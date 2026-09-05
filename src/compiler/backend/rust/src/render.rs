@@ -343,14 +343,17 @@ fn render_elidable_paren(
     }
 }
 
-/// Render a [`Doc::MethodChain`]: the `receiver`, then the trailing `.method(…)`
-/// glued inline for a simple receiver, or dropped onto its own line at the
-/// receiver's begin-line indent when the receiver is BLOCK-SHAPED — its rendered
-/// form spans multiple lines OR contains a brace block `{ … }` (a closure body /
-/// `if` / `match` / statement block). `rustfmt` keeps the method glued only to a
-/// receiver that is a plain single-line non-brace expression (`get_or_init(|| (a /
-/// b)).clone()`); a brace-carrying receiver breaks the method to its own line even
-/// when the whole line would still fit. See [`Doc::MethodChain`]. `col` is where the
+/// Render a [`Doc::MethodChain`]: the `receiver`, then the trailing `.method(…)`,
+/// laid out per `rustfmt`'s method-chain rule. A SINGLE-LINE receiver glues the
+/// method inline while the glued `receiver.method` fits the width — whether or not
+/// the receiver carries a brace block (`(if a {…} else {…}).ipe_wrapping_add(x)`
+/// stays on one line when it fits) — and drops the method to its own line one chain
+/// step in only on overflow (`"long"\n    .to_string()`). A MULTILINE receiver
+/// always drops the method to its own line: at the receiver's begin-line indent when
+/// the receiver is a brace block ending on a de-indented `})` line (the
+/// `CELL.get_or_init(|| {…})\n.clone()` shape), or one chain step in when the receiver
+/// is ITSELF a broken method chain, so every `.method()` link aligns at the same
+/// column (`x\n    .add(y)\n    .add(z)`). See [`Doc::MethodChain`]. `col` is where the
 /// receiver's first character lands.
 fn render_method_chain(
     receiver: &Doc,
@@ -386,10 +389,13 @@ fn render_method_chain(
     let method_w = flat_leaf_len(method);
     let start_col = eff_col(out, col);
     let shape = receiver_shape(receiver, cfg, start_col, indent);
-    let recv_reserve = if shape == ReceiverShape::Plain {
-        method_w
-    } else {
+    // A single-line receiver glues the method inline (reserving the method's width
+    // against the receiver's fit test); a multiline receiver already spans lines, so
+    // the method lands on its own fresh line and needs no receiver-side reserve.
+    let recv_reserve = if shape == ReceiverShape::Multiline {
         0
+    } else {
+        method_w
     };
     render_at(
         receiver,
@@ -399,16 +405,16 @@ fn render_method_chain(
         flat,
         out,
     );
-    // A MULTILINE receiver ends on a de-indented block-closing line (`})` at the
-    // begin-line indent), so the method attaches at that indent. A SINGLE-LINE
-    // brace-shaped receiver (`(if …)`) indents the broken method one chain step. A
-    // PLAIN receiver glues the method inline UNLESS the glued `receiver.method` would
-    // overflow the width — then `rustfmt` drops the method onto its own line one
-    // chain step in (`"long"\n    .to_string()`). The glue overflow is measured
-    // against the FULL `max_width` (the reserve was for the glued case; a broken
-    // method lands on a fresh line whose own fit the caller measures).
+    // A SINGLE-LINE receiver (plain or brace-carrying) keeps the method glued while
+    // the whole `receiver.method` fits, dropping it onto its own line one chain step
+    // in only on overflow (`"long"\n    .to_string()`). A MULTILINE receiver always
+    // drops the method to its own line: at the begin-line indent when it is a brace
+    // block ending on a de-indented `})` line, or one chain step in when it is itself
+    // a broken method chain (so every link aligns at the same column). The glue
+    // overflow is measured against the FULL `max_width` (the reserve was for the
+    // glued case; a broken method lands on a fresh line the caller measures).
     match shape {
-        ReceiverShape::Plain => {
+        ReceiverShape::Plain | ReceiverShape::SingleLineBrace => {
             // The flat case returned early above, so here the layout is broken: a
             // glued `receiver.method` that overflows drops the method to its own line.
             if current_col(out) + method_w > cfg.max_width {
@@ -418,15 +424,30 @@ fn render_method_chain(
         }
         ReceiverShape::Multiline => {
             out.push('\n');
-            push_indent(begin_indent, out);
-        }
-        ReceiverShape::SingleLineBrace => {
-            out.push('\n');
-            push_indent(begin_indent + CHAIN_BREAK_INDENT, out);
+            let method_indent = if receiver_is_method_chain(receiver) {
+                begin_indent + CHAIN_BREAK_INDENT
+            } else {
+                begin_indent
+            };
+            push_indent(method_indent, out);
         }
     }
     let c = current_col(out);
     render_at(method, cfg, indent, c, flat, out);
+}
+
+/// Whether `receiver` is itself a [`Doc::MethodChain`] — every `.method()` link of a
+/// broken chain aligns at the same chain-step column, so a method applied to a broken
+/// chain lands one step in (not at the chain root's begin-line indent, where a
+/// brace-block receiver's method attaches). A transparent `Nest`/`Concat` wrapper is
+/// looked through so a chain carried inside a positional wrapper still classifies.
+fn receiver_is_method_chain(receiver: &Doc) -> bool {
+    match receiver {
+        Doc::MethodChain { .. } => true,
+        Doc::Nest(_, inner) => receiver_is_method_chain(inner),
+        Doc::Concat(docs) => docs.last().is_some_and(receiver_is_method_chain),
+        _ => false,
+    }
 }
 
 /// The layout shape of a [`Doc::MethodChain`] receiver, which drives whether its
@@ -434,21 +455,22 @@ fn render_method_chain(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReceiverShape {
     /// A single-line non-brace expression (`get_or_init(|| (a / b))`): the method
-    /// glues inline.
+    /// glues inline while `receiver.method` fits, else breaks one chain step in.
     Plain,
-    /// A single-line receiver carrying a brace block (`get_or_init(|| (if … {…}))`):
-    /// the method breaks to its own line one chain step in.
+    /// A single-line receiver carrying a brace block (`(if a {…} else {…})`): laid out
+    /// exactly like [`ReceiverShape::Plain`] — glued while it fits, one chain step in
+    /// on overflow. The variant is kept distinct only to document the brace case.
     SingleLineBrace,
-    /// A multiline receiver ending on a de-indented block-closing line (`})`): the
-    /// method breaks to its own line at the begin-line indent.
+    /// A multiline receiver ending on a de-indented block-closing line (`})`) or a
+    /// broken method chain: the method breaks to its own line — at the begin-line
+    /// indent for a brace block, one chain step in for a chain receiver.
     Multiline,
 }
 
-/// Classify a [`Doc::MethodChain`] receiver's layout shape. `rustfmt` glues the
-/// trailing method only to a [`ReceiverShape::Plain`] receiver; a brace-carrying one
-/// breaks the method to its own line — at the begin-line indent when the receiver is
-/// multiline, one chain step in when it is single-line. Probed by rendering the
-/// receiver from `start_col` with no method reserve and inspecting its bytes.
+/// Classify a [`Doc::MethodChain`] receiver's layout shape. A single-line receiver
+/// (plain or brace-carrying) glues its trailing method while the line fits; a
+/// multiline receiver always breaks the method to its own line. Probed by rendering
+/// the receiver from `start_col` with no method reserve and inspecting its bytes.
 fn receiver_shape(
     receiver: &Doc,
     cfg: RenderConfig,
