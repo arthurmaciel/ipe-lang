@@ -543,6 +543,16 @@ fn name_prose(msg: &NameError) -> String {
                 r.module, r.placement,
             )
         }
+        NameError::RustNameFold {
+            first,
+            second,
+            rust_name,
+            kind,
+        } => format!(
+            "Two different {} — `{first}` and `{second}` — end up with the same \
+             generated name `{rust_name}`, so I can't emit them both.",
+            kind.noun(),
+        ),
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -1576,7 +1586,11 @@ fn name_label(msg: &NameError) -> Option<String> {
                  placements"
             ))
         }
-        NameError::Unknown => None,
+        // `RustNameFold`'s span is always DUMMY (the IR carries none), so a label
+        // never reaches a caret; the fix rides the help note instead (see
+        // `name_help`), which renders with or without a snippet — and `None` here
+        // also avoids duplicating that note in the snippet-free `plain_message`.
+        NameError::RustNameFold { .. } | NameError::Unknown => None,
     }
 }
 

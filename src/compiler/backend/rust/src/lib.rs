@@ -61,7 +61,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ipe_backend::{Backend, EmittedProject};
-use ipe_diagnostics::{DResult, Diagnostic, NameError, Span};
+use ipe_diagnostics::{DResult, Diagnostic, NameError, RustNameFoldKind, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{Callee, Expr, FuncId, IrType, KernelFn, ModPath, Program, TypeDef};
 
@@ -1397,6 +1397,11 @@ impl<'a> EmitCtx<'a> {
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
         let mut enum_variants: BTreeMap<(ModPath, Symbol), VariantList> = BTreeMap::new();
         let mut func_names = BTreeMap::new();
+        // Generated Rust fn name -> the first Ipê function (dotted) that claimed
+        // it, so the fold gate below can name BOTH colliding definitions in an
+        // IPE-N0048 diagnostic. `func_names` is keyed by `FuncId`, which does not
+        // recover a source spelling on its own.
+        let mut func_ipe_names: BTreeMap<String, String> = BTreeMap::new();
         let mut impl_fn_params: BTreeMap<FuncId, Vec<usize>> = BTreeMap::new();
         for module in &program.modules {
             let segs = module
@@ -1456,14 +1461,29 @@ impl<'a> EmitCtx<'a> {
                 // fold is not injective over the (home, name) split (`["Std",
                 // "Palette"]/Color` and `["Std"]/PaletteColor` both fold to
                 // `StdPaletteColor`), so two DISTINCT identities could otherwise
-                // emit the same Rust enum and trip `rustc` E0428. Fail closed with
-                // the same duplicate-type diagnostic rather than emit a broken crate.
-                if enum_names.values().any(|n| n == &rust_name) {
+                // emit the same Rust enum and trip `rustc` E0428. Fail closed and
+                // name both colliding Ipê types (IPE-N0048) rather than emit a
+                // broken crate.
+                if let Some((first_home, first_name)) = enum_names
+                    .iter()
+                    .find(|(_, n)| *n == &rust_name)
+                    .map(|(k, _)| k)
+                {
+                    let first_segs = first_home
+                        .0
+                        .iter()
+                        .map(|s| resolve_sym(interner, *s))
+                        .collect::<DResult<Vec<&str>>>()?;
+                    let first_dotted =
+                        ipe_dotted_name(&first_segs, resolve_sym(interner, *first_name)?);
+                    let second_dotted = ipe_dotted_name(&home_segs, def_name);
                     return Err(Diagnostic::Name {
                         span: Span::DUMMY,
-                        msg: NameError::DuplicateType {
-                            name: rust_name.into_boxed_str(),
-                            first: Span::DUMMY,
+                        msg: NameError::RustNameFold {
+                            first: first_dotted.into_boxed_str(),
+                            second: second_dotted.into_boxed_str(),
+                            rust_name: rust_name.into_boxed_str(),
+                            kind: RustNameFoldKind::Type,
                         },
                     });
                 }
@@ -1502,17 +1522,21 @@ impl<'a> EmitCtx<'a> {
                 // and `["Std", "Ui", "Border"]/rounded` both fold to
                 // `std_ui_border_rounded` — so two DISTINCT functions could
                 // otherwise emit the same Rust fn and trip `rustc` E0428. Fail
-                // closed with the same duplicate-value diagnostic rather than
-                // emit a broken crate.
-                if func_names.values().any(|n| n == &rust_name) {
+                // closed and name both colliding Ipê values (IPE-N0048) rather
+                // than emit a broken crate.
+                let second_dotted = ipe_dotted_name(&func_segs, resolve_sym(interner, func.name)?);
+                if let Some(first_dotted) = func_ipe_names.get(&rust_name) {
                     return Err(Diagnostic::Name {
                         span: Span::DUMMY,
-                        msg: NameError::DuplicateValue {
-                            name: rust_name.into_boxed_str(),
-                            first: Span::DUMMY,
+                        msg: NameError::RustNameFold {
+                            first: first_dotted.clone().into_boxed_str(),
+                            second: second_dotted.into_boxed_str(),
+                            rust_name: rust_name.into_boxed_str(),
+                            kind: RustNameFoldKind::Value,
                         },
                     });
                 }
+                func_ipe_names.insert(rust_name.clone(), second_dotted);
                 func_names.insert(func.id, rust_name);
                 // Record which of this function's `Fn`-typed params were
                 // monomorphized to `impl Fn` so the call-site emitter passes the
@@ -2845,12 +2869,28 @@ impl<'a> EmitCtx<'a> {
             let trait_name = crate::naming::field_witness_trait_name(field_str);
             let collides_type =
                 self.contains_type_name(&trait_name) || mod_idents.contains(&trait_name);
-            if collides_type || seen.insert(trait_name.clone(), field).is_some() {
+            if collides_type {
                 return Err(Diagnostic::Name {
                     span: Span::DUMMY,
-                    msg: NameError::DuplicateValue {
+                    msg: NameError::DuplicateType {
                         name: trait_name.into_boxed_str(),
                         first: Span::DUMMY,
+                    },
+                });
+            }
+            // Two DIFFERENTLY-spelled row fields folding to one witness trait —
+            // the `first_name` / `firstName` hazard the doc comment names. Report
+            // BOTH surface field names (IPE-N0048): the prior claimant is the
+            // Symbol `seen.insert` returns.
+            if let Some(prior) = seen.insert(trait_name.clone(), field) {
+                let prior_str = self.resolve_ident(prior)?;
+                return Err(Diagnostic::Name {
+                    span: Span::DUMMY,
+                    msg: NameError::RustNameFold {
+                        first: prior_str.to_owned().into_boxed_str(),
+                        second: field_str.to_owned().into_boxed_str(),
+                        rust_name: trait_name.into_boxed_str(),
+                        kind: RustNameFoldKind::Value,
                     },
                 });
             }
@@ -4780,6 +4820,19 @@ fn resolve_sym(interner: &Interner, sym: Symbol) -> DResult<&str> {
         })
 }
 
+/// The dotted Ipê source spelling of a definition — `Std.Ui.borderRounded` from
+/// home segments `["Std", "Ui"]` and leaf `borderRounded`, or just the leaf when
+/// the home is empty (a single-module program). Used only to name the two
+/// colliding definitions in an [`IPE-N0048`](NameError::RustNameFold) diagnostic,
+/// so it is built lazily on the error path.
+fn ipe_dotted_name(home_segs: &[&str], leaf: &str) -> String {
+    if home_segs.is_empty() {
+        leaf.to_owned()
+    } else {
+        format!("{}.{leaf}", home_segs.join("."))
+    }
+}
+
 /// Whether a function is a qualifying `Ipe.Ui` structural wrapper for the
 /// subtree partition pass.
 ///
@@ -5091,6 +5144,7 @@ mod record_struct_namespace_tests {
     /// (`first_name` / `firstName` → `IpeHasFirstName`) must fail the row-witness
     /// disjointness gate closed — emitting two `IpeHasFirstName` traits is E0428.
     #[test]
+    #[allow(clippy::too_many_lines)] // one exhaustive collision-construction fixture
     fn colliding_row_witness_names_fail_closed() -> DResult<()> {
         let mut interner = Interner::new();
         let main_mod = interner.intern("Main")?;
@@ -5176,17 +5230,40 @@ mod record_struct_namespace_tests {
 
         let colliding: BTreeSet<Symbol> = [snake, camel].into_iter().collect();
         let result = ctx.assert_row_witness_names_disjoint(&colliding, &BTreeSet::new());
+        // The two folding field names must BOTH be named (IPE-N0048), not just
+        // the mangled trait — that is the point of the fix.
         assert!(
             matches!(
-                result,
+                &result,
                 Err(Diagnostic::Name {
-                    msg: NameError::DuplicateValue { .. },
+                    msg: NameError::RustNameFold { .. },
                     ..
                 })
             ),
-            "two field names colliding to one witness trait must fail closed, \
-             got {result:?}"
+            "two field names colliding to one witness trait must fail closed with RustNameFold, got {result:?}"
         );
+        if let Err(Diagnostic::Name {
+            msg:
+                NameError::RustNameFold {
+                    first,
+                    second,
+                    rust_name,
+                    kind,
+                },
+            ..
+        }) = &result
+        {
+            let named: BTreeSet<&str> = [first.as_ref(), second.as_ref()].into_iter().collect();
+            assert_eq!(
+                named,
+                ["firstName", "first_name"]
+                    .into_iter()
+                    .collect::<BTreeSet<_>>(),
+                "both colliding Ipê field names must be reported"
+            );
+            assert_eq!(rust_name.as_ref(), "IpeHasFirstName");
+            assert_eq!(*kind, ipe_diagnostics::RustNameFoldKind::Value);
+        }
 
         // Distinct field names pass — the gate is purely additive.
         let distinct: BTreeSet<Symbol> = std::iter::once(snake).collect();
