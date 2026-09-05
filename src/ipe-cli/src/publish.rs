@@ -434,7 +434,7 @@ fn merge_into_entry(
 ) -> Result<String, CliError> {
     // An absent entry file ⇒ a first publish. A present-but-malformed entry is a
     // read error we surface rather than silently overwrite.
-    let existing: Option<IndexEntry> = if index::entry_file_exists(index_root, name) {
+    let existing: Option<IndexEntry> = if index::entry_file_exists(index_root, name)? {
         Some(index::read_entry(index_root, name)?)
     } else {
         None
