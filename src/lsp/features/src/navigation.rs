@@ -15,7 +15,7 @@
 //! `case` branches) are not tracked — they do not cross module boundaries and
 //! have no persistent canonical identity.
 
-use ipe_canon::ast::{Def, Expr_, LetBinding, Module};
+use ipe_canon::ast::{Def, Expr_, Module};
 use ipe_db::{Db as _, IpeDatabase, SourceRoot};
 use ipe_diagnostics::Span;
 use ipe_intern::Symbol;
@@ -466,15 +466,6 @@ pub fn find_references(
     }
     refs
 }
-
-// ---------------------------------------------------------------------------
-// Suppress dead-code warnings for unused imports
-// ---------------------------------------------------------------------------
-
-// `LetBinding` is named in the walker arms but Rust infers it from the arm
-// patterns; a type alias here keeps the import live without a dummy usage.
-#[allow(dead_code)]
-type _LetBindingAlias = LetBinding;
 
 #[cfg(test)]
 mod tests {

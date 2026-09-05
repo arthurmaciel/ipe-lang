@@ -30,7 +30,6 @@ use lsp_types::{
 };
 
 use ipe_db::{Db as _, IpeDatabase, SourceRoot};
-use ipe_diagnostics::Span;
 
 use crate::offset::{PositionEncoding, offset_to_position};
 
@@ -463,10 +462,6 @@ fn line_byte_range(text: &str, line: usize) -> (usize, usize) {
     }
     (text.len(), text.len())
 }
-
-// Suppress the unused-import warning for `Span` (used only in doc context).
-#[allow(dead_code)]
-type _SpanAlias = Span;
 
 #[cfg(test)]
 mod tests {
