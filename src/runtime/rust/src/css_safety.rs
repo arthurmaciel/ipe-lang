@@ -265,18 +265,28 @@ pub(crate) enum CssValueOrigin {
 
 /// Run the CSS value security scan, returning WHY the value is unsafe (for the
 /// A9 diagnostic) rather than a bare `Option`. `Ok(())` ⇒ safe.
+///
+/// The accept/reject DECISION is the SHARED `ipe_kernels::css_value_is_safe`
+/// allowlist-grammar gate — the single source of truth every consumer (this
+/// runtime sanitizer + the backend hoist-eligibility check) must agree on, so
+/// the two can never drift. This function adds only the A9 reason
+/// classification on top: it distinguishes a value rejected in its RAW form
+/// from one that parsed raw but is rejected only after CSS-escape decoding
+/// (a hex-escaped payload), so the developer diagnostic can name which.
 fn scan_css_value(v: &str) -> Result<(), CssStripReason> {
-    let low = v.to_ascii_lowercase();
-    if has_dangerous_css_pattern(&low) {
-        return Err(CssStripReason::RawBreakout);
+    if ipe_kernels::css_value_is_safe(v) {
+        return Ok(());
     }
-    // Defence-in-depth: decode CSS backslash escapes and re-scan so a
-    // hex-escaped bypass of the check above (`\65 xpression(…)`, `\3b` for `;`)
-    // is caught too.
-    if has_dangerous_css_pattern(&css_unescape(&low)) {
-        return Err(CssStripReason::EscapedBreakout);
+    // Rejected: classify the reason for the A9 diagnostic. If the RAW form
+    // already fails the shared grammar it is a raw breakout; otherwise the raw
+    // form parsed and only the decoded form was rejected — a hex-escaped
+    // payload. The classification reuses the SAME kernel grammar (via
+    // `css_value_raw_form_parses`), so it cannot drift from the gate.
+    if !ipe_kernels::css_value_raw_form_parses(v) {
+        Err(CssStripReason::RawBreakout)
+    } else {
+        Err(CssStripReason::EscapedBreakout)
     }
-    Ok(())
 }
 
 impl<'a> SafeCssValue<'a> {
@@ -696,15 +706,23 @@ mod tests {
     }
 
     /// The scan reason distinguishes a raw breakout from an escape-hidden one,
-    /// so the diagnostic can name WHY — and a safe value scans clean.
+    /// so the diagnostic can name WHY — and a safe value scans clean. Under the
+    /// allowlist grammar a bare backslash is itself unrecognized structure, so
+    /// an escaped payload whose backslash sits at top level fails the RAW parse
+    /// (`RawBreakout`); `EscapedBreakout` is reached only when the raw form
+    /// parses cleanly and the CSS-escape decode reveals the reject — e.g. a
+    /// `var(...)` custom-property name that decodes to a breakout character.
     #[test]
     fn scan_reason_names_raw_vs_escaped_breakout() {
         assert_eq!(
             scan_css_value("red; color:blue"),
             Err(CssStripReason::RawBreakout)
         );
+        // `\3a` decodes to `:` inside a `var()` name — the raw `var(--x\3a)`
+        // parses (backslash never reaches top level; it is inside the nested
+        // value that recurses), but the decoded `var(--x:)` fails the grammar.
         assert_eq!(
-            scan_css_value("\\65 xpression(alert(1))"),
+            scan_css_value("var(--x\\3a y)"),
             Err(CssStripReason::EscapedBreakout)
         );
         assert_eq!(scan_css_value("#ff6600"), Ok(()));
