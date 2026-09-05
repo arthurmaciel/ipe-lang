@@ -200,16 +200,17 @@ impl<'a> Parser<'a> {
     /// Consume the next token. On end-of-input the error names `construct`, the
     /// enclosing grammar production that still required more tokens.
     fn bump(&mut self, construct: Construct) -> DResult<Token> {
-        if self.pos >= self.toks.len() {
+        // Move the token out of the Vec without shifting elements — the slot is
+        // never read again because `pos` only advances. `get_mut` returning
+        // `None` is end-of-input.
+        let Some(slot) = self.toks.get_mut(self.pos) else {
             return Err(Diagnostic::Parse {
                 span: self.eof_err_span(),
                 msg: ParseError::UnexpectedEof { construct },
             });
-        }
-        // Move the token out of the Vec without shifting elements — the slot is
-        // never read again because `pos` only advances.
+        };
         let tok = std::mem::replace(
-            &mut self.toks[self.pos],
+            slot,
             Token {
                 kind: Tok::Underscore,
                 line: 0,

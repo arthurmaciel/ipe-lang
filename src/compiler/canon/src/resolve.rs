@@ -3568,7 +3568,7 @@ fn field_leaf_codecs(
 ) -> DResult<(canon::Expr, canon::Expr)> {
     let field_name = resolve_or_bug(interner, field, "ipe_canon::field_leaf_codecs")?.to_owned();
     let diag_span = sg.diag;
-    let bad = |reason: CodecAutoRejection, name: String| Diagnostic::Name {
+    let bad = |reason: CodecAutoRejection, name: &str| Diagnostic::Name {
         span: diag_span,
         msg: NameError::CodecAutoUnderivable {
             reason,
@@ -3582,11 +3582,11 @@ fn field_leaf_codecs(
         && let Some(text) = interner.resolve(*name)
         && SEAL_SECRET_OR_SINK.contains(&text)
     {
-        return Err(bad(CodecAutoRejection::SecretField, field_name.clone()));
+        return Err(bad(CodecAutoRejection::SecretField, &field_name));
     }
     // A function field is not a serialisable value.
     if matches!(ty, canon::Type::Lambda(_, _)) {
-        return Err(bad(CodecAutoRejection::FunctionField, field_name.clone()));
+        return Err(bad(CodecAutoRejection::FunctionField, &field_name));
     }
 
     match ty {
@@ -3605,7 +3605,7 @@ fn field_leaf_codecs(
                 )),
                 None => Err(bad(
                     CodecAutoRejection::UnsupportedField,
-                    field_name.clone(),
+                    &field_name,
                 )),
             }
         }
@@ -3618,7 +3618,7 @@ fn field_leaf_codecs(
             let Some(elem) = args.first() else {
                 return Err(bad(
                     CodecAutoRejection::UnsupportedField,
-                    field_name.clone(),
+                    &field_name,
                 ));
             };
             let (enc_elem, dec_elem) = field_leaf_codecs(field, elem, sg, env, interner)?;
@@ -3642,7 +3642,7 @@ fn field_leaf_codecs(
         }
         _ => Err(bad(
             CodecAutoRejection::UnsupportedField,
-            field_name.clone(),
+            &field_name,
         )),
     }
 }
@@ -5836,7 +5836,7 @@ fn resolve_or_bug<'a>(
     sym: Symbol,
     where_: &'static str,
 ) -> DResult<&'a str> {
-    interner.resolve(sym).ok_or(Diagnostic::CompilerBug {
+    interner.resolve(sym).ok_or_else(|| Diagnostic::CompilerBug {
         where_,
         detail: "interned symbol did not resolve".to_owned(),
     })
@@ -7661,10 +7661,10 @@ mod alias_ctor_gate_tests {
         let forged = Symbol::from_raw(u32::MAX);
         let err = resolve_or_bug(&i, forged, "test_site")
             .expect_err("an unresolvable symbol must not resolve to a name");
-        match err {
-            Diagnostic::CompilerBug { where_, .. } => assert_eq!(where_, "test_site"),
-            other => panic!("expected CompilerBug, got {other:?}"),
-        }
+        assert!(
+            matches!(err, Diagnostic::CompilerBug { where_, .. } if where_ == "test_site"),
+            "fail-closed path must be CompilerBug at the given site"
+        );
     }
 
     #[test]
