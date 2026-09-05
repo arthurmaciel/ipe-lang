@@ -99,10 +99,15 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
 
     // Gutter width is the digit-count of the largest line number we will print.
     let gutter = if has_snippet {
-        let mut max_line = locate(source, primary.lo).line;
+        // The gutter must fit the largest line number any span will PRINT, and
+        // `push_span_block` prints through `locate(span.hi).line`; a hi line with
+        // more digits than the lo line (a span crossing a digit boundary, e.g.
+        // 9→10) would otherwise widen the source row past the underline row and
+        // shift the carets. Fold in every span's hi line, not just its lo line.
+        let mut max_line = locate(source, primary.hi).line;
         for (span, _) in &secondaries {
             if *span != Span::DUMMY {
-                max_line = max_line.max(locate(source, span.lo).line);
+                max_line = max_line.max(locate(source, span.hi).line);
             }
         }
         max_line.to_string().len()
