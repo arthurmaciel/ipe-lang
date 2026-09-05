@@ -2221,18 +2221,17 @@ struct SearchEntry {
 /// writing them under `out/{json,markdown,html}/` subfolders.
 ///
 /// Attempts full project + stdlib documentation. When no project source is
-/// reachable at `path` (no source files, no valid project), falls back to
+/// reachable at `path` (an empty directory, no `.ipe` modules), falls back to
 /// stdlib-only so the command succeeds in any directory, including an empty
-/// scratch dir.
+/// scratch dir. A project that exists but fails to build surfaces its error
+/// rather than collapsing to a stdlib-only site.
 ///
 /// # Errors
-/// [`CliError::Io`] on a write failure. Project extraction errors are silently
-/// absorbed by the stdlib-only fallback.
+/// [`CliError::Io`] on a write failure, plus any real project build error from
+/// [`build_docs_or_stdlib`].
 fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), CliError> {
     crate::style::print_command_header();
-    // Attempt full project + stdlib documentation. When no project is reachable
-    // at `path`, fall back to stdlib-only so the command succeeds in any dir.
-    let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
+    let docs = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
 
@@ -2282,6 +2281,29 @@ fn write_format_dir(
         std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
     }
     Ok(())
+}
+
+/// Build project + stdlib docs, falling back to stdlib-only ONLY when no project
+/// is reachable at `path`.
+///
+/// The fallback is reserved for [`DiffError::Empty`] — a directory carrying no
+/// `.ipe` modules, where stdlib-only is the correct and complete answer. Every
+/// other build failure (an unreadable module, a typecheck error, an open
+/// interface) is a real project error the user must see, so it is propagated
+/// rather than masked behind a plausible stdlib-only site that silently omits
+/// every project module.
+///
+/// # Errors
+/// Any non-empty [`build_docs`] failure — [`CliError::Io`], a typecheck
+/// [`CliError::Diff`], or an open-interface [`CliError::Diff`].
+fn build_docs_or_stdlib(path: &Path) -> Result<DocsJson, CliError> {
+    match build_docs(path) {
+        Ok(docs) => Ok(docs),
+        Err(CliError::Diff(crate::api_surface::DiffError::Empty { .. })) => {
+            Ok(build_stdlib_only_docs())
+        }
+        Err(other) => Err(other),
+    }
 }
 
 /// Build a stdlib-only [`DocsJson`] without accessing any project on disk.
@@ -4317,7 +4339,7 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     use std::net::TcpListener;
 
     crate::style::print_command_header();
-    let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
+    let docs = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
     let site = render_site_for_serve(&docs, &bundle);
@@ -5122,6 +5144,42 @@ mod tests {
                 m.name
             );
         }
+    }
+
+    // ── Fallback is reserved for an empty tree, never a broken project ────────
+
+    #[test]
+    fn build_docs_or_stdlib_falls_back_on_empty_dir() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create empty dir");
+
+        let docs = build_docs_or_stdlib(&tmp).expect("empty dir falls back to stdlib-only");
+        assert!(
+            docs.modules.iter().all(|m| m.kind == ModuleKind::Stdlib),
+            "empty-dir fallback yields stdlib-only modules"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn build_docs_or_stdlib_propagates_a_broken_project() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-broken-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create project dir");
+        // A syntactically broken module: a real project that must NOT collapse to
+        // a plausible stdlib-only site.
+        fs::write(tmp.join("Main.ipe"), "module Main exposing (..)\n\nx =\n")
+            .expect("write broken module");
+
+        let result = build_docs_or_stdlib(&tmp);
+        assert!(
+            result.is_err(),
+            "a broken project surfaces its build error rather than falling back"
+        );
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     // ── Hierarchical namespace tree ────────────────────────────────────────
