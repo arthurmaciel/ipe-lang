@@ -3603,10 +3603,7 @@ fn field_leaf_codecs(
                     kernel_ref(enc_k, sg.fresh(), interner)?,
                     kernel_ref(dec_k, sg.fresh(), interner)?,
                 )),
-                None => Err(bad(
-                    CodecAutoRejection::UnsupportedField,
-                    &field_name,
-                )),
+                None => Err(bad(CodecAutoRejection::UnsupportedField, &field_name)),
             }
         }
         // `List t` — `Encode.list <encElem>` / `Decode.list <decElem>`, recursing
@@ -3616,10 +3613,7 @@ fn field_leaf_codecs(
             if interner.resolve(*name) == Some("List") && args.len() == 1 =>
         {
             let Some(elem) = args.first() else {
-                return Err(bad(
-                    CodecAutoRejection::UnsupportedField,
-                    &field_name,
-                ));
+                return Err(bad(CodecAutoRejection::UnsupportedField, &field_name));
             };
             let (enc_elem, dec_elem) = field_leaf_codecs(field, elem, sg, env, interner)?;
             let enc = call_expr(
@@ -3640,10 +3634,7 @@ fn field_leaf_codecs(
             let codec = derive_record_codec(fields, sg, env, interner)?;
             project_codec_enc_dec(&codec, sg, env, interner)
         }
-        _ => Err(bad(
-            CodecAutoRejection::UnsupportedField,
-            &field_name,
-        )),
+        _ => Err(bad(CodecAutoRejection::UnsupportedField, &field_name)),
     }
 }
 
@@ -5836,10 +5827,12 @@ fn resolve_or_bug<'a>(
     sym: Symbol,
     where_: &'static str,
 ) -> DResult<&'a str> {
-    interner.resolve(sym).ok_or_else(|| Diagnostic::CompilerBug {
-        where_,
-        detail: "interned symbol did not resolve".to_owned(),
-    })
+    interner
+        .resolve(sym)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_,
+            detail: "interned symbol did not resolve".to_owned(),
+        })
 }
 
 /// Build a single resolved binary-operation node.

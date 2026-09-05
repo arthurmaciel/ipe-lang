@@ -112,7 +112,10 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         ..
     } = &**diag
     else {
-        assert!(false_marker(), "expected NameError::RustNameFold, got: {err}");
+        assert!(
+            false_marker(),
+            "expected NameError::RustNameFold, got: {err}"
+        );
         return;
     };
     assert_eq!(&**rust_name, "zui_border_rounded");
