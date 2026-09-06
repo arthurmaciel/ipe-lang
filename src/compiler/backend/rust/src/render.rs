@@ -1193,6 +1193,25 @@ fn fits_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usiz
     start_col + scratch.len() <= cfg.margin()
 }
 
+/// Whether a chain's operands rendered flat from `start_col` are genuinely
+/// single-line AND fit the width — the whole-chain-flat fast-path probe. Equal to
+/// [`fits_single_line`] on a `Doc::Chain` of the same operands (a flat `Doc::Chain`
+/// renders through [`render_chain_flat`]), but probes the operands directly rather
+/// than cloning them into a fresh `Doc::Chain` just to route through [`render_at`].
+fn chain_flat_fits_single_line(
+    operands: &[ChainOperand],
+    cfg: RenderConfig,
+    start_col: usize,
+    indent: usize,
+) -> bool {
+    let mut scratch = String::new();
+    render_chain_flat(operands, cfg.no_reserve(), indent, &mut scratch);
+    if scratch.contains('\n') {
+        return false;
+    }
+    start_col + scratch.len() <= cfg.margin()
+}
+
 /// Render a binop chain with rustfmt's layout.
 ///
 /// `col` is where the chain's first character (its outermost `(`) lands;
@@ -1210,23 +1229,27 @@ fn render_chain(
     // Whole-chain-flat fast path: if the entire flattened chain fits on the
     // current line AND no operand carries a hard break (a statement-block always
     // breaks, forcing the chain broken), emit it inline with no operator breaks.
-    let no_hard_break = operands.iter().all(|o| !has_hard_break(&o.doc));
-    let whole = Doc::Chain {
-        operands: operands.to_vec(),
-    };
+    //
     // The whole-flat and per-operator glue fit tests honor the trailing-delimiter
     // `reserve`: the `,` (or `),`) `rustfmt` appends after the chain reduces the
-    // width the chain's single line may occupy. `fits_single_line`/`glue_fits`
-    // subtract `cfg.reserve` via `cfg.margin()`.
+    // width the chain's single line may occupy. `chain_flat_fits_single_line`/
+    // `glue_fits` subtract `cfg.reserve` via `cfg.margin()`.
     //
     // The whole-flat fast path requires the chain to render GENUINELY single-line,
     // not merely first-line-fits: an operand carrying an independent-layout construct
     // (a `CallArgs` whose statement-block argument breaks) hides its `HardLine` from
     // `no_hard_break`, yet its flat render still spans multiple lines. `fits` would
     // measure only the (short) first line and wrongly flatten the whole chain, gluing
-    // the block; `fits_single_line` rejects the embedded newline so the chain breaks
-    // and each operand lays out its own multiline argument.
-    if flat || (no_hard_break && fits_single_line(&whole, cfg, col, indent)) {
+    // the block; the single-line check rejects the embedded newline so the chain
+    // breaks and each operand lays out its own multiline argument.
+    //
+    // Both the `no_hard_break` walk and the single-line probe are guarded behind the
+    // `flat` short-circuit: an enclosing group that already chose flat takes the fast
+    // path directly, so neither the operand scan nor a whole-chain clone runs.
+    if flat
+        || (operands.iter().all(|o| !has_hard_break(&o.doc))
+            && chain_flat_fits_single_line(operands, cfg, col, indent))
+    {
         render_chain_flat(operands, cfg, indent, out);
         return;
     }
@@ -1276,12 +1299,19 @@ fn render_chain(
                 // never opens a multiline operand mid-line in a broken chain (the sole
                 // multiline glue is onto a PRECEDING operand's closing line, the
                 // `prev_multiline` arm below).
-                glue_fits(&operand.doc, cfg, cur, indent, op)
-                    && renders_single_line(&operand.doc, cfg, cur + 1 + op.len() + 1, indent)
+                let (fits, single_line) = glue_fits(&operand.doc, cfg, cur, indent, op);
+                // The single-line probe column matches `glue_fits`'s own render column,
+                // so under a zero reserve the two renders coincide and its verdict is
+                // reused; a nonzero reserve tightens the operand's margin, so re-probe.
+                fits && if cfg.reserve == 0 {
+                    single_line
+                } else {
+                    renders_single_line(&operand.doc, cfg, cur + 1 + op.len() + 1, indent)
+                }
             } else {
                 // Past the flat prefix, an operator glues only immediately after a
                 // multiline operand, at that operand's closing-line column.
-                prev_multiline && glue_fits(&operand.doc, cfg, cur, indent, op)
+                prev_multiline && glue_fits(&operand.doc, cfg, cur, indent, op).0
             };
             if can_glue {
                 out.push(' ');
@@ -1306,23 +1336,6 @@ fn render_chain(
         let c = current_col(out);
         render_at(&operand.doc, cfg, shared_indent, c, false, out);
     }
-}
-
-/// Whether a call's `open` renders across more than one line at `start_col` — a
-/// `(func)(args)` whose `func` is a `({ … })` block that breaks. When so, the tiny
-/// argument list may still glue onto the open's closing line rather than breaking
-/// one-per-line.
-fn open_is_multiline(open: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
-    let mut scratch = String::new();
-    render_at(
-        open,
-        cfg.no_reserve(),
-        indent,
-        start_col,
-        false,
-        &mut scratch,
-    );
-    scratch.contains('\n')
 }
 
 /// Render a bracket-delimited argument list with `rustfmt`'s call-argument
@@ -1390,26 +1403,30 @@ fn render_call_args_broken(
     // fits on the open's LAST line. `rustfmt` glues `(args)` onto the block's closing
     // `})` line rather than breaking the tiny argument list one-per-line. Render the
     // open non-flat, then the flat args and close on its last line.
-    if !elems.is_empty() && open_is_multiline(open, cfg, start_col, indent) {
+    if !elems.is_empty() {
+        // Render `open` once; its multiline-ness and closing column both read off
+        // this single probe (the glue path re-renders it into `out` below).
         let mut probe = String::new();
         render_at(open, cfg.no_reserve(), indent, start_col, false, &mut probe);
-        let open_last = current_col(&probe);
-        let mut argscratch = String::new();
-        render_flat_elems(elems, cfg, indent, &mut argscratch);
-        render_at(
-            close,
-            cfg.no_reserve(),
-            indent,
-            open_last,
-            true,
-            &mut argscratch,
-        );
-        if !argscratch.contains('\n') && open_last + argscratch.len() <= cfg.margin() {
-            render_at(open, cfg.no_reserve(), indent, start_col, false, out);
-            render_flat_elems(elems, cfg, indent, out);
-            let c = current_col(out);
-            render_at(close, cfg, indent, c, true, out);
-            return;
+        if probe.contains('\n') {
+            let open_last = current_col(&probe);
+            let mut argscratch = String::new();
+            render_flat_elems(elems, cfg, indent, &mut argscratch);
+            render_at(
+                close,
+                cfg.no_reserve(),
+                indent,
+                open_last,
+                true,
+                &mut argscratch,
+            );
+            if !argscratch.contains('\n') && open_last + argscratch.len() <= cfg.margin() {
+                render_at(open, cfg.no_reserve(), indent, start_col, false, out);
+                render_flat_elems(elems, cfg, indent, out);
+                let c = current_col(out);
+                render_at(close, cfg, indent, c, true, out);
+                return;
+            }
         }
     }
 
@@ -2020,15 +2037,24 @@ fn is_delimited_expr(doc: &Doc) -> bool {
     }
 }
 
-/// Whether `op operand` glued onto the current line fits. The operand may render
-/// multiline; the fit test measures only whether `op` plus the operand's FIRST
-/// line fits at the current column (a multiline operand's later lines are free to
-/// break below). A single-line operand must fit entirely.
-fn glue_fits(operand: &Doc, cfg: RenderConfig, col: usize, indent: usize, op: &str) -> bool {
+/// Whether `op operand` glued onto the current line fits, paired with whether the
+/// glued operand rendered single-line. The operand may render multiline; the fit
+/// test measures only whether `op` plus the operand's FIRST line fits at the
+/// current column (a multiline operand's later lines are free to break below). A
+/// single-line operand must fit entirely. The `single_line` flag is the same fact
+/// [`renders_single_line`] measures at the same column under a zero reserve, so a
+/// caller with `cfg.reserve == 0` reads it here instead of re-rendering.
+fn glue_fits(
+    operand: &Doc,
+    cfg: RenderConfig,
+    col: usize,
+    indent: usize,
+    op: &str,
+) -> (bool, bool) {
     // Column after " op " is appended.
     let after_op = col + 1 + op.len() + 1;
     if after_op > cfg.margin() {
-        return false;
+        return (false, false);
     }
     let mut scratch = String::new();
     render_at(
@@ -2050,7 +2076,7 @@ fn glue_fits(operand: &Doc, cfg: RenderConfig, col: usize, indent: usize, op: &s
     } else {
         cfg.max_width
     };
-    after_op + first_line.len() <= margin
+    (after_op + first_line.len() <= margin, single_line)
 }
 
 /// Whether `operand`, rendered non-flat from `col`, stays on a single line. A chain
