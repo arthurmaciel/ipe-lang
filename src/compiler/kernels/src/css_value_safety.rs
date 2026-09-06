@@ -55,79 +55,78 @@
 /// only invoke a colour / gradient / transform / sizing / custom-property
 /// function from this closed set. `url` is present but its ARGUMENT is gated
 /// separately (scheme-free only) by [`url_arg_is_safe`].
+/// The closed allowlist, sorted so [`parse_function`] resolves a name with a
+/// binary search rather than a linear scan (the vocabulary spans colour, custom
+/// property / computed value, gradient, transform, sizing / grid, filter /
+/// effect, and scheme-free resource-reference functions). The sort order is a
+/// lookup invariant asserted at the call site; keep it alphabetical when adding a
+/// function.
 const ALLOWED_FUNCTIONS: &[&str] = &[
-    // Colour.
-    "rgb",
-    "rgba",
-    "hsl",
-    "hsla",
-    "hwb",
-    "lab",
-    "lch",
-    "oklab",
-    "oklch",
+    "attr",
+    "blur",
+    "brightness",
+    "calc",
+    "clamp",
     "color",
     "color-mix",
-    // Custom properties / computed values.
-    "var",
-    "calc",
-    "min",
-    "max",
-    "clamp",
-    "env",
-    // Gradients.
-    "linear-gradient",
-    "radial-gradient",
     "conic-gradient",
+    "contrast",
+    "counter",
+    "counters",
+    "cubic-bezier",
+    "drop-shadow",
+    "env",
+    "fit-content",
+    "format",
+    "grayscale",
+    "hsl",
+    "hsla",
+    "hue-rotate",
+    "hwb",
+    "invert",
+    "lab",
+    "lch",
+    "linear-gradient",
+    "local",
+    "matrix",
+    "matrix3d",
+    "max",
+    "min",
+    "minmax",
+    "oklab",
+    "oklch",
+    "opacity",
+    "perspective",
+    "radial-gradient",
+    "repeat",
+    "repeating-conic-gradient",
     "repeating-linear-gradient",
     "repeating-radial-gradient",
-    "repeating-conic-gradient",
-    // Transforms.
-    "translate",
-    "translatex",
-    "translatey",
-    "translatez",
-    "translate3d",
-    "scale",
-    "scalex",
-    "scaley",
-    "scalez",
-    "scale3d",
+    "rgb",
+    "rgba",
     "rotate",
+    "rotate3d",
     "rotatex",
     "rotatey",
     "rotatez",
-    "rotate3d",
+    "saturate",
+    "scale",
+    "scale3d",
+    "scalex",
+    "scaley",
+    "scalez",
+    "sepia",
     "skew",
     "skewx",
     "skewy",
-    "matrix",
-    "matrix3d",
-    "perspective",
-    // Sizing / grid.
-    "repeat",
-    "minmax",
-    "fit-content",
-    // Filters / effects.
-    "blur",
-    "brightness",
-    "contrast",
-    "drop-shadow",
-    "grayscale",
-    "hue-rotate",
-    "invert",
-    "opacity",
-    "saturate",
-    "sepia",
-    "cubic-bezier",
     "steps",
-    // Resource reference (argument gated scheme-free).
+    "translate",
+    "translate3d",
+    "translatex",
+    "translatey",
+    "translatez",
     "url",
-    "format",
-    "local",
-    "attr",
-    "counter",
-    "counters",
+    "var",
 ];
 
 /// The authoritative `Css.safeValue` decision. `true` iff `v` parses cleanly.
@@ -151,9 +150,11 @@ pub fn css_value_is_safe(v: &str) -> bool {
     // CSS-escape-decoded form, so a hex-escaped payload (`\65 xpression`,
     // `\75 rl(...)`) cannot smuggle an unrecognized construct past the parse.
     // Decoding can only ever reveal MORE structure to the parser, never hide
-    // it, so requiring both forms to parse is strictly fail-closed.
+    // it, so requiring both forms to parse is strictly fail-closed. `css_unescape`
+    // is the identity on backslash-free input (only `\` diverges), so the decoded
+    // pass runs only when a backslash is present — decision-identical either way.
     let low = v.to_ascii_lowercase();
-    value_parses(&low) && value_parses(&css_unescape(&low))
+    value_parses(&low) && (!low.contains('\\') || value_parses(&css_unescape(&low)))
 }
 
 /// Parse `s` (already lowercased) as a whitespace/`,`/`/`-separated sequence of
@@ -227,7 +228,11 @@ fn parse_token(bytes: &[u8], start: usize) -> Option<usize> {
 /// function recursively parses its argument list as a nested value.
 fn parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
     let name_str = core::str::from_utf8(name).ok()?;
-    if !ALLOWED_FUNCTIONS.contains(&name_str) {
+    debug_assert!(
+        ALLOWED_FUNCTIONS.is_sorted(),
+        "ALLOWED_FUNCTIONS must stay sorted for the binary search"
+    );
+    if ALLOWED_FUNCTIONS.binary_search(&name_str).is_err() {
         return None;
     }
     // Find the matching close paren, tracking nesting so an inner function's
