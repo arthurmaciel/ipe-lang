@@ -6305,36 +6305,24 @@ fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
 
     // Step 2 — baseline: read the previously-published entry (if any).
     // Fail closed: a present-but-unreadable baseline propagates as an error
-    // so the immutability wall below never runs against an empty baseline and
-    // silently classifies every submitted version as "new".
+    // so the structural prechecks below never run against an empty baseline and
+    // silently classify every submitted version as "new".
     let index_root = index_root_opt.clone().unwrap_or_else(resolve::index_root);
     let baseline: Option<index::IndexEntry> =
         index::read_entry_lookup(&index_root, &submitted.name).require_present()?;
+
+    // Structural prechecks (no fetch): version-count ceiling, per-version
+    // immutability against the baseline, and source continuity (anti-squat). This
+    // is the authoritative wall (ADR 0044) — it enforces these even for an entry
+    // hand-edited around the author-side `ipe publish`, which an attacker opening
+    // the index PR directly would bypass.
+    index::admission_precheck(&submitted, baseline.as_ref())?;
+
     let baseline_by_version: std::collections::BTreeMap<&semver::Version, &index::EntryVersion> =
         baseline
             .as_ref()
             .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
             .unwrap_or_default();
-
-    // Immutability — a published version is immutable. A submitted version whose
-    // NUMBER already exists in the baseline must be byte-for-byte identical to the
-    // published row; rewriting its `source`/`rev`/`sha256`/`capabilities` is a
-    // supply-chain mutation and is rejected here, never silently skipped. This gate
-    // is the authoritative wall (ADR 0044): it enforces immutability even for an
-    // entry hand-edited around the author-side `ipe publish`, whose own immutability
-    // check an attacker opening the index PR directly would bypass.
-    for version in &submitted.versions {
-        if let Some(&prior) = baseline_by_version.get(&version.version)
-            && prior != version
-        {
-            return Err(CliError::UsageOwned(format!(
-                "ipe package audit-entry: `{}` version {} is already published and immutable, \
-                 but the submitted entry rewrites it (source, rev, sha256, or capabilities \
-                 differ). A published version must never be rewritten — publish a new version.",
-                submitted.name, version.version
-            )));
-        }
-    }
 
     // The new versions are those present in the submitted entry but absent from
     // the baseline. A PR normally adds exactly one. Each is fetched, hash-verified,
@@ -10015,7 +10003,7 @@ pub mod web {
                 "1.0.0",
                 "https://x.invalid/mylib",
                 "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                "00",
+                "0000000000000000000000000000000000000000000000000000000000000000",
             )],
         );
         write_entry(
@@ -10025,7 +10013,7 @@ pub mod web {
                 "1.0.0",
                 "https://x.invalid/mylib",
                 "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                "00",
+                "0000000000000000000000000000000000000000000000000000000000000000",
             )],
         );
         let args: Vec<String> = [
@@ -10058,8 +10046,8 @@ pub mod web {
     fn audit_entry_rejects_rewriting_a_published_version() {
         let submitted_root = temp_dir_unique("ae-immutable-sub");
         let baseline_root = temp_dir_unique("ae-immutable-idx");
-        // Baseline published 1.0.0 with sha "00"; the submission keeps the same
-        // version number but rewrites its sha256 to "11".
+        // The baseline publishes 1.0.0 with one content hash; the submission
+        // keeps the same version number but rewrites its sha256 to another.
         write_entry(
             &baseline_root,
             "mylib",
@@ -10067,7 +10055,7 @@ pub mod web {
                 "1.0.0",
                 "https://x.invalid/mylib",
                 "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                "00",
+                "0000000000000000000000000000000000000000000000000000000000000000",
             )],
         );
         write_entry(
@@ -10077,7 +10065,7 @@ pub mod web {
                 "1.0.0",
                 "https://x.invalid/mylib",
                 "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                "11",
+                "1111111111111111111111111111111111111111111111111111111111111111",
             )],
         );
         let args: Vec<String> = [
@@ -10134,14 +10122,17 @@ pub mod web {
             .expect("git rev-parse");
         let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_owned();
 
-        // Write an entry that points at this repo but with a deliberately wrong sha256.
+        // Write an entry that points at this repo but with a deliberately wrong
+        // sha256. It is well-formed (64 lowercase-hex chars) so it clears the
+        // parse gate and reaches the content-hash verification, which must then
+        // reject it as a mismatch.
         let entry_root = temp_dir_unique("ae-mismatch-entry");
         let pkgs = entry_root.join("packages");
         std::fs::create_dir_all(&pkgs).expect("packages dir");
         let entry_text = format!(
             "name = \"testlib\"\npublisher = \"tester\"\n\n[[version]]\n\
              version = \"1.0.0\"\nsource = \"{}\"\nrev = \"{rev}\"\n\
-             sha256 = \"000000000000000000000000000000000000000000000000000000000000wrong\"\n\
+             sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
              capabilities = []\n",
             repo.display()
         );
