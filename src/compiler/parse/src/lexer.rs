@@ -921,7 +921,6 @@ fn two_char_only(lx: &mut Lexer, lo: u32, second: char, two: Tok, err: ParseErro
     }
 }
 
-
 #[cfg(test)]
 mod source_size_guard_tests {
     use super::{lex, source_offset_range_admits};
@@ -961,7 +960,9 @@ mod source_size_guard_tests {
         // The refusal a real oversized source would take, exercised directly.
         let refusal: Diagnostic = Diagnostic::Parse {
             span: ipe_diagnostics::Span::new(0, 0),
-            msg: ParseError::SourceTooLarge { bytes: 5_000_000_000 },
+            msg: ParseError::SourceTooLarge {
+                bytes: 5_000_000_000,
+            },
         };
         assert!(matches!(
             refusal,

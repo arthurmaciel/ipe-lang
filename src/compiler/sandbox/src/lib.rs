@@ -1037,7 +1037,10 @@ mod tests {
             .iter()
             .position(|a| a == "/usr/bin/bwrap")
             .expect("bwrap token present");
-        assert_eq!(rendered.get(bwrap + 1).map(String::as_str), Some("--seccomp"));
+        assert_eq!(
+            rendered.get(bwrap + 1).map(String::as_str),
+            Some("--seccomp")
+        );
         assert_eq!(rendered.get(bwrap + 2).map(String::as_str), Some("7"));
     }
 

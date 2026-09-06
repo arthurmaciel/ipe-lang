@@ -4397,10 +4397,7 @@ fn serve_one(conn: &mut std::net::TcpStream, site: &BTreeMap<String, String>) {
     // Bound the wait: a peer that connects and never writes stalls this one
     // connection for at most the timeout, never the whole loop (a remote
     // exhaustion vector otherwise).
-    if conn
-        .set_read_timeout(Some(DOC_SERVE_READ_TIMEOUT))
-        .is_err()
-    {
+    if conn.set_read_timeout(Some(DOC_SERVE_READ_TIMEOUT)).is_err() {
         return;
     }
     let Ok(clone) = conn.try_clone() else {
@@ -5844,5 +5841,4 @@ withBaseMs = something
             "serve_one must return promptly, took {elapsed:?}"
         );
     }
-
 }

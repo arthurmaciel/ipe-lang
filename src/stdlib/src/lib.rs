@@ -1966,13 +1966,11 @@ pub fn inject_compiled_std_closure(
     extract_imports: impl Fn(&str) -> Vec<Vec<String>>,
     mut on_injected: impl FnMut(&[String], &std::path::Path),
 ) -> std::collections::BTreeSet<Vec<String>> {
-    let mut injected: std::collections::BTreeSet<Vec<String>> =
-        std::collections::BTreeSet::new();
+    let mut injected: std::collections::BTreeSet<Vec<String>> = std::collections::BTreeSet::new();
 
     // Seed the worklist from every compiled-source import across current sources.
     // Short-circuit: an unused-stdlib build enqueues nothing and returns empty.
-    let mut work: std::collections::VecDeque<Vec<String>> =
-        std::collections::VecDeque::new();
+    let mut work: std::collections::VecDeque<Vec<String>> = std::collections::VecDeque::new();
     for (_, src) in sources.values() {
         for imp in extract_imports(src) {
             if is_compiled_source_segments(&imp) {
@@ -1995,8 +1993,7 @@ pub fn inject_compiled_std_closure(
 
         // Synthetic on-disk-looking path, for diagnostics only — never read from
         // disk: `sources` already carries the embedded text.
-        let synth_path =
-            std::path::PathBuf::from("<embedded-stdlib>").join(path.join("."));
+        let synth_path = std::path::PathBuf::from("<embedded-stdlib>").join(path.join("."));
         sources.insert(path.clone(), (synth_path.clone(), embedded.to_owned()));
         on_injected(&path, &synth_path);
         injected.insert(path.clone());

@@ -65,8 +65,14 @@ mod tests {
             },
         );
 
-        assert_eq!(wrapper_set, core_set, "wrapper and core inject the same set");
-        assert_eq!(observed, core_set, "callback saw exactly the injected paths");
+        assert_eq!(
+            wrapper_set, core_set,
+            "wrapper and core inject the same set"
+        );
+        assert_eq!(
+            observed, core_set,
+            "callback saw exactly the injected paths"
+        );
         assert!(
             core_set.contains(&vec!["Ipe".to_owned(), "Palette".to_owned()]),
             "Ipe.Palette must be injected"

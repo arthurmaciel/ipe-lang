@@ -1040,10 +1040,7 @@ fn colliding_type_fold_disambiguates_and_emits() -> DResult<()> {
     let prog = Program {
         imports_unsafe_submodule: false,
         imported_web_capabilities: std::collections::BTreeSet::new(),
-        modules: vec![
-            module(std_palette, color),
-            module(std_mod, palette_color),
-        ],
+        modules: vec![module(std_palette, color), module(std_mod, palette_color)],
     };
     // Previously rejected with IPE-N0048; the injective fold now emits both.
     let emitted = RustBackend::new(&interner).emit(&prog)?;

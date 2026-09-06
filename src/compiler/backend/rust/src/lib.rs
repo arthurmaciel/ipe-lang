@@ -1472,13 +1472,9 @@ impl<'a> EmitCtx<'a> {
                 // degenerate name space with no free suffix fails closed with the
                 // fold diagnostic (IPE-N0048) naming both Ipê types.
                 let this_dotted = ipe_dotted_name(&home_segs, def_name);
-                let Some(rust_name) =
-                    disambiguated_rust_name(&rust_name, "", &enum_rust_names)
+                let Some(rust_name) = disambiguated_rust_name(&rust_name, "", &enum_rust_names)
                 else {
-                    let first_dotted = enum_rust_names
-                        .get(&rust_name)
-                        .cloned()
-                        .unwrap_or_default();
+                    let first_dotted = enum_rust_names.get(&rust_name).cloned().unwrap_or_default();
                     return Err(Diagnostic::Name {
                         span: Span::DUMMY,
                         msg: NameError::RustNameFold {
@@ -1530,10 +1526,7 @@ impl<'a> EmitCtx<'a> {
                 let this_dotted = ipe_dotted_name(&func_segs, resolve_sym(interner, func.name)?);
                 let Some(rust_name) = disambiguated_rust_name(&rust_name, "_", &func_ipe_names)
                 else {
-                    let first_dotted = func_ipe_names
-                        .get(&rust_name)
-                        .cloned()
-                        .unwrap_or_default();
+                    let first_dotted = func_ipe_names.get(&rust_name).cloned().unwrap_or_default();
                     return Err(Diagnostic::Name {
                         span: Span::DUMMY,
                         msg: NameError::RustNameFold {
