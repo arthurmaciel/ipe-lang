@@ -99,10 +99,15 @@ fn parse_exposing(source: &str) -> Option<Vec<String>> {
     let module_kw = line_anchored_module_offset(source)?;
     let exposing_kw = source[module_kw..].find("exposing")? + module_kw;
     let open = source[exposing_kw..].find('(')? + exposing_kw;
+    // A `--`-to-end-of-line comment may sit between exposed names (section
+    // headers inside the list). Mask those comment spans to spaces — keeping
+    // byte length so the paren depth counter and comma splitter below see only
+    // the real clause, not stray parens or names absorbed from comment text.
+    let masked = mask_line_comments(source);
     // Match the closing paren of the exposing clause (it may span lines).
     let mut depth = 0usize;
     let mut close = None;
-    for (i, c) in source[open..].char_indices() {
+    for (i, c) in masked[open..].char_indices() {
         match c {
             '(' => depth += 1,
             ')' => {
@@ -116,7 +121,7 @@ fn parse_exposing(source: &str) -> Option<Vec<String>> {
         }
     }
     let close = close?;
-    let inner = &source[open + 1..close];
+    let inner = &masked[open + 1..close];
     if inner.trim() == ".." {
         return None;
     }
@@ -145,6 +150,39 @@ fn parse_exposing(source: &str) -> Option<Vec<String>> {
     }
     push_exposed_name(&mut names, &token);
     Some(names)
+}
+
+/// Replace every `--`-to-end-of-line comment with spaces, preserving byte
+/// length and newlines so byte offsets into the result still index the
+/// original source. Used to keep exposing-clause parsing blind to section
+/// comments interleaved in a multi-line `exposing ( … )` list.
+fn mask_line_comments(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    for line in source.split_inclusive('\n') {
+        match line.find("--") {
+            Some(at) => {
+                // Everything before the marker stays; the comment (up to but
+                // not including any trailing newline) becomes spaces of equal
+                // byte width so offsets into the result match the original.
+                let (kept, comment) = line.split_at(at);
+                out.push_str(kept);
+                let trailing_newline = comment.ends_with('\n');
+                let body = if trailing_newline {
+                    comment.strip_suffix('\n').unwrap_or(comment)
+                } else {
+                    comment
+                };
+                for _ in 0..body.len() {
+                    out.push(' ');
+                }
+                if trailing_newline {
+                    out.push('\n');
+                }
+            }
+            None => out.push_str(line),
+        }
+    }
+    out
 }
 
 /// Byte offset of the `module` declaration keyword — the first line whose
@@ -546,6 +584,38 @@ withDefault = Kernel.kernel \"Result_withDefault\"
             wd.doc.as_deref().is_some_and(|d| d.contains("fallback")),
             "the block doc must be captured"
         );
+    }
+
+    #[test]
+    fn exposing_list_with_interleaved_comments() {
+        // Section comments interleaved in a multi-line exposing list must not
+        // be absorbed into export names or unbalance the paren counter.
+        let src = "\
+module Ipe.Demo exposing
+    ( config
+    -- Event constructors (Pii etc.)
+    , trackEvent
+    , erase
+    )
+
+config : Int
+config = 0
+
+trackEvent : Int -> Int
+trackEvent n = n
+
+erase : Int -> Int
+erase n = n
+";
+        let names = parse_exposing(src).expect("explicit exposing list");
+        assert_eq!(names, vec!["config", "trackEvent", "erase"]);
+        let m = extract_module_doc("Ipe.Demo", src);
+        for want in ["config", "trackEvent", "erase"] {
+            assert!(
+                m.exports.iter().any(|e| e.name == want),
+                "export {want} must survive the interleaved comment"
+            );
+        }
     }
 
     #[test]

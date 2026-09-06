@@ -447,7 +447,7 @@ jobs:
           IPE="$PWD/target/release/ipe"
           WARM="$(mktemp -d)"; cd "$WARM"
           "$IPE" build "$GITHUB_WORKSPACE/examples/shapes/script/release-preflight/package.ipe" --out out/rust
-          cd out/rust && cargo build --release
+          cd out/rust && cargo build
       - name: Check + emit + build every first-party shape
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/shapes-shared-target
@@ -465,7 +465,11 @@ jobs:
             if ! "$IPE" build "$toml" --out "$dir/out/rust"; then
               echo "::error::ipe build regressed: $dir"; fail=1; echo "::endgroup::"; continue
             fi
-            if ! ( cd "$dir/out/rust" && cargo build --release ); then
+            # A debug build proves the emitted crate compiles and links — the two
+            # ways a user first feels an emit regression. Release optimisation adds
+            # minutes here without strengthening that proof; the full release SEAL
+            # (the e2e goldens) stays on push/nightly.
+            if ! ( cd "$dir/out/rust" && cargo build ); then
               echo "::error::emitted cargo build regressed: $dir"; fail=1
             fi
             echo "::endgroup::"
