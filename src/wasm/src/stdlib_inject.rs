@@ -56,17 +56,17 @@ mod tests {
 
         let mut via_core: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         seed(&mut via_core);
-        let mut seen: BTreeSet<Vec<String>> = BTreeSet::new();
+        let mut observed: BTreeSet<Vec<String>> = BTreeSet::new();
         let core_set = ipe_stdlib::inject_compiled_std_closure(
             &mut via_core,
             ipe_db::extract_imports_from_source,
             |module_path, _synth| {
-                seen.insert(module_path.to_vec());
+                observed.insert(module_path.to_vec());
             },
         );
 
         assert_eq!(wrapper_set, core_set, "wrapper and core inject the same set");
-        assert_eq!(seen, core_set, "callback saw exactly the injected paths");
+        assert_eq!(observed, core_set, "callback saw exactly the injected paths");
         assert!(
             core_set.contains(&vec!["Ipe".to_owned(), "Palette".to_owned()]),
             "Ipe.Palette must be injected"
