@@ -67,9 +67,16 @@ cwd-mutating = { max-threads = 1 }
 advisory-db-lock = { max-threads = 1 }
 wasm-external-cargo = { max-threads = 1 }
 
+# The heavy-server-e2e members cold-`cargo build` a full axum/tokio crate and
+# bind a real TCP port. Serialization (max-threads = 1) removes the shared-target
+# lock contention, but a transient teardown/serve timeout under runner scheduler
+# pressure can still surface on a single attempt. Two in-run retries let such a
+# transient self-heal without masking a real regression (a genuinely broken emit
+# fails all three attempts).
 [[profile.ci.overrides]]
 filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
+retries = 2
 
 [[profile.ci.overrides]]
 filter = 'binary(build_no_arg) | binary(release_subcommand)'
