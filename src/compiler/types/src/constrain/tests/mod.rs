@@ -2083,12 +2083,12 @@ mod registry_phase_c_tests {
     #[test]
     fn no_ty_var_max_sentinel() {
         let src = concat!(
-            include_str!("mod.rs"),
-            include_str!("builtins.rs"),
-            include_str!("builder_core.rs"),
-            include_str!("constrain_ast.rs"),
-            include_str!("scheme_table.rs"),
-            include_str!("zonk.rs"),
+            include_str!("../mod.rs"),
+            include_str!("../builtins.rs"),
+            include_str!("../builder_core.rs"),
+            include_str!("../constrain_ast.rs"),
+            include_str!("../scheme_table.rs"),
+            include_str!("../zonk.rs"),
         );
         let needle = concat!("Ty::Var(u32::", "MAX)");
         for (idx, line) in src.lines().enumerate() {
