@@ -218,6 +218,11 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
         "IPE-P0067",
         "exported binding has no doc-string is a warning (not a hard rejection); needs a warning-surface test",
     ),
+    (
+        "refusal-tested",
+        "IPE-P0070",
+        "source-too-large refusal fires only above u32::MAX bytes; driving it needs a >4 GiB source, impractical in the suite",
+    ),
     // ── IPE-T#### (type) ────────────────────────────────────────────────────
     (
         "refusal-tested",

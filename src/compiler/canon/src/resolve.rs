@@ -8389,7 +8389,7 @@ mod duplicate_pattern_binder_tests {
     //! alternatives are disjoint scopes, so a name reused across them is legal.
 
     use super::{reject_duplicate_pattern_binders, src};
-    use ipe_diagnostics::{Diagnostic, Located, NameError, Span};
+    use ipe_diagnostics::{Diagnostic, Located, NameError, Span, IPE_N0049};
     use ipe_intern::Interner;
 
     fn sym(i: &mut Interner, name: &str) -> ipe_intern::Symbol {
@@ -8418,6 +8418,7 @@ mod duplicate_pattern_binder_tests {
             ),
             "expected DuplicatePatternBinder"
         );
+        assert_eq!(err.code(), IPE_N0049, "duplicate pattern binder is IPE-N0049");
     }
 
     #[test]
