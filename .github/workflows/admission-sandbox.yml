@@ -40,7 +40,7 @@ name: Sandbox
 
 on:
   push:
-    branches: [main, master, 'ci/admission-sandbox-matrix']
+    branches: [main, master, development, 'ci/admission-sandbox-matrix']
   pull_request:
   schedule:
     - cron: '17 3 * * *'   # nightly, offset from ci.yml / security.yml

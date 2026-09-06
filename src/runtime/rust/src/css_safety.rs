@@ -63,59 +63,26 @@ impl<'a> SafeCssPropertyName<'a> {
 ///   `url(data:application`.
 pub(crate) struct SafeCssValue<'a>(&'a str);
 
-/// Breakout / script-sink patterns for a CSS declaration value. Checked
-/// against both the raw value and the CSS-escape-decoded value
-/// (`css_unescape`) by [`has_dangerous_css_pattern`] — one list, one policy.
-const BAD_VALUE_PATTERNS: &[&str] = &[
-    "expression(",
-    "javascript:",
-    "vbscript:",
-    // Legacy script-execution properties: Firefox XBL (`-moz-binding:`) and
-    // IE HTC (`behavior:`). Neither appears in valid modern CSS; block both
-    // as defence-in-depth for contexts that must defend legacy engines.
-    "-moz-binding:",
-    "behavior:",
-    "url(-moz-binding:",
-    "url(javascript:",
-    "url('javascript:",
-    "url(\"javascript:",
-    "url(vbscript:",
-    "url(data:text",
-    "url(data:application",
-];
-
-/// True when `low` (already lowercased) carries a declaration/ruleset
-/// breakout character or a script-sink keyword. Shared by the raw-value and
-/// CSS-escape-decoded-value passes so they cannot drift.
-fn has_dangerous_css_pattern(low: &str) -> bool {
-    // Declaration / ruleset / style-tag breakout + comment obfuscation.
-    if low.contains(';')
-        || low.contains('{')
-        || low.contains('}')
-        || low.contains("</")
-        || low.contains("/*")
-        || low.contains("@import")
-    {
-        return true;
-    }
-    // Script sinks — whitespace stripped so `url( javascript:…` /
-    // `java script:` cannot evade.
-    let low_nows: String = low.chars().filter(|c| !c.is_whitespace()).collect();
-    BAD_VALUE_PATTERNS.iter().any(|bad| low_nows.contains(bad))
-}
-
-/// At-rule / style-tag / comment / script-sink patterns that must never survive
-/// in a raw `<style>`-body fragment (`Css.raw` / `Css.keyframes`). A raw body is
-/// a full stylesheet fragment, so block-structure characters (`{` `}` `;`) are
+/// Structural breakout / script-property patterns that must never survive in a
+/// raw `<style>`-body fragment (`Css.raw` / `Css.keyframes`). A raw body is a
+/// full stylesheet fragment, so block-structure characters (`{` `}` `;`) are
 /// LEGAL here (unlike a single declaration value) — the danger is an at-rule
 /// (`@import` CSS-level SSRF, `@charset`), a style-tag / comment breakout
-/// (`</` `/*`), or a script-sink URL scheme. Checked against BOTH the raw
-/// fragment and its CSS-escape-decoded form so a hex-escaped payload
-/// (`\40 import`, `x:e\78 pression(…)`) cannot slip past.
+/// (`</` `/*`), or a script-execution property.
+///
+/// URL schemes are NOT in this list: every `url(…)` argument is judged
+/// positively by [`raw_body_url_args_all_safe`], which delegates to the SAME
+/// scheme-free [`url_arg_is_safe`] the declaration-value grammar uses — so a
+/// remote (`url(http://…)`), protocol-relative (`url(//…)`), script-scheme, or
+/// scriptable-data (`url(data:image/svg…)`, `url(data:text/html…)`) reference is
+/// rejected by construction, none of which a denylist would need to name.
+/// Checked against BOTH the raw fragment and its CSS-escape-decoded form so a
+/// hex-escaped payload (`\40 import`, `x:e\78 pression(…)`) cannot slip past.
 const BAD_RAW_BODY_PATTERNS: &[&str] = &[
     "@import",
     "@charset",
     "@namespace",
+    "@font-face",
     "</",
     "/*",
     "*/",
@@ -127,25 +94,53 @@ const BAD_RAW_BODY_PATTERNS: &[&str] = &[
     // as defence-in-depth for contexts that must defend legacy engines.
     "-moz-binding:",
     "behavior:",
-    "url(-moz-binding:",
-    "url(javascript:",
-    "url('javascript:",
-    "url(\"javascript:",
-    "url(vbscript:",
-    "url(data:text",
-    "url(data:application",
 ];
 
+/// True when EVERY `url(…)` occurrence in `low_nows` (already lowercased,
+/// whitespace stripped) carries a safe argument, judged by the shared
+/// scheme-free [`url_arg_is_safe`] — the identical policy the declaration-value
+/// grammar applies to a `url(...)` token, so the raw-body path and the value
+/// path cannot disagree on a URL. A `url(` with no closing `)` in the remaining
+/// input is treated as UNSAFE (fail closed on a malformed / truncated token).
+///
+/// Parse, don't validate: only a scheme-free same-origin reference is accepted;
+/// every scheme-bearing or authority-bearing argument is refused without a
+/// per-scheme denylist entry, so a novel scheme fails closed by default.
+fn raw_body_url_args_all_safe(low_nows: &str) -> bool {
+    let mut rest = low_nows;
+    while let Some(pos) = rest.find("url(") {
+        let after = &rest[pos + "url(".len()..];
+        // The argument runs to the first `)`; a missing close is fail-closed.
+        let Some(close) = after.find(')') else {
+            return false;
+        };
+        // Strip one layer of matching quotes so `url('…')` / `url("…")` is
+        // judged on the same bytes as the bare form.
+        let arg = after[..close].trim_matches(|c| c == '"' || c == '\'');
+        if !url_arg_is_safe(arg.as_bytes()) {
+            return false;
+        }
+        rest = &after[close + 1..];
+    }
+    true
+}
+
 /// True when `low` (already lowercased) carries a raw-`<style>`-body breakout —
-/// an at-rule, a style-tag / comment breakout, or a script-sink scheme. Shared
-/// by the raw and CSS-escape-decoded passes of [`sink_safe_raw_body`] so they
-/// cannot drift. Whitespace is stripped before the scan so `@ import`,
-/// `url( javascript:`, and `expression (` cannot evade by inserting spaces.
+/// an at-rule, a style-tag / comment breakout, a script-execution property, or a
+/// `url(…)` whose argument fails the shared scheme-free [`url_arg_is_safe`]
+/// allowlist. Shared by the raw and CSS-escape-decoded passes of
+/// [`sink_safe_raw_body`] so they cannot drift. Whitespace is stripped before
+/// the scan so `@ import`, `url( http:`, and `expression (` cannot evade by
+/// inserting spaces.
 fn raw_body_has_dangerous_pattern(low: &str) -> bool {
     let low_nows: String = low.chars().filter(|c| !c.is_whitespace()).collect();
-    BAD_RAW_BODY_PATTERNS
+    if BAD_RAW_BODY_PATTERNS
         .iter()
         .any(|bad| low_nows.contains(bad))
+    {
+        return true;
+    }
+    !raw_body_url_args_all_safe(&low_nows)
 }
 
 /// Sink-side validation of a raw `<style>`-body fragment — the body carried by
@@ -153,10 +148,14 @@ fn raw_body_has_dangerous_pattern(low: &str) -> bool {
 /// TRUSTED-INPUT escape hatch (`dangerouslySetInnerHTML`-class): block structure
 /// (`{` `}` `;`) is legitimate, so this does NOT reuse the flat declaration-value
 /// policy. It rejects an at-rule (`@import` CSS-level SSRF), a `<style>`/comment
-/// breakout (`</` `/*` `*/`), or a script-sink URL scheme — in BOTH the raw and
-/// CSS-escape-decoded (`css_unescape`) forms, with whitespace stripped for the
-/// scan. This is the faithful counterpart to `Ipe.Css`'s `.ipe` gate: the same
-/// normalization the `<style>` sink relies on runs at the `raw`/`keyframes`
+/// breakout (`</` `/*` `*/`), a script-execution property, or a `url(…)` whose
+/// argument fails the scheme-free [`url_arg_is_safe`] allowlist — so a remote
+/// (`url(http://…)`), protocol-relative (`url(//…)`), script-scheme, or
+/// scriptable-data (`url(data:image/svg…)`, `url(data:text/html…)`) reference is
+/// rejected by construction rather than by naming it. Checked in BOTH the raw
+/// and CSS-escape-decoded (`css_unescape`) forms, with whitespace stripped for
+/// the scan. This is the faithful counterpart to `Ipe.Css`'s `.ipe` gate: the
+/// same normalization the `<style>` sink relies on runs at the `raw`/`keyframes`
 /// boundary, so a CSS-escaped payload that a raw substring check would miss
 /// (`\40 import`, `x:e\78 pression(…)`) is dropped here.
 ///
@@ -179,8 +178,8 @@ pub(crate) fn sink_safe_raw_body(body: &str) -> bool {
 /// purposes only — the decoded string is never emitted; [`SafeCssValue`]
 /// keeps the caller's ORIGINAL string on success. A value that hides a
 /// blocked keyword or breakout char behind a hex escape (`\65 xpression(…)`,
-/// `\3b` for `;`) decodes to the literal form here, so
-/// [`has_dangerous_css_pattern`] catches it on the second pass.
+/// `\3b` for `;`) decodes to the literal form here, so the second-pass scan
+/// (each gate's grammar / allowlist check) catches it.
 ///
 /// Best-effort / fail-closed, not a spec-complete CSS tokenizer: an escape
 /// decoding to an invalid Unicode scalar value is dropped rather than
@@ -354,7 +353,7 @@ fn value_grammar_parses(s: &str) -> bool {
         if c == b'!' {
             return s
                 .get(i + 1..)
-                .is_some_and(|rest| rest.trim_start() == "important");
+                .is_some_and(|rest| rest.trim() == "important");
         }
         if c == b'"' || c == b'\'' {
             match value_parse_string(bytes, i, c) {
@@ -760,40 +759,79 @@ impl<'a> SafeCssSelector<'a> {
 /// `Ui.breakpoint` — the text spliced into `@media <query> {` inside a raw
 /// `<style>` body by `web::style_inject::build_mq`).
 ///
-/// Deliberately a DISTINCT boundary type from [`SafeCssSelector`]: the
-/// selector allowlist blocks `<` outright, but Media Queries Level 4 range
-/// syntax legitimately uses it (`(400px <= width <= 700px)`), and a media
-/// query is a different grammar from a selector. The POLICY, however, is the
-/// shared [`has_dangerous_css_pattern`] + [`css_unescape`] re-scan pair that
-/// [`SafeCssValue`] uses (one policy, one place — no second weaker encoder):
-/// it rejects everything that could break out of the `@media … {` position —
-/// `;` `{` `}` `</` `/*` `@import` and the script-sink keywords, in both the
-/// raw and CSS-escape-decoded forms. None of those occur in any valid media
-/// query (`</` cannot form because a query has no `/` followed by tag text
-/// that matters — and if present it is rejected, fail-closed). A query that
-/// fails is DROPPED with its whole rule; the wrapped child still renders.
+/// Deliberately a DISTINCT boundary type from [`SafeCssSelector`]: the selector
+/// allowlist blocks `<` outright, but Media Queries Level 4 range syntax
+/// legitimately uses it (`(400px <= width <= 700px)`), and a media query is a
+/// different grammar from a selector.
+///
+/// The policy is a POSITIVE grammar allowlist, not a breakout denylist: a media
+/// query is a boolean feature test (`(min-width: 768px) and (hover: hover)`,
+/// media types like `screen`/`all`, the connectives `and`/`or`/`not`/`only`,
+/// `,` lists, and Level-4 range operators `< > =`). It therefore uses ONLY the
+/// charset `[a-z0-9 _-]`, `:`, `.`, `%`, `(`, `)`, `,`, `<`, `>`, `=`. Every
+/// other byte — `{` `}` `;` `@` `/` `\` `<tag>` quotes, and crucially any `url(`
+/// which never appears in a real query — is outside the grammar and drops the
+/// whole rule by construction. Because URLs are grammatically impossible here,
+/// there is no fetch / SSRF / exfil sink to reason about at all. Checked on both
+/// the raw and CSS-escape-decoded forms so a hex-escaped byte cannot smuggle a
+/// character back into the string.
 pub(crate) struct SafeCssMediaQuery<'a>(&'a str);
 
 impl<'a> SafeCssMediaQuery<'a> {
+    /// The positive per-byte grammar of a media-query condition, PLUS an
+    /// explicit rejection of any `url(` token. The charset allows `:` `(` `)`
+    /// (needed by `(min-width: 768px)`), which together happen to spell
+    /// `url(scheme:…)`; a real media query never contains a URL, so a `url(`
+    /// substring is refused outright rather than relying on the charset to
+    /// exclude it. Anything else outside the charset is rejected too, so no
+    /// breakout / at-rule / tag can form.
+    fn charset_ok(low: &str) -> bool {
+        // Whitespace-stripped so `url ( …` cannot evade the `url(` check.
+        let low_nows: String = low.chars().filter(|c| !c.is_whitespace()).collect();
+        if low_nows.contains("url(") {
+            return false;
+        }
+        low.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b' ' | b'_'
+                        | b'-'
+                        | b':'
+                        | b'.'
+                        | b'%'
+                        | b'('
+                        | b')'
+                        | b','
+                        | b'<'
+                        | b'>'
+                        | b'='
+                )
+        })
+    }
+
     /// Parse and validate a CSS media-query condition string.
     ///
     /// Returns `None` (drop the media-query styling) when `q` is empty after
-    /// trimming or carries any breakout / script-sink pattern in either its
-    /// raw or CSS-escape-decoded form.
+    /// trimming or contains any byte outside the media-query grammar, in either
+    /// its raw or CSS-escape-decoded form.
     pub(crate) fn parse(q: &'a str) -> Option<Self> {
         let s = q.trim();
         if s.is_empty() {
             return None;
         }
         let low = s.to_ascii_lowercase();
-        if has_dangerous_css_pattern(&low) {
+        if !Self::charset_ok(&low) {
             return None;
         }
-        // Defence-in-depth (same as SafeCssValue): decode CSS backslash
-        // escapes and re-scan so `\3b` / `\7b`-style obfuscation of a
-        // breakout char is caught too.
+        // Defence-in-depth: decode CSS backslash escapes and re-check so a
+        // hex-escaped byte (`\7b` → `{`, `\2f` → `/`) that decodes to an
+        // out-of-grammar character is caught too. A lone `\` is itself outside
+        // the grammar, so an escape sequence in the raw form is already
+        // rejected above; the decoded pass closes the theoretical gap where the
+        // decoder collapses an escape into an in-grammar-looking string.
         let decoded_low = css_unescape(&low);
-        if has_dangerous_css_pattern(&decoded_low) {
+        if !Self::charset_ok(&decoded_low) {
             return None;
         }
         Some(SafeCssMediaQuery(s))
@@ -1037,6 +1075,15 @@ mod tests {
             "(min-width: 1px) \\7b  color:red",
             // script sink
             "url(javascript:alert(1))",
+            // Exfil / remote-fetch vectors a media query never legitimately
+            // contains — the positive grammar rejects every `url(…)` outright,
+            // so these fail closed without any per-scheme denylist entry.
+            "(min-width: 1px) and url(http://evil.example/x)",
+            "screen url(//evil.example/x)",
+            "(min-width: 1px) url(data:image/svg+xml,<svg onload=alert(1)>)",
+            // A bare `/` or `\` (comment / escape byte) is outside the grammar.
+            "(min-width: 1px) /x",
+            "(min-width: 1px) \\x",
         ] {
             assert!(
                 SafeCssMediaQuery::parse(q).is_none(),
@@ -1204,11 +1251,53 @@ mod tests {
             "0% { opacity: 0 } 100% { opacity: 1 }",
             ".card { color: red; padding: 8px }",
             "from { transform: translateX(0) } to { transform: translateX(100px) }",
+            // A scheme-free same-origin asset reference passes the url() gate.
+            ".hero { background: url(/assets/hero.png) }",
+            ".icon { background: url('../img/sprite.svg') }",
+            ".mask { mask: url(#clip) }",
+            ".bg { background: url(img/bg.webp?v=2) }",
         ];
         for body in &must_pass {
             assert!(
                 sink_safe_raw_body(body),
                 "benign raw body must pass: {body:?}"
+            );
+        }
+    }
+
+    /// Exfil / remote-fetch vectors the OLD denylist let through because it
+    /// enumerated only the schemes it feared. The scheme-free `url(…)` allowlist
+    /// (`raw_body_url_args_all_safe` → `url_arg_is_safe`) rejects every `url(…)`
+    /// that is not a same-origin, scheme-free reference — so these fail closed in
+    /// the raw-body path (a `data:` image is refused too: it carries a `:`).
+    #[test]
+    fn raw_body_gate_rejects_unenumerated_url_exfil_vectors() {
+        let must_reject = [
+            // Remote fetch (SSRF / exfil) — never on any denylist.
+            "a { background: url(http://evil.example/x.png) }",
+            "a { background: url(https://evil.example/track.gif) }",
+            "a { background: url(ftp://evil.example/x) }",
+            // Protocol-relative fetch resolves to a foreign host.
+            "a { background: url(//evil.example/x.png) }",
+            // Any data: URL is refused (it bears a `:`); a scriptable SVG data
+            // image (which can carry <script>) is the reason to never special-case it.
+            "a { background: url(data:image/svg+xml,<svg onload=alert(1)>) }",
+            "a { background: url(data:image/svg+xml;base64,PHN2Zz4=) }",
+            // Quoted forms must not evade the scheme check.
+            "a { background: url('https://evil.example/x') }",
+            "a { background: url(\"//evil.example/x\") }",
+            // Whitespace-obfuscated remote fetch (whitespace stripped first).
+            "a { background: url( https://evil.example/x ) }",
+            // CSS-hex-escaped remote scheme (`\68`='h') — caught by the
+            // decode-then-rescan. `\68 ttps:` → `https:`.
+            "a { background: url(\\68 ttps://evil.example/x) }",
+            // A `url(` with no closing paren is a malformed token — fail closed.
+            "a { background: url(https://evil.example/x }",
+        ];
+        for body in &must_reject {
+            assert!(
+                !sink_safe_raw_body(body),
+                "url exfil vector must be dropped: {body:?}"
             );
         }
     }
@@ -1228,6 +1317,8 @@ mod tests {
             "rgba(0,0,0,0.2)",
             "1px solid #ccc",
             "translateX(100px)",
+            "red !important",
+            "red !important ",
             // adversarial — rejected by both
             "expression(alert(1))",
             "0; background:url(javascript:alert(1))",

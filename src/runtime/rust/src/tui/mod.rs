@@ -550,6 +550,30 @@ pub fn cli_bg_<M>(c: TermColor) -> CliAttr<M> {
     CliAttr::BgColor(c)
 }
 
+/// Render a `Lines` view to the styled terminal string a line-oriented `Cli.app`
+/// writes to stdout.
+///
+/// A line-oriented surface occupies exactly the height of its own stacked lines,
+/// so the frame is sized to the view's content height rather than the full
+/// terminal window — a `Screen` paints a fixed rectangle, a `Lines` view paints
+/// only its lines. Width still comes from the terminal so styled runs reflow to
+/// the visible columns. The returned string carries no forced trailing newline:
+/// the console loop owns the single terminating newline, matching the
+/// no-trailing-newline write contract of the string-returning view it replaces.
+#[must_use]
+pub fn render_lines_view<M: Clone>(view: LinesView<M>) -> String {
+    let element = view.into_element();
+    let cols = match crossterm::terminal::size() {
+        Ok((w, _)) if w > 0 => w as usize,
+        _ => 80,
+    };
+    // Probe pass measures the content height; the paint pass sizes the frame to
+    // exactly that height so no blank padding rows follow the last line.
+    let content_h = layout::element_to_cells_height(&element, cols);
+    let frame = layout::element_to_cells(&element, cols, content_h);
+    frame.trim_end_matches('\n').to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,5 +643,47 @@ mod tests {
     #[test]
     fn rgb_channels_clamp_into_byte_range() {
         assert_eq!(term_color_rgb_(-5, 300, 128), TermColor::Rgb(0, 255, 128));
+    }
+
+    #[test]
+    fn render_lines_view_emits_plain_text() {
+        let out = render_lines_view(cli_text_::<()>("hello".to_owned()));
+        assert!(out.contains("hello"));
+    }
+
+    #[test]
+    fn render_lines_view_has_no_trailing_newline() {
+        let out = render_lines_view(cli_text_::<()>("prompt > ".to_owned()));
+        assert!(!out.ends_with('\n'));
+    }
+
+    #[test]
+    fn render_lines_view_stacks_lines_top_to_bottom() {
+        let out = render_lines_view(cli_lines_::<()>(vec![
+            cli_text_("first".to_owned()),
+            cli_text_("second".to_owned()),
+        ]));
+        let first = out.find("first").expect("first line present");
+        let second = out.find("second").expect("second line present");
+        assert!(first < second, "lines stack top-to-bottom");
+    }
+
+    #[test]
+    fn render_lines_view_carries_line_styling() {
+        let bold = render_lines_view(cli_line_::<()>(vec![CliAttr::Bold], "b".to_owned()));
+        assert!(bold.contains("\u{1b}[") && bold.contains('1'));
+        let dim = render_lines_view(cli_line_::<()>(vec![CliAttr::Dim], "d".to_owned()));
+        assert!(dim.contains('2'));
+        let reverse = render_lines_view(cli_line_::<()>(vec![CliAttr::Reverse], "r".to_owned()));
+        assert!(reverse.contains('7'));
+    }
+
+    #[test]
+    fn render_lines_view_carries_palette_color() {
+        let out = render_lines_view(cli_line_::<()>(
+            vec![CliAttr::FgColor(TermColor::Red)],
+            "c".to_owned(),
+        ));
+        assert!(out.contains("31"));
     }
 }

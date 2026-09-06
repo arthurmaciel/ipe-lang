@@ -31,7 +31,7 @@ name: Static binaries
 # pull_request.
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, development]
     paths-ignore:
       - '**.md'
   schedule:

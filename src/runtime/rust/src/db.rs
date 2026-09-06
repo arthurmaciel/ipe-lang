@@ -284,8 +284,8 @@ fn column_is_boolean(row: &DbRow, i: usize) -> bool {
         .get(i)
         .map(sqlx::Column::type_info)
         .map(|ti| {
-            let name = ti.name().to_ascii_uppercase();
-            name == "BOOL" || name == "BOOLEAN"
+            let name = ti.name();
+            name.eq_ignore_ascii_case("BOOL") || name.eq_ignore_ascii_case("BOOLEAN")
         })
         .unwrap_or(false)
 }
@@ -3313,8 +3313,8 @@ where
         .get(i)
         .map(sqlx::Column::type_info)
         .map(|ti| {
-            let name = ti.name().to_ascii_uppercase();
-            name == "BOOL" || name == "BOOLEAN"
+            let name = ti.name();
+            name.eq_ignore_ascii_case("BOOL") || name.eq_ignore_ascii_case("BOOLEAN")
         })
         .unwrap_or(false);
     if is_bool && let Ok(opt) = row.try_get::<Option<bool>, _>(i) {
@@ -3375,8 +3375,8 @@ where
         .get(i)
         .map(sqlx::Column::type_info)
         .map(|ti| {
-            let name = ti.name().to_ascii_uppercase();
-            name == "BOOL" || name == "BOOLEAN"
+            let name = ti.name();
+            name.eq_ignore_ascii_case("BOOL") || name.eq_ignore_ascii_case("BOOLEAN")
         })
         .unwrap_or(false);
     if is_bool && let Ok(opt) = row.try_get::<Option<bool>, _>(i) {

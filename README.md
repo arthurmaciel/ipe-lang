@@ -10,6 +10,7 @@
 [![Supply-chain security](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml)
 [![Static binaries](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
 [![No-panic](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml)
+[![Docs deploy](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml)
 
 
 # Ipê language
@@ -82,7 +83,7 @@ cargo build --release
 
 - **Elm syntax** — pure functions, Hindley–Milner type inference, exhaustive
   `case`, immutable data. No `null`, no runtime exceptions.
-- **Sky's batteries-included standard library** — Web live applications (SSR + real-time), typed HTTP, 
+- **Batteries-included standard library** — Web live applications (SSR + real-time), typed HTTP,
   typed SQL, auth, email, cache, pub/sub, and WebSockets, all behind a
   single `Task Error a` effect boundary. `Error` is a typed, classified value
   you construct and inspect — see `ipe doc Error` or `ipe explain IPE-T0001`.

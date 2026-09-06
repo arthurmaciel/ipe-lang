@@ -159,9 +159,20 @@ pub fn transition_of_arm(
     // environment so a later `Var(__upd)` read resolves back to its value; this
     // makes the classifier robust to the LOWERED shape the backend actually sees,
     // not just the surface syntax.
+    //
+    // The compiled arm evaluates every leading `let` value, so a peeled value with
+    // its own semantics (an abort like `1 // 0`, or any effect the emitted
+    // transition datum would never reproduce) must refuse — otherwise the hot
+    // `apply_transition` path silently drops that evaluation and diverges from the
+    // compiled arm. Only a value drawn from the inert vocabulary (a literal, a
+    // Model-field read, or a recognised int-op / `not` over those) is safe to peel;
+    // anything else returns `None` (the arm stays compiled).
     let mut env: Vec<(Symbol, &Expr)> = Vec::new();
     let mut cursor = model_expr;
     while let Expr::Let { name, value, body } = cursor {
+        if !is_inert_peelable(value.as_ref(), model_param, &env) {
+            return None;
+        }
         env.push((*name, value.as_ref()));
         cursor = body.as_ref();
     }
@@ -189,6 +200,43 @@ fn deref_subst<'e>(expr: &'e Expr, env: &[(Symbol, &'e Expr)]) -> &'e Expr {
         }
     }
     current
+}
+
+/// Whether a peeled `let` value is drawn from the inert vocabulary the emitted
+/// transition datum faithfully reproduces, so dropping its direct evaluation on
+/// the hot path cannot diverge from the compiled arm.
+///
+/// Inert values, exhaustively: an int / bool / string literal; a read of the
+/// `Model` parameter itself or of one of its fields; a variable already bound in
+/// the peeled environment (a temporary whose own value was already vetted inert
+/// when it was peeled); and an `IntAdd` / `IntSub` or a `not` whose operands are
+/// themselves inert. Anything else — a division (which may abort), any other
+/// operator, a call, a field expression, an unbound variable — is NOT inert and
+/// refuses, keeping the arm compiled.
+fn is_inert_peelable(expr: &Expr, model_param: Symbol, env: &[(Symbol, &Expr)]) -> bool {
+    match expr {
+        Expr::Int(_) | Expr::Bool(_) | Expr::Str(_) => true,
+        // A read of the Model parameter, or of a temporary already peeled inert.
+        Expr::Var(sym) | Expr::CloneVar(sym) => {
+            *sym == model_param || env.iter().any(|(name, _)| name == sym)
+        }
+        // A field read on the Model parameter (`model.field`).
+        Expr::Access { record, .. } => is_inert_peelable(record, model_param, env),
+        // Only the closed int ops the transition vocabulary reproduces; a division
+        // or any other operator can carry an abort and refuses.
+        Expr::BinOp { op, lhs, rhs } => {
+            matches!(op, BinOp::IntAdd | BinOp::IntSub)
+                && is_inert_peelable(lhs, model_param, env)
+                && is_inert_peelable(rhs, model_param, env)
+        }
+        // A boolean `not` over an inert operand.
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::BasicsNot),
+            args,
+            ..
+        } => matches!(args.as_slice(), [arg] if is_inert_peelable(arg, model_param, env)),
+        _ => false,
+    }
 }
 
 /// Whether `expr` is exactly `Cmd.none` — the nullary `CmdNone` kernel call. Any
@@ -618,6 +666,58 @@ mod tests {
             }),
             "the direct lowered update arm the backend emits must classify"
         );
+    }
+
+    #[test]
+    fn peeled_inert_let_still_classifies() {
+        // `let t = count + 1 in ({ m | count = t }, Cmd.none)` — the peeled binding
+        // is an inert int-op over a field read, so it is safe to peel and the arm
+        // classifies to the same IntAdd transition.
+        let t = Symbol::from_raw(200);
+        let model_pos = Expr::Let {
+            name: t,
+            value: Box::new(Expr::BinOp {
+                op: BinOp::IntAdd,
+                lhs: Box::new(model_access(count_sym())),
+                rhs: Box::new(Expr::Int(1)),
+            }),
+            body: Box::new(Expr::Update {
+                record: Box::new(Expr::Var(model_sym())),
+                fields: vec![(count_sym(), Expr::Var(t))],
+            }),
+        };
+        let body = Expr::Tuple(vec![model_pos, cmd_none()]);
+        assert_eq!(
+            classify(&body),
+            Some(CompileTransition {
+                field: "count".to_owned(),
+                op: CompileOp::IntAdd,
+                source: CompileSource::Int(1),
+            })
+        );
+    }
+
+    #[test]
+    fn peeled_non_inert_let_refuses() {
+        // `let x = count // 0 in ({ m | count = 5 }, Cmd.none)` — the peeled binding
+        // aborts when evaluated. The compiled arm takes that abort; the transition
+        // datum would silently skip it, so the classifier must refuse (keep the arm
+        // compiled) rather than emit a diverging Some.
+        let x = Symbol::from_raw(201);
+        let model_pos = Expr::Let {
+            name: x,
+            value: Box::new(Expr::BinOp {
+                op: BinOp::IntDiv,
+                lhs: Box::new(model_access(count_sym())),
+                rhs: Box::new(Expr::Int(0)),
+            }),
+            body: Box::new(Expr::Update {
+                record: Box::new(Expr::Var(model_sym())),
+                fields: vec![(count_sym(), Expr::Int(5))],
+            }),
+        };
+        let body = Expr::Tuple(vec![model_pos, cmd_none()]);
+        assert_eq!(classify(&body), None);
     }
 
     // ── acceptance: the four data-describable shapes ──────────────────────

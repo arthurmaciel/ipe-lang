@@ -985,8 +985,10 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
             // dispatch has no error channel, so the `err==nil` conjunct is always
             // true and is dropped.
             let noop = cmd_is_none && e.model == next;
-            e.last_view = tree.clone();
+            // Build the handler index from the tree, then move the tree into
+            // last_view (its only remaining use), avoiding a deep VDOM clone.
             e.index = build_index(&tree);
+            e.last_view = tree;
             e.model = next.clone();
             e.seq += 1;
             #[cfg(feature = "debugger")]
@@ -1548,8 +1550,10 @@ async fn apply_literal_patch_to_web_sessions<Model, Msg, FView>(
         let (patches, seq, sse) = {
             let mut e = handle.lock().unwrap_or_else(|e| e.into_inner());
             let patches = diff(&e.last_view, &tree);
-            e.last_view = tree.clone();
+            // Index first (borrow), then move the tree into last_view — its
+            // only remaining use — instead of a deep VDOM clone.
             e.index = build_index(&tree);
+            e.last_view = tree;
             e.seq += 1;
             (patches, e.seq, e.sse_tx.clone())
         };
@@ -4004,7 +4008,11 @@ where
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8000);
-    let addr = format!("0.0.0.0:{port}");
+    // Honour the same host-bind precedence as the Ipe.Http.Server path
+    // (`IPE_HTTP_BIND` > `Host.bind` setting > loopback-unless-production), so
+    // an explicit loopback setting is never overridden into all-interfaces.
+    let host = crate::app_config::resolve_host_bind();
+    let addr = format!("{host}:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -4019,7 +4027,7 @@ where
         }
         Err(e) => return IpeResult::Err(format!("Web.app: bind {addr}: {e}").into()),
     };
-    // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
+    // Bind-address line (stderr) — carries the resolved host:port.
     eprintln!("[ipe.web] listening on http://{addr}");
     //  user-facing line (stdout, `fmt.Printf("Ipe.Web listening on
     // :%d\n", port)` — live.go:3546).
@@ -6126,16 +6134,7 @@ mod watch_status_handler_tests {
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
             if let Some(WatchBuildStatus { ok, error }) = snapshot {
-                let payload = if ok {
-                    r#"{"ok":true}"#.to_string()
-                } else {
-                    let esc = error
-                        .as_deref()
-                        .unwrap_or("")
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"");
-                    format!(r#"{{"ok":false,"error":"{esc}"}}"#)
-                };
+                let payload = watch_status_sse_payload(ok, error.as_deref());
                 let _ = sse_tx
                     .send(SsePatch(sse::frame("ipe-build-status", &payload)))
                     .await;

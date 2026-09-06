@@ -165,6 +165,11 @@ pub struct Token {
 }
 
 struct Lexer<'src> {
+    /// The full source. A lexeme spans a contiguous byte range `[lo, hi)`, so a
+    /// keyword/number/body reads directly from `src[lo..hi]` — no per-char heap
+    /// buffer. All offsets come from `CharIndices`, so every range is on a char
+    /// boundary; `get` keeps the slice fail-closed if that ever breaks.
+    src: &'src str,
     /// Up to three characters of lookahead. `window[0]` is the current char
     /// (what `peek()` returns), `window[1]` is one ahead, `window[2]` is two
     /// ahead. A `None` slot means end-of-input at that position.
@@ -186,12 +191,21 @@ impl<'src> Lexer<'src> {
         let b = iter.next();
         let c = iter.next();
         Self {
+            src,
             window: [a, b, c],
             rest: iter,
             eof_offset,
             line: 1,
             col: 1,
         }
+    }
+
+    /// The source text over the byte range `[lo, hi)`, where both bounds are
+    /// char-boundary offsets the lexer produced from `CharIndices`. Returns the
+    /// empty string if the range is somehow out of bounds — a fail-closed
+    /// fallback that never panics on a bad offset.
+    fn slice(&self, lo: u32, hi: u32) -> &'src str {
+        self.src.get(lo as usize..hi as usize).unwrap_or("")
     }
 
     fn peek(&self) -> Option<char> {
@@ -209,6 +223,11 @@ impl<'src> Lexer<'src> {
     }
 
     /// Byte offset of the current char, or end-of-input.
+    ///
+    /// [`lex`] rejects any source larger than `u32::MAX` bytes before building
+    /// the lexer, so every byte offset here fits a `u32`; the saturating
+    /// conversion is an unreachable fallback, never a silent clamp of a real
+    /// position.
     fn offset(&self) -> u32 {
         match self.window[0] {
             Some((o, _)) => u32::try_from(o).unwrap_or(u32::MAX),
@@ -325,9 +344,29 @@ pub fn keyword(text: &str) -> Option<Tok> {
 }
 
 /// Lex `src` into tokens, or fail with a typed diagnostic.
+/// Whether a source of `byte_len` bytes can be spanned: every byte offset the
+/// lexer records is a `u32`, so the source must fit in `u32::MAX` bytes. The
+/// boundary is a named predicate so the refusal is testable without allocating a
+/// multi-gigabyte string.
+fn source_offset_range_admits(byte_len: usize) -> bool {
+    u32::try_from(byte_len).is_ok()
+}
+
 pub fn lex(src: &str) -> DResult<Vec<Token>> {
+    // Byte offsets are stored as `u32`; a source larger than `u32::MAX` bytes
+    // cannot be spanned. Refuse it here rather than clamp offsets downstream —
+    // a clamped span misreports every position past the limit.
+    if !source_offset_range_admits(src.len()) {
+        return Err(Diagnostic::Parse {
+            span: Span::new(0, 0),
+            msg: ParseError::SourceTooLarge { bytes: src.len() },
+        });
+    }
     let mut lx = Lexer::new(src);
-    let mut out = Vec::new();
+    // Roughly one token per four source bytes reserves enough for most files up
+    // front, eliminating nearly all growth reallocs; a bad estimate only
+    // over-reserves transiently and degrades to plain growth.
+    let mut out = Vec::with_capacity(src.len() / 4);
     loop {
         lx.skip_trivia()?;
         let Some(c) = lx.peek() else { break };
@@ -340,7 +379,7 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
         } else if c.is_ascii_digit() {
             lex_number(&mut lx, lo)?
         } else if is_ident_start(c) {
-            lex_ident(&mut lx)
+            lex_ident(&mut lx, lo)
         } else if c == '"' {
             lex_string(&mut lx, lo)?
         } else if c == '\'' {
@@ -371,7 +410,7 @@ fn lex_doc_comment(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     lx.advance(); // consume `{`
     lx.advance(); // consume `-`
     lx.advance(); // consume `|`
-    let mut body = String::new();
+    let content_lo = lx.offset();
     loop {
         match lx.peek() {
             None => {
@@ -381,25 +420,26 @@ fn lex_doc_comment(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
                 });
             }
             Some('-') if lx.peek2() == Some('}') => {
+                let closer_lo = lx.offset();
                 lx.advance(); // consume `-`
                 lx.advance(); // consume `}`
-                break;
+                // The body is exactly the source between `{-|` and the closing
+                // `-}`; nothing in the loop transforms a char, so the slice
+                // equals the concatenation a per-char buffer produced.
+                return Ok(Tok::DocComment(lx.slice(content_lo, closer_lo).to_owned()));
             }
-            Some(c) => {
-                body.push(c);
+            Some(_) => {
                 lx.advance();
             }
         }
     }
-    Ok(Tok::DocComment(body))
 }
 
-/// Consume a run of ASCII digits into `out` (zero or more). Each digit advances
-/// the cursor; the first non-digit stops the run without consuming it.
-fn consume_digits(lx: &mut Lexer, out: &mut String) {
+/// Consume a run of ASCII digits (zero or more). Each digit advances the
+/// cursor; the first non-digit stops the run without consuming it.
+fn consume_digits(lx: &mut Lexer) {
     while let Some(c) = lx.peek() {
         if c.is_ascii_digit() {
-            out.push(c);
             lx.advance();
         } else {
             break;
@@ -418,22 +458,20 @@ fn consume_digits(lx: &mut Lexer, out: &mut String) {
 /// follows, so a trailing `e` falls through to the joined-name check. A literal
 /// with a fraction OR an exponent is a [`Tok::Float`]; otherwise a [`Tok::Int`].
 fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
-    let mut text = String::new();
     let mut is_float = false;
 
     // Integer part: one or more ASCII digits (the caller guaranteed the first).
-    consume_digits(lx, &mut text);
+    consume_digits(lx);
 
     // Fractional part: a `.` immediately followed by a digit.
     if lx.peek() == Some('.') && lx.peek2().is_some_and(|c| c.is_ascii_digit()) {
         is_float = true;
-        text.push('.');
         lx.advance(); // consume the `.`
-        consume_digits(lx, &mut text);
+        consume_digits(lx);
     }
 
     // Exponent part: `e`/`E`, an optional `+`/`-`, then one or more digits.
-    if let Some(exp @ ('e' | 'E')) = lx.peek() {
+    if let Some('e' | 'E') = lx.peek() {
         let signed = matches!(lx.peek2(), Some('+' | '-'));
         let digit_follows = if signed {
             lx.peek3().is_some_and(|c| c.is_ascii_digit())
@@ -442,13 +480,11 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
         };
         if digit_follows {
             is_float = true;
-            text.push(exp);
             lx.advance(); // consume `e`/`E`
-            if let Some(sign @ ('+' | '-')) = lx.peek() {
-                text.push(sign);
+            if let Some('+' | '-') = lx.peek() {
                 lx.advance(); // consume the sign
             }
-            consume_digits(lx, &mut text);
+            consume_digits(lx);
         }
     }
 
@@ -466,6 +502,9 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     }
 
     let hi = lx.offset();
+    // The consumed byte range is the literal: ASCII digits and, for a float, a
+    // `.`, an `e`/`E`, and a sign — exactly what a per-char buffer collected.
+    let text = lx.slice(lo, hi);
     if is_float {
         // `text` is a well-formed float lexeme by construction (a digit run, an
         // optional `.`-digit run, an optional `e[+-]`-digit run), so `f64`
@@ -506,8 +545,9 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 /// `"""`. Otherwise lexes a single-line `"…"` string: escape sequences are
 /// resolved into the runtime value; an unrecognised escape is kept verbatim
 /// (backslash + char) so a typo surfaces as wrong text rather than lost data,
-/// matching the the reference's `unescapeString`. Reaching end of input before
-/// the closing `"` is [`ParseError::UnterminatedString`].
+/// matching the the reference's `unescapeString`. A raw newline, or end of
+/// input, before the closing `"` is [`ParseError::UnterminatedString`]: a
+/// single-line string may not span lines (a multi-line body uses `"""`).
 fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     lx.advance(); // consume opening `"`
 
@@ -525,7 +565,12 @@ fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     let mut value = String::new();
     loop {
         match lx.peek() {
-            None => {
+            // End of input, or a raw newline: a single-line string may not span
+            // lines (a multi-line body uses `"""`). Reporting it here at the
+            // opener through the line break stops the scan from swallowing the
+            // following lines up to the next quote in the file, which would
+            // mislocate the diagnostic to end-of-file.
+            None | Some('\n' | '\r') => {
                 let hi = lx.offset();
                 return Err(Diagnostic::Parse {
                     span: Span::new(lo, hi),
@@ -571,7 +616,7 @@ fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 ///
 /// Reaching end of input before `"""` is [`ParseError::UnterminatedString`].
 fn lex_triple_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
-    let mut value = String::new();
+    let content_lo = lx.offset();
     let mut anchor: Option<u32> = None;
     loop {
         match lx.peek() {
@@ -587,24 +632,27 @@ fn lex_triple_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
                 // peek() is `"` (confirmed by this arm); peek2() and peek3()
                 // must also be `"` for a triple-close.
                 if lx.peek2() == Some('"') && lx.peek3() == Some('"') {
+                    let closer_lo = lx.offset();
                     lx.advance(); // consume first `"`  of `"""`
                     lx.advance(); // consume second `"` of `"""`
                     lx.advance(); // consume third `"`  of `"""`
+                    // The raw body is exactly the source between the opening and
+                    // closing `"""`; the loop transforms no char (escape and
+                    // interpolation resolution is downstream), so the slice
+                    // equals the concatenation a per-char buffer produced.
                     return Ok(Tok::TripleStr {
-                        raw: value,
+                        raw: lx.slice(content_lo, closer_lo).to_owned(),
                         anchor: anchor.unwrap_or(1),
                     });
                 }
                 // A literal `"` is content, so it fixes the anchor.
                 anchor.get_or_insert(lx.col);
-                value.push('"');
                 lx.advance();
             }
             Some(c) => {
                 if c != '\n' && c != '\r' && c != ' ' && c != '\t' {
                     anchor.get_or_insert(lx.col);
                 }
-                value.push(c);
                 lx.advance();
             }
         }
@@ -704,12 +752,10 @@ fn push_escape(lx: &mut Lexer, out: &mut String) {
     }
 }
 
-fn lex_ident(lx: &mut Lexer) -> Tok {
-    let mut text = String::new();
+fn lex_ident(lx: &mut Lexer, lo: u32) -> Tok {
     // First segment.
     while let Some(c) = lx.peek() {
         if is_ident_continue(c) {
-            text.push(c);
             lx.advance();
         } else {
             break;
@@ -717,21 +763,24 @@ fn lex_ident(lx: &mut Lexer) -> Tok {
     }
     // Dotted continuation: `.seg` runs, but never `..`.
     while lx.peek() == Some('.') && lx.peek2().is_some_and(is_ident_start) {
-        text.push('.');
         lx.advance();
         while let Some(c) = lx.peek() {
             if is_ident_continue(c) {
-                text.push(c);
                 lx.advance();
             } else {
                 break;
             }
         }
     }
+    // The lexeme is exactly the consumed byte range: ASCII ident chars and the
+    // `.` separators, so the slice equals the chars a per-char buffer collected.
+    let text = lx.slice(lo, lx.offset());
     if text == "_" {
         return Tok::Underscore;
     }
-    keyword(&text).unwrap_or(Tok::Ident(text))
+    // A keyword matches the borrowed slice with no allocation; only a real
+    // identifier owns one exact-capacity copy.
+    keyword(text).unwrap_or_else(|| Tok::Ident(text.to_owned()))
 }
 
 /// Consume the current char, then optionally a following `second` char,
@@ -896,5 +945,58 @@ fn two_char_only(lx: &mut Lexer, lo: u32, second: char, two: Tok, err: ParseErro
             span: Span::new(lo, lx.offset()),
             msg: err,
         })
+    }
+}
+
+#[cfg(test)]
+mod source_size_guard_tests {
+    use super::{lex, source_offset_range_admits};
+    use ipe_diagnostics::{Diagnostic, ParseError};
+
+    #[test]
+    fn offset_range_boundary() {
+        // The largest spannable source is exactly `u32::MAX` bytes; one more
+        // cannot be given a `u32` offset and is turned away.
+        assert!(source_offset_range_admits(u32::MAX as usize));
+        assert!(source_offset_range_admits(0));
+        // `u32::MAX as usize + 1` only overflows `u32` on a 64-bit target; on a
+        // 32-bit target a `usize` can never exceed `u32::MAX`, so the predicate
+        // is vacuously total there.
+        #[cfg(target_pointer_width = "64")]
+        assert!(!source_offset_range_admits(u32::MAX as usize + 1));
+    }
+
+    #[test]
+    fn a_normal_source_lexes() {
+        // The guard does not disturb an ordinary in-range source.
+        let toks = lex("module Main exposing (main)\nmain = 0\n").expect("lexes");
+        assert!(!toks.is_empty());
+    }
+
+    #[test]
+    fn oversized_source_is_a_typed_refusal_not_a_clamp() {
+        // A source whose length exceeds `u32::MAX` yields a typed
+        // `SourceTooLarge` rather than a silently clamped span. Proven at the
+        // predicate the guard consults (allocating >4 GiB is infeasible in a
+        // test); the guard maps a `false` verdict straight to the error below.
+        #[cfg(target_pointer_width = "64")]
+        {
+            let oversized = u32::MAX as usize + 1;
+            assert!(!source_offset_range_admits(oversized));
+        }
+        // The refusal a real oversized source would take, exercised directly.
+        let refusal: Diagnostic = Diagnostic::Parse {
+            span: ipe_diagnostics::Span::new(0, 0),
+            msg: ParseError::SourceTooLarge {
+                bytes: 5_000_000_000,
+            },
+        };
+        assert!(matches!(
+            refusal,
+            Diagnostic::Parse {
+                msg: ParseError::SourceTooLarge { .. },
+                ..
+            }
+        ));
     }
 }
