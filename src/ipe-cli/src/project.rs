@@ -121,6 +121,12 @@ pub struct ProjectManifest {
 /// resolved target. There is no `active` selector — that is the CLI.
 #[derive(Clone, Debug, Default)]
 pub struct DeliveryConfig {
+    /// The declared delivery set — which deliveries `ipe release` produces.
+    /// Empty when the manifest omits the `ships` field, meaning the implicit
+    /// `[ binary ]` singleton (resolved by
+    /// [`crate::delivery_set::DeliverySet::resolve`]). The `ships` list declares
+    /// *what* ships; the sections below configure *how* each looks.
+    pub ships: Vec<crate::delivery_set::ShipEntry>,
     /// Window title, width, and height for the `web live desktop`
     /// (webview-native) host.
     pub desktop: DesktopDelivery,
