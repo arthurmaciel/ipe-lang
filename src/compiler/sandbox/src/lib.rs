@@ -1045,10 +1045,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_bwrap_token_refuses_rather_than_dropping_seccomp() {
-        // When the bwrap program token cannot be located, the seccomp flag has
-        // no home; dropping it would run the payload unfiltered. Fail closed.
-        let err = bwrap_argv_with_seccomp(
+    fn seccomp_is_attached_and_never_silently_dropped() {
+        // A requested seccomp filter must always reach the argv, whatever the
+        // bwrap path — never silently dropped, which would run the payload
+        // unfiltered. The `SeccompNotAttached` arm is a fail-closed backstop
+        // for the impossible case where the token the builder itself inserted
+        // cannot be found again; it turns a silent drop into a hard refusal.
+        let argv = bwrap_argv_with_seccomp(
             Path::new("/nonexistent/bwrap-alias"),
             Path::new("/usr/bin/prlimit"),
             Path::new("/usr/bin/timeout"),
@@ -1056,8 +1059,21 @@ mod tests {
             &[OsString::from("ipe-ffi-inspector")],
             Some(7),
         )
-        .expect_err("no bwrap token means the seccomp filter cannot attach");
-        assert!(matches!(err, SandboxDefect::SeccompNotAttached));
+        .expect("a requested seccomp filter must attach, never drop");
+        let rendered: Vec<String> = argv
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let bwrap = rendered
+            .iter()
+            .position(|a| a == "/nonexistent/bwrap-alias")
+            .expect("the bwrap token is present in the argv");
+        assert_eq!(
+            rendered.get(bwrap + 1).map(String::as_str),
+            Some("--seccomp"),
+            "seccomp must be injected right after the bwrap token"
+        );
+        assert_eq!(rendered.get(bwrap + 2).map(String::as_str), Some("7"));
     }
 
     #[test]
