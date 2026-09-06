@@ -115,11 +115,6 @@ pub type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
 /// native stack regardless of the bound.
 pub const ZONK_NODE_LIMIT: u32 = 4_096;
 
-/// Interned symbols for the built-in type constructors the inferencer needs to
-/// name. `Int` / `String` usually already exist (from the source), but `Task`
-/// never appears in source, so the builder interns them up front to
-/// guarantee a stable, resolvable [`Symbol`] for each.
-
 /// The constraint-generation state threaded through the walk.
 pub struct Builder<'a> {
     pub uf: &'a mut UnionFind<Content>,
