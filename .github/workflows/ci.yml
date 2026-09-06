@@ -21,7 +21,7 @@ name: Build & test
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, development]
   pull_request:
   schedule:
     - cron: '0 4 * * *'        # nightly full sweep (catches dep/upstream drift)
