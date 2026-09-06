@@ -129,6 +129,51 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "var",
 ];
 
+/// Whether `a` is byte-wise lexicographically less than `b`. Byte order matches
+/// `str`'s `Ord`, and `split_first` keeps the walk free of slice indexing so it
+/// is usable in a `const fn`.
+const fn bytes_lt(mut a: &[u8], mut b: &[u8]) -> bool {
+    loop {
+        match (a.split_first(), b.split_first()) {
+            // `a` ran out first (proper prefix of `b`): a < b.
+            (None, Some(_)) => return true,
+            // `b` ran out, or both did: a is not strictly less than b.
+            (_, None) => return false,
+            (Some((&ha, ta)), Some((&hb, tb))) => {
+                if ha < hb {
+                    return true;
+                }
+                if ha > hb {
+                    return false;
+                }
+                (a, b) = (ta, tb);
+            }
+        }
+    }
+}
+
+/// Whether `xs` is strictly ascending — the invariant [`parse_function`]'s
+/// binary search relies on. `const` so the check below runs at compile time.
+const fn is_ascending(mut xs: &[&str]) -> bool {
+    while let Some((&head, tail)) = xs.split_first() {
+        if let Some((&next, _)) = tail.split_first()
+            && !bytes_lt(head.as_bytes(), next.as_bytes())
+        {
+            return false;
+        }
+        xs = tail;
+    }
+    true
+}
+
+// Enforce the sortedness invariant at build time so a mis-ordered edit fails to
+// compile rather than deferring to a per-call runtime check.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); it fails the build if `ALLOWED_FUNCTIONS` is edited out of sorted order, on which the binary search depends [ledger #boundary]
+const _: () = assert!(
+    is_ascending(ALLOWED_FUNCTIONS),
+    "ALLOWED_FUNCTIONS must stay sorted for the binary search"
+);
+
 /// The authoritative `Css.safeValue` decision. `true` iff `v` parses cleanly.
 ///
 /// A value is accepted IFF it parses against the allowlisted CSS
@@ -228,10 +273,6 @@ fn parse_token(bytes: &[u8], start: usize) -> Option<usize> {
 /// function recursively parses its argument list as a nested value.
 fn parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
     let name_str = core::str::from_utf8(name).ok()?;
-    debug_assert!(
-        ALLOWED_FUNCTIONS.is_sorted(),
-        "ALLOWED_FUNCTIONS must stay sorted for the binary search"
-    );
     if ALLOWED_FUNCTIONS.binary_search(&name_str).is_err() {
         return None;
     }
