@@ -6091,28 +6091,32 @@ impl StdlibKernel {
     /// `Some` when the scheme is expressible structurally — `ipe_types`
     /// interprets the returned shape into a `Ty` byte-identical to what the
     /// `stdlib_scheme` table produces. `None` for a scheme that is not, which
-    /// resolves through that table instead.
+    /// resolves through that table instead. A shape may be **monomorphic** (an
+    /// arrow spine over the primitive built-ins) or **rank-1 polymorphic** (over
+    /// [`TyShape::Var`] applied to the `List` / `Maybe` / `Dict` / `Set`
+    /// constructors, tuples, records, and open rows). [`TyShape`]'s vocabulary
+    /// carries a [`TyShape::Tuple`] node, a [`TyShape::Record`] node, and a
+    /// [`RowTailShape::Open`] open-tail marker, so tuple-, record-, and
+    /// open-row-shaped schemes are all expressible.
     ///
-    /// [`TyShape`]'s vocabulary spans arrow spines over the primitive built-ins
-    /// ([`BuiltinTag`]), the `List` / `Maybe` / `Dict` / `Set` constructors,
-    /// scheme-local type variables ([`TyShape::Var`]), tuples
-    /// ([`TyShape::Tuple`]), records with an open row tail
-    /// ([`RowTailShape::Open`]), and closed records. Each shape is a `'static`
-    /// value assembled from the leaves below, so it embeds directly and the
-    /// `ipe_types` interpreter reproduces the exact `Ty` the scheme names.
+    /// A fully-monomorphic kernel family whose scheme is an arrow spine over the
+    /// primitive built-ins ([`BuiltinTag`]) carries a shape assembled as a
+    /// `'static` value from the primitive leaves below; it embeds directly as the
+    /// carried shape and the `ipe_types` interpreter reproduces the exact `Ty` a
+    /// hand-written `stdlib_scheme` arm would.
     ///
-    /// The core `List` combinator family carries a polymorphic shape over the
-    /// scheme-local type variables `a` (index 0) and `b` (index 1), e.g.
-    /// `map : (a -> b) -> List a -> List b`; the tuple-returning members
-    /// (`zip`, `unzip`, `partition`, `map2`, `indexedMap`, `foldl`/`foldr`,
-    /// `sortWith`) carry shapes over [`TyShape::Tuple`].
+    /// The core `List` combinator family carries a **polymorphic** shape over the
+    /// scheme-local type variables `a` (index 0) and `b` (index 1) applied to the
+    /// container constructors — `map : (a -> b) -> List a -> List b`, and the
+    /// tuple-shaped `zip`/`unzip`/`partition`/`map2`..`map5`/`indexedMap`/
+    /// `foldl`/`foldr`/`sortWith` over [`TyShape::Tuple`].
     ///
-    /// The classes that still resolve through `stdlib_scheme` instead are the
-    /// bounded-super-var families — the `comparable` / `number`-bounded members
-    /// (`sort`, `sum`, `product`, `maximum`, `minimum`) whose super-var is minted
-    /// in `constrain_var_kernel` before the scheme is read — and any scheme over
-    /// a constructor not yet in the vocabulary (`Result`, `Task`, an opaque
-    /// handle).
+    /// The classes that carry NO shape and resolve through the `stdlib_scheme`
+    /// table are the schemes whose type the structural vocabulary cannot yet name:
+    /// a **bounded** super-var (the `comparable` / `number`-obligated members
+    /// `sort`/`sortBy`, `sum`, `product`, `maximum`, `minimum`, whose bound is
+    /// minted in `constrain_var_kernel` before the scheme is read), and a scheme
+    /// touching an opaque constructor not yet tagged in [`BuiltinTag`].
     #[must_use]
     #[allow(clippy::too_many_lines)] // one flat declarative spine table per family
     #[allow(clippy::match_same_arms)] // family-grouped spine table; merging cross-family arms with coincidentally-equal spines would obscure the per-family structure
@@ -9961,7 +9965,13 @@ impl StdlibKernel {
             // `open`; a read against it is a database op (like every other read).
             | Self::DbConnFindWhere
             | Self::DbConnQueryDecode
-            | Self::DbConnGetById => Some(Capability::Database),
+            | Self::DbConnGetById
+            // Auth kernels that take a live `Db` handle and run CREATE TABLE /
+            // INSERT / SELECT / UPDATE through it — a database op like every other
+            // handle-consuming kernel, disclosed as `database` for capability honesty.
+            | Self::AuthRegister
+            | Self::AuthLogin
+            | Self::AuthSetRole => Some(Capability::Database),
             Self::SystemArgs
             | Self::SystemGetenv
             | Self::SystemGetenvOr
@@ -10014,7 +10024,9 @@ impl StdlibKernel {
             | Self::TimeUnixMillis
             | Self::TimeTimeString
             | Self::SubEvery
-            | Self::TimeEvery => Some(Capability::Clock),
+            | Self::TimeEvery
+            // Validates a token's `exp` / `nbf` against the wall clock (`SystemTime::now`).
+            | Self::AuthVerifyToken => Some(Capability::Clock),
             Self::CryptoRandomBytes
             | Self::CryptoRandomToken
             | Self::UuidV4
@@ -10024,7 +10036,10 @@ impl StdlibKernel {
             | Self::RandomChoice
             | Self::RandomChoiceMaybe
             | Self::RandomShuffle
-            | Self::RandomWeighted => Some(Capability::Random),
+            | Self::RandomWeighted
+            // Mints a random `jti` from OS entropy (also reads the clock for `iat`;
+            // the entropy draw is the security-relevant disclosure).
+            | Self::AuthSignToken => Some(Capability::Random),
             Self::LogInfo
             | Self::LogDebug
             | Self::LogWarn
@@ -10386,6 +10401,10 @@ impl StdlibKernel {
             | Self::CryptoAesKeyFromPassword
             | Self::CryptoChachaKeyFromPassword
             | Self::UuidParse
+            // The Jwt decode kernels validate `exp` / `nbf` against the wall clock,
+            // an incidental read left undisclosed on purpose: Clock is pinned
+            // low-value and never jail-enforced, and a decode is a pure verification
+            // over its two inputs rather than a clock effect the caller selects.
             | Self::JwtEncodeHs256
             | Self::JwtDecodeHs256
             | Self::JwtEncodeRs256
@@ -10689,11 +10708,6 @@ impl StdlibKernel {
             | Self::AuthHashPasswordCost
             | Self::AuthVerifyPassword
             | Self::AuthPasswordStrength
-            | Self::AuthSignToken
-            | Self::AuthVerifyToken
-            | Self::AuthRegister
-            | Self::AuthLogin
-            | Self::AuthSetRole
             | Self::AuthSubject
             // Revocation store — writes/reads to a process-global in-memory set;
             // no network, DB, filesystem, or other isolatable capability.
@@ -10980,10 +10994,11 @@ impl StdlibKernel {
     /// element function is separately rejected by the region gate
     /// (`embeds_nonderivable_function`) before a kernel is even resolved, since
     /// those positions are non-storable; this tag governs the storable-element
-    /// kernels (the `List` element and `Dict` value the carrier flip admits). The
-    /// `qualifier`-keyed default keeps a newly-added collection kernel tagged
-    /// without an omission — the coherence test asserts every `List`/`Dict`/`Set`
-    /// kernel returns `Some`.
+    /// kernels (the `List` element and `Dict` value the carrier flip admits). A
+    /// collection kernel matching none of the explicit arms falls to the tail
+    /// wildcard and returns `None`; the
+    /// `every_collection_kernel_carries_an_element_capability_tag` test — not the
+    /// match — is what forces every `List`/`Dict`/`Set` kernel to return `Some`.
     #[must_use]
     pub const fn element_capability(self) -> Option<ElementCapability> {
         match self {
@@ -11026,13 +11041,13 @@ impl StdlibKernel {
                 return Some(ElementCapability::MapperFrontierOpen);
             }
             // Collection kernels that only move/clone the element: sound over an
-            // `Arc<dyn Fn>` carrier.  Listed EXHAUSTIVELY — no wildcard — so a
-            // newly added List/Dict/Set kernel that does NOT fit in any of the
-            // three existing capability buckets above causes a compile error here
-            // rather than silently inheriting the wrong (permissive) default.
-            // The non-collection tail arm below returns `None`; the intentional
-            // design invariant is: collection kernel ⇒ explicit capability,
-            // non-collection kernel ⇒ `None`.
+            // `Arc<dyn Fn>` carrier. A newly added List/Dict/Set kernel that fits
+            // none of the three capability buckets above falls to the `_ => {}`
+            // tail and returns `None`; the design invariant — collection kernel ⇒
+            // explicit capability, non-collection kernel ⇒ `None` — is enforced by
+            // the `every_collection_kernel_carries_an_element_capability_tag` test,
+            // not by the match arms (the tail wildcard swallows an unlisted variant
+            // at compile time, so the coherence test is what catches the omission).
             Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl
@@ -11096,8 +11111,8 @@ impl StdlibKernel {
         None
     }
 
-    /// `true` for a development-only escape hatch (the `Ipe.Debug` family).
-    /// Rejected in a PRODUCTION build (`ipe release`, IPE-L0140) rather than
+    /// A development-only escape hatch (the `Ipe.Debug` family). Rejected in a
+    /// PRODUCTION build (`ipe release`, IPE-L0140) rather than
     /// silently stripped or shipped. The single SSOT for "which kernels are
     /// dev-only" — the lowerer's usage scan and every gate consult this.
     #[must_use]
@@ -11105,8 +11120,8 @@ impl StdlibKernel {
         matches!(self, Self::DebugLog | Self::DebugTodo | Self::DebugExplain)
     }
 
-    /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
-    /// `Time.every`) subsystem, including reserved pub/sub variants.
+    /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` / `Time.every`)
+    /// subsystem, including reserved pub/sub variants.
     #[must_use]
     pub const fn is_tea(self) -> bool {
         matches!(
@@ -13089,6 +13104,30 @@ mod tests {
             StdlibKernel::JsCloseSession.capability(),
             Some(Capability::JsPort(WebCapability::Raw))
         );
+        // Auth kernels that take a live `Db` handle disclose the database axis, not
+        // pure — a library exposing register/login wrappers must report `database`.
+        assert_eq!(
+            StdlibKernel::AuthRegister.capability(),
+            Some(Capability::Database)
+        );
+        assert_eq!(
+            StdlibKernel::AuthLogin.capability(),
+            Some(Capability::Database)
+        );
+        assert_eq!(
+            StdlibKernel::AuthSetRole.capability(),
+            Some(Capability::Database)
+        );
+        // `Auth.signToken` mints a random `jti`; `Auth.verifyToken` reads the clock
+        // to validate `exp` / `nbf`.
+        assert_eq!(
+            StdlibKernel::AuthSignToken.capability(),
+            Some(Capability::Random)
+        );
+        assert_eq!(
+            StdlibKernel::AuthVerifyToken.capability(),
+            Some(Capability::Clock)
+        );
     }
 
     /// Every `Ipe.Http` kernel (qualifier `"Http"`) emits a symbol that lives in
@@ -13934,8 +13973,10 @@ mod tests {
             let is_collection = matches!(k.def().qualifier, "List" | "Dict" | "Set");
             let cap = k.element_capability();
 
-            // Every collection kernel must return Some (the exhaustive explicit
-            // match is the compile-time guarantee; this is the runtime check).
+            // Every collection kernel must return Some. This test is the guarantee:
+            // `element_capability`'s match ends in a swallowing `_ => {}`, so an
+            // unlisted collection kernel returns `None` at compile time and only
+            // this check catches the omission.
             assert_eq!(
                 cap.is_some(),
                 is_collection,

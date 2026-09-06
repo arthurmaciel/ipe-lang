@@ -74,8 +74,8 @@ least-recently-used entry and the one evicted. `Cache.stats` returns running
 totals of `{ hits, misses, evictions }`; `Cache.size` the live entry count after
 lazy expiry.
 
-A cache holds any value type; an `Int`-valued cache reads back the stored value
-after a `put`, exactly as a string-valued one does.
+The values here are strings, but any type works: a cache whose value type is
+`Int` reads the stored value back on a hit, the same as any other payload type.
 
 ## The why
 

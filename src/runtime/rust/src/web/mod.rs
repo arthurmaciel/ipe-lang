@@ -601,6 +601,22 @@ struct WatchBuildStatus {
     error: Option<String>,
 }
 
+/// Serialise a build-status verdict into the `ipe-build-status` SSE `data`
+/// payload. `serde_json` escapes every control char below 0x20 as `\u00XX`, so
+/// a compiler excerpt carrying carriage returns or ANSI escapes yields JSON the
+/// browser can parse — hand-rolled backslash/quote escaping alone left those
+/// raw, and a raw newline inside the value would break the `data:` line framing.
+/// A crafted excerpt is confined to the `error` string value: it cannot inject
+/// sibling fields.
+fn watch_status_sse_payload(ok: bool, error: Option<&str>) -> String {
+    let value = if ok {
+        serde_json::json!({ "ok": true })
+    } else {
+        serde_json::json!({ "ok": false, "error": error.unwrap_or("") })
+    };
+    value.to_string()
+}
+
 /// Wire shape POSTed by the browser client to `/_ipe/event`
 /// (`live/client.js` __ipeSend): `{sessionId, seq, msg, args, handlerId}`.
 /// `handlerId` is the element's `data-ipe-hid` (== its ipe-id); `msg` is the
@@ -2500,16 +2516,7 @@ mod handlers {
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
             if let Some(WatchBuildStatus { ok, error }) = status_snapshot {
-                let payload = if ok {
-                    r#"{"ok":true}"#.to_string()
-                } else {
-                    let esc = error
-                        .as_deref()
-                        .unwrap_or("")
-                        .replace('\\', "\\\\")
-                        .replace('"', "\\\"");
-                    format!(r#"{{"ok":false,"error":"{esc}"}}"#)
-                };
+                let payload = watch_status_sse_payload(ok, error.as_deref());
                 let _ = tx
                     .send(SsePatch(sse::frame("ipe-build-status", &payload)))
                     .await;
@@ -3228,16 +3235,9 @@ mod handlers {
         let recompiling = parsed.phase.as_deref() == Some("recompiling");
         // Build the JSON payload for the SSE event.
         let sse_payload = if recompiling {
-            r#"{"phase":"recompiling"}"#.to_string()
-        } else if parsed.ok {
-            r#"{"ok":true}"#.to_string()
+            serde_json::json!({ "phase": "recompiling" }).to_string()
         } else {
-            let esc = error
-                .as_deref()
-                .unwrap_or("")
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"");
-            format!(r#"{{"ok":false,"error":"{esc}"}}"#)
+            watch_status_sse_payload(parsed.ok, error.as_deref())
         };
         // Update the stored status so new SSE connections see the current state.
         // The recompiling phase is transient (not a terminal verdict), so it does
@@ -5955,6 +5955,52 @@ mod watch_status_handler_tests {
         }
 
         locked_remove_var("IPE_WATCH_HOT_TOKEN");
+    }
+
+    /// A build-failure excerpt laced with raw control chars (carriage return,
+    /// tab, bell, ANSI escape) and a double-quote must serialise to RFC 8259
+    /// JSON: every control byte below 0x20 escaped as `\u00XX`, no raw byte that
+    /// could break the SSE `data:` framing, and the excerpt confined to the
+    /// `error` string value.
+    #[test]
+    fn watch_status_sse_payload_escapes_control_chars() {
+        let hostile = "err\r\n\u{1b}[31m\"boom\"\ttab\u{7}bell";
+        let payload = watch_status_sse_payload(false, Some(hostile));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload).expect("payload must be RFC 8259-valid JSON");
+        assert_eq!(parsed["ok"], serde_json::Value::Bool(false));
+        assert_eq!(
+            parsed["error"],
+            serde_json::Value::String(hostile.to_string()),
+            "the error round-trips byte-for-byte"
+        );
+        assert!(
+            !payload.contains('\r') && !payload.contains('\n') && !payload.contains('\u{1b}'),
+            "no raw control byte survives in the serialised payload: {payload:?}"
+        );
+    }
+
+    /// A crafted excerpt cannot inject sibling JSON fields: a spoofed
+    /// `"ok":true` and an `"injected"` key survive only as string content.
+    #[test]
+    fn watch_status_sse_payload_resists_field_injection() {
+        let attack = r#"","ok":true,"injected":"x"#;
+        let payload = watch_status_sse_payload(false, Some(attack));
+        let parsed: serde_json::Value = serde_json::from_str(&payload).expect("valid JSON");
+        assert_eq!(parsed["ok"], serde_json::Value::Bool(false));
+        assert!(
+            parsed.get("injected").is_none(),
+            "a crafted excerpt must not add fields to the object"
+        );
+    }
+
+    /// The ok verdict omits the `error` field entirely.
+    #[test]
+    fn watch_status_sse_payload_ok_omits_error() {
+        let parsed: serde_json::Value =
+            serde_json::from_str(&watch_status_sse_payload(true, None)).expect("valid JSON");
+        assert_eq!(parsed["ok"], serde_json::Value::Bool(true));
+        assert!(parsed.get("error").is_none());
     }
 
     /// The stored error value is NOT converted into an HTML/JS-active form

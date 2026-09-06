@@ -66,12 +66,10 @@ case Email.parseAddress "alice@example.com" of
 Explore the full surface — the `with*` builders, the SES / SMTP config records,
 and `send` itself — with `ipe doc Ipe.Email`.
 
-> A program that imports `Ipe.Email` but never calls `Email.send` does not yet
-> build end-to-end: the emitted runtime references the `Secret` module without
-> pulling in the feature that provides it, so the crate fails to compile. A full
-> program that *does* call `send` links everything and builds. Until that gap
-> closes, this guide teaches the shape and points at `ipe doc Ipe.Email` for the
-> per-symbol reference rather than shipping a script that will not compile.
+Address parsing and message building are pure and fully type-checked: a
+malformed address is rejected at `parseAddress`, and a message can only be built
+from typed fields. Actually delivering mail is `Email.send provider message`,
+which needs a live provider and network — see `ipe doc Ipe.Email`.
 
 ## The why
 

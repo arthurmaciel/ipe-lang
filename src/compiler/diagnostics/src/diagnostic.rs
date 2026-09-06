@@ -23,13 +23,13 @@ use crate::code::{
     IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
     IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
     IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_N0045,
-    IPE_N0046, IPE_N0047, IPE_N0048, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011,
-    IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020,
-    IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061,
-    IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_P0068, IPE_P0069,
-    IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012,
-    IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020,
-    Severity,
+    IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
+    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
+    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
+    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_P0068,
+    IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
+    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
+    IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -429,6 +429,11 @@ pub enum ParseError {
     /// one type can bind a value; the extras would otherwise be silently
     /// dropped last-write-wins. [IPE-P0069]
     DuplicateAnnotation { name: Box<str> },
+    /// The source file exceeds the addressable span range: byte offsets are
+    /// stored as `u32`, so a file larger than `u32::MAX` bytes cannot be given
+    /// accurate spans. Rather than clamp offsets (which would misreport every
+    /// position past the limit), the lexer turns the file away. [IPE-P0070]
+    SourceTooLarge { bytes: usize },
 }
 
 /// Errors raised during name resolution / canonicalisation.
@@ -747,6 +752,12 @@ pub enum NameError {
         /// noun the message uses.
         kind: RustNameFoldKind,
     },
+    /// A single pattern binds the same variable name more than once (e.g.
+    /// `( x, x )`). Each bound name is a distinct value in the branch body, so
+    /// two bindings of one name are ambiguous; the pattern is rejected rather
+    /// than silently shadowing one with the other. `first` is the span of the
+    /// earlier binder. [IPE-N0049]
+    DuplicatePatternBinder { name: Box<str>, first: Span },
 }
 
 /// Which namespace a [`NameError::RustNameFold`] collision falls in — selects
@@ -1952,6 +1963,7 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::MissingDocString { .. } => IPE_P0067,
         ParseError::AnnotationWithoutBinding { .. } => IPE_P0068,
         ParseError::DuplicateAnnotation { .. } => IPE_P0069,
+        ParseError::SourceTooLarge { .. } => IPE_P0070,
     }
 }
 
@@ -1994,6 +2006,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::WebInitPolyArg => IPE_N0046,
         NameError::ModuleNotAllowedInPlacement(..) => IPE_N0047,
         NameError::RustNameFold { .. } => IPE_N0048,
+        NameError::DuplicatePatternBinder { .. } => IPE_N0049,
     }
 }
 
@@ -2137,7 +2150,8 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
         | ParseError::DocOnUnexported { .. }
         | ParseError::MissingDocString { .. }
         | ParseError::AnnotationWithoutBinding { .. }
-        | ParseError::DuplicateAnnotation { .. } => Vec::new(),
+        | ParseError::DuplicateAnnotation { .. }
+        | ParseError::SourceTooLarge { .. } => Vec::new(),
     }
 }
 
@@ -2153,6 +2167,7 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         NameError::DuplicateValue { first, .. }
         | NameError::DuplicateConstructor { first, .. }
         | NameError::DuplicateType { first, .. }
+        | NameError::DuplicatePatternBinder { first, .. }
         | NameError::DuplicateQualifier { first, .. } => vec![HelpLine::SecondarySpan {
             span: *first,
             role: SpanRole::FirstDefinition,

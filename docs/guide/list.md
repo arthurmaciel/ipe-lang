@@ -44,8 +44,8 @@ standings matches =
 
 "Update one team's row" is a rebuild, not a mutation. `List.partition` splits the
 table into (this team's row, everyone else); the row is rebuilt with updated
-points and consed back on. The partitioned tuple is destructured in the `let`,
-then the list is matched.
+points and consed back on. Here the tuple is destructured first, then the list is
+matched.
 
 ```ipe
 creditTeam team earned table =

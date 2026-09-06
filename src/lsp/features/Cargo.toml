@@ -9,6 +9,7 @@ ipe_db = { path = "../../compiler/db" }
 ipe_diagnostics = { path = "../../compiler/diagnostics" }
 ipe_intern = { path = "../../compiler/intern" }
 ipe_canon = { path = "../../compiler/canon" }
+ipe_parse = { path = "../../compiler/parse" }
 ipe_syntax = { path = "../../compiler/syntax" }
 ipe_types = { path = "../../compiler/types" }
 ipe_annotate = { path = "../../compiler/annotate" }

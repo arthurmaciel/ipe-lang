@@ -149,24 +149,33 @@ Ipe.Analytics — typed, consent-gated product analytics.
 
 | Export | Summary |
 |--------|----------|
+| `Config` | Session configuration: which sink to use, the current consent state, and |
 | `ConsentState` | The three possible consent states. `track` / `trackEvent` are |
 | `Sink` | Where serialised event lines go. |
 | `PropValue` | A typed analytics property value. Every branch serialises safely: |
 | `Props` | A bag of named property values for an event or identity. |
 | `Pii` | An opaque PII-tagged string. Cannot be serialised directly — the sink |
+| `AnalyticsEvent` | A persisted analytics event row. |
 | `pii` | Wrap a plaintext string as a `Pii` value. The wrapped string is sealed |
+| `redactedText` | The only text this module emits for a `Pii` value: the literal string |
 | `noProps` | An empty `Props`. |
 | `props` | Build a `Props` from a list of `(name, value)` pairs. |
+| `prop` | Insert one property into an existing `Props`. |
+| `noTraits` | Synonym for `noProps` used in the identity position. |
 | `defaultConfig` | A `Config` starting in the `Pending` state (fail-closed default) with no |
 | `setConsent` | Replace the consent state in a `Config`. |
 | `identify` | Record the user's identity and optional trait properties. |
+| `consentState` | Read the current consent state from a `Config`. |
 | `track` | `track cfg eventName eventProps` — emit a named event with a property bag. |
+| `trackEvent` | `trackEvent cfg codec event eventProps` — emit an event encoded by the |
 | `eventsStore` | The typed `Store AnalyticsEvent`. Built from `analyticsEventCodec`, so its |
 | `persist` | `persist db store cfg eventName eventProps` — persist a named event with a |
 | `persistEvent` | `persistEvent db store cfg codec event eventProps` — persist an event |
+| `erase` | `erase db store cfg` — delete all persisted rows for the `Config`'s |
 | `totals` | `totals db store` — the total count of persisted events. |
 | `uniqueUsers` | `uniqueUsers db store` — the count of distinct `userId` values in the |
 | `eventCounts` | `eventCounts db store` — a dictionary mapping each event name to the |
+| `recent` | `recent db store limit` — the `limit` most-recently recorded events, |
 | `encodePropValue` | Encode one `PropValue` to a JSON `Value`. `PPii` → `"[redacted]"`, |
 
 ## Basics
