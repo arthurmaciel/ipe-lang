@@ -1,4 +1,4 @@
-use super::*;
+use super::{VarId, BTreeMap, Symbol, UnionFind, Content, Budget, DResult, Diagnostic, STAGE, FlatType, Interner, Generated, unify, RowTail, Ty, ZONK_NODE_LIMIT, tag_solver_var, Builder, Builtins, BTreeSet, StdlibKernel, SchemeKey};
 
 
 // ===========================================================================

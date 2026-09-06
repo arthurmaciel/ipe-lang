@@ -1,6 +1,6 @@
-use super::*;
+use super::{StdlibKernel, Builder, canon, DResult, BTreeMap, from_canon, FlatType, Diagnostic, STAGE, Symbol, canon_type_to_doc, TypeError, Ty, Span, VarNamer, ty_to_doc, RowTail, VarId, SchemeApp, PendingInstantiation, TyBounds, LowerError, Feature, RoutedWebCheck, RouteWitnessCheck, SchemeKey, Content, FieldAccess, RecordUpdate};
 
-impl<'a> Builder<'a> {
+impl Builder<'_> {
     #[allow(clippy::too_many_lines)] // Handler expansion block (E-12) pushes it over 100
     pub fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
         // Track which source module this def belongs to so every `regions.insert`

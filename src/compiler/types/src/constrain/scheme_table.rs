@@ -1,6 +1,6 @@
-use super::*;
+use super::{StdlibKernel, Builder, SchemeKey, Ty, TyShape, BTreeMap, RowTailShape, RowTail, BuiltinTag, Symbol, FieldTag};
 
-impl<'a> Builder<'a> {
+impl Builder<'_> {
     /// Resolve a [`SchemeKey`] carried on a [`ipe_kernels::KernelDef`] to its
     /// concrete HM type scheme.
     ///

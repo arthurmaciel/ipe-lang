@@ -1,4 +1,4 @@
-use super::*;
+use super::{Builder, UnionFind, Content, Interner, canon, DResult, Generated, BTreeMap, Symbol, Rc, Ty, Builtins, BTreeSet, pin_any_in_ty, from_canon, CtorScheme, VarId, FlatType, TyBounds, Span, Diagnostic, classify_binop, BinopClass, Constraint, RowTail, is_solver_var};
 
 impl<'a> Builder<'a> {
     /// Build a constraint set for the whole module.

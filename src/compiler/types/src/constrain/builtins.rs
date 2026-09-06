@@ -1,4 +1,4 @@
-use super::*;
+use super::{Symbol, Interner, DResult, CtorScheme, Ty, TyBounds};
 
 pub struct Builtins {
     pub int: Symbol,
