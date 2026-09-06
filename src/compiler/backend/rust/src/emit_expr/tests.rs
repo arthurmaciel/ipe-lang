@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod cmd_wiring_emit_tests {
-    use super::emit_cmd_wiring_arm;
+    use super::super::emit_cmd_wiring_arm;
     use ipe_ir::{CallPin, Callee, Expr, KernelFn, OnFormKind};
 
     fn cmd_none() -> Expr {
