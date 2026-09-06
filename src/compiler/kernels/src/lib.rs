@@ -10994,10 +10994,11 @@ impl StdlibKernel {
     /// element function is separately rejected by the region gate
     /// (`embeds_nonderivable_function`) before a kernel is even resolved, since
     /// those positions are non-storable; this tag governs the storable-element
-    /// kernels (the `List` element and `Dict` value the carrier flip admits). The
-    /// `qualifier`-keyed default keeps a newly-added collection kernel tagged
-    /// without an omission — the coherence test asserts every `List`/`Dict`/`Set`
-    /// kernel returns `Some`.
+    /// kernels (the `List` element and `Dict` value the carrier flip admits). A
+    /// collection kernel matching none of the explicit arms falls to the tail
+    /// wildcard and returns `None`; the
+    /// `every_collection_kernel_carries_an_element_capability_tag` test — not the
+    /// match — is what forces every `List`/`Dict`/`Set` kernel to return `Some`.
     #[must_use]
     pub const fn element_capability(self) -> Option<ElementCapability> {
         match self {
@@ -11040,13 +11041,13 @@ impl StdlibKernel {
                 return Some(ElementCapability::MapperFrontierOpen);
             }
             // Collection kernels that only move/clone the element: sound over an
-            // `Arc<dyn Fn>` carrier.  Listed EXHAUSTIVELY — no wildcard — so a
-            // newly added List/Dict/Set kernel that does NOT fit in any of the
-            // three existing capability buckets above causes a compile error here
-            // rather than silently inheriting the wrong (permissive) default.
-            // The non-collection tail arm below returns `None`; the intentional
-            // design invariant is: collection kernel ⇒ explicit capability,
-            // non-collection kernel ⇒ `None`.
+            // `Arc<dyn Fn>` carrier. A newly added List/Dict/Set kernel that fits
+            // none of the three capability buckets above falls to the `_ => {}`
+            // tail and returns `None`; the design invariant — collection kernel ⇒
+            // explicit capability, non-collection kernel ⇒ `None` — is enforced by
+            // the `every_collection_kernel_carries_an_element_capability_tag` test,
+            // not by the match arms (the tail wildcard swallows an unlisted variant
+            // at compile time, so the coherence test is what catches the omission).
             Self::ListMap
             | Self::ListFilter
             | Self::ListFoldl
@@ -13972,8 +13973,10 @@ mod tests {
             let is_collection = matches!(k.def().qualifier, "List" | "Dict" | "Set");
             let cap = k.element_capability();
 
-            // Every collection kernel must return Some (the exhaustive explicit
-            // match is the compile-time guarantee; this is the runtime check).
+            // Every collection kernel must return Some. This test is the guarantee:
+            // `element_capability`'s match ends in a swallowing `_ => {}`, so an
+            // unlisted collection kernel returns `None` at compile time and only
+            // this check catches the omission.
             assert_eq!(
                 cap.is_some(),
                 is_collection,
