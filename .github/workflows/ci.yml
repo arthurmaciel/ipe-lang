@@ -598,31 +598,37 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
 
-  # Scoped deliberately, not exhaustively. All 5 targets are
-  # `#![forbid(unsafe_code)]`, so Miri's value here is catching UB triggered
-  # indirectly through a DEPENDENCY's own `unsafe` (interning/IR/union-find
-  # data structures are exactly the kind of code that leans on library
-  # invariants) plus Stacked/Tree-Borrows aliasing violations, not scanning
-  # for a nonexistent `unsafe` block of ours. `ipe_db` (the salsa
-  # incremental-compilation database — the other candidate with genuinely
-  # complex invariants, per docs/architecture/ci-and-hosting.md §3.5) was
-  # evaluated and rejected: `cargo +nightly miri test -p ipe_db` timed out
-  # after 280s on the FIRST of 3 tests (salsa's internal thread-pool/
-  # generation-counter machinery is impractical under Miri's interpretation
-  # overhead). `ipe`/`ipe_canon`/`ipe_parse`/`ipe_backend_rust`/`runtime` are
-  # out of scope for a different reason: they spawn real subprocesses / do
-  # real I/O (E2E tests, `ipe_backend_rust::project`'s `rustfmt` spawn, the
-  # runtime's HTTP/DB/websocket kernels), which Miri can't interpret at all —
-  # `posix_spawn` is an unsupported foreign call under Miri.
-  # Sharded across 10 runners via nextest partitioning. Serial `miri test` over
-  # the five crates is a multi-hour long-pole; partitioning splits the test set
-  # evenly so each shard interprets ~1/10 of the cases and the wall-clock drops
-  # to well under an hour. Same crates, same MIRIFLAGS — only parallelised.
-  # The shard driver is `cargo miri nextest run`, which needs BOTH the miri
-  # component AND nextest on the runner, so this installs nextest like every
-  # other nextest-driven job.
+  # Forward-guard over EVERY miri-interpretable crate — defense in depth. No
+  # workspace crate holds `unsafe` today (the sole sanctioned block is a runtime
+  # `prctl`, excluded below), so miri's value is catching UB the moment a future
+  # `unsafe` addition — ours or a dependency's own `unsafe` (interning, IR,
+  # union-find, salsa-style structures lean on library invariants) — introduces
+  # a Stacked/Tree-Borrows aliasing violation. Vetting the whole pure-logic
+  # surface, not a hand-picked five, means any such regression is caught wherever
+  # it lands. FFI / syscall / process-spawn crates are the sanitizers' job, not
+  # miri's: `posix_spawn`, network, and DB foreign calls abort as
+  # "unsupported foreign call" under miri, so `ipe` (spawns cargo/ipe),
+  # `ipe-runtime-rust`, `ipe_sandbox`, `ipe_ffi`, and the lsp/wasm IO crates are
+  # out of scope.
+  #
+  # The included set was classified empirically (a small nextest partition per
+  # crate under miri): every crate below interprets cleanly. `ipe_db` is the one
+  # candidate EXCLUDED for cost, not capability — salsa's thread-pool /
+  # generation-counter machinery makes nearly every db test exceed the per-test
+  # ceiling under miri's interpretation overhead, and sharding cannot rescue a
+  # single test that alone overruns. A handful of individual tests inside
+  # otherwise-interpretable crates are likewise long-poles (full-universe
+  # feature-closure walks, whole-stdlib canonicalization, an env-var doc scan);
+  # they are filtered out per-test with `not test(...)` so the crate's remaining
+  # cases still get miri coverage.
+  #
+  # Sharded across nextest partitions so each shard interprets a slice of the
+  # combined test set and stays well under an hour despite miri's 10-50x
+  # slowdown; more crates than the original five means more shards. The driver
+  # `cargo miri nextest run` needs BOTH the miri component AND nextest on the
+  # runner, so this installs nextest like every other nextest-driven job.
   miri-shard:
-    name: miri-shard (${{ matrix.shard }}/10)
+    name: miri-shard (${{ matrix.shard }}/20)
     runs-on: ubuntu-latest
     # Fail-fast: don't start the slow miri interpretation if the workspace does
     # not even compile (quick-check is red). Only reachable off the PR path.
@@ -631,7 +637,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -639,14 +645,33 @@ jobs:
           components: miri
       - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +nightly miri nextest run -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics --partition count:${{ matrix.shard }}/10
+      # Per-test exclusions: each named test alone overruns the miri per-test
+      # ceiling in its (otherwise interpretable) crate, so sharding can't help it
+      # — filtered out so the crate's other tests still run under miri.
+      #   composed_full_universe_is_closed — full runtime feature-closure walk
+      #   def_is_none_inside_string        — heavy annotate string scan
+      #   all_runtime_env_vars_are_documented — whole env-var doc scan
+      #   *_alias_* / unknown_stdlib_alias — whole-stdlib canonicalization
+      - run: >-
+          cargo +nightly miri nextest run
+          -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics
+          -p ipe_syntax -p ipe_path_core -p ipe_parse -p ipe_lint -p ipe_stdlib
+          -p ipe_backend -p ipe_kernels -p ipe_annotate -p ipe_docs
+          -p ipe_canon -p ipe_backend_rust
+          -E 'not (test(composed_full_universe_is_closed)
+              or test(def_is_none_inside_string)
+              or test(all_runtime_env_vars_are_documented)
+              or test(unknown_stdlib_alias_stays_fail_closed)
+              or test(record_alias_ctor_field_order_is_declared_not_alphabetical)
+              or test(exposed_record_alias_via_list_exports_its_ctor_value))'
+          --partition count:${{ matrix.shard }}/20
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
 
   # Stable aggregation gate for the sharded miri matrix. The `miri-shard` matrix
-  # expands to ten shard-named jobs, so no single shard name is a durable
-  # required-check target and a `fail-fast: false` shard failure is easy to
-  # miss. This job depends on every shard and is GREEN only when all ten passed
+  # expands to one shard-named job per partition, so no single shard name is a
+  # durable required-check target and a `fail-fast: false` shard failure is easy
+  # to miss. This job depends on every shard and is GREEN only when all passed
   # — one stable context name (`miri`) branch protection can require so a UB /
   # aliasing regression blocks a landing. The `always()` guard makes a
   # skipped/failed/cancelled shard a FAILURE here, never a false green; a
