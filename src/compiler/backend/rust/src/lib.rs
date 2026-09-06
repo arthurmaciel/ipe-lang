@@ -1472,24 +1472,22 @@ impl<'a> EmitCtx<'a> {
                 // degenerate name space with no free suffix fails closed with the
                 // fold diagnostic (IPE-N0048) naming both Ipê types.
                 let this_dotted = ipe_dotted_name(&home_segs, def_name);
-                let rust_name = match disambiguated_rust_name(&rust_name, "", &enum_rust_names)
-                {
-                    Some(name) => name,
-                    None => {
-                        let first_dotted = enum_rust_names
-                            .get(&rust_name)
-                            .cloned()
-                            .unwrap_or_default();
-                        return Err(Diagnostic::Name {
-                            span: Span::DUMMY,
-                            msg: NameError::RustNameFold {
-                                first: first_dotted.into_boxed_str(),
-                                second: this_dotted.into_boxed_str(),
-                                rust_name: rust_name.into_boxed_str(),
-                                kind: RustNameFoldKind::Type,
-                            },
-                        });
-                    }
+                let Some(rust_name) =
+                    disambiguated_rust_name(&rust_name, "", &enum_rust_names)
+                else {
+                    let first_dotted = enum_rust_names
+                        .get(&rust_name)
+                        .cloned()
+                        .unwrap_or_default();
+                    return Err(Diagnostic::Name {
+                        span: Span::DUMMY,
+                        msg: NameError::RustNameFold {
+                            first: first_dotted.into_boxed_str(),
+                            second: this_dotted.into_boxed_str(),
+                            rust_name: rust_name.into_boxed_str(),
+                            kind: RustNameFoldKind::Type,
+                        },
+                    });
                 };
                 enum_rust_names.insert(rust_name.clone(), this_dotted);
                 enum_names.insert(key.clone(), rust_name.clone());
@@ -1530,23 +1528,21 @@ impl<'a> EmitCtx<'a> {
                 // emits; a degenerate name space fails closed with the fold
                 // diagnostic (IPE-N0048) naming both Ipê values.
                 let this_dotted = ipe_dotted_name(&func_segs, resolve_sym(interner, func.name)?);
-                let rust_name = match disambiguated_rust_name(&rust_name, "_", &func_ipe_names) {
-                    Some(name) => name,
-                    None => {
-                        let first_dotted = func_ipe_names
-                            .get(&rust_name)
-                            .cloned()
-                            .unwrap_or_default();
-                        return Err(Diagnostic::Name {
-                            span: Span::DUMMY,
-                            msg: NameError::RustNameFold {
-                                first: first_dotted.into_boxed_str(),
-                                second: this_dotted.into_boxed_str(),
-                                rust_name: rust_name.into_boxed_str(),
-                                kind: RustNameFoldKind::Value,
-                            },
-                        });
-                    }
+                let Some(rust_name) = disambiguated_rust_name(&rust_name, "_", &func_ipe_names)
+                else {
+                    let first_dotted = func_ipe_names
+                        .get(&rust_name)
+                        .cloned()
+                        .unwrap_or_default();
+                    return Err(Diagnostic::Name {
+                        span: Span::DUMMY,
+                        msg: NameError::RustNameFold {
+                            first: first_dotted.into_boxed_str(),
+                            second: this_dotted.into_boxed_str(),
+                            rust_name: rust_name.into_boxed_str(),
+                            kind: RustNameFoldKind::Value,
+                        },
+                    });
                 };
                 func_ipe_names.insert(rust_name.clone(), this_dotted);
                 func_names.insert(func.id, rust_name);

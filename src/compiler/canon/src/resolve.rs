@@ -5082,7 +5082,7 @@ fn collect_binders_no_dup(
     seen: &mut BTreeMap<Symbol, Span>,
     interner: &Interner,
 ) -> DResult<()> {
-    let mut note = |name: Symbol, span: Span, seen: &mut BTreeMap<Symbol, Span>| -> DResult<()> {
+    let note = |name: Symbol, span: Span, seen: &mut BTreeMap<Symbol, Span>| -> DResult<()> {
         if let Some(&first) = seen.get(&name) {
             return Err(Diagnostic::Name {
                 span,
