@@ -9965,7 +9965,13 @@ impl StdlibKernel {
             // `open`; a read against it is a database op (like every other read).
             | Self::DbConnFindWhere
             | Self::DbConnQueryDecode
-            | Self::DbConnGetById => Some(Capability::Database),
+            | Self::DbConnGetById
+            // Auth kernels that take a live `Db` handle and run CREATE TABLE /
+            // INSERT / SELECT / UPDATE through it — a database op like every other
+            // handle-consuming kernel, disclosed as `database` for capability honesty.
+            | Self::AuthRegister
+            | Self::AuthLogin
+            | Self::AuthSetRole => Some(Capability::Database),
             Self::SystemArgs
             | Self::SystemGetenv
             | Self::SystemGetenvOr
@@ -10018,7 +10024,9 @@ impl StdlibKernel {
             | Self::TimeUnixMillis
             | Self::TimeTimeString
             | Self::SubEvery
-            | Self::TimeEvery => Some(Capability::Clock),
+            | Self::TimeEvery
+            // Validates a token's `exp` / `nbf` against the wall clock (`SystemTime::now`).
+            | Self::AuthVerifyToken => Some(Capability::Clock),
             Self::CryptoRandomBytes
             | Self::CryptoRandomToken
             | Self::UuidV4
@@ -10028,7 +10036,10 @@ impl StdlibKernel {
             | Self::RandomChoice
             | Self::RandomChoiceMaybe
             | Self::RandomShuffle
-            | Self::RandomWeighted => Some(Capability::Random),
+            | Self::RandomWeighted
+            // Mints a random `jti` from OS entropy (also reads the clock for `iat`;
+            // the entropy draw is the security-relevant disclosure).
+            | Self::AuthSignToken => Some(Capability::Random),
             Self::LogInfo
             | Self::LogDebug
             | Self::LogWarn
@@ -10390,6 +10401,10 @@ impl StdlibKernel {
             | Self::CryptoAesKeyFromPassword
             | Self::CryptoChachaKeyFromPassword
             | Self::UuidParse
+            // The Jwt decode kernels validate `exp` / `nbf` against the wall clock,
+            // an incidental read left undisclosed on purpose: Clock is pinned
+            // low-value and never jail-enforced, and a decode is a pure verification
+            // over its two inputs rather than a clock effect the caller selects.
             | Self::JwtEncodeHs256
             | Self::JwtDecodeHs256
             | Self::JwtEncodeRs256
@@ -10693,11 +10708,6 @@ impl StdlibKernel {
             | Self::AuthHashPasswordCost
             | Self::AuthVerifyPassword
             | Self::AuthPasswordStrength
-            | Self::AuthSignToken
-            | Self::AuthVerifyToken
-            | Self::AuthRegister
-            | Self::AuthLogin
-            | Self::AuthSetRole
             | Self::AuthSubject
             // Revocation store — writes/reads to a process-global in-memory set;
             // no network, DB, filesystem, or other isolatable capability.
@@ -13092,6 +13102,30 @@ mod tests {
         assert_eq!(
             StdlibKernel::JsCloseSession.capability(),
             Some(Capability::JsPort(WebCapability::Raw))
+        );
+        // Auth kernels that take a live `Db` handle disclose the database axis, not
+        // pure — a library exposing register/login wrappers must report `database`.
+        assert_eq!(
+            StdlibKernel::AuthRegister.capability(),
+            Some(Capability::Database)
+        );
+        assert_eq!(
+            StdlibKernel::AuthLogin.capability(),
+            Some(Capability::Database)
+        );
+        assert_eq!(
+            StdlibKernel::AuthSetRole.capability(),
+            Some(Capability::Database)
+        );
+        // `Auth.signToken` mints a random `jti`; `Auth.verifyToken` reads the clock
+        // to validate `exp` / `nbf`.
+        assert_eq!(
+            StdlibKernel::AuthSignToken.capability(),
+            Some(Capability::Random)
+        );
+        assert_eq!(
+            StdlibKernel::AuthVerifyToken.capability(),
+            Some(Capability::Clock)
         );
     }
 
