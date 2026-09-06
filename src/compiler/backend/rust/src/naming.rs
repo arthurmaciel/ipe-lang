@@ -63,7 +63,7 @@ fn disambiguate_user_fn_name(default_snake: &str) -> Option<String> {
 ///
 /// `Ipe_Core_Error_Error` → `IpeCoreErrorError`, `Main_Msg` → `MainMsg`.
 /// An underscore is dropped and the following character upper-cased; a trailing
-/// underscore with no successor is kept verbatim (mirrors the the compiler pattern
+/// underscore with no successor is kept verbatim (mirrors the reference compiler pattern
 /// `go ('_':c:cs)` falling through to `go (c:cs)` when there is no `c`).
 #[must_use]
 pub fn to_camel_case(s: &str) -> String {
@@ -94,7 +94,7 @@ pub fn to_camel_case(s: &str) -> String {
 /// Convert a Ipê module-prefixed name to `snake_case` (used for function names).
 ///
 /// `Ipe_Core_List_map` → `ipe_core_list_map`, `Main_update` → `main_update`.
-/// Mirrors the the compiler `toSnakeCase`: the leading character is lower-cased; an
+/// Mirrors the reference compiler `toSnakeCase`: the leading character is lower-cased; an
 /// underscore followed by a character emits `_` plus the lower-cased successor;
 /// an interior upper-case character emits `_` plus its lower-case form.
 #[must_use]
@@ -157,7 +157,7 @@ pub fn module_prefix(module: &[&str]) -> String {
 
 /// Every Rust keyword that cannot appear as a bare identifier in emitted code:
 /// the strict keywords (2015 + 2018), the reserved-for-future keywords, and the
-/// 2024-reserved `gen`. Mirrors the the backend's `reservedGoNames` audit. A name
+/// 2024-reserved `gen`. Mirrors the backend's `reservedGoNames` audit. A name
 /// in this set is mangled by [`mangle_reserved`] before it reaches the output.
 ///
 /// `union`/`dyn`-style weak/contextual keywords are intentionally excluded: they
@@ -273,7 +273,7 @@ pub fn enum_name(module: &[&str], ty: &str) -> String {
 ///
 /// The program entry `main` in module `Main` is special-cased to `ipe_main`
 /// (the fixed `fn main` entry-point in the epilogue calls `ipe_main()`), matching
-/// the the compiler `rustName` rule in `ModuleEmitter.hs`.
+/// the reference compiler `rustName` rule in `ModuleEmitter.hs`.
 #[must_use]
 pub fn module_value(module: &[&str], name: &str) -> String {
     if name == "main" && module == ["Main"] {
@@ -308,7 +308,7 @@ pub fn module_value(module: &[&str], name: &str) -> String {
 /// The base Rust struct name for a synthesised record shape, derived from its
 /// sorted field names: `record_struct_name(["x", "y"])` → `RecXY`.
 ///
-/// Mirrors the the compiler Rust backend's `anonStructName` strategy (a name built
+/// Mirrors the reference compiler Rust backend's `anonStructName` strategy (a name built
 /// from the field set) but with a `Rec_` stem. The result is a *base* name; the
 /// caller deduplicates across the program and appends a numeric suffix on the
 /// rare event that two distinct field sets camel-case to the same string (e.g.

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Source AST for the Ipê compiler. This is the raw parse tree the parser
-//! produces and name resolution (`ipe_canon`) consumes. It mirrors the
-//! supported subset of the the compiler compiler's `Ipe.AST.Source`.
+//! produces and name resolution (`ipe_canon`) consumes, covering the
+//! supported subset of the surface language.
 
 mod ast;
 

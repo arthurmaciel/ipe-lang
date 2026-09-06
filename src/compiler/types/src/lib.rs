@@ -8,7 +8,7 @@
 //! source region (`regions`) — the latter being exactly what the type-directed
 //! lowerer reads to fill its `IrType` slots.
 //!
-//! The implementation is a faithful but narrowed port of the the compiler compiler's
+//! The implementation is a faithful but narrowed port of the reference compiler's
 //! `Ipe.Type.{Type,UnionFind,Unify,Solve}` + `Constrain.Expression`:
 //!
 //! * [`unionfind`] — `Vec`-backed weighted union-find (port of `UnionFind`).
@@ -62,7 +62,7 @@ use unionfind::{UnionFind, VarId};
 
 /// The result of inference: resolved types for bindings and for every region.
 ///
-/// Mirrors the the compiler `SolvedTypes` record's `_stEnv` + `_stRegions`. Both
+/// Mirrors the reference compiler `SolvedTypes` record's `_stEnv` + `_stRegions`. Both
 /// maps are `BTreeMap`s so iteration is deterministic.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SolvedTypes {
@@ -2309,7 +2309,7 @@ fn resolve_routed_web_checks(
             // Non-routed Model (no `page` field) BUT the program declared a
             // non-empty `routes` list: the routes are forwarded to the
             // non-routed runtime path and silently ignored. This compiles
-            // (matching the the reference's `applyRoute` no-op), but it is
+            // (matching the reference's `applyRoute` no-op), but it is
             // almost always a mistake — usually a mis-named `page` field. Emit
             // the IPE-L0124 warning at the `Web.app` span.
             //

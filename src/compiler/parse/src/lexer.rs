@@ -1,6 +1,6 @@
 //! Layout-aware lexer for the supported subset of Ipê.
 //!
-//! This is a Rust port of the relevant pieces of the the compiler compiler's
+//! This is a Rust port of the relevant pieces of the reference compiler's
 //! `Ipe.Parse.{Primitives,Space,Number,Symbol,Variable}` — narrowed to the
 //! token shapes the supported subset exercises. Rather than emit explicit
 //! layout tokens, each token carries its 1-based `line`/`col`, and the parser
@@ -517,7 +517,7 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
         })?;
         // A magnitude past `f64::MAX` (e.g. `1e400`) parses to `inf`, which is
         // not the number the source spelled. Rejecting it — rather than
-        // silently accepting infinity — restores parity with the the reference
+        // silently accepting infinity — restores parity with the reference
         // (the lexer errors on the same literal) and the principle of least
         // surprise. Finite literals (including a genuine `0.0`) pass through.
         if !f.is_finite() {
@@ -544,10 +544,10 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 /// dispatches to [`lex_triple_string`] which terminates only on a closing
 /// `"""`. Otherwise lexes a single-line `"…"` string: escape sequences are
 /// resolved into the runtime value; an unrecognised escape is kept verbatim
-/// (backslash + char) so a typo surfaces as wrong text rather than lost data,
-/// matching the the reference's `unescapeString`. A raw newline, or end of
-/// input, before the closing `"` is [`ParseError::UnterminatedString`]: a
-/// single-line string may not span lines (a multi-line body uses `"""`).
+/// (backslash + char) so a typo surfaces as wrong text rather than lost data.
+/// A raw newline, or end of input, before the closing `"` is
+/// [`ParseError::UnterminatedString`]: a single-line string may not span lines
+/// (a multi-line body uses `"""`).
 fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     lx.advance(); // consume opening `"`
 
@@ -603,7 +603,7 @@ fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 ///
 /// Raw content is returned without escape processing: `{{expr}}` interpolation,
 /// `\{{` literal-brace escapes, and `\\` collapse are handled downstream by the
-/// canonicaliser (mirroring `Ipe.Parse.String.findTripleClose` in the the compiler
+/// canonicaliser (mirroring `Ipe.Parse.String.findTripleClose` in the reference compiler
 /// reference, which performs no escape resolution).
 ///
 /// The anchor column A is the source column of the first non-whitespace content

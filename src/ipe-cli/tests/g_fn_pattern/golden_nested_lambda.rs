@@ -28,8 +28,8 @@
 //! 6
 //! ```
 //!
-//! Running the the toolchain inside `cargo test` is impractical (it needs the
-//! the `ipe` binary plus a the toolchain), so the hand-computed value is the
+//! Running the toolchain inside `cargo test` is impractical (it needs the
+//! the `ipe` binary plus a toolchain), so the hand-computed value is the
 //! in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};

@@ -1,5 +1,4 @@
-//! Ipe.Ui style-marker injection — Rust port of  `applyStyleInjections`
-//! (live.go:872-1110).
+//! Ipe.Ui style-marker injection.
 //!
 //! The shared `Ipe.Ui` stdlib emits `data-ipe-{mq,pc,tr,anim}-*` marker
 //! *attributes* on elements for `Ui.breakpoint` / `Ui.mediaQuery`,

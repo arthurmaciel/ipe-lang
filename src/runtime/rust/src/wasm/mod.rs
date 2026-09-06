@@ -549,8 +549,8 @@ where
     // path does not match any declared route.
     //
     // The `matches_any` guard before `match_routes` is the browser-client
-    // analogue of the server's `isBrowserNoisePath` / `matches_any` guard in
-    // `web_app_routed` (live.go parity): a popstate to an unrouted path (e.g.
+    // analogue of the server's routed-app noise-path guard: a popstate to an
+    // unrouted path (e.g.
     // `/favicon.ico`) must not re-route the model to `not_found` and rebuild
     // the handler index — that would orphan every handler on the page the
     // browser is actually showing, silently breaking all subsequent events.

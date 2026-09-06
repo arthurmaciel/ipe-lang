@@ -20,7 +20,7 @@
 //! Verified: the reference toolchain compiles and runs
 //! `fn_value_reuse_promoted` (`47`) and `fn_param_capture_promoted`
 //! (`13`) to the asserted stdout. `fn_capture_eta_promoted` is REJECTED
-//! by the the backend (`not enough arguments in call to wrap` — the same
+//! by the backend (`not enough arguments in call to wrap` — the same
 //! local-fn-value partial-application arity gap this promotion closes), so its
 //! `4` is the hand-computed language-semantics value; accepting the shape is a
 //! recorded strictly-better divergence.

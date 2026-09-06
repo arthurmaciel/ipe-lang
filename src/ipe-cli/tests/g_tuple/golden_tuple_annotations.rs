@@ -24,8 +24,8 @@
 //! `firstOf (41, 7) = 41` and `secondOf (41, 7) = 7` (each returns the matching
 //! element when the tuple equals `(41, 7)`), so the entry prints `41 + 7 = 48`.
 //! The `end_to_end_*` test below asserts the Rust backend reaches the identical
-//! `48`. Running the the toolchain inside `cargo test` is impractical (it needs
-//! the the `ipe` binary plus a the toolchain), so the hand-verified value is
+//! `48`. Running the toolchain inside `cargo test` is impractical (it needs
+//! the `ipe` binary plus a toolchain), so the hand-verified value is
 //! the in-test oracle, documented here against the equivalent command.
 //!
 //! (Bool literals `True`/`False` are not yet in the Rust frontend's prelude, so
@@ -74,7 +74,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// tuple-annotation program prints `48` — the same value the the backend
+/// tuple-annotation program prints `48` — the same value the backend
 /// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_forty_eight() {

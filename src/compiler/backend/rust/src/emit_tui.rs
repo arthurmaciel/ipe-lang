@@ -27,7 +27,7 @@
 //! For records with additional String fields (e.g. `{ ctrl, kind, shift, value }`),
 //! the wrapper fills the runtime-supplied `kind` and `value` and initialises every
 //! other String field to an empty string.  Non-String fields (Bool, Int, …) are
-//! initialised to their zero value.  This matches what the the runtime does via
+//! initialised to their zero value.  This matches what the runtime does via
 //! reflection: fields not present in the runtime key-event struct receive their
 //! zero value.
 //!
@@ -192,10 +192,10 @@ fn emit_tui_inner(
 /// * `kind` and `value` fields must be present (both `IrType::Str`); they map
 ///   directly to the runtime parameters.  Any additional String fields receive
 ///   `String::new()` as the default; Bool fields receive `false`; Int fields
-///   receive `0i64`.  This mirrors the the runtime's zero-value fill for record
+///   receive `0i64`.  This mirrors the runtime's zero-value fill for record
 ///   fields not supplied by `tuiKeyToIpe`.
 ///
-/// Rationale for the default-fill approach: the the compiler compiler's the backend
+/// Rationale for the default-fill approach: the reference compiler's the backend
 /// handles the `KeyEvent → Msg` bridge via reflection (`IpeCall`), which
 /// zero-initialises fields not present in the runtime struct.  The Rust port
 /// replicates that contract statically at code-generation time.

@@ -1,10 +1,10 @@
 //! The embedded Ipê standard-library source (`Ipe.*`).
 //!
-//! `ipe` is self-contained: the foundational `Ipe` modules are compiled
-//! into the binary as their original Ipe source. The checked-in copies
-//! under `crates/ipec/stdlib/Ipe/Core/` are byte-identical to the upstream
-//! `ipe-stdlib` sources; embedding a copy (rather than `include_str!`-ing an
-//! out-of-repo path) keeps the build portable and the toolchain hermetic.
+//! `ipe` is self-contained: the foundational `Ipe` modules are the `.ipe`
+//! sources under `src/stdlib/Ipe/`, `include_str!`-embedded into the binary
+//! at compile time. These sources ARE the standard library — there is no
+//! out-of-repo original they mirror; embedding them keeps the build portable
+//! and the toolchain hermetic.
 //!
 //! `Ipe.Basics` is the canonical implicit module (ADR 0047): its Tier-A surface
 //! is auto-imported into every module. There is no `Ipe.Prelude` module — the
@@ -52,8 +52,8 @@ const STRING: &str = include_str!("../Ipe/String.ipe");
 /// Every member is a point-free `Kernel.kernel "Char_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Char*`
 /// `StdlibKernel` variant (`ipe_runtime::char::*`). Registered in
-/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
-/// so the disjointness invariant holds.
+/// [`COMPILED_STD_MODULES`] and also in `MODULES`, so the module resolves for
+/// consumers that read either table.
 const CHAR: &str = include_str!("../Ipe/Char.ipe");
 /// `Ipe.Dict` — string-keyed associative map, compiled-source Layer-3.
 ///
@@ -73,9 +73,8 @@ const DICT: &str = include_str!("../Ipe/Dict.ipe");
 const SET: &str = include_str!("../Ipe/Set.ipe");
 /// `Ipe.Bytes` — arbitrary byte buffer, distinct from `String`.
 ///
-/// Divergence from Ipê: Ipê defines `type alias Bytes = String`; Ipê-Rust
-/// makes `Bytes` a distinct primitive lowering to `Vec<u8>` (lossless for
-/// non-UTF-8 binary). See `docs/architecture/divergence-policy.md`.
+/// `Bytes` is a distinct primitive lowering to `Vec<u8>` (lossless for
+/// non-UTF-8 binary), not a `String` alias.
 const BYTES: &str = include_str!("../Ipe/Bytes.ipe");
 /// `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
 const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");

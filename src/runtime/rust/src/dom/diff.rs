@@ -180,8 +180,8 @@ fn diff_attrs<M>(old: &[Attribute<M>], new: &[Attribute<M>], p: &mut Patch) {
                     m.insert(k.as_str(), v.as_str());
                 }
                 Attribute::BoolAttr(k, true) => {
-                    // live.go line 190 `vn.Attrs[k] = k`.
-                    // Key-as-value encodes a present boolean attr; "" is the remove sentinel only.
+                    // Key-as-value (`attr = k`) encodes a present boolean attr;
+                    // "" is the remove sentinel only.
                     m.insert(k.as_str(), k.as_str());
                 }
                 _ => {}

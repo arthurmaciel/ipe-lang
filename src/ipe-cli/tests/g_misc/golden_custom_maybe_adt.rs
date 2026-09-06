@@ -16,7 +16,7 @@
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the SAME
 //! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir, where the
 //! the backend emits the matching `MainOpt[T1 any]` enum and `MainOpt_Som(41)`
-//! construction. Running the the toolchain inside `cargo test` is impractical, so
+//! construction. Running the toolchain inside `cargo test` is impractical, so
 //! the hand-computed `42` is the in-test oracle.
 
 use std::path::{Path, PathBuf};

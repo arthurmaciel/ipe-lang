@@ -13,6 +13,9 @@ Security notes:
     random nonce on every call; the nonce is prepended to the
     ciphertext so `decrypt` can recover it.
   * Key/secret material is never logged.
+  * `sha1` and `md5` are cryptographically BROKEN (practical collisions):
+    use them only for legacy interop or non-security checksums, never for
+    passwords, signatures, or MACs.  Prefer `sha256`/`sha512`.
   * `Key` and `Mac` enforce role at compile time.  Every key-consuming
     function — `hmacSha256`, `hmacSha512`, `aesGcmEncrypt`/`Decrypt`,
     `chacha20Encrypt`/`Decrypt` — requires a `Key`; passing a bare `String`
@@ -41,11 +44,23 @@ sha512 : String -> String
 sha1 : String -> String
 ```
 
+SHA-1 hash, hex-encoded.
+
+Cryptographically BROKEN (practical collisions exist). Use only for legacy
+interop or non-security checksums — never for passwords, signatures, or MACs.
+Prefer `sha256`/`sha512`.
+
 ## `md5`
 
 ```ipe
 md5 : String -> String
 ```
+
+MD5 hash, hex-encoded.
+
+Cryptographically BROKEN (practical collisions exist). Use only for legacy
+interop or non-security checksums — never for passwords, signatures, or MACs.
+Prefer `sha256`/`sha512`.
 
 ## `rsaSha256Sign`
 

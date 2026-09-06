@@ -1828,7 +1828,7 @@ fn emit_process_run_in_pty_call(
 ///
 /// * **`HttpWithHeader k v req`** — emits a prepend:
 ///   `{ let mut __ipe_rec = (req).clone(); __ipe_rec.headers.insert(0, (k, v)); __ipe_rec }`.
-///   PREPEND (cons-prepend) matches the the reference implementation in `Http.ipe`
+///   PREPEND (cons-prepend) matches the reference implementation in `Http.ipe`
 ///   (`{ req | headers = (k, v) :: req.headers }`), so `withHeader "B" "2"` after
 ///   `withHeader "A" "1"` yields `B:2,A:1` in iteration order.
 ///

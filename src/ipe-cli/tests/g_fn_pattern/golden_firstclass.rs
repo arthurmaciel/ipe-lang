@@ -18,8 +18,8 @@
 //! passed as a value) and `applyTwice inc 1` is `(1+1)+1 = 3` (the top-level
 //! `inc` passed by name — reified into a boxed closure). `makeInc 0` returns the
 //! top-level `inc` as a value, bound to `g`; `g 40` is `41`. The entry's total
-//! is `7 + 3 + 41 = 51`. Running the the toolchain inside `cargo test` is
-//! impractical (it needs the the `ipe` binary plus a the toolchain), so the
+//! is `7 + 3 + 41 = 51`. Running the toolchain inside `cargo test` is
+//! impractical (it needs the `ipe` binary plus a toolchain), so the
 //! hand-computed value is the in-test oracle, documented here against the
 //! equivalent command.
 
@@ -64,7 +64,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// first-class-function arithmetic prints `51` — the same value the the backend
+/// first-class-function arithmetic prints `51` — the same value the backend
 /// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_fifty_one() {

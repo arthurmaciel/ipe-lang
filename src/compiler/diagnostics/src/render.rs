@@ -2114,8 +2114,8 @@ const fn feature_label(f: Feature) -> &'static str {
         }
         Feature::BoundedRecordUpdate => {
             "updating a generic record is not supported yet — it needs a \
-             `Clone`-bounded type parameter, and bounded generics are not \
-             supported yet [feature: bounded-record-update]"
+             `Clone`-bounded type parameter (bounded generics are not \
+             supported yet) [feature: bounded-record-update]"
         }
         Feature::NestedPayloadPatterns => {
             "a record pattern is supported at a `case` scrutinee or a `let` \

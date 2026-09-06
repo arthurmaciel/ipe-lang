@@ -21,7 +21,7 @@ use crate::env::{CtorHome, Env, VarHome, WildcardOrigin};
 /// error; the list is `(Levenshtein, name)`-sorted so the closest comes first.
 const MAX_SUGGESTIONS: usize = 3;
 
-/// The inclusive edit-distance ceiling for a suggestion. Mirrors the the compiler
+/// The inclusive edit-distance ceiling for a suggestion. Mirrors the reference compiler
 /// reference (`Ipe.Canonicalise.Module.suggestQualifier`): beyond two edits a
 /// "did you mean" is more misleading than helpful, so silence wins.
 const SUGGESTION_MAX_DISTANCE: usize = 2;
@@ -1022,7 +1022,7 @@ fn origin_owns_reserved_prefix(origin: ModuleOrigin, prefix: &str) -> bool {
     }
 }
 
-#[allow(clippy::too_many_lines)] // qualifier_paths pass added ~20 lines; refactor tracked in #todo
+#[allow(clippy::too_many_lines)] // one linear resolution pass over a module's declarations
 pub fn canonicalise_module_in_project(
     m: &src::Module,
     expected_path: &[Symbol],
@@ -3994,7 +3994,7 @@ fn call_expr(f: canon::Expr, args: Vec<canon::Expr>, span: Span) -> canon::Expr 
     Located::new(span, canon::Expr_::Call(Box::new(f), args))
 }
 
-#[allow(clippy::too_many_arguments)] // qualifier_paths added to thread context; refactor tracked
+#[allow(clippy::too_many_arguments)] // qualifier paths threaded through the resolution context
 fn synthesize_record_alias_ctors(
     m: &src::Module,
     home: &[Symbol],
@@ -5751,9 +5751,9 @@ enum Assoc {
 
 /// The precedence (higher binds tighter) and associativity of `op`.
 ///
-/// Mirror of the the compiler reference `Ipe.Parse.Symbol.precedence` for the
+/// Mirror of the reference compiler `Ipe.Parse.Symbol.precedence` for the
 /// core operator set; any operator outside the set defaults to `9 L` exactly
-/// as the the compiler catch-all does.
+/// as the reference compiler catch-all does.
 const fn op_precedence(op: &str) -> (i32, Assoc) {
     match op.as_bytes() {
         b"*" | b"/" | b"//" | b"%" => (7, Assoc::Left),
@@ -5790,7 +5790,7 @@ const fn op_precedence(op: &str) -> (i32, Assoc) {
 /// `Ipe.Canonicalise.Expression.canonicaliseBinops`), reading each operator's
 /// precedence + associativity from [`op_precedence`].
 ///
-/// Unlike the the compiler parser — which nests `Src.Binops` pairwise and so needs a
+/// Unlike the reference compiler parser — which nests `Src.Binops` pairwise and so needs a
 /// flattening pre-pass — the Rust parser already emits one flat chain per
 /// syntactic level. A `Binop` *operand* therefore only ever arises from an
 /// explicit parenthesised group, which must stay atomic; we never re-flatten
@@ -7171,7 +7171,7 @@ fn rank_suggestions<'a>(typo: &str, candidates: impl Iterator<Item = &'a str>) -
 /// Iterative Levenshtein edit distance over Unicode scalar values, computed
 /// with two rolling rows and no indexing (the `indexing_slicing` lint is
 /// denied workspace-wide). Ipê identifiers are short ASCII names, so the
-/// O(n·m) cost is negligible. Mirrors the the compiler reference's `levenshtein`.
+/// O(n·m) cost is negligible. Mirrors the reference compiler's `levenshtein`.
 fn levenshtein(a: &str, b: &str) -> usize {
     let b_chars: Vec<char> = b.chars().collect();
     // Row 0: cost of deleting every prefix of `b` (i.e. inserting into empty a).
@@ -7302,7 +7302,7 @@ fn chunk_to_expr(
     match chunk {
         Chunk::Lit(s) => Ok(Located::new(span, canon::Expr_::Str(s))),
         Chunk::Interp(body) => {
-            // Trim leading/trailing whitespace, matching the the compiler
+            // Trim leading/trailing whitespace, matching the reference compiler
             // `dropWhile (== ' ') (reverse (dropWhile …))`.
             let trimmed = body.trim();
             let resolved = resolve_interp_ref(trimmed, span, env, interner)?;

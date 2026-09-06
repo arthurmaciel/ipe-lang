@@ -15,7 +15,7 @@
 //!   fast as a [`Diagnostic::CompilerBug`] (the same upstream contract record
 //!   LITERALS are held to), never a silent mis-emit.
 //!
-//! Behavioural-parity oracle: the the reference compiler at
+//! Behavioural-parity oracle: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! shape-equivalent programs
 //!
@@ -301,7 +301,7 @@ fn record_pattern_with_unknown_shape_fails_fast() -> DResult<()> {
 
 /// Full spine: build the `getX` record-destructure IR, emit the Cargo project,
 /// vendor the runtime, `cargo build`, run, and assert the program prints `7` —
-/// the value the the backend produces for the field-set-equivalent program. Gated
+/// the value the backend produces for the field-set-equivalent program. Gated
 /// on `IPE_E2E=1` so the default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_seven() -> DResult<()> {

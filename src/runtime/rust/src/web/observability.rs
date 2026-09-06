@@ -62,8 +62,8 @@ pub async fn buildinfo() -> impl IntoResponse {
 
 /// `GET /_ipe/metrics` — full Prometheus 0.0.4 text exposition.
 pub async fn metrics() -> impl IntoResponse {
-    // The whole exposition comes from the labeled registry (:
-    // prometheus.go's WriteProm) — active sessions, SSE connections, 5xx errors,
+    // The whole exposition comes from the labeled registry — active sessions,
+    // SSE connections, 5xx errors,
     // request-latency histogram, AND `ipe_web_requests_total{method,status}`
     // written per request by the `track` middleware below. `write_prom` emits
     // exactly one #HELP/#TYPE per metric name, so there is NO hand-printed
@@ -117,8 +117,8 @@ pub async fn track(
             &[],
             dur_us as f64 / 1_000_000.0,
         );
-        // Labeled request counter (prometheus.go's
-        // ipe_web_requests_total{method,route,status}). We keep  two
+        // Labeled request counter
+        // (`ipe_web_requests_total{method,route,status}`). We keep two
         // BOUNDED labels — `method` normalised to a closed set, and the full
         // numeric `status` (bounded by the HTTP spec) — but DROP  `route`
         // label: it is derived from the raw request path, an attacker-

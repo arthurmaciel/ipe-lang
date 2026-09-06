@@ -16,7 +16,7 @@
 //! `p = { x = 1, y = 2 }`; `q = { p | x = 41 }`; the entry prints
 //! `q.x + p.y = 43` — proving the update replaced `x` (41) and left `p`
 //! untouched (`p.y = 2`). The `end_to_end_*` test below asserts the Rust
-//! backend reaches the identical `43`. Running the the toolchain inside
+//! backend reaches the identical `43`. Running the toolchain inside
 //! `cargo test` is impractical (it needs the full `ipe` toolchain),
 //! so the hand-verified value is the in-test oracle, documented
 //! here against the equivalent command.

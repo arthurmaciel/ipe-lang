@@ -1,7 +1,7 @@
 //! The lowering core: a name-resolved [`canon::Module`] plus its
 //! [`SolvedTypes`] become a backend-agnostic [`ipe_ir::Program`].
 //!
-//! This is the narrowed port of the the compiler compiler's `Ipe.Build.Compile`
+//! This is the narrowed port of the reference compiler's `Ipe.Build.Compile`
 //! lowering walk and `Ipe.Build.LowerCtx`. Every step is total, and failures
 //! split into two channels — never a panic, never a guess:
 //!
@@ -14206,20 +14206,6 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// Run the pass, producing the single-module program. On error, returns the
-    /// diagnostic paired with the `home` (module byte-namespace path) of the def
-    /// that produced it, so the driver attributes a lowering diagnostic to the
-    /// correct SOURCE FILE rather than guessing from a bare byte span (the
-    /// misattribution class: a Server.ipe lowering span numerically overlapping
-    /// a Main.ipe def range was blamed on Main.ipe). Mirrors
-    /// [`ipe_types::infer_attributed`]'s `(Diagnostic, Vec<Symbol>)` contract
-    /// exactly. A pre-/post-def error (union lowering, record collection, module
-    /// assembly) carries an EMPTY home — the driver falls back to the byte-offset
-    /// heuristic for those, as it already does for homeless type errors. Every
-    /// `?` below yields a bare `Diagnostic`; the per-def `lower_def` boundary is
-    /// the one site that attaches a non-empty home.
-    #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui_shape` are intentionally similar
-    #[allow(clippy::too_many_lines)] // the module-assembly tail is one linear pass
     /// Resolve a source [`Span`] to a human-readable `"<file>:<line>"` string
     /// using the source path and text threaded into the lowerer at construction
     /// time.  Falls back to `"<unknown>:0"` when source info is absent.
@@ -14241,7 +14227,20 @@ impl<'a> Lowerer<'a> {
         format!("{}:{}", self.source_path, line)
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Run the pass, producing the single-module program. On error, returns the
+    /// diagnostic paired with the `home` (module byte-namespace path) of the def
+    /// that produced it, so the driver attributes a lowering diagnostic to the
+    /// correct SOURCE FILE rather than guessing from a bare byte span (the
+    /// misattribution class: a Server.ipe lowering span numerically overlapping
+    /// a Main.ipe def range was blamed on Main.ipe). Mirrors
+    /// [`ipe_types::infer_attributed`]'s `(Diagnostic, Vec<Symbol>)` contract
+    /// exactly. A pre-/post-def error (union lowering, record collection, module
+    /// assembly) carries an EMPTY home — the driver falls back to the byte-offset
+    /// heuristic for those, as it already does for homeless type errors. Every
+    /// `?` below yields a bare `Diagnostic`; the per-def `lower_def` boundary is
+    /// the one site that attaches a non-empty home.
+    #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui_shape` are intentionally similar
+    #[allow(clippy::too_many_lines)] // the module-assembly tail is one linear pass
     pub fn run(self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
@@ -14907,7 +14906,7 @@ impl<'a> Lowerer<'a> {
         // `SqlValue` is a Prelude built-in (not a user `type`): its constructors
         // carry the empty canon home, so its nominal identity uses the empty
         // `ModPath` everywhere (EnumDef / IrType::Enum / Expr::Ctor). The backend's
-        // empty-home→entry-module naming fallback reproduces the the earlier Rust name
+        // empty-home→entry-module naming fallback reproduces the earlier Rust name
         // byte-for-byte.
         let sv = IrType::Enum {
             home: ModPath(Vec::new()),
@@ -15799,7 +15798,7 @@ impl<'a> Lowerer<'a> {
                 // is the body expression's solved type, which IS the concrete return
                 // type after solving.
                 //
-                // The analogous gate in the the compiler compiler: `Instantiate.fromAnnotation`
+                // The analogous gate in the reference compiler: `Instantiate.fromAnnotation`
                 // filters `"any"` out before treating free vars as polymorphic;
                 // `buildEnv` gives each `any` occurrence a fresh flex UV that the body
                 // constrains to a concrete type.  The Rust port must do the same.
@@ -27921,7 +27920,7 @@ impl<'a> Lowerer<'a> {
         // Redundancy demotion: IPE-T0011 is a WARNING, so arms AFTER
         // an irrefutable catch-all can now reach lowering. They are provably
         // unreachable — the exhaustiveness pass already warned — so DROP them
-        // here (semantics-preserving; the the reference compiles the same
+        // here (semantics-preserving; the reference compiles the same
         // shape). Without the truncation `Match::new_flat`'s structural
         // backstop sees a non-trailing catch-all and raises a CompilerBug.
         //
@@ -28152,7 +28151,7 @@ impl<'a> Lowerer<'a> {
     /// (WHOLE mode with neither flag, and non-str/non-list tuple columns) are
     /// gated: a dispatch-needing alias inner there is rejected at lowering
     /// with a clean diagnostic rather than reaching the backend, where it
-    /// would either double-move (the the earlier E0382 seal hole) or require a
+    /// would either double-move (the earlier E0382 seal hole) or require a
     /// by-reference arm redesign. Dispatch-free aliases pass through — the
     /// backend's `render_arm_pat_alias_safe` repairs those.
     fn gate_by_value_dispatch_needing_aliases(

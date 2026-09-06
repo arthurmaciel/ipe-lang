@@ -4,7 +4,7 @@
 //! own teardown thunk.
 //!
 //! Same "stop everything, respawn from the new `Sub`" contract as native
-//! (`tea_subs.go`: one program, one model, re-evaluated each tick) — the
+//! (one program, one model, re-evaluated each tick) — the
 //! scheduler calls [`SubManager::update`] once per `mount`/`flush` cycle with
 //! the freshly computed `subscriptions(model)`.
 

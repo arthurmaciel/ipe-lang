@@ -26,7 +26,7 @@
 //! 103
 //! ```
 //!
-//! Running the the compiler `ipe` toolchain inside `cargo test` is impractical, so
+//! Running the reference compiler `ipe` toolchain inside `cargo test` is impractical, so
 //! the hand-computed values are the in-test oracle, documented here against the
 //! equivalent command.
 

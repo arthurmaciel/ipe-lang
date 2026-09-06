@@ -4,8 +4,7 @@
 //! [`crate::Diagnostic::code`]. Codes are the machine-greppable, user-facing
 //! handle a reader passes to `ipe doc <CODE>`; they never change once
 //! shipped. The taxonomy is authoritative here (this file + the explain
-//! pages under `crates/ipe_diagnostics/explain/`); the original design spec
-//! is preserved in git history.
+//! pages under `src/compiler/diagnostics/explain/`).
 //!
 //! Ranges: `IPE-P####` parse, `IPE-N####` name resolution, `IPE-T####` type,
 //! `IPE-L####` lower / not-yet-supported, `IPE-F####` foreign bindings (FFI),

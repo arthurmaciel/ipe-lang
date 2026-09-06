@@ -895,12 +895,11 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         PortLifecycle(port_sid)
     };
 
-    // Initial subscriptions —
-    // creation, before the first event; live.go:3729). Without this a
-    // watch-only session never subscribes until it dispatches its own Msg, so a
-    // pub/sub broadcast (or a Sub.every ticker) would never reach a freshly
-    // loaded session. Wrapped in the session-sid scope so SkipOrigin filtering
-    // binds the right owner.
+    // Register initial subscriptions at session creation, before the first
+    // event. Without this a watch-only session never subscribes until it
+    // dispatches its own Msg, so a pub/sub broadcast (or a Sub.every ticker)
+    // would never reach a freshly loaded session. Wrapped in the session-sid
+    // scope so SkipOrigin filtering binds the right owner.
     {
         // Upgrade transiently; if the session is already gone there is nothing to drive.
         let Some(strong) = entry.upgrade() else {
@@ -952,8 +951,8 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                 .model
                 .clone()
         };
-        // Msg-handling latency histogram (ipe_web_msg_seconds{name},
-        // msg_logging.go). The `name` label is the BOUNDED Msg variant name
+        // Msg-handling latency histogram (`ipe_web_msg_seconds{name}`).
+        // The `name` label is the BOUNDED Msg variant name
         // (finite cardinality), never a payload — see telemetry::variant_name.
         // Extracted BEFORE `update` consumes `msg`.
         let msg_name = crate::telemetry::variant_name(&msg);
@@ -2458,7 +2457,7 @@ mod handlers {
         let _ = tx
             .send(SsePatch(format!(": {}\n\n", " ".repeat(2048))))
             .await;
-        //  hello payload (live.go ~5486): `{"v":1,"sid":...,"ts":<ms>}`.
+        // Hello payload: `{"v":1,"sid":...,"ts":<ms>}`.
         // Reaching here means `entry` exists ⇒ the cookie sid was a live session,
         // so `sid` is Some; the impossible None degrades to an empty sid (the
         // client already holds its sid via window.__IPE_SID — the body is
@@ -4029,8 +4028,7 @@ where
     };
     // Bind-address line (stderr) — carries the resolved host:port.
     eprintln!("[ipe.web] listening on http://{addr}");
-    //  user-facing line (stdout, `fmt.Printf("Ipe.Web listening on
-    // :%d\n", port)` — live.go:3546).
+    // User-facing line on stdout.
     println!("Ipe.Web listening on :{port}");
     // Graceful shutdown: trap SIGINT/SIGTERM,
     // print the shutdown line, drain in-flight requests, and return cleanly so

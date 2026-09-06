@@ -27,7 +27,7 @@
 //!
 //! The `db_exec` golden inserts `"apple"` and `"banana"` with `SqlString` /
 //! `SqlInt` params and reads them back ordered by name. The output
-//! `"apple:5\nbanana:3\n"` is the only correct answer; the the backend would
+//! `"apple:5\nbanana:3\n"` is the only correct answer; the backend would
 //! produce identical bytes given the same Ipê source.
 //!
 //! ## Golden catalogue

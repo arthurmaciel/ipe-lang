@@ -3373,7 +3373,7 @@ impl StdlibKernel {
             ),
             // AEAD arity is 2 (key, plaintext/ciphertext): the Rust runtime
             // (`ipe_aes_gcm_encrypt(key, plaintext)` etc.) prepends/strips a
-            // fresh random nonce internally, so — unlike the the backend which
+            // fresh random nonce internally, so — unlike the backend which
             // took an explicit nonce/AAD arg — there is no third argument.
             Self::CryptoAesGcmEncrypt => d(
                 "Crypto",

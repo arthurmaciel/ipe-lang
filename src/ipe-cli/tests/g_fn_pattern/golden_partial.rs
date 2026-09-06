@@ -18,7 +18,7 @@
 //! a + b`): the first arg saturates `over(1)` and the surplus `2` applies to the
 //! returned closure → `3`. `applyTwice (add 1) 5` passes the partial `add 1` as
 //! a first-class function and applies it twice: `add 1 (add 1 5)` → `7`. The
-//! entry prints `p + o + h = 5 + 3 + 7 = 15`. Running the the toolchain inside
+//! entry prints `p + o + h = 5 + 3 + 7 = 15`. Running the toolchain inside
 //! `cargo test` is impractical (it needs the full `ipe` toolchain),
 //! so the hand-computed value is the in-test oracle, documented here
 //! against the equivalent command.

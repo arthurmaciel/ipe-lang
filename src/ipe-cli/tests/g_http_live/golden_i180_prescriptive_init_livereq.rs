@@ -29,7 +29,7 @@
 use std::path::PathBuf;
 
 /// A `Web.app` whose `init : WebReq -> …` READS `req.path` into the Model.
-/// Non-routed for brevity; plain-data Model so the the admissibility gate
+/// Non-routed for brevity; plain-data Model so the admissibility gate
 /// passes, isolating the init-field + field-access behaviour.
 const LIVE_INIT_READS_REQ_PATH: &str = r#"module Main exposing (main)
 import Ipe.Tea.Web as Web
