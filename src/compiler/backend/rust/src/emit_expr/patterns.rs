@@ -5,7 +5,7 @@ use core::fmt::Write as _;
 /// two characters that would otherwise terminate or corrupt the literal). The
 /// JSON writer already escaped control characters as `\uXXXX` / `\n` etc., which
 /// are ordinary ASCII here, so only these two need Rust-level escaping. Total.
-pub(crate) fn rust_string_literal(s: &str) -> String {
+pub fn rust_string_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for ch in s.chars() {
@@ -48,7 +48,7 @@ pub struct ColMode {
 /// whose head is a [`Pat::Tuple`], or `None` when no arm is a tuple pattern (the
 /// whole-scrutinee shapes). The lowerer only builds a tuple-headed arm from a
 /// literal-tuple scrutinee of the SAME arity, so this drives the tuple path.
-pub(crate) fn tuple_arm_arity(arms: &[Arm]) -> Option<usize> {
+pub fn tuple_arm_arity(arms: &[Arm]) -> Option<usize> {
     arms.iter().find_map(|a| match &a.pat {
         Pat::Tuple(elems) => Some(elems.len()),
         _ => None,
@@ -59,7 +59,7 @@ pub(crate) fn tuple_arm_arity(arms: &[Arm]) -> Option<usize> {
 /// is in list mode when some arm slices it, and in string mode when some arm
 /// matches it against a string literal. (A column is never both — the scrutinee
 /// element has a single type the checker pinned.)
-pub(crate) fn tuple_col_modes(arms: &[Arm], arity: usize) -> Vec<ColMode> {
+pub fn tuple_col_modes(arms: &[Arm], arity: usize) -> Vec<ColMode> {
     let mut cols = vec![
         ColMode {
             str_mode: false,
@@ -198,7 +198,7 @@ pub fn emit_arm_head(
 /// match GUARDS. The guards are the `__sgN.as_str() == "lit"` checks for a
 /// by-value string-literal column — the caller ANDs them onto the arm; they are
 /// empty for every other shape (so existing emission is byte-identical).
-pub(crate) fn emit_whole_arm_head(
+pub fn emit_whole_arm_head(
     ctx: &EmitCtx,
     pat: &Pat,
     str_mode: bool,
@@ -247,7 +247,7 @@ pub(crate) fn emit_whole_arm_head(
 /// a tuple or wildcard head here (`tuple_case_supported`), so a whole-value
 /// variable / alias binder — which would see the wrong per-column-coerced type —
 /// is an internal invariant violation, surfaced as a `CompilerBug`.
-pub(crate) fn emit_tuple_arm_head(
+pub fn emit_tuple_arm_head(
     ctx: &EmitCtx,
     pat: &Pat,
     cols: &[ColMode],
@@ -294,7 +294,7 @@ pub(crate) fn emit_tuple_arm_head(
 /// Render a constructor arm head to its Rust pattern plus any leading unbox
 /// statements. A cyclic self-edge payload field is boxed in the enum, so a
 /// variable bound to it is unboxed (`let x = *x;`) at the arm body's head.
-pub(crate) fn emit_ctor_arm_pat(
+pub fn emit_ctor_arm_pat(
     ctx: &EmitCtx,
     home: &ModPath,
     ty: Symbol,
@@ -408,13 +408,13 @@ pub(crate) fn emit_ctor_arm_pat(
 /// arm body sees the Ipê `String` type. A variable binds itself; an alias binds
 /// its name and recurses into its inner pattern; a wildcard / literal binds
 /// nothing.
-pub(crate) fn str_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
+pub fn str_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
     let mut out = String::new();
     collect_str_rebinds(ctx, pat, &mut out)?;
     Ok(out)
 }
 
-pub(crate) fn collect_str_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()> {
+pub fn collect_str_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()> {
     match pat {
         Pat::Var(s) => {
             let name = ctx.emit_ident(*s)?;
@@ -463,7 +463,7 @@ pub(crate) fn collect_str_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) ->
 /// body sees `Vec<T>`). Cloning is the sound owned destructure of a shared slice;
 /// the lowerer gates a list `case` binding a still-generic (non-`Clone`) element
 /// type (IPE-L0102), so the `.clone()` / `.to_vec()` always resolve.
-pub(crate) fn list_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
+pub fn list_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
     let mut out = String::new();
     match pat {
         Pat::Slice { prefix, rest } => {
@@ -504,7 +504,7 @@ pub(crate) fn list_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
 /// Collect the owned-by-`clone` rebinds for an ELEMENT sub-pattern (a head
 /// position of a slice). Every variable / alias binder there is `&T` and is
 /// cloned to `T`; nested tuple / constructor / record element patterns recurse.
-pub(crate) fn collect_elem_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()> {
+pub fn collect_elem_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()> {
     match pat {
         Pat::Var(s) => rebind_clone(ctx, *s, out),
         Pat::Alias(inner, name) => {
@@ -548,7 +548,7 @@ pub(crate) fn collect_elem_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -
 /// Collect the owned-by-`to_vec` rebinds for a REST / whole-list binder (`&[T]`
 /// → `Vec<T>`). The lowerer admits only a variable / wildcard rest, so this is a
 /// single binder (an alias recurses defensively).
-pub(crate) fn collect_list_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()> {
+pub fn collect_list_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()> {
     match pat {
         Pat::Var(s) => rebind_to_vec(ctx, *s, out),
         Pat::Alias(inner, name) => {
@@ -574,7 +574,7 @@ pub(crate) fn collect_list_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -
 
 /// Emit `let <name> = <name>.clone();` — rebind a slice ELEMENT binder (`&T`) to
 /// the owned `T` the arm body expects.
-pub(crate) fn rebind_clone(ctx: &EmitCtx, sym: Symbol, out: &mut String) -> DResult<()> {
+pub fn rebind_clone(ctx: &EmitCtx, sym: Symbol, out: &mut String) -> DResult<()> {
     let name = ctx.emit_ident(sym)?;
     write!(out, "let {name} = {name}.clone(); ").map_err(|e| Diagnostic::CompilerBug {
         where_: "ipe_backend_rust::list_binder_rebinds",
@@ -584,7 +584,7 @@ pub(crate) fn rebind_clone(ctx: &EmitCtx, sym: Symbol, out: &mut String) -> DRes
 
 /// Emit `let <name> = <name>.to_vec();` — rebind a slice REST / whole-list binder
 /// (`&[T]`) to the owned `Vec<T>` the arm body expects.
-pub(crate) fn rebind_to_vec(ctx: &EmitCtx, sym: Symbol, out: &mut String) -> DResult<()> {
+pub fn rebind_to_vec(ctx: &EmitCtx, sym: Symbol, out: &mut String) -> DResult<()> {
     let name = ctx.emit_ident(sym)?;
     write!(out, "let {name} = {name}.to_vec(); ").map_err(|e| Diagnostic::CompilerBug {
         where_: "ipe_backend_rust::list_binder_rebinds",
@@ -607,7 +607,7 @@ pub(crate) fn rebind_to_vec(ctx: &EmitCtx, sym: Symbol, out: &mut String) -> DRe
 /// arbitrarily nested shape (`Just (a, b)`, `Node (Node …) x r`,
 /// `{ point = (a, b) }`) renders correctly. The renderer stays total: no arm
 /// panics, and every fallible lookup is surfaced as a [`Diagnostic`].
-pub(crate) fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
+pub fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
     match pat {
         Pat::Var(sym) => ctx.emit_ident(*sym),
         Pat::Wildcard => Ok("_".to_owned()),
@@ -736,7 +736,7 @@ pub(crate) fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
 /// constructor / slice / literal never appears in an irrefutable binder, so
 /// those return `false`. The predicate and [`emit_binding_stmts`] special-case
 /// the SAME two shapes (`Alias`, `Tuple`); any disagreement fails closed there.
-pub(crate) fn pat_contains_alias(pat: &Pat) -> bool {
+pub fn pat_contains_alias(pat: &Pat) -> bool {
     match pat {
         Pat::Alias(..) => true,
         Pat::Tuple(elems) => elems.iter().any(pat_contains_alias),
@@ -761,7 +761,7 @@ pub(crate) fn pat_contains_alias(pat: &Pat) -> bool {
 /// `Ctor`/`Record`/`Slice` never legitimately appear), this ALSO recurses
 /// into `Ctor` args, `Record` fields, and `Slice` prefix/rest — all of which
 /// DO appear in a refutable match-arm pattern.
-pub(crate) fn pat_contains_alias_in_arm(pat: &Pat) -> bool {
+pub fn pat_contains_alias_in_arm(pat: &Pat) -> bool {
     match pat {
         Pat::Alias(..) => true,
         Pat::Tuple(elems) => elems.iter().any(pat_contains_alias_in_arm),
@@ -793,7 +793,7 @@ pub(crate) fn pat_contains_alias_in_arm(pat: &Pat) -> bool {
 /// by-value renderer, and the lowerer keeps a list / cons tuple column
 /// fail-closed on the variable-scrutinee path (IPE-L0115), so no `Pat::Str`
 /// under a slice can reach here.
-pub(crate) fn pat_contains_str_in_arm(pat: &Pat) -> bool {
+pub fn pat_contains_str_in_arm(pat: &Pat) -> bool {
     match pat {
         Pat::Str(_) => true,
         Pat::Alias(inner, _) => pat_contains_str_in_arm(inner),
@@ -828,7 +828,7 @@ pub(crate) fn pat_contains_str_in_arm(pat: &Pat) -> bool {
 /// unboxing already uses (`unbox_lines`) or `emit_whole_arm_head`'s
 /// `prelude` return.
 #[allow(clippy::too_many_lines)] // one arm per IR pattern shape — a rendering table, not branching logic
-pub(crate) fn render_arm_pat_alias_safe(
+pub fn render_arm_pat_alias_safe(
     ctx: &EmitCtx,
     pat: &Pat,
     counter: &mut usize,
@@ -1017,7 +1017,7 @@ pub fn emit_binding_stmts(ctx: &EmitCtx, binder: &Pat, value: &str) -> DResult<V
     Ok(out)
 }
 
-pub(crate) fn push_binding_stmts(
+pub fn push_binding_stmts(
     ctx: &EmitCtx,
     pat: &Pat,
     src: &str,
@@ -1081,7 +1081,7 @@ pub(crate) fn push_binding_stmts(
 /// variable binds the remaining slice (`name @ ..`); a wildcard ignores it
 /// (`..`). The lowerer admits only these two rest shapes ([`crate`]-side
 /// `lower_rest_pat` gates the rest), so the renderer is total over them.
-pub(crate) fn render_rest_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
+pub fn render_rest_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
     match pat {
         Pat::Var(s) => Ok(format!("{} @ ..", ctx.emit_ident(*s)?)),
         // A wildcard ignores the tail (`..`). No other rest shape is produced by
@@ -1105,7 +1105,7 @@ pub(crate) fn render_rest_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
 /// bind (zero remaining fields under the complete-set contract — a legal,
 /// no-op `..`). A field whose sub-pattern is a variable bound to the field's own
 /// name renders in Rust shorthand (`x` rather than the lint-flagged `x: x`).
-pub(crate) fn render_record_pat(ctx: &EmitCtx, fields: &[(Symbol, Pat)]) -> DResult<String> {
+pub fn render_record_pat(ctx: &EmitCtx, fields: &[(Symbol, Pat)]) -> DResult<String> {
     // Resolve the struct by the (sorted) set of bound field names.
     let mut key = Vec::with_capacity(fields.len());
     for (sym, _) in fields {

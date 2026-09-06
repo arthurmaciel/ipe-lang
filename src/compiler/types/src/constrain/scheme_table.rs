@@ -40,7 +40,7 @@ impl<'a> Builder<'a> {
     /// use site (`instantiate_in`), exactly as for a table-built scheme, so this
     /// interpreter still takes `&self`. Because `Ty::Var` is `Eq`, repeating an
     /// index reuses one variable structurally without any shared-cell handling.
-    pub(crate) fn interpret_shape(&self, shape: &TyShape) -> Ty {
+    pub fn interpret_shape(&self, shape: &TyShape) -> Ty {
         match shape {
             TyShape::Fun(arg, res) => Ty::Fun(
                 Box::new(self.interpret_shape(arg)),
@@ -84,7 +84,7 @@ impl<'a> Builder<'a> {
     /// Resolve a structural [`BuiltinTag`] to the interned type-constructor
     /// [`Symbol`] the `stdlib_scheme` table uses for the same built-in, so an
     /// interpreted shape is byte-identical to the hand-built `Ty`.
-    pub(crate) const fn builtin_symbol(&self, tag: BuiltinTag) -> Symbol {
+    pub const fn builtin_symbol(&self, tag: BuiltinTag) -> Symbol {
         match tag {
             BuiltinTag::Int => self.builtins.int,
             BuiltinTag::Float => self.builtins.float,
@@ -182,7 +182,7 @@ impl<'a> Builder<'a> {
     /// the `stdlib_scheme` table uses as the `Ty::Record` `BTreeMap` key for the
     /// same field, so an interpreted record shape is byte-identical to the
     /// hand-built `Ty::Record`.
-    pub(crate) const fn field_symbol(&self, tag: FieldTag) -> Symbol {
+    pub const fn field_symbol(&self, tag: FieldTag) -> Symbol {
         match tag {
             FieldTag::MigrationName => self.builtins.migration_f_name,
             FieldTag::MigrationSql => self.builtins.migration_f_sql,
@@ -284,7 +284,7 @@ impl<'a> Builder<'a> {
     /// this the ONE non-empty case preserves byte-identity for the qualified
     /// `Ipe.Html.Attribute` cons while leaving all other interpreted cons
     /// unqualified.
-    pub(crate) fn builtin_con_module(&self, tag: BuiltinTag) -> Vec<Symbol> {
+    pub fn builtin_con_module(&self, tag: BuiltinTag) -> Vec<Symbol> {
         match tag {
             BuiltinTag::HtmlAttribute => vec![self.builtins.html_con],
             // The `send` kernel takes `EmailProvider` as its first parameter.
@@ -309,7 +309,7 @@ impl<'a> Builder<'a> {
     /// pinned by `migrated_set_burndown`.
     #[allow(clippy::too_many_lines)] // declarative scheme table — mirrors kernel_ty
     #[allow(clippy::match_same_arms)] // family-grouped declarative type table; merging cross-family arms with coincidentally-equal schemes would obscure the per-family structure
-    pub(crate) fn stdlib_scheme(&self, k: StdlibKernel) -> Option<Ty> {
+    pub fn stdlib_scheme(&self, k: StdlibKernel) -> Option<Ty> {
         use StdlibKernel as K;
         // Constructors mirror `kernel_ty`'s so the two tables stay byte-faithful
         // (verified structurally by `stdlib_scheme_matches_legacy`).

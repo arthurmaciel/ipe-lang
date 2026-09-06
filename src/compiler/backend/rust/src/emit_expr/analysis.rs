@@ -15,10 +15,10 @@ use super::*;
 /// copy of the same value — a `--emit-ir` dev-flag dump and the real emitter
 /// must refuse a program at the identical depth, not two independently
 /// tuned bounds that can drift apart.
-pub(crate) const MAX_EMIT_DEPTH: u16 = MAX_IR_RENDER_DEPTH;
+pub const MAX_EMIT_DEPTH: u16 = MAX_IR_RENDER_DEPTH;
 
 /// One indentation level: four spaces, matching the golden's formatting.
-pub(crate) fn indent_of(level: usize) -> String {
+pub fn indent_of(level: usize) -> String {
     "    ".repeat(level)
 }
 
@@ -73,7 +73,7 @@ pub fn expr_value_is_non_clone(expr: &Expr) -> bool {
 /// Used by the `Expr::Access` emission arm for AUD-09's type-directed
 /// Copy elision — see
 /// `docs/adr/0011-emitter-clone-borrow-discipline.md` §3.
-pub(crate) const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
+pub const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
     matches!(
         ty,
         IrType::Int
@@ -94,7 +94,7 @@ pub(crate) const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
 /// Collect every symbol a pattern binds (recursively) into `out`. Mirrors
 /// `ipe_lower::pat_binds_symbol`'s traversal shape but gathers the full bound
 /// set in one pass rather than testing membership of one target.
-pub(crate) fn pat_bound_symbols(pat: &Pat, out: &mut std::collections::BTreeSet<Symbol>) {
+pub fn pat_bound_symbols(pat: &Pat, out: &mut std::collections::BTreeSet<Symbol>) {
     match pat {
         Pat::Var(s) => {
             out.insert(*s);
@@ -157,7 +157,7 @@ pub fn free_vars(expr: &Expr) -> std::collections::BTreeSet<Symbol> {
 }
 
 #[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
-pub(crate) fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) {
+pub fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSet<Symbol>) {
     match expr {
         Expr::Int(_)
         | Expr::Bool(_)
@@ -289,7 +289,7 @@ pub(crate) fn collect_free_vars(expr: &Expr, out: &mut std::collections::BTreeSe
 /// Access receiver is left a bare `Var`, upholding the invariant that a
 /// row-generic value only ever reaches emission as `Access { record: Var(row) }`.
 #[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
-pub(crate) fn clone_free_target(
+pub fn clone_free_target(
     expr: Expr,
     target: Symbol,
     row_binders: &std::collections::BTreeSet<Symbol>,
@@ -517,7 +517,7 @@ pub(crate) fn clone_free_target(
 /// in this crate rather than shared because `ipe_backend_rust` does not
 /// depend on `ipe_lower` (IR flows one way: lower produces it, backends
 /// consume it).
-pub(crate) fn pat_binds_target(pat: &Pat, target: Symbol) -> bool {
+pub fn pat_binds_target(pat: &Pat, target: Symbol) -> bool {
     match pat {
         Pat::Var(s) => *s == target,
         Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => false,
@@ -568,7 +568,7 @@ pub fn clone_targets_in_expr(
 /// occurrence — including inside a nested lambda, a [`Expr::FuncValue`], or any
 /// [`Expr`] variant not special-cased — is a value use, so an unrecognised
 /// shape conservatively reports `true` (keep `Box`).
-pub(crate) fn fn_binder_used_as_value(sym: Symbol, body: &Expr) -> bool {
+pub fn fn_binder_used_as_value(sym: Symbol, body: &Expr) -> bool {
     match body {
         Expr::Var(s) | Expr::CloneVar(s) => *s == sym,
         // A lambda that references `sym` at all captures it BY VALUE into its
@@ -650,7 +650,7 @@ pub(crate) fn fn_binder_used_as_value(sym: Symbol, body: &Expr) -> bool {
 
 /// Does `sym` appear ANYWHERE (any position) in `expr`? Used to decide whether a
 /// nested lambda captures the function binder — any capture is a value use.
-pub(crate) fn expr_refs_symbol(sym: Symbol, expr: &Expr) -> bool {
+pub fn expr_refs_symbol(sym: Symbol, expr: &Expr) -> bool {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => *s == sym,
         Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => expr_refs_symbol(sym, body),
@@ -717,7 +717,7 @@ pub(crate) fn expr_refs_symbol(sym: Symbol, expr: &Expr) -> bool {
 /// ([`render_type`]'s `ServerHandler` / `WsServerCfg` Arc arms, plus
 /// [`IrType::SharedFun`] and [`IrType::FnOnceChain`]), whose rendered types are
 /// NOT `Box<dyn Fn>` and must never be re-carriered here.
-pub(crate) fn is_plain_boxed_fun(ty: &IrType) -> bool {
+pub fn is_plain_boxed_fun(ty: &IrType) -> bool {
     matches!(ty, IrType::Fun(..)) && !wants_arc_ctor(ty)
 }
 
@@ -763,7 +763,7 @@ pub fn scan_free_target(expr: &Expr, target: Symbol) -> (usize, bool) {
 }
 
 #[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
-pub(crate) fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clonevar: &mut bool) {
+pub fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clonevar: &mut bool) {
     match expr {
         Expr::Var(s) => {
             if *s == target {
@@ -1084,7 +1084,7 @@ pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
 }
 
 /// Returns `true` if `ty` is or structurally contains `IrType::Task`.
-pub(crate) fn ir_type_contains_task(ty: &IrType) -> bool {
+pub fn ir_type_contains_task(ty: &IrType) -> bool {
     match ty {
         IrType::Task(_) => true,
         IrType::Maybe(inner) | IrType::List(inner) => ir_type_contains_task(inner),
