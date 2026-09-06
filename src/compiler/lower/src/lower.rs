@@ -1559,10 +1559,24 @@ fn canon_collect_free_locals(
     }
 }
 
-/// Does `pat` bind ANY symbol in `set`?
-#[inline]
+/// Does `pat` bind ANY symbol in `set`? A single walk of `pat` testing each
+/// bound name against `set`, rather than one full `pat` walk per set member.
 fn pat_binds_any_in(pat: &Pat, set: &BTreeSet<Symbol>) -> bool {
-    set.iter().any(|&s| pat_binds_symbol(pat, s))
+    match pat {
+        Pat::Var(s) => set.contains(s),
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => false,
+        Pat::Alias(inner, s) => set.contains(s) || pat_binds_any_in(inner, set),
+        Pat::Ctor { args, .. } => args.iter().any(|p| pat_binds_any_in(p, set)),
+        Pat::Tuple(elems) => elems.iter().any(|p| pat_binds_any_in(p, set)),
+        Pat::Record(fields) => fields.iter().any(|(_, p)| pat_binds_any_in(p, set)),
+        Pat::Slice { prefix, rest } => {
+            prefix.iter().any(|p| pat_binds_any_in(p, set))
+                || rest.as_deref().is_some_and(|p| pat_binds_any_in(p, set))
+        }
+        // Every alternative of an or-pattern binds the same names, so it binds a
+        // set member iff any (equivalently, the first) alternative does.
+        Pat::Or(alts) => alts.iter().any(|p| pat_binds_any_in(p, set)),
+    }
 }
 
 /// Rewrite a lowered IR expression — the body of a `move` closure — to make
@@ -5844,12 +5858,6 @@ fn collect_local_derived_tvars(
     }
 }
 
-/// A callee's forwarding-relevant signature snapshot: its parameter types (in
-/// order) paired with its quantified type parameters and their bounds. Taken
-/// per fixpoint round in [`propagate_call_site_bounds`] so a caller can read a
-/// callee's obligations without aliasing the `&mut [Func]` it writes.
-type CalleeSig = (Vec<IrType>, Vec<(Symbol, BoundSet)>, IrType);
-
 /// Cross-call type-parameter-bound propagation, run to a fixpoint over all
 /// lowered funcs of a module.
 ///
@@ -5904,19 +5912,20 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
         .map(|(i, f)| (f.id.as_raw(), i))
         .collect();
 
+    // Each callee's param types and return type are IMMUTABLE across the fixpoint
+    // — only `type_params` bound bits change (below) — so snapshot the deep
+    // `IrType` trees once, not per round.
+    let sig_param_tys: Vec<Vec<IrType>> = funcs
+        .iter()
+        .map(|f| f.params.iter().map(|(_, t)| t.clone()).collect())
+        .collect();
+    let sig_rets: Vec<IrType> = funcs.iter().map(|f| f.ret.clone()).collect();
+
     loop {
-        // One snapshot of every callee's signature per fixpoint round. Cheap
-        // relative to the emit that follows, and it sidesteps borrow conflicts.
-        let sigs: Vec<CalleeSig> = funcs
-            .iter()
-            .map(|f| {
-                (
-                    f.params.iter().map(|(_, t)| t.clone()).collect(),
-                    f.type_params.clone(),
-                    f.ret.clone(),
-                )
-            })
-            .collect();
+        // Only the mutable half — each callee's `type_params` bounds — is
+        // re-snapshotted per round; the params/ret snapshots above are invariant.
+        let sig_tparams: Vec<Vec<(Symbol, BoundSet)>> =
+            funcs.iter().map(|f| f.type_params.clone()).collect();
 
         let mut changed = false;
         for caller in funcs.iter_mut() {
@@ -5950,9 +5959,11 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                 std::collections::HashMap::new();
 
             for (callee_id, args) in calls {
-                let Some((callee_param_tys, callee_tparams, _)) = by_id
-                    .get(&callee_id.as_raw())
-                    .and_then(|&callee_idx| sigs.get(callee_idx))
+                let Some(callee_idx) = by_id.get(&callee_id.as_raw()).copied() else {
+                    continue;
+                };
+                let (Some(callee_param_tys), Some(callee_tparams)) =
+                    (sig_param_tys.get(callee_idx), sig_tparams.get(callee_idx))
                 else {
                     continue;
                 };
@@ -6018,9 +6029,11 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
             let mut tail_callees: Vec<FuncId> = Vec::new();
             collect_tail_call_callees(&caller.body, &mut tail_callees);
             for callee_id in tail_callees {
-                let Some((_, callee_tparams, sig_ret)) = by_id
-                    .get(&callee_id.as_raw())
-                    .and_then(|&callee_idx| sigs.get(callee_idx))
+                let Some(callee_idx) = by_id.get(&callee_id.as_raw()).copied() else {
+                    continue;
+                };
+                let (Some(callee_tparams), Some(sig_ret)) =
+                    (sig_tparams.get(callee_idx), sig_rets.get(callee_idx))
                 else {
                     continue;
                 };
@@ -8365,6 +8378,7 @@ pub fn analyze_tail_recursion(self_id: FuncId, arity: usize, body: &Expr) -> Tai
 /// (never their `value`). Every other descent — critically `Lambda.body`, all
 /// call/apply arguments, operands, list/tuple/record/ctor elements, and both
 /// `TaskSeq` sub-terms — is non-tail.
+#[allow(clippy::too_many_lines)] // one exhaustive arm per `Expr` variant; the total walk must stay in one place
 fn count_self_calls(
     self_id: FuncId,
     arity: usize,
@@ -9078,7 +9092,7 @@ fn reachable_func_ids(
 fn collect_ir_type_refs(
     ty: &IrType,
     enums: &mut BTreeSet<(ModPath, Symbol)>,
-    records: &mut Vec<IrType>,
+    records: &mut std::collections::HashSet<IrType>,
 ) {
     // Drive the total, exhaustive [`ir_type_mentions`] traversal — which already
     // recurses into EVERY inner-type-carrying variant (`Cmd`/`Sub`/`Ui`/`Dict`/
@@ -9095,8 +9109,10 @@ fn collect_ir_type_refs(
             IrType::Enum { home, name, .. } => {
                 enums.insert((home.clone(), *name));
             }
-            IrType::Record(_) if !records.contains(t) => {
-                records.push(t.clone());
+            IrType::Record(_) => {
+                // A `HashSet` dedups in O(1) amortized; the reachability set is
+                // consumed only for membership, so insertion order is irrelevant.
+                records.insert(t.clone());
             }
             _ => {}
         }
@@ -9127,7 +9143,7 @@ fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &
     // ret / params / row-generic fields / body — the same surface
     // `func_type_mentions` scans, walked here to accumulate rather than test.
     let mut reachable_enums: BTreeSet<(ModPath, Symbol)> = BTreeSet::new();
-    let mut reachable_records: Vec<IrType> = Vec::new();
+    let mut reachable_records: std::collections::HashSet<IrType> = std::collections::HashSet::new();
     for f in funcs {
         collect_ir_type_refs(&f.ret, &mut reachable_enums, &mut reachable_records);
         for (_, t) in &f.params {
@@ -9181,8 +9197,7 @@ fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &
     types_ir.retain(|td| match td {
         TypeDef::Enum(e) => reachable_enums.contains(&(e.home.clone(), e.name)),
     });
-    let keep: std::collections::HashSet<&IrType> = reachable_records.iter().collect();
-    records.retain(|r| keep.contains(r));
+    records.retain(|r| reachable_records.contains(r));
 }
 
 /// Walk an [`Expr`] body, recording into the accumulators every user-enum
@@ -9206,7 +9221,7 @@ fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &
 fn collect_body_ir_type_refs(
     expr: &Expr,
     enums: &mut BTreeSet<(ModPath, Symbol)>,
-    records: &mut Vec<IrType>,
+    records: &mut std::collections::HashSet<IrType>,
 ) {
     collect_node_head_type_refs(expr, enums, records);
     collect_child_ir_type_refs(expr, enums, records);
@@ -9220,7 +9235,7 @@ fn collect_body_ir_type_refs(
 fn collect_node_head_type_refs(
     expr: &Expr,
     enums: &mut BTreeSet<(ModPath, Symbol)>,
-    records: &mut Vec<IrType>,
+    records: &mut std::collections::HashSet<IrType>,
 ) {
     {
         let cell = std::cell::RefCell::new((&mut *enums, &mut *records));
@@ -9260,7 +9275,7 @@ fn collect_node_head_type_refs(
 fn collect_child_ir_type_refs(
     expr: &Expr,
     enums: &mut BTreeSet<(ModPath, Symbol)>,
-    records: &mut Vec<IrType>,
+    records: &mut std::collections::HashSet<IrType>,
 ) {
     // Recurse into every child expression (and match-arm patterns).
     match expr {
@@ -16153,8 +16168,7 @@ impl<'a> Lowerer<'a> {
                 // per-occurrence `any` symbols — the single source of truth for
                 // which tvars are compiler-minted wildcards, so a legal user
                 // tvar can never be misclassified by a name-shape guess.
-                let wildcard_any_syms: BTreeSet<Symbol> =
-                    any_syms_minted.iter().copied().collect();
+                let wildcard_any_syms: BTreeSet<Symbol> = any_syms_minted.iter().copied().collect();
                 apply_kernel_type_param_bounds(
                     &mut type_params,
                     &wildcard_any_syms,
