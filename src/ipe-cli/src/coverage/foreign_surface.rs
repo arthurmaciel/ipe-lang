@@ -231,7 +231,7 @@ impl AspectCheck<ForeignItem> for BoundaryDisciplineWiredColumn {
                 let cap = item.capability;
                 let tagged = StdlibKernel::ALL
                     .iter()
-                    .any(|k| k.capability() == Some(cap));
+                    .any(|k| k.def().capability == Some(cap));
                 if tagged {
                     Cell::Ok
                 } else {
