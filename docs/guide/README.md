@@ -22,6 +22,9 @@ at the top and follow the links; each page assumes only the ones before it.
 - [Faster builds](faster-builds.md) — a fast linker (mold/lld), sccache, a
   shared build target, and dev-profile flags; what `ipe health` configures and
   how to apply each step manually.
+- [Delivering an app](delivery.md) — shape vs delivery, then packaging a `Web`
+  app into a desktop bundle (`ipe pack --target desktop`) and a mobile
+  system-webview shell (`ipe pack --target mobile:ios|android`).
 
 ## Standard-library guides
 
