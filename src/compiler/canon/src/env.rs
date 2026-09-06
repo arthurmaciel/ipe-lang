@@ -201,6 +201,22 @@ pub fn stdlib_module_dot_paths() -> Vec<Box<str>> {
         .collect()
 }
 
+/// `true` when `name` is the canonical short qualifier of some stdlib module in
+/// [`STDLIB_MODULE_QUALIFIERS`] (e.g. `Crypto`, `Sql`, `Db.Decode`).
+///
+/// Used to reject an `import Ipe.X as <Y>` whose alias `Y` names a DIFFERENT
+/// stdlib module's canonical qualifier — which would otherwise merge unrelated
+/// members into that qualifier's table. Internal re-export qualifiers such as
+/// `Cmd` / `Sub` are absent from the table, so aliasing to them stays allowed.
+#[must_use]
+pub fn is_stdlib_canonical_qualifier(interner: &Interner, name: Symbol) -> bool {
+    interner.resolve(name).is_some_and(|n| {
+        STDLIB_MODULE_QUALIFIERS
+            .iter()
+            .any(|(_, canon)| *canon == n)
+    })
+}
+
 /// The reserved kernel-alias qualifier path. `import Ipe.Ffi.Kernel as Kernel`
 /// brings the `Kernel.kernel "…"` alias surface into scope for a driver-vouched
 /// stdlib / FFI-interface source. It is a compiler-internal qualifier, not a
