@@ -1108,7 +1108,12 @@ fn run_inner(
                     }
                 };
 
-                let desired: BTreeMap<Vec<String>, (String, ipe_db::ModuleOrigin)> = sources
+                // Borrow each module's text: `sync_source_root` clones only at
+                // the real mutation points (a new input, or an actually-changed
+                // set), so a settled batch that touches one file no longer copies
+                // every module's source (including the ~130-module injected
+                // stdlib closure) into a map that is immediately discarded.
+                let desired: BTreeMap<Vec<String>, (&str, ipe_db::ModuleOrigin)> = sources
                     .iter()
                     .map(|(p, (_, text))| {
                         let origin = if injected.contains(p) {
@@ -1118,7 +1123,7 @@ fn run_inner(
                         } else {
                             ipe_db::ModuleOrigin::User
                         };
-                        (p.clone(), (text.clone(), origin))
+                        (p.clone(), (text.as_str(), origin))
                     })
                     .collect();
 

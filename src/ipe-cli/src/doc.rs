@@ -1315,6 +1315,46 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
     modules.into_values().collect()
 }
 
+/// Resolve and build the [`ModuleDoc`] for a single stdlib module by name,
+/// type-checking only that module rather than the whole compiled-source set.
+///
+/// The three-way resolution mirrors [`build_stdlib_docs`] but stops at the first
+/// match, so `ipe doc <Module>` costs one type-check instead of ~130:
+///
+/// 1. A compiled-source module (`COMPILED_STD_MODULES`) — build only that one
+///    (the single expensive per-module type-check), matching what the full pass
+///    would have produced for this name.
+/// 2. A kernel-qualifier module — the kernel type table is a single shared db, so
+///    the full kernel-doc pass already costs one check; take this name's entry.
+/// 3. A listed-but-otherwise-undocumentable name — the signature-less fallback,
+///    preserving the `--list` == queryable SSOT invariant.
+///
+/// Returns `None` only for a name that is not a stdlib module at all (the query
+/// path then reports the unknown-module error).
+fn query_single_stdlib_module(module_name: &str) -> Option<ModuleDoc> {
+    // 1. Compiled-source: type-check only the matching module.
+    for csm in ipe_stdlib::COMPILED_STD_MODULES {
+        if csm.dotted == module_name {
+            let segments: Vec<String> = csm.dotted.split('.').map(str::to_owned).collect();
+            return Some(build_compiled_std_module_doc(&segments, csm.source));
+        }
+    }
+
+    // 2. Kernel-qualifier: the type table is one shared db; take this entry.
+    if let Ok(mut kernel_docs) = build_kernel_module_docs()
+        && let Some(doc) = kernel_docs.remove(module_name)
+    {
+        return Some(doc);
+    }
+
+    // 3. Listed-name SSOT fallback: a queryable, signature-less entry.
+    if stdlib_module_names().iter().any(|n| n == module_name) {
+        return Some(empty_stdlib_module_doc(module_name));
+    }
+
+    None
+}
+
 /// A signature-less [`ModuleDoc`] carrying only the module name — the last-resort
 /// entry for a listed stdlib module the richer paths could not document, so a
 /// `--list` name is never unqueryable.
@@ -1562,15 +1602,15 @@ fn render_module_human(module: &ModuleDoc, index: &AnchorIndex) {
 /// Resolves `module_name` against stdlib + project (project overrides stdlib on
 /// a name collision). Errors with a typed message on an unknown module.
 fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError> {
-    // Build stdlib docs; also try to find project docs from `.` (best-effort).
-    let stdlib = build_stdlib_docs();
+    // Project wins over stdlib on name collision. Project modules are already a
+    // single resolved pass; the stdlib side is resolved lazily so a single-name
+    // query type-checks one module, not all ~130 compiled-source modules.
     let project = query_project_modules();
-
-    // Project wins over stdlib on name collision.
-    let found: Option<&ModuleDoc> = project
+    let found: Option<ModuleDoc> = project
         .iter()
         .find(|m| m.name == module_name)
-        .or_else(|| stdlib.iter().find(|m| m.name == module_name));
+        .cloned()
+        .or_else(|| query_single_stdlib_module(module_name));
 
     let Some(module) = found else {
         return Err(CliError::UsageOwned(format!(
@@ -1599,11 +1639,11 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
         }
         OutputFormat::Json => {
             let mut out = String::new();
-            render_module_json(&mut out, module, &index);
+            render_module_json(&mut out, &module, &index);
             println!("{out}");
         }
         OutputFormat::Human => {
-            render_module_human(module, &index);
+            render_module_human(&module, &index);
         }
     }
     Ok(())

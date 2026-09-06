@@ -8,7 +8,7 @@ package =
     { name = "{name}"
     , version = "0.1.0"
     , delivery =
-        { desktop = { title = "{name}", width = 1024, height = 768 }
+        { {ships}desktop = { title = "{name}", width = 1024, height = 768 }
         , mobile = { bundleId = "com.example.{name}", orientation = Portrait }
         , browser = { basePath = "/" }
         }

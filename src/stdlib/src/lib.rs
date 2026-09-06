@@ -1975,6 +1975,8 @@ pub fn inject_compiled_std_closure(
 
     // Seed the worklist from every compiled-source import across current sources.
     // Short-circuit: an unused-stdlib build enqueues nothing and returns empty.
+    // User sources are fresh every call, so they are lexed here — only the
+    // compile-time-constant embedded sources are memoized (below).
     let mut work: std::collections::VecDeque<Vec<String>> = std::collections::VecDeque::new();
     for (_, src) in sources.values() {
         for imp in extract_imports(src) {
@@ -2004,16 +2006,63 @@ pub fn inject_compiled_std_closure(
         injected.insert(path.clone());
 
         // Std -> Std closure: enqueue the embedded module's OWN compiled-source
-        // imports (a kernel import inside it stays qualifier-resolved). Fixpoint
-        // via the `sources.contains_key` guard above.
-        for imp in extract_imports(embedded) {
-            if is_compiled_source_segments(&imp) && !sources.contains_key(&imp) {
-                work.push_back(imp);
+        // imports. The embedded text is a compile-time constant, so its
+        // compiled-source import edges are a pure function of it and are memoized
+        // once per module — the fixpoint then walks precomputed edges instead of
+        // re-lexing the same `&'static str` on every call. Fixpoint via the
+        // `sources.contains_key` guard above.
+        let edges = embedded_compiled_std_imports(embedded, &extract_imports);
+        for imp in &*edges {
+            if !sources.contains_key(imp) {
+                work.push_back(imp.clone());
             }
         }
     }
 
     injected
+}
+
+/// A memoized, shareable list of one embedded module's compiled-source import
+/// edges (path segments per edge).
+type ImportEdges = std::sync::Arc<Vec<Vec<String>>>;
+
+/// The compiled-source import edges of one embedded stdlib module, memoized by
+/// the module's `&'static str` identity.
+///
+/// The embedded sources are compile-time constants, so their compiled-source
+/// import lists never change; lexing each once and caching the result removes
+/// the per-call re-lex of every embedded module the closure walks. The cache is
+/// keyed by the source's pointer identity (unique per embedded `&'static str`),
+/// and the stored list is already filtered to compiled-source modules so the
+/// caller iterates it directly. Correctness is unaffected: the memoized value is
+/// exactly what `extract_imports` would return for that constant text.
+fn embedded_compiled_std_imports(
+    embedded: &'static str,
+    extract_imports: &impl Fn(&str) -> Vec<Vec<String>>,
+) -> ImportEdges {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<usize, ImportEdges>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = embedded.as_ptr() as usize;
+
+    if let Ok(guard) = cache.lock()
+        && let Some(hit) = guard.get(&key)
+    {
+        return Arc::clone(hit);
+    }
+
+    let edges: Vec<Vec<String>> = extract_imports(embedded)
+        .into_iter()
+        .filter(|imp| is_compiled_source_segments(imp))
+        .collect();
+    let edges = Arc::new(edges);
+
+    if let Ok(mut guard) = cache.lock() {
+        return Arc::clone(guard.entry(key).or_insert(edges));
+    }
+    edges
 }
 
 #[cfg(test)]
