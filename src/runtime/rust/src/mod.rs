@@ -211,8 +211,13 @@ pub use dsn::*;
 pub mod external_conn;
 #[cfg(feature = "db")]
 pub use external_conn::*;
+// Regression tests for the Postgres `db_format_sql` placeholder rewriter, which
+// only ships in the emitted `config_postgres.rs` template and is never otherwise
+// compiled in-workspace (the standalone crate uses the sqlite `config.rs`).
 #[cfg(feature = "json")]
 pub mod json;
+#[cfg(all(test, feature = "db"))]
+mod postgres_placeholder_rewrite_test;
 // The Ipê↔JS boundary-seal codec: the total, fail-closed decode gate a generated
 // per-seal-type decoder runs behind. Shares the `json` canonical substrate, so it
 // carries the same feature gate.
