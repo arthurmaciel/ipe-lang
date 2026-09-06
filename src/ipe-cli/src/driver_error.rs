@@ -1,5 +1,11 @@
 use crate::*;
 
+/// The runtime crate an emitted project linked against: its root and declared
+/// version.
+///
+/// Carried into [`CliError::EmittedBuildFailed`] so a `cargo` failure that names
+/// a missing runtime feature can point at the exact stale crate.
+#[derive(Debug, Clone)]
 pub struct RuntimeContext {
     /// The resolved runtime crate root.
     pub root: PathBuf,
