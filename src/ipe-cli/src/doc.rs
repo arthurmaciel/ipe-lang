@@ -1258,6 +1258,11 @@ fn stdlib_module_names() -> Vec<String> {
         names.insert(m.dotted.to_owned());
     }
 
+    // Documentation-only reserved qualifiers (Ipe.Ffi.Kernel, Ipe.Ffi.Rust).
+    for m in ipe_stdlib::DOC_ONLY_MODULES {
+        names.insert(m.dotted.to_owned());
+    }
+
     // Kernel-qualifier modules (Ipe.List, Ipe.String, …).
     for (segments, _qualifier) in ipe_canon::STDLIB_MODULE_QUALIFIERS {
         names.insert(segments.join("."));
@@ -1287,6 +1292,20 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
         modules.insert(
             csm.dotted.to_owned(),
             build_compiled_std_module_doc(&segments, csm.source),
+        );
+    }
+
+    // ── Documentation-only reserved qualifiers ────────────────────────────────
+    // `Ipe.Ffi.Kernel` / `Ipe.Ffi.Rust` are compiler-recognised FFI qualifiers,
+    // not importable modules; their embedded source carries doc-comments and
+    // signatures for discoverability only. They are documented from the raw
+    // source so a body-less signature surfaces its doc + signature line without
+    // depending on a type-check the veneer intentionally does not satisfy.
+    for dom in ipe_stdlib::DOC_ONLY_MODULES {
+        let segments: Vec<String> = dom.dotted.split('.').map(str::to_owned).collect();
+        modules.insert(
+            dom.dotted.to_owned(),
+            build_source_only_module_doc(&segments, dom.source),
         );
     }
 
@@ -1387,6 +1406,39 @@ fn build_compiled_std_module_doc(segments: &[String], source: &str) -> ModuleDoc
         .unwrap_or_default();
     let segments_vec: Vec<String> = segments.to_vec();
     module_doc(&segments_vec, &module_api, &comments, ModuleKind::Stdlib)
+}
+
+/// Build a [`ModuleDoc`] for a documentation-only reserved qualifier
+/// (`Ipe.Ffi.Kernel` / `Ipe.Ffi.Rust`) straight from its embedded source.
+///
+/// These qualifiers are recognised structurally by the compiler, never compiled
+/// as importable modules, so there is no type-checked API to read. The
+/// module-header doc and each exposed member's `name : Type` signature line +
+/// doc-comment are relayed verbatim from the source via
+/// [`ipe_docs::stdlib_docs::extract_module_doc`]; the resolved-type field is a
+/// placeholder ([`TyDoc::Unit`]) because no cross-reference identity exists for a
+/// compiler primitive. Always yields a [`ModuleDoc`] so the qualifier stays
+/// queryable and `--list`/query agree.
+fn build_source_only_module_doc(segments: &[String], source: &str) -> ModuleDoc {
+    let extracted = ipe_docs::stdlib_docs::extract_module_doc(&segments.join("."), source);
+    let values = extracted
+        .exports
+        .into_iter()
+        .filter(|e| e.signature.is_some())
+        .map(|e| ValueDoc {
+            name: e.name,
+            signature: e.signature.unwrap_or_default(),
+            signature_ty: TyDoc::Unit,
+            comment: e.doc.unwrap_or_default(),
+        })
+        .collect();
+    ModuleDoc {
+        name: segments.join("."),
+        kind: ModuleKind::Stdlib,
+        comment: extracted.module_doc.unwrap_or_default(),
+        unions: Vec::new(),
+        values,
+    }
 }
 
 /// Build [`ModuleDoc`]s for every kernel-qualifier stdlib module.
