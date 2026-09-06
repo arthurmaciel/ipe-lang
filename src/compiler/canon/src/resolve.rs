@@ -2240,8 +2240,23 @@ fn register_stdlib_import_aliases(
         // (the alias, or — via the fall-through below — the canonical) so a later
         // `Alias.member` / `X.member` resolves instead of raising N0034. An
         // explicit alias that collides with a gated canonical was rejected above,
-        // so marking the alias here can never unlock an unrelated module's gate.
-        env.mark_stdlib_qualifier_imported(alias);
+        // so marking an explicit alias here can never unlock an unrelated gate.
+        //
+        // A BARE import exposes the module under its last path segment. When that
+        // segment equals a DIFFERENT module's gated canonical qualifier
+        // (`import Ipe.Http.Stream` → segment `Stream` = server `Stream`'s
+        // canonical; `import Ipe.Server.Http` → segment `Http` = client `Http`'s
+        // canonical), marking it would unlock the foreign module's privileged
+        // kernels with no import of that module — a capability smuggle. Fail
+        // closed: skip the mark for that foreign-canonical case. The member-clone
+        // below still runs, so the bare import's own members resolve, and its
+        // canonical is still marked via the `import.alias.is_none()` branch.
+        let alias_is_foreign_gated_canonical = import.alias.is_none()
+            && alias != canonical
+            && crate::env::is_stdlib_canonical_qualifier(interner, alias);
+        if !alias_is_foreign_gated_canonical {
+            env.mark_stdlib_qualifier_imported(alias);
+        }
         // A bare `import Ipe.X.Y` (no explicit `as`) also names the module under
         // its CANONICAL qualifier — for a dotted-canonical module such as
         // `Ipe.Db.Decode` (canonical `Db.Decode`) that is the multi-segment form

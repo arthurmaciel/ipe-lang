@@ -68,7 +68,7 @@ advisory-db-lock = { max-threads = 1 }
 wasm-external-cargo = { max-threads = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
 
 [[profile.ci.overrides]]
@@ -98,8 +98,13 @@ slow-timeout = { period = "60s", terminate-after = 30 }
 # hang. It is the same full-sweep class as `every_listed_module_is_queryable`, so
 # it gets the same 1800s (30-period) ceiling. Placed before the parity override so
 # nextest's first-match-per-setting picks this wider window for the binary.
+#
+# `g_http_live` is the same class: each golden in it (e.g.
+# `golden_live_param_routes::param_route_solo_cargo_builds_and_delivers_param`)
+# runs a real `cargo build` of an emitted HTTP project, which on a cold CI runner
+# passes the default 600s ceiling. It gets the same 1800s (30-period) window.
 [[profile.ci.overrides]]
-filter = 'binary(stdlib_coverage_dynamic)'
+filter = 'binary(stdlib_coverage_dynamic) | binary(g_http_live)'
 slow-timeout = { period = "60s", terminate-after = 30 }
 
 # The parity probes compile every golden fixture twice (clean + incremental),
@@ -123,7 +128,7 @@ filter = 'test(hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wa
 test-group = 'wasm-external-cargo'
 
 [[profile.default.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
 
 [[profile.default.overrides]]
