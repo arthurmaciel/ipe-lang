@@ -4207,16 +4207,6 @@ fn pat_binds_any(pat: &Pat, params: &BTreeSet<Symbol>) -> bool {
     params.iter().any(|p| pat_binds_symbol(pat, *p))
 }
 
-/// Is `*tv` a wildcard-`any` generic (a fresh `anyp_`-pooled binder minted by
-/// `split_typed_sig`, or the raw `any` symbol) rather than a genuine named tvar
-/// (`a`/`msg`)? The `IpeRow` bound is restricted to wildcards; the
-/// `Display` bound applies to BOTH.
-fn is_wildcard_any_tv(interner: &Interner, tv: Symbol) -> bool {
-    interner
-        .resolve(tv)
-        .is_some_and(|nm| nm == "any" || nm.starts_with("anyp_"))
-}
-
 /// Does `ty` mention the type variable `tv` anywhere in its structure?
 ///
 /// A total structural walk over every compound [`IrType`] carrier — the nullary
@@ -5279,8 +5269,8 @@ fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
 /// that does not flow into the kernel, so a truly-parametric pass-through stays
 /// unbounded and reusable. This precision is what forbids over-bounding.
 fn apply_kernel_type_param_bounds(
-    interner: &Interner,
     type_params: &mut [(Symbol, BoundSet)],
+    wildcard_any_syms: &BTreeSet<Symbol>,
     params: &[(Symbol, IrType)],
     ret: &IrType,
     body: &Expr,
@@ -5344,7 +5334,7 @@ fn apply_kernel_type_param_bounds(
     };
 
     for (tv, bounds) in type_params.iter_mut() {
-        let is_wildcard = is_wildcard_any_tv(interner, *tv);
+        let is_wildcard = wildcard_any_syms.contains(tv);
         // Resolve the VALUE binder(s) whose type is exactly `Generic(tv)`, then
         // ask each obligation's matcher whether the body applies its kernel to
         // that binder.
@@ -8434,6 +8424,15 @@ fn count_self_calls(
         Expr::Match(m) => {
             count_self_calls(self_id, arity, m.scrutinee(), false, tail, non_tail);
             for arm in m.arms() {
+                // A guard is evaluated before the body decides the match; a
+                // self-call inside it is never in tail position, so it must
+                // count as non-tail and disqualify TCO. Scanning the guard also
+                // keeps this soundness-load-bearing walk structurally total over
+                // `Arm` rather than trusting a guarantee from a distant
+                // desugaring pass.
+                if let Some(guard) = &arm.guard {
+                    count_self_calls(self_id, arity, guard, false, tail, non_tail);
+                }
                 count_self_calls(self_id, arity, &arm.body, in_tail, tail, non_tail);
             }
         }
@@ -16150,9 +16149,15 @@ impl<'a> Lowerer<'a> {
                 // IpeRow (`Db.get*`→`IpeRow`, wildcard-only) + Display
                 // (`toString`→`Display`, any tvar). See
                 // `apply_kernel_type_param_bounds`.
+                // The wildcard-only obligations (IpeRow) key on the minted
+                // per-occurrence `any` symbols — the single source of truth for
+                // which tvars are compiler-minted wildcards, so a legal user
+                // tvar can never be misclassified by a name-shape guess.
+                let wildcard_any_syms: BTreeSet<Symbol> =
+                    any_syms_minted.iter().copied().collect();
                 apply_kernel_type_param_bounds(
-                    self.interner,
                     &mut type_params,
+                    &wildcard_any_syms,
                     &params,
                     &ret,
                     &lowered_body,
@@ -16315,10 +16320,13 @@ impl<'a> Lowerer<'a> {
                     let mut type_params =
                         compute_type_params(quantified_syms, var_bounds, &params, &ret);
                     // General kernel→type-param-bound propagation (IpeRow +
-                    // Display) — see `apply_kernel_type_param_bounds`.
+                    // Display) — see `apply_kernel_type_param_bounds`. An
+                    // unannotated def's tvars are all genuine HM-quantified
+                    // vars; none are minted wildcard-`any`, so the wildcard set
+                    // is empty and the wildcard-only obligations never fire.
                     apply_kernel_type_param_bounds(
-                        self.interner,
                         &mut type_params,
+                        &BTreeSet::new(),
                         &params,
                         &ret,
                         &lowered_body,
@@ -30021,8 +30029,8 @@ mod tests {
         // `Decoder a`. Body is irrelevant to the type-walk obligation.
         let mut decoder_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut decoder_params,
+            &std::collections::BTreeSet::new(),
             &[(x, IrType::Generic(a))],
             &IrType::Decoder(Box::new(IrType::Generic(a))),
             &Expr::Unit,
@@ -30047,8 +30055,8 @@ mod tests {
         // (only its incoming `Clone`), proving the obligation cannot over-bound.
         let mut id_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut id_params,
+            &std::collections::BTreeSet::new(),
             &[(x, IrType::Generic(a))],
             &IrType::Generic(a),
             &Expr::Unit,
@@ -30057,6 +30065,117 @@ mod tests {
         assert!(
             !id_bound.has_send(),
             "a plain `a -> a` must NOT gain a `Send` bound (no over-bounding)"
+        );
+    }
+
+    /// A self-call hiding inside a match-arm GUARD is never in tail position, so
+    /// it must disqualify TCO: the guard-aware walk counts it as non-tail. Without
+    /// descending into guards a tail-body self-call would leave the function
+    /// classified `TailRecursive` while a plain self-`Call` survives inside the
+    /// emitted loop — a stranded non-tail call the rewrite must never permit.
+    #[test]
+    fn guard_self_call_disqualifies_tco() {
+        use ipe_ir::{Arm, CallPin, Callee, Expr, FuncId, Match, OnFormKind, Pat};
+
+        let self_id = FuncId(0);
+        let arity = 1;
+        let self_call = |arg: Expr| Expr::Call {
+            callee: Callee::Func(self_id),
+            args: vec![arg],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+
+        // A single catch-all arm whose BODY is a tail self-call (would be TCO) but
+        // whose GUARD also self-calls. The guard call is non-tail, so the whole
+        // function must be `NotTailRecursive`.
+        let guarded_arm = Arm {
+            pat: Pat::Wildcard,
+            body: self_call(Expr::Unit),
+            guard: Some(self_call(Expr::Unit)),
+        };
+        let guarded = Expr::Match(
+            Match::new_flat(Expr::Unit, vec![guarded_arm]).expect("catch-all arm is exhaustive"),
+        );
+        assert_eq!(
+            super::analyze_tail_recursion(self_id, arity, &guarded),
+            super::TailRecursion::NotTailRecursive,
+            "a self-call inside a match guard must disqualify TCO"
+        );
+
+        // Control: the SAME arm without the guard IS tail-recursive, proving the
+        // disqualification above comes from the guard, not the body.
+        let plain_arm = Arm::new(Pat::Wildcard, self_call(Expr::Unit));
+        let plain = Expr::Match(
+            Match::new_flat(Expr::Unit, vec![plain_arm]).expect("catch-all arm is exhaustive"),
+        );
+        assert_eq!(
+            super::analyze_tail_recursion(self_id, arity, &plain),
+            super::TailRecursion::TailRecursive,
+            "an unguarded tail self-call in a match arm is tail-recursive"
+        );
+    }
+
+    /// A user type variable whose NAME collides with the compiler's minted
+    /// wildcard-`any` prefix (`anyp_…`) is a genuine named tvar, not a minted
+    /// wildcard: since it is absent from the minted-symbol set, the wildcard-only
+    /// `IpeRow` obligation must NOT fire on it even when its value flows into a
+    /// `Db` row accessor. Classification is structural (minted-symbol membership),
+    /// never a name-shape guess.
+    #[test]
+    fn user_tvar_with_wildcard_name_prefix_is_not_wildcard() {
+        use ipe_ir::{CallPin, Callee, Expr, IrType, KernelFn, OnFormKind};
+
+        let mut interner = Interner::new();
+        // A legal user tvar that happens to spell the minted-pool prefix.
+        let user_tv = interner.intern("anyp_r").unwrap();
+        let field = interner.intern("field").unwrap();
+        let row = interner.intern("row").unwrap();
+
+        // Body `Db.unsafeGetString field row`: arg index 1 (`row`) is the tracked
+        // row param — the exact shape that obliges the `IpeRow` bound for a real
+        // wildcard.
+        let accessor_call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::DbGetString),
+            args: vec![Expr::Var(field), Expr::Var(row)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let mut type_params = vec![(user_tv, super::BoundSet::UNBOUNDED.with_clone())];
+        // Empty minted-wildcard set: `user_tv` is a genuine named tvar.
+        super::apply_kernel_type_param_bounds(
+            &mut type_params,
+            &std::collections::BTreeSet::new(),
+            &[(row, IrType::Generic(user_tv))],
+            &IrType::Unit,
+            &accessor_call,
+        );
+        let bound = type_params.first().map(|(_, b)| *b).unwrap_or_default();
+        assert!(
+            !bound.has_ipe_row(),
+            "a genuine user tvar named `anyp_r` must NOT receive the \
+             wildcard-only `IpeRow` bound, got: {bound:?}"
+        );
+
+        // Positive control: the SAME tvar, now present in the minted-wildcard
+        // set, DOES gain `IpeRow` — proving the accessor shape is genuinely
+        // IpeRow-obliging and the negative result above is the classification,
+        // not a dead matcher.
+        let mut minted_params = vec![(user_tv, super::BoundSet::UNBOUNDED.with_clone())];
+        let mut minted = std::collections::BTreeSet::new();
+        minted.insert(user_tv);
+        super::apply_kernel_type_param_bounds(
+            &mut minted_params,
+            &minted,
+            &[(row, IrType::Generic(user_tv))],
+            &IrType::Unit,
+            &accessor_call,
+        );
+        let minted_bound = minted_params.first().map(|(_, b)| *b).unwrap_or_default();
+        assert!(
+            minted_bound.has_ipe_row(),
+            "a minted wildcard-`any` tvar flowing into a `Db` row accessor \
+             must gain `IpeRow`, got: {minted_bound:?}"
         );
     }
 
@@ -30082,8 +30201,8 @@ mod tests {
         };
         let mut params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut params,
+            &std::collections::BTreeSet::new(),
             &[(fallback, IrType::Generic(a))],
             &IrType::Decoder(Box::new(IrType::Generic(a))),
             &succeed_call,
@@ -30100,8 +30219,8 @@ mod tests {
         // capture `a`, so the arg-0 matcher does not fire on it.
         let mut carry_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut carry_params,
+            &std::collections::BTreeSet::new(),
             &[(fallback, IrType::Decoder(Box::new(IrType::Generic(a))))],
             &IrType::Decoder(Box::new(IrType::Generic(a))),
             &Expr::Var(fallback),
@@ -30148,8 +30267,8 @@ mod tests {
             (b, super::BoundSet::UNBOUNDED.with_clone()),
         ];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut params,
+            &std::collections::BTreeSet::new(),
             &[
                 (default, IrType::Generic(a)),
                 (
