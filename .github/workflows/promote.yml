@@ -1,0 +1,39 @@
+name: promote development to main
+# When the full CI ("Build & test") completes green on the development integration
+# branch, fast-forward main to that exact commit. main therefore only ever advances
+# to an already-full-CI-green tree — green by construction. Nothing else writes main.
+on:
+  workflow_run:
+    workflows: ["Build & test"]
+    types: [completed]
+    branches: [development]
+permissions:
+  contents: write
+concurrency:
+  group: promote-main
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'development'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Fast-forward main to the green development commit
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main development
+          # FF only: main must be an ancestor of the tested development commit, so
+          # this can never rewrite or diverge main.
+          if git merge-base --is-ancestor origin/main "$SHA"; then
+            git push origin "$SHA:refs/heads/main"
+            echo "Promoted main -> $SHA (green development)"
+          else
+            echo "main diverged from development; refusing to force — manual reconcile." >&2
+            exit 1
+          fi
