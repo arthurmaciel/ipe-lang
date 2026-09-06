@@ -105,7 +105,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ipe_backend::EmittedProject;
 use ipe_backend_rust::DbDriver;
@@ -201,9 +201,13 @@ pub fn tree_hasher(root: &Path) -> Result<Sha256, (PathBuf, std::io::Error)> {
     update_len_prefixed(&mut hasher, TREE_TAG);
     let count = u64::try_from(files.len()).unwrap_or(u64::MAX);
     hasher.update(count.to_le_bytes());
+    // One reusable chunk buffer for the whole tree — the hashed byte stream is
+    // identical to a per-file allocation, since every file streams through the
+    // same fixed-size window.
+    let mut buf = vec![0u8; TREE_HASH_CHUNK_BYTES];
     for (rel, abs) in &files {
         update_str(&mut hasher, rel);
-        hash_one_file(&mut hasher, rel, abs)?;
+        hash_one_file(&mut hasher, rel, abs, &mut buf)?;
     }
     Ok(hasher)
 }
@@ -217,10 +221,14 @@ pub fn tree_hasher(root: &Path) -> Result<Sha256, (PathBuf, std::io::Error)> {
 /// against the bytes actually read, so a file that grows between `stat` and the
 /// final read (a race an attacker controls) is refused rather than framed with a
 /// stale, mismatched length that would corrupt the integrity hash.
+///
+/// `buf` is a caller-owned scratch chunk reused across every file in a tree; its
+/// length is the streaming window and its contents on entry are irrelevant.
 fn hash_one_file(
     hasher: &mut Sha256,
     rel: &str,
     abs: &Path,
+    buf: &mut [u8],
 ) -> Result<(), (PathBuf, std::io::Error)> {
     use std::io::Read as _;
 
@@ -233,10 +241,9 @@ fn hash_one_file(
     hasher.update(declared_len.to_le_bytes());
 
     let mut reader = file.take(declared_len);
-    let mut buf = vec![0u8; TREE_HASH_CHUNK_BYTES];
     let mut total: u64 = 0;
     loop {
-        let n = reader.read(&mut buf).map_err(|e| (abs.to_path_buf(), e))?;
+        let n = reader.read(buf).map_err(|e| (abs.to_path_buf(), e))?;
         if n == 0 {
             break;
         }
@@ -510,10 +517,23 @@ pub fn compute_ir_key(
 /// executable cannot be located or read (never a hard error: the cache is
 /// simply unavailable for this invocation).
 fn compiler_revision_hash() -> Option<String> {
+    use std::io::Read as _;
+
     let exe = std::env::current_exe().ok()?;
-    let bytes = fs::read(&exe).ok()?;
+    let mut file = fs::File::open(&exe).ok()?;
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    // Stream the running binary in fixed chunks rather than buffering the whole
+    // (statically linked) executable in one `Vec` — the digest is byte-identical,
+    // and the exe cannot change under a running process, so version isolation is
+    // unweakened.
+    let mut buf = vec![0u8; TREE_HASH_CHUNK_BYTES];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(buf.get(..n)?);
+    }
     Some(hex::encode(hasher.finalize()))
 }
 
@@ -538,6 +558,16 @@ fn toolchain_fingerprint_hash() -> Option<String> {
 /// the module doc's "Advisory semantics" section).
 #[must_use]
 pub fn derive_epoch() -> Option<String> {
+    // Both probes (the running exe's content hash and the active `rustc -vV`
+    // fingerprint) are invariant for the life of the process, so compute the
+    // epoch once and reuse it — turning a per-build IO + hash + `rustc` spawn on
+    // the warm cache path into a single up-front cost. The `None` outcome (a
+    // probe was unavailable) is memoized too, matching today's per-call result.
+    static EPOCH: OnceLock<Option<String>> = OnceLock::new();
+    EPOCH.get_or_init(derive_epoch_uncached).clone()
+}
+
+fn derive_epoch_uncached() -> Option<String> {
     let compiler_revision = compiler_revision_hash()?;
     let toolchain = toolchain_fingerprint_hash()?;
     let mut hasher = Sha256::new();

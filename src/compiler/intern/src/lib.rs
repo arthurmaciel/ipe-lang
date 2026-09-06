@@ -356,21 +356,29 @@ impl serde::Serialize for Symbol {
     where
         S: serde::Serializer,
     {
-        let resolved = with_ambient_interner(|interner| {
+        // Serialize on the borrowed `&str` from `resolve` inside the lock scope,
+        // rather than cloning it into an owned `String` just to escape the scope
+        // — byte-identical output, one lock, zero interim allocation. The
+        // serializer is a `FnOnce`, so it is moved into the closure and consumed
+        // on exactly one of the two arms below.
+        let outcome = with_ambient_interner(|interner| {
             let guard = interner.lock().unwrap_or_else(PoisonError::into_inner);
-            guard.resolve(*self).map(str::to_owned)
+            guard.resolve(*self).map_or_else(
+                || {
+                    Err(serde::ser::Error::custom(
+                        "ipe_intern::Symbol::serialize: symbol resolves to no string in \
+                         the ambient interner (a forged or cross-interner Symbol)",
+                    ))
+                },
+                |text| serializer.serialize_str(text),
+            )
         });
-        match resolved {
-            None => Err(serde::ser::Error::custom(
+        outcome.unwrap_or_else(|| {
+            Err(serde::ser::Error::custom(
                 "ipe_intern::Symbol::serialize: no ambient interner installed \
                  (missing SerdeInternerGuard::install)",
-            )),
-            Some(None) => Err(serde::ser::Error::custom(
-                "ipe_intern::Symbol::serialize: symbol resolves to no string in \
-                 the ambient interner (a forged or cross-interner Symbol)",
-            )),
-            Some(Some(text)) => serializer.serialize_str(&text),
-        }
+            ))
+        })
     }
 }
 
