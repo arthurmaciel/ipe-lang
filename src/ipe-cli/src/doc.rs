@@ -4403,9 +4403,8 @@ fn serve_one(conn: &mut std::net::TcpStream, site: &BTreeMap<String, String>) {
     {
         return;
     }
-    let clone = match conn.try_clone() {
-        Ok(c) => c,
-        Err(_) => return,
+    let Ok(clone) = conn.try_clone() else {
+        return;
     };
     // Bound the size: read at most one capped request line. `take` caps the byte
     // count, so a client that never sends a newline yields a bounded buffer, not
