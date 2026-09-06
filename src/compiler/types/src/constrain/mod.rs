@@ -14,22 +14,22 @@
 //! structure) and [`Builder::zonk`] (a settled union-find variable → [`Ty`]).
 
 
-pub(crate) use std::collections::{BTreeMap, BTreeSet};
-pub(crate) use std::rc::Rc;
-pub(crate) use ipe_canon::ast as canon;
-pub(crate) use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
-pub(crate) use ipe_intern::{Interner, Symbol};
-pub(crate) use ipe_kernels::{BuiltinTag, FieldTag, RowTailShape, SchemeKey, StdlibKernel, TyShape};
-pub(crate) use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
-pub(crate) use crate::solve::{Budget, Constraint};
-pub(crate) use crate::ty::{
+pub use std::collections::{BTreeMap, BTreeSet};
+pub use std::rc::Rc;
+pub use ipe_canon::ast as canon;
+pub use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
+pub use ipe_intern::{Interner, Symbol};
+pub use ipe_kernels::{BuiltinTag, FieldTag, RowTailShape, SchemeKey, StdlibKernel, TyShape};
+pub use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
+pub use crate::solve::{Budget, Constraint};
+pub use crate::ty::{
     Content, FlatType, RowTail, Ty, TyBounds, from_canon, is_solver_var, tag_solver_var,
 };
-pub(crate) use crate::unify::unify;
-pub(crate) use crate::unionfind::{UnionFind, VarId};
+pub use crate::unify::unify;
+pub use crate::unionfind::{UnionFind, VarId};
 
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
-pub(crate) const STAGE: &str = "ipe_types::constrain";
+pub const STAGE: &str = "ipe_types::constrain";
 
 /// Recursively replace every `Ty::Var(v)` where `v` resolves to the `"any"`
 /// wildcard AND `v` is NOT one of the union's declared type parameters with
@@ -39,7 +39,7 @@ pub(crate) const STAGE: &str = "ipe_types::constrain";
 /// the the compiler/the backend carries `any` payloads as dynamic `interface{}`; the
 /// Rust backend pins them to `Dict String String`, the sole concrete carrier that
 /// satisfies `Clone + Debug + PartialEq + Serialize + DeserializeOwned`.
-pub(crate) fn pin_any_in_ty(
+pub fn pin_any_in_ty(
     ty: Ty,
     union_vars: &[Symbol],
     interner: &Interner,
@@ -101,7 +101,7 @@ pub(crate) fn pin_any_in_ty(
 ///
 /// Used in [`Builder::typed_rigids`] and re-exported via [`Generated::typed_rigids`]
 /// so `SolvedTypes::poly_var_map` can build the lowerer's generic-variable lookup.
-pub(crate) type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
+pub type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
 
 /// Maximum number of nodes [`zonk`] reads back from a single type before
 /// declaring it pathologically deep. The occurs check in unification rules out
@@ -113,7 +113,7 @@ pub(crate) type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
 /// count here keeps that downstream recursion provably stack-safe. The
 /// read-back itself is iterative (an explicit work stack), so it never grows the
 /// native stack regardless of the bound.
-pub(crate) const ZONK_NODE_LIMIT: u32 = 4_096;
+pub const ZONK_NODE_LIMIT: u32 = 4_096;
 
 /// Interned symbols for the built-in type constructors the inferencer needs to
 /// name. `Int` / `String` usually already exist (from the source), but `Task`
@@ -122,9 +122,9 @@ pub(crate) const ZONK_NODE_LIMIT: u32 = 4_096;
 
 /// The constraint-generation state threaded through the walk.
 pub struct Builder<'a> {
-    pub(crate) uf: &'a mut UnionFind<Content>,
-    pub(crate) interner: &'a Interner,
-    pub(crate) builtins: Builtins,
+    pub uf: &'a mut UnionFind<Content>,
+    pub interner: &'a Interner,
+    pub builtins: Builtins,
     /// Resolved type per source region, keyed by `(home_module_path, Span)`.
     ///
     /// The home path discriminant prevents span collisions after `link::link`
@@ -132,7 +132,7 @@ pub struct Builder<'a> {
     /// may independently contain expressions at the same byte-offset span.  The
     /// bare-`Span` key (pre-fix) silently overwrote earlier entries, causing the
     /// lowerer to read the wrong type and produce IPE-I0001.
-    pub(crate) regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
+    pub regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
     /// The type EXPECTED at each source region by its surrounding context,
     /// keyed by `(home_module_path, Span)` — the type-directed-completion
     /// sidecar (ADR 0034 / LSP plan §6). Where [`Self::regions`] records the
@@ -147,12 +147,12 @@ pub struct Builder<'a> {
     /// contextual expectation appear; an unconstrained position (a bare
     /// top-level body, a lambda not in an annotated context) is absent, and the
     /// completion provider degrades to scope-only ranking there.
-    pub(crate) expected: BTreeMap<(Vec<Symbol>, Span), VarId>,
+    pub expected: BTreeMap<(Vec<Symbol>, Span), VarId>,
     /// Home module path of the def currently being constrained.  Set at the
     /// start of each `constrain_def` call; read by every `regions.insert`.
-    pub(crate) current_home: Vec<Symbol>,
+    pub current_home: Vec<Symbol>,
     /// Equality constraints to be discharged by the solver.
-    pub(crate) constraints: Vec<Constraint>,
+    pub constraints: Vec<Constraint>,
     /// Annotation-derived types of every top-level binding, for cross-binding
     /// references (`main` mentions `update`).
     ///
@@ -166,37 +166,37 @@ pub struct Builder<'a> {
     /// the whole annotation `Ty` tree (efficiency-audit §2/§7 medium).
     /// `instantiate_tracked` only reads the scheme; resolved types are
     /// byte-identical. Single-threaded solver → `Rc` suffices.
-    pub(crate) top_level: BTreeMap<(Vec<Symbol>, Symbol), Rc<Ty>>,
+    pub top_level: BTreeMap<(Vec<Symbol>, Symbol), Rc<Ty>>,
     /// Body region-var of each untyped top-level binding, read back for `env`.
     ///
     /// Keyed by `(home_module_path, bare_name)` for the same reason as
     /// [`Self::top_level`].
-    pub(crate) untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
+    pub untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
     /// Deferred record field-access obligations, resolved after the main solve.
-    pub(crate) field_accesses: Vec<FieldAccess>,
+    pub field_accesses: Vec<FieldAccess>,
     /// Deferred record-update obligations, resolved after the main solve.
-    pub(crate) record_updates: Vec<RecordUpdate>,
+    pub record_updates: Vec<RecordUpdate>,
     /// Deferred routed-Web.app type checks, resolved after the main solve.
-    pub(crate) routed_web_checks: Vec<RoutedWebCheck>,
+    pub routed_web_checks: Vec<RoutedWebCheck>,
     /// Deferred per-route page-witness checks (one per `Web.route` reference),
     /// resolved after the main solve, BEFORE the routed-Web.app checks.
-    pub(crate) route_witness_checks: Vec<RouteWitnessCheck>,
+    pub route_witness_checks: Vec<RouteWitnessCheck>,
     /// Body result var of every typed top-level binding whose RETURN annotation
     /// is the bare wildcard `any`. Keyed by `(home_module_path, bare_name)`.
     /// A wildcard `any` return severs the body's settled type from every use
     /// site (each occurrence instantiates its own fresh flex); this map is the
     /// handle [`Self::tie_wildcard_any_uses_to_bodies`] uses to re-connect them.
-    pub(crate) wildcard_any_return_bodies: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
+    pub wildcard_any_return_bodies: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
     /// Names of typed bindings whose RETURN annotation is the bare wildcard
     /// `any`, recorded in the registration pass. Each reference to one of these
     /// (in [`Self::constrain_var_top_level`]) records a use tie so its body can
     /// flow to the use site.
-    pub(crate) wildcard_any_return_bindings: BTreeSet<(Vec<Symbol>, Symbol)>,
+    pub wildcard_any_return_bindings: BTreeSet<(Vec<Symbol>, Symbol)>,
     /// One entry per reference to a wildcard-`any`-return binding: the use's
     /// instantiated arrow var + the binding it references. Tied to the binding's
     /// body by [`Self::tie_wildcard_any_uses_to_bodies`] once every def is
     /// constrained.
-    pub(crate) wildcard_any_use_results: Vec<(VarId, (Vec<Symbol>, Symbol))>,
+    pub wildcard_any_use_results: Vec<(VarId, (Vec<Symbol>, Symbol))>,
     /// The type scheme of every data constructor in the program, keyed by the
     /// constructor's fully-qualified identity `(home, type_name, name)` — the
     /// declaring module path, its type, and the constructor name. A constructor
@@ -220,7 +220,7 @@ pub struct Builder<'a> {
     /// release the `&self` borrow before the `&mut self` instantiate call).
     /// The `Rc` holds byte-identical data — same fresh vars, same constraints,
     /// same errors. Fully internal to `Builder`.
-    pub(crate) ctors: BTreeMap<CtorKey, Rc<CtorScheme>>,
+    pub ctors: BTreeMap<CtorKey, Rc<CtorScheme>>,
     /// One entry per typed binding: its `(home, name)` and the rigid (skolem)
     /// variable each of its annotation type variables instantiated to while its
     /// body was checked. Read post-solve to recover each variable's super-type
@@ -228,12 +228,12 @@ pub struct Builder<'a> {
     /// `SolvedTypes::poly_var_map` (the per-binding generic-variable map the
     /// lowerer uses to distinguish enclosing-generic `Ty::Var`s from
     /// message-free `Ty::Var`s inside UI attribute lists).
-    pub(crate) typed_rigids: Vec<PolyVarEntry>,
+    pub typed_rigids: Vec<PolyVarEntry>,
     /// One entry per *reference* to a typed top-level binding (each `VarTopLevel`
     /// use site), recording how that use instantiated the binding's scheme. Used
     /// post-solve to check a super-typed binding's obligations against the
     /// concrete type each use pins it to.
-    pub(crate) scheme_apps: Vec<SchemeApp>,
+    pub scheme_apps: Vec<SchemeApp>,
     /// Every super-typed flex variable minted by a numeric / ordering / equality
     /// operator, paired with the obligations it was minted with and the operand
     /// span to blame. Read post-solve for two jobs: numeric defaulting (an
@@ -243,7 +243,7 @@ pub struct Builder<'a> {
     /// during solving must be one the operation truly supports — an equality
     /// obligation rejects a type containing a function, which Rust cannot
     /// compare, with IPE-T0014 rather than emitting code `cargo` rejects).
-    pub(crate) super_vars: Vec<(VarId, TyBounds, Span)>,
+    pub super_vars: Vec<(VarId, TyBounds, Span)>,
     /// One entry per *cross-module* reference to an untyped top-level binding
     /// (`Builder::current_home != source.0`). A same-module reference keeps
     /// sharing `untyped[key]` directly (unchanged monomorphic-within-module
@@ -252,7 +252,7 @@ pub struct Builder<'a> {
     /// against the source binding's *generalized* scheme — see the "Boundary
     /// Scheme Promotion" design at
     /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
-    pub(crate) pending_instantiations: Vec<PendingInstantiation>,
+    pub pending_instantiations: Vec<PendingInstantiation>,
 }
 
 /// A cross-module reference to an untyped top-level binding, recorded during
@@ -305,7 +305,7 @@ pub struct SchemeApp {
 /// than a foreign one that merely shares the leaf name. Built from the same
 /// `(home, type_name, name)` triple canon records on every `PCtor` / `VarCtor`,
 /// so the insert side and the lookup side agree by construction.
-pub(crate) type CtorKey = (Vec<Symbol>, Symbol, Symbol);
+pub type CtorKey = (Vec<Symbol>, Symbol, Symbol);
 
 /// A data constructor's quantified type scheme.
 ///
@@ -315,9 +315,9 @@ pub(crate) type CtorKey = (Vec<Symbol>, Symbol, Symbol);
 /// type variables as [`Ty::Var`]s, so instantiating them through one shared map
 /// alpha-renames a generic constructor consistently per use site.
 #[derive(Clone)]
-pub(crate) struct CtorScheme {
-    pub(crate) arg_tys: Vec<Ty>,
-    pub(crate) result: Ty,
+pub struct CtorScheme {
+    pub arg_tys: Vec<Ty>,
+    pub result: Ty,
 }
 
 /// A deferred record field-access obligation `record.field`.
@@ -481,6 +481,6 @@ mod zonk;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use builtins::*;
+pub use builtins::*;
 pub use zonk::*;
 

@@ -1,71 +1,71 @@
 use super::*;
 
-pub(crate) struct Builtins {
-    pub(crate) int: Symbol,
-    pub(crate) float: Symbol,
-    pub(crate) bool: Symbol,
-    pub(crate) string: Symbol,
-    pub(crate) char: Symbol,
-    pub(crate) task: Symbol,
-    pub(crate) maybe: Symbol,
-    pub(crate) result: Symbol,
-    pub(crate) list: Symbol,
+pub struct Builtins {
+    pub int: Symbol,
+    pub float: Symbol,
+    pub bool: Symbol,
+    pub string: Symbol,
+    pub char: Symbol,
+    pub task: Symbol,
+    pub maybe: Symbol,
+    pub result: Symbol,
+    pub list: Symbol,
     /// Interned `Just` / `Nothing` / `Ok` / `Err` / `True` / `False` — the
     /// Prelude-exposed built-in constructor names.
-    pub(crate) just: Symbol,
-    pub(crate) nothing: Symbol,
-    pub(crate) ok: Symbol,
-    pub(crate) err: Symbol,
-    pub(crate) true_: Symbol,
-    pub(crate) false_: Symbol,
+    pub just: Symbol,
+    pub nothing: Symbol,
+    pub ok: Symbol,
+    pub err: Symbol,
+    pub true_: Symbol,
+    pub false_: Symbol,
     /// `Ipe.Dict` type constructor symbol.
-    pub(crate) dict: Symbol,
+    pub dict: Symbol,
     /// `Ipe.Set` type constructor symbol.
-    pub(crate) set: Symbol,
+    pub set: Symbol,
     /// `Ipe.Bytes` type constructor symbol.
     /// Divergence from Ipê: Bytes is a distinct primitive in Ipê-Rust (Vec<u8>),
     /// not a String alias as in the the reference.
-    pub(crate) bytes: Symbol,
+    pub bytes: Symbol,
     /// The interned `Error` symbol, used to validate the error channel in
     /// `Task Error a` annotations (normalised to unary `Task a`) and to pin the
     /// handler parameter type in `mapError` / `onError` so a bare lambda `\e ->
     /// ...` infers `e : Error` without leaving a free variable.
-    pub(crate) error: Symbol,
+    pub error: Symbol,
     /// `ErrorKind` — the 11-variant classification carried by `Error`'s first
     /// field. Registered as a Prelude built-in exactly
     /// like `Order` — see `ipe_lower`'s `enum_variants`/`ctor_arity`
     /// (E-12), which already validate `Error kind info ->` patterns.
-    pub(crate) errorkind: Symbol,
+    pub errorkind: Symbol,
     /// The 11 `ErrorKind` nullary constructor symbols, in canon's registered
     /// index order (`crates/ipe_canon/src/env.rs`) — do not reorder.
-    pub(crate) ek_io: Symbol,
-    pub(crate) ek_network: Symbol,
-    pub(crate) ek_ffi: Symbol,
-    pub(crate) ek_decode: Symbol,
-    pub(crate) ek_timeout: Symbol,
-    pub(crate) ek_not_found: Symbol,
-    pub(crate) ek_permission_denied: Symbol,
-    pub(crate) ek_invalid_input: Symbol,
-    pub(crate) ek_conflict: Symbol,
-    pub(crate) ek_unavailable: Symbol,
-    pub(crate) ek_unexpected: Symbol,
+    pub ek_io: Symbol,
+    pub ek_network: Symbol,
+    pub ek_ffi: Symbol,
+    pub ek_decode: Symbol,
+    pub ek_timeout: Symbol,
+    pub ek_not_found: Symbol,
+    pub ek_permission_denied: Symbol,
+    pub ek_invalid_input: Symbol,
+    pub ek_conflict: Symbol,
+    pub ek_unavailable: Symbol,
+    pub ek_unexpected: Symbol,
     /// `ErrorDetails` — the 5-variant enrichment union carried on
     /// `ErrorInfo.details`. Registered as a Prelude
     /// built-in exactly like `ErrorKind` — see `ipe_lower`'s
     /// `enum_variants`/`ctor_arity` seeding.
-    pub(crate) errordetails: Symbol,
+    pub errordetails: Symbol,
     /// `BackoffStrategy` — the 4-constructor retry-backoff strategy ADT
     /// (`Linear | LinearWithJitter | Exponential | ExponentialWithJitter`).
     /// Registered as a Prelude built-in; seeded by `ipe_lower`'s
     /// `enum_variants`/`ctor_arity` (via `BuiltinTag::BackoffStrategy`).
-    pub(crate) backoffstrategy: Symbol,
+    pub backoffstrategy: Symbol,
     /// The 5 `ErrorDetails` constructor symbols, in canon's registered index
     /// order (`crates/ipe_canon/src/env.rs`) — do not reorder.
-    pub(crate) ed_ffi_panic: Symbol,
-    pub(crate) ed_type_mismatch: Symbol,
-    pub(crate) ed_http_status: Symbol,
-    pub(crate) ed_json_decode: Symbol,
-    pub(crate) ed_custom: Symbol,
+    pub ed_ffi_panic: Symbol,
+    pub ed_type_mismatch: Symbol,
+    pub ed_http_status: Symbol,
+    pub ed_json_decode: Symbol,
+    pub ed_custom: Symbol,
     /// `PanicInfo` / `TypeInfo` / `ErrorInfo` — NOMINAL type-constructor
     /// symbols (SEAL fix, see
     /// `docs/adr/0017-error-payload-nominal-identity.md`). The three payload
@@ -76,129 +76,129 @@ pub(crate) struct Builtins {
     /// (project-local synthesized struct) would fail `cargo build` after a
     /// clean `ipe` exit. Field ACCESS on them stays available through
     /// `resolve_deferred`'s builtin-record field tables.
-    pub(crate) panicinfo: Symbol,
-    pub(crate) typeinfo: Symbol,
-    pub(crate) errorinfo: Symbol,
+    pub panicinfo: Symbol,
+    pub typeinfo: Symbol,
+    pub errorinfo: Symbol,
     /// Two distinct scheme type-variable symbols (`a`, `e`) used to build the
     /// built-in constructor schemes. Their identity links a constructor's
     /// payload to its result type, exactly like a user union's declared vars;
     /// each use site instantiates them fresh through one shared map.
-    pub(crate) tv_a: Symbol,
-    pub(crate) tv_e: Symbol,
+    pub tv_a: Symbol,
+    pub tv_e: Symbol,
     // ── Http field-name symbols ──────────────────────────────────────────────
     // Pre-interned because `kernel_ty` takes `&self` (the interner is immutable
     // at that point); these symbols give `Ty::Record` the correct BTreeMap keys
     // for `HttpResponse` and `HttpRequest` so the emit prepass registers both
     // record shapes.
     /// `"body"` — shared by `HttpResponse` and `HttpRequest`.
-    pub(crate) http_f_body: Symbol,
+    pub http_f_body: Symbol,
     /// `"headers"` — shared by `HttpResponse` (`Dict String String`) and
     /// `HttpRequest` (`List (String, String)`).
-    pub(crate) http_f_headers: Symbol,
+    pub http_f_headers: Symbol,
     /// `"status"` — `HttpResponse` only.
-    pub(crate) http_f_status: Symbol,
+    pub http_f_status: Symbol,
     /// `"method"` — `HttpRequest` only.
-    pub(crate) http_f_method: Symbol,
+    pub http_f_method: Symbol,
     /// `"HttpMethod"` — the `Ipe.Http.HttpMethod` ADT type constructor.
-    pub(crate) http_method: Symbol,
+    pub http_method: Symbol,
     /// `"url"` — `HttpRequest` only.
-    pub(crate) http_f_url: Symbol,
+    pub http_f_url: Symbol,
     /// `"timeout"` — `HttpRequest` only.
-    pub(crate) http_f_timeout: Symbol,
+    pub http_f_timeout: Symbol,
     /// `"redirects"` — `HttpRequest` only.
-    pub(crate) http_f_redirects: Symbol,
+    pub http_f_redirects: Symbol,
     /// `"RedirectPolicy"` — the `Ipe.Http.RedirectPolicy` ADT type constructor.
-    pub(crate) redirect_policy: Symbol,
+    pub redirect_policy: Symbol,
     /// `"NoRedirects"` — nullary `RedirectPolicy` constructor.
-    pub(crate) no_redirects: Symbol,
+    pub no_redirects: Symbol,
     /// `"FollowRedirects"` — `Int -> RedirectPolicy` constructor.
-    pub(crate) follow_redirects: Symbol,
+    pub follow_redirects: Symbol,
     /// `"contentType"` — `Ipe.Http.Server.Response` record field (camelCase).
-    pub(crate) server_f_content_type: Symbol,
+    pub server_f_content_type: Symbol,
     /// `"name"` — `Ipe.Db.Migration` record field.
-    pub(crate) migration_f_name: Symbol,
+    pub migration_f_name: Symbol,
     /// `"sql"` — `Ipe.Db.Migration` record field.
-    pub(crate) migration_f_sql: Symbol,
+    pub migration_f_sql: Symbol,
     // ── Db type symbols ──────────────────────────────────────────────────────
     /// `"Db"` — the opaque database connection pool type constructor.
-    pub(crate) db: Symbol,
+    pub db: Symbol,
     /// `"SqlValue"` — the sum type for typed SQL parameter values.
-    pub(crate) sqlvalue: Symbol,
+    pub sqlvalue: Symbol,
     /// `"SqlField"` — the sum type for PATCH-style field-set / field-omit SQL params.
-    pub(crate) sqlfield: Symbol,
+    pub sqlfield: Symbol,
     /// `"SqlFragment"` — `Ipe.Db.Sql`'s opaque, parameterized WHERE-fragment
     /// type.
-    pub(crate) sqlfragment: Symbol,
+    pub sqlfragment: Symbol,
     /// `"Secret"` — `Ipe.Secret`'s opaque, sealed secret-string wrapper
     /// type.
-    pub(crate) secret: Symbol,
+    pub secret: Symbol,
     /// `"Path"` — `Ipe.Path`'s opaque, validated filesystem-path type.
-    pub(crate) path: Symbol,
+    pub path: Symbol,
     /// `"Regex"` — `Ipe.Regex`'s opaque compiled-pattern handle. Built ONLY by
     /// `Regex.compile : String -> Result Error Regex`. Zero type arguments.
     /// Lowered to `IrType::Regex`.
-    pub(crate) regex: Symbol,
+    pub regex: Symbol,
     // ── SqlValue constructor name symbols ─────────────────────────────────────
-    pub(crate) sql_string: Symbol,
-    pub(crate) sql_int: Symbol,
-    pub(crate) sql_float: Symbol,
-    pub(crate) sql_bool: Symbol,
-    pub(crate) sql_bytes: Symbol,
-    pub(crate) sql_time: Symbol,
+    pub sql_string: Symbol,
+    pub sql_int: Symbol,
+    pub sql_float: Symbol,
+    pub sql_bool: Symbol,
+    pub sql_bytes: Symbol,
+    pub sql_time: Symbol,
     /// `"SqlDecimal"` — wraps a `String` decimal representation (lossless TEXT).
-    pub(crate) sql_decimal: Symbol,
+    pub sql_decimal: Symbol,
     /// `"SqlMoney"` — wraps a `String` in `"ISO_CODE AMOUNT"` format (TEXT).
-    pub(crate) sql_money: Symbol,
-    pub(crate) sql_null: Symbol,
+    pub sql_money: Symbol,
+    pub sql_null: Symbol,
     // ── SqlField constructor name symbols ─────────────────────────────────────
-    pub(crate) set_field: Symbol,
-    pub(crate) omit_field: Symbol,
+    pub set_field: Symbol,
+    pub omit_field: Symbol,
     // ── Shared row-decoder type (JSON) ────────────────────────────────────────
     /// `"Decoder"` — the opaque decoder type constructor shared by `Ipe.Json.Decode`
     /// and `Ipe.Db.Decode`. Represented in the IR as `IrType::Decoder(Box<IrType>)`.
-    pub(crate) decoder: Symbol,
+    pub decoder: Symbol,
     // ── TEA Cmd / Sub type constructor symbols ────────────────────────────────
     /// `"Cmd"` — the opaque command type constructor `Cmd msg`.
     /// Represented in the IR as `IrType::Cmd(Box<IrType>)`.
-    pub(crate) cmd: Symbol,
+    pub cmd: Symbol,
     /// `"Sub"` — the opaque subscription type constructor `Sub msg`.
     /// Represented in the IR as `IrType::Sub(Box<IrType>)`.
-    pub(crate) sub: Symbol,
+    pub sub: Symbol,
     // ── Ipe.Http.Server opaque type constructor symbols ───────────────────────
     /// `"Request"` — the opaque server request type.
-    pub(crate) server_request: Symbol,
+    pub server_request: Symbol,
     /// `"Response"` — the opaque server response type.
-    pub(crate) server_response: Symbol,
+    pub server_response: Symbol,
     /// `"Route"` — the opaque server route type.
-    pub(crate) server_route: Symbol,
+    pub server_route: Symbol,
     /// `"Cookie"` — the opaque server cookie type.
-    pub(crate) server_cookie: Symbol,
+    pub server_cookie: Symbol,
     /// `"AuthConfig"` — the opaque authed-route configuration type
     /// (`ipe_runtime::server::AuthConfig`). Built only through `Server.authConfig`;
     /// the sole value the authed-route kernels accept. Lowered to
     /// `IrType::AuthConfig`.
-    pub(crate) auth_config: Symbol,
+    pub auth_config: Symbol,
     /// `"TokenSource"` — the opaque descriptor of where the authed middleware
     /// reads the session token (`ipe_runtime::server::TokenSource`). Built only
     /// through the `Server` token-source kernels. Lowered to
     /// `IrType::TokenSource`.
-    pub(crate) token_source: Symbol,
+    pub token_source: Symbol,
     /// `"Handler"` — the `Request -> Task Error Response` alias from
     /// `Ipe.Http.Server`. Pre-interned so `constrain_def` can detect a
     /// `handler : Handler` annotation and expand it to the full arrow type
     /// before the parameter-loop runs (fixes IPE-T0004 for handler bindings).
-    pub(crate) handler: Symbol,
+    pub handler: Symbol,
     // ── Ipe.Http.Server.Stream opaque type constructor symbol ───────────
     /// `"StreamWriter"` — the opaque stream writer handle passed to the
     /// `Stream.stream` callback and consumed by `Stream.emit` /
     /// `Stream.finish` / `Stream.withContentType`.
-    pub(crate) stream_writer: Symbol,
+    pub stream_writer: Symbol,
     // ── Ipe.Http.Server.WebSocket opaque type constructor symbols ────────
     /// `"WebSocketServer"` — the opaque per-peer WebSocket handle (`WsHandle`).
-    pub(crate) ws_server: Symbol,
+    pub ws_server: Symbol,
     /// `"WebSocketServerCfg"` — the opaque WebSocket server configuration
     /// (`WsServerCfg<IpeError>`).
-    pub(crate) ws_server_cfg: Symbol,
+    pub ws_server_cfg: Symbol,
     // ── Ipe.Ui / Ipe.Html parametric type constructor symbols ─────────────────
     /// `"Attribute"` — Ipe.Ui attribute type constructor `Attribute msg`.
     ///
@@ -209,56 +209,56 @@ pub(crate) struct Builtins {
     /// type, `list_elem_ir` returns `IrType::Json`, and `emit_list` emits the
     /// bare `Vec::new()` that Rust rejects with E0283 when M cannot be inferred
     /// from elsewhere in the expression.
-    pub(crate) attribute: Symbol,
+    pub attribute: Symbol,
     /// `"Element"` — Ipe.Ui element type constructor `Element msg`.
-    pub(crate) element: Symbol,
+    pub element: Symbol,
     /// `"Screen"` — Tui-only view type constructor `Screen msg`. Distinct from
     /// `Element msg`; produced by `Ipe.Tea.Tui.Ui.*` builders.
-    pub(crate) cells: Symbol,
+    pub cells: Symbol,
     /// `"TuiAttr"` — the cell-native attribute type constructor
     /// `Ipe.Tea.Tui.Ui.Attribute msg`. Distinct from the DOM `Attribute msg`
     /// (`attribute`): only terminal-honorable attributes (spacing/padding/
     /// align/bold/underline/color/bg) inhabit it, so a DOM attribute
     /// (`Ui.onClick`, `Ui.scrollbars`, …) is unnameable in a `Screen` view —
     /// a type error, never a silent render-time drop.
-    pub(crate) tui_attr: Symbol,
+    pub tui_attr: Symbol,
     /// `"Lines"` — the Cli-only line-oriented view type constructor `Lines msg`.
     /// Distinct from both `Element msg` and `Screen msg`; produced by
     /// `Ipe.Tea.Cli.Ui.*` builders. Line-scoped, so 2D cell and DOM builders are
     /// unnameable in it.
-    pub(crate) cli_lines: Symbol,
+    pub cli_lines: Symbol,
     /// `"CliAttr"` — the line-native attribute type constructor
     /// `Ipe.Tea.Cli.Ui.Attribute msg`. Only line-scoped styles
     /// (bold/underline/dim/reverse/color/bg) inhabit it, so a 2D cell attribute
     /// or a DOM attribute is unnameable in a `Lines` view.
-    pub(crate) cli_attr: Symbol,
+    pub cli_attr: Symbol,
     /// `"TermColor"` (spelled `Terminal.Color`) — the closed terminal colour
     /// palette. The argument type of the Tui and Cli `color` / `bg` builders.
-    pub(crate) term_color: Symbol,
+    pub term_color: Symbol,
     /// `"CustomElement"` — the JS-widget boundary type constructor
     /// `CustomElement down up`. Empty-module opaque handle; consumed only by the
     /// `Ui.widget` kernel scheme.
-    pub(crate) custom_element: Symbol,
+    pub custom_element: Symbol,
     /// `"Html"` — Html type constructor `Html msg` (shared by Ipe.Html and
     /// Ipe.Ui render entry points).
-    pub(crate) html_con: Symbol,
+    pub html_con: Symbol,
     /// `"Length"` — Ipe.Ui nullary length type produced by `Ui.px` / `Ui.fill`
     /// / `Ui.minimum` / …. Lowered to `IrType::UiPlain(UiPlain::Length)` via the
     /// `"Length"` arm in `ipe_lower::ir_type_from_ty`.
-    pub(crate) length: Symbol,
+    pub length: Symbol,
     /// `"Color"` — Ipe.Ui nullary colour type produced by `Ui.rgb` / `Ui.rgba`
     /// / `Ui.white` / …. Lowered to `IrType::UiPlain(UiPlain::Color)`.
-    pub(crate) color: Symbol,
+    pub color: Symbol,
     /// `"Description"` — Ipe.Ui semantic description type produced by `Ui.descMain`
     /// / `Ui.descNavigation` / …. Lowered to `IrType::UiPlain(UiPlain::Description)`
     /// via the `"Description"` arm in `ipe_lower::ir_type_from_ty`.
-    pub(crate) description: Symbol,
+    pub description: Symbol,
     /// `"PseudoClass"` — Ipe.Ui nullary pseudo-class-selector type produced by
     /// `Ui.hover` / `Ui.focus` / `Ui.focusVisible` / `Ui.active` / `Ui.disabled`
     /// and consumed by `Ui.onPseudo`. Lowered to
     /// `IrType::UiPlain(UiPlain::PseudoClass)` via the
     /// `"PseudoClass"` arm in `ipe_lower::ir_type_from_ty`.
-    pub(crate) pseudo_class: Symbol,
+    pub pseudo_class: Symbol,
     /// `"Value"` — the opaque JSON value type (`Value = any` in Ipê) produced /
     /// consumed by the `JsonEnc.*` encoders. Lowered to `IrType::Json`
     /// (`serde_json::Value`, re-exported as `JsonVal`) via the `"Value"` arm in
@@ -266,227 +266,227 @@ pub(crate) struct Builtins {
     /// scheme can produce a *concrete* `Value` region type (closing the former
     /// `Ty::Var(u32::MAX)` exit-0 hole) rather than leaning on the lowerer's
     /// free-`Ty::Var` → `Json` fallback.
-    pub(crate) json_value: Symbol,
+    pub json_value: Symbol,
     /// `"wrapperAttrs"` — field name in the `Ui.layoutWith` config record.
     /// Pre-interned because `kernel_ty` builds a `Ty::Record` for the first
     /// argument of `Ui.layoutWith : { wrapperAttrs, rootAttrs } -> ...` and
     /// needs the key as a `Symbol`.
-    pub(crate) lw_wrapper_attrs: Symbol,
+    pub lw_wrapper_attrs: Symbol,
     /// `"rootAttrs"` — the second field in the `Ui.layoutWith` config record.
-    pub(crate) lw_root_attrs: Symbol,
+    pub lw_root_attrs: Symbol,
     // ── Ipe.Web / Ipe.Web opaque type constructor symbols ───────────────────
     /// `"WebReq"` — opaque request threaded through `Web.app`'s `init`.
-    pub(crate) web_req: Symbol,
+    pub web_req: Symbol,
     /// `"SessionHandle"` — the opaque `Ipe.Ffi.Js` session-stream handle,
     /// obtained only from `Js.openSession`. Backed by the runtime session id.
-    pub(crate) session_handle: Symbol,
+    pub session_handle: Symbol,
     /// `"WebRoute"` — opaque route descriptor returned by `Web.route`.
-    pub(crate) live_route_con: Symbol,
+    pub live_route_con: Symbol,
     // ── Web cfg record field name symbols ───────────────────────────────────────
     /// `"init"` — the init field of the `Web.app` config record.
-    pub(crate) live_f_init: Symbol,
+    pub live_f_init: Symbol,
     /// `"update"` — the update field of the `Web.app` config record.
-    pub(crate) live_f_update: Symbol,
+    pub live_f_update: Symbol,
     /// `"view"` — the view field of the `Web.app` config record.
-    pub(crate) live_f_view: Symbol,
+    pub live_f_view: Symbol,
     /// `"subscriptions"` — the subscriptions field of the `Web.app` config record.
-    pub(crate) live_f_subscriptions: Symbol,
+    pub live_f_subscriptions: Symbol,
     /// `"routes"` — the routes field of the `Web.appRouted` config record.
     /// Reserved for a future split scheme between `app` and `appRouted`.
     #[allow(dead_code)]
-    pub(crate) live_f_routes: Symbol,
+    pub live_f_routes: Symbol,
     /// `"notFound"` — the notFound field of the `Web.appRouted` config record.
     /// Reserved for a future split scheme between `app` and `appRouted`.
     #[allow(dead_code)]
-    pub(crate) live_f_not_found: Symbol,
+    pub live_f_not_found: Symbol,
     // ── Tui cfg record field name symbols ─────────────────────────────────────
     /// `"onKey"` — the onKey field of the `Tui.app` config record.
     /// Typed `{ kind : String, value : String } -> msg`; the backend bridges the
     /// record handler onto the runtime bound `FOnKey: Fn(String, String) -> Msg`.
-    pub(crate) tui_f_on_key: Symbol,
+    pub tui_f_on_key: Symbol,
     /// `"kind"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
-    pub(crate) tui_f_key_kind: Symbol,
+    pub tui_f_key_kind: Symbol,
     /// `"value"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
-    pub(crate) tui_f_key_value: Symbol,
+    pub tui_f_key_value: Symbol,
     // ── Cli cfg record field name symbols ──────────────────────────────
     /// `"onLine"` — the onLine field of the `Cli.app` config record.
     /// Typed as `String -> Msg` — called once per stdin line.
-    pub(crate) cli_f_on_line: Symbol,
+    pub cli_f_on_line: Symbol,
     // ── Ui.button cfg record field name symbols ───────────────────────────────
     /// `"onPress"` — the onPress field of the `Ui.button` config record.
     /// Typed as `Maybe msg`.
-    pub(crate) btn_f_on_press: Symbol,
+    pub btn_f_on_press: Symbol,
     /// `"label"` — the label field of the `Ui.button` config record.
     /// Typed as `Element msg`.
-    pub(crate) btn_f_label: Symbol,
+    pub btn_f_label: Symbol,
     // ── Ipe.Ui.Input type constructor + cfg field symbols ─────────────
     /// `"Label"` — the `Label msg` type constructor from `Ipe.Ui.Input`.
     /// Lowered to `IrType::Ui { ctor: UiCtor::Label, msg }`.
-    pub(crate) input_label_con: Symbol,
+    pub input_label_con: Symbol,
     /// `"Placeholder"` — the `Placeholder msg` type constructor from `Ipe.Ui.Input`.
     /// Lowered to `IrType::Ui { ctor: UiCtor::Placeholder, msg }`.
-    pub(crate) input_placeholder_con: Symbol,
+    pub input_placeholder_con: Symbol,
     /// `"RadioOption"` — the `RadioOption msg` type constructor from `Ipe.Ui.Input`.
     /// Lowered to `IrType::Ui { ctor: UiCtor::RadioOption, msg }`.
-    pub(crate) input_radio_option_con: Symbol,
+    pub input_radio_option_con: Symbol,
     /// `"onChange"` — the onChange field of Input text/multiline/password cfg records.
-    pub(crate) input_f_on_change: Symbol,
+    pub input_f_on_change: Symbol,
     /// `"text"` — the text field of text/multiline/email/username/search/password cfg records.
-    pub(crate) input_f_text: Symbol,
+    pub input_f_text: Symbol,
     /// `"placeholder"` — the placeholder field of text-variant cfg records.
-    pub(crate) input_f_placeholder: Symbol,
+    pub input_f_placeholder: Symbol,
     /// `"checked"` — the checked field of the checkbox cfg record.
-    pub(crate) input_f_checked: Symbol,
+    pub input_f_checked: Symbol,
     /// `"icon"` — the icon field of the checkbox cfg record.
-    pub(crate) input_f_icon: Symbol,
+    pub input_f_icon: Symbol,
     /// `"spellcheck"` — the spellcheck field of the multiline cfg record.
-    pub(crate) input_f_spellcheck: Symbol,
+    pub input_f_spellcheck: Symbol,
     /// `"value"` — the value field of the slider cfg record (current value as String).
-    pub(crate) input_f_value: Symbol,
+    pub input_f_value: Symbol,
     /// `"min"` — the min field of the slider cfg record.
-    pub(crate) input_f_min: Symbol,
+    pub input_f_min: Symbol,
     /// `"max"` — the max field of the slider cfg record.
-    pub(crate) input_f_max: Symbol,
+    pub input_f_max: Symbol,
     /// `"step"` — the step field of the slider cfg record.
-    pub(crate) input_f_step: Symbol,
+    pub input_f_step: Symbol,
     /// `"options"` — the options field of the radio/radioRow cfg record.
-    pub(crate) input_f_options: Symbol,
+    pub input_f_options: Symbol,
     /// `"selected"` — the selected field of the radio/radioRow cfg record.
-    pub(crate) input_f_selected: Symbol,
+    pub input_f_selected: Symbol,
     // ── Ipe.Http.Stream opaque StreamId type constructor ─────────────────
     /// `"StreamId"` — the opaque stream identifier type constructor from
     /// `Ipe.Http.Stream`. Backed by `ipe_runtime::http_stream::IpeStreamId`.
     /// No synthetic `EnumDef` is injected; the backend handles it via a special
     /// case in `enum_name` that maps the symbol to the runtime struct.
-    pub(crate) stream_id: Symbol,
+    pub stream_id: Symbol,
     // ── Order ADT ─────────────────────────────────────────────────────
     /// `"Order"` — the type constructor for three-way comparison results.
-    pub(crate) order: Symbol,
+    pub order: Symbol,
     /// `"LT"` — the LT constructor of the Order ADT (less-than).
-    pub(crate) lt: Symbol,
+    pub lt: Symbol,
     /// `"EQ"` — the EQ constructor of the Order ADT (equal).
-    pub(crate) eq: Symbol,
+    pub eq: Symbol,
     /// `"GT"` — the GT constructor of the Order ADT (greater-than).
-    pub(crate) gt: Symbol,
+    pub gt: Symbol,
     // ── Task.RetryPolicy field name symbols (retry surface) ───────────────────
     /// `"maxAttempts"` — maximum number of attempts in `RetryPolicy e`.
-    pub(crate) retry_f_max_attempts: Symbol,
+    pub retry_f_max_attempts: Symbol,
     /// `"baseMs"` — base delay in milliseconds in `RetryPolicy e`.
-    pub(crate) retry_f_base_ms: Symbol,
+    pub retry_f_base_ms: Symbol,
     /// `"shouldRetry"` — predicate field `e -> Bool` in `RetryPolicy e`.
-    pub(crate) retry_f_should_retry: Symbol,
+    pub retry_f_should_retry: Symbol,
     /// `"strategy"` — the `BackoffStrategy` ADT field in `RetryPolicy e`.
-    pub(crate) retry_f_strategy: Symbol,
+    pub retry_f_strategy: Symbol,
     // ── Border/padding edge field name symbols (Border.widthEach) ────────────
     /// `"top"` — top edge field of `Border.widthEach { top, right, bottom, left }`.
-    pub(crate) edge_f_top: Symbol,
+    pub edge_f_top: Symbol,
     /// `"right"` — right edge field.
-    pub(crate) edge_f_right: Symbol,
+    pub edge_f_right: Symbol,
     /// `"bottom"` — bottom edge field.
-    pub(crate) edge_f_bottom: Symbol,
+    pub edge_f_bottom: Symbol,
     /// `"left"` — left edge field.
-    pub(crate) edge_f_left: Symbol,
+    pub edge_f_left: Symbol,
     // ── Border.shadow record field name symbols ──────────────────────────────
     /// `"offsetX"` — horizontal offset field of `Border.shadow { offsetX, … }`.
-    pub(crate) shadow_f_offset_x: Symbol,
+    pub shadow_f_offset_x: Symbol,
     /// `"offsetY"` — vertical offset field.
-    pub(crate) shadow_f_offset_y: Symbol,
+    pub shadow_f_offset_y: Symbol,
     /// `"blur"` — blur radius field.
-    pub(crate) shadow_f_blur: Symbol,
+    pub shadow_f_blur: Symbol,
     /// `"spread"` — spread field.
-    pub(crate) shadow_f_spread: Symbol,
+    pub shadow_f_spread: Symbol,
     /// `"color"` — shadow colour field.
-    pub(crate) shadow_f_color: Symbol,
+    pub shadow_f_color: Symbol,
     // ── Ui.image record field name symbols ──────────────────────────────
     /// `"src"` — image source URL field of `Ui.image _ { src, description }`.
-    pub(crate) img_f_src: Symbol,
+    pub img_f_src: Symbol,
     /// `"description"` — alt-text field of `Ui.image _ { src, description }`.
-    pub(crate) img_f_description: Symbol,
+    pub img_f_description: Symbol,
     // ── Process.runWith input / output record field name symbols ──────────
     /// `"command"` — `Process.runWith` input: executable name or path.
-    pub(crate) process_f_command: Symbol,
+    pub process_f_command: Symbol,
     /// `"args"` — `Process.runWith` input: argument vector.
-    pub(crate) process_f_args: Symbol,
+    pub process_f_args: Symbol,
     /// `"cwd"` — `Process.runWith` input: optional per-child working directory.
-    pub(crate) process_f_cwd: Symbol,
+    pub process_f_cwd: Symbol,
     /// `"env"` — `Process.runWith` input: per-child env overrides.
-    pub(crate) process_f_env: Symbol,
+    pub process_f_env: Symbol,
     /// `"exitCode"` — `Process.runWith` output: exit status code.
-    pub(crate) process_f_exit_code: Symbol,
+    pub process_f_exit_code: Symbol,
     /// `"stdout"` — `Process.runWith` output: captured standard output.
-    pub(crate) process_f_stdout: Symbol,
+    pub process_f_stdout: Symbol,
     /// `"stderr"` — `Process.runWith` output: captured standard error.
-    pub(crate) process_f_stderr: Symbol,
+    pub process_f_stderr: Symbol,
     /// `"cols"` — `Process.runInPty` input: pty window width in columns.
-    pub(crate) process_f_cols: Symbol,
+    pub process_f_cols: Symbol,
     /// `"rows"` — `Process.runInPty` input: pty window height in rows.
-    pub(crate) process_f_rows: Symbol,
+    pub process_f_rows: Symbol,
     /// `"output"` — `Process.runInPty` output: combined pty-master stream.
-    pub(crate) process_f_output: Symbol,
+    pub process_f_output: Symbol,
     // ── JWT builder opaque type constructor symbols (D-00) ────────────────────
     /// `"Claims"` — opaque JWT claims builder object.  Backed at runtime by
     /// `serde_json::Value` (a JSON object accumulator).  Used as the input /
     /// output of the `Jwt.subject`, `Jwt.issuer`, … builder chain functions
     /// and the final `Jwt.encode` call.
-    pub(crate) jwt_claims: Symbol,
+    pub jwt_claims: Symbol,
     /// `"Algorithm"` — JWT signing algorithm descriptor.  Backed at runtime by
     /// a sealed `Ipe.Secret` wrapping the string `"HS256:<secret>"` or
     /// `"RS256:<pem>"`.  Built by `Jwt.hs256` / `Jwt.rs256` and consumed by
     /// `Jwt.encode` / `Jwt.decode`.
-    pub(crate) jwt_algorithm: Symbol,
+    pub jwt_algorithm: Symbol,
     // ── Ipe.Decimal opaque type constructor symbol ────────────────────────────
     /// `"Decimal"` — the opaque arbitrary-precision decimal type constructor
     /// from `Ipe.Decimal`.  Backed by `ipe_runtime::decimal::Decimal` (wrapping
     /// `rust_decimal::Decimal`).  Zero type arguments.  Lowered to
     /// `IrType::Decimal` by `ir_type_from_ty` / `ir_type_from_canon`.
-    pub(crate) decimal: Symbol,
+    pub decimal: Symbol,
     // ── Ipe.Csv record field symbols ─────────────────────────────────────
     /// `"header"` — `Ipe.Csv.Csv.header : List String`.
-    pub(crate) csv_f_header: Symbol,
+    pub csv_f_header: Symbol,
     /// `"rows"` — `Ipe.Csv.Csv.rows : List (List String)`.
-    pub(crate) csv_f_rows: Symbol,
+    pub csv_f_rows: Symbol,
     // ── Ipe.Cache record field symbols ───────────────────────────────────
     /// `"maxEntries"` — `Ipe.Cache.CacheCfg.maxEntries : Int`.
-    pub(crate) cache_f_max_entries: Symbol,
+    pub cache_f_max_entries: Symbol,
     /// `"ttlMs"` — `Ipe.Cache.CacheCfg.ttlMs : Int`.
-    pub(crate) cache_f_ttl_ms: Symbol,
+    pub cache_f_ttl_ms: Symbol,
     /// `"maxBytes"` — `Ipe.Cache.CacheCfg.maxBytes : Int`.
-    pub(crate) cache_f_max_bytes: Symbol,
+    pub cache_f_max_bytes: Symbol,
     /// `"hits"` — `Ipe.Cache.stats` return field `hits : Int`.
-    pub(crate) cache_f_hits: Symbol,
+    pub cache_f_hits: Symbol,
     /// `"misses"` — `Ipe.Cache.stats` return field `misses : Int`.
-    pub(crate) cache_f_misses: Symbol,
+    pub cache_f_misses: Symbol,
     /// `"evictions"` — `Ipe.Cache.stats` return field `evictions : Int`.
-    pub(crate) cache_f_evictions: Symbol,
+    pub cache_f_evictions: Symbol,
     // ── Ipe.WebSocket.WebSocketCfg record field symbols ─────────────
     /// `"url"` — `Ipe.WebSocket.WebSocketCfg.url : String`.
-    pub(crate) ws_f_url: Symbol,
+    pub ws_f_url: Symbol,
     /// `"headers"` — `WebSocketCfg.headers : List (String, String)`.
-    pub(crate) ws_f_headers: Symbol,
+    pub ws_f_headers: Symbol,
     /// `"timeout"` — `WebSocketCfg.timeout : Int`.
-    pub(crate) ws_f_timeout: Symbol,
+    pub ws_f_timeout: Symbol,
     /// `"pingInterval"` — `WebSocketCfg.pingInterval : Int`.
-    pub(crate) ws_f_ping_interval: Symbol,
+    pub ws_f_ping_interval: Symbol,
     // ── Ipe.Email type + record field symbols ────────────────────────────
     /// `"EmailProvider"` — the opaque `Ipe.Email.EmailProvider` ADT constructor
     /// (`Resend`/`Ses`/`SendGrid`/`Smtp`).  Backed by
     /// `ipe_runtime::email::EmailProvider`; lowered to `IrType::EmailProvider`.
-    pub(crate) email_provider: Symbol,
+    pub email_provider: Symbol,
     /// `EmailMessage` record field names (`ipe_runtime::email::EmailMessage`).
-    pub(crate) email_f_from: Symbol,
-    pub(crate) email_f_to: Symbol,
-    pub(crate) email_f_cc: Symbol,
-    pub(crate) email_f_bcc: Symbol,
-    pub(crate) email_f_subject: Symbol,
-    pub(crate) email_f_text_body: Symbol,
-    pub(crate) email_f_html_body: Symbol,
-    pub(crate) email_f_attachments: Symbol,
-    pub(crate) email_f_reply_to: Symbol,
+    pub email_f_from: Symbol,
+    pub email_f_to: Symbol,
+    pub email_f_cc: Symbol,
+    pub email_f_bcc: Symbol,
+    pub email_f_subject: Symbol,
+    pub email_f_text_body: Symbol,
+    pub email_f_html_body: Symbol,
+    pub email_f_attachments: Symbol,
+    pub email_f_reply_to: Symbol,
     /// `Attachment` record field names (`ipe_runtime::email::EmailAttachment`)
     /// — the `attachments` element shape carried inside `EmailMessage`.
-    pub(crate) email_f_filename: Symbol,
-    pub(crate) email_f_mime_type: Symbol,
-    pub(crate) email_f_content: Symbol,
+    pub email_f_filename: Symbol,
+    pub email_f_mime_type: Symbol,
+    pub email_f_content: Symbol,
     // `SesConfig` / `SmtpConfig` record shapes are folded by the lowerer via
     // field-name string constants (`ipe_lower`), not through a kernel scheme, so
     // no interned field symbols for them are needed here.
@@ -494,49 +494,49 @@ pub(crate) struct Builtins {
     /// `"Key"` — opaque role-typed crypto key (`ipe_runtime::crypto::Key`).
     /// The ONLY constructor is `Key.fromString`/`Key.fromBytes`; no implicit
     /// `String` coercion. Lowered to `IrType::CryptoKey`.
-    pub(crate) crypto_key: Symbol,
+    pub crypto_key: Symbol,
     /// `"Mac"` — opaque role-typed MAC output (`ipe_runtime::crypto::Mac`).
     /// Produced exclusively by `hmacSha256WithKey`/`hmacSha512WithKey`; extracted
     /// via `Mac.toHex`.  Lowered to `IrType::CryptoMac`.
-    pub(crate) crypto_mac: Symbol,
+    pub crypto_mac: Symbol,
     // ── Ipe.Email.EmailAddress ──────────────────────────────────────────────
     /// `"EmailAddress"` — opaque validated email address
     /// (`ipe_runtime::email::EmailAddress`).  The ONLY constructor is
     /// `EmailAddress.parse : String -> Maybe EmailAddress`; extracted via
     /// `EmailAddress.toString`.  Lowered to `IrType::EmailAddress`.
-    pub(crate) email_address: Symbol,
+    pub email_address: Symbol,
     // ── Ipe.Auth.Principal ────────────────────────────────────────────────────
     /// `"Principal"` — the opaque authenticated subject (`ipe_runtime::
     /// principal::Principal`). NO Ipê constructor: a value only ever comes from
     /// the server auth middleware's mint. Read via `Ipe.Auth.subject :
     /// Principal -> String`. Zero type arguments. Lowered to `IrType::Principal`.
-    pub(crate) principal: Symbol,
+    pub principal: Symbol,
     // ── Ipe.Url ─────────────────────────────────────────────────────────────
     /// `"Url"` — `Ipe.Url`'s opaque validated URL type (`ipe_runtime::url::Url`).
     /// The ONLY constructor is `Url.fromString : String -> Result Error Url`;
     /// extracted via `Url.toString`. Zero type arguments. Lowered to
     /// `IrType::Url`.
-    pub(crate) url: Symbol,
+    pub url: Symbol,
     // ── Ipe.Db.Dsn ──────────────────────────────────────────────────────────
     /// `"Dsn"` — `Ipe.Db.Dsn`'s opaque validated connection descriptor
     /// (`ipe_runtime::dsn::Dsn`). Constructed only by `Db.Dsn.parse` /
     /// `Db.Dsn.build`; zero type arguments. Lowered to `IrType::Dsn`.
-    pub(crate) dsn: Symbol,
+    pub dsn: Symbol,
     // ── Ipe.Db external Connection ──────────────────────────────────────────
     /// `"Connection"` — the external-DB connection handle constructor
     /// `Connection mode` (`ipe_runtime::external_conn::ExternalConnection`).
     /// Minted only by `Db.Dsn.open`. The phantom
     /// `mode` distinguishes `ReadOnly` from `ReadWrite` at inference and is
     /// erased at emit. Lowered to `IrType::Connection`.
-    pub(crate) connection: Symbol,
+    pub connection: Symbol,
     /// `"ReadOnly"` — the phantom read-only access-mode marker. Appears only as
     /// `Connection`'s argument; never a standalone value. Lowered to
     /// `IrType::ConnReadOnly`.
-    pub(crate) conn_read_only: Symbol,
+    pub conn_read_only: Symbol,
     /// `"ReadWrite"` — the phantom mutable access-mode marker. Appears only as
     /// `Connection`'s argument; never a standalone value. Lowered to
     /// `IrType::ConnReadWrite`.
-    pub(crate) conn_read_write: Symbol,
+    pub conn_read_write: Symbol,
     // ── Ipe.App runtime-config Setting ──────────────────────────────────────
     /// `"Setting"` — the runtime-config carrier constructor `Setting shape`
     /// (`ipe_runtime::app_config::Setting`). Built only by the setting kernels
@@ -544,148 +544,148 @@ pub(crate) struct Builtins {
     /// `shape` marker keeps a `Web`-only setting from unifying into a
     /// `Terminal` app's settings list; erased at emit. Lowered to
     /// `IrType::Setting`.
-    pub(crate) setting: Symbol,
+    pub setting: Symbol,
     /// `"Web"` — the phantom shape marker pinning a setting to the web shape.
     /// Appears only as `Setting`'s argument; never a standalone value. Lowered
     /// to `IrType::ShapeWeb`.
-    pub(crate) shape_web: Symbol,
+    pub shape_web: Symbol,
     /// `"WebView"` — the phantom shape marker pinning a setting to the webview
     /// shape. Appears only as `Setting`'s argument. Lowered to
     /// `IrType::ShapeWebView`.
-    pub(crate) shape_webview: Symbol,
+    pub shape_webview: Symbol,
     /// `"Terminal"` — the phantom shape marker pinning a setting to the terminal
     /// shape. Appears only as `Setting`'s argument. Lowered to
     /// `IrType::ShapeTerminal`.
-    pub(crate) shape_terminal: Symbol,
+    pub shape_terminal: Symbol,
     /// `"HostMode"` — the closed host-bind ADT, the argument type of
     /// `Host.bind`. Built only by its constructor kernels; each projects to the
     /// raw `Int` host-bind tag at emit, so `HostMode` erases to `Int`.
-    pub(crate) host_mode: Symbol,
+    pub host_mode: Symbol,
     /// `"LogLevel"` — the closed log-severity ADT, the argument type of
     /// `Log.level`. Built only by its constructor kernels; erases to `Int`.
-    pub(crate) log_level: Symbol,
+    pub log_level: Symbol,
     /// `"CsrfMode"` — the closed CSRF-policy ADT, the argument type of
     /// `Web.csrf`. Built only by its constructor kernels; carries no disabling
     /// variant, and erases to `Int`.
-    pub(crate) csrf_mode: Symbol,
+    pub csrf_mode: Symbol,
     /// `"RevocationMode"` — the closed revocation-gate ADT (`Off` / `Store`),
     /// the argument type of `Web.withRevocation` / `Server.withRevocation`.
     /// Stricter-only monotonic; erases to `Int`.
-    pub(crate) revocation_mode: Symbol,
+    pub revocation_mode: Symbol,
     // ── Ipe.Locale ─────────────────────────────────────────────────────────
     /// `"Locale"` — opaque BCP-47 locale handle (`ipe_runtime::locale::Locale`).
     /// The ONLY constructor is `Locale.fromTag : String -> Maybe Locale`;
     /// extracted via `Locale.toTag : Locale -> String`.  Lowered to
     /// `IrType::Locale`.
-    pub(crate) locale: Symbol,
+    pub locale: Symbol,
     // ── Ipe.PubSub.Topic ───────────────────────────────────────────────────
     /// `"Topic"` — the phantom topic-handle type constructor `Topic a`.
     /// Erases to `String` at runtime (`ir_type_from_ty` maps `Topic a → Str`).
     /// Used only in kernel type schemes (`CmdPublish`/`SubSubscribeTopic`/
     /// `PubSubPublish`/`PubSubPublishNoEcho`/`PubSubTopic`) to share the
     /// payload type variable `a` between publisher and subscriber.
-    pub(crate) topic_con: Symbol,
+    pub topic_con: Symbol,
     // ── Ipe.Db.Store.Cond ──────────────────────────────────────────────────
     /// `"Cond"` — the typed `WHERE`-predicate ADT built by the accessor-typed
     /// query leaves. Used as the result type of the `StoreEqCol` kernel scheme;
     /// its constructors (`Compare` / …) lower normally as an emitted enum.
-    pub(crate) cond_con: Symbol,
+    pub cond_con: Symbol,
     /// `"Codec"` — the `Ipe.Codec` codec ADT. Used as the first parameter of the
     /// `StoreEqBy` kernel scheme (`Codec t -> …`), so an enum/newtype column's
     /// comparison value is projected to a bound `SqlValue` through its own codec.
-    pub(crate) codec_con: Symbol,
+    pub codec_con: Symbol,
     /// `"Store"` — the `Ipe.Db.Store.Store a` ADT, the classified, queryable
     /// table. Reads and writes accept a `Store a`; it is reachable only via
     /// `public` / `secured` applied to a `Draft a` (deny-by-default).
-    pub(crate) store_con: Symbol,
+    pub store_con: Symbol,
     /// `"Draft"` — the `Ipe.Db.Store.Draft a` ADT, the unclassified table
     /// `fromCodec` returns. Used as the parameter and result of the accessor-typed
     /// schema-shaping builder kernel schemes (`StorePrimaryKey` / `StoreSerial` /
     /// … / `StoreDefaultInt`): they refine a `Draft`, before classification. No
     /// read or write kernel accepts a `Draft`, so an unclassified table is
     /// unqueryable by construction.
-    pub(crate) draft_con: Symbol,
+    pub draft_con: Symbol,
     /// `"Joined"` — the `Ipe.Db.Store.Joined a b` two-store inner-join ADT, the
     /// result of the `StoreJoin` kernel scheme
     /// (`Store a -> (a -> k) -> Store b -> (b -> k) -> Joined a b`). It carries
     /// both stores' row types so `toList` decodes each side through its own
     /// codec.
-    pub(crate) joined_con: Symbol,
+    pub joined_con: Symbol,
     /// `"Select"` — the `Ipe.Db.Store.Select row` column-projection ADT, the
     /// result of the `StoreSelect` kernel scheme
     /// (`(( Cols a, Cols b ) -> row) -> Joined a b -> Select row`). Its `row`
     /// argument is the projected shape the lambda returns.
-    pub(crate) select_con: Symbol,
+    pub select_con: Symbol,
     /// `"Policy"` — the `Ipe.Db.Store.Policy row` row-security algebra ADT. The
     /// `row` argument is phantom (the runtime `Policy` carries only rule data),
     /// but it ties the accessor's record type to the store's row type in the
     /// `StoreOwnerColumn` / `StoreImmutable` kernel schemes, so `secured`
     /// (`Policy row -> Store row -> …`) pins the policy's columns to the store.
-    pub(crate) policy_con: Symbol,
+    pub policy_con: Symbol,
     /// `"Order"` — the `Ipe.Db.Store.Order` nullary ADT (`Asc | Desc`), the
     /// sort-direction argument of `orderByLeft` / `orderByRight`. It has no
     /// type parameters; the scheme just names the ADT so inference pins the
     /// second argument of each kernel to `Order`.
-    pub(crate) order_con: Symbol,
+    pub order_con: Symbol,
     // ── Ipe.Db.Store.ProjectionTerm / ProjectionOperand ─────────────────────────
     /// `"ProjectionTerm"` — typed representation of a single named-select
     /// projection, backing `selectNamed`. Defined in `ipe_runtime::db` and
     /// exported via a type alias from the Spine. Zero type arguments.
-    pub(crate) projection_term: Symbol,
+    pub projection_term: Symbol,
     /// `"ColumnTerm"` — `ColumnTerm String String` constructor of `ProjectionTerm`
     /// (left-table column, right-table column).
-    pub(crate) column_term: Symbol,
+    pub column_term: Symbol,
     /// `"LiteralTerm"` — `LiteralTerm` nullary constructor of `ProjectionTerm`
     /// (a `?` literal placeholder).
-    pub(crate) literal_term: Symbol,
+    pub literal_term: Symbol,
     /// `"UpperTerm"` — `UpperTerm String` constructor of `ProjectionTerm`
     /// (upper-cased column reference).
-    pub(crate) upper_term: Symbol,
+    pub upper_term: Symbol,
     /// `"LowerTerm"` — `LowerTerm String` constructor of `ProjectionTerm`
     /// (lower-cased column reference).
-    pub(crate) lower_term: Symbol,
+    pub lower_term: Symbol,
     /// `"CoalesceTerm"` — `CoalesceTerm ProjectionOperand ProjectionOperand`
     /// constructor of `ProjectionTerm` (SQL COALESCE of two operands).
-    pub(crate) coalesce_term: Symbol,
+    pub coalesce_term: Symbol,
     /// `"ProjectionOperand"` — companion type for the two operands of `CoalesceTerm`.
     /// Defined in `ipe_runtime::db` alongside `ProjectionTerm`.
-    pub(crate) projection_operand: Symbol,
+    pub projection_operand: Symbol,
     /// `"OperandColumn"` — `OperandColumn String` constructor of `ProjectionOperand`
     /// (a dotted column reference).
-    pub(crate) operand_column: Symbol,
+    pub operand_column: Symbol,
     /// `"OperandLiteral"` — `OperandLiteral` nullary constructor of `ProjectionOperand`
     /// (a `?` literal placeholder).
-    pub(crate) operand_literal: Symbol,
+    pub operand_literal: Symbol,
     // ── Shape opaque app-leaf type constructor symbols ────────────────────────
     /// `"WebApp"` — opaque app handle returned by `Web.app` / `Web.appRouted` /
     /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp`.
-    pub(crate) web_app: Symbol,
+    pub web_app: Symbol,
     /// `"TuiApp"` — opaque app handle returned by `Tui.app`. Nullary;
     /// backed by `ipe_runtime::tea::TuiApp`.
-    pub(crate) tui_app: Symbol,
+    pub tui_app: Symbol,
     /// `"CliApp"` — opaque app handle returned by `Cli.app`. Nullary;
     /// backed by `ipe_runtime::tea::CliApp`.
-    pub(crate) cli_app: Symbol,
+    pub cli_app: Symbol,
     /// The interned module segments `["Ipe", "Db", "Store"]` — the real home of
     /// the `Cond` / `Store` / `Draft` / `Joined` / `Select` / `Policy` / `Order`
     /// ADTs. A kernel scheme returning one of these carries this home so the
     /// lowerer's home-keyed variant lookup finds its emitted enum instead of
     /// treating an unhomed name as an unknown builtin.
-    pub(crate) db_store_home: Vec<Symbol>,
+    pub db_store_home: Vec<Symbol>,
     /// The interned module segments `["Ipe", "Codec"]` — the real home of the
     /// `Codec` ADT.
-    pub(crate) codec_home: Vec<Symbol>,
+    pub codec_home: Vec<Symbol>,
     /// The interned module segments `["Ipe", "Email"]` — the real home of the
     /// `EmailProvider` ADT. The `send` kernel scheme carries this home so a
     /// point-free reference lowers to the emitted enum instead of dropping
     /// through the lowerer's home-keyed variant lookup into the unknown-builtin
     /// internal-compiler-error arm.
-    pub(crate) email_home: Vec<Symbol>,
+    pub email_home: Vec<Symbol>,
 }
 
 impl Builtins {
     #[allow(clippy::too_many_lines)] // declarative intern table — each field listed explicitly for exhaustiveness
-    pub(crate) fn new(interner: &mut Interner) -> DResult<Self> {
+    pub fn new(interner: &mut Interner) -> DResult<Self> {
         Ok(Self {
             int: interner.intern("Int")?,
             float: interner.intern("Float")?,
@@ -975,7 +975,7 @@ impl Builtins {
     /// an empty module path, matching how `from_canon` renders the builtin type
     /// names (`Int` / `Bool` / …) and how the lowerer recognises them by name.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn ctor_schemes(&self) -> Vec<(Symbol, CtorScheme)> {
+    pub fn ctor_schemes(&self) -> Vec<(Symbol, CtorScheme)> {
         let bool_ty = Ty::Con {
             module: Vec::new(),
             name: self.bool,
@@ -1496,7 +1496,7 @@ impl Builtins {
 /// The type discipline a binary operator imposes. Classified once from the
 /// resolved kernel name so the constraint walk doesn't re-borrow the interner.
 #[derive(Clone, Copy)]
-pub(crate) enum BinopClass {
+pub enum BinopClass {
     /// `//`: integer division `Int -> Int -> Int`.
     IntDiv,
     /// `/`: `Float -> Float -> Float` (matches the the backend's float division).
@@ -1528,7 +1528,7 @@ pub(crate) enum BinopClass {
 }
 
 /// Classify a resolved operator kernel name (`add`, `eq`, `and`, …).
-pub(crate) const fn classify_binop(func: &str) -> BinopClass {
+pub const fn classify_binop(func: &str) -> BinopClass {
     match func.as_bytes() {
         b"add" => BinopClass::Num(TyBounds::add()),
         b"sub" => BinopClass::Num(TyBounds::sub()),

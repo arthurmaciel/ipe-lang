@@ -28,7 +28,7 @@ use super::*;
 pub struct UntypedScheme {
     /// The shared, home-module-monomorphic root every same-module reference
     /// (and, pre-discharge, the binding's own `untyped[key]` var) resolves to.
-    pub(crate) root: VarId,
+    pub root: VarId,
     /// Generalized root → synthesized type-variable name.
     pub quantified: BTreeMap<VarId, Symbol>,
 }
@@ -37,12 +37,12 @@ pub struct UntypedScheme {
 /// by [`promote_untyped_boundaries`].
 pub type UntypedSchemes = BTreeMap<(Vec<Symbol>, Symbol), UntypedScheme>;
 
-pub(crate) const COPY_VAR_NODE_LIMIT: u32 = 4_096;
+pub const COPY_VAR_NODE_LIMIT: u32 = 4_096;
 
 /// One step of the iterative [`copy_var`] work stack — the mirror image of
 /// [`ZonkTask`]: instead of reading a settled UF node back into an owned
 /// [`Ty`], it builds a *fresh* UF substructure over it.
-pub(crate) enum CopyVarTask {
+pub enum CopyVarTask {
     Visit(VarId),
     BuildFun,
     BuildCon {
@@ -84,7 +84,7 @@ pub(crate) enum CopyVarTask {
 /// structure has more than [`COPY_VAR_NODE_LIMIT`] nodes;
 /// [`TypeError::StepBudgetExceeded`] if the shared budget is exhausted.
 #[allow(clippy::too_many_lines)] // one task-stack state machine, mirrors `zonk` — splitting would obscure the Visit/Build pairing
-pub(crate) fn copy_var(
+pub fn copy_var(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     var: VarId,
@@ -212,7 +212,7 @@ pub(crate) fn copy_var(
 
 /// The work-stack invariant was violated (only reachable via a compiler bug in
 /// `copy_var` itself, never from input).
-pub(crate) fn copy_var_underflow() -> Diagnostic {
+pub fn copy_var_underflow() -> Diagnostic {
     Diagnostic::CompilerBug {
         where_: STAGE,
         detail: "copy_var result stack underflow".to_owned(),
@@ -229,7 +229,7 @@ pub(crate) fn copy_var_underflow() -> Diagnostic {
 /// generalization *candidates* — the actual quantified set additionally
 /// excludes any root still reachable from a pending deferred obligation (see
 /// callers).
-pub(crate) fn reachable_flex_roots(
+pub fn reachable_flex_roots(
     uf: &mut UnionFind<Content>,
     budget: &mut Budget,
     root: VarId,
@@ -282,7 +282,7 @@ pub(crate) fn reachable_flex_roots(
 /// `promote_untyped_boundaries` run so names stay distinct program-wide (not
 /// required for soundness — each scheme's names only need to be distinct
 /// *within* that scheme — but keeps `IPE_DEBUG_UNTYPED` dumps unambiguous).
-pub(crate) fn mint_synth_symbol(interner: &mut Interner, next: &mut u32) -> DResult<Symbol> {
+pub fn mint_synth_symbol(interner: &mut Interner, next: &mut u32) -> DResult<Symbol> {
     loop {
         let candidate = crate::doc::letters(*next);
         *next = next.saturating_add(1);
@@ -439,7 +439,7 @@ pub fn promote_untyped_boundaries(
 /// open record tail is PRESERVED as `RowTail::Open` (zonk presents every
 /// settled record as closed, which is fine for display but would silently
 /// close a row-polymorphic exported scheme).
-pub(crate) enum ReifyTask {
+pub enum ReifyTask {
     Visit(VarId),
     BuildFun,
     BuildCon {
@@ -605,7 +605,7 @@ pub fn reify_scheme(
 
 /// The work-stack invariant was violated (only reachable via a compiler bug
 /// in `reify_scheme` itself, never from input).
-pub(crate) fn reify_underflow() -> Diagnostic {
+pub fn reify_underflow() -> Diagnostic {
     Diagnostic::CompilerBug {
         where_: STAGE,
         detail: "reify_scheme result stack underflow".to_owned(),
@@ -617,7 +617,7 @@ pub(crate) fn reify_underflow() -> Diagnostic {
 /// `Visit` reads one union-find node and pushes either a leaf result or the
 /// `Build*` task plus its children's `Visit`s; the `Build*` tasks reassemble a
 /// parent [`Ty`] once its children's results sit on the result stack.
-pub(crate) enum ZonkTask {
+pub enum ZonkTask {
     /// Resolve and read back one variable.
     Visit(VarId),
     /// Pop two results (`arg`, then `result`) and push a `Fun`.
@@ -792,7 +792,7 @@ pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DRe
 
 /// The work-stack invariant was violated (only reachable via a compiler bug in
 /// `zonk` itself, never from input).
-pub(crate) fn zonk_underflow() -> Diagnostic {
+pub fn zonk_underflow() -> Diagnostic {
     Diagnostic::CompilerBug {
         where_: STAGE,
         detail: "zonk result stack underflow".to_owned(),
@@ -814,7 +814,7 @@ impl<'a> Builder<'a> {
     /// [`kernel_type_table`] (the salsa Task-9 `kernel_types()` query's
     /// single source of schemes — one code path, so the query can never
     /// drift from what inference actually uses).
-    pub(crate) const fn for_scheme_table(
+    pub const fn for_scheme_table(
         uf: &'a mut UnionFind<Content>,
         interner: &'a Interner,
         builtins: Builtins,

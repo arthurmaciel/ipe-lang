@@ -14,7 +14,7 @@ use core::fmt::Write as _;
 /// (`ipe_lower::lower::is_http_request_shape`) directly here — deferring to
 /// the registry is how this call site stays in sync with that test without
 /// duplicating it.
-pub(crate) const HTTP_REQUEST_FIELDS: &[&str] = &["body", "headers", "method", "redirects", "timeout", "url"];
+pub const HTTP_REQUEST_FIELDS: &[&str] = &["body", "headers", "method", "redirects", "timeout", "url"];
 
 /// the sorted `Ipe.Process.runWith` input record field-name set — a record
 /// literal with exactly these names (and no registered synthesised struct,
@@ -22,28 +22,28 @@ pub(crate) const HTTP_REQUEST_FIELDS: &[&str] = &["body", "headers", "method", "
 /// constructs the runtime `ipe_runtime::system::ProcessRunWithCfg` struct.
 /// Mirrors [`CACHE_CFG_FIELDS`]; kept in sync with
 /// `ipe_lower::lower::PROCESS_RUN_WITH_CFG_FIELDS`.
-pub(crate) const PROCESS_RUN_WITH_CFG_FIELDS: &[&str] = &["args", "command", "cwd", "env"];
+pub const PROCESS_RUN_WITH_CFG_FIELDS: &[&str] = &["args", "command", "cwd", "env"];
 
 /// the sorted `Ipe.Process.runInPty` config field-name set — a record literal
 /// with exactly these names (and no registered synthesised struct, because the
 /// lowerer folded the shape to `IrType::ProcessRunInPtyCfg`) constructs the
 /// runtime `ipe_runtime::system::ProcessRunInPtyCfg` struct. Kept in sync with
 /// `ipe_lower::lower::PROCESS_RUN_IN_PTY_CFG_FIELDS`.
-pub(crate) const PROCESS_RUN_IN_PTY_CFG_FIELDS: &[&str] = &["args", "cols", "command", "cwd", "env", "rows"];
+pub const PROCESS_RUN_IN_PTY_CFG_FIELDS: &[&str] = &["args", "cols", "command", "cwd", "env", "rows"];
 
 /// the sorted `Ipe.Cache.CacheCfg` field-name set — a record literal with
 /// exactly these names (and no registered synthesised struct, because the
 /// lowerer folded the shape to `IrType::CacheCfg`) constructs the runtime
 /// `ipe_runtime::cache::CacheCfg` struct. Mirrors [`HTTP_REQUEST_FIELDS`]; kept
 /// in sync with `ipe_lower::lower::CACHE_CFG_FIELDS`.
-pub(crate) const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
+pub const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
 
 /// the sorted `Ipe.Csv.Csv` field-name set — a record literal with exactly
 /// these names (and no registered synthesised struct, because the lowerer
 /// folded the shape to `IrType::CsvDoc`) constructs the runtime
 /// `ipe_runtime::csv::CsvDoc` struct. Mirrors [`CACHE_CFG_FIELDS`]; kept in
 /// sync with `ipe_lower::lower::CSV_DOC_FIELDS`.
-pub(crate) const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
+pub const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
 
 /// the sorted `Ipe.WebSocket.WebSocketCfg` field-name set — a record
 /// literal with exactly these names (and no registered synthesised struct,
@@ -51,7 +51,7 @@ pub(crate) const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
 /// constructs the runtime `ipe_runtime::ws_client::WsClientCfg` struct. Mirrors
 /// [`CACHE_CFG_FIELDS`]; kept in sync with
 /// `ipe_lower::lower::WEBSOCKET_CFG_FIELD_TYPES`.
-pub(crate) const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "timeout", "url"];
+pub const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "timeout", "url"];
 
 /// the sorted `Ipe.Http.Server.Response` field-name set. A record literal
 /// with exactly these names (and no registered synthesised struct, because the
@@ -60,7 +60,7 @@ pub(crate) const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "t
 /// runtime-only field, `cookies: Vec<String>` (multi-`Set-Cookie` support),
 /// which the Ipê record alias does not expose — so the literal must default it
 /// to `Vec::new()`. Kept in sync with `ipe_lower::lower::SERVER_RESPONSE_FIELD_TYPES`.
-pub(crate) const SERVER_RESPONSE_FIELDS: &[&str] = &["body", "contentType", "headers", "status"];
+pub const SERVER_RESPONSE_FIELDS: &[&str] = &["body", "contentType", "headers", "status"];
 
 /// the sorted `Ipe.Email` record field-name sets. A record literal with exactly
 /// one of these name-sets (and no registered synthesised struct, because the
@@ -71,7 +71,7 @@ pub(crate) const SERVER_RESPONSE_FIELDS: &[&str] = &["body", "contentType", "hea
 /// (soundness note: a genuine `Ipe.Email` literal never gets a registered
 /// struct because the lowerer intercepts it into the `IrType::Email*` fold
 /// first — the same rationale as `CsvDoc`).
-pub(crate) const EMAIL_MESSAGE_FIELDS: &[&str] = &[
+pub const EMAIL_MESSAGE_FIELDS: &[&str] = &[
     "attachments",
     "bcc",
     "cc",
@@ -82,16 +82,16 @@ pub(crate) const EMAIL_MESSAGE_FIELDS: &[&str] = &[
     "textBody",
     "to",
 ];
-pub(crate) const EMAIL_ATTACHMENT_FIELDS: &[&str] = &["content", "filename", "mimeType"];
-pub(crate) const EMAIL_SES_FIELDS: &[&str] = &["key", "region", "secret"];
-pub(crate) const EMAIL_SMTP_FIELDS: &[&str] = &["host", "pass", "port", "user"];
+pub const EMAIL_ATTACHMENT_FIELDS: &[&str] = &["content", "filename", "mimeType"];
+pub const EMAIL_SES_FIELDS: &[&str] = &["key", "region", "secret"];
+pub const EMAIL_SMTP_FIELDS: &[&str] = &["host", "pass", "port", "user"];
 
 /// Emit a record literal `{ x = e1, ... }` as a named struct literal
 /// `RecXY { x: <e1>, ... }`. `depth` is the literal's own IR-nesting level; its
 /// field values are emitted one level deeper. Kept out of the `emit_expr_at`
 /// match (`#[inline(never)]`) so its locals don't inflate the recursive frame.
 #[inline(never)]
-pub(crate) fn emit_record(
+pub fn emit_record(
     ctx: &EmitCtx,
     fields: &[(Symbol, Expr)],
     ty: Option<&IrType>,
@@ -288,7 +288,7 @@ pub fn record_struct_name(
 ///
 /// Kept `#[inline(never)]` for the same frame-size reason as [`emit_record`].
 #[inline(never)]
-pub(crate) fn emit_update(
+pub fn emit_update(
     ctx: &EmitCtx,
     record: &Expr,
     fields: &[(Symbol, Expr)],
@@ -352,7 +352,7 @@ pub(crate) fn emit_update(
 /// helpers build joined by `"; "`; `rustfmt` puts each on its own line. Split on
 /// the separator, re-indent each, and return the block (with its trailing
 /// newline) — a trailing empty segment is skipped.
-pub(crate) fn tail_arm_prelude_lines(prelude: &str, indent: usize) -> DResult<String> {
+pub fn tail_arm_prelude_lines(prelude: &str, indent: usize) -> DResult<String> {
     let pad = indent_of(indent);
     let mut out = String::new();
     for stmt in prelude.split_inclusive("; ") {
