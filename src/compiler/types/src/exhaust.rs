@@ -197,7 +197,10 @@ impl Sigs {
                     .entry(ph.clone())
                     .or_default()
                     .insert(ctor, (ph.clone(), union));
-                ctor_arity.entry(ph.clone()).or_default().insert(ctor, arity);
+                ctor_arity
+                    .entry(ph.clone())
+                    .or_default()
+                    .insert(ctor, arity);
             }
             union_ctors.insert((ph.clone(), union), ctors.clone());
         }
@@ -1103,7 +1106,10 @@ fn missing_heads(roots: &[Head], sigs: &Sigs) -> Vec<UPat> {
             out
         }
         Some(Head::Adt(h, c)) => {
-            let Some(union) = sigs.ctor_to_union.get(h.as_slice()).and_then(|by_ctor| by_ctor.get(c))
+            let Some(union) = sigs
+                .ctor_to_union
+                .get(h.as_slice())
+                .and_then(|by_ctor| by_ctor.get(c))
             else {
                 return vec![UPat::Wild];
             };

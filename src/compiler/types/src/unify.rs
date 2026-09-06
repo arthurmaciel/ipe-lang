@@ -308,8 +308,20 @@ fn unify_nonstructure(
         // A super-typed FLEX meeting a rigid skolem: the rigid adopts the
         // obligations and stays rigid, so the body's super-typed use of an
         // annotated `a` becomes a trait bound on `a` rather than a rejection.
-        (Content::Super { rigid: false, bounds }, Content::Rigid)
-        | (Content::Rigid, Content::Super { rigid: false, bounds }) => uf.union(
+        (
+            Content::Super {
+                rigid: false,
+                bounds,
+            },
+            Content::Rigid,
+        )
+        | (
+            Content::Rigid,
+            Content::Super {
+                rigid: false,
+                bounds,
+            },
+        ) => uf.union(
             ra,
             rb,
             Content::Super {
