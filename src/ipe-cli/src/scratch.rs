@@ -432,6 +432,14 @@ mod tests {
             if path.file_name().and_then(|n| n.to_str()) == Some("scratch.rs") {
                 continue;
             }
+            // A `tests.rs` file is a `#[cfg(test)] mod tests;` unit — entirely
+            // test code, whose `temp_dir()` joins are the exempt test-helper
+            // form. The in-file test-region tracker keys on an inline
+            // `#[cfg(test)]`/`mod tests` marker, which a standalone module file
+            // does not carry, so exempt it by name (as `scratch.rs` is).
+            if path.file_name().and_then(|n| n.to_str()) == Some("tests.rs") {
+                continue;
+            }
             let Ok(source) = std::fs::read_to_string(path) else {
                 continue;
             };
