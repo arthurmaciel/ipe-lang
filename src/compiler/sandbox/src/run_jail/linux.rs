@@ -84,6 +84,19 @@ pub fn netns_jail_available(bwrap: &std::path::Path) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// The read-only binds re-exposing the app binary past the home/tmp tmpfs masks.
+///
+/// Only the app FILE itself is bound, never its parent directory. A user-placed
+/// binary can sit directly in `$HOME` (`~/myapp`) or a bundle unpacked into home,
+/// and the `--tmpfs /home` mask hides it — but binding the whole PARENT would
+/// re-expose that entire tree read-only inside the jail, defeating the mask and
+/// resurfacing masked secrets (e.g. `~/.ssh`) to a network-granted payload. bwrap
+/// binds a regular file at a file target, so the app can exec but never mutate it,
+/// with nothing else in its directory reachable.
+fn app_ro_binds(app: &Path) -> Vec<PathBuf> {
+    vec![app.to_path_buf()]
+}
+
 /// Run the emitted `app` binary inside the run jail described by `profile`,
 /// replacing the current process on success (Unix `exec`).
 ///
@@ -123,15 +136,7 @@ pub fn exec_in_run_jail(
     payload.push(app.as_os_str().to_owned());
     payload.extend(app_args.iter().cloned());
 
-    // Re-expose the app binary's directory read-only past the home/tmp tmpfs
-    // masks (a `CARGO_TARGET_DIR` under `~/.cache` is otherwise hidden). The
-    // binary's *parent* is bound so a relocated dynamic loader path or a
-    // co-located artifact resolves; the read-only bind means the app can exec
-    // it but never mutate it.
-    let mut extra_ro_binds: Vec<PathBuf> = Vec::new();
-    if let Some(app_dir) = app.parent() {
-        extra_ro_binds.push(app_dir.to_path_buf());
-    }
+    let extra_ro_binds = app_ro_binds(app);
 
     let host_env = |k: &str| std::env::var_os(k);
     let argv = run_jail_argv(
@@ -533,4 +538,40 @@ pub fn write_sealed_app_memfd(bytes: &[u8]) -> Result<SealedApp, RunJailDefect> 
         )));
     }
     Ok(sealed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::app_ro_binds;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn app_ro_bind_is_the_file_not_its_parent() {
+        // A user-placed binary directly in home must be re-exposed as the FILE
+        // itself, never as its parent directory: binding the parent would re-expose
+        // all of `$HOME` (including `~/.ssh`) read-only past the `/home` mask.
+        let app = Path::new("/home/alice/myapp");
+        let binds = app_ro_binds(app);
+        assert_eq!(binds, vec![PathBuf::from("/home/alice/myapp")]);
+        // The parent directory must NOT be bound.
+        assert!(
+            !binds.contains(&PathBuf::from("/home/alice")),
+            "the app's parent directory must not be re-exposed: {binds:?}"
+        );
+    }
+
+    #[test]
+    fn app_ro_bind_of_a_binary_at_home_root_does_not_expose_home() {
+        // A bundle unpacked into `$HOME` itself (app parent == the masked root) must
+        // still bind only the file, so the mask over `/home` is not defeated.
+        let app = Path::new("/home/bob/.local/bin/app");
+        let binds = app_ro_binds(app);
+        assert_eq!(binds, vec![PathBuf::from("/home/bob/.local/bin/app")]);
+        for masked in ["/home", "/home/bob", "/home/bob/.local/bin"] {
+            assert!(
+                !binds.contains(&PathBuf::from(masked)),
+                "no ancestor directory may be bound ({masked}): {binds:?}"
+            );
+        }
+    }
 }
