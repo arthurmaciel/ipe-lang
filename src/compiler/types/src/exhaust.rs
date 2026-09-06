@@ -49,6 +49,99 @@ const STAGE: &str = "intern.resolve";
 /// search from fanning out) without losing the common small cases.
 const WITNESS_CAP: usize = 32;
 
+/// Work ceiling for the exhaustiveness analysis of a SINGLE `case`.
+///
+/// Or-pattern row expansion and the usefulness recursion are both worst-case
+/// exponential in pattern breadth (`[True | False]` repeated N times expands to
+/// `2^N` rows), so an adversarial-but-small `case` can otherwise exhaust memory
+/// and abort the process instead of yielding a typed error. Every expanded row
+/// and every usefulness node ticks one unit of this budget; exhausting it fails
+/// closed with [`TypeError::StepBudgetExceeded`] rather than allocating without
+/// bound. The ceiling is generous — a real `case` consumes a few dozen units —
+/// so it never changes the accept/reject verdict of a normal match, only turns
+/// a would-be out-of-memory death into a bounded diagnostic.
+const DEFAULT_EXHAUST_BUDGET: u64 = 2_000_000;
+
+/// Environment override for [`DEFAULT_EXHAUST_BUDGET`], mirroring the solver's
+/// three-mode resolution (unset → default; `0` → unbounded; `N` → absolute).
+const EXHAUST_BUDGET_ENV: &str = "IPE_EXHAUST_BUDGET";
+
+/// Ceiling on the length of a list-literal pattern (`[e0, e1, …]`).
+///
+/// A flat `[e0, …, eN]` pattern desugars to a depth-`N` `Nil | Cons` spine, and
+/// the usefulness walk descends one native recursion frame per spine level. The
+/// per-node work budget bounds breadth but not native-stack depth, so an
+/// otherwise-legal source file with a thousands-long list pattern would overflow
+/// the native stack and abort the process. A list literal wider than this fails
+/// closed with [`TypeError::StepBudgetExceeded`] — a typed limit far below native
+/// stack capacity, well above any list pattern a real program writes by hand.
+const MAX_LIST_PATTERN_LEN: usize = 1024;
+
+/// A decrementing work budget for one `case`'s exhaustiveness analysis.
+///
+/// Each unit of expansion / usefulness work ticks it; reaching zero raises
+/// [`TypeError::StepBudgetExceeded`] carrying the configured `limit` (so the
+/// help line can name the value to raise). A `remaining` of `None` is disabled
+/// (the `IPE_EXHAUST_BUDGET=0` escape hatch). This mirrors the solver's
+/// [`crate::Budget`] so the two guard rails behave identically, but stays a
+/// per-`case` counter so one large module's many small matches never share (and
+/// prematurely exhaust) a single pool.
+struct ExhaustBudget {
+    remaining: Option<u64>,
+    limit: u64,
+}
+
+impl ExhaustBudget {
+    /// A budget with an explicit work cap.
+    const fn with_limit(steps: u64) -> Self {
+        Self {
+            remaining: Some(steps),
+            limit: steps,
+        }
+    }
+
+    /// A disabled (unbounded) budget — never charges.
+    const fn unbounded() -> Self {
+        Self {
+            remaining: None,
+            limit: 0,
+        }
+    }
+
+    /// A fresh per-`case` budget resolved from the environment (unset → default;
+    /// `0` → unbounded; `N` → absolute; malformed → default).
+    fn from_env() -> Self {
+        std::env::var(EXHAUST_BUDGET_ENV).map_or_else(
+            |_| Self::with_limit(DEFAULT_EXHAUST_BUDGET),
+            |raw| match raw.trim().parse::<u64>() {
+                Ok(0) => Self::unbounded(),
+                Ok(n) => Self::with_limit(n),
+                Err(_) => Self::with_limit(DEFAULT_EXHAUST_BUDGET),
+            },
+        )
+    }
+
+    /// Consume `n` units of work.
+    ///
+    /// # Errors
+    /// [`TypeError::StepBudgetExceeded`] when the budget is exhausted, carrying
+    /// the configured `limit`.
+    const fn charge(&mut self, n: u64) -> DResult<()> {
+        if let Some(remaining) = self.remaining.as_mut() {
+            if let Some(next) = remaining.checked_sub(n) {
+                *remaining = next;
+            } else {
+                *remaining = 0;
+                return Err(Diagnostic::Type {
+                    span: Span::DUMMY,
+                    msg: TypeError::StepBudgetExceeded { budget: self.limit },
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A type's nominal identity: its DEFINING module (home) paired with its bare
 /// name [`Symbol`]. Two modules each declaring `type Color` share the bare name
 /// but differ in home, so keying the constructor tables by `(home, name)` —
@@ -60,15 +153,16 @@ type TyId = (Vec<Symbol>, Symbol);
 
 /// Constructor-signature tables, built once per module from its `type` decls.
 struct Sigs {
-    /// Constructor identity `(home, ctor name)` → its owning union's identity
-    /// `(home, union name)`.
-    ctor_to_union: BTreeMap<TyId, TyId>,
+    /// Home module → (constructor name → its owning union's identity). Nesting on
+    /// the home path lets a lookup borrow the home as a `&[Symbol]` slice instead
+    /// of cloning it to build a composite `(home, ctor)` key.
+    ctor_to_union: BTreeMap<Vec<Symbol>, BTreeMap<Symbol, TyId>>,
     /// Union identity `(home, name)` → its constructors in declaration (`index`)
     /// order, each paired with its payload arity.
     union_ctors: BTreeMap<TyId, Vec<(Symbol, usize)>>,
-    /// Constructor identity `(home, ctor name)` → payload arity (the field count
-    /// its pattern binds).
-    ctor_arity: BTreeMap<TyId, usize>,
+    /// Home module → (constructor name → payload arity). Nested for the same
+    /// borrow-not-clone lookup as `ctor_to_union`.
+    ctor_arity: BTreeMap<Vec<Symbol>, BTreeMap<Symbol, usize>>,
 }
 
 impl Sigs {
@@ -77,9 +171,9 @@ impl Sigs {
         extra_unions: &[&canon::Union],
         interner: &mut Interner,
     ) -> DResult<Self> {
-        let mut ctor_to_union = BTreeMap::new();
-        let mut union_ctors = BTreeMap::new();
-        let mut ctor_arity = BTreeMap::new();
+        let mut ctor_to_union: BTreeMap<Vec<Symbol>, BTreeMap<Symbol, TyId>> = BTreeMap::new();
+        let mut union_ctors: BTreeMap<TyId, Vec<(Symbol, usize)>> = BTreeMap::new();
+        let mut ctor_arity: BTreeMap<Vec<Symbol>, BTreeMap<Symbol, usize>> = BTreeMap::new();
 
         // Seed EVERY Prelude-built-in closed union from the ONE shared table
         // (`ipe_canon::builtins`) that canon and lower also consume, so a `case`
@@ -99,8 +193,14 @@ impl Sigs {
         let ph: Vec<Symbol> = Vec::new();
         for (&union, ctors) in &builtins.exhaust_union_ctors {
             for &(ctor, arity) in ctors {
-                ctor_to_union.insert((ph.clone(), ctor), (ph.clone(), union));
-                ctor_arity.insert((ph.clone(), ctor), arity);
+                ctor_to_union
+                    .entry(ph.clone())
+                    .or_default()
+                    .insert(ctor, (ph.clone(), union));
+                ctor_arity
+                    .entry(ph.clone())
+                    .or_default()
+                    .insert(ctor, arity);
             }
             union_ctors.insert((ph.clone(), union), ctors.clone());
         }
@@ -114,8 +214,14 @@ impl Sigs {
             ctors.sort_by_key(|c| c.index);
             let mut list = Vec::with_capacity(ctors.len());
             for c in ctors {
-                ctor_to_union.insert((uhome.clone(), c.name), ukey.clone());
-                ctor_arity.insert((uhome.clone(), c.name), c.arity);
+                ctor_to_union
+                    .entry(uhome.clone())
+                    .or_default()
+                    .insert(c.name, ukey.clone());
+                ctor_arity
+                    .entry(uhome.clone())
+                    .or_default()
+                    .insert(c.name, c.arity);
                 list.push((c.name, c.arity));
             }
             union_ctors.insert(ukey, list);
@@ -135,7 +241,12 @@ impl Sigs {
     fn arity(&self, head: &Head) -> usize {
         match head {
             Head::Tuple(n) => *n,
-            Head::Adt(h, c) => self.ctor_arity.get(&(h.clone(), *c)).copied().unwrap_or(0),
+            Head::Adt(h, c) => self
+                .ctor_arity
+                .get(h.as_slice())
+                .and_then(|by_ctor| by_ctor.get(c))
+                .copied()
+                .unwrap_or(0),
             // Literal heads carry no sub-patterns; the empty-list `[]` (`Nil`) is
             // likewise nullary.
             Head::Bool(_) | Head::Int(_) | Head::Char(_) | Head::Str(_) | Head::Nil => 0,
@@ -198,7 +309,7 @@ enum UPat {
 /// one the hand-written alternatives would produce, the usefulness algorithm's
 /// coverage / redundancy proofs carry over unchanged — no new [`Head`] and no
 /// re-proving.
-fn expand_upats(p: &canon::Pattern_) -> Vec<UPat> {
+fn expand_upats(p: &canon::Pattern_, budget: &mut ExhaustBudget) -> DResult<Vec<UPat>> {
     match p {
         // The unit pattern matches the single value of the unit type, so — like a
         // wildcard, a variable, or a field-pun record — it covers its whole type
@@ -207,28 +318,53 @@ fn expand_upats(p: &canon::Pattern_) -> Vec<UPat> {
         | canon::Pattern_::PVar(_)
         | canon::Pattern_::PUnit
         | canon::Pattern_::PRecord(_) => {
-            vec![UPat::Wild]
+            budget.charge(1)?;
+            Ok(vec![UPat::Wild])
         }
         canon::Pattern_::PCtor {
             home, name, args, ..
-        } => cartesian(args.iter().map(|a| expand_upats(&a.value)).collect())
-            .into_iter()
-            .map(|combo| UPat::Ctor(Head::Adt(home.clone(), *name), combo))
-            .collect(),
+        } => {
+            let mut columns = Vec::with_capacity(args.len());
+            for a in args {
+                columns.push(expand_upats(&a.value, budget)?);
+            }
+            let combos = cartesian(columns, budget)?;
+            Ok(combos
+                .into_iter()
+                .map(|combo| UPat::Ctor(Head::Adt(home.clone(), *name), combo))
+                .collect())
+        }
         canon::Pattern_::PTuple(elems) => {
-            cartesian(elems.iter().map(|e| expand_upats(&e.value)).collect())
+            let mut columns = Vec::with_capacity(elems.len());
+            for e in elems {
+                columns.push(expand_upats(&e.value, budget)?);
+            }
+            let combos = cartesian(columns, budget)?;
+            Ok(combos
                 .into_iter()
                 .map(|combo| UPat::Ctor(Head::Tuple(elems.len()), combo))
-                .collect()
+                .collect())
         }
         // Literal leaves abstract to a zero-arity head of their value.
-        canon::Pattern_::PInt(n) => vec![UPat::Ctor(Head::Int(*n), Vec::new())],
-        canon::Pattern_::PBool(b) => vec![UPat::Ctor(Head::Bool(*b), Vec::new())],
-        canon::Pattern_::PChar(c) => vec![UPat::Ctor(Head::Char(c.clone()), Vec::new())],
-        canon::Pattern_::PStr(s) => vec![UPat::Ctor(Head::Str(s.clone()), Vec::new())],
+        canon::Pattern_::PInt(n) => {
+            budget.charge(1)?;
+            Ok(vec![UPat::Ctor(Head::Int(*n), Vec::new())])
+        }
+        canon::Pattern_::PBool(b) => {
+            budget.charge(1)?;
+            Ok(vec![UPat::Ctor(Head::Bool(*b), Vec::new())])
+        }
+        canon::Pattern_::PChar(c) => {
+            budget.charge(1)?;
+            Ok(vec![UPat::Ctor(Head::Char(c.clone()), Vec::new())])
+        }
+        canon::Pattern_::PStr(s) => {
+            budget.charge(1)?;
+            Ok(vec![UPat::Ctor(Head::Str(s.clone()), Vec::new())])
+        }
         // An alias is transparent for coverage — it matches exactly what its
         // inner pattern matches (and expands the same way).
-        canon::Pattern_::PAlias(inner, _) => expand_upats(&inner.value),
+        canon::Pattern_::PAlias(inner, _) => expand_upats(&inner.value, budget),
         // `List` is the closed two-constructor type `Nil | Cons`. A cons pattern
         // `head :: tail` abstracts to a [`Head::Cons`] over its two sub-patterns;
         // a list literal `[a, b, c]` desugars to the right-nested cons spine
@@ -236,15 +372,33 @@ fn expand_upats(p: &canon::Pattern_) -> Vec<UPat> {
         // judged with the SAME `Nil | Cons` signature. Each sub-position expands,
         // so a nested or-pattern multiplies the rows cartesian-wise.
         canon::Pattern_::PCons(head, tail) => {
-            cartesian(vec![expand_upats(&head.value), expand_upats(&tail.value)])
+            let head_rows = expand_upats(&head.value, budget)?;
+            let tail_rows = expand_upats(&tail.value, budget)?;
+            let combos = cartesian(vec![head_rows, tail_rows], budget)?;
+            Ok(combos
                 .into_iter()
                 .map(|combo| UPat::Ctor(Head::Cons, combo))
-                .collect()
+                .collect())
         }
         canon::Pattern_::PList(elems) => {
+            // The spine this builds is as deep as the list is long, and the
+            // usefulness walk recurses natively once per level. Refuse a spine
+            // deep enough to overflow the native stack, before building it.
+            if elems.len() > MAX_LIST_PATTERN_LEN {
+                return Err(Diagnostic::Type {
+                    span: Span::DUMMY,
+                    msg: TypeError::StepBudgetExceeded {
+                        budget: MAX_LIST_PATTERN_LEN as u64,
+                    },
+                });
+            }
             let mut rows = vec![UPat::Ctor(Head::Nil, Vec::new())];
             for e in elems.iter().rev() {
-                let heads = expand_upats(&e.value);
+                let heads = expand_upats(&e.value, budget)?;
+                // Every product row is charged before allocation, so a breadth
+                // blow-up (a wide list of or-patterns) fails closed rather than
+                // exhausting memory.
+                budget.charge((heads.len() as u64).saturating_mul(rows.len() as u64))?;
                 let mut next = Vec::with_capacity(heads.len() * rows.len());
                 for h in &heads {
                     for tail in &rows {
@@ -253,10 +407,17 @@ fn expand_upats(p: &canon::Pattern_) -> Vec<UPat> {
                 }
                 rows = next;
             }
-            rows
+            Ok(rows)
         }
         // An or-pattern expands to the union of its alternatives' rows.
-        canon::Pattern_::POr(alts) => alts.iter().flat_map(|a| expand_upats(&a.value)).collect(),
+        canon::Pattern_::POr(alts) => {
+            let mut out = Vec::new();
+            for a in alts {
+                out.extend(expand_upats(&a.value, budget)?);
+            }
+            budget.charge(out.len() as u64)?;
+            Ok(out)
+        }
     }
 }
 
@@ -265,9 +426,13 @@ fn expand_upats(p: &canon::Pattern_) -> Vec<UPat> {
 /// in column order. An empty input (a nullary constructor) yields the single
 /// empty combination `[[]]`; an empty column (unreachable — every abstraction
 /// yields ≥ 1 row) short-circuits to no combinations, keeping the function total.
-fn cartesian(columns: Vec<Vec<UPat>>) -> Vec<Vec<UPat>> {
+fn cartesian(columns: Vec<Vec<UPat>>, budget: &mut ExhaustBudget) -> DResult<Vec<Vec<UPat>>> {
     let mut acc: Vec<Vec<UPat>> = vec![Vec::new()];
     for column in columns {
+        // Charge the product size before allocating it, so a combinatorial
+        // blow-up (independent or-patterns across sub-positions) surfaces a
+        // typed limit error instead of an out-of-memory abort.
+        budget.charge((acc.len() as u64).saturating_mul(column.len() as u64))?;
         let mut next = Vec::with_capacity(acc.len() * column.len());
         for prefix in &acc {
             for choice in &column {
@@ -278,7 +443,7 @@ fn cartesian(columns: Vec<Vec<UPat>>) -> Vec<Vec<UPat>> {
         }
         acc = next;
     }
-    acc
+    Ok(acc)
 }
 
 /// Does `p` reference a name this end-of-checking pass cannot analyse soundly
@@ -303,7 +468,10 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
         canon::Pattern_::PCtor {
             home, name, args, ..
         } => {
-            !sigs.ctor_to_union.contains_key(&(home.clone(), *name))
+            !sigs
+                .ctor_to_union
+                .get(home.as_slice())
+                .is_some_and(|by_ctor| by_ctor.contains_key(name))
                 || args
                     .iter()
                     .any(|a| pattern_uses_unknown_ctor(&a.value, sigs))
@@ -548,6 +716,13 @@ fn check_case(
         return Ok(());
     }
 
+    // A per-`case` work budget bounds both the or-pattern row expansion and the
+    // usefulness walk. A crafted-but-small `case` (e.g. many independent
+    // 2-alternative or-patterns whose product is exponential) would otherwise
+    // allocate without ceiling and abort the process; exhausting the budget
+    // instead surfaces IPE-T0003 (StepBudgetExceeded), fail-closed.
+    let mut budget = ExhaustBudget::from_env();
+
     // Redundancy: an arm is redundant when its pattern is not useful against the
     // arms before it (those already cover every value it would match). An
     // or-pattern is checked at ALTERNATIVE granularity — each alternative
@@ -593,10 +768,14 @@ fn check_case(
             other => vec![(br.pat.span, other)],
         };
         for (span, unit_pat) in units {
-            let rows = expand_upats(unit_pat);
-            let alternative_covered = rows
-                .iter()
-                .all(|row| useful(&prior, std::slice::from_ref(row), sigs, 1).is_empty());
+            let rows = expand_upats(unit_pat, &mut budget)?;
+            let mut alternative_covered = true;
+            for row in &rows {
+                if !useful(&prior, std::slice::from_ref(row), sigs, 1, &mut budget)?.is_empty() {
+                    alternative_covered = false;
+                    break;
+                }
+            }
             if !is_product && alternative_covered {
                 // IPE-T0011 is Severity::Warning: collect it but do not abort.
                 warnings.push(Diagnostic::Type {
@@ -616,12 +795,13 @@ fn check_case(
     // when some value escapes every arm. Each witness is a missing pattern. Every
     // branch expands (an or-pattern into one row per alternative), so an arm
     // enumerating a union via `A | B | C` covers all three constructors.
-    let matrix: Vec<Vec<UPat>> = branches
-        .iter()
-        .flat_map(|br| expand_upats(&br.pat.value))
-        .map(|p| vec![p])
-        .collect();
-    let witnesses = useful(&matrix, &[UPat::Wild], sigs, WITNESS_CAP);
+    let mut matrix: Vec<Vec<UPat>> = Vec::new();
+    for br in branches {
+        for p in expand_upats(&br.pat.value, &mut budget)? {
+            matrix.push(vec![p]);
+        }
+    }
+    let witnesses = useful(&matrix, &[UPat::Wild], sigs, WITNESS_CAP, &mut budget)?;
     if !witnesses.is_empty() {
         let mut missing: Vec<Box<str>> = Vec::with_capacity(witnesses.len());
         for w in &witnesses {
@@ -710,17 +890,28 @@ fn check_case(
 ///
 /// `matrix` rows and `q` all share the same width; the recursion peels one
 /// column at a time. The implementation is total (no panic, no raw indexing).
-fn useful(matrix: &[Vec<UPat>], q: &[UPat], sigs: &Sigs, cap: usize) -> Vec<Vec<UPat>> {
+fn useful(
+    matrix: &[Vec<UPat>],
+    q: &[UPat],
+    sigs: &Sigs,
+    cap: usize,
+    budget: &mut ExhaustBudget,
+) -> DResult<Vec<Vec<UPat>>> {
+    // One tick per recursion node bounds the walk's depth AND breadth: a deep
+    // cons spine or a wide complete-signature fan-out each spend proportional
+    // budget, so a pathological matrix fails closed instead of recursing until
+    // the native stack or the allocator gives out.
+    budget.charge(1)?;
     if cap == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let Some((first, rest_q)) = q.split_first() else {
         // Base case: the empty row is useful iff the matrix has no rows.
-        return if matrix.is_empty() {
+        return Ok(if matrix.is_empty() {
             vec![Vec::new()]
         } else {
             Vec::new()
-        };
+        });
     };
 
     match first {
@@ -728,10 +919,10 @@ fn useful(matrix: &[Vec<UPat>], q: &[UPat], sigs: &Sigs, cap: usize) -> Vec<Vec<
             let specialised = specialise(matrix, c, sigs);
             let mut sub_q = args.clone();
             sub_q.extend_from_slice(rest_q);
-            useful(&specialised, &sub_q, sigs, cap)
+            Ok(useful(&specialised, &sub_q, sigs, cap, budget)?
                 .into_iter()
                 .map(|w| rebuild(c, sigs.arity(c), w))
-                .collect()
+                .collect())
         }
         UPat::Wild => {
             let roots = column_heads(matrix);
@@ -743,22 +934,22 @@ fn useful(matrix: &[Vec<UPat>], q: &[UPat], sigs: &Sigs, cap: usize) -> Vec<Vec<
                     let specialised = specialise(matrix, &head, sigs);
                     let mut sub_q = vec![UPat::Wild; arity];
                     sub_q.extend_from_slice(rest_q);
-                    for w in useful(&specialised, &sub_q, sigs, cap - out.len()) {
+                    for w in useful(&specialised, &sub_q, sigs, cap - out.len(), budget)? {
                         out.push(rebuild(&head, arity, w));
                         if out.len() >= cap {
-                            return out;
+                            return Ok(out);
                         }
                     }
                 }
-                out
+                Ok(out)
             } else {
                 // The first column is missing constructors (or has none): drop it
                 // via the default matrix and witness the gap with a missing head
                 // (or a wildcard when the column carries no constructor).
                 let defaulted = default_matrix(matrix);
-                let tails = useful(&defaulted, rest_q, sigs, cap);
+                let tails = useful(&defaulted, rest_q, sigs, cap, budget)?;
                 if tails.is_empty() {
-                    return Vec::new();
+                    return Ok(Vec::new());
                 }
                 let heads = missing_heads(&roots, sigs);
                 let mut out: Vec<Vec<UPat>> = Vec::new();
@@ -769,11 +960,11 @@ fn useful(matrix: &[Vec<UPat>], q: &[UPat], sigs: &Sigs, cap: usize) -> Vec<Vec<
                         row.extend_from_slice(tail);
                         out.push(row);
                         if out.len() >= cap {
-                            return out;
+                            return Ok(out);
                         }
                     }
                 }
-                out
+                Ok(out)
             }
         }
     }
@@ -867,7 +1058,7 @@ fn complete_signature(roots: &[Head], sigs: &Sigs) -> Option<Vec<(Head, usize)>>
             }
         }
         Head::Adt(h, c) => {
-            let union = sigs.ctor_to_union.get(&(h.clone(), *c))?;
+            let union = sigs.ctor_to_union.get(h.as_slice())?.get(c)?;
             let all = sigs.union_ctors.get(union)?;
             // The union's home fixes each missing/present head's identity. All
             // roots in one column share this union (the type checker pins the
@@ -915,7 +1106,11 @@ fn missing_heads(roots: &[Head], sigs: &Sigs) -> Vec<UPat> {
             out
         }
         Some(Head::Adt(h, c)) => {
-            let Some(union) = sigs.ctor_to_union.get(&(h.clone(), *c)) else {
+            let Some(union) = sigs
+                .ctor_to_union
+                .get(h.as_slice())
+                .and_then(|by_ctor| by_ctor.get(c))
+            else {
                 return vec![UPat::Wild];
             };
             let Some(all) = sigs.union_ctors.get(union) else {
@@ -1068,4 +1263,115 @@ fn resolve(interner: &Interner, sym: Symbol) -> DResult<Box<str>> {
             where_: STAGE,
             detail: format!("no backing string for constructor symbol {}", sym.as_raw()),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ipe_diagnostics::Located;
+
+    fn boolp(b: bool) -> canon::Pattern {
+        Located::new(Span::DUMMY, canon::Pattern_::PBool(b))
+    }
+
+    /// `True | False` — a two-alternative or-pattern.
+    fn true_or_false() -> canon::Pattern {
+        Located::new(
+            Span::DUMMY,
+            canon::Pattern_::POr(vec![boolp(true), boolp(false)]),
+        )
+    }
+
+    /// A tuple of `n` independent `True | False` sub-patterns. Its abstraction is
+    /// the cartesian product of the columns, so it expands to `2^n` rows — the
+    /// exact combinatorial blow-up the budget must bound.
+    fn wide_or_tuple(n: usize) -> canon::Pattern_ {
+        canon::Pattern_::PTuple((0..n).map(|_| true_or_false()).collect())
+    }
+
+    #[test]
+    fn pathological_or_expansion_fails_closed_not_hangs() {
+        // A 40-wide product is 2^40 rows — an out-of-memory abort without the
+        // budget. A small budget must turn it into a typed limit error, and it
+        // must do so promptly (charging the product size BEFORE allocating it),
+        // never materialising the rows.
+        let pat = wide_or_tuple(40);
+        let mut budget = ExhaustBudget::with_limit(1_000);
+        let result = expand_upats(&pat, &mut budget);
+        assert!(
+            matches!(
+                result,
+                Err(Diagnostic::Type {
+                    msg: TypeError::StepBudgetExceeded { budget: 1_000 },
+                    ..
+                })
+            ),
+            "pathological or-pattern must yield a bounded StepBudgetExceeded, got Ok={}",
+            result.is_ok()
+        );
+    }
+
+    #[test]
+    fn disabled_budget_expands_pathological_case() {
+        // The `IPE_EXHAUST_BUDGET=0` escape hatch (a `None` remaining) never
+        // charges, so a moderate product still expands rather than erroring —
+        // proving the ceiling is the only thing the trip depends on.
+        let pat = wide_or_tuple(8);
+        let mut budget = ExhaustBudget::unbounded();
+        let rows = expand_upats(&pat, &mut budget).expect("unbounded budget never errors");
+        assert_eq!(rows.len(), 1 << 8, "8-wide product expands to 2^8 rows");
+    }
+
+    /// A list literal `[e0, …, eN]` desugars to a depth-`N` cons spine the
+    /// usefulness walk recurses over natively. A list wider than the dedicated
+    /// depth cap must fail closed with a typed limit error EVEN under an
+    /// unbounded work budget — the cap, not the budget, is what keeps the native
+    /// stack safe. One element past the cap is the boundary that must reject.
+    #[test]
+    fn over_length_list_pattern_is_rejected_even_when_budget_disabled() {
+        let elems: Vec<canon::Pattern> = (0..=MAX_LIST_PATTERN_LEN)
+            .map(|_| Located::new(Span::DUMMY, canon::Pattern_::PAnything))
+            .collect();
+        let pat = canon::Pattern_::PList(elems);
+        let mut budget = ExhaustBudget::unbounded();
+        let result = expand_upats(&pat, &mut budget);
+        assert!(
+            matches!(
+                result,
+                Err(Diagnostic::Type {
+                    msg: TypeError::StepBudgetExceeded { .. },
+                    ..
+                })
+            ),
+            "a list pattern past the depth cap must reject, got Ok={}",
+            result.is_ok()
+        );
+    }
+
+    /// A list literal exactly at the depth cap is still legal — the cap rejects
+    /// only strictly longer spines, so a real (short) list pattern is never
+    /// turned away.
+    #[test]
+    fn at_length_list_pattern_is_accepted() {
+        let elems: Vec<canon::Pattern> = (0..MAX_LIST_PATTERN_LEN)
+            .map(|_| Located::new(Span::DUMMY, canon::Pattern_::PAnything))
+            .collect();
+        let pat = canon::Pattern_::PList(elems);
+        let mut budget = ExhaustBudget::unbounded();
+        assert!(
+            expand_upats(&pat, &mut budget).is_ok(),
+            "a list pattern at the cap must still expand"
+        );
+    }
+
+    #[test]
+    fn normal_pattern_unaffected_by_budget() {
+        // A realistic small pattern expands to a handful of rows and spends only
+        // a trickle of the default budget, so accept/reject is unchanged. A
+        // single `True | False` is two rows.
+        let pat = true_or_false().value;
+        let mut budget = ExhaustBudget::from_env();
+        let rows = expand_upats(&pat, &mut budget).expect("small pattern fits any default budget");
+        assert_eq!(rows.len(), 2, "True | False expands to two rows");
+    }
 }

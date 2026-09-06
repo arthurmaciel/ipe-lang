@@ -598,6 +598,7 @@ wasm-bindgen-test = "0.3"
 
 [lints.clippy]
 # No-runtime-errors gate: a panic vector reached from well-typed code is a bug.
-# The only permitted exceptions are the 3 INFALLIBLE-tagged HMAC #[allow] sites.
+# Exceptions are per-site #[allow] markers carrying IPE-RUST-AUDIT:ACCEPTED,
+# inventoried by tools/panic-scan.
 unwrap_used = "deny"
 expect_used = "deny"

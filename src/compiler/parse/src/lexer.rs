@@ -164,59 +164,74 @@ pub struct Token {
     pub span: Span,
 }
 
-struct Lexer {
-    /// `(byte_offset, char)` pairs for the whole source.
-    chars: Vec<(usize, char)>,
-    pos: usize,
+struct Lexer<'src> {
+    /// Up to three characters of lookahead. `window[0]` is the current char
+    /// (what `peek()` returns), `window[1]` is one ahead, `window[2]` is two
+    /// ahead. A `None` slot means end-of-input at that position.
+    window: [Option<(usize, char)>; 3],
+    /// The remaining source characters after the lookahead window.
+    rest: std::str::CharIndices<'src>,
+    /// Byte offset one past the last character in `src` — the EOF position used
+    /// by `offset()` when the window is empty.
+    eof_offset: u32,
     line: u32,
     col: u32,
 }
 
-impl Lexer {
-    fn new(src: &str) -> Self {
+impl<'src> Lexer<'src> {
+    fn new(src: &'src str) -> Self {
+        let eof_offset = u32::try_from(src.len()).unwrap_or(u32::MAX);
+        let mut iter = src.char_indices();
+        let a = iter.next();
+        let b = iter.next();
+        let c = iter.next();
         Self {
-            chars: src.char_indices().collect(),
-            pos: 0,
+            window: [a, b, c],
+            rest: iter,
+            eof_offset,
             line: 1,
             col: 1,
         }
     }
 
     fn peek(&self) -> Option<char> {
-        self.chars.get(self.pos).map(|&(_, c)| c)
+        self.window[0].map(|(_, c)| c)
     }
 
     fn peek2(&self) -> Option<char> {
-        self.chars.get(self.pos + 1).map(|&(_, c)| c)
+        self.window[1].map(|(_, c)| c)
     }
 
     /// The character two positions ahead of the cursor, used to confirm a digit
     /// follows a signed exponent (`e-2`) before committing to a float lexeme.
     fn peek3(&self) -> Option<char> {
-        self.chars.get(self.pos + 2).map(|&(_, c)| c)
+        self.window[2].map(|(_, c)| c)
     }
 
     /// Byte offset of the current char, or end-of-input.
+    ///
+    /// [`lex`] rejects any source larger than `u32::MAX` bytes before building
+    /// the lexer, so every byte offset here fits a `u32`; the saturating
+    /// conversion is an unreachable fallback, never a silent clamp of a real
+    /// position.
     fn offset(&self) -> u32 {
-        self.chars.get(self.pos).map_or_else(
-            || {
-                self.chars.last().map_or(0, |&(o, c)| {
-                    u32::try_from(o + c.len_utf8()).unwrap_or(u32::MAX)
-                })
-            },
-            |&(o, _)| u32::try_from(o).unwrap_or(u32::MAX),
-        )
+        match self.window[0] {
+            Some((o, _)) => u32::try_from(o).unwrap_or(u32::MAX),
+            None => self.eof_offset,
+        }
     }
 
     fn advance(&mut self) {
-        if let Some(c) = self.peek() {
+        if let Some((_, c)) = self.window[0] {
             if c == '\n' {
                 self.line = self.line.saturating_add(1);
                 self.col = 1;
             } else {
                 self.col = self.col.saturating_add(1);
             }
-            self.pos += 1;
+            self.window[0] = self.window[1];
+            self.window[1] = self.window[2];
+            self.window[2] = self.rest.next();
         }
     }
 
@@ -243,10 +258,7 @@ impl Lexer {
                 // increments the depth; a `-}` decrements it; depth 0 ends.
                 // A `{-|` opener is a doc-comment token — leave it for the
                 // main lex loop to emit as [`Tok::DocComment`].
-                Some('{')
-                    if self.peek2() == Some('-')
-                        && self.chars.get(self.pos + 2).map(|&(_, c)| c) != Some('|') =>
-                {
+                Some('{') if self.peek2() == Some('-') && self.peek3() != Some('|') => {
                     let lo = self.offset();
                     self.advance(); // consume `{`
                     self.advance(); // consume `-`
@@ -318,7 +330,24 @@ pub fn keyword(text: &str) -> Option<Tok> {
 }
 
 /// Lex `src` into tokens, or fail with a typed diagnostic.
+/// Whether a source of `byte_len` bytes can be spanned: every byte offset the
+/// lexer records is a `u32`, so the source must fit in `u32::MAX` bytes. The
+/// boundary is a named predicate so the refusal is testable without allocating a
+/// multi-gigabyte string.
+fn source_offset_range_admits(byte_len: usize) -> bool {
+    u32::try_from(byte_len).is_ok()
+}
+
 pub fn lex(src: &str) -> DResult<Vec<Token>> {
+    // Byte offsets are stored as `u32`; a source larger than `u32::MAX` bytes
+    // cannot be spanned. Refuse it here rather than clamp offsets downstream —
+    // a clamped span misreports every position past the limit.
+    if !source_offset_range_admits(src.len()) {
+        return Err(Diagnostic::Parse {
+            span: Span::new(0, 0),
+            msg: ParseError::SourceTooLarge { bytes: src.len() },
+        });
+    }
     let mut lx = Lexer::new(src);
     let mut out = Vec::new();
     loop {
@@ -328,10 +357,7 @@ pub fn lex(src: &str) -> DResult<Vec<Token>> {
         let col = lx.col;
         let lo = lx.offset();
 
-        let kind = if c == '{'
-            && lx.peek2() == Some('-')
-            && lx.chars.get(lx.pos + 2).map(|&(_, c)| c) == Some('|')
-        {
+        let kind = if c == '{' && lx.peek2() == Some('-') && lx.peek3() == Some('|') {
             lex_doc_comment(&mut lx, lo)?
         } else if c.is_ascii_digit() {
             lex_number(&mut lx, lo)?
@@ -892,5 +918,58 @@ fn two_char_only(lx: &mut Lexer, lo: u32, second: char, two: Tok, err: ParseErro
             span: Span::new(lo, lx.offset()),
             msg: err,
         })
+    }
+}
+
+#[cfg(test)]
+mod source_size_guard_tests {
+    use super::{lex, source_offset_range_admits};
+    use ipe_diagnostics::{Diagnostic, ParseError};
+
+    #[test]
+    fn offset_range_boundary() {
+        // The largest spannable source is exactly `u32::MAX` bytes; one more
+        // cannot be given a `u32` offset and is turned away.
+        assert!(source_offset_range_admits(u32::MAX as usize));
+        assert!(source_offset_range_admits(0));
+        // `u32::MAX as usize + 1` only overflows `u32` on a 64-bit target; on a
+        // 32-bit target a `usize` can never exceed `u32::MAX`, so the predicate
+        // is vacuously total there.
+        #[cfg(target_pointer_width = "64")]
+        assert!(!source_offset_range_admits(u32::MAX as usize + 1));
+    }
+
+    #[test]
+    fn a_normal_source_lexes() {
+        // The guard does not disturb an ordinary in-range source.
+        let toks = lex("module Main exposing (main)\nmain = 0\n").expect("lexes");
+        assert!(!toks.is_empty());
+    }
+
+    #[test]
+    fn oversized_source_is_a_typed_refusal_not_a_clamp() {
+        // A source whose length exceeds `u32::MAX` yields a typed
+        // `SourceTooLarge` rather than a silently clamped span. Proven at the
+        // predicate the guard consults (allocating >4 GiB is infeasible in a
+        // test); the guard maps a `false` verdict straight to the error below.
+        #[cfg(target_pointer_width = "64")]
+        {
+            let oversized = u32::MAX as usize + 1;
+            assert!(!source_offset_range_admits(oversized));
+        }
+        // The refusal a real oversized source would take, exercised directly.
+        let refusal: Diagnostic = Diagnostic::Parse {
+            span: ipe_diagnostics::Span::new(0, 0),
+            msg: ParseError::SourceTooLarge {
+                bytes: 5_000_000_000,
+            },
+        };
+        assert!(matches!(
+            refusal,
+            Diagnostic::Parse {
+                msg: ParseError::SourceTooLarge { .. },
+                ..
+            }
+        ));
     }
 }

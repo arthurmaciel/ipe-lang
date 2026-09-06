@@ -398,6 +398,24 @@ fn parse_prose(msg: &ParseError) -> String {
         ParseError::MissingDocString { name } => {
             format!("`{name}` is exported but has no doc-string.")
         }
+        ParseError::AnnotationWithoutBinding { name } => {
+            format!(
+                "This `{name} : …` type annotation has no matching `{name} = …` \
+                 definition. Without a binding to attach to, the type is discarded."
+            )
+        }
+        ParseError::DuplicateAnnotation { name } => {
+            format!(
+                "`{name}` has more than one type annotation. A value can carry only \
+                 one declared type."
+            )
+        }
+        ParseError::SourceTooLarge { bytes } => {
+            format!(
+                "this source file is {bytes} bytes, larger than I can compile — a file \
+                 must fit in a 32-bit byte offset (under 4 GiB)."
+            )
+        }
         ParseError::Unexpected => "I couldn't make sense of this part of the file.".to_string(),
     }
 }
@@ -530,6 +548,19 @@ fn name_prose(msg: &NameError) -> String {
                  renders and where it runs doesn't include this module.",
                 r.module, r.placement,
             )
+        }
+        NameError::RustNameFold {
+            first,
+            second,
+            rust_name,
+            kind,
+        } => format!(
+            "Two different {} — `{first}` and `{second}` — end up with the same \
+             generated name `{rust_name}`, so I can't emit them both.",
+            kind.noun(),
+        ),
+        NameError::DuplicatePatternBinder { name, .. } => {
+            format!("`{name}` is bound twice in the same pattern, so I don't know which you mean.")
         }
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
@@ -1315,10 +1346,17 @@ fn parse_label(msg: &ParseError) -> Option<String> {
             };
             Some(detail)
         }
+        ParseError::AnnotationWithoutBinding { .. } => {
+            Some("this annotation has no matching definition".to_string())
+        }
+        ParseError::DuplicateAnnotation { .. } => {
+            Some("this name is already annotated above".to_string())
+        }
         ParseError::Unexpected
         | ParseError::TooDeep
         | ParseError::SteplessDo
         | ParseError::DocOnUnexported { .. }
+        | ParseError::SourceTooLarge { .. }
         | ParseError::MissingDocString { .. } => None,
     }
 }
@@ -1558,7 +1596,14 @@ fn name_label(msg: &NameError) -> Option<String> {
                  placements"
             ))
         }
-        NameError::Unknown => None,
+        // `RustNameFold`'s span is always DUMMY (the IR carries none), so a label
+        // never reaches a caret; the fix rides the help note instead (see
+        // `name_help`), which renders with or without a snippet — and `None` here
+        // also avoids duplicating that note in the snippet-free `plain_message`.
+        NameError::DuplicatePatternBinder { .. } => {
+            Some("this name is already bound in this pattern".to_string())
+        }
+        NameError::RustNameFold { .. } | NameError::Unknown => None,
     }
 }
 

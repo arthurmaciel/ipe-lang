@@ -98,11 +98,6 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
     ),
     (
         "refusal-tested",
-        "IPE-L0106",
-        "top-level function signature gate not yet reached by any constant assertion or wire literal",
-    ),
-    (
-        "refusal-tested",
         "IPE-L0110",
         "partial application gate not yet reached by any constant assertion or wire literal",
     ),
@@ -202,6 +197,11 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
         "IPE-N0045",
         "runtime shape selection gate not yet reached by any constant assertion or wire literal",
     ),
+    (
+        "refusal-tested",
+        "IPE-N0048",
+        "the injective name fold disambiguates colliding Rust names, so N0048 fires only when every suffix up to the 1,000,000 ceiling is taken — driving it needs ~1M colliding definitions, impractical in the suite",
+    ),
     // ── IPE-P#### (parse) ────────────────────────────────────────────────────
     (
         "refusal-tested",
@@ -217,6 +217,11 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
         "refusal-tested",
         "IPE-P0067",
         "exported binding has no doc-string is a warning (not a hard rejection); needs a warning-surface test",
+    ),
+    (
+        "refusal-tested",
+        "IPE-P0070",
+        "source-too-large refusal fires only above u32::MAX bytes; driving it needs a >4 GiB source, impractical in the suite",
     ),
     // ── IPE-T#### (type) ────────────────────────────────────────────────────
     (

@@ -186,6 +186,12 @@ code! {
     IPE_P0066 = "IPE-P0066", "doc-string on a non-exported binding is unreachable", "IPE-P0066";
     /// exported binding has no doc-string — opt-in lint (warning)
     IPE_P0067 = "IPE-P0067", "exported binding has no doc-string", "IPE-P0067";
+    /// type annotation has no matching value binding
+    IPE_P0068 = "IPE-P0068", "type annotation has no matching value binding", "IPE-P0068";
+    /// duplicate type annotation for one name
+    IPE_P0069 = "IPE-P0069", "duplicate type annotation for one name", "IPE-P0069";
+    /// source exceeds the addressable span range (u32 byte offsets)
+    IPE_P0070 = "IPE-P0070", "source file is too large to compile", "IPE-P0070";
 
     // -----------------------------------------------------------------------
     // Name resolution (IPE-N####)
@@ -283,6 +289,12 @@ code! {
     /// a standard-library module is imported in a shape × runtime placement the
     /// library single-source-of-truth table does not admit
     IPE_N0047 = "IPE-N0047", "this standard-library module is not available in this shape × runtime placement", "IPE-N0047";
+    /// two distinct Ipê definitions mangle to one generated Rust name, which
+    /// would emit two Rust items under one identifier (E0428) — reported with
+    /// both Ipê names and the shared Rust name so the fix is a rename
+    IPE_N0048 = "IPE-N0048", "two definitions fold to one generated Rust name", "IPE-N0048";
+    /// a pattern binds the same variable name more than once
+    IPE_N0049 = "IPE-N0049", "a pattern binds the same name twice", "IPE-N0049";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)

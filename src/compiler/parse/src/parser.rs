@@ -73,6 +73,17 @@ enum Decl {
     Foreign(Located<ForeignDecl>),
 }
 
+/// A standalone type annotation awaiting its value binding, tracked by
+/// [`Parser::assemble`] so orphans and duplicates can be rejected rather than
+/// silently dropped.
+struct Annotation {
+    name: Symbol,
+    ty: Located<TypeAnnotation>,
+    doc: Option<DocString>,
+    /// Set once a value binding of the same name claims this annotation.
+    consumed: bool,
+}
+
 /// Map a concrete lexer token to its payload-free [`TokenKind`] category — the
 /// "found" shape a [`ParseError::UnexpectedToken`] reports.
 const fn tok_kind(t: &Tok) -> TokenKind {
@@ -189,14 +200,24 @@ impl<'a> Parser<'a> {
     /// Consume the next token. On end-of-input the error names `construct`, the
     /// enclosing grammar production that still required more tokens.
     fn bump(&mut self, construct: Construct) -> DResult<Token> {
-        let tok = self
-            .toks
-            .get(self.pos)
-            .cloned()
-            .ok_or_else(|| Diagnostic::Parse {
+        // Move the token out of the Vec without shifting elements — the slot is
+        // never read again because `pos` only advances. `get_mut` returning
+        // `None` is end-of-input.
+        let Some(slot) = self.toks.get_mut(self.pos) else {
+            return Err(Diagnostic::Parse {
                 span: self.eof_err_span(),
                 msg: ParseError::UnexpectedEof { construct },
-            })?;
+            });
+        };
+        let tok = std::mem::replace(
+            slot,
+            Token {
+                kind: Tok::Underscore,
+                line: 0,
+                col: 0,
+                span: Span::DUMMY,
+            },
+        );
         self.pos += 1;
         Ok(tok)
     }
@@ -371,8 +392,9 @@ impl<'a> Parser<'a> {
         }
 
         let header_span = Self::span_merge(module_tok.span, name.span);
-        let (values, unions, aliases, foreigns) = Self::assemble(decls);
+        let (values, unions, aliases, foreigns) = self.assemble(decls)?;
         Ok(Module {
+            module_kw: module_tok.span,
             name,
             exposing: Located::new(header_span, exposing),
             imports,
@@ -385,31 +407,53 @@ impl<'a> Parser<'a> {
 
     /// Split decls into values (with annotations attached), unions, aliases,
     /// and foreign FFI declarations.
-    fn assemble(decls: Vec<Decl>) -> AssembledDecls {
+    ///
+    /// Every standalone `name : T` annotation must attach to exactly one value
+    /// binding of the same `name`. A second annotation for a name is a
+    /// duplicate ([`ParseError::DuplicateAnnotation`]); an annotation left
+    /// unattached once all values are processed is an orphan
+    /// ([`ParseError::AnnotationWithoutBinding`]). Both are rejected rather
+    /// than silently dropped, so a typo like `nmae : Int` cannot discard the
+    /// author's stated type.
+    fn assemble(&self, decls: Vec<Decl>) -> DResult<AssembledDecls> {
         let mut unions = Vec::new();
         let mut aliases = Vec::new();
         let mut foreigns = Vec::new();
-        let mut annotations: Vec<(Symbol, Located<TypeAnnotation>, Option<DocString>)> = Vec::new();
+        // One annotation slot per name; `consumed` flips when a value binds it.
+        let mut annotations: Vec<Annotation> = Vec::new();
         let mut values = Vec::new();
         for d in decls {
             match d {
                 Decl::Union(u) => unions.push(u),
                 Decl::Alias(a) => aliases.push(a),
                 Decl::Foreign(f) => foreigns.push(f),
-                Decl::Annotation(name, ty, doc) => annotations.push((name, ty, doc)),
+                Decl::Annotation(name, ty, doc) => {
+                    if annotations.iter().any(|a| a.name == name) {
+                        return Err(Self::duplicate_annotation(ty.span, self.symbol_text(name)));
+                    }
+                    annotations.push(Annotation {
+                        name,
+                        ty,
+                        doc,
+                        consumed: false,
+                    });
+                }
                 Decl::Value {
                     name,
                     patterns,
                     body,
                     doc,
                 } => {
-                    let matched_ann = annotations.iter().rev().find(|(n, _, _)| *n == name.value);
-                    let type_annotation = matched_ann.map(|(_, ty, _)| ty.clone());
+                    let matched = annotations.iter_mut().find(|a| a.name == name.value);
+                    let type_annotation = matched.as_ref().map(|a| a.ty.clone());
                     // When the value has no inline doc but a preceding
                     // annotation carried one (the `{-| … -}\nname : T\nname
                     // = …` pattern), inherit the annotation's doc.
                     let effective_doc =
-                        doc.or_else(|| matched_ann.and_then(|(_, _, ann_doc)| ann_doc.clone()));
+                        doc.or_else(|| matched.as_ref().and_then(|a| a.doc.clone()));
+                    if let Some(a) = matched {
+                        a.consumed = true;
+                    }
                     let span = name.span;
                     values.push(Located::new(
                         span,
@@ -424,30 +468,71 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        (values, unions, aliases, foreigns)
+        if let Some(orphan) = annotations.iter().find(|a| !a.consumed) {
+            return Err(Self::orphan_annotation(
+                orphan.ty.span,
+                self.symbol_text(orphan.name),
+            ));
+        }
+        Ok((values, unions, aliases, foreigns))
+    }
+
+    /// The source text of `sym`, or a placeholder when it is somehow
+    /// un-interned (unreachable for a symbol the parser itself minted).
+    fn symbol_text(&self, sym: Symbol) -> Box<str> {
+        self.interner.resolve(sym).unwrap_or("?").into()
+    }
+
+    const fn duplicate_annotation(span: Span, name: Box<str>) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::DuplicateAnnotation { name },
+        }
+    }
+
+    const fn orphan_annotation(span: Span, name: Box<str>) -> Diagnostic {
+        Diagnostic::Parse {
+            span,
+            msg: ParseError::AnnotationWithoutBinding { name },
+        }
     }
 
     /// The module name in the header: a single (possibly dotted) identifier.
     /// A missing or non-identifier name is a malformed-header defect.
     fn parse_module_name(&mut self) -> DResult<Located<Vec<Symbol>>> {
-        let Some(tok) = self.peek().cloned() else {
-            return Err(Self::malformed_header(
-                self.eof_err_span(),
-                HeaderDefect::MissingName,
-            ));
-        };
-        let Tok::Ident(text) = &tok.kind else {
-            return Err(Self::malformed_header(
-                tok.span,
-                HeaderDefect::NameNotIdentifier,
-            ));
-        };
-        self.pos += 1; // consume the name token (already cloned above)
-        let segs = text
-            .split('.')
-            .map(|s| self.interner.intern(s))
-            .collect::<DResult<Vec<Symbol>>>()?;
-        Ok(Located::new(tok.span, segs))
+        // Validate via peek before consuming, so errors can reference the right span.
+        match self.peek() {
+            None => {
+                return Err(Self::malformed_header(
+                    self.eof_err_span(),
+                    HeaderDefect::MissingName,
+                ));
+            }
+            Some(t) if !matches!(t.kind, Tok::Ident(_)) => {
+                return Err(Self::malformed_header(
+                    t.span,
+                    HeaderDefect::NameNotIdentifier,
+                ));
+            }
+            Some(_) => {}
+        }
+        let tok = self.bump(Construct::ModuleHeader)?;
+        let tok_span = tok.span;
+        // peek() confirmed Ident above; extract the text by value.
+        if let Tok::Ident(text) = tok.kind {
+            let segs = text
+                .split('.')
+                .map(|s| self.interner.intern(s))
+                .collect::<DResult<Vec<Symbol>>>()?;
+            Ok(Located::new(tok_span, segs))
+        } else {
+            // peek() and bump() are sequential in a single-threaded parser;
+            // reaching this branch would be a compiler bug, not a user error.
+            Err(Diagnostic::CompilerBug {
+                where_: "ipe_parse::parse_module_name",
+                detail: "token changed between peek and bump".to_owned(),
+            })
+        }
     }
 
     /// A dotted import name, e.g. `Ipe.String`.
@@ -620,7 +705,7 @@ impl<'a> Parser<'a> {
 
     fn parse_import(&mut self) -> DResult<Import> {
         // The caller has already peeked `import`.
-        self.bump(Construct::ModuleHeader)?;
+        let import_tok = self.bump(Construct::ModuleHeader)?;
         let name = self.parse_dotted_name()?;
         let alias = if self.peek_kind() == Some(&Tok::As) {
             self.bump(Construct::ModuleHeader)?;
@@ -642,6 +727,7 @@ impl<'a> Parser<'a> {
             Located::new(name.span, Exposing::List(Vec::new()))
         };
         Ok(Import {
+            import_kw: import_tok.span,
             name,
             alias,
             exposing,
@@ -891,6 +977,7 @@ impl<'a> Parser<'a> {
         Ok(Located::new(
             span,
             Union {
+                type_kw: type_tok.span,
                 name,
                 vars,
                 ctors,
@@ -1420,25 +1507,23 @@ impl<'a> Parser<'a> {
             return self.parse_lambda(threshold, depth + 1);
         }
         let tok = self.bump(Construct::Expression)?;
-        match &tok.kind {
-            Tok::LParen => self.parse_paren_or_tuple(tok.span, depth + 1),
-            Tok::LBrace => self.parse_record(tok.span, depth + 1),
-            Tok::LBracket => self.parse_list(tok.span, depth + 1),
-            Tok::Int(n) => Ok(Located::new(tok.span, Expr_::Int(*n))),
-            Tok::Float(f) => Ok(Located::new(tok.span, Expr_::Float(*f))),
-            Tok::Str(s) => Ok(Located::new(tok.span, Expr_::Str(s.clone()))),
+        let span = tok.span;
+        match tok.kind {
+            Tok::LParen => self.parse_paren_or_tuple(span, depth + 1),
+            Tok::LBrace => self.parse_record(span, depth + 1),
+            Tok::LBracket => self.parse_list(span, depth + 1),
+            Tok::Int(n) => Ok(Located::new(span, Expr_::Int(n))),
+            Tok::Float(f) => Ok(Located::new(span, Expr_::Float(f))),
+            // String payloads move directly into the AST node — no secondary copy.
+            Tok::Str(s) => Ok(Located::new(span, Expr_::Str(s))),
             // Triple-quoted strings carry raw content; the canonicaliser desugars
             // `{{expr}}` interpolation at name-resolution time. Mirrors the the compiler
             // parser's `MultiLine str -> return (Src.MultilineStr str)` arm.
-            Tok::TripleStr { raw, anchor } => Ok(Located::new(
-                tok.span,
-                Expr_::MultilineStr {
-                    raw: raw.clone(),
-                    anchor: *anchor,
-                },
-            )),
-            Tok::Char(c) => Ok(Located::new(tok.span, Expr_::Char(c.clone()))),
-            Tok::Minus => self.parse_negative_literal(tok.span, threshold, depth),
+            Tok::TripleStr { raw, anchor } => {
+                Ok(Located::new(span, Expr_::MultilineStr { raw, anchor }))
+            }
+            Tok::Char(c) => Ok(Located::new(span, Expr_::Char(c))),
+            Tok::Minus => self.parse_negative_literal(span, threshold, depth),
             Tok::Ident(text) => {
                 // `path "…"` — a contextual path literal. `path` is only
                 // special when immediately followed (in the same layout block)
@@ -1450,20 +1535,28 @@ impl<'a> Parser<'a> {
                 {
                     let str_tok = self.bump(Construct::Expression)?;
                     if let Tok::Str(raw) = str_tok.kind {
-                        let span = Self::span_merge(tok.span, str_tok.span);
-                        return Ok(Located::new(span, Expr_::PathLit(raw)));
+                        let merged = Self::span_merge(span, str_tok.span);
+                        return Ok(Located::new(merged, Expr_::PathLit(raw)));
                     }
                 }
-                let expr = self.ident_expr(text, tok.span)?;
-                Ok(Located::new(tok.span, expr))
+                let expr = self.ident_expr(&text, span)?;
+                Ok(Located::new(span, expr))
             }
             // A leading `.field` in atom position is the first-class accessor — a
             // value of type `{ r | field : a } -> a`. It desugars here to the
             // getter lambda `\<fresh> -> <fresh>.field`, reusing the ordinary
             // record-access path (deferred field access + monomorphic pinning) so
             // no new type/canon/backend node is needed.
-            Tok::Dot => self.parse_field_accessor(tok.span, depth),
-            _ => Err(Self::unexpected_token(&tok, &[Expected::Expression])),
+            Tok::Dot => self.parse_field_accessor(span, depth),
+            kind => Err(Self::unexpected_token(
+                &Token {
+                    kind,
+                    line: 0,
+                    col: 0,
+                    span,
+                },
+                &[Expected::Expression],
+            )),
         }
     }
 
@@ -1478,8 +1571,17 @@ impl<'a> Parser<'a> {
             return Err(self.too_deep(Construct::Expression));
         }
         let tok = self.bump(Construct::Expression)?;
-        let Tok::Ident(text) = &tok.kind else {
+        let tok_span = tok.span;
+        // Validate before destructuring so the error can carry the found kind.
+        if !matches!(tok.kind, Tok::Ident(_)) {
             return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
+        }
+        // The `matches!` guard above ensures this arm is always taken.
+        let Tok::Ident(text) = tok.kind else {
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_parse::parse_field_accessor",
+                detail: "token kind changed after Ident check".to_owned(),
+            });
         };
         // The synthesised parameter. Its name need only be a valid emitted Rust
         // identifier: the parameter is the innermost binder of this lambda, so the
@@ -1492,9 +1594,8 @@ impl<'a> Parser<'a> {
         // Each field of a dotted accessor `.a.b` gets a distinct sub-span via
         // the shared helper, so no two Access nodes share a `(module, span)`
         // type-region key.
-        let text = text.clone();
-        body = self.build_access_chain(body, tok.span, &text)?;
-        let span = Self::span_merge(dot_span, tok.span);
+        body = self.build_access_chain(body, tok_span, &text)?;
+        let span = Self::span_merge(dot_span, tok_span);
         Ok(Located::new(
             span,
             Expr_::Lambda(vec![param], Box::new(body)),
@@ -1565,9 +1666,10 @@ impl<'a> Parser<'a> {
     ///   `negate 5`.
     ///
     /// * **Adjacent non-literal atom** (`-x`, `-(e)`, `-f x`) — desugared at
-    ///   parse time to `Call(VarLocal("negate"), [e])`, matching the canonical
-    ///   Elm / Ipê desugar path.  This closes the IPE-P0001 that 37-composite-
-    ///   live-shop hit on `if cents < 0 then -cents else cents` (State.ipe:156).
+    ///   parse time to `Call(Basics.negate, [e])`. The callee is the QUALIFIED
+    ///   `Basics.negate` reference, which resolves through the module catalog to
+    ///   the `Basics_negate` kernel and is unshadowable, so a user binding named
+    ///   `negate` never captures the unary-minus operator.
     ///
     /// * **Non-adjacent** (`- 5`, `- x`) — the the compiler parser's `exprAtom_`
     ///   has no leading `spaces` call after consuming `-`, so a space before the
@@ -1611,16 +1713,21 @@ impl<'a> Parser<'a> {
         }
 
         // ── Attempt 2: adjacent non-literal atom → `negate(e)` ──────────────
-        // Port of the the compiler `_` branch: parse the sub-atom immediately
-        // following `-` and desugar to `Call(VarLocal("negate"), [e])`.
-        // Adjacency check mirrors the the compiler `exprAtom_` having no leading
-        // `spaces` call after the `-`: a space before the operand would cause
-        // the recursive atom parse to fail on the space character (consumed
-        // error). The check uses byte-span adjacency: `t.span.lo == minus_span.hi`.
+        // Parse the sub-atom immediately following `-` and desugar to
+        // `Call(Basics.negate, [e])`. The callee is a QUALIFIED `Basics.negate`
+        // reference, never a bare `negate` name: qualified references resolve
+        // through the module catalog to the `Basics_negate` kernel and cannot be
+        // captured by a user binding named `negate`, so `-x` always means
+        // arithmetic negation regardless of names in scope.
+        //
+        // Adjacency check: a space before the operand would cause the recursive
+        // atom parse to fail on the space character (consumed error). The check
+        // uses byte-span adjacency: `t.span.lo == minus_span.hi`.
         let is_adjacent = self.peek().is_some_and(|t| t.span.lo == minus_span.hi);
         if is_adjacent {
+            let basics_sym = self.intern("Basics")?;
             let negate_sym = self.intern("negate")?;
-            let negate_expr = Located::new(minus_span, Expr_::VarLocal(negate_sym));
+            let negate_expr = Located::new(minus_span, Expr_::VarQual(basics_sym, negate_sym));
             let sub_expr = self.parse_atom_postfix(threshold, depth + 1)?;
             let call_span = Self::span_merge(minus_span, sub_expr.span);
             return Ok(Located::new(
