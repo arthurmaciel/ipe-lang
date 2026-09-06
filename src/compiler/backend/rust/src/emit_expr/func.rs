@@ -15,7 +15,7 @@ use core::fmt::Write as _;
 /// fail-closed walker: a stray `TailLoop`/`TailRecur` reaching it routes to the
 /// `CompilerBug` arm (never a panic, never a silent swallow).
 #[inline(never)]
-pub fn emit_expr_tail(
+pub(crate) fn emit_expr_tail(
     ctx: &EmitCtx,
     expr: &Expr,
     indent: usize,
@@ -142,7 +142,7 @@ pub fn emit_expr_tail(
 /// one level deeper. Kept out of the `emit_expr_at` match (`#[inline(never)]`)
 /// so its `Vec`/`String` locals don't inflate the recursive frame.
 #[inline(never)]
-pub fn emit_apply(
+pub(crate) fn emit_apply(
     ctx: &EmitCtx,
     func: &Expr,
     args: &[Expr],
@@ -284,7 +284,7 @@ pub fn wants_arc_ctor(ty: &IrType) -> bool {
 }
 
 #[inline(never)]
-pub fn emit_func_value(
+pub(crate) fn emit_func_value(
     ctx: &EmitCtx,
     callee: &Callee,
     ty: &IrType,
@@ -364,7 +364,7 @@ pub fn emit_lambda_unboxed(
 /// out of the `emit_expr_at` match (`#[inline(never)]`) for the same frame-size
 /// reason as [`emit_record`] / [`emit_update`].
 #[inline(never)]
-pub fn emit_lambda(
+pub(crate) fn emit_lambda(
     ctx: &EmitCtx,
     params: &[(Symbol, IrType)],
     ret: &IrType,
@@ -413,7 +413,7 @@ pub fn emit_lambda(
 /// runtime's existing `ServerHandler` / `WsServerCfg` Arc-callback shapes
 /// (`emit_types.rs`) at the type-string level.
 #[inline(never)]
-pub fn emit_shared_lambda(
+pub(crate) fn emit_shared_lambda(
     ctx: &EmitCtx,
     params: &[(Symbol, IrType)],
     ret: &IrType,
@@ -448,7 +448,7 @@ pub fn emit_shared_lambda(
 /// order is fixed (`Add`, `Sub`, `Mul`, `PartialOrd`, `PartialEq`, `Ord`,
 /// `Hash`, `Copy`, `Clone`, `Into<SqlParam>`) so the emission is deterministic
 /// regardless of how the bound set was assembled.
-pub fn render_bounds(bounds: BoundSet, n: usize) -> String {
+pub(crate) fn render_bounds(bounds: BoundSet, n: usize) -> String {
     if bounds.is_unbounded() {
         return String::new();
     }
@@ -566,7 +566,7 @@ pub fn render_bounds(bounds: BoundSet, n: usize) -> String {
 /// `Match` is rebuilt via [`Match::from_parts_unchecked`]: only arm BODIES
 /// change here, never the arm patterns, so the exhaustiveness proof
 /// [`Match::new`] / [`Match::new_flat`] already ran stays valid.
-pub fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
+pub(crate) fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
     match expr {
         Expr::Call {
             callee: Callee::Kernel(KernelFn::TaskRun | KernelFn::TaskPerform),
@@ -669,7 +669,7 @@ pub fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
 ///
 /// Returns `(wrap_unit, wrap_result_ok_ty)` — at most one is ever set (`Unit`
 /// and `Result` are disjoint [`IrType`] shapes).
-pub fn ipe_main_wrap_decision(
+pub(crate) fn ipe_main_wrap_decision(
     name: &str,
     elided_ret: Option<&IrType>,
     func_ret: &IrType,
@@ -713,7 +713,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
 /// non-update function that coincidentally returns `(_, Cmd _)` — e.g. a helper)
 /// simply yields no classifiable arm, never a wrong rewrite. Conservative by
 /// construction.
-pub fn tea_update_model_param(func: &ipe_ir::Func) -> Option<Symbol> {
+pub(crate) fn tea_update_model_param(func: &ipe_ir::Func) -> Option<Symbol> {
     let IrType::Tuple(elems) = &func.ret else {
         return None;
     };
@@ -730,7 +730,7 @@ pub fn tea_update_model_param(func: &ipe_ir::Func) -> Option<Symbol> {
 /// return type must be a `Sub` and the function must take at least one parameter
 /// (the Model). Used to arm the `subscriptions`-entry sub-description rewrite for
 /// this body; a non-subscriptions function is never sub-rewritten.
-pub const fn is_tea_subs_function(func: &ipe_ir::Func) -> bool {
+pub(crate) const fn is_tea_subs_function(func: &ipe_ir::Func) -> bool {
     matches!(&func.ret, IrType::Sub(_)) && !func.params.is_empty()
 }
 
@@ -740,7 +740,7 @@ pub const fn is_tea_subs_function(func: &ipe_ir::Func) -> bool {
 /// ([`crate::transition_classify::init_datum_of_body`]) then refuses an `update`
 /// body (a `msg` match, never a bare record-literal tuple) and every non-`init`
 /// helper, so the arming is only a cheap pre-filter, never the correctness gate.
-pub fn func_returns_cmd_tuple(func: &ipe_ir::Func) -> bool {
+pub(crate) fn func_returns_cmd_tuple(func: &ipe_ir::Func) -> bool {
     let IrType::Tuple(elems) = &func.ret else {
         return false;
     };
@@ -761,7 +761,7 @@ pub fn func_returns_cmd_tuple(func: &ipe_ir::Func) -> bool {
 /// An `update` body is a `msg` match (never a bare record tuple), so it never
 /// classifies; with the flag off (or an `ipe_main`-wrapped entry-point body) this
 /// returns `None` and the body is byte-identical to the direct form.
-pub fn emit_init_hot_for_func(
+pub(crate) fn emit_init_hot_for_func(
     ctx: &EmitCtx,
     func: &Func,
     body_expr: &Expr,
@@ -1030,7 +1030,7 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
 /// a `__ipe_lit.get(N)` read is indistinguishable from the direct literal. The
 /// binding is emitted immediately after the recursion guard, in scope for every
 /// hoisted read in the body.
-pub fn literal_table_prologue(defaults: &[String]) -> String {
+pub(crate) fn literal_table_prologue(defaults: &[String]) -> String {
     if defaults.is_empty() {
         return String::new();
     }
@@ -1056,7 +1056,7 @@ pub fn literal_table_prologue(defaults: &[String]) -> String {
 /// ([`IrType::Fun`]/[`IrType::FnOnceChain`]) is neither `Sync` nor `Clone`; an
 /// [`IrType::Task`] future is single-poll and not `Sync`; an
 /// [`IrType::Generic`] cannot appear in a `static` type at all.
-pub fn is_share_once_safe(ty: &IrType) -> bool {
+pub(crate) fn is_share_once_safe(ty: &IrType) -> bool {
     match ty {
         IrType::Int
         | IrType::Float
@@ -1106,7 +1106,7 @@ pub fn is_share_once_safe(ty: &IrType) -> bool {
 /// The ` {` the caller appends is included in every fit test (rustfmt measures the
 /// opening brace as part of the line), so the flat/broken decision matches the
 /// formatter's own boundary — verified flat at width 100, broken at 101.
-pub fn render_fn_signature(
+pub(crate) fn render_fn_signature(
     vis_prefix: &str,
     name: &str,
     generic_clause: &str,
@@ -1187,7 +1187,7 @@ pub fn render_fn_signature(
 /// at the end) — `rustfmt` has no shorter layout for such a type, so the caller keeps
 /// the flat line. The `Inner` is placed at one indent step with a trailing comma and
 /// the `>` dedented to column 0, the same one-per-line break the params path uses.
-pub fn wrap_return_type(open: &str, ret: &str) -> Option<String> {
+pub(crate) fn wrap_return_type(open: &str, ret: &str) -> Option<String> {
     const MAX_WIDTH: usize = 100;
     const BRACE: usize = 2;
     if open.len() + ret.len() + BRACE <= MAX_WIDTH {
@@ -1221,7 +1221,7 @@ pub fn wrap_return_type(open: &str, ret: &str) -> Option<String> {
 /// when the body fits flat — matching the golden's `|| expr` form exactly. The
 /// outer [`Doc::CallArgs`] tests the full `CELL.get_or_init(|| body).clone()` line
 /// against `max_width` (100) and `fn_call_width` (60) before choosing flat.
-pub fn emit_caf_get_or_init(
+pub(crate) fn emit_caf_get_or_init(
     ctx: &EmitCtx,
     body_expr: &Expr,
     generics: GenericScope,
@@ -1264,7 +1264,7 @@ pub fn emit_caf_get_or_init(
 ///
 /// `build_doc` is threaded the fn-body context the string emitter used: block
 /// indent 1, IR depth 0.
-pub fn emit_body_native(ctx: &EmitCtx, body_expr: &Expr, generics: GenericScope) -> DResult<String> {
+pub(crate) fn emit_body_native(ctx: &EmitCtx, body_expr: &Expr, generics: GenericScope) -> DResult<String> {
     let doc = crate::emit_doc::build_doc(ctx, body_expr, 1, 0, generics)?;
     Ok(render_seeded(&doc, RenderConfig::default(), 4, 4))
 }
@@ -1288,7 +1288,7 @@ pub fn emit_body_native(ctx: &EmitCtx, body_expr: &Expr, generics: GenericScope)
 /// by the lowerer's structural IR walk (`ipe_lower`'s `apply_db_row_bounds` /
 /// `body_calls_db_get_on_param`), so this function simply renders whatever
 /// bounds each param carries.
-pub fn render_fn_generics(
+pub(crate) fn render_fn_generics(
     ctx: &EmitCtx,
     func: &Func,
     ret_is_task: bool,
@@ -1415,7 +1415,7 @@ pub fn render_fn_generics(
 /// position `idx` monomorphizes to — `FN0`, `FN1`, … . The `FN` prefix cannot
 /// collide with the ordinary type variables (`T1`, `T2`, …) rendered from
 /// [`Func::type_params`].
-pub fn impl_fn_generic_name(idx: usize) -> String {
+pub(crate) fn impl_fn_generic_name(idx: usize) -> String {
     format!("FN{idx}")
 }
 
@@ -1429,7 +1429,7 @@ pub fn impl_fn_generic_name(idx: usize) -> String {
 /// 'static` bound injection in [`render_fn_generics`] for exactly those
 /// variables — narrower than the blanket `ret_is_task` gate so that a pure,
 /// non-callback-taking generic function keeps a bare `Clone` bound.
-pub fn type_var_in_fn_param(func: &Func, sym: Symbol) -> bool {
+pub(crate) fn type_var_in_fn_param(func: &Func, sym: Symbol) -> bool {
     func.params
         .iter()
         .any(|(_, ty)| ty_mentions_var_under_fn(ty, sym, false))
@@ -1448,7 +1448,7 @@ pub fn type_var_in_fn_param(func: &Func, sym: Symbol) -> bool {
 /// no function-typed parameter. Pinning exactly the carried `msg` var mirrors
 /// the boxed-`dyn Fn` treatment and leaves pure record/ADT-returning generics
 /// unconstrained.
-pub fn type_var_in_ui_carrier(ret: &IrType, sym: Symbol) -> bool {
+pub(crate) fn type_var_in_ui_carrier(ret: &IrType, sym: Symbol) -> bool {
     match ret {
         IrType::Ui { msg, .. } => ty_mentions_var(msg, sym),
         IrType::Task(inner)
@@ -1472,7 +1472,7 @@ pub fn type_var_in_ui_carrier(ret: &IrType, sym: Symbol) -> bool {
 /// `true` if `IrType::Generic(sym)` occurs anywhere in `ty` — the carrier's
 /// message argument may itself be a nested structure (`List msg`, `(msg, a)`),
 /// so the whole sub-tree is scanned.
-pub fn ty_mentions_var(ty: &IrType, sym: Symbol) -> bool {
+pub(crate) fn ty_mentions_var(ty: &IrType, sym: Symbol) -> bool {
     match ty {
         IrType::Generic(s) => *s == sym,
         IrType::Ui { msg, .. } => ty_mentions_var(msg, sym),
@@ -1503,7 +1503,7 @@ pub fn ty_mentions_var(ty: &IrType, sym: Symbol) -> bool {
 /// is set (i.e. inside a `Fun` / `FnOnceChain` sub-tree). Once a function-typed
 /// node is entered, `under_fn` stays set for the whole sub-tree — the entire
 /// boxed trait object is `'static`, so every variable it names needs the bound.
-pub fn ty_mentions_var_under_fn(ty: &IrType, sym: Symbol, under_fn: bool) -> bool {
+pub(crate) fn ty_mentions_var_under_fn(ty: &IrType, sym: Symbol, under_fn: bool) -> bool {
     match ty {
         IrType::Generic(s) => under_fn && *s == sym,
         // `SharedFun` shares `Fun`'s `+ 'static` boxed/`Arc` carrier, so entering

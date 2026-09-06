@@ -257,15 +257,15 @@ impl<'a> Builder<'a> {
 
     // ── solver-var construction helpers ────────────────────────────────────
 
-    pub fn flex(&mut self) -> DResult<VarId> {
+    pub(crate) fn flex(&mut self) -> DResult<VarId> {
         self.uf.fresh(Content::Flex)
     }
 
-    pub fn rigid(&mut self) -> DResult<VarId> {
+    pub(crate) fn rigid(&mut self) -> DResult<VarId> {
         self.uf.fresh(Content::Rigid)
     }
 
-    pub fn structure(&mut self, f: FlatType) -> DResult<VarId> {
+    pub(crate) fn structure(&mut self, f: FlatType) -> DResult<VarId> {
         self.uf.fresh(Content::Structure(f))
     }
 
@@ -277,11 +277,11 @@ impl<'a> Builder<'a> {
     /// one, so the occurs-check can distinguish different records' tails;
     /// this matches the the compiler reference's `UF.fresh EmptyRecord1` per
     /// record literal.
-    pub fn empty_record_tail(&mut self) -> DResult<VarId> {
+    pub(crate) fn empty_record_tail(&mut self) -> DResult<VarId> {
         self.structure(FlatType::EmptyRecord)
     }
 
-    pub fn int_var(&mut self) -> DResult<VarId> {
+    pub(crate) fn int_var(&mut self) -> DResult<VarId> {
         let name = self.builtins.int;
         self.structure(FlatType::Con {
             module: Vec::new(),
@@ -290,7 +290,7 @@ impl<'a> Builder<'a> {
         })
     }
 
-    pub fn bool_var(&mut self) -> DResult<VarId> {
+    pub(crate) fn bool_var(&mut self) -> DResult<VarId> {
         let name = self.builtins.bool;
         self.structure(FlatType::Con {
             module: Vec::new(),
@@ -299,7 +299,7 @@ impl<'a> Builder<'a> {
         })
     }
 
-    pub fn float_var(&mut self) -> DResult<VarId> {
+    pub(crate) fn float_var(&mut self) -> DResult<VarId> {
         let name = self.builtins.float;
         self.structure(FlatType::Con {
             module: Vec::new(),
@@ -308,7 +308,7 @@ impl<'a> Builder<'a> {
         })
     }
 
-    pub fn string_var(&mut self) -> DResult<VarId> {
+    pub(crate) fn string_var(&mut self) -> DResult<VarId> {
         let name = self.builtins.string;
         self.structure(FlatType::Con {
             module: Vec::new(),
@@ -317,7 +317,7 @@ impl<'a> Builder<'a> {
         })
     }
 
-    pub fn char_var(&mut self) -> DResult<VarId> {
+    pub(crate) fn char_var(&mut self) -> DResult<VarId> {
         let name = self.builtins.char;
         self.structure(FlatType::Con {
             module: Vec::new(),
@@ -326,7 +326,7 @@ impl<'a> Builder<'a> {
         })
     }
 
-    pub fn path_var(&mut self) -> DResult<VarId> {
+    pub(crate) fn path_var(&mut self) -> DResult<VarId> {
         let name = self.builtins.path;
         self.structure(FlatType::Con {
             module: Vec::new(),
@@ -339,7 +339,7 @@ impl<'a> Builder<'a> {
     /// down up` with two fresh flexible parameters. The annotation on the binding
     /// (a resolved `CustomElement down up`) unifies with these, pinning the seal
     /// types; the arity + SEAL of that annotation were already enforced at canon.
-    pub fn custom_element_var(&mut self) -> DResult<VarId> {
+    pub(crate) fn custom_element_var(&mut self) -> DResult<VarId> {
         let name = self.builtins.custom_element;
         let down = self.flex()?;
         let up = self.flex()?;
@@ -357,7 +357,7 @@ impl<'a> Builder<'a> {
     /// so the generic parameter is emitted with the matching trait bound.
     /// `span` is the operand span blamed if the variable later pins to a
     /// concrete type that does not actually support the operation.
-    pub fn super_var(&mut self, bounds: TyBounds, span: Span) -> DResult<VarId> {
+    pub(crate) fn super_var(&mut self, bounds: TyBounds, span: Span) -> DResult<VarId> {
         let v = self.uf.fresh(Content::Super {
             rigid: false,
             bounds,
@@ -369,7 +369,7 @@ impl<'a> Builder<'a> {
     /// Constrain a binary operation by the type discipline of its operator. The
     /// returned [`VarId`] is the result type's variable. Mirrors the core
     /// subset of `Ipe.Type.Constrain.Expression.binopTypes`.
-    pub fn constrain_binop(
+    pub(crate) fn constrain_binop(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
         func: Symbol,
@@ -463,13 +463,13 @@ impl<'a> Builder<'a> {
         }
     }
 
-    pub fn con_var(&mut self, module: Vec<Symbol>, name: Symbol, args: Vec<VarId>) -> DResult<VarId> {
+    pub(crate) fn con_var(&mut self, module: Vec<Symbol>, name: Symbol, args: Vec<VarId>) -> DResult<VarId> {
         self.structure(FlatType::Con { module, name, args })
     }
 
     /// A `List elem` type variable over the element variable `elem`. The built-in
     /// `List` carries an empty module path, matching the other builtins.
-    pub fn list_var(&mut self, elem: VarId) -> DResult<VarId> {
+    pub(crate) fn list_var(&mut self, elem: VarId) -> DResult<VarId> {
         let name = self.builtins.list;
         self.con_var(Vec::new(), name, vec![elem])
     }
@@ -478,7 +478,7 @@ impl<'a> Builder<'a> {
     /// element variable, and the whole expression is the `List` over it. An empty
     /// list leaves the element variable flexible (inferred from context, else
     /// numeric-defaulted like any unpinned variable). Returns the result variable.
-    pub fn constrain_list(
+    pub(crate) fn constrain_list(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
         elems: &[canon::Expr],
@@ -498,7 +498,7 @@ impl<'a> Builder<'a> {
     /// Constrain a cons `head :: tail`: `head : elem`, `tail : List elem`, result
     /// `List elem`. Imposing the `a -> List a -> List a` discipline directly makes
     /// a non-list tail or a mismatched element a type error, not a backend crash.
-    pub fn constrain_cons(
+    pub(crate) fn constrain_cons(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
         head: &canon::Expr,
@@ -513,7 +513,7 @@ impl<'a> Builder<'a> {
         Ok(list)
     }
 
-    pub fn eq(&mut self, span: Span, lhs: VarId, rhs: VarId) {
+    pub(crate) fn eq(&mut self, span: Span, lhs: VarId, rhs: VarId) {
         self.constraints.push(Constraint {
             span,
             lhs,
@@ -530,7 +530,7 @@ impl<'a> Builder<'a> {
     /// tightest (innermost-recorded) expectation for a span is kept; an outer
     /// context that revisits the same span (rare, only under span-sharing
     /// desugarings) does not overwrite it.
-    pub fn record_expected(&mut self, span: Span, var: VarId) {
+    pub(crate) fn record_expected(&mut self, span: Span, var: VarId) {
         self.expected
             .entry((self.current_home.clone(), span))
             .or_insert(var);
@@ -549,7 +549,7 @@ impl<'a> Builder<'a> {
     /// fresh `vars` map (`a -> a` becomes `f -> f`, one shared flex), so calling
     /// `identity` at `Int` and at `Bool` in the same module yields two
     /// independent, separately-satisfiable instantiations.
-    pub fn instantiate(&mut self, ty: &Ty) -> DResult<VarId> {
+    pub(crate) fn instantiate(&mut self, ty: &Ty) -> DResult<VarId> {
         let (var, _vars) = self.instantiate_tracked(ty)?;
         Ok(var)
     }
@@ -559,7 +559,7 @@ impl<'a> Builder<'a> {
     /// checked post-solve against the binding's super-type obligations: each
     /// obligated scheme variable's fresh variable reveals the concrete type this
     /// use pinned it to.
-    pub fn instantiate_tracked(&mut self, ty: &Ty) -> DResult<(VarId, BTreeMap<u32, VarId>)> {
+    pub(crate) fn instantiate_tracked(&mut self, ty: &Ty) -> DResult<(VarId, BTreeMap<u32, VarId>)> {
         let mut vars = BTreeMap::new();
         let var = self.instantiate_in(ty, &mut vars, /* rigid */ false)?;
         Ok((var, vars))
@@ -572,7 +572,7 @@ impl<'a> Builder<'a> {
     /// ties the payload to the result), exactly like [`Self::instantiate`] over the
     /// equivalent arrow — but decomposed, so a pattern can bind each field and a
     /// value reference can rebuild the arrow.
-    pub fn instantiate_ctor(&mut self, scheme: &CtorScheme) -> DResult<(Vec<VarId>, VarId)> {
+    pub(crate) fn instantiate_ctor(&mut self, scheme: &CtorScheme) -> DResult<(Vec<VarId>, VarId)> {
         let mut vars = BTreeMap::new();
         let mut arg_vars = Vec::with_capacity(scheme.arg_tys.len());
         for t in &scheme.arg_tys {
@@ -590,11 +590,11 @@ impl<'a> Builder<'a> {
     /// the whole signature is instantiated through *one* `vars` map so `a` is the
     /// same rigid everywhere it appears, and distinct annotation variables become
     /// distinct rigids that the body cannot conflate ([`Content::Rigid`]).
-    pub fn instantiate_rigid(&mut self, ty: &Ty, vars: &mut BTreeMap<u32, VarId>) -> DResult<VarId> {
+    pub(crate) fn instantiate_rigid(&mut self, ty: &Ty, vars: &mut BTreeMap<u32, VarId>) -> DResult<VarId> {
         self.instantiate_in(ty, vars, /* rigid */ true)
     }
 
-    pub fn instantiate_in(
+    pub(crate) fn instantiate_in(
         &mut self,
         ty: &Ty,
         vars: &mut BTreeMap<u32, VarId>,

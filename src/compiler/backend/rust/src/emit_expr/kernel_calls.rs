@@ -138,7 +138,7 @@ pub fn call_has_kernel_special_case(
 /// fail-closed http/https scheme narrowing lives in the runtime fns these call.
 /// Returns `None` for any other callee.
 #[inline(never)]
-pub fn emit_http_typed_target_builder(
+pub(crate) fn emit_http_typed_target_builder(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -180,7 +180,7 @@ pub fn emit_http_typed_target_builder(
 }
 
 #[inline(never)]
-pub fn emit_http_call(
+pub(crate) fn emit_http_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -306,7 +306,7 @@ pub fn emit_http_call(
 ///
 /// Returns `None` for any other callee.
 #[inline(never)]
-pub fn emit_process_run_with_call(
+pub(crate) fn emit_process_run_with_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -363,7 +363,7 @@ pub fn emit_process_run_with_call(
 ///
 /// Returns `None` for any other callee.
 #[inline(never)]
-pub fn emit_process_run_in_pty_call(
+pub(crate) fn emit_process_run_in_pty_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -436,7 +436,7 @@ pub fn emit_process_run_in_pty_call(
 /// small (same rationale as `emit_http_call`).
 #[inline(never)]
 #[allow(clippy::too_many_lines)] // 8 match arms × ~20 lines = inherently verbose but linear
-pub fn emit_http_builder_call(
+pub(crate) fn emit_http_builder_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -609,7 +609,7 @@ pub fn emit_http_builder_call(
 ///   `ipe_runtime::task::task_retry_with`, adapting the `Arc<dyn Fn(E) -> bool>`
 ///   field to the `impl Fn(&E) -> bool` expected by the runtime via a cloning
 ///   adapter closure (an `Arc<dyn Fn>` is directly callable).
-pub fn emit_task_retry_call(
+pub(crate) fn emit_task_retry_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -841,7 +841,7 @@ pub fn emit_task_retry_call(
 // the function explicitly enumerates every Db kernel arm for compile-time
 // completeness; extracting sub-helpers would hide the intentional coverage.
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]
-pub fn emit_db_call(
+pub(crate) fn emit_db_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -1507,7 +1507,7 @@ pub fn emit_db_call(
 ///
 /// Returns `Some(literal)` for the eleven constructor kernels and `None` for every
 /// other callee, so the standard call path handles the rest.
-pub fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
+pub(crate) fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
     let Callee::Kernel(k) = callee else {
         return None;
     };
@@ -1534,7 +1534,7 @@ pub fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
 }
 
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]
-pub fn emit_tea_call(
+pub(crate) fn emit_tea_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -1778,7 +1778,7 @@ pub fn emit_tea_call(
 /// promoted to `SharedLambda` (`Arc`, `Clone` — `StreamStream` is in
 /// `requires_sync_capture`), or a `Copy` leaf (whose `.clone()` is a bitwise
 /// copy).
-pub fn stream_handler_capture_prologue(ctx: &EmitCtx, handler: &Expr) -> DResult<String> {
+pub(crate) fn stream_handler_capture_prologue(ctx: &EmitCtx, handler: &Expr) -> DResult<String> {
     let mut prologue = String::new();
     for sym in free_vars(handler) {
         let id = ctx.emit_ident(sym)?;
@@ -1798,7 +1798,7 @@ pub fn stream_handler_capture_prologue(ctx: &EmitCtx, handler: &Expr) -> DResult
 /// not listed here, so a future addition that forgets this function fails at
 /// compile time.
 #[allow(clippy::too_many_lines)] // exhaustive declarative per-kernel dispatch table
-pub fn emit_server_call(
+pub(crate) fn emit_server_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -2013,7 +2013,7 @@ pub fn emit_server_call(
 /// direct-literal guard and emits directly. A caller with no appearance field
 /// passes `&[]` and this path is inert.
 #[allow(clippy::too_many_arguments)] // one hoist site per cfg-record kernel; the args mirror emit_expr_at's
-pub fn emit_cfg_record_call(
+pub(crate) fn emit_cfg_record_call(
     ctx: &EmitCtx,
     leading: &[&Expr],
     fields: &[(Symbol, Expr)],
@@ -2086,7 +2086,7 @@ pub fn emit_cfg_record_call(
     Ok(format!("{{ {hoist}{callee}({}) }}", call_args.join(", ")))
 }
 
-pub fn lookup_field<'f>(
+pub(crate) fn lookup_field<'f>(
     ctx: &EmitCtx,
     fields: &'f [(Symbol, Expr)],
     name: &str,
@@ -2133,7 +2133,7 @@ pub fn lookup_field<'f>(
 /// callback is always `'static` (it captures no borrow-lifetime context), so the
 /// `move` capture yields a `Send + Sync` `Arc`. This is the reference's uniform
 /// Arc-callback policy applied at the call-argument boundary.
-pub fn arc_callback_wrap(handler_src: &str) -> String {
+pub(crate) fn arc_callback_wrap(handler_src: &str) -> String {
     format!("::std::sync::Arc::new(move |_x| ({handler_src})(_x))")
 }
 
@@ -2188,7 +2188,7 @@ pub fn arc_callback_wrap(handler_src: &str) -> String {
 /// alias/clone of an outer symbol whose hoist out of the `move` closure is
 /// always semantics-preserving (Ipê values are immutable). A `let` binding a
 /// COMPUTED value stays inside, so no re-ordering of effects can occur.
-pub fn peel_callback_capture_clones(field: &Expr) -> (Vec<(Symbol, &Expr)>, &Expr) {
+pub(crate) fn peel_callback_capture_clones(field: &Expr) -> (Vec<(Symbol, &Expr)>, &Expr) {
     let mut hoisted: Vec<(Symbol, &Expr)> = Vec::new();
     let mut inner = field;
     while let Expr::Let { name, value, body } = inner {
@@ -2206,7 +2206,7 @@ pub fn peel_callback_capture_clones(field: &Expr) -> (Vec<(Symbol, &Expr)>, &Exp
 /// a `let n = <value>; ` prefix. Empty when there are no leading pure-alias
 /// `let`s, so a capture-free callback's emitted text is byte-identical to the
 /// un-peeled form.
-pub fn render_hoisted_clone_prefix(
+pub(crate) fn render_hoisted_clone_prefix(
     ctx: &EmitCtx,
     hoisted: &[(Symbol, &Expr)],
     indent: usize,
@@ -2225,7 +2225,7 @@ pub fn render_hoisted_clone_prefix(
     Ok(prefix)
 }
 
-pub fn emit_arc_callback_field(
+pub(crate) fn emit_arc_callback_field(
     ctx: &EmitCtx,
     field: &Expr,
     indent: usize,
@@ -2285,7 +2285,7 @@ pub fn emit_arc_callback_field(
 ///
 /// The selector sanitizer (`safeSelector`) is deliberately absent: a selector is
 /// structure (what a rule targets), not an appearance value, and never hoists.
-pub fn emit_css_value_call(
+pub(crate) fn emit_css_value_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -2357,7 +2357,7 @@ pub fn emit_css_value_call(
 /// The whole subtree collapses into ONE literal slot (its serialized JSON), so
 /// a structural edit is a single-slot value change the shipped emit-diff
 /// classifier already routes to the zero-compile hot-swap path.
-pub fn emit_html_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
+pub(crate) fn emit_html_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
     if !ctx.uses_web {
         return None;
     }
@@ -2422,7 +2422,7 @@ pub fn emit_html_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
 /// Compile list-hole fills for [`emit_ui_template`]. Each fill is an iterator
 /// expression that yields one `Vec<Element<M>>` per item — the per-item
 /// element-fill vec for one materialization of the list hole's item template.
-pub fn compile_list_fills(
+pub(crate) fn compile_list_fills(
     ctx: &EmitCtx,
     list_holes: &[crate::emit_ui_template::ListHoleFill],
     indent: usize,
@@ -2449,7 +2449,7 @@ pub fn compile_list_fills(
     Ok(v)
 }
 
-pub fn emit_ui_template(
+pub(crate) fn emit_ui_template(
     ctx: &EmitCtx,
     expr: &Expr,
     indent: usize,
@@ -2564,7 +2564,7 @@ pub fn emit_ui_template(
 }
 
 /// Pre-compiled fill vecs for each hole kind in a templatized `Ui` subtree.
-pub struct CompiledFills<'a> {
+pub(crate) struct CompiledFills<'a> {
     element_fills: &'a [String],
     children_fills: &'a [String],
     handler_msgs: &'a [String],
@@ -2575,7 +2575,7 @@ pub struct CompiledFills<'a> {
 
 /// Select and format the runtime materializer call, choosing the front door
 /// based on which fill vecs are non-empty.
-pub fn select_ui_materializer_call(slot: usize, f: &CompiledFills<'_>) -> String {
+pub(crate) fn select_ui_materializer_call(slot: usize, f: &CompiledFills<'_>) -> String {
     // Float-attr fills are purely additive (attr-level); route to the float-attr
     // front door when float fills are the ONLY non-base fills present. For the
     // common case (float attrs alone, no other structural hole kinds), this is the
@@ -2647,7 +2647,7 @@ pub fn select_ui_materializer_call(slot: usize, f: &CompiledFills<'_>) -> String
 
 /// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /
 /// `WebView` variant, letting the standard call path handle it.
-pub fn emit_ui_call(
+pub(crate) fn emit_ui_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
@@ -2678,7 +2678,7 @@ pub fn emit_ui_call(
 #[allow(clippy::too_many_lines)] // the capability-leaf emitters, gathered under one native dispatch
 #[allow(clippy::many_single_char_names)] // r/g/b/a are the conventional colour-channel names in moved arms
 #[allow(clippy::too_many_arguments)] // the emit thread-through (ctx, callee, on_form, indent, child, generics)
-pub fn emit_ui_plan(
+pub(crate) fn emit_ui_plan(
     ctx: &EmitCtx,
     plan: &UiEmitPlan,
     k: KernelFn,
@@ -4100,7 +4100,7 @@ pub fn emit_ui_plan(
 /// standard emitter.  Factored out of `emit_expr_at` to avoid inflating that
 /// function's stack frame (the depth-guard test relies on a bounded frame size).
 #[inline(never)]
-pub fn emit_json_decoder_call(
+pub(crate) fn emit_json_decoder_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],

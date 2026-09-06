@@ -644,7 +644,7 @@ pub fn emit_expr_at(
 /// `emit_expr_at` match (`#[inline(never)]`) so its locals don't inflate the
 /// recursive frame.
 #[inline(never)]
-pub fn emit_list(
+pub(crate) fn emit_list(
     ctx: &EmitCtx,
     elem: &IrType,
     items: &[Expr],
@@ -711,7 +711,7 @@ pub fn emit_list(
 // The extra `home` param is the type's nominal-identity half `(home, ty)`;
 // splitting the ctor emitter would obscure the boxing/runtime-enum flow.
 #[allow(clippy::too_many_arguments)]
-pub fn emit_ctor(
+pub(crate) fn emit_ctor(
     ctx: &EmitCtx,
     home: &ModPath,
     ty: Symbol,
@@ -783,7 +783,7 @@ pub fn emit_ctor(
 /// `emit_expr_at` match (`#[inline(never)]`) for the same frame-size reason as
 /// the neighbouring helpers.
 #[inline(never)]
-pub fn emit_match(
+pub(crate) fn emit_match(
     ctx: &EmitCtx,
     m: &Match,
     indent: usize,

@@ -8,7 +8,7 @@ use super::*;
 /// calls (never infix), so they also never arrive here.
 /// All variants are listed so adding a new `BinOp` without wiring it is a
 /// compile error rather than a silent gap.
-pub const fn op_str(op: BinOp) -> &'static str {
+pub(crate) const fn op_str(op: BinOp) -> &'static str {
     match op {
         BinOp::FloatAdd => "+",
         BinOp::FloatSub => "-",
@@ -46,7 +46,7 @@ pub const fn op_str(op: BinOp) -> &'static str {
 /// marker. A non-finite value (an over-range lexeme reads back as `inf`) can have
 /// no decimal literal, so it renders through the `f64` associated constants,
 /// keeping the emission total and valid Rust.
-pub fn float_literal(f: f64) -> String {
+pub(crate) fn float_literal(f: f64) -> String {
     if f.is_nan() {
         return "f64::NAN".to_owned();
     }
@@ -78,7 +78,7 @@ pub fn float_literal(f: f64) -> String {
 /// An illegal name is a compiler invariant failure (the lowerer must have
 /// admitted a bad wrapper ident), so this returns [`Diagnostic::CompilerBug`]
 /// rather than a user-facing error.
-pub fn ffi_path(ctx: &EmitCtx, sym: Symbol) -> DResult<String> {
+pub(crate) fn ffi_path(ctx: &EmitCtx, sym: Symbol) -> DResult<String> {
     let name = ctx.resolve_ident(sym)?;
     let mut chars = name.chars();
     let head_ok = chars
@@ -134,7 +134,7 @@ pub fn ffi_call_has_glue(ctx: &EmitCtx, callee: &Callee) -> DResult<bool> {
 /// foreign→Ipê around the call — under the `IpeResult` Ok arm for a fallible
 /// wrapper, or over the bare value for an infallible accessor. Unmarked
 /// positions render exactly as the generic tail would.
-pub fn emit_ffi_glued_call(
+pub(crate) fn emit_ffi_glued_call(
     ctx: &EmitCtx,
     wrapper: Symbol,
     glue: &crate::FfiWrapperGlue,
@@ -170,7 +170,7 @@ pub fn emit_ffi_glued_call(
 /// Render the Ipê→foreign conversion of `value` (a rendered expression) for
 /// one transparent type: a record moves field-for-field into the foreign
 /// struct literal; a union matches the app enum into the foreign enum.
-pub fn ffi_to_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> DResult<String> {
+pub(crate) fn ffi_to_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> DResult<String> {
     match ty {
         crate::FfiGlueType::Record { rust_path, fields } => {
             let moves: Vec<String> = fields
@@ -201,7 +201,7 @@ pub fn ffi_to_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> DR
 /// Render the foreign→Ipê conversion of the bound variable `value` for one
 /// transparent type: a struct moves field-for-field into the synthesised
 /// record struct; an enum matches the foreign enum into the app enum.
-pub fn ffi_from_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> DResult<String> {
+pub(crate) fn ffi_from_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> DResult<String> {
     match ty {
         crate::FfiGlueType::Record { fields, .. } => {
             // An FFI glue record has a foreign-type-unique field-name set, so
@@ -228,7 +228,7 @@ pub fn ffi_from_foreign(ctx: &EmitCtx, ty: &crate::FfiGlueType, value: &str) -> 
 
 /// Which way a transparent-union match arm converts.
 #[derive(Clone, Copy)]
-pub enum Direction {
+pub(crate) enum Direction {
     ToForeign,
     FromForeign,
 }
@@ -236,7 +236,7 @@ pub enum Direction {
 /// One `match` arm converting a transparent enum variant between the app
 /// enum (always tuple-shaped — the positional Ipê constructor surface) and
 /// the foreign enum (its declared unit/tuple/struct shape).
-pub fn ffi_union_arm(
+pub(crate) fn ffi_union_arm(
     app: &str,
     rust_path: &str,
     v: &crate::FfiGlueVariant,
@@ -277,7 +277,7 @@ pub fn ffi_union_arm(
 
 /// The app-side Rust enum name for a transparent union, resolved through the
 /// registered `EnumDef` exactly as every other reference to it.
-pub fn ffi_union_app_name(ctx: &EmitCtx, module: &[String], name: &str) -> DResult<String> {
+pub(crate) fn ffi_union_app_name(ctx: &EmitCtx, module: &[String], name: &str) -> DResult<String> {
     let mut segs = Vec::with_capacity(module.len());
     for m in module {
         segs.push(ctx.lookup_symbol(m)?);

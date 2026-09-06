@@ -29,7 +29,7 @@ pub use crate::unify::unify;
 pub use crate::unionfind::{UnionFind, VarId};
 
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
-pub const STAGE: &str = "ipe_types::constrain";
+pub(crate) const STAGE: &str = "ipe_types::constrain";
 
 /// Recursively replace every `Ty::Var(v)` where `v` resolves to the `"any"`
 /// wildcard AND `v` is NOT one of the union's declared type parameters with
@@ -39,7 +39,7 @@ pub const STAGE: &str = "ipe_types::constrain";
 /// the the compiler/the backend carries `any` payloads as dynamic `interface{}`; the
 /// Rust backend pins them to `Dict String String`, the sole concrete carrier that
 /// satisfies `Clone + Debug + PartialEq + Serialize + DeserializeOwned`.
-pub fn pin_any_in_ty(
+pub(crate) fn pin_any_in_ty(
     ty: Ty,
     union_vars: &[Symbol],
     interner: &Interner,
@@ -101,7 +101,7 @@ pub fn pin_any_in_ty(
 ///
 /// Used in [`Builder::typed_rigids`] and re-exported via [`Generated::typed_rigids`]
 /// so `SolvedTypes::poly_var_map` can build the lowerer's generic-variable lookup.
-pub type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
+pub(crate) type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
 
 /// Maximum number of nodes [`zonk`] reads back from a single type before
 /// declaring it pathologically deep. The occurs check in unification rules out
@@ -113,7 +113,7 @@ pub type PolyVarEntry = ((Vec<Symbol>, Symbol), BTreeMap<Symbol, VarId>);
 /// count here keeps that downstream recursion provably stack-safe. The
 /// read-back itself is iterative (an explicit work stack), so it never grows the
 /// native stack regardless of the bound.
-pub const ZONK_NODE_LIMIT: u32 = 4_096;
+pub(crate) const ZONK_NODE_LIMIT: u32 = 4_096;
 
 /// The constraint-generation state threaded through the walk.
 pub struct Builder<'a> {
@@ -300,7 +300,7 @@ pub struct SchemeApp {
 /// than a foreign one that merely shares the leaf name. Built from the same
 /// `(home, type_name, name)` triple canon records on every `PCtor` / `VarCtor`,
 /// so the insert side and the lookup side agree by construction.
-pub type CtorKey = (Vec<Symbol>, Symbol, Symbol);
+pub(crate) type CtorKey = (Vec<Symbol>, Symbol, Symbol);
 
 /// A data constructor's quantified type scheme.
 ///
@@ -310,7 +310,7 @@ pub type CtorKey = (Vec<Symbol>, Symbol, Symbol);
 /// type variables as [`Ty::Var`]s, so instantiating them through one shared map
 /// alpha-renames a generic constructor consistently per use site.
 #[derive(Clone)]
-pub struct CtorScheme {
+pub(crate) struct CtorScheme {
     pub arg_tys: Vec<Ty>,
     pub result: Ty,
 }

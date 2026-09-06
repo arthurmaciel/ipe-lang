@@ -375,7 +375,7 @@ impl From<build_plan::Refusal> for CliError {
 /// printing the human-readable layout a second time.
 ///
 /// Any non-`Pipeline` error is returned as-is (the human path continues for it).
-pub fn emit_pipeline_json(err: CliError) -> CliError {
+pub(crate) fn emit_pipeline_json(err: CliError) -> CliError {
     if let CliError::Pipeline {
         ref file,
         ref src,
@@ -394,7 +394,7 @@ pub fn emit_pipeline_json(err: CliError) -> CliError {
 /// the caller prints it as-is. The per-case failures and the `N passed, M
 /// failed` summary already went to stdout from the test binary; this pairs the
 /// non-zero exit with a short, human-readable reason.
-pub fn test_failed_message(code: i32) -> String {
+pub(crate) fn test_failed_message(code: i32) -> String {
     format!(
         "{}{} one or more tests failed (runner exited {code})",
         style::GUTTER,
@@ -585,7 +585,7 @@ impl std::fmt::Display for CliError {
 /// the plain top-level page, only with the leading advice. The top-level page
 /// already carries its own gutter, so an unknown-command entry re-gutters only
 /// its own advice lines and leaves the page as-is.
-pub fn fmt_unknown_command(attempted: &str, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+pub(crate) fn fmt_unknown_command(attempted: &str, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     if !attempted.is_empty() {
         writeln!(
             f,
@@ -604,7 +604,7 @@ pub fn fmt_unknown_command(attempted: &str, f: &mut std::fmt::Formatter<'_>) -> 
 /// it gets a plain-language message with no `os error N` tail and no `io error`
 /// jargon; every other kind keeps the readable OS description under the same
 /// guttered, path-naming frame. Never leaks an errno.
-pub fn fmt_io_error(
+pub(crate) fn fmt_io_error(
     path: &Path,
     source: &std::io::Error,
     f: &mut std::fmt::Formatter<'_>,
@@ -633,7 +633,7 @@ pub fn fmt_io_error(
 /// Render the runtime-install error family (`RuntimeDirInvalid`,
 /// `RuntimeHomeUnknown`, `RuntimeMaterializeFailed`) for [`CliError`]'s `Display`.
 /// Split out so the main `Display` match stays within one screen.
-pub fn fmt_runtime_install_error(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+pub(crate) fn fmt_runtime_install_error(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match err {
         CliError::RuntimeDirInvalid {
             path,
@@ -697,7 +697,7 @@ pub fn fmt_runtime_install_error(err: &CliError, f: &mut std::fmt::Formatter<'_>
 ///   stderr is embedded as the reportable detail.
 ///
 /// Neither form shows any command's `--help` page.
-pub fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+pub(crate) fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let CliError::EmittedBuildFailed {
         what,
         code,
@@ -771,7 +771,7 @@ pub fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>)
 /// malformed — not connectivity problems, and reporting them as "check your
 /// connection" would misdirect the user. The offline case always surfaces one of
 /// the network phrases below as its root cause.
-pub fn is_registry_unreachable(stderr: &str) -> bool {
+pub(crate) fn is_registry_unreachable(stderr: &str) -> bool {
     stderr.contains("Could not resolve host")
         || stderr.contains("spurious network error")
         || stderr.contains("failed to fetch")
@@ -781,7 +781,7 @@ pub fn is_registry_unreachable(stderr: &str) -> bool {
 /// the form ``… depends on ipe-runtime-rust with feature `X` but ipe-runtime-rust
 /// does not have that feature``. The name is quoted in backticks or single
 /// quotes; both are accepted. `None` when the stderr is some other failure.
-pub fn missing_runtime_feature(stderr: &str) -> Option<String> {
+pub(crate) fn missing_runtime_feature(stderr: &str) -> Option<String> {
     if !stderr.contains("does not have that feature") {
         return None;
     }
@@ -812,6 +812,6 @@ impl std::error::Error for CliError {}
 // future variant that carries an unboxed wide payload trips both. The bound is
 // the lint's ceiling, not the type's current exact size, so it holds on every
 // target ABI (`std::io::Error` is wider on Windows than on Linux, for one).
-pub const CLI_ERROR_MAX_BYTES: usize = 128;
+pub(crate) const CLI_ERROR_MAX_BYTES: usize = 128;
 // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); it fails the build if a future `CliError` variant exceeds the size bound rather than boxing its payload [ledger #boundary]
 const _: () = assert!(std::mem::size_of::<CliError>() <= CLI_ERROR_MAX_BYTES);

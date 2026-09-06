@@ -1,6 +1,6 @@
 use super::*;
 
-pub struct Builtins {
+pub(crate) struct Builtins {
     pub int: Symbol,
     pub float: Symbol,
     pub bool: Symbol,
@@ -685,7 +685,7 @@ pub struct Builtins {
 
 impl Builtins {
     #[allow(clippy::too_many_lines)] // declarative intern table — each field listed explicitly for exhaustiveness
-    pub fn new(interner: &mut Interner) -> DResult<Self> {
+    pub(crate) fn new(interner: &mut Interner) -> DResult<Self> {
         Ok(Self {
             int: interner.intern("Int")?,
             float: interner.intern("Float")?,
@@ -975,7 +975,7 @@ impl Builtins {
     /// an empty module path, matching how `from_canon` renders the builtin type
     /// names (`Int` / `Bool` / …) and how the lowerer recognises them by name.
     #[allow(clippy::too_many_lines)]
-    pub fn ctor_schemes(&self) -> Vec<(Symbol, CtorScheme)> {
+    pub(crate) fn ctor_schemes(&self) -> Vec<(Symbol, CtorScheme)> {
         let bool_ty = Ty::Con {
             module: Vec::new(),
             name: self.bool,
@@ -1496,7 +1496,7 @@ impl Builtins {
 /// The type discipline a binary operator imposes. Classified once from the
 /// resolved kernel name so the constraint walk doesn't re-borrow the interner.
 #[derive(Clone, Copy)]
-pub enum BinopClass {
+pub(crate) enum BinopClass {
     /// `//`: integer division `Int -> Int -> Int`.
     IntDiv,
     /// `/`: `Float -> Float -> Float` (matches the the backend's float division).
@@ -1528,7 +1528,7 @@ pub enum BinopClass {
 }
 
 /// Classify a resolved operator kernel name (`add`, `eq`, `and`, …).
-pub const fn classify_binop(func: &str) -> BinopClass {
+pub(crate) const fn classify_binop(func: &str) -> BinopClass {
     match func.as_bytes() {
         b"add" => BinopClass::Num(TyBounds::add()),
         b"sub" => BinopClass::Num(TyBounds::sub()),

@@ -2,7 +2,7 @@ use super::*;
 
 impl<'a> Builder<'a> {
     #[allow(clippy::too_many_lines)] // Handler expansion block (E-12) pushes it over 100
-    pub fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
+    pub(crate) fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
         // Track which source module this def belongs to so every `regions.insert`
         // in the sub-expression walk uses `(home, span)` as the key, preventing
         // cross-module span collisions after `link::link` merges dep modules.
@@ -187,7 +187,7 @@ impl<'a> Builder<'a> {
     /// patterns than its annotation has arrows. Resolving the name / rendering
     /// the signature can itself only fail on a forged symbol, in which case
     /// that internal bug is surfaced instead.
-    pub fn too_many_parameters(
+    pub(crate) fn too_many_parameters(
         &self,
         name: &ipe_diagnostics::Located<Symbol>,
         ty: &canon::Type,
@@ -217,7 +217,7 @@ impl<'a> Builder<'a> {
     /// whose interned symbol resolves to `"any"`. Mirrors the `Ty::Var` "any"
     /// arm in [`Self::instantiate_in`]: `any` is Ipê's wildcard type-variable
     /// name, distinct from a genuine named parameter (`a`, `msg`).
-    pub fn is_wildcard_any_ty(&self, ty: &Ty) -> bool {
+    pub(crate) fn is_wildcard_any_ty(&self, ty: &Ty) -> bool {
         matches!(ty, Ty::Var(id) if self
             .interner
             .resolve(Symbol::from_raw(*id))
@@ -228,7 +228,7 @@ impl<'a> Builder<'a> {
     /// `_ -> _` arrow) is the bare wildcard `any`. Such a binding's body is
     /// severed from its uses by the wildcard and must be re-tied — see
     /// [`Self::tie_wildcard_any_uses_to_bodies`].
-    pub fn annotation_returns_wildcard_any(&self, ty: &Ty) -> bool {
+    pub(crate) fn annotation_returns_wildcard_any(&self, ty: &Ty) -> bool {
         let mut cur = ty;
         while let Ty::Fun(_, ret) = cur {
             cur = ret;
@@ -255,7 +255,7 @@ impl<'a> Builder<'a> {
     /// `Task Error Int Bool`), because canonicalisation validates arity only for
     /// type *aliases*, never for a non-alias constructor application like `Task`.
     #[allow(clippy::too_many_lines)]
-    pub fn normalize_annotation_ty(&self, ty: Ty, span: Span) -> DResult<Ty> {
+    pub(crate) fn normalize_annotation_ty(&self, ty: Ty, span: Span) -> DResult<Ty> {
         match ty {
             Ty::Con { module, name, args } => {
                 if name == self.builtins.task {
@@ -483,7 +483,7 @@ impl<'a> Builder<'a> {
     /// Check whether `ty` is the built-in `Error` type — a nullary type
     /// constructor named `"Error"`.  The module path is intentionally ignored so
     /// both bare `Error` and fully-qualified `Ipe.Error.Error` are accepted.
-    pub fn is_error_ty(&self, ty: &Ty) -> bool {
+    pub(crate) fn is_error_ty(&self, ty: &Ty) -> bool {
         matches!(
             ty,
             Ty::Con { name, args, .. } if *name == self.builtins.error && args.is_empty()
@@ -503,7 +503,7 @@ impl<'a> Builder<'a> {
     /// [`Builder::top_level`]) ensures that a `Lib.helper` reference resolves to
     /// `Lib.helper`'s own annotation type even when a same-named `Main.helper`
     /// exists in the merged def list.
-    pub fn constrain_var_top_level(
+    pub(crate) fn constrain_var_top_level(
         &mut self,
         module: &[Symbol],
         name: Symbol,
@@ -568,7 +568,7 @@ impl<'a> Builder<'a> {
     /// determinism-sorted `HashMap` (`Hash + Eq + Ord`); the obligation is
     /// attached to raw scheme-variable 0, the element/key in every `Set` /
     /// `Dict` kernel scheme.
-    pub fn key_obligation_for(k: StdlibKernel) -> Option<TyBounds> {
+    pub(crate) fn key_obligation_for(k: StdlibKernel) -> Option<TyBounds> {
         match k.decl().qualifier {
             "Set" => Some(TyBounds::set_elem()),
             "Dict" => Some(TyBounds::dict_key()),
@@ -611,7 +611,7 @@ impl<'a> Builder<'a> {
     ///   `Decoder` family in particular must NOT be gated — its runtime has
     ///   genuine `curry1..curry10` currying support the applicative decoder
     ///   pipeline depends on).
-    pub const fn hof_result_slot_for(k: StdlibKernel) -> Option<u32> {
+    pub(crate) const fn hof_result_slot_for(k: StdlibKernel) -> Option<u32> {
         use StdlibKernel as K;
         match k {
             K::MaybeMap | K::ResultMap | K::ResultMapError | K::MaybeAndMap | K::ResultAndMap => {
@@ -649,7 +649,7 @@ impl<'a> Builder<'a> {
     ///   This is also more conservative than Ipê's runtime, which keys a Set /
     ///   Dict on a stringified value.
     #[allow(clippy::too_many_lines)]
-    pub fn constrain_var_kernel(
+    pub(crate) fn constrain_var_kernel(
         &mut self,
         id: Option<StdlibKernel>,
         module: Symbol,
@@ -1020,7 +1020,7 @@ impl<'a> Builder<'a> {
     /// type. Extracted as a pure fn so the fail-closed arm is unit-testable
     /// independently of the (currently total) legacy table — see
     /// `both_miss_is_fail_closed`.
-    pub fn kernel_scheme_or_unsupported(
+    pub(crate) fn kernel_scheme_or_unsupported(
         registry: Option<Ty>,
         legacy: Option<Ty>,
         span: Span,
@@ -1032,7 +1032,7 @@ impl<'a> Builder<'a> {
     }
 
     #[allow(clippy::too_many_lines)] // one arm per canonical expression form
-    pub fn constrain_expr(
+    pub(crate) fn constrain_expr(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
         e: &canon::Expr,
@@ -1204,7 +1204,7 @@ impl<'a> Builder<'a> {
     /// there. The lambda's type is the right-nested arrow `p0 -> p1 -> … -> body`,
     /// so a surrounding `Call` unifies its callee against exactly this shape.
     /// Mirrors `Ipe.Type.Constrain.Expression`'s lambda arm.
-    pub fn constrain_lambda(
+    pub(crate) fn constrain_lambda(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
         params: &[canon::Pattern],
@@ -1236,7 +1236,7 @@ impl<'a> Builder<'a> {
     ///
     /// User-written record literals are always **closed** — they carry an
     /// `EmptyRecord` tail so the unifier rejects extra fields on either side.
-    pub fn constrain_record(
+    pub(crate) fn constrain_record(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
         fields: &[(Symbol, canon::Expr)],
@@ -1261,7 +1261,7 @@ impl<'a> Builder<'a> {
     /// `cargo build`. Covers every indirection — direct reference, `let` alias
     /// chains, eta-expansion — because it is plain unification, not a syntactic
     /// reference walk.
-    pub fn tie_wildcard_any_uses_to_bodies(&mut self) -> DResult<()> {
+    pub(crate) fn tie_wildcard_any_uses_to_bodies(&mut self) -> DResult<()> {
         let ties = std::mem::take(&mut self.wildcard_any_use_results);
         for (use_arrow, binding) in ties {
             let Some(&body_var) = self.wildcard_any_return_bodies.get(&binding) else {
@@ -1283,7 +1283,7 @@ impl<'a> Builder<'a> {
     /// Follow a variable's settled structure, peeling leading `_ -> rest`
     /// arrows, and return the final non-arrow result. Bounded fuel guards a
     /// pathological cyclic chain.
-    pub fn peel_arrow_result(&mut self, var: VarId) -> DResult<VarId> {
+    pub(crate) fn peel_arrow_result(&mut self, var: VarId) -> DResult<VarId> {
         let mut cur = self.uf.find(var)?;
         let mut fuel: u32 = 1024;
         while fuel > 0 {
@@ -1301,7 +1301,7 @@ impl<'a> Builder<'a> {
     /// settles, so the access is deferred: a fresh result variable is its region
     /// type now, and [`crate::resolve_field_accesses`] links it to the field's
     /// type after the main solve.
-    pub fn constrain_access(
+    pub(crate) fn constrain_access(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
         record: &canon::Expr,
@@ -1327,7 +1327,7 @@ impl<'a> Builder<'a> {
     /// carry no row variable, so the base's type may not be settled yet —
     /// recorded here and discharged by [`crate::resolve_record_updates`] after
     /// the main solve.
-    pub fn constrain_update(
+    pub(crate) fn constrain_update(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
         base: &canon::Expr,
@@ -1352,7 +1352,7 @@ impl<'a> Builder<'a> {
     /// Constrain a `case scrut of …`: the scrutinee shares one type, every arm
     /// pattern is checked against it, and every arm body unifies to one shared
     /// result — the whole `case`'s type.
-    pub fn constrain_case(
+    pub(crate) fn constrain_case(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
         scrut: &canon::Expr,
@@ -1378,7 +1378,7 @@ impl<'a> Builder<'a> {
     /// and at `Bool` in one module yields two separately-satisfiable types. A
     /// constructor with no registered scheme (imported, outside the single-module
     /// subset) falls back to the bare enum type, sound for the nullary case.
-    pub fn constrain_var_ctor(
+    pub(crate) fn constrain_var_ctor(
         &mut self,
         home: &[Symbol],
         type_name: Symbol,
@@ -1403,7 +1403,7 @@ impl<'a> Builder<'a> {
     /// Constrain a `case` arm pattern against the scrutinee's variable, binding
     /// any pattern variables into `local`.
     #[allow(clippy::too_many_lines)]
-    pub fn constrain_pattern(
+    pub(crate) fn constrain_pattern(
         &mut self,
         local: &mut BTreeMap<Symbol, VarId>,
         pat: &canon::Pattern,
@@ -1620,7 +1620,7 @@ impl<'a> Builder<'a> {
     /// Build the IPE-T0013 diagnostic for a constructor pattern that binds the
     /// wrong number of payload fields. A forged constructor symbol surfaces the
     /// underlying intern bug instead.
-    pub fn ctor_pattern_arity(
+    pub(crate) fn ctor_pattern_arity(
         &self,
         span: Span,
         ctor: Symbol,

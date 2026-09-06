@@ -142,7 +142,7 @@ pub fn hot_appearance_enabled() -> bool {
 /// values (`None` = unset). Opt-out (`no_var`) wins; then an explicit
 /// `hot_var`; otherwise the default is on.
 #[must_use]
-pub fn hot_appearance_from_env(no_var: Option<&str>, hot_var: Option<&str>) -> bool {
+pub(crate) fn hot_appearance_from_env(no_var: Option<&str>, hot_var: Option<&str>) -> bool {
     let set = |v: Option<&str>| v.is_some_and(|s| !s.is_empty() && s != "0");
     if set(no_var) {
         return false;
@@ -190,7 +190,7 @@ pub fn bluegreen_enabled() -> bool {
 /// `no_bluegreen` / `bluegreen` are the respective env values (`None` = unset).
 /// Precedence: opt-out wins, then an explicit legacy choice, else default on.
 #[must_use]
-pub fn bluegreen_from_env_values(no_bluegreen: Option<&str>, bluegreen: Option<&str>) -> bool {
+pub(crate) fn bluegreen_from_env_values(no_bluegreen: Option<&str>, bluegreen: Option<&str>) -> bool {
     // Opt-out wins: a hard "never proxy" for a user who needs the direct bind.
     if no_bluegreen.is_some_and(|v| !v.is_empty() && v != "0") {
         return false;
@@ -358,7 +358,7 @@ pub fn build_with_sibling_discovery_with_options(
 /// [`CliError::Pipeline`] when the compiler rejects the program; [`CliError::Io`]
 /// on any filesystem failure; [`CliError::StaticRefusal`] when the emitted app
 /// shape cannot be static.
-pub fn build_test_with_project_sources(
+pub(crate) fn build_test_with_project_sources(
     project_src_root: &Path,
     test_entry: &Path,
     out_dir: &Path,
@@ -383,7 +383,7 @@ pub fn build_test_with_project_sources(
 
 /// The entry file and every sibling `.ipe` module discovered in its source
 /// directory, ready to feed the shared compile core.
-pub struct CollectedSources {
+pub(crate) struct CollectedSources {
     pub(crate) sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     pub(crate) discovered: Vec<project::DiscoveredModule>,
     pub(crate) entry_module_path: Vec<String>,
@@ -405,7 +405,7 @@ pub struct CollectedSources {
 /// # Errors
 /// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on
 /// any filesystem failure reading a discovered module.
-pub fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
+pub(crate) fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
     let source =
         crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
     let entry_module_path = parse_entry_module_path(entry, &source)?;
@@ -448,7 +448,7 @@ pub fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliE
 /// # Errors
 /// [`CliError::Pipeline`] when the test entry does not parse; [`CliError::Io`]
 /// on any filesystem failure reading a discovered module.
-pub fn collect_test_sources(
+pub(crate) fn collect_test_sources(
     project_src_root: &Path,
     test_entry: &Path,
 ) -> Result<CollectedSources, CliError> {
@@ -494,7 +494,7 @@ pub fn collect_test_sources(
 ///
 /// # Errors
 /// [`CliError::Pipeline`] when the source does not parse.
-pub fn parse_entry_module_path(entry: &Path, source: &str) -> Result<Vec<String>, CliError> {
+pub(crate) fn parse_entry_module_path(entry: &Path, source: &str) -> Result<Vec<String>, CliError> {
     let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
         file: entry.to_path_buf(),
         src: source.to_owned(),
@@ -513,7 +513,7 @@ pub fn parse_entry_module_path(entry: &Path, source: &str) -> Result<Vec<String>
 /// Ensure the entry itself is in the discovered set, even when its file name
 /// does not match the module-segment validation (e.g. a temp path). This
 /// prevents the entry from being silently dropped.
-pub fn ensure_entry_present(
+pub(crate) fn ensure_entry_present(
     discovered: &mut Vec<project::DiscoveredModule>,
     entry: &Path,
     entry_module_path: &[String],
@@ -535,7 +535,7 @@ pub fn ensure_entry_present(
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure reading a discovered module.
-pub fn read_discovered_sources(
+pub(crate) fn read_discovered_sources(
     discovered: &[project::DiscoveredModule],
     entry: &Path,
     entry_module_path: &[String],
@@ -566,7 +566,7 @@ pub fn read_discovered_sources(
 /// When given a file entry, the driver locates the project root (where
 /// `package.ipe` lives) before building, so the full module graph is compiled
 /// instead of just the single entry file.
-pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Option<PathBuf> {
+pub(crate) fn find_manifest_for_ipe_file(ipe_file: &Path) -> Option<PathBuf> {
     let mut dir = ipe_file.parent()?;
     loop {
         if let Some(manifest) = project::manifest_in_dir(dir) {
@@ -581,7 +581,7 @@ pub fn find_manifest_for_ipe_file(ipe_file: &Path) -> Option<PathBuf> {
 /// verbosity — [`compile_modules`] (used by every stable entry point) does
 /// not need it and discards it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CacheOutcome {
+pub(crate) enum CacheOutcome {
     /// A matching, same-epoch [`ipe_backend::EmittedProject`] entry was
     /// found on disk; the whole compile pipeline (parse through emit) was
     /// skipped.
@@ -609,7 +609,7 @@ pub enum CacheOutcome {
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic; [`CliError::Io`]
 /// on any filesystem failure.
 #[allow(clippy::too_many_arguments)]
-pub fn compile_modules(
+pub(crate) fn compile_modules(
     sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     discovered: Vec<project::DiscoveredModule>,
     entry_path: &[String],
@@ -663,7 +663,7 @@ pub fn compile_modules(
     clippy::too_many_arguments,
     clippy::needless_pass_by_value
 )]
-pub fn compile_modules_observed(
+pub(crate) fn compile_modules_observed(
     mut sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     mut discovered: Vec<project::DiscoveredModule>,
     entry_path: &[String],
@@ -940,7 +940,7 @@ pub fn create_source_root(
 /// `(file, src)` blame map every span-attribution step reads. The lookups run
 /// against symbols `canonicalize` already interned, so this cannot append a new
 /// symbol and cannot perturb interning order (the golden byte-identity SEAL).
-pub fn home_to_source_map(
+pub(crate) fn home_to_source_map(
     interner: &ipe_db::SharedInterner,
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
 ) -> BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)> {
@@ -972,7 +972,7 @@ pub fn home_to_source_map(
 /// defs share a byte namespace, so the intended def almost always has the
 /// smaller distance from its own `lo`. Falls back to `entry` when no def or
 /// constructor encloses the span (e.g. a `CompilerBug` with `Span::DUMMY`).
-pub fn source_for_span_in_linked(
+pub(crate) fn source_for_span_in_linked(
     linked: &ipe_canon::ast::Module,
     home_to_source: &BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)>,
     entry: &(PathBuf, String),
@@ -1024,7 +1024,7 @@ pub fn source_for_span_in_linked(
 /// back to the byte-offset heuristic over the linked program. This is the
 /// single attribution rule every post-link pipeline error shares, so `ipe build`
 /// and `ipe type-check` frame the identical diagnostic against the identical source.
-pub fn attribute_post_link_error(
+pub(crate) fn attribute_post_link_error(
     linked: &ipe_canon::ast::Module,
     home_to_source: &BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)>,
     entry: &(PathBuf, String),
@@ -1058,7 +1058,7 @@ pub fn attribute_post_link_error(
 /// footgun is caught. The returned `home` is empty: the diagnostic's own span
 /// carries the offending source location, resolved by the byte-offset heuristic
 /// the other homeless post-link errors already use.
-pub fn gate_decoder_pipelines(
+pub(crate) fn gate_decoder_pipelines(
     linked: &ipe_canon::ast::Module,
 ) -> Result<(), (Diagnostic, Vec<ipe_intern::Symbol>)> {
     ipe_canon::decoder_pipeline_gate::check_decoder_pipelines(linked)
@@ -1079,7 +1079,7 @@ pub fn gate_decoder_pipelines(
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first module's canon error;
 /// [`CliError::Usage`] if a topo-ordered module is absent from the source map.
-pub fn attribute_canon_errors(
+pub(crate) fn attribute_canon_errors(
     db: &ipe_db::IpeDatabase,
     source_root: ipe_db::SourceRoot,
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
@@ -1121,7 +1121,7 @@ pub fn attribute_canon_errors(
 /// it, so the caller additionally canonicalises the join and asserts containment
 /// (`starts_with` the canonical root) before trusting it — the lexical seals and
 /// the resolved-path containment check are independent layers.
-pub fn widget_file_root(entry_src_path: &Path) -> &Path {
+pub(crate) fn widget_file_root(entry_src_path: &Path) -> &Path {
     entry_src_path
         .parent()
         .filter(|p| p.is_dir())
@@ -1483,7 +1483,7 @@ pub fn compile_prepared(
 /// from the emitted file set or the `install_panic_classifier();` anchor the
 /// splice keys on is missing — a drifted emit template, surfaced loudly rather
 /// than silently emitting a program that never registers its widgets.
-pub fn inject_widget_registration(
+pub(crate) fn inject_widget_registration(
     emitted: &mut ipe_backend::EmittedProject,
     manifest: &BTreeMap<String, String>,
 ) -> Result<(), CliError> {
@@ -1549,7 +1549,7 @@ pub fn inject_widget_registration(
 /// [`CliError`] carrying a [`Diagnostic::CompilerBug`] if `www/index.html` is
 /// absent from the emitted file set or lacks the `</head>` anchor — a drifted
 /// wasm emit template, surfaced loudly.
-pub fn inject_wasm_widget_bundle(
+pub(crate) fn inject_wasm_widget_bundle(
     emitted: &mut ipe_backend::EmittedProject,
     manifest: &BTreeMap<String, String>,
 ) -> Result<(), CliError> {
@@ -1630,7 +1630,7 @@ pub fn inject_wasm_widget_bundle(
 /// Render `s` as a plain double-quoted Rust string literal (the tag: a fixed
 /// `ipe-ce-<hex>`, `[a-z0-9-]` only, so escaping is trivial but applied for
 /// safety).
-pub fn rust_str_literal(s: &str) -> String {
+pub(crate) fn rust_str_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for ch in s.chars() {
@@ -1648,7 +1648,7 @@ pub fn rust_str_literal(s: &str) -> String {
 /// to clear any `"#` run inside `s`, so arbitrary content (author JS with quotes
 /// and hashes) is emitted verbatim as data — it can never terminate the literal
 /// early and spill into code.
-pub fn rust_raw_str_literal(s: &str) -> String {
+pub(crate) fn rust_raw_str_literal(s: &str) -> String {
     // The fence must be longer than the longest run of `#` that immediately
     // follows a `"` in the content (that is the only sequence that could close a
     // raw literal). Computing the max `#`-run overall is a safe over-approximation.
@@ -1691,7 +1691,7 @@ pub fn rust_raw_str_literal(s: &str) -> String {
 /// [`CliError::Io`] on any filesystem failure; [`CliError::StaticRefusal`]
 /// for a webview shape under a static plan; [`CliError::Pipeline`] on a
 /// backend-invariant breach (manifest anchor drift).
-pub fn write_emitted_project(
+pub(crate) fn write_emitted_project(
     emitted: &ipe_backend::EmittedProject,
     out_dir: &Path,
     runtime_dir: &Path,
@@ -1726,7 +1726,7 @@ pub fn write_emitted_project(
 /// Map a backend-invariant [`Diagnostic`] (a `CompilerBug` from manifest
 /// surgery — no owning source file) onto the pipeline error channel, blamed
 /// on the emitted manifest.
-pub fn backend_invariant_err(diag: Diagnostic) -> CliError {
+pub(crate) fn backend_invariant_err(diag: Diagnostic) -> CliError {
     CliError::Pipeline {
         file: PathBuf::from("Cargo.toml"),
         src: String::new(),
@@ -1740,7 +1740,7 @@ pub fn backend_invariant_err(diag: Diagnostic) -> CliError {
 /// user placed there by hand is never touched. Needed because the
 /// reconciler's prune pass is scoped to `out_dir/src` and cannot own
 /// root-level files.
-pub fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
+pub(crate) fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
     let path = out_dir.join(".cargo").join("config.toml");
     match fs::read_to_string(&path) {
         Ok(text) if text.starts_with(ipe_backend_rust::static_build::CARGO_CONFIG_MARKER) => {
@@ -1784,7 +1784,7 @@ pub fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
 /// runtime tree is trusted in-repo source, so this is not expected to fire in
 /// practice). [`CliError::RuntimeMaterializeFailed`] when the embedded runtime
 /// crate contains non-UTF-8 files (unexpected for in-repo source).
-pub fn build_emit_manifest(
+pub(crate) fn build_emit_manifest(
     emitted: &ipe_backend::EmittedProject,
     runtime_dir: &Path,
     tree_shake_vendored: bool,
@@ -1853,7 +1853,7 @@ pub fn build_emit_manifest(
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure reading `runtime_dir`.
-pub fn collect_reachable_runtime_text(
+pub(crate) fn collect_reachable_runtime_text(
     runtime_dir: &Path,
     dst_prefix: &Path,
     emitted_mod_rs: &str,
@@ -1882,7 +1882,7 @@ pub fn collect_reachable_runtime_text(
 /// or trailing content. A declaration that opens an inline module body (`pub
 /// mod web {`) is deliberately excluded — it has no separate source file — by
 /// requiring the statement to end in `;`.
-pub fn declared_modules(mod_rs: &str) -> BTreeSet<String> {
+pub(crate) fn declared_modules(mod_rs: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for line in mod_rs.lines() {
         let line = line.trim();
@@ -1902,7 +1902,7 @@ pub fn declared_modules(mod_rs: &str) -> BTreeSet<String> {
 
 /// Recursively read every file under `src_dir` as UTF-8 text, inserting
 /// `(dst_prefix.join(rel), contents)` into `manifest`.
-pub fn collect_dir_text(
+pub(crate) fn collect_dir_text(
     src_dir: &Path,
     dst_prefix: &Path,
     manifest: &mut BTreeMap<PathBuf, String>,
@@ -1938,7 +1938,7 @@ pub fn collect_dir_text(
 ///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure.
-pub fn reconcile_emitted_project(
+pub(crate) fn reconcile_emitted_project(
     manifest: &BTreeMap<PathBuf, String>,
     out_dir: &Path,
 ) -> Result<(), CliError> {
@@ -1957,7 +1957,7 @@ pub fn reconcile_emitted_project(
 /// (it always writes). Delegating the actual write to [`write_atomic`] reuses
 /// its established tmp-then-rename + cleanup-on-failure behaviour rather than
 /// a second, parallel atomic-write implementation.
-pub fn write_if_changed(path: &Path, contents: &str) -> Result<(), CliError> {
+pub(crate) fn write_if_changed(path: &Path, contents: &str) -> Result<(), CliError> {
     if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
         return Ok(());
     }
@@ -1969,7 +1969,7 @@ pub fn write_if_changed(path: &Path, contents: &str) -> Result<(), CliError> {
 /// directory itself (leaving empty directories behind is harmless — `cargo`
 /// does not care — and staying file-only keeps this pass's blast radius
 /// minimal).
-pub fn prune_orphaned_files(
+pub(crate) fn prune_orphaned_files(
     dir: &Path,
     manifest: &BTreeMap<PathBuf, String>,
     out_dir: &Path,
@@ -2221,7 +2221,7 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 /// # Errors
 /// [`CliError::RuntimeNotFound`] / [`CliError::Io`] from [`resolve_runtime`] when
 /// a vendored tree is required but cannot be located.
-pub fn resolve_vendored_runtime_dir(
+pub(crate) fn resolve_vendored_runtime_dir(
     cli_override: Option<String>,
     needs_vendored: bool,
 ) -> Result<PathBuf, CliError> {
