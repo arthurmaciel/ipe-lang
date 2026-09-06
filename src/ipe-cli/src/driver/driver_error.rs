@@ -1,7 +1,7 @@
 use super::nearest_command;
 use crate::{
-    Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, help,
-    publish, render, render_json, style, toolchain,
+    Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, delivery,
+    help, publish, render, render_json, style, toolchain,
 };
 
 /// The runtime crate an emitted project linked against: its root and declared
@@ -371,6 +371,14 @@ impl From<api_surface::DiffError> for CliError {
 impl From<build_plan::Refusal> for CliError {
     fn from(refusal: build_plan::Refusal) -> Self {
         Self::StaticRefusal(refusal)
+    }
+}
+
+impl From<delivery::DeliveryError> for CliError {
+    /// A delivery refusal is a pedagogical, user-facing message; it surfaces
+    /// through the reader's named-error channel.
+    fn from(err: delivery::DeliveryError) -> Self {
+        Self::UsageOwned(err.to_string())
     }
 }
 
