@@ -186,12 +186,13 @@ const HTML_ATTRIBUTES: &str = include_str!("../Ipe/Html/Attributes.ipe");
 /// `Ipe.Html.Unsafe` — the un-escaped raw-HTML escape hatch, compiled-source
 /// Layer-3.
 ///
-/// The single member `unsafeRaw` is a point-free `Kernel.kernel "Html_unsafeRaw"`
-/// alias resolved by `ipe_canon::resolve::detect_kernel_alias` to the retained
-/// `HtmlRawNode` kernel (runtime: `ipe_runtime::ui::helpers::html_raw_node_`,
-/// the `HRaw` verbatim sink). Only the surface home moved here from `Ipe.Html`;
-/// the kernel, its `("Html", "unsafeRaw")` registry key, and the render-sink
-/// behaviour are unchanged. Importing this dotted `Ipe.<M>.Unsafe` submodule
+/// Its members `unsafeRaw` and `unsafeScript` are point-free
+/// `Kernel.kernel "Html_unsafeRaw"` / `"Html_unsafeScript"` aliases resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to the `HtmlRawNode` /
+/// `HtmlScriptNode` kernels (runtime: `ipe_runtime::ui::helpers::html_raw_node_`,
+/// the `HRaw` verbatim sink, and the inline-`<script>` sink). Only the surface
+/// home moved here from `Ipe.Html`; the kernels, their registry keys, and the
+/// render-sink behaviour are unchanged. Importing this dotted `Ipe.<M>.Unsafe` submodule
 /// discloses the `unsafe` capability. Registered in [`COMPILED_STD_MODULES`]
 /// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
@@ -426,8 +427,8 @@ const TOSTRING_CORE: &str = include_str!("../Ipe/ToString.ipe");
 /// `Ipe.Test` — lightweight in-process test framework.
 ///
 /// Compiled pure-Ipê source that defines the `Test` / `TestResult` ADTs and
-/// all assertion helpers.  `expectErrorKind` / `kindName` are OMITTED pending
-/// the `Ipe.Error` compiled-source migration; `summarise` is pure (no IO).
+/// all assertion helpers.  `kindName` re-exports `Ipe.Error.kindName`; `summarise`
+/// is pure (no IO).
 /// Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Test"` entry exists there).
 const IPE_TEST: &str = include_str!("../Ipe/Test.ipe");
 
@@ -1103,8 +1104,9 @@ const STD_CACHE: &str = include_str!("../Ipe/Cache.ipe");
 
 /// `Ipe.Compression` — gzip + zstd compression (compiled source).
 ///
-/// KERNEL-BLOCKED: no `Compression_*` kernel variants exist — member use
-/// fails closed with IPE-N0028.
+/// Members are point-free `Kernel.kernel "Compression_*"` aliases backed by the
+/// registered `Compression*` kernels (`ipe_runtime::compression::*`); the
+/// `kernel_backed_qualifiers_match_registry` test locks that this stays true.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_COMPRESSION: &str = include_str!("../Ipe/Compression.ipe");
 
@@ -1127,16 +1129,19 @@ const STD_CONFIG: &str = include_str!("../Ipe/Config.ipe");
 
 /// `Ipe.Csv` — CSV encode + decode (compiled source).
 ///
-/// Defines `type alias Csv` + pure Ipê builders.  KERNEL-BLOCKED: no
-/// `Csv_*` kernel variants exist — member use fails closed with IPE-N0028.
+/// Defines `type alias Csv` + pure Ipê builders.  The kernel-backed members are
+/// point-free `Kernel.kernel "Csv_*"` aliases backed by the registered `Csv*`
+/// kernels; the `kernel_backed_qualifiers_match_registry` test locks that this
+/// stays true.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CSV: &str = include_str!("../Ipe/Csv.ipe");
 
 /// `Ipe.Email` — provider-abstract email send (compiled source).
 ///
-/// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.  KERNEL-BLOCKED:
-/// no `Email_*` kernel variant exists — member use fails closed with
-/// IPE-N0028.
+/// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.  `Email.send`
+/// is a point-free `Kernel.kernel "Email_send"` alias backed by the registered
+/// `EmailSend` kernel; the `kernel_backed_qualifiers_match_registry` test locks
+/// that this stays true.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_EMAIL: &str = include_str!("../Ipe/Email.ipe");
 
@@ -1159,8 +1164,9 @@ const STD_PUBSUB: &str = include_str!("../Ipe/PubSub.ipe");
 
 /// `Ipe.Trace` — opt-in distributed-tracing spans (compiled source).
 ///
-/// KERNEL-BLOCKED: no `Trace_*` kernel variants exist — member use fails
-/// closed with IPE-N0028.
+/// Members are point-free `Kernel.kernel "Trace_*"` aliases backed by the
+/// registered `Trace*` kernels; the `kernel_backed_qualifiers_match_registry`
+/// test locks that this stays true.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_TRACE: &str = include_str!("../Ipe/Trace.ipe");
 
@@ -2067,6 +2073,34 @@ mod tests {
                 "compiled-source module {} must parse: {:?}",
                 m.dotted,
                 parsed.err()
+            );
+        }
+    }
+
+    /// Anti-drift guard for the per-module availability prose above (issue
+    /// #1975): the `KernelDef` registry is the single source of truth for which
+    /// members are backed, and hand-written "KERNEL-BLOCKED" / "OMITTED pending a
+    /// kernel" doc claims silently drifted from it in both directions. Every
+    /// qualifier whose compiled-source module routes members through
+    /// `Kernel.kernel "<Qualifier>_*"` MUST have at least one registered kernel;
+    /// this asserts the ground truth those doc comments describe so a future edit
+    /// that (a) deletes a kernel or (b) re-introduces a false "no kernel exists"
+    /// claim is caught against the registry rather than trusted prose.
+    #[test]
+    fn kernel_backed_qualifiers_match_registry() {
+        let registered: std::collections::BTreeSet<&'static str> = ipe_kernels::StdlibKernel::ALL
+            .iter()
+            .map(|k| k.def().qualifier)
+            .collect();
+
+        // The qualifiers whose module docs previously claimed no kernel existed;
+        // the registry now backs each, so the claim was drift.
+        for qualifier in ["Compression", "Csv", "Email", "Trace", "Time"] {
+            assert!(
+                registered.contains(qualifier),
+                "module doc treats `{qualifier}` as kernel-backed, but the \
+                 KernelDef registry has no `{qualifier}_*` kernel — the doc \
+                 prose and the registry SSOT have drifted",
             );
         }
     }
