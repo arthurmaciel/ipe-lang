@@ -124,3 +124,100 @@ fn legitimate_stdlib_alias_still_resolves() {
         "a legitimate `import Ipe.Json.Encode as J` must still resolve J.string, got: {r:?}"
     );
 }
+
+/// Capability smuggle: a bare `import Ipe.Http.Stream` exposes the module under
+/// its last path segment `Stream`, which equals the DIFFERENT server-`Stream`
+/// module's gated canonical qualifier. Marking that segment as imported would
+/// unlock server `Stream.emit` / `Stream.finish` (privileged server kernels)
+/// with no import of `Ipe.Http.Server.Stream`. The gate must fail closed:
+/// `Stream.emit` under only `import Ipe.Http.Stream` still raises the teachable
+/// must-import diagnostic.
+#[test]
+fn bare_http_stream_import_does_not_unlock_server_stream_gate() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Http.Stream\n\n\
+               main =\n    Stream.emit \"x\"\n";
+    let err =
+        canon(src).expect_err("server `Stream.emit` must stay gated under bare Ipe.Http.Stream");
+    assert!(
+        matches!(
+            err,
+            Diagnostic::Name {
+                msg: NameError::StdlibImportRequired { .. },
+                ..
+            }
+        ),
+        "expected StdlibImportRequired for smuggled server `Stream`, got: {err:?}"
+    );
+}
+
+/// Capability smuggle: a bare `import Ipe.Server.Http` exposes the module under
+/// its last path segment `Http`, which equals the DIFFERENT client-`Http`
+/// module's gated canonical qualifier. Marking it would unlock client `Http.get`
+/// with no `import Ipe.Http`. The gate must fail closed.
+#[test]
+fn bare_server_http_import_does_not_unlock_client_http_gate() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Server.Http\n\n\
+               main =\n    Http.get\n";
+    let err = canon(src).expect_err("client `Http.get` must stay gated under bare Ipe.Server.Http");
+    assert!(
+        matches!(
+            err,
+            Diagnostic::Name {
+                msg: NameError::StdlibImportRequired { .. },
+                ..
+            }
+        ),
+        "expected StdlibImportRequired for smuggled client `Http`, got: {err:?}"
+    );
+}
+
+/// Control: server `Stream.emit` with NO import at all is already gated — the
+/// baseline the smuggle probe above must not weaken.
+#[test]
+fn bare_server_stream_use_is_gated_without_import() {
+    let src = "module Main exposing (main)\n\n\
+               main =\n    Stream.emit \"x\"\n";
+    let err = canon(src).expect_err("un-imported server `Stream.emit` must be gated");
+    assert!(
+        matches!(
+            err,
+            Diagnostic::Name {
+                msg: NameError::StdlibImportRequired { .. },
+                ..
+            }
+        ),
+        "expected StdlibImportRequired for un-imported `Stream`, got: {err:?}"
+    );
+}
+
+/// Positive: a bare `import Ipe.Http.Stream` still resolves its OWN canonical
+/// qualifier `HttpStream` — the fail-closed foreign-segment guard must not lock
+/// the module's legitimate members.
+#[test]
+fn bare_http_stream_import_resolves_its_own_canonical() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Http.Stream\n\n\
+               main =\n    HttpStream.open\n";
+    let r = canon(src);
+    assert!(
+        r.is_ok(),
+        "bare `import Ipe.Http.Stream` must still resolve HttpStream.open, got: {r:?}"
+    );
+}
+
+/// Positive: an explicit `import Ipe.Server.Http as Server` still resolves
+/// `Server.get` — an explicit alias onto its own canonical is legitimate and the
+/// guard (which only skips a BARE foreign-segment) leaves it untouched.
+#[test]
+fn explicit_server_http_alias_resolves_server_members() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Server.Http as Server\n\n\
+               main =\n    Server.get\n";
+    let r = canon(src);
+    assert!(
+        r.is_ok(),
+        "`import Ipe.Server.Http as Server` must resolve Server.get, got: {r:?}"
+    );
+}
