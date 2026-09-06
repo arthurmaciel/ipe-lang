@@ -118,7 +118,7 @@ fn collect_tokens(
     // here because the LSP path does not yet run the full canonicaliser on every
     // keypress; the syntax-only path keeps the same token set the previous
     // hand-written walk produced (class-only, no def keys).
-    let annotated = ipe_annotate::annotate_syntax_only(&module, text, &interner);
+    let annotated = ipe_annotate::annotate_syntax_only(&module, &interner);
 
     drop(interner);
 

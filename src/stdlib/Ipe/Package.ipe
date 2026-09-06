@@ -36,6 +36,15 @@ module Ipe.Package exposing
     , WrapperOptions
     , Build
     , Delivery
+    , Ship
+    , binary
+    , staticBinary
+    , crossBinary
+    , desktop
+    , spa
+    , spaDesktop
+    , spaIos
+    , spaAndroid
     , DesktopConfig
     , MobileConfig
     , BrowserConfig
@@ -76,10 +85,80 @@ type alias Package =
 -- resolved shape+runtime+host, not a field here. `ipe build` reads only the
 -- section matching the resolved target; the others are inert at that run.
 type alias Delivery =
-    { desktop : DesktopConfig
+    { ships : List Ship
+    , desktop : DesktopConfig
     , mobile : MobileConfig
     , browser : BrowserConfig
     }
+
+
+-- | One delivery `ipe release` produces. The `ships` list declares *what* a
+-- project releases; the host config sections below declare *how* each looks.
+-- Every entry is one of the closed builder vocabulary — a typo is an unknown
+-- name at read time, never a string compared at build time. Each builder maps
+-- one-to-one onto the CLI delivery grammar (`binary` is the shape's co-located
+-- artifact; `spaIos` is `web spa ios`), so the manifest stores the same
+-- sentences the CLI accepts. An omitted `ships` field means the implicit
+-- `[ binary ]` singleton — the shape's default delivery.
+type Ship
+    = ShipBinary
+    | ShipStaticBinary
+    | ShipCross String
+    | ShipDesktop
+    | ShipSpa
+    | ShipSpaDesktop
+    | ShipSpaIos
+    | ShipSpaAndroid
+
+
+-- | The shape's own co-located artifact on the host triple (for `web`, served
+-- live). Meaningful for every shape.
+binary : Ship
+binary =
+    ShipBinary
+
+
+-- | The musl static binary (`--static`). Co-located shapes only.
+staticBinary : Ship
+staticBinary =
+    ShipStaticBinary
+
+
+-- | A cross-compiled co-located binary for a Rust target triple, validated at
+-- read time against the supported target set.
+crossBinary : String -> Ship
+crossBinary triple =
+    ShipCross triple
+
+
+-- | The `web desktop` webview-native desktop bundle. Web shape only.
+desktop : Ship
+desktop =
+    ShipDesktop
+
+
+-- | The `web spa` browser wasm bundle. Web shape only.
+spa : Ship
+spa =
+    ShipSpa
+
+
+-- | The `web spa desktop` wasm bundle plus a native webview shell.
+spaDesktop : Ship
+spaDesktop =
+    ShipSpaDesktop
+
+
+-- | The `web spa ios` wasm bundle plus an iOS shell.
+spaIos : Ship
+spaIos =
+    ShipSpaIos
+
+
+-- | The `web spa android` wasm bundle plus an Android shell.
+spaAndroid : Ship
+spaAndroid =
+    ShipSpaAndroid
 
 
 -- | Configuration for the `web live desktop` (webview-native) host.

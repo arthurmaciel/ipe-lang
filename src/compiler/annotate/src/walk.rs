@@ -9,6 +9,8 @@
 //!
 //! Both produce a sorted, deduplicated token stream.
 
+use std::collections::BTreeMap;
+
 use ipe_diagnostics::Span;
 use ipe_intern::{Interner, Symbol};
 
@@ -55,13 +57,12 @@ impl Raw {
 pub fn annotate_full(
     syntax: &ipe_syntax::Module,
     canon: &ipe_canon::ast::Module,
-    source: &str,
     interner: &Interner,
 ) -> Vec<AnnotatedToken> {
     let mut raw: Vec<Raw> = Vec::new();
 
     // Walk the canonical AST for semantically-classified tokens.
-    canon_walk(&mut raw, syntax, canon, source, interner);
+    canon_walk(&mut raw, syntax, canon, interner);
 
     finish(raw)
 }
@@ -70,14 +71,10 @@ pub fn annotate_full(
 // Syntax-only annotate
 // ---------------------------------------------------------------------------
 
-pub fn annotate_syntax(
-    syntax: &ipe_syntax::Module,
-    source: &str,
-    interner: &Interner,
-) -> Vec<AnnotatedToken> {
+pub fn annotate_syntax(syntax: &ipe_syntax::Module, interner: &Interner) -> Vec<AnnotatedToken> {
     let mut raw: Vec<Raw> = Vec::new();
 
-    syntax_walk(&mut raw, syntax, source, interner);
+    syntax_walk(&mut raw, syntax, interner);
 
     finish(raw)
 }
@@ -108,29 +105,22 @@ fn canon_walk(
     out: &mut Vec<Raw>,
     syntax: &ipe_syntax::Module,
     canon: &ipe_canon::ast::Module,
-    source: &str,
     interner: &Interner,
 ) {
     // Module keyword + name.
-    if let Some(kw) = find_keyword(source, 0, "module") {
-        Raw::keyword(out, kw);
-    }
+    Raw::keyword(out, syntax.module_kw);
     Raw::push(out, syntax.name.span, TokenClass::Module, None);
 
     // Imports — syntactic (canon AST does not retain import list post-resolution).
     for imp in &syntax.imports {
-        if let Some(kw) = find_keyword_before(source, imp.name.span.lo, "import") {
-            Raw::keyword(out, kw);
-        }
+        Raw::keyword(out, imp.import_kw);
         Raw::push(out, imp.name.span, TokenClass::Module, None);
         push_exposing(out, &imp.exposing.value, interner);
     }
 
     // Union types — syntactic (canon carries unions with resolved ctors).
     for (syn_union, can_union) in syntax.unions.iter().zip(canon.unions.iter()) {
-        if let Some(kw) = find_keyword_before(source, syn_union.value.name.span.lo, "type") {
-            Raw::keyword(out, kw);
-        }
+        Raw::keyword(out, syn_union.value.type_kw);
         Raw::push(out, syn_union.value.name.span, TokenClass::Type, None);
         for var in &syn_union.value.vars {
             Raw::push(out, var.span, TokenClass::TypeVar, None);
@@ -149,12 +139,25 @@ fn canon_walk(
         }
     }
 
-    // Value bindings — walk canonical expr for semantic class.
-    for (syn_val, can_def) in syntax.values.iter().zip(canon.defs.iter()) {
-        // The binding name itself — top-level Function with DefKey::TopLevel.
-        let def = resolve_sym(can_def.name().value, interner).map(|name_str| DefKey::TopLevel {
-            module: interner_join(can_def.home(), interner),
-            name: name_str,
+    // Value bindings — match each syntax value to its canonical def by name.
+    //
+    // Canon filters some syntax values out of `canon.defs` (a `Ffi.kernel` alias
+    // binding leaves no ordinary def), so a positional pairing would attach the
+    // wrong `DefKey` to every following value and silently drop the tail. Keying
+    // by name pairs each value with its own def; a value with no matching def
+    // (a kernel alias) is classified as a plain `Function` with no `DefKey`,
+    // never mispaired with a neighbour's def.
+    let defs_by_name: BTreeMap<Symbol, &ipe_canon::ast::Def> =
+        canon.defs.iter().map(|d| (d.name().value, d)).collect();
+    for syn_val in &syntax.values {
+        let can_def = defs_by_name.get(&syn_val.value.name.value).copied();
+        // The binding name itself — top-level Function; carry a DefKey::TopLevel
+        // only when a canonical def backs this value.
+        let def = can_def.and_then(|d| {
+            resolve_sym(d.name().value, interner).map(|name_str| DefKey::TopLevel {
+                module: interner_join(d.home(), interner),
+                name: name_str,
+            })
         });
         Raw::push(out, syn_val.value.name.span, TokenClass::Function, def);
         // Type annotation (syntactic spans not always available).
@@ -165,13 +168,15 @@ fn canon_walk(
         for pat in &syn_val.value.patterns {
             push_syn_pattern(out, pat, interner);
         }
-        // Body expression — walk the canonical expr for semantic richness.
-        let body = match can_def {
-            ipe_canon::ast::Def::Untyped { body, .. } | ipe_canon::ast::Def::Typed { body, .. } => {
-                body
-            }
-        };
-        canon_expr(out, body, interner);
+        // Body expression — walk the canonical expr for semantic richness when a
+        // canonical def exists; fall back to the syntax body for a value with no
+        // def (a kernel alias) so its tokens are not dropped.
+        match can_def {
+            Some(
+                ipe_canon::ast::Def::Untyped { body, .. } | ipe_canon::ast::Def::Typed { body, .. },
+            ) => canon_expr(out, body, interner),
+            None => push_syn_expr(out, &syn_val.value.body, interner),
+        }
     }
 }
 
@@ -380,24 +385,18 @@ fn canon_pattern(out: &mut Vec<Raw>, pat: &ipe_canon::ast::Pattern, interner: &I
 // Syntax-only walk (parse tree, no canon)
 // ---------------------------------------------------------------------------
 
-fn syntax_walk(out: &mut Vec<Raw>, syntax: &ipe_syntax::Module, source: &str, interner: &Interner) {
-    if let Some(kw) = find_keyword(source, 0, "module") {
-        Raw::keyword(out, kw);
-    }
+fn syntax_walk(out: &mut Vec<Raw>, syntax: &ipe_syntax::Module, interner: &Interner) {
+    Raw::keyword(out, syntax.module_kw);
     Raw::push(out, syntax.name.span, TokenClass::Module, None);
 
     for imp in &syntax.imports {
-        if let Some(kw) = find_keyword_before(source, imp.name.span.lo, "import") {
-            Raw::keyword(out, kw);
-        }
+        Raw::keyword(out, imp.import_kw);
         Raw::push(out, imp.name.span, TokenClass::Module, None);
         push_exposing(out, &imp.exposing.value, interner);
     }
 
     for syn_union in &syntax.unions {
-        if let Some(kw) = find_keyword_before(source, syn_union.value.name.span.lo, "type") {
-            Raw::keyword(out, kw);
-        }
+        Raw::keyword(out, syn_union.value.type_kw);
         Raw::push(out, syn_union.value.name.span, TokenClass::Type, None);
         for var in &syn_union.value.vars {
             Raw::push(out, var.span, TokenClass::TypeVar, None);
@@ -581,60 +580,11 @@ fn push_syn_expr(out: &mut Vec<Raw>, expr: &ipe_syntax::Expr, interner: &Interne
 }
 
 // ---------------------------------------------------------------------------
-// Keyword scanning
-// ---------------------------------------------------------------------------
-
-fn find_keyword(source: &str, from: usize, kw: &str) -> Option<Span> {
-    let pos = source.get(from..)?.find(kw)?;
-    let abs = from + pos;
-    let before_ok = abs == 0
-        || source
-            .as_bytes()
-            .get(abs - 1)
-            .is_none_or(u8::is_ascii_whitespace);
-    let after_ok = source
-        .as_bytes()
-        .get(abs + kw.len())
-        .is_none_or(|b| b.is_ascii_whitespace() || *b == b'(');
-    if before_ok && after_ok {
-        Some(Span::new(offset_u32(abs), offset_u32(abs + kw.len())))
-    } else {
-        None
-    }
-}
-
-/// Scan backwards from `before_byte` up to 64 bytes to find a keyword.
-fn find_keyword_before(source: &str, before_byte: u32, kw: &str) -> Option<Span> {
-    let window_start = (before_byte as usize).saturating_sub(64);
-    let window = source.get(window_start..before_byte as usize)?;
-    let rel = window.rfind(kw)?;
-    let abs = window_start + rel;
-    let before_ok = abs == 0
-        || source
-            .as_bytes()
-            .get(abs - 1)
-            .is_none_or(u8::is_ascii_whitespace);
-    let after_ok = source
-        .as_bytes()
-        .get(abs + kw.len())
-        .is_none_or(|b| b.is_ascii_whitespace() || *b == b'(');
-    if before_ok && after_ok {
-        Some(Span::new(offset_u32(abs), offset_u32(abs + kw.len())))
-    } else {
-        None
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
 fn byte_len_u32(s: &str) -> u32 {
     u32::try_from(s.len()).unwrap_or(u32::MAX)
-}
-
-fn offset_u32(n: usize) -> u32 {
-    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 fn interner_join(syms: &[Symbol], interner: &Interner) -> String {
@@ -704,7 +654,124 @@ mod tests {
     fn syntax_walk_produces_tokens_for_valid_module() {
         let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
         let (syntax, interner) = parse(src);
-        let tokens = annotate_syntax(&syntax, src, &interner);
+        let tokens = annotate_syntax(&syntax, &interner);
         assert!(!tokens.is_empty(), "syntax walk produces tokens");
+    }
+
+    /// Keyword spans come from the lexer, not substring scans.
+    ///
+    /// A leading line comment contains the word "module"; the scanner approach
+    /// would match inside the comment.  The lexer-span approach emits a keyword
+    /// token only at the real keyword position.
+    #[test]
+    fn keyword_spans_are_exact_not_from_comment() {
+        // "-- module comment\nmodule Main exposing (..)\n"
+        // The real `module` keyword starts at byte 19.
+        let src = "-- module comment\nmodule Main exposing (..)\n";
+        let (syntax, interner) = parse(src);
+        let tokens = annotate_syntax(&syntax, &interner);
+        let kw = tokens
+            .iter()
+            .find(|t| t.class == TokenClass::Keyword)
+            .expect("at least one keyword token");
+        // The real keyword is at byte 18 (after the newline), not byte 3 inside the comment.
+        assert!(
+            kw.byte_start >= 18,
+            "keyword token must be at the real `module` span (byte >= 18), got {}",
+            kw.byte_start
+        );
+    }
+
+    /// A `type` declaration preceded by a comment longer than 64 bytes must
+    /// still produce a keyword token at the correct span.
+    #[test]
+    fn type_kw_span_survives_long_comment() {
+        // Construct a comment that is > 64 bytes, then a `type` declaration.
+        let long_comment = "-- ".to_owned() + &"x".repeat(70) + "\n";
+        let src = format!("module Main exposing (..)\n\n{long_comment}type Color = Red | Blue\n");
+        let (syntax, interner) = parse(&src);
+        let tokens = annotate_syntax(&syntax, &interner);
+        let type_kw = tokens
+            .iter()
+            .find(|t| {
+                t.class == TokenClass::Keyword
+                    && src.get(t.byte_start as usize..(t.byte_start + t.byte_len) as usize)
+                        == Some("type")
+            })
+            .expect("a `type` keyword token must be present");
+        let lexed =
+            &src[type_kw.byte_start as usize..(type_kw.byte_start + type_kw.byte_len) as usize];
+        assert_eq!(lexed, "type");
+    }
+
+    // Build an untyped canonical def whose body is a bare unit, so it can stand
+    // in for a real value binding without materialising an expression tree.
+    fn unit_def(name: Symbol, home: &[Symbol]) -> ipe_canon::ast::Def {
+        ipe_canon::ast::Def::Untyped {
+            home: home.to_vec(),
+            name: ipe_diagnostics::Located::new(Span::new(0, 0), name),
+            patterns: Vec::new(),
+            body: ipe_diagnostics::Located::new(Span::new(0, 0), ipe_canon::ast::Expr_::Unit),
+        }
+    }
+
+    // Regression for the positional-zip mispairing: canon filters a kernel-alias
+    // binding out of `canon.defs`, so a value's DefKey must be resolved by NAME,
+    // never by position. Here `aliased` is present in syntax but absent from
+    // `canon.defs`; a positional zip would attach `aliased`'s slot to `first`
+    // and drop `second` entirely.
+    #[test]
+    fn full_walk_pairs_defs_by_name_across_a_filtered_alias() {
+        let src = concat!(
+            "module Main exposing (first, second)\n\n",
+            "aliased : Int\n",
+            "aliased =\n    Kernel.kernel\n\n",
+            "first : Int\n",
+            "first =\n    1\n\n",
+            "second : Int\n",
+            "second =\n    2\n",
+        );
+        let (syntax, mut interner) = parse(src);
+        let home = vec![interner.intern("Main").expect("intern Main")];
+        let first_sym = interner.intern("first").expect("intern first");
+        let second_sym = interner.intern("second").expect("intern second");
+
+        // canon.defs OMITS `aliased` (the filtered kernel alias), keeping only
+        // the two ordinary values — the exact shape canon produces.
+        let canon = ipe_canon::ast::Module {
+            name: home.clone(),
+            unions: Vec::new(),
+            defs: vec![unit_def(first_sym, &home), unit_def(second_sym, &home)],
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::default(),
+        };
+
+        let tokens = annotate_full(&syntax, &canon, &interner);
+
+        // Resolve a value's name token (by source byte offset) to the top-level
+        // name its DefKey carries, or `None` when it has no top-level DefKey.
+        let top_level_name = |needle: &str| -> Option<String> {
+            let off = u32::try_from(src.find(&format!("{needle} =")).expect("value in source"))
+                .expect("offset fits u32");
+            tokens
+                .iter()
+                .find(|t| t.byte_start == off && t.class == TokenClass::Function)
+                .and_then(|t| t.def.clone())
+                .and_then(|def| match def {
+                    DefKey::TopLevel { name, .. } => Some(name),
+                    _ => None,
+                })
+        };
+
+        // Each value keys to its OWN def, never a neighbour's — the property a
+        // positional zip violates once the filtered alias shifts every pairing.
+        assert_eq!(top_level_name("first").as_deref(), Some("first"));
+        assert_eq!(top_level_name("second").as_deref(), Some("second"));
+        // The filtered alias has no canonical def: it is a plain Function token
+        // with no DefKey, never borrowing a neighbour's key.
+        assert!(
+            top_level_name("aliased").is_none(),
+            "a value with no canonical def carries no DefKey"
+        );
     }
 }

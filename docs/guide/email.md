@@ -66,12 +66,10 @@ case Email.parseAddress "alice@example.com" of
 Explore the full surface — the `with*` builders, the SES / SMTP config records,
 and `send` itself — with `ipe doc Ipe.Email`.
 
-> A `send`-free script that only parses an address and builds a message does not
-> yet compile end-to-end: emit references `ipe_runtime::email::*` but does not
-> enable the runtime's `email` cargo feature unless `Email.send` is called
-> ([issue #1545](https://github.com/arthurmaciel/ipe-lang/issues/1545)). A full
-> program that *does* call `send` links the feature and builds. Until #1545 lands
-> this guide stays reference-only rather than shipping a broken example.
+Address parsing and message building are pure and fully type-checked: a
+malformed address is rejected at `parseAddress`, and a message can only be built
+from typed fields. Actually delivering mail is `Email.send provider message`,
+which needs a live provider and network — see `ipe doc Ipe.Email`.
 
 ## The why
 

@@ -23,12 +23,13 @@ use crate::code::{
     IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
     IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
     IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_N0045,
-    IPE_N0046, IPE_N0047, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012,
-    IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021,
-    IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062,
-    IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_S0001, IPE_T0001, IPE_T0002,
-    IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015,
-    IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
+    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
+    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
+    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_P0068,
+    IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
+    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
+    IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -420,6 +421,19 @@ pub enum ParseError {
     /// (`--lint missing-docs`) is enabled; off by default. **Warning** — the
     /// program still compiles. [IPE-P0067]
     MissingDocString { name: Box<str> },
+    /// A standalone `name : T` type annotation whose `name` has no matching
+    /// value binding in the module — an orphan the compiler would otherwise
+    /// silently drop, discarding the author's stated type. [IPE-P0068]
+    AnnotationWithoutBinding { name: Box<str> },
+    /// Two or more `name : T` type annotations declare the same `name`. Only
+    /// one type can bind a value; the extras would otherwise be silently
+    /// dropped last-write-wins. [IPE-P0069]
+    DuplicateAnnotation { name: Box<str> },
+    /// The source file exceeds the addressable span range: byte offsets are
+    /// stored as `u32`, so a file larger than `u32::MAX` bytes cannot be given
+    /// accurate spans. Rather than clamp offsets (which would misreport every
+    /// position past the limit), the lexer turns the file away. [IPE-P0070]
+    SourceTooLarge { bytes: usize },
 }
 
 /// Errors raised during name resolution / canonicalisation.
@@ -718,6 +732,56 @@ pub enum NameError {
     /// [`ModulePlacementRejection`] names the module, the placement, and why the
     /// two axes forbid it, so the rendered message teaches the fix. [IPE-N0047]
     ModuleNotAllowedInPlacement(Box<ModulePlacementRejection>),
+    /// Two DISTINCT Ipê definitions collapse to one generated Rust identifier
+    /// after name mangling — the backend's `naming.rs` fold is not injective, so
+    /// e.g. `Std.Ui.borderRounded` and `Std.Ui.Border.rounded` both fold to
+    /// `std_ui_border_rounded`, and `firstName` / `first_name` both fold to the
+    /// witness trait `IpeHasFirstName`. Emitting both items under one name is
+    /// `rustc` E0428, so the backend fails closed here rather than emit a broken
+    /// crate. Unlike [`NameError::DuplicateValue`] (a genuine same-name source
+    /// redefinition, carrying real spans), this is a mangling collision between
+    /// two differently-spelled Ipê definitions; the IR carries no source spans,
+    /// so it names both Ipê definitions and the shared Rust name and asks for a
+    /// rename. [IPE-N0048]
+    RustNameFold {
+        /// The first (already-claimed) Ipê definition, as a dotted path.
+        first: Box<str>,
+        /// The second Ipê definition that folds onto the same Rust name.
+        second: Box<str>,
+        /// The generated Rust identifier both definitions produce.
+        rust_name: Box<str>,
+        /// Whether the collision is in the value or type namespace — selects the
+        /// noun the message uses.
+        kind: RustNameFoldKind,
+    },
+    /// A single pattern binds the same variable name more than once (e.g.
+    /// `( x, x )`). Each bound name is a distinct value in the branch body, so
+    /// two bindings of one name are ambiguous; the pattern is rejected rather
+    /// than silently shadowing one with the other. `first` is the span of the
+    /// earlier binder. [IPE-N0049]
+    DuplicatePatternBinder { name: Box<str>, first: Span },
+}
+
+/// Which namespace a [`NameError::RustNameFold`] collision falls in — selects
+/// the noun the rendered message uses ("value" vs "type").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RustNameFoldKind {
+    /// A value-namespace fold: two functions, or a record struct / row-witness
+    /// trait, collapsing onto one Rust identifier.
+    Value,
+    /// A type-namespace fold: two enums collapsing onto one Rust type name.
+    Type,
+}
+
+impl RustNameFoldKind {
+    /// The noun for this namespace, used in the rendered message.
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self {
+            Self::Value => "values",
+            Self::Type => "types",
+        }
+    }
 }
 
 /// Why a standard-library module is not admissible in a shape × runtime
@@ -1901,6 +1965,9 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::SteplessDo => IPE_P0065,
         ParseError::DocOnUnexported { .. } => IPE_P0066,
         ParseError::MissingDocString { .. } => IPE_P0067,
+        ParseError::AnnotationWithoutBinding { .. } => IPE_P0068,
+        ParseError::DuplicateAnnotation { .. } => IPE_P0069,
+        ParseError::SourceTooLarge { .. } => IPE_P0070,
     }
 }
 
@@ -1942,6 +2009,8 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::RuntimeBranchedMain => IPE_N0045,
         NameError::WebInitPolyArg => IPE_N0046,
         NameError::ModuleNotAllowedInPlacement(..) => IPE_N0047,
+        NameError::RustNameFold { .. } => IPE_N0048,
+        NameError::DuplicatePatternBinder { .. } => IPE_N0049,
     }
 }
 
@@ -2083,7 +2152,10 @@ fn parse_help(msg: &ParseError) -> Vec<HelpLine> {
         | ParseError::InvalidPathLiteral { .. }
         | ParseError::SteplessDo
         | ParseError::DocOnUnexported { .. }
-        | ParseError::MissingDocString { .. } => Vec::new(),
+        | ParseError::MissingDocString { .. }
+        | ParseError::AnnotationWithoutBinding { .. }
+        | ParseError::DuplicateAnnotation { .. }
+        | ParseError::SourceTooLarge { .. } => Vec::new(),
     }
 }
 
@@ -2099,6 +2171,7 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         NameError::DuplicateValue { first, .. }
         | NameError::DuplicateConstructor { first, .. }
         | NameError::DuplicateType { first, .. }
+        | NameError::DuplicatePatternBinder { first, .. }
         | NameError::DuplicateQualifier { first, .. } => vec![HelpLine::SecondarySpan {
             span: *first,
             role: SpanRole::FirstDefinition,
@@ -2107,6 +2180,23 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
             format!(
                 "this app's shape reaches `Cmd` / `Sub` through `{}`",
                 m.expected
+            )
+            .into_boxed_str(),
+        )],
+        // The IR carries no source spans, so there is no caret to hang the fix
+        // label on; carry it as a note instead, which renders whether or not a
+        // snippet is shown.
+        NameError::RustNameFold {
+            first,
+            second,
+            rust_name,
+            kind,
+        } => vec![HelpLine::Note(
+            format!(
+                "`{first}` and `{second}` are distinct Ipê {}, but after name mangling both \
+                 become the Rust name `{rust_name}`, which can only be defined once. Rename one \
+                 of the two so they fold to different Rust names.",
+                kind.noun(),
             )
             .into_boxed_str(),
         )],

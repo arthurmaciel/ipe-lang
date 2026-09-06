@@ -1,0 +1,1484 @@
+//! The runtime jail around the *emitted app* (as opposed to the build-time jail
+//! around an untrusted crate compile in [`crate`]).
+//!
+//! A program's capability set is inferred from pure Ipê and declared for native
+//! `Rust.` code, but nothing confines the emitted binary when it *runs*: a Tier
+//! 2 wrapper is arbitrary native Rust that can make any syscall. This module is
+//! the fail-closed jail that runs the binary confined to exactly its
+//! declared-plus-inferred set — declared effects work, undeclared ones are
+//! impossible.
+//!
+//! The pipeline is: a [`Capability`] set → a platform-independent
+//! [`SandboxProfile`] ([`profile_from_capabilities`]) → a `bwrap` argv + a
+//! seccomp program ([`run_jail_argv`] + [`crate::seccomp`]). The profile is the
+//! serializable value the built artifact carries (`ipe.profile`); the argv is
+//! what a launcher execs.
+//!
+//! ## Invariants
+//!
+//! - **Deny-by-default, structurally.** [`profile_from_capabilities`] is an
+//!   exhaustive `match Capability` with no `_` catch-all, so a newly-added
+//!   capability variant fails to *compile* until it is classified — an
+//!   unclassified variant can never default to "allowed". [`SandboxProfile`] has
+//!   no `Default` that yields an all-allowed value: the empty set lowers to the
+//!   maximally-isolated profile.
+//! - **Fail-closed on an unknown database driver.** `database` lowers to
+//!   `network` or `filesystem` per the driver; an unknown/missing driver is an
+//!   error, never a silently-dropped axis.
+//! - **Reuse the mechanism, not the numbers.** The argv reuses the build jail's
+//!   `bwrap`/`prlimit` flag vocabulary but defines its own [`RunResourceLimits`]
+//!   (no wall-clock kill by default — a long-lived server is legitimate) and
+//!   adds the baseline denials the build argv lacks (`--proc /proc`,
+//!   `no_new_privs`, the seccomp filter).
+
+#[cfg(test)]
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+use ipe_diagnostics::{Code, Diagnostic as SharedDiag, IPE_F4413, SandboxError};
+use ipe_kernels::Capability;
+
+/// Stamp `$item` with the `#[cfg(...)]` for the targets that HAVE a real run
+/// jail compiled into [`exec_in_run_jail`], and the negation on a matching `no:`
+/// item — the ONE place the supported-target set is written as a predicate.
+///
+/// The supported set is Linux `x86_64`/`aarch64` (the `bwrap`+seccomp jail), macOS (the
+/// `sandbox-exec` SBPL jail), and Windows (the Job Object + `AppContainer` +
+/// launcher-scrub jail). The value [`platform_supports_jail`] returns
+/// (`JAIL_COMPILED_IN`) is stamped through this macro, and the refuse-stub
+/// `exec_in_run_jail` arm is gated on the NEGATION of this same predicate. So
+/// `platform_supports_jail` is `true` exactly where a real jail arm compiles: the
+/// admit verdict (`Holds` vs `RefuseGap`) and the jail actually compiled in cannot
+/// drift, and a target with only the stub arm reports "refuse", fail-closed. The
+/// per-OS real arms keep their own precise `#[cfg]` (their bodies differ), and the
+/// `platform_supports_jail_matches_the_compiled_in_jail_arm` unit test asserts the
+/// predicate spelled here equals the one those arms use.
+///
+/// Being a jailed target makes [`platform_supports_jail`] `true`; it does NOT
+/// imply the target confines EVERY axis. Linux and macOS confine the full set,
+/// but Windows is PARTIAL (see [`platform_confined_axes`]): its jail confines
+/// subprocess + env, and filesystem + network + database only under
+/// `AppContainer` on an ACL volume. [`CONFINED_AXES`] is therefore NOT stamped by
+/// this macro — it is a separate per-OS `#[cfg]` so a jailed-but-partial target
+/// can list fewer axes than it compiles an arm for.
+macro_rules! on_jailed_target {
+    (yes: { $($yes:item)* } no: { $($no:item)* }) => {
+        $(
+            #[cfg(any(
+                all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
+                target_os = "macos",
+                target_os = "windows"
+            ))]
+            $yes
+        )*
+        $(
+            #[cfg(not(any(
+                all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
+                target_os = "macos",
+                target_os = "windows"
+            )))]
+            $no
+        )*
+    };
+}
+
+pub(crate) mod profile;
+pub use profile::*;
+
+pub(crate) mod linux;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub use linux::*;
+
+pub(crate) mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::*;
+
+pub(crate) mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::*;
+// `windows_scrubbed_env` is a pure, host-independent helper (the Windows env
+// scrub, unit-tested on any host) that is part of the run-jail public surface on
+// every target, so it is re-exported unconditionally, not only on Windows.
+pub use windows::windows_scrubbed_env;
+
+// ── the Linux jail argv builder ─────────────────────────────────────────────
+
+/// The paths of the host tools the run jail needs. `bwrap` and `prlimit` are
+/// mandatory; `timeout` is only needed when the profile sets a wall-clock cap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunJailTools {
+    /// `bwrap` — the namespaces + `--seccomp` loader.
+    pub bwrap: PathBuf,
+    /// `prlimit` — the resource caps (mandatory).
+    pub prlimit: PathBuf,
+    /// `timeout` — the wall clock, needed only when `limits.wall_secs` is set.
+    pub timeout: Option<PathBuf>,
+}
+
+/// Build the `bwrap` argv that runs `payload` under the jail `profile`
+/// describes.
+///
+/// Pure — no process is spawned — so the exact isolation surface is
+/// unit-testable, exactly like the build jail's `bwrap_argv`. This does NOT
+/// share code with `bwrap_argv`: that builder's non-optional `timeout` prefix is
+/// load-bearing for the *build* jail (an untrusted compile must always have a
+/// wall clock), whereas the run jail wants no wall clock for a long-lived
+/// server. Reusing the *flag vocabulary* is deliberate; sharing the *builder*
+/// would couple two different resource-limit policies.
+///
+/// `scoped_tmp` is the one writable tempdir (used both as the `Isolated`
+/// filesystem's sole writable mount and as `TMPDIR`). `working_tree` is bound
+/// read-write only under [`FilesystemScope::WorkingTreeReadWrite`].
+/// `seccomp_fd` is the file-descriptor number the caller has arranged to carry
+/// the compiled seccomp program (passed to `bwrap --seccomp <fd>`); `None` means
+/// no filter is attached (the caller must have refused already if a filter was
+/// required).
+///
+/// The env is scrubbed with `--clearenv`; only the fixed minimal allowlist
+/// (`PATH`, `TMPDIR`, `LANG`) plus the profile's `env_allowlist` re-enter. There
+/// is NO shell token anywhere in the result.
+// Every argument is a distinct, load-bearing jail input (tools, profile, the two
+// mount roots, the extra binds, the seccomp fd, the env lookup, the payload);
+// bundling them into a struct would only move the same fields behind one more
+// indirection without reducing the surface. The pure-builder shape is
+// deliberately explicit, matching the sibling `bwrap_argv`.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn run_jail_argv(
+    tools: &RunJailTools,
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    extra_ro_binds: &[PathBuf],
+    seccomp_fd: Option<i32>,
+    host_env: &dyn Fn(&str) -> Option<OsString>,
+    payload: &[OsString],
+) -> Vec<OsString> {
+    run_jail_argv_with_delivery(
+        tools,
+        profile,
+        scoped_tmp,
+        working_tree,
+        extra_ro_binds,
+        seccomp_fd,
+        None,
+        host_env,
+        payload,
+    )
+}
+
+/// [`run_jail_argv`] plus optional in-jail materialisation of the app binary
+/// from an inherited descriptor.
+///
+/// When `app_delivery` is `Some((fd, dest))`, a `--perms 0700 --file <fd>
+/// <dest>` pair is emitted AFTER every mount op (so `dest`'s parent tmpfs/bind
+/// already exists) and BEFORE the payload separator. bwrap reads the app bytes
+/// from the inherited (sealed, non-cloexec) `fd` and writes an owner-execute
+/// copy at `dest` inside the sandbox — the delivered bytes are exactly the
+/// sealed bytes the caller verified, with no host path lookup to race. The
+/// caller then runs `dest` as the payload.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn run_jail_argv_with_delivery(
+    tools: &RunJailTools,
+    profile: &SandboxProfile,
+    scoped_tmp: &Path,
+    working_tree: &Path,
+    extra_ro_binds: &[PathBuf],
+    seccomp_fd: Option<i32>,
+    app_delivery: Option<(i32, &Path)>,
+    host_env: &dyn Fn(&str) -> Option<OsString>,
+    payload: &[OsString],
+) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = Vec::new();
+
+    // Optional wall clock (only when the profile sets one AND `timeout` is
+    // present; the caller refuses a wall-clock profile with no `timeout`).
+    if let (Some(wall), Some(timeout)) = (profile.limits.wall_secs, &tools.timeout) {
+        argv.push(timeout.clone().into());
+        argv.push("--kill-after=5s".into());
+        argv.push(wall.to_string().into());
+    }
+
+    argv.push(tools.bwrap.clone().into());
+
+    // The network namespace is unshared UNLESS `network` is granted. IPC/UTS/
+    // cgroup are unconditionally unshared (SysV shmem / abstract sockets are
+    // covert channels that ride IPC independent of the network axis). PID is
+    // unconditionally unshared (no host-PID visibility even when subprocess is
+    // granted).
+    if !profile.network {
+        argv.push("--unshare-net".into());
+    }
+    for flag in [
+        "--unshare-pid",
+        "--unshare-uts",
+        "--unshare-ipc",
+        "--unshare-cgroup",
+        "--die-with-parent",
+        "--new-session",
+        "--clearenv",
+    ] {
+        argv.push(flag.into());
+    }
+
+    // Read-only root, then a FRESH proc mask OVER it. Order matters: the
+    // `--ro-bind / /` exposes the host `/proc` (which leaks sibling env via
+    // `/proc/<pid>/environ`, defeating `--clearenv`, and is a user-namespace
+    // escape lever); the later `--proc /proc` masks it. bwrap applies mount ops
+    // in argv order, so proc-after-robind wins.
+    argv.push("--ro-bind".into());
+    argv.push("/".into());
+    argv.push("/".into());
+    argv.push("--proc".into());
+    argv.push("/proc".into());
+    // A fresh minimal devtmpfs (the ro-bound host `/dev` nodes carry no device
+    // permissions inside the user namespace).
+    argv.push("--dev".into());
+    argv.push("/dev".into());
+    // Mask the home/tmp trees.
+    for tmpfs in ["/home", "/root", "/tmp"] {
+        argv.push("--tmpfs".into());
+        argv.push(tmpfs.into());
+    }
+
+    // Re-expose paths the tmpfs masks would otherwise hide, read-only. The
+    // emitted app binary commonly lives under `$HOME` (e.g. a `CARGO_TARGET_DIR`
+    // in `~/.cache`), which the `--tmpfs /home` mask hides. Each entry is bound at
+    // the SAME path, read-only: the payload can execute but never mutate it. The
+    // caller binds the app FILE itself, never its parent directory — binding a
+    // directory that equals or contains a masked root would re-expose that tree
+    // and defeat the mask.
+    for path in extra_ro_binds {
+        argv.push("--ro-bind".into());
+        argv.push(path.clone().into());
+        argv.push(path.clone().into());
+    }
+
+    // The one writable mount (always), and the working tree read-write only
+    // when the filesystem axis is granted.
+    argv.push("--bind".into());
+    argv.push(scoped_tmp.into());
+    argv.push(scoped_tmp.into());
+    if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
+        argv.push("--bind".into());
+        argv.push(working_tree.into());
+        argv.push(working_tree.into());
+        argv.push("--chdir".into());
+        argv.push(working_tree.into());
+    } else {
+        argv.push("--chdir".into());
+        argv.push(scoped_tmp.into());
+    }
+
+    // The seccomp filter (subprocess denial + baseline denials). Attached via a
+    // pre-arranged fd. `no_new_privs` is set by bubblewrap by default (it always
+    // calls `PR_SET_NO_NEW_PRIVS` unless `--cap-add` is used, which the run jail
+    // never does), so the "no privilege gain" claim is mechanical.
+    if let Some(fd) = seccomp_fd {
+        argv.push("--seccomp".into());
+        argv.push(fd.to_string().into());
+    }
+
+    // Scrubbed env: the fixed minimal allowlist, then the profile's declared
+    // env names re-exported from the host (only when `env` was granted). A named
+    // var absent from the host is simply not re-exported (never a placeholder).
+    argv.push("--setenv".into());
+    argv.push("PATH".into());
+    argv.push("/usr/bin:/bin".into());
+    argv.push("--setenv".into());
+    argv.push("TMPDIR".into());
+    argv.push(scoped_tmp.into());
+    if let Some(lang) = host_env("LANG") {
+        argv.push("--setenv".into());
+        argv.push("LANG".into());
+        argv.push(lang);
+    }
+    for name in &profile.env_allowlist {
+        if let Some(value) = host_env(name) {
+            argv.push("--setenv".into());
+            argv.push(name.into());
+            argv.push(value);
+        }
+    }
+
+    // Materialise the app inside the jail from the inherited sealed descriptor,
+    // AFTER all mounts (so the destination's parent exists) and BEFORE the
+    // payload. `--perms 0700` applies to the `--file` copy that follows it,
+    // making the delivered binary owner-executable. bwrap reads the bytes from
+    // `fd` (inherited, non-cloexec, sealed) — the delivered file cannot differ
+    // from the verified bytes.
+    if let Some((fd, dest)) = app_delivery {
+        argv.push("--perms".into());
+        argv.push("0700".into());
+        argv.push("--file".into());
+        argv.push(fd.to_string().into());
+        argv.push(dest.into());
+    }
+
+    // Resource caps via prlimit, then the payload with NO shell. The wall clock
+    // (if any) is the outer `timeout`; prlimit bounds AS/CPU/FDs/procs.
+    argv.push("--".into());
+    argv.push(tools.prlimit.clone().into());
+    argv.push(format!("--as={}", profile.limits.as_bytes).into());
+    argv.push(format!("--cpu={}", profile.limits.cpu_secs).into());
+    argv.push(format!("--nofile={}", profile.limits.fd_cap).into());
+    argv.push(format!("--nproc={}", profile.limits.proc_cap).into());
+    argv.push("--".into());
+    argv.extend(payload.iter().cloned());
+    argv
+}
+
+// ── refusal + the fail-closed platform decision ─────────────────────────────
+
+/// Why the run jail could not be established, or refused to run. The whole
+/// family carries the [`IPE_F4413`] taxonomy code, the run-jail sibling of the
+/// build jail's [`crate::SandboxDefect`] / `IPE-F4410`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunJailDefect {
+    /// A required jail primitive is absent on this host (`bwrap`/`prlimit`, or a
+    /// wall-clock profile with no `timeout`). Fail-closed: refuse, never run
+    /// unconfined.
+    PrimitiveUnavailable {
+        /// The missing primitive name(s).
+        missing: Vec<&'static str>,
+    },
+    /// No sound jail can be built on this platform (not Linux, or seccomp cannot
+    /// be compiled for this architecture). The documented refuse-gap: a
+    /// non-empty native/high-value set refuses to run here.
+    UnsupportedPlatform {
+        /// A short reason for the diagnostic.
+        reason: &'static str,
+    },
+    /// The capability profile could not be built (see [`ProfileError`]).
+    Profile(ProfileError),
+    /// The jailed process could not be spawned.
+    Spawn {
+        /// The rendered OS error.
+        detail: String,
+    },
+    /// A jail-root mount (or unmount) could not be established while building the
+    /// confinement — the read-only root, a read-write scratch/working-tree mount,
+    /// the fresh devfs, or the masked `/proc`. Distinct from [`Self::Spawn`] so a
+    /// failure to *build* the jail root is never conflated with a failure to
+    /// *launch* the payload: a half-built root refuses before any process runs.
+    /// Fail-closed — the untrusted payload never runs against an
+    /// incompletely-mounted root.
+    MountFailed {
+        /// The mount target that could not be established.
+        target: PathBuf,
+        /// The rendered OS error or non-success detail for the mount attempt.
+        detail: String,
+    },
+    /// A tampered `ipe.profile` requested *less* isolation than the capability
+    /// floor embedded in the binary. Refuse — a weaker profile cannot widen the
+    /// jail below what the binary was built for.
+    ProfileWeakerThanFloor,
+}
+
+impl RunJailDefect {
+    /// The stable taxonomy code (`IPE-F4413` for the whole family).
+    #[must_use]
+    pub const fn code(&self) -> Code {
+        IPE_F4413
+    }
+}
+
+impl From<RunJailDefect> for SandboxError {
+    fn from(d: RunJailDefect) -> Self {
+        let detail = match &d {
+            RunJailDefect::PrimitiveUnavailable { missing } => format!(
+                "cannot establish a runtime jail around the app — missing {} — refusing to run \
+                 a capability-bearing program unconfined; install bubblewrap (bwrap) and \
+                 util-linux (prlimit)",
+                missing.join(", ")
+            ),
+            RunJailDefect::UnsupportedPlatform { reason } => format!(
+                "no runtime jail can be built on this platform ({reason}); refusing to run a \
+                 native-capability program unconfined"
+            ),
+            RunJailDefect::Profile(e) => e.to_string(),
+            RunJailDefect::Spawn { detail } => {
+                format!("failed to spawn the jailed app: {detail}")
+            }
+            RunJailDefect::MountFailed { target, detail } => format!(
+                "could not establish the jail-root mount at {} ({detail}); refusing to run the \
+                 untrusted payload against an incompletely-mounted root",
+                target.display()
+            ),
+            RunJailDefect::ProfileWeakerThanFloor => {
+                "the artifact's ipe.profile requests less isolation than the capability floor \
+                 embedded in the binary — refusing to run under a weakened profile"
+                    .to_owned()
+            }
+        };
+        Self::RunJail { detail }
+    }
+}
+
+impl From<RunJailDefect> for SharedDiag {
+    fn from(d: RunJailDefect) -> Self {
+        Self::Sandbox {
+            msg: SandboxError::from(d),
+        }
+    }
+}
+
+impl std::fmt::Display for RunJailDefect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let shared: SharedDiag = self.clone().into();
+        f.write_str(&ipe_diagnostics::render(&shared, "", ""))
+    }
+}
+
+impl std::error::Error for RunJailDefect {}
+
+/// The build-time platform verdict: can a sound run jail be built on THIS
+/// target at all?
+///
+/// Linux `x86_64`/`aarch64` (the `bwrap`+seccomp jail), macOS (the `sandbox-exec` SBPL
+/// jail), and Windows (the Job Object + `AppContainer` + launcher-scrub jail) →
+/// yes. Everything else is the documented refuse-gap.
+///
+/// "Yes" means a jail ARM is compiled in, not that every axis is confined:
+/// Windows is a jailed target with a PARTIAL confined set (see
+/// [`platform_confined_axes`]). This is a `const` reflection of the compile
+/// target, independent of host tool availability (which [`RunJailTools`] /
+/// `sandbox-exec` probing covers). Both this constant and the real
+/// [`exec_in_run_jail`] arm are stamped by the SAME [`on_jailed_target`] macro,
+/// so the verdict is `true` EXACTLY on the targets a jail is compiled for. There
+/// is no second hand-kept copy to drift: the FFI admit path can never claim a
+/// jail that is not compiled for the target, and a target with only the stub
+/// `exec_in_run_jail` reports "refuse".
+#[must_use]
+pub const fn platform_supports_jail() -> bool {
+    JAIL_COMPILED_IN
+}
+
+on_jailed_target! {
+    yes: {
+        /// True on the targets [`exec_in_run_jail`] has a real (non-stub) arm.
+        /// Stamped by [`on_jailed_target`] so it cannot disagree with the arm.
+        const JAIL_COMPILED_IN: bool = true;
+    }
+    no: {
+        /// False on the targets [`exec_in_run_jail`] is only the refuse stub.
+        const JAIL_COMPILED_IN: bool = false;
+    }
+}
+
+/// The runtime-enforced axes the compiled-in [`exec_in_run_jail`] arm confines.
+///
+/// This is the single source the FFI admit path keys off, so it can never claim
+/// an axis the jail does not enforce on this target.
+///
+/// The set is per-OS `#[cfg]` (NOT stamped by [`on_jailed_target`], because a
+/// jailed target need not confine every axis):
+///
+/// - **Linux** (`bwrap`+seccomp) and **macOS** (`sandbox-exec`+launcher-scrub)
+///   confine the FULL set — network + filesystem (net namespace / SBPL deny;
+///   `--ro-bind`+tmpfs / SBPL deny-write), subprocess (seccomp / SBPL
+///   process-deny), env (`--clearenv` / launcher scrub) — and native-ffi is
+///   contained by the whole-process jail regardless of what native code does.
+/// - **Windows** is PARTIAL: the Job Object confines subprocess and the launcher
+///   scrub confines env unconditionally; filesystem and network are confined
+///   only under `AppContainer` on an ACL volume (see the design doc's refuse-gap
+///   policy). The compiled-in Windows arm establishes `AppContainer` + an ACL
+///   scratch, so it lists filesystem and network too — the restricted-token /
+///   non-ACL-volume refuse-gaps are runtime conditions the arm fails-closed on,
+///   not a compile-time axis removal.
+/// - Off every jailed target the stub arm confines NOTHING (the fail-closed
+///   empty set), so a capability-bearing wrapper is refused, never run
+///   unconfined.
+///
+/// **`database` is DERIVED, never a standalone asserted bit.** `database` lowers
+/// to `network` (a TCP driver) or `filesystem` (a file driver) before it reaches
+/// the jail; which one is a per-project runtime fact unknown here. So the honest
+/// platform predicate is "database is confined iff BOTH the axes it can lower
+/// into are confined" — [`database_confined`] over this target's net + fs
+/// membership. On a FULL target (Linux/macOS) net and fs are both confined, so
+/// database is confined exactly as before. On a PARTIAL target that confined, say,
+/// filesystem but not network, database would be OMITTED — a file-backed database
+/// would still be admitted through its `filesystem` lowering, but the standalone
+/// `database` claim would over-promise for a TCP driver, so it is not made. This
+/// is guardian Nit-1 from the per-axis review.
+///
+/// The list is `Capability` values so the FFI admit path folds them straight
+/// into its confined-axis set; the ordering is irrelevant (folded into a set).
+#[must_use]
+pub const fn platform_confined_axes() -> &'static [Capability] {
+    CONFINED_AXES
+}
+
+/// Whether the `database` axis is confined, DERIVED from whether both axes it can
+/// lower into — `network` (TCP driver) and `filesystem` (file driver) — are
+/// confined on this target.
+///
+/// `database` carries no OS control of its own; it is confined iff EVERY axis it
+/// could lower into is confined, so that neither a TCP nor a file driver escapes.
+/// This is the single source that keeps `database` from being over-claimed on a
+/// partial target (guardian Nit-1): it is never asserted directly in
+/// [`CONFINED_AXES`] — it appears there only when this derivation holds.
+#[must_use]
+pub const fn database_confined(network_confined: bool, filesystem_confined: bool) -> bool {
+    network_confined && filesystem_confined
+}
+
+/// The `FILE_PERSISTENT_ACLS` filesystem-capability bit as reported by
+/// `GetVolumeInformationW`'s `lpFileSystemFlags`. A volume that clears this bit
+/// (FAT/exFAT, some redirected `%TEMP%` and network shares) neither persists nor
+/// enforces DACLs: `SetNamedSecurityInfoW` returns `ERROR_SUCCESS` while
+/// persisting/enforcing nothing.
+///
+/// It is written here as the raw Win32 value (kept in lockstep with
+/// `windows_sys::Win32::System::SystemServices::FILE_PERSISTENT_ACLS`) so the
+/// [`volume_flags_confine_filesystem`] decision is a pure, cross-platform
+/// function unit-testable on any host, not gated behind `cfg(windows)`.
+///
+/// Consumed by the Windows arm (the `const _` lockstep assertion) and by the
+/// cross-platform unit tests; on a non-Windows non-test build it has no caller,
+/// hence the scoped `dead_code` allow.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub(crate) const FILE_PERSISTENT_ACLS_FLAG: u32 = 0x0000_0008;
+
+/// The typed "parse the volume capability" decision: given the filesystem flags
+/// `GetVolumeInformationW` reports for a volume, is the ACL boundary the Windows
+/// run-jail arm relies on actually enforceable there?
+///
+/// The Windows arm confines `filesystem` (and, via [`database_confined`],
+/// `database`) by `ACLing` the scratch/working-tree DACL to the container SID.
+/// That boundary is a NO-OP on a volume without `FILE_PERSISTENT_ACLS`, where
+/// `SetNamedSecurityInfoW` succeeds without persisting or enforcing anything. So
+/// the ACL claim is honest only when this bit is present.
+///
+/// `true` ⇒ the volume persists+enforces DACLs, so the arm may proceed to ACL and
+/// launch. `false` ⇒ the arm must fail closed (never launch on a volume where the
+/// ACL boundary the admit path already trusted is a no-op). This is the parse
+/// step: probe once → a typed proceed/refuse decision, not an inference from a
+/// success return that does not mean what the caller assumed.
+#[must_use]
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+pub(crate) const fn volume_flags_confine_filesystem(filesystem_flags: u32) -> bool {
+    filesystem_flags & FILE_PERSISTENT_ACLS_FLAG != 0
+}
+
+/// Linux/macOS confine the full set. `database` is present because
+/// [`database_confined`] holds (both net and fs are confined); the
+/// `database_membership_is_derived_from_net_and_fs` test proves the list matches
+/// the derivation rather than asserting `database` standalone.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+))]
+const CONFINED_AXES: &[Capability] = &[
+    Capability::Network,
+    Capability::Filesystem,
+    Capability::Database,
+    Capability::Env,
+    Capability::Subprocess,
+    Capability::NativeFfi,
+];
+
+/// Windows confines subprocess + env unconditionally, and filesystem + network
+/// under the `AppContainer` + ACL-scratch arm the launcher establishes.
+/// `database` is present because [`database_confined`] holds over Windows's net +
+/// fs membership (both are in the list). Were a future Windows configuration to
+/// drop `network` or `filesystem`, `database` would have to leave too — the
+/// `database_membership_is_derived_from_net_and_fs` test enforces exactly that,
+/// so the derivation cannot silently over-claim. native-ffi is contained by the
+/// whole-process Job Object + token, so it is listed.
+#[cfg(target_os = "windows")]
+const CONFINED_AXES: &[Capability] = &[
+    Capability::Network,
+    Capability::Filesystem,
+    Capability::Database,
+    Capability::Env,
+    Capability::Subprocess,
+    Capability::NativeFfi,
+];
+
+/// The stub arm confines nothing — the fail-closed empty set.
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "windows"
+)))]
+const CONFINED_AXES: &[Capability] = &[];
+
+/// On non-Linux targets bwrap is not the jail mechanism, so there is no
+/// `--unshare-net` netns to probe; return `false` so callers skip the
+/// bwrap-netns-dependent tests unconditionally off Linux.
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
+#[must_use]
+pub fn netns_jail_available(_bwrap: &std::path::Path) -> bool {
+    false
+}
+
+/// Off every jailed target the run jail is a documented refuse-gap: no primitive
+/// this crate builds would confine the app here.
+///
+/// # Errors
+///
+/// Always [`RunJailDefect::UnsupportedPlatform`].
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "windows"
+)))]
+#[allow(clippy::missing_const_for_fn)]
+pub fn probe_run_jail_tools(_wants_wall_clock: bool) -> Result<RunJailTools, RunJailDefect> {
+    Err(RunJailDefect::UnsupportedPlatform {
+        reason: "runtime jail is compiled only for Linux (x86_64/aarch64), macOS, and Windows",
+    })
+}
+
+/// Off every jailed target the run jail is a documented refuse-gap.
+///
+/// # Errors
+///
+/// Always [`RunJailDefect::UnsupportedPlatform`]: no sound run jail can be built
+/// here, so a capability-bearing program refuses to run rather than run
+/// unconfined. This arm is gated on the negation of the [`on_jailed_target`]
+/// predicate, so it compiles EXACTLY where [`platform_supports_jail`] is false.
+// Kept a plain `fn` (not `const fn`) so its signature matches the real
+// `exec_in_run_jail` arms, which cannot be `const`.
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos",
+    target_os = "windows"
+)))]
+#[allow(clippy::missing_const_for_fn)]
+pub fn exec_in_run_jail(
+    _tools: &RunJailTools,
+    _profile: &SandboxProfile,
+    _scoped_tmp: &Path,
+    _working_tree: &Path,
+    _app: &Path,
+    _app_args: &[OsString],
+) -> Result<std::convert::Infallible, RunJailDefect> {
+    Err(RunJailDefect::UnsupportedPlatform {
+        reason: "runtime jail is compiled only for Linux (x86_64/aarch64), macOS, and Windows",
+    })
+}
+
+/// Embedded-app holder on platforms without the sealed-fd / exclusive-scratch
+/// delivery path (Windows and unsupported targets). Embed mode is a Unix
+/// deploy feature; this arm keeps the wrapper compiling everywhere and refuses
+/// at run time rather than running unconfined.
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+)))]
+pub struct SealedApp {
+    _bytes: Vec<u8>,
+}
+
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+)))]
+impl SealedApp {
+    /// Return the held bytes for the capability-floor verification scan.
+    ///
+    /// # Errors
+    ///
+    /// Never; returns `Result` for arm-parity with the Linux variant.
+    pub fn read_sealed_bytes(&self) -> Result<Vec<u8>, RunJailDefect> {
+        Ok(self._bytes.clone())
+    }
+}
+
+/// Hold the embedded app bytes on a platform without sealed-fd delivery.
+///
+/// # Errors
+///
+/// Never; returns `Result` for arm-parity with the Linux variant.
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+)))]
+pub fn write_sealed_app_memfd(bytes: &[u8]) -> Result<SealedApp, RunJailDefect> {
+    Ok(SealedApp {
+        _bytes: bytes.to_vec(),
+    })
+}
+
+/// Embedded exec is a documented refuse-gap on platforms without a run jail.
+///
+/// # Errors
+///
+/// Always [`RunJailDefect::UnsupportedPlatform`].
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+)))]
+#[allow(clippy::missing_const_for_fn)]
+pub fn exec_embedded_in_run_jail(
+    _tools: &RunJailTools,
+    _profile: &SandboxProfile,
+    _scoped_tmp: &Path,
+    _working_tree: &Path,
+    _app: &SealedApp,
+    _app_args: &[OsString],
+) -> Result<std::convert::Infallible, RunJailDefect> {
+    Err(RunJailDefect::UnsupportedPlatform {
+        reason: "runtime jail is compiled only for Linux (x86_64/aarch64), macOS, and Windows",
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(caps: &[Capability]) -> BTreeSet<Capability> {
+        caps.iter().copied().collect()
+    }
+
+    // The volume-capability decision the Windows run-jail arm uses to keep its
+    // always-confined `Filesystem` claim honest. These exercise the pure
+    // `volume_flags_confine_filesystem` on the raw filesystem-flags value, so they
+    // run on ANY host — no self-hosted FAT/exFAT runner is needed for the negative
+    // proof. The Windows arm's `probe_volume_persists_acls` feeds
+    // `GetVolumeInformationW`'s flags straight into this function and fails closed
+    // on `false`.
+
+    #[test]
+    fn volume_without_persistent_acls_refuses() {
+        // FAT/exFAT-style flags: the FILE_PERSISTENT_ACLS bit is clear. Even with
+        // other capability bits set (case-preserving, unicode-on-disk), the
+        // decision is refuse — the ACL boundary would be a no-op there.
+        let no_acls = 0x0000_0001 | 0x0000_0002 | 0x0000_0004; // not FILE_PERSISTENT_ACLS
+        assert!(
+            !volume_flags_confine_filesystem(no_acls),
+            "a volume without FILE_PERSISTENT_ACLS must refuse (flags = {no_acls:#x})"
+        );
+        // Exactly zero flags also refuses.
+        assert!(!volume_flags_confine_filesystem(0));
+    }
+
+    #[test]
+    fn volume_with_persistent_acls_proceeds() {
+        // NTFS-style flags: the FILE_PERSISTENT_ACLS bit is set.
+        assert!(volume_flags_confine_filesystem(FILE_PERSISTENT_ACLS_FLAG));
+        // Set alongside unrelated capability bits, it still proceeds.
+        let ntfs_like = FILE_PERSISTENT_ACLS_FLAG | 0x0000_0001 | 0x0000_0002 | 0x0010_0000;
+        assert!(volume_flags_confine_filesystem(ntfs_like));
+    }
+
+    #[test]
+    fn persistent_acls_flag_is_the_win32_bit() {
+        // The pure flag value must equal the documented Win32 FILE_PERSISTENT_ACLS
+        // (0x8). On Windows a `const _` assertion additionally ties it to
+        // `windows-sys`; this keeps the value pinned on every host.
+        assert_eq!(FILE_PERSISTENT_ACLS_FLAG, 0x0000_0008);
+    }
+
+    #[test]
+    fn empty_set_lowers_to_maximally_isolated() {
+        let p = profile_from_capabilities(
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            DatabaseAxis::NotApplicable,
+            &[],
+        )
+        .expect("empty set lowers");
+        assert_eq!(p, SandboxProfile::maximally_isolated());
+        assert!(!p.network);
+        assert_eq!(p.filesystem, FilesystemScope::Isolated);
+        assert!(!p.subprocess);
+        assert!(p.env_allowlist.is_empty());
+    }
+
+    #[test]
+    fn network_capability_grants_network_only() {
+        let p = profile_from_capabilities(
+            &set(&[Capability::Network]),
+            &BTreeSet::new(),
+            DatabaseAxis::NotApplicable,
+            &[],
+        )
+        .expect("lowers");
+        assert!(p.network);
+        assert_eq!(p.filesystem, FilesystemScope::Isolated);
+        assert!(!p.subprocess);
+    }
+
+    #[test]
+    fn the_union_of_inferred_and_declared_is_used() {
+        // inferred = {filesystem}, declared = {network}: both must be granted
+        // (no false-deny — a declared axis is relaxed even if not inferred).
+        let p = profile_from_capabilities(
+            &set(&[Capability::Filesystem]),
+            &set(&[Capability::Network]),
+            DatabaseAxis::NotApplicable,
+            &[],
+        )
+        .expect("lowers");
+        assert!(p.network);
+        assert_eq!(p.filesystem, FilesystemScope::WorkingTreeReadWrite);
+    }
+
+    #[test]
+    fn database_lowers_to_network_or_filesystem_per_driver() {
+        let net = profile_from_capabilities(
+            &set(&[Capability::Database]),
+            &BTreeSet::new(),
+            DatabaseAxis::Network,
+            &[],
+        )
+        .expect("lowers");
+        assert!(net.network);
+        assert_eq!(net.filesystem, FilesystemScope::Isolated);
+
+        let file = profile_from_capabilities(
+            &set(&[Capability::Database]),
+            &BTreeSet::new(),
+            DatabaseAxis::Filesystem,
+            &[],
+        )
+        .expect("lowers");
+        assert!(!file.network);
+        assert_eq!(file.filesystem, FilesystemScope::WorkingTreeReadWrite);
+    }
+
+    #[test]
+    fn database_with_an_unknown_driver_fails_closed() {
+        let r = profile_from_capabilities(
+            &set(&[Capability::Database]),
+            &BTreeSet::new(),
+            DatabaseAxis::NotApplicable,
+            &[],
+        );
+        assert_eq!(r, Err(ProfileError::UnknownDatabaseDriver));
+    }
+
+    #[test]
+    fn env_capability_re_exports_the_named_allowlist() {
+        let p = profile_from_capabilities(
+            &set(&[Capability::Env]),
+            &BTreeSet::new(),
+            DatabaseAxis::NotApplicable,
+            &["DATABASE_URL".to_owned(), "API_KEY".to_owned()],
+        )
+        .expect("lowers");
+        assert_eq!(p.env_allowlist, vec!["DATABASE_URL", "API_KEY"]);
+    }
+
+    #[test]
+    fn clock_and_random_carry_no_control() {
+        let p = profile_from_capabilities(
+            &set(&[Capability::Clock, Capability::Random]),
+            &BTreeSet::new(),
+            DatabaseAxis::NotApplicable,
+            &[],
+        )
+        .expect("lowers");
+        // No axis is opened by clock/random.
+        assert_eq!(p, SandboxProfile::maximally_isolated());
+    }
+
+    #[test]
+    fn native_ffi_alone_opens_no_control() {
+        let p = profile_from_capabilities(
+            &set(&[Capability::NativeFfi]),
+            &BTreeSet::new(),
+            DatabaseAxis::NotApplicable,
+            &[],
+        )
+        .expect("lowers");
+        assert_eq!(p, SandboxProfile::maximally_isolated());
+    }
+
+    #[test]
+    fn floor_comparison_refuses_a_widened_profile() {
+        let floor = SandboxProfile::maximally_isolated();
+        // A profile that grants network is weaker than a maximally-isolated
+        // floor → refuse.
+        let widened = SandboxProfile {
+            network: true,
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!widened.is_at_least_as_isolated_as(&floor));
+        // The floor itself is at least as isolated as itself.
+        assert!(floor.is_at_least_as_isolated_as(&floor));
+    }
+
+    #[test]
+    fn floor_comparison_allows_a_tighter_profile() {
+        // floor grants network; a profile that does NOT grant it is tighter →
+        // allowed (more isolation than the floor is never a violation).
+        let floor = SandboxProfile {
+            network: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let tighter = SandboxProfile::maximally_isolated();
+        assert!(tighter.is_at_least_as_isolated_as(&floor));
+    }
+
+    #[test]
+    fn floor_comparison_checks_env_var_subset() {
+        let floor = SandboxProfile {
+            env_allowlist: vec!["A".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        // Granting an env var the floor does not is a violation.
+        let extra_env = SandboxProfile {
+            env_allowlist: vec!["A".to_owned(), "SECRET".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!extra_env.is_at_least_as_isolated_as(&floor));
+        // A subset is fine.
+        let subset = SandboxProfile {
+            env_allowlist: vec!["A".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(subset.is_at_least_as_isolated_as(&floor));
+    }
+
+    fn tools() -> RunJailTools {
+        RunJailTools {
+            bwrap: PathBuf::from("/usr/bin/bwrap"),
+            prlimit: PathBuf::from("/usr/bin/prlimit"),
+            timeout: Some(PathBuf::from("/usr/bin/timeout")),
+        }
+    }
+
+    fn rendered(profile: &SandboxProfile, seccomp_fd: Option<i32>) -> Vec<String> {
+        let no_env = |_: &str| None;
+        run_jail_argv(
+            &tools(),
+            profile,
+            Path::new("/work/tmp-1"),
+            Path::new("/work/tree"),
+            &[],
+            seccomp_fd,
+            &no_env,
+            &[OsString::from("/work/tree/target/debug/ipe-app")],
+        )
+        .into_iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
+    }
+
+    #[test]
+    fn maximally_isolated_argv_denies_net_masks_proc_and_scrubs_env() {
+        let argv = rendered(&SandboxProfile::maximally_isolated(), Some(10));
+        let joined = argv.join(" ");
+        // No wall clock (default RunResourceLimits has wall_secs = None), so
+        // bwrap is the first program.
+        assert!(joined.starts_with("/usr/bin/bwrap"), "{joined}");
+        // Net unshared (network absent), namespaces fresh, env scrubbed.
+        for flag in [
+            "--unshare-net",
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--clearenv",
+        ] {
+            assert!(argv.contains(&flag.to_owned()), "missing {flag}: {joined}");
+        }
+        // Fresh proc mask AFTER the ro-bind of root — the ordering that masks
+        // the host /proc.
+        let ro_root = joined.find("--ro-bind / /").expect("ro-bind root");
+        let proc = joined.find("--proc /proc").expect("proc mask");
+        assert!(
+            proc > ro_root,
+            "proc mask must follow the ro-bind: {joined}"
+        );
+        // Seccomp filter attached.
+        assert!(joined.contains("--seccomp 10"), "{joined}");
+        // Resource caps then the payload, no shell.
+        assert!(joined.contains("-- /usr/bin/prlimit --as="), "{joined}");
+        assert!(
+            joined.ends_with("-- /work/tree/target/debug/ipe-app"),
+            "{joined}"
+        );
+        assert!(!joined.contains("sh -c"), "{joined}");
+    }
+
+    #[test]
+    fn app_delivery_emits_perms_file_after_mounts_before_payload() {
+        let no_env = |_: &str| None;
+        let dest = Path::new("/work/tmp-1/ipe-app");
+        let argv: Vec<String> = run_jail_argv_with_delivery(
+            &tools(),
+            &SandboxProfile::maximally_isolated(),
+            Path::new("/work/tmp-1"),
+            Path::new("/work/tree"),
+            &[],
+            Some(10),
+            Some((7, dest)),
+            &no_env,
+            &[OsString::from("/work/tmp-1/ipe-app")],
+        )
+        .into_iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+        let joined = argv.join(" ");
+        // The sealed-fd delivery pair: owner-execute perms then a copy from the
+        // inherited fd to the in-jail app path.
+        assert!(
+            joined.contains("--perms 0700 --file 7 /work/tmp-1/ipe-app"),
+            "delivery pair missing: {joined}"
+        );
+        // It must come AFTER the writable bind (so the dest parent exists) and
+        // BEFORE the `-- /usr/bin/prlimit` payload separator.
+        let bind = joined
+            .find("--bind /work/tmp-1 /work/tmp-1")
+            .expect("scratch bind");
+        let file = joined.find("--file 7").expect("delivery");
+        let payload = joined.find("-- /usr/bin/prlimit").expect("payload sep");
+        assert!(
+            file > bind,
+            "delivery must follow the scratch bind: {joined}"
+        );
+        assert!(
+            file < payload,
+            "delivery must precede the payload: {joined}"
+        );
+        // The payload execs the delivered in-jail path, not any host path.
+        assert!(
+            joined.ends_with("-- /work/tmp-1/ipe-app"),
+            "payload must exec the delivered path: {joined}"
+        );
+    }
+
+    #[test]
+    fn no_delivery_emits_no_file_op() {
+        // The default `run_jail_argv` (no delivery) must not emit `--file`.
+        let joined = rendered(&SandboxProfile::maximally_isolated(), Some(10)).join(" ");
+        assert!(!joined.contains("--file"), "unexpected --file: {joined}");
+        assert!(!joined.contains("--perms"), "unexpected --perms: {joined}");
+    }
+
+    #[test]
+    fn network_granted_shares_the_net_namespace() {
+        let p = SandboxProfile {
+            network: true,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let argv = rendered(&p, None);
+        assert!(
+            !argv.contains(&"--unshare-net".to_owned()),
+            "network granted must NOT unshare net: {}",
+            argv.join(" ")
+        );
+        // IPC is still unshared unconditionally.
+        assert!(argv.contains(&"--unshare-ipc".to_owned()));
+    }
+
+    #[test]
+    fn filesystem_granted_binds_the_working_tree_read_write() {
+        let p = SandboxProfile {
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let joined = rendered(&p, None).join(" ");
+        assert!(
+            joined.contains("--bind /work/tree /work/tree"),
+            "working tree not bound rw: {joined}"
+        );
+        assert!(joined.contains("--chdir /work/tree"), "{joined}");
+    }
+
+    #[test]
+    fn env_allowlist_re_exports_only_named_present_vars() {
+        let p = SandboxProfile {
+            env_allowlist: vec!["DATABASE_URL".to_owned(), "ABSENT".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let host = |k: &str| {
+            if k == "DATABASE_URL" {
+                Some(OsString::from("postgres://x"))
+            } else {
+                None
+            }
+        };
+        let argv = run_jail_argv(
+            &tools(),
+            &p,
+            Path::new("/work/tmp-1"),
+            Path::new("/work/tree"),
+            &[],
+            None,
+            &host,
+            &[OsString::from("app")],
+        );
+        let joined: Vec<String> = argv
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let s = joined.join(" ");
+        assert!(s.contains("--setenv DATABASE_URL postgres://x"), "{s}");
+        // An absent named var is simply not re-exported.
+        assert!(!s.contains("ABSENT"), "{s}");
+    }
+
+    #[test]
+    fn scan_capfloor_finds_the_embedded_marker() {
+        let p = SandboxProfile {
+            network: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            env_allowlist: vec!["A".to_owned(), "B".to_owned()],
+            subprocess: false,
+            limits: RunResourceLimits::default(),
+        };
+        // Simulate a binary: arbitrary bytes, the floor line in .rodata, more bytes.
+        let mut buf: Vec<u8> = vec![0xde, 0xad, 0xbe, 0xef];
+        buf.extend_from_slice(p.to_capfloor_line().as_bytes());
+        buf.push(0); // NUL-terminated as in .rodata
+        buf.extend_from_slice(&[0x11, 0x22]);
+        let floor = scan_capfloor(&buf).expect("found");
+        assert!(floor.network);
+        assert_eq!(floor.filesystem, FilesystemScope::WorkingTreeReadWrite);
+        assert_eq!(floor.env_allowlist, vec!["A".to_owned(), "B".to_owned()]);
+    }
+
+    #[test]
+    fn scan_capfloor_intersects_env_names_of_multiple_copies() {
+        // A legitimate floor grants {A, B}; an appended forged copy grants {B, C}
+        // (same count, swapped name). The strictest merged floor is the name-set
+        // intersection {B}, so the forged copy cannot smuggle C into the ceiling.
+        let legit = SandboxProfile {
+            env_allowlist: vec!["A".to_owned(), "B".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let forged = SandboxProfile {
+            env_allowlist: vec!["B".to_owned(), "C".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let mut buf = Vec::new();
+        buf.extend_from_slice(legit.to_capfloor_line().as_bytes());
+        buf.push(b'\n');
+        buf.extend_from_slice(forged.to_capfloor_line().as_bytes());
+        buf.push(0);
+        let floor = scan_capfloor(&buf).expect("found");
+        assert_eq!(floor.env_allowlist, vec!["B".to_owned()]);
+        // A profile granting C is refused: C is not in the intersected floor.
+        let wants_c = SandboxProfile {
+            env_allowlist: vec!["C".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!wants_c.satisfies_capfloor(&floor));
+    }
+
+    #[test]
+    fn scan_capfloor_takes_the_strictest_of_multiple_copies() {
+        // A legitimate strict floor, plus a forged permissive one appended by an
+        // attacker: the strictest (least-granting) must win so the forgery cannot
+        // relax the ceiling.
+        let strict = SandboxProfile::maximally_isolated();
+        let forged = SandboxProfile {
+            network: true,
+            subprocess: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let mut buf = Vec::new();
+        buf.extend_from_slice(strict.to_capfloor_line().as_bytes());
+        buf.push(b'\n');
+        buf.extend_from_slice(forged.to_capfloor_line().as_bytes());
+        buf.push(0);
+        let floor = scan_capfloor(&buf).expect("found");
+        // The strict floor wins: no axis granted.
+        assert!(!floor.network);
+        assert!(!floor.subprocess);
+        assert_eq!(floor.filesystem, FilesystemScope::Isolated);
+    }
+
+    #[test]
+    fn scan_capfloor_absent_is_none() {
+        assert_eq!(scan_capfloor(b"no floor here"), None);
+    }
+
+    #[test]
+    fn profile_string_round_trips() {
+        let p = SandboxProfile {
+            network: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            env_allowlist: vec!["DATABASE_URL".to_owned(), "API_KEY".to_owned()],
+            subprocess: true,
+            limits: RunResourceLimits::default(),
+        };
+        let text = p.to_profile_string();
+        let parsed = parse_profile(&text).expect("round-trips");
+        assert_eq!(parsed, p);
+    }
+
+    #[test]
+    fn parse_profile_rejects_unknown_keys_and_missing_fields() {
+        // Unknown key → refuse.
+        assert!(parse_profile("ipe-profile 1\nnetwork true\nbogus x\n").is_err());
+        // Missing header → refuse.
+        assert!(parse_profile("network true\n").is_err());
+        // Missing required field → refuse.
+        assert!(parse_profile("ipe-profile 1\nnetwork true\n").is_err());
+        // Malformed boolean → refuse.
+        assert!(
+            parse_profile("ipe-profile 1\nnetwork yes\nfilesystem isolated\nsubprocess false\n")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn capfloor_line_round_trips_axes_and_env_names() {
+        let p = SandboxProfile {
+            network: true,
+            filesystem: FilesystemScope::WorkingTreeReadWrite,
+            // Out of order on purpose: the line is sorted, so the round-trip is
+            // canonical regardless of the source order.
+            env_allowlist: vec!["B".to_owned(), "A".to_owned()],
+            subprocess: false,
+            limits: RunResourceLimits::default(),
+        };
+        let line = p.to_capfloor_line();
+        assert_eq!(line, "ipe-capfloor 1 net=true fs=rw sub=false env=A,B");
+        let floor = parse_capfloor(&line).expect("round-trips");
+        assert!(floor.network);
+        assert_eq!(floor.filesystem, FilesystemScope::WorkingTreeReadWrite);
+        assert!(!floor.subprocess);
+        // The names round-trip exactly (sorted), not merely their count.
+        assert_eq!(floor.env_allowlist, vec!["A".to_owned(), "B".to_owned()]);
+    }
+
+    #[test]
+    fn capfloor_line_empty_env_round_trips() {
+        let p = SandboxProfile::maximally_isolated();
+        let line = p.to_capfloor_line();
+        assert_eq!(line, "ipe-capfloor 1 net=false fs=isolated sub=false env=");
+        let floor = parse_capfloor(&line).expect("round-trips");
+        assert!(floor.env_allowlist.is_empty());
+    }
+
+    #[test]
+    fn satisfies_capfloor_refuses_a_widened_profile() {
+        // floor = maximally isolated; a profile granting network must be refused.
+        let floor = parse_capfloor(&SandboxProfile::maximally_isolated().to_capfloor_line())
+            .expect("floor");
+        let widened = SandboxProfile {
+            network: true,
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!widened.satisfies_capfloor(&floor));
+        assert!(SandboxProfile::maximally_isolated().satisfies_capfloor(&floor));
+    }
+
+    #[test]
+    fn satisfies_capfloor_refuses_more_env_than_the_floor() {
+        // floor grants 1 env var; a profile granting 2 exceeds it → refuse.
+        let floor_profile = SandboxProfile {
+            env_allowlist: vec!["A".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let floor = parse_capfloor(&floor_profile.to_capfloor_line()).expect("floor");
+        let two_env = SandboxProfile {
+            env_allowlist: vec!["A".to_owned(), "B".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!two_env.satisfies_capfloor(&floor));
+        // A profile granting exactly the floor's named var is accepted.
+        let same_env = SandboxProfile {
+            env_allowlist: vec!["A".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(same_env.satisfies_capfloor(&floor));
+    }
+
+    #[test]
+    fn satisfies_capfloor_refuses_a_same_count_env_name_swap() {
+        // The env-swap attack: the source proves it needs {PATH, HOME}, so the
+        // floor records those two names. A doctored ipe.profile swaps in a
+        // DIFFERENT pair of the SAME count ({AWS_SECRET_ACCESS_KEY,
+        // SSH_AUTH_SOCK}). The count matches (2 == 2), so a count-only check would
+        // pass; the name subset check must REFUSE, because neither swapped name is
+        // in the floor.
+        let floor_profile = SandboxProfile {
+            env_allowlist: vec!["PATH".to_owned(), "HOME".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        let floor = parse_capfloor(&floor_profile.to_capfloor_line()).expect("floor");
+        let swapped = SandboxProfile {
+            env_allowlist: vec![
+                "AWS_SECRET_ACCESS_KEY".to_owned(),
+                "SSH_AUTH_SOCK".to_owned(),
+            ],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(
+            !swapped.satisfies_capfloor(&floor),
+            "a same-count env name swap must be refused"
+        );
+        // A single swapped name (one legitimate, one smuggled) is also refused —
+        // the smuggled one is not in the floor.
+        let partial_swap = SandboxProfile {
+            env_allowlist: vec!["PATH".to_owned(), "AWS_SECRET_ACCESS_KEY".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(!partial_swap.satisfies_capfloor(&floor));
+        // The legitimate subset (⊆ the floor's names) still passes.
+        let legit = SandboxProfile {
+            env_allowlist: vec!["HOME".to_owned()],
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert!(legit.satisfies_capfloor(&floor));
+        // Granting exactly the floor's names passes.
+        assert!(floor_profile.satisfies_capfloor(&floor));
+    }
+
+    #[test]
+    fn parse_capfloor_refuses_a_malformed_env_name() {
+        // A name with a stray comma (empty element) or a non-POSIX char cannot be
+        // emitted by `to_capfloor_line`; if a tampered floor carries one, the
+        // launcher must refuse rather than silently parse a smuggled separator.
+        assert!(parse_capfloor("ipe-capfloor 1 net=false fs=isolated sub=false env=A,,B").is_err());
+        assert!(parse_capfloor("ipe-capfloor 1 net=false fs=isolated sub=false env=,A").is_err());
+        assert!(parse_capfloor("ipe-capfloor 1 net=false fs=isolated sub=false env=1BAD").is_err());
+        assert!(parse_capfloor("ipe-capfloor 1 net=false fs=isolated sub=false env=A-B").is_err());
+    }
+
+    #[test]
+    fn parse_capfloor_refuses_an_unreadable_floor() {
+        assert!(parse_capfloor("garbage").is_err());
+        assert!(parse_capfloor("ipe-capfloor 2 net=true").is_err());
+        assert!(parse_capfloor("ipe-capfloor 1 fs=bogus").is_err());
+    }
+
+    #[test]
+    fn platform_supports_jail_matches_the_compiled_in_jail_arm() {
+        // The single-source guard: `platform_supports_jail()` returns exactly the
+        // `on_jailed_target!` predicate (the value stamped onto `JAIL_COMPILED_IN`
+        // by the same macro that selects the real `exec_in_run_jail` arm). This
+        // spells that predicate independently and asserts equality, so a future
+        // edit that flips one without the other fails this test.
+        let compiled_in_here = cfg!(any(
+            all(
+                target_os = "linux",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            ),
+            target_os = "macos",
+            target_os = "windows"
+        ));
+        assert_eq!(
+            platform_supports_jail(),
+            compiled_in_here,
+            "platform_supports_jail() must equal the compiled-in run-jail predicate"
+        );
+    }
+
+    #[test]
+    fn database_membership_is_derived_from_net_and_fs() {
+        // Guardian Nit-1: `database` is confined iff BOTH axes it can lower into
+        // (network for a TCP driver, filesystem for a file driver) are confined —
+        // never a standalone asserted bit. This asserts the compiled-in
+        // `CONFINED_AXES` on THIS host agrees with the `database_confined`
+        // derivation, so a partial target that dropped net or fs could not keep
+        // an over-claimed `database`.
+        let axes = platform_confined_axes();
+        let net = axes.contains(&Capability::Network);
+        let fs = axes.contains(&Capability::Filesystem);
+        let db = axes.contains(&Capability::Database);
+        assert_eq!(
+            db,
+            database_confined(net, fs),
+            "database membership must equal database_confined(net, fs): net={net}, fs={fs}"
+        );
+    }
+
+    #[test]
+    fn database_confined_requires_both_net_and_fs() {
+        // The derivation itself: only both-confined yields a confined database.
+        assert!(database_confined(true, true));
+        assert!(!database_confined(true, false));
+        assert!(!database_confined(false, true));
+        assert!(!database_confined(false, false));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_is_a_jailed_target_with_the_partial_arm_axes() {
+        // Windows has a real (non-stub) run-jail arm, so it is a jailed target.
+        assert!(platform_supports_jail());
+        // The compiled-in Windows arm establishes the Job Object (subprocess), the
+        // launcher scrub (env), and AppContainer + an ACL scratch (filesystem +
+        // network), and fails closed when AppContainer/ACL is unavailable — so it
+        // lists those axes plus the whole-process-contained native-ffi and the
+        // net+fs-derived database.
+        let axes = platform_confined_axes();
+        for cap in [
+            Capability::Subprocess,
+            Capability::Env,
+            Capability::Filesystem,
+            Capability::Network,
+            Capability::NativeFfi,
+            Capability::Database,
+        ] {
+            assert!(axes.contains(&cap), "Windows must confine {cap:?}");
+        }
+    }
+
+    #[test]
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    fn linux_x86_64_is_a_jail_holds_target() {
+        // On the Linux/x86_64 build host the run jail is compiled in, so the FFI
+        // admit predicate must see a jail-holds target.
+        assert!(platform_supports_jail());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_is_a_jail_holds_target() {
+        // On macOS the sandbox-exec SBPL run-jail arm is compiled in, so the FFI
+        // admit predicate flips to jail-holds.
+        assert!(platform_supports_jail());
+    }
+
+    #[test]
+    fn a_wall_clock_profile_wraps_in_timeout() {
+        let p = SandboxProfile {
+            limits: RunResourceLimits {
+                wall_secs: Some(30),
+                ..RunResourceLimits::default()
+            },
+            ..SandboxProfile::maximally_isolated()
+        };
+        let joined = rendered(&p, None).join(" ");
+        assert!(
+            joined.starts_with("/usr/bin/timeout --kill-after=5s 30 /usr/bin/bwrap"),
+            "{joined}"
+        );
+    }
+}

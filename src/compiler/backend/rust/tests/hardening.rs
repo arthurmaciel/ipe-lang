@@ -887,3 +887,123 @@ fn tuple_arm_wider_than_column_table_fails_closed() -> DResult<()> {
     }
     Ok(())
 }
+
+/// Two distinct Ipê values whose snake-case fold collides
+/// (`firstName` and `first_name` in one module both mangle to
+/// `main_first_name`) are a LEGAL program: the non-injective fold must
+/// disambiguate the loser to a distinct Rust name so both functions emit,
+/// rather than reject the program.
+#[test]
+fn colliding_value_fold_disambiguates_and_emits() -> DResult<()> {
+    let mut interner = Interner::new();
+    let main_mod = interner.intern("Main")?;
+    let camel = interner.intern("firstName")?;
+    let snake = interner.intern("first_name")?;
+
+    let mk = |id: u32, name: Symbol| Func {
+        id: FuncId::from_raw(id),
+        name,
+        home: ModPath(vec![main_mod]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![],
+        ret: IrType::Int,
+        body: Expr::Int(0),
+    };
+    let prog = program(main_mod, vec![], vec![mk(0, camel), mk(1, snake)]);
+    let src = emit(&interner, &prog)?;
+    // Both functions are present under distinct names: the base name and its
+    // deterministic `_2` disambiguation.
+    assert!(
+        src.contains("fn main_first_name(") && src.contains("fn main_first_name_2("),
+        "both colliding values must emit under distinct names, got:\n{src}"
+    );
+    Ok(())
+}
+
+/// Two distinct Ipê types in different modules whose camel-case fold collides
+/// (module `Std.Palette` type `Color` and module `Std` type `PaletteColor`
+/// both mangle to `StdPaletteColor`) are a LEGAL program: the non-injective
+/// fold must disambiguate the loser so both enums emit, rather than reject the
+/// program. Emitting them from distinct modules (empty `home`, so each folds
+/// from its own module name) mirrors the real cross-module collision.
+#[test]
+#[allow(clippy::too_many_lines)] // two full body-free Module literals inline
+fn colliding_type_fold_disambiguates_and_emits() -> DResult<()> {
+    let mut interner = Interner::new();
+    let std_palette = interner.intern("StdPalette")?;
+    let std_mod = interner.intern("Std")?;
+    let color = interner.intern("Color")?;
+    let palette_color = interner.intern("PaletteColor")?;
+    let unit = interner.intern("Unit")?;
+
+    let mk_enum = |name: Symbol| {
+        TypeDef::Enum(EnumDef {
+            name,
+            type_params: vec![],
+            variants: vec![Variant {
+                name: unit,
+                fields: vec![],
+            }],
+            home: ModPath(vec![]),
+        })
+    };
+    let module = |name: Symbol, ty: Symbol| Module {
+        name: ModPath(vec![name]),
+        types: vec![mk_enum(ty)],
+        funcs: vec![],
+        entry: None,
+        records: vec![],
+        uses_tea: false,
+        uses_server: false,
+        uses_http: false,
+        uses_config: false,
+        uses_compression: false,
+        uses_csv: false,
+        uses_cache: false,
+        uses_encoding: false,
+        uses_regex: false,
+        uses_uuid: false,
+        uses_random: false,
+        uses_log: false,
+        uses_decimal: false,
+        uses_char_category: false,
+        uses_crypto_core: false,
+        uses_secret: false,
+        uses_json: false,
+        uses_crypto: false,
+        uses_jwt: false,
+        uses_url: false,
+        uses_ui: false,
+        uses_web: false,
+        uses_tui: false,
+        uses_console: false,
+        uses_webview: false,
+        uses_css: false,
+        uses_auth: false,
+        uses_principal: false,
+        uses_websocket: false,
+        uses_email: false,
+        uses_locale: false,
+        uses_time: false,
+        uses_env_public: false,
+        uses_debug: false,
+        uses_ffi: false,
+        uses_async_runtime: false,
+    };
+    // `Std.Palette` / `Color` -> `StdPaletteColor`; `Std` / `PaletteColor` ->
+    // `StdPaletteColor`. Both fold to the same Rust enum name.
+    let prog = Program {
+        imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
+        modules: vec![module(std_palette, color), module(std_mod, palette_color)],
+    };
+    // Previously rejected with IPE-N0048; the injective fold now emits both.
+    let emitted = RustBackend::new(&interner).emit(&prog)?;
+    let all: String = emitted.files.values().cloned().collect();
+    assert!(
+        all.contains("enum StdPaletteColor ") && all.contains("enum StdPaletteColor2 "),
+        "both colliding types must emit under distinct names, got:\n{all}"
+    );
+    Ok(())
+}

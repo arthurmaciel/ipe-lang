@@ -889,6 +889,7 @@ impl Env {
                     "setenv",
                     "unsetenv",
                     "cwd",
+                    "getcwd",
                     "loadEnv",
                     "exit",
                 ],
