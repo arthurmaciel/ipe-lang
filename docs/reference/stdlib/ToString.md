@@ -11,8 +11,8 @@ the purpose is editor + `ipe doc` discoverability so callers can
 write `ToString.fromInt n` instead of memorising the per-type
 kernel sub-namespace.
 
-`fromTime` is OMITTED: it requires a `Time_timeString` Rust kernel
-that is not yet backed; tracked as a separate backlog item.
+`fromTime` is not aliased here yet; use `Time.timeString` directly.
+Adding the alias is tracked as a separate backlog item.
 
 All top-level bindings are fully annotated (compiled-source
 discipline — annotation-driven generalisation; no whole-program
