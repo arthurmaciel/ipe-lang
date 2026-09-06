@@ -6,8 +6,7 @@
 # breaks its batch is evicted rather than reddening main. Branch protection's
 # required checks gate every merge.
 #
-# Batches are sized for the file-disjoint PRs this repo produces, and
-# speculative_checks tests successive batches in parallel to drain faster.
+# Batches are sized for the file-disjoint PRs this repo produces.
 #
 # Hold a PR out of the queue by marking it draft or labelling it `do-not-queue`
 # (used for release PRs and work in progress).
@@ -15,7 +14,6 @@ queue_rules:
   - name: default
     merge_method: squash
     batch_size: 10
-    speculative_checks: 2
 
 pull_request_rules:
   - name: auto-queue ready pull requests
