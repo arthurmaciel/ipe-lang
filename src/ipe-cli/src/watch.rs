@@ -1284,7 +1284,20 @@ fn run_inner(
                             running_emitted.as_ref(),
                         ) {
                             match crate::hot_classify::classify(running, &emitted) {
-                                crate::hot_classify::Classification::HotSwappable(hot) => {
+                                // An EMPTY hot-swap means the two emits were
+                                // byte-identical — a no-op re-emit (a duplicate
+                                // filesystem event on an already-current source, or
+                                // a whitespace-only edit). It applies nothing to the
+                                // running app, so it must NOT short-circuit the
+                                // rebuild: this cycle already killed any in-flight
+                                // cargo build when its batch settled, and taking the
+                                // fast path here would `continue` without restarting
+                                // it — losing the pending rebuild. Fall through to
+                                // the normal build path instead, which re-launches
+                                // the (idempotent) rebuild.
+                                crate::hot_classify::Classification::HotSwappable(hot)
+                                    if !hot.is_empty() =>
+                                {
                                     // The running binary is unchanged, so
                                     // `running_emitted` stays the baseline. Push
                                     // each edited view's appearance patch AND each
@@ -1351,7 +1364,11 @@ fn run_inner(
                                         continue;
                                     }
                                 }
-                                crate::hot_classify::Classification::Logic => {
+                                // An empty hot-swap (byte-identical re-emit, guarded
+                                // out of the fast path above) and a `Logic` edit both
+                                // fall through to the normal rebuild below.
+                                crate::hot_classify::Classification::HotSwappable(_)
+                                | crate::hot_classify::Classification::Logic => {
                                     // Recompile below.
                                 }
                             }
