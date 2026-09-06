@@ -788,7 +788,7 @@ mod tests {
         let clamp = |raw: u64, current: u64| raw.max(current + 5).min(MAX_POLL_INTERVAL_SECS);
         assert_eq!(clamp(u64::MAX, 5), MAX_POLL_INTERVAL_SECS);
         assert_eq!(clamp(0, 5), 10); // floor of current+5 still applies
-        assert!(MAX_POLL_INTERVAL_SECS <= 60);
+        const _: () = assert!(MAX_POLL_INTERVAL_SECS <= 60);
         // The initial-interval clamp keeps a hostile first value bounded too.
         assert_eq!(
             u64::MAX.clamp(1, MAX_POLL_INTERVAL_SECS),

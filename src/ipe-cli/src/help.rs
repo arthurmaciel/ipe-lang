@@ -1161,7 +1161,7 @@ mod tests {
         field
             .trim_start_matches('[')
             .trim_end_matches(']')
-            .split(|c| c == '|' || c == ' ')
+            .split(['|', ' '])
             .map(str::trim)
             .filter(|tok| tok.starts_with('-') && *tok != "--")
             .map(str::to_owned)
@@ -1177,7 +1177,7 @@ mod tests {
         parse: impl Fn(&[String]) -> Result<(), crate::CliError>,
     ) {
         let Some(cmd) = COMMANDS.iter().find(|c| c.name == command) else {
-            panic!("no such command {command}");
+            unreachable!("no such command {command}");
         };
         for opt in cmd.options {
             let takes_value = opt.flag.contains('<');

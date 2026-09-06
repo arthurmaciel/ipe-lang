@@ -648,7 +648,7 @@ mod tests {
         // The emitted byte array is exactly `to_capfloor_line()` + a terminating
         // newline, so the last array element is the newline's byte value (10).
         let line = p.to_capfloor_line();
-        let len = line.as_bytes().len() + 1;
+        let len = line.len() + 1;
         assert!(
             src.contains(&format!("[u8; {len}]")),
             "the static holds the line plus one terminator byte: {src}"
