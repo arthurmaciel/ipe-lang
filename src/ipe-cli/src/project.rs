@@ -121,6 +121,12 @@ pub struct ProjectManifest {
 /// resolved target. There is no `active` selector — that is the CLI.
 #[derive(Clone, Debug, Default)]
 pub struct DeliveryConfig {
+    /// The declared delivery set — which deliveries `ipe release` produces.
+    /// Empty when the manifest omits the `ships` field, meaning the implicit
+    /// `[ binary ]` singleton (resolved by
+    /// [`crate::delivery_set::DeliverySet::resolve`]). The `ships` list declares
+    /// *what* ships; the sections below configure *how* each looks.
+    pub ships: Vec<crate::delivery_set::ShipEntry>,
     /// Window title, width, and height for the `web live desktop`
     /// (webview-native) host.
     pub desktop: DesktopDelivery,
@@ -193,8 +199,9 @@ impl ProjectManifest {
     /// A manifest with no `programs` (or one whose sole/default program does not
     /// override the entry) uses `["Main"]`. A single-program manifest routes that
     /// program's declared entry-file through to a module path. A multi-program
-    /// manifest is not yet selectable by name at the CLI (the schema lands ahead
-    /// of the selection wiring); its default (the first) program's entry is used.
+    /// manifest builds its first program's entry; named selection of the others is
+    /// not yet wired, so [`Self::multi_program_notice`] surfaces which one was
+    /// chosen and how many were declared.
     ///
     /// # Errors
     /// [`CliError::UsageOwned`] when a program's entry file does not map to a
@@ -207,11 +214,32 @@ impl ProjectManifest {
     }
 
     /// The default program: the sole program of a single-program manifest, or the
-    /// first of a multi-program one (named-selection is a reported residual).
-    /// `None` when `programs` is empty.
+    /// first of a multi-program one. `None` when `programs` is empty.
     #[must_use]
     pub fn default_program(&self) -> Option<&Program> {
         self.programs.first()
+    }
+
+    /// A one-line notice naming which program a multi-program build compiled and
+    /// how many were declared, so the silently-unreachable programs 2..N are not
+    /// an unsurfaced surprise.
+    ///
+    /// `None` for a zero- or one-program manifest (nothing to disambiguate); a
+    /// framed sentence otherwise, naming the built program and its position in the
+    /// declared list. The caller prints it once at build start.
+    #[must_use]
+    pub fn multi_program_notice(&self) -> Option<String> {
+        let total = self.programs.len();
+        if total <= 1 {
+            return None;
+        }
+        let built = self.default_program()?;
+        Some(format!(
+            "building program `{}` (1 of {total} — named selection of the other \
+             {} is not yet supported)",
+            built.name,
+            total - 1,
+        ))
     }
 }
 
@@ -838,52 +866,19 @@ pub fn inject_compiled_std_closure(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
     discovered: &mut Vec<DiscoveredModule>,
 ) -> BTreeSet<Vec<String>> {
-    let mut injected: BTreeSet<Vec<String>> = BTreeSet::new();
-
-    // Seed the worklist from every compiled-source import across current sources.
-    // Short-circuit: an unused-stdlib build enqueues nothing and returns empty.
-    let mut work: VecDeque<Vec<String>> = VecDeque::new();
-    for (_, src) in sources.values() {
-        for imp in extract_imports_from_source(src) {
-            if crate::stdlib::is_compiled_source_segments(&imp) {
-                work.push_back(imp);
-            }
-        }
-    }
-
-    while let Some(path) = work.pop_front() {
-        // Already present — a user file OR an already-injected node. Skip; do NOT
-        // tag trusted (BTreeMap key = free dedup; user-squat stays User origin).
-        if sources.contains_key(&path) {
-            continue;
-        }
-        let Some(embedded) = crate::stdlib::compiled_std_source_segments(&path) else {
-            // Not a compiled-source module (kernel import inside an embedded
-            // source, e.g. `Ipe.String`): leave it kernel-resolved.
-            continue;
-        };
-
-        // Synthetic on-disk-looking path, for diagnostics only. It is never read
-        // from disk: `sources` already carries the embedded text.
-        let synth_path = PathBuf::from("<embedded-stdlib>").join(path.join("."));
-        sources.insert(path.clone(), (synth_path.clone(), embedded.to_owned()));
-        discovered.push(DiscoveredModule {
-            path: synth_path,
-            module_path: path.clone(),
-        });
-        injected.insert(path.clone());
-
-        // Std → Std closure: enqueue the embedded module's OWN compiled-source
-        // imports (a kernel import inside it is not enqueued — it stays
-        // qualifier-resolved). Fixpoint via the `sources.contains_key` guard.
-        for imp in extract_imports_from_source(embedded) {
-            if crate::stdlib::is_compiled_source_segments(&imp) && !sources.contains_key(&imp) {
-                work.push_back(imp);
-            }
-        }
-    }
-
-    injected
+    // One shared closure + squat-guard lives in `ipe_stdlib` (the SSOT both the
+    // native and wasm frontends call); the native driver additionally records a
+    // `DiscoveredModule` per injected node via the callback.
+    ipe_stdlib::inject_compiled_std_closure(
+        sources,
+        extract_imports_from_source,
+        |module_path, synth_path| {
+            discovered.push(DiscoveredModule {
+                path: synth_path.to_path_buf(),
+                module_path: module_path.to_vec(),
+            });
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1307,6 +1302,54 @@ import String
         assert!(
             !migration_pending(&root),
             "an empty project has nothing to migrate"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn multi_program_manifest_surfaces_which_program_is_built() {
+        let root = discovery_dir(
+            "multi_program_notice",
+            Some(
+                "module Package exposing (package)\n\n\
+                 package =\n    \
+                 { name = \"multi\"\n    \
+                 , programs =\n        \
+                 [ { name = \"server\", entry = \"Main.ipe\", shape = Web }\n        \
+                 , { name = \"cli\", entry = \"Cli/Main.ipe\", shape = Terminal }\n        \
+                 ]\n    \
+                 }\n",
+            ),
+            None,
+        );
+        let manifest = parse_manifest(&root.join("package.ipe")).expect("manifest must parse");
+        let notice = manifest
+            .multi_program_notice()
+            .expect("a multi-program manifest surfaces its selection");
+        assert!(
+            notice.contains("server") && notice.contains("1 of 2"),
+            "the notice names the built program and the count: {notice}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn single_program_manifest_has_no_selection_notice() {
+        let root = discovery_dir(
+            "single_program_notice",
+            Some(
+                "module Package exposing (package)\n\n\
+                 package =\n    \
+                 { name = \"solo\"\n    \
+                 , programs = [ { name = \"app\", entry = \"Main.ipe\" } ]\n    \
+                 }\n",
+            ),
+            None,
+        );
+        let manifest = parse_manifest(&root.join("package.ipe")).expect("manifest must parse");
+        assert!(
+            manifest.multi_program_notice().is_none(),
+            "a single-program manifest has nothing to disambiguate"
         );
         let _ = fs::remove_dir_all(&root);
     }

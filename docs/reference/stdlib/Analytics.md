@@ -87,6 +87,13 @@ Minimal store usage:
                             (Analytics.props [ ( "label", Analytics.PText "Sign up" ) ])
                     )
 
+## `Config`
+
+Session configuration: which sink to use, the current consent state, and
+an optional identity (`userId` + trait `Props`).
+
+Build with `defaultConfig`, then thread through `setConsent` / `identify`.
+
 ## `ConsentState`
 
 The three possible consent states. `track` / `trackEvent` are
@@ -126,6 +133,14 @@ A bag of named property values for an event or identity.
 An opaque PII-tagged string. Cannot be serialised directly — the sink
 layer always emits `"[redacted]"` in place of the raw plaintext.
 
+## `AnalyticsEvent`
+
+A persisted analytics event row.
+
+`recordedAt` is a DB-stamped ISO-8601 timestamp string (SQLite
+`CURRENT_TIMESTAMP`). The column is read back as text; ordering in `recent`
+uses lexicographic order, which matches temporal order for ISO-8601 strings.
+
 ## `pii`
 
 ```ipe
@@ -134,6 +149,16 @@ pii : String -> Pii
 
 Wrap a plaintext string as a `Pii` value. The wrapped string is sealed
 inside the opaque constructor; no API on this module reveals it back.
+
+## `redactedText`
+
+```ipe
+redactedText : Pii -> String
+```
+
+The only text this module emits for a `Pii` value: the literal string
+`"[redacted]"`. Calling this does NOT reveal the plaintext — the result is
+the redacted sentinel, not the wrapped string.
 
 ## `noProps`
 
@@ -150,6 +175,22 @@ props : List ( String, PropValue ) -> Props
 ```
 
 Build a `Props` from a list of `(name, value)` pairs.
+
+## `prop`
+
+```ipe
+prop : String -> PropValue -> Props -> Props
+```
+
+Insert one property into an existing `Props`.
+
+## `noTraits`
+
+```ipe
+noTraits : Props
+```
+
+Synonym for `noProps` used in the identity position.
 
 ## `defaultConfig`
 
@@ -177,6 +218,14 @@ identify : String -> Props -> Config -> Config
 
 Record the user's identity and optional trait properties.
 
+## `consentState`
+
+```ipe
+consentState : Config -> ConsentState
+```
+
+Read the current consent state from a `Config`.
+
 ## `track`
 
 ```ipe
@@ -188,6 +237,23 @@ track : Config -> String -> Props -> Task Error ()
 Fail-closed: when consent is `Pending` or `Denied` the event is dropped and
 `Task.succeed ()` is returned. The event only reaches the sink when consent
 is `Granted`.
+
+## `trackEvent`
+
+```ipe
+trackEvent : Config -> Codec a -> a -> Props -> Task Error ()
+```
+
+`trackEvent cfg codec event eventProps` — emit an event encoded by the
+caller's `Codec`, plus a supplementary `Props` bag.
+
+The caller constructs their event ADT and supplies a `Codec Event` built
+with `Codec.taggedUnion` (or any other `Codec`). The codec encodes the
+event value to a JSON `Value`; this function wraps it in the session
+envelope and dispatches to the sink.
+
+Fail-closed: when consent is `Pending` or `Denied` the event is dropped and
+`Task.succeed ()` is returned. No codec encoding and no sink write happen.
 
 ## `eventsStore`
 
@@ -230,6 +296,17 @@ encoded by the caller's `Codec`, plus a supplementary `Props` bag.
 
 Consent-gated and PII-safe: same guarantees as `persist`.
 
+## `erase`
+
+```ipe
+erase : Db -> Store AnalyticsEvent -> Config -> Task Error Int
+```
+
+`erase db store cfg` — delete all persisted rows for the `Config`'s
+`userId`. Consent-state independent: GDPR right-to-erasure must succeed
+regardless of whether consent is currently `Granted`. Returns `Task.fail`
+when `cfg.userId` is `Nothing` (no identity to erase).
+
 ## `totals`
 
 ```ipe
@@ -255,6 +332,17 @@ eventCounts : Db -> Store AnalyticsEvent -> Task Error (Dict String Int)
 
 `eventCounts db store` — a dictionary mapping each event name to the
 number of times it appears in the store.
+
+## `recent`
+
+```ipe
+recent : Db -> Store AnalyticsEvent -> Int -> Task Error (List AnalyticsEvent)
+```
+
+`recent db store limit` — the `limit` most-recently recorded events,
+ordered newest-first by `recordedAt`. All columns read and decoded; PII was
+already redacted at persist time, so the returned `propsJson` field holds
+only redacted values.
 
 ## `encodePropValue`
 
