@@ -1,4 +1,4 @@
-use super::{MAX_IR_RENDER_DEPTH, Expr, IrType, Pat, Symbol, wants_arc_ctor, Func};
+use super::{Expr, Func, IrType, MAX_IR_RENDER_DEPTH, Pat, Symbol, wants_arc_ctor};
 
 /// The deepest expression nesting the backend will descend before failing fast.
 ///
@@ -763,7 +763,12 @@ pub fn scan_free_target(expr: &Expr, target: Symbol) -> (usize, bool) {
 }
 
 #[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
-pub fn scan_free_target_into(expr: &Expr, target: Symbol, count: &mut usize, has_clonevar: &mut bool) {
+pub fn scan_free_target_into(
+    expr: &Expr,
+    target: Symbol,
+    count: &mut usize,
+    has_clonevar: &mut bool,
+) {
     match expr {
         Expr::Var(s) => {
             if *s == target {

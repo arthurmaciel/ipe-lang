@@ -1,4 +1,4 @@
-use super::{Symbol, Expr, IrType, GenericScope, DResult, emit_expr_at, indent_of, Diagnostic};
+use super::{DResult, Diagnostic, Expr, GenericScope, IrType, Symbol, emit_expr_at, indent_of};
 use crate::EmitCtx;
 use core::fmt::Write as _;
 
@@ -15,7 +15,8 @@ use core::fmt::Write as _;
 /// (`ipe_lower::lower::is_http_request_shape`) directly here — deferring to
 /// the registry is how this call site stays in sync with that test without
 /// duplicating it.
-pub const HTTP_REQUEST_FIELDS: &[&str] = &["body", "headers", "method", "redirects", "timeout", "url"];
+pub const HTTP_REQUEST_FIELDS: &[&str] =
+    &["body", "headers", "method", "redirects", "timeout", "url"];
 
 /// the sorted `Ipe.Process.runWith` input record field-name set — a record
 /// literal with exactly these names (and no registered synthesised struct,
@@ -30,7 +31,8 @@ pub const PROCESS_RUN_WITH_CFG_FIELDS: &[&str] = &["args", "command", "cwd", "en
 /// lowerer folded the shape to `IrType::ProcessRunInPtyCfg`) constructs the
 /// runtime `ipe_runtime::system::ProcessRunInPtyCfg` struct. Kept in sync with
 /// `ipe_lower::lower::PROCESS_RUN_IN_PTY_CFG_FIELDS`.
-pub const PROCESS_RUN_IN_PTY_CFG_FIELDS: &[&str] = &["args", "cols", "command", "cwd", "env", "rows"];
+pub const PROCESS_RUN_IN_PTY_CFG_FIELDS: &[&str] =
+    &["args", "cols", "command", "cwd", "env", "rows"];
 
 /// the sorted `Ipe.Cache.CacheCfg` field-name set — a record literal with
 /// exactly these names (and no registered synthesised struct, because the

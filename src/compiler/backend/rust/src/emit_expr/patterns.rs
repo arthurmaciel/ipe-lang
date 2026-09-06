@@ -1,4 +1,6 @@
-use super::{Arm, Pat, Match, GenericScope, DResult, Expr, Diagnostic, emit_expr_at, ModPath, Symbol};
+use super::{
+    Arm, DResult, Diagnostic, Expr, GenericScope, Match, ModPath, Pat, Symbol, emit_expr_at,
+};
 use crate::EmitCtx;
 use core::fmt::Write as _;
 

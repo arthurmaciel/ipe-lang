@@ -1,4 +1,8 @@
-use super::{Builder, UnionFind, Content, Interner, canon, DResult, Generated, BTreeMap, Symbol, Rc, Ty, Builtins, BTreeSet, pin_any_in_ty, from_canon, CtorScheme, VarId, FlatType, TyBounds, Span, Diagnostic, classify_binop, BinopClass, Constraint, RowTail, is_solver_var};
+use super::{
+    BTreeMap, BTreeSet, BinopClass, Builder, Builtins, Constraint, Content, CtorScheme, DResult,
+    Diagnostic, FlatType, Generated, Interner, Rc, RowTail, Span, Symbol, Ty, TyBounds, UnionFind,
+    VarId, canon, classify_binop, from_canon, is_solver_var, pin_any_in_ty,
+};
 
 impl<'a> Builder<'a> {
     /// Build a constraint set for the whole module.
@@ -463,7 +467,12 @@ impl<'a> Builder<'a> {
         }
     }
 
-    pub fn con_var(&mut self, module: Vec<Symbol>, name: Symbol, args: Vec<VarId>) -> DResult<VarId> {
+    pub fn con_var(
+        &mut self,
+        module: Vec<Symbol>,
+        name: Symbol,
+        args: Vec<VarId>,
+    ) -> DResult<VarId> {
         self.structure(FlatType::Con { module, name, args })
     }
 
@@ -590,7 +599,11 @@ impl<'a> Builder<'a> {
     /// the whole signature is instantiated through *one* `vars` map so `a` is the
     /// same rigid everywhere it appears, and distinct annotation variables become
     /// distinct rigids that the body cannot conflate ([`Content::Rigid`]).
-    pub fn instantiate_rigid(&mut self, ty: &Ty, vars: &mut BTreeMap<u32, VarId>) -> DResult<VarId> {
+    pub fn instantiate_rigid(
+        &mut self,
+        ty: &Ty,
+        vars: &mut BTreeMap<u32, VarId>,
+    ) -> DResult<VarId> {
         self.instantiate_in(ty, vars, /* rigid */ true)
     }
 

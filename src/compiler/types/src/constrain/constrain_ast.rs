@@ -1,4 +1,9 @@
-use super::{StdlibKernel, Builder, canon, DResult, BTreeMap, from_canon, FlatType, Diagnostic, STAGE, Symbol, canon_type_to_doc, TypeError, Ty, Span, VarNamer, ty_to_doc, RowTail, VarId, SchemeApp, PendingInstantiation, TyBounds, LowerError, Feature, RoutedWebCheck, RouteWitnessCheck, SchemeKey, Content, FieldAccess, RecordUpdate};
+use super::{
+    BTreeMap, Builder, Content, DResult, Diagnostic, Feature, FieldAccess, FlatType, LowerError,
+    PendingInstantiation, RecordUpdate, RouteWitnessCheck, RoutedWebCheck, RowTail, STAGE,
+    SchemeApp, SchemeKey, Span, StdlibKernel, Symbol, Ty, TyBounds, TypeError, VarId, VarNamer,
+    canon, canon_type_to_doc, from_canon, ty_to_doc,
+};
 
 impl Builder<'_> {
     #[allow(clippy::too_many_lines)] // Handler expansion block (E-12) pushes it over 100

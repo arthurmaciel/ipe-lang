@@ -1,5 +1,8 @@
-use crate::{Write, PathBuf, Diagnostic, build_plan, api_surface, audit, publish, toolchain, contained_path, render_json, style, render, help, Path};
-use super::{nearest_command};
+use super::nearest_command;
+use crate::{
+    Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, help,
+    publish, render, render_json, style, toolchain,
+};
 
 /// The runtime crate an emitted project linked against: its root and declared
 /// version.
@@ -634,7 +637,10 @@ pub fn fmt_io_error(
 /// Render the runtime-install error family (`RuntimeDirInvalid`,
 /// `RuntimeHomeUnknown`, `RuntimeMaterializeFailed`) for [`CliError`]'s `Display`.
 /// Split out so the main `Display` match stays within one screen.
-pub fn fmt_runtime_install_error(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+pub fn fmt_runtime_install_error(
+    err: &CliError,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
     match err {
         CliError::RuntimeDirInvalid {
             path,
@@ -698,7 +704,10 @@ pub fn fmt_runtime_install_error(err: &CliError, f: &mut std::fmt::Formatter<'_>
 ///   stderr is embedded as the reportable detail.
 ///
 /// Neither form shows any command's `--help` page.
-pub fn fmt_emitted_build_failed(err: &CliError, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+pub fn fmt_emitted_build_failed(
+    err: &CliError,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
     let CliError::EmittedBuildFailed {
         what,
         code,

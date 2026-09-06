@@ -1,5 +1,7 @@
 use super::*;
-use crate::{fs, Path, PathBuf, BTreeMap, ALL_CODES, Applicability, Diagnostic, Suggestion, style, project};
+use crate::{
+    ALL_CODES, Applicability, BTreeMap, Diagnostic, Path, PathBuf, Suggestion, fs, project, style,
+};
 use ipe_diagnostics::{NameError, Span};
 
 #[test]
@@ -709,9 +711,7 @@ Io.println \"hello from main task\"
         "ipe_main must return IpeTask<…>, got signature region:\n{}",
         emitted
             .lines()
-            .filter(|l| l.contains("ipe_main")
-                || l.contains("IpeTask")
-                || l.contains("IpeResult"))
+            .filter(|l| l.contains("ipe_main") || l.contains("IpeTask") || l.contains("IpeResult"))
             .collect::<Vec<_>>()
             .join("\n")
     );

@@ -1,5 +1,8 @@
-use super::{VarId, BTreeMap, Symbol, UnionFind, Content, Budget, DResult, Diagnostic, STAGE, FlatType, Interner, Generated, unify, RowTail, Ty, ZONK_NODE_LIMIT, tag_solver_var, Builder, Builtins, BTreeSet, StdlibKernel, SchemeKey};
-
+use super::{
+    BTreeMap, BTreeSet, Budget, Builder, Builtins, Content, DResult, Diagnostic, FlatType,
+    Generated, Interner, RowTail, STAGE, SchemeKey, StdlibKernel, Symbol, Ty, UnionFind, VarId,
+    ZONK_NODE_LIMIT, tag_solver_var, unify,
+};
 
 // ===========================================================================
 // Boundary Scheme Promotion — untyped top-level binding generalization.

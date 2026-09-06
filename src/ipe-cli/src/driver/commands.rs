@@ -1,5 +1,16 @@
-use crate::{help, package_manifest, project, cli_args, Path, PathBuf, toolchain, watch, style, delivery, io_bounded, Interner, build_plan, run_sandbox, ffi, Write, runtime_embed, fs, ALL_CODES, title, explain_page, BTreeMap, Diagnostic, unsafe_ack, web_consent, native_ffi_consent};
-use super::{CliError, run_version, resolve_vendored_runtime_dir, bluegreen_enabled, resolve_analysis_entry, find_manifest_for_ipe_file, emit_pipeline_json, apply_fixes_cmd, runtime_dep_from_env, BuildOptions, build_with_sibling_discovery_with_options, build_project_with_options, render_capabilities, RuntimeContext, io_err, attribute_canon_errors, home_to_source_map, attribute_post_link_error, collect_entry_and_siblings, create_source_root, gate_decoder_pipelines};
+use super::{
+    BuildOptions, CliError, RuntimeContext, apply_fixes_cmd, attribute_canon_errors,
+    attribute_post_link_error, bluegreen_enabled, build_project_with_options,
+    build_with_sibling_discovery_with_options, collect_entry_and_siblings, create_source_root,
+    emit_pipeline_json, find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map,
+    io_err, render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
+    runtime_dep_from_env,
+};
+use crate::{
+    ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, Write, build_plan, cli_args,
+    delivery, explain_page, ffi, fs, help, io_bounded, native_ffi_consent, package_manifest,
+    project, run_sandbox, runtime_embed, style, title, toolchain, unsafe_ack, watch, web_consent,
+};
 
 /// The misuse reason shown when `build` / `run` / `watch` are invoked with no
 /// entry and none can be discovered. Just the reason — the command's own

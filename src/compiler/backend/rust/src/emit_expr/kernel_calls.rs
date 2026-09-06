@@ -1,4 +1,10 @@
-use super::{KernelFn, Callee, Expr, GenericScope, DResult, Diagnostic, emit_expr_at, kernel_name, emit_sub_arm, free_vars, Symbol, LitKind, emit_lambda_unboxed, ui_call_shape, UiEmitPlan, Guard, LowerError, Span, ArgPlan, appearance_literal_args, float_literal, NativeUiEmit, appearance_literal_record_fields, UiDelegate, callee_name, IrType, emit_shared_lambda, render_type};
+use super::{
+    ArgPlan, Callee, DResult, Diagnostic, Expr, GenericScope, Guard, IrType, KernelFn, LitKind,
+    LowerError, NativeUiEmit, Span, Symbol, UiDelegate, UiEmitPlan, appearance_literal_args,
+    appearance_literal_record_fields, callee_name, emit_expr_at, emit_lambda_unboxed,
+    emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name, render_type,
+    ui_call_shape,
+};
 use crate::EmitCtx;
 use core::fmt::Write as _;
 

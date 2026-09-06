@@ -1,4 +1,7 @@
-use super::{StdlibKernel, Builder, SchemeKey, Ty, TyShape, BTreeMap, RowTailShape, RowTail, BuiltinTag, Symbol, FieldTag};
+use super::{
+    BTreeMap, Builder, BuiltinTag, FieldTag, RowTail, RowTailShape, SchemeKey, StdlibKernel,
+    Symbol, Ty, TyShape,
+};
 
 impl Builder<'_> {
     /// Resolve a [`SchemeKey`] carried on a [`ipe_kernels::KernelDef`] to its

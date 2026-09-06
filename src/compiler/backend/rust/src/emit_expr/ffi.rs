@@ -1,4 +1,6 @@
-use super::{BinOp, Symbol, DResult, Diagnostic, Callee, kernel_name, Expr, GenericScope, emit_expr_at};
+use super::{
+    BinOp, Callee, DResult, Diagnostic, Expr, GenericScope, Symbol, emit_expr_at, kernel_name,
+};
 use crate::EmitCtx;
 
 /// The Rust infix spelling for float binary operators and comparisons.

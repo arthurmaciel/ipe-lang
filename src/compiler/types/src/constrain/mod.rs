@@ -13,13 +13,6 @@
 //! the solver level: [`Builder::instantiate`] (a [`Ty`] → fresh union-find
 //! structure) and [`Builder::zonk`] (a settled union-find variable → [`Ty`]).
 
-
-pub use std::collections::{BTreeMap, BTreeSet};
-pub use std::rc::Rc;
-pub use ipe_canon::ast as canon;
-pub use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
-pub use ipe_intern::{Interner, Symbol};
-pub use ipe_kernels::{BuiltinTag, FieldTag, RowTailShape, SchemeKey, StdlibKernel, TyShape};
 pub use crate::doc::{VarNamer, canon_type_to_doc, ty_to_doc};
 pub use crate::solve::{Budget, Constraint};
 pub use crate::ty::{
@@ -27,6 +20,12 @@ pub use crate::ty::{
 };
 pub use crate::unify::unify;
 pub use crate::unionfind::{UnionFind, VarId};
+pub use ipe_canon::ast as canon;
+pub use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
+pub use ipe_intern::{Interner, Symbol};
+pub use ipe_kernels::{BuiltinTag, FieldTag, RowTailShape, SchemeKey, StdlibKernel, TyShape};
+pub use std::collections::{BTreeMap, BTreeSet};
+pub use std::rc::Rc;
 
 /// `where_` tag for any `CompilerBug` raised during constraint generation.
 pub const STAGE: &str = "ipe_types::constrain";
@@ -468,14 +467,13 @@ pub struct Generated {
     pub module_order: Vec<Vec<Symbol>>,
 }
 
-mod builtins;
 mod builder_core;
+mod builtins;
 mod constrain_ast;
 mod scheme_table;
-mod zonk;
 #[cfg(test)]
 mod tests;
+mod zonk;
 
 pub use builtins::*;
 pub use zonk::*;
-

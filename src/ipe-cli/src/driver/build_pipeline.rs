@@ -1,5 +1,8 @@
-use crate::{Path, Interner, Diagnostic, BTreeMap, PathBuf, project, cache, ffi, runtime_embed, contained_path, render, build_plan, fs, BTreeSet};
 use super::{CliError, diag_span, io_err, write_atomic};
+use crate::{
+    BTreeMap, BTreeSet, Diagnostic, Interner, Path, PathBuf, build_plan, cache, contained_path,
+    ffi, fs, project, render, runtime_embed,
+};
 
 /// Options modifying a build beyond plain source compilation — some (the
 /// static plan) apply post-emit at write time; others (`target`,

@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod registry_phase_c_tests {
-    use super::super::{Builder, Builtins, Content, Diagnostic, Feature, LowerError, Ty, UnionFind};
+    use super::super::{
+        Builder, Builtins, Content, Diagnostic, Feature, LowerError, Ty, UnionFind,
+    };
     use ipe_diagnostics::Span;
     use ipe_intern::{Interner, Symbol};
     use ipe_kernels::{StdlibKernel, TyShape};

@@ -1,5 +1,16 @@
-use crate::{cli_args, pack, PathBuf, project, delivery, toolchain, Path, Write, audit, publish, index, style, resolve, contained_path, fmt, scratch, progress, version_check, BTreeMap, ffi, Diagnostic, Interner, Suggestion, HelpLine, Applicability, fs};
-use super::{CliError, discover_manifest, classify_entry_shape, resolve_vendored_runtime_dir, build_project, force_cargo_terminal_ui, build_emitted_project, cargo_target_directory, emitted_bin_name, default_entry, typecheck_entry_via_graph, emit_pipeline_json, run_build, resolve_runtime, build_test_with_project_sources, build_with_sibling_discovery, runtime_context_for_message, build_source_graph, capabilities_including_served_widgets, create_source_root};
+use super::{
+    CliError, build_emitted_project, build_project, build_source_graph,
+    build_test_with_project_sources, build_with_sibling_discovery,
+    capabilities_including_served_widgets, cargo_target_directory, classify_entry_shape,
+    create_source_root, default_entry, discover_manifest, emit_pipeline_json, emitted_bin_name,
+    force_cargo_terminal_ui, resolve_runtime, resolve_vendored_runtime_dir, run_build,
+    runtime_context_for_message, typecheck_entry_via_graph,
+};
+use crate::{
+    Applicability, BTreeMap, Diagnostic, HelpLine, Interner, Path, PathBuf, Suggestion, Write,
+    audit, cli_args, contained_path, delivery, ffi, fmt, fs, index, pack, progress, project,
+    publish, resolve, scratch, style, toolchain, version_check,
+};
 
 /// `ipe pack --emit-permissions <platform> [<path>]` — derive and print the
 /// native-shell OS-permission declarations a packaged app requires on `platform`
@@ -882,7 +893,10 @@ pub fn run_project_tests(path: Option<&str>) -> Result<TestOutcome, CliError> {
 ///
 /// # Errors
 /// As [`run_project_tests`].
-pub fn run_project_tests_with(path: Option<&str>, stdio: TestStdio) -> Result<TestOutcome, CliError> {
+pub fn run_project_tests_with(
+    path: Option<&str>,
+    stdio: TestStdio,
+) -> Result<TestOutcome, CliError> {
     // Resolve the project root from the supplied path (or cwd defaults).
     let entry_path = match path {
         Some(p) => PathBuf::from(p),
@@ -1692,7 +1706,10 @@ pub fn render_upgrade(
 /// - Human (default): a guttered `ipe <version>` line.
 /// - `--plain`: the bare version string, flush-left, nothing else.
 /// - `--json`: `{"version": "<x.y.z>"}`, a stable single-field object.
-pub fn render_version(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerminal) -> String {
+pub fn render_version(
+    format: cli_args::OutputFormat,
+    _stream: &impl std::io::IsTerminal,
+) -> String {
     use cli_args::OutputFormat::{Human, Json, Plain};
     let version = env!("CARGO_PKG_VERSION");
     match format {

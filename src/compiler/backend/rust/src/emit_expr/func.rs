@@ -1,4 +1,9 @@
-use super::{Expr, GenericScope, Symbol, IrType, DResult, indent_of, emit_expr_at, emit_match_scrutinee, emit_arm_head, tail_arm_prelude_lines, combine_guards, emit_binding_stmts, Diagnostic, render_type, Callee, callee_name, BoundSet, KernelFn, Func, emit_init_datum, impl_fn_param_indices, Doc, render_seeded, RenderConfig};
+use super::{
+    BoundSet, Callee, DResult, Diagnostic, Doc, Expr, Func, GenericScope, IrType, KernelFn,
+    RenderConfig, Symbol, callee_name, combine_guards, emit_arm_head, emit_binding_stmts,
+    emit_expr_at, emit_init_datum, emit_match_scrutinee, impl_fn_param_indices, indent_of,
+    render_seeded, render_type, tail_arm_prelude_lines,
+};
 use crate::EmitCtx;
 use core::fmt::Write as _;
 
@@ -1265,7 +1270,11 @@ pub fn emit_caf_get_or_init(
 ///
 /// `build_doc` is threaded the fn-body context the string emitter used: block
 /// indent 1, IR depth 0.
-pub fn emit_body_native(ctx: &EmitCtx, body_expr: &Expr, generics: GenericScope) -> DResult<String> {
+pub fn emit_body_native(
+    ctx: &EmitCtx,
+    body_expr: &Expr,
+    generics: GenericScope,
+) -> DResult<String> {
     let doc = crate::emit_doc::build_doc(ctx, body_expr, 1, 0, generics)?;
     Ok(render_seeded(&doc, RenderConfig::default(), 4, 4))
 }

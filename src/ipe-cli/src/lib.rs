@@ -83,36 +83,21 @@ pub(crate) use ipe_intern::Interner;
 mod driver;
 
 pub use driver::{
-    AdvisoryVulnerablePayload,
-    BuildOptions,
-    CliError,
-    INSTALL_SH_URL,
-    RuntimeContext,
-    apply_fixes,
-    bluegreen_enabled,
-    build,
-    build_project,
-    build_project_with_options,
-    build_with_options,
-    build_with_sibling_discovery,
-    build_with_sibling_discovery_with_options,
-    code_index,
-    compile_prepared,
-    create_source_root,
-    emit_ir_text,
-    explain_lookup,
-    hot_appearance_enabled,
-    infer_package_capabilities,
-    resolve_runtime,
-    run_cli,
-    run_upgrade,
-    runtime_dep_from_env,
-    select_non_overlapping,
-    verify_capabilities,
-    watch_banner_enabled,
+    AdvisoryVulnerablePayload, BuildOptions, CliError, INSTALL_SH_URL, RuntimeContext, apply_fixes,
+    bluegreen_enabled, build, build_project, build_project_with_options, build_with_options,
+    build_with_sibling_discovery, build_with_sibling_discovery_with_options, code_index,
+    compile_prepared, create_source_root, emit_ir_text, explain_lookup, hot_appearance_enabled,
+    infer_package_capabilities, resolve_runtime, run_cli, run_upgrade, runtime_dep_from_env,
+    select_non_overlapping, verify_capabilities, watch_banner_enabled,
 };
 // Crate-internal driver items reached as `crate::…` by sibling modules
 // (`watch`, `pkg`, …). Kept `pub(crate)` so no originally-private helper widens
 // to public API; the block above re-exports the genuine public surface as `pub`.
-pub(crate) use driver::{write_emitted_project, resolve_vendored_runtime_dir, typecheck_entry_via_graph, lower_entry_via_graph, io_err, read_yes_no, write_atomic, run_installer, run_build, run_eject, run_release, run_type_check, run_test, run_verify, run_run, run_exec, run_watch, run_fix, run_package, run_pack, run_capabilities, run_version, read_yes_no_default, default_entry, build_source_graph, capabilities_including_served_widgets, find_manifest_for_ipe_file, force_cargo_terminal_ui, read_progress_chunk};
-
+pub(crate) use driver::{
+    build_source_graph, capabilities_including_served_widgets, default_entry,
+    find_manifest_for_ipe_file, force_cargo_terminal_ui, io_err, lower_entry_via_graph,
+    read_progress_chunk, read_yes_no, read_yes_no_default, resolve_vendored_runtime_dir, run_build,
+    run_capabilities, run_eject, run_exec, run_fix, run_installer, run_pack, run_package,
+    run_release, run_run, run_test, run_type_check, run_verify, run_version, run_watch,
+    typecheck_entry_via_graph, write_atomic, write_emitted_project,
+};
