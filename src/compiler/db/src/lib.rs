@@ -508,12 +508,11 @@ where
 
     while let Some((node, mut deps, dfs_path)) = stack.pop() {
         if let Some(next_dep) = deps.pop() {
-            // Re-push the current node with remaining deps.
-            stack.push((node, deps, dfs_path.clone()));
-
             match color.get(next_dep.as_slice()) {
                 Some(Color::Gray) => {
-                    // Back edge → cycle. Build the cycle path.
+                    // Back edge → cycle. Build the cycle path from this node's
+                    // ancestor path (owned here — the node was popped, not yet
+                    // re-pushed).
                     let target = next_dep.join(".");
                     let mut cycle_path = dfs_path;
                     cycle_path.push(target);
@@ -523,9 +522,14 @@ where
                     // Black: already fully visited — skip.
                     // None: not in module_set (stdlib import) — skip; IPE-N0020
                     // fires later if it's a real local dep that's missing.
+                    // Re-push the current node with its remaining deps, reusing
+                    // the ancestor path — no child frame needs a copy here.
+                    stack.push((node, deps, dfs_path));
                 }
                 Some(Color::White) => {
-                    // First visit — push with its deps.
+                    // First visit — push with its deps. The child's ancestor
+                    // path extends this node's, so it is the only copy taken;
+                    // the current node is re-pushed with the original.
                     let sub_deps: Vec<Vec<String>> = imports_of(&next_dep)
                         .into_iter()
                         .filter(|d| module_set.contains(d.as_slice()))
@@ -535,6 +539,7 @@ where
                     }
                     let mut sub_path = dfs_path.clone();
                     sub_path.push(next_dep.join("."));
+                    stack.push((node, deps, dfs_path));
                     stack.push((next_dep, sub_deps, sub_path));
                 }
             }
@@ -759,28 +764,49 @@ pub type ModuleTypesResult = Result<Arc<ModuleTypes>, (Diagnostic, Vec<Symbol>)>
 /// [`ipe_types::SolvedTypes`] — the [`ModuleTypes`] projection.
 #[must_use]
 pub fn project_module_types(solved: &ipe_types::SolvedTypes, home: &[Symbol]) -> ModuleTypes {
-    let env = solved
-        .env
-        .iter()
-        .filter(|((h, _), _)| h == home)
-        .map(|((_, name), ty)| (*name, ty.clone()))
-        .collect();
+    use std::ops::Bound;
+
+    // Each map is keyed `(home, _)` and a `BTreeMap` orders by the tuple, so
+    // every entry for one `home` is a contiguous run. Range from the run's
+    // start (the smallest possible second component) and stop at the first key
+    // whose home differs — a scan of one module's slice, not the whole program.
+    // The `owned_home` is the range's lower bound; the second component's
+    // minimum is the type's own minimum (`Symbol` id `0` / `Span::DUMMY`).
+    let owned_home = home.to_vec();
     let regions = solved
         .regions
-        .iter()
-        .filter(|((h, _), _)| h == home)
+        .range((
+            Bound::Included((owned_home.clone(), ipe_diagnostics::Span::DUMMY)),
+            Bound::Unbounded,
+        ))
+        .take_while(|((h, _), _)| h.as_slice() == home)
         .map(|((_, span), ty)| (*span, ty.clone()))
         .collect();
     let expected = solved
         .expected
-        .iter()
-        .filter(|((h, _), _)| h == home)
+        .range((
+            Bound::Included((owned_home.clone(), ipe_diagnostics::Span::DUMMY)),
+            Bound::Unbounded,
+        ))
+        .take_while(|((h, _), _)| h.as_slice() == home)
         .map(|((_, span), ty)| (*span, ty.clone()))
+        .collect();
+    let env = solved
+        .env
+        .range((
+            Bound::Included((owned_home.clone(), Symbol::from_raw(0))),
+            Bound::Unbounded,
+        ))
+        .take_while(|((h, _), _)| h.as_slice() == home)
+        .map(|((_, name), ty)| (*name, ty.clone()))
         .collect();
     let bounds = solved
         .bounds
-        .iter()
-        .filter(|((h, _), _)| h == home)
+        .range((
+            Bound::Included((owned_home, Symbol::from_raw(0))),
+            Bound::Unbounded,
+        ))
+        .take_while(|((h, _), _)| h.as_slice() == home)
         .map(|((_, name), b)| (*name, b.clone()))
         .collect();
     ModuleTypes {

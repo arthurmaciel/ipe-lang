@@ -2611,6 +2611,15 @@ pub fn element_to_cells<M: Clone>(view: &Element<M>, cols: usize, rows: usize) -
     render_with_focus(view, cols, rows, usize::MAX, &mut inputs, 0).0
 }
 
+/// The content height an Element lays out to at the given width — the number of
+/// rows its lines occupy, independent of any frame the caller paints it into.
+/// A line-oriented caller sizes its frame to this so it emits exactly the view's
+/// own lines with no trailing blank rows.
+pub fn element_to_cells_height<M: Clone>(view: &Element<M>, cols: usize) -> usize {
+    let mut inputs = InputRegistry::new();
+    render_with_focus(view, cols, usize::MAX, usize::MAX, &mut inputs, 0).2
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::super::ui::Description;
