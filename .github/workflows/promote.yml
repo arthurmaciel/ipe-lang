@@ -14,6 +14,7 @@ on:
       - "No-panic"
       - "Install"
       - "Static binaries"
+      - "Playground jail"
     types: [completed]
     branches: [development]
 permissions:
