@@ -56,3 +56,5 @@ mod golden_m5b_db_gates;
 mod golden_m5b_http;
 #[path = "g_db/golden_m5b_uuid_jwt.rs"]
 mod golden_m5b_uuid_jwt;
+#[path = "g_db/golden_store_ident_parity.rs"]
+mod golden_store_ident_parity;

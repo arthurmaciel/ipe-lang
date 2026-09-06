@@ -131,27 +131,26 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreSt
         }
     }
 }
-pub(crate) fn user_ipe_db_store_valid_sql_ident(name: String) -> bool {
+pub(crate) fn user_ipe_db_store_valid_sql_ident_plain(name: String) -> bool {
     let _ipe_recursion_guard = crate::recursion_guard();
     (basics_not(string_is_empty(name.clone()))
     && string_all(
         {
             let __ipe_fn: Box<dyn Fn(char) -> bool + Send + Sync + 'static> =
-                Box::new(crate::user_ipe_db_store_valid_ident_char);
+                Box::new(crate::user_ipe_db_store_plain_ident_char);
             __ipe_fn
         },
         name,
     ))
 }
-pub(crate) fn user_ipe_db_store_valid_ident_char(c: char) -> bool {
+pub(crate) fn user_ipe_db_store_plain_ident_char(c: char) -> bool {
     let _ipe_recursion_guard = crate::recursion_guard();
     ({
         let code = char_to_code(c);
         (crate::user_ipe_db_store_is_ascii_digit(code)
             || (crate::user_ipe_db_store_is_ascii_upper(code)
                 || (crate::user_ipe_db_store_is_ascii_lower(code)
-                    || ((code == crate::user_ipe_db_store_underscore_code())
-                        || (code == crate::user_ipe_db_store_dot_code())))))
+                    || (code == crate::user_ipe_db_store_underscore_code()))))
     })
 }
 pub(crate) fn user_ipe_db_store_is_ascii_digit(code: i64) -> bool {
@@ -170,11 +169,6 @@ pub(crate) fn user_ipe_db_store_underscore_code() -> i64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     CELL.get_or_init(|| 95i64).clone()
-}
-pub(crate) fn user_ipe_db_store_dot_code() -> i64 {
-    let _ipe_recursion_guard = crate::recursion_guard();
-    static CELL: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| 46i64).clone()
 }
 pub(crate) fn user_ipe_db_store_column(name: String, colType: IpeCodecColType) -> IpeDbStoreColumn {
     let _ipe_recursion_guard = crate::recursion_guard();
@@ -204,7 +198,9 @@ pub(crate) fn user_ipe_db_store_build_store<T1: Clone>(
     codec: IpeCodecCodec<T1>,
 ) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreDraft<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    (if basics_not(crate::user_ipe_db_store_valid_sql_ident(table.clone())) {
+    (if basics_not(crate::user_ipe_db_store_valid_sql_ident_plain(
+        table.clone(),
+    )) {
         IpeResult::Err(
             crate::user_ipe_db_store_invalid_ident_error("table".to_string(), table),
         )
@@ -245,7 +241,7 @@ pub(crate) fn user_ipe_db_store_first_invalid_column(
                 let first = first.clone();
                 let rest = rest.to_vec();
                 let name = crate::user_ipe_db_store_column_name(first);
-                if crate::user_ipe_db_store_valid_sql_ident(name.clone()) {
+                if crate::user_ipe_db_store_valid_sql_ident_plain(name.clone()) {
                     let __tco_0 = rest;
                     columns = __tco_0;
                     continue;

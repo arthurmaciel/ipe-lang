@@ -5,15 +5,14 @@
 -- write `ToString.fromInt n` instead of memorising the per-type
 -- kernel sub-namespace.
 --
--- `fromTime` is not aliased here yet; use `Time.timeString` directly.
--- Adding the alias is tracked as a separate backlog item.
---
 -- All top-level bindings are fully annotated (compiled-source
 -- discipline — annotation-driven generalisation; no whole-program
 -- let-gen).
-module Ipe.ToString exposing (fromInt, fromFloat, fromBool)
+module Ipe.ToString exposing (fromInt, fromFloat, fromBool, fromTime)
 
 import Ipe.String as String
+import Ipe.Time as Time
+import Ipe.Time.Timestamp exposing (Timestamp)
 
 
 fromInt : Int -> String
@@ -34,3 +33,11 @@ fromBool b =
 
         False ->
             "False"
+
+
+-- | `fromTime t` — a human-readable local-time rendering of `t`. A thin alias
+-- over `Ipe.Time.timeString` (the `Time_timeString` kernel), the same
+-- discoverability role the other `from*` aliases play for their home modules.
+fromTime : Timestamp -> String
+fromTime t =
+    Time.timeString t
