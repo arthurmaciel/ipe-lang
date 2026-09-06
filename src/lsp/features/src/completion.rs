@@ -143,20 +143,17 @@ pub fn completions(
         &dep_canonicals,
     );
 
-    // Reassemble the `(home, name) → Ty` lookup the renderer keys on, from the
+    // Reassemble the `home → (name → Ty)` lookup the renderer keys on, from the
     // per-module projections: this module's env under `home_syms`, plus each
-    // dep's env under its own home. This is the same value the whole-program
-    // env carried, sliced and rejoined — the projection loses nothing.
-    let mut solved_env: BTreeMap<(Vec<Symbol>, Symbol), Ty> = BTreeMap::new();
-    if let Some(env) = &module_env {
-        for (name, ty) in env {
-            solved_env.insert((home_syms.clone(), *name), ty.clone());
-        }
+    // dep's env under its own home. Nesting by home lets the renderer look up by
+    // a borrowed home slice (no per-candidate key allocation) and moves each
+    // per-module env in wholesale rather than re-inserting entry by entry.
+    let mut solved_env: BTreeMap<Vec<Symbol>, BTreeMap<Symbol, Ty>> = BTreeMap::new();
+    if let Some(env) = module_env {
+        solved_env.insert(home_syms, env);
     }
-    for (dep_home, env) in &dep_envs {
-        for (name, ty) in env {
-            solved_env.insert((dep_home.clone(), *name), ty.clone());
-        }
+    for (dep_home, env) in dep_envs {
+        solved_env.entry(dep_home).or_default().extend(env);
     }
 
     let mut items: Vec<CompletionItem> =
@@ -192,7 +189,7 @@ fn collect_dep_canonicals(
     root: SourceRoot,
     entry: ipe_db::SourceFile,
     file: ipe_db::SourceFile,
-) -> Vec<(Vec<String>, ipe_db::CanonicalModule)> {
+) -> Vec<(Vec<String>, std::sync::Arc<ipe_db::CanonicalModule>)> {
     let Ok(resolutions) = ipe_db::resolve_imports(db, root, file) else {
         return Vec::new();
     };
@@ -202,7 +199,9 @@ fn collect_dep_canonicals(
             && let Some(dep_canon) =
                 crate::db_access::canonicalize_checked(db, root, entry, *dep_file)
         {
-            out.push((dep_path.clone(), (*dep_canon).clone()));
+            // Keep the salsa `Arc` — the consumers only borrow it, so a
+            // refcount bump replaces a full deep-copy of the canonical module.
+            out.push((dep_path.clone(), dep_canon));
         }
     }
     out
@@ -246,7 +245,7 @@ fn build_candidates(
     interner: &mut ipe_intern::Interner,
     canonical: Option<&std::sync::Arc<ipe_db::CanonicalModule>>,
     home_syms: &[Symbol],
-    dep_canonicals: &[(Vec<String>, ipe_db::CanonicalModule)],
+    dep_canonicals: &[(Vec<String>, std::sync::Arc<ipe_db::CanonicalModule>)],
 ) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = Vec::new();
 
@@ -335,7 +334,7 @@ fn dep_ctor_head(
 /// candidates that carry no type relation to it (`InScopeOnly`).
 fn render_candidates(
     candidates: &[Candidate],
-    solved_env: Option<&BTreeMap<(Vec<Symbol>, Symbol), Ty>>,
+    solved_env: Option<&BTreeMap<Vec<Symbol>, BTreeMap<Symbol, Ty>>>,
     expected: Option<&Ty>,
     interner: &ipe_intern::Interner,
 ) -> Vec<CompletionItem> {
@@ -345,9 +344,12 @@ fn render_candidates(
             continue;
         };
         // The candidate's own solved type (values only), used for both the
-        // detail string and result-head classification.
+        // detail string and result-head classification. The home is looked up by
+        // a borrowed slice, so no key is allocated per candidate.
         let value_ty: Option<&Ty> = match c.kind {
-            CandidateKind::Value => solved_env.and_then(|env| env.get(&(c.home.clone(), c.name))),
+            CandidateKind::Value => {
+                solved_env.and_then(|env| env.get(c.home.as_slice())?.get(&c.name))
+            }
             CandidateKind::Ctor | CandidateKind::Type => None,
         };
 
@@ -487,17 +489,41 @@ fn keyword_item(label: &'static str) -> CompletionItem {
     }
 }
 
-/// Ipê keywords offered at every cursor position.
+/// Ipê keywords offered at every cursor position. Every entry is a real
+/// reserved word per the lexer's own table (`ipe_parse::is_keyword`);
+/// `completion_keywords_match_the_lexer` pins the two against drift.
 const KEYWORDS: &[&str] = &[
-    "module", "import", "exposing", "type", "alias", "let", "in", "if", "then", "else", "case",
-    "of", "as",
+    "module", "import", "exposing", "as", "type", "foreign", "case", "of", "let", "in", "if",
+    "then", "else", "do",
 ];
 
 #[cfg(test)]
 mod tests {
     use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
-    use super::completions;
+    use super::{KEYWORDS, completions};
+
+    /// Every completion keyword must be a real reserved word per the lexer's own
+    /// table — no invented entry (a past list offered `alias`, which is not a
+    /// keyword) and no drift from the lexer SSOT.
+    #[test]
+    fn completion_keywords_match_the_lexer() {
+        for kw in KEYWORDS {
+            assert!(
+                ipe_parse::is_keyword(kw),
+                "completion offers {kw:?}, which is not a lexer keyword"
+            );
+        }
+        for kw in [
+            "module", "import", "exposing", "as", "type", "foreign", "case", "of", "let", "in",
+            "if", "then", "else", "do",
+        ] {
+            assert!(
+                KEYWORDS.contains(&kw),
+                "completion is missing the keyword {kw:?}"
+            );
+        }
+    }
 
     fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
         SourceFile::new(

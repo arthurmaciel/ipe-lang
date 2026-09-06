@@ -54,6 +54,10 @@ pub enum SandboxDefect {
         /// The configured cap in bytes.
         cap_bytes: u64,
     },
+    /// A seccomp filter was requested but the `bwrap` token could not be found
+    /// in the rendered argv, so `--seccomp` could not be attached. Running
+    /// without the filter is fail-open, so the jail refuses instead.
+    SeccompNotAttached,
 }
 
 impl SandboxDefect {
@@ -83,6 +87,11 @@ impl From<SandboxDefect> for SandboxError {
             }
             SandboxDefect::OutputCapExceeded { cap_bytes } => {
                 format!("the jailed process exceeded the {cap_bytes}-byte output cap")
+            }
+            SandboxDefect::SeccompNotAttached => {
+                "could not attach the seccomp filter to the jail (bwrap token absent from \
+                 the rendered argv); refusing to run untrusted code without its syscall filter"
+                    .to_owned()
             }
         };
         Self::BuildJail { detail }
@@ -485,7 +494,7 @@ fn run_bwrap(
             missing: missing_caps(caps),
         });
     };
-    let argv = bwrap_argv_with_seccomp(bwrap, prlimit, timeout, spec, payload, seccomp_fd);
+    let argv = bwrap_argv_with_seccomp(bwrap, prlimit, timeout, spec, payload, seccomp_fd)?;
     let (program, rest) = argv
         .split_first()
         .ok_or(SandboxDefect::NoIsolationMechanism)?;
@@ -635,6 +644,11 @@ fn drain_and_reap(
 /// [`bwrap_argv`] with an optional `--seccomp <fd>` flag injected immediately
 /// after the `bwrap` program token (bwrap reads the filter from the inherited
 /// fd). When `seccomp_fd` is `None` this is exactly [`bwrap_argv`].
+///
+/// When a filter is requested but the `bwrap` token cannot be located in the
+/// rendered argv, the seccomp flag cannot be attached to bwrap — dropping it
+/// would run the payload without its syscall filter (fail-open). The refusal
+/// here keeps the seccomp guarantee: no filter, no run.
 fn bwrap_argv_with_seccomp(
     bwrap: &Path,
     prlimit: &Path,
@@ -642,19 +656,20 @@ fn bwrap_argv_with_seccomp(
     spec: &JailSpec,
     payload: &[OsString],
     seccomp_fd: Option<i32>,
-) -> Vec<OsString> {
+) -> Result<Vec<OsString>, SandboxDefect> {
     let mut argv = bwrap_argv(bwrap, prlimit, timeout, spec, payload);
     let Some(fd) = seccomp_fd else {
-        return argv;
+        return Ok(argv);
     };
     // The argv is `timeout … <wall> bwrap …`; insert `--seccomp <fd>` right after
     // the `bwrap` token so it is a bwrap option, not a timeout one.
     let bwrap_os = bwrap.as_os_str();
-    if let Some(pos) = argv.iter().position(|a| a.as_os_str() == bwrap_os) {
-        argv.insert(pos + 1, fd.to_string().into());
-        argv.insert(pos + 1, "--seccomp".into());
-    }
-    argv
+    let Some(pos) = argv.iter().position(|a| a.as_os_str() == bwrap_os) else {
+        return Err(SandboxDefect::SeccompNotAttached);
+    };
+    argv.insert(pos + 1, fd.to_string().into());
+    argv.insert(pos + 1, "--seccomp".into());
+    Ok(argv)
 }
 
 /// Read a stream up to `cap` bytes; `Ok(None)` when the stream exceeds it.
@@ -1001,5 +1016,77 @@ mod tests {
             "--proc /proc must follow --ro-bind / / (bwrap order is load-bearing): {joined}"
         );
         assert!(dev > proc, "--dev /dev must follow --proc /proc: {joined}");
+    }
+
+    #[test]
+    fn seccomp_flag_is_injected_after_the_bwrap_token() {
+        let argv = bwrap_argv_with_seccomp(
+            Path::new("/usr/bin/bwrap"),
+            Path::new("/usr/bin/prlimit"),
+            Path::new("/usr/bin/timeout"),
+            &spec(),
+            &[OsString::from("ipe-ffi-inspector")],
+            Some(7),
+        )
+        .expect("bwrap token present, so the seccomp flag attaches");
+        let rendered: Vec<String> = argv
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let bwrap = rendered
+            .iter()
+            .position(|a| a == "/usr/bin/bwrap")
+            .expect("bwrap token present");
+        assert_eq!(
+            rendered.get(bwrap + 1).map(String::as_str),
+            Some("--seccomp")
+        );
+        assert_eq!(rendered.get(bwrap + 2).map(String::as_str), Some("7"));
+    }
+
+    #[test]
+    fn seccomp_is_attached_and_never_silently_dropped() {
+        // A requested seccomp filter must always reach the argv, whatever the
+        // bwrap path — never silently dropped, which would run the payload
+        // unfiltered. The `SeccompNotAttached` arm is a fail-closed backstop
+        // for the impossible case where the token the builder itself inserted
+        // cannot be found again; it turns a silent drop into a hard refusal.
+        let argv = bwrap_argv_with_seccomp(
+            Path::new("/nonexistent/bwrap-alias"),
+            Path::new("/usr/bin/prlimit"),
+            Path::new("/usr/bin/timeout"),
+            &spec(),
+            &[OsString::from("ipe-ffi-inspector")],
+            Some(7),
+        )
+        .expect("a requested seccomp filter must attach, never drop");
+        let rendered: Vec<String> = argv
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let bwrap = rendered
+            .iter()
+            .position(|a| a == "/nonexistent/bwrap-alias")
+            .expect("the bwrap token is present in the argv");
+        assert_eq!(
+            rendered.get(bwrap + 1).map(String::as_str),
+            Some("--seccomp"),
+            "seccomp must be injected right after the bwrap token"
+        );
+        assert_eq!(rendered.get(bwrap + 2).map(String::as_str), Some("7"));
+    }
+
+    #[test]
+    fn no_seccomp_request_is_unchanged() {
+        let argv = bwrap_argv_with_seccomp(
+            Path::new("/nonexistent/bwrap-alias"),
+            Path::new("/usr/bin/prlimit"),
+            Path::new("/usr/bin/timeout"),
+            &spec(),
+            &[OsString::from("ipe-ffi-inspector")],
+            None,
+        )
+        .expect("no filter requested, so the argv renders unchanged");
+        assert!(!argv.iter().any(|a| a.as_os_str() == "--seccomp"));
     }
 }
