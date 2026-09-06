@@ -2179,11 +2179,15 @@ fn register_stdlib_import_aliases(
     interner: &mut Interner,
 ) -> DResult<()> {
     let ipe_sym = interner.intern("Ipe")?;
-    // Which canonical qualifier each effective alias was registered against, plus
-    // the span of the import that first claimed it. Guards against two stdlib
-    // imports resolving to one alias (last-wins member merge) and against an
-    // alias colliding with a different module's pre-installed qualifier.
-    let mut alias_canonical: BTreeMap<Symbol, (Symbol, Span)> = BTreeMap::new();
+    // Which canonical qualifier each EXPLICIT `as Alias` was registered against,
+    // plus the span of the import that first claimed it. Two stdlib imports
+    // aliased to one name (`… as J` twice) would otherwise extend-merge member
+    // tables last-wins with no diagnostic; this rejects the second with the same
+    // DuplicateQualifier the user-dep path raises. Bare imports are absent — a
+    // bare import is spoken under its CANONICAL qualifier, so two bare imports
+    // that merely share a last path segment (`Ipe.Json.Decode` + `Ipe.Db.Decode`,
+    // both segment `Decode`) do not collide and stay legitimate.
+    let mut explicit_alias_canonical: BTreeMap<Symbol, (Symbol, Span)> = BTreeMap::new();
     for import in imports {
         let dep_path = &import.name.value;
         // Only `Ipe.*` imports name compiler stdlib modules.
@@ -2199,45 +2203,55 @@ fn register_stdlib_import_aliases(
         let alias = import
             .alias
             .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
-        // Reject an alias already bound to a DIFFERENT canonical qualifier — by a
-        // prior stdlib import (`… as J` twice), or (when the alias differs from
-        // this import's canonical) by an unrelated module's pre-installed
-        // qualifier in `qual_vars`. Either way a silent extend-merge would let
-        // `Alias.member` resolve last-wins across modules with no diagnostic;
-        // fail closed with the same DuplicateQualifier the user-dep path uses.
-        // Re-importing the same module under the same alias stays a no-op.
-        if let Some(&(prev_canonical, first)) = alias_canonical.get(&alias) {
-            if prev_canonical != canonical {
+        if let Some(explicit) = import.alias {
+            // Reject an explicit alias already claimed by a prior explicit alias
+            // for a DIFFERENT module (`import … as J` twice), or one that names a
+            // DIFFERENT stdlib module's canonical qualifier
+            // (`import Ipe.Json.Encode as Crypto`). Either way a silent
+            // extend-merge would resolve `Alias.member` last-wins across modules
+            // with no diagnostic, and aliasing onto a gated canonical would also
+            // unlock that canonical's must-import gate. Re-aliasing the same
+            // module under the same name stays a no-op.
+            if let Some(&(prev_canonical, first)) = explicit_alias_canonical.get(&explicit) {
+                if prev_canonical != canonical {
+                    return Err(Diagnostic::Name {
+                        span: import.name.span,
+                        msg: NameError::DuplicateQualifier {
+                            qualifier: name_str(interner, explicit)?,
+                            first,
+                        },
+                    });
+                }
+            } else if explicit != canonical
+                && crate::env::is_stdlib_canonical_qualifier(interner, explicit)
+            {
                 return Err(Diagnostic::Name {
                     span: import.name.span,
                     msg: NameError::DuplicateQualifier {
-                        qualifier: name_str(interner, alias)?,
-                        first,
+                        qualifier: name_str(interner, explicit)?,
+                        first: import.name.span,
                     },
                 });
             }
-        } else if alias != canonical && crate::env::is_stdlib_canonical_qualifier(interner, alias) {
-            // The alias names a DIFFERENT stdlib module's canonical qualifier
-            // (`import Ipe.Json.Encode as Sql`); merging into `Sql`'s member
-            // table would silently shadow it. Internal re-export qualifiers
-            // (`Cmd` / `Sub`) are not canonical table entries, so a legitimate
-            // `import Ipe.Tea.Web.Cmd as Cmd` is unaffected.
-            return Err(Diagnostic::Name {
-                span: import.name.span,
-                msg: NameError::DuplicateQualifier {
-                    qualifier: name_str(interner, alias)?,
-                    first: import.name.span,
-                },
-            });
+            explicit_alias_canonical.insert(explicit, (canonical, import.name.span));
         }
-        alias_canonical.insert(alias, (canonical, import.name.span));
-        // Tier-C import gate (ADR 0047): mark the CANONICAL qualifier of the
-        // module actually imported — never the raw alias. Keying the gate on the
-        // alias would let `import Ipe.Json.Encode as Crypto` unlock the unrelated
-        // `Crypto` gate, resolving `Crypto.hmacSha256` without importing
-        // `Ipe.Crypto`. `Alias.member` still resolves via the member clone below,
-        // not the gate (an alias is never itself a gated qualifier).
-        env.mark_stdlib_qualifier_imported(canonical);
+        // Tier-C import gate (ADR 0047): this `import Ipe.X [as Alias]` brings the
+        // qualifier into scope under the name the user will type. Mark that name
+        // (the alias, or — via the fall-through below — the canonical) so a later
+        // `Alias.member` / `X.member` resolves instead of raising N0034. An
+        // explicit alias that collides with a gated canonical was rejected above,
+        // so marking the alias here can never unlock an unrelated module's gate.
+        env.mark_stdlib_qualifier_imported(alias);
+        // A bare `import Ipe.X.Y` (no explicit `as`) also names the module under
+        // its CANONICAL qualifier — for a dotted-canonical module such as
+        // `Ipe.Db.Decode` (canonical `Db.Decode`) that is the multi-segment form
+        // the parser produces from `Db.Decode.member`, which no `as` alias can
+        // spell. Marking the canonical too keeps `X.Y.member` resolving without an
+        // alias. An explicit `as Alias` names a single qualifier on purpose, so it
+        // does not pull the canonical into scope.
+        if import.alias.is_none() {
+            env.mark_stdlib_qualifier_imported(canonical);
+        }
         if alias == canonical {
             // Already registered under its canonical name — nothing to clone.
             continue;
