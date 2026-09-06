@@ -1382,7 +1382,8 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `ColumnSpec` | A DB-only fact the record type cannot express: primary key, serial |
 | `IndexSpec` | A declarative performance index over one or more of the store's columns. |
 | `Row` | A row read back from the database: every column keyed by its name, values |
-| `validSqlIdent` | `validSqlIdent name` — accept `name` as an SQL identifier, or reject it. |
+| `validSqlIdent` | `validSqlIdent name` — accept `name` as a (possibly dotted) SQL identifier, |
+| `validSqlIdentPlain` | `validSqlIdentPlain name` — the dot-free identifier gate, byte-equivalent to |
 | `column` | `column name colType` — a column of an explicit `ColType`. The name is |
 | `textColumn` | A `CText` column. |
 | `intColumn` | A `CInt` column. |
@@ -2711,6 +2712,7 @@ Ipe.ToString — naming-consistency surface.
 | `fromInt` | (no summary) |
 | `fromFloat` | (no summary) |
 | `fromBool` | (no summary) |
+| `fromTime` | `fromTime t` — a human-readable local-time rendering of `t`. A thin alias |
 
 ## Trace
 

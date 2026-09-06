@@ -73,11 +73,12 @@ The security argument, made structural:
 
   * Identifiers are parsed, not validated. A `Store` is built through
     `fromCodec` (or the raw-column escape `fromColumns`), which runs
-    `validSqlIdent` over the table name and every derived column name and
-    returns `Err` on the first non-conforming identifier. A built `Store`
-    therefore carries only accepted identifiers — no downstream operation
-    re-checks, because an invalid one was unrepresentable past the constructor
-    (parse-don't-validate).
+    `validSqlIdentPlain` — the dot-free gate that is byte-equivalent to the
+    runtime's `SqlIdent::parse_plain` — over the table name and every derived
+    column name and returns `Err` on the first non-conforming identifier. A
+    built `Store` therefore carries only identifiers the kernel also accepts —
+    no downstream operation re-checks, and none can drift, because the Ipê
+    gate and the kernel gate share the same charset rule (parse-don't-validate).
   * Columns derive from the codec, never drift from it. `fromCodec` reads the
     codec's `Shape`; a non-`SRecord` codec names no columns and is a build
     `Err` (fail-closed). The column list, the DDL, the insert binds, and the
@@ -263,14 +264,21 @@ stores rows in this form.
 validSqlIdent : String -> Bool
 ```
 
-`validSqlIdent name` — accept `name` as an SQL identifier, or reject it.
-The ONLY gate through which a table or column name reaches emitted SQL on the
-safe surface. Accepts a non-empty run of ASCII letters, digits, `_`, and `.`
-(a dotted `table.column` reference); rejects everything else — a space, a
-quote, a semicolon, a parenthesis. This mirrors the identifier gate the
-`Ipe.Db` kernels apply, so the Ipê-level check and the runtime check agree:
-an identifier that passes here also passes the kernel, and one that fails
-here is rejected before any SQL is built.
+`validSqlIdent name` — accept `name` as a (possibly dotted) SQL identifier,
+or reject it. Byte-equivalent to the runtime's dotted identifier gate
+(`SqlIdent::parse` in dotted mode, `runtime/rust/src/db.rs`): a non-empty run
+of ASCII letters, digits, `_`, and `.`, where every `.`-delimited segment is
+itself non-empty. So a bare name (`users`) and a dotted `table.column`
+reference (`users.id`) pass, while a lone `.`, a trailing dot (`users.`), a
+leading dot (`.id`), and consecutive dots (`a..b`) are rejected — a dotted
+reference is a sequence of bare names, never a structurally-malformed dot
+string. Everything else (a space, a quote, a semicolon, a parenthesis) is
+rejected before any SQL is built.
+
+Table and column *keys* are stricter still (dot-free) and go through
+`validSqlIdentPlain`; this dotted predicate mirrors the qualified-reference
+surface (`Sql.column`). Keeping both mirrors byte-equivalent to the single
+runtime charset gate is why the Ipê-level check and the kernel check agree.
 
 Example:
 
@@ -278,6 +286,21 @@ Example:
     Store.validSqlIdent "users.id" == True
     Store.validSqlIdent "user table" == False
     Store.validSqlIdent "users;drop" == False
+    Store.validSqlIdent "users." == False
+    Store.validSqlIdent "a..b" == False
+
+## `validSqlIdentPlain`
+
+```ipe
+validSqlIdentPlain : String -> Bool
+```
+
+`validSqlIdentPlain name` — the dot-free identifier gate, byte-equivalent to
+the runtime's plain mode (`SqlIdent::parse_plain`): a non-empty run of ASCII
+letters, digits, and `_`, with no `.` at all. This is the gate the runtime
+applies to a bare table or column name, so the Store validates its table name
+and every column key through this stricter predicate rather than the dotted
+`validSqlIdent`.
 
 ## `column`
 
