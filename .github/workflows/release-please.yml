@@ -13,7 +13,7 @@ name: release-please
 
 on:
   push:
-    branches: [main]
+    branches: [development]
 
 permissions:
   contents: write
@@ -42,6 +42,10 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .github/.release-please-manifest.json
+          # The release PR targets the development integration branch so it flows
+          # through the same gate and promotes to main via the FF promotion — main
+          # is never PR-merged directly.
+          target-branch: development
 
   # Keep Cargo.lock in sync with whichever version Cargo.toml was bumped to.
   #
