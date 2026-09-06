@@ -204,8 +204,7 @@ pub fn main_bigger() -> bool {
 pub fn main_chosen() -> f64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     static CELL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| (if crate::main_bigger() { 1500.0 } else { 0.02 }))
-        .clone()
+    CELL.get_or_init(|| (if crate::main_bigger() { 1500.0 } else { 0.02 })).clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
