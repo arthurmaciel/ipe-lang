@@ -8474,7 +8474,7 @@ mod duplicate_pattern_binder_tests {
 
     #[test]
     fn wildcards_may_repeat() {
-        let mut i = Interner::new();
+        let i = Interner::new();
         let w1 = Located::new(Span::new(0, 1), src::Pattern_::PAnything);
         let w2 = Located::new(Span::new(3, 4), src::Pattern_::PAnything);
         let pat = Located::new(Span::new(0, 5), src::Pattern_::PTuple(vec![w1, w2]));
