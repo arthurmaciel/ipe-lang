@@ -614,21 +614,69 @@ jobs:
   # real I/O (E2E tests, `ipe_backend_rust::project`'s `rustfmt` spawn, the
   # runtime's HTTP/DB/websocket kernels), which Miri can't interpret at all —
   # `posix_spawn` is an unsupported foreign call under Miri.
-  miri:
+  # Sharded across 10 runners via nextest partitioning. Serial `miri test` over
+  # the five crates is a multi-hour long-pole; partitioning splits the test set
+  # evenly so each shard interprets ~1/10 of the cases and the wall-clock drops
+  # to well under an hour. Same crates, same MIRIFLAGS — only parallelised.
+  # The shard driver is `cargo miri nextest run`, which needs BOTH the miri
+  # component AND nextest on the runner, so this installs nextest like every
+  # other nextest-driven job.
+  miri-shard:
+    name: miri-shard (${{ matrix.shard }}/10)
     runs-on: ubuntu-latest
     # Fail-fast: don't start the slow miri interpretation if the workspace does
     # not even compile (quick-check is red). Only reachable off the PR path.
     needs: [changes, quick-check]
     if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +nightly miri test -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics
+      - run: cargo +nightly miri nextest run -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics --partition count:${{ matrix.shard }}/10
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
+
+  # Stable aggregation gate for the sharded miri matrix. The `miri-shard` matrix
+  # expands to ten shard-named jobs, so no single shard name is a durable
+  # required-check target and a `fail-fast: false` shard failure is easy to
+  # miss. This job depends on every shard and is GREEN only when all ten passed
+  # — one stable context name (`miri`) branch protection can require so a UB /
+  # aliasing regression blocks a landing. The `always()` guard makes a
+  # skipped/failed/cancelled shard a FAILURE here, never a false green; a
+  # legitimate skip (the matrix self-skips on pull_request) passes vacuously so
+  # the PR path is unaffected. A bare, stable `name` so the required-check
+  # context is exactly `miri` (branch protection matches the check name
+  # literally; a parenthetical would make the required-context string brittle).
+  miri:
+    name: miri
+    runs-on: ubuntu-latest
+    needs: miri-shard
+    if: always()
+    steps:
+      - name: Gate on every miri shard result
+        run: |
+          result='${{ needs.miri-shard.result }}'
+          case "$result" in
+            success)
+              echo "miri: every shard passed — no UB/aliasing violation."
+              ;;
+            skipped)
+              # The miri-shard matrix self-skips on pull_request (off the cheap
+              # PR gate); nothing to aggregate, so this passes vacuously.
+              echo "miri: shards skipped for this event — vacuously green."
+              ;;
+            *)
+              echo "miri FAILED: shards result=$result (a UB/aliasing regression or an infra failure)" >&2
+              exit 1
+              ;;
+          esac
 
   # E2E builds+runs the emitted Rust per golden (THE SEAL — the soundness floor:
   # every `ipe`-exit-0 golden's emitted Cargo project must `cargo build` + run).
