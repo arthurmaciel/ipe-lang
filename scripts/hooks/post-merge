@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# post-merge — refresh the ipe-index incrementally after a merge/pull brings new
+# commits into the tree, so rdeps/locate/parity reflect the merged state.
+# Non-blocking by design (see scripts/hooks/post-commit): a failure never breaks
+# the merge.
+#
+# Install via scripts/install-hooks.sh (sets core.hooksPath to scripts/hooks).
+REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -x "$REPO/tools/scripts/ipe-index" ] || exit 0
+"$REPO/tools/scripts/ipe-index" update >/dev/null 2>&1 || true
+exit 0
