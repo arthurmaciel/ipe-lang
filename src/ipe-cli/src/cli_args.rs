@@ -347,16 +347,40 @@ fn is_delivery_word(token: &str) -> bool {
         || crate::delivery::Host::from_word(token).is_some()
 }
 
+/// The disambiguation note for a leading delivery word that also names a path on
+/// disk, or `None` when nothing shadows. `exists` reports whether `word` names an
+/// existing filesystem entry; kept as a parameter so the decision is unit-testable
+/// without touching the real filesystem.
+fn shadowing_note(word: &str, exists: impl FnOnce(&str) -> bool) -> Option<String> {
+    if is_delivery_word(word) && exists(word) {
+        Some(format!(
+            "note: a path `{word}` exists but bare `{word}` selects the delivery; write `./{word}` to build that path"
+        ))
+    } else {
+        None
+    }
+}
+
 /// Take the leading positional entry only when it is a genuine entry path — not
 /// a delivery word. `ipe build web desktop` leaves the entry unset (the project
 /// default) and hands `web desktop` to the delivery parse; `ipe build
 /// src/Main.ipe web` consumes the path, then hands `web` to delivery.
+///
+/// When a skipped leading delivery word also names a path on disk it prints a
+/// one-line note pointing at the `./word` form, so the shadowed path is
+/// discoverable rather than silently overridden by the delivery reading.
 fn take_leading_entry_path(
     it: &mut std::iter::Peekable<std::slice::Iter<'_, String>>,
 ) -> Option<String> {
     match it.peek() {
         Some(first) if !first.starts_with('-') && !is_delivery_word(first) => it.next().cloned(),
-        _ => None,
+        Some(first) => {
+            if let Some(note) = shadowing_note(first, |w| std::path::Path::new(w).exists()) {
+                eprintln!("{note}");
+            }
+            None
+        }
+        None => None,
     }
 }
 
@@ -1021,10 +1045,7 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
             )?,
             "--port" => {
                 let raw = take_value(&mut it, "--port", "watch")?;
-                let parsed = raw.parse::<u16>().map_err(|_| {
-                    CliError::UsageOwned(format!("ipe watch: invalid --port value: {raw}"))
-                })?;
-                set_once(&mut port, parsed, "--port", "watch")?;
+                set_once(&mut port, parse_port(&raw, "watch")?, "--port", "watch")?;
             }
             "-q" | "--quiet" => quiet = true,
             "--reset-state" => reset_state = true,
@@ -1047,16 +1068,40 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
     })
 }
 
+/// Parse a `--port` value into a real TCP port for `command`.
+///
+/// Port 0 is rejected: it asks the OS for an ephemeral port, but a served
+/// process threads the literal value into URLs and readiness probes, so a
+/// accepted 0 would yield unreachable `localhost:0` targets. The teaching
+/// message names the command and points at the fix.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on a non-numeric value or on `0`.
+pub fn parse_port(value: &str, command: &str) -> Result<u16, CliError> {
+    match value.parse::<u16>() {
+        Ok(0) => Err(CliError::UsageOwned(format!(
+            "ipe {command}: --port 0 is not a real port; omit --port to auto-select a free one"
+        ))),
+        Ok(port) => Ok(port),
+        Err(_) => Err(CliError::UsageOwned(format!(
+            "ipe {command}: --port `{value}` is not a port number (1-65535)"
+        ))),
+    }
+}
+
 /// Fully-parsed `ipe fix` arguments.
 pub struct FixArgs {
     /// The positional source file (required).
     pub entry: String,
-    /// `--yes` — durable authorization to apply every fix without prompting.
+    /// `--yes`/`-y` — durable authorization to apply every fix without prompting.
     pub auto: bool,
 }
 
 /// Parse `ipe fix`'s argument tail. The `<path>` positional is required; a
-/// second positional, or a flag other than `--yes`, is rejected.
+/// second positional, or a flag other than `--yes`/`-y`, is rejected.
+///
+/// Any leading-dash token is treated as a flag (never bound as the path),
+/// matching the sibling parsers.
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
@@ -1065,8 +1110,8 @@ pub fn parse_fix(rest: &[String]) -> Result<FixArgs, CliError> {
     let mut auto = false;
     for arg in rest {
         match arg.as_str() {
-            "--yes" => auto = true,
-            flag if flag.starts_with("--") => {
+            "--yes" | "-y" => auto = true,
+            flag if flag.starts_with('-') => {
                 return Err(usage_unknown_flag("fix", flag));
             }
             positional => set_once(&mut entry, positional.to_owned(), "<path>", "fix")?,
@@ -1522,6 +1567,13 @@ mod tests {
     }
 
     #[test]
+    fn watch_rejects_port_zero() {
+        // Port 0 is an ephemeral-port request, but watch threads the literal
+        // value into URLs and readiness probes, so it is refused like doc serve.
+        assert!(parse_watch(&s(&["--port", "0"])).is_err());
+    }
+
+    #[test]
     fn watch_duplicate_port_rejected() {
         assert!(parse_watch(&s(&["--port", "1", "--port", "2"])).is_err());
     }
@@ -1561,6 +1613,32 @@ mod tests {
     #[test]
     fn fix_unknown_flag_rejected() {
         assert!(parse_fix(&s(&["Main.ipe", "--bogus"])).is_err());
+    }
+
+    #[test]
+    fn fix_accepts_short_yes_alias() {
+        let a = parse_fix(&s(&["-y", "Main.ipe"])).expect("fix -y");
+        assert_eq!(a.entry, "Main.ipe");
+        assert!(a.auto);
+    }
+
+    #[test]
+    fn fix_short_flag_is_never_bound_as_the_path() {
+        // A single-dash token is a flag, not the entry path: `-z` is rejected as
+        // an unknown flag rather than silently opened as a file named `-z`.
+        assert!(parse_fix(&s(&["-z", "Main.ipe"])).is_err());
+        assert!(matches!(
+            parse_fix(&s(&["-z"])),
+            Err(CliError::UsageOwned(_))
+        ));
+    }
+
+    #[test]
+    fn shadowing_note_only_fires_for_an_existing_delivery_word() {
+        assert!(shadowing_note("web", |_| true).is_some());
+        assert!(shadowing_note("web", |_| false).is_none());
+        // A non-delivery leading token never yields a note (it is a real entry).
+        assert!(shadowing_note("src", |_| true).is_none());
     }
 
     // ---- fmt ----------------------------------------------------------------

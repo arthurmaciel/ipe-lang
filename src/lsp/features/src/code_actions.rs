@@ -7,10 +7,8 @@
 //!
 //! - `IPE-T0001` (type mismatch) / no match arms on a `case`: no automatic fix
 //!   (the shape is too varied).
-//! - `IPE-N0001` (unused import): "Remove unused import" — delete the import
-//!   line.
-//! - `IPE-N0003` (missing type annotation): "Add type annotation" — insert the
-//!   inferred type annotation above the binding.
+//! - `IPE-L0106` (top-level function needs a type signature): "Add type
+//!   annotation" — insert the inferred type annotation above the binding.
 //! - `IPE-N0034` (standard-library module used without importing it): "Add
 //!   import `Ipe.X`" — insert the named `import Ipe.X` line into the module's
 //!   import block, alphabetically among the existing imports.
@@ -30,7 +28,6 @@ use lsp_types::{
 };
 
 use ipe_db::{Db as _, IpeDatabase, SourceRoot};
-use ipe_diagnostics::Span;
 
 use crate::offset::{PositionEncoding, offset_to_position};
 
@@ -91,16 +88,9 @@ pub fn code_actions(
             continue;
         };
         match code.as_str() {
-            "IPE-N0001" => {
-                // Unused import — remove the line containing this diagnostic.
-                let action = remove_line_action(uri, diag, text, "Remove unused import", encoding);
-                actions.push(CodeActionOrCommand::CodeAction(action));
-            }
-            "IPE-N0004" => {
-                // Missing type annotation — insert the annotation.
-                // The diagnostic message carries the inferred type in the form
-                // `missing type annotation for `name`: Type`. We extract the
-                // type string and synthesise the edit.
+            "IPE-L0106" => {
+                // A top-level function with no type signature — insert its
+                // inferred type annotation above the binding.
                 if let Some(action) =
                     add_type_annotation_action(view, module, uri, diag, text, encoding)
                 {
@@ -138,42 +128,6 @@ pub fn code_actions(
 
 fn ranges_overlap(a: Range, b: Range) -> bool {
     a.start <= b.end && b.start <= a.end
-}
-
-/// Quick-fix that deletes the entire line (including its trailing newline)
-/// that contains `diag.range`.
-fn remove_line_action(
-    uri: &Url,
-    diag: &Diagnostic,
-    text: &str,
-    title: &str,
-    encoding: PositionEncoding,
-) -> CodeAction {
-    let line = diag.range.start.line as usize;
-    // Byte span of the full line including its trailing '\n'.
-    let (line_start, line_end) = line_byte_range(text, line);
-    let start = offset_to_position(text, line_start, encoding);
-    let end = offset_to_position(text, line_end, encoding);
-    let edit = TextEdit {
-        range: Range { start, end },
-        new_text: String::new(),
-    };
-    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    changes.insert(uri.clone(), vec![edit]);
-    CodeAction {
-        title: title.to_owned(),
-        kind: Some(CodeActionKind::QUICKFIX),
-        diagnostics: Some(vec![diag.clone()]),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
-        command: None,
-        is_preferred: Some(true),
-        disabled: None,
-        data: None,
-    }
 }
 
 /// Quick-fix that inserts a type annotation above the binding named in the
@@ -464,10 +418,6 @@ fn line_byte_range(text: &str, line: usize) -> (usize, usize) {
     (text.len(), text.len())
 }
 
-// Suppress the unused-import warning for `Span` (used only in doc context).
-#[allow(dead_code)]
-type _SpanAlias = Span;
-
 #[cfg(test)]
 mod tests {
     use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
@@ -551,8 +501,12 @@ mod tests {
         assert!(actions.is_empty(), "unknown code → no actions");
     }
 
+    /// A value-not-found (`IPE-N0001`) and an unknown-module (`IPE-N0004`)
+    /// diagnostic must offer NO quick-fix — neither is an unused import nor a
+    /// missing annotation, so no line-deleting or annotation-inserting action
+    /// may be offered against the user's code.
     #[test]
-    fn remove_import_action_deletes_the_import_line() {
+    fn value_not_found_and_unknown_module_produce_no_actions() {
         let db = IpeDatabase::new();
         let src = "module Main exposing (main)\n\nimport Unused\n\nmain : Int\nmain =\n    42\n";
         let entry = file(&db, &["Main"], src);
@@ -560,42 +514,33 @@ mod tests {
         let uri = Url::from_file_path("/fake/Main.ipe").unwrap();
         let range = Range {
             start: Position {
-                line: 2,
+                line: 0,
                 character: 0,
             },
             end: Position {
-                line: 2,
-                character: 13,
+                line: 6,
+                character: 0,
             },
         };
-        let diag = diag_at(2, "IPE-N0001");
-        let actions = code_actions(
-            DbView {
-                db: &db,
-                root,
-                entry,
-            },
-            &["Main".to_owned()],
-            &uri,
-            range,
-            &[diag],
-            src,
-            PositionEncoding::Utf16,
-        );
-        assert_eq!(actions.len(), 1, "one action for unused import");
-        let action = actions.into_iter().find_map(|a| match a {
-            lsp_types::CodeActionOrCommand::CodeAction(action) => Some(action),
-            lsp_types::CodeActionOrCommand::Command(_) => None,
-        });
-        let action = action.expect("the single action is a CodeAction");
-        assert_eq!(action.title, "Remove unused import");
-        let edit = action
-            .edit
-            .as_ref()
-            .and_then(|e| e.changes.as_ref())
-            .and_then(|c| c.values().next())
-            .and_then(|v| v.first())
-            .expect("edit present");
-        assert!(edit.new_text.is_empty(), "replacement is empty (delete)");
+        for code in ["IPE-N0001", "IPE-N0004"] {
+            let actions = code_actions(
+                DbView {
+                    db: &db,
+                    root,
+                    entry,
+                },
+                &["Main".to_owned()],
+                &uri,
+                range,
+                &[diag_at(2, code)],
+                src,
+                PositionEncoding::Utf16,
+            );
+            assert!(
+                actions.is_empty(),
+                "{code} must offer no quick-fix; got {} action(s)",
+                actions.len()
+            );
+        }
     }
 }

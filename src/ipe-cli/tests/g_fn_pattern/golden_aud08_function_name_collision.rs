@@ -1,27 +1,25 @@
 //! AUD-08 regression — two DISTINCT functions in DIFFERENT modules whose
 //! `(home, name)` identity folds to the SAME Rust identifier under
-//! `naming::module_value`'s `snake_case` fold must be rejected with
-//! `NameError::RustNameFold`, never silently emit two functions sharing
-//! one Rust name (a `rustc` E0428 "duplicate definition", or worse, whichever
-//! definition the emitter's map keeps last silently winning). Unlike a
-//! same-name source redefinition (`DuplicateValue`), this is a mangling
-//! collision between two differently-spelled Ipê definitions, so the
-//! diagnostic names both Ipê paths and the shared Rust name.
+//! `naming::module_value`'s `snake_case` fold must NOT silently emit two
+//! functions sharing one Rust name (a `rustc` E0428 "duplicate definition",
+//! or worse, whichever definition the emitter's map keeps last silently
+//! winning). The injective name fold resolves this by disambiguating the
+//! loser to a free Rust name, so BOTH definitions emit and the legal program
+//! builds and runs; only a degenerate namespace with no free suffix fails
+//! closed with `NameError::RustNameFold` (IPE-N0048), naming both Ipê paths
+//! and the shared Rust name.
 //!
 //! `module_value`'s fold is not injective over the (home, name) split:
 //! `["ZuiBorder"]/"rounded"` and `["Zui"]/"borderRounded"` both fold to
 //! `zui_border_rounded` (verified against `to_snake_case`'s exact algorithm —
 //! an interior uppercase char always emits a `_` boundary, so `ZuiBorder_rounded`
 //! and `Zui_borderRounded` produce byte-identical output). `zui` is NOT a kernel
-//! namespace, so no `user_` disambiguation prefix applies, and the shared
-//! identifier the collision guard reports is `zui_border_rounded`. The module
+//! namespace, so no `user_` disambiguation prefix applies. The module
 //! names are DELIBERATELY not `Ui`/`UiBorder`: `Ui` is a reserved Tier-C stdlib
 //! qualifier (`Ipe.Ui`), so a bare `Ui.borderRounded` would raise IPE-N0034
 //! (demanding `import Ipe.Ui`) and mask the fold-collision this test covers;
-//! `Zui`/`ZuiBorder` are non-reserved names that fold identically. Mirrors the sibling
-//! enum-name collision guard (`crates/ipe_backend_rust/src/lib.rs`, the
-//! `enum_names.values().any(...)` check ~10 lines above the guard this
-//! test covers).
+//! `Zui`/`ZuiBorder` are non-reserved names that fold identically. Mirrors the
+//! sibling enum-name fold in `ipe_backend_rust`'s `emit`.
 //!
 //! ```text
 //! cargo test -p ipe --test golden_aud08_function_name_collision
@@ -29,12 +27,6 @@
 
 use std::fs;
 use std::path::PathBuf;
-
-/// A runtime `false` the optimiser cannot fold — mirrors
-/// `crates/ipe/src/lib.rs`'s own test helper and the AUD-14 regression's.
-const fn false_marker() -> bool {
-    std::hint::black_box(false)
-}
 
 fn write_project(dir: &std::path::Path, files: &[(&str, &str)]) -> bool {
     let src = dir.join("src");
@@ -48,7 +40,7 @@ fn write_project(dir: &std::path::Path, files: &[(&str, &str)]) -> bool {
 }
 
 #[test]
-fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
+fn distinct_functions_folding_to_the_same_rust_name_both_emit() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable in this environment — skip silently
     };
@@ -86,45 +78,18 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("aud08_function_name_collision_out");
     let _ = fs::remove_dir_all(&out);
 
+    // `ZuiBorder.rounded` and `Zui.borderRounded` both fold to
+    // `zui_border_rounded`. The injective fold disambiguates the loser to a
+    // free Rust name, so both definitions emit and the legal program builds —
+    // it is NOT rejected. A leftover E0428 (two Rust fns sharing one name)
+    // would surface as an emit/build error, so a clean `Ok` proves the fold
+    // kept the two definitions distinct.
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    let Err(err) = built else {
-        assert!(
-            false_marker(),
-            "expected a RustNameFold rejection for ZuiBorder.rounded vs \
-             Zui.borderRounded (both fold to `zui_border_rounded`), but ipec \
-             build SUCCEEDED — the collision would silently emit two Rust \
-             fns sharing one name"
-        );
-        return;
-    };
-    let ipe::CliError::Pipeline { diag, .. } = &err else {
-        assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
-        return;
-    };
-    let ipe_diagnostics::Diagnostic::Name {
-        msg:
-            ipe_diagnostics::NameError::RustNameFold {
-                first,
-                second,
-                rust_name,
-                kind,
-            },
-        ..
-    } = &**diag
-    else {
-        assert!(
-            false_marker(),
-            "expected NameError::RustNameFold, got: {err}"
-        );
-        return;
-    };
-    assert_eq!(&**rust_name, "zui_border_rounded");
-    assert_eq!(*kind, ipe_diagnostics::RustNameFoldKind::Value);
-    // Both colliding Ipê definitions are named, so the fix is unambiguous.
-    let both: [&str; 2] = [first, second];
     assert!(
-        both.contains(&"ZuiBorder.rounded") && both.contains(&"Zui.borderRounded"),
-        "diagnostic must name both folding Ipê definitions, got {both:?}"
+        built.is_ok(),
+        "two functions folding to `zui_border_rounded` must both emit under \
+         disambiguated Rust names and build cleanly, got: {:?}",
+        built.err()
     );
 }
 
