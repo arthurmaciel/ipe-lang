@@ -1186,6 +1186,9 @@ const _: () = {
             let mut mi = 0;
             while mi < members.len() {
                 let member = members[mi];
+                // IPE-RUST-AUDIT:ACCEPTED — this `assert!` runs during const-eval of the
+                // enclosing `const _` block, so it fails the build on kernel-table drift and
+                // can never panic at runtime; it is a compile-time proof, not a runtime abort.
                 assert!(
                     registry_backs(qualifier, member)
                         || is_prelude_qualifier_alias(qualifier, member),
