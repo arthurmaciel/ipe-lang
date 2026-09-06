@@ -446,6 +446,762 @@ pub struct CodecAutoContext {
     pub witness_records: BTreeMap<Symbol, Vec<(Symbol, crate::ast::Type)>>,
 }
 
+/// Prelude kernel qualifier table — the `(qualifier, &[member])` surface
+/// registered by [`Env::install_prelude_qualifiers`]. Hoisted to module
+/// level so the compile-time drift gate (the `const _` block just below) can
+/// check it against the kernel registry without running the installer.
+#[rustfmt::skip]
+pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
+        // `Ipe.Error` — the real `Error ErrorKind ErrorInfo` ADT.
+        // Message constructors + nullary constructors + `toString`
+        // render + `withMessage` modifier + `isRetryable` classification +
+        // `withDetails` modifier (attaches the
+        // `ErrorDetails` union to `ErrorInfo.details : Maybe ErrorDetails`).
+        // `Ipe.CssSafety` — the Ipe.Css leaf security kernels: four
+        // `String -> Maybe String` parsers (`safeValue`/`safePropName`/
+        // `safeSelector` gate declarations/selectors at construction;
+        // `sanitizeRawBody` is the authoritative raw/keyframes-body gate over
+        // the audited `css_safety` policy) + the `String -> String`
+        // `<style>`-breakout floor. Imported (and called unqualified) by the
+        // compiled-source `Ipe.Css`.
+        (
+            "CssSafety",
+            &[
+                "safeValue",
+                "safePropName",
+                "safeSelector",
+                "sanitizeRawBody",
+                "stripStyleClose",
+            ],
+        ),
+        // `Ipe.Log` — qualified form (`import Ipe.Log as Log`).
+        // `info`/`debug`/`warn`/`error` are backed; the `*With`
+        // variants take Stringify-bounded attrs and stay fail-closed
+        // (IPE-L0108) until the Stringify obligation is added.
+        // `Log` is observability-only — line printing lives in `Ipe.Io`
+        // (`Io.println` / `Io.eprintln`).
+        // `Ipe.App` — runtime-config front door. `fromEnv` seals an env var
+        // into a `Secret` (the ONLY way to get a config secret);
+        // `fromEnvRequired` is its fail-closed variant (a missing/empty var
+        // is a named load-time `ConfigError`, not an empty secret).
+        ("App", &["fromEnv", "fromEnvRequired"]),
+        // `Ipe.Console` — the console/telemetry `Secret`-typed token settings.
+        // Each takes a `Secret` (from `App.fromEnvRequired`), so a hard-coded
+        // token `String` does not type-check.
+        ("Console", &["adminToken", "ingestToken", "metricsToken"]),
+        // `Ipe.Host` — the host-bind setting builder plus the `HostMode`
+        // constructors it takes.
+        ("Host", &["bind", "loopback", "allInterfaces", "envDriven"]),
+        // `Ipe.Level` — the `LogLevel` constructors `Log.level` takes. A
+        // separate qualifier from `Log` because `Log.debug`/`Log.info`/… are
+        // already the logging kernels; `Level.debug`/… are the severity tags.
+        // `Ipe.Json.Encode` — JSON encoder.
+        (
+            "JsonEnc",
+            &[
+                "string", "int", "float", "bool", "null", "list", "object", "encode",
+            ],
+        ),
+        // `Ipe.Json.Decode` — JSON decoder combinators.
+        (
+            "JsonDec",
+            &[
+                "string",
+                "int",
+                "float",
+                "bool",
+                "value",
+                "decodeString",
+                "decodeValue",
+                "field",
+                "at",
+                "index",
+                "list",
+                "nullable",
+                "map",
+                "andThen",
+                "succeed",
+                "fail",
+                "oneOf",
+                "map2",
+                "map3",
+                "map4",
+            ],
+        ),
+        // `Ipe.Json.Decode.Pipeline` — pipeline-style record decoders.
+        (
+            "JsonDecP",
+            &["required", "optional", "custom", "requiredAt"],
+        ),
+        // `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
+        // String-typed surface (backward-compat) + typed-key variants (§6.11).
+        (
+            "Crypto",
+            &[
+                "sha256",
+                "sha512",
+                "sha1",
+                "md5",
+                "rsaSha256Sign",
+                "rsaSha256Verify",
+                "constantTimeEqual",
+                "aesGcmEncrypt",
+                "aesGcmDecrypt",
+                "chacha20Encrypt",
+                "chacha20Decrypt",
+                "aesKeyFromPassword",
+                "chachaKeyFromPassword",
+                "randomBytes",
+                "randomToken",
+                // Typed HMAC kernels; the AEAD/key-derivation entry points
+                // above already require/return the typed `Key`, so there is
+                // no separate bare-`String`-key spelling to register.
+                "hmacSha256WithKey",
+                "hmacSha512WithKey",
+            ],
+        ),
+        // `Ipe.Secret` — opaque secret-string wrapper.
+        // `fromString` is the seal; `use` is the scoped consume (apply a
+        // function to the plaintext, return its result); `redacted` is the
+        // explicit "<redacted>" accessor. The blunt raw un-parse `reveal`
+        // relocated to the compiled-source `Ipe.Secret.Unsafe` submodule
+        // (`src/stdlib/Ipe/Secret/Unsafe.ipe`) as `unsafeReveal`, reached
+        // through the `Kernel.kernel "Secret_reveal"` alias to the SAME kernel —
+        // so it is absent here and no longer resolves off a plain
+        // `import Ipe.Secret`.
+        ("Secret", &["fromString", "use", "redacted"]),
+        // `Ipe.Jwt` — JWT encode/decode for HS256 and RS256,
+        // plus builder API: claims / hs256 / rs256 / subject / issuer /
+        // audience / expiresAt / notBefore / issuedAt / jwtId / withClaim /
+        // encode / decode.
+        (
+            "Jwt",
+            &[
+                "encodeHs256",
+                "decodeHs256",
+                "encodeRs256",
+                "decodeRs256",
+                // builder API
+                "claims",
+                "hs256",
+                "rs256",
+                "subject",
+                "issuer",
+                "audience",
+                "expiresAt",
+                "notBefore",
+                "issuedAt",
+                "jwtId",
+                "withClaim",
+                "encode",
+                "decode",
+            ],
+        ),
+        // `Ipe.System` — system effects.
+        (
+            "System",
+            &[
+                "args",
+                "getenv",
+                "getenvOr",
+                "getArg",
+                "getenvInt",
+                "getenvBool",
+                "setenv",
+                "unsetenv",
+                "cwd",
+                "getcwd",
+                "loadEnv",
+                "exit",
+            ],
+        ),
+        // `Ipe.Random` is DELIBERATELY absent: it is COMPILED-SOURCE
+        // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
+        // from `Ipe/Random.ipe` — the `Kernel.kernel "Random_*"` aliases and the
+        // pure Ipê wrappers — not from this kernel-qualifier catalog.
+        // `Ipe.File` — file effects.
+        (
+            "File",
+            &[
+                "readFile",
+                "writeFile",
+                "exists",
+                "remove",
+                "mkdirAll",
+                "readFileLimit",
+                "readFileBytes",
+                "append",
+                "readDir",
+                "isDir",
+                "walk",
+                "walkMatching",
+                "tempFile",
+                "tempDir",
+                "copy",
+                "rename",
+                "delete",
+            ],
+        ),
+        // `Ipe.Process` — subprocess execution with NO shell.
+        // `run` : `String -> List String -> Task Error String`.
+        // `runWith` : `{ command, args, cwd, env } -> Task Error { exitCode, stdout, stderr }`.
+        // `runInPty` : `{ command, args, cwd, env, cols, rows } -> Task Error { exitCode, output }`.
+        // All are server-only (`subprocess` capability), default-denied under wasm.
+        ("Process", &["run", "runWith", "runInPty"]),
+        // `Ipe.Http` — outbound HTTP client.
+        // `get` / `post` / `request` are effect kernels (Task Error
+        // HttpResponse); `parseQuery` is a pure kernel (String -> Dict
+        // String String); the `with*` builders + `defaultRequest` are ALSO
+        // pure kernels (HttpRequest record-update emission in the backend) —
+        // cross-module pure-Ipê stdlib calls are not resolved by ipe, so the
+        // builders cannot live as pure Ipê in Http.ipe. Every name below is
+        // registered so `Http.foo` resolves during name-resolution and lands
+        // as `Callee::Kernel` (see lower.rs ("Http", _) arms + constrain.rs
+        // kernel_ty Http entries that give each its record type).
+        (
+            "Http",
+            &[
+                "get",
+                "post",
+                "request",
+                "defaultRequest",
+                "defaultRequestFromString",
+                "withMethod",
+                "withHeader",
+                "withTimeout",
+                "withBody",
+                "withUrl",
+                "withRedirects",
+                "parseQuery",
+                "methodToString",
+                "methodFromString",
+            ],
+        ),
+        // ── TEA Cmd / Sub kernels ───────────────────────────────────────────
+        // `Cmd.publish` / `Cmd.publishNoEcho` are backed by runtime
+        // `cmd_publish` / `cmd_publish_no_echo` in live/pubsub.rs.
+        // `Sub.subscribeTopic` is backed by runtime `sub_subscribe_topic`
+        // in live/pubsub.rs; emit path uses the standard N-arg route.
+        (
+            "Cmd",
+            &[
+                "none",
+                "batch",
+                "perform",
+                "map",
+                "publish",
+                "publishNoEcho",
+            ],
+        ),
+        (
+            "Sub",
+            &[
+                "none",
+                "batch",
+                "every",
+                "map",
+                "subscribeTopic",
+                "subscribeWebSocket",
+            ],
+        ),
+        // `Ipe.PubSub` (the top-level, Task-shaped publish surface) is a
+        // COMPILED-SOURCE stdlib module (`src/stdlib/Ipe/PubSub.ipe`), so it
+        // stays OUT of this kernel-qualifier table (kernel qualifier here OR
+        // compiled-source — never both). Its `publish` / `publishNoEcho` bodies
+        // are `Kernel.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`; the
+        // alias fast-path (`detect_kernel_alias`) splits `"PubSub_publish"` →
+        // the canonical `("PubSub", "publish")` kernel (`class = Web`,
+        // Task-shaped — NOT TEA-loop machinery).
+        // ── Db kernels ──────────────────────────────────────────────────────
+        // `Ipe.Db` — the SAFE database connection + query surface. The
+        // raw-SQL and untyped-column-read escape hatches (`unsafeExecRaw`,
+        // `unsafeQuery`, `unsafeGet*`) live in the compiled-source
+        // `Ipe.Db.Unsafe` submodule (`src/stdlib/Ipe/Db/Unsafe.ipe`), reached
+        // through `Kernel.kernel "Db_*"` aliases to the SAME kernels — so they
+        // are absent here and no longer resolve off a plain `import Ipe.Db`.
+        // `SqlValue` / `SqlField` ADT constructors are handled by
+        // `install_builtin_ctors` above; they are unqualified.
+        (
+            "Db",
+            &[
+                "connect",
+                "open",
+                "close",
+                "exec",
+                "queryDecode",
+                "insertRow",
+                "getById",
+                "updateById",
+                "deleteById",
+                "findOneByField",
+                "findManyByField",
+                "findByConditions",
+                "findWhere",
+                "findJoin",
+                "findProjection",
+                "findJoinOrdered",
+                "findProjectionOrdered",
+                "deleteWhere",
+                "updateWhere",
+                // External read path — `…On` reads over a `Connection a`.
+                "findWhereOn",
+                "queryDecodeOn",
+                "getByIdOn",
+                "insertFields",
+                "updateFields",
+                "insertFieldsReturning",
+                "withTransaction",
+                "migrate",
+                "defaultMigration",
+                // Runtime-config front door — `Db.url : Secret -> Setting a`.
+                "url",
+            ],
+        ),
+        // `Ipe.Db.Sql` — typed, parameterized WHERE-fragment builder.
+        // A `SqlFragment` can only be built through
+        // these combinators, so a naive string-concatenated WHERE clause
+        // is a type error (`String` where `SqlFragment` is expected) at
+        // `Db.findWhere` / `Db.deleteWhere`, not a runtime injection risk.
+        (
+            "Sql",
+            &[
+                "column",
+                "param",
+                "int",
+                "string",
+                "float",
+                "bool",
+                "eq",
+                "ne",
+                "gt",
+                "lt",
+                "gte",
+                "lte",
+                "and",
+                "or",
+                "not",
+                "isNull",
+                "isNotNull",
+                "inList",
+                "like",
+            ],
+        ),
+        // `Ipe.Db.Decode` — row decoder combinators.
+        // The qualifier string contains a dot ("Db.Decode") which the parser
+        // produces correctly for the 3-segment path `Db.Decode.string` — see
+        // ipe_parse::parser::ident_expr (qualifier = init.join(".")).
+        (
+            "Db.Decode",
+            &[
+                "string", "int", "float", "bool", "bytes", "money", "decimal", "nullable",
+                "map", "andThen", "succeed", "fail", "map2", "map3", "map4", "required",
+                "optional",
+            ],
+        ),
+        // Ipe.Http.Server kernels.
+        (
+            "Server",
+            &[
+                "get",
+                "post",
+                "put",
+                "delete",
+                "any",
+                "api",
+                "static",
+                "mountApp",
+                "listen",
+                "text",
+                "json",
+                "html",
+                "withStatus",
+                "withHeader",
+                "redirect",
+                "param",
+                "queryParam",
+                "header",
+                "getCookie",
+                "body",
+                "path",
+                "method",
+                "cookie",
+                "withCookie",
+                "authConfig",
+                "bearerToken",
+                "cookieToken",
+                "withRevocation",
+                "getAuthed",
+                "postAuthed",
+                "putAuthed",
+                "deleteAuthed",
+            ],
+        ),
+        // Ipe.Http.Middleware kernels.
+        (
+            "Middleware",
+            &[
+                "withCors",
+                "withLogging",
+                "withBasicAuth",
+                "withRateLimit",
+                "withCsrf",
+            ],
+        ),
+        // Ipe.Http.RateLimit kernels.
+        ("RateLimit", &["allow"]),
+        // `Ipe.Ui` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not a
+        // kernel qualifier: the layout builders (`el`/`row`/`column`/
+        // `wrappedRow`/`grid`/`paragraph`/`textColumn`/`form`/`input`) are
+        // pure Ipê over the retained `node`/`taggedNode` primitives, and every
+        // other member is a `Kernel.kernel "Ui_*"` alias resolving to its
+        // unchanged kernel. The `Ipe.Ui.*` sub-qualifiers (Background/Border/
+        // Font/Region/Input/Lazy/Keyed) stay native below. The disjointness
+        // invariant forbids `Ui` here.
+        // ── Ipe.Ui.Background sub-module ─────────────────────────────────────
+        (
+            "Background",
+            &[
+                "color",
+                "image",
+                "hoverColor",
+                "focusColor",
+                "activeColor",
+                "disabledColor",
+                "linearGradient",
+            ],
+        ),
+        // ── Ipe.Ui.Border sub-module ─────────────────────────────────────────
+        (
+            "Border",
+            &[
+                "width",
+                "widthEach",
+                "color",
+                "rounded",
+                "solid",
+                "dashed",
+                "dotted",
+                "shadow",
+                "glow",
+                "innerShadow",
+                "hoverColor",
+                "focusColor",
+                "activeColor",
+                "hoverWidth",
+                "hoverRounded",
+            ],
+        ),
+        // ── Ipe.Ui.Font sub-module ───────────────────────────────────────────
+        (
+            "Font",
+            &[
+                "color",
+                "family",
+                "size",
+                "weight",
+                "bold",
+                "semiBold",
+                "regular",
+                "light",
+                "extraBold",
+                "black",
+                "italic",
+                "underline",
+                "lineThrough",
+                "noDecoration",
+                "letterSpacing",
+                "wordSpacing",
+                "alignLeft",
+                "alignRight",
+                "alignCenter",
+                "center",
+                "justify",
+                "sansSerif",
+                "serif",
+                "monospace",
+                "hoverColor",
+                "focusColor",
+                "activeColor",
+                "disabledColor",
+                "hoverSize",
+            ],
+        ),
+        // ── Ipe.Ui.Region sub-module ─────────────────────────────────────────
+        (
+            "Region",
+            &[
+                "mainContent",
+                "navigation",
+                "footer",
+                "aside",
+                "heading",
+                "label",
+                "announce",
+                "announceUrgently",
+            ],
+        ),
+        // ── Ipe.Ui.Input sub-module ──────────────────────────────────────────
+        (
+            "Input",
+            &[
+                "labelAbove",
+                "labelBelow",
+                "labelLeft",
+                "labelRight",
+                "labelHidden",
+                "placeholder",
+                "text",
+                "multiline",
+                "email",
+                "username",
+                "search",
+                "currentPassword",
+                "newPassword",
+                "checkbox",
+                "slider",
+                "option",
+                "radio",
+                "radioRow",
+            ],
+        ),
+        // ── Ipe.Ui.Lazy sub-module ───────────────────────────────────────────
+        ("Lazy", &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"]),
+        // ── Ipe.Ui.Keyed — ipe-key for diff identity ─────────────────────────
+        ("Keyed", &["column", "row"]),
+        // `Ipe.Html` and `Ipe.Html.Attributes` are compiled-source (see exclusion
+        // table in `STDLIB_MODULE_QUALIFIERS`); `Ipe.Html.Events` is a kernel qualifier.
+        // ── Ipe.Html.Events alias ─────────────────────────────────────────────
+        (
+            "Event",
+            &[
+                "onClick",
+                "onInput",
+                "onChange",
+                "onSubmit",
+                "onFocus",
+                "onBlur",
+                "onMouseOver",
+                "onMouseOut",
+                "onKeyDown",
+                "onKeyUp",
+                "onBool",
+                "onMsg",
+            ],
+        ),
+        // ── Ipe.Web app-entry kernels ────────────────────────────────────────
+        (
+            "Web",
+            &[
+                "app",
+                "appRouted",
+                "embed",
+                "appWith",
+                "route",
+                "csrf",
+                "sessionTtl",
+                "authMaxLifetime",
+                "authSlideWindow",
+                "withRevocation",
+                // `CsrfMode` constructors `Web.csrf` takes. No disabling
+                // variant — a setting cannot turn CSRF off.
+                "strict",
+                "inheritCsrf",
+                // `RevocationMode` constructors `Web.withRevocation` takes.
+                "revocationOff",
+                "revocationStore",
+            ],
+        ),
+        // ── Ipe.Tui / Ipe.Cli app-entry kernels ──────────────────────────────
+        // `Tui.app` (full screen, `onKey`) and `Cli.app` (line stream,
+        // `onLine`) — one terminal rendering family, two drive axes. Both
+        // carry `KernelClass::Terminal` internally.
+        ("Tui", &["app"]),
+        ("Cli", &["app"]),
+        // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
+        // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
+        (
+            "Auth",
+            &[
+                "hashPassword",
+                "hashPasswordCost",
+                "verifyPassword",
+                "passwordStrength",
+                "signToken",
+                "verifyToken",
+                "register",
+                "login",
+                "setRole",
+                "subject",
+            ],
+        ),
+        // Ipe.Auth.Revocation — per-session and per-subject revocation gate.
+        // Requires `Principal` (enforces auth-on-auth); fail-closed on store error.
+        (
+            "Revocation",
+            &["revokeUser", "revokeSession", "restoreUser", "isRevoked"],
+        ),
+        // Ipe.Http.Server.Stream — server-side streaming HTTP (fail-closed).
+        ("Stream", &["stream", "emit", "finish", "withContentType"]),
+        // Ipe.Http.Stream — client-side HTTP streaming (fail-closed).
+        ("HttpStream", &["open", "forEachChunk", "close", "chunks"]),
+        // Ipe.Decimal — DELIBERATELY absent: migrated to compiled-source
+        // `Ipe/Decimal.ipe` (COMPILED_STD_MODULES). Every member reaches its
+        // kernel via `Kernel.kernel "Decimal_*"`, so this catalog block is no
+        // longer needed here.
+        //
+        // Ipe.Http.Server.WebSocket (12 kernels).
+        (
+            "Ws",
+            &[
+                "defaultCfg",
+                "withOnConnect",
+                "withOnMessage",
+                "withOnClose",
+                "withOnError",
+                "withMaxMessageBytes",
+                "withOriginPatterns",
+                "upgrade",
+                "sendToClient",
+                "sendBinaryToClient",
+                "broadcast",
+                "closeClient",
+            ],
+        ),
+    ];
+
+/// Surface members that appear in [`PRELUDE_QUALIFIERS`] under a qualifier that
+/// backs no [`StdlibKernel`] of the *same* member name, because they are
+/// in-table aliases resolved to a different canonical kernel name at
+/// registration time (see `install_prelude_qualifiers`). They are still backed
+/// kernels — just under another name — so the drift gate exempts them.
+///
+/// `("Event", "onMsg")` is the generic alias for the `Event.onClick` kernel
+/// (`onMsg foo == onClick foo`); its canonical name is rewritten to `onClick`
+/// before the `stdlib_index` lookup, so no `StdlibKernel::decl()` carries the
+/// literal `("Event", "onMsg")` pair.
+const PRELUDE_QUALIFIER_ALIASES: &[(&str, &str)] = &[("Event", "onMsg")];
+
+/// Number of wired kernel variants — the length of [`StdlibKernel::ALL`].
+const REGISTRY_LEN: usize = StdlibKernel::ALL.len();
+
+// Raw slice indexing below is deliberate and provably panic-free: `slice::get`
+// is not `const`-stable on this toolchain, so a `const`-context scan must index.
+// Every index is bounded by its own `while i < slice.len()` guard, so it can
+// never be out of range — the `indexing_slicing` lint is a false positive here.
+
+/// The `(qualifier, name)` identity of every wired kernel, projected once from
+/// [`StdlibKernel::decl`]. Building this flat table calls the heavy `decl()`
+/// projection exactly `REGISTRY_LEN` times; the drift gate then cross-checks each
+/// prelude member against it with cheap `&str` compares, instead of re-projecting
+/// every kernel for every member (which trips the const-eval step budget).
+// `indexing_slicing`: index guarded by `i < REGISTRY_LEN` (see note above).
+// `large_const_arrays`: must be `const`, not `static` — the drift gate reads it
+// during const evaluation, which cannot access a `static`'s value.
+#[allow(clippy::indexing_slicing, clippy::large_const_arrays)]
+const REGISTRY_DECL_PAIRS: [(&str, &str); REGISTRY_LEN] = {
+    let mut pairs = [("", ""); REGISTRY_LEN];
+    let all = StdlibKernel::ALL;
+    let mut i = 0;
+    while i < REGISTRY_LEN {
+        let decl = all[i].decl();
+        pairs[i] = (decl.qualifier, decl.name);
+        i += 1;
+    }
+    pairs
+};
+
+/// `const`-context byte-exact string equality (`str::eq` is not `const`).
+#[allow(clippy::indexing_slicing)] // indices guarded by `i < len`; see note above
+const fn const_str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `true` iff `(qualifier, member)` is one of the sanctioned in-table aliases.
+#[allow(clippy::indexing_slicing)] // index guarded by `i < len`; see note above
+const fn is_prelude_qualifier_alias(qualifier: &str, member: &str) -> bool {
+    let mut i = 0;
+    while i < PRELUDE_QUALIFIER_ALIASES.len() {
+        let (q, m) = PRELUDE_QUALIFIER_ALIASES[i];
+        if const_str_eq(q, qualifier) && const_str_eq(m, member) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// `true` iff some wired [`StdlibKernel`] declares exactly `(qualifier, member)`.
+#[allow(clippy::indexing_slicing)] // index guarded by `i < REGISTRY_LEN`; see note above
+const fn registry_backs(qualifier: &str, member: &str) -> bool {
+    let mut i = 0;
+    while i < REGISTRY_LEN {
+        let (q, n) = REGISTRY_DECL_PAIRS[i];
+        if const_str_eq(q, qualifier) && const_str_eq(n, member) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// **Compile-time drift tripwire (fail-closed).** Every `(qualifier, member)`
+/// the canonicaliser will register from [`PRELUDE_QUALIFIERS`] must be backed by
+/// a wired [`StdlibKernel`] of the same name — or be a sanctioned in-table alias
+/// ([`PRELUDE_QUALIFIER_ALIASES`]). If the two const tables drift (a member is
+/// added here without a matching kernel, or a kernel is renamed/removed out from
+/// under a registered member) this `assert!` fails **at build time**, before any
+/// test runs — so a resolver that recognises a name the registry cannot lower
+/// (the `ipe`-accepts-then-`cargo`-fails class) can never ship.
+///
+/// The runtime `canon_equals_registry` test in `crate::tests` still checks the
+/// dynamic wiring the interner builds (`stdlib_index` propagation, the reserved
+/// category, `.Unsafe`-relocation), which cannot be evaluated in `const` context;
+/// this gate is the const-data half the project rulebook mandates be build-time.
+///
+/// The `allow(long_running_const_eval)` covers the bounded
+/// `PRELUDE_QUALIFIERS.len() × StdlibKernel::ALL.len()` cross-scan — deterministic
+/// and finite (no data-dependent iteration), just larger than the lint's default
+/// step budget for a soft infinite-loop guard.
+#[allow(long_running_const_eval)]
+#[allow(clippy::indexing_slicing)] // indices guarded by `i < len`; see note above
+const _: () = {
+    let mut qi = 0;
+    while qi < PRELUDE_QUALIFIERS.len() {
+        let (qualifier, members) = PRELUDE_QUALIFIERS[qi];
+        // Internal-only qualifiers never surface a user-visible kernel member.
+        let bytes = qualifier.as_bytes();
+        let is_internal = !bytes.is_empty() && bytes[0] == b'_';
+        if !is_internal {
+            let mut mi = 0;
+            while mi < members.len() {
+                let member = members[mi];
+                assert!(
+                    registry_backs(qualifier, member)
+                        || is_prelude_qualifier_alias(qualifier, member),
+                    "kernel-table drift: PRELUDE_QUALIFIERS lists a (qualifier, \
+                     member) pair with no matching StdlibKernel::decl() and no \
+                     sanctioned alias in PRELUDE_QUALIFIER_ALIASES. Add the kernel \
+                     variant (+ its type scheme) to the registry, or register the \
+                     alias, or remove the stale member.",
+                );
+                mi += 1;
+            }
+        }
+        qi += 1;
+    }
+};
+
 impl Env {
     /// Build the base environment with Ipê's built-in variables and the
     /// auto-qualified prelude kernel modules. The `home` module's top-level
@@ -746,623 +1502,11 @@ impl Env {
         // Uuid, Task, Io, Debug, Time, Random, Decimal, Css, Ui, Html,
         // Html.Attributes, Path, Regex.
         // Their kernels are reached via `detect_kernel_alias`, not this table.
-        const QUALIFIERS: &[(&str, &[&str])] = &[
-            // `Ipe.Error` — the real `Error ErrorKind ErrorInfo` ADT.
-            // Message constructors + nullary constructors + `toString`
-            // render + `withMessage` modifier + `isRetryable` classification +
-            // `withDetails` modifier (attaches the
-            // `ErrorDetails` union to `ErrorInfo.details : Maybe ErrorDetails`).
-            // `Ipe.CssSafety` — the Ipe.Css leaf security kernels: four
-            // `String -> Maybe String` parsers (`safeValue`/`safePropName`/
-            // `safeSelector` gate declarations/selectors at construction;
-            // `sanitizeRawBody` is the authoritative raw/keyframes-body gate over
-            // the audited `css_safety` policy) + the `String -> String`
-            // `<style>`-breakout floor. Imported (and called unqualified) by the
-            // compiled-source `Ipe.Css`.
-            (
-                "CssSafety",
-                &[
-                    "safeValue",
-                    "safePropName",
-                    "safeSelector",
-                    "sanitizeRawBody",
-                    "stripStyleClose",
-                ],
-            ),
-            // `Ipe.Log` — qualified form (`import Ipe.Log as Log`).
-            // `info`/`debug`/`warn`/`error` are backed; the `*With`
-            // variants take Stringify-bounded attrs and stay fail-closed
-            // (IPE-L0108) until the Stringify obligation is added.
-            // `Log` is observability-only — line printing lives in `Ipe.Io`
-            // (`Io.println` / `Io.eprintln`).
-            // `Ipe.App` — runtime-config front door. `fromEnv` seals an env var
-            // into a `Secret` (the ONLY way to get a config secret);
-            // `fromEnvRequired` is its fail-closed variant (a missing/empty var
-            // is a named load-time `ConfigError`, not an empty secret).
-            ("App", &["fromEnv", "fromEnvRequired"]),
-            // `Ipe.Console` — the console/telemetry `Secret`-typed token settings.
-            // Each takes a `Secret` (from `App.fromEnvRequired`), so a hard-coded
-            // token `String` does not type-check.
-            ("Console", &["adminToken", "ingestToken", "metricsToken"]),
-            // `Ipe.Host` — the host-bind setting builder plus the `HostMode`
-            // constructors it takes.
-            ("Host", &["bind", "loopback", "allInterfaces", "envDriven"]),
-            // `Ipe.Level` — the `LogLevel` constructors `Log.level` takes. A
-            // separate qualifier from `Log` because `Log.debug`/`Log.info`/… are
-            // already the logging kernels; `Level.debug`/… are the severity tags.
-            // `Ipe.Json.Encode` — JSON encoder.
-            (
-                "JsonEnc",
-                &[
-                    "string", "int", "float", "bool", "null", "list", "object", "encode",
-                ],
-            ),
-            // `Ipe.Json.Decode` — JSON decoder combinators.
-            (
-                "JsonDec",
-                &[
-                    "string",
-                    "int",
-                    "float",
-                    "bool",
-                    "value",
-                    "decodeString",
-                    "decodeValue",
-                    "field",
-                    "at",
-                    "index",
-                    "list",
-                    "nullable",
-                    "map",
-                    "andThen",
-                    "succeed",
-                    "fail",
-                    "oneOf",
-                    "map2",
-                    "map3",
-                    "map4",
-                ],
-            ),
-            // `Ipe.Json.Decode.Pipeline` — pipeline-style record decoders.
-            (
-                "JsonDecP",
-                &["required", "optional", "custom", "requiredAt"],
-            ),
-            // `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
-            // String-typed surface (backward-compat) + typed-key variants (§6.11).
-            (
-                "Crypto",
-                &[
-                    "sha256",
-                    "sha512",
-                    "sha1",
-                    "md5",
-                    "rsaSha256Sign",
-                    "rsaSha256Verify",
-                    "constantTimeEqual",
-                    "aesGcmEncrypt",
-                    "aesGcmDecrypt",
-                    "chacha20Encrypt",
-                    "chacha20Decrypt",
-                    "aesKeyFromPassword",
-                    "chachaKeyFromPassword",
-                    "randomBytes",
-                    "randomToken",
-                    // Typed HMAC kernels; the AEAD/key-derivation entry points
-                    // above already require/return the typed `Key`, so there is
-                    // no separate bare-`String`-key spelling to register.
-                    "hmacSha256WithKey",
-                    "hmacSha512WithKey",
-                ],
-            ),
-            // `Ipe.Secret` — opaque secret-string wrapper.
-            // `fromString` is the seal; `use` is the scoped consume (apply a
-            // function to the plaintext, return its result); `redacted` is the
-            // explicit "<redacted>" accessor. The blunt raw un-parse `reveal`
-            // relocated to the compiled-source `Ipe.Secret.Unsafe` submodule
-            // (`src/stdlib/Ipe/Secret/Unsafe.ipe`) as `unsafeReveal`, reached
-            // through the `Kernel.kernel "Secret_reveal"` alias to the SAME kernel —
-            // so it is absent here and no longer resolves off a plain
-            // `import Ipe.Secret`.
-            ("Secret", &["fromString", "use", "redacted"]),
-            // `Ipe.Jwt` — JWT encode/decode for HS256 and RS256,
-            // plus builder API: claims / hs256 / rs256 / subject / issuer /
-            // audience / expiresAt / notBefore / issuedAt / jwtId / withClaim /
-            // encode / decode.
-            (
-                "Jwt",
-                &[
-                    "encodeHs256",
-                    "decodeHs256",
-                    "encodeRs256",
-                    "decodeRs256",
-                    // builder API
-                    "claims",
-                    "hs256",
-                    "rs256",
-                    "subject",
-                    "issuer",
-                    "audience",
-                    "expiresAt",
-                    "notBefore",
-                    "issuedAt",
-                    "jwtId",
-                    "withClaim",
-                    "encode",
-                    "decode",
-                ],
-            ),
-            // `Ipe.System` — system effects.
-            (
-                "System",
-                &[
-                    "args",
-                    "getenv",
-                    "getenvOr",
-                    "getArg",
-                    "getenvInt",
-                    "getenvBool",
-                    "setenv",
-                    "unsetenv",
-                    "cwd",
-                    "getcwd",
-                    "loadEnv",
-                    "exit",
-                ],
-            ),
-            // `Ipe.Random` is DELIBERATELY absent: it is COMPILED-SOURCE
-            // (`ipe::stdlib::COMPILED_STD_MODULES`), so its whole surface resolves
-            // from `Ipe/Random.ipe` — the `Kernel.kernel "Random_*"` aliases and the
-            // pure Ipê wrappers — not from this kernel-qualifier catalog.
-            // `Ipe.File` — file effects.
-            (
-                "File",
-                &[
-                    "readFile",
-                    "writeFile",
-                    "exists",
-                    "remove",
-                    "mkdirAll",
-                    "readFileLimit",
-                    "readFileBytes",
-                    "append",
-                    "readDir",
-                    "isDir",
-                    "walk",
-                    "walkMatching",
-                    "tempFile",
-                    "tempDir",
-                    "copy",
-                    "rename",
-                    "delete",
-                ],
-            ),
-            // `Ipe.Process` — subprocess execution with NO shell.
-            // `run` : `String -> List String -> Task Error String`.
-            // `runWith` : `{ command, args, cwd, env } -> Task Error { exitCode, stdout, stderr }`.
-            // `runInPty` : `{ command, args, cwd, env, cols, rows } -> Task Error { exitCode, output }`.
-            // All are server-only (`subprocess` capability), default-denied under wasm.
-            ("Process", &["run", "runWith", "runInPty"]),
-            // `Ipe.Http` — outbound HTTP client.
-            // `get` / `post` / `request` are effect kernels (Task Error
-            // HttpResponse); `parseQuery` is a pure kernel (String -> Dict
-            // String String); the `with*` builders + `defaultRequest` are ALSO
-            // pure kernels (HttpRequest record-update emission in the backend) —
-            // cross-module pure-Ipê stdlib calls are not resolved by ipe, so the
-            // builders cannot live as pure Ipê in Http.ipe. Every name below is
-            // registered so `Http.foo` resolves during name-resolution and lands
-            // as `Callee::Kernel` (see lower.rs ("Http", _) arms + constrain.rs
-            // kernel_ty Http entries that give each its record type).
-            (
-                "Http",
-                &[
-                    "get",
-                    "post",
-                    "request",
-                    "defaultRequest",
-                    "defaultRequestFromString",
-                    "withMethod",
-                    "withHeader",
-                    "withTimeout",
-                    "withBody",
-                    "withUrl",
-                    "withRedirects",
-                    "parseQuery",
-                    "methodToString",
-                    "methodFromString",
-                ],
-            ),
-            // ── TEA Cmd / Sub kernels ───────────────────────────────────────────
-            // `Cmd.publish` / `Cmd.publishNoEcho` are backed by runtime
-            // `cmd_publish` / `cmd_publish_no_echo` in live/pubsub.rs.
-            // `Sub.subscribeTopic` is backed by runtime `sub_subscribe_topic`
-            // in live/pubsub.rs; emit path uses the standard N-arg route.
-            (
-                "Cmd",
-                &[
-                    "none",
-                    "batch",
-                    "perform",
-                    "map",
-                    "publish",
-                    "publishNoEcho",
-                ],
-            ),
-            (
-                "Sub",
-                &[
-                    "none",
-                    "batch",
-                    "every",
-                    "map",
-                    "subscribeTopic",
-                    "subscribeWebSocket",
-                ],
-            ),
-            // `Ipe.PubSub` (the top-level, Task-shaped publish surface) is a
-            // COMPILED-SOURCE stdlib module (`src/stdlib/Ipe/PubSub.ipe`), so it
-            // stays OUT of this kernel-qualifier table (kernel qualifier here OR
-            // compiled-source — never both). Its `publish` / `publishNoEcho` bodies
-            // are `Kernel.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`; the
-            // alias fast-path (`detect_kernel_alias`) splits `"PubSub_publish"` →
-            // the canonical `("PubSub", "publish")` kernel (`class = Web`,
-            // Task-shaped — NOT TEA-loop machinery).
-            // ── Db kernels ──────────────────────────────────────────────────────
-            // `Ipe.Db` — the SAFE database connection + query surface. The
-            // raw-SQL and untyped-column-read escape hatches (`unsafeExecRaw`,
-            // `unsafeQuery`, `unsafeGet*`) live in the compiled-source
-            // `Ipe.Db.Unsafe` submodule (`src/stdlib/Ipe/Db/Unsafe.ipe`), reached
-            // through `Kernel.kernel "Db_*"` aliases to the SAME kernels — so they
-            // are absent here and no longer resolve off a plain `import Ipe.Db`.
-            // `SqlValue` / `SqlField` ADT constructors are handled by
-            // `install_builtin_ctors` above; they are unqualified.
-            (
-                "Db",
-                &[
-                    "connect",
-                    "open",
-                    "close",
-                    "exec",
-                    "queryDecode",
-                    "insertRow",
-                    "getById",
-                    "updateById",
-                    "deleteById",
-                    "findOneByField",
-                    "findManyByField",
-                    "findByConditions",
-                    "findWhere",
-                    "findJoin",
-                    "findProjection",
-                    "findJoinOrdered",
-                    "findProjectionOrdered",
-                    "deleteWhere",
-                    "updateWhere",
-                    // External read path — `…On` reads over a `Connection a`.
-                    "findWhereOn",
-                    "queryDecodeOn",
-                    "getByIdOn",
-                    "insertFields",
-                    "updateFields",
-                    "insertFieldsReturning",
-                    "withTransaction",
-                    "migrate",
-                    "defaultMigration",
-                    // Runtime-config front door — `Db.url : Secret -> Setting a`.
-                    "url",
-                ],
-            ),
-            // `Ipe.Db.Sql` — typed, parameterized WHERE-fragment builder.
-            // A `SqlFragment` can only be built through
-            // these combinators, so a naive string-concatenated WHERE clause
-            // is a type error (`String` where `SqlFragment` is expected) at
-            // `Db.findWhere` / `Db.deleteWhere`, not a runtime injection risk.
-            (
-                "Sql",
-                &[
-                    "column",
-                    "param",
-                    "int",
-                    "string",
-                    "float",
-                    "bool",
-                    "eq",
-                    "ne",
-                    "gt",
-                    "lt",
-                    "gte",
-                    "lte",
-                    "and",
-                    "or",
-                    "not",
-                    "isNull",
-                    "isNotNull",
-                    "inList",
-                    "like",
-                ],
-            ),
-            // `Ipe.Db.Decode` — row decoder combinators.
-            // The qualifier string contains a dot ("Db.Decode") which the parser
-            // produces correctly for the 3-segment path `Db.Decode.string` — see
-            // ipe_parse::parser::ident_expr (qualifier = init.join(".")).
-            (
-                "Db.Decode",
-                &[
-                    "string", "int", "float", "bool", "bytes", "money", "decimal", "nullable",
-                    "map", "andThen", "succeed", "fail", "map2", "map3", "map4", "required",
-                    "optional",
-                ],
-            ),
-            // Ipe.Http.Server kernels.
-            (
-                "Server",
-                &[
-                    "get",
-                    "post",
-                    "put",
-                    "delete",
-                    "any",
-                    "api",
-                    "static",
-                    "mountApp",
-                    "listen",
-                    "text",
-                    "json",
-                    "html",
-                    "withStatus",
-                    "withHeader",
-                    "redirect",
-                    "param",
-                    "queryParam",
-                    "header",
-                    "getCookie",
-                    "body",
-                    "path",
-                    "method",
-                    "cookie",
-                    "withCookie",
-                    "authConfig",
-                    "bearerToken",
-                    "cookieToken",
-                    "withRevocation",
-                    "getAuthed",
-                    "postAuthed",
-                    "putAuthed",
-                    "deleteAuthed",
-                ],
-            ),
-            // Ipe.Http.Middleware kernels.
-            (
-                "Middleware",
-                &[
-                    "withCors",
-                    "withLogging",
-                    "withBasicAuth",
-                    "withRateLimit",
-                    "withCsrf",
-                ],
-            ),
-            // Ipe.Http.RateLimit kernels.
-            ("RateLimit", &["allow"]),
-            // `Ipe.Ui` is COMPILED-SOURCE (see `COMPILED_STD_MODULES`), not a
-            // kernel qualifier: the layout builders (`el`/`row`/`column`/
-            // `wrappedRow`/`grid`/`paragraph`/`textColumn`/`form`/`input`) are
-            // pure Ipê over the retained `node`/`taggedNode` primitives, and every
-            // other member is a `Kernel.kernel "Ui_*"` alias resolving to its
-            // unchanged kernel. The `Ipe.Ui.*` sub-qualifiers (Background/Border/
-            // Font/Region/Input/Lazy/Keyed) stay native below. The disjointness
-            // invariant forbids `Ui` here.
-            // ── Ipe.Ui.Background sub-module ─────────────────────────────────────
-            (
-                "Background",
-                &[
-                    "color",
-                    "image",
-                    "hoverColor",
-                    "focusColor",
-                    "activeColor",
-                    "disabledColor",
-                    "linearGradient",
-                ],
-            ),
-            // ── Ipe.Ui.Border sub-module ─────────────────────────────────────────
-            (
-                "Border",
-                &[
-                    "width",
-                    "widthEach",
-                    "color",
-                    "rounded",
-                    "solid",
-                    "dashed",
-                    "dotted",
-                    "shadow",
-                    "glow",
-                    "innerShadow",
-                    "hoverColor",
-                    "focusColor",
-                    "activeColor",
-                    "hoverWidth",
-                    "hoverRounded",
-                ],
-            ),
-            // ── Ipe.Ui.Font sub-module ───────────────────────────────────────────
-            (
-                "Font",
-                &[
-                    "color",
-                    "family",
-                    "size",
-                    "weight",
-                    "bold",
-                    "semiBold",
-                    "regular",
-                    "light",
-                    "extraBold",
-                    "black",
-                    "italic",
-                    "underline",
-                    "lineThrough",
-                    "noDecoration",
-                    "letterSpacing",
-                    "wordSpacing",
-                    "alignLeft",
-                    "alignRight",
-                    "alignCenter",
-                    "center",
-                    "justify",
-                    "sansSerif",
-                    "serif",
-                    "monospace",
-                    "hoverColor",
-                    "focusColor",
-                    "activeColor",
-                    "disabledColor",
-                    "hoverSize",
-                ],
-            ),
-            // ── Ipe.Ui.Region sub-module ─────────────────────────────────────────
-            (
-                "Region",
-                &[
-                    "mainContent",
-                    "navigation",
-                    "footer",
-                    "aside",
-                    "heading",
-                    "label",
-                    "announce",
-                    "announceUrgently",
-                ],
-            ),
-            // ── Ipe.Ui.Input sub-module ──────────────────────────────────────────
-            (
-                "Input",
-                &[
-                    "labelAbove",
-                    "labelBelow",
-                    "labelLeft",
-                    "labelRight",
-                    "labelHidden",
-                    "placeholder",
-                    "text",
-                    "multiline",
-                    "email",
-                    "username",
-                    "search",
-                    "currentPassword",
-                    "newPassword",
-                    "checkbox",
-                    "slider",
-                    "option",
-                    "radio",
-                    "radioRow",
-                ],
-            ),
-            // ── Ipe.Ui.Lazy sub-module ───────────────────────────────────────────
-            ("Lazy", &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"]),
-            // ── Ipe.Ui.Keyed — ipe-key for diff identity ─────────────────────────
-            ("Keyed", &["column", "row"]),
-            // `Ipe.Html` and `Ipe.Html.Attributes` are compiled-source (see exclusion
-            // table in `STDLIB_MODULE_QUALIFIERS`); `Ipe.Html.Events` is a kernel qualifier.
-            // ── Ipe.Html.Events alias ─────────────────────────────────────────────
-            (
-                "Event",
-                &[
-                    "onClick",
-                    "onInput",
-                    "onChange",
-                    "onSubmit",
-                    "onFocus",
-                    "onBlur",
-                    "onMouseOver",
-                    "onMouseOut",
-                    "onKeyDown",
-                    "onKeyUp",
-                    "onBool",
-                    "onMsg",
-                ],
-            ),
-            // ── Ipe.Web app-entry kernels ────────────────────────────────────────
-            (
-                "Web",
-                &[
-                    "app",
-                    "appRouted",
-                    "embed",
-                    "appWith",
-                    "route",
-                    "csrf",
-                    "sessionTtl",
-                    "authMaxLifetime",
-                    "authSlideWindow",
-                    "withRevocation",
-                    // `CsrfMode` constructors `Web.csrf` takes. No disabling
-                    // variant — a setting cannot turn CSRF off.
-                    "strict",
-                    "inheritCsrf",
-                    // `RevocationMode` constructors `Web.withRevocation` takes.
-                    "revocationOff",
-                    "revocationStore",
-                ],
-            ),
-            // ── Ipe.Tui / Ipe.Cli app-entry kernels ──────────────────────────────
-            // `Tui.app` (full screen, `onKey`) and `Cli.app` (line stream,
-            // `onLine`) — one terminal rendering family, two drive axes. Both
-            // carry `KernelClass::Terminal` internally.
-            ("Tui", &["app"]),
-            ("Cli", &["app"]),
-            // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
-            // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
-            (
-                "Auth",
-                &[
-                    "hashPassword",
-                    "hashPasswordCost",
-                    "verifyPassword",
-                    "passwordStrength",
-                    "signToken",
-                    "verifyToken",
-                    "register",
-                    "login",
-                    "setRole",
-                    "subject",
-                ],
-            ),
-            // Ipe.Auth.Revocation — per-session and per-subject revocation gate.
-            // Requires `Principal` (enforces auth-on-auth); fail-closed on store error.
-            (
-                "Revocation",
-                &["revokeUser", "revokeSession", "restoreUser", "isRevoked"],
-            ),
-            // Ipe.Http.Server.Stream — server-side streaming HTTP (fail-closed).
-            ("Stream", &["stream", "emit", "finish", "withContentType"]),
-            // Ipe.Http.Stream — client-side HTTP streaming (fail-closed).
-            ("HttpStream", &["open", "forEachChunk", "close", "chunks"]),
-            // Ipe.Decimal — DELIBERATELY absent: migrated to compiled-source
-            // `Ipe/Decimal.ipe` (COMPILED_STD_MODULES). Every member reaches its
-            // kernel via `Kernel.kernel "Decimal_*"`, so this catalog block is no
-            // longer needed here.
-            //
-            // Ipe.Http.Server.WebSocket (12 kernels).
-            (
-                "Ws",
-                &[
-                    "defaultCfg",
-                    "withOnConnect",
-                    "withOnMessage",
-                    "withOnClose",
-                    "withOnError",
-                    "withMaxMessageBytes",
-                    "withOriginPatterns",
-                    "upgrade",
-                    "sendToClient",
-                    "sendBinaryToClient",
-                    "broadcast",
-                    "closeClient",
-                ],
-            ),
-        ];
+        //
+        // The table itself is hoisted to the module-level `PRELUDE_QUALIFIERS`
+        // so a compile-time drift gate can check it against the kernel registry
+        // without executing this function.
+        const QUALIFIERS: &[(&str, &[&str])] = PRELUDE_QUALIFIERS;
 
         // ── Per-qualifier function name aliases ───────────────────────────────
         // Maps a Ipê-source alias name (e.g. `htmlRender`) to its canonical
@@ -1605,6 +1749,68 @@ impl Env {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod kernel_table_drift_gate_tests {
+    //! Guards the compile-time drift tripwire (`const _` block above, using
+    //! `registry_backs` / `is_prelude_qualifier_alias`). The `const` gate itself
+    //! cannot be exercised with a *drifted* table at test time — a real drift
+    //! fails the build, not a test — so these tests instead prove the gate's
+    //! decision logic: it rejects an unbacked pair and accepts the backed /
+    //! aliased cases, and the live table has zero unsanctioned drift.
+
+    use super::{PRELUDE_QUALIFIERS, is_prelude_qualifier_alias, registry_backs};
+    use ipe_kernels::StdlibKernel;
+
+    /// A real registry pair is recognised as backed.
+    #[test]
+    fn registry_backs_a_real_pair() {
+        let first = StdlibKernel::ALL.first().expect("registry is non-empty");
+        let decl = first.decl();
+        assert!(registry_backs(decl.qualifier, decl.name));
+    }
+
+    /// A pair no kernel declares is NOT backed — the drift the const gate rejects.
+    #[test]
+    fn registry_does_not_back_a_synthetic_drift_pair() {
+        assert!(!registry_backs("CssSafety", "driftProbeXyz"));
+        assert!(!is_prelude_qualifier_alias("CssSafety", "driftProbeXyz"));
+    }
+
+    /// The sanctioned in-table alias (`Event.onMsg`) is exempt: unbacked by its
+    /// own name, but recognised as an alias.
+    #[test]
+    fn event_on_msg_is_a_sanctioned_alias() {
+        assert!(!registry_backs("Event", "onMsg"));
+        assert!(is_prelude_qualifier_alias("Event", "onMsg"));
+    }
+
+    /// Runtime mirror of the compile-time gate: every surfaced
+    /// `(qualifier, member)` in the live table is either registry-backed or a
+    /// sanctioned alias. If this fails, the `const _` gate above has already
+    /// failed the build — this is the readable diagnostic form.
+    #[test]
+    fn every_prelude_qualifier_member_is_backed_or_aliased() {
+        let mut offenders = Vec::new();
+        for (qualifier, members) in PRELUDE_QUALIFIERS {
+            if qualifier.starts_with('_') {
+                continue;
+            }
+            for member in *members {
+                if !registry_backs(qualifier, member)
+                    && !is_prelude_qualifier_alias(qualifier, member)
+                {
+                    offenders.push(format!("{qualifier}.{member}"));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "PRELUDE_QUALIFIERS members with no backing StdlibKernel and no \
+             sanctioned alias: {offenders:?}"
+        );
     }
 }
 
