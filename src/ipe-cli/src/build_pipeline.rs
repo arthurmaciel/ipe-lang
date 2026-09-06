@@ -1,0 +1,2233 @@
+use crate::*;
+
+/// Options modifying a build beyond plain source compilation — some (the
+/// static plan) apply post-emit at write time; others (`target`,
+/// `wasm_public_env`) feed the compile/emit pipeline itself.
+///
+/// The static plan is applied post-emit at write time — the compile pipeline
+/// and its on-disk caches stay untouched (their keys deliberately exclude
+/// the plan; the transform is a deterministic function of the plan applied
+/// on cache-hit and cache-miss paths alike).
+// The four `bool` fields (`wasm_hydrate_mode`, `production`, `runtime_dep`,
+// `tree_shake_vendored`) are genuinely independent, orthogonal build toggles —
+// any combination is valid (a production dep-model build, a vendored tree-shaken
+// dev build, …). They are not the states of one machine, so collapsing them into
+// a two-variant enum or a state enum would obscure their independence rather than
+// clarify it; the clippy heuristic's usual remedy does not apply here.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Default)]
+pub struct BuildOptions {
+    /// `Some` — staticize the emitted project (activate the planned
+    /// allocator feature, add the generated `.cargo/config.toml`). `None` —
+    /// normal dynamic build; also removes a stale generated static config.
+    pub static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
+    /// The compilation target (`Native` default; `WasmClient` under
+    /// `ipe build --target wasm`) — threaded into kernel resolution (the
+    /// Layer-1 wasm gate), the emitted manifest, and both cache keys.
+    pub target: ipe_ir::Target,
+    /// The `[wasm] publicEnv` allowlist from `package.ipe`, already validated
+    /// against the secret-name denylist at parse time. Empty when the
+    /// project has no `[wasm]` section (or no manifest — the
+    /// sibling-discovery single-file path). Threaded into
+    /// [`ipe_backend_rust::RustBackend::with_wasm_public_env`] /
+    /// [`ipe_db::BuildConfig::wasm_public_env`].
+    pub wasm_public_env: Vec<String>,
+    /// `true` when `[wasm] mode = "hydrate"` in the project's `package.ipe`.
+    /// Causes the backend to emit a `#[wasm_bindgen] pub fn hydrate(model_json: &str)`
+    /// export in addition to the `#[wasm_bindgen(start)] pub fn ipe_start()` entry.
+    /// The emitted `hydrate` function parses the island JSON as the user's declared
+    /// `HydrationState` type, converts to `Model` via `fromHydrationState`, and
+    /// calls `ipe_runtime::wasm::wasm_adopt_app`. On parse failure it falls back
+    /// to clean `ipe_main()` with a console warning (fault-tolerant hydrate — see
+    /// spec Q6 §"Fault-tolerant hydrate — parse, don't unwrap").
+    pub wasm_hydrate_mode: bool,
+    /// `true` for a production build (`ipe release` — any target). Threaded into
+    /// [`ipe_db::BuildConfig::production`] so the emit demand rejects any
+    /// development-only `Debug.*` escape hatch (IPE-L0140). Default `false`
+    /// (`ipe build` / `ipe run` are development builds — `Debug.*` permitted).
+    pub production: bool,
+    /// `true` (the DEFAULT) selects the dependency-model emit: the emitted
+    /// project declares the runtime as a path dependency with a
+    /// `runtime_features`-selected feature list and vendors no runtime source.
+    /// Applies to BOTH targets — a native project selects the reached native
+    /// features; a wasm project selects the `wasm-client` floor plus any
+    /// browser-admissible surface it reaches, built for
+    /// `wasm32-unknown-unknown`. `false` opts back into the byte-identical
+    /// vendored-source emit — the fallback for debugging / a machine without an
+    /// installed runtime crate — set via `IPE_RUNTIME_VENDORED=1` (or directly by
+    /// a test).
+    pub runtime_dep: bool,
+    /// `true` tree-shakes the vendored runtime tree to only the modules the
+    /// program reaches — the `ipe eject` shape. The emitted `ipe_runtime/mod.rs`
+    /// already declares `pub mod X;` for exactly the reached top-level modules,
+    /// so [`build_emit_manifest`] vendors only those source files instead of the
+    /// whole runtime tree. Ignored unless the emit is the vendored shape (it has
+    /// no effect on a dependency-model emit, which carries no vendored source at
+    /// all). Default `false`: a plain vendored build copies the whole tree
+    /// (rustc drops the undeclared files itself, so the emitted binary is
+    /// identical either way — trimming only changes what source lands on disk).
+    pub tree_shake_vendored: bool,
+    /// The sanitized Cargo package name for the emitted crate, derived from
+    /// `package.ipe`'s name via
+    /// [`ipe_backend_rust::sanitize_cargo_name`]. The emitted `Cargo.toml`
+    /// carries `[package] name = "<cargo_name>"` and the built binary is
+    /// named accordingly. Empty string uses the safe `"ipe-app"` default
+    /// (single-file builds with no manifest).
+    pub cargo_name: String,
+    /// `true` when `ipe build --debugger` / `ipe run --debugger` was passed.
+    /// Threaded through [`ipe_db::BuildConfig`] to
+    /// [`ipe_backend_rust::RustBackend::with_debugger`], which adds the
+    /// `debugger` feature to the emitted project's runtime dependency so the TEA
+    /// driver instantiates the recorder. NEVER set for `ipe release` builds — the
+    /// release command does not expose this flag, so no production artifact can
+    /// carry recorder code.
+    pub debugger: bool,
+    /// `true` routes style-value literals through a per-view `LiteralTable` and
+    /// emits the `/_ipe/hot-appearance` endpoint, so an appearance-only source
+    /// edit hot-swaps in the running app instead of forcing a recompile. Set
+    /// ONLY by the `ipe watch` entry (from [`hot_appearance_enabled`]); the
+    /// `ipe build` / `ipe run` / `ipe release` entries leave it `false` so a
+    /// release artifact never carries hot-swap scaffolding. Default `false`.
+    pub hot_appearance: bool,
+    /// `true` when the resolved delivery is `web desktop` (webview-native).
+    /// Threaded through [`ipe_db::BuildConfig`] and the emit fast-path to
+    /// [`ipe_backend_rust::RustBackend::with_webview_host`], forcing the
+    /// `uses_webview` signal so the emitted project selects the webview executor
+    /// and promotes `webview` to the default feature list. The webview delivery
+    /// is a resolved HOST decision (from the CLI's shape × runtime × host), not a
+    /// source entry. Default `false` (a served `web`, or any non-web shape).
+    pub webview_host: bool,
+    /// The webview-native desktop window, sourced from the manifest
+    /// `delivery.desktop` block. Threaded to
+    /// [`ipe_backend_rust::RustBackend::with_webview_window`] and consulted only
+    /// when [`Self::webview_host`]. Filled in `build_project_with_options` once
+    /// the manifest is parsed; `None` selects the built-in fallback window.
+    pub webview_window: Option<ipe_backend_rust::WebViewWindow>,
+}
+
+/// Select the emit model from the environment.
+///
+/// The dependency model is the DEFAULT; `IPE_RUNTIME_VENDORED=1` opts back into
+/// the vendored-source emit (debugging / a machine that cannot resolve the
+/// runtime crate). The legacy `IPE_RUNTIME_DEP=1` remains an explicit no-op
+/// affirmation of the default. A [`BuildOptions::runtime_dep`] already set by a
+/// caller (a test) is what is threaded; this function only computes the
+/// env-derived default.
+#[must_use]
+pub fn runtime_dep_from_env() -> bool {
+    !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
+}
+
+/// Whether the dev-only appearance hot-swap emit is enabled for `ipe watch`.
+///
+/// Default ON: `ipe watch` hot-swaps appearance-only edits (e.g. `Ui.spacing`)
+/// without a recompile out of the box. Opt out with `IPE_WATCH_NO_HOT_APPEARANCE`
+/// (set to any non-empty value other than `0`), which forces the plain
+/// direct-literal emit. `IPE_WATCH_HOT_APPEARANCE`, when set, is honoured
+/// explicitly (`0` or empty = off, anything else = on) and overrides the
+/// default; the opt-out takes precedence over it.
+///
+/// This lever exists ONLY in `ipe watch`. `ipe build` / `ipe run` / `ipe release`
+/// thread [`BuildOptions::hot_appearance`] `= false`, so a release artifact never
+/// carries hot-swap scaffolding regardless of these variables.
+#[must_use]
+pub fn hot_appearance_enabled() -> bool {
+    hot_appearance_from_env(
+        std::env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
+        std::env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
+    )
+}
+
+/// Pure decision for [`hot_appearance_enabled`], over the two raw variable
+/// values (`None` = unset). Opt-out (`no_var`) wins; then an explicit
+/// `hot_var`; otherwise the default is on.
+#[must_use]
+pub(crate) fn hot_appearance_from_env(no_var: Option<&str>, hot_var: Option<&str>) -> bool {
+    let set = |v: Option<&str>| v.is_some_and(|s| !s.is_empty() && s != "0");
+    if set(no_var) {
+        return false;
+    }
+    hot_var.is_none_or(|v| !v.is_empty() && v != "0")
+}
+
+/// Whether the dev-only browser build-status banner is enabled for `ipe watch`.
+///
+/// Enabled unless `IPE_WEB_BANNER` is explicitly `off`/`0`/`false`. Mirrors the
+/// runtime's `watch_banner_active` disable semantics so the CLI-side poster and
+/// the server-side endpoint agree on when the banner is live. Distinct from
+/// [`hot_appearance_enabled`]: the failure banner must surface a red compile
+/// error whenever the banner is on, even with appearance hot-swap off.
+#[must_use]
+pub fn watch_banner_enabled() -> bool {
+    std::env::var("IPE_WEB_BANNER").map_or(true, |v| {
+        let v = v.trim().to_ascii_lowercase();
+        !(v == "off" || v == "0" || v == "false")
+    })
+}
+
+/// Whether the DEV-ONLY blue-green front proxy is enabled for `ipe watch`.
+///
+/// Default ON: `ipe watch` puts a persistent proxy on the user's port and cuts
+/// each rebuilt binary over behind it once it passes readiness, so a rebuild
+/// never drops the browser's connection (no "Reconnecting…" flash — the client
+/// gets a brief "updated ✓" toast instead). Opt out with `IPE_WATCH_NO_BLUEGREEN`
+/// (set to any non-empty value other than `0`) to fall back to the direct-bind,
+/// kill-old-then-spawn-new path. The legacy `IPE_WATCH_BLUEGREEN` still forces a
+/// choice when set (`0`/empty ⇒ off, anything else ⇒ on) and takes precedence
+/// over the default but yields to the opt-out. This lever exists ONLY in
+/// `ipe watch`; it is never compiled into a release binary or an emitted app.
+#[must_use]
+pub fn bluegreen_enabled() -> bool {
+    bluegreen_from_env_values(
+        std::env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
+        std::env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
+    )
+}
+
+/// The pure default-resolution behind [`bluegreen_enabled`], separated from the
+/// process-env read so it is unit-testable without mutating global state.
+///
+/// `no_bluegreen` / `bluegreen` are the respective env values (`None` = unset).
+/// Precedence: opt-out wins, then an explicit legacy choice, else default on.
+#[must_use]
+pub(crate) fn bluegreen_from_env_values(no_bluegreen: Option<&str>, bluegreen: Option<&str>) -> bool {
+    // Opt-out wins: a hard "never proxy" for a user who needs the direct bind.
+    if no_bluegreen.is_some_and(|v| !v.is_empty() && v != "0") {
+        return false;
+    }
+    // Then an explicit legacy choice, if any: `0`/empty off, else on.
+    if let Some(v) = bluegreen {
+        return !v.is_empty() && v != "0";
+    }
+    // Default on.
+    true
+}
+
+impl BuildOptions {
+    /// The default build options with the emit model resolved from the
+    /// environment (dependency-model by default; vendored under
+    /// `IPE_RUNTIME_VENDORED=1`). The zero-configuration entrypoints
+    /// ([`build`], [`build_with_sibling_discovery`], [`build_project`]) seed
+    /// this so a library caller gets the same default emit model a `ipe build`
+    /// invocation does, rather than the raw `Default` (which is vendored — the
+    /// fallback shape).
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            runtime_dep: runtime_dep_from_env(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Build `entry` into a Rust Cargo project under `out_dir`, vendoring the
+/// runtime module tree from `runtime_dir`.
+///
+/// # Errors
+/// Returns [`CliError::Pipeline`] when the compiler rejects the program,
+/// [`CliError::Io`] on any filesystem failure.
+pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), CliError> {
+    build_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
+}
+
+/// [`build`] with explicit [`BuildOptions`] (the static-plan-aware variant).
+///
+/// # Errors
+/// As [`build`], plus [`CliError::StaticRefusal`] when the emitted app shape
+/// cannot be static (an `Ipe.WebView` app under a static plan).
+pub fn build_with_options(
+    entry: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<(), CliError> {
+    let source =
+        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
+
+    // Parse ONCE with a throwaway interner to learn the entry's declared module
+    // path. Using the declared name as the entry's `module_path` means the shared
+    // graph core's N0023 (path mismatch) can never fire for a single-file build
+    // (expected == declared by construction), while still routing a single-file
+    // program through the SAME injection-aware pipeline as a project — so a
+    // single file importing `Ipe.Palette` injects the compiled source instead of
+    // 404-ing (design §2.6). For a program with no compiled-source import the
+    // core is emit-byte-identical to a plain single-module path (link over one
+    // module is the identity — regression-covered by the golden suite).
+    let mut name_interner = Interner::new();
+    let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
+        file: entry.to_path_buf(),
+        src: source.clone(),
+        diag: Box::new(diag),
+    };
+    let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(&pipeline_err)?;
+    let entry_path: Vec<String> = parsed
+        .name
+        .value
+        .iter()
+        .map(|s| name_interner.resolve(*s).unwrap_or_default().to_owned())
+        .collect();
+
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(entry_path.clone(), (entry.to_path_buf(), source.clone()));
+    let discovered = vec![project::DiscoveredModule {
+        path: entry.to_path_buf(),
+        module_path: entry_path.clone(),
+    }];
+
+    // No manifest on the single-file path — default to sqlite, matching the
+    // documented `package.ipe` default for a project that has no database
+    // setting.
+    compile_modules(
+        sources,
+        discovered,
+        &entry_path,
+        out_dir,
+        runtime_dir,
+        entry,
+        ipe_backend_rust::DbDriver::Sqlite,
+        options,
+    )
+}
+
+/// Build a `.ipe` entry file and all sibling modules discovered in the same
+/// source directory.
+///
+/// When no manifest is present, the entry file's parent directory is used
+/// as the source root. Every `*.ipe` file found there is loaded and compiled
+/// together — fixing IPE-N0020 for multi-file projects built via the
+/// file-path shorthand (`ipe build src/Main.ipe`).
+///
+/// This is the faithful port of Haskell's `Graph.discoverModulesMulti
+/// (sourceRoot : ...) entryPath` call in `Ipe.Build.Compile.hs`: it probes
+/// the source root recursively and follows imports across sibling files before
+/// running the shared `compile_modules` core.
+///
+/// When the source directory contains only the entry file this function is
+/// byte-identical to `build` (single-module pipeline is the identity over
+/// `link`).
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the compiler rejects the program.
+/// [`CliError::Io`] on any filesystem failure.
+pub fn build_with_sibling_discovery(
+    entry: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+) -> Result<(), CliError> {
+    build_with_sibling_discovery_with_options(entry, out_dir, runtime_dir, BuildOptions::from_env())
+}
+
+/// [`build_with_sibling_discovery`] with explicit [`BuildOptions`] (the
+/// static-plan-aware variant).
+///
+/// # Errors
+/// As [`build_with_sibling_discovery`], plus [`CliError::StaticRefusal`]
+/// when the emitted app shape cannot be static.
+pub fn build_with_sibling_discovery_with_options(
+    entry: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<(), CliError> {
+    let collected = collect_entry_and_siblings(entry)?;
+
+    // No manifest on this path either (sibling discovery is the "no manifest
+    // found" fallback) — default to sqlite, same rationale as `build`.
+    compile_modules(
+        collected.sources,
+        collected.discovered,
+        &collected.entry_module_path,
+        out_dir,
+        runtime_dir,
+        entry,
+        ipe_backend_rust::DbDriver::Sqlite,
+        options,
+    )
+}
+
+/// Build `ipe verify`'s test entry against the project's `src/` sources.
+///
+/// Unlike [`build_with_sibling_discovery`], which roots discovery at the
+/// entry's own directory, this roots the code under test at `project_src_root`
+/// (the `src/` tree) and additionally discovers the test entry's own directory
+/// (the `tests/` tree) — so a `tests/Main.ipe` that imports `Lib.Foo` from
+/// `src/Lib/Foo.ipe` resolves. See [`collect_test_sources`] for the source-set
+/// model.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the compiler rejects the program; [`CliError::Io`]
+/// on any filesystem failure; [`CliError::StaticRefusal`] when the emitted app
+/// shape cannot be static.
+pub(crate) fn build_test_with_project_sources(
+    project_src_root: &Path,
+    test_entry: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+) -> Result<(), CliError> {
+    let collected = collect_test_sources(project_src_root, test_entry)?;
+
+    // No manifest driver is threaded here (the test stage mirrors the sibling
+    // build's "no manifest" fallback) — default to sqlite, same rationale as
+    // `build_with_sibling_discovery`.
+    compile_modules(
+        collected.sources,
+        collected.discovered,
+        &collected.entry_module_path,
+        out_dir,
+        runtime_dir,
+        test_entry,
+        ipe_backend_rust::DbDriver::Sqlite,
+        BuildOptions::from_env(),
+    )
+}
+
+/// The entry file and every sibling `.ipe` module discovered in its source
+/// directory, ready to feed the shared compile core.
+pub(crate) struct CollectedSources {
+    sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    discovered: Vec<project::DiscoveredModule>,
+    entry_module_path: Vec<String>,
+}
+
+/// Collect the entry module plus every sibling `.ipe` file in its source
+/// directory, reading each source once.
+///
+/// This is the file-path shorthand's source-collection step, shared by the
+/// build path ([`build_with_sibling_discovery_with_options`]) and the
+/// single-entry analysis paths ([`lower_entry_via_graph`], [`emit_ir_text`]) so all
+/// three see the SAME module set — a program that imports a compiled-source
+/// stdlib module resolves identically whether it is built or merely analysed.
+/// It is the equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
+/// `Ipe.Build.Compile.hs`; the compiled-source stdlib closure is injected
+/// downstream (in [`compile_modules_observed`] / [`lower_entry_via_graph`]),
+/// not here, so the injection routine stays single-sourced.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on
+/// any filesystem failure reading a discovered module.
+pub(crate) fn collect_entry_and_siblings(entry: &Path) -> Result<CollectedSources, CliError> {
+    let source =
+        crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
+    let entry_module_path = parse_entry_module_path(entry, &source)?;
+
+    // Source root: the directory containing the entry file.
+    let src_root = entry
+        .parent()
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| Path::new("."));
+
+    // Discover ALL .ipe files in the source root (recursively).
+    let mut discovered = project::discover_modules(src_root)?;
+    ensure_entry_present(&mut discovered, entry, &entry_module_path);
+
+    let sources = read_discovered_sources(&discovered, entry, &entry_module_path, &source)?;
+
+    Ok(CollectedSources {
+        sources,
+        discovered,
+        entry_module_path,
+    })
+}
+
+/// Collect the sources for `ipe verify`'s test stage: the project's `src/`
+/// tree (the code under test) unioned with the `tests/` tree (the test entry
+/// and any test-only siblings).
+///
+/// A test entry lives in a sibling directory from the code it exercises
+/// (`tests/Main.ipe` importing `Lib.Db` under `src/Lib/`), so a single-root
+/// discovery cannot see both: `src/` and `tests/` must be relativised against
+/// their OWN roots for module paths to resolve (`src/Lib/Foo.ipe` → `Lib.Foo`,
+/// `tests/Main.ipe` → `Main`). This resolves both rooted discoveries into one
+/// well-typed [`CollectedSources`] whose entry is the test module, so a test
+/// module can import the code under test AND its test-only siblings.
+///
+/// When a module path is defined in both trees, the `src/` definition wins for
+/// non-entry modules — the code under test is authoritative — while the entry
+/// module is always the test entry itself.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the test entry does not parse; [`CliError::Io`]
+/// on any filesystem failure reading a discovered module.
+pub(crate) fn collect_test_sources(
+    project_src_root: &Path,
+    test_entry: &Path,
+) -> Result<CollectedSources, CliError> {
+    let entry_source =
+        crate::io_bounded::read_to_string_capped(test_entry, crate::io_bounded::SOURCE_READ_CAP)?;
+    let entry_module_path = parse_entry_module_path(test_entry, &entry_source)?;
+
+    // The `tests/` tree: the directory holding the test entry, rooted at itself
+    // so `tests/Main.ipe` → `Main` and `tests/Support/Fixtures.ipe` →
+    // `Support.Fixtures`.
+    let tests_root = test_entry
+        .parent()
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| Path::new("."));
+
+    // The code under test: the `src/` tree, rooted at itself so
+    // `src/Lib/Foo.ipe` → `Lib.Foo` — the SAME relativisation the build stage
+    // uses. Union the two rooted discoveries; a `src/` module masks a `tests/`
+    // module of the same path (code under test wins), and the test entry is
+    // always added last so it is never masked.
+    let mut discovered = project::discover_modules(project_src_root)?;
+    let src_paths: std::collections::BTreeSet<Vec<String>> =
+        discovered.iter().map(|m| m.module_path.clone()).collect();
+    for m in project::discover_modules(tests_root)? {
+        if !src_paths.contains(&m.module_path) {
+            discovered.push(m);
+        }
+    }
+    ensure_entry_present(&mut discovered, test_entry, &entry_module_path);
+
+    let sources =
+        read_discovered_sources(&discovered, test_entry, &entry_module_path, &entry_source)?;
+
+    Ok(CollectedSources {
+        sources,
+        discovered,
+        entry_module_path,
+    })
+}
+
+/// Parse a `.ipe` entry file's already-read source to learn its declared
+/// module path (e.g. `["Lib", "Db"]`).
+///
+/// # Errors
+/// [`CliError::Pipeline`] when the source does not parse.
+pub(crate) fn parse_entry_module_path(entry: &Path, source: &str) -> Result<Vec<String>, CliError> {
+    let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
+        file: entry.to_path_buf(),
+        src: source.to_owned(),
+        diag: Box::new(diag),
+    };
+    let mut name_interner = Interner::new();
+    let parsed = ipe_parse::parse_module(source, &mut name_interner).map_err(&pipeline_err)?;
+    Ok(parsed
+        .name
+        .value
+        .iter()
+        .map(|s| name_interner.resolve(*s).unwrap_or_default().to_owned())
+        .collect())
+}
+
+/// Ensure the entry itself is in the discovered set, even when its file name
+/// does not match the module-segment validation (e.g. a temp path). This
+/// prevents the entry from being silently dropped.
+pub(crate) fn ensure_entry_present(
+    discovered: &mut Vec<project::DiscoveredModule>,
+    entry: &Path,
+    entry_module_path: &[String],
+) {
+    if !discovered
+        .iter()
+        .any(|m| m.module_path == entry_module_path)
+    {
+        discovered.push(project::DiscoveredModule {
+            path: entry.to_path_buf(),
+            module_path: entry_module_path.to_vec(),
+        });
+    }
+}
+
+/// Read every discovered module into the module-path-keyed source map. The
+/// entry's source is already in memory (`entry_source`), so it is inserted
+/// without a second read.
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure reading a discovered module.
+pub(crate) fn read_discovered_sources(
+    discovered: &[project::DiscoveredModule],
+    entry: &Path,
+    entry_module_path: &[String],
+    entry_source: &str,
+) -> Result<BTreeMap<Vec<String>, (PathBuf, String)>, CliError> {
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    for m in discovered {
+        if m.module_path == entry_module_path {
+            sources.insert(
+                entry_module_path.to_vec(),
+                (entry.to_path_buf(), entry_source.to_owned()),
+            );
+        } else {
+            let src = crate::io_bounded::read_to_string_capped(
+                &m.path,
+                crate::io_bounded::SOURCE_READ_CAP,
+            )?;
+            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+        }
+    }
+    Ok(sources)
+}
+
+/// Walk up the directory tree from a `.ipe` file's parent, looking for a
+/// `package.ipe` manifest. Returns the manifest path if found, or `None` when
+/// the walk reaches the filesystem root.
+///
+/// When given a file entry, the driver locates the project root (where
+/// `package.ipe` lives) before building, so the full module graph is compiled
+/// instead of just the single entry file.
+pub(crate) fn find_manifest_for_ipe_file(ipe_file: &Path) -> Option<PathBuf> {
+    let mut dir = ipe_file.parent()?;
+    loop {
+        if let Some(manifest) = project::manifest_in_dir(dir) {
+            return Some(manifest);
+        }
+        dir = dir.parent()?;
+    }
+}
+
+/// Whether [`compile_modules_observed`] served an on-disk build-cache
+/// hit or ran the full compile pipeline. Exists for tests and future CLI
+/// verbosity — [`compile_modules`] (used by every stable entry point) does
+/// not need it and discards it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CacheOutcome {
+    /// A matching, same-epoch [`ipe_backend::EmittedProject`] entry was
+    /// found on disk; the whole compile pipeline (parse through emit) was
+    /// skipped.
+    Hit,
+    /// No `EmittedProject`-tier entry existed, but a matching, same-epoch
+    /// lowered-[`ipe_ir::Program`] entry was — parse through
+    /// lower were skipped; only `RustBackend::emit` ran over the relocated
+    /// IR (see `crate::cache`'s lowered-IR module doc section).
+    IrHit,
+    /// No usable entry existed at either tier (cache disabled, epoch
+    /// undeterminable, key miss, or corrupt entry) — the full pipeline ran.
+    Miss,
+}
+
+/// The shared multi-module compile core: inject the compiled-source stdlib
+/// closure, topologically order the graph, canonicalise each module dep-first
+/// (with its unforgeable [`ipe_canon::ModuleOrigin`]), link, then infer → lower →
+/// emit → write. Both [`build`] and [`build_project`] route through this so the
+/// injection seam is identical on the single-file and project paths.
+///
+/// `blame_path` is the file a cross-file diagnostic with no single owner (an
+/// import cycle) is rendered against.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying the first compiler diagnostic; [`CliError::Io`]
+/// on any filesystem failure.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_modules(
+    sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    discovered: Vec<project::DiscoveredModule>,
+    entry_path: &[String],
+    out_dir: &Path,
+    runtime_dir: &Path,
+    blame_path: &Path,
+    db_driver: ipe_backend_rust::DbDriver,
+    options: BuildOptions,
+) -> Result<(), CliError> {
+    let cache_dir = cache::env_cache_dir(out_dir);
+    compile_modules_observed(
+        sources,
+        discovered,
+        entry_path,
+        out_dir,
+        runtime_dir,
+        blame_path,
+        db_driver,
+        cache_dir.as_deref(),
+        options,
+    )
+    .0
+}
+
+/// [`compile_modules`]'s full implementation, with the on-disk build
+/// cache's root made an EXPLICIT parameter (`None` disables the cache
+/// entirely) rather than read from the environment internally — the
+/// dependency-injection seam this module's tests use instead of
+/// `std::env::set_var` (which is `unsafe` as of the standard library's
+/// current signature, and this crate is `#![forbid(unsafe_code)]`; a
+/// same-process env mutation would also be a cross-test race under a
+/// shared-process runner, though `cargo nextest` avoids that specific
+/// hazard by isolating tests into their own processes — the explicit
+/// parameter avoids both concerns at once).
+///
+/// Cache flow (see `crate::cache`'s module doc for the full design): the
+/// content-address key and version-epoch are computed
+/// BEFORE any salsa database exists (driver-boundary only — INV-1: no
+/// `std::fs` on a tracked path). On a hit, the ENTIRE compile pipeline
+/// (parse through emit) is skipped; only [`write_emitted_project`] runs,
+/// materialising the cached [`ipe_backend::EmittedProject`] verbatim. On a
+/// miss, the full pipeline runs, and a successful
+/// result is best-effort stored for the next invocation.
+// `options` is threaded onward by value into the cache-hit / full-pipeline
+// branches below (mirroring every sibling `BuildOptions` consumer in this
+// file); a `&BuildOptions` parameter would just push the clone this struct's
+// `Vec<String>` field (`wasm_public_env`) now needs onto every call site
+// instead of the one place that actually reads it.
+#[allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::needless_pass_by_value
+)]
+pub(crate) fn compile_modules_observed(
+    mut sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    mut discovered: Vec<project::DiscoveredModule>,
+    entry_path: &[String],
+    out_dir: &Path,
+    runtime_dir: &Path,
+    blame_path: &Path,
+    db_driver: ipe_backend_rust::DbDriver,
+    cache_dir: Option<&Path>,
+    options: BuildOptions,
+) -> (Result<(), CliError>, CacheOutcome) {
+    // Inject the transitive compiled-source stdlib closure. `injected` is the
+    // driver's unforgeable record of which module paths are trusted stdlib
+    // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
+    let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
+
+    // The FFI seam: the SAME catalog-load → nominal-unification →
+    // interface-inject → emit-assemble sequence `watch` and `lsp` use
+    // (`prepare_ffi`) — a divergent copy here once skipped the unification
+    // step entirely.
+    let ffi_prep = match ffi::prepare_ffi(&mut sources, blame_path) {
+        Ok(p) => p,
+        Err(e) => return (Err(e), CacheOutcome::Miss),
+    };
+    let ffi_injected = ffi_prep.injected;
+    let ffi_emit = ffi_prep.emit;
+
+    // Resolve the dependency-model runtime crate ONCE, fail-closed: if the
+    // opt-in is set but no verified `ipe-runtime-rust` crate root is found, the
+    // build refuses loudly here rather than falling back to a vendored — or
+    // worse, a wrong — runtime. Native and wasm share the ONE dependency model
+    // (the wasm emit selects the crate's `wasm-client` floor + reached surface,
+    // built for `wasm32-unknown-unknown`).
+    let runtime_dep = if options.runtime_dep {
+        match runtime_embed::resolve() {
+            Ok(resolved) => Some(ipe_backend_rust::RuntimeDep {
+                root: resolved.root().to_path_buf(),
+            }),
+            Err(e) => return (Err(e), CacheOutcome::Miss),
+        }
+    } else {
+        None
+    };
+
+    // The on-disk build caches key only the Ipê sources — the FFI bindings
+    // text and opaque map live OUTSIDE that key, so a cache hit could serve a
+    // stale emitted project after `ipe add`/`ipe remove`. Disable both cache
+    // tiers for FFI-using builds (correctness over warm-start speed).
+    // The dependency-model flag also changes emit shape without changing the
+    // Ipê sources, so a cache keyed only on sources must not serve a
+    // cross-model artifact: disable the caches when the dep model is active.
+    let cache_dir = if ffi_emit.is_some() || runtime_dep.is_some() {
+        None
+    } else {
+        cache_dir
+    };
+
+    // The on-disk build cache. `epoch` folds in BOTH the running
+    // `ipe` binary's own content hash and the active `rustc`'s fingerprint
+    // (see `cache::derive_epoch`'s doc for why this makes
+    // "refuse, don't guess" structural rather than a runtime check).
+    let cache_key = cache::compute_project_key(
+        &sources,
+        &injected,
+        entry_path,
+        db_driver,
+        options.target,
+        &options.wasm_public_env,
+        options.production,
+        options.hot_appearance,
+        options.webview_host,
+        options.webview_window.as_ref(),
+    );
+    let epoch = cache_dir.and_then(|_| cache::derive_epoch());
+    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
+        && let Some(emitted) = cache::try_load(root, epoch, &cache_key)
+    {
+        return (
+            write_emitted_project(
+                &emitted,
+                out_dir,
+                runtime_dir,
+                options.static_plan.as_ref(),
+                options.tree_shake_vendored,
+            ),
+            CacheOutcome::Hit,
+        );
+    }
+
+    // The lowered-IR cache tier (see `crate::cache`'s module doc
+    // section for the full design). A hit here skips parse -> canon -> link
+    // -> infer -> lower ENTIRELY — no `IpeDatabase` is constructed at all —
+    // running only `RustBackend::emit` over the relocated `Program` before
+    // falling through to the SAME disk-write + tier-1-warming path a full
+    // pipeline run uses. The `ir_key` deliberately excludes `db_driver`
+    // (`compute_ir_key`'s own doc explains why), so this tier can still hit
+    // when the `EmittedProject` tier just missed on a `db_driver`-only edit.
+    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
+        let ir_key = cache::compute_ir_key(&sources, &injected, entry_path, options.target);
+        let fresh_interner: std::sync::Arc<std::sync::Mutex<ipe_intern::Interner>> =
+            std::sync::Arc::new(std::sync::Mutex::new(ipe_intern::Interner::new()));
+        if let Some(program) = cache::try_load_ir(root, epoch, &ir_key, &fresh_interner) {
+            use ipe_backend::Backend as _;
+            // Production gate on the IR-cache fast path: this path bypasses
+            // `emit_project` (the DB layer where the gate normally runs), so a
+            // cached IR that uses a development-only `Debug.*` escape hatch must
+            // be rejected here too (IPE-L0140) — otherwise a cached dev artifact
+            // could slip through a release build that hits this tier.
+            if options.production && program.modules.iter().any(|m| m.uses_debug) {
+                let diag = Diagnostic::Lower {
+                    span: ipe_diagnostics::Span::DUMMY,
+                    msg: ipe_diagnostics::LowerError::DevOnlyKernelInProduction {
+                        kernel: "Debug.log".into(),
+                    },
+                };
+                let src = std::fs::read_to_string(blame_path).unwrap_or_default();
+                return (
+                    Err(CliError::Pipeline {
+                        file: blame_path.to_path_buf(),
+                        src,
+                        diag: Box::new(diag),
+                    }),
+                    CacheOutcome::IrHit,
+                );
+            }
+            let emit_result = {
+                let guard = fresh_interner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                ipe_backend_rust::RustBackend::new(&guard)
+                    .with_db_driver(db_driver)
+                    .with_target(options.target)
+                    .with_wasm_public_env(options.wasm_public_env.clone())
+                    .with_wasm_hydrate_mode(options.wasm_hydrate_mode)
+                    .with_runtime_dep(runtime_dep.clone())
+                    .with_debugger(options.debugger)
+                    .with_project_name(&options.cargo_name)
+                    .with_hot_appearance(options.hot_appearance)
+                    .with_webview_host(options.webview_host)
+                    .with_webview_window(options.webview_window.clone())
+                    .emit(&program)
+            };
+            if let Ok(emitted) = emit_result {
+                // Warm the (cheaper-to-hit) EmittedProject tier for the
+                // next build too — advisory, best-effort, same as every
+                // other cache-write in this module.
+                cache::store(root, epoch, &cache_key, &emitted);
+                return (
+                    write_emitted_project(
+                        &emitted,
+                        out_dir,
+                        runtime_dir,
+                        options.static_plan.as_ref(),
+                        options.tree_shake_vendored,
+                    ),
+                    CacheOutcome::IrHit,
+                );
+            }
+            // A relocated Program that fails to emit is never a build
+            // failure from this fast path — fall through to the full
+            // pipeline exactly as a tier-2 miss would. This should not
+            // happen for a genuinely-cached (not tampered, not epoch-
+            // mismatched) entry, but the advisory contract holds
+            // regardless of why.
+        }
+    }
+
+    // Salsa database (see
+    // docs/architecture/salsa-incremental-compilation-2026-07-11.md). The
+    // driver parses external state ONCE into typed inputs here (`SourceFile`
+    // per module + the `SourceRoot` file set); the front-end stages are
+    // demanded as memoized queries inside `compile_prepared`. The database is
+    // cold and per-invocation, and queries are demanded in the fixed topo
+    // order, so the interning sequence — and therefore emitted bytes — is
+    // deterministic across runs (golden-suite-enforced).
+    let db = ipe_db::IpeDatabase::new();
+    let source_root = create_source_root(&db, &sources, &injected, &ffi_injected);
+    // The config input (see `ipe_db::BuildConfig`'s doc for why this
+    // is narrowed to `db_driver` rather than the full manifest shape). A
+    // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
+    // clean-vs-incremental parity gate's warm sequence, this driver never
+    // re-demands `emit_project` against a second config instance.
+    let config = ipe_db::BuildConfig::new(
+        &db,
+        db_driver,
+        ffi_emit,
+        options.target,
+        options.wasm_public_env.clone(),
+        options.wasm_hydrate_mode,
+        options.production,
+        runtime_dep,
+        options.debugger,
+        options.cargo_name.clone(),
+        options.hot_appearance,
+        options.webview_host,
+    );
+
+    let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
+    {
+        Ok(emitted) => emitted,
+        Err(e) => return (Err(e), CacheOutcome::Miss),
+    };
+
+    if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
+        cache::store(root, epoch, &cache_key, &emitted);
+        // Also store the lowered `Program` at the IR tier.
+        // `ipe_db::lower_program` is a PURE MEMO HIT here — it already ran
+        // (transitively, via `compile_prepared`'s `emit_project` demand
+        // chain) inside the salsa database above, so this costs nothing
+        // beyond the lookup + relocation-pass serialize. Best-effort: an
+        // entry-file lookup failure or a serialize failure never turns a
+        // successful build into a reported failure (same advisory contract
+        // as the `EmittedProject` tier's own store).
+        if let Some(entry_file) = source_root.files(&db).get(entry_path).copied()
+            && let Ok(program) = ipe_db::lower_program(&db, source_root, entry_file)
+        {
+            let ir_key = cache::compute_ir_key(&sources, &injected, entry_path, options.target);
+            cache::store_ir(
+                root,
+                epoch,
+                &ir_key,
+                &program,
+                ipe_db::Db::interner(&db).as_arc(),
+            );
+        }
+    }
+
+    (
+        write_emitted_project(
+            &emitted,
+            out_dir,
+            runtime_dir,
+            options.static_plan.as_ref(),
+            options.tree_shake_vendored,
+        ),
+        CacheOutcome::Miss,
+    )
+}
+
+/// Create the salsa inputs for one build: a [`ipe_db::SourceFile`] per module
+/// plus the [`ipe_db::SourceRoot`] file set.
+///
+/// The trust tag: `EmbeddedStdlib` IFF the module path is in `injected` (the
+/// driver's unforgeable record from [`project::inject_compiled_std_closure`]).
+/// A user file squatting on `Ipe.Foo` is NOT in `injected` (injection skipped
+/// it on the pre-existing-key guard), so it is `User` and stays
+/// IPE-N0025-rejected.
+#[must_use]
+pub fn create_source_root(
+    db: &ipe_db::IpeDatabase,
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    injected: &std::collections::BTreeSet<Vec<String>>,
+    ffi_injected: &std::collections::BTreeSet<Vec<String>>,
+) -> ipe_db::SourceRoot {
+    let file_handles: BTreeMap<Vec<String>, ipe_db::SourceFile> = sources
+        .iter()
+        .map(|(mod_path, (_, src))| {
+            let origin = if injected.contains(mod_path) {
+                ipe_canon::ModuleOrigin::EmbeddedStdlib
+            } else if ffi_injected.contains(mod_path) {
+                ipe_canon::ModuleOrigin::FfiInterface
+            } else {
+                ipe_canon::ModuleOrigin::User
+            };
+            (
+                mod_path.clone(),
+                ipe_db::SourceFile::new(db, mod_path.clone(), src.clone(), origin),
+            )
+        })
+        .collect();
+    ipe_db::SourceRoot::new(db, file_handles)
+}
+
+/// Intern each module path in `sources` to build the module-home →
+/// `(file, src)` blame map every span-attribution step reads. The lookups run
+/// against symbols `canonicalize` already interned, so this cannot append a new
+/// symbol and cannot perturb interning order (the golden byte-identity SEAL).
+pub(crate) fn home_to_source_map(
+    interner: &ipe_db::SharedInterner,
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+) -> BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)> {
+    let mut guard = interner.lock();
+    let mut map = BTreeMap::new();
+    for (str_path, (file, src)) in sources {
+        let sym_path: Result<Vec<_>, _> = str_path.iter().map(|s| guard.intern(s)).collect();
+        if let Ok(sym_path) = sym_path {
+            map.insert(sym_path, (file.clone(), src.clone()));
+        }
+    }
+    map
+}
+
+/// Map a diagnostic span (byte offsets into its *home* module's source) to the
+/// `(file, src)` pair that source is rendered against.
+///
+/// Every span in a def's body is a byte offset into that def's home module —
+/// preserved across `link`. Among all defs whose `body_span` contains the
+/// target span, prefer the one whose `body_span.lo` is *closest* to `span.lo`
+/// (the def starting nearest the failing expression); width is the secondary
+/// tiebreaker (narrower body wins on a tie). Union constructor spans live in
+/// the union's home byte-namespace, outside any def body, so they are scanned
+/// too — without this a `lower_enum` error (IPE-L0102 / IPE-L0114) would fall
+/// back to the entry file at a coincidental byte offset.
+///
+/// The closest-lo criterion is what keeps this from picking a numerically
+/// narrower def in a *different* module (a different byte namespace): same-module
+/// defs share a byte namespace, so the intended def almost always has the
+/// smaller distance from its own `lo`. Falls back to `entry` when no def or
+/// constructor encloses the span (e.g. a `CompilerBug` with `Span::DUMMY`).
+pub(crate) fn source_for_span_in_linked(
+    linked: &ipe_canon::ast::Module,
+    home_to_source: &BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)>,
+    entry: &(PathBuf, String),
+    span: ipe_diagnostics::Span,
+) -> (PathBuf, String) {
+    if span == ipe_diagnostics::Span::DUMMY {
+        return entry.clone();
+    }
+    // (lo_dist, width, home)
+    let mut best: Option<(u32, u32, &[ipe_intern::Symbol])> = None;
+    for def in &linked.defs {
+        let body_span = match def {
+            ipe_canon::ast::Def::Untyped { body, .. } | ipe_canon::ast::Def::Typed { body, .. } => {
+                body.span
+            }
+        };
+        if body_span.lo <= span.lo && span.hi <= body_span.hi {
+            let lo_dist = span.lo.saturating_sub(body_span.lo);
+            let width = body_span.hi.saturating_sub(body_span.lo);
+            if best.is_none_or(|(prev_dist, prev_w, _)| {
+                lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
+            }) {
+                best = Some((lo_dist, width, def.home()));
+            }
+        }
+    }
+    for union in &linked.unions {
+        for ctor in &union.ctors {
+            if ctor.span.lo <= span.lo && span.hi <= ctor.span.hi {
+                let lo_dist = span.lo.saturating_sub(ctor.span.lo);
+                let width = ctor.span.hi.saturating_sub(ctor.span.lo);
+                if best.is_none_or(|(prev_dist, prev_w, _)| {
+                    lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
+                }) {
+                    best = Some((lo_dist, width, union.home.as_slice()));
+                }
+            }
+        }
+    }
+    best.and_then(|(_, _, home)| home_to_source.get(home))
+        .cloned()
+        .unwrap_or_else(|| entry.clone())
+}
+
+/// Attribute a `(diag, home)` query error to the source file that OWNS it.
+///
+/// A non-empty `home` resolves DIRECTLY via `home_to_source` (O(log N), exact);
+/// an empty home (homeless backend/emit error, or a non-solver error) falls
+/// back to the byte-offset heuristic over the linked program. This is the
+/// single attribution rule every post-link pipeline error shares, so `ipe build`
+/// and `ipe type-check` frame the identical diagnostic against the identical source.
+pub(crate) fn attribute_post_link_error(
+    linked: &ipe_canon::ast::Module,
+    home_to_source: &BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)>,
+    entry: &(PathBuf, String),
+    diag: Diagnostic,
+    home: &[ipe_intern::Symbol],
+) -> CliError {
+    let (file, src) = if home.is_empty() {
+        source_for_span_in_linked(linked, home_to_source, entry, diag_span(&diag))
+    } else {
+        home_to_source.get(home).cloned().unwrap_or_else(|| {
+            source_for_span_in_linked(linked, home_to_source, entry, diag_span(&diag))
+        })
+    };
+    CliError::Pipeline {
+        file,
+        src,
+        diag: Box::new(diag),
+    }
+}
+
+/// Run the canon decoder-pipeline direction gate (IPE-N0040) over the linked
+/// program, returning the rejection in the post-link `(diag, home)` shape both
+/// the build and the type-check surfaces attribute through.
+///
+/// The gate rejects the reverse-associated hand-nested spelling of the
+/// `required` / `optional` / `requiredAt` / `custom` decoder combinators, which
+/// silently swaps two same-typed fields with no type error. It runs on the
+/// LINKED module so a decoder split across modules is still seen whole. Both
+/// [`compile_prepared`] (the build/lower/emit path) and the `ipe type-check`
+/// flow call THIS one helper, so the two surfaces cannot drift on whether the
+/// footgun is caught. The returned `home` is empty: the diagnostic's own span
+/// carries the offending source location, resolved by the byte-offset heuristic
+/// the other homeless post-link errors already use.
+pub(crate) fn gate_decoder_pipelines(
+    linked: &ipe_canon::ast::Module,
+) -> Result<(), (Diagnostic, Vec<ipe_intern::Symbol>)> {
+    ipe_canon::decoder_pipeline_gate::check_decoder_pipelines(linked)
+        .map_err(|diag| (diag, Vec::new()))
+}
+
+/// Demand `canonicalize` for every module in dep-first order, attributing a
+/// canon error (e.g. IPE-N0020 module-not-found) to the source file of the
+/// module that produced it. A canon error fires *before* `link`, so there is no
+/// linked program to run the byte-offset heuristic against; the module whose
+/// `canonicalize` fails IS the owner, so blaming that module's `(path, src)` is
+/// exact.
+///
+/// On the build path these demands are the memoized inputs `linked_program`
+/// re-uses; running the loop here first (also on the `check`/analysis paths)
+/// makes a canon-error diagnostic frame against its own file on every surface.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying the first module's canon error;
+/// [`CliError::Usage`] if a topo-ordered module is absent from the source map.
+pub(crate) fn attribute_canon_errors(
+    db: &ipe_db::IpeDatabase,
+    source_root: ipe_db::SourceRoot,
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    entry_file: ipe_db::SourceFile,
+    blame_path: &Path,
+) -> Result<(), CliError> {
+    let topo =
+        ipe_db::topo_order(db, source_root, entry_file).map_err(|diag| CliError::Pipeline {
+            file: blame_path.to_path_buf(),
+            src: String::new(),
+            diag: Box::new(diag),
+        })?;
+    for mod_path in topo.iter() {
+        let Some((path, src)) = sources.get(mod_path) else {
+            return Err(CliError::Usage(
+                "internal: module in topo order not in source map",
+            ));
+        };
+        let Some(file_handle) = source_root.files(db).get(mod_path).copied() else {
+            return Err(CliError::Usage(
+                "internal: module in topo order not in source map",
+            ));
+        };
+        ipe_db::canonicalize(db, source_root, file_handle).map_err(|diag| CliError::Pipeline {
+            file: path.clone(),
+            src: src.clone(),
+            diag: Box::new(diag),
+        })?;
+    }
+    Ok(())
+}
+
+/// The project root a `customElement "<js-path>"` literal resolves against: the
+/// directory holding the entry file, the same root sibling module discovery uses.
+///
+/// Canon refuses a `..`-escaping literal (IPE-P0063) and an absolute/rooted one
+/// (IPE-N0044), so the joined path is lexically inside this root. That is
+/// necessary but NOT sufficient: a symlink UNDER the root can still point outside
+/// it, so the caller additionally canonicalises the join and asserts containment
+/// (`starts_with` the canonical root) before trusting it — the lexical seals and
+/// the resolved-path containment check are independent layers.
+pub(crate) fn widget_file_root(entry_src_path: &Path) -> &Path {
+    entry_src_path
+        .parent()
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+/// The in-memory compile core over an already-populated database.
+///
+/// topo order → per-module canonicalisation (memoized, blame-attributed) →
+/// [`ipe_db::linked_program`] (the coarse whole-program spine) → infer → lower →
+/// emit. Returns the emitted project without touching the filesystem.
+///
+/// This is THE production pipeline — [`compile_modules`] wraps it with input
+/// creation and disk writes, and the clean-vs-incremental parity gate
+/// drives it against both cold and warm databases, so the gate can
+/// never test a divergent copy of the pipeline.
+///
+/// `sources` is consulted for diagnostic blame only (module path → file/src).
+///
+/// `config` is the [`ipe_db::BuildConfig`] handle — callers that
+/// re-demand `compile_prepared` across a warm sequence (the parity
+/// gate) MUST hold one stable `BuildConfig` across the sequence rather than
+/// constructing a fresh one per call, or `emit_project`'s memo key never
+/// matches between calls and the seam's memoization is silently defeated.
+///
+/// # Errors
+/// [`CliError::Pipeline`] carrying the first compiler diagnostic.
+#[allow(clippy::too_many_lines)]
+pub fn compile_prepared(
+    db: &ipe_db::IpeDatabase,
+    source_root: ipe_db::SourceRoot,
+    sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
+    entry_path: &[String],
+    blame_path: &Path,
+    config: ipe_db::BuildConfig,
+) -> Result<ipe_backend::EmittedProject, CliError> {
+    // The build-wide interner is owned by the database (Option 3a) so the
+    // parse query and the non-salsa passes share one symbol table. NEVER hold
+    // a lock guard across a salsa query demand (the mutex is not reentrant).
+    let shared_interner = ipe_db::Db::interner(db).clone();
+
+    let Some(entry_file) = source_root.files(db).get(entry_path).copied() else {
+        return Err(CliError::Usage("internal: entry module not in source map"));
+    };
+
+    // Canonicalise each module in dep-first order, attributing a canon error
+    // (e.g. IPE-N0020) to its own module's file — the SAME blame loop the
+    // `check`/analysis surfaces reuse (`attribute_canon_errors`), so a
+    // canon-error diagnostic frames against its own file on every surface.
+    // `linked_program` below re-demands these memos.
+    attribute_canon_errors(db, source_root, sources, entry_file, blame_path)?;
+
+    // Link → infer → lower → emit on the merged module. Blame link/lower/emit
+    // errors on the entry file; infer errors and warnings are attributed to the
+    // dep module that owns the failing span.
+    let entry_src_path = sources
+        .get(entry_path)
+        .map_or_else(|| blame_path.to_path_buf(), |(p, _)| p.clone());
+    let entry_src = sources
+        .get(entry_path)
+        .map(|(_, s)| s.clone())
+        .unwrap_or_default();
+    let pipeline_err = |diag: ipe_diagnostics::Diagnostic| CliError::Pipeline {
+        file: entry_src_path.clone(),
+        src: entry_src.clone(),
+        diag: Box::new(diag),
+    };
+
+    // The coarse whole-program spine: every per-module canonical result
+    // assembled + linked inside salsa. All
+    // `canonicalize` demands above are memo hits here. The link step gates
+    // cross-module type-identity duplicates `(home, name)`, blamed on
+    // the entry file like every other post-link diagnostic.
+    let linked_program =
+        ipe_db::linked_program(db, source_root, entry_file).map_err(&pipeline_err)?;
+    let linked = &linked_program.module;
+
+    // The fresh-name collision universe for this build: the identifier words
+    // of the CURRENT program — a pure function of the source inputs, so the
+    // lowering pools (`eta_*`, `cap_*`, …) mint the SAME names on a warm
+    // (reused) database as on a cold one. Interner-membership minting would
+    // skip the previous build's pool names and drift the emitted bytes — the
+    // exact divergence the clean-vs-incremental parity gate guards against.
+    let mut fresh_avoid: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for file in source_root.files(db).values() {
+        fresh_avoid.extend(ipe_db::identifier_words(db, *file).iter().cloned());
+    }
+
+    // Set the fresh-name avoid-set (must happen before `lower_program` may
+    // execute below). Short lock scope: the guard is dropped before any further
+    // salsa query is demanded — the interner mutex is not reentrant, and
+    // `typecheck`/`lower_program` each take their own lock internally.
+    {
+        let mut interner = shared_interner.lock();
+        interner.set_fresh_avoid(fresh_avoid);
+    }
+
+    // The module-home → (file, src) blame map, and the span-attribution helper
+    // built on it — the SAME resolution the `check`/analysis surfaces reuse (via
+    // `attribute_post_link_error`), so every surface frames a given diagnostic
+    // against the identical source.
+    let home_to_source = home_to_source_map(&shared_interner, sources);
+    let entry = (entry_src_path.clone(), entry_src.clone());
+    let source_for_span = |span: ipe_diagnostics::Span| -> (PathBuf, String) {
+        source_for_span_in_linked(linked, &home_to_source, &entry, span)
+    };
+
+    // Widget-file gate (IPE-N0044, Security #1). The `customElement` constructor's
+    // shape + lexical path seals (traversal IPE-P0063, absolute/rooted IPE-N0044)
+    // already ran in canon; here — the one stage that owns the project root — two
+    // FILESYSTEM invariants are enforced, defence-in-depth against the lexical
+    // seals:
+    //   1. Containment: the resolved path must lie strictly INSIDE the project
+    //      root. `ContainedRelPath::parse` canonicalises the join and asserts it
+    //      is a descendant of the canonical root, so a symlink UNDER the root that
+    //      points OUTSIDE it (which the lexical seals cannot see) is refused. A
+    //      bare `Path::join`/`is_file` would instead FOLLOW that symlink and stat
+    //      an out-of-project file — the escape this check closes.
+    //   2. Existence: the contained path must name a real file, so a widget never
+    //      registers against a file that is not there.
+    // Both fail closed with IPE-N0044; the widget seam never reaches emission on
+    // an out-of-project or absent file.
+    let widget_root = widget_file_root(&entry_src_path);
+    // The program's widget manifest: one entry per DISTINCT reached
+    // `customElement "<path>"`, carrying the lowerer-minted `ipe-ce-<hex>` tag
+    // (so the served-glue registration targets the SAME tag the view node
+    // renders) and the author hook file's verbatim content (WP5 serves it
+    // content-addressed + SRI). Populated as the containment/existence gate
+    // proves each file; deduplicated by tag so two views of one widget register
+    // once. Empty for a program that uses no `Ui.widget`.
+    let mut widget_manifest: BTreeMap<String, String> = BTreeMap::new();
+    for widget in ipe_canon::custom_element_gate::collect_widget_files(linked) {
+        let reject = |detail: String| {
+            let (file, src) = source_for_span(widget.span);
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(ipe_diagnostics::Diagnostic::Name {
+                    span: widget.span,
+                    msg: ipe_diagnostics::NameError::CustomElementCtorMalformed {
+                        detail: detail.into_boxed_str(),
+                    },
+                }),
+            }
+        };
+        let contained = contained_path::ContainedRelPath::parse(widget_root, &widget.cleaned_path)
+            .map_err(|_| {
+                reject(format!(
+                    "the widget-hook file `{}` resolves outside the project directory \
+                         (an absolute path, a `..` climb, or a symlink pointing above the \
+                         project root) and is refused",
+                    widget.cleaned_path
+                ))
+            })?;
+        if !contained.resolved().is_file() {
+            return Err(reject(format!(
+                "the widget-hook file `{}` does not exist in the project",
+                widget.cleaned_path
+            )));
+        }
+        // Read the verified in-project file's content for content-addressed +
+        // SRI serving. `resolved()` is the containment-checked canonical path, so
+        // this read stays strictly inside the project root. A read failure (a
+        // race that removed the file between the `is_file` check and here, or a
+        // permission fault) fails the build closed — the widget seam never
+        // reaches emission on a file we could not read whole.
+        let content = std::fs::read_to_string(contained.resolved()).map_err(|e| {
+            reject(format!(
+                "the widget-hook file `{}` could not be read: {e}",
+                widget.cleaned_path
+            ))
+        })?;
+        // The tag is the SINGLE lowerer definition, keyed on the same cleaned
+        // path the view node hashed — never a second, drift-prone hash here.
+        let tag = ipe_lower::custom_element_tag(&widget.cleaned_path);
+        widget_manifest.entry(tag).or_insert(content);
+    }
+
+    // Layer-2 wasm security gate (IPE-N0030, M5): the client entry's
+    // reachability closure must not transitively reach a server-classified
+    // module. Runs BEFORE Layer 1 so a reachability violation gets the
+    // friendlier exact-chain message; Layer 1 remains the flat,
+    // defense-in-depth backstop for everything this closure does not cover
+    // (e.g. a server kernel named directly in the entry's own module).
+    // `linked.name` is the client entry's module path for today's
+    // single-entry `--target wasm` build (a distinct `[wasm].entry` module
+    // takes the same role once the M6 integration wires a separate client
+    // entry through).
+    if config.target(db) == ipe_ir::Target::WasmClient {
+        let gate_result = {
+            let interner = shared_interner.lock();
+            ipe_canon::module_classify::check_client_reachability(linked, &linked.name, &interner)
+        };
+        gate_result.map_err(|diag| {
+            let span = diag_span(&diag);
+            let (file, src) = source_for_span(span);
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(diag),
+            }
+        })?;
+    }
+
+    // Layer-1 wasm security gate (IPE-N0029): under `--target wasm`, every
+    // kernel named anywhere in the linked program must be on the WasmClient
+    // allowlist. Runs on the LINKED module (everything linked is emitted, so
+    // a denied kernel anywhere would otherwise become a cargo failure — THE
+    // SEAL — or a secret consumer in a public bundle). Blame via the same
+    // span→file heuristic the type errors use.
+    if config.target(db) == ipe_ir::Target::WasmClient {
+        let gate_result = {
+            let interner = shared_interner.lock();
+            ipe_canon::target_gate::check_wasm_client(linked, &interner)
+        };
+        gate_result.map_err(|diag| {
+            let span = diag_span(&diag);
+            let (file, src) = source_for_span(span);
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(diag),
+            }
+        })?;
+    }
+
+    // Use the attributed variant so cross-module type errors are attributed to
+    // the correct source file via the `home` carried on the failing constraint,
+    // rather than relying solely on the byte-offset heuristic (`source_for_span`)
+    // which can mis-attribute when two merged modules share overlapping numeric
+    // span ranges.
+    //
+    // When `home` is non-empty we look it up in `home_to_source` directly —
+    // O(log N) and exact.  When the home is empty (non-solver errors: constraint
+    // generation, field-access pass, exhaustiveness) we fall back to the
+    // byte-offset heuristic.
+    //
+    // `ipe_db::typecheck` is the memoized
+    // SEAM over `ipe_types::infer_attributed`: same whole-program computation,
+    // skippable on a warm no-op rebuild. No interner guard is held across
+    // this demand — the query takes its own lock internally.
+    let types = ipe_db::typecheck(db, source_root, entry_file).map_err(|(diag, home)| {
+        attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
+    })?;
+    // Print non-fatal warnings (e.g. IPE-T0011 RedundantCaseBranch) to stderr.
+    // These are Severity::Warning: the build continues and exit code stays 0.
+    for w in &types.warnings {
+        let span = diag_span(w);
+        let (w_file, w_src) = source_for_span(span);
+        eprintln!("{}", render(w, &w_file.to_string_lossy(), &w_src));
+    }
+    // Attribute lower / backend diagnostics to the source file that OWNS the
+    // failing span, not blindly to the entry file. After link, every module's
+    // defs keep their original `home` byte-namespace, so a bare `pipeline_err`
+    // (which always blames the entry file) mis-renders a dep-module diagnostic
+    // against the entry file at a coincidental byte offset — e.g. a State.ipe
+    // IPE-L0115 shown at an unrelated Main.ipe line. `source_for_span` maps the
+    // span back to its owning def's file, the same heuristic already used for
+    // constraint-gen / exhaustiveness type errors.
+    // Lowering (and emit) errors carry the owning def's `home`,
+    // exactly like `typecheck` above. When `home` is non-empty we resolve the
+    // source file DIRECTLY via `home_to_source` (O(log N), exact) — this is what
+    // makes a Server.ipe IPE-L0126 render against Server.ipe, not against a
+    // Main.ipe def whose byte range coincidentally overlaps the failing span.
+    // An empty `home` (homeless backend diagnostic, or a pre-def lowering
+    // error) falls back to the byte-offset heuristic `source_for_span`.
+    let span_attributed_err =
+        |(diag, home): (ipe_diagnostics::Diagnostic, Vec<ipe_intern::Symbol>)| {
+            attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
+        };
+
+    // Decoder-pipeline direction gate (IPE-N0040): reject the hand-nested
+    // `required`/`optional`/`requiredAt`/`custom` spelling that silently
+    // reverses field→constructor binding. Runs on the linked module, framed
+    // against the owning source like every other post-link diagnostic. The
+    // IDENTICAL gate runs on the `ipe type-check` path (both call
+    // `gate_decoder_pipelines`), so the footgun is caught on every pre-ship
+    // surface, not just the build.
+    gate_decoder_pipelines(linked).map_err(span_attributed_err)?;
+
+    // `ipe_db::program_metadata` — the whole-program DCE-reachability seam
+    // over `lower_program`.
+    // Its own dependency on `lower_program` is what forces the lowering pass
+    // to execute here; a standalone `lower_program` demand alongside this one
+    // would be a redundant duplicate of the SAME memoized query (its error
+    // maps through the same `span_attributed_err` closure either way).
+    // Demanded here, on the production path, purely as a FORWARD SEAM:
+    // nothing downstream consumes its value yet (no pruning pass exists —
+    // see the query's own doc for the honestly-recorded scope), matching the
+    // `kernel_types` precedent (materialized and proven memoized
+    // before it has a real consumer). The demand costs nothing observable in
+    // emitted bytes — the point is to put the query on the same path the
+    // clean-vs-incremental parity gate drives, so a future divergence in this
+    // analysis cannot go undetected.
+    ipe_db::program_metadata(db, source_root, entry_file).map_err(span_attributed_err)?;
+
+    // `ipe_db::emit_manifest` (design doc §4.4) — the top-level
+    // emit demand, assembled from the per-`RustFileId` query graph:
+    // `program_rust_file_ids` + `emit_spine_file` + one `emit_rust_file` per
+    // home. For a single-module program it routes straight to `emit_project`
+    // (byte-identical Spine-collapse); for a genuine 2+-home program it
+    // assembles the split from those per-file memos, so a body edit to an
+    // UNRELATED module early-cuts that module's `emit_rust_file` (byte-identical
+    // value → salsa backdate → the on-disk write skips, §4.3). The
+    // `EmitResult` SHAPE matches a plain `emit_project` demand, so
+    // `build_emit_manifest`/`reconcile_emitted_project`/`prune_orphaned_files`
+    // need zero changes (§4.4). The no-op-rebuild + `db_driver`-only
+    // memoization properties `phase6_build_config.rs` proves hold — the
+    // config field flows through unchanged.
+    let emitted =
+        ipe_db::emit_manifest(db, source_root, entry_file, config).map_err(span_attributed_err)?;
+    let mut emitted = (*emitted).clone();
+
+    // Thread the widget manifest into the emitted program. The emit query is a
+    // pure function of the source text and cannot read the widget files off disk
+    // (INV-1: no salsa query touches the filesystem); this stage owns the project
+    // root and already read each file above, so it wires the transport here.
+    //
+    // Two transports, one manifest:
+    //  * Native (server-driven Web) — inject the one-time `widget_assets::register`
+    //    into `main`, so the runtime serves each asset content-addressed + SRI and
+    //    generates the attribute/POST glue at process start.
+    //  * WasmClient (browser client) — there is no server to serve routes, so the
+    //    static bundle carries the assets: write each author file + the generated
+    //    property/CustomEvent glue into `www/`, SRI-pinned, and reference them from
+    //    the static `index.html`. The in-process wasm sink delivers down-state as a
+    //    decoded property and folds up-`CustomEvent`s into `update`.
+    //
+    // A widget-free program injects nothing under either target (byte-identical
+    // emit).
+    if !widget_manifest.is_empty() {
+        match config.target(db) {
+            ipe_ir::Target::Native => {
+                inject_widget_registration(&mut emitted, &widget_manifest)?;
+            }
+            ipe_ir::Target::WasmClient => {
+                inject_wasm_widget_bundle(&mut emitted, &widget_manifest)?;
+            }
+        }
+    }
+    Ok(emitted)
+}
+
+/// Inject the process-start `Ui.widget` asset registration into the emitted
+/// `main.rs`, so the served app registers its widget assets before the web
+/// server binds.
+///
+/// The registration is a single `ipe_runtime::web::widget_assets::register(&[…])`
+/// call spliced in right after `install_panic_classifier();` in the generated
+/// `main()` — the first line of the entry point, before any task runs. Each
+/// `(tag, content)` is rendered as a Rust string-literal pair; the content is
+/// emitted as a raw string literal with a hash fence wide enough to clear any run
+/// of `#` in the file, so arbitrary JS (including embedded `"` / `#`) is a valid
+/// literal and no author byte can break out of the string into code (the content
+/// is DATA in the emitted program, exactly as it is data in the browser).
+///
+/// # Errors
+/// [`CliError`] carrying a [`Diagnostic::CompilerBug`] if `src/main.rs` is absent
+/// from the emitted file set or the `install_panic_classifier();` anchor the
+/// splice keys on is missing — a drifted emit template, surfaced loudly rather
+/// than silently emitting a program that never registers its widgets.
+pub(crate) fn inject_widget_registration(
+    emitted: &mut ipe_backend::EmittedProject,
+    manifest: &BTreeMap<String, String>,
+) -> Result<(), CliError> {
+    // The splice point: the first line of the generated `main()`, before any task
+    // runs, so the registry is populated before the web server binds.
+    const ANCHOR: &str = "install_panic_classifier();";
+    let bug = |detail: &str| CliError::Pipeline {
+        file: PathBuf::from("src/main.rs"),
+        src: String::new(),
+        diag: Box::new(ipe_diagnostics::Diagnostic::CompilerBug {
+            where_: "ipe_cli::inject_widget_registration",
+            detail: detail.to_owned(),
+        }),
+    };
+    let main = emitted
+        .files
+        .get_mut("src/main.rs")
+        .ok_or_else(|| bug("no src/main.rs in the emitted file set for widget registration"))?;
+
+    // Build the `register(&[(tag, content), …])` argument list. Deterministic
+    // order (BTreeMap iteration) keeps the emit byte-stable across builds.
+    let mut entries = String::new();
+    for (tag, content) in manifest {
+        entries.push_str("        (");
+        entries.push_str(&rust_str_literal(tag));
+        entries.push_str(", ");
+        entries.push_str(&rust_raw_str_literal(content));
+        entries.push_str("),\n");
+    }
+    let call = format!("\n    ipe_runtime::web::widget_assets::register(&[\n{entries}    ]);\n");
+
+    let Some(pos) = main.find(ANCHOR) else {
+        return Err(bug(
+            "the emitted main() is missing the `install_panic_classifier();` anchor the widget \
+             registration splices after — the emit template drifted",
+        ));
+    };
+    let insert_at = pos + ANCHOR.len();
+    main.insert_str(insert_at, &call);
+    Ok(())
+}
+
+/// Assemble the browser-client widget bundle into the emitted static SPA.
+///
+/// The `WasmClient` target has no server to mount asset routes, so the assets
+/// ride the static `www/` tree. This writes, for the widget manifest:
+///
+///  * each author hook file at `www/_ipe/widget.<hex16>.js` (content-addressed,
+///    so a page pinning its SRI can never be served different bytes);
+///  * the generated registration glue at `www/_ipe/widget-glue.<hex16>.js`
+///    (the `WasmClient` transport: down as a decoded property, up as a typed
+///    `CustomEvent`) — produced by the SAME `ipe_runtime::widget_assets` generator
+///    the server path serves, so there is one glue, not a drift-prone twin;
+///  * SRI-pinned `<link rel="modulepreload">` + glue `<script type="module">`
+///    references spliced into `www/index.html` before `</head>`.
+///
+/// The hash the page pins is `sha256` over the served bytes (§ `widget_assets`),
+/// so page integrity == served bytes for the static target exactly as for the
+/// server. `base` is empty: the static SPA is root-mounted, so the absolute
+/// `/_ipe/…` asset URLs resolve against the `www/` document root.
+///
+/// # Errors
+/// [`CliError`] carrying a [`Diagnostic::CompilerBug`] if `www/index.html` is
+/// absent from the emitted file set or lacks the `</head>` anchor — a drifted
+/// wasm emit template, surfaced loudly.
+pub(crate) fn inject_wasm_widget_bundle(
+    emitted: &mut ipe_backend::EmittedProject,
+    manifest: &BTreeMap<String, String>,
+) -> Result<(), CliError> {
+    use ipe_runtime_rust::widget_assets::{
+        WidgetAsset, WidgetTransport, glue_js_for, glue_path_for, page_scripts_for,
+        widget_asset_path,
+    };
+
+    // The static SPA is root-mounted; the `/_ipe/…` asset URLs are document-root
+    // absolute, so the `www/`-relative file path drops the leading slash.
+    const BASE: &str = "";
+    const TRANSPORT: WidgetTransport = WidgetTransport::WasmClient;
+    const HEAD_CLOSE: &str = "</head>";
+
+    let bug = |detail: String| CliError::Pipeline {
+        file: PathBuf::from("www/index.html"),
+        src: String::new(),
+        diag: Box::new(ipe_diagnostics::Diagnostic::CompilerBug {
+            where_: "ipe_cli::inject_wasm_widget_bundle",
+            detail,
+        }),
+    };
+    let rel = |p: &str| -> Result<ipe_backend::RelPath, CliError> {
+        ipe_backend::RelPath::new(p.to_owned()).map_err(|_| {
+            bug(format!(
+                "the generated widget asset path `{p}` is not a valid in-project relative path"
+            ))
+        })
+    };
+
+    // Rebuild the explicit asset slice (deterministic BTreeMap order → byte-stable
+    // emit) the registry-free generator consumes.
+    let assets: Vec<WidgetAsset> = manifest
+        .iter()
+        .map(|(tag, content)| WidgetAsset {
+            tag: tag.clone(),
+            content: content.clone(),
+        })
+        .collect();
+
+    // Write each author hook file content-addressed under `www/`. `widget_asset_path`
+    // yields the absolute URL path `/_ipe/widget.<hex16>.js`; strip the leading
+    // `/` for the `www/`-relative file key.
+    for asset in &assets {
+        let url_path = widget_asset_path(&asset.content);
+        let file_path = format!("www{url_path}");
+        emitted
+            .files
+            .insert(rel(&file_path)?, asset.content.clone());
+    }
+
+    // Write the generated glue (WasmClient transport) content-addressed under `www/`.
+    let glue_url = glue_path_for(&assets, BASE, TRANSPORT);
+    let glue_body = glue_js_for(&assets, BASE, TRANSPORT);
+    emitted
+        .files
+        .insert(rel(&format!("www{glue_url}"))?, glue_body);
+
+    // Splice the SRI-pinned preload + glue script references into `index.html`
+    // before `</head>` (external + SRI + crossorigin — no inline script, so the
+    // static shell's CSP `script-src 'self' 'wasm-unsafe-eval'` is unchanged).
+    let scripts = page_scripts_for(&assets, BASE, TRANSPORT);
+    let index = emitted
+        .files
+        .get_mut("www/index.html")
+        .ok_or_else(|| bug("no www/index.html in the emitted wasm file set".to_owned()))?;
+    let Some(pos) = index.find(HEAD_CLOSE) else {
+        return Err(bug(
+            "the emitted www/index.html is missing the `</head>` anchor the widget bundle \
+             splices before — the wasm emit template drifted"
+                .to_owned(),
+        ));
+    };
+    index.insert_str(pos, &scripts);
+    Ok(())
+}
+
+/// Render `s` as a plain double-quoted Rust string literal (the tag: a fixed
+/// `ipe-ce-<hex>`, `[a-z0-9-]` only, so escaping is trivial but applied for
+/// safety).
+pub(crate) fn rust_str_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Render `s` as a Rust RAW string literal `r#"…"#` with a hash fence wide enough
+/// to clear any `"#` run inside `s`, so arbitrary content (author JS with quotes
+/// and hashes) is emitted verbatim as data — it can never terminate the literal
+/// early and spill into code.
+pub(crate) fn rust_raw_str_literal(s: &str) -> String {
+    // The fence must be longer than the longest run of `#` that immediately
+    // follows a `"` in the content (that is the only sequence that could close a
+    // raw literal). Computing the max `#`-run overall is a safe over-approximation.
+    let mut max_hashes = 0usize;
+    let mut run = 0usize;
+    for ch in s.chars() {
+        if ch == '#' {
+            run += 1;
+            max_hashes = max_hashes.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    let fence = "#".repeat(max_hashes + 1);
+    format!("r{fence}\"{s}\"{fence}")
+}
+
+/// Write an emitted project to `out_dir`, vendoring the runtime module tree
+/// from `runtime_dir`.
+///
+/// The emit→cargo bridge (design doc H7/H8):
+/// assembles the COMPLETE intended project (`build_emit_manifest`) — the
+/// vendored runtime tree, `Cargo.toml`, and every backend-emitted file — then
+/// [`reconcile_emitted_project`] writes only what changed (content-gated,
+/// atomic tmp-then-rename) and deletes anything under `out_dir/src` the
+/// manifest no longer names (manifest-driven prune). On an unchanged rebuild
+/// this writes NOTHING; `cargo` therefore sees no mtime churn and does not
+/// invalidate its own build cache. This is a pure driver-boundary filesystem
+/// operation — no salsa query touches disk (INV-1).
+///
+/// Under a static plan (see `docs/architecture/static-compilation.md`) the
+/// intended project additionally gets the planned allocator feature spliced
+/// into `Cargo.toml` and a generated `.cargo/config.toml` — and an
+/// `Ipe.WebView` shape is refused BEFORE any file is written (a webview app
+/// links the system webview; a "static" artifact would be a lie). A
+/// non-static build removes a stale generated config so `+crt-static` can
+/// never leak from an earlier static build into later ones.
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure; [`CliError::StaticRefusal`]
+/// for a webview shape under a static plan; [`CliError::Pipeline`] on a
+/// backend-invariant breach (manifest anchor drift).
+pub(crate) fn write_emitted_project(
+    emitted: &ipe_backend::EmittedProject,
+    out_dir: &Path,
+    runtime_dir: &Path,
+    static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
+    tree_shake_vendored: bool,
+) -> Result<(), CliError> {
+    use ipe_backend_rust::static_build;
+
+    let mut manifest = build_emit_manifest(emitted, runtime_dir, tree_shake_vendored)?;
+    if let Some(plan) = static_plan {
+        // The webview-under-static refusal reads the backend's typed
+        // `uses_webview` signal (set from the resolved runtime/host), never a
+        // re-parse of the emitted `cargo_toml` default-feature list.
+        if emitted.uses_webview {
+            return Err(CliError::StaticRefusal(build_plan::Refusal::WebviewStatic));
+        }
+        let cargo_toml = static_build::staticize_manifest(&emitted.cargo_toml, plan.allocator())
+            .map_err(backend_invariant_err)?;
+        manifest.insert(PathBuf::from("Cargo.toml"), cargo_toml);
+        manifest.insert(
+            PathBuf::from(".cargo/config.toml"),
+            static_build::cargo_config(plan),
+        );
+    }
+    reconcile_emitted_project(&manifest, out_dir)?;
+    if static_plan.is_none() {
+        remove_stale_static_config(out_dir)?;
+    }
+    Ok(())
+}
+
+/// Map a backend-invariant [`Diagnostic`] (a `CompilerBug` from manifest
+/// surgery — no owning source file) onto the pipeline error channel, blamed
+/// on the emitted manifest.
+pub(crate) fn backend_invariant_err(diag: Diagnostic) -> CliError {
+    CliError::Pipeline {
+        file: PathBuf::from("Cargo.toml"),
+        src: String::new(),
+        diag: Box::new(diag),
+    }
+}
+
+/// Remove a stale GENERATED `.cargo/config.toml` from the project root — and
+/// only a generated one: the file is deleted solely when it starts with
+/// [`ipe_backend_rust::static_build::CARGO_CONFIG_MARKER`], so a config a
+/// user placed there by hand is never touched. Needed because the
+/// reconciler's prune pass is scoped to `out_dir/src` and cannot own
+/// root-level files.
+pub(crate) fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
+    let path = out_dir.join(".cargo").join("config.toml");
+    match fs::read_to_string(&path) {
+        Ok(text) if text.starts_with(ipe_backend_rust::static_build::CARGO_CONFIG_MARKER) => {
+            match fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(io_err(&path, e)),
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Assemble the complete intended on-disk project, relative to `out_dir`:
+/// every path this build produces, mapped to its exact text.
+///
+/// Every file this driver ever writes is UTF-8 Rust/TOML source, so `String`
+/// (not raw bytes) is the honest content type — it lets this function reuse
+/// the existing [`write_atomic`] helper unchanged (see
+/// [`reconcile_emitted_project`]) instead of a parallel byte-oriented atomic
+/// writer.
+///
+/// Three sources, in the same precedence `write_emitted_project` has always
+/// used ("vendor first, emit second" — the backend's trimmed
+/// `ipe_runtime/mod.rs` / `config.rs` must win over the fuller copies from
+/// the source tree):
+///   1. The vendored runtime module tree (`runtime_dir`, read recursively
+///      under `src/ipe_runtime/`) — a driver-boundary filesystem read, the
+///      same discipline as reading the entry file (never inside a
+///      salsa-tracked query). For the dependency model this step is replaced
+///      by bundling the embedded runtime source under `ipe_runtime_dep/` so
+///      the relative path dep in the emitted `Cargo.toml` is always satisfied.
+///   2. `Cargo.toml` at the project root.
+///   3. Every backend-emitted file (`emitted.files`; each key is already a
+///      validated [`ipe_backend::RelPath`] — relative and `..`-free — so no
+///      entry here can escape `out_dir`).
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure reading `runtime_dir` (including
+/// a non-UTF-8 file, surfaced as an I/O error rather than a panic — the
+/// runtime tree is trusted in-repo source, so this is not expected to fire in
+/// practice). [`CliError::RuntimeMaterializeFailed`] when the embedded runtime
+/// crate contains non-UTF-8 files (unexpected for in-repo source).
+pub(crate) fn build_emit_manifest(
+    emitted: &ipe_backend::EmittedProject,
+    runtime_dir: &Path,
+    tree_shake_vendored: bool,
+) -> Result<BTreeMap<PathBuf, String>, CliError> {
+    let mut manifest = BTreeMap::new();
+    // The emit shape is self-describing: a vendored emit always writes
+    // `src/ipe_runtime/mod.rs`; the dep-model emit never does. Use this to
+    // branch between the two materialization strategies.
+    let emitted_mod_rs = emitted
+        .files
+        .iter()
+        .find(|(rel, _)| rel.as_str() == "src/ipe_runtime/mod.rs")
+        .map(|(_, contents)| contents.as_str());
+    if let Some(mod_rs) = emitted_mod_rs {
+        // Vendored model: copy the runtime source tree into `src/ipe_runtime/`.
+        if tree_shake_vendored {
+            // Eject shape: vendor only the runtime source the program reaches.
+            // The emitted `mod.rs` declares `pub mod X;` for exactly the reached
+            // top-level modules; a source file whose module is never declared is
+            // one rustc would drop anyway, so omitting it from the tree is
+            // behaviour-preserving and shrinks the shippable, auditable artifact.
+            collect_reachable_runtime_text(
+                runtime_dir,
+                Path::new("src/ipe_runtime"),
+                mod_rs,
+                &mut manifest,
+            )?;
+        } else {
+            collect_dir_text(runtime_dir, Path::new("src/ipe_runtime"), &mut manifest)?;
+        }
+    } else {
+        // Dependency model: the emitted `Cargo.toml` declares the runtime via
+        // a relative path dep (`path = "ipe_runtime_dep"`). Bundle the embedded
+        // runtime source under that directory so the dep resolves in any
+        // environment — cross-compiler container, offline, CI — without a
+        // host-absolute path. The embedded source is the binary's own version,
+        // identical to the in-repo tree by construction.
+        let embedded = runtime_embed::collect_embedded_crate_text()?;
+        for (rel, text) in embedded {
+            manifest.insert(PathBuf::from("ipe_runtime_dep").join(rel), text);
+        }
+    }
+    manifest.insert(PathBuf::from("Cargo.toml"), emitted.cargo_toml.clone());
+    for (rel, contents) in &emitted.files {
+        manifest.insert(PathBuf::from(rel.as_str()), contents.clone());
+    }
+    Ok(manifest)
+}
+
+/// Vendor only the runtime source files the emitted `mod.rs` reaches.
+///
+/// The emitted `ipe_runtime/mod.rs` is a flat, non-`cfg`-gated list of `pub mod
+/// X;` for exactly the top-level modules the program reaches. For each declared
+/// name this copies either the single file `X.rs` or, when `X` is a directory
+/// module, the ENTIRE `X/` subtree — never parsing the subtree's own nested
+/// `mod` declarations. Copying a reached directory whole is the fail-closed
+/// choice the eject contract requires: it can only ever include a file, never
+/// omit one a nested `mod` needs, so the vendored tree always compiles. The
+/// modules a directory does not reach are already excluded at the top level
+/// (an unreached `web`/`db`/`tui`/… directory is never declared, so its whole
+/// subtree is dropped) — where the large size wins come from.
+///
+/// `mod.rs` itself is always copied (it IS the emitted file, overlaid verbatim
+/// by the caller's `emitted.files` pass afterwards); the loop only resolves the
+/// modules it names.
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure reading `runtime_dir`.
+pub(crate) fn collect_reachable_runtime_text(
+    runtime_dir: &Path,
+    dst_prefix: &Path,
+    emitted_mod_rs: &str,
+    manifest: &mut BTreeMap<PathBuf, String>,
+) -> Result<(), CliError> {
+    for name in declared_modules(emitted_mod_rs) {
+        let file = runtime_dir.join(format!("{name}.rs"));
+        let dir = runtime_dir.join(&name);
+        if dir.is_dir() {
+            collect_dir_text(&dir, &dst_prefix.join(&name), manifest)?;
+        } else if file.is_file() {
+            let text = fs::read_to_string(&file).map_err(|e| io_err(&file, e))?;
+            manifest.insert(dst_prefix.join(format!("{name}.rs")), text);
+        }
+        // A `pub mod X;` with neither `X.rs` nor `X/` on disk is an inline
+        // module (a `pub mod web { pub mod route; }` block) — it has no separate
+        // source file to vendor, so there is nothing to copy for it here.
+    }
+    Ok(())
+}
+
+/// The module names a runtime `mod.rs` declares with `pub mod X;` / `mod X;`.
+///
+/// A parse-free line scan sufficient for the emitted `mod.rs`, whose module
+/// declarations are one-per-line `pub mod <name>;` with no attributes, braces,
+/// or trailing content. A declaration that opens an inline module body (`pub
+/// mod web {`) is deliberately excluded — it has no separate source file — by
+/// requiring the statement to end in `;`.
+pub(crate) fn declared_modules(mod_rs: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for line in mod_rs.lines() {
+        let line = line.trim();
+        let rest = line
+            .strip_prefix("pub mod ")
+            .or_else(|| line.strip_prefix("mod "));
+        if let Some(rest) = rest
+            && let Some(name) = rest.strip_suffix(';')
+            && !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            names.insert(name.to_owned());
+        }
+    }
+    names
+}
+
+/// Recursively read every file under `src_dir` as UTF-8 text, inserting
+/// `(dst_prefix.join(rel), contents)` into `manifest`.
+pub(crate) fn collect_dir_text(
+    src_dir: &Path,
+    dst_prefix: &Path,
+    manifest: &mut BTreeMap<PathBuf, String>,
+) -> Result<(), CliError> {
+    let entries = fs::read_dir(src_dir).map_err(|e| io_err(src_dir, e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| io_err(src_dir, e))?;
+        let from = entry.path();
+        let dst = dst_prefix.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|e| io_err(&from, e))?;
+        if file_type.is_dir() {
+            collect_dir_text(&from, &dst, manifest)?;
+        } else {
+            let text = fs::read_to_string(&from).map_err(|e| io_err(&from, e))?;
+            manifest.insert(dst, text);
+        }
+    }
+    Ok(())
+}
+
+/// Reconcile `out_dir` against `manifest`: write only files whose content
+/// differs from what is already on disk (content-gated — H8, avoids spurious
+/// `cargo` rebuilds from an identical-byte rewrite bumping mtime) via
+/// [`write_atomic`]'s existing tmp-then-rename, then DELETE every file under
+/// `out_dir/src` that is NOT a manifest key (manifest-driven prune — H7,
+/// makes an orphaned/stale `.rs` left over from a deleted module or a
+/// runtime-tree removal structurally impossible: `manifest` is authoritative).
+///
+/// Scope discipline: the prune walk is confined to `out_dir/src` and never
+/// touches the project root — `Cargo.lock`, a `target/` build-cache
+/// directory, or any other file `cargo` itself manages there must never be
+/// touched by this pass.
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure.
+pub(crate) fn reconcile_emitted_project(
+    manifest: &BTreeMap<PathBuf, String>,
+    out_dir: &Path,
+) -> Result<(), CliError> {
+    for (rel, contents) in manifest {
+        let path = out_dir.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
+        }
+        write_if_changed(&path, contents)?;
+    }
+    prune_orphaned_files(&out_dir.join("src"), manifest, out_dir)
+}
+
+/// Write `contents` to `path` only when the existing content differs (or the
+/// file is absent) — the content-gate `write_atomic` alone does not provide
+/// (it always writes). Delegating the actual write to [`write_atomic`] reuses
+/// its established tmp-then-rename + cleanup-on-failure behaviour rather than
+/// a second, parallel atomic-write implementation.
+pub(crate) fn write_if_changed(path: &Path, contents: &str) -> Result<(), CliError> {
+    if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
+        return Ok(());
+    }
+    write_atomic(path, contents)
+}
+
+/// Delete every FILE under `dir` whose path relative to `out_dir` is not a
+/// key of `manifest`. Recurses into subdirectories but never removes a
+/// directory itself (leaving empty directories behind is harmless — `cargo`
+/// does not care — and staying file-only keeps this pass's blast radius
+/// minimal).
+pub(crate) fn prune_orphaned_files(
+    dir: &Path,
+    manifest: &BTreeMap<PathBuf, String>,
+    out_dir: &Path,
+) -> Result<(), CliError> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    // A directory that vanishes between the `is_dir()` check above and this
+    // read (a concurrent external cleanup — see `write_atomic`'s doc for the
+    // shared-scratch-directory scenario this guards) trivially has nothing
+    // left to prune; treat `NotFound` as success rather than failing the
+    // whole build over a race that already resolved itself.
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(io_err(dir, e)),
+    };
+    for entry in entries {
+        // Likewise: a file this same walk is iterating over can disappear
+        // mid-loop (a sibling process finished its OWN rebuild and deleted
+        // its temp state). Skip rather than fail — there is nothing left to
+        // prune at a path that no longer exists.
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io_err(dir, e)),
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io_err(&path, e)),
+        };
+        if file_type.is_dir() {
+            prune_orphaned_files(&path, manifest, out_dir)?;
+        } else {
+            // `path` was built from `dir`, itself built from `out_dir` by
+            // construction (the initial call passes `out_dir.join("src")`,
+            // and every recursive call passes a child of that) — the
+            // `strip_prefix` can only fail if `out_dir` itself is relative
+            // and the working directory changed mid-walk; skip rather than
+            // fail the whole build over a diagnostic-only path label.
+            let Ok(rel) = path.strip_prefix(out_dir) else {
+                continue;
+            };
+            if !manifest.contains_key(rel)
+                && let Err(e) = fs::remove_file(&path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                // A concurrent deleter reaching `path` first (see above) is
+                // NOT a failure to prune it — the goal ("this orphan is gone")
+                // is already satisfied.
+                return Err(io_err(&path, e));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build a multi-module Ipe project rooted at `manifest_path` (`package.ipe`)
+/// into a Rust Cargo project under `out_dir`, vendoring the runtime from
+/// `runtime_dir`.
+///
+/// The build pipeline:
+/// 1. Parse `package.ipe` to locate the source root.
+/// 2. Discover every `*.ipe` file under `src/`.
+/// 3. Scan each file for `import` declarations (token-level lexer scan) to
+///    build the import graph.
+/// 4. Topological sort — fail closed on a cycle (IPE-N0021).
+/// 5. Canonicalise each module in dep-first order (IPE-N0020 / N0022 / N0023 /
+///    N0024 / N0025 gate).
+/// 6. Link (merge) all canonical modules into one.
+/// 7. Infer → lower → emit as a single-module program (byte-identical to the
+///    single-file pipeline on the entry module).
+///
+/// # Errors
+/// [`CliError::Io`] on any filesystem failure.
+/// [`CliError::Pipeline`] carrying the first compiler diagnostic.
+pub fn build_project(
+    manifest_path: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+) -> Result<(), CliError> {
+    build_project_with_options(
+        manifest_path,
+        out_dir,
+        runtime_dir,
+        BuildOptions::from_env(),
+    )
+}
+
+/// [`build_project`] with explicit [`BuildOptions`] (the static-plan-aware
+/// variant).
+///
+/// # Errors
+/// As [`build_project`], plus [`CliError::StaticRefusal`] when the emitted
+/// app shape cannot be static.
+// `options` is reconstructed (struct-update syntax) with the parsed
+// manifest's `[wasm] publicEnv` allowlist before threading onward — a
+// genuine consuming use clippy's by-value heuristic doesn't credit; taking
+// `&BuildOptions` here would ripple a lifetime through every call site for
+// no benefit (every caller already owns a fresh `BuildOptions`).
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_project_with_options(
+    manifest_path: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<(), CliError> {
+    let manifest = project::parse_manifest(manifest_path)?;
+    let discovered = project::discover_modules(&manifest.src_root)?;
+
+    // For each module, read its source and extract imports.
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    for m in &discovered {
+        let src =
+            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)?;
+        sources.insert(m.module_path.clone(), (m.path.clone(), src));
+    }
+
+    // A library package (declares `exposedModules`, has no runnable entry —
+    // neither a `programs` stage nor a `src/Main.ipe`) has nothing to emit. Refuse
+    // with a clean, honest message directing the author to `ipe type-check`
+    // (which analyses the public surface) rather than the internal
+    // missing-entry error a bogus `["Main"]` entry would raise downstream.
+    let entry_path = manifest.resolved_entry()?;
+    if manifest.default_program().is_none()
+        && !manifest.exposed_modules.is_empty()
+        && !sources.contains_key(&entry_path)
+    {
+        return Err(CliError::Usage(
+            "this is a library package (it declares `exposedModules` and no runnable program) — \
+             there is no entry to build. Use `ipe type-check` to verify its public surface, or \
+             add a `Package.programs [ … ]` stage to declare a runnable entry",
+        ));
+    }
+    // The emit epilogue's fixed `fn main` calls `ipe_main`, which the backend
+    // names only for a `main` in module `Main`. A `programs`-declared entry in a
+    // non-`Main` module type-checks (analysis honours the declared entry) but the
+    // emit's main-symbol naming does not yet thread through a per-program entry,
+    // so emitting a non-`Main` program entry would miscompile. Refuse cleanly and
+    // point at the working analysis path rather than emit a broken crate.
+    if entry_path != ["Main".to_owned()] {
+        return Err(CliError::UsageOwned(format!(
+            "program entry module `{}` is not yet buildable — a declared `programs` entry outside \
+             module `Main` type-checks (`ipe type-check`) but native emission still assumes a \
+             `Main` entry. Name the entry file `Main.ipe`, or track the multi-program emit \
+             follow-up",
+            entry_path.join(".")
+        )));
+    }
+
+    // Fold in the manifest-derived fields: `[wasm] publicEnv`, hydrate mode,
+    // and the project name (sanitized to a valid Cargo package name). The
+    // caller's `options` carries no manifest-derived data — it is built before
+    // the manifest is parsed — so these three fields are completed here, the
+    // same way `manifest.driver` bypasses `options` as its own positional arg.
+    // The webview window is a manifest-derived HOST setting: read the
+    // `delivery.desktop` block only for a webview-native (`web desktop`) build.
+    let webview_window = options.webview_host.then(|| {
+        let d = &manifest.delivery.desktop;
+        ipe_backend_rust::WebViewWindow {
+            title: d.title.clone(),
+            width: i64::from(d.width),
+            height: i64::from(d.height),
+        }
+    });
+    let options = BuildOptions {
+        wasm_public_env: manifest.wasm.public_env.clone(),
+        wasm_hydrate_mode: manifest.wasm.mode.as_deref() == Some("hydrate"),
+        cargo_name: ipe_backend_rust::sanitize_cargo_name(&manifest.name),
+        webview_window,
+        ..options
+    };
+
+    // The manifest is the blame location for an import cycle (no single file
+    // owns it); post-link errors are blamed on the entry file inside the core.
+    compile_modules(
+        sources,
+        discovered,
+        &entry_path,
+        out_dir,
+        runtime_dir,
+        manifest_path,
+        manifest.driver,
+        options,
+    )
+}
+
+/// Locate the Ipê runtime module tree (`src/runtime/rust/src/`).
+///
+/// Resolution order:
+/// 1. `$IPE_RUNTIME_DIR` — explicit override, allows pointing at any tree.
+/// 2. Upward walk from the current directory, checking in order:
+///    - `src/runtime/rust/src/ipe_runtime` (the in-repo copy — found immediately when
+///      running from anywhere inside the ipe-lang workspace)
+///    - `ipe/runtime-rust/src/ipe_runtime` (sibling ipe checkout — legacy)
+///    - `runtime-rust/src/ipe_runtime` (legacy sibling path)
+///
+/// # Errors
+/// Returns [`CliError::RuntimeNotFound`] when no candidate directory exists, or
+/// [`CliError::Io`] if the current directory cannot be read.
+pub fn resolve_runtime() -> Result<PathBuf, CliError> {
+    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+        let path = PathBuf::from(dir);
+        if path.is_dir() {
+            return Ok(path);
+        }
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| io_err(Path::new("."), e))?;
+    let mut here: Option<&Path> = Some(cwd.as_path());
+    while let Some(dir) = here {
+        for candidate in [
+            // In-repo runtime (ipe-lang monorepo): found when CWD is anywhere
+            // inside the workspace.
+            dir.join("src").join("runtime").join("rust").join("src"),
+            // Legacy: sibling `ipe` checkout.
+            dir.join("ipe")
+                .join("runtime-rust")
+                .join("src")
+                .join("ipe_runtime"),
+            // Legacy: sibling `runtime-rust` directory.
+            dir.join("runtime-rust").join("src").join("ipe_runtime"),
+        ] {
+            if candidate.is_dir() {
+                return Ok(candidate);
+            }
+        }
+        here = dir.parent();
+    }
+    Err(CliError::RuntimeNotFound)
+}
+
+/// Resolve the vendored runtime MODULE tree the emit copies into the project,
+/// but only when that emit shape actually needs it.
+///
+/// The dependency-model native emit (the default) carries no vendored
+/// `src/ipe_runtime/` tree — it names the runtime as a path dependency, resolved
+/// separately by [`runtime_embed::resolve`] — so requiring a vendored tree up
+/// front would fail a perfectly valid build run outside a repo checkout. The
+/// vendored tree is needed only when the vendored shape is emitted: the wasm
+/// target (which still vendors) or a build with the dependency model turned off.
+///
+/// `cli_override` is the explicit `--runtime <dir>` value, honoured verbatim when
+/// present. When the vendored tree is not needed, an empty sentinel path is
+/// returned; the dep-model native emit never reads it.
+///
+/// # Errors
+/// [`CliError::RuntimeNotFound`] / [`CliError::Io`] from [`resolve_runtime`] when
+/// a vendored tree is required but cannot be located.
+pub(crate) fn resolve_vendored_runtime_dir(
+    cli_override: Option<String>,
+    needs_vendored: bool,
+) -> Result<PathBuf, CliError> {
+    match cli_override {
+        Some(r) => Ok(PathBuf::from(r)),
+        None if needs_vendored => resolve_runtime(),
+        None => Ok(PathBuf::new()),
+    }
+}
