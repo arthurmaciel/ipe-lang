@@ -30,7 +30,7 @@ jobs:
     steps:
       - name: Promote iff every required check is green on development HEAD
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PROMOTE_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
