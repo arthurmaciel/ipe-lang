@@ -101,16 +101,20 @@ fn bug(where_: &'static str, detail: impl Into<String>) -> Diagnostic {
 ///    every byte is `[a-z0-9-]`, none of it copied verbatim from source. An
 ///    attacker who controls the path string cannot steer the tag to an
 ///    arbitrary `customElements.define` name.
-/// 2. **Content-addressed + collision-free across distinct widgets.** A widget
-///    is one-to-one with its hook file, so hashing the file's in-project path
-///    yields a stable, per-widget-distinct identity. (WP5 folds the file's
-///    content hash into SRI serving; the tag identity itself is stable across
-///    that addition.)
+/// 2. **Content-addressed + stable per path.** A widget is one-to-one with its
+///    hook file, so hashing the file's in-project path yields a stable identity
+///    that two view nodes of one widget agree on. (WP5 folds the file's content
+///    hash into SRI serving; the tag identity itself is stable across that
+///    addition.)
 ///
 /// A plain FNV-1a-64 digest is used, not a cryptographic hash: the tag is an
 /// opaque identifier, not a security primitive — its safety comes from property
 /// 1 (no user input), not from collision resistance. Keeping it dependency-free
-/// avoids pulling a crypto crate into the lowerer.
+/// avoids pulling a crypto crate into the lowerer. FNV-1a-64 is NOT
+/// collision-free, so the manifest builder in `ipe-cli` must NOT assume distinct
+/// paths yield distinct tags: it fails the build closed when two distinct hook
+/// paths hash to one tag, rather than silently serving one widget's code under
+/// the other's element name.
 #[must_use]
 pub fn custom_element_tag(cleaned_path: &str) -> String {
     // FNV-1a-64 over the UTF-8 bytes of the sealed path.
