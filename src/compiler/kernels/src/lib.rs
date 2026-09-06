@@ -11110,7 +11110,6 @@ impl StdlibKernel {
         None
     }
 
-    /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
     /// A development-only escape hatch (the `Ipe.Debug` family). Rejected in a
     /// PRODUCTION build (`ipe release`, IPE-L0140) rather than
     /// silently stripped or shipped. The single SSOT for "which kernels are
@@ -11120,7 +11119,8 @@ impl StdlibKernel {
         matches!(self, Self::DebugLog | Self::DebugTodo | Self::DebugExplain)
     }
 
-    /// `Time.every`) subsystem, including reserved pub/sub variants.
+    /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` / `Time.every`)
+    /// subsystem, including reserved pub/sub variants.
     #[must_use]
     pub const fn is_tea(self) -> bool {
         matches!(
