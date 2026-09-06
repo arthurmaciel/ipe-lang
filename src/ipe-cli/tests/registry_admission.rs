@@ -419,14 +419,14 @@ fn publish_dry_run_computes_a_correct_entry_offline() {
     std::fs::create_dir_all(pkg.join("src")).expect("src");
     std::fs::write(
         pkg.join("package.ipe"),
-        "module Pkg exposing (value)\n\nvalue : Int\nvalue = 42\n",
+        "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\npackage : Package\npackage =\n    { name = \"pkg\"\n    , version = \"1.0.0\"\n    }\n",
     )
     .expect("package.ipe");
     std::fs::write(
-        pkg.join("ipe.toml"),
-        "name = \"pkg\"\nversion = \"1.0.0\"\n",
+        pkg.join("src").join("Main.ipe"),
+        "module Main exposing (main)\n\nimport Ipe.Io as Io\n\n\nmain =\n    Io.println \"pkg\"\n",
     )
-    .expect("manifest");
+    .expect("Main.ipe");
     git(&pkg, &["init", "--quiet"]);
     git(&pkg, &["add", "."]);
     git(&pkg, &["commit", "--quiet", "-m", "seed"]);

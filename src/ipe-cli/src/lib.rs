@@ -10003,7 +10003,7 @@ pub mod web {
                 "1.0.0",
                 "https://x.invalid/mylib",
                 "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                "00",
+                "0000000000000000000000000000000000000000000000000000000000000000",
             )],
         );
         write_entry(
@@ -10013,7 +10013,7 @@ pub mod web {
                 "1.0.0",
                 "https://x.invalid/mylib",
                 "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                "00",
+                "0000000000000000000000000000000000000000000000000000000000000000",
             )],
         );
         let args: Vec<String> = [
@@ -10046,8 +10046,8 @@ pub mod web {
     fn audit_entry_rejects_rewriting_a_published_version() {
         let submitted_root = temp_dir_unique("ae-immutable-sub");
         let baseline_root = temp_dir_unique("ae-immutable-idx");
-        // Baseline published 1.0.0 with sha "00"; the submission keeps the same
-        // version number but rewrites its sha256 to "11".
+        // The baseline publishes 1.0.0 with one content hash; the submission
+        // keeps the same version number but rewrites its sha256 to another.
         write_entry(
             &baseline_root,
             "mylib",
@@ -10055,7 +10055,7 @@ pub mod web {
                 "1.0.0",
                 "https://x.invalid/mylib",
                 "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                "00",
+                "0000000000000000000000000000000000000000000000000000000000000000",
             )],
         );
         write_entry(
@@ -10065,7 +10065,7 @@ pub mod web {
                 "1.0.0",
                 "https://x.invalid/mylib",
                 "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                "11",
+                "1111111111111111111111111111111111111111111111111111111111111111",
             )],
         );
         let args: Vec<String> = [
@@ -10122,14 +10122,17 @@ pub mod web {
             .expect("git rev-parse");
         let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_owned();
 
-        // Write an entry that points at this repo but with a deliberately wrong sha256.
+        // Write an entry that points at this repo but with a deliberately wrong
+        // sha256. It is well-formed (64 lowercase-hex chars) so it clears the
+        // parse gate and reaches the content-hash verification, which must then
+        // reject it as a mismatch.
         let entry_root = temp_dir_unique("ae-mismatch-entry");
         let pkgs = entry_root.join("packages");
         std::fs::create_dir_all(&pkgs).expect("packages dir");
         let entry_text = format!(
             "name = \"testlib\"\npublisher = \"tester\"\n\n[[version]]\n\
              version = \"1.0.0\"\nsource = \"{}\"\nrev = \"{rev}\"\n\
-             sha256 = \"000000000000000000000000000000000000000000000000000000000000wrong\"\n\
+             sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
              capabilities = []\n",
             repo.display()
         );

@@ -503,16 +503,20 @@ pub fn validate_entry_file(path: &Path) -> Result<IndexEntry, CliError> {
     parse_entry(name, &text)
 }
 
-/// The per-entry version ceiling enforced at admission. A real package accrues
-/// versions across many reviewed PRs; one submission listing more than this is a
-/// resource / review-flooding vector, refused fail-closed.
+/// The per-entry version ceiling enforced at admission.
+///
+/// A real package accrues versions across many reviewed PRs; one submission
+/// listing more than this is a resource / review-flooding vector, refused
+/// fail-closed.
 pub const MAX_ENTRY_VERSIONS: usize = 1024;
 
-/// The structural admission checks that need no fetch: version-count ceiling,
-/// per-version immutability against the baseline, and source continuity
-/// (anti-squat). A pure function of the submitted entry and the previously
-/// published `baseline` (if any), so the whole deny/accept surface is testable
-/// without a network, a git fetch, or a build.
+/// The structural admission checks that need no fetch.
+///
+/// Covers the version-count ceiling, per-version immutability against the
+/// baseline, and source continuity (anti-squat). A pure function of the
+/// submitted entry and the previously published `baseline` (if any), so the
+/// whole deny/accept surface is testable without a network, a git fetch, or a
+/// build.
 ///
 /// Fail-closed and deny-by-default:
 /// - **Version ceiling** — more than [`MAX_ENTRY_VERSIONS`] versions is refused.
