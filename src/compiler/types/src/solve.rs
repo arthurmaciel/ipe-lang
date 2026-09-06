@@ -16,9 +16,10 @@ use crate::ty::Content;
 use crate::unify::unify;
 use crate::unionfind::{UnionFind, VarId};
 
-/// Default cap on solver steps before bailing — matches the reference compiler
-/// `defaultSolverBudget`. Ordinary programs consume well under a thousand
-/// steps; the cap exists purely to bound adversarial blow-up.
+/// Default cap on solver steps before bailing.
+///
+/// Ordinary programs consume well under a thousand steps; the cap exists purely
+/// to bound adversarial blow-up.
 pub const DEFAULT_SOLVER_BUDGET: u64 = 5_000_000;
 
 /// Environment variable that overrides [`DEFAULT_SOLVER_BUDGET`].
