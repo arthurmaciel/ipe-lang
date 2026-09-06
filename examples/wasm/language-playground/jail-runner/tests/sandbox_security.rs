@@ -46,17 +46,14 @@ fn jail_or_skip(test: &str) -> Option<std::path::PathBuf> {
     // having verified nothing. A missing jail primitive here is a hard failure,
     // not a skip. Locally, without the flag, skipping stays a dev convenience.
     let require = std::env::var("IPE_PLAYGROUND_E2E").is_ok();
-    let bwrap = match ipe_sandbox::probe().bwrap {
-        Some(b) => b,
-        None => {
-            assert!(
-                !require,
-                "{test}: IPE_PLAYGROUND_E2E=1 but bwrap is absent — refusing to \
-                 skip a required jail proof (the sandbox was never exercised)"
-            );
-            eprintln!("{test}: SKIP — bwrap absent on this host");
-            return None;
-        }
+    let Some(bwrap) = ipe_sandbox::probe().bwrap else {
+        assert!(
+            !require,
+            "{test}: IPE_PLAYGROUND_E2E=1 but bwrap is absent — refusing to \
+             skip a required jail proof (the sandbox was never exercised)"
+        );
+        eprintln!("{test}: SKIP — bwrap absent on this host");
+        return None;
     };
     if !netns_jail_available(&bwrap) {
         assert!(
