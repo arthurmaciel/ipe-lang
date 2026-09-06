@@ -1104,6 +1104,48 @@ mod tests {
     }
 
     #[test]
+    fn a_crate_root_alias_reaching_subprocess_refuses_exactly_as_the_unaliased_form() {
+        // `use std as s; s::process::Command::new(...)` reaches the subprocess
+        // surface through the aliased crate root: `s::process` matches no path
+        // rule, so absent the crate-root guard the scan would admit a hidden
+        // Subprocess capability. The alias declaration itself must refuse, and it
+        // must do so identically to the un-aliased `std::process` form.
+        let aliased = scan_source(
+            "lib.rs",
+            "use std as s; pub fn f() { s::process::Command::new(\"sh\").spawn().ok(); }",
+        );
+        assert!(
+            aliased.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "aliasing the crate root to reach subprocess must refuse: {:?}",
+            aliased.opacities
+        );
+        assert!(
+            aliased.must_refuse(),
+            "the aliased subprocess reach must force a refuse"
+        );
+
+        let unaliased = scan_source(
+            "lib.rs",
+            "pub fn f() { std::process::Command::new(\"sh\").spawn().ok(); }",
+        );
+        assert!(
+            unaliased.must_refuse(),
+            "the un-aliased subprocess reach must also refuse"
+        );
+        assert!(
+            unaliased.proposed.contains(&Capability::Subprocess),
+            "the un-aliased form proposes Subprocess: {:?}",
+            caps(&unaliased)
+        );
+    }
+
+    #[test]
     fn a_crate_root_alias_of_core_is_an_unenumerable_module() {
         let src = "use core as c; pub fn f() -> c::cmp::Ordering { c::cmp::Ordering::Less }";
         let o = scan_source("lib.rs", src);
