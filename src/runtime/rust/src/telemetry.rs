@@ -156,8 +156,13 @@ pub fn spans_json(limit: usize) -> String {
     format!("[{}]", items.join(","))
 }
 
-/// Production gate ( `productionFromEnv`): `ENV` then `IPE_ENV`; unset OR a
-/// dev marker (`dev`/`development`/`local`) → dev (false); anything else → true.
+/// Production gate: `ENV` then `IPE_ENV` selects the posture. An explicit dev
+/// marker (`dev`/`development`/`local`) is dev; any other explicit value is
+/// production. With neither variable set, the build profile decides: a release
+/// binary is production, a debug binary is dev. This keys every dev-open gate
+/// (unauthenticated console, token-less ingest, SSRF deny-private, non-Secure
+/// cookies) off a signal that fails closed for a released binary deployed
+/// without env vars.
 #[must_use]
 pub fn production_from_env() -> bool {
     let mut e = crate::system::read_env_var("ENV")
@@ -169,7 +174,7 @@ pub fn production_from_env() -> bool {
             .to_ascii_lowercase();
     }
     if e.is_empty() {
-        return false;
+        return !cfg!(debug_assertions);
     }
     !matches!(e.as_str(), "dev" | "development" | "local")
 }

@@ -138,9 +138,20 @@ pub fn scan_identifier_words(src: &str) -> Option<std::collections::BTreeSet<Str
     for tok in &toks {
         match &tok.kind {
             lexer::Tok::Ident(text) => {
-                words.insert(text.clone());
-                for segment in text.split('.') {
-                    words.insert(segment.to_owned());
+                // Guard each insert with a membership check: repeated identifiers
+                // (the common case) then allocate nothing, since `to_owned` is
+                // only paid for a word the set does not already hold.
+                if !words.contains(text.as_str()) {
+                    words.insert(text.clone());
+                }
+                // An undotted identifier's only segment equals `text`, which is
+                // already inserted above; skip the split entirely for it.
+                if text.contains('.') {
+                    for segment in text.split('.') {
+                        if !words.contains(segment) {
+                            words.insert(segment.to_owned());
+                        }
+                    }
                 }
             }
             lexer::Tok::TripleStr { raw, .. } => {

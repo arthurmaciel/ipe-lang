@@ -385,11 +385,12 @@ pub fn install_web(settings: Vec<Setting>) {
 }
 
 /// Resolve the host-bind address string, applying the one precedence:
-/// `IPE_HTTP_BIND` (env) > the installed `Host.bind` setting > the build-profile
-/// fallback. The fallback is loopback in a debug build and all-interfaces in a
-/// release build; an `EnvDriven` in-code setting defers to that same fallback.
-/// The conservative default absent any signal is loopback, so a dev console is
-/// never reachable off-box by accident.
+/// `IPE_HTTP_BIND` (env) > the installed `Host.bind` setting > the default
+/// fallback. The default is loopback unless production is explicitly declared
+/// (`ENV`/`IPE_ENV`), so a server is never reachable off-box by accident; an
+/// `EnvDriven` in-code setting defers to that same fallback. Binding all
+/// interfaces requires either an explicit `Host.bind AllInterfaces` setting, an
+/// explicit `IPE_HTTP_BIND`, or a declared-production posture.
 #[must_use]
 pub fn resolve_host_bind() -> String {
     // Env override wins unconditionally (a non-blank value).
@@ -399,17 +400,17 @@ pub fn resolve_host_bind() -> String {
             return trimmed.to_owned();
         }
     }
-    let profile_default = || {
-        if cfg!(debug_assertions) {
-            "127.0.0.1".to_owned()
-        } else {
+    let default_bind = || {
+        if crate::telemetry::production_from_env() {
             "0.0.0.0".to_owned()
+        } else {
+            "127.0.0.1".to_owned()
         }
     };
     match INSTALLED.get().and_then(|c| c.host_bind) {
         Some(HostMode::Loopback) => "127.0.0.1".to_owned(),
         Some(HostMode::AllInterfaces) => "0.0.0.0".to_owned(),
-        Some(HostMode::EnvDriven) | None => profile_default(),
+        Some(HostMode::EnvDriven) | None => default_bind(),
     }
 }
 

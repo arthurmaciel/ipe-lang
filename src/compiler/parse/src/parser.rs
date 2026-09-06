@@ -78,10 +78,14 @@ enum Decl {
 /// silently dropped.
 struct Annotation {
     name: Symbol,
-    ty: Located<TypeAnnotation>,
+    /// The span of the annotation line, retained for the orphan diagnostic
+    /// after `ty` is moved into a matching value binding.
+    span: Span,
+    /// The annotation type; `take`n into the matching value binding. `None`
+    /// once claimed, which marks the annotation consumed.
+    ty: Option<Located<TypeAnnotation>>,
+    /// The preceding doc-string; `take`n into the matching value binding.
     doc: Option<DocString>,
-    /// Set once a value binding of the same name claims this annotation.
-    consumed: bool,
 }
 
 /// Map a concrete lexer token to its payload-free [`TokenKind`] category — the
@@ -297,25 +301,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Require a closing `)`. The primary span points where the `)` was
-    /// expected; `opener` is carried as the secondary span (IPE-P0050).
-    fn close_paren(&mut self, opener: Span, construct: Construct) -> DResult<()> {
-        match self.peek() {
-            Some(t) if t.kind == Tok::RParen => {
-                self.bump(construct)?;
-                Ok(())
-            }
-            Some(t) => Err(Diagnostic::Parse {
-                span: t.span,
-                msg: ParseError::UnclosedDelimiter { opener },
-            }),
-            None => Err(Diagnostic::Parse {
-                span: self.eof_err_span(),
-                msg: ParseError::UnclosedDelimiter { opener },
-            }),
-        }
-    }
-
     fn intern(&mut self, s: &str) -> DResult<Symbol> {
         self.interner.intern(s)
     }
@@ -416,11 +401,16 @@ impl<'a> Parser<'a> {
     /// than silently dropped, so a typo like `nmae : Int` cannot discard the
     /// author's stated type.
     fn assemble(&self, decls: Vec<Decl>) -> DResult<AssembledDecls> {
+        use std::collections::BTreeMap;
         let mut unions = Vec::new();
         let mut aliases = Vec::new();
         let mut foreigns = Vec::new();
-        // One annotation slot per name; `consumed` flips when a value binds it.
+        // Insertion-ordered annotation slots plus a name→index map for O(log n)
+        // duplicate detection and value lookup. The `ty`/`doc` of a claimed
+        // annotation are `take`n (not cloned) into its value binding; a slot
+        // whose `ty` is still `Some` after all values are processed is an orphan.
         let mut annotations: Vec<Annotation> = Vec::new();
+        let mut by_name: BTreeMap<Symbol, usize> = BTreeMap::new();
         let mut values = Vec::new();
         for d in decls {
             match d {
@@ -428,14 +418,15 @@ impl<'a> Parser<'a> {
                 Decl::Alias(a) => aliases.push(a),
                 Decl::Foreign(f) => foreigns.push(f),
                 Decl::Annotation(name, ty, doc) => {
-                    if annotations.iter().any(|a| a.name == name) {
+                    if by_name.contains_key(&name) {
                         return Err(Self::duplicate_annotation(ty.span, self.symbol_text(name)));
                     }
+                    by_name.insert(name, annotations.len());
                     annotations.push(Annotation {
                         name,
-                        ty,
+                        span: ty.span,
+                        ty: Some(ty),
                         doc,
-                        consumed: false,
                     });
                 }
                 Decl::Value {
@@ -444,16 +435,17 @@ impl<'a> Parser<'a> {
                     body,
                     doc,
                 } => {
-                    let matched = annotations.iter_mut().find(|a| a.name == name.value);
-                    let type_annotation = matched.as_ref().map(|a| a.ty.clone());
+                    let matched = by_name
+                        .get(&name.value)
+                        .and_then(|&i| annotations.get_mut(i));
+                    let (type_annotation, ann_doc) = match matched {
+                        Some(a) => (a.ty.take(), a.doc.take()),
+                        None => (None, None),
+                    };
                     // When the value has no inline doc but a preceding
                     // annotation carried one (the `{-| … -}\nname : T\nname
                     // = …` pattern), inherit the annotation's doc.
-                    let effective_doc =
-                        doc.or_else(|| matched.as_ref().and_then(|a| a.doc.clone()));
-                    if let Some(a) = matched {
-                        a.consumed = true;
-                    }
+                    let effective_doc = doc.or(ann_doc);
                     let span = name.span;
                     values.push(Located::new(
                         span,
@@ -468,9 +460,9 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        if let Some(orphan) = annotations.iter().find(|a| !a.consumed) {
+        if let Some(orphan) = annotations.iter().find(|a| a.ty.is_some()) {
             return Err(Self::orphan_annotation(
-                orphan.ty.span,
+                orphan.span,
                 self.symbol_text(orphan.name),
             ));
         }
@@ -737,11 +729,12 @@ impl<'a> Parser<'a> {
     // ---- declarations -----------------------------------------------------
 
     fn parse_decl(&mut self, pre_doc: Option<DocString>) -> DResult<Decl> {
-        // A `{-| … -}` doc-comment token preceding a declaration in the token
-        // stream attaches to that declaration, regardless of any blank lines
-        // between them (the lexer emits the token on `{-|` and skips whitespace
-        // separately, so attachment is pure token order). `pre_doc` carries one
-        // the caller already consumed in the import region that turned out to
+        // A `{-| … -}` doc-comment that precedes a declaration in the token
+        // stream attaches to that declaration. Attachment is by token order
+        // alone: any blank lines between the doc-comment and the declaration are
+        // insignificant, since the lexer emits `Tok::DocComment` unconditionally
+        // and neither stage records line adjacency. `pre_doc` carries one the
+        // caller already consumed in the import region that turned out to
         // precede a declaration rather than an `import`; otherwise the
         // doc-comment is consumed here.
         let doc = if pre_doc.is_some() {
@@ -865,21 +858,12 @@ impl<'a> Parser<'a> {
 
         // Declared type parameters (lowercase identifiers), mirroring `parse_union`.
         let mut vars = Vec::new();
-        loop {
-            let var = match self.peek() {
-                Some(Token {
-                    kind: Tok::Ident(text),
-                    span,
-                    ..
-                }) if text.chars().next().is_some_and(|c| c.is_ascii_lowercase()) => {
-                    Some((text.clone(), *span))
-                }
-                _ => None,
-            };
-            let Some((text, span)) = var else { break };
-            let sym = self.intern(&text)?;
-            vars.push(Located::new(span, sym));
-            self.bump(Construct::TypeDeclaration)?;
+        while self.peek_is_lowercase_ident() {
+            let tok = self.bump(Construct::TypeDeclaration)?;
+            if let Tok::Ident(text) = tok.kind {
+                let sym = self.intern(&text)?;
+                vars.push(Located::new(tok.span, sym));
+            }
         }
 
         // The `=` before the aliased type.
@@ -928,21 +912,12 @@ impl<'a> Parser<'a> {
         let name = Located::new(name_tok.span, self.interner.intern(name_text)?);
 
         let mut vars = Vec::new();
-        loop {
-            let var = match self.peek() {
-                Some(Token {
-                    kind: Tok::Ident(text),
-                    span,
-                    ..
-                }) if text.chars().next().is_some_and(|c| c.is_ascii_lowercase()) => {
-                    Some((text.clone(), *span))
-                }
-                _ => None,
-            };
-            let Some((text, span)) = var else { break };
-            let sym = self.intern(&text)?;
-            vars.push(Located::new(span, sym));
-            self.bump(Construct::TypeDeclaration)?;
+        while self.peek_is_lowercase_ident() {
+            let tok = self.bump(Construct::TypeDeclaration)?;
+            if let Tok::Ident(text) = tok.kind {
+                let sym = self.intern(&text)?;
+                vars.push(Located::new(tok.span, sym));
+            }
         }
 
         // The `=` before the constructors.
@@ -989,11 +964,13 @@ impl<'a> Parser<'a> {
 
     /// Parse a `foreign Name = { crate = "…", kind = … }` declaration.
     ///
-    /// A type is supplied only inline, as `foreign name : T = …`; the lifted
-    /// record's `kind` field selects the shape, so the annotation is accepted
-    /// for readability but not required. A standalone `name : T` line preceding
-    /// the binding does not attach — `assemble` pairs pending annotations with
-    /// value bindings only, so that form is rejected as an orphan annotation.
+    /// A type annotation is carried only in the inline `foreign name : T = …`
+    /// form parsed here. A standalone `name : T` line preceding the binding is
+    /// not matched to a foreign declaration — `assemble` pairs annotations with
+    /// value bindings only, so a standalone annotation for a foreign name is
+    /// rejected as an orphan. The lifted record's `kind` field selects the
+    /// shape, so the inline annotation is accepted for readability but not
+    /// required.
     ///
     /// The body is parsed as a full expression at the name's column so the layout
     /// rule treats the record's continuation lines as the body, not new
@@ -1216,6 +1193,17 @@ impl<'a> Parser<'a> {
                         TypeAnnotation::TType(empty, vec![seg], Vec::new()),
                     ))
                 } else {
+                    // A lowercase-head type name is a type variable, but a
+                    // dotted one (`a.b`, or a typo like `json.Decoder`) is not:
+                    // a qualified type must have an uppercase head. Reject it
+                    // rather than mint a `TVar` whose dotted text canon would
+                    // silently quantify as a free variable.
+                    if text.contains('.') {
+                        return Err(Diagnostic::Parse {
+                            span: tok.span,
+                            msg: ParseError::ExpectedType,
+                        });
+                    }
                     let sym = self.interner.intern(text)?;
                     Ok(Located::new(tok.span, TypeAnnotation::TVar(sym)))
                 }
@@ -1477,13 +1465,20 @@ impl<'a> Parser<'a> {
             }
             self.bump(Construct::Expression)?;
             let tok = self.bump(Construct::Expression)?;
-            let Tok::Ident(text) = &tok.kind else {
+            // Validate by reference, then own the text by move — no clone.
+            if !matches!(tok.kind, Tok::Ident(_)) {
                 return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
+            }
+            let tok_span = tok.span;
+            let Tok::Ident(text) = tok.kind else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_parse::parse_atom_postfix",
+                    detail: "token kind changed after Ident check".to_owned(),
+                });
             };
             // `a.b.c` after a dot lexes as one dotted identifier; each segment
             // becomes a separate Access node with a distinct carved sub-span.
-            let text = text.clone();
-            expr = self.build_access_chain(expr, tok.span, &text)?;
+            expr = self.build_access_chain(expr, tok_span, &text)?;
         }
         Ok(expr)
     }
@@ -1828,8 +1823,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Require a closing `)`, returning its span. Like [`Self::close_paren`] but
-    /// hands back the `)`'s span so the caller can build the full bracketed span.
+    /// Require a closing `)`, returning its span so the caller can build the
+    /// full bracketed span.
     fn expect_rparen(&mut self, opener: Span, construct: Construct) -> DResult<Span> {
         match self.peek() {
             Some(t) if t.kind == Tok::RParen => {
@@ -1858,6 +1853,12 @@ impl<'a> Parser<'a> {
     ///   followed by zero or more record-field accesses — `p.x.y` becomes
     ///   `Access (Access p x) y`. A bare `p` (no dots) is just `VarLocal p`.
     ///
+    /// An upper-case head whose run continues into a lowercase segment
+    /// (`Http.defaultConfig.timeout`) is a qualified var followed by field
+    /// accesses: the qualifier is the leading uppercase segments, the value is
+    /// the first lowercase segment, and any further segments are an `Access`
+    /// chain over that `VarQual`.
+    ///
     /// `span` is the whole identifier token's span. The lexer produces one token
     /// for the dotted run, so the sub-spans of the base var and each field access
     /// are computed from the token's byte range plus the segment lengths: the base
@@ -1866,28 +1867,63 @@ impl<'a> Parser<'a> {
     /// `(module, span)` key unique, which the type-region map relies on — a shared
     /// key lets a field's result type overwrite the record type at the same key.
     fn ident_expr(&mut self, text: &str, span: Span) -> DResult<Expr_> {
-        let mut segs = text.split('.');
-        let first = segs.next().unwrap_or("");
-        let rest: Vec<&str> = segs.collect();
-        if rest.is_empty() {
+        let first = text.split('.').next().unwrap_or("");
+        if !text.contains('.') {
             return Ok(Expr_::VarLocal(self.interner.intern(first)?));
         }
         let head_upper = first.chars().next().is_some_and(|c| c.is_ascii_uppercase());
         if head_upper {
-            // Qualified: everything but the last segment is the qualifier.
-            // Slice at the last '.' instead of re-assembling the init
-            // segments through Vec + join (efficiency-audit §5 low) —
-            // `split('.')` → join of the init segments ≡ `text[..last_dot]`,
-            // and rfind at an ASCII '.' is always a char boundary (safe
-            // slice). `rest` is non-empty here, so the rfind always hits.
-            let Some(idx) = text.rfind('.') else {
-                return Ok(Expr_::VarLocal(self.interner.intern(text)?));
+            // The value ends the module qualifier at the first lowercase
+            // segment: `Http.defaultConfig` is qualifier `Http`, value
+            // `defaultConfig`; any segments past it (`…​.timeout`) are field
+            // accesses. A run of only uppercase segments (`Json.Decode.field`
+            // has its value at the first lowercase `field`, but `Foo.Bar` does
+            // not) has no accessor tail and splits at the last '.'.
+            let value_idx = text
+                .split('.')
+                .position(|s| s.chars().next().is_some_and(|c| c.is_ascii_lowercase()));
+            let Some(value_idx) = value_idx else {
+                // No lowercase segment: a plain qualified name `Module.Ctor`.
+                // Slice at the last '.' — `rfind` at an ASCII '.' is a char
+                // boundary, and `text` is dotted here so it always hits.
+                let Some(idx) = text.rfind('.') else {
+                    return Ok(Expr_::VarLocal(self.interner.intern(text)?));
+                };
+                let qualifier = text.get(..idx).unwrap_or_default();
+                let last = text.get(idx + 1..).unwrap_or_default();
+                let q = self.interner.intern(qualifier)?;
+                let name = self.interner.intern(last)?;
+                return Ok(Expr_::VarQual(q, name));
             };
-            let qualifier = text.get(..idx).unwrap_or_default();
-            let last = text.get(idx + 1..).unwrap_or_default();
+            // Byte offset where the value segment starts: the qualifier is
+            // `text[..qual_end]`, one '.' precedes the value, and the value
+            // runs to `value_end`. All boundaries are ASCII '.' so slicing is
+            // valid; a `value_idx` of 0 means there is no qualifier prefix.
+            let segments: Vec<&str> = text.split('.').collect();
+            let qual_len: usize = segments.iter().take(value_idx).map(|s| s.len() + 1).sum();
+            let value = segments.get(value_idx).copied().unwrap_or_default();
+            let value_len = value.len();
+            let qualifier = text.get(..qual_len.saturating_sub(1)).unwrap_or_default();
             let q = self.interner.intern(qualifier)?;
-            let name = self.interner.intern(last)?;
-            return Ok(Expr_::VarQual(q, name));
+            let name = self.interner.intern(value)?;
+            let qual_len_u = u32::try_from(qual_len).unwrap_or(0);
+            let value_len_u = u32::try_from(value_len).unwrap_or(0);
+            let value_lo = span.lo.saturating_add(qual_len_u);
+            let value_hi = value_lo.saturating_add(value_len_u);
+            let var_qual = Located::new(Span::new(span.lo, value_hi), Expr_::VarQual(q, name));
+            // No trailing segments → the bare qualified var.
+            if value_idx + 1 >= segments.len() {
+                return Ok(var_qual.value);
+            }
+            // Trailing lowercase segments are field accesses over the VarQual;
+            // the access text starts one byte past the value segment (skipping
+            // the '.' that follows it).
+            let access_lo = value_hi.saturating_add(1);
+            let access_start = qual_len.saturating_add(value_len).saturating_add(1);
+            let access_text = text.get(access_start..).unwrap_or_default();
+            let access_span = Span::new(access_lo, span.hi);
+            let expr = self.build_access_chain(var_qual, access_span, access_text)?;
+            return Ok(expr.value);
         }
         // Lower-case head: a local var with a chain of field accesses. Build the
         // base VarLocal for the first segment, then hand the rest to the shared
@@ -1896,10 +1932,13 @@ impl<'a> Parser<'a> {
         let base_span = Span::new(span.lo, span.lo.saturating_add(base_len));
         let base = Located::new(base_span, Expr_::VarLocal(self.interner.intern(first)?));
         // The rest segments start one byte after the base (past the first '.').
+        // The suffix slice is the identity of `split('.')`→`join('.')` on the
+        // tail, and `build_access_chain` re-splits it; '.' is ASCII so the slice
+        // boundary is valid.
         let rest_lo = span.lo.saturating_add(base_len).saturating_add(1);
-        let rest_text = rest.join(".");
+        let rest_text = text.get(first.len() + 1..).unwrap_or_default();
         let tok_span = Span::new(rest_lo, span.hi);
-        let expr = self.build_access_chain(base, tok_span, &rest_text)?;
+        let expr = self.build_access_chain(base, tok_span, rest_text)?;
         Ok(expr.value)
     }
 
@@ -2424,7 +2463,7 @@ impl<'a> Parser<'a> {
     ///
     /// Because the desugar names `Task.andThen`, the enclosing module must have
     /// `Ipe.Task` in scope as `Task` (the usual `import Ipe.Task as Task`).
-    fn parse_do(&mut self, _threshold: u32, depth: u32) -> DResult<Expr> {
+    fn parse_do(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Expression));
         }
@@ -2438,6 +2477,16 @@ impl<'a> Parser<'a> {
             });
         };
         let block_col = first.col;
+        // The first statement must be indented past the enclosing layout
+        // threshold; otherwise a statement at or before it belongs to an outer
+        // block, and consuming it would swallow following top-level
+        // declarations. Fail closed, mirroring `parse_case`'s first-branch gate.
+        if block_col <= threshold {
+            return Err(Diagnostic::Parse {
+                span: first.span,
+                msg: ParseError::Unexpected,
+            });
+        }
         let mut stmts = Vec::new();
         loop {
             stmts.push(self.parse_do_statement(block_col, depth + 1)?);
@@ -2646,8 +2695,10 @@ impl<'a> Parser<'a> {
             return Err(self.too_deep(Construct::Pattern));
         }
         let head = self.parse_pattern_atom(depth + 1)?;
-        // Only a constructor head may take sub-patterns.
-        let pat = if let Pattern_::PCtor(name, mods, _) = head.value.clone() {
+        // Only a constructor head may take sub-patterns. Peek by reference to
+        // avoid cloning the whole pattern; destructure by move only on the
+        // sub-pattern-bearing path.
+        let pat = if matches!(head.value, Pattern_::PCtor(..)) {
             let mut sub = Vec::new();
             let mut end = head.span;
             while self.peek_is_pattern_atom_start() {
@@ -2657,9 +2708,11 @@ impl<'a> Parser<'a> {
             }
             if sub.is_empty() {
                 head
-            } else {
+            } else if let Pattern_::PCtor(name, mods, _) = head.value {
                 let span = Self::span_merge(head.span, end);
                 Located::new(span, Pattern_::PCtor(name, mods, sub))
+            } else {
+                head
             }
         } else {
             head
@@ -2811,6 +2864,13 @@ impl<'a> Parser<'a> {
                         Pattern_::PCtor(name, Vec::new(), Vec::new()),
                     ))
                 } else {
+                    // A dotted lowercase name (`a.b`) is not a value binder — a
+                    // binder is a single lowercase identifier. Reject it rather
+                    // than mint a `PVar` whose interned text carries a `.`, which
+                    // would emit an illegal Rust identifier at codegen.
+                    if text.contains('.') {
+                        return Err(Self::unexpected_token(&tok, &[Expected::Identifier]));
+                    }
                     let sym = self.interner.intern(text)?;
                     Ok(Located::new(tok.span, Pattern_::PVar(sym)))
                 }
@@ -2850,8 +2910,9 @@ impl<'a> Parser<'a> {
             let span = Self::span_merge(opener, close);
             return Ok(Located::new(span, Pattern_::PTuple(elems)));
         }
-        self.close_paren(opener, Construct::Pattern)?;
-        Ok(Located::new(opener, inner.value))
+        let close = self.expect_rparen(opener, Construct::Pattern)?;
+        let span = Self::span_merge(opener, close);
+        Ok(Located::new(span, inner.value))
     }
 
     fn parse_list_pattern(&mut self, opener: Span, depth: u32) -> DResult<Pattern> {
@@ -2900,6 +2961,15 @@ impl<'a> Parser<'a> {
         matches!(
             self.peek_kind(),
             Some(&(Tok::Underscore | Tok::LParen | Tok::LBrace | Tok::Ident(_)))
+        )
+    }
+
+    /// Whether the next token is a lowercase-headed identifier — a declared type
+    /// parameter in a `type` / `type alias` header.
+    fn peek_is_lowercase_ident(&self) -> bool {
+        matches!(
+            self.peek_kind(),
+            Some(Tok::Ident(text)) if text.chars().next().is_some_and(|c| c.is_ascii_lowercase())
         )
     }
 

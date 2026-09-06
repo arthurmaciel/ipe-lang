@@ -1,4 +1,4 @@
-name: playground
+name: Playground jail
 
 # Gate: build the playground bundle (ipe-wasm) + jail-runner and run the
 # sandbox security tests so a change that breaks either fails CI.
@@ -18,7 +18,7 @@ name: playground
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, development]
   pull_request:
   merge_group:
   schedule:

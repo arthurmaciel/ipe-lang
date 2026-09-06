@@ -25,6 +25,7 @@
 //! emitted program's behaviour, so prod is byte-identical whether or not it is
 //! computed.
 
+use crate::emit_template::write_json_string;
 use ipe_ir::{EnumDef, IrType};
 
 /// The schema-tag the descriptor is baked at.
@@ -190,6 +191,12 @@ fn type_tag(ty: &IrType) -> String {
 /// A stable discriminant name for a non-scalar [`IrType`] constructor. Distinct
 /// constructors get distinct names; the same constructor gets the same name
 /// regardless of its inner types (the coarse-tag rationale above).
+///
+/// Exhaustive and wildcard-free over every [`IrType`] constructor: a new variant
+/// forces a compile-time decision here rather than collapsing onto a shared tag,
+/// so a payload retyped between two currently-distinct constructors is always
+/// detected as a change (a swallowing catch-all would report equal descriptors
+/// for two different types).
 const fn aggregate_discriminant(ty: &IrType) -> &'static str {
     match ty {
         IrType::Int | IrType::Float | IrType::Bool | IrType::Str | IrType::Char => "Scalar",
@@ -205,35 +212,74 @@ const fn aggregate_discriminant(ty: &IrType) -> &'static str {
         IrType::SharedFun(..) => "SharedFun",
         IrType::FnOnceChain(..) => "FnOnceChain",
         IrType::Generic(_) => "Var",
-        // A future `IrType` constructor collapses to one stable tag; since the
-        // descriptor only needs CHANGE detection (never full reconstruction) a
-        // catch-all is fail-closed — it can make two payloads look less equal,
-        // never spuriously equal.
-        _ => "Other",
+        IrType::RowGeneric(_) => "RowVar",
+        IrType::Dict(..) => "Dict",
+        IrType::Set(_) => "Set",
+        IrType::Bytes => "Bytes",
+        IrType::Json => "Json",
+        IrType::Decoder(_) => "Decoder",
+        IrType::Db => "Db",
+        IrType::Cmd(_) => "Cmd",
+        IrType::Sub(_) => "Sub",
+        IrType::ServerRequest => "ServerRequest",
+        IrType::ServerResponse => "ServerResponse",
+        IrType::ServerRoute => "ServerRoute",
+        IrType::ServerCookie => "ServerCookie",
+        IrType::StreamWriter => "StreamWriter",
+        IrType::HttpRequest => "HttpRequest",
+        IrType::WebSocketServer => "WebSocketServer",
+        IrType::WebSocketServerCfg => "WebSocketServerCfg",
+        IrType::Ui { .. } => "Ui",
+        IrType::UiPlain(_) => "UiPlain",
+        IrType::WebReq => "WebReq",
+        IrType::SessionHandle => "SessionHandle",
+        IrType::WebRoute(_) => "WebRoute",
+        IrType::CustomElement { .. } => "CustomElement",
+        IrType::Order => "Order",
+        IrType::BackoffStrategy => "BackoffStrategy",
+        IrType::HttpMethod => "HttpMethod",
+        IrType::Decimal => "Decimal",
+        IrType::Principal => "Principal",
+        IrType::AuthConfig => "AuthConfig",
+        IrType::TokenSource => "TokenSource",
+        IrType::ErrorKind => "ErrorKind",
+        IrType::Error => "Error",
+        IrType::ErrorDetails => "ErrorDetails",
+        IrType::ErrorInfo => "ErrorInfo",
+        IrType::PanicInfo => "PanicInfo",
+        IrType::TypeInfo => "TypeInfo",
+        IrType::SqlFragment => "SqlFragment",
+        IrType::Secret => "Secret",
+        IrType::Path => "Path",
+        IrType::Regex => "Regex",
+        IrType::ProcessRunWithCfg => "ProcessRunWithCfg",
+        IrType::ProcessRunInPtyCfg => "ProcessRunInPtyCfg",
+        IrType::CacheCfg => "CacheCfg",
+        IrType::CacheStats => "CacheStats",
+        IrType::WebSocketClientCfg => "WebSocketClientCfg",
+        IrType::CsvDoc => "CsvDoc",
+        IrType::EmailMessage => "EmailMessage",
+        IrType::EmailAttachment => "EmailAttachment",
+        IrType::EmailSesConfig => "EmailSesConfig",
+        IrType::EmailSmtpConfig => "EmailSmtpConfig",
+        IrType::EmailProvider => "EmailProvider",
+        IrType::CryptoKey => "CryptoKey",
+        IrType::CryptoMac => "CryptoMac",
+        IrType::EmailAddress => "EmailAddress",
+        IrType::Url => "Url",
+        IrType::Dsn => "Dsn",
+        IrType::Connection => "Connection",
+        IrType::ConnReadOnly => "ConnReadOnly",
+        IrType::ConnReadWrite => "ConnReadWrite",
+        IrType::Setting => "Setting",
+        IrType::ShapeWeb => "ShapeWeb",
+        IrType::ShapeWebView => "ShapeWebView",
+        IrType::ShapeTerminal => "ShapeTerminal",
+        IrType::Locale => "Locale",
+        IrType::WebApp => "WebApp",
+        IrType::TuiApp => "TuiApp",
+        IrType::CliApp => "CliApp",
     }
-}
-
-/// Append `s` as a JSON string literal matching `serde_json`'s encoding — mirrors
-/// [`crate::transition_classify`]'s writer. Total: never panics.
-fn write_json_string(s: &str, out: &mut String) {
-    use std::fmt::Write as _;
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
 }
 
 /// Append a [`CompilePayloadShape`] as the runtime `PayloadShape`'s serde form:
