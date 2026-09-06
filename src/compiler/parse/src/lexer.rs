@@ -544,10 +544,10 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 /// dispatches to [`lex_triple_string`] which terminates only on a closing
 /// `"""`. Otherwise lexes a single-line `"…"` string: escape sequences are
 /// resolved into the runtime value; an unrecognised escape is kept verbatim
-/// (backslash + char) so a typo surfaces as wrong text rather than lost data,
-/// matching the reference's `unescapeString`. A raw newline, or end of
-/// input, before the closing `"` is [`ParseError::UnterminatedString`]: a
-/// single-line string may not span lines (a multi-line body uses `"""`).
+/// (backslash + char) so a typo surfaces as wrong text rather than lost data.
+/// A raw newline, or end of input, before the closing `"` is
+/// [`ParseError::UnterminatedString`]: a single-line string may not span lines
+/// (a multi-line body uses `"""`).
 fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     lx.advance(); // consume opening `"`
 
