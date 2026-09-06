@@ -528,8 +528,9 @@ fn lex_number(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
 /// `"""`. Otherwise lexes a single-line `"…"` string: escape sequences are
 /// resolved into the runtime value; an unrecognised escape is kept verbatim
 /// (backslash + char) so a typo surfaces as wrong text rather than lost data,
-/// matching the the reference's `unescapeString`. Reaching end of input before
-/// the closing `"` is [`ParseError::UnterminatedString`].
+/// matching the the reference's `unescapeString`. A raw newline, or end of
+/// input, before the closing `"` is [`ParseError::UnterminatedString`]: a
+/// single-line string may not span lines (a multi-line body uses `"""`).
 fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     lx.advance(); // consume opening `"`
 
@@ -547,7 +548,12 @@ fn lex_string(lx: &mut Lexer, lo: u32) -> DResult<Tok> {
     let mut value = String::new();
     loop {
         match lx.peek() {
-            None => {
+            // End of input, or a raw newline: a single-line string may not span
+            // lines (a multi-line body uses `"""`). Reporting it here at the
+            // opener through the line break stops the scan from swallowing the
+            // following lines up to the next quote in the file, which would
+            // mislocate the diagnostic to end-of-file.
+            None | Some('\n' | '\r') => {
                 let hi = lx.offset();
                 return Err(Diagnostic::Parse {
                     span: Span::new(lo, hi),

@@ -1376,6 +1376,44 @@ mod tests {
     }
 
     #[test]
+    fn single_line_string_rejects_raw_newline() {
+        use ipe_diagnostics::{Diagnostic, ParseError};
+        use lexer::lex;
+        // A single-line `"…"` broken by a raw newline is rejected, and the error
+        // is located at the opening quote through the line break — it does NOT
+        // swallow the following lines up to the next quote in the file. A later
+        // valid string on a subsequent line would otherwise absorb everything
+        // in between, mislocating the diagnostic to end-of-file.
+        let src = format!("{HDR}s =\n    \"oops\nt =\n    \"fine\"\n");
+        // The whole module still fails with the unterminated-string code.
+        assert_eq!(err_code(&src), "IPE-P0014");
+        // The lexer error span opens at the `"` that begins `"oops` and closes
+        // at the newline that ends the line, never reaching the later `"fine"`.
+        let Some(opener_at) = src.find("\"oops") else {
+            return;
+        };
+        let quote_lo = u32::try_from(opener_at).unwrap_or(u32::MAX);
+        let newline_hi = u32::try_from(opener_at + "\"oops".len()).unwrap_or(u32::MAX);
+        let result = lex(&src);
+        assert!(
+            matches!(
+                &result,
+                Err(Diagnostic::Parse {
+                    msg: ParseError::UnterminatedString,
+                    ..
+                })
+            ),
+            "expected an unterminated-string parse error, got {result:?}"
+        );
+        // Span opens at the `"` that begins `"oops` and closes at the newline
+        // ending that line — never reaching the later `"fine"`.
+        if let Err(Diagnostic::Parse { span, .. }) = result {
+            assert_eq!(span.lo, quote_lo);
+            assert_eq!(span.hi, newline_hi);
+        }
+    }
+
+    #[test]
     fn malformed_char_is_p0015() {
         // Empty char literal `''`.
         assert_eq!(err_code(&format!("{HDR}c =\n    ''\n")), "IPE-P0015");
