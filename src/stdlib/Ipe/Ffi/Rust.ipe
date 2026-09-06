@@ -51,6 +51,9 @@
 module Ipe.Ffi.Rust exposing (fn, const)
 
 
+import Ipe.Debug as Debug
+
+
 -- | `fn "<crate>" "<item>"` — assert a call into a linked Rust function.
 --
 -- `"<crate>"` is the installed crate (one Rust identifier); `"<item>"` is the
@@ -68,6 +71,8 @@ module Ipe.Ffi.Rust exposing (fn, const)
 -- add` and the definition's whole body is this call under a top-level
 -- annotation; anything else fails closed.
 fn : String -> String -> a
+fn crate item =
+    Debug.todo (crate ++ item)
 
 
 -- | `const "<crate>" "<item>"` — read an infallible native constant of a bare
@@ -87,3 +92,5 @@ fn : String -> String -> a
 -- vouched-origin gates are shared with `fn`; only the accepted shape differs —
 -- applying a `const` to a value argument is refused fail-closed.
 const : String -> String -> a
+const crate item =
+    Debug.todo (crate ++ item)

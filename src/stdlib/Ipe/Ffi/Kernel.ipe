@@ -37,6 +37,9 @@
 module Ipe.Ffi.Kernel exposing (kernel)
 
 
+import Ipe.Debug as Debug
+
+
 -- | `kernel "<Name>"` — the member aliased to the registered compiler kernel
 -- named `"<Name>"`.
 --
@@ -54,3 +57,5 @@ module Ipe.Ffi.Kernel exposing (kernel)
 -- call is legal only in a driver-vouched embedded-stdlib / FFI-interface module
 -- (IPE-N0042 otherwise), so it is never an ambient capability of user code.
 kernel : String -> a
+kernel name =
+    Debug.todo name
