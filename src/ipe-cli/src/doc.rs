@@ -2249,12 +2249,12 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
         "{}",
         crate::style::status_line(
             true,
-            &format!(
+            &crate::style::TerminalSafe::sanitize(&format!(
                 "documented {} module{} to {}",
                 docs.modules.len(),
                 if docs.modules.len() == 1 { "" } else { "s" },
                 out.display()
-            ),
+            )),
             crate::style::use_color(&std::io::stdout()),
         )
     );
@@ -4355,7 +4355,9 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
         "{}",
         crate::style::status_line(
             true,
-            &format!("serving docs at {url} (read-only, loopback; Ctrl-C to stop)"),
+            &crate::style::TerminalSafe::sanitize(&format!(
+                "serving docs at {url} (read-only, loopback; Ctrl-C to stop)"
+            )),
             crate::style::use_color(&std::io::stdout()),
         )
     );
@@ -4405,10 +4407,22 @@ fn serve_one(conn: &mut std::net::TcpStream, site: &BTreeMap<String, String>) {
     };
     // Bound the size: read at most one capped request line. `take` caps the byte
     // count, so a client that never sends a newline yields a bounded buffer, not
-    // unbounded growth.
+    // unbounded growth. A line that fills the cap without a terminating newline is
+    // an over-long request: fail closed with `431` rather than act on a truncated
+    // request line.
     let mut reader = BufReader::new(clone.take(DOC_SERVE_REQUEST_LINE_CAP as u64));
     let mut request_line = String::new();
-    if reader.read_line(&mut request_line).is_err() {
+    let Ok(read) = reader.read_line(&mut request_line) else {
+        return;
+    };
+    if read >= DOC_SERVE_REQUEST_LINE_CAP && !request_line.ends_with('\n') {
+        let overflow = http_response(
+            "431 Request Header Fields Too Large",
+            "text/plain; charset=utf-8",
+            "request line too long\n",
+        );
+        let _ = conn.write_all(overflow.as_bytes());
+        let _ = conn.flush();
         return;
     }
 
@@ -5839,6 +5853,50 @@ withBaseMs = something
         assert!(
             elapsed < DOC_SERVE_READ_TIMEOUT * 3,
             "serve_one must return promptly, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn doc_serve_rejects_an_over_long_request_line_with_431() {
+        // A request line that fills the cap without a terminating newline is
+        // fail-closed: the server answers `431` and never acts on the truncated
+        // line, so an over-long line can neither be served nor grow the buffer
+        // past the cap.
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("addr");
+
+        let handle = std::thread::spawn(move || {
+            let mut site: BTreeMap<String, String> = BTreeMap::new();
+            site.insert("index.html".to_owned(), "<h1>hi</h1>".to_owned());
+            let (mut conn, _) = listener.accept().expect("accept");
+            serve_one(&mut conn, &site);
+        });
+
+        let mut client = TcpStream::connect(addr).expect("connect");
+        // Exactly the cap in bytes, no newline: the server's capped read consumes
+        // every byte sent (so the close is a clean FIN, not an RST that would
+        // discard the response) yet still sees no line terminator, which is the
+        // over-long condition. Send-then-shutdown so the read below sees the full
+        // `431` before the server closes.
+        let over_long = vec![b'a'; DOC_SERVE_REQUEST_LINE_CAP];
+        client.write_all(&over_long).expect("write over-long line");
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("shutdown write");
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).expect("read response");
+        handle.join().expect("server thread");
+
+        assert!(
+            resp.starts_with("HTTP/1.1 431 Request Header Fields Too Large"),
+            "over-long line must be rejected with 431, got: {resp}"
+        );
+        assert!(
+            !resp.contains("<h1>hi</h1>"),
+            "an over-long line must not be served a body: {resp}"
         );
     }
 }
