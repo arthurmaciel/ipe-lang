@@ -1476,14 +1476,20 @@ impl Env {
         // up the backing kernel and pick `Kernel` vs `ReservedKernel`.
         // Derived from StdlibKernel::ALL + decl() — anti-drift by construction.
         // Skip internal-only qualifiers (e.g. "_internal_").
-        for sk in StdlibKernel::ALL {
-            let decl = sk.decl();
-            if decl.qualifier.starts_with('_') {
-                continue; // e.g. "_internal_" — skip
+        {
+            // Hoist the copy-on-write out of the per-kernel loop: one refcount
+            // check yields a mutable handle reused for every insert, rather than
+            // re-checking on each of the ~1285 kernels.
+            let index = Rc::make_mut(&mut self.stdlib_index);
+            for sk in StdlibKernel::ALL {
+                let decl = sk.decl();
+                if decl.qualifier.starts_with('_') {
+                    continue; // e.g. "_internal_" — skip
+                }
+                let qual_sym = interner.intern(decl.qualifier)?;
+                let name_sym = interner.intern(decl.name)?;
+                index.insert((qual_sym, name_sym), *sk);
             }
-            let qual_sym = interner.intern(decl.qualifier)?;
-            let name_sym = interner.intern(decl.name)?;
-            Rc::make_mut(&mut self.stdlib_index).insert((qual_sym, name_sym), *sk);
         }
 
         for (qual, funcs) in QUALIFIERS {
