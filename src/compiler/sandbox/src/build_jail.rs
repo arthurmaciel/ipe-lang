@@ -706,11 +706,18 @@ fn spawn_and_decode(
 /// - **network**: withheld (`!profile.network`) ⇒ `(deny network*)` and the
 ///   low-level socket operations, so a probe socket is denied and the
 ///   `network` axis is observable. Granted ⇒ no network denial.
-/// - **filesystem**: the scratch (`scoped_tmp`) is always writable; the working
-///   tree is writable ONLY when the profile grants the filesystem axis. A
+/// - **filesystem writes**: the scratch (`scoped_tmp`) is always writable; the
+///   working tree is writable ONLY when the profile grants the filesystem axis. A
 ///   blanket `(deny file-write*)` withholds every other path, so an
 ///   out-of-scratch write under a filesystem-withholding profile is denied and
 ///   the `filesystem` axis is observable.
+/// - **filesystem reads**: denied by default (`(deny file-read*)`), then
+///   re-allowed only for the fixed system/toolchain roots the shell and compiler
+///   need, the scratch, and the working tree (the source being built). The
+///   invoking user's home is NOT in the allow set, so a network-granted build
+///   cannot read `~/.ssh` (or any home secret) to exfiltrate it — the macOS
+///   analogue of the Linux jail's `--tmpfs /home` read mask. Without this the
+///   allow-default base would leave the whole home directory readable.
 /// - **subprocess**: withheld (`!profile.subprocess`) ⇒ `(deny process-fork)`,
 ///   the NEW-process denial. Every way to create a new process
 ///   (`fork`/`vfork`/`posix_spawn`) forks under Seatbelt, so a fork denial
@@ -861,6 +868,54 @@ pub fn sbpl_from_profile(
             quote(&macos_resolved_subpath(working_tree))
         );
     }
+    s.push('\n');
+
+    // File READS are denied by default, then re-allowed only for the paths a build
+    // legitimately needs. Without this, the allow-default base leaves the whole
+    // home directory readable, so a network-granted build could read `~/.ssh` (or
+    // any secret) and exfiltrate it — the macOS analogue of the Linux jail's
+    // `--tmpfs /home` mask, which makes home unreadable inside the jail. Reads are
+    // confined to the system/toolchain trees the shell and compiler need, the
+    // always-readable scratch, and the working tree (the source being built). The
+    // invoking user's home is NOT in the allow set, so its secrets stay unreadable
+    // even when the network axis is granted. Fail-closed: a path outside the
+    // allow set is denied, never read.
+    s.push_str("(deny file-read*)\n");
+    // The fixed system/toolchain read roots. These are the OS-owned, non-secret
+    // trees the shell, its tools, and the Rust toolchain resolve at fixed paths;
+    // none live under the invoking user's home. `/private/var/db`/`/private/etc`
+    // hold the system databases (dyld cache, timezone, resolver config) the loader
+    // and libc read; user secrets are not here.
+    for root in [
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/System",
+        "/Library",
+        "/Applications",
+        "/opt",
+        "/dev",
+        "/private/etc",
+        "/private/var/db",
+        "/private/var/folders",
+    ] {
+        let _ = writeln!(s, "(allow file-read* (subpath \"{root}\"))");
+    }
+    // The scratch is always readable (the launcher writes the profile and the
+    // child's temp files there); the working tree is the source being built, so it
+    // is readable whether or not the filesystem axis grants WRITE access. Both are
+    // rendered in symlink-resolved form so the allow matches the kernel-resolved
+    // read, exactly like the write allows above.
+    let _ = writeln!(
+        s,
+        "(allow file-read* (subpath {}))",
+        quote(&macos_resolved_subpath(scoped_tmp))
+    );
+    let _ = writeln!(
+        s,
+        "(allow file-read* (subpath {}))",
+        quote(&macos_resolved_subpath(working_tree))
+    );
     s.push('\n');
 
     // Subprocess: deny NEW-process creation unless the profile grants it. On
@@ -2017,6 +2072,71 @@ mod tests {
         assert!(
             !sbpl.contains("(allow file-write* (subpath \"/private/var\"))"),
             "resolving must not blanket-allow /private/var: {sbpl}"
+        );
+    }
+
+    #[test]
+    fn sbpl_denies_file_reads_by_default_and_does_not_allow_home() {
+        // The macOS jail must confine file READS: without a `(deny file-read*)`
+        // base, the allow-default profile leaves the whole home directory readable,
+        // so a network-granted build could read `~/.ssh` and exfiltrate it. The read
+        // allow set must be the system/toolchain roots plus the scratch and working
+        // tree — never the user's home. Home stays denied even when network is
+        // granted.
+        let p = scoped(true, FilesystemScope::Isolated);
+        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"));
+        assert!(
+            sbpl.contains("(deny file-read*)"),
+            "reads must be denied by default: {sbpl}"
+        );
+        // The scratch and the source tree are readable (the build reads its source
+        // whether or not it may WRITE it).
+        assert!(
+            sbpl.contains("(allow file-read* (subpath \"/work/scratch\"))"),
+            "the scratch must be readable: {sbpl}"
+        );
+        assert!(
+            sbpl.contains("(allow file-read* (subpath \"/work/tree\"))"),
+            "the working tree must be readable: {sbpl}"
+        );
+        // The system/toolchain roots the shell and compiler need are readable.
+        for root in ["/usr", "/System", "/Library"] {
+            assert!(
+                sbpl.contains(&format!("(allow file-read* (subpath \"{root}\"))")),
+                "the system root {root} must be readable: {sbpl}"
+            );
+        }
+        // The user's home is NOT re-allowed — no read allow covers `/Users` or
+        // `/home`, so a home secret stays unreadable even with network granted.
+        assert!(
+            !sbpl.contains("(allow file-read* (subpath \"/Users\"))"),
+            "the user home must NOT be blanket-read-allowed: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(allow file-read* (subpath \"/home\"))"),
+            "the user home must NOT be blanket-read-allowed: {sbpl}"
+        );
+    }
+
+    #[test]
+    fn sbpl_read_allow_for_the_working_tree_is_independent_of_the_write_grant() {
+        // A build reads its source tree regardless of whether the filesystem axis
+        // grants WRITE access. The read allow for the working tree must therefore be
+        // present under BOTH an isolated and a read-write filesystem scope, while the
+        // WRITE allow stays gated on the grant.
+        let isolated = scoped(false, FilesystemScope::Isolated);
+        let sbpl_iso = sbpl_from_profile(
+            &isolated,
+            Path::new("/work/scratch"),
+            Path::new("/work/tree"),
+        );
+        assert!(
+            sbpl_iso.contains("(allow file-read* (subpath \"/work/tree\"))"),
+            "the source tree must be readable even when writes are withheld: {sbpl_iso}"
+        );
+        assert!(
+            !sbpl_iso.contains("(allow file-write* (subpath \"/work/tree\"))"),
+            "the working tree must NOT be writable when the axis is withheld: {sbpl_iso}"
         );
     }
 
