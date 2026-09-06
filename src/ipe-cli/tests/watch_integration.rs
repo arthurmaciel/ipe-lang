@@ -283,10 +283,13 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
     );
 
     // Recovery: fixing the source must produce a fresh green build and
-    // restart onto it.
+    // restart onto it. The recovery rebuild is a full isolated `cargo build`
+    // (no shared target, exactly like the initial cold build), so it gets the
+    // same generous cold-build budget — a tighter deadline here fails on a
+    // loaded runner's slow rebuild, not on a real regression.
     write_main(&ipe_dir, &server_fixture("v2"))?;
     assert!(
-        wait_for_body(port, "v2", Duration::from_mins(2)),
+        wait_for_body(port, "v2", Duration::from_mins(4)),
         "watch must recover once the syntax error is fixed"
     );
 

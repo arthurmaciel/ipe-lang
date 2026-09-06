@@ -160,6 +160,25 @@ pub struct HotSwap {
     pub wirings: Vec<WiringPatch>,
 }
 
+impl HotSwap {
+    /// `true` when this hot-swap carries no patch on any channel — the two emits
+    /// were byte-identical (a no-op re-emit: a whitespace-only edit, or a
+    /// duplicate filesystem event on an already-current source). An empty
+    /// hot-swap applies nothing to the running app, so it must NOT stand in for a
+    /// rebuild: the caller falls through to the normal build path instead of
+    /// short-circuiting, which is what keeps a duplicate save from cancelling an
+    /// in-flight rebuild of the same source.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.views.is_empty()
+            && self.transitions.is_empty()
+            && self.msg_sets.is_empty()
+            && self.subs.is_empty()
+            && self.inits.is_empty()
+            && self.wirings.is_empty()
+    }
+}
+
 /// The classification of a source edit, derived from the emitted-Rust diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Classification {

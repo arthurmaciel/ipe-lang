@@ -70,7 +70,7 @@ mod imp {
         E: Send + From<String> + 'static,
         Model: Clone + Send + 'static,
         Msg: Clone + Send + 'static,
-        FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
+        FInit: Fn(crate::dom::req::WebReq) -> (Model, IpeCmd<Msg>) + Send + 'static,
         FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
         FView: Fn(Model) -> Html<Msg> + Send + 'static,
         FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
@@ -199,7 +199,7 @@ mod imp {
         E: Send + From<String> + 'static,
         Model: Clone + Send + 'static,
         Msg: Clone + Send + 'static,
-        FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
+        FInit: Fn(crate::dom::req::WebReq) -> (Model, IpeCmd<Msg>) + Send + 'static,
         FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
         FView: Fn(Model) -> Html<Msg> + Send + 'static,
         FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
@@ -246,7 +246,11 @@ mod imp {
                 Err(e) => return IpeResult::Err(format!("Webview.app: window: {e}").into()),
             };
 
-            let (mut model, _cmd0) = init(());
+            // A native window has no incoming HTTP request; the app opens at its
+            // root, so `init` receives the same initial-load `WebReq` a fresh
+            // browser `GET /` reports. This is the ONE Web.app init shape across
+            // the served, WASM, and webview hosts — never a divergent `()`.
+            let (mut model, _cmd0) = init(crate::dom::req::WebReq::local_root());
             warn_dropped_cmd_if_real(&_cmd0);
             let (body0, mut index) = render::<Model, Msg, _>(&view, &model);
             let tail = format!("<script>{BRIDGE_JS}</script>");
