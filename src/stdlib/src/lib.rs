@@ -1968,8 +1968,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
 // compiled dependency.
 
 /// One documentation-only stdlib module: its dotted name and its embedded Ipê
-/// source. Shares the shape of [`CompiledStdModule`] but is never compiled or
-/// injected — it feeds `ipe doc` and the stdlib reference only.
+/// source.
+///
+/// Shares the shape of [`CompiledStdModule`] but is never compiled or injected
+/// — it feeds `ipe doc` and the stdlib reference only.
 pub struct DocOnlyModule {
     /// The dotted module name as written in an `import`, e.g. `Ipe.Ffi.Kernel`.
     pub dotted: &'static str,

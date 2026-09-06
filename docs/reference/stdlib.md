@@ -84,6 +84,8 @@ Each module listed below links to a detail page with the full documentation and 
 - [Error](#error)
 - [Ffi.Js](#ffijs)
 - [Ffi.Js.CustomElement](#ffijscustomelement)
+- [Ffi.Kernel](#ffikernel)
+- [Ffi.Rust](#ffirust)
 - [File](#file)
 - [Html](#html)
 - [Html.Attributes](#htmlattributes)
@@ -1766,6 +1768,27 @@ Ipe.Ffi.Js.CustomElement — the typed JS custom-element boundary (compiled
 | Export | Summary |
 |--------|----------|
 | `node` | `node handle state onEvent` — place a typed JS custom-element widget. |
+
+## Ffi.Kernel
+
+[Full reference](stdlib/Ffi.Kernel.md)
+
+Ipe.Ffi.Kernel — the point-free primitive that aliases a stdlib member to a
+
+| Export | Summary |
+|--------|----------|
+| `kernel` | `kernel "<Name>"` — the member aliased to the registered compiler kernel |
+
+## Ffi.Rust
+
+[Full reference](stdlib/Ffi.Rust.md)
+
+Ipe.Ffi.Rust — the taxonomy-native surface for calling a linked Rust crate.
+
+| Export | Summary |
+|--------|----------|
+| `fn` | `fn "<crate>" "<item>"` — assert a call into a linked Rust function. |
+| `const` | `const "<crate>" "<item>"` — read an infallible native constant of a bare |
 
 ## File
 
