@@ -98,11 +98,6 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
     ),
     (
         "refusal-tested",
-        "IPE-L0106",
-        "top-level function signature gate not yet reached by any constant assertion or wire literal",
-    ),
-    (
-        "refusal-tested",
         "IPE-L0110",
         "partial application gate not yet reached by any constant assertion or wire literal",
     ),
