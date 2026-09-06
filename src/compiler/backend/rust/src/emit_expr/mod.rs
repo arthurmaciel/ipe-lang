@@ -11,7 +11,7 @@ pub use ipe_ir::{
     Arm, BinOp, BoundSet, Callee, Expr, Func, IrType, KernelFn, MAX_IR_RENDER_DEPTH, Match,
     ModPath, Pat,
 };
-pub use crate::EmitCtx;
+pub(crate) use crate::EmitCtx;
 pub use crate::doc::Doc;
 pub use crate::emit_types::{GenericScope, render_type};
 pub use crate::emit_ui_plan::{
