@@ -29,7 +29,7 @@ use ipe_annotate::TokenClass;
 use ipe_db::{Db as _, IpeDatabase, SourceFile};
 use lsp_types::{SemanticToken, SemanticTokens, SemanticTokensLegend, SemanticTokensResult};
 
-use crate::offset::{PositionEncoding, offset_to_position};
+use crate::offset::PositionEncoding;
 
 // ---------------------------------------------------------------------------
 // Legend
@@ -114,10 +114,8 @@ fn collect_tokens(
     let text = file.text(db);
     let interner = db.interner().lock();
 
-    // Produce annotated tokens via the shared API.  We use `annotate_syntax_only`
-    // here because the LSP path does not yet run the full canonicaliser on every
-    // keypress; the syntax-only path keeps the same token set the previous
-    // hand-written walk produced (class-only, no def keys).
+    // The LSP path uses `annotate_syntax_only` (not the full canonicaliser) so a
+    // keypress stays cheap; it yields class-only tokens with no def keys.
     let annotated = ipe_annotate::annotate_syntax_only(&module, &interner);
 
     drop(interner);
@@ -160,25 +158,81 @@ const fn class_to_lsp(class: TokenClass) -> Option<u32> {
 // Delta encoding
 // ---------------------------------------------------------------------------
 
+/// The byte offset of the start of every line in a document, built once so a
+/// byte→position lookup is a binary search plus a within-line column scan rather
+/// than a from-zero rescan of the whole prefix per token.
+struct LineIndex {
+    /// `starts[i]` is the byte offset of line `i` (0-based). Always begins with
+    /// `0`; a trailing newline adds a final empty line's start.
+    starts: Vec<usize>,
+}
+
+impl LineIndex {
+    fn new(text: &str) -> Self {
+        let mut starts = vec![0usize];
+        for (i, b) in text.bytes().enumerate() {
+            if b == b'\n' {
+                starts.push(i + 1);
+            }
+        }
+        Self { starts }
+    }
+
+    /// The 0-based line containing `byte`: the last line start `<= byte`.
+    fn line_of(&self, byte: usize) -> usize {
+        match self.starts.binary_search(&byte) {
+            Ok(line) => line,
+            // `Err(i)` is the insertion point; the containing line is the one
+            // before it. `i` is never 0 because `starts[0] == 0 <= byte`.
+            Err(i) => i.saturating_sub(1),
+        }
+    }
+
+    /// The byte offset of line `line`'s start.
+    fn start_of(&self, line: usize) -> usize {
+        self.starts.get(line).copied().unwrap_or(0)
+    }
+}
+
 fn encode(raw: Vec<RawToken>, text: &str, encoding: PositionEncoding) -> Vec<SemanticToken> {
     let mut out: Vec<SemanticToken> = Vec::with_capacity(raw.len());
+    let index = LineIndex::new(text);
     let mut prev_line: u32 = 0;
     let mut prev_char: u32 = 0;
 
     for tok in raw {
-        let pos = offset_to_position(text, tok.byte as usize, encoding);
-        let delta_line = pos.line - prev_line;
+        let mut byte = (tok.byte as usize).min(text.len());
+        while byte > 0 && !text.is_char_boundary(byte) {
+            byte -= 1;
+        }
+        let line = index.line_of(byte);
+        let line_start = index.start_of(line);
+        // Column: sum the encoding-widths of the characters on this line up to
+        // the token, scanning only the (short) line prefix, not the whole file.
+        let column: usize = text
+            .get(line_start..byte)
+            .unwrap_or("")
+            .chars()
+            .map(|c| match encoding {
+                PositionEncoding::Utf8 => c.len_utf8(),
+                PositionEncoding::Utf16 => c.len_utf16(),
+            })
+            .sum();
+        let pos_line = u32::try_from(line).unwrap_or(u32::MAX);
+        let pos_char = u32::try_from(column).unwrap_or(u32::MAX);
+
+        let delta_line = pos_line - prev_line;
         let delta_start = if delta_line == 0 {
-            pos.character - prev_char
+            pos_char - prev_char
         } else {
-            pos.character
+            pos_char
         };
         let slice = text
             .get(tok.byte as usize..(tok.byte + tok.len) as usize)
             .unwrap_or("");
         let length = match encoding {
-            crate::offset::PositionEncoding::Utf8 => tok.len,
-            crate::offset::PositionEncoding::Utf16 => slice
+            PositionEncoding::Utf8 => tok.len,
+            PositionEncoding::Utf16 => slice
                 .chars()
                 .map(|c| u32::try_from(c.len_utf16()).unwrap_or(2))
                 .sum(),
@@ -190,18 +244,11 @@ fn encode(raw: Vec<RawToken>, text: &str, encoding: PositionEncoding) -> Vec<Sem
             token_type: tok.token_type,
             token_modifiers_bitset: 0,
         });
-        prev_line = pos.line;
-        prev_char = pos.character;
+        prev_line = pos_line;
+        prev_char = pos_char;
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// The helper functions below are DELETED — they were part of the previous
-// hand-written walk and are now fully superseded by ipe_annotate::annotate.
-// The removal proves there is no dual maintenance: any classification logic
-// lives in ipe_annotate and projects here via class_to_lsp.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
