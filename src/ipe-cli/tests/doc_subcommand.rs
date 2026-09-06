@@ -396,8 +396,7 @@ fn every_listed_module_is_queryable() -> io::Result<()> {
     let failures = Mutex::new(Vec::<String>::new());
     let cursor = AtomicUsize::new(0);
     let workers = std::thread::available_parallelism()
-        .map(|n| (n.get() * 2).clamp(4, 16))
-        .unwrap_or(8)
+        .map_or(8, |n| (n.get() * 2).clamp(4, 16))
         .min(names.len().max(1));
     std::thread::scope(|scope| {
         for _ in 0..workers {
@@ -409,7 +408,7 @@ fn every_listed_module_is_queryable() -> io::Result<()> {
                     if !q_ok {
                         failures
                             .lock()
-                            .unwrap_or_else(|e| e.into_inner())
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .push(format!(
                                 "listed module `{name}` must be queryable (no IPE-N0004):\n{q_out}\n{q_err}"
                             ));
@@ -418,7 +417,9 @@ fn every_listed_module_is_queryable() -> io::Result<()> {
             });
         }
     });
-    let failures = failures.into_inner().unwrap_or_else(|e| e.into_inner());
+    let failures = failures
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(
         failures.is_empty(),
         "{} listed module(s) not queryable:\n{}",
