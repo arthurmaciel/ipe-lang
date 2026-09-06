@@ -195,11 +195,9 @@ fn dollar_tag_end(bytes: &[u8], start: usize) -> Option<usize> {
 
 #[cfg(feature = "db")]
 fn find_byte(bytes: &[u8], target: u8, from: usize) -> Option<usize> {
-    bytes.get(from..).and_then(|s| {
-        s.iter()
-            .position(|&c| c == target)
-            .map(|p| from + p)
-    })
+    bytes
+        .get(from..)
+        .and_then(|s| s.iter().position(|&c| c == target).map(|p| from + p))
 }
 
 #[cfg(feature = "db")]
