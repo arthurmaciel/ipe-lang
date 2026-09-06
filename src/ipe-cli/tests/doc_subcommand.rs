@@ -15,6 +15,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod support;
 
@@ -387,13 +389,42 @@ fn every_listed_module_is_queryable() -> io::Result<()> {
         "the stdlib listing is non-empty:\n{listed}"
     );
 
-    for name in names {
-        let (q_ok, q_out, q_err) = run_in(&dir, &["doc", name, "--plain"]);
-        assert!(
-            q_ok,
-            "listed module `{name}` must be queryable (no IPE-N0004):\n{q_out}\n{q_err}"
-        );
-    }
+    // Each `ipe doc <name>` is an independent read-only subprocess over the same
+    // empty dir, so a bounded worker pool over a shared cursor collapses the
+    // ~165 serial spawns into a few parallel waves — same assertion, a fraction
+    // of the wall-clock — without changing what is proven.
+    let failures = Mutex::new(Vec::<String>::new());
+    let cursor = AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism()
+        .map(|n| (n.get() * 2).clamp(4, 16))
+        .unwrap_or(8)
+        .min(names.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let i = cursor.fetch_add(1, Ordering::Relaxed);
+                    let Some(name) = names.get(i) else { break };
+                    let (q_ok, q_out, q_err) = run_in(&dir, &["doc", name, "--plain"]);
+                    if !q_ok {
+                        failures
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(format!(
+                                "listed module `{name}` must be queryable (no IPE-N0004):\n{q_out}\n{q_err}"
+                            ));
+                    }
+                }
+            });
+        }
+    });
+    let failures = failures.into_inner().unwrap_or_else(|e| e.into_inner());
+    assert!(
+        failures.is_empty(),
+        "{} listed module(s) not queryable:\n{}",
+        failures.len(),
+        failures.join("\n---\n")
+    );
     Ok(())
 }
 
