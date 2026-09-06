@@ -706,11 +706,18 @@ fn spawn_and_decode(
 /// - **network**: withheld (`!profile.network`) ⇒ `(deny network*)` and the
 ///   low-level socket operations, so a probe socket is denied and the
 ///   `network` axis is observable. Granted ⇒ no network denial.
-/// - **filesystem**: the scratch (`scoped_tmp`) is always writable; the working
-///   tree is writable ONLY when the profile grants the filesystem axis. A
+/// - **filesystem writes**: the scratch (`scoped_tmp`) is always writable; the
+///   working tree is writable ONLY when the profile grants the filesystem axis. A
 ///   blanket `(deny file-write*)` withholds every other path, so an
 ///   out-of-scratch write under a filesystem-withholding profile is denied and
 ///   the `filesystem` axis is observable.
+/// - **filesystem reads**: denied by default (`(deny file-read*)`), then
+///   re-allowed only for the fixed system/toolchain roots the shell and compiler
+///   need, the scratch, and the working tree (the source being built). The
+///   invoking user's home is NOT in the allow set, so a network-granted build
+///   cannot read `~/.ssh` (or any home secret) to exfiltrate it — the macOS
+///   analogue of the Linux jail's `--tmpfs /home` read mask. Without this the
+///   allow-default base would leave the whole home directory readable.
 /// - **subprocess**: withheld (`!profile.subprocess`) ⇒ `(deny process-fork)`,
 ///   the NEW-process denial. Every way to create a new process
 ///   (`fork`/`vfork`/`posix_spawn`) forks under Seatbelt, so a fork denial
@@ -861,6 +868,54 @@ pub fn sbpl_from_profile(
             quote(&macos_resolved_subpath(working_tree))
         );
     }
+    s.push('\n');
+
+    // File READS are denied by default, then re-allowed only for the paths a build
+    // legitimately needs. Without this, the allow-default base leaves the whole
+    // home directory readable, so a network-granted build could read `~/.ssh` (or
+    // any secret) and exfiltrate it — the macOS analogue of the Linux jail's
+    // `--tmpfs /home` mask, which makes home unreadable inside the jail. Reads are
+    // confined to the system/toolchain trees the shell and compiler need, the
+    // always-readable scratch, and the working tree (the source being built). The
+    // invoking user's home is NOT in the allow set, so its secrets stay unreadable
+    // even when the network axis is granted. Fail-closed: a path outside the
+    // allow set is denied, never read.
+    s.push_str("(deny file-read*)\n");
+    // The fixed system/toolchain read roots. These are the OS-owned, non-secret
+    // trees the shell, its tools, and the Rust toolchain resolve at fixed paths;
+    // none live under the invoking user's home. `/private/var/db`/`/private/etc`
+    // hold the system databases (dyld cache, timezone, resolver config) the loader
+    // and libc read; user secrets are not here.
+    for root in [
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/System",
+        "/Library",
+        "/Applications",
+        "/opt",
+        "/dev",
+        "/private/etc",
+        "/private/var/db",
+        "/private/var/folders",
+    ] {
+        let _ = writeln!(s, "(allow file-read* (subpath \"{root}\"))");
+    }
+    // The scratch is always readable (the launcher writes the profile and the
+    // child's temp files there); the working tree is the source being built, so it
+    // is readable whether or not the filesystem axis grants WRITE access. Both are
+    // rendered in symlink-resolved form so the allow matches the kernel-resolved
+    // read, exactly like the write allows above.
+    let _ = writeln!(
+        s,
+        "(allow file-read* (subpath {}))",
+        quote(&macos_resolved_subpath(scoped_tmp))
+    );
+    let _ = writeln!(
+        s,
+        "(allow file-read* (subpath {}))",
+        quote(&macos_resolved_subpath(working_tree))
+    );
     s.push('\n');
 
     // Subprocess: deny NEW-process creation unless the profile grants it. On
@@ -1122,14 +1177,25 @@ mod freebsd_jail {
         // requires) chowns it. A failed chown refuses — a scratch the payload cannot
         // write is a broken jail, never run. Defence in depth atop the read-only
         // root: even the writable mount is only reachable by an unprivileged user.
+        // The scratch is a per-run directory under the private cache root, discarded
+        // after the run, so its ownership need not be restored.
         if let Err(defect) = chown_to_jail_user(scoped_tmp.as_path()) {
             return JailOutcome::Unavailable { defect };
         }
-        if profile.filesystem == FilesystemScope::WorkingTreeReadWrite
-            && let Err(defect) = chown_to_jail_user(working_tree.as_path())
-        {
-            return JailOutcome::Unavailable { defect };
-        }
+        // The working tree is the user's REAL project directory (nullfs is a
+        // pass-through: chowning the mount target chowns the source inode). Chowning
+        // it to the jail user so a granted filesystem effect can write it must NOT
+        // outlive the run — a persistent host mutation from a confined build is a
+        // trust-boundary violation. Record the original owner and restore it on drop
+        // regardless of outcome, so the user's tree ownership is left untouched.
+        let _tree_owner_guard = if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
+            match RestoredOwnership::chown_to_jail_user(working_tree.as_path()) {
+                Ok(guard) => Some(guard),
+                Err(defect) => return JailOutcome::Unavailable { defect },
+            }
+        } else {
+            None
+        };
 
         let jail_name = per_run_jail_name();
         let argv = jail_argv(&jail_bin, &jail_name, jail_root.root(), profile, payload);
@@ -1156,6 +1222,9 @@ mod freebsd_jail {
         // their guards on drop (in reverse order) as this scope ends, leaving no
         // residue across the audit's per-axis tightening loop.
         drop(jail_root);
+        // Restore the working tree's original ownership only AFTER the mounts are
+        // torn down, so the user's real tree is left exactly as it was found.
+        drop(_tree_owner_guard);
         outcome
     }
 
@@ -1226,25 +1295,76 @@ mod freebsd_jail {
     }
 
     /// Chown `path` to the unprivileged jail user so the confined payload can write
-    /// its scratch. Uses the `chown(8)` CLI (no new `unsafe` FFI); a failure refuses.
-    fn chown_to_jail_user(path: &Path) -> Result<(), RunJailDefect> {
+    /// it. Uses the `chown(8)` CLI (no new `unsafe` FFI); a failure refuses.
+    ///
+    /// `spec` is a `chown(8)` owner spec: a bare user (`nobody`) or a numeric
+    /// `uid:gid` pair used to restore the original ownership.
+    fn run_chown(spec: &str, path: &Path) -> Result<(), RunJailDefect> {
         let Some(chown) = find_in_path("chown") else {
             return Err(RunJailDefect::PrimitiveUnavailable {
                 missing: vec!["chown"],
             });
         };
         let status = std::process::Command::new(chown)
-            .arg(JAIL_USER)
+            .arg(spec)
             .arg(path)
             .status();
         match status {
             Ok(s) if s.success() => Ok(()),
             Ok(s) => Err(RunJailDefect::Spawn {
-                detail: format!("chown {} to {JAIL_USER} failed ({s})", path.display()),
+                detail: format!("chown {spec} {} failed ({s})", path.display()),
             }),
             Err(e) => Err(RunJailDefect::Spawn {
                 detail: format!("could not run chown for {}: {e}", path.display()),
             }),
+        }
+    }
+
+    /// Chown `path` to the unprivileged jail user so the confined payload can write
+    /// its scratch. The scratch is a discarded per-run directory, so its ownership
+    /// need not be restored.
+    fn chown_to_jail_user(path: &Path) -> Result<(), RunJailDefect> {
+        run_chown(JAIL_USER, path)
+    }
+
+    /// Chown a path to the jail user for the duration of a jailed run, restoring its
+    /// original ownership on drop.
+    ///
+    /// The working tree is the user's REAL project directory. Making it writable to
+    /// the unprivileged jail user requires a chown (nullfs is a pass-through, so the
+    /// mount target and the source inode are one), but a confined build must not
+    /// leave a persistent host mutation behind. This guard records the original
+    /// `uid`/`gid` before the chown and restores it on drop regardless of outcome, so
+    /// the user's tree ownership is left exactly as it was found.
+    struct RestoredOwnership {
+        path: PathBuf,
+        original: String,
+    }
+
+    impl RestoredOwnership {
+        fn chown_to_jail_user(path: &Path) -> Result<Self, RunJailDefect> {
+            use std::os::unix::fs::MetadataExt as _;
+
+            // Read the current owner BEFORE any mutation so a failure to observe it
+            // refuses rather than chowning a tree we could not later restore.
+            let metadata = std::fs::metadata(path).map_err(|e| RunJailDefect::Spawn {
+                detail: format!("could not stat {} before chown: {e}", path.display()),
+            })?;
+            let original = format!("{}:{}", metadata.uid(), metadata.gid());
+            run_chown(JAIL_USER, path)?;
+            Ok(Self {
+                path: path.to_path_buf(),
+                original,
+            })
+        }
+    }
+
+    impl Drop for RestoredOwnership {
+        fn drop(&mut self) {
+            // Best-effort restore: the run is over, so a failure here cannot be
+            // surfaced as a jail outcome, but it must be attempted so the user's tree
+            // ownership is not left changed.
+            let _ = run_chown(&self.original, &self.path);
         }
     }
 
@@ -2017,6 +2137,71 @@ mod tests {
         assert!(
             !sbpl.contains("(allow file-write* (subpath \"/private/var\"))"),
             "resolving must not blanket-allow /private/var: {sbpl}"
+        );
+    }
+
+    #[test]
+    fn sbpl_denies_file_reads_by_default_and_does_not_allow_home() {
+        // The macOS jail must confine file READS: without a `(deny file-read*)`
+        // base, the allow-default profile leaves the whole home directory readable,
+        // so a network-granted build could read `~/.ssh` and exfiltrate it. The read
+        // allow set must be the system/toolchain roots plus the scratch and working
+        // tree — never the user's home. Home stays denied even when network is
+        // granted.
+        let p = scoped(true, FilesystemScope::Isolated);
+        let sbpl = sbpl_from_profile(&p, Path::new("/work/scratch"), Path::new("/work/tree"));
+        assert!(
+            sbpl.contains("(deny file-read*)"),
+            "reads must be denied by default: {sbpl}"
+        );
+        // The scratch and the source tree are readable (the build reads its source
+        // whether or not it may WRITE it).
+        assert!(
+            sbpl.contains("(allow file-read* (subpath \"/work/scratch\"))"),
+            "the scratch must be readable: {sbpl}"
+        );
+        assert!(
+            sbpl.contains("(allow file-read* (subpath \"/work/tree\"))"),
+            "the working tree must be readable: {sbpl}"
+        );
+        // The system/toolchain roots the shell and compiler need are readable.
+        for root in ["/usr", "/System", "/Library"] {
+            assert!(
+                sbpl.contains(&format!("(allow file-read* (subpath \"{root}\"))")),
+                "the system root {root} must be readable: {sbpl}"
+            );
+        }
+        // The user's home is NOT re-allowed — no read allow covers `/Users` or
+        // `/home`, so a home secret stays unreadable even with network granted.
+        assert!(
+            !sbpl.contains("(allow file-read* (subpath \"/Users\"))"),
+            "the user home must NOT be blanket-read-allowed: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(allow file-read* (subpath \"/home\"))"),
+            "the user home must NOT be blanket-read-allowed: {sbpl}"
+        );
+    }
+
+    #[test]
+    fn sbpl_read_allow_for_the_working_tree_is_independent_of_the_write_grant() {
+        // A build reads its source tree regardless of whether the filesystem axis
+        // grants WRITE access. The read allow for the working tree must therefore be
+        // present under BOTH an isolated and a read-write filesystem scope, while the
+        // WRITE allow stays gated on the grant.
+        let isolated = scoped(false, FilesystemScope::Isolated);
+        let sbpl_iso = sbpl_from_profile(
+            &isolated,
+            Path::new("/work/scratch"),
+            Path::new("/work/tree"),
+        );
+        assert!(
+            sbpl_iso.contains("(allow file-read* (subpath \"/work/tree\"))"),
+            "the source tree must be readable even when writes are withheld: {sbpl_iso}"
+        );
+        assert!(
+            !sbpl_iso.contains("(allow file-write* (subpath \"/work/tree\"))"),
+            "the working tree must NOT be writable when the axis is withheld: {sbpl_iso}"
         );
     }
 

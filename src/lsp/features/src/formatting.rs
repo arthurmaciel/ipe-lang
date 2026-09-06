@@ -2,11 +2,18 @@
 //! `textDocument/rangeFormatting`.
 //!
 //! Formats by re-printing the parse AST: canonical whitespace, 4-space indent,
-//! sorted imports, blank lines between top-level declarations. When the buffer
-//! does not parse, no edit is returned (never corrupt the user's file).
+//! sorted imports, blank lines between top-level declarations.
 //!
-//! The formatted output is returned as a single `TextEdit` replacing the whole
-//! document (for `formatting`) or the selected lines (for `rangeFormatting`).
+//! The feature never corrupts the buffer: no edit is returned when the source
+//! does not parse, when it carries comment or doc-string trivia the AST printer
+//! cannot reproduce, or when the formatted output would not itself re-parse.
+//! String, char, and multiline-string literals are reproduced verbatim from
+//! their original spans so escapes survive.
+//!
+//! The result is a single whole-document `TextEdit`. A `rangeFormatting`
+//! request degrades to a whole-document format: reformatting shifts line
+//! numbering, so splicing formatted lines back at the original line indices
+//! would overwrite unrelated declarations.
 
 use std::fmt::Write as _;
 
@@ -25,9 +32,22 @@ pub fn format_document(
 ) -> Option<Vec<TextEdit>> {
     let module = ipe_db::parse(db, file).ok()?;
     let text = file.text(db);
+    // The printer re-prints the AST, which does not carry comment or doc-string
+    // trivia; formatting a file that has any would silently delete it. Fail
+    // closed — leave the buffer untouched rather than drop the user's comments.
+    if source_has_comment_or_doc(text) {
+        return None;
+    }
     let formatted = format_module(db, &module, text);
     if formatted == text.as_str() {
         return Some(Vec::new()); // already canonical — no edit
+    }
+    // Second gate: the formatted output must itself parse. A reformat that would
+    // not round-trip (a printer bug on some construct) is discarded rather than
+    // written over the user's file.
+    let mut check_interner = ipe_intern::Interner::new();
+    if ipe_parse::parse_module(&formatted, &mut check_interner).is_err() {
+        return None;
     }
     let start = offset_to_position(text, 0, encoding);
     let end = offset_to_position(text, text.len(), encoding);
@@ -37,6 +57,53 @@ pub fn format_document(
     }])
 }
 
+/// Whether `text` contains a line comment (`--`), a block comment (`{-`), or a
+/// doc comment (`{-|`) outside a string, char, or multiline-string literal.
+///
+/// The printer cannot reproduce this trivia, so its presence forces a
+/// fail-closed no-format. The scan tracks literal state so a `--` or `{-` inside
+/// a string is not mistaken for a comment.
+fn source_has_comment_or_doc(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes.get(i) {
+            Some(b'"') => {
+                // Multiline string `"""…"""` or ordinary `"…"`; skip to its end.
+                if bytes.get(i + 1) == Some(&b'"') && bytes.get(i + 2) == Some(&b'"') {
+                    i += 3;
+                    while i < bytes.len()
+                        && !(bytes.get(i) == Some(&b'"')
+                            && bytes.get(i + 1) == Some(&b'"')
+                            && bytes.get(i + 2) == Some(&b'"'))
+                    {
+                        i += 1;
+                    }
+                    i += 3;
+                } else {
+                    i += 1;
+                    while i < bytes.len() && bytes.get(i) != Some(&b'"') {
+                        // Skip an escaped character (e.g. `\"`) as one unit.
+                        i += if bytes.get(i) == Some(&b'\\') { 2 } else { 1 };
+                    }
+                    i += 1;
+                }
+            }
+            Some(b'\'') => {
+                i += 1;
+                while i < bytes.len() && bytes.get(i) != Some(&b'\'') {
+                    i += if bytes.get(i) == Some(&b'\\') { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            // `--` line comment, or `{-` block / `{-|` doc comment.
+            Some(b'-' | b'{') if bytes.get(i + 1) == Some(&b'-') => return true,
+            _ => i += 1,
+        }
+    }
+    false
+}
+
 /// Format the lines overlapping `range` in `file`. The replacement covers
 /// full lines (from the start of the first touched line to the end of the last).
 /// Returns `None` when the file does not parse.
@@ -44,67 +111,60 @@ pub fn format_document(
 pub fn format_range(
     db: &IpeDatabase,
     file: SourceFile,
-    range: Range,
+    _range: Range,
     encoding: PositionEncoding,
 ) -> Option<Vec<TextEdit>> {
-    // Format the full document first, then trim to the requested lines.
-    let edits = format_document(db, file, encoding)?;
-    // If no edits the document is already canonical.
-    let Some(full_edit) = edits.into_iter().next() else {
-        return Some(Vec::new());
-    };
-    let formatted = full_edit.new_text;
-    // Extract the lines covered by `range` from the formatted output.
-    let start_line = range.start.line as usize;
-    let end_line = range.end.line as usize;
-    let lines: Vec<&str> = formatted.split('\n').collect();
-    let lo_line = start_line.min(lines.len().saturating_sub(1));
-    let hi_line = end_line.min(lines.len().saturating_sub(1));
-    // Collect the slice plus a trailing newline when present. `lo_line`/`hi_line`
-    // are both clamped below `lines.len()`, so the range is always in bounds; an
-    // empty `lines` yields an empty slice rather than a panic.
-    let slice: String = lines
-        .get(lo_line..=hi_line)
-        .map_or_else(String::new, |ls| ls.join("\n"));
-
-    // The LSP range covers full lines (character 0 to end of hi_line).
-    let text = file.text(db);
-    let range_start = offset_to_position(text, line_byte_start(text, lo_line), encoding);
-    let range_end = offset_to_position(text, line_byte_end(text, hi_line), encoding);
-    Some(vec![TextEdit {
-        range: Range {
-            start: range_start,
-            end: range_end,
-        },
-        new_text: slice,
-    }])
+    // Reformatting shifts line numbering (imports sort, blank lines are
+    // inserted, equations reflow), so replacing the selected line INDICES with
+    // the same indices of the formatted output would overwrite one declaration
+    // with another's text. The printer only produces a faithful whole-document
+    // result, so a range request degrades to a whole-document format — the one
+    // edit that is guaranteed correct.
+    format_document(db, file, encoding)
 }
 
 // ---------------------------------------------------------------------------
-// Byte helpers
+// Literal reproduction
 // ---------------------------------------------------------------------------
 
-fn line_byte_start(text: &str, line: usize) -> usize {
-    let mut byte = 0;
-    for (i, l) in text.split('\n').enumerate() {
-        if i == line {
-            return byte;
-        }
-        byte += l.len() + 1;
+/// Push the exact source text of `span` from `original`, or the result of
+/// `fallback` when the span is out of range. Literal spellings (string, char,
+/// multiline-string literals) are reproduced verbatim so escapes survive a
+/// reformat — the AST stores the already-unescaped value, which cannot be
+/// re-quoted losslessly.
+fn push_span_or(
+    out: &mut String,
+    span: ipe_diagnostics::Span,
+    original: &str,
+    fallback: impl FnOnce() -> String,
+) {
+    let lo = span.lo as usize;
+    let hi = span.hi as usize;
+    if let Some(slice) = original.get(lo..hi) {
+        out.push_str(slice);
+    } else {
+        out.push_str(&fallback());
     }
-    text.len()
 }
 
-fn line_byte_end(text: &str, line: usize) -> usize {
-    let mut byte = 0;
-    for (i, l) in text.split('\n').enumerate() {
-        let next = byte + l.len();
-        if i == line {
-            return next;
+/// Re-escape an unescaped string value into a quoted Ipê string literal. Used
+/// only when a literal's original span is unavailable (a synthesized node), so
+/// the emitted literal is still valid source rather than a raw-newline splat.
+fn escaped_string_literal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
         }
-        byte = next + 1;
     }
-    text.len()
+    out.push('"');
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +317,7 @@ fn push_values(
         out.push_str(name);
         for pat in &value.value.patterns {
             out.push(' ');
-            push_pattern(out, pat, interner);
+            push_pattern(out, pat, interner, original);
         }
         out.push_str(" =\n    ");
         push_expr(out, &value.value.body, 1, interner, original);
@@ -394,7 +454,12 @@ fn push_type_annotation(
     }
 }
 
-fn push_pattern(out: &mut String, pat: &ipe_syntax::Pattern, interner: &ipe_intern::Interner) {
+fn push_pattern(
+    out: &mut String,
+    pat: &ipe_syntax::Pattern,
+    interner: &ipe_intern::Interner,
+    original: &str,
+) {
     let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
     match &pat.value {
         ipe_syntax::Pattern_::PAnything => out.push('_'),
@@ -416,10 +481,10 @@ fn push_pattern(out: &mut String, pat: &ipe_syntax::Pattern, interner: &ipe_inte
                 );
                 if needs_parens {
                     out.push('(');
-                    push_pattern(out, arg, interner);
+                    push_pattern(out, arg, interner, original);
                     out.push(')');
                 } else {
-                    push_pattern(out, arg, interner);
+                    push_pattern(out, arg, interner, original);
                 }
             }
         }
@@ -429,7 +494,7 @@ fn push_pattern(out: &mut String, pat: &ipe_syntax::Pattern, interner: &ipe_inte
                 if i > 0 {
                     out.push_str(", ");
                 }
-                push_pattern(out, e, interner);
+                push_pattern(out, e, interner, original);
             }
             out.push(')');
         }
@@ -448,17 +513,16 @@ fn push_pattern(out: &mut String, pat: &ipe_syntax::Pattern, interner: &ipe_inte
             out.push_str(if *b { "True" } else { "False" });
         }
         ipe_syntax::Pattern_::PChar(c) => {
-            out.push('\'');
-            out.push_str(c);
-            out.push('\'');
+            // Reproduce the `'…'` literal verbatim so an escape is not unspooled.
+            push_span_or(out, pat.span, original, || format!("'{c}'"));
         }
         ipe_syntax::Pattern_::PStr(s) => {
-            out.push('"');
-            out.push_str(s);
-            out.push('"');
+            // The stored value is unescaped; reproduce the literal from its span
+            // so `\n` / `\"` survive, re-escaping only as a fallback.
+            push_span_or(out, pat.span, original, || escaped_string_literal(s));
         }
         ipe_syntax::Pattern_::PAlias(inner, name) => {
-            push_pattern(out, inner, interner);
+            push_pattern(out, inner, interner, original);
             out.push_str(" as ");
             out.push_str(resolve(name.value));
         }
@@ -468,21 +532,21 @@ fn push_pattern(out: &mut String, pat: &ipe_syntax::Pattern, interner: &ipe_inte
                 if i > 0 {
                     out.push_str(", ");
                 }
-                push_pattern(out, e, interner);
+                push_pattern(out, e, interner, original);
             }
             out.push(']');
         }
         ipe_syntax::Pattern_::PCons(h, t) => {
-            push_pattern(out, h, interner);
+            push_pattern(out, h, interner, original);
             out.push_str(" :: ");
-            push_pattern(out, t, interner);
+            push_pattern(out, t, interner, original);
         }
         ipe_syntax::Pattern_::POr(alts) => {
             for (i, alt) in alts.iter().enumerate() {
                 if i > 0 {
                     out.push_str(" | ");
                 }
-                push_pattern(out, alt, interner);
+                push_pattern(out, alt, interner, original);
             }
         }
     }
@@ -521,24 +585,30 @@ fn push_expr(
             }
         }
         ipe_syntax::Expr_::Str(s) => {
-            out.push('"');
-            out.push_str(s);
-            out.push('"');
+            // The AST stores the UNESCAPED value; re-quoting it verbatim would
+            // turn a `\n` or `\"` back into a raw newline/quote and corrupt the
+            // source. Reproduce the literal from its original span, which carries
+            // the exact escaped spelling; re-escape as a fallback.
+            push_span_or(out, expr.span, original, || escaped_string_literal(s));
         }
-        ipe_syntax::Expr_::PathLit(s) => {
-            out.push_str("path \"");
-            out.push_str(s);
-            out.push('"');
+        ipe_syntax::Expr_::PathLit(_) => {
+            // A `path "…"` literal — reproduce the whole construct verbatim from
+            // its span so the quoted path keeps its exact escaped spelling.
+            let lo = expr.span.lo as usize;
+            let hi = expr.span.hi as usize;
+            if let Some(slice) = original.get(lo..hi) {
+                out.push_str(slice);
+            }
         }
         ipe_syntax::Expr_::MultilineStr { raw: s, .. } => {
-            out.push_str("\"\"\"");
-            out.push_str(s);
-            out.push_str("\"\"\"");
+            // Reproduce the whole `"""…"""` literal from its span so escapes and
+            // interior quotes survive; fall back to the stored raw body.
+            push_span_or(out, expr.span, original, || format!("\"\"\"{s}\"\"\""));
         }
         ipe_syntax::Expr_::Char(c) => {
-            out.push('\'');
-            out.push_str(c);
-            out.push('\'');
+            // Reproduce the `'…'` literal from its span to keep any escape;
+            // fall back to the stored char text.
+            push_span_or(out, expr.span, original, || format!("'{c}'"));
         }
         ipe_syntax::Expr_::Unit => out.push_str("()"),
         ipe_syntax::Expr_::Call(f, args) => {
@@ -667,7 +737,7 @@ fn push_block_expr(
                 if i > 0 {
                     out.push(' ');
                 }
-                push_pattern(out, p, interner);
+                push_pattern(out, p, interner, original);
             }
             out.push_str(" ->\n");
             out.push_str(&pad1);
@@ -677,7 +747,7 @@ fn push_block_expr(
             out.push_str("let\n");
             for b in bindings {
                 out.push_str(&pad1);
-                push_pattern(out, &b.pat, interner);
+                push_pattern(out, &b.pat, interner, original);
                 out.push_str(" =\n");
                 out.push_str(&"    ".repeat(indent + 2));
                 push_expr(out, &b.body, indent + 2, interner, original);
@@ -712,7 +782,7 @@ fn push_block_expr(
             out.push_str(" of\n");
             for (pat, body) in branches {
                 out.push_str(&pad1);
-                push_pattern(out, pat, interner);
+                push_pattern(out, pat, interner, original);
                 out.push_str(" ->\n");
                 out.push_str(&"    ".repeat(indent + 2));
                 push_expr(out, body, indent + 2, interner, original);

@@ -1,22 +1,2 @@
-# Merge queue for ipe-lang.
-#
-# A pull request labelled `queue` is added to the merge queue: Mergify batches
-# it with other queued PRs, tests the batch against main together in one CI
-# cycle, and merges only when the batch is green. Main stays green by
-# construction — the combined tree is proven before it lands, and a PR that
-# breaks the batch is evicted rather than reddening main. Branch protection's
-# required checks gate every merge.
-queue_rules:
-  - name: default
-    merge_method: squash
-    batch_size: 5
-
-pull_request_rules:
-  - name: queue labelled pull requests
-    conditions:
-      - base=main
-      - "-draft"
-      - label=queue
-    actions:
-      queue:
-        name: default
+merge_queue:
+  status_comments: none
