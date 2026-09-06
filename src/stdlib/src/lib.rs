@@ -2282,10 +2282,13 @@ mod tests {
         // string literal are counted.
         let mut compiled_reachable: Vec<(String, String)> = Vec::new();
 
-        let all_sources = MODULES
-            .iter()
-            .map(|m| m.source)
-            .chain(COMPILED_STD_MODULES.iter().map(|m| m.source));
+        // Reachability evidence comes ONLY from sources that actually compile
+        // into a user program. The `MODULES` veneers are never injected
+        // (`inject_compiled_std_closure` consults `COMPILED_STD_MODULES` alone),
+        // so a `Kernel.kernel` alias in a veneer is no proof a kernel is reachable
+        // — crediting one masks a dead feature (a member `ipe doc` advertises but
+        // a real call resolves to IPE-N0005).
+        let all_sources = COMPILED_STD_MODULES.iter().map(|m| m.source);
 
         for source in all_sources {
             let mut local_interner = Interner::new();

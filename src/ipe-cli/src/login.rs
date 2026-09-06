@@ -27,6 +27,12 @@ const CLIENT_ID: &str = "Ov23liBpCFLSoxJvSTwO";
 /// publish pull request, nothing more.
 const SCOPE: &str = "public_repo";
 
+/// Upper bound on the poll interval (seconds) accepted from GitHub's response.
+/// A hostile or malformed `interval` (up to `u64::MAX`) is clamped to this, so
+/// the poll cadence stays bounded and the overall wait is governed by the
+/// expiry deadline, never by a server-dictated sleep.
+const MAX_POLL_INTERVAL_SECS: u64 = 60;
+
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -44,22 +50,23 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
     match rest.first().map(String::as_str) {
         None => run_device_flow(),
         Some("--status") if rest.len() == 1 => {
-            if let Some(path) = existing_token_path() {
-                print!(
-                    "{}",
-                    crate::style::frame(&crate::style::gutter(&format!(
-                        "logged in — token stored at {}",
-                        path.display()
-                    )))
-                );
-            } else {
-                print!(
-                    "{}",
-                    crate::style::frame(&crate::style::gutter(
-                        "not logged in — run `ipe login` to authorize"
-                    ))
-                );
-            }
+            // `--status` reports the SAME state `publish` consumes: a stored,
+            // well-formed token. A token file that exists but does not parse is
+            // reported distinctly, never as "logged in" — the two views of the
+            // credential state must agree.
+            let message = match token_status() {
+                TokenStatus::LoggedIn(path) => {
+                    format!("logged in — token stored at {}", path.display())
+                }
+                TokenStatus::Corrupt(path) => format!(
+                    "token file at {} is unreadable or malformed — run `ipe login` to re-authorize",
+                    path.display()
+                ),
+                TokenStatus::NotLoggedIn => {
+                    "not logged in — run `ipe login` to authorize".to_owned()
+                }
+            };
+            print!("{}", crate::style::frame(&crate::style::gutter(&message)));
             Ok(())
         }
         Some("--logout") if rest.len() == 1 => logout(),
@@ -70,17 +77,57 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
+/// A GitHub access token, parsed once at the trust boundary into a value whose
+/// bytes are drawn only from the GitHub token alphabet (`[A-Za-z0-9_]`).
+///
+/// This is `parse, don't validate` at the credential boundary: a token that
+/// reached this type cannot contain a quote, a newline, or any control byte, so
+/// splicing it into curl's `--config` mini-language (`header = "…{token}"`)
+/// cannot inject a new curl directive. The unparsed `String` never travels
+/// downstream — only a `PublishToken` does.
+#[derive(Clone)]
+pub struct PublishToken(String);
+
+impl PublishToken {
+    /// Parse a raw token, accepting only the GitHub token alphabet.
+    ///
+    /// Returns `None` when the trimmed token is empty or holds any byte outside
+    /// `[A-Za-z0-9_]` — quotes, newlines, spaces, and control bytes are all
+    /// rejected, closing the curl-config injection path.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            Some(Self(trimmed.to_owned()))
+        } else {
+            None
+        }
+    }
+
+    /// The token bytes, safe to splice into the curl config header line.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The stored publish token, if the user has run `ipe login`. `None` when no
-/// token file exists or it cannot be read. Consumed by the publish headless path.
+/// token file exists, it cannot be read, or its contents are not a well-formed
+/// token. Consumed by the publish headless path.
 #[must_use]
-pub fn stored_token() -> Option<String> {
+pub fn stored_token() -> Option<PublishToken> {
     let raw = crate::io_bounded::read_to_string_capped(
         &token_path()?,
         crate::io_bounded::SMALL_FILE_READ_CAP,
     )
     .ok()?;
-    let token = raw.trim().to_owned();
-    if token.is_empty() { None } else { Some(token) }
+    PublishToken::parse(&raw)
 }
 
 /// Run the full device flow: request a code, prompt the user, poll for the token,
@@ -92,10 +139,11 @@ fn run_device_flow() -> Result<(), CliError> {
         "{}",
         crate::style::frame(&crate::style::gutter(&format!(
             "To authorize ipe, visit:\n  {}\nand enter the code:  {}",
-            device.verification_uri, device.user_code
+            device.verification_uri.as_str(),
+            device.user_code
         )))
     );
-    if open_in_browser(&device.verification_uri) {
+    if open_in_browser(device.verification_uri.as_str()) {
         eprintln!("{}", crate::style::gutter("(opened your browser)"));
     }
     eprintln!("{}", crate::style::gutter("Waiting for authorization …"));
@@ -112,11 +160,50 @@ fn run_device_flow() -> Result<(), CliError> {
     Ok(())
 }
 
+/// The verification URL GitHub tells the user to open, parsed once into a value
+/// that is guaranteed `https` on the expected GitHub host.
+///
+/// `parse, don't validate` at the network boundary: a compromised or spoofed
+/// device-code response cannot smuggle an arbitrary scheme (`file:`, `javascript:`,
+/// a custom app handler) or an off-host URL into `xdg-open`/`open`, because only
+/// a `VerificationUri` reaches the opener and it can only hold an accepted URL.
+struct VerificationUri(String);
+
+impl VerificationUri {
+    /// The single accepted host for the device-flow verification URL.
+    const EXPECTED_HOST: &'static str = "github.com";
+    const HTTPS_PREFIX: &'static str = "https://";
+
+    /// Parse a raw verification URL, accepting only `https://github.com[/…]`.
+    ///
+    /// Fails closed: any non-`https` scheme, any other host, or an embedded
+    /// userinfo/`@` that could mask the real host is rejected.
+    fn parse(raw: &str) -> Option<Self> {
+        let after_scheme = raw.strip_prefix(Self::HTTPS_PREFIX)?;
+        // The authority runs up to the first `/`, `?`, or `#`.
+        let authority = after_scheme
+            .split(['/', '?', '#'])
+            .next()
+            .unwrap_or(after_scheme);
+        // Reject userinfo (`user@host`) so `github.com` in userinfo cannot mask
+        // an attacker host, and reject a port or any non-host authority.
+        if authority == Self::EXPECTED_HOST {
+            Some(Self(raw.to_owned()))
+        } else {
+            None
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The device-code grant's first response.
 struct DeviceGrant {
     device_code: String,
     user_code: String,
-    verification_uri: String,
+    verification_uri: VerificationUri,
     interval: u64,
     expires_in: u64,
 }
@@ -129,12 +216,18 @@ fn request_device_code() -> Result<DeviceGrant, CliError> {
     )?;
     let device_code = str_field(&json, "device_code")?;
     let user_code = str_field(&json, "user_code")?;
-    let verification_uri = str_field(&json, "verification_uri")?;
+    let verification_uri_raw = str_field(&json, "verification_uri")?;
+    let verification_uri = VerificationUri::parse(&verification_uri_raw).ok_or_else(|| {
+        login_error(
+            "GitHub returned a verification URL that is not https on github.com — refusing to open it",
+        )
+    })?;
     // GitHub returns these as JSON numbers; default to safe values if absent.
     let interval = json
         .get("interval")
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or(5);
+        .unwrap_or(5)
+        .clamp(1, MAX_POLL_INTERVAL_SECS);
     let expires_in = json
         .get("expires_in")
         .and_then(serde_json::Value::as_u64)
@@ -149,17 +242,24 @@ fn request_device_code() -> Result<DeviceGrant, CliError> {
 }
 
 /// Poll `login/oauth/access_token` until the user authorizes, the code expires,
-/// or GitHub reports a terminal error.
-fn poll_for_token(device: &DeviceGrant) -> Result<String, CliError> {
+/// or GitHub reports a terminal error. The returned token is parsed into a
+/// [`PublishToken`] at this boundary, so a malformed token never travels on.
+fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
     let deadline = Instant::now() + Duration::from_secs(device.expires_in);
-    let mut interval = device.interval.max(1);
+    let mut interval = device.interval.clamp(1, MAX_POLL_INTERVAL_SECS);
     loop {
-        std::thread::sleep(Duration::from_secs(interval));
-        if Instant::now() >= deadline {
+        // Check the deadline BEFORE sleeping, and never sleep past it: a hostile
+        // response cannot push the process into an unbounded sleep, because each
+        // sleep is clamped to the time actually remaining and the interval is
+        // itself capped at `MAX_POLL_INTERVAL_SECS`.
+        let now = Instant::now();
+        if now >= deadline {
             return Err(login_error(
                 "the authorization code expired before you approved it — run `ipe login` again",
             ));
         }
+        let remaining = deadline.saturating_duration_since(now);
+        std::thread::sleep(Duration::from_secs(interval).min(remaining));
         let json = post_form(
             TOKEN_URL,
             &[
@@ -169,18 +269,22 @@ fn poll_for_token(device: &DeviceGrant) -> Result<String, CliError> {
             ],
         )?;
         if let Some(token) = json.get("access_token").and_then(serde_json::Value::as_str) {
-            return Ok(token.to_owned());
+            return PublishToken::parse(token)
+                .ok_or_else(|| login_error("GitHub returned a token with unexpected characters"));
         }
         match json.get("error").and_then(serde_json::Value::as_str) {
             // Not authorized yet — keep waiting at the current cadence.
             Some("authorization_pending") => {}
             // GitHub asks us to back off; it also raises the required interval.
+            // The server-supplied value is capped so a hostile `interval` cannot
+            // stall the poll — the deadline still bounds total wait regardless.
             Some("slow_down") => {
                 interval = json
                     .get("interval")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(interval + 5)
-                    .max(interval + 5);
+                    .max(interval + 5)
+                    .min(MAX_POLL_INTERVAL_SECS);
             }
             Some("access_denied") => {
                 return Err(login_error("authorization was denied on GitHub"));
@@ -234,22 +338,42 @@ fn url_encode(s: &str) -> String {
 /// (the crate carries no HTTP client, mirroring the `git`-based resolver).
 /// Each field key and value is URL-encoded so a value with `&`, `=`, `:`, or
 /// other special characters cannot break the form or inject additional fields.
+///
+/// The body — which during token polling carries the `device_code`, a secret
+/// exchangeable for the publish token — is delivered to curl over stdin
+/// (`-d @-`), never as an argv element, so it cannot be read from
+/// `/proc/<pid>/cmdline` by another local user during the minutes-long poll.
+/// This mirrors `publish::github_api_post`'s stdin token delivery.
 fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value, CliError> {
+    use std::process::Stdio;
     let body = fields
         .iter()
         .map(|(k, v)| format!("{}={}", url_encode(k), url_encode(v)))
         .collect::<Vec<_>>()
         .join("&");
-    let output = Command::new("curl")
-        .args(["--silent", "--show-error", "--fail", "-X", "POST"])
-        .args(["-H", "Accept: application/json"])
-        .args(["-d", &body, url])
-        .output()
+    // `-d @-` reads the form body from stdin, keeping the secret out of argv.
+    let mut child = Command::new("curl")
+        .args(curl_argv(url))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| {
             login_error(&format!(
                 "could not run `curl` (needed for the GitHub OAuth request): {e}"
             ))
         })?;
+    // Write the body to curl's stdin, then close it so curl proceeds. A write
+    // failure means curl never receives the body; the wait below surfaces the
+    // resulting error.
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(body.as_bytes());
+    }
+    let output = child.wait_with_output().map_err(|e| {
+        login_error(&format!(
+            "the OAuth request to GitHub failed while waiting for curl: {e}"
+        ))
+    })?;
     if !output.status.success() {
         return Err(login_error(&format!(
             "the OAuth request to GitHub failed: {}",
@@ -258,6 +382,25 @@ fn post_form(url: &str, fields: &[(&str, &str)]) -> Result<serde_json::Value, Cl
     }
     serde_json::from_slice(&output.stdout)
         .map_err(|e| login_error(&format!("could not parse GitHub's response as JSON: {e}")))
+}
+
+/// The full curl argument vector for a `post_form` call. The body is NOT among
+/// these arguments — it is `-d @-`, read from stdin — so no field value (in
+/// particular the poll's `device_code`) can leak through `/proc/<pid>/cmdline`.
+/// Split out so a regression test can assert the argv is secret-free.
+const fn curl_argv(url: &str) -> [&str; 10] {
+    [
+        "--silent",
+        "--show-error",
+        "--fail",
+        "-X",
+        "POST",
+        "-H",
+        "Accept: application/json",
+        "-d",
+        "@-",
+        url,
+    ]
 }
 
 /// Extract a required string field, erroring if it is absent.
@@ -277,9 +420,25 @@ fn token_path() -> Option<PathBuf> {
     Some(base.join("ipe").join("token"))
 }
 
-/// The token path if a token is actually stored there.
-fn existing_token_path() -> Option<PathBuf> {
-    token_path().filter(|p| p.is_file())
+/// The three distinguishable login states `--status` reports. A token file that
+/// exists but does not parse is `Corrupt`, never conflated with `LoggedIn`, so
+/// `--status` and the publish path (which requires a parseable token) agree.
+enum TokenStatus {
+    LoggedIn(PathBuf),
+    Corrupt(PathBuf),
+    NotLoggedIn,
+}
+
+/// Classify the stored-token state through the SAME parse the publish path uses,
+/// so `--status` never reports "logged in" on a token `publish` would reject.
+fn token_status() -> TokenStatus {
+    let Some(path) = token_path().filter(|p| p.is_file()) else {
+        return TokenStatus::NotLoggedIn;
+    };
+    match crate::io_bounded::read_to_string_capped(&path, crate::io_bounded::SMALL_FILE_READ_CAP) {
+        Ok(raw) if PublishToken::parse(&raw).is_some() => TokenStatus::LoggedIn(path),
+        _ => TokenStatus::Corrupt(path),
+    }
 }
 
 /// Write the token with owner-only permissions, creating the config dir.
@@ -287,7 +446,7 @@ fn existing_token_path() -> Option<PathBuf> {
 /// On Unix the file is created with mode 0600 atomically before any bytes are
 /// written, so there is no window where the token is readable by other users.
 /// On non-Unix the containing profile directory is the protection layer.
-fn store_token(token: &str) -> Result<PathBuf, CliError> {
+fn store_token(token: &PublishToken) -> Result<PathBuf, CliError> {
     let path = token_path().ok_or_else(|| {
         login_error("could not determine a config directory (set HOME or XDG_CONFIG_HOME)")
     })?;
@@ -295,37 +454,60 @@ fn store_token(token: &str) -> Result<PathBuf, CliError> {
         std::fs::create_dir_all(parent)
             .map_err(|e| login_error(&format!("could not create {}: {e}", parent.display())))?;
     }
-    write_token_atomic(&path, token)?;
+    write_token_atomic(&path, token.as_str())?;
     Ok(path)
 }
 
-/// Write `token` to `path` atomically with owner-only permissions.
+/// Write `token` to `path` crash-atomically with owner-only permissions.
 ///
-/// On Unix: opens the file with `O_CREAT | O_WRONLY | O_TRUNC` and mode 0600,
-/// then enforces 0600 on the open handle before writing. The create-mode covers
-/// a fresh file; the explicit `fchmod` covers an already-existing file (whose
-/// mode `O_TRUNC` would otherwise preserve), so the token bytes are never
-/// written into a less-restrictive file — regardless of a prior mode.
+/// On Unix: writes the token into a fresh mode-0600 temp file in the SAME
+/// directory (created with `O_CREAT | O_EXCL` so a pre-seeded name is refused,
+/// not followed), flushes it, then `rename(2)`s it over `path`. The rename is
+/// atomic within the directory, so a crash at any point leaves either the old
+/// token or the complete new one — never a truncated or empty file. The token
+/// bytes only ever land in a 0600 inode, so there is no window in which the
+/// secret is group- or world-readable.
 ///
 /// On non-Unix: falls back to [`std::fs::write`] and relies on the containing
 /// directory for protection (same as before).
 #[cfg(unix)]
 fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliError> {
     use std::fs::OpenOptions;
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let tmp_path = dir.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("token"),
+        std::process::id()
+    ));
+    // O_EXCL: refuse an existing name (a stale temp or a planted symlink) rather
+    // than truncate/follow it. Mode 0600 from creation, so the secret never
+    // touches a looser-mode inode.
     let mut file = OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o600)
-        .open(path)
-        .map_err(|e| login_error(&format!("could not open {}: {e}", path.display())))?;
-    // fchmod on the open fd (no path re-resolution, no TOCTOU) before the secret
-    // is written, so an existing file's looser mode cannot survive.
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| login_error(&format!("could not set mode on {}: {e}", path.display())))?;
-    writeln!(file, "{token}")
-        .map_err(|e| login_error(&format!("could not write {}: {e}", path.display())))
+        .open(&tmp_path)
+        .map_err(|e| login_error(&format!("could not create {}: {e}", tmp_path.display())))?;
+    let write_result = writeln!(file, "{token}")
+        .and_then(|()| file.flush())
+        .and_then(|()| file.sync_all());
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(login_error(&format!(
+            "could not write {}: {e}",
+            tmp_path.display()
+        )));
+    }
+    drop(file);
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        login_error(&format!(
+            "could not move the token into place at {}: {e}",
+            path.display()
+        ))
+    })
 }
 
 #[cfg(not(unix))]
@@ -425,6 +607,69 @@ mod tests {
     }
 
     #[test]
+    fn publish_token_accepts_github_alphabet() {
+        let parsed = PublishToken::parse("ghp_ABCdef0123456789_XYZ").expect("valid token");
+        assert_eq!(parsed.as_str(), "ghp_ABCdef0123456789_XYZ");
+    }
+
+    #[test]
+    fn publish_token_trims_surrounding_whitespace() {
+        let parsed = PublishToken::parse("  ghp_token123  \n").expect("valid after trim");
+        assert_eq!(parsed.as_str(), "ghp_token123");
+    }
+
+    #[test]
+    fn publish_token_rejects_a_quote() {
+        // A quote would close the curl `header = "…"` string and let the rest of
+        // the token inject further curl directives.
+        assert!(PublishToken::parse(r#"ghp_"url = file:///etc/passwd"#).is_none());
+    }
+
+    #[test]
+    fn publish_token_rejects_an_embedded_newline() {
+        // A newline would start a fresh curl config line (`upload-file = …`).
+        assert!(PublishToken::parse("ghp_token\nupload-file = /etc/passwd").is_none());
+    }
+
+    #[test]
+    fn publish_token_rejects_empty_and_whitespace_only() {
+        assert!(PublishToken::parse("").is_none());
+        assert!(PublishToken::parse("   \n\t").is_none());
+    }
+
+    #[test]
+    fn verification_uri_accepts_https_github() {
+        let uri = VerificationUri::parse("https://github.com/login/device").expect("accepted");
+        assert_eq!(uri.as_str(), "https://github.com/login/device");
+    }
+
+    #[test]
+    fn verification_uri_rejects_non_https_scheme() {
+        assert!(VerificationUri::parse("http://github.com/login/device").is_none());
+        assert!(VerificationUri::parse("file:///etc/passwd").is_none());
+        assert!(VerificationUri::parse("javascript:alert(1)").is_none());
+    }
+
+    #[test]
+    fn verification_uri_rejects_other_host() {
+        assert!(VerificationUri::parse("https://evil.example.com/login/device").is_none());
+        // A lookalike host and a subdomain are not github.com.
+        assert!(VerificationUri::parse("https://github.com.evil.com/x").is_none());
+        assert!(VerificationUri::parse("https://notgithub.com/x").is_none());
+    }
+
+    #[test]
+    fn verification_uri_rejects_userinfo_masking_the_host() {
+        // `github.com` in the userinfo must not let an attacker host through.
+        assert!(VerificationUri::parse("https://github.com@evil.example.com/x").is_none());
+    }
+
+    #[test]
+    fn verification_uri_rejects_a_port() {
+        assert!(VerificationUri::parse("https://github.com:8443/login/device").is_none());
+    }
+
+    #[test]
     fn unexpected_login_argument_is_a_usage_error() {
         let result = run_login(&["--bogus".to_owned()]);
         assert!(matches!(result, Err(CliError::UsageOwned(_))));
@@ -503,6 +748,104 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).expect("readable"),
             "new-token\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The `post_form` curl argv must never carry a field value — the body is
+    /// delivered over stdin (`-d @-`), so the poll's `device_code` (a secret
+    /// exchangeable for the publish token) cannot leak via `/proc/<pid>/cmdline`.
+    #[test]
+    fn post_form_argv_carries_no_secret_body() {
+        let argv = curl_argv(TOKEN_URL);
+        let secret = "the-device-code-secret";
+        let body = format!(
+            "client_id={}&device_code={}&grant_type={}",
+            url_encode(CLIENT_ID),
+            url_encode(secret),
+            url_encode(GRANT_TYPE)
+        );
+        for arg in argv {
+            assert!(
+                !arg.contains(secret),
+                "curl argv must not contain the device_code secret; found in `{arg}`"
+            );
+            assert_ne!(
+                arg, body,
+                "the form body must not appear as an argv element"
+            );
+        }
+        // The body must be present exactly as the stdin sentinel, nothing more.
+        assert!(argv.contains(&"@-"), "body must be read from stdin (`@-`)");
+    }
+
+    /// A hostile `interval` (up to `u64::MAX`) is clamped, so the poll cadence
+    /// can never be pushed into an unbounded sleep by the server's response.
+    #[test]
+    fn poll_interval_is_clamped_to_ceiling() {
+        // Mirrors the slow_down clamp: `.max(interval + 5).min(MAX_POLL_INTERVAL_SECS)`.
+        let clamp = |raw: u64, current: u64| raw.max(current + 5).min(MAX_POLL_INTERVAL_SECS);
+        assert_eq!(clamp(u64::MAX, 5), MAX_POLL_INTERVAL_SECS);
+        assert_eq!(clamp(0, 5), 10); // floor of current+5 still applies
+        // The initial-interval clamp keeps a hostile first value bounded too.
+        assert_eq!(
+            u64::MAX.clamp(1, MAX_POLL_INTERVAL_SECS),
+            MAX_POLL_INTERVAL_SECS
+        );
+        assert_eq!(0u64.clamp(1, MAX_POLL_INTERVAL_SECS), 1);
+    }
+
+    /// `--status` classification must agree with the publish path: a token file
+    /// that exists but does not parse is `Corrupt`, never `LoggedIn`.
+    #[cfg(unix)]
+    #[test]
+    fn token_status_reports_corrupt_distinctly_from_logged_in() {
+        // A corrupt token (bytes outside the alphabet) does not parse.
+        assert!(PublishToken::parse("not a valid token!!").is_none());
+        // A well-formed token parses, matching what publish consumes.
+        assert!(PublishToken::parse("ghp_valid_token_0123").is_some());
+        // The classifier reuses exactly this parse, so the two views cannot drift.
+    }
+
+    /// A crash-atomic write leaves a complete, well-formed, 0600 token — the temp
+    /// file is renamed into place, so there is no truncated/empty window.
+    #[cfg(unix)]
+    #[test]
+    fn write_token_is_crash_atomic_and_leaves_no_temp() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = std::env::temp_dir().join(format!(
+            "ipe-login-atomic-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("token");
+
+        write_token_atomic(&path, "ghp_atomic_token").expect("write succeeds");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("token readable"),
+            "ghp_atomic_token\n"
+        );
+        let mode = std::fs::metadata(&path)
+            .expect("exists")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "renamed token must be 0600, got {mode:04o}");
+
+        // No leftover temp file in the directory.
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("readdir")
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no .tmp file should remain after rename"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

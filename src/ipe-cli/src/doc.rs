@@ -735,23 +735,27 @@ fn build_doc_bundle(docs_root: &std::path::Path) -> Result<DocBundle, CliError> 
         }
     }
 
-    // Diagnostics: from the embedded explain pages.
+    // Diagnostics: from the embedded explain pages. The title is the page's
+    // human heading (never the code repeated), so a list reads
+    // `IPE-Xnnnn  <title>` rather than the code twice.
     let diagnostic_sources: Vec<BundleSource> = ipe_diagnostics::ALL_CODES
         .iter()
         .map(|code| {
             let body = ipe_diagnostics::explain_page(*code)
                 .unwrap_or("")
                 .to_owned();
-            BundleSource::with_body(code.as_str().to_owned(), code.as_str().to_owned(), body)
+            let title = explain_title(&body).unwrap_or_else(|| code.as_str().to_owned());
+            BundleSource::with_body(code.as_str().to_owned(), title, body)
         })
         .collect();
 
-    // CLI commands: from the COMMANDS registry.
+    // CLI commands: from the COMMANDS registry. The summary is the title, so a
+    // list reads `<command>  <summary>` in an aligned table.
     let cli_sources: Vec<BundleSource> = crate::help::command_names()
         .into_iter()
         .filter_map(|name| {
             crate::help::command_summary(name).map(|summary| {
-                BundleSource::with_body(name.to_owned(), name.to_owned(), summary.to_owned())
+                BundleSource::with_body(name.to_owned(), summary.to_owned(), summary.to_owned())
             })
         })
         .collect();
@@ -1876,6 +1880,43 @@ fn module_stem(module: &str) -> String {
     module.replace('.', "-")
 }
 
+/// The one canonical href for a bundle entry, relative to a page whose distance
+/// from the site root is `base` (`""` at the root, `"../"` one level deep).
+///
+/// This is the single source of truth every link builder shares — the search
+/// script, the index pages, and page emission — so a link and the file it points
+/// at are computed identically and can never drift (issue #1874, item 9):
+///
+/// - A **module** page lives at the root as `<Module-stem>.html`; a symbol links
+///   to its module page with a `#<symbol>` fragment.
+/// - Every other kind lives at `<kind>/<key>.html`.
+fn entry_href(kind: crate::doc_bundle::DocKind, key: &str, base: &str) -> String {
+    use crate::doc_bundle::DocKind;
+    match kind {
+        DocKind::Module => format!("{base}{}.html", module_stem(key)),
+        DocKind::Symbol => {
+            // `Module.symbol` → the module page anchored at the symbol.
+            match key.rsplit_once('.') {
+                Some((module, sym)) => format!("{base}{}.html#{sym}", module_stem(module)),
+                None => format!("{base}{}.html", module_stem(key)),
+            }
+        }
+        _ => format!("{base}{}/{key}.html", kind.prefix()),
+    }
+}
+
+/// The site-map key (never base-relative) for a bundle entry's generated file —
+/// the flat path the serve loop and the on-disk writer store it under. Symbols
+/// have no page of their own (they live as anchors on their module page), so
+/// this returns `None` for them.
+fn entry_page_key(kind: crate::doc_bundle::DocKind, key: &str) -> Option<String> {
+    use crate::doc_bundle::DocKind;
+    match kind {
+        DocKind::Module | DocKind::Symbol => None,
+        _ => Some(format!("{}/{key}.html", kind.prefix())),
+    }
+}
+
 /// One piece of a rendered signature: either plain text, or an in-package type
 /// reference to link. A [`TyDoc`] renders to a flat sequence of these, so a
 /// renderer emits links (HTML `<a>`, Markdown `[…](…)`) without re-parsing the
@@ -2039,7 +2080,7 @@ fn render_site_split(
     }
 
     if write_format.wants_html() {
-        let search_script = build_site_search_script(bundle, "");
+        let search_script = build_site_search_script(docs, bundle, "");
         html_files.insert(
             "index.html".to_owned(),
             render_html_index(docs, bundle, &search_script),
@@ -2053,7 +2094,7 @@ fn render_site_split(
         }
         // Per-kind index pages: module/index.html, diagnostic/index.html,
         // cli/index.html, and one page per curated kind.
-        let ref_search = build_site_search_script(bundle, "../");
+        let ref_search = build_site_search_script(docs, bundle, "../");
         html_files.insert(
             "module/index.html".to_owned(),
             render_reference_index(docs, &ref_search),
@@ -2069,6 +2110,9 @@ fn render_site_split(
         for (path, content) in render_curated_kind_indexes(bundle, &ref_search) {
             html_files.insert(path, content);
         }
+        for (path, content) in render_entry_pages(bundle, &ref_search) {
+            html_files.insert(path, content);
+        }
     }
 
     (json_files, markdown_files, html_files)
@@ -2080,8 +2124,8 @@ fn render_site_for_serve(
     bundle: &crate::doc_bundle::DocBundle,
 ) -> BTreeMap<String, String> {
     let index = AnchorIndex::build(docs);
-    let search_script = build_site_search_script(bundle, "");
-    let ref_search = build_site_search_script(bundle, "../");
+    let search_script = build_site_search_script(docs, bundle, "");
+    let ref_search = build_site_search_script(docs, bundle, "../");
     let mut files = BTreeMap::new();
     files.insert(
         "index.html".to_owned(),
@@ -2109,6 +2153,11 @@ fn render_site_for_serve(
     for (path, content) in render_curated_kind_indexes(bundle, &ref_search) {
         files.insert(path, content);
     }
+    // Per-entry pages: the targets every diagnostic / CLI / curated link points
+    // at. Without these the links 404 (issue #1874, item 9).
+    for (path, content) in render_entry_pages(bundle, &ref_search) {
+        files.insert(path, content);
+    }
     files
 }
 
@@ -2116,29 +2165,73 @@ fn render_site_for_serve(
 ///
 /// `href_base` is the JS-level base prefix for building entry hrefs (`""` for
 /// root-level pages, `"../"` for pages one level deep like `module/index.html`).
-fn build_site_search_script(bundle: &crate::doc_bundle::DocBundle, href_base: &str) -> String {
-    let entries: Vec<(&str, &str, &str)> = bundle
-        .all_entries()
-        .map(|e| (e.kind.prefix(), e.key.as_str(), e.title.as_str()))
-        .collect();
-    build_search_script(&entries, href_base)
+fn build_site_search_script(
+    docs: &DocsJson,
+    bundle: &crate::doc_bundle::DocBundle,
+    href_base: &str,
+) -> String {
+    use crate::doc_bundle::DocKind;
+    use std::collections::HashSet;
+    // The stems that actually have a generated module page. A module/symbol
+    // search entry is only included when it resolves to one of these, so a
+    // result can never land on a page that was never generated (issue #1874,
+    // items 9 and 16 — the short-form symbol duplicates would otherwise point at
+    // a non-existent `Short.html`).
+    let module_stems: HashSet<String> = docs.modules.iter().map(|m| module_stem(&m.name)).collect();
+
+    // Precompute each entry's href through the one canonical scheme so a search
+    // result lands on a generated page — the JS never rebuilds a path.
+    let mut entries: Vec<SearchEntry> = Vec::new();
+    for e in bundle.all_entries() {
+        let target_stem = match e.kind {
+            DocKind::Module => Some(module_stem(&e.key)),
+            DocKind::Symbol => e
+                .key
+                .rsplit_once('.')
+                .map(|(module, _)| module_stem(module)),
+            _ => None,
+        };
+        // Skip a module/symbol entry whose page was not generated (a short-form
+        // duplicate whose stem has no page); keep the fully-qualified form.
+        if let Some(stem) = &target_stem
+            && !module_stems.contains(stem)
+        {
+            continue;
+        }
+        entries.push(SearchEntry {
+            kind: e.kind.prefix(),
+            key: e.key.clone(),
+            title: e.title.clone(),
+            href: entry_href(e.kind, &e.key, href_base),
+        });
+    }
+    build_search_script(&entries)
+}
+
+/// One searchable entry as embedded in a page's inline index: its kind label,
+/// key, title, and its already-resolved href (relative to that page).
+struct SearchEntry {
+    kind: &'static str,
+    key: String,
+    title: String,
+    href: String,
 }
 
 /// Generate `docs.json` and the selected renderings for the package at `path`,
 /// writing them under `out/{json,markdown,html}/` subfolders.
 ///
 /// Attempts full project + stdlib documentation. When no project source is
-/// reachable at `path` (no source files, no valid project), falls back to
+/// reachable at `path` (an empty directory, no `.ipe` modules), falls back to
 /// stdlib-only so the command succeeds in any directory, including an empty
-/// scratch dir.
+/// scratch dir. A project that exists but fails to build surfaces its error
+/// rather than collapsing to a stdlib-only site.
 ///
 /// # Errors
-/// [`CliError::Io`] on a write failure. Project extraction errors are silently
-/// absorbed by the stdlib-only fallback.
+/// [`CliError::Io`] on a write failure, plus any real project build error from
+/// [`build_docs_or_stdlib`].
 fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), CliError> {
-    // Attempt full project + stdlib documentation. When no project is reachable
-    // at `path`, fall back to stdlib-only so the command succeeds in any dir.
-    let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
+    crate::style::print_command_header();
+    let docs = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
 
@@ -2154,12 +2247,16 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
 
     print!(
         "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "documented {} module{} to {}",
-            docs.modules.len(),
-            if docs.modules.len() == 1 { "" } else { "s" },
-            out.display()
-        )))
+        crate::style::status_line(
+            true,
+            &format!(
+                "documented {} module{} to {}",
+                docs.modules.len(),
+                if docs.modules.len() == 1 { "" } else { "s" },
+                out.display()
+            ),
+            crate::style::use_color(&std::io::stdout()),
+        )
     );
     Ok(())
 }
@@ -2184,6 +2281,29 @@ fn write_format_dir(
         std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
     }
     Ok(())
+}
+
+/// Build project + stdlib docs, falling back to stdlib-only ONLY when no project
+/// is reachable at `path`.
+///
+/// The fallback is reserved for [`DiffError::Empty`] — a directory carrying no
+/// `.ipe` modules, where stdlib-only is the correct and complete answer. Every
+/// other build failure (an unreadable module, a typecheck error, an open
+/// interface) is a real project error the user must see, so it is propagated
+/// rather than masked behind a plausible stdlib-only site that silently omits
+/// every project module.
+///
+/// # Errors
+/// Any non-empty [`build_docs`] failure — [`CliError::Io`], a typecheck
+/// [`CliError::Diff`], or an open-interface [`CliError::Diff`].
+fn build_docs_or_stdlib(path: &Path) -> Result<DocsJson, CliError> {
+    match build_docs(path) {
+        Ok(docs) => Ok(docs),
+        Err(CliError::Diff(crate::api_surface::DiffError::Empty { .. })) => {
+            Ok(build_stdlib_only_docs())
+        }
+        Err(other) => Err(other),
+    }
 }
 
 /// Build a stdlib-only [`DocsJson`] without accessing any project on disk.
@@ -2971,16 +3091,50 @@ fn render_plain_tree(nodes: &[NamespaceNode], depth: usize, out: &mut String) {
 /// The bundled stylesheet the HTML site links, written once beside the pages so
 /// the site is self-contained and opens over `file://` with no network fetch.
 const STYLE_CSS: &str = "\
+/* Palette: dark by default, following the system preference; the light set
+   applies under a light system preference or an explicit [data-theme]. */
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
   --bg: #1e232b;
   --surface: #262c36;
-  --fg: #d7dbe0;
+  --fg: #e6e9ee;
+  --fg-body: #cdd3db;
   --muted: #9aa2ad;
   --accent: #f2e29a;
   --accent-strong: #f7ecb0;
   --border: #3a4150;
+  --inline-bg: #2c333f;
+  --code-kw: #d6a2ff; --code-ty: #8fd3e8; --code-tv: #b8c0cc; --code-fn: #9ec1ff;
+  --code-kn: #7fd0ff; --code-ct: #ffbe7a; --code-va: #d7dbe0; --code-mo: #b7a6ff;
+  --code-op: #cdd3db; --code-st: #9be3a6; --code-nm: #ffb28a; --code-cm: #8b93a0;
 }
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff; --surface: #f4f5f7; --fg: #1c2128; --fg-body: #2f3641;
+    --muted: #616873; --accent: #8a6d00; --accent-strong: #6f5700;
+    --border: #d7dbe0; --inline-bg: #eceef1;
+    --code-kw: #7c3aed; --code-ty: #0e7490; --code-tv: #6b7280; --code-fn: #1d4ed8;
+    --code-kn: #0369a1; --code-ct: #b45309; --code-va: #374151; --code-mo: #4338ca;
+    --code-op: #374151; --code-st: #166534; --code-nm: #9a3412; --code-cm: #6b7280;
+  }
+}
+:root[data-theme=light] {
+  --bg: #ffffff; --surface: #f4f5f7; --fg: #1c2128; --fg-body: #2f3641;
+  --muted: #616873; --accent: #8a6d00; --accent-strong: #6f5700;
+  --border: #d7dbe0; --inline-bg: #eceef1;
+  --code-kw: #7c3aed; --code-ty: #0e7490; --code-tv: #6b7280; --code-fn: #1d4ed8;
+  --code-kn: #0369a1; --code-ct: #b45309; --code-va: #374151; --code-mo: #4338ca;
+  --code-op: #374151; --code-st: #166534; --code-nm: #9a3412; --code-cm: #6b7280;
+}
+:root[data-theme=dark] {
+  --bg: #1e232b; --surface: #262c36; --fg: #e6e9ee; --fg-body: #cdd3db;
+  --muted: #9aa2ad; --accent: #f2e29a; --accent-strong: #f7ecb0;
+  --border: #3a4150; --inline-bg: #2c333f;
+  --code-kw: #d6a2ff; --code-ty: #8fd3e8; --code-tv: #b8c0cc; --code-fn: #9ec1ff;
+  --code-kn: #7fd0ff; --code-ct: #ffbe7a; --code-va: #d7dbe0; --code-mo: #b7a6ff;
+  --code-op: #cdd3db; --code-st: #9be3a6; --code-nm: #ffb28a; --code-cm: #8b93a0;
+}
+*, *::before, *::after { box-sizing: border-box; }
 body {
   font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   margin: 0; padding: 0; max-width: none;
@@ -2991,6 +3145,13 @@ h1 { font-size: 1.6rem; color: var(--accent); }
 h2 { font-size: 1.2rem; margin-top: 2rem; color: var(--accent); }
 a { color: var(--accent); text-decoration: none; }
 a:hover, a:focus { color: var(--accent-strong); text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.skip-link {
+  position: absolute; left: -999px; top: 0; z-index: 200;
+  background: var(--surface); color: var(--fg); padding: 0.5rem 0.9rem;
+  border: 1px solid var(--border); border-radius: 0 0 6px 0;
+}
+.skip-link:focus { left: 0; }
 nav.site-header {
   background: var(--surface); border-bottom: 1px solid var(--border);
   padding: 0.6rem 1.5rem; display: flex; align-items: center; gap: 1.2rem;
@@ -3000,6 +3161,8 @@ nav.site-header .site-title {
   font-weight: 700; color: var(--accent-strong); font-size: 1rem;
   text-decoration: none; margin-right: 0.4rem;
 }
+nav.site-header .site-title .title-short { display: none; }
+.nav-links { display: contents; }
 nav.site-header a { color: var(--fg); font-size: 0.9rem; }
 nav.site-header a:hover, nav.site-header a:focus { color: var(--accent-strong); }
 nav.site-header a.active { color: var(--accent); font-weight: 600; }
@@ -3014,6 +3177,21 @@ nav.site-header input.nav-search {
   border: 1px solid var(--border); border-radius: 4px;
 }
 nav.site-header input.nav-search:focus { outline: 2px solid var(--accent); }
+.theme-toggle, .nav-toggle {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.2rem 0.5rem; font-size: 1rem; cursor: pointer;
+  line-height: 1.2;
+}
+.theme-toggle:hover, .nav-toggle:hover { color: var(--accent-strong); }
+.theme-toggle .theme-icon-light { display: none; }
+:root[data-theme=light] .theme-toggle .theme-icon-light { display: inline; }
+:root[data-theme=light] .theme-toggle .theme-icon-dark { display: none; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .theme-toggle .theme-icon-light { display: inline; }
+  :root:not([data-theme]) .theme-toggle .theme-icon-dark { display: none; }
+}
+.nav-toggle { display: none; }
+.nav-toggle .nav-toggle-close { display: none; }
 .search-results {
   position: absolute; top: calc(100% + 4px); right: 0; width: 20rem;
   background: var(--surface); border: 1px solid var(--border);
@@ -3024,7 +3202,9 @@ nav.site-header input.nav-search:focus { outline: 2px solid var(--accent); }
   display: block; padding: 0.3rem 0.8rem; font-size: 0.85rem;
   color: var(--fg);
 }
-.search-results li a:hover { background: var(--bg); color: var(--accent-strong); }
+.search-results li a:hover, .search-results li.active a {
+  background: var(--bg); color: var(--accent-strong);
+}
 .search-results li a .sr-kind { color: var(--muted); font-size: 0.75rem; margin-left: 0.4rem; }
 nav.crumb { margin-bottom: 1.5rem; font-size: 0.9rem; }
 input.filter {
@@ -3039,23 +3219,36 @@ ul.modules {
   list-style: none; padding: 0; margin: 0.5rem 0 0;
   columns: 3 14rem; column-gap: 2rem;
 }
-ul.modules li { margin: 0.3rem 0; break-inside: avoid; }
+/* Root modules breathe; a parent and its children read as one tight block
+   (issue #1874, item 15). */
+ul.modules > li { margin: 0.55rem 0; break-inside: avoid; }
+ul.modules ul { padding-left: 1.1rem; margin-top: 0.1rem; }
+ul.modules ul li { margin: 0.12rem 0; }
 section.entry { border-top: 1px solid var(--border); padding-top: 0.5rem; margin-top: 1.5rem; }
 section.entry h3 { margin: 0 0 0.3rem; font-size: 1.05rem; color: var(--accent); }
 code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* Inline code / symbols sit in a rounded-border rectangle for emphasis
+   (issue #1874, item 11). */
+p.comment code, li code, .entry-code code, code.inline {
+  background: var(--inline-bg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.05em 0.35em; font-size: 0.88em;
+}
 pre.sig {
   background: var(--surface); padding: 0.4rem 0.6rem;
   border-radius: 4px; overflow-x: auto; border: 1px solid var(--border);
 }
-p.comment { margin: 0.4rem 0 0; color: var(--muted); }
+/* Readable body prose (issue #1874, item 11) — not the low-contrast muted grey. */
+p.comment { margin: 0.5rem 0 0; color: var(--fg-body); }
+ul.doc-list { margin: 0.5rem 0 0; padding-left: 1.4rem; color: var(--fg-body); }
+ul.doc-list li { margin: 0.2rem 0; }
 pre.doc-code {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 4px; padding: 0.6rem 0.8rem; overflow-x: auto;
   margin: 0.6rem 0 0; color: var(--fg);
 }
-pre.doc-code code { background: none; padding: 0; }
-span.ns-header { color: var(--muted); font-style: italic; }
-ul.modules ul { padding-left: 1.2rem; }
+pre.doc-code code { background: none; padding: 0; border: 0; }
+/* Non-clickable namespace headers: dimmed grey, NOT italic (issue #1874, item 14). */
+span.ns-header { color: var(--muted); font-style: normal; }
 section.kind-group { margin-bottom: 2.5rem; }
 section.kind-group h2 { margin-bottom: 0.6rem; }
 ul.curated-entries {
@@ -3069,7 +3262,63 @@ ul.index-entries {
 }
 ul.index-entries li { margin: 0.4rem 0; }
 ul.index-entries .entry-key { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; margin-left: 0.5rem; }
-@media (max-width: 40rem) { ul.modules { columns: 1; } nav.site-header { gap: 0.6rem; } }
+/* Aligned two-column table for the Diagnostics and CLI lists (items 5 and 7):
+   the code/command in a fixed first column, the title in the next. */
+ul.index-table li {
+  display: grid; grid-template-columns: minmax(10rem, max-content) 1fr;
+  gap: 0.75rem; align-items: baseline;
+}
+ul.index-table .entry-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--accent);
+}
+ul.index-table .entry-title { color: var(--fg-body); font-weight: 400; }
+p.entry-code { margin: 0.2rem 0 1rem; color: var(--muted); }
+/* Syntax-highlight token classes, shared with the docs highlighter. */
+.doc-code .kw, .sig .kw { color: var(--code-kw); font-weight: 600; }
+.doc-code .ty, .sig .ty { color: var(--code-ty); }
+.doc-code .tv, .sig .tv { color: var(--code-tv); }
+.doc-code .fn, .sig .fn { color: var(--code-fn); }
+.doc-code .kn, .sig .kn { color: var(--code-kn); font-weight: 500; }
+.doc-code .ct, .sig .ct { color: var(--code-ct); }
+.doc-code .va, .sig .va { color: var(--code-va); }
+.doc-code .mo, .sig .mo { color: var(--code-mo); }
+.doc-code .op, .sig .op { color: var(--code-op); }
+.doc-code .st, .sig .st { color: var(--code-st); }
+.doc-code .nm, .sig .nm { color: var(--code-nm); }
+.doc-code .cm, .sig .cm { color: var(--code-cm); font-style: italic; }
+/* Floating round scroll-to-top button (issue #1874, item 17). */
+.scroll-top {
+  position: fixed; bottom: 1.5rem; right: 1.5rem; width: 2.75rem; height: 2.75rem;
+  border-radius: 50%; border: 1px solid var(--border); background: var(--surface);
+  color: var(--accent); font-size: 1.2rem; cursor: pointer; display: none;
+  align-items: center; justify-content: center; z-index: 50;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.scroll-top.visible { display: flex; }
+.scroll-top:hover { color: var(--accent-strong); }
+@media (max-width: 48rem) {
+  ul.modules { columns: 1; }
+  nav.site-header { gap: 0.6rem; }
+  nav.site-header .site-title .title-full { display: none; }
+  nav.site-header .site-title .title-short { display: inline; }
+  .nav-toggle { display: inline-block; margin-left: auto; order: 3; }
+  nav.site-header .search-wrap { margin-left: 0; }
+  .nav-links {
+    display: none; order: 4; flex-basis: 100%;
+    flex-direction: column; align-items: flex-start; gap: 0.6rem;
+    margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--border);
+  }
+  .nav-links.open { display: flex; }
+  .nav-links .sep { display: none; }
+  .nav-links .search-wrap { width: 100%; }
+  .nav-links input.nav-search { width: 100%; }
+  .search-results { width: 100%; }
+  .nav-toggle[aria-expanded=true] .nav-toggle-open { display: none; }
+  .nav-toggle[aria-expanded=true] .nav-toggle-close { display: inline; }
+  ul.index-table li { grid-template-columns: 1fr; gap: 0.1rem; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 ";
 
 /// The inline filter script bundled into the module-list index page.
@@ -3112,21 +3361,28 @@ const SEARCH_SCRIPT_TEMPLATE: &str = "\
   var box = document.getElementById('nav-search');
   var list = document.getElementById('search-results');
   if (!box || !list) return;
+  var active = -1;
+  function esc(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function setExpanded(on) { box.setAttribute('aria-expanded', on ? 'true' : 'false'); }
   function show(entries) {
     list.innerHTML = '';
+    active = -1;
     entries.slice(0, 12).forEach(function (e) {
       var li = document.createElement('li');
+      li.setAttribute('role', 'option');
       var a = document.createElement('a');
-      a.href = HREF_BASE + e.kind + '/' + e.key + '.html';
+      a.href = e.href;
+      a.setAttribute('tabindex', '-1');
       a.innerHTML = '<span class=\"sr-title\">' + esc(e.title) + '</span>'
         + '<span class=\"sr-kind\">' + esc(e.kind) + '</span>';
       li.appendChild(a);
       list.appendChild(li);
     });
-    list.style.display = entries.length ? 'block' : 'none';
-  }
-  function esc(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    var any = entries.length > 0;
+    list.style.display = any ? 'block' : 'none';
+    setExpanded(any);
   }
   function rank(q) {
     var ql = q.toLowerCase();
@@ -3143,14 +3399,31 @@ const SEARCH_SCRIPT_TEMPLATE: &str = "\
     scored.sort(function (a, b) { return b.s - a.s; });
     return scored.map(function (x) { return x.e; });
   }
+  function highlight(items) {
+    for (var i = 0; i < items.length; i++) {
+      items[i].setAttribute('aria-selected', i === active ? 'true' : 'false');
+      items[i].className = i === active ? 'active' : '';
+    }
+  }
   box.addEventListener('input', function () {
     var q = box.value.trim();
-    if (q.length < 1) { list.style.display = 'none'; return; }
+    if (q.length < 1) { list.style.display = 'none'; setExpanded(false); return; }
     show(rank(q));
+  });
+  box.addEventListener('keydown', function (ev) {
+    var items = list.querySelectorAll('li');
+    if (!items.length) return;
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); active = Math.min(active + 1, items.length - 1); highlight(items); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); active = Math.max(active - 1, 0); highlight(items); }
+    else if (ev.key === 'Enter' && active >= 0) {
+      var a = items[active].querySelector('a');
+      if (a) { ev.preventDefault(); window.location.href = a.href; }
+    } else if (ev.key === 'Escape') { list.style.display = 'none'; setExpanded(false); }
   });
   document.addEventListener('click', function (ev) {
     if (!box.contains(ev.target) && !list.contains(ev.target)) {
       list.style.display = 'none';
+      setExpanded(false);
     }
   });
 })();
@@ -3184,11 +3457,25 @@ fn render_header(active: NavSection, base: &str, search_script: &str) -> String 
         };
         format!("<a href=\"{base}{href}\"{cls}>{label}</a>")
     };
-    let mut h = String::from("<nav class=\"site-header\">\n");
+    let mut h = String::from(
+        "<a class=\"skip-link\" href=\"#content\">Skip to content</a>\n\
+         <nav class=\"site-header\" aria-label=\"Site\">\n",
+    );
+    // The full title on desktop; the mobile CSS swaps in the short form via a
+    // second span — never a bare \"Ipê docs\" (issue #1874, item 20).
     let _ = writeln!(
         h,
-        "<a class=\"site-title\" href=\"{base}index.html\">Ip\u{ea} docs</a>"
+        "<a class=\"site-title\" href=\"{base}index.html\">\
+         <span class=\"title-full\">Ip\u{ea} language documentation</span>\
+         <span class=\"title-short\">Ip\u{ea} language docs</span></a>"
     );
+    h.push_str(
+        "<button class=\"nav-toggle\" id=\"nav-toggle\" type=\"button\" \
+         aria-label=\"Menu\" aria-expanded=\"false\" aria-controls=\"nav-links\">\
+         <span class=\"nav-toggle-open\">\u{2630}</span>\
+         <span class=\"nav-toggle-close\">\u{2715}</span></button>\n",
+    );
+    h.push_str("<div class=\"nav-links\" id=\"nav-links\">\n");
     h.push_str(&link(NavSection::Guide, "guide/index.html", "Guides"));
     h.push('\n');
     h.push_str(&link(NavSection::Topic, "topic/index.html", "Topics"));
@@ -3201,7 +3488,7 @@ fn render_header(active: NavSection, base: &str, search_script: &str) -> String 
         "Constructs",
     ));
     h.push('\n');
-    h.push_str("<span class=\"sep\">\u{2502}</span>\n");
+    h.push_str("<span class=\"sep\" aria-hidden=\"true\">\u{2502}</span>\n");
     h.push_str(&link(
         NavSection::Reference,
         "module/index.html",
@@ -3217,17 +3504,86 @@ fn render_header(active: NavSection, base: &str, search_script: &str) -> String 
     h.push_str(&link(NavSection::Cli, "cli/index.html", "CLI"));
     h.push('\n');
     h.push_str(
-        "<span class=\"search-wrap\">\
+        "<span class=\"search-wrap\" role=\"search\">\
          <input type=\"search\" id=\"nav-search\" class=\"nav-search\" \
          placeholder=\"Search\u{2026}\" aria-label=\"Search documentation\" \
-         autocomplete=\"off\">\
-         <ul class=\"search-results\" id=\"search-results\"></ul>\
+         role=\"combobox\" aria-expanded=\"false\" aria-controls=\"search-results\" \
+         aria-autocomplete=\"list\" autocomplete=\"off\">\
+         <ul class=\"search-results\" id=\"search-results\" role=\"listbox\" \
+         aria-label=\"Search results\"></ul>\
          </span>\n",
     );
+    h.push_str(
+        "<button class=\"theme-toggle\" id=\"theme-toggle\" type=\"button\" \
+         aria-label=\"Toggle light and dark theme\" aria-pressed=\"false\">\
+         <span class=\"theme-icon-dark\" aria-hidden=\"true\">\u{263e}</span>\
+         <span class=\"theme-icon-light\" aria-hidden=\"true\">\u{2600}</span></button>\n",
+    );
+    h.push_str("</div>\n");
     h.push_str("</nav>\n");
     h.push_str(search_script);
+    h.push_str(NAV_UX_SCRIPT);
     h
 }
+
+/// The inline script powering the theme toggle (item 19), the mobile hamburger
+/// (item 20), and the floating scroll-to-top button (item 17). Static — no user
+/// content reaches it.
+const NAV_UX_SCRIPT: &str = "\
+<script>
+(function () {
+  var root = document.documentElement;
+  // Theme: stored choice wins, else the system preference (the default).
+  var stored = null;
+  try { stored = localStorage.getItem('ipe-theme'); } catch (e) {}
+  function apply(theme) {
+    if (theme === 'light' || theme === 'dark') { root.setAttribute('data-theme', theme); }
+    else { root.removeAttribute('data-theme'); }
+    var btn = document.getElementById('theme-toggle');
+    if (btn) {
+      var dark = theme === 'dark' ||
+        (theme !== 'light' && window.matchMedia &&
+         window.matchMedia('(prefers-color-scheme: dark)').matches);
+      btn.setAttribute('aria-pressed', dark ? 'true' : 'false');
+    }
+  }
+  apply(stored);
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function () {
+      var cur = root.getAttribute('data-theme');
+      var sysDark = window.matchMedia &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var isDark = cur ? cur === 'dark' : sysDark;
+      var next = isDark ? 'light' : 'dark';
+      try { localStorage.setItem('ipe-theme', next); } catch (e) {}
+      apply(next);
+    });
+  }
+  // Mobile menu.
+  var navToggle = document.getElementById('nav-toggle');
+  var navLinks = document.getElementById('nav-links');
+  if (navToggle && navLinks) {
+    navToggle.addEventListener('click', function () {
+      var open = navLinks.classList.toggle('open');
+      navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+  // Scroll-to-top.
+  var top = document.getElementById('scroll-top');
+  if (top) {
+    window.addEventListener('scroll', function () {
+      top.classList.toggle('visible', window.scrollY > 300);
+    }, { passive: true });
+    top.addEventListener('click', function () {
+      var reduce = window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
+    });
+  }
+})();
+</script>
+";
 
 /// Escape the five characters an HTML text/attribute context requires, so a type
 /// name or a doc-comment can never inject markup.
@@ -3300,25 +3656,50 @@ fn render_comment_html(comment: &str) -> String {
         prose.clear();
     }
 
-    /// Flush a code block buffer to `out`, html-escaping the content.
+    /// Flush a code block buffer to `out`, syntax-highlighting it when it parses
+    /// as Ipê and falling back to escaped text otherwise. A contiguous run of
+    /// code lines stays one `<pre>` block.
     fn flush_code(out: &mut String, code: &mut Vec<String>) {
         if code.is_empty() {
             return;
         }
-        out.push_str("<pre class=\"doc-code\"><code>");
-        for (i, line) in code.iter().enumerate() {
-            if i > 0 {
-                out.push('\n');
-            }
-            out.push_str(&html_escape(line));
-        }
-        out.push_str("</code></pre>\n");
+        let source = code.join("\n");
+        out.push_str("<pre class=\"doc-code\">");
+        out.push_str(&highlight_ipe_snippet(&source));
+        out.push_str("</pre>\n");
         code.clear();
+    }
+
+    /// Flush a bullet-list buffer as a `<ul>`, each item its own `<li>` — the raw
+    /// `*`/`-` marker dropped, inline spans rendered (issue #1874, item 12).
+    fn flush_list(out: &mut String, items: &mut Vec<String>) {
+        if items.is_empty() {
+            return;
+        }
+        out.push_str("<ul class=\"doc-list\">\n");
+        for item in items.iter() {
+            let _ = writeln!(out, "<li>{}</li>", render_inline(item));
+        }
+        out.push_str("</ul>\n");
+        items.clear();
+    }
+
+    /// Strip a leading bullet marker (`* `, `- `, or `+ `), returning the item
+    /// text when the line is a list item.
+    fn bullet_item(line: &str) -> Option<&str> {
+        let t = line.trim_start();
+        for marker in ["* ", "- ", "+ "] {
+            if let Some(rest) = t.strip_prefix(marker) {
+                return Some(rest.trim());
+            }
+        }
+        None
     }
 
     let mut out = String::new();
     let mut prose: Vec<String> = Vec::new();
     let mut code_buf: Vec<String> = Vec::new();
+    let mut list_buf: Vec<String> = Vec::new();
     let mut fenced = false;
 
     for line in comment.lines() {
@@ -3334,21 +3715,32 @@ fn render_comment_html(comment: &str) -> String {
                 code_buf.push(line.to_owned());
             }
         } else if fence_delim {
-            // Opening delimiter: flush prose, then enter fenced mode.
+            // Opening delimiter: flush open blocks, then enter fenced mode.
             flush_prose(&mut out, &mut prose);
+            flush_list(&mut out, &mut list_buf);
             fenced = true;
             // The opening delimiter line (plus any language tag) is dropped.
-        } else if let Some(rest) = line.strip_prefix("    ") {
-            // Indented code block: flush prose, strip the four-space marker.
+        } else if let Some(item) = bullet_item(line) {
+            // A list item: close any open prose/code, accumulate into the list.
+            flush_prose(&mut out, &mut prose);
+            flush_code(&mut out, &mut code_buf);
+            list_buf.push(item.to_owned());
+        } else if list_buf.is_empty()
+            && let Some(rest) = line.strip_prefix("    ")
+        {
+            // Indented code block (only when not continuing a list): flush prose,
+            // strip the four-space marker.
             flush_prose(&mut out, &mut prose);
             code_buf.push(rest.to_owned());
         } else if line.trim().is_empty() {
-            // Blank line: close any open paragraph or indented code block.
+            // Blank line: close any open paragraph, code, or list.
             flush_prose(&mut out, &mut prose);
             flush_code(&mut out, &mut code_buf);
+            flush_list(&mut out, &mut list_buf);
         } else {
-            // Prose line: close any open indented code block first.
+            // Prose line: close any open code or list first.
             flush_code(&mut out, &mut code_buf);
+            flush_list(&mut out, &mut list_buf);
             prose.push(line.trim().to_owned());
         }
     }
@@ -3356,8 +3748,19 @@ fn render_comment_html(comment: &str) -> String {
     // Flush any trailing content (an unclosed fence is treated as a code block).
     flush_prose(&mut out, &mut prose);
     flush_code(&mut out, &mut code_buf);
+    flush_list(&mut out, &mut list_buf);
 
     out
+}
+
+/// Syntax-highlight an Ipê snippet into `<code>…</code>` inner HTML.
+///
+/// The snippet is fed through the shared `ipe_docs` highlighter (the real lexer,
+/// no hand-rolled tokenizer); when it does not parse as a module — most excerpts
+/// do not — the highlighter falls back to escaped text. Deterministic and
+/// escape-safe: no snippet content can inject markup.
+fn highlight_ipe_snippet(source: &str) -> String {
+    ipe_docs::render::highlight_snippet(source)
 }
 
 /// Render a signature's pieces as HTML: an in-package type is an `<a href>` to
@@ -3392,39 +3795,45 @@ fn html_page(title: &str, css_href: &str, header: &str, body: &str) -> String {
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <title>{}</title>\n<link rel=\"stylesheet\" href=\"{css_href}\">\n</head>\n\
-         <body>\n{header}<div class=\"page-body\">\n{body}</div>\n</body>\n</html>\n",
+         <body>\n{header}<main id=\"content\" class=\"page-body\">\n{body}</main>\n\
+         <button id=\"scroll-top\" class=\"scroll-top\" type=\"button\" \
+         aria-label=\"Scroll to top\">\u{2191}</button>\n</body>\n</html>\n",
         html_escape(title)
     )
 }
 
 /// Build the search script with the embedded entry index.
 ///
-/// `entries` are (kind, key, title) triples for every searchable entry.
-/// `href_base` is the JS-level base path to prepend when building hrefs.
-fn build_search_script(entries: &[(&str, &str, &str)], href_base: &str) -> String {
+/// Each entry carries its already-resolved `href` (relative to the page the
+/// script is embedded in), so the JS navigates straight to a generated file and
+/// never rebuilds a path from parts.
+fn build_search_script(entries: &[SearchEntry]) -> String {
     use crate::cli_args::json;
     let mut json_buf = String::from("[");
-    for (i, (kind, key, title)) in entries.iter().enumerate() {
+    for (i, e) in entries.iter().enumerate() {
         if i > 0 {
             json_buf.push(',');
         }
         let _ = std::fmt::Write::write_fmt(
             &mut json_buf,
             format_args!(
-                "{{\"kind\":{},\"key\":{},\"title\":{}}}",
-                json::string(kind),
-                json::string(key),
-                json::string(title)
+                "{{\"kind\":{},\"key\":{},\"title\":{},\"href\":{}}}",
+                json::string(e.kind),
+                json::string(&e.key),
+                json::string(&e.title),
+                json::string(&e.href),
             ),
         );
     }
     json_buf.push(']');
-    let json = json_buf;
 
-    let href_base_js = format!("'{}'", href_base.replace('\'', "\\'"));
-    SEARCH_SCRIPT_TEMPLATE
-        .replace("ENTRY_INDEX_PLACEHOLDER", &json)
-        .replace("HREF_BASE", &href_base_js)
+    // The JSON is embedded verbatim inside a `<script>` element. Escape `<` as
+    // its `<` JSON form so a value containing `</script>` (or any markup)
+    // cannot break out of the script element — a defence-in-depth measure even
+    // though doc keys/titles are repo-controlled.
+    let json_buf = json_buf.replace('<', "\\u003c");
+
+    SEARCH_SCRIPT_TEMPLATE.replace("ENTRY_INDEX_PLACEHOLDER", &json_buf)
 }
 
 /// Sort curated entries: entries with an explicit `order:` first (ascending),
@@ -3436,6 +3845,53 @@ fn sort_curated_entries(entries: &mut Vec<&crate::doc_bundle::DocEntry>) {
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => a.title.cmp(&b.title),
     });
+}
+
+/// Extract a human title from a Markdown body: the text of its first ATX
+/// heading (`# …`), with any leading diagnostic code and backtick markers
+/// stripped. Returns `None` when the body has no heading — the caller then falls
+/// back to the entry key.
+fn explain_title(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix('#') else {
+            if t.is_empty() {
+                continue;
+            }
+            // A body that opens with prose (no heading) has no title to lift.
+            return None;
+        };
+        let heading = rest.trim_start_matches('#').trim();
+        // Drop a leading `IPE-Xnnnn` code token plus its separator so the title is
+        // the description, not the code the list already prints alongside it.
+        let heading = strip_leading_code(heading);
+        let plain: String = heading.chars().filter(|&c| c != '`').collect();
+        let plain = plain.trim().to_owned();
+        if plain.is_empty() {
+            return None;
+        }
+        return Some(plain);
+    }
+    None
+}
+
+/// Strip a leading `IPE-Xnnnn` diagnostic code and its trailing separator
+/// (`:`, `—`, `-`, or whitespace) from a heading, so `IPE-E0001 — Foo` becomes
+/// `Foo`. A heading without such a prefix is returned unchanged.
+fn strip_leading_code(heading: &str) -> &str {
+    let Some(rest) = heading.strip_prefix("IPE-") else {
+        return heading;
+    };
+    // The code token is `IPE-` followed by non-space, non-separator characters.
+    let code_len = rest
+        .find(|c: char| c.is_whitespace() || c == ':' || c == '—')
+        .unwrap_or(rest.len());
+    let after = rest[code_len..].trim_start_matches([' ', '\t', ':', '—', '-']);
+    if after.is_empty() {
+        heading
+    } else {
+        after.trim()
+    }
 }
 
 /// Extract a one-line summary from a Markdown body -- the first non-blank,
@@ -3546,21 +4002,22 @@ fn render_html_tree_relative(nodes: &[NamespaceNode], out: &mut String) {
 fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
     let header = render_header(NavSection::Diagnostic, "../", search_script);
     let mut body = String::from("<h1>Diagnostics</h1>\n");
-    body.push_str("<ul class=\"index-entries\">\n");
+    body.push_str("<ul class=\"index-entries index-table\">\n");
     let mut entries: Vec<&crate::doc_bundle::DocEntry> = bundle
         .entries_for_kind(crate::doc_bundle::DocKind::Diagnostic)
         .collect();
     entries.sort_by(|a, b| a.key.cmp(&b.key));
     for entry in entries {
-        let href = format!(
-            "../{}/{}.html",
-            entry.kind.prefix(),
-            html_escape(&entry.key)
-        );
+        let href = entry_href(entry.kind, &entry.key, "../");
+        // `<code>` (accent) then the human title — never the code twice
+        // (issue #1874, item 5).
         let _ = writeln!(
             body,
-            "<li><a href=\"{href}\">{}</a><span class=\"entry-key\">{}</span></li>",
+            "<li><a class=\"entry-code\" href=\"{}\">{}</a>\
+             <a class=\"entry-title\" href=\"{}\">{}</a></li>",
+            html_escape(&href),
             html_escape(&entry.key),
+            html_escape(&href),
             html_escape(&entry.title),
         );
     }
@@ -3574,27 +4031,30 @@ fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script:
 fn render_cli_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
     let header = render_header(NavSection::Cli, "../", search_script);
     let mut body = String::from("<h1>CLI</h1>\n");
-    body.push_str("<ul class=\"index-entries\">\n");
+    // A two-column aligned table: command in one column, summary in the next, so
+    // every summary starts at the same indentation (issue #1874, item 7).
+    body.push_str("<ul class=\"index-entries index-table\">\n");
     let mut entries: Vec<&crate::doc_bundle::DocEntry> = bundle
         .entries_for_kind(crate::doc_bundle::DocKind::Cli)
         .collect();
     entries.sort_by(|a, b| a.key.cmp(&b.key));
     for entry in entries {
-        let href = format!(
-            "../{}/{}.html",
-            entry.kind.prefix(),
-            html_escape(&entry.key)
-        );
-        let summary = first_sentence(&entry.body);
+        let href = entry_href(entry.kind, &entry.key, "../");
+        let summary = if entry.title.is_empty() {
+            first_sentence(&entry.body)
+        } else {
+            entry.title.clone()
+        };
         let _ = write!(
             body,
-            "<li><a href=\"{href}\">{}</a>",
+            "<li><a class=\"entry-code\" href=\"{}\">{}</a>",
+            html_escape(&href),
             html_escape(&entry.key),
         );
         if !summary.is_empty() {
             let _ = write!(
                 body,
-                "<span class=\"entry-key\">{}</span>",
+                "<span class=\"entry-title\">{}</span>",
                 html_escape(&summary),
             );
         }
@@ -3643,7 +4103,7 @@ fn render_curated_kind_indexes(
         sort_curated_entries(&mut entries);
         body.push_str("<ul class=\"curated-entries\">\n");
         for entry in entries {
-            let href = format!("../{}/{}.html", kind.prefix(), html_escape(&entry.key));
+            let href = entry_href(kind, &entry.key, "../");
             let summary = first_sentence(&entry.body);
             let _ = write!(
                 body,
@@ -3662,6 +4122,78 @@ fn render_curated_kind_indexes(
         body.push_str("</ul>\n");
         let page = html_page(label, "../style.css", &header, &body);
         out.insert(format!("{}/index.html", kind.prefix()), page);
+    }
+    out
+}
+
+/// The navigation section a bundle kind belongs to, for header highlighting.
+const fn nav_section_for(kind: crate::doc_bundle::DocKind) -> NavSection {
+    use crate::doc_bundle::DocKind;
+    match kind {
+        DocKind::Guide => NavSection::Guide,
+        DocKind::Topic => NavSection::Topic,
+        DocKind::Idiom => NavSection::Idiom,
+        DocKind::Construct => NavSection::Construct,
+        DocKind::Diagnostic => NavSection::Diagnostic,
+        DocKind::Cli => NavSection::Cli,
+        DocKind::Module | DocKind::Symbol => NavSection::Reference,
+    }
+}
+
+/// Render a full page for a single non-module bundle entry (a diagnostic, a CLI
+/// command, or a curated guide/topic/idiom/construct).
+///
+/// The body is the entry's Markdown, rendered through the shared block renderer
+/// so lists, code, and inline spans display consistently with module pages. The
+/// page lives one directory deep (`<kind>/<key>.html`), so links resolve with a
+/// `"../"` base.
+fn render_entry_page(
+    kind: crate::doc_bundle::DocKind,
+    entry: &crate::doc_bundle::DocEntry,
+    search_script: &str,
+) -> String {
+    let header = render_header(nav_section_for(kind), "../", search_script);
+    let mut body = String::new();
+    let _ = writeln!(body, "<h1>{}</h1>", html_escape(&entry.title));
+    if entry.key != entry.title {
+        let _ = writeln!(
+            body,
+            "<p class=\"entry-code\"><code>{}</code></p>",
+            html_escape(&entry.key)
+        );
+    }
+    if entry.body.is_empty() {
+        body.push_str("<p class=\"comment\">No further documentation yet.</p>\n");
+    } else {
+        body.push_str(&render_comment_html(&entry.body));
+    }
+    html_page(&entry.title, "../style.css", &header, &body)
+}
+
+/// Emit a `<kind>/<key>.html` page for every non-module bundle entry, keyed by
+/// its flat site-map path. These are the per-entry targets every diagnostic /
+/// CLI / curated link points at; generating them here is what makes those links
+/// resolve (issue #1874, item 9).
+fn render_entry_pages(
+    bundle: &crate::doc_bundle::DocBundle,
+    search_script: &str,
+) -> BTreeMap<String, String> {
+    use crate::doc_bundle::DocKind;
+    let mut out = BTreeMap::new();
+    let kinds = [
+        DocKind::Diagnostic,
+        DocKind::Cli,
+        DocKind::Guide,
+        DocKind::Topic,
+        DocKind::Idiom,
+        DocKind::Construct,
+    ];
+    for kind in kinds {
+        for entry in bundle.entries_for_kind(kind) {
+            if let Some(path) = entry_page_key(kind, &entry.key) {
+                out.insert(path, render_entry_page(kind, entry, search_script));
+            }
+        }
     }
     out
 }
@@ -3698,7 +4230,7 @@ fn render_html_index(
         let _ = writeln!(body, "<h2>{}</h2>", html_escape(label));
         body.push_str("<ul class=\"curated-entries\">\n");
         for entry in entries {
-            let href = format!("{}/{}.html", kind.prefix(), html_escape(&entry.key));
+            let href = entry_href(kind, &entry.key, "");
             let summary = first_sentence(&entry.body);
             let _ = write!(
                 body,
@@ -3806,7 +4338,8 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex, search_script: &s
 fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     use std::net::TcpListener;
 
-    let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
+    crate::style::print_command_header();
+    let docs = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
     let site = render_site_for_serve(&docs, &bundle);
@@ -3820,9 +4353,11 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     let url = format!("http://{bound}/");
     print!(
         "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "serving docs at {url} (read-only, loopback; Ctrl-C to stop)"
-        )))
+        crate::style::status_line(
+            true,
+            &format!("serving docs at {url} (read-only, loopback; Ctrl-C to stop)"),
+            crate::style::use_color(&std::io::stdout()),
+        )
     );
     // A headless caller (CI, a test, a remote shell) opts out of the browser pop
     // with `IPE_DOC_NO_OPEN`; the URL is already printed, so the preview stays
@@ -4369,7 +4904,7 @@ mod tests {
         let docs = one_module_docs(color_module());
         let index = AnchorIndex::build(&docs);
         let bundle = crate::doc_bundle::DocBundle::empty();
-        let search_script = build_site_search_script(&bundle, "");
+        let search_script = build_site_search_script(&docs, &bundle, "");
 
         let idx = render_html_index(&docs, &bundle, &search_script);
         assert!(idx.contains("<!DOCTYPE html>"));
@@ -4434,7 +4969,7 @@ mod tests {
             modules: vec![local_module("App"), stdlib_module("Ipe.List")],
         };
         let bundle = crate::doc_bundle::DocBundle::empty();
-        let search_script = build_site_search_script(&bundle, "../");
+        let search_script = build_site_search_script(&docs, &bundle, "../");
         let idx = render_reference_index(&docs, &search_script);
 
         // Both section labels render.
@@ -4635,6 +5170,42 @@ mod tests {
         }
     }
 
+    // ── Fallback is reserved for an empty tree, never a broken project ────────
+
+    #[test]
+    fn build_docs_or_stdlib_falls_back_on_empty_dir() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create empty dir");
+
+        let docs = build_docs_or_stdlib(&tmp).expect("empty dir falls back to stdlib-only");
+        assert!(
+            docs.modules.iter().all(|m| m.kind == ModuleKind::Stdlib),
+            "empty-dir fallback yields stdlib-only modules"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn build_docs_or_stdlib_propagates_a_broken_project() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-broken-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create project dir");
+        // A syntactically broken module: a real project that must NOT collapse to
+        // a plausible stdlib-only site.
+        fs::write(tmp.join("Main.ipe"), "module Main exposing (..)\n\nx =\n")
+            .expect("write broken module");
+
+        let result = build_docs_or_stdlib(&tmp);
+        assert!(
+            result.is_err(),
+            "a broken project surfaces its build error rather than falling back"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
     // ── Hierarchical namespace tree ────────────────────────────────────────
 
     #[test]
@@ -4729,7 +5300,7 @@ mod tests {
             ],
         };
         let bundle = crate::doc_bundle::DocBundle::empty();
-        let search_script = build_site_search_script(&bundle, "../");
+        let search_script = build_site_search_script(&docs, &bundle, "../");
         let idx = render_reference_index(&docs, &search_script);
         // Ipe.Db.Codec must appear inside a nested <ul> inside Ipe's <li>
         // The simplest proxy: Ipe.Db.Codec's <a> appears after Ipe.Db's <a>,
@@ -4753,7 +5324,7 @@ mod tests {
             modules: vec![stdlib_module("Ipe.List"), stdlib_module("Ipe.String")],
         };
         let bundle = crate::doc_bundle::DocBundle::empty();
-        let search_script = build_site_search_script(&bundle, "../");
+        let search_script = build_site_search_script(&docs, &bundle, "../");
         let idx = render_reference_index(&docs, &search_script);
         // "Ipe" should appear as a span.ns-header, not a link.
         assert!(
@@ -4805,8 +5376,8 @@ mod tests {
     fn header_appears_on_landing_module_and_guide_pages() {
         let docs = one_module_docs(local_module("App"));
         let bundle = nav_test_bundle();
-        let search = build_site_search_script(&bundle, "");
-        let ref_search = build_site_search_script(&bundle, "../");
+        let search = build_site_search_script(&docs, &bundle, "");
+        let ref_search = build_site_search_script(&docs, &bundle, "../");
 
         // Landing page.
         let landing = render_html_index(&docs, &bundle, &search);
@@ -4870,7 +5441,7 @@ mod tests {
             .unwrap();
             b
         };
-        let search = build_site_search_script(&bundle, "");
+        let search = build_site_search_script(&docs, &bundle, "");
         let landing = render_html_index(&docs, &bundle, &search);
 
         // "Guides" section heading must precede "Topics" section heading.
@@ -4932,7 +5503,7 @@ mod tests {
             modules: vec![stdlib_module("Ipe.List")],
         };
         let bundle = nav_test_bundle();
-        let ref_search = build_site_search_script(&bundle, "../");
+        let ref_search = build_site_search_script(&docs, &bundle, "../");
         let ref_page = render_reference_index(&docs, &ref_search);
 
         // The reference page lists the known module with a link.
@@ -4949,7 +5520,11 @@ mod tests {
     #[test]
     fn diagnostic_index_lists_known_code() {
         let bundle = nav_test_bundle();
-        let ref_search = build_site_search_script(&bundle, "../");
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: Vec::new(),
+        };
+        let ref_search = build_site_search_script(&docs, &bundle, "../");
         let page = render_diagnostic_index(&bundle, &ref_search);
 
         assert!(
@@ -4965,7 +5540,11 @@ mod tests {
     #[test]
     fn cli_index_lists_known_subcommand() {
         let bundle = nav_test_bundle();
-        let ref_search = build_site_search_script(&bundle, "../");
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: Vec::new(),
+        };
+        let ref_search = build_site_search_script(&docs, &bundle, "../");
         let page = render_cli_index(&bundle, &ref_search);
 
         assert!(
@@ -4981,7 +5560,13 @@ mod tests {
     #[test]
     fn search_index_is_embedded_valid_json_with_multiple_kinds() {
         let bundle = nav_test_bundle();
-        let script = build_site_search_script(&bundle, "");
+        // `nav_test_bundle` carries an `Ipe.List` module; the docs must list it so
+        // its search entry survives the has-a-page filter.
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![stdlib_module("Ipe.List")],
+        };
+        let script = build_site_search_script(&docs, &bundle, "");
 
         // The script contains a JSON array literal starting with '['.
         let json_start = script.find('[').expect("JSON array start in script");
@@ -5014,6 +5599,116 @@ mod tests {
             "diagnostic/index.html"
         );
         assert_eq!(serve_file_name("/cli/index.html"), "cli/index.html");
+    }
+
+    /// Extract every relative `href="…"` from an HTML page, dropping absolute
+    /// URLs, in-page fragments, and mailto/anchor-only links — the set a link
+    /// checker must resolve against the generated file map.
+    fn extract_relative_hrefs(html: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = html;
+        while let Some(pos) = rest.find("href=\"") {
+            rest = &rest[pos + 6..];
+            let Some(end) = rest.find('"') else { break };
+            let raw = &rest[..end];
+            rest = &rest[end + 1..];
+            // Skip absolute schemes and pure fragments.
+            if raw.is_empty()
+                || raw.starts_with('#')
+                || raw.starts_with("http://")
+                || raw.starts_with("https://")
+                || raw.starts_with("mailto:")
+            {
+                continue;
+            }
+            out.push(raw.to_owned());
+        }
+        out
+    }
+
+    /// Resolve a page-relative href against the directory the page lives in,
+    /// dropping any `#fragment`, to the flat site-map key it must hit.
+    ///
+    /// `page_key` is the map key of the page the href appears on (e.g.
+    /// `diagnostic/IPE-E0001.html`); its parent directory is the base.
+    fn resolve_href(page_key: &str, href: &str) -> String {
+        let target = href.split('#').next().unwrap_or(href);
+        let dir = page_key.rsplit_once('/').map_or("", |(d, _)| d);
+        let mut parts: Vec<&str> = Vec::new();
+        if !dir.is_empty() {
+            parts.extend(dir.split('/'));
+        }
+        for seg in target.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                other => parts.push(other),
+            }
+        }
+        parts.join("/")
+    }
+
+    /// The link-integrity regression gate (issue #1874, item 9): every relative
+    /// href on every generated page must resolve to a generated file. This is
+    /// what would have caught the pervasive dead links, and prevents a
+    /// href-scheme / output-path drift from recurring.
+    #[test]
+    fn every_generated_href_resolves_to_a_generated_file() {
+        let docs = build_stdlib_only_docs();
+        let docs_root = locate_docs_root();
+        let bundle = build_doc_bundle(&docs_root).expect("bundle");
+        let site = render_site_for_serve(&docs, &bundle);
+
+        let mut missing: Vec<String> = Vec::new();
+        for (page_key, html) in &site {
+            if !std::path::Path::new(page_key)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("html"))
+            {
+                continue;
+            }
+            for href in extract_relative_hrefs(html) {
+                let resolved = resolve_href(page_key, &href);
+                if resolved.is_empty() || site.contains_key(&resolved) {
+                    continue;
+                }
+                missing.push(format!("{page_key} -> {href} (resolved {resolved})"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "every generated href must resolve to a generated file; {} dead link(s):\n{}",
+            missing.len(),
+            missing.join("\n"),
+        );
+    }
+
+    /// Every diagnostic and CLI entry has a generated per-entry page at exactly
+    /// the path its links point to (the fix for items 6, 8, and the curated
+    /// 404s under item 9).
+    #[test]
+    fn per_entry_pages_exist_for_every_linked_kind() {
+        use crate::doc_bundle::DocKind;
+        let docs = build_stdlib_only_docs();
+        let docs_root = locate_docs_root();
+        let bundle = build_doc_bundle(&docs_root).expect("bundle");
+        let site = render_site_for_serve(&docs, &bundle);
+
+        for kind in [DocKind::Diagnostic, DocKind::Cli] {
+            let mut count = 0usize;
+            for entry in bundle.entries_for_kind(kind) {
+                let key = entry_page_key(kind, &entry.key).expect("kind has per-entry pages");
+                assert!(
+                    site.contains_key(&key),
+                    "{kind} entry `{}` must have a generated page at {key}",
+                    entry.key
+                );
+                count += 1;
+            }
+            assert!(count > 0, "{kind} must contribute at least one entry");
+        }
     }
 
     #[test]
