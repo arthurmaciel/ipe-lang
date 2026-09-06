@@ -2080,7 +2080,14 @@ mod registry_phase_c_tests {
     /// contain the contiguous banned token and thus never self-matches.
     #[test]
     fn no_ty_var_max_sentinel() {
-        let src = include_str!("constrain.rs");
+        let src = concat!(
+            include_str!("mod.rs"),
+            include_str!("builtins.rs"),
+            include_str!("builder_core.rs"),
+            include_str!("constrain_ast.rs"),
+            include_str!("scheme_table.rs"),
+            include_str!("zonk.rs"),
+        );
         let needle = concat!("Ty::Var(u32::", "MAX)");
         for (idx, line) in src.lines().enumerate() {
             // Strip the comment tail: everything from the first `//` onward.
