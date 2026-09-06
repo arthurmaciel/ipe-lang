@@ -59,6 +59,12 @@
 )]
 
 pub mod config;
+// Behavioral tests for the emit-only Postgres `config_postgres.rs` placeholder
+// rewriter, which is otherwise never compiled into this crate (see that file's
+// header). Test-only, gated on `db` so the re-included sqlx-typed source
+// compiles; nothing here is emitted.
+#[cfg(all(test, feature = "db"))]
+mod config_postgres_test;
 #[cfg(feature = "config")]
 pub mod config_decode;
 pub mod core;
