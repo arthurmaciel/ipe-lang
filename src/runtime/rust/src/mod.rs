@@ -63,10 +63,10 @@ pub mod config;
 // rewriter, which is otherwise never compiled into this crate (see that file's
 // header). Test-only, gated on `db` so the re-included sqlx-typed source
 // compiles; nothing here is emitted.
-#[cfg(all(test, feature = "db"))]
-mod config_postgres_test;
 #[cfg(feature = "config")]
 pub mod config_decode;
+#[cfg(all(test, feature = "db"))]
+mod config_postgres_test;
 pub mod core;
 // Development-only TEA time-travelling debugger core. Only present when the
 // `debugger` feature is active (`ipe build/run --debugger`). Zero code emitted

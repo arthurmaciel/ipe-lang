@@ -66,27 +66,18 @@ mod tests {
     fn doubled_single_quote_is_an_escaped_quote_not_a_terminator() {
         // '' is an embedded quote: the literal spans the whole `'a''?''b'`, so
         // its inner `?` stays literal and the real placeholder is $1.
-        assert_eq!(
-            fmt("SELECT 'a''?''b' , ?"),
-            "SELECT 'a''?''b' , $1"
-        );
+        assert_eq!(fmt("SELECT 'a''?''b' , ?"), "SELECT 'a''?''b' , $1");
     }
 
     #[test]
     fn doubled_double_quote_is_an_escaped_quote_not_a_terminator() {
-        assert_eq!(
-            fmt(r#"SELECT "a""?""b" , ?"#),
-            r#"SELECT "a""?""b" , $1"#
-        );
+        assert_eq!(fmt(r#"SELECT "a""?""b" , ?"#), r#"SELECT "a""?""b" , $1"#);
     }
 
     #[test]
     fn empty_dollar_quote_tag_spans_its_body() {
         // `$$…$$` (empty tag): the `?` inside is literal, the outer `?` is $1.
-        assert_eq!(
-            fmt("SELECT $$why?$$ , ?"),
-            "SELECT $$why?$$ , $1"
-        );
+        assert_eq!(fmt("SELECT $$why?$$ , ?"), "SELECT $$why?$$ , $1");
     }
 
     #[test]
@@ -100,20 +91,14 @@ mod tests {
     #[test]
     fn dollar_quote_with_digit_in_tag_after_first_char() {
         // A tag char may be a digit after the first position (`t1`).
-        assert_eq!(
-            fmt("SELECT $t1$why?$t1$ , ?"),
-            "SELECT $t1$why?$t1$ , $1"
-        );
+        assert_eq!(fmt("SELECT $t1$why?$t1$ , ?"), "SELECT $t1$why?$t1$ , $1");
     }
 
     #[test]
     fn dollar_quote_inner_prefix_tag_does_not_close_early() {
         // The closer must be the FULL `$ab$`; an inner `$a$` that is a prefix of
         // the tag must NOT terminate the span. The `?` between them is literal.
-        assert_eq!(
-            fmt("SELECT $ab$x$a$?$ab$ , ?"),
-            "SELECT $ab$x$a$?$ab$ , $1"
-        );
+        assert_eq!(fmt("SELECT $ab$x$a$?$ab$ , ?"), "SELECT $ab$x$a$?$ab$ , $1");
     }
 
     #[test]
@@ -170,10 +155,7 @@ mod tests {
     #[test]
     fn unterminated_block_comment_consumes_the_remainder() {
         // No closing `*/`: the rest is a comment, its `?` stays literal.
-        assert_eq!(
-            fmt("SELECT 1 /* why? and ?"),
-            "SELECT 1 /* why? and ?"
-        );
+        assert_eq!(fmt("SELECT 1 /* why? and ?"), "SELECT 1 /* why? and ?");
     }
 
     #[test]
