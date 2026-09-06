@@ -247,15 +247,16 @@ pub fn run_jail_argv_with_delivery(
     }
 
     // Re-expose paths the tmpfs masks would otherwise hide, read-only. The
-    // emitted app binary (and, when `filesystem` is absent, so the working tree
-    // is NOT already bound, anything it needs at a fixed path) commonly lives
-    // under `$HOME` (e.g. a `CARGO_TARGET_DIR` in `~/.cache`), which the
-    // `--tmpfs /home` mask hides. Read-only: the payload can execute but never
-    // mutate these.
-    for dir in extra_ro_binds {
+    // emitted app binary commonly lives under `$HOME` (e.g. a `CARGO_TARGET_DIR`
+    // in `~/.cache`), which the `--tmpfs /home` mask hides. Each entry is bound at
+    // the SAME path, read-only: the payload can execute but never mutate it. The
+    // caller binds the app FILE itself, never its parent directory — binding a
+    // directory that equals or contains a masked root would re-expose that tree
+    // and defeat the mask.
+    for path in extra_ro_binds {
         argv.push("--ro-bind".into());
-        argv.push(dir.clone().into());
-        argv.push(dir.clone().into());
+        argv.push(path.clone().into());
+        argv.push(path.clone().into());
     }
 
     // The one writable mount (always), and the working tree read-write only
