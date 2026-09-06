@@ -9375,6 +9375,12 @@ enum ZonkTask {
     /// `names` are visited in their `BTreeMap` order, so popping in reverse pairs
     /// each result with its field name.
     BuildRecord { names: Vec<Symbol> },
+    /// Record the freshly assembled result on top of the stack as the read-back
+    /// of union-find representative `root`, so a later visit to any variable
+    /// sharing that representative reuses the cached [`Ty`] instead of walking
+    /// the sub-structure again. This is what keeps a shared solver DAG from
+    /// expanding as a tree.
+    Memoize { root: VarId },
 }
 
 /// Read a settled union-find variable back into a resolved [`Ty`].
@@ -9394,91 +9400,141 @@ enum ZonkTask {
 /// [`Diagnostic::CompilerBug`] on a union-find invariant violation or if the
 /// structure has more than [`ZONK_NODE_LIMIT`] nodes; [`TypeError::StepBudgetExceeded`]
 /// if the shared budget is exhausted.
+/// Read back one union-find node during [`zonk`], driving the shared work
+/// stack. Resolves `v` to its representative; a representative already in `memo`
+/// is genuine sharing (the structure is acyclic), so its cached [`Ty`] is reused
+/// without re-walking or re-charging the node budget. A first visit charges one
+/// node, then either produces a leaf `Ty` (also cached) or pushes the rebuild
+/// task, a [`ZonkTask::Memoize`] to cache the assembled parent, and the
+/// children's visits.
+fn zonk_visit(
+    uf: &mut UnionFind<Content>,
+    v: VarId,
+    work: &mut Vec<ZonkTask>,
+    results: &mut Vec<Ty>,
+    memo: &mut std::collections::HashMap<VarId, Ty>,
+    nodes_left: &mut u32,
+) -> DResult<()> {
+    let root = uf.find(v)?;
+    if let Some(cached) = memo.get(&root) {
+        // A representative already read back: reuse it. Sharing does not
+        // re-consume the node budget, so the limit now bounds the count of
+        // distinct nodes rather than an expanded tree.
+        results.push(cached.clone());
+        return Ok(());
+    }
+    *nodes_left = nodes_left
+        .checked_sub(1)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: STAGE,
+            detail: "type exceeded read-back node limit".to_owned(),
+        })?;
+    match uf.content(root)? {
+        // A flexible, rigid, or super-typed variable that survives solving reads
+        // back as a type variable named by its representative's id. (A
+        // super-typed variable is still a variable; its obligations are read
+        // separately when generalising — see [`crate::SolvedTypes::bounds`].)
+        Content::Flex | Content::Rigid | Content::Super { .. } => {
+            // AUD-13: tag so this solver-representative id can never be mistaken
+            // for an annotation-symbol raw by `instantiate_in`'s wildcard-`"any"`
+            // check if this zonked `Ty` is ever fed back through it.
+            let ty = Ty::Var(tag_solver_var(root));
+            memo.insert(root, ty.clone());
+            results.push(ty);
+        }
+        Content::Structure(FlatType::Unit) => {
+            memo.insert(root, Ty::Unit);
+            results.push(Ty::Unit);
+        }
+        Content::Structure(FlatType::Fun(a, b)) => {
+            // Cache this representative once its children reassemble, then push
+            // the rebuild and children so that `a` is visited before `b` and
+            // lands lower on `results`.
+            work.push(ZonkTask::Memoize { root });
+            work.push(ZonkTask::BuildFun);
+            work.push(ZonkTask::Visit(b));
+            work.push(ZonkTask::Visit(a));
+        }
+        Content::Structure(FlatType::Con { module, name, args }) => {
+            let arity = args.len();
+            work.push(ZonkTask::Memoize { root });
+            work.push(ZonkTask::BuildCon {
+                module,
+                name,
+                arity,
+            });
+            // Reverse so args land on `results` in source order.
+            for a in args.into_iter().rev() {
+                work.push(ZonkTask::Visit(a));
+            }
+        }
+        Content::Structure(FlatType::Tuple(elems)) => {
+            let arity = elems.len();
+            work.push(ZonkTask::Memoize { root });
+            work.push(ZonkTask::BuildTuple { arity });
+            // Reverse so elements land on `results` in source order.
+            for e in elems.into_iter().rev() {
+                work.push(ZonkTask::Visit(e));
+            }
+        }
+        Content::Structure(FlatType::Record(fields, _ext)) => {
+            // Capture the field names (BTreeMap order) for the rebuild, and visit
+            // each field var in reverse so the results land in the same order the
+            // names are popped. The extension var is intentionally not zonked
+            // here — `Ty::Record` does not carry a RowTail in its resolved form
+            // (the tail is a solver artefact consumed only by unify.rs and the
+            // `BuildRecord` path). Closed records resolve to fields only; open
+            // records show as the same (tail is transparent to diagnostics for
+            // now).
+            let names: Vec<Symbol> = fields.keys().copied().collect();
+            work.push(ZonkTask::Memoize { root });
+            work.push(ZonkTask::BuildRecord { names });
+            for v in fields.values().copied().rev() {
+                work.push(ZonkTask::Visit(v));
+            }
+        }
+        Content::Structure(FlatType::EmptyRecord) => {
+            // EmptyRecord is the closed-tail sentinel — it carries no children
+            // and does not produce a `Ty` of its own. It should only appear as
+            // the extension variable of a `FlatType::Record`, never as the root
+            // type of a standalone expression. Push `Ty::Unit` as a safe fallback
+            // so the work stack stays balanced (this arm is reachable if zonk is
+            // called directly on an extension var, which does not happen in
+            // normal code, but must not panic).
+            memo.insert(root, Ty::Unit);
+            results.push(Ty::Unit);
+        }
+    }
+    Ok(())
+}
+
 pub fn zonk(uf: &mut UnionFind<Content>, budget: &mut Budget, var: VarId) -> DResult<Ty> {
     let mut work: Vec<ZonkTask> = vec![ZonkTask::Visit(var)];
     let mut results: Vec<Ty> = Vec::new();
     let mut nodes_left = ZONK_NODE_LIMIT;
+    // Read-back cache keyed by union-find representative. The occurs check in
+    // unification guarantees the structure is acyclic, so this is a DAG, not a
+    // cyclic graph: a representative reached along two paths is genuine sharing,
+    // and reusing its cached `Ty` reproduces the same type while visiting the
+    // shared sub-structure only once. Without it a diamond of sharing (e.g.
+    // `p = (q, q)` chained) doubles the walk per level and blows the node limit.
+    let mut memo: std::collections::HashMap<VarId, Ty> = std::collections::HashMap::new();
 
     while let Some(task) = work.pop() {
         match task {
             ZonkTask::Visit(v) => {
                 budget.tick()?;
-                nodes_left = nodes_left
-                    .checked_sub(1)
-                    .ok_or_else(|| Diagnostic::CompilerBug {
-                        where_: STAGE,
-                        detail: "type exceeded read-back node limit".to_owned(),
-                    })?;
-                let root = uf.find(v)?;
-                match uf.content(root)? {
-                    // A flexible, rigid, or super-typed variable that survives
-                    // solving reads back as a type variable named by its
-                    // representative's id. (A super-typed variable is still a
-                    // variable; its obligations are read separately when
-                    // generalising — see [`crate::SolvedTypes::bounds`].)
-                    Content::Flex | Content::Rigid | Content::Super { .. } => {
-                        // AUD-13: tag so this solver-representative id can
-                        // never be mistaken for an annotation-symbol raw by
-                        // `instantiate_in`'s wildcard-`"any"` check if this
-                        // zonked `Ty` is ever fed back through it.
-                        results.push(Ty::Var(tag_solver_var(root)));
+                zonk_visit(uf, v, &mut work, &mut results, &mut memo, &mut nodes_left)?;
+            }
+            ZonkTask::Memoize { root } => {
+                // The parent `Ty` was just assembled and sits on top of the
+                // result stack; cache it under its representative so later shared
+                // visits reuse it.
+                match results.last() {
+                    Some(ty) => {
+                        memo.insert(root, ty.clone());
                     }
-                    Content::Structure(FlatType::Unit) => results.push(Ty::Unit),
-                    Content::Structure(FlatType::Fun(a, b)) => {
-                        // Push the rebuild first, then the children so that `a`
-                        // is visited before `b` and lands lower on `results`.
-                        work.push(ZonkTask::BuildFun);
-                        work.push(ZonkTask::Visit(b));
-                        work.push(ZonkTask::Visit(a));
-                    }
-                    Content::Structure(FlatType::Con { module, name, args }) => {
-                        let arity = args.len();
-                        work.push(ZonkTask::BuildCon {
-                            module,
-                            name,
-                            arity,
-                        });
-                        // Reverse so args land on `results` in source order.
-                        for a in args.into_iter().rev() {
-                            work.push(ZonkTask::Visit(a));
-                        }
-                    }
-                    Content::Structure(FlatType::Tuple(elems)) => {
-                        let arity = elems.len();
-                        work.push(ZonkTask::BuildTuple { arity });
-                        // Reverse so elements land on `results` in source order.
-                        for e in elems.into_iter().rev() {
-                            work.push(ZonkTask::Visit(e));
-                        }
-                    }
-                    Content::Structure(FlatType::Record(fields, _ext)) => {
-                        // Capture the field names (BTreeMap order) for the
-                        // rebuild, and visit each field var in reverse so the
-                        // results land in the same order the names are popped.
-                        // The extension var is intentionally not zonked here —
-                        // `Ty::Record` does not carry a RowTail in its resolved
-                        // form (the tail is a solver artefact consumed only by
-                        // unify.rs and the `BuildRecord` path).  Closed records
-                        // resolve to fields only; open records show as the same
-                        // (tail is transparent to diagnostics for now).
-                        let names: Vec<Symbol> = fields.keys().copied().collect();
-                        work.push(ZonkTask::BuildRecord { names });
-                        for v in fields.values().copied().rev() {
-                            work.push(ZonkTask::Visit(v));
-                        }
-                    }
-                    Content::Structure(FlatType::EmptyRecord) => {
-                        // EmptyRecord is the closed-tail sentinel — it carries no
-                        // children and does not produce a `Ty` of its own.
-                        // It should only appear as the extension variable of a
-                        // `FlatType::Record`, never as the root type of a
-                        // standalone expression.  Push `Ty::Unit` as a safe
-                        // fallback so the work stack stays balanced (this arm is
-                        // reachable if zonk is called directly on an extension
-                        // var, which does not happen in normal code, but must not
-                        // panic).
-                        results.push(Ty::Unit);
-                    }
+                    None => return Err(zonk_underflow()),
                 }
             }
             ZonkTask::BuildFun => {
@@ -11944,5 +12000,58 @@ mod aud13_solver_var_tag_tests {
             "untagged \"any\" must keep independent-fresh-var-per-occurrence \
              wildcard semantics",
         );
+    }
+}
+
+#[cfg(test)]
+mod zonk_sharing_tests {
+    use super::{Budget, Content, FlatType, Ty, UnionFind, VarId, zonk};
+
+    /// A chain of `pN = (p{N-1}, p{N-1})` shares each variable across both
+    /// tuple slots, so the settled solver structure is a DAG whose read-back is
+    /// tiny (`depth + 1` distinct nodes) but whose tree unfolding doubles per
+    /// level. Read back must walk the shared representative once; without
+    /// memoization a 14-deep chain unfolds to `2^13` visits and trips
+    /// `ZONK_NODE_LIMIT`, wrongly rejecting a legal program.
+    fn build_shared_tuple_chain(uf: &mut UnionFind<Content>, depth: usize) -> VarId {
+        let mut cur = uf
+            .fresh(Content::Structure(FlatType::Unit))
+            .expect("fresh leaf must not fail");
+        for _ in 0..depth {
+            cur = uf
+                .fresh(Content::Structure(FlatType::Tuple(vec![cur, cur])))
+                .expect("fresh tuple must not fail");
+        }
+        cur
+    }
+
+    #[test]
+    fn zonk_reads_back_a_deep_shared_dag_without_tripping_the_node_limit() -> Result<(), String> {
+        // 14 levels of sharing: the tree unfolding (2^14 nodes) far exceeds
+        // ZONK_NODE_LIMIT, so this fails pre-fix and succeeds once sharing is
+        // preserved.
+        let mut uf = UnionFind::<Content>::new();
+        let root = build_shared_tuple_chain(&mut uf, 14);
+        let mut budget = Budget::unbounded();
+
+        let ty = zonk(&mut uf, &mut budget, root)
+            .expect("a legal shared DAG must read back, not hit the node limit");
+
+        // Both slots of every tuple resolve to the identical sub-type: the DAG
+        // read back preserves the shape a tree walk would have produced.
+        let elems = match &ty {
+            Ty::Tuple(elems) => elems,
+            other => return Err(format!("expected a tuple at the root, got {other:?}")),
+        };
+        let (Some(left), Some(right)) = (elems.first(), elems.get(1)) else {
+            return Err(format!(
+                "each level is a pair, got {} elements",
+                elems.len()
+            ));
+        };
+        if left != right {
+            return Err("the two shared slots must read back as equal sub-types".to_owned());
+        }
+        Ok(())
     }
 }
