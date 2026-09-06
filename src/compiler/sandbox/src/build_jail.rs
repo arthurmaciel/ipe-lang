@@ -1177,14 +1177,25 @@ mod freebsd_jail {
         // requires) chowns it. A failed chown refuses — a scratch the payload cannot
         // write is a broken jail, never run. Defence in depth atop the read-only
         // root: even the writable mount is only reachable by an unprivileged user.
+        // The scratch is a per-run directory under the private cache root, discarded
+        // after the run, so its ownership need not be restored.
         if let Err(defect) = chown_to_jail_user(scoped_tmp.as_path()) {
             return JailOutcome::Unavailable { defect };
         }
-        if profile.filesystem == FilesystemScope::WorkingTreeReadWrite
-            && let Err(defect) = chown_to_jail_user(working_tree.as_path())
-        {
-            return JailOutcome::Unavailable { defect };
-        }
+        // The working tree is the user's REAL project directory (nullfs is a
+        // pass-through: chowning the mount target chowns the source inode). Chowning
+        // it to the jail user so a granted filesystem effect can write it must NOT
+        // outlive the run — a persistent host mutation from a confined build is a
+        // trust-boundary violation. Record the original owner and restore it on drop
+        // regardless of outcome, so the user's tree ownership is left untouched.
+        let _tree_owner_guard = if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
+            match RestoredOwnership::chown_to_jail_user(working_tree.as_path()) {
+                Ok(guard) => Some(guard),
+                Err(defect) => return JailOutcome::Unavailable { defect },
+            }
+        } else {
+            None
+        };
 
         let jail_name = per_run_jail_name();
         let argv = jail_argv(&jail_bin, &jail_name, jail_root.root(), profile, payload);
@@ -1211,6 +1222,9 @@ mod freebsd_jail {
         // their guards on drop (in reverse order) as this scope ends, leaving no
         // residue across the audit's per-axis tightening loop.
         drop(jail_root);
+        // Restore the working tree's original ownership only AFTER the mounts are
+        // torn down, so the user's real tree is left exactly as it was found.
+        drop(_tree_owner_guard);
         outcome
     }
 
@@ -1281,25 +1295,76 @@ mod freebsd_jail {
     }
 
     /// Chown `path` to the unprivileged jail user so the confined payload can write
-    /// its scratch. Uses the `chown(8)` CLI (no new `unsafe` FFI); a failure refuses.
-    fn chown_to_jail_user(path: &Path) -> Result<(), RunJailDefect> {
+    /// it. Uses the `chown(8)` CLI (no new `unsafe` FFI); a failure refuses.
+    ///
+    /// `spec` is a `chown(8)` owner spec: a bare user (`nobody`) or a numeric
+    /// `uid:gid` pair used to restore the original ownership.
+    fn run_chown(spec: &str, path: &Path) -> Result<(), RunJailDefect> {
         let Some(chown) = find_in_path("chown") else {
             return Err(RunJailDefect::PrimitiveUnavailable {
                 missing: vec!["chown"],
             });
         };
         let status = std::process::Command::new(chown)
-            .arg(JAIL_USER)
+            .arg(spec)
             .arg(path)
             .status();
         match status {
             Ok(s) if s.success() => Ok(()),
             Ok(s) => Err(RunJailDefect::Spawn {
-                detail: format!("chown {} to {JAIL_USER} failed ({s})", path.display()),
+                detail: format!("chown {spec} {} failed ({s})", path.display()),
             }),
             Err(e) => Err(RunJailDefect::Spawn {
                 detail: format!("could not run chown for {}: {e}", path.display()),
             }),
+        }
+    }
+
+    /// Chown `path` to the unprivileged jail user so the confined payload can write
+    /// its scratch. The scratch is a discarded per-run directory, so its ownership
+    /// need not be restored.
+    fn chown_to_jail_user(path: &Path) -> Result<(), RunJailDefect> {
+        run_chown(JAIL_USER, path)
+    }
+
+    /// Chown a path to the jail user for the duration of a jailed run, restoring its
+    /// original ownership on drop.
+    ///
+    /// The working tree is the user's REAL project directory. Making it writable to
+    /// the unprivileged jail user requires a chown (nullfs is a pass-through, so the
+    /// mount target and the source inode are one), but a confined build must not
+    /// leave a persistent host mutation behind. This guard records the original
+    /// `uid`/`gid` before the chown and restores it on drop regardless of outcome, so
+    /// the user's tree ownership is left exactly as it was found.
+    struct RestoredOwnership {
+        path: PathBuf,
+        original: String,
+    }
+
+    impl RestoredOwnership {
+        fn chown_to_jail_user(path: &Path) -> Result<Self, RunJailDefect> {
+            use std::os::unix::fs::MetadataExt as _;
+
+            // Read the current owner BEFORE any mutation so a failure to observe it
+            // refuses rather than chowning a tree we could not later restore.
+            let metadata = std::fs::metadata(path).map_err(|e| RunJailDefect::Spawn {
+                detail: format!("could not stat {} before chown: {e}", path.display()),
+            })?;
+            let original = format!("{}:{}", metadata.uid(), metadata.gid());
+            run_chown(JAIL_USER, path)?;
+            Ok(Self {
+                path: path.to_path_buf(),
+                original,
+            })
+        }
+    }
+
+    impl Drop for RestoredOwnership {
+        fn drop(&mut self) {
+            // Best-effort restore: the run is over, so a failure here cannot be
+            // surfaced as a jail outcome, but it must be attempted so the user's tree
+            // ownership is not left changed.
+            let _ = run_chown(&self.original, &self.path);
         }
     }
 
