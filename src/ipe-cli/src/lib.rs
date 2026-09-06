@@ -87,8 +87,8 @@ mod commands_pkg;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use driver_error::*;
-pub(crate) use build_pipeline::*;
-pub(crate) use commands::*;
-pub(crate) use commands_pkg::*;
+pub use driver_error::*;
+pub use build_pipeline::*;
+pub use commands::*;
+pub use commands_pkg::*;
 
