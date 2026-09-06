@@ -1939,10 +1939,11 @@ pub fn is_compiled_source_segments(segments: &[String]) -> bool {
     compiled_std_source_segments(segments).is_some()
 }
 
-/// Transitively inject every embedded compiled-source stdlib module the graph
-/// imports into `sources`, returning the set of module paths that were actually
-/// injected from the embed table — the caller's unforgeable record of which
-/// modules earn `EmbeddedStdlib` trust.
+/// Transitively inject the embedded compiled-source stdlib modules the graph imports.
+///
+/// Every embedded module reachable from `sources` is injected into it, and the set
+/// of module paths actually injected from the embed table is returned — the caller's
+/// unforgeable record of which modules earn `EmbeddedStdlib` trust.
 ///
 /// This is the single source of truth for the injection algorithm and its
 /// **squat-guard**: a module path already present in `sources` (a user file
