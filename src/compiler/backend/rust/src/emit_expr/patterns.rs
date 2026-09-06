@@ -1,4 +1,5 @@
-use super::*;
+use super::{Arm, Pat, Match, GenericScope, DResult, Expr, Diagnostic, emit_expr_at, ModPath, Symbol};
+use crate::EmitCtx;
 use core::fmt::Write as _;
 
 /// Render `s` as a Rust double-quoted string literal: escape `\` and `"` (the

@@ -1,4 +1,5 @@
-use super::*;
+use super::{KernelFn, Callee, Expr, GenericScope, DResult, Diagnostic, emit_expr_at, kernel_name, emit_sub_arm, free_vars, Symbol, LitKind, emit_lambda_unboxed, ui_call_shape, UiEmitPlan, Guard, LowerError, Span, ArgPlan, appearance_literal_args, float_literal, NativeUiEmit, appearance_literal_record_fields, UiDelegate, callee_name, IrType, emit_shared_lambda, render_type};
+use crate::EmitCtx;
 use core::fmt::Write as _;
 
 /// Whether a kernel's runtime function takes its two arguments in the OPPOSITE

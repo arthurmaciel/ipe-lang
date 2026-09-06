@@ -1,4 +1,4 @@
-use super::*;
+use super::{MAX_IR_RENDER_DEPTH, Expr, IrType, Pat, Symbol, wants_arc_ctor, Func};
 
 /// The deepest expression nesting the backend will descend before failing fast.
 ///

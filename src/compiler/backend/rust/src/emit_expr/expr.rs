@@ -1,4 +1,5 @@
-use super::*;
+use super::{Expr, GenericScope, DResult, MAX_EMIT_DEPTH, Diagnostic, Span, LowerError, float_literal, BinOp, op_str, scan_free_target, expr_value_is_non_clone, substitute_var, emit_binding_stmts, Callee, emit_ui_template, emit_json_decoder_call, emit_http_call, emit_process_run_with_call, emit_process_run_in_pty_call, emit_http_builder_call, emit_task_retry_call, emit_db_call, emit_tea_call, emit_config_ctor_call, emit_server_call, emit_html_template, emit_ui_call, emit_css_value_call, KernelFn, emit_ffi_glued_call, callee_name, free_vars, Symbol, clone_targets_in_expr, emit_lambda_unboxed, kernel_swaps_first_two, emit_record, ir_type_is_definitely_copy, emit_update, emit_lambda, emit_shared_lambda, emit_apply, emit_func_value, IrType, render_type, ModPath, Match, emit_match_scrutinee, indent_of, emit_arm_head, combine_guards, rust_string_literal};
+use crate::EmitCtx;
 
 /// Depth-tracked recursion behind [`emit_expr`]. `depth` is the IR-nesting level
 /// of `expr` (0 at the function body); it gates the bounded-emit guard and is

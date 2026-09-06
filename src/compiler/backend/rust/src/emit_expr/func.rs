@@ -1,4 +1,5 @@
-use super::*;
+use super::{Expr, GenericScope, Symbol, IrType, DResult, indent_of, emit_expr_at, emit_match_scrutinee, emit_arm_head, tail_arm_prelude_lines, combine_guards, emit_binding_stmts, Diagnostic, render_type, Callee, callee_name, BoundSet, KernelFn, Func, emit_init_datum, impl_fn_param_indices, Doc, render_seeded, RenderConfig};
+use crate::EmitCtx;
 use core::fmt::Write as _;
 
 /// Emit an `Expr` in TAIL/STATEMENT context — the interior of a `TailLoop`'s

@@ -1,4 +1,5 @@
-use super::*;
+use super::{Symbol, Expr, IrType, GenericScope, DResult, emit_expr_at, indent_of, Diagnostic};
+use crate::EmitCtx;
 use core::fmt::Write as _;
 
 /// Field names of the `HttpRequest` runtime struct, sorted alphabetically.
