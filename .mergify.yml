@@ -1,2 +1,28 @@
+# Merge queue for ipe-lang.
+#
+# A pull request labelled `queued` enters the queue: Mergify batches queued PRs,
+# tests each batch against main together, and merges only when the batch is
+# green — main stays green by construction, and a PR that breaks its batch is
+# evicted rather than reddening main. The batch runs in the merge-queue context,
+# so the required checks that never fire on a bare pull request (the tier-2
+# jails, the full e2e sweep, miri) run and gate the merge here.
+#
+# `auto_merge_conditions` auto-enables the merge the moment a `queued` PR's
+# protections pass, so a labelled PR needs no further manual step.
+#
+# Merge conditions are inherited from branch protection's required checks, so the
+# gate never drifts from the source-of-truth check set.
 merge_queue:
   status_comments: none
+  queued_label: queued
+
+queue_rules:
+  - name: default
+    merge_method: squash
+    batch_size: 5
+    queue_conditions:
+      - label = queued
+
+merge_protections_settings:
+  auto_merge_conditions:
+    - label = queued
