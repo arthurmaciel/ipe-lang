@@ -6093,31 +6093,30 @@ impl StdlibKernel {
     /// `stdlib_scheme` table produces. `None` for a scheme that is not, which
     /// resolves through that table instead. A shape may be **monomorphic** (an
     /// arrow spine over the primitive built-ins) or **rank-1 polymorphic** (over
-    /// [`TyShape::Var`] applied to the `List` / `Maybe` constructors); the one
-    /// class still absent is an open row, because [`TyShape`]'s vocabulary
-    /// carries no solver-touching open-tail node.
+    /// [`TyShape::Var`] applied to the `List` / `Maybe` / `Dict` / `Set`
+    /// constructors, tuples, records, and open rows). [`TyShape`]'s vocabulary
+    /// carries a [`TyShape::Tuple`] node, a [`TyShape::Record`] node, and a
+    /// [`RowTailShape::Open`] open-tail marker, so tuple-, record-, and
+    /// open-row-shaped schemes are all expressible.
     ///
-    /// Every fully-monomorphic kernel family whose scheme is an arrow spine over
-    /// ONLY the six primitive built-ins ([`BuiltinTag`]) carries a shape — no
-    /// type variable, no row, no record, no tuple, no opaque constructor. Each
-    /// spine is a `'static` value assembled from the primitive leaves below, so
-    /// it embeds directly as the carried shape and the `ipe_types` interpreter
-    /// reproduces the exact `Ty` the (now-removed) `stdlib_scheme` arm did.
+    /// A fully-monomorphic kernel family whose scheme is an arrow spine over the
+    /// primitive built-ins ([`BuiltinTag`]) carries a shape assembled as a
+    /// `'static` value from the primitive leaves below; it embeds directly as the
+    /// carried shape and the `ipe_types` interpreter reproduces the exact `Ty` a
+    /// hand-written `stdlib_scheme` arm would.
     ///
-    /// The core `List` combinator family carries a **polymorphic** shape over
-    /// the scheme-local type variables `a` (index 0) and `b` (index 1) applied to
-    /// the `List` / `Maybe` constructors, e.g. `map : (a -> b) -> List a ->
-    /// List b`. Only the obligation-free members migrate: the `comparable` /
-    /// `number`-bounded ones (`sort`/`sortBy`, `sum`, `product`, `maximum`,
-    /// `minimum`) keep their `stdlib_scheme` base-scheme arm because their bounded
-    /// super-var is minted in `constrain_var_kernel` before the scheme is read,
-    /// and the tuple-shaped ones (`zip`, `unzip`, `partition`, `map2`..`map5`,
-    /// `indexedMap`, `foldl`/`foldr`, `sortWith`) are deferred until [`TyShape`]
-    /// gains a tuple node.
+    /// The core `List` combinator family carries a **polymorphic** shape over the
+    /// scheme-local type variables `a` (index 0) and `b` (index 1) applied to the
+    /// container constructors — `map : (a -> b) -> List a -> List b`, and the
+    /// tuple-shaped `zip`/`unzip`/`partition`/`map2`..`map5`/`indexedMap`/
+    /// `foldl`/`foldr`/`sortWith` over [`TyShape::Tuple`].
     ///
-    /// A family that touches any not-yet-tagged constructor (`Result`, `Task`, a
-    /// tuple, a record, an opaque handle) or an open row carries NO shape and
-    /// resolves through the `stdlib_scheme` table.
+    /// The classes that carry NO shape and resolve through the `stdlib_scheme`
+    /// table are the schemes whose type the structural vocabulary cannot yet name:
+    /// a **bounded** super-var (the `comparable` / `number`-obligated members
+    /// `sort`/`sortBy`, `sum`, `product`, `maximum`, `minimum`, whose bound is
+    /// minted in `constrain_var_kernel` before the scheme is read), and a scheme
+    /// touching an opaque constructor not yet tagged in [`BuiltinTag`].
     #[must_use]
     #[allow(clippy::too_many_lines)] // one flat declarative spine table per family
     #[allow(clippy::match_same_arms)] // family-grouped spine table; merging cross-family arms with coincidentally-equal spines would obscure the per-family structure
