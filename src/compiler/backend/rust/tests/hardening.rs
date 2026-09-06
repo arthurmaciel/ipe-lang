@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 
 use ipe_backend::Backend;
 use ipe_backend_rust::{FfiEmit, FfiWrapperGlue, RustBackend};
-use ipe_diagnostics::{DResult, Diagnostic, IPE_I0201, IPE_L0200, IPE_N0012, IPE_N0048};
+use ipe_diagnostics::{DResult, Diagnostic, IPE_I0201, IPE_L0200, IPE_N0012};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
     Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, Match, ModPath, Module,
@@ -366,50 +366,6 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
         // Pre-Defect-2-fix: IPE-I0202 (CompilerBug). Post-fix: clean IPE-N0012
         // (NameError::DuplicateType) so the user sees a structured error not an ICE.
         assert_eq!(err.code(), IPE_N0012, "wrong code for type-name collision");
-    }
-    Ok(())
-}
-
-/// Two DISTINCT types whose `(home, name)` split folds to one generated Rust
-/// enum name (`["Std", "Palette"]/Color` and `["Std"]/PaletteColor` both fold to
-/// `StdPaletteColor`) must be rejected with IPE-N0048 — never emit a crate whose
-/// two enums collide and trip `rustc` E0428. Drives the `RustNameFold` refusal.
-#[test]
-fn generated_rust_name_fold_is_rejected() -> DResult<()> {
-    let mut interner = Interner::new();
-    let merged = interner.intern("Main")?;
-    let std_seg = interner.intern("Std")?;
-    let palette_seg = interner.intern("Palette")?;
-    // Distinct `(home, name)` identities that fold to the same Rust enum name.
-    let color = interner.intern("Color")?;
-    let palette_color = interner.intern("PaletteColor")?;
-    let variant = interner.intern("Red")?;
-
-    let enum_at = |name: Symbol, home: Vec<Symbol>| {
-        TypeDef::Enum(EnumDef {
-            name,
-            type_params: vec![],
-            variants: vec![Variant {
-                name: variant,
-                fields: vec![],
-            }],
-            home: ModPath(home),
-        })
-    };
-
-    let prog = program(
-        merged,
-        vec![
-            enum_at(color, vec![std_seg, palette_seg]),
-            enum_at(palette_color, vec![std_seg]),
-        ],
-        vec![],
-    );
-
-    let res = RustBackend::new(&interner).emit(&prog);
-    assert!(res.is_err(), "Rust-name fold must error, got {res:?}");
-    if let Err(err) = res {
-        assert_eq!(err.code(), IPE_N0048, "wrong code for Rust-name fold");
     }
     Ok(())
 }

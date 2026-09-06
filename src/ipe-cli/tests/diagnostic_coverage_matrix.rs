@@ -202,6 +202,11 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
         "IPE-N0045",
         "runtime shape selection gate not yet reached by any constant assertion or wire literal",
     ),
+    (
+        "refusal-tested",
+        "IPE-N0048",
+        "the injective name fold disambiguates colliding Rust names, so N0048 fires only when every suffix up to the 1,000,000 ceiling is taken — driving it needs ~1M colliding definitions, impractical in the suite",
+    ),
     // ── IPE-P#### (parse) ────────────────────────────────────────────────────
     (
         "refusal-tested",
