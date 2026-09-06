@@ -111,4 +111,8 @@ pub use driver::{
     verify_capabilities,
     watch_banner_enabled,
 };
+// Crate-internal driver items reached as `crate::…` by sibling modules
+// (`watch`, `pkg`, …). Kept `pub(crate)` so no originally-private helper widens
+// to public API; the block above re-exports the genuine public surface as `pub`.
+pub(crate) use driver::{write_emitted_project, resolve_vendored_runtime_dir, typecheck_entry_via_graph, lower_entry_via_graph, io_err, read_yes_no, write_atomic, run_installer, run_build, run_eject, run_release, run_type_check, run_test, run_verify, run_run, run_exec, run_watch, run_fix, run_package, run_pack, run_capabilities, run_version, read_yes_no_default, default_entry, build_source_graph, capabilities_including_served_widgets, find_manifest_for_ipe_file, force_cargo_terminal_ui, read_progress_chunk};
 

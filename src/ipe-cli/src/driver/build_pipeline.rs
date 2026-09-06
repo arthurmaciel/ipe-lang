@@ -1,4 +1,4 @@
-use crate::{Write, Path, Interner, Diagnostic, BTreeMap, PathBuf, project, cache, ffi, runtime_embed, contained_path, render, build_plan, fs, BTreeSet};
+use crate::{Path, Interner, Diagnostic, BTreeMap, PathBuf, project, cache, ffi, runtime_embed, contained_path, render, build_plan, fs, BTreeSet};
 use super::{CliError, diag_span, io_err, write_atomic};
 
 /// Options modifying a build beyond plain source compilation — some (the
