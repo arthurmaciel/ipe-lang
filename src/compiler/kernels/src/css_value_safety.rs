@@ -176,7 +176,7 @@ fn value_parses(s: &str) -> bool {
         if c == b'!' {
             return s
                 .get(i + 1..)
-                .is_some_and(|rest| rest.trim_start() == "important");
+                .is_some_and(|rest| rest.trim() == "important");
         }
         // A quoted string token (e.g. a `content` value or a `url("…")` handled
         // inside `parse_function`): only reachable at top level for `content`,
@@ -464,6 +464,9 @@ mod tests {
         assert!(css_value_is_safe("red !important"));
         assert!(css_value_is_safe("rgba(0,0,0,0.2) !important"));
         assert!(css_value_is_safe("1px solid #ccc!important"));
+        // Insignificant trailing whitespace after the flag is accepted (the trimmed
+        // remainder is still exactly `important`).
+        assert!(css_value_is_safe("red !important "));
         // Any other `!…` is rejected — `!` is not a general value byte.
         assert!(!css_value_is_safe("red !imporant"));
         assert!(!css_value_is_safe("red ! url(x)"));

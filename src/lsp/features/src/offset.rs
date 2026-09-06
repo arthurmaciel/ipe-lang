@@ -42,6 +42,66 @@ fn floor_char_boundary(text: &str, byte: usize) -> usize {
     b
 }
 
+/// A one-pass index of a document's line-start byte offsets.
+///
+/// A feature that converts many spans in one request resolves each in
+/// `O(log lines)` plus a within-line scan, rather than rescanning the whole
+/// prefix from byte 0 per conversion (which is `O(items × file_len)` across a
+/// diagnostics / symbols / inlay-hints loop). Build it once per file text and
+/// reuse it for every conversion in the request.
+pub struct LineIndex<'a> {
+    text: &'a str,
+    /// Byte offset of each line's first character. Always starts with `0`.
+    line_starts: Vec<usize>,
+}
+
+impl<'a> LineIndex<'a> {
+    /// Build the index over `text` in one linear pass.
+    #[must_use]
+    pub fn new(text: &'a str) -> Self {
+        let mut line_starts = vec![0usize];
+        for (i, b) in text.bytes().enumerate() {
+            if b == b'\n' {
+                line_starts.push(i + 1);
+            }
+        }
+        Self { text, line_starts }
+    }
+
+    /// Convert a byte offset to an LSP position, clamping like
+    /// [`offset_to_position`] but using the prebuilt line table.
+    #[must_use]
+    pub fn position_of(&self, byte: usize, encoding: PositionEncoding) -> Position {
+        let byte = floor_char_boundary(self.text, byte);
+        // The containing line is the last line start `<= byte`.
+        let line = match self.line_starts.binary_search(&byte) {
+            Ok(l) => l,
+            Err(i) => i.saturating_sub(1),
+        };
+        let line_start = self.line_starts.get(line).copied().unwrap_or(0);
+        let column: usize = self
+            .text
+            .get(line_start..byte)
+            .unwrap_or("")
+            .chars()
+            .map(|ch| encoding.width(ch))
+            .sum();
+        Position {
+            line: u32::try_from(line).unwrap_or(u32::MAX),
+            character: u32::try_from(column).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// Convert a compiler [`Span`] to an LSP range using the prebuilt table.
+    #[must_use]
+    pub fn range_of(&self, span: Span, encoding: PositionEncoding) -> Range {
+        let start = self.position_of(span.lo as usize, encoding);
+        let end_byte = (span.hi as usize).max(span.lo as usize);
+        let end = self.position_of(end_byte, encoding);
+        Range { start, end }
+    }
+}
+
 /// Convert a byte offset into `text` to an LSP position. Clamps out-of-range
 /// and mid-code-point offsets down to the nearest char boundary.
 #[must_use]
@@ -117,6 +177,25 @@ mod tests {
         "mixed 😀漢e\u{301}x\r\ntail",
         "\u{10FFFF}\n\u{10FFFF}ascii",
     ];
+
+    #[test]
+    fn line_index_matches_the_scalar_mapper_everywhere() {
+        // The bulk `LineIndex` path must agree byte-for-byte with the scalar
+        // `offset_to_position` on every char boundary of the nasty corpus, so a
+        // feature can switch to it with no observable change.
+        for text in NASTY {
+            let index = LineIndex::new(text);
+            for encoding in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
+                for byte in 0..=text.len() {
+                    assert_eq!(
+                        index.position_of(byte, encoding),
+                        offset_to_position(text, byte, encoding),
+                        "LineIndex disagreed at byte {byte} of {text:?} ({encoding:?})"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn round_trip_identity_on_every_char_boundary() {

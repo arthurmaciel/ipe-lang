@@ -121,6 +121,12 @@ pub struct ProjectManifest {
 /// resolved target. There is no `active` selector — that is the CLI.
 #[derive(Clone, Debug, Default)]
 pub struct DeliveryConfig {
+    /// The declared delivery set — which deliveries `ipe release` produces.
+    /// Empty when the manifest omits the `ships` field, meaning the implicit
+    /// `[ binary ]` singleton (resolved by
+    /// [`crate::delivery_set::DeliverySet::resolve`]). The `ships` list declares
+    /// *what* ships; the sections below configure *how* each looks.
+    pub ships: Vec<crate::delivery_set::ShipEntry>,
     /// Window title, width, and height for the `web live desktop`
     /// (webview-native) host.
     pub desktop: DesktopDelivery,
@@ -860,52 +866,19 @@ pub fn inject_compiled_std_closure(
     sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
     discovered: &mut Vec<DiscoveredModule>,
 ) -> BTreeSet<Vec<String>> {
-    let mut injected: BTreeSet<Vec<String>> = BTreeSet::new();
-
-    // Seed the worklist from every compiled-source import across current sources.
-    // Short-circuit: an unused-stdlib build enqueues nothing and returns empty.
-    let mut work: VecDeque<Vec<String>> = VecDeque::new();
-    for (_, src) in sources.values() {
-        for imp in extract_imports_from_source(src) {
-            if crate::stdlib::is_compiled_source_segments(&imp) {
-                work.push_back(imp);
-            }
-        }
-    }
-
-    while let Some(path) = work.pop_front() {
-        // Already present — a user file OR an already-injected node. Skip; do NOT
-        // tag trusted (BTreeMap key = free dedup; user-squat stays User origin).
-        if sources.contains_key(&path) {
-            continue;
-        }
-        let Some(embedded) = crate::stdlib::compiled_std_source_segments(&path) else {
-            // Not a compiled-source module (kernel import inside an embedded
-            // source, e.g. `Ipe.String`): leave it kernel-resolved.
-            continue;
-        };
-
-        // Synthetic on-disk-looking path, for diagnostics only. It is never read
-        // from disk: `sources` already carries the embedded text.
-        let synth_path = PathBuf::from("<embedded-stdlib>").join(path.join("."));
-        sources.insert(path.clone(), (synth_path.clone(), embedded.to_owned()));
-        discovered.push(DiscoveredModule {
-            path: synth_path,
-            module_path: path.clone(),
-        });
-        injected.insert(path.clone());
-
-        // Std → Std closure: enqueue the embedded module's OWN compiled-source
-        // imports (a kernel import inside it is not enqueued — it stays
-        // qualifier-resolved). Fixpoint via the `sources.contains_key` guard.
-        for imp in extract_imports_from_source(embedded) {
-            if crate::stdlib::is_compiled_source_segments(&imp) && !sources.contains_key(&imp) {
-                work.push_back(imp);
-            }
-        }
-    }
-
-    injected
+    // One shared closure + squat-guard lives in `ipe_stdlib` (the SSOT both the
+    // native and wasm frontends call); the native driver additionally records a
+    // `DiscoveredModule` per injected node via the callback.
+    ipe_stdlib::inject_compiled_std_closure(
+        sources,
+        extract_imports_from_source,
+        |module_path, synth_path| {
+            discovered.push(DiscoveredModule {
+                path: synth_path.to_path_buf(),
+                module_path: module_path.to_vec(),
+            });
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
