@@ -52,6 +52,12 @@ pub(crate) struct Command {
     /// The optional flags, listed with descriptions on the command's `--help`
     /// page.
     options: &'static [Opt],
+    /// Whether the command is withheld from the top-level `ipe --help` screen.
+    /// A hidden command is still fully dispatchable (its `--help` page renders,
+    /// it runs) but is not listed among the [`SECTIONS`], so a command whose
+    /// only outcome today is a manual-step message is not advertised as a
+    /// finished feature. A hidden command belongs to no section.
+    hidden: bool,
 }
 
 /// A titled group of commands on the top-level screen.
@@ -139,6 +145,7 @@ const COMMANDS: &[Command] = &[
                 desc: "scaffold a library package (exposedModules) instead of an application",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "build",
@@ -191,10 +198,23 @@ const COMMANDS: &[Command] = &[
                 desc: "permit an allocator known to be slow for the target",
             },
             Opt {
+                flag: "[--cfree]",
+                desc: "build without linking any C code (incompatible with allocators that require C, e.g. mimalloc)",
+            },
+            Opt {
+                flag: "[--debugger]",
+                desc: "compile the in-app time-travelling debugger overlay into the built app",
+            },
+            Opt {
+                flag: "[-q|--quiet]",
+                desc: "suppress progress chatter; only warnings and errors",
+            },
+            Opt {
                 flag: "[--json]",
                 desc: "emit each diagnostic as a stable JSON object (one per line) instead of the human layout",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "eject",
@@ -212,6 +232,7 @@ const COMMANDS: &[Command] = &[
                 desc: "vendor the Ipê runtime source from <dir>",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "release",
@@ -248,6 +269,7 @@ const COMMANDS: &[Command] = &[
                 desc: "print the inferred capability model for the app without building",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "type-check",
@@ -260,6 +282,7 @@ const COMMANDS: &[Command] = &[
             desc: "emit each diagnostic as a stable JSON object (one per line) on stderr; \
                    success is {\"status\":\"ok\"} on stdout",
         }],
+        hidden: false,
     },
     Command {
         name: "test",
@@ -271,6 +294,7 @@ const COMMANDS: &[Command] = &[
             flag: "[--json]",
             desc: "emit a compact {\"result\":…} verdict on stdout (non-zero exit on a failing case)",
         }],
+        hidden: false,
     },
     Command {
         name: "verify",
@@ -282,6 +306,7 @@ const COMMANDS: &[Command] = &[
             flag: "[--json]",
             desc: "emit a compact gate verdict on stdout ({\"result\":…}; non-zero exit at the first failing stage)",
         }],
+        hidden: false,
     },
     Command {
         name: "run",
@@ -315,8 +340,20 @@ const COMMANDS: &[Command] = &[
                 desc: "permit an allocator known to be slow for the target",
             },
             Opt {
+                flag: "[--cfree]",
+                desc: "build without linking any C code (incompatible with allocators that require C, e.g. mimalloc)",
+            },
+            Opt {
                 flag: "[--accept-risks]",
                 desc: "accept every disclosed .Unsafe escape-hatch import and proceed without prompting",
+            },
+            Opt {
+                flag: "[--debugger]",
+                desc: "compile the in-app time-travelling debugger overlay into the run app",
+            },
+            Opt {
+                flag: "[-q|--quiet]",
+                desc: "suppress progress chatter; only warnings and errors",
             },
             Opt {
                 flag: "[--json]",
@@ -327,6 +364,7 @@ const COMMANDS: &[Command] = &[
                 desc: "forward <args> to the compiled program",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "exec",
@@ -340,6 +378,7 @@ const COMMANDS: &[Command] = &[
             flag: "[-- <args>...]",
             desc: "forward <args> to the artifact",
         }],
+        hidden: false,
     },
     Command {
         name: "watch",
@@ -364,7 +403,16 @@ const COMMANDS: &[Command] = &[
                 flag: "[--debugger]",
                 desc: "compile the in-app time-travelling debugger overlay into the served app",
             },
+            Opt {
+                flag: "[--reset-state]",
+                desc: "force every returning session to a fresh init instead of preserving prior state",
+            },
+            Opt {
+                flag: "[-q|--quiet]",
+                desc: "suppress progress chatter; only warnings and errors",
+            },
         ],
+        hidden: false,
     },
     Command {
         name: "fix",
@@ -376,6 +424,7 @@ const COMMANDS: &[Command] = &[
             flag: "[--yes]",
             desc: "apply every fix without per-edit confirmation",
         }],
+        hidden: false,
     },
     Command {
         name: "fmt",
@@ -397,6 +446,7 @@ const COMMANDS: &[Command] = &[
                 desc: "format stdin to stdout (for editors and pipes); excludes <path>",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "lint",
@@ -408,6 +458,7 @@ const COMMANDS: &[Command] = &[
             flag: "[--fix]",
             desc: "apply every machine-applicable (semantics-preserving) fix instead of only reporting",
         }],
+        hidden: false,
     },
     Command {
         name: "clean",
@@ -416,6 +467,7 @@ const COMMANDS: &[Command] = &[
         args: "",
         args_desc: "",
         options: &[],
+        hidden: false,
     },
     Command {
         name: "migrate",
@@ -424,6 +476,7 @@ const COMMANDS: &[Command] = &[
         args: "config",
         args_desc: "The migration to run. `config` rewrites the interim manifest (a `Package.named |>` package.ipe, or a legacy ipe.toml) as the record form.",
         options: &[],
+        hidden: false,
     },
     Command {
         name: "add",
@@ -432,6 +485,11 @@ const COMMANDS: &[Command] = &[
         args: "<package>",
         args_desc: "The package name, optionally `@version`.",
         options: &[],
+        // Editing a package.ipe `Package.dependencies` list is not yet
+        // automated, so `add`/`remove` today only report the manual step. Kept
+        // dispatchable (and documented) but withheld from the top-level screen
+        // until the manifest-source rewrite lands.
+        hidden: true,
     },
     Command {
         name: "remove",
@@ -440,6 +498,9 @@ const COMMANDS: &[Command] = &[
         args: "<package>",
         args_desc: "The package name.",
         options: &[],
+        // See `add`: withheld from the top-level screen until the manifest-source
+        // rewrite lands; still dispatchable and documented.
+        hidden: true,
     },
     Command {
         name: "rust",
@@ -465,6 +526,7 @@ const COMMANDS: &[Command] = &[
                 desc: "add/install: show the full raw inspector log on failure",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "package",
@@ -508,6 +570,7 @@ const COMMANDS: &[Command] = &[
                        owner)",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "pack",
@@ -547,6 +610,7 @@ const COMMANDS: &[Command] = &[
                 desc: "print the OS-permission declarations required on the given platform",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "login",
@@ -564,6 +628,7 @@ const COMMANDS: &[Command] = &[
                 desc: "remove the stored token",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "capabilities",
@@ -581,6 +646,7 @@ const COMMANDS: &[Command] = &[
                 desc: "print {\"capabilities\":[…]} for jq",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "diff",
@@ -600,6 +666,7 @@ const COMMANDS: &[Command] = &[
                 desc: "print the report as a stable JSON object for jq",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "doc",
@@ -635,6 +702,7 @@ const COMMANDS: &[Command] = &[
                 desc: "machine-readable JSON output; list and <module> only",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "lsp",
@@ -643,6 +711,7 @@ const COMMANDS: &[Command] = &[
         args: "",
         args_desc: "",
         options: &[],
+        hidden: false,
     },
     Command {
         name: "upgrade",
@@ -676,6 +745,7 @@ const COMMANDS: &[Command] = &[
                 desc: "print the status as JSON (never prompts)",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "health",
@@ -697,6 +767,7 @@ const COMMANDS: &[Command] = &[
                 desc: "print the report as JSON for jq (never mutates)",
             },
         ],
+        hidden: false,
     },
     Command {
         name: "version",
@@ -714,6 +785,7 @@ const COMMANDS: &[Command] = &[
                 desc: "print {\"version\":\"…\"} for jq",
             },
         ],
+        hidden: false,
     },
 ];
 
@@ -727,10 +799,6 @@ const SECTIONS: &[Section] = &[
     Section {
         title: "Quality",
         commands: &["type-check", "lint", "test", "verify"],
-    },
-    Section {
-        title: "Using external packages",
-        commands: &["add", "remove"],
     },
     Section {
         title: "Package authoring",
@@ -851,6 +919,10 @@ fn render_top_level(p: &Palette) -> String {
             .unwrap_or(0);
         for &name in section.commands {
             let Some(cmd) = find(name) else { continue };
+            // A hidden command is never listed, even if a section still names it.
+            if cmd.hidden {
+                continue;
+            }
             let pad = name_w - cmd.name.len();
             let _ = writeln!(
                 out,
@@ -919,6 +991,14 @@ mod tests {
             );
         }
         for cmd in COMMANDS {
+            if cmd.hidden {
+                assert!(
+                    !plain.contains(&format!("ipe {} ", cmd.name)),
+                    "hidden command {} must not be advertised on the top-level screen",
+                    cmd.name
+                );
+                continue;
+            }
             assert!(
                 plain.contains(&format!("ipe {}", cmd.name)),
                 "missing command {}",
@@ -1014,12 +1094,40 @@ mod tests {
                 .flat_map(|s| s.commands)
                 .filter(|&&n| n == cmd.name)
                 .count();
+            // A visible command sits in exactly one section; a hidden command
+            // (withheld from the top-level screen) sits in none.
+            let expected = usize::from(!cmd.hidden);
             assert_eq!(
-                count, 1,
-                "command {} must appear in exactly one section, found {count}",
-                cmd.name
+                count, expected,
+                "command {} (hidden={}) must appear in {expected} section(s), found {count}",
+                cmd.name, cmd.hidden
             );
         }
+    }
+
+    /// `add`/`remove` are withheld from the top-level screen while their only
+    /// outcome is a manual-step message, yet they stay dispatchable and keep a
+    /// `--help` page — de-advertised, never removed.
+    #[test]
+    fn add_and_remove_are_hidden_but_dispatchable() {
+        for name in ["add", "remove"] {
+            let cmd = find(name).expect("command still in the registry");
+            assert!(
+                cmd.hidden,
+                "{name} must be hidden from the top-level screen"
+            );
+            assert!(handler(name).is_some(), "{name} must stay dispatchable");
+            // Its per-command help page still renders (documentation survives).
+            let page = render_command(cmd, &Palette::PLAIN);
+            assert!(page.contains(&format!("ipe {name}")));
+        }
+        // Neither appears on the top-level screen.
+        let plain = render_top_level(&Palette::PLAIN);
+        assert!(!plain.contains("ipe add "), "add must not be advertised");
+        assert!(
+            !plain.contains("ipe remove "),
+            "remove must not be advertised"
+        );
     }
 
     // The single-source-of-truth invariant: dispatch and advertisement are the
@@ -1043,5 +1151,62 @@ mod tests {
             handler("exec").is_some(),
             "exec must resolve to a dispatch handler"
         );
+    }
+
+    /// Split a help `Opt.flag` field (`[-q|--quiet]`, `[--out <dir>]`,
+    /// `[-- <args>...]`) into the dashed option tokens it advertises, dropping the
+    /// surrounding brackets, the `<value>` placeholders, and the bare `--`
+    /// forwarding separator (which no parser treats as an option).
+    fn advertised_flag_tokens(field: &str) -> Vec<String> {
+        field
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(['|', ' '])
+            .map(str::trim)
+            .filter(|tok| tok.starts_with('-') && *tok != "--")
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// A flag advertised in help must be accepted by the command's parser: run
+    /// the parser with just that flag (a dummy value for a value flag) and assert
+    /// it never rejects the flag as unknown. This closes the help/parser drift
+    /// that let real working flags go undocumented.
+    fn assert_help_flags_are_accepted(
+        command: &str,
+        parse: impl Fn(&[String]) -> Result<(), crate::CliError>,
+    ) {
+        let Some(cmd) = COMMANDS.iter().find(|c| c.name == command) else {
+            return;
+        };
+        for opt in cmd.options {
+            let takes_value = opt.flag.contains('<');
+            for tok in advertised_flag_tokens(opt.flag) {
+                let mut argv = vec![tok.clone()];
+                if takes_value {
+                    argv.push("x".to_owned());
+                }
+                let unknown = format!("unknown flag `{tok}`");
+                if let Err(err) = parse(&argv) {
+                    assert!(
+                        !err.to_string().contains(&unknown),
+                        "`ipe {command}` help advertises `{tok}` but its parser rejects it as unknown"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn advertised_flags_are_accepted_by_their_parser() {
+        assert_help_flags_are_accepted("build", |a| crate::cli_args::parse_build(a).map(|_| ()));
+        assert_help_flags_are_accepted("run", |a| crate::cli_args::parse_run(a).map(|_| ()));
+        assert_help_flags_are_accepted("watch", |a| crate::cli_args::parse_watch(a).map(|_| ()));
+        assert_help_flags_are_accepted("fix", |a| crate::cli_args::parse_fix(a).map(|_| ()));
+        assert_help_flags_are_accepted("type-check", |a| {
+            crate::cli_args::parse_type_check(a).map(|_| ())
+        });
+        assert_help_flags_are_accepted("health", |a| crate::cli_args::parse_health(a).map(|_| ()));
+        assert_help_flags_are_accepted("fmt", |a| crate::cli_args::parse_fmt(a).map(|_| ()));
     }
 }

@@ -44,11 +44,11 @@ fn run(args: &[&str]) -> Run {
 
 /// Every command name and every section title, for coverage assertions.
 const COMMANDS: &[&str] = &[
-    "init", "build", "run", "watch", "fix", "fmt", "add", "remove", "rust", "doc", "lsp", "version",
+    "init", "build", "run", "watch", "fix", "fmt", "rust", "doc", "lsp", "version",
 ];
 const SECTIONS: &[&str] = &[
     "Development",
-    "Using external packages",
+    "Quality",
     "Package authoring",
     "Foreign-function interface (FFI)",
     "Tools",
@@ -114,14 +114,12 @@ fn package_authoring_section_holds_package_and_external_packages_holds_add_remov
         "`package` must sit under `Package authoring`, got:\n{authoring}"
     );
 
-    let external = section_body(&r.stdout, "Using external packages");
+    // `add`/`remove` are de-advertised: still dispatchable, but never shown on
+    // the top-level screen.
     assert!(
-        external.contains("ipe add") && external.contains("ipe remove"),
-        "`add`/`remove` must stay under `Using external packages`, got:\n{external}"
-    );
-    assert!(
-        !external.contains("ipe package"),
-        "`package` must have moved out of `Using external packages`"
+        !r.stdout.contains("ipe add ") && !r.stdout.contains("ipe remove "),
+        "`add`/`remove` must not be advertised on the top-level screen, got:\n{}",
+        r.stdout
     );
 }
 
