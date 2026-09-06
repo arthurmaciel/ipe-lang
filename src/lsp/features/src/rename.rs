@@ -40,14 +40,6 @@ const fn ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
-/// Keywords the lexer recognises — a lexically valid identifier that matches
-/// one of these is still rejected because renaming to a keyword produces
-/// un-parseable source.
-const KEYWORDS: &[&str] = &[
-    "module", "import", "exposing", "as", "type", "case", "of", "let", "in", "if", "then", "else",
-    "do",
-];
-
 // ── Case class ───────────────────────────────────────────────────────────────
 
 /// Whether a renamed symbol is a type/constructor (uppercase) or a value
@@ -87,7 +79,11 @@ impl ValidatedIdentifier {
         if !chars.all(ident_continue) {
             return None;
         }
-        if KEYWORDS.contains(&raw) {
+        // Gate on the lexer's own keyword table (the single source of truth) so
+        // a rename can never turn a value into a keyword token — renaming to
+        // `foreign`, `do`, or any other reserved word rewrites references into
+        // unparseable source.
+        if ipe_parse::is_keyword(raw) {
             return None;
         }
         match kind {
@@ -458,8 +454,11 @@ mod tests {
 
     #[test]
     fn keywords_are_rejected() {
+        // `foreign` and `do` are the words a hand-mirrored list had dropped;
+        // gating on the lexer's own table (`ipe_parse::is_keyword`) covers them.
         for kw in [
-            "let", "if", "then", "else", "type", "case", "of", "in", "module", "import",
+            "let", "if", "then", "else", "type", "case", "of", "in", "module", "import", "do",
+            "foreign", "exposing", "as",
         ] {
             assert!(
                 ValidatedIdentifier::parse(kw, SymbolKind::Value).is_none(),

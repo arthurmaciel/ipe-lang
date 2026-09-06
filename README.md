@@ -82,7 +82,7 @@ cargo build --release
 
 - **Elm syntax** — pure functions, Hindley–Milner type inference, exhaustive
   `case`, immutable data. No `null`, no runtime exceptions.
-- **Sky's batteries-included standard library** — Web live applications (SSR + real-time), typed HTTP, 
+- **Batteries-included standard library** — Web live applications (SSR + real-time), typed HTTP,
   typed SQL, auth, email, cache, pub/sub, and WebSockets, all behind a
   single `Task Error a` effect boundary. `Error` is a typed, classified value
   you construct and inspect — see `ipe doc Error` or `ipe explain IPE-T0001`.
