@@ -1,0 +1,82 @@
+module Main exposing (main)
+
+-- Ipê-side parity fixture for the SQL-identifier gate.
+--
+-- `Store.validSqlIdent` (dotted) and `Store.validSqlIdentPlain` (dot-free) must
+-- stay byte-equivalent to the runtime SSOT `SqlIdent::parse_dotted` /
+-- `SqlIdent::parse_plain` (`runtime/rust/src/db.rs`). The corpus below mirrors
+-- that module's `HOSTILE_IDENTS` fixture plus the empty-dot-segment cases; each
+-- line prints `<plain><dotted>` (`T`/`F`) so a drift in either gate changes the
+-- pinned expected output.
+--
+-- Expected stdout: one `<name>:<plain><dotted>` line per corpus entry, in order.
+
+import Ipe.Db.Store as Store
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Tuple as Tuple
+import Ipe.Error exposing (Error)
+
+
+-- (label, identifier) pairs. The label avoids emitting a hostile string
+-- (semicolons, quotes) into the expected-output diff; the verdict is what
+-- matters.
+corpus : List ( String, String )
+corpus =
+    [ ( "bare", "users" )
+    , ( "underscore", "user_id" )
+    , ( "dotted", "users.id" )
+    , ( "multi-dotted", "a.b.c" )
+    , ( "leading-dot", ".leading" )
+    , ( "trailing-dot", "trailing." )
+    , ( "double-dot", "a..b" )
+    , ( "lone-dot", "." )
+    , ( "single-quote", "a'b" )
+    , ( "double-quote", "a\"b" )
+    , ( "semicolon-drop", "users; DROP TABLE todos" )
+    , ( "space", "col name" )
+    , ( "line-comment", "col--" )
+    , ( "backtick", "`col`" )
+    , ( "call", "f()" )
+    , ( "star", "*" )
+    , ( "empty", "" )
+    , ( "digit-punct", "1; --" )
+    , ( "non-ascii", "café" )
+    ]
+
+
+yn : Bool -> String
+yn b =
+    case b of
+        True ->
+            "T"
+
+        False ->
+            "F"
+
+
+verdict : ( String, String ) -> String
+verdict pair =
+    let
+        label =
+            Tuple.first pair
+
+        ident =
+            Tuple.second pair
+    in
+    String.concat
+        [ label
+        , ":"
+        , yn (Store.validSqlIdentPlain ident)
+        , yn (Store.validSqlIdent ident)
+        ]
+
+
+main : Task Error ()
+main =
+    List.foldl
+        (\line acc -> Task.andThen (\_ -> Io.println line) acc)
+        (Task.succeed ())
+        (List.map verdict corpus)

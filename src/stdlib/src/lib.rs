@@ -418,9 +418,9 @@ const CSS: &str = include_str!("../Ipe/Css.ipe");
 ///
 /// Thin pure-Ipê aliases to canonical kernels in their home modules so callers
 /// can write `ToString.fromInt n` without memorising the per-type kernel
-/// sub-namespace.  `fromTime` is OMITTED pending the `Time_timeString` Rust
-/// kernel.  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"ToString"` entry
-/// exists in `STDLIB_MODULE_QUALIFIERS`).
+/// sub-namespace.  `fromTime` aliases `Ipe.Time.timeString` (the backed
+/// `Time_timeString` kernel).  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
+/// `"ToString"` entry exists in `STDLIB_MODULE_QUALIFIERS`).
 const TOSTRING_CORE: &str = include_str!("../Ipe/ToString.ipe");
 
 /// `Ipe.Test` — lightweight in-process test framework.
