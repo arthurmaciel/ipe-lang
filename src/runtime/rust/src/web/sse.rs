@@ -35,23 +35,57 @@ pub fn channel() -> (SseTx, SseRx) {
 /// Self-defending against SSE injection: event names are single-line per the
 /// spec, so any CR/LF is stripped (a crafted name otherwise injects fields or
 /// terminates the event early); `data` is emitted as one `data: ` field per
-/// line so a raw newline cannot inject extra fields or end the message —
-/// independent of caller-side JSON escaping. For the common single-line JSON
-/// payload the output is byte-identical to `event: <name>\ndata: <payload>\n\n`.
+/// line so no line terminator in the payload can inject extra fields or end the
+/// message — independent of caller-side JSON escaping. The SSE spec treats CR,
+/// LF, and CRLF each as a line terminator, so all three break `data` into
+/// fields here; an interior lone CR cannot smuggle a `data:`/`event:` line into
+/// a compliant EventSource. For the common single-line JSON payload the output
+/// is byte-identical to `event: <name>\ndata: <payload>\n\n`.
 pub fn frame(event: &str, data: &str) -> String {
     let event = event.replace(['\r', '\n'], "");
     let mut out = String::with_capacity(event.len() + data.len() + 16);
     out.push_str("event: ");
     out.push_str(&event);
     out.push('\n');
-    for line in data.split('\n') {
-        let line = line.strip_suffix('\r').unwrap_or(line);
+    for line in split_sse_lines(data) {
         out.push_str("data: ");
         out.push_str(line);
         out.push('\n');
     }
     out.push('\n');
     out
+}
+
+/// Split `data` on SSE line terminators — CR, LF, and CRLF each end one line —
+/// yielding the terminator-free content of every line (including a trailing
+/// empty line after a final terminator).
+fn split_sse_lines(data: &str) -> Vec<&str> {
+    let bytes = data.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while let Some(&b) = bytes.get(i) {
+        match b {
+            b'\n' => {
+                lines.push(data.get(start..i).unwrap_or_default());
+                i += 1;
+                start = i;
+            }
+            b'\r' => {
+                lines.push(data.get(start..i).unwrap_or_default());
+                // A CRLF pair is a single terminator, not two.
+                i += if bytes.get(i + 1) == Some(&b'\n') {
+                    2
+                } else {
+                    1
+                };
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    lines.push(data.get(start..).unwrap_or_default());
+    lines
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -71,5 +105,26 @@ mod tests {
         let (tx, _rx) = channel();
         // capacity is 16; can send without await from sync context via try_send
         assert!(tx.try_send(SsePatch("test".into())).is_ok());
+    }
+
+    #[test]
+    fn interior_lone_cr_cannot_inject_a_field() {
+        // A compliant EventSource treats a lone CR as a line terminator, so the
+        // `event:` text after the CR must land on its own `data: ` line rather
+        // than continuing the first field.
+        let s = frame("hello", "a\revent: injected");
+        assert_eq!(s, "event: hello\ndata: a\ndata: event: injected\n\n");
+    }
+
+    #[test]
+    fn crlf_is_one_terminator() {
+        let s = frame("hello", "a\r\nb");
+        assert_eq!(s, "event: hello\ndata: a\ndata: b\n\n");
+    }
+
+    #[test]
+    fn lf_split_is_unchanged() {
+        let s = frame("hello", "a\nb");
+        assert_eq!(s, "event: hello\ndata: a\ndata: b\n\n");
     }
 }
