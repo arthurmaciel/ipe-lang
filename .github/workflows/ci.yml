@@ -199,6 +199,41 @@ jobs:
           IPE_BIN: ${{ github.workspace }}/target/release/ipe
         run: bash tools/scripts/check-doc-examples.sh
 
+  # Registry supply-chain admission gate: `ipe package publish` computes a correct
+  # index entry, the admission path (validate-entry / audit-entry) accepts a valid
+  # package and denies every malicious/malformed one (bad/absent sha256, unpinned
+  # rev, injection source, name-squat via a divergent source, an over-long version
+  # list, a rewritten immutable version, missing/malformed fields), and the
+  # resolver git-fetches + hash-verifies the pinned tree, rejecting a tamper. The
+  # test drives a real fixture index + source over local git — no real registry.
+  # IPE_E2E=1 arms the publish --dry-run subprocess case (it builds the package
+  # through the local audit gate).
+  registry-admission:
+    name: registry-admission
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      # The fixtures shell out to `git init/commit/push`; give the runner an
+      # identity so those commands do not fail on a fresh machine.
+      - name: Configure git identity for fixtures
+        run: |
+          git config --global user.email "ci@ipe-lang.invalid"
+          git config --global user.name "ipe-ci"
+      - name: Registry publish + admission gate
+        env:
+          IPE_E2E: "1"
+        run: cargo nextest run -p ipe --test registry_admission --profile ci
+
   # Fast fail-fast compile check. A non-compiling PR turns this red in ~a minute
   # (no test link, no emit), so the expensive downstream jobs (seal-smoke and the
   # push-only e2e/miri) never start behind broken code — they `needs: quick-check`.

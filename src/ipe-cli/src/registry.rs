@@ -208,6 +208,8 @@ mod tests {
     use crate::advisory::Severity;
 
     const FIXTURE_REV: &str = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+    /// A well-formed 64-char lowercase-hex content hash for the fixtures.
+    const FIXTURE_SHA: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
     fn temp_index(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -224,7 +226,7 @@ mod tests {
         let text = format!(
             "name = \"{name}\"\npublisher = \"git-source\"\n\n[[version]]\n\
              version = \"{version}\"\nsource = \"https://example.invalid/{name}\"\n\
-             rev = \"{FIXTURE_REV}\"\nsha256 = \"00\"\ncapabilities = [\"network\"]\n"
+             rev = \"{FIXTURE_REV}\"\nsha256 = \"{FIXTURE_SHA}\"\ncapabilities = [\"network\"]\n"
         );
         std::fs::write(root.join("packages").join(format!("{name}.toml")), text)
             .expect("write git entry");
@@ -235,7 +237,7 @@ mod tests {
             r#"{{ "name": "{name}", "publisher": "{publisher}",
                   "versions": [ {{ "version": "{version}",
                                    "source": "https://example.invalid/{name}",
-                                   "rev": "{FIXTURE_REV}", "sha256": "00",
+                                   "rev": "{FIXTURE_REV}", "sha256": "{FIXTURE_SHA}",
                                    "capabilities": ["network"] }} ] }}"#
         )
     }

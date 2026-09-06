@@ -233,6 +233,48 @@ impl std::fmt::Display for PinnedRev {
     }
 }
 
+/// A validated source-tree content hash: exactly 64 lowercase hex characters.
+///
+/// The only inhabitants are the digests `hex::encode(Sha256)` produces
+/// ([`crate::cache::hash_tree`], the hash the resolver verifies a fetched tree
+/// against). A short, uppercase, non-hex, or otherwise malformed value cannot
+/// inhabit this type, so a garbage integrity anchor is refused at the entry-parse
+/// boundary — the cheap structural gate (`ipe package validate-entry`) the index
+/// CI runs first — rather than only surfacing as a fetch-time mismatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sha256Hex(String);
+
+impl Sha256Hex {
+    /// Parse a stored `sha256` field, accepting only a 64-char lowercase-hex
+    /// digest.
+    ///
+    /// # Errors
+    /// [`CliError::Resolve`] when `raw` is not exactly 64 lowercase hex chars.
+    pub fn parse(pkg: &str, raw: &str) -> Result<Self, CliError> {
+        let is_digest = raw.len() == 64 && raw.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+        if !is_digest {
+            return Err(CliError::Resolve(format!(
+                "package `{pkg}`: `sha256` is not a 64-char lowercase-hex content hash, \
+                 got: {raw:?}"
+            )));
+        }
+        Ok(Self(raw.to_owned()))
+    }
+
+    /// The validated 64-hex digest string, compared against a freshly-computed
+    /// tree hash at verify-before-trust time.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Sha256Hex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A parsed index entry: one package and every version published for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexEntry {
@@ -461,6 +503,85 @@ pub fn validate_entry_file(path: &Path) -> Result<IndexEntry, CliError> {
     parse_entry(name, &text)
 }
 
+/// The per-entry version ceiling enforced at admission. A real package accrues
+/// versions across many reviewed PRs; one submission listing more than this is a
+/// resource / review-flooding vector, refused fail-closed.
+pub const MAX_ENTRY_VERSIONS: usize = 1024;
+
+/// The structural admission checks that need no fetch: version-count ceiling,
+/// per-version immutability against the baseline, and source continuity
+/// (anti-squat). A pure function of the submitted entry and the previously
+/// published `baseline` (if any), so the whole deny/accept surface is testable
+/// without a network, a git fetch, or a build.
+///
+/// Fail-closed and deny-by-default:
+/// - **Version ceiling** — more than [`MAX_ENTRY_VERSIONS`] versions is refused.
+/// - **Immutability** — a submitted version whose NUMBER already exists in the
+///   baseline must be byte-for-byte identical; rewriting its
+///   source/rev/sha256/capabilities is a supply-chain mutation and is refused.
+/// - **Source continuity** — a package name is bound to one source repository.
+///   The established source is the baseline's first published version's source
+///   (on first publish, the submitted entry's own first version fixes it); a
+///   version pointing elsewhere is a name-squat and is refused.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] naming the exact rule that refused the entry.
+pub fn admission_precheck(
+    submitted: &IndexEntry,
+    baseline: Option<&IndexEntry>,
+) -> Result<(), CliError> {
+    if submitted.versions.len() > MAX_ENTRY_VERSIONS {
+        return Err(CliError::UsageOwned(format!(
+            "ipe package audit-entry: `{}` lists {} versions, exceeding the {MAX_ENTRY_VERSIONS} \
+             per-entry ceiling — a single submission cannot carry this many versions.",
+            submitted.name,
+            submitted.versions.len()
+        )));
+    }
+
+    let baseline_by_version: std::collections::BTreeMap<&semver::Version, &EntryVersion> = baseline
+        .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
+        .unwrap_or_default();
+
+    // Immutability: an existing version NUMBER must match the published row exactly.
+    for version in &submitted.versions {
+        if let Some(&prior) = baseline_by_version.get(&version.version)
+            && prior != version
+        {
+            return Err(CliError::UsageOwned(format!(
+                "ipe package audit-entry: `{}` version {} is already published and immutable, \
+                 but the submitted entry rewrites it (source, rev, sha256, or capabilities \
+                 differ). A published version must never be rewritten — publish a new version.",
+                submitted.name, version.version
+            )));
+        }
+    }
+
+    // Source continuity (anti-squat): every version's source must equal the
+    // package's established source.
+    let established_source: Option<&str> = baseline
+        .and_then(|e| e.versions.first())
+        .map(|v| v.source.as_str())
+        .or_else(|| submitted.versions.first().map(|v| v.source.as_str()));
+    if let Some(expected_source) = established_source {
+        for version in &submitted.versions {
+            if version.source.as_str() != expected_source {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe package audit-entry: `{}` version {} declares source `{}`, but this \
+                     package's established source is `{}`. A package name is bound to one source \
+                     repository; a version pointing elsewhere is a name-squat and is refused.",
+                    submitted.name,
+                    version.version,
+                    version.source.as_str(),
+                    expected_source
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Resolve the highest published version satisfying `req`.
 ///
 /// # Errors
@@ -663,7 +784,9 @@ fn parse_entry_version_json(name: &str, raw: &serde_json::Value) -> Result<Entry
     // either.
     let source = SourceUrl::parse(name, field("source")?)?;
     let rev = PinnedRev::from_full_sha(name, field("rev")?)?;
-    let sha256 = field("sha256")?.to_owned();
+    let sha256 = Sha256Hex::parse(name, field("sha256")?)?
+        .as_str()
+        .to_owned();
 
     // `capabilities` is an optional array of strings; absent means none. An
     // unknown capability name is a hard error, never a silently-dropped effect.
@@ -734,11 +857,14 @@ impl RawVersion {
         })?;
         let raw_source = self.source.ok_or_else(|| missing("source"))?;
         let raw_rev = self.rev.ok_or_else(|| missing("rev"))?;
-        let sha256 = self.sha256.ok_or_else(|| missing("sha256"))?;
+        let raw_sha256 = self.sha256.ok_or_else(|| missing("sha256"))?;
         // Parse-don't-validate: typed constructors reject invalid values at
         // the read boundary before any value can reach `git`.
         let source = SourceUrl::parse(name, &raw_source)?;
         let rev = PinnedRev::from_full_sha(name, &raw_rev)?;
+        // A malformed content hash is refused here, at the cheap structural gate,
+        // not deferred to a fetch-time mismatch.
+        let sha256 = Sha256Hex::parse(name, &raw_sha256)?.as_str().to_owned();
         let capabilities = parse_capabilities(name, self.capabilities.as_deref())?;
         // A present `signature` is parsed into a typed bundle; a malformed one is
         // a hard error, never a silently-dropped field. Absent = unsigned.
@@ -817,7 +943,7 @@ mod tests {
             let _ = write!(
                 text,
                 "\n[[version]]\nversion = \"{v}\"\nsource = \"https://example.invalid/{name}\"\n\
-                 rev = \"{FIXTURE_REV}\"\nsha256 = \"00\"\ncapabilities = [\"network\"]\n"
+                 rev = \"{FIXTURE_REV}\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\ncapabilities = [\"network\"]\n"
             );
         }
         std::fs::write(packages.join(format!("{name}.toml")), text).expect("write entry");
@@ -880,7 +1006,7 @@ mod tests {
             format!(
                 "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
                  source = \"https://example.invalid/weird\"\nrev = \"{FIXTURE_REV}\"\n\
-                 sha256 = \"00\"\ncapabilities = [\"telepathy\"]\n"
+                 sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\ncapabilities = [\"telepathy\"]\n"
             ),
         )
         .expect("write entry");
@@ -934,7 +1060,7 @@ mod tests {
             format!(
                 "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
                  source = \"https://example.invalid/weird\"\nrev = \"{FIXTURE_REV}\"\n\
-                 sha256 = \"00\"\ncapabilities = [\"telepathy\"]\n"
+                 sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\ncapabilities = [\"telepathy\"]\n"
             ),
         )
         .expect("write entry");
@@ -1099,7 +1225,7 @@ mod tests {
             format!(
                 "publisher = \"attacker\"\n\n[[version]]\nversion = \"1.0.0\"\n\
                  source = \"ext::sh -c 'id > /tmp/pwned'\"\nrev = \"{FIXTURE_REV}\"\n\
-                 sha256 = \"00\"\ncapabilities = []\n"
+                 sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\ncapabilities = []\n"
             ),
         )
         .expect("write entry");
@@ -1120,7 +1246,7 @@ mod tests {
             packages.join("badrev.toml"),
             "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
              source = \"https://example.invalid/badrev\"\nrev = \"-S injected\"\n\
-             sha256 = \"00\"\ncapabilities = []\n",
+             sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\ncapabilities = []\n",
         )
         .expect("write entry");
         let err = read_entry(&root, "badrev").unwrap_err();
@@ -1138,7 +1264,7 @@ mod tests {
         std::fs::write(
             packages.join(format!("{name}.toml")),
             "publisher = \"tester\"\n\n[[version]]\nversion = \"NOT_SEMVER\"\n\
-             source = \"https://example.invalid/x\"\nrev = \"aabbcc\"\nsha256 = \"00\"\n",
+             source = \"https://example.invalid/x\"\nrev = \"aabbcc\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n",
         )
         .expect("write corrupt entry");
     }
@@ -1346,7 +1472,7 @@ mod tests {
             packages.join("badpin.toml"),
             "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
              source = \"https://example.invalid/badpin\"\nrev = \"main\"\n\
-             sha256 = \"00\"\ncapabilities = []\n",
+             sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\ncapabilities = []\n",
         )
         .expect("write entry");
         let err = read_entry(&root, "badpin").unwrap_err();
@@ -1363,7 +1489,7 @@ mod tests {
             packages2.join("headpin.toml"),
             "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
              source = \"https://example.invalid/headpin\"\nrev = \"HEAD\"\n\
-             sha256 = \"00\"\ncapabilities = []\n",
+             sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\ncapabilities = []\n",
         )
         .expect("write entry");
         let err2 = read_entry(&root2, "headpin").unwrap_err();
@@ -1402,7 +1528,7 @@ mod tests {
             format!(
                 "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
                  source = \"https://example.invalid/signed\"\nrev = \"{FIXTURE_REV}\"\n\
-                 sha256 = \"00\"\ncapabilities = []\nsignature = {BUNDLE_JSON}\n"
+                 sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\ncapabilities = []\nsignature = {BUNDLE_JSON}\n"
             ),
         )
         .expect("write entry");
@@ -1427,7 +1553,8 @@ mod tests {
             format!(
                 "publisher = \"tester\"\n\n[[version]]\nversion = \"1.0.0\"\n\
                  source = \"https://example.invalid/badsig\"\nrev = \"{FIXTURE_REV}\"\n\
-                 sha256 = \"00\"\ncapabilities = []\nsignature = not-json-at-all\n"
+                 sha256 = \"{}\"\ncapabilities = []\nsignature = not-json-at-all\n",
+                "0".repeat(64)
             ),
         )
         .expect("write entry");
@@ -1444,7 +1571,7 @@ mod tests {
             "versions": [ { "version": "1.0.0",
                             "source": "https://example.invalid/x",
                             "rev": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                            "sha256": "00",
+                            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
                             "signature": { "dsseEnvelope": {} } } ] }"#;
         let entry = super::parse_entry_json("http-extras", json).expect("parses");
         let v = entry.versions.first().expect("one version");
@@ -1459,7 +1586,7 @@ mod tests {
             "versions": [ { "version": "1.0.0",
                             "source": "https://example.invalid/x",
                             "rev": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-                            "sha256": "00", "signature": null } ] }"#;
+                            "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "signature": null } ] }"#;
         let entry = super::parse_entry_json("x", json).expect("parses");
         assert!(entry.versions.first().expect("v").signature.is_none());
     }
