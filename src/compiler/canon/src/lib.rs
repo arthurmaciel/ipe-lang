@@ -1,13 +1,12 @@
 #![forbid(unsafe_code)]
-//! `ipe_canon` — name resolution / canonicalisation for the Milestone-0 subset
+//! `ipe_canon` — name resolution / canonicalisation for the supported subset
 //! of Ipê.
 //!
 //! Entry point: [`canonicalise`]. It consumes a [`ipe_syntax::Module`] (the raw
 //! parse tree) plus a mutable [`Interner`] and produces a name-resolved
 //! [`ast::Module`], or a typed [`ipe_diagnostics::Diagnostic`]. Every variable
 //! reference is classified — local binding, top-level binding, stdlib kernel,
-//! or data constructor — by porting the supported subset of the the compiler compiler's
-//! `Ipe.Canonicalise.{Module,Expression,Pattern,Type,Environment}`.
+//! or data constructor.
 
 pub mod asserted;
 pub mod ast;
@@ -207,7 +206,7 @@ mod tests {
 
     const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.ipe");
 
-    /// Parse + canonicalise the golden M0 module. Returns `None` (failing the
+    /// Parse + canonicalise the golden module. Returns `None` (failing the
     /// caller's assertions) rather than panicking, per the no-panic gate.
     fn canon_golden(i: &mut Interner) -> Option<ast::Module> {
         let src = ipe_parse::parse_module(GOLDEN, i).ok()?;
@@ -1083,9 +1082,9 @@ mod tests {
 
     #[test]
     fn stdlib_alias_registers_multisegment_json_encode() {
-        // The reported failure: `import Ipe.Json.Encode as Encode` then
-        // `Encode.string` used to error IPE-N0004 (unknown module `Encode`)
-        // because the alias was never registered against the canonical `JsonEnc`.
+        // A multi-segment aliased import (`import Ipe.Json.Encode as Encode`)
+        // registers the alias against the canonical `JsonEnc`, so `Encode.string`
+        // resolves rather than erroring IPE-N0004 (unknown module `Encode`).
         let src = "module Main exposing (main)\n\
                    import Ipe.Json.Encode as Encode\n\n\
                    main = Encode.string\n";
@@ -2788,8 +2787,6 @@ mod tests {
         // when the alias name coincides with a known ADT constructor, instead of
         // erroring — achieving the same "ADT ctor wins in expression position"
         // outcome more cleanly.
-        //
-        // Ref: upstream `Ipe.Canonicalise.Module.registerAliases`.
         let src = "module Main exposing (main)\n\
                    type alias Foo =\n    { x : Int }\n\
                    type Bar = Foo\n\n\

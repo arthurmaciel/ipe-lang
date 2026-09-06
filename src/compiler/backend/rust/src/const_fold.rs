@@ -1232,7 +1232,7 @@ fn eval_kernel(k: KernelFn, args: &[ConstValue]) -> Option<ConstValue> {
 
     // A kernel carrying any security-relevant capability is effectful; never
     // fold it, regardless of the arms below.
-    if k.capability().is_some() {
+    if k.def().capability.is_some() {
         return None;
     }
 

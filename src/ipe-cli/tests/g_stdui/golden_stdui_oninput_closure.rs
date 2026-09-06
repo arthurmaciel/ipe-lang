@@ -20,9 +20,9 @@
 //!
 //! ## Oracle provenance
 //!
-//! `oracle_divergence = true`: the the reference compiler (`ipe dev`) does not
-//! expose `Html.htmlRender` and exits 1 on this source.  `expected_go.txt` holds
-//! ipe's own correct output — the Rust-backend HTML with the input event wired.
+//! `oracle_divergence = true`: there is no external oracle for this shape, so
+//! the golden holds Ipê's own correct output — the Rust-backend HTML with the
+//! input event wired.
 //!
 //! ## What is tested
 //!

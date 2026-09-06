@@ -1,0 +1,49 @@
+name: Close issues on development
+# GitHub only auto-closes an issue from a `Closes #N` keyword when the fix reaches
+# the DEFAULT branch (`main`). This project's PRs land on `development` first and
+# only reach `main` on promotion, so closing keywords would otherwise sit unhonoured
+# until the nightly FF. This workflow closes those issues at development-merge time:
+# it scans the messages of the commits in each push to `development` for closing
+# keywords and closes the referenced issues, noting they reach `main` on promotion.
+on:
+  push:
+    branches: [development]
+permissions:
+  issues: write
+  contents: read
+concurrency:
+  group: close-issues-on-development
+  cancel-in-progress: false
+jobs:
+  close-referenced-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close issues referenced by the pushed commits
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTE_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMITS_JSON: ${{ toJSON(github.event.commits) }}
+        run: |
+          set -euo pipefail
+          # Pull issue numbers that follow a GitHub closing keyword
+          # (close/closes/closed, fix/fixes/fixed, resolve/resolves/resolved) in any
+          # pushed commit message. Deduplicate, then close each still-open issue.
+          numbers=$(printf '%s' "$COMMITS_JSON" \
+            | jq -r '.[].message' \
+            | grep -oiE '(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' \
+            | sort -un || true)
+          if [ -z "$numbers" ]; then
+            echo "No closing keywords in this push."
+            exit 0
+          fi
+          for n in $numbers; do
+            state=$(gh issue view "$n" --repo "$REPO" --json state --jq '.state' 2>/dev/null || echo MISSING)
+            if [ "$state" = "OPEN" ]; then
+              gh issue close "$n" --repo "$REPO" \
+                --comment "Fixed on \`development\` (merged). Reaches \`main\` on the next promotion." \
+                && echo "closed #$n" || echo "skip #$n (close failed)"
+            else
+              echo "skip #$n (state=$state)"
+            fi
+          done

@@ -1,10 +1,10 @@
 //! The embedded Ipê standard-library source (`Ipe.*`).
 //!
-//! `ipe` is self-contained: the foundational `Ipe` modules are compiled
-//! into the binary as their original Ipe source. The checked-in copies
-//! under `crates/ipec/stdlib/Ipe/Core/` are byte-identical to the upstream
-//! `ipe-stdlib` sources; embedding a copy (rather than `include_str!`-ing an
-//! out-of-repo path) keeps the build portable and the toolchain hermetic.
+//! `ipe` is self-contained: the foundational `Ipe` modules are the `.ipe`
+//! sources under `src/stdlib/Ipe/`, `include_str!`-embedded into the binary
+//! at compile time. These sources ARE the standard library — there is no
+//! out-of-repo original they mirror; embedding them keeps the build portable
+//! and the toolchain hermetic.
 //!
 //! `Ipe.Basics` is the canonical implicit module (ADR 0047): its Tier-A surface
 //! is auto-imported into every module. There is no `Ipe.Prelude` module — the
@@ -52,8 +52,8 @@ const STRING: &str = include_str!("../Ipe/String.ipe");
 /// Every member is a point-free `Kernel.kernel "Char_*"` alias resolved by
 /// `ipe_canon::resolve::detect_kernel_alias` to a registered `Char*`
 /// `StdlibKernel` variant (`ipe_runtime::char::*`). Registered in
-/// [`COMPILED_STD_MODULES`] (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`,
-/// so the disjointness invariant holds.
+/// [`COMPILED_STD_MODULES`] and also in `MODULES`, so the module resolves for
+/// consumers that read either table.
 const CHAR: &str = include_str!("../Ipe/Char.ipe");
 /// `Ipe.Dict` — string-keyed associative map, compiled-source Layer-3.
 ///
@@ -73,9 +73,8 @@ const DICT: &str = include_str!("../Ipe/Dict.ipe");
 const SET: &str = include_str!("../Ipe/Set.ipe");
 /// `Ipe.Bytes` — arbitrary byte buffer, distinct from `String`.
 ///
-/// Divergence from Ipê: Ipê defines `type alias Bytes = String`; Ipê-Rust
-/// makes `Bytes` a distinct primitive lowering to `Vec<u8>` (lossless for
-/// non-UTF-8 binary). See `docs/architecture/divergence-policy.md`.
+/// `Bytes` is a distinct primitive lowering to `Vec<u8>` (lossless for
+/// non-UTF-8 binary), not a `String` alias.
 const BYTES: &str = include_str!("../Ipe/Bytes.ipe");
 /// `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
 const CRYPTO: &str = include_str!("../Ipe/Crypto.ipe");
@@ -186,12 +185,13 @@ const HTML_ATTRIBUTES: &str = include_str!("../Ipe/Html/Attributes.ipe");
 /// `Ipe.Html.Unsafe` — the un-escaped raw-HTML escape hatch, compiled-source
 /// Layer-3.
 ///
-/// The single member `unsafeRaw` is a point-free `Kernel.kernel "Html_unsafeRaw"`
-/// alias resolved by `ipe_canon::resolve::detect_kernel_alias` to the retained
-/// `HtmlRawNode` kernel (runtime: `ipe_runtime::ui::helpers::html_raw_node_`,
-/// the `HRaw` verbatim sink). Only the surface home moved here from `Ipe.Html`;
-/// the kernel, its `("Html", "unsafeRaw")` registry key, and the render-sink
-/// behaviour are unchanged. Importing this dotted `Ipe.<M>.Unsafe` submodule
+/// Its members `unsafeRaw` and `unsafeScript` are point-free
+/// `Kernel.kernel "Html_unsafeRaw"` / `"Html_unsafeScript"` aliases resolved by
+/// `ipe_canon::resolve::detect_kernel_alias` to the `HtmlRawNode` /
+/// `HtmlScriptNode` kernels (runtime: `ipe_runtime::ui::helpers::html_raw_node_`,
+/// the `HRaw` verbatim sink, and the inline-`<script>` sink). Only the surface
+/// home moved here from `Ipe.Html`; the kernels, their registry keys, and the
+/// render-sink behaviour are unchanged. Importing this dotted `Ipe.<M>.Unsafe` submodule
 /// discloses the `unsafe` capability. Registered in [`COMPILED_STD_MODULES`]
 /// (NOT `MODULES`); NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
@@ -418,16 +418,16 @@ const CSS: &str = include_str!("../Ipe/Css.ipe");
 ///
 /// Thin pure-Ipê aliases to canonical kernels in their home modules so callers
 /// can write `ToString.fromInt n` without memorising the per-type kernel
-/// sub-namespace.  `fromTime` is OMITTED pending the `Time_timeString` Rust
-/// kernel.  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"ToString"` entry
-/// exists in `STDLIB_MODULE_QUALIFIERS`).
+/// sub-namespace.  `fromTime` aliases `Ipe.Time.timeString` (the backed
+/// `Time_timeString` kernel).  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
+/// `"ToString"` entry exists in `STDLIB_MODULE_QUALIFIERS`).
 const TOSTRING_CORE: &str = include_str!("../Ipe/ToString.ipe");
 
 /// `Ipe.Test` — lightweight in-process test framework.
 ///
 /// Compiled pure-Ipê source that defines the `Test` / `TestResult` ADTs and
-/// all assertion helpers.  `expectErrorKind` / `kindName` are OMITTED pending
-/// the `Ipe.Error` compiled-source migration; `summarise` is pure (no IO).
+/// all assertion helpers.  `kindName` re-exports `Ipe.Error.kindName`; `summarise`
+/// is pure (no IO).
 /// Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Test"` entry exists there).
 const IPE_TEST: &str = include_str!("../Ipe/Test.ipe");
 
@@ -652,6 +652,33 @@ const IPE_CORE_JS: &str = include_str!("../Ipe/Ffi/Js.ipe");
 /// opaque handle. Resolved via the `Kernel.kernel` alias
 /// fast-path, so the qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
 const IPE_CORE_JS_CUSTOM_ELEMENT: &str = include_str!("../Ipe/Ffi/Js/CustomElement.ipe");
+
+/// `Ipe.Ffi.Kernel` — the documentation veneer for the point-free kernel-alias
+/// primitive `Kernel.kernel "<Name>"`.
+///
+/// A DOC-ONLY surface (registered in [`DOC_ONLY_MODULES`], NOT
+/// `COMPILED_STD_MODULES`): `Ipe.Ffi.Kernel` is a reserved compiler-internal
+/// qualifier — accepted at the import boundary and resolved by
+/// `detect_kernel_alias` only in a driver-vouched embedded-stdlib / FFI-interface
+/// module — never a member-bearing importable module. Keeping it out of
+/// `COMPILED_STD_MODULES` is load-bearing: were it injectable, the many stdlib
+/// modules that `import Ipe.Ffi.Kernel as Kernel` would pull in this
+/// body-less veneer as a compiled dep. The embedded source carries only the
+/// module-header and the `kernel : String -> a` signature + doc so the surface is
+/// discoverable through `ipe doc`.
+const IPE_FFI_KERNEL: &str = include_str!("../Ipe/Ffi/Kernel.ipe");
+
+/// `Ipe.Ffi.Rust` — the documentation veneer for the taxonomy-native native-call
+/// surface (`Rust.fn` / `Rust.const`) and the companion `foreign` declaration.
+///
+/// A DOC-ONLY surface (registered in [`DOC_ONLY_MODULES`], NOT
+/// `COMPILED_STD_MODULES`): `Ipe.Ffi.Rust` is a reserved compiler-internal
+/// qualifier — accepted at the import boundary, its `Rust.fn`/`Rust.const` calls
+/// rewritten onto the driver-generated forwarder by `canonicalise_asserted_call`
+/// — never a member-bearing importable module. The embedded source carries the
+/// module-header and the `fn` / `const` signatures + docs so the surface is
+/// discoverable through `ipe doc`.
+const IPE_FFI_RUST: &str = include_str!("../Ipe/Ffi/Rust.ipe");
 
 /// `Ipe.Browser.Clipboard` — write text to the system clipboard over `Ipe.Ffi.Js`
 /// ports (compiled source).
@@ -1103,8 +1130,9 @@ const STD_CACHE: &str = include_str!("../Ipe/Cache.ipe");
 
 /// `Ipe.Compression` — gzip + zstd compression (compiled source).
 ///
-/// KERNEL-BLOCKED: no `Compression_*` kernel variants exist — member use
-/// fails closed with IPE-N0028.
+/// Members are point-free `Kernel.kernel "Compression_*"` aliases backed by the
+/// registered `Compression*` kernels (`ipe_runtime::compression::*`); the
+/// `kernel_backed_qualifiers_match_registry` test locks that this stays true.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_COMPRESSION: &str = include_str!("../Ipe/Compression.ipe");
 
@@ -1127,16 +1155,19 @@ const STD_CONFIG: &str = include_str!("../Ipe/Config.ipe");
 
 /// `Ipe.Csv` — CSV encode + decode (compiled source).
 ///
-/// Defines `type alias Csv` + pure Ipê builders.  KERNEL-BLOCKED: no
-/// `Csv_*` kernel variants exist — member use fails closed with IPE-N0028.
+/// Defines `type alias Csv` + pure Ipê builders.  The kernel-backed members are
+/// point-free `Kernel.kernel "Csv_*"` aliases backed by the registered `Csv*`
+/// kernels; the `kernel_backed_qualifiers_match_registry` test locks that this
+/// stays true.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CSV: &str = include_str!("../Ipe/Csv.ipe");
 
 /// `Ipe.Email` — provider-abstract email send (compiled source).
 ///
-/// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.  KERNEL-BLOCKED:
-/// no `Email_*` kernel variant exists — member use fails closed with
-/// IPE-N0028.
+/// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.  `Email.send`
+/// is a point-free `Kernel.kernel "Email_send"` alias backed by the registered
+/// `EmailSend` kernel; the `kernel_backed_qualifiers_match_registry` test locks
+/// that this stays true.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_EMAIL: &str = include_str!("../Ipe/Email.ipe");
 
@@ -1159,8 +1190,9 @@ const STD_PUBSUB: &str = include_str!("../Ipe/PubSub.ipe");
 
 /// `Ipe.Trace` — opt-in distributed-tracing spans (compiled source).
 ///
-/// KERNEL-BLOCKED: no `Trace_*` kernel variants exist — member use fails
-/// closed with IPE-N0028.
+/// Members are point-free `Kernel.kernel "Trace_*"` aliases backed by the
+/// registered `Trace*` kernels; the `kernel_backed_qualifiers_match_registry`
+/// test locks that this stays true.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_TRACE: &str = include_str!("../Ipe/Trace.ipe");
 
@@ -1918,6 +1950,49 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     },
 ];
 
+// ===========================================================================
+// Documentation-only modules — reserved compiler-internal qualifiers.
+// ===========================================================================
+//
+// These name reserved FFI qualifiers (`Ipe.Ffi.Kernel`, `Ipe.Ffi.Rust`) that
+// the compiler recognises structurally, not as importable member-bearing
+// modules: `Kernel.kernel "…"` is rewritten by `detect_kernel_alias` and
+// `Rust.fn`/`Rust.const` by `canonicalise_asserted_call`, each only in a
+// driver-vouched origin. They carry doc-comments + signatures purely so the
+// surface is discoverable through `ipe doc` and the generated stdlib reference.
+//
+// They are DISJOINT from both `MODULES` and `COMPILED_STD_MODULES` on purpose:
+// the doc-enumeration paths read this table, but the build-driver injection
+// path (`is_compiled_source_segments`) does NOT, so a stdlib module that does
+// `import Ipe.Ffi.Kernel as Kernel` never pulls a body-less veneer in as a
+// compiled dependency.
+
+/// One documentation-only stdlib module: its dotted name and its embedded Ipê
+/// source.
+///
+/// Shares the shape of [`CompiledStdModule`] but is never compiled or injected
+/// — it feeds `ipe doc` and the stdlib reference only.
+pub struct DocOnlyModule {
+    /// The dotted module name as written in an `import`, e.g. `Ipe.Ffi.Kernel`.
+    pub dotted: &'static str,
+    /// The module's Ipê source, embedded at compile time.
+    pub source: &'static str,
+}
+
+/// The reserved FFI qualifiers surfaced for documentation only. Enumerated by
+/// the `ipe doc` module list and the stdlib-reference generator; never compiled
+/// or injected.
+pub const DOC_ONLY_MODULES: &[DocOnlyModule] = &[
+    DocOnlyModule {
+        dotted: "Ipe.Ffi.Kernel",
+        source: IPE_FFI_KERNEL,
+    },
+    DocOnlyModule {
+        dotted: "Ipe.Ffi.Rust",
+        source: IPE_FFI_RUST,
+    },
+];
+
 /// The embedded Ipê source for a compiled-source stdlib module named by its path
 /// SEGMENTS (e.g. `["Std", "Palette"]`), or `None` when the segments name no
 /// compiled-source module.
@@ -1970,6 +2045,8 @@ pub fn inject_compiled_std_closure(
 
     // Seed the worklist from every compiled-source import across current sources.
     // Short-circuit: an unused-stdlib build enqueues nothing and returns empty.
+    // User sources are fresh every call, so they are lexed here — only the
+    // compile-time-constant embedded sources are memoized (below).
     let mut work: std::collections::VecDeque<Vec<String>> = std::collections::VecDeque::new();
     for (_, src) in sources.values() {
         for imp in extract_imports(src) {
@@ -1999,16 +2076,63 @@ pub fn inject_compiled_std_closure(
         injected.insert(path.clone());
 
         // Std -> Std closure: enqueue the embedded module's OWN compiled-source
-        // imports (a kernel import inside it stays qualifier-resolved). Fixpoint
-        // via the `sources.contains_key` guard above.
-        for imp in extract_imports(embedded) {
-            if is_compiled_source_segments(&imp) && !sources.contains_key(&imp) {
-                work.push_back(imp);
+        // imports. The embedded text is a compile-time constant, so its
+        // compiled-source import edges are a pure function of it and are memoized
+        // once per module — the fixpoint then walks precomputed edges instead of
+        // re-lexing the same `&'static str` on every call. Fixpoint via the
+        // `sources.contains_key` guard above.
+        let edges = embedded_compiled_std_imports(embedded, &extract_imports);
+        for imp in &*edges {
+            if !sources.contains_key(imp) {
+                work.push_back(imp.clone());
             }
         }
     }
 
     injected
+}
+
+/// A memoized, shareable list of one embedded module's compiled-source import
+/// edges (path segments per edge).
+type ImportEdges = std::sync::Arc<Vec<Vec<String>>>;
+
+/// The compiled-source import edges of one embedded stdlib module, memoized by
+/// the module's `&'static str` identity.
+///
+/// The embedded sources are compile-time constants, so their compiled-source
+/// import lists never change; lexing each once and caching the result removes
+/// the per-call re-lex of every embedded module the closure walks. The cache is
+/// keyed by the source's pointer identity (unique per embedded `&'static str`),
+/// and the stored list is already filtered to compiled-source modules so the
+/// caller iterates it directly. Correctness is unaffected: the memoized value is
+/// exactly what `extract_imports` would return for that constant text.
+fn embedded_compiled_std_imports(
+    embedded: &'static str,
+    extract_imports: &impl Fn(&str) -> Vec<Vec<String>>,
+) -> ImportEdges {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<usize, ImportEdges>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = embedded.as_ptr() as usize;
+
+    if let Ok(guard) = cache.lock()
+        && let Some(hit) = guard.get(&key)
+    {
+        return Arc::clone(hit);
+    }
+
+    let edges: Vec<Vec<String>> = extract_imports(embedded)
+        .into_iter()
+        .filter(|imp| is_compiled_source_segments(imp))
+        .collect();
+    let edges = Arc::new(edges);
+
+    if let Ok(mut guard) = cache.lock() {
+        return Arc::clone(guard.entry(key).or_insert(edges));
+    }
+    edges
 }
 
 #[cfg(test)]
@@ -2067,6 +2191,78 @@ mod tests {
                 "compiled-source module {} must parse: {:?}",
                 m.dotted,
                 parsed.err()
+            );
+        }
+    }
+
+    /// Anti-drift guard for the per-module availability prose above (issue
+    /// #1975): the `KernelDef` registry is the single source of truth for which
+    /// members are backed, and hand-written "KERNEL-BLOCKED" / "OMITTED pending a
+    /// kernel" doc claims silently drifted from it in both directions. Every
+    /// qualifier whose compiled-source module routes members through
+    /// `Kernel.kernel "<Qualifier>_*"` MUST have at least one registered kernel;
+    /// this asserts the ground truth those doc comments describe so a future edit
+    /// that (a) deletes a kernel or (b) re-introduces a false "no kernel exists"
+    /// claim is caught against the registry rather than trusted prose.
+    #[test]
+    fn kernel_backed_qualifiers_match_registry() {
+        let registered: std::collections::BTreeSet<&'static str> = ipe_kernels::StdlibKernel::ALL
+            .iter()
+            .map(|k| k.def().qualifier)
+            .collect();
+
+        // The qualifiers whose module docs previously claimed no kernel existed;
+        // the registry now backs each, so the claim was drift.
+        for qualifier in ["Compression", "Csv", "Email", "Trace", "Time"] {
+            assert!(
+                registered.contains(qualifier),
+                "module doc treats `{qualifier}` as kernel-backed, but the \
+                 KernelDef registry has no `{qualifier}_*` kernel — the doc \
+                 prose and the registry SSOT have drifted",
+            );
+        }
+    }
+
+    /// Every documentation-only veneer must PARSE with the real front end — it is
+    /// relayed to `ipe doc` from raw source, so ill-formed source would surface a
+    /// broken signature line rather than fail closed.
+    #[test]
+    fn every_doc_only_module_parses() {
+        for m in DOC_ONLY_MODULES {
+            let mut interner = Interner::new();
+            let parsed = ipe_parse::parse_module(m.source, &mut interner);
+            assert!(
+                parsed.is_ok(),
+                "doc-only module {} must parse: {:?}",
+                m.dotted,
+                parsed.err()
+            );
+        }
+    }
+
+    /// Load-bearing invariant: a documentation-only veneer is NEVER a compiled or
+    /// injectable module. Were a `DOC_ONLY_MODULES` name also in
+    /// `COMPILED_STD_MODULES` (or the `MODULES` parse fixtures), the many stdlib
+    /// modules that `import Ipe.Ffi.Kernel as Kernel` would pull the body-less
+    /// veneer in as a compiled dependency — the exact breakage this table avoids.
+    #[test]
+    fn doc_only_disjoint_from_compiled_and_parse_fixtures() {
+        for d in DOC_ONLY_MODULES {
+            assert!(
+                !COMPILED_STD_MODULES.iter().any(|m| m.dotted == d.dotted),
+                "{} is BOTH doc-only and compiled-source — it must never be injectable",
+                d.dotted
+            );
+            assert!(
+                !MODULES.iter().any(|m| m.name == d.dotted),
+                "{} is BOTH doc-only and a `MODULES` parse fixture",
+                d.dotted
+            );
+            let segments: Vec<String> = d.dotted.split('.').map(str::to_owned).collect();
+            assert!(
+                !is_compiled_source_segments(&segments),
+                "{} must not be seen as a compiled-source module by the injector",
+                d.dotted
             );
         }
     }

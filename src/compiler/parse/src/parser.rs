@@ -1225,7 +1225,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a closed record type `{ field : T, ... }`, the opening `{` already
     /// consumed (its span is `opener`). The empty record `{}` is valid and
-    /// produces a `TRecord` with an empty field list (mirrors the the compiler
+    /// produces a `TRecord` with an empty field list (mirrors the reference compiler
     /// compiler's behaviour). Each non-empty field is a lowercase name, a `:`,
     /// then its type; fields are comma-separated and the list is closed by `}`.
     /// Duplicate field names are not rejected here (a later stage owns that),
@@ -1235,7 +1235,7 @@ impl<'a> Parser<'a> {
             return Err(self.too_deep(Construct::Type));
         }
         // `{}` (the empty record type) — valid, produces `TRecord []`.
-        // Mirrors the the compiler reference: `Just '}' -> char '}'  >> return (TRecord [] Nothing)`.
+        // Mirrors the reference compiler: `Just '}' -> char '}'  >> return (TRecord [] Nothing)`.
         if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBrace) {
             let close = t.span;
             self.bump(Construct::Type)?;
@@ -1338,6 +1338,13 @@ impl<'a> Parser<'a> {
         let mut ops: Vec<(Expr, Located<Symbol>)> = Vec::new();
         let mut operand = first;
         while let Some((op, op_span)) = self.peek_binop(threshold) {
+            // A flat operator chain re-associates into a nesting-deep Binop/Cons
+            // tree downstream, so each operator must cost one depth level here or
+            // the chain escapes `MAX_DEPTH` and overflows the recursive walkers
+            // (and Drop) that traverse the canonical tree.
+            if depth.saturating_add(u32::try_from(ops.len()).unwrap_or(u32::MAX)) >= MAX_DEPTH {
+                return Err(self.too_deep(Construct::Expression));
+            }
             let op_sym = self.intern(op)?;
             self.bump(Construct::Expression)?;
             ops.push((operand, Located::new(op_span, op_sym)));
@@ -1513,7 +1520,7 @@ impl<'a> Parser<'a> {
             // String payloads move directly into the AST node — no secondary copy.
             Tok::Str(s) => Ok(Located::new(span, Expr_::Str(s))),
             // Triple-quoted strings carry raw content; the canonicaliser desugars
-            // `{{expr}}` interpolation at name-resolution time. Mirrors the the compiler
+            // `{{expr}}` interpolation at name-resolution time. Mirrors the reference compiler
             // parser's `MultiLine str -> return (Src.MultilineStr str)` arm.
             Tok::TripleStr { raw, anchor } => {
                 Ok(Located::new(span, Expr_::MultilineStr { raw, anchor }))
@@ -1632,7 +1639,7 @@ impl<'a> Parser<'a> {
     /// Parse a unary minus in atom (prefix) position, the `-` already consumed
     /// at `minus_span`.
     ///
-    /// **Faithful port of the the compiler `exprAtom_` `Negate` arm**
+    /// **Faithful port of the reference compiler `exprAtom_` `Negate` arm**
     /// (`Ipe.Parse.Expression`, lines 356–367 of the upstream reference):
     ///
     /// ```haskell
@@ -1667,7 +1674,7 @@ impl<'a> Parser<'a> {
     ///   the `Basics_negate` kernel and is unshadowable, so a user binding named
     ///   `negate` never captures the unary-minus operator.
     ///
-    /// * **Non-adjacent** (`- 5`, `- x`) — the the compiler parser's `exprAtom_`
+    /// * **Non-adjacent** (`- 5`, `- x`) — the reference compiler parser's `exprAtom_`
     ///   has no leading `spaces` call after consuming `-`, so a space before the
     ///   operand causes the nested atom parse to fail on the space character
     ///   (consumed error, no backtrack).  We mirror this by checking byte-span
@@ -1946,7 +1953,7 @@ impl<'a> Parser<'a> {
     ///
     /// After the opening `{` three forms are accepted:
     ///
-    /// * `{}` — the **empty record literal**: zero fields. Mirrors the the compiler
+    /// * `{}` — the **empty record literal**: zero fields. Mirrors the reference compiler
     ///   compiler's `Src.Record []` (line 309-311 of Expression.hs).
     /// * `{ name = value, ... }` — a record **literal**: a non-empty, comma-
     ///   separated list of `name = value` fields.
@@ -1961,7 +1968,7 @@ impl<'a> Parser<'a> {
             return Err(self.too_deep(Construct::Record));
         }
         // `{}` (the empty record literal) — valid, produces `Record []`.
-        // Mirrors the the compiler reference: `Just '}' -> char '}' >> return (Record [])`.
+        // Mirrors the reference compiler: `Just '}' -> char '}' >> return (Record [])`.
         if let Some(t) = self.peek().filter(|t| t.kind == Tok::RBrace) {
             let close = t.span;
             self.bump(Construct::Record)?;
@@ -2226,7 +2233,7 @@ impl<'a> Parser<'a> {
     /// at `threshold`, so it extends as far right as the surrounding layout
     /// allows (`\x -> x + 1` captures the whole `x + 1`). A zero-parameter
     /// `\ -> e` and a missing `->` are clean parse errors, never a silently
-    /// reshaped AST. Mirrors the the compiler compiler's `Ipe.Parse.Expression.lambda`.
+    /// reshaped AST. Mirrors the reference compiler's `Ipe.Parse.Expression.lambda`.
     fn parse_lambda(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
         if depth > MAX_DEPTH {
             return Err(self.too_deep(Construct::Lambda));
@@ -2276,7 +2283,7 @@ impl<'a> Parser<'a> {
     /// condition and branch parses as a full expression at `threshold`; the
     /// `then` / `else` / `if` keyword tokens delimit them, since the expression
     /// parser never consumes a keyword as an application argument or operator.
-    /// The result is `If [(cond, branch), …] else`, mirroring the the compiler
+    /// The result is `If [(cond, branch), …] else`, mirroring the reference compiler
     /// compiler's `Src.If [(Expr, Expr)] Expr` — the leading `if` plus every
     /// `else if`, then the mandatory final `else`.
     fn parse_if(&mut self, threshold: u32, depth: u32) -> DResult<Expr> {
@@ -2731,7 +2738,7 @@ impl<'a> Parser<'a> {
             pat
         };
         // An `as` alias binds the whole pattern parsed so far to a name
-        // (`inner as name`). Mirrors the the compiler compiler's `pattern_` postfix
+        // (`inner as name`). Mirrors the reference compiler's `pattern_` postfix
         // check; the inner sub-pattern keeps its shape and the alias wraps it.
         if self.peek_kind() == Some(&Tok::As) {
             self.bump(Construct::Pattern)?;
@@ -2842,7 +2849,7 @@ impl<'a> Parser<'a> {
             Tok::Ident(text) => {
                 // `True` / `False` are the two Bool constructors; in pattern
                 // position they are boolean literal patterns (a closed
-                // two-constructor cover), matching the the compiler compiler's
+                // two-constructor cover), matching the reference compiler's
                 // `Src.PBool`. They are checked before the general ctor branch.
                 if text == "True" {
                     return Ok(Located::new(tok.span, Pattern_::PBool(true)));

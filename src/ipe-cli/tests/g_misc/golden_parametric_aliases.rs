@@ -24,8 +24,8 @@
 //! `addPair (20, 22) = 42` (the body returns 42 when the pair equals `(20, 22)`;
 //! this subset has no tuple element access, so equality recovers the value,
 //! mirroring the `tuple_annotations` golden). The `end_to_end_*` test below
-//! asserts the Rust backend reaches the identical `42`. Running the the toolchain
-//! inside `cargo test` is impractical (it needs the the `ipe` binary plus a
+//! asserts the Rust backend reaches the identical `42`. Running the toolchain
+//! inside `cargo test` is impractical (it needs the `ipe` binary plus a
 //! the toolchain), so the hand-verified value is the in-test oracle, documented
 //! here against the equivalent command.
 
@@ -70,7 +70,7 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
-/// parametric-alias program prints `42` — the same value the the backend
+/// parametric-alias program prints `42` — the same value the backend
 /// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() {

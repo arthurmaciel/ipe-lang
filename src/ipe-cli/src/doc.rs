@@ -1258,6 +1258,11 @@ fn stdlib_module_names() -> Vec<String> {
         names.insert(m.dotted.to_owned());
     }
 
+    // Documentation-only reserved qualifiers (Ipe.Ffi.Kernel, Ipe.Ffi.Rust).
+    for m in ipe_stdlib::DOC_ONLY_MODULES {
+        names.insert(m.dotted.to_owned());
+    }
+
     // Kernel-qualifier modules (Ipe.List, Ipe.String, …).
     for (segments, _qualifier) in ipe_canon::STDLIB_MODULE_QUALIFIERS {
         names.insert(segments.join("."));
@@ -1290,6 +1295,20 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
         );
     }
 
+    // ── Documentation-only reserved qualifiers ────────────────────────────────
+    // `Ipe.Ffi.Kernel` / `Ipe.Ffi.Rust` are compiler-recognised FFI qualifiers,
+    // not importable modules; their embedded source carries doc-comments and
+    // signatures for discoverability only. They are documented from the raw
+    // source so a body-less signature surfaces its doc + signature line without
+    // depending on a type-check the veneer intentionally does not satisfy.
+    for dom in ipe_stdlib::DOC_ONLY_MODULES {
+        let segments: Vec<String> = dom.dotted.split('.').map(str::to_owned).collect();
+        modules.insert(
+            dom.dotted.to_owned(),
+            build_source_only_module_doc(&segments, dom.source),
+        );
+    }
+
     // ── Kernel-qualifier stdlib modules ───────────────────────────────────────
     // Signatures come from kernel_type_table; doc-comments are absent for these
     // compiler-internal modules (signatures are the contract). If the kernel
@@ -1313,6 +1332,46 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
     }
 
     modules.into_values().collect()
+}
+
+/// Resolve and build the [`ModuleDoc`] for a single stdlib module by name,
+/// type-checking only that module rather than the whole compiled-source set.
+///
+/// The three-way resolution mirrors [`build_stdlib_docs`] but stops at the first
+/// match, so `ipe doc <Module>` costs one type-check instead of ~130:
+///
+/// 1. A compiled-source module (`COMPILED_STD_MODULES`) — build only that one
+///    (the single expensive per-module type-check), matching what the full pass
+///    would have produced for this name.
+/// 2. A kernel-qualifier module — the kernel type table is a single shared db, so
+///    the full kernel-doc pass already costs one check; take this name's entry.
+/// 3. A listed-but-otherwise-undocumentable name — the signature-less fallback,
+///    preserving the `--list` == queryable SSOT invariant.
+///
+/// Returns `None` only for a name that is not a stdlib module at all (the query
+/// path then reports the unknown-module error).
+fn query_single_stdlib_module(module_name: &str) -> Option<ModuleDoc> {
+    // 1. Compiled-source: type-check only the matching module.
+    for csm in ipe_stdlib::COMPILED_STD_MODULES {
+        if csm.dotted == module_name {
+            let segments: Vec<String> = csm.dotted.split('.').map(str::to_owned).collect();
+            return Some(build_compiled_std_module_doc(&segments, csm.source));
+        }
+    }
+
+    // 2. Kernel-qualifier: the type table is one shared db; take this entry.
+    if let Ok(mut kernel_docs) = build_kernel_module_docs()
+        && let Some(doc) = kernel_docs.remove(module_name)
+    {
+        return Some(doc);
+    }
+
+    // 3. Listed-name SSOT fallback: a queryable, signature-less entry.
+    if stdlib_module_names().iter().any(|n| n == module_name) {
+        return Some(empty_stdlib_module_doc(module_name));
+    }
+
+    None
 }
 
 /// A signature-less [`ModuleDoc`] carrying only the module name — the last-resort
@@ -1347,6 +1406,39 @@ fn build_compiled_std_module_doc(segments: &[String], source: &str) -> ModuleDoc
         .unwrap_or_default();
     let segments_vec: Vec<String> = segments.to_vec();
     module_doc(&segments_vec, &module_api, &comments, ModuleKind::Stdlib)
+}
+
+/// Build a [`ModuleDoc`] for a documentation-only reserved qualifier
+/// (`Ipe.Ffi.Kernel` / `Ipe.Ffi.Rust`) straight from its embedded source.
+///
+/// These qualifiers are recognised structurally by the compiler, never compiled
+/// as importable modules, so there is no type-checked API to read. The
+/// module-header doc and each exposed member's `name : Type` signature line +
+/// doc-comment are relayed verbatim from the source via
+/// [`ipe_docs::stdlib_docs::extract_module_doc`]; the resolved-type field is a
+/// placeholder ([`TyDoc::Unit`]) because no cross-reference identity exists for a
+/// compiler primitive. Always yields a [`ModuleDoc`] so the qualifier stays
+/// queryable and `--list`/query agree.
+fn build_source_only_module_doc(segments: &[String], source: &str) -> ModuleDoc {
+    let extracted = ipe_docs::stdlib_docs::extract_module_doc(&segments.join("."), source);
+    let values = extracted
+        .exports
+        .into_iter()
+        .filter(|e| e.signature.is_some())
+        .map(|e| ValueDoc {
+            name: e.name,
+            signature: e.signature.unwrap_or_default(),
+            signature_ty: TyDoc::Unit,
+            comment: e.doc.unwrap_or_default(),
+        })
+        .collect();
+    ModuleDoc {
+        name: segments.join("."),
+        kind: ModuleKind::Stdlib,
+        comment: extracted.module_doc.unwrap_or_default(),
+        unions: Vec::new(),
+        values,
+    }
 }
 
 /// Build [`ModuleDoc`]s for every kernel-qualifier stdlib module.
@@ -1562,15 +1654,15 @@ fn render_module_human(module: &ModuleDoc, index: &AnchorIndex) {
 /// Resolves `module_name` against stdlib + project (project overrides stdlib on
 /// a name collision). Errors with a typed message on an unknown module.
 fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError> {
-    // Build stdlib docs; also try to find project docs from `.` (best-effort).
-    let stdlib = build_stdlib_docs();
+    // Project wins over stdlib on name collision. Project modules are already a
+    // single resolved pass; the stdlib side is resolved lazily so a single-name
+    // query type-checks one module, not all ~130 compiled-source modules.
     let project = query_project_modules();
-
-    // Project wins over stdlib on name collision.
-    let found: Option<&ModuleDoc> = project
+    let found: Option<ModuleDoc> = project
         .iter()
         .find(|m| m.name == module_name)
-        .or_else(|| stdlib.iter().find(|m| m.name == module_name));
+        .cloned()
+        .or_else(|| query_single_stdlib_module(module_name));
 
     let Some(module) = found else {
         return Err(CliError::UsageOwned(format!(
@@ -1599,11 +1691,11 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
         }
         OutputFormat::Json => {
             let mut out = String::new();
-            render_module_json(&mut out, module, &index);
+            render_module_json(&mut out, &module, &index);
             println!("{out}");
         }
         OutputFormat::Human => {
-            render_module_human(module, &index);
+            render_module_human(&module, &index);
         }
     }
     Ok(())
@@ -2249,12 +2341,12 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
         "{}",
         crate::style::status_line(
             true,
-            &format!(
+            &crate::style::TerminalSafe::sanitize(&format!(
                 "documented {} module{} to {}",
                 docs.modules.len(),
                 if docs.modules.len() == 1 { "" } else { "s" },
                 out.display()
-            ),
+            )),
             crate::style::use_color(&std::io::stdout()),
         )
     );
@@ -2559,6 +2651,7 @@ fn synthesize_module(body: &str, source_module: &str, module_imports: &[String])
         ("Io.", "import Ipe.Io as Io"),
         ("Debug.", "import Ipe.Debug as Debug"),
         ("Char.", "import Ipe.Char as Char"),
+        ("Tuple.", "import Ipe.Tuple as Tuple"),
     ] {
         let Some(module_for_prefix) = import_line_module(import) else {
             continue;
@@ -2572,22 +2665,80 @@ fn synthesize_module(body: &str, source_module: &str, module_imports: &[String])
 
     out.push('\n');
 
-    // Emit body lines. `-->` expression-assertion lines become `docCheckN = <expr>`
-    // top-level bindings so the type-checker can reach them.
+    // Every example body is one or more expressions, each optionally followed
+    // by a `-->` result or a `-- ==` explanatory comment. An expression may span
+    // several lines (a pipeline, a call with bracketed arguments), so a bare
+    // expression cannot be emitted as a top-level line — it needs a binding.
+    // Each expression becomes a `docCheckN = <expr>` top-level binding so the
+    // type-checker can reach it without a `main` entry point.
+    //
+    // Grouping: blank lines separate independent expressions. Within a run of
+    // non-blank lines, a line carrying an inline `-->` (non-empty left side) is
+    // one complete single-line expression; consecutive lines without an inline
+    // `-->` accumulate into one multi-line expression, terminated by a blank
+    // line, a following inline-`-->` line, or a trailing annotation line (a
+    // standalone `-->` result or a `-- ==` comment).
     let mut check_idx = 0usize;
+    let mut pending: Vec<&str> = Vec::new();
+
+    let flush = |out: &mut String, check_idx: &mut usize, pending: &mut Vec<&str>| {
+        if pending.is_empty() {
+            return;
+        }
+        let expr = pending.join(" ");
+        let expr = expr.trim();
+        if !expr.is_empty() {
+            *check_idx += 1;
+            out.push('\n');
+            let _ = writeln!(out, "docCheck{check_idx} = {expr}");
+        }
+        pending.clear();
+    };
+
     for line in body.lines() {
-        if let Some(arrow_pos) = line.find("-->") {
-            let expr = line[..arrow_pos].trim();
-            if !expr.is_empty() {
-                check_idx += 1;
-                out.push('\n');
-                let _ = writeln!(out, "docCheck{check_idx} = {expr}");
-            }
-        } else {
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            flush(&mut out, &mut check_idx, &mut pending);
+            continue;
+        }
+
+        // A `-- ==` comment shows an order-unspecified expected result for the
+        // preceding expression; it annotates, it does not extend the expression.
+        if trimmed.starts_with("-- ") || trimmed == "--" {
+            flush(&mut out, &mut check_idx, &mut pending);
+            continue;
+        }
+
+        // A top-level construct (an example that opens with its own `import`) is
+        // emitted verbatim, never folded into an expression binding.
+        if trimmed.starts_with("import ")
+            || trimmed.starts_with("module ")
+            || trimmed.starts_with("type ")
+        {
+            flush(&mut out, &mut check_idx, &mut pending);
             out.push('\n');
             out.push_str(line);
+            continue;
         }
+
+        if let Some(arrow_pos) = line.find("-->") {
+            let expr = line[..arrow_pos].trim();
+            // A standalone `--> result` closes the accumulated expression; an
+            // inline `expr --> result` closes any pending expression, then binds
+            // the single-line expression on its own.
+            flush(&mut out, &mut check_idx, &mut pending);
+            if !expr.is_empty() {
+                pending.push(expr);
+                flush(&mut out, &mut check_idx, &mut pending);
+            }
+            continue;
+        }
+
+        pending.push(trimmed);
     }
+    flush(&mut out, &mut check_idx, &mut pending);
+
     out.push('\n');
     out
 }
@@ -4355,7 +4506,9 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
         "{}",
         crate::style::status_line(
             true,
-            &format!("serving docs at {url} (read-only, loopback; Ctrl-C to stop)"),
+            &crate::style::TerminalSafe::sanitize(&format!(
+                "serving docs at {url} (read-only, loopback; Ctrl-C to stop)"
+            )),
             crate::style::use_color(&std::io::stdout()),
         )
     );
@@ -4405,10 +4558,22 @@ fn serve_one(conn: &mut std::net::TcpStream, site: &BTreeMap<String, String>) {
     };
     // Bound the size: read at most one capped request line. `take` caps the byte
     // count, so a client that never sends a newline yields a bounded buffer, not
-    // unbounded growth.
+    // unbounded growth. A line that fills the cap without a terminating newline is
+    // an over-long request: fail closed with `431` rather than act on a truncated
+    // request line.
     let mut reader = BufReader::new(clone.take(DOC_SERVE_REQUEST_LINE_CAP as u64));
     let mut request_line = String::new();
-    if reader.read_line(&mut request_line).is_err() {
+    let Ok(read) = reader.read_line(&mut request_line) else {
+        return;
+    };
+    if read >= DOC_SERVE_REQUEST_LINE_CAP && !request_line.ends_with('\n') {
+        let overflow = http_response(
+            "431 Request Header Fields Too Large",
+            "text/plain; charset=utf-8",
+            "request line too long\n",
+        );
+        let _ = conn.write_all(overflow.as_bytes());
+        let _ = conn.flush();
         return;
     }
 
@@ -5839,6 +6004,50 @@ withBaseMs = something
         assert!(
             elapsed < DOC_SERVE_READ_TIMEOUT * 3,
             "serve_one must return promptly, took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn doc_serve_rejects_an_over_long_request_line_with_431() {
+        // A request line that fills the cap without a terminating newline is
+        // fail-closed: the server answers `431` and never acts on the truncated
+        // line, so an over-long line can neither be served nor grow the buffer
+        // past the cap.
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("addr");
+
+        let handle = std::thread::spawn(move || {
+            let mut site: BTreeMap<String, String> = BTreeMap::new();
+            site.insert("index.html".to_owned(), "<h1>hi</h1>".to_owned());
+            let (mut conn, _) = listener.accept().expect("accept");
+            serve_one(&mut conn, &site);
+        });
+
+        let mut client = TcpStream::connect(addr).expect("connect");
+        // Exactly the cap in bytes, no newline: the server's capped read consumes
+        // every byte sent (so the close is a clean FIN, not an RST that would
+        // discard the response) yet still sees no line terminator, which is the
+        // over-long condition. Send-then-shutdown so the read below sees the full
+        // `431` before the server closes.
+        let over_long = vec![b'a'; DOC_SERVE_REQUEST_LINE_CAP];
+        client.write_all(&over_long).expect("write over-long line");
+        client
+            .shutdown(std::net::Shutdown::Write)
+            .expect("shutdown write");
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).expect("read response");
+        handle.join().expect("server thread");
+
+        assert!(
+            resp.starts_with("HTTP/1.1 431 Request Header Fields Too Large"),
+            "over-long line must be rejected with 431, got: {resp}"
+        );
+        assert!(
+            !resp.contains("<h1>hi</h1>"),
+            "an over-long line must not be served a body: {resp}"
         );
     }
 }

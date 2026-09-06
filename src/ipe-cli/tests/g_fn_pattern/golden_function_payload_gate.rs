@@ -19,13 +19,8 @@
 //! with the semantically-correct output. It must NEVER accept the program and
 //! then cargo-fail.
 //!
-//! Note on the golden oracle: the the reference compiler (`/usr/local/bin/ipe`,
-//! ) fails this exact shape — its codegen emitted code that `go build`
-//! rejects (`invalid operation: cannot call f (variable of interface type any):
-//! any is not a function`), captured in `oracle.meta` as a upstream-failure
-//! divergence (`oracle_divergence = true`) by the `refresh-oracle` tool. So the
-//! Rust build-and-run outcome is a strict improvement over the golden reference,
-//! not a Ipê-Rust behavior divergence.
+//! Marked `oracle_divergence = true`: there is no external oracle output for
+//! this shape, so the golden is Ipê's own emitted-and-run result.
 
 use std::path::{Path, PathBuf};
 

@@ -11,7 +11,7 @@
 //! <blank: 128>
 //! <user functions: 129..=137>  emitted from the IR (emit_func)
 //! <blank: 138>
-//! <epilogue: 139..>            Ffi.kernel polyfill, list helpers, entry point
+//! <epilogue: 139..>            list helpers, FFI-placeholder banner, entry point
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -324,12 +324,13 @@ pub use wasm::pubsub::{
 };
 ";
 
-/// Prelude module paths with no denotation in the wasm module set — a
-/// kernel-wrapper block referencing one of these is dropped from the wasm
-/// prelude by [`wasm_runtime_bindings`], UNLESS the block also matches
-/// [`WASM_PRESENT_OVERRIDES`] (a landed M4 substitute inside an otherwise
-/// mostly-native module). Keyed on module paths (structural), so a prelude
-/// drift auto-adapts.
+/// Runtime call paths shadowed absent on the wasm target even though their module
+/// is declared in [`WASM_RUNTIME_MOD_RS`] — a mostly-native module (`task`,
+/// `time`, `crypto`, `http_client`) whose non-override functions have no wasm32
+/// arm. A kernel-wrapper whose own body call path matches one of these is dropped
+/// from the wasm prelude by [`wasm_runtime_bindings`], UNLESS that exact path is a
+/// [`WASM_PRESENT_OVERRIDES`] entry (a landed browser substitute in the same
+/// module). Keyed on call paths (structural), so a prelude drift auto-adapts.
 const WASM_ABSENT_MODULE_PATHS: &[&str] = &[
     "ipe_runtime::task::",
     "ipe_runtime::http_client::",

@@ -2316,3 +2316,56 @@ mod aud13_solver_var_tag_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod zonk_sharing_tests {
+    use super::super::{Budget, Content, FlatType, Ty, UnionFind, VarId, zonk};
+
+    /// A chain of `pN = (p{N-1}, p{N-1})` shares each variable across both
+    /// tuple slots, so the settled solver structure is a DAG whose read-back is
+    /// tiny (`depth + 1` distinct nodes) but whose tree unfolding doubles per
+    /// level. Read back must walk the shared representative once; without
+    /// memoization a 14-deep chain unfolds to `2^13` visits and trips
+    /// `ZONK_NODE_LIMIT`, wrongly rejecting a legal program.
+    fn build_shared_tuple_chain(uf: &mut UnionFind<Content>, depth: usize) -> VarId {
+        let mut cur = uf
+            .fresh(Content::Structure(FlatType::Unit))
+            .expect("fresh leaf must not fail");
+        for _ in 0..depth {
+            cur = uf
+                .fresh(Content::Structure(FlatType::Tuple(vec![cur, cur])))
+                .expect("fresh tuple must not fail");
+        }
+        cur
+    }
+
+    #[test]
+    fn zonk_reads_back_a_deep_shared_dag_without_tripping_the_node_limit() -> Result<(), String> {
+        // 14 levels of sharing: the tree unfolding (2^14 nodes) far exceeds
+        // ZONK_NODE_LIMIT, so this fails pre-fix and succeeds once sharing is
+        // preserved.
+        let mut uf = UnionFind::<Content>::new();
+        let root = build_shared_tuple_chain(&mut uf, 14);
+        let mut budget = Budget::unbounded();
+
+        let ty = zonk(&mut uf, &mut budget, root)
+            .expect("a legal shared DAG must read back, not hit the node limit");
+
+        // Both slots of every tuple resolve to the identical sub-type: the DAG
+        // read back preserves the shape a tree walk would have produced.
+        let elems = match &ty {
+            Ty::Tuple(elems) => elems,
+            other => return Err(format!("expected a tuple at the root, got {other:?}")),
+        };
+        let (Some(left), Some(right)) = (elems.first(), elems.get(1)) else {
+            return Err(format!(
+                "each level is a pair, got {} elements",
+                elems.len()
+            ));
+        };
+        if left != right {
+            return Err("the two shared slots must read back as equal sub-types".to_owned());
+        }
+        Ok(())
+    }
+}

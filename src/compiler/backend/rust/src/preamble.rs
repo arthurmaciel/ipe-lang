@@ -2,8 +2,8 @@
 //!
 //! The Ipê → Rust codegen wraps the user's emitted types and functions in a
 //! fixed prologue (header, imports, basic type aliases, runtime re-exports) and
-//! a fixed epilogue (`Ffi.kernel` polyfill, list helpers, FFI-placeholder
-//! banner, entry point). Those two fixed regions are produced here.
+//! a fixed epilogue (list helpers, FFI-placeholder banner, entry point). Those
+//! two fixed regions are produced here.
 //!
 //! The byte source of truth is the hand-maintained template at
 //! `templates/main.rs` — a canonical whole-program rendering that owns the fixed
@@ -16,9 +16,9 @@
 //! anchor mistake is caught.
 //!
 //! A missing anchor is not a silent empty fallback: a template edit
-//! that drops the USER TYPES banner or the `Ffi.kernel` polyfill comment fails
-//! loudly with [`Diagnostic::CompilerBug`] (IPE-I0203) rather than emitting a
-//! truncated project.
+//! that drops the USER TYPES banner or the list-helpers section fails loudly
+//! with [`Diagnostic::CompilerBug`] (IPE-I0203) rather than emitting a truncated
+//! project.
 
 use ipe_diagnostics::{DResult, Diagnostic};
 
@@ -92,17 +92,18 @@ pub fn preamble(keep_json: bool) -> DResult<String> {
 
 /// The fixed epilogue emitted after the user's function definitions.
 ///
-/// Spans the `Ffi.kernel` polyfill, the list helpers, the FFI-placeholder
-/// banner, and the entry point (`fn main`) — the tail of the golden program.
+/// Spans the list helpers, the FFI-placeholder banner, and the entry point
+/// (`fn main`) — the tail of the golden program. `Ffi.kernel` calls are routed
+/// directly by codegen, so no runtime polyfill is emitted; a construction path
+/// that could not be routed is rejected at ipe-time, never left to a runtime
+/// panic in emitted pure-Ipê Rust.
 ///
 /// # Errors
 ///
-/// Returns [`Diagnostic::CompilerBug`] (IPE-I0203) if the `Ffi.kernel` polyfill
-/// anchor is absent from the embedded golden.
+/// Returns [`Diagnostic::CompilerBug`] (IPE-I0203) if the list-helpers anchor is
+/// absent from the embedded golden.
 pub fn epilogue() -> DResult<String> {
-    // Anchored on the ASCII prefix of the polyfill comment (the full comment
-    // contains a UTF-8 em-dash; the prefix is unique and ASCII-only).
-    const ANCHOR: &str = "// Ffi.kernel polyfill";
+    const ANCHOR: &str = "// List helpers";
     let start = GOLDEN.find(ANCHOR).ok_or_else(|| anchor_missing(ANCHOR))?;
     GOLDEN
         .get(start..)
@@ -155,13 +156,23 @@ mod tests {
 
     #[test]
     fn epilogue_matches_golden_tail() -> DResult<()> {
-        // The epilogue is the golden's tail from the `Ffi.kernel` polyfill
-        // through `fn main`, located by its section marker so growth in the
-        // preamble above it never invalidates this check.
+        // The epilogue is the golden's tail from the list-helpers section through
+        // `fn main`, located by its section marker so growth in the preamble above
+        // it never invalidates this check.
         let start = GOLDEN
-            .find("// Ffi.kernel polyfill")
-            .expect("golden contains the epilogue polyfill marker");
+            .find("// List helpers")
+            .expect("golden contains the epilogue list-helpers marker");
         assert_eq!(epilogue()?.as_str(), &GOLDEN[start..]);
+        Ok(())
+    }
+
+    #[test]
+    fn epilogue_ships_no_runtime_panic_polyfill() -> DResult<()> {
+        // `Ffi.kernel` calls are routed by codegen; no runtime polyfill is emitted,
+        // so the epilogue carries no authored `panic!` (an abrupt-failure hit in
+        // emitted pure-Ipê Rust is a compiler bug the package gate forbids).
+        assert!(!epilogue()?.contains("ffi_kernel_polyfill"));
+        assert!(!epilogue()?.contains("panic!"));
         Ok(())
     }
 
@@ -187,8 +198,8 @@ mod tests {
     }
 
     #[test]
-    fn epilogue_starts_with_polyfill_and_ends_with_main() -> DResult<()> {
-        assert!(epilogue()?.starts_with("// Ffi.kernel polyfill"));
+    fn epilogue_starts_with_list_helpers_and_ends_with_main() -> DResult<()> {
+        assert!(epilogue()?.starts_with("// List helpers"));
         assert!(epilogue()?.trim_end().ends_with('}'));
         Ok(())
     }

@@ -1132,6 +1132,37 @@ pub fn widget_file_root(entry_src_path: &Path) -> &Path {
         .unwrap_or_else(|| Path::new("."))
 }
 
+/// Two distinct widget-hook paths that hashed to one custom-element tag.
+pub struct WidgetTagCollision {
+    pub existing_path: String,
+    pub new_path: String,
+}
+
+/// Record `cleaned_path` as the origin of `tag`, or report a collision.
+///
+/// The custom-element tag is a 64-bit FNV-1a digest, which is not collision-free.
+/// Two DISTINCT hook paths hashing to one tag must fail the build closed rather
+/// than let a tag-keyed manifest silently serve one widget's code under the
+/// other's element name. Re-recording the SAME path for a tag is the legitimate
+/// dedup of two view nodes of one widget and is accepted.
+pub fn record_widget_tag_origin(
+    origins: &mut BTreeMap<String, String>,
+    tag: &str,
+    cleaned_path: &str,
+) -> Result<(), WidgetTagCollision> {
+    match origins.get(tag) {
+        Some(existing) if existing != cleaned_path => Err(WidgetTagCollision {
+            existing_path: existing.clone(),
+            new_path: cleaned_path.to_owned(),
+        }),
+        Some(_) => Ok(()),
+        None => {
+            origins.insert(tag.to_owned(), cleaned_path.to_owned());
+            Ok(())
+        }
+    }
+}
+
 /// The in-memory compile core over an already-populated database.
 ///
 /// topo order → per-module canonicalisation (memoized, blame-attributed) →
@@ -1257,6 +1288,12 @@ pub fn compile_prepared(
     // proves each file; deduplicated by tag so two views of one widget register
     // once. Empty for a program that uses no `Ui.widget`.
     let mut widget_manifest: BTreeMap<String, String> = BTreeMap::new();
+    // The cleaned path that first minted each tag. The tag is a 64-bit FNV-1a
+    // digest, so two DISTINCT hook paths can collide onto one tag; keying the
+    // manifest by tag alone would then silently drop the second widget's JS and
+    // serve the first's code under both view nodes. Recording the origin path
+    // lets a collision from a distinct path fail the build closed instead.
+    let mut tag_origin: BTreeMap<String, String> = BTreeMap::new();
     for widget in ipe_canon::custom_element_gate::collect_widget_files(linked) {
         let reject = |detail: String| {
             let (file, src) = source_for_span(widget.span);
@@ -1301,6 +1338,16 @@ pub fn compile_prepared(
         // The tag is the SINGLE lowerer definition, keyed on the same cleaned
         // path the view node hashed — never a second, drift-prone hash here.
         let tag = ipe_lower::custom_element_tag(&widget.cleaned_path);
+        if let Err(collision) =
+            record_widget_tag_origin(&mut tag_origin, &tag, &widget.cleaned_path)
+        {
+            return Err(reject(format!(
+                "the widget-hook files `{}` and `{}` hash to the same \
+                 custom-element tag `{tag}`; register one under a distinct \
+                 path so their element names cannot collide",
+                collision.existing_path, collision.new_path
+            )));
+        }
         widget_manifest.entry(tag).or_insert(content);
     }
 

@@ -634,7 +634,7 @@ pub fn html_node_<M>(
 /// `Html.doctype : List (Html msg) -> Html msg` — wraps children in the
 /// `!doctype-wrapper` pseudo-tag; `ipe_runtime::html::render_into_ctx`
 /// recognises that literal tag and emits `<!DOCTYPE html>` before the
-/// children directly (implements `live.go:303-312`).
+/// children directly.
 #[must_use]
 pub fn html_doctype_<M>(children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("!doctype-wrapper".to_owned(), Vec::new(), children)

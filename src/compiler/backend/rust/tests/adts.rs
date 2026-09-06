@@ -14,7 +14,7 @@
 //!   boxes its self-edge fields so the Rust enum stays finite-sized, and balances
 //!   that with `Box::new` at construction and a deref at pattern binding.
 //!
-//! Behavioural-parity oracle: the the reference compiler at
+//! Behavioural-parity oracle: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! shape-equivalent programs
 //!

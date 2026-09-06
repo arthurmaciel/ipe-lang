@@ -4,21 +4,29 @@
 
 [Back to stdlib index](../stdlib.md)
 
-Ipe.Set — unordered set of unique elements.
+Ipe.Set — unordered collection of unique elements.
 
-Every function in this module is declared as a Ipe-source binding
-aliased to a kernel via `Kernel.kernel "Set_<name>"`.  The compiler
-rewrites every call site to typed kernel dispatch — so `Set.member x s`
-emits `rt.Set_member(x, s)`, preserving the typed-codegen guarantees
-the kernel-direct route already enjoyed.
+A `Set a` holds distinct values of type `a`. Adding an element that is
+already present is a no-op; the set always holds each value at most once.
+This makes `Set` the right choice when you need fast membership checks
+or de-duplication.
 
-The Ipe-source layer exists for discoverability so `ipe doc` shows a
-stable source location for every entry.  The runtime bodies live in
-the `ipe_runtime` crate (`Set_*` kernels).
+At runtime a `Set a` is backed by a stringified-key map (the same
+representation `Dict` uses), so any comparable type works as the element
+type and membership is O(1) amortised.
 
-Internally a `Set a` is represented by a stringified-key map so
-equality + hash semantics inherit Ipe's stringified-key contract
-(the same one Dict uses). Order of iteration is unspecified.
+Example:
+
+    import Ipe.Set as Set
+
+    unique : List comparable -> List comparable
+    unique =
+        Set.fromList >> Set.toList
+
+    unique [ 3, 1, 4, 1, 5, 9, 2, 6, 5 ]
+    -- == [ 3, 1, 4, 5, 9, 2, 6 ]   (order unspecified)
+
+See also: `Ipe.Dict` (key-value map), `Ipe.List.unique`.
 
 ## `empty`
 
@@ -26,7 +34,12 @@ equality + hash semantics inherit Ipe's stringified-key contract
 empty : Set a
 ```
 
-The empty set.
+The empty set — no elements.
+
+```ipe
+Set.isEmpty Set.empty --> True
+Set.size Set.empty --> 0
+```
 
 ## `size`
 
@@ -34,7 +47,13 @@ The empty set.
 size : Set a -> Int
 ```
 
-Number of distinct elements.
+`size s` — the number of distinct elements in the set.
+
+```ipe
+Set.size Set.empty --> 0
+Set.size (Set.fromList [ 1, 2, 3 ]) --> 3
+Set.size (Set.fromList [ 1, 1, 2 ]) --> 2
+```
 
 ## `isEmpty`
 
@@ -42,7 +61,12 @@ Number of distinct elements.
 isEmpty : Set a -> Bool
 ```
 
-`True` when the set has no elements.
+`isEmpty s` — `True` when the set has no elements.
+
+```ipe
+Set.isEmpty Set.empty --> True
+Set.isEmpty (Set.singleton 1) --> False
+```
 
 ## `singleton`
 
@@ -50,7 +74,13 @@ isEmpty : Set a -> Bool
 singleton : a -> Set a
 ```
 
-`singleton x` — the one-element set `{x}`.
+`singleton x` — a set containing exactly one element.
+
+```ipe
+Set.member 1 (Set.singleton 1) --> True
+Set.member 2 (Set.singleton 1) --> False
+Set.size (Set.singleton "hello") --> 1
+```
 
 ## `insert`
 
@@ -58,7 +88,19 @@ singleton : a -> Set a
 insert : a -> Set a -> Set a
 ```
 
-`insert x s` — add `x` to `s`. No-op if already present.
+`insert x s` — add `x` to `s`; no-op when `x` is already present.
+
+```ipe
+Set.fromList [ 1, 2 ]
+    |> Set.insert 3
+    |> Set.size
+--> 3
+
+Set.fromList [ 1, 2 ]
+    |> Set.insert 2
+    |> Set.size
+--> 2
+```
 
 ## `remove`
 
@@ -66,7 +108,14 @@ insert : a -> Set a -> Set a
 remove : a -> Set a -> Set a
 ```
 
-`remove x s` — drop `x` from `s`. No-op if absent.
+`remove x s` — drop `x` from `s`; no-op when `x` is absent.
+
+```ipe
+Set.fromList [ 1, 2, 3 ]
+    |> Set.remove 2
+    |> Set.member 2
+--> False
+```
 
 ## `member`
 
@@ -74,7 +123,12 @@ remove : a -> Set a -> Set a
 member : a -> Set a -> Bool
 ```
 
-`member x s` — `True` iff `x` is in `s`.
+`member x s` — `True` when `x` is an element of `s`.
+
+```ipe
+Set.member 2 (Set.fromList [ 1, 2, 3 ]) --> True
+Set.member 9 (Set.fromList [ 1, 2, 3 ]) --> False
+```
 
 ## `toList`
 
@@ -82,7 +136,13 @@ member : a -> Set a -> Bool
 toList : Set a -> List a
 ```
 
-All elements in the set (unsorted).
+`toList s` — all elements of the set as a list, in unspecified order.
+
+```ipe
+Set.fromList [ 3, 1, 2 ]
+    |> Set.toList
+-- == [ 3, 1, 2 ]   (order unspecified)
+```
 
 ## `fromList`
 
@@ -90,7 +150,12 @@ All elements in the set (unsorted).
 fromList : List a -> Set a
 ```
 
-Build a set from a list, de-duplicating along the way.
+`fromList xs` — build a set from a list, dropping duplicates.
+
+```ipe
+Set.fromList [ 1, 2, 2, 3 ] |> Set.size --> 3
+Set.fromList [] |> Set.isEmpty --> True
+```
 
 ## `union`
 
@@ -98,7 +163,15 @@ Build a set from a list, de-duplicating along the way.
 union : Set a -> Set a -> Set a
 ```
 
-`union a b` — every element in `a` OR `b`.
+`union a b` — every element in `a` or `b` (or both).
+
+```ipe
+Set.union
+    (Set.fromList [ 1, 2 ])
+    (Set.fromList [ 2, 3 ])
+    |> Set.toList
+-- == [ 1, 2, 3 ]   (order unspecified)
+```
 
 ## `intersect`
 
@@ -106,7 +179,15 @@ union : Set a -> Set a -> Set a
 intersect : Set a -> Set a -> Set a
 ```
 
-`intersect a b` — every element in BOTH `a` and `b`.
+`intersect a b` — every element present in both `a` and `b`.
+
+```ipe
+Set.intersect
+    (Set.fromList [ 1, 2, 3 ])
+    (Set.fromList [ 2, 3, 4 ])
+    |> Set.toList
+-- == [ 2, 3 ]   (order unspecified)
+```
 
 ## `diff`
 
@@ -114,7 +195,15 @@ intersect : Set a -> Set a -> Set a
 diff : Set a -> Set a -> Set a
 ```
 
-`diff a b` — every element in `a` BUT NOT in `b`.
+`diff a b` — every element in `a` that is NOT in `b`.
+
+```ipe
+Set.diff
+    (Set.fromList [ 1, 2, 3 ])
+    (Set.fromList [ 2, 3, 4 ])
+    |> Set.toList
+-- == [ 1 ]
+```
 
 ## `foldl`
 
@@ -122,7 +211,13 @@ diff : Set a -> Set a -> Set a
 foldl : (a -> b -> b) -> b -> Set a -> b
 ```
 
-`foldl fn acc s` — fold over the elements in ascending order.
+`foldl f acc s` — fold over every element, in unspecified order.
+
+```ipe
+Set.fromList [ 1, 2, 3, 4, 5 ]
+    |> Set.foldl (\x total -> total + x) 0
+--> 15
+```
 
 ## `foldr`
 
@@ -130,7 +225,13 @@ foldl : (a -> b -> b) -> b -> Set a -> b
 foldr : (a -> b -> b) -> b -> Set a -> b
 ```
 
-`foldr fn acc s` — fold over the elements in descending order.
+`foldr f acc s` — fold over every element in reverse traversal order.
+
+```ipe
+Set.fromList [ 1, 2, 3 ]
+    |> Set.foldr (\x acc -> x :: acc) []
+-- == [ 3, 2, 1 ]   (order unspecified)
+```
 
 ## `map`
 
@@ -138,7 +239,19 @@ foldr : (a -> b -> b) -> b -> Set a -> b
 map : (a -> b) -> Set a -> Set b
 ```
 
-`map fn s` — apply `fn` to every element; duplicate results collapse.
+`map f s` — apply `f` to every element; duplicate results are merged.
+
+```ipe
+Set.fromList [ 1, 2, 3 ]
+    |> Set.map (\x -> x * 2)
+    |> Set.toList
+-- == [ 2, 4, 6 ]   (order unspecified)
+
+Set.fromList [ -1, 1, 2 ]
+    |> Set.map abs
+    |> Set.size
+--> 2
+```
 
 ## `filter`
 
@@ -146,7 +259,14 @@ map : (a -> b) -> Set a -> Set b
 filter : (a -> Bool) -> Set a -> Set a
 ```
 
-`filter pred s` — keep only elements satisfying `pred`.
+`filter pred s` — keep only elements for which `pred` is `True`.
+
+```ipe
+Set.fromList [ 1, 2, 3, 4, 5 ]
+    |> Set.filter (\x -> modBy 2 x == 0)
+    |> Set.toList
+-- == [ 2, 4 ]   (order unspecified)
+```
 
 ## `partition`
 
@@ -154,5 +274,11 @@ filter : (a -> Bool) -> Set a -> Set a
 partition : (a -> Bool) -> Set a -> ( Set a, Set a )
 ```
 
-`partition pred s` — split into (satisfying, not-satisfying).
+`partition pred s` — split into `( satisfying, not-satisfying )`.
+
+```ipe
+Set.fromList [ 1, 2, 3, 4 ]
+    |> Set.partition (\x -> x > 2)
+-- == ( Set.fromList [ 3, 4 ], Set.fromList [ 1, 2 ] )
+```
 

@@ -42,6 +42,19 @@ cd counter
 ipe run                   # serves the counter at http://localhost:8000
 ```
 
+On a terminal, `ipe init` runs a short wizard: it asks what kind of program you
+are building — `web`, `tui`, `cli`, `server`, or `script` — and, for a web app,
+whether it runs `live` (a co-located server) or as an `spa` (a wasm bundle in the
+browser). Each choice scaffolds the matching `src/Main.ipe` and a `package.ipe`;
+picking `spa` records an explicit `delivery = { ships = [ spa ] }` so
+`ipe release` builds the wasm bundle. You can skip the prompts by naming the shape
+(and, for web, the runtime) directly — handy in scripts:
+
+```sh
+ipe init myapp web spa    # web SPA, no prompts
+ipe init mytool script    # a plain-task program, no prompts
+```
+
 Prefer to start from scratch? A minimal script program is just:
 
 ```elm

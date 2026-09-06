@@ -1612,14 +1612,15 @@ fn raw_word_scan(src: &str) -> BTreeSet<String> {
 /// nothing. Removed module paths simply drop out of the map; their orphaned
 /// `SourceFile` inputs stay in the database (unreachable from any query once
 /// no resolution points at them).
-pub fn sync_source_root(
+pub fn sync_source_root<T: AsRef<str>>(
     db: &mut IpeDatabase,
     root: SourceRoot,
-    desired: &BTreeMap<Vec<String>, (String, ModuleOrigin)>,
+    desired: &BTreeMap<Vec<String>, (T, ModuleOrigin)>,
 ) {
     let current = root.files(db).clone();
     let mut next: BTreeMap<Vec<String>, SourceFile> = BTreeMap::new();
     for (path, (text, origin)) in desired {
+        let text = text.as_ref();
         if let Some(&file) = current.get(path) {
             set_text_if_changed(db, file, text);
             if file.origin(db) != *origin {
@@ -1627,9 +1628,10 @@ pub fn sync_source_root(
             }
             next.insert(path.clone(), file);
         } else {
+            // Own the text only at the real mutation point — a fresh input.
             next.insert(
                 path.clone(),
-                SourceFile::new(db, path.clone(), text.clone(), *origin),
+                SourceFile::new(db, path.clone(), text.to_owned(), *origin),
             );
         }
     }

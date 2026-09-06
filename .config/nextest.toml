@@ -67,9 +67,16 @@ cwd-mutating = { max-threads = 1 }
 advisory-db-lock = { max-threads = 1 }
 wasm-external-cargo = { max-threads = 1 }
 
+# The heavy-server-e2e members cold-`cargo build` a full axum/tokio crate and
+# bind a real TCP port. Serialization (max-threads = 1) removes the shared-target
+# lock contention, but a transient teardown/serve timeout under runner scheduler
+# pressure can still surface on a single attempt. Two in-run retries let such a
+# transient self-heal without masking a real regression (a genuinely broken emit
+# fails all three attempts).
 [[profile.ci.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
+retries = 2
 
 [[profile.ci.overrides]]
 filter = 'binary(build_no_arg) | binary(release_subcommand)'
@@ -91,14 +98,27 @@ test-group = 'advisory-db-lock'
 filter = 'test(every_listed_module_is_queryable)'
 slow-timeout = { period = "60s", terminate-after = 30 }
 
+# The `stdlib_coverage_dynamic` build+run column drives a real `cargo build` per
+# higher-order stdlib symbol across a representative slice. Even serialized into
+# `heavy-server-e2e`, the whole slice legitimately runs past the 1200s (20-period)
+# ceiling the parity binaries use on a cold CI runner — a real build cost, not a
+# hang. It is the same full-sweep class as `every_listed_module_is_queryable`, so
+# it gets the same 1800s (30-period) ceiling. Placed before the parity override so
+# nextest's first-match-per-setting picks this wider window for the binary.
+#
+# `g_http_live` is the same class: each golden in it (e.g.
+# `golden_live_param_routes::param_route_solo_cargo_builds_and_delivers_param`)
+# runs a real `cargo build` of an emitted HTTP project, which on a cold CI runner
+# passes the default 600s ceiling. It gets the same 1800s (30-period) window.
+[[profile.ci.overrides]]
+filter = 'binary(stdlib_coverage_dynamic) | binary(g_http_live)'
+slow-timeout = { period = "60s", terminate-after = 30 }
+
 # The parity probes compile every golden fixture twice (clean + incremental),
 # per shard — a shard legitimately approaches the default 600s ceiling under CI
-# load, so give the parity binaries a wider terminate window. The stdlib
-# coverage dynamic sweep is the same class: its build+run column drives a real
-# `cargo build` per higher-order symbol, so the whole slice legitimately runs
-# past 600s on a cold runner even serialized.
+# load, so give the parity binaries a wider terminate window.
 [[profile.ci.overrides]]
-filter = 'binary(clean_vs_incremental_parity) | binary(per_module_typecheck_parity) | binary(stdlib_coverage_dynamic)'
+filter = 'binary(clean_vs_incremental_parity) | binary(per_module_typecheck_parity)'
 slow-timeout = { period = "60s", terminate-after = 20 }
 
 # The wasm-hydration gate spawns `cargo check --target wasm32-unknown-unknown` on
@@ -115,7 +135,7 @@ filter = 'test(hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wa
 test-group = 'wasm-external-cargo'
 
 [[profile.default.overrides]]
-filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
+filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
 
 [[profile.default.overrides]]

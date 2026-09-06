@@ -624,8 +624,6 @@ pub enum NameError {
         name: Box<str>,
         replacement: Box<str>,
     },
-    /// A reserved language/JS-interop BOUNDARY type is named in an annotation,
-    /// but its runtime denotation has not shipped yet. The name is reserved
     /// An asserted foreign call (`Rust.Ffi.call`) is malformed at its use
     /// site: applied to a non-literal path, referenced without application,
     /// carrying an invalid Rust path, or placed anywhere other than the whole
@@ -1179,8 +1177,6 @@ pub enum Feature {
     /// the annotation and let the parameter's shape be inferred at its call site,
     /// until each such form lands. [IPE-L0131]
     RowPolyRecordAnnotation,
-    /// A `CustomElement down up` boundary value reached lowering. The type
-    /// resolves and its two parameters pass the SEAL, but the widget transport —
     /// A `Js.send` payload or a `Js.subscribe` decoder crossed the Ipê↔JS port
     /// seam with a type that is NOT seal-legal: a `Secret` or reserved-sink type
     /// (a secret must never be serialised to JS), an untyped `Value`/`Json` (the
@@ -1289,7 +1285,7 @@ pub enum LowerError {
     /// Debug`). The predicate used is `ir_type_is_derivable` (NOT serde), so
     /// `Html`/`Element`/`Color`-carrying Msg variants are accepted (they derive
     /// `Clone + Debug + PartialEq`). Converts a would-be `cargo` trait-bound
-    /// failure into a fail-closed `ipe` error. [IPE-L0122]
+    /// failure into a fail-closed `ipe` error. [IPE-L0125]
     InadmissibleAppMsg {
         app: AppShape,
         field: Box<str>,
@@ -1820,16 +1816,16 @@ pub enum HelpLine {
     /// A concrete, span-scoped fix the reader can apply (and `ipe fix` may
     /// auto-apply when [`Applicability::MachineApplicable`]).
     Suggest(Suggestion),
-    /// Nudge toward an `ipe explain <topic>` teaching page.
+    /// Nudge toward an `ipe doc <topic>` teaching page.
     ///
-    /// The topic string is one of the curated topic-page identifiers registered
-    /// in `ipe-cli`'s `explain::ANTI_PATTERN_TOPICS` SSOT map (e.g. `"effects"`,
-    /// `"state"`, `"main"`). The renderer appends a hint like
-    /// `→ run ipe explain <topic>` to the diagnostic's help output. The
-    /// `ipe-cli` explain module validates at test time that every referenced
-    /// topic has a live page; the diagnostics crate carries only the static
-    /// string, keeping the dependency direction clean (diagnostics → cli would
-    /// be a cycle).
+    /// The string is either a topic-page name ingested from `docs/topics/` by
+    /// `ipe-cli`'s `doc_bundle::ingest_markdown_dir` (e.g. `"effects"`,
+    /// `"state"`, `"main"`) or a diagnostic code naming an explain page (e.g.
+    /// `"IPE-L0142"`). The renderer appends a hint like `→ run ipe doc <name>`
+    /// to the diagnostic's help output. The diagnostics crate carries only the
+    /// static string, keeping the dependency direction clean (diagnostics → cli
+    /// would be a cycle). A test in this crate asserts every referenced topic
+    /// name resolves to a live page under `docs/topics/`.
     SeeExplain(&'static str),
 }
 
@@ -2842,5 +2838,48 @@ mod sorted_names_tests {
         let names = result.expect("try_new over all-Ok must succeed");
         let rendered: Vec<&str> = names.iter().map(AsRef::as_ref).collect();
         assert_eq!(rendered, vec!["a", "z"]);
+    }
+}
+
+#[cfg(test)]
+mod see_explain_topic_tests {
+    /// Every `SeeExplain` argument that names a topic page (not an `IPE-` code)
+    /// must resolve to a live `docs/topics/<name>.md` — the drift-guard the
+    /// `SeeExplain` doc promises. A code argument is covered by the explain-page
+    /// build gate instead, so it is excluded here.
+    #[test]
+    fn every_see_explain_topic_has_a_live_page() {
+        let this_file = include_str!("diagnostic.rs");
+        let topics_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/topics");
+
+        // Assembled from parts so the needle does not appear verbatim in this
+        // file — otherwise the scan would match its own literal.
+        let needle = format!("SeeExplain({}", '"');
+
+        let mut checked = 0usize;
+        for (idx, _) in this_file.match_indices(&needle) {
+            // The argument is the text between the opening quote (just past the
+            // needle) and the next quote. `match_indices` yields the match, not
+            // the tail, so slice the tail from the file at the match offset.
+            let tail = this_file.get(idx + needle.len()..).unwrap_or("");
+            let arg = tail.split('"').next().unwrap_or("");
+            // A code argument is covered by the explain-page build gate; an
+            // empty match is not a topic.
+            if arg.is_empty() || arg.starts_with("IPE-") {
+                continue;
+            }
+            let page = topics_dir.join(format!("{arg}.md"));
+            assert!(
+                page.is_file(),
+                "SeeExplain({arg:?}) has no live topic page at {}",
+                page.display()
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "found no SeeExplain topic literals to check — scan is broken"
+        );
     }
 }

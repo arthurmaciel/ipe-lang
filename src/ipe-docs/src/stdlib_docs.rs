@@ -20,7 +20,7 @@
 //! The extractor never authors prose: it only relays comment text and the
 //! `name : Type` signature line exactly as they appear in the source.
 
-use ipe_stdlib::{COMPILED_STD_MODULES, MODULES as STDLIB_MODULES};
+use ipe_stdlib::{COMPILED_STD_MODULES, DOC_ONLY_MODULES, MODULES as STDLIB_MODULES};
 
 /// A single documented export of a stdlib module.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,6 +62,9 @@ pub fn all_module_docs() -> Vec<ModuleDoc> {
         out.push(extract_module_doc(m.name, m.source));
     }
     for m in COMPILED_STD_MODULES {
+        out.push(extract_module_doc(m.dotted, m.source));
+    }
+    for m in DOC_ONLY_MODULES {
         out.push(extract_module_doc(m.dotted, m.source));
     }
 

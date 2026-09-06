@@ -24,7 +24,7 @@
 //! The alias case IS exhaustive (a binder matches anything), so its emitted
 //! crate builds and runs: `end_to_end_alias_binds_whole_value` (gated on
 //! `IPE_E2E=1`) drives the hand-built IR through the Rust backend and asserts
-//! `7`, matching the the reference compiler at
+//! `7`, matching the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` on the shape-equivalent
 //!
 //! ```text

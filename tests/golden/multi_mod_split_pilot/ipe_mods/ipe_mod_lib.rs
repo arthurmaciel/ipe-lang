@@ -43,8 +43,8 @@ pub(crate) fn lib_seed_and_count() -> IpeTask<i64> {
                                             MainSqlValue::SqlInt(4i64),
                                         ])
                                         .into_iter()
-                                        .map(::core::convert::Into::into)
-                                        .collect::<Vec<ipe_runtime::db::SqlParam>>(),
+                                            .map(::core::convert::Into::into)
+                                            .collect::<Vec<ipe_runtime::db::SqlParam>>(),
                                     ),
                                     Box::new(move |_| {
                                         task_and_then(
@@ -57,8 +57,8 @@ pub(crate) fn lib_seed_and_count() -> IpeTask<i64> {
                                                     MainSqlValue::SqlInt(2i64),
                                                 ])
                                                 .into_iter()
-                                                .map(::core::convert::Into::into)
-                                                .collect::<Vec<ipe_runtime::db::SqlParam>>(),
+                                                    .map(::core::convert::Into::into)
+                                                    .collect::<Vec<ipe_runtime::db::SqlParam>>(),
                                             ),
                                             Box::new(move |_| task_map({
                                                 let __ipe_fn: Box<dyn Fn(Vec<HashMap<String, String>>) -> i64 + Send + Sync + 'static> = Box::new(move |rows: Vec<HashMap<String, String>>| -> i64 { list_length(rows) });

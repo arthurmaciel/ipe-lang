@@ -2,8 +2,8 @@
 //!
 //! Always compiled (so `Ipe.Log.*` can feed it regardless of features); the
 //! Ipe.Web `console` module exposes it over HTTP. Bounded ring buffers (logs +
-//! errors) plus monotonic request/error counters. Mirrors the in-RAM tier of
-//!  console (`*.go`), minus the `SQLite` spill.
+//! errors) plus monotonic request/error counters. This is the in-RAM tier of
+//! the console, minus the `SQLite` spill.
 //!
 //! No panic vectors: a poisoned lock recovers via `into_inner()` (the data is
 //! plain records — a panic mid-push can't corrupt invariants); all reads/writes
@@ -214,10 +214,10 @@ pub fn dev_console_banner(base: &str) -> String {
     {
         return String::new();
     }
-    // Byte-match  `devBannerHTML` (`dev_banner.go`): same id, target/rel/title,
-    // monospace blue styling, and the `&#128269;` entity (NOT a literal emoji) so
-    // both backends emit identical bytes. href honours `IPE_CONSOLE_URL` (default
-    // `/_ipe/console`), attribute-escaped against a hostile env value.
+    // The dev banner: fixed id, target/rel/title, monospace blue styling, and
+    // the `&#128269;` entity (NOT a literal emoji). href honours
+    // `IPE_CONSOLE_URL` (default `/_ipe/console`), attribute-escaped against a
+    // hostile env value.
     let url = crate::system::read_env_var("IPE_CONSOLE_URL")
         .map(|v| v.trim().to_string())
         .ok()
@@ -297,9 +297,9 @@ pub fn frame_ancestors() -> Option<&'static str> {
     if v.is_empty() { None } else { Some(v.as_str()) }
 }
 
-/// Safe-by-default security response headers (`setSecurityHeaders`,
-/// live.go:3557 — applied on both the Ipe.Web page path and the Ipe.Http.Server
-/// response path, ). Returned as owned `(name, value)` pairs so each
+/// Safe-by-default security response headers, applied on both the Ipe.Web
+/// page path and the Ipe.Http.Server response path. Returned as owned
+/// `(name, value)` pairs so each
 /// caller splices them into its response builder only when the header is unset
 /// (an explicit handler override wins).
 #[must_use]
@@ -361,9 +361,9 @@ pub fn errors_total() -> u64 {
 }
 
 // ===========================================
-// Labeled metric registry + Prometheus exposition (:
-// telemetry/store.go + prometheus.go). Labeled counters + gauges + histograms
-// keyed by (name, sorted-labels), rendered as canonical 0.0.4 text — giving an
+// Labeled metric registry + Prometheus exposition. Labeled counters + gauges
+// + histograms keyed by (name, sorted-labels), rendered as canonical 0.0.4
+// text — giving an
 // operator pointing Prometheus/Grafana at a Rust Ipê binary the full
 // route/status/SSE breakdown.
 // ===========================================
@@ -399,7 +399,7 @@ enum MetricValue {
     },
 }
 
-///  `BucketsLatency` (buckets.go) — hot-path latency seconds, 1ms…5s.
+/// Hot-path latency buckets, in seconds, 1ms…5s.
 const LATENCY_BUCKETS: [f64; 8] = [0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.0, 5.0];
 
 // `Mutex::new` + `BTreeMap::new` are const → a plain static, no OnceLock. BTree
@@ -496,9 +496,9 @@ pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
 }
 
 /// Extract the BOUNDED variant name from a `Debug` value, for use as a
-/// low-cardinality metric label (e.g. `ipe_web_msg_seconds{name}`
-/// with `msg_logging.go`). Returns ONLY the leading Rust-identifier characters of
-/// the `{:?}` rendering — the enum variant name — and NEVER any payload field.
+/// low-cardinality metric label (e.g. `ipe_web_msg_seconds{name}`).
+/// Returns ONLY the leading Rust-identifier characters of the `{:?}` rendering
+/// — the enum variant name — and NEVER any payload field.
 ///
 /// CARDINALITY GUARD (load-bearing): a derived-`Debug` enum renders as `Variant`
 /// / `Variant(..)` / `Variant { .. }`, so the variant ident is always the leading
@@ -839,10 +839,10 @@ mod tests {
     }
 
     #[test]
-    fn dev_banner_byte_matches_go_dev_banner_markup() {
-        // (dev_banner.go devBannerHTML): same id, target/rel/title,
-        // monospace blue style, `&#128269;` ENTITY (not a literal emoji). Default
-        // test env is dev (ENV/IPE_ENV unset) → non-empty banner.
+    fn dev_banner_markup_is_exact() {
+        // Fixed id, target/rel/title, monospace blue style, `&#128269;` ENTITY
+        // (not a literal emoji). Default test env is dev (ENV/IPE_ENV unset) →
+        // non-empty banner.
         let b = dev_console_banner("");
         let expected = "<a id=\"__ipe-dev-console\" href=\"/_ipe/console\" target=\"_blank\" \
             rel=\"noopener\" title=\"Ipe Console (dev only)\" \

@@ -1063,7 +1063,7 @@ fn impl_header(bounds: &str, trait_name: &str, ty: &str) -> String {
 /// }
 /// ```
 ///
-/// The `ipe_show` body mirrors the the reference's `%v` rendering of a struct
+/// The `ipe_show` body mirrors the reference's `%v` rendering of a struct
 /// (`{f0 f1 ...}`, fields space-separated in declared order, no field names) so
 /// stringifying a record reads identically across the two backends. Each field
 /// renders through the runtime's total autoref `Wrap(..).dispatch()` shim, which

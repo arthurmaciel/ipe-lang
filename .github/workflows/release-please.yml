@@ -2,10 +2,18 @@ name: release-please
 
 # Automated versioning + changelog + release cutting, driven by Conventional
 # Commits. On every push to `main`, release-please opens (or refreshes) a single
-# standing "release PR" that bumps the workspace version in Cargo.toml and
-# prepends the new CHANGELOG.md section. That PR is inert until merged; merging
-# it tags `vX.Y.Z` and creates the GitHub release. The binary build+upload lives
-# in release.yml, triggered by the tag release-please pushes.
+# standing "release PR" targeting `main` that bumps the workspace version in
+# Cargo.toml and prepends the new CHANGELOG.md section. That PR is inert until
+# merged; merging it tags `vX.Y.Z` and creates the GitHub release. The binary
+# build+upload lives in release.yml, triggered by the tag release-please pushes.
+#
+# The release PR targets `main` because that is where the release commit and tag
+# must live. main is otherwise advanced only by the FF promotion of an
+# already-green development HEAD, so a version bump landing on main would leave
+# main AHEAD of development and break the next fast-forward. The
+# `backport-bump-to-development` job below closes that gap: once a release merges
+# to main it pushes the same bump onto development, keeping development an
+# ancestor-or-equal of main so the FF promotion stays valid.
 #
 # Pre-1.0 bump policy (release-please-config.json): feat/fix/perf -> patch,
 # `!`/`BREAKING CHANGE` -> minor. It never auto-bumps to 1.0 — that is a
@@ -30,6 +38,10 @@ jobs:
       # Forwarded so the lock-sync job can gate on a live release PR.
       pr: ${{ steps.rp.outputs.pr }}
       pr_branch: ${{ steps.rp.outputs.pr_branch }}
+      # Set to "true" on the run where a release PR just MERGED to main (the tag
+      # was cut). The backport job below gates on it.
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: rp
@@ -42,6 +54,10 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .github/.release-please-manifest.json
+          # The release PR targets main — where the release commit + tag live.
+          # The backport job below re-lands the bump on development afterward so
+          # the FF promotion (development -> main) stays valid.
+          target-branch: main
 
   # Keep Cargo.lock in sync with whichever version Cargo.toml was bumped to.
   #
@@ -81,3 +97,36 @@ jobs:
           git add Cargo.lock
           git commit -m "chore: sync Cargo.lock to bumped workspace version"
           git push
+
+  # After a release merges to main (the tag was cut), re-land the version bump on
+  # development so development stays an ancestor-or-equal of main and the FF
+  # promotion (development -> main) keeps fast-forwarding cleanly. Merges main
+  # into development with a merge commit — the bumped Cargo.toml/Cargo.lock/
+  # CHANGELOG.md flow across without a hand edit; if development already contains
+  # them (nothing to merge) the push is a no-op.
+  backport-bump-to-development:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so `git merge origin/main` can fast-forward or merge.
+          fetch-depth: 0
+          ref: development
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Merge the release bump from main into development
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "development already contains main's release bump — nothing to backport."
+            exit 0
+          fi
+          git merge --no-edit origin/main
+          git push origin HEAD:development

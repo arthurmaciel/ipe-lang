@@ -574,7 +574,7 @@ fn unify_flat(
             Ok(())
         }
         // Two closed-tail sentinels: identical structures, merge and succeed.
-        // Mirrors the the compiler `(EmptyRecord1, EmptyRecord1) -> return ()` arm
+        // Mirrors the reference compiler `(EmptyRecord1, EmptyRecord1) -> return ()` arm
         // in `../ipe/src/Ipe/Type/Unify.hs`. Without this arm both roots would
         // fall through to the wildcard mismatch, producing a spurious
         // "TypeMismatch { expected: Unit, found: Unit }" (zonk renders

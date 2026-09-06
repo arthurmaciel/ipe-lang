@@ -525,36 +525,24 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
 
     // Step 2 — baseline: read the previously-published entry (if any).
     // Fail closed: a present-but-unreadable baseline propagates as an error
-    // so the immutability wall below never runs against an empty baseline and
-    // silently classifies every submitted version as "new".
+    // so the structural prechecks below never run against an empty baseline and
+    // silently classify every submitted version as "new".
     let index_root = index_root_opt.clone().unwrap_or_else(resolve::index_root);
     let baseline: Option<index::IndexEntry> =
         index::read_entry_lookup(&index_root, &submitted.name).require_present()?;
+
+    // Structural prechecks (no fetch): version-count ceiling, per-version
+    // immutability against the baseline, and source continuity (anti-squat). This
+    // is the authoritative wall (ADR 0044) — it enforces these even for an entry
+    // hand-edited around the author-side `ipe publish`, which an attacker opening
+    // the index PR directly would bypass.
+    index::admission_precheck(&submitted, baseline.as_ref())?;
+
     let baseline_by_version: std::collections::BTreeMap<&semver::Version, &index::EntryVersion> =
         baseline
             .as_ref()
             .map(|e| e.versions.iter().map(|v| (&v.version, v)).collect())
             .unwrap_or_default();
-
-    // Immutability — a published version is immutable. A submitted version whose
-    // NUMBER already exists in the baseline must be byte-for-byte identical to the
-    // published row; rewriting its `source`/`rev`/`sha256`/`capabilities` is a
-    // supply-chain mutation and is rejected here, never silently skipped. This gate
-    // is the authoritative wall (ADR 0044): it enforces immutability even for an
-    // entry hand-edited around the author-side `ipe publish`, whose own immutability
-    // check an attacker opening the index PR directly would bypass.
-    for version in &submitted.versions {
-        if let Some(&prior) = baseline_by_version.get(&version.version)
-            && prior != version
-        {
-            return Err(CliError::UsageOwned(format!(
-                "ipe package audit-entry: `{}` version {} is already published and immutable, \
-                 but the submitted entry rewrites it (source, rev, sha256, or capabilities \
-                 differ). A published version must never be rewritten — publish a new version.",
-                submitted.name, version.version
-            )));
-        }
-    }
 
     // The new versions are those present in the submitted entry but absent from
     // the baseline. A PR normally adds exactly one. Each is fetched, hash-verified,

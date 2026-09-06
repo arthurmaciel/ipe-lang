@@ -11,7 +11,7 @@
 //!   ONE generic struct and renders `RecValue<i64>` at the use site,
 //! * monomorphic records emit no `<..>` clause.
 //!
-//! Behavioural-parity oracle: the the reference compiler at
+//! Behavioural-parity oracle: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! equivalent program
 //!

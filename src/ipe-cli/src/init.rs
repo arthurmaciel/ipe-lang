@@ -170,6 +170,23 @@ impl InitRuntime {
             Self::Spa => "spa",
         }
     }
+
+    /// The `{ships}` template fill for a web project's `package.ipe` delivery
+    /// record, so the wizard's runtime choice writes the delivery set the
+    /// `ipe release` loop actually builds (spec § delivery).
+    ///
+    /// `spa` declares an explicit `ships = [ spa ]` — the browser wasm bundle
+    /// the user asked for. `live` is the implicit `[ binary ]` singleton, so it
+    /// fills to nothing and the manifest stays minimal (a live web project *is*
+    /// a co-located binary; declaring it explicitly would be noise). The fill is
+    /// spliced before the first delivery sub-field, closing with a `, ` so the
+    /// record's existing fields follow it unchanged.
+    const fn ships_fill(self) -> &'static str {
+        match self {
+            Self::Live => "",
+            Self::Spa => "ships = [ spa ]\n        , ",
+        }
+    }
 }
 
 // ── init args ─────────────────────────────────────────────────────────────────
@@ -261,6 +278,18 @@ fn fill_name(template: &str, project_name: &str) -> String {
     template.replace("{name}", escaped.as_str())
 }
 
+/// Fill a `package.ipe` template's `{name}` and (web-only) `{ships}` holes.
+///
+/// `{ships}` is a fixed builder expression drawn from the runtime's closed set,
+/// never user input, so it needs no literal escaping; non-web templates carry no
+/// `{ships}` hole, so the substitution is a no-op there.
+fn fill_package(template: &str, project_name: &str, runtime: InitRuntime) -> String {
+    // `{ships}` is a template placeholder substituted by `.replace`, not a
+    // `format!` argument — the formatting-args lint's heuristic misreads it.
+    #[allow(clippy::literal_string_with_formatting_args)]
+    fill_name(template, project_name).replace("{ships}", runtime.ships_fill())
+}
+
 // ── entry point ───────────────────────────────────────────────────────────────
 
 /// `ipe init [<name>] [--force] [--lib] [--shape <shape>]`.
@@ -323,7 +352,7 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     // conflict — is refused, never silently reshaped (spec § 8).
     guard_rerun_conflict(&target_dir, shape, args.shape, args.runtime)?;
 
-    let files = managed_files(&project_name, shape);
+    let files = managed_files(&project_name, shape, runtime);
     run_scaffold(
         target,
         &target_dir,
@@ -626,13 +655,15 @@ fn run_scaffold(
 
 /// The complete set of files `init` writes for an application project.
 ///
-/// `shape` selects which `Main.ipe` and `package.ipe` are scaffolded; all
-/// other files are shape-independent.
-fn managed_files(project_name: &str, shape: InitShape) -> Vec<ManagedFile> {
+/// `shape` selects which `Main.ipe` and `package.ipe` are scaffolded; `runtime`
+/// fills the web `package.ipe`'s delivery set (`spa` declares an explicit
+/// `ships`, `live` stays the implicit default). All other files are
+/// shape-independent.
+fn managed_files(project_name: &str, shape: InitShape, runtime: InitRuntime) -> Vec<ManagedFile> {
     vec![
         ManagedFile {
             rel: PathBuf::from("package.ipe"),
-            content: fill_name(shape.package_ipe(), project_name),
+            content: fill_package(shape.package_ipe(), project_name, runtime),
         },
         ManagedFile {
             rel: PathBuf::from("src").join("Main.ipe"),
@@ -925,7 +956,7 @@ mod tests {
 
     #[test]
     fn scaffolded_web_manifest_is_package_ipe_that_re_parses() {
-        let files = managed_files("demo-app", InitShape::Web);
+        let files = managed_files("demo-app", InitShape::Web, InitRuntime::Live);
         let manifest = files
             .iter()
             .find(|f| f.rel == Path::new("package.ipe"))
@@ -946,8 +977,89 @@ mod tests {
     }
 
     #[test]
+    fn spa_runtime_scaffolds_an_explicit_spa_ships_set() {
+        use crate::delivery_set::ShipEntry;
+        let files = managed_files("spa-app", InitShape::Web, InitRuntime::Spa);
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("init writes a package.ipe");
+
+        let root = std::env::temp_dir().join("ipe_init_spa_ships");
+        let _ = std::fs::remove_dir_all(&root);
+        write_stub_src(&root);
+        let path = root.join("package.ipe");
+        std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
+
+        let parsed =
+            crate::project::parse_manifest(&path).expect("scaffolded spa manifest re-parses");
+        assert_eq!(
+            parsed.delivery.ships,
+            vec![ShipEntry::Spa],
+            "a wizard `web spa` choice writes an explicit `ships = [ spa ]`"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn live_runtime_leaves_the_delivery_set_implicit() {
+        // The default `live` runtime keeps the manifest minimal: no `ships`
+        // field, which reads back as the implicit `[ binary ]` singleton.
+        let files = managed_files("live-app", InitShape::Web, InitRuntime::Live);
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("init writes a package.ipe");
+        assert!(
+            !manifest.content.contains("ships"),
+            "a `live` web project declares no explicit ships set"
+        );
+
+        let root = std::env::temp_dir().join("ipe_init_live_ships");
+        let _ = std::fs::remove_dir_all(&root);
+        write_stub_src(&root);
+        let path = root.join("package.ipe");
+        std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
+        let parsed =
+            crate::project::parse_manifest(&path).expect("scaffolded live manifest re-parses");
+        assert!(
+            parsed.delivery.ships.is_empty(),
+            "an absent ships field is the implicit default"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn non_web_shape_never_carries_a_ships_hole() {
+        // Non-web templates have no `{ships}` hole; the runtime fill is a no-op
+        // and no stray placeholder survives regardless of the runtime passed.
+        for shape in [
+            InitShape::Tui,
+            InitShape::Cli,
+            InitShape::Server,
+            InitShape::Script,
+        ] {
+            let files = managed_files("proj", shape, InitRuntime::Spa);
+            let manifest = files
+                .iter()
+                .find(|f| f.rel == Path::new("package.ipe"))
+                .expect("package.ipe present");
+            assert!(
+                !manifest.content.contains("{ships}"),
+                "shape `{}` left an unfilled ships hole",
+                shape.label()
+            );
+            assert!(
+                !manifest.content.contains("ships"),
+                "shape `{}` scaffolded a ships set it does not support",
+                shape.label()
+            );
+        }
+    }
+
+    #[test]
     fn scaffolded_tui_manifest_re_parses() {
-        let files = managed_files("tui-app", InitShape::Tui);
+        let files = managed_files("tui-app", InitShape::Tui, InitRuntime::Live);
         let manifest = files
             .iter()
             .find(|f| f.rel == Path::new("package.ipe"))
@@ -967,7 +1079,7 @@ mod tests {
 
     #[test]
     fn scaffolded_script_manifest_re_parses() {
-        let files = managed_files("my-script", InitShape::Script);
+        let files = managed_files("my-script", InitShape::Script, InitRuntime::Live);
         let manifest = files
             .iter()
             .find(|f| f.rel == Path::new("package.ipe"))
@@ -987,11 +1099,11 @@ mod tests {
 
     #[test]
     fn each_shape_scaffolds_a_distinct_main_ipe() {
-        let web = managed_files("x", InitShape::Web);
-        let tui = managed_files("x", InitShape::Tui);
-        let cli = managed_files("x", InitShape::Cli);
-        let server = managed_files("x", InitShape::Server);
-        let script = managed_files("x", InitShape::Script);
+        let web = managed_files("x", InitShape::Web, InitRuntime::Live);
+        let tui = managed_files("x", InitShape::Tui, InitRuntime::Live);
+        let cli = managed_files("x", InitShape::Cli, InitRuntime::Live);
+        let server = managed_files("x", InitShape::Server, InitRuntime::Live);
+        let script = managed_files("x", InitShape::Script, InitRuntime::Live);
 
         let main = |files: &[ManagedFile]| {
             files
@@ -1193,7 +1305,7 @@ mod tests {
 
     #[test]
     fn delivery_defaults_in_scaffolded_manifest() {
-        let files = managed_files("proj", InitShape::Web);
+        let files = managed_files("proj", InitShape::Web, InitRuntime::Live);
         let manifest = files
             .iter()
             .find(|f| f.rel == Path::new("package.ipe"))
@@ -1271,7 +1383,7 @@ mod tests {
 
     #[test]
     fn managed_set_omits_legacy_ipe_toml() {
-        let files = managed_files("x", InitShape::default());
+        let files = managed_files("x", InitShape::default(), InitRuntime::Live);
         assert!(
             !files.iter().any(|f| f.rel == Path::new("ipe.toml")),
             "init must not scaffold a legacy ipe.toml"
@@ -1320,7 +1432,7 @@ mod tests {
         // of the quoted `.ipe` literal without escaping. The scaffolded manifest
         // must still re-parse, and the name must round-trip exactly.
         let hostile = "evil\"\\\n }, injected = True { ";
-        let files = managed_files(hostile, InitShape::Web);
+        let files = managed_files(hostile, InitShape::Web, InitRuntime::Live);
         let manifest = files
             .iter()
             .find(|f| f.rel == Path::new("package.ipe"))

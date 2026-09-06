@@ -504,11 +504,11 @@ fn push_i64(n: i64, out: &mut String) {
 /// `serde_json`'s shortest-round-trip form).
 ///
 /// A non-finite `f64` (`NaN` / `±∞`) has no JSON number form and `format_finite`
-/// is documented only for finite inputs. The partition reaches this only with a
-/// finite literal (the classifier refuses any non-literal), and a source `Float`
-/// literal is always finite — so the non-finite arm is unreachable in practice;
-/// it emits `0.0` (a finite, decodable value) rather than an undecodable token, so
-/// even a future non-finite path fails closed to a valid template.
+/// is documented only for finite inputs. Every capture site refuses a non-finite
+/// literal (an `is_finite` guard on each `Float` arm), so this function only ever
+/// receives a finite value; the non-finite arm is a total fallback that emits
+/// `0.0` (a finite, decodable value) rather than an undecodable token, keeping the
+/// function total.
 fn push_f64(f: f64, out: &mut String) {
     if f.is_finite() {
         let mut buf = ryu::Buffer::new();
@@ -1696,10 +1696,15 @@ fn static_attr(attr: &Expr, holes: &mut Holes) -> Option<CompileUiAttr> {
         (KernelFn::BackgroundColor, [c]) => Some(CompileUiAttr::BgColor(static_color(c)?)),
         (KernelFn::BorderColor, [c]) => Some(CompileUiAttr::BorderColor(static_color(c)?)),
         // ── single-`Float` attributes over a literal ──────────────────────
-        (KernelFn::FontLetterSpacing, [Expr::Float(v)]) => {
+        // A non-finite literal (a const-folded `1.0 / 0.0`) has no `serde_json`
+        // number form — the compiled path emits `null` — so templatizing it would
+        // diverge from the compiled arm. Refuse: keep the subtree compiled.
+        (KernelFn::FontLetterSpacing, [Expr::Float(v)]) if v.is_finite() => {
             Some(CompileUiAttr::FontLetterSpacing(*v))
         }
-        (KernelFn::FontWordSpacing, [Expr::Float(v)]) => Some(CompileUiAttr::FontWordSpacing(*v)),
+        (KernelFn::FontWordSpacing, [Expr::Float(v)]) if v.is_finite() => {
+            Some(CompileUiAttr::FontWordSpacing(*v))
+        }
         // ── float-attr holes: model-driven float value ─────────────────────
         // A float-valued attribute whose argument is model-driven (not a literal)
         // reduces to an `AttrHoleFloat` hole in hole mode. The attr discriminant
@@ -1832,7 +1837,7 @@ fn static_color(expr: &Expr) -> Option<CompileUiColor> {
                 Expr::Int(blue),
                 Expr::Float(alpha),
             ],
-        ) => Some(CompileUiColor {
+        ) if alpha.is_finite() => Some(CompileUiColor {
             r: *red,
             g: *green,
             b: *blue,
@@ -2525,6 +2530,52 @@ mod tests {
                 children: vec![],
             }
         );
+    }
+
+    #[test]
+    fn non_finite_letter_spacing_literal_refuses() {
+        // `Font.letterSpacing (1.0 / 0.0)` reaches the capture as `Expr::Float(∞)`
+        // after const-folding. It has no `serde_json` number form (the compiled
+        // path emits `null`), so templatizing it in pure mode must refuse rather
+        // than bake a diverging `0.0`.
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![kcall(
+                    KernelFn::FontLetterSpacing,
+                    vec![Expr::Float(f64::INFINITY)],
+                )]),
+                child_list(vec![]),
+            ],
+        );
+        assert_eq!(ui_template_of_expr(&node, None), None);
+    }
+
+    #[test]
+    fn non_finite_rgba_alpha_literal_refuses() {
+        // `Ui.rgba 1 2 3 (0.0 / 0.0)` — a NaN alpha has no JSON number form, so the
+        // color capture refuses and the node stays compiled.
+        let node = kcall(
+            KernelFn::UiNode,
+            vec![
+                desc_none(),
+                attr_list(vec![kcall(
+                    KernelFn::FontColor,
+                    vec![kcall(
+                        KernelFn::UiRgba,
+                        vec![
+                            Expr::Int(1),
+                            Expr::Int(2),
+                            Expr::Int(3),
+                            Expr::Float(f64::NAN),
+                        ],
+                    )],
+                )]),
+                child_list(vec![]),
+            ],
+        );
+        assert_eq!(ui_template_of_expr(&node, None), None);
     }
 
     // ── refusal: Model-derived / non-literal color, colorCss, deferred shadow ─

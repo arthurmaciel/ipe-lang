@@ -19,12 +19,9 @@
 //!
 //! A missing/unreadable spill file, a SQL error, or a JSON-decode miss degrades
 //! to an **empty result** plus a structured `warn` — never `?`-into-panic, never
-//! `unwrap`/`expect`/indexing. This implements `getHubStore() == nil → Ok([])`
-//! path (`/bridge.go`). The kernel owns both the SELECT and the
-//! `Value` shape, so a producer/consumer schema mismatch cannot arise.
-//!
-//! Ground truth (read-only): `/store.go` (schema + queries) and
-//! `/bridge.go` (row → console-record field derivation).
+//! `unwrap`/`expect`/indexing (a missing hub store yields `Ok([])`). The kernel
+//! owns both the SELECT and the `Value` shape, so a producer/consumer schema
+//! mismatch cannot arise.
 
 use super::super::core::{IpeResult, IpeTask, ok_res, str_err};
 use serde::de::DeserializeOwned;
@@ -97,8 +94,6 @@ fn current_tenant_prefix() -> String {
 /// prefix). `Err(())` when `svc` is outside the tenant's scope — the caller
 /// MUST refuse with an `Err`, never silently drop the tenant filter and fall
 /// through to an unscoped read.
-///
-/// Direct port of  `rejectCrossTenantSvc` (`hub_bridge.go`).
 fn reject_cross_tenant_svc(svc: &str, tenant_prefix: &str) -> Result<String, ()> {
     if tenant_prefix.is_empty() {
         return Ok(svc.to_string());

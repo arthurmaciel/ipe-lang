@@ -22,8 +22,8 @@
 //! `func identity[T1 any](x T1) T1` / `func const_[T1 any, T2 any](x T1, y T2) T1`
 //! / `func apply[T1 any, T2 any](f func(T1) T2, x T1) T2`, confirming the
 //! `a` → `T1` naming convention and the `func(T1) T2` ↔ `Box<dyn Fn(T1) -> T2>`
-//! correspondence. Running the the toolchain inside `cargo test` is impractical
-//! (it needs the the `ipe` binary plus a the toolchain), so the hand-computed
+//! correspondence. Running the toolchain inside `cargo test` is impractical
+//! (it needs the `ipe` binary plus a toolchain), so the hand-computed
 //! `42` is the in-test oracle, documented here against the equivalent command.
 
 use std::path::{Path, PathBuf};

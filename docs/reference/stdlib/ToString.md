@@ -11,9 +11,6 @@ the purpose is editor + `ipe doc` discoverability so callers can
 write `ToString.fromInt n` instead of memorising the per-type
 kernel sub-namespace.
 
-`fromTime` is OMITTED: it requires a `Time_timeString` Rust kernel
-that is not yet backed; tracked as a separate backlog item.
-
 All top-level bindings are fully annotated (compiled-source
 discipline — annotation-driven generalisation; no whole-program
 let-gen).
@@ -35,4 +32,14 @@ fromFloat : Float -> String
 ```ipe
 fromBool : Bool -> String
 ```
+
+## `fromTime`
+
+```ipe
+fromTime : Timestamp -> String
+```
+
+`fromTime t` — a human-readable local-time rendering of `t`. A thin alias
+over `Ipe.Time.timeString` (the `Time_timeString` kernel), the same
+discoverability role the other `from*` aliases play for their home modules.
 

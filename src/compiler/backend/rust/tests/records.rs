@@ -14,7 +14,7 @@
 //! * the upstream-contract guard (a literal whose shape was never declared)
 //!   fails fast as a `CompilerBug`, never a silent mis-emit.
 //!
-//! Behavioural-parity oracle: the the reference compiler at
+//! Behavioural-parity oracle: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! field-set-equivalent program
 //!
@@ -561,7 +561,7 @@ fn end_to_end_distinct_shapes_cargo_check() -> DResult<()> {
 
 /// Full spine: build the canonical record IR, emit the Cargo project, vendor the
 /// runtime, `cargo build`, run, and assert the program prints `5` — the value
-/// the the backend produces for the field-set-equivalent program. Gated on
+/// the backend produces for the field-set-equivalent program. Gated on
 /// `IPE_E2E=1` so the default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_five() -> DResult<()> {

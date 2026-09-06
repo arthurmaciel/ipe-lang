@@ -326,8 +326,13 @@ pub fn print_error_banner(message: &str) {
 ///
 /// The one way a human-mode command reports a completed step — replacing a bare
 /// left-flush spinner line with `<glyph> <message>` plus the 2-space gutter.
+///
+/// The message is already-sanitised [`TerminalSafe`], mirroring [`error_banner`]:
+/// the line's own glyph/colour escapes are the only control bytes the output may
+/// carry, so a message routed here can never smuggle ANSI or control bytes to the
+/// terminal.
 #[must_use]
-pub fn status_line(ok: bool, message: &str, color: bool) -> String {
+pub fn status_line(ok: bool, message: &TerminalSafe, color: bool) -> String {
     let p = Palette::select(color);
     let (glyph, tint) = if ok {
         (glyph::OK, p.green)

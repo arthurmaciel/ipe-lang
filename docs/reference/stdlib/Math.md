@@ -6,12 +6,26 @@
 
 Ipe.Math — pure numeric helpers.
 
+Floating-point arithmetic, trigonometry, rounding, and numeric constants.
 Every function is aliased to a runtime kernel via `Kernel.kernel`.
+
+The module complements `Ipe.Basics` (`abs`, `min`, `max`, `sqrt`,
+`negate`, `modBy`): import both, or import each qualified to keep the
+namespace clear. Floating-point results follow IEEE 754 — `nan` and
+`inf` are valid `Float` values, and `isNaN` is the correct test for NaN.
 
 ## `abs`
 
 ```ipe
 abs : Int -> Int
+```
+
+`abs x` — the absolute (non-negative) value of an integer.
+
+```ipe
+abs (-7) --> 7
+abs 7 --> 7
+abs 0 --> 0
 ```
 
 ## `min`
@@ -20,10 +34,30 @@ abs : Int -> Int
 min : a -> a -> a
 ```
 
+`min a b` — the smaller of two comparable values.
+
+Works on any comparable type (`Int`, `Float`, `String`, …).
+
+```ipe
+min 3 5 --> 3
+min 5 3 --> 3
+min 3.0 3.0 --> 3.0
+```
+
 ## `max`
 
 ```ipe
 max : a -> a -> a
+```
+
+`max a b` — the larger of two comparable values.
+
+Works on any comparable type (`Int`, `Float`, `String`, …).
+
+```ipe
+max 3 5 --> 5
+max 5 3 --> 5
+max 3.0 3.0 --> 3.0
 ```
 
 ## `sqrt`
@@ -32,10 +66,33 @@ max : a -> a -> a
 sqrt : Float -> Float
 ```
 
+`sqrt x` — the non-negative square root of `x`.
+
+Returns `nan` for negative inputs (IEEE 754). For a guaranteed real
+result, pass non-negative values; for integer square roots combine with
+`floor`, `ceil`, or `round`.
+
+```ipe
+sqrt 9.0 --> 3.0
+sqrt 2.0 --> 1.4142135623730951
+sqrt 0.0 --> 0.0
+```
+
 ## `pow`
 
 ```ipe
 pow : Float -> Float -> Float
+```
+
+`pow base exponent` — `base` raised to `exponent`.
+
+Both arguments are `Float`. For integer exponentiation use repeated
+multiplication via `List.foldl` or pattern-match on small exponents.
+
+```ipe
+pow 2.0 10.0 --> 1024.0
+pow 3.0 3.0 --> 27.0
+pow 9.0 0.5 --> 3.0
 ```
 
 ## `log`
@@ -44,10 +101,28 @@ pow : Float -> Float -> Float
 log : Float -> Float
 ```
 
+`log x` — the natural logarithm (base *e*) of `x`.
+
+Returns `nan` for negative inputs and `-inf` for `0.0`.
+
+```ipe
+log 1.0 --> 0.0
+log (exp 1.0) --> 1.0
+log 10.0 --> 2.302585092994046
+```
+
 ## `log2`
 
 ```ipe
 log2 : Float -> Float
+```
+
+`log2 x` — the base-2 logarithm of `x`.
+
+```ipe
+log2 1.0 --> 0.0
+log2 2.0 --> 1.0
+log2 1024.0 --> 10.0
 ```
 
 ## `log10`
@@ -56,10 +131,26 @@ log2 : Float -> Float
 log10 : Float -> Float
 ```
 
+`log10 x` — the base-10 (common) logarithm of `x`.
+
+```ipe
+log10 1.0 --> 0.0
+log10 10.0 --> 1.0
+log10 100.0 --> 2.0
+```
+
 ## `exp`
 
 ```ipe
 exp : Float -> Float
+```
+
+`exp x` — the natural exponential *e*^x.
+
+```ipe
+exp 0.0 --> 1.0
+exp 1.0 --> 2.718281828459045
+exp (-1.0) --> 0.36787944117144233
 ```
 
 ## `exp2`
@@ -68,10 +159,29 @@ exp : Float -> Float
 exp2 : Float -> Float
 ```
 
+`exp2 x` — 2^x (base-2 exponential).
+
+```ipe
+exp2 0.0 --> 1.0
+exp2 1.0 --> 2.0
+exp2 10.0 --> 1024.0
+```
+
 ## `cbrt`
 
 ```ipe
 cbrt : Float -> Float
+```
+
+`cbrt x` — the real cube root of `x`.
+
+Unlike `sqrt`, `cbrt` is defined for negative inputs: the cube root of
+a negative number is negative.
+
+```ipe
+cbrt 8.0 --> 2.0
+cbrt (-8.0) --> -2.0
+cbrt 27.0 --> 3.0
 ```
 
 ## `hypot`
@@ -80,10 +190,28 @@ cbrt : Float -> Float
 hypot : Float -> Float -> Float
 ```
 
+`hypot a b` — the Euclidean hypotenuse `sqrt(a² + b²)`.
+
+Avoids intermediate overflow for large values by using a numerically
+stable internal computation.
+
+```ipe
+hypot 3.0 4.0 --> 5.0
+hypot 1.0 1.0 --> 1.4142135623730951
+```
+
 ## `floor`
 
 ```ipe
 floor : Float -> Int
+```
+
+`floor x` — round `x` toward negative infinity; result is an `Int`.
+
+```ipe
+floor 3.7 --> 3
+floor (-3.7) --> -4
+floor 3.0 --> 3
 ```
 
 ## `ceil`
@@ -92,10 +220,28 @@ floor : Float -> Int
 ceil : Float -> Int
 ```
 
+`ceil x` — round `x` toward positive infinity; result is an `Int`.
+
+```ipe
+ceil 3.2 --> 4
+ceil (-3.2) --> -3
+ceil 3.0 --> 3
+```
+
 ## `round`
 
 ```ipe
 round : Float -> Int
+```
+
+`round x` — round `x` to the nearest integer, half-up; result is an `Int`.
+
+Ties round toward positive infinity (`round 2.5 == 3`).
+
+```ipe
+round 3.4 --> 3
+round 3.5 --> 4
+round (-3.5) --> -3
 ```
 
 ## `trunc`
@@ -104,10 +250,28 @@ round : Float -> Int
 trunc : Float -> Int
 ```
 
+`trunc x` — truncate `x` toward zero; result is an `Int`.
+
+Equivalent to dropping the fractional part.
+
+```ipe
+trunc 3.7 --> 3
+trunc (-3.7) --> -3
+trunc 3.0 --> 3
+```
+
 ## `sin`
 
 ```ipe
 sin : Float -> Float
+```
+
+`sin x` — the sine of `x` in radians.
+
+```ipe
+sin 0.0 --> 0.0
+sin (pi / 2.0) --> 1.0
+sin pi --> 1.2246467991473532e-16
 ```
 
 ## `cos`
@@ -116,10 +280,25 @@ sin : Float -> Float
 cos : Float -> Float
 ```
 
+`cos x` — the cosine of `x` in radians.
+
+```ipe
+cos 0.0 --> 1.0
+cos (pi / 2.0) --> 6.123233995736766e-17
+cos pi --> -1.0
+```
+
 ## `tan`
 
 ```ipe
 tan : Float -> Float
+```
+
+`tan x` — the tangent of `x` in radians.
+
+```ipe
+tan 0.0 --> 0.0
+tan (pi / 4.0) --> 0.9999999999999999
 ```
 
 ## `asin`
@@ -128,10 +307,29 @@ tan : Float -> Float
 asin : Float -> Float
 ```
 
+`asin x` — the arcsine of `x`, result in radians in `[-π/2, π/2]`.
+
+Returns `nan` for `x` outside `[-1, 1]`.
+
+```ipe
+asin 0.0 --> 0.0
+asin 1.0 --> 1.5707963267948966
+```
+
 ## `acos`
 
 ```ipe
 acos : Float -> Float
+```
+
+`acos x` — the arccosine of `x`, result in radians in `[0, π]`.
+
+Returns `nan` for `x` outside `[-1, 1]`.
+
+```ipe
+acos 1.0 --> 0.0
+acos 0.0 --> 1.5707963267948966
+acos (-1.0) --> 3.141592653589793
 ```
 
 ## `atan`
@@ -140,10 +338,31 @@ acos : Float -> Float
 atan : Float -> Float
 ```
 
+`atan x` — the arctangent of `x`, result in radians in `(-π/2, π/2)`.
+
+```ipe
+atan 0.0 --> 0.0
+atan 1.0 --> 0.7853981633974483
+atan (-1.0) --> -0.7853981633974483
+```
+
 ## `atan2`
 
 ```ipe
 atan2 : Float -> Float -> Float
+```
+
+`atan2 y x` — the quadrant-aware arctangent of `y/x`.
+
+Returns the angle in radians in `(-π, π]` between the positive x-axis
+and the point `(x, y)`. Unlike `atan`, it uses both signs to place the
+result in the correct quadrant.
+
+```ipe
+atan2 0.0 1.0 --> 0.0
+atan2 1.0 1.0 --> 0.7853981633974483
+atan2 1.0 0.0 --> 1.5707963267948966
+atan2 1.0 (-1.0) --> 2.356194490192345
 ```
 
 ## `sinh`
@@ -152,10 +371,24 @@ atan2 : Float -> Float -> Float
 sinh : Float -> Float
 ```
 
+`sinh x` — the hyperbolic sine of `x`.
+
+```ipe
+sinh 0.0 --> 0.0
+sinh 1.0 --> 1.1752011936438014
+```
+
 ## `cosh`
 
 ```ipe
 cosh : Float -> Float
+```
+
+`cosh x` — the hyperbolic cosine of `x`.
+
+```ipe
+cosh 0.0 --> 1.0
+cosh 1.0 --> 1.5430806348152437
 ```
 
 ## `tanh`
@@ -164,10 +397,24 @@ cosh : Float -> Float
 tanh : Float -> Float
 ```
 
+`tanh x` — the hyperbolic tangent of `x`.
+
+```ipe
+tanh 0.0 --> 0.0
+tanh 1.0 --> 0.7615941559557649
+```
+
 ## `asinh`
 
 ```ipe
 asinh : Float -> Float
+```
+
+`asinh x` — the inverse hyperbolic sine of `x`.
+
+```ipe
+asinh 0.0 --> 0.0
+asinh 1.0 --> 0.881373587019543
 ```
 
 ## `acosh`
@@ -176,10 +423,29 @@ asinh : Float -> Float
 acosh : Float -> Float
 ```
 
+`acosh x` — the inverse hyperbolic cosine of `x`.
+
+Defined for `x >= 1`. Returns `nan` for `x < 1`.
+
+```ipe
+acosh 1.0 --> 0.0
+acosh 2.0 --> 1.3169578969248166
+```
+
 ## `atanh`
 
 ```ipe
 atanh : Float -> Float
+```
+
+`atanh x` — the inverse hyperbolic tangent of `x`.
+
+Defined for `x` in `(-1, 1)`. Returns `±inf` for `x = ±1`
+and `nan` for `|x| > 1`.
+
+```ipe
+atanh 0.0 --> 0.0
+atanh 0.5 --> 0.5493061443340548
 ```
 
 ## `mod`
@@ -188,10 +454,32 @@ atanh : Float -> Float
 mod : Float -> Float -> Float
 ```
 
+`mod x y` — floating-point modulo; result has the same sign as `y`.
+
+Follows the mathematical modulo convention. For integer modulo with
+sign-of-divisor semantics, see `Basics.modBy`.
+
+```ipe
+mod 10.5 3.0 --> 1.5
+mod (-10.5) 3.0 --> 1.5
+mod 10.5 (-3.0) --> -1.5
+```
+
 ## `remainder`
 
 ```ipe
 remainder : Float -> Float -> Float
+```
+
+`remainder x y` — IEEE 754 floating-point remainder.
+
+The result has the same sign as `x` (the dividend), distinguishing it
+from `mod` which follows the divisor's sign.
+
+```ipe
+remainder 10.5 3.0 --> 1.5
+remainder (-10.5) 3.0 --> -1.5
+remainder 10.5 (-3.0) --> 1.5
 ```
 
 ## `pi`
@@ -200,10 +488,24 @@ remainder : Float -> Float -> Float
 pi : Float
 ```
 
+The ratio of a circle's circumference to its diameter (π ≈ 3.14159).
+
+```ipe
+pi --> 3.141592653589793
+sin pi --> 1.2246467991473532e-16
+```
+
 ## `e`
 
 ```ipe
 e : Float
+```
+
+Euler's number, the base of the natural logarithm (*e* ≈ 2.71828).
+
+```ipe
+e --> 2.718281828459045
+log e --> 1.0
 ```
 
 ## `phi`
@@ -212,10 +514,23 @@ e : Float
 phi : Float
 ```
 
+The golden ratio (φ ≈ 1.61803), where φ = (1 + √5) / 2.
+
+```ipe
+phi --> 1.618033988749895
+```
+
 ## `sqrt2`
 
 ```ipe
 sqrt2 : Float
+```
+
+The square root of 2 (√2 ≈ 1.41421).
+
+```ipe
+sqrt2 --> 1.4142135623730951
+sqrt2 * sqrt2 --> 2.0000000000000004
 ```
 
 ## `inf`
@@ -224,15 +539,47 @@ sqrt2 : Float
 inf : Float
 ```
 
+Positive floating-point infinity.
+
+Arises from division by zero or operations that overflow `Float`. Any
+finite number is less than `inf`.
+
+```ipe
+1.0 / 0.0 --> inf
+inf + 1.0 --> inf
+```
+
 ## `nan`
 
 ```ipe
 nan : Float
 ```
 
+Not-a-Number (NaN) — the IEEE 754 indeterminate result.
+
+By the IEEE 754 standard, `nan /= nan`; use `isNaN` to test for NaN.
+Arises from operations like `sqrt (-1.0)` or `0.0 / 0.0`.
+
+```ipe
+isNaN nan --> True
+nan == nan --> False
+```
+
 ## `isNaN`
 
 ```ipe
 isNaN : Float -> Bool
+```
+
+`isNaN x` — `True` when `x` is the IEEE 754 Not-a-Number value.
+
+Because `nan /= nan` by the IEEE 754 standard, this is the only correct
+way to test for NaN.
+
+```ipe
+isNaN nan --> True
+isNaN inf --> False
+isNaN 0.0 --> False
+isNaN (0.0 / 0.0) --> True
 ```
 

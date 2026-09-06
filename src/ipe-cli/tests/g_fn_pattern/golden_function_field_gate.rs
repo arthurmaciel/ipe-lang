@@ -17,13 +17,10 @@
 //! `unwrap (wrap (\n -> n + 1))` is `\n -> n + 1` and `f 41 == 42`). It must
 //! NEVER accept the program and then cargo-fail.
 //!
-//! Note on the golden oracle: the the reference compiler at
-//! `/home/arthur/Documentos/comp/ipe/out/ipe` ALSO fails this shape today —
-//! its codegen emitted code that `go build` rejects (E5001 "Ipê compiler bug",
-//! `cannot call f ... any is not a function`), hand-verified in a temp dir. So
-//! the Rust clean diagnostic is a strict improvement over the golden reference, not
-//! a divergence: `42` is the value the language *semantics* specify, which the
-//! `Ok` branch below asserts should proper support ever land.
+//! `42` is the value the language *semantics* specify for this shape, which
+//! the `Ok` branch below asserts should proper support ever land. Until then
+//! the gate must reject with a clean diagnostic rather than emit code that
+//! fails to build.
 
 use std::path::{Path, PathBuf};
 

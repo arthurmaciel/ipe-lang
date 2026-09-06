@@ -1,5 +1,5 @@
 //! Ipe Console — the operator dashboard mounted at `/_ipe/console`, plus the
-//! observability federation receiver. Implements `console*.go` in-RAM tier:
+//! observability federation receiver. The in-RAM tier:
 //! a plain-HTML shell that polls JSON `/_ipe/console/api/*` endpoints backed by
 //! the `telemetry` ring buffers, and a `/_ipe/observability/ingest` POST that
 //! folds a sub-app's batched logs into the same rings.
@@ -211,9 +211,9 @@ fn resolve_console_auth_mode() -> ConsoleAuthMode {
     }
 }
 
-/// The console-auth mode label, mirroring  `describeConsoleAuthMode`
-/// (`console_auth_v2.go:149`) over `resolveConsoleAuthMode`'s env/production
-/// derivation. Used for the `[ipe.console] inline console mounted … mode=<m>`
+/// The console-auth mode label, derived from `resolveConsoleAuthMode`'s
+/// env/production derivation. Used for the `[ipe.console] inline console
+/// mounted … mode=<m>`
 /// startup log . Total: every branch is explicit.
 ///
 /// Derivation : `IPE_CONSOLE_AUTH` (case-insensitive, trimmed) selects
@@ -315,12 +315,11 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
 /// them into the local rings. Malformed bodies are accepted as 204 (drop) rather
 /// than erroring — telemetry must never break the caller.
 ///
-/// Auth : a shared secret in `X-Ipê-Ingest-Token`, constant-time
-/// compared against `IPE_INGEST_TOKEN`. The Rust runtime does not yet spawn
-/// sub-apps (no auto-generated token to distribute), so the gate is enforced
-/// ONLY when an operator sets `IPE_INGEST_TOKEN` — unset leaves the endpoint open
-/// (dev / single-process). When federation lands the parent will generate + pass
-/// the token; the check side is already here.
+/// Auth : a shared secret in `X-Ipê-Ingest-Token`, constant-time compared
+/// against `IPE_INGEST_TOKEN`. With the token set, only a matching request is
+/// accepted. With the token unset, the endpoint fails CLOSED in production
+/// (401) and, in dev, accepts only same-origin requests — a cross-origin POST
+/// (the CSRF-log-injection shape) is rejected (403).
 pub async fn ingest(headers: axum::http::HeaderMap, body: String) -> axum::response::Response {
     if let Some(resp) = ingest_token_blocked(&headers) {
         return resp;

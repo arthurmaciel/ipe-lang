@@ -422,14 +422,34 @@ pub fn emit_expr_at(
                 if matches!(callee, Callee::Kernel(KernelFn::TaskAndThen))
                     && let [cont, effect] = args.as_slice()
                 {
-                    let cont_captures = free_vars(cont);
-                    let row_binders: std::collections::BTreeSet<Symbol> =
-                        generics.row_binders().iter().copied().collect();
-                    Some(clone_targets_in_expr(
-                        effect.clone(),
-                        &cont_captures,
-                        &row_binders,
-                    ))
+                    // Only `effect`'s own free vars can be rewritten, and only if
+                    // `cont` also captures them. Collect `effect`'s vars first (it
+                    // is the small head task); when it has none there is nothing to
+                    // clone, so the whole-continuation `free_vars(cont)` walk is
+                    // skipped. Otherwise the rewrite targets are exactly the shared
+                    // vars — folding over that subset instead of all of `cont`'s
+                    // captures is a proven no-op difference (a target absent from
+                    // `effect` never matches), so the emitted bytes are identical.
+                    let effect_vars = free_vars(effect);
+                    let targets: std::collections::BTreeSet<Symbol> = if effect_vars.is_empty() {
+                        std::collections::BTreeSet::new()
+                    } else {
+                        free_vars(cont)
+                            .intersection(&effect_vars)
+                            .copied()
+                            .collect()
+                    };
+                    if targets.is_empty() {
+                        None
+                    } else {
+                        let row_binders: std::collections::BTreeSet<Symbol> =
+                            generics.row_binders().iter().copied().collect();
+                        Some(clone_targets_in_expr(
+                            effect.clone(),
+                            &targets,
+                            &row_binders,
+                        ))
+                    }
                 } else {
                     None
                 };
@@ -467,7 +487,13 @@ pub fn emit_expr_at(
                 {
                     let inner =
                         emit_lambda_unboxed(ctx, params, ret, body, indent, child, generics)?;
-                    format!("Box::new({inner})")
+                    // Splice the already-built child into a pre-sized buffer rather
+                    // than re-copying it through `format!` — same bytes, one alloc.
+                    let mut rendered = String::with_capacity(inner.len() + "Box::new()".len());
+                    rendered.push_str("Box::new(");
+                    rendered.push_str(&inner);
+                    rendered.push(')');
+                    rendered
                 } else {
                     let unboxed = if let Callee::Func(id) = callee
                         && ctx.call_arg_is_impl_fn(*id, i)
@@ -624,15 +650,42 @@ pub fn emit_expr_at(
             // a record field name in `effect` can never be corrupted (the prior
             // text-level `clone_captured_vars` pass matched on rendered source
             // and could rewrite either).
-            let rest_captures = free_vars(rest);
-            let row_binders: std::collections::BTreeSet<Symbol> =
-                generics.row_binders().iter().copied().collect();
-            let effect_rw = clone_targets_in_expr((**effect).clone(), &rest_captures, &row_binders);
-            let effect_s = emit_expr_at(ctx, &effect_rw, indent, child, generics)?;
+            // `effect` is the small head task; collect its free vars first. When it
+            // has none, nothing can be cloned, so both the whole-`rest`
+            // `free_vars(rest)` walk and the deep `effect` clone are skipped and
+            // `effect` is emitted directly. Otherwise the rewrite targets are the
+            // vars shared with `rest`'s captures — the same subset the full
+            // `clone_targets_in_expr` would have touched, so the emitted text is
+            // byte-identical.
+            let effect_vars = free_vars(effect);
+            let targets: std::collections::BTreeSet<Symbol> = if effect_vars.is_empty() {
+                std::collections::BTreeSet::new()
+            } else {
+                free_vars(rest)
+                    .intersection(&effect_vars)
+                    .copied()
+                    .collect()
+            };
+            let effect_s = if targets.is_empty() {
+                emit_expr_at(ctx, effect, indent, child, generics)?
+            } else {
+                let row_binders: std::collections::BTreeSet<Symbol> =
+                    generics.row_binders().iter().copied().collect();
+                let effect_rw = clone_targets_in_expr((**effect).clone(), &targets, &row_binders);
+                emit_expr_at(ctx, &effect_rw, indent, child, generics)?
+            };
             let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;
-            Ok(format!(
-                "task_and_then({effect_s}, Box::new(move |_| {{ {rest_s} }}))"
-            ))
+            // Splice the two already-built child strings into one pre-sized buffer
+            // in the same token order — byte-identical to the nested `format!`, but
+            // it avoids re-copying `effect_s`/`rest_s` through a growing scratch. The
+            // fixed wrapper `task_and_then(, Box::new(move |_| {  }))` is 40 bytes.
+            let mut out = String::with_capacity(effect_s.len() + rest_s.len() + 40);
+            out.push_str("task_and_then(");
+            out.push_str(&effect_s);
+            out.push_str(", Box::new(move |_| { ");
+            out.push_str(&rest_s);
+            out.push_str(" }))");
+            Ok(out)
         }
         // Sync variant of TaskSeq: blocks on `effect` (discarding the result),
         // then evaluates `rest` in the same sync context. Used when a

@@ -1,8 +1,9 @@
 //! Name resolution: `ipe_syntax` source tree → canonical AST. Port of the
 //! supported subset of `Ipe.Canonicalise.{Module,Expression,Pattern,Type}`.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use ipe_diagnostics::{
     AliasExpansionKind, CmdSubShapeMismatch, CodecAutoRejection, DResult, Diagnostic, Located,
@@ -21,7 +22,7 @@ use crate::env::{CtorHome, Env, VarHome, WildcardOrigin};
 /// error; the list is `(Levenshtein, name)`-sorted so the closest comes first.
 const MAX_SUGGESTIONS: usize = 3;
 
-/// The inclusive edit-distance ceiling for a suggestion. Mirrors the the compiler
+/// The inclusive edit-distance ceiling for a suggestion. Mirrors the reference compiler
 /// reference (`Ipe.Canonicalise.Module.suggestQualifier`): beyond two edits a
 /// "did you mean" is more misleading than helpful, so silence wins.
 const SUGGESTION_MAX_DISTANCE: usize = 2;
@@ -442,9 +443,22 @@ const KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES: &[&str] = &[
 /// use [`is_user_type_declaration_forbidden`] for that gate.
 #[must_use]
 pub fn is_reserved_builtin_type_name(name: &str) -> bool {
-    RESERVED_BUILTIN_TYPES.contains(&name)
-        || EXTRA_BUILTIN_TYPE_NAMES.contains(&name)
-        || KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES.contains(&name)
+    builtin_type_name_set().contains(name)
+}
+
+/// The union of every built-in type-name table, as an O(1)-membership set built
+/// once. The three source slices stay the single source of truth; this only
+/// caches their union so per-node membership tests avoid three linear scans.
+fn builtin_type_name_set() -> &'static HashSet<&'static str> {
+    static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| {
+        RESERVED_BUILTIN_TYPES
+            .iter()
+            .chain(EXTRA_BUILTIN_TYPE_NAMES)
+            .chain(KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES)
+            .copied()
+            .collect()
+    })
 }
 
 /// `true` when a user `.ipe` module (or an FFI-generated shadow module) may
@@ -760,22 +774,23 @@ fn reject_reserved_builtin_type(
     origin: ModuleOrigin,
     interner: &Interner,
 ) -> DResult<()> {
-    match interner.resolve(name) {
-        Some(resolved)
-            if is_user_type_declaration_forbidden(resolved)
-                && !(origin == ModuleOrigin::EmbeddedStdlib
-                    && (STDLIB_DEFINABLE_UI_TYPES.contains(&resolved)
-                        || STDLIB_DEFINABLE_CARRIER_TYPES.contains(&resolved))) =>
-        {
-            Err(Diagnostic::Name {
-                span,
-                msg: NameError::ReservedBuiltinType {
-                    name: Box::<str>::from(resolved),
-                },
-            })
-        }
-        _ => Ok(()),
+    // An unresolvable type name is an interner-invariant break; fail closed
+    // (CompilerBug) rather than the `_ => Ok(())` wildcard passing the gate on a
+    // `None` resolve.
+    let resolved = resolve_or_bug(interner, name, "ipe_canon::reject_reserved_builtin_type")?;
+    if is_user_type_declaration_forbidden(resolved)
+        && !(origin == ModuleOrigin::EmbeddedStdlib
+            && (STDLIB_DEFINABLE_UI_TYPES.contains(&resolved)
+                || STDLIB_DEFINABLE_CARRIER_TYPES.contains(&resolved)))
+    {
+        return Err(Diagnostic::Name {
+            span,
+            msg: NameError::ReservedBuiltinType {
+                name: Box::<str>::from(resolved),
+            },
+        });
     }
+    Ok(())
 }
 
 /// Trust provenance of a module entering [`canonicalise_module_with_origin`].
@@ -1022,7 +1037,7 @@ fn origin_owns_reserved_prefix(origin: ModuleOrigin, prefix: &str) -> bool {
     }
 }
 
-#[allow(clippy::too_many_lines)] // qualifier_paths pass added ~20 lines; refactor tracked in #todo
+#[allow(clippy::too_many_lines)] // one linear resolution pass over a module's declarations
 pub fn canonicalise_module_in_project(
     m: &src::Module,
     expected_path: &[Symbol],
@@ -1055,7 +1070,10 @@ pub fn canonicalise_module_in_project(
     // silently vanish from emission. The exemption is granted only by the
     // driver-vouched origin tag, never because the module text says `module Ipe.…`.
     if let Some(first) = home.first().copied() {
-        let first_name = interner.resolve(first).unwrap_or_default();
+        // An unresolvable first segment is an interner-invariant break; fail
+        // closed (CompilerBug) rather than default to `""`, which would silently
+        // skip the reserved-namespace supply-chain gate below.
+        let first_name = resolve_or_bug(interner, first, "ipe_canon::reserved_namespace_gate")?;
         if let Some(prefix) = ipe_kernels::reserved_prefix_of(&[first_name])
             && !origin_owns_reserved_prefix(origin, prefix)
         {
@@ -2161,6 +2179,15 @@ fn register_stdlib_import_aliases(
     interner: &mut Interner,
 ) -> DResult<()> {
     let ipe_sym = interner.intern("Ipe")?;
+    // Which canonical qualifier each EXPLICIT `as Alias` was registered against,
+    // plus the span of the import that first claimed it. Two stdlib imports
+    // aliased to one name (`… as J` twice) would otherwise extend-merge member
+    // tables last-wins with no diagnostic; this rejects the second with the same
+    // DuplicateQualifier the user-dep path raises. Bare imports are absent — a
+    // bare import is spoken under its CANONICAL qualifier, so two bare imports
+    // that merely share a last path segment (`Ipe.Json.Decode` + `Ipe.Db.Decode`,
+    // both segment `Decode`) do not collide and stay legitimate.
+    let mut explicit_alias_canonical: BTreeMap<Symbol, (Symbol, Span)> = BTreeMap::new();
     for import in imports {
         let dep_path = &import.name.value;
         // Only `Ipe.*` imports name compiler stdlib modules.
@@ -2176,16 +2203,64 @@ fn register_stdlib_import_aliases(
         let alias = import
             .alias
             .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
+        if let Some(explicit) = import.alias {
+            // Reject an explicit alias already claimed by a prior explicit alias
+            // for a DIFFERENT module (`import … as J` twice), or one that names a
+            // DIFFERENT stdlib module's canonical qualifier
+            // (`import Ipe.Json.Encode as Crypto`). Either way a silent
+            // extend-merge would resolve `Alias.member` last-wins across modules
+            // with no diagnostic, and aliasing onto a gated canonical would also
+            // unlock that canonical's must-import gate. Re-aliasing the same
+            // module under the same name stays a no-op.
+            if let Some(&(prev_canonical, first)) = explicit_alias_canonical.get(&explicit) {
+                if prev_canonical != canonical {
+                    return Err(Diagnostic::Name {
+                        span: import.name.span,
+                        msg: NameError::DuplicateQualifier {
+                            qualifier: name_str(interner, explicit)?,
+                            first,
+                        },
+                    });
+                }
+            } else if explicit != canonical
+                && crate::env::is_stdlib_canonical_qualifier(interner, explicit)
+            {
+                return Err(Diagnostic::Name {
+                    span: import.name.span,
+                    msg: NameError::DuplicateQualifier {
+                        qualifier: name_str(interner, explicit)?,
+                        first: import.name.span,
+                    },
+                });
+            }
+            explicit_alias_canonical.insert(explicit, (canonical, import.name.span));
+        }
         // Tier-C import gate (ADR 0047): this `import Ipe.X [as Alias]` brings the
-        // qualifier into scope under the name the user will actually type. Record
-        // that name (the alias, or — via the fall-through below — the canonical) so
-        // a later `Alias.member` / `X.member` resolves instead of raising N0034.
-        // A bare `import Ipe.String` names `String` both as canonical and alias.
-        env.mark_stdlib_qualifier_imported(alias);
+        // qualifier into scope under the name the user will type. Mark that name
+        // (the alias, or — via the fall-through below — the canonical) so a later
+        // `Alias.member` / `X.member` resolves instead of raising N0034. An
+        // explicit alias that collides with a gated canonical was rejected above,
+        // so marking an explicit alias here can never unlock an unrelated gate.
+        //
+        // A BARE import exposes the module under its last path segment. When that
+        // segment equals a DIFFERENT module's gated canonical qualifier
+        // (`import Ipe.Http.Stream` → segment `Stream` = server `Stream`'s
+        // canonical; `import Ipe.Server.Http` → segment `Http` = client `Http`'s
+        // canonical), marking it would unlock the foreign module's privileged
+        // kernels with no import of that module — a capability smuggle. Fail
+        // closed: skip the mark for that foreign-canonical case. The member-clone
+        // below still runs, so the bare import's own members resolve, and its
+        // canonical is still marked via the `import.alias.is_none()` branch.
+        let alias_is_foreign_gated_canonical = import.alias.is_none()
+            && alias != canonical
+            && crate::env::is_stdlib_canonical_qualifier(interner, alias);
+        if !alias_is_foreign_gated_canonical {
+            env.mark_stdlib_qualifier_imported(alias);
+        }
         // A bare `import Ipe.X.Y` (no explicit `as`) also names the module under
-        // its CANONICAL qualifier — which for a dotted-canonical module such as
-        // `Ipe.Db.Decode` (canonical `Db.Decode`) is the multi-segment form the
-        // parser produces from `Db.Decode.member`, and which no `as` alias can
+        // its CANONICAL qualifier — for a dotted-canonical module such as
+        // `Ipe.Db.Decode` (canonical `Db.Decode`) that is the multi-segment form
+        // the parser produces from `Db.Decode.member`, which no `as` alias can
         // spell. Marking the canonical too keeps `X.Y.member` resolving without an
         // alias. An explicit `as Alias` names a single qualifier on purpose, so it
         // does not pull the canonical into scope.
@@ -2193,8 +2268,7 @@ fn register_stdlib_import_aliases(
             env.mark_stdlib_qualifier_imported(canonical);
         }
         if alias == canonical {
-            // Already registered under its canonical name — nothing to clone. The
-            // gate above already recorded it (alias == canonical here).
+            // Already registered under its canonical name — nothing to clone.
             continue;
         }
         // Clone the canonical qualifier's members under the alias key. The cloned
@@ -3994,7 +4068,7 @@ fn call_expr(f: canon::Expr, args: Vec<canon::Expr>, span: Span) -> canon::Expr 
     Located::new(span, canon::Expr_::Call(Box::new(f), args))
 }
 
-#[allow(clippy::too_many_arguments)] // qualifier_paths added to thread context; refactor tracked
+#[allow(clippy::too_many_arguments)] // qualifier paths threaded through the resolution context
 fn synthesize_record_alias_ctors(
     m: &src::Module,
     home: &[Symbol],
@@ -5751,9 +5825,9 @@ enum Assoc {
 
 /// The precedence (higher binds tighter) and associativity of `op`.
 ///
-/// Mirror of the the compiler reference `Ipe.Parse.Symbol.precedence` for the
+/// Mirror of the reference compiler `Ipe.Parse.Symbol.precedence` for the
 /// core operator set; any operator outside the set defaults to `9 L` exactly
-/// as the the compiler catch-all does.
+/// as the reference compiler catch-all does.
 const fn op_precedence(op: &str) -> (i32, Assoc) {
     match op.as_bytes() {
         b"*" | b"/" | b"//" | b"%" => (7, Assoc::Left),
@@ -5790,7 +5864,7 @@ const fn op_precedence(op: &str) -> (i32, Assoc) {
 /// `Ipe.Canonicalise.Expression.canonicaliseBinops`), reading each operator's
 /// precedence + associativity from [`op_precedence`].
 ///
-/// Unlike the the compiler parser — which nests `Src.Binops` pairwise and so needs a
+/// Unlike the reference compiler parser — which nests `Src.Binops` pairwise and so needs a
 /// flattening pre-pass — the Rust parser already emits one flat chain per
 /// syntactic level. A `Binop` *operand* therefore only ever arises from an
 /// explicit parenthesised group, which must stay atomic; we never re-flatten
@@ -5839,7 +5913,8 @@ fn canonicalise_binops(
 ///
 /// Call-stack depth is O(1) in chain length: a `pending` heap-stack holds
 /// reduce-deferred `(left, op, prec)` frames so no native frame is opened per
-/// operator. Mirrors `target_gate::check_expr`'s heap-work-stack discipline.
+/// operator. Shares the heap-work-stack discipline of
+/// `module_classify::walk_expr`.
 ///
 /// Reduce predicate (reproduces the recursive semantics byte-for-byte):
 /// - Left/non-assoc: reduce when a pending op is at least as tight as the
@@ -6090,10 +6165,7 @@ fn resolve_unqualified_type_home(name: Symbol, ctx: &TypeCtx) -> DResult<Vec<Sym
         name,
         "ipe_canon::resolve_unqualified_type_home",
     )?;
-    if RESERVED_BUILTIN_TYPES.contains(&name_s)
-        || EXTRA_BUILTIN_TYPE_NAMES.contains(&name_s)
-        || KERNEL_IMPLICIT_BUILTIN_TYPE_NAMES.contains(&name_s)
-    {
+    if is_reserved_builtin_type_name(name_s) {
         // Empty-home sentinel: the lowerer's per-name explicit arm resolves it.
         return Ok(Vec::new());
     }
@@ -7171,7 +7243,7 @@ fn rank_suggestions<'a>(typo: &str, candidates: impl Iterator<Item = &'a str>) -
 /// Iterative Levenshtein edit distance over Unicode scalar values, computed
 /// with two rolling rows and no indexing (the `indexing_slicing` lint is
 /// denied workspace-wide). Ipê identifiers are short ASCII names, so the
-/// O(n·m) cost is negligible. Mirrors the the compiler reference's `levenshtein`.
+/// O(n·m) cost is negligible. Mirrors the reference compiler's `levenshtein`.
 fn levenshtein(a: &str, b: &str) -> usize {
     let b_chars: Vec<char> = b.chars().collect();
     // Row 0: cost of deleting every prefix of `b` (i.e. inserting into empty a).
@@ -7302,7 +7374,7 @@ fn chunk_to_expr(
     match chunk {
         Chunk::Lit(s) => Ok(Located::new(span, canon::Expr_::Str(s))),
         Chunk::Interp(body) => {
-            // Trim leading/trailing whitespace, matching the the compiler
+            // Trim leading/trailing whitespace, matching the reference compiler
             // `dropWhile (== ' ') (reverse (dropWhile …))`.
             let trimmed = body.trim();
             let resolved = resolve_interp_ref(trimmed, span, env, interner)?;
@@ -7748,6 +7820,47 @@ mod alias_ctor_gate_tests {
         assert_eq!(
             resolve_or_bug(&i, s, "test_site").expect("resolves"),
             "Widget"
+        );
+    }
+
+    #[test]
+    fn reject_reserved_builtin_type_fails_closed_on_unresolvable_name() {
+        // A type name symbol the interner never handed out must not pass the
+        // reserved-builtin-type gate on a `None` resolve; it fails closed with a
+        // CompilerBug rather than the old `_ => Ok(())` wildcard.
+        let i = Interner::new();
+        let forged = Symbol::from_raw(u32::MAX);
+        let err = reject_reserved_builtin_type(forged, Span::DUMMY, ModuleOrigin::User, &i)
+            .expect_err("an unresolvable type name must not silently pass the gate");
+        assert!(
+            matches!(err, Diagnostic::CompilerBug { .. }),
+            "unresolvable name must fail closed as CompilerBug"
+        );
+    }
+
+    #[test]
+    fn reject_reserved_builtin_type_still_gates_correctly() {
+        // The fail-closed change must not weaken the ordinary gate: an ordinary
+        // name passes, a reserved built-in name is still rejected for a user
+        // module.
+        let mut i = Interner::new();
+        let widget = i.intern("Widget").expect("intern");
+        assert!(
+            reject_reserved_builtin_type(widget, Span::DUMMY, ModuleOrigin::User, &i).is_ok(),
+            "an ordinary user type name is allowed"
+        );
+        let reserved = i.intern("Int").expect("intern");
+        let err = reject_reserved_builtin_type(reserved, Span::DUMMY, ModuleOrigin::User, &i)
+            .expect_err("a reserved built-in name must still be rejected");
+        assert!(
+            matches!(
+                err,
+                Diagnostic::Name {
+                    msg: NameError::ReservedBuiltinType { .. },
+                    ..
+                }
+            ),
+            "reserved name rejection must be ReservedBuiltinType"
         );
     }
 }

@@ -6,25 +6,28 @@
 
 Ipe.Dict — string-keyed associative map.
 
-Every function in this module is declared as a Ipe-source binding
-aliased to a kernel via `Kernel.kernel "Dict_<name>"`.  The compiler
-rewrites every call site to typed kernel dispatch — so `Dict.get "k" d`
-emits the appropriate typed kernel, preserving the typed-codegen
-guarantees the kernel-direct route already enjoyed.
+A `Dict k v` maps keys of type `k` to values of type `v`. Every key is
+unique: inserting the same key twice replaces the earlier value. Looking up
+a missing key returns `Nothing`; looking up a present key returns `Just v`.
 
-The Ipe-source layer exists for discoverability so `ipe doc` shows a
-stable source location for every entry.  The runtime bodies live in
-the `ipe_runtime` crate (`Dict_*` kernels).
+At runtime the underlying store uses stringified keys, so any comparable
+type (`Int`, `Float`, `String`, …) works as a key and round-trips faithfully.
+When the inferred key type is `Dict Int v`, the compiler routes conversion
+functions through a typed variant so integer keys stay integers after a
+`toList`/`fromList` round-trip.
 
-Key-type note: at runtime the underlying map uses stringified keys,
-so non-String keys are stringified on `fromList` and re-parsed on
-`toList`. For `Dict Int v` the round-trip is faithful (Int → "1" →
-1); for floating-point keys the round-trip carries decimal-string
-precision (Float 1.5 → "1.5" → 1.5). When Ipe's HM solver infers
-a typed key like `Dict Int v`, the compiler routes `Dict.toList`
-through the `Dict_toListIntKey` variant so the returned tuple's
-first slot is a real Int — closing the long-standing Limitation
-#10 soundness hole.
+Example:
+
+    import Ipe.Dict as Dict
+
+    scores : Dict String Int
+    scores =
+        Dict.fromList [ ( "alice", 90 ), ( "bob", 75 ) ]
+
+    Dict.get "alice" scores --> Just 90
+    Dict.get "carol" scores --> Nothing
+
+See also: `Ipe.Set` (a set of unique values), `Ipe.List`.
 
 ## `empty`
 
@@ -32,7 +35,12 @@ first slot is a real Int — closing the long-standing Limitation
 empty : Dict k v
 ```
 
-The empty dictionary.
+The empty dictionary — no keys, no values.
+
+```ipe
+Dict.isEmpty Dict.empty --> True
+Dict.size Dict.empty --> 0
+```
 
 ## `singleton`
 
@@ -40,7 +48,13 @@ The empty dictionary.
 singleton : k -> v -> Dict k v
 ```
 
-`singleton k v` — a dictionary with the single binding `k → v`.
+`singleton k v` — a dictionary with exactly one binding: `k → v`.
+
+```ipe
+Dict.singleton "x" 1 --> Dict.fromList [ ( "x", 1 ) ]
+Dict.get "x" (Dict.singleton "x" 1) --> Just 1
+Dict.get "y" (Dict.singleton "x" 1) --> Nothing
+```
 
 ## `isEmpty`
 
@@ -48,7 +62,12 @@ singleton : k -> v -> Dict k v
 isEmpty : Dict k v -> Bool
 ```
 
-`True` when the dictionary contains no entries.
+`isEmpty d` — `True` when the dictionary contains no entries.
+
+```ipe
+Dict.isEmpty Dict.empty --> True
+Dict.isEmpty (Dict.singleton "k" 1) --> False
+```
 
 ## `size`
 
@@ -56,7 +75,12 @@ isEmpty : Dict k v -> Bool
 size : Dict k v -> Int
 ```
 
-Number of key/value pairs.
+`size d` — the number of key/value pairs in the dictionary.
+
+```ipe
+Dict.size Dict.empty --> 0
+Dict.size (Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ]) --> 2
+```
 
 ## `insert`
 
@@ -64,7 +88,20 @@ Number of key/value pairs.
 insert : k -> v -> Dict k v -> Dict k v
 ```
 
-`insert k v d` — bind `k → v`, replacing any prior value.
+`insert k v d` — bind `k → v`, replacing any earlier value for `k`.
+
+```ipe
+Dict.empty
+    |> Dict.insert "a" 1
+    |> Dict.insert "b" 2
+    |> Dict.size
+--> 2
+
+Dict.singleton "a" 1
+    |> Dict.insert "a" 99
+    |> Dict.get "a"
+--> Just 99
+```
 
 ## `update`
 
@@ -72,8 +109,26 @@ insert : k -> v -> Dict k v -> Dict k v
 update : k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
 ```
 
-`update k fn d` — apply `fn` to the current value at `k` (`Just`/`Nothing`);
-a `Just` result re-binds `k`, a `Nothing` removes it.
+`update k f d` — apply `f` to `k`'s current binding and use the result
+as the new binding.
+
+`f` receives `Just v` when `k` is present, `Nothing` when absent.
+Returning `Just newValue` inserts or replaces the binding; returning
+`Nothing` removes it.
+
+```ipe
+-- increment a counter, defaulting to 0 when absent
+Dict.empty
+    |> Dict.update "hits" (\m -> Just (Maybe.withDefault 0 m + 1))
+    |> Dict.get "hits"
+--> Just 1
+
+-- remove a key conditionally
+Dict.singleton "a" 5
+    |> Dict.update "a" (\_ -> Nothing)
+    |> Dict.member "a"
+--> False
+```
 
 ## `get`
 
@@ -81,7 +136,12 @@ a `Just` result re-binds `k`, a `Nothing` removes it.
 get : k -> Dict k v -> Maybe v
 ```
 
-`get k d` — look up `k`; `Nothing` if absent.
+`get k d` — look up the value at `k`; `Nothing` if absent.
+
+```ipe
+Dict.get "a" (Dict.fromList [ ( "a", 42 ) ]) --> Just 42
+Dict.get "z" (Dict.fromList [ ( "a", 42 ) ]) --> Nothing
+```
 
 ## `remove`
 
@@ -89,7 +149,14 @@ get : k -> Dict k v -> Maybe v
 remove : k -> Dict k v -> Dict k v
 ```
 
-`remove k d` — drop `k`'s binding; no-op if absent.
+`remove k d` — drop the binding for `k`; no-op when `k` is absent.
+
+```ipe
+Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ]
+    |> Dict.remove "a"
+    |> Dict.member "a"
+--> False
+```
 
 ## `member`
 
@@ -97,7 +164,12 @@ remove : k -> Dict k v -> Dict k v
 member : k -> Dict k v -> Bool
 ```
 
-`member k d` — `True` iff `k` is bound in `d`.
+`member k d` — `True` when `k` is bound in `d`.
+
+```ipe
+Dict.member "a" (Dict.fromList [ ( "a", 1 ) ]) --> True
+Dict.member "z" (Dict.fromList [ ( "a", 1 ) ]) --> False
+```
 
 ## `keys`
 
@@ -105,7 +177,13 @@ member : k -> Dict k v -> Bool
 keys : Dict k v -> List k
 ```
 
-All keys in the dictionary (unsorted).
+`keys d` — all keys in the dictionary, in unspecified order.
+
+```ipe
+Dict.fromList [ ( "b", 2 ), ( "a", 1 ) ]
+    |> Dict.keys
+-- == [ "b", "a" ]   (order unspecified)
+```
 
 ## `values`
 
@@ -113,7 +191,13 @@ All keys in the dictionary (unsorted).
 values : Dict k v -> List v
 ```
 
-All values in the dictionary (unsorted).
+`values d` — all values in the dictionary, in unspecified order.
+
+```ipe
+Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ]
+    |> Dict.values
+-- == [ 1, 2 ]   (order unspecified)
+```
 
 ## `toList`
 
@@ -121,12 +205,18 @@ All values in the dictionary (unsorted).
 toList : Dict k v -> List ( k, v )
 ```
 
-`toList d` — every (key, value) pair as a list of tuples.
+`toList d` — every `( key, value )` pair as a list of tuples, in
+unspecified order.
 
-Key-type fidelity: when the inferred Ipe type is `Dict Int v`,
-the compiler routes through a typed kernel variant whose first
-tuple slot is `Int` (not `String`). Arithmetic on the returned
-keys works correctly — closes Limitation #10.
+For `Dict Int v`, the returned keys are genuine `Int` values (not
+strings); the compiler routes the call through a typed kernel variant
+that preserves the key type.
+
+```ipe
+Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ]
+    |> Dict.toList
+-- == [ ( "a", 1 ), ( "b", 2 ) ]   (order unspecified)
+```
 
 ## `fromList`
 
@@ -134,8 +224,19 @@ keys works correctly — closes Limitation #10.
 fromList : List ( k, v ) -> Dict k v
 ```
 
-`fromList pairs` — build a dictionary from a list of tuples.
-Later pairs overwrite earlier ones with the same key.
+`fromList pairs` — build a dictionary from a list of `( key, value )` tuples.
+
+When the same key appears more than once, the last binding wins.
+
+```ipe
+Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ]
+    |> Dict.get "a"
+--> Just 1
+
+Dict.fromList [ ( "a", 1 ), ( "a", 99 ) ]
+    |> Dict.get "a"
+--> Just 99
+```
 
 ## `map`
 
@@ -143,8 +244,14 @@ Later pairs overwrite earlier ones with the same key.
 map : (k -> v -> w) -> Dict k v -> Dict k w
 ```
 
-`map fn d` — apply `fn k v` to every entry, building a new
-dictionary with the transformed values.
+`map f d` — apply `f k v` to every entry, producing a new dictionary
+with the transformed values. Keys are unchanged.
+
+```ipe
+Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ]
+    |> Dict.map (\_ v -> v * 10)
+-- == Dict.fromList [ ( "a", 10 ), ( "b", 20 ) ]
+```
 
 ## `foldl`
 
@@ -152,7 +259,16 @@ dictionary with the transformed values.
 foldl : (k -> v -> a -> a) -> a -> Dict k v -> a
 ```
 
-`foldl fn acc d` — accumulate over every entry.
+`foldl f acc d` — accumulate over every `( key, value )` pair.
+
+The order of traversal is unspecified; use `toList` and `List.sortBy`
+if a stable order matters.
+
+```ipe
+Dict.fromList [ ( "a", 1 ), ( "b", 2 ), ( "c", 3 ) ]
+    |> Dict.foldl (\_ v total -> total + v) 0
+--> 6
+```
 
 ## `foldr`
 
@@ -160,7 +276,14 @@ foldl : (k -> v -> a -> a) -> a -> Dict k v -> a
 foldr : (k -> v -> a -> a) -> a -> Dict k v -> a
 ```
 
-`foldr fn acc d` — accumulate over every entry in descending key order.
+`foldr f acc d` — accumulate over every `( key, value )` pair in
+descending key order.
+
+```ipe
+Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ]
+    |> Dict.foldr (\k _ names -> k :: names) []
+-- == [ "b", "a" ]   (descending key order)
+```
 
 ## `union`
 
@@ -168,8 +291,15 @@ foldr : (k -> v -> a -> a) -> a -> Dict k v -> a
 union : Dict k v -> Dict k v -> Dict k v
 ```
 
-`union a b` — merge two dictionaries. `a`'s bindings win on
-key collision.
+`union a b` — merge two dictionaries; when a key appears in both,
+`a`'s value wins.
+
+```ipe
+Dict.union
+    (Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ])
+    (Dict.fromList [ ( "b", 99 ), ( "c", 3 ) ])
+-- == Dict.fromList [ ( "a", 1 ), ( "b", 2 ), ( "c", 3 ) ]
+```
 
 ## `filter`
 
@@ -177,7 +307,13 @@ key collision.
 filter : (k -> v -> Bool) -> Dict k v -> Dict k v
 ```
 
-`filter pred d` — keep only entries for which `pred k v` holds.
+`filter pred d` — keep only the entries for which `pred k v` is `True`.
+
+```ipe
+Dict.fromList [ ( "a", 1 ), ( "b", 2 ), ( "c", 3 ) ]
+    |> Dict.filter (\_ v -> v > 1)
+-- == Dict.fromList [ ( "b", 2 ), ( "c", 3 ) ]
+```
 
 ## `partition`
 
@@ -185,7 +321,14 @@ filter : (k -> v -> Bool) -> Dict k v -> Dict k v
 partition : (k -> v -> Bool) -> Dict k v -> ( Dict k v, Dict k v )
 ```
 
-`partition pred d` — split into (satisfying, not-satisfying).
+`partition pred d` — split into `( satisfying, not-satisfying )`.
+
+```ipe
+Dict.fromList [ ( "a", 1 ), ( "b", 2 ), ( "c", 3 ) ]
+    |> Dict.partition (\_ v -> v > 1)
+-- == ( Dict.fromList [ ( "b", 2 ), ( "c", 3 ) ]
+--    , Dict.fromList [ ( "a", 1 ) ] )
+```
 
 ## `intersect`
 
@@ -195,6 +338,15 @@ intersect : Dict k v -> Dict k v -> Dict k v
 
 `intersect a b` — keep `a`'s entries whose key also appears in `b`.
 
+Values come from `a`; `b` is used only for key membership.
+
+```ipe
+Dict.intersect
+    (Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ])
+    (Dict.fromList [ ( "b", 99 ), ( "c", 3 ) ])
+-- == Dict.fromList [ ( "b", 2 ) ]
+```
+
 ## `diff`
 
 ```ipe
@@ -202,4 +354,11 @@ diff : Dict k v -> Dict k v -> Dict k v
 ```
 
 `diff a b` — keep `a`'s entries whose key does NOT appear in `b`.
+
+```ipe
+Dict.diff
+    (Dict.fromList [ ( "a", 1 ), ( "b", 2 ) ])
+    (Dict.fromList [ ( "b", 99 ), ( "c", 3 ) ])
+-- == Dict.fromList [ ( "a", 1 ) ]
+```
 

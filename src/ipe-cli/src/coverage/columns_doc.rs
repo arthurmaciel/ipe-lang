@@ -329,47 +329,52 @@ fn synthesize_example_module(body: &str, source_module: &str, module_imports: &[
 
 /// Emit each example item as source the type-checker reaches.
 ///
-/// An item runs until a line carrying `-->` (an expression/result assertion): the
-/// expression is every buffered line up to that line plus the text before the
-/// arrow, so a multi-line expression is assembled into one `docCheckN = …`
-/// binding rather than each line orphaned at top level. A top-level declaration
-/// (a `name =`/`name :` at column zero) and any line that carries no arrow item
-/// after it is emitted verbatim, so a standalone helper decl stays a decl.
+/// An item is a run of expression lines, assembled into one `docCheckN = …`
+/// binding so a multi-line expression (a pipeline, a bracketed call) is one
+/// binding rather than each line orphaned at top level. The run ends at a
+/// boundary: an inline `-->` result annotation (its expression before the arrow
+/// closes the run), a standalone result annotation, a `--` comment line (a
+/// `-- == …` expected-result note), a blank line, a top-level declaration, or an
+/// import. A declaration and an import are emitted verbatim, so a standalone
+/// helper decl stays a decl; annotations and blank lines only close the run.
 fn emit_example_bindings(out: &mut String, body: &str) {
     let mut check_idx = 0usize;
     let mut pending: Vec<&str> = Vec::new();
 
-    let flush_verbatim = |out: &mut String, pending: &mut Vec<&str>| {
-        for buffered in pending.drain(..) {
-            out.push_str(buffered);
-            out.push('\n');
+    let flush_binding = |out: &mut String, check_idx: &mut usize, pending: &mut Vec<&str>| {
+        let expr = pending.join("\n");
+        pending.clear();
+        if expr.trim().is_empty() {
+            return;
+        }
+        *check_idx += 1;
+        let _ = writeln!(out, "docCheck{check_idx} =");
+        for expr_line in expr.lines() {
+            let _ = writeln!(out, "    {expr_line}");
         }
     };
 
     for line in body.lines() {
+        let trimmed = line.trim();
         if let Some(arrow) = line.find("-->") {
             let head = line[..arrow].trim_end();
             if !head.trim().is_empty() {
                 pending.push(head);
             }
-            let expr: String = pending.join("\n");
-            pending.clear();
-            if !expr.trim().is_empty() {
-                check_idx += 1;
-                let _ = writeln!(out, "docCheck{check_idx} =");
-                for expr_line in expr.lines() {
-                    let _ = writeln!(out, "    {expr_line}");
-                }
-            }
+            flush_binding(out, &mut check_idx, &mut pending);
+        } else if trimmed.is_empty() || trimmed.starts_with("--") {
+            // A blank line or a comment (a `-- == …` expected-result note) closes
+            // the current expression; it never extends it.
+            flush_binding(out, &mut check_idx, &mut pending);
         } else if is_top_level_decl(line) || line.starts_with("import ") {
-            flush_verbatim(out, &mut pending);
+            flush_binding(out, &mut check_idx, &mut pending);
             out.push_str(line);
             out.push('\n');
         } else {
             pending.push(line);
         }
     }
-    flush_verbatim(out, &mut pending);
+    flush_binding(out, &mut check_idx, &mut pending);
 }
 
 /// Whether a line opens a top-level declaration — a bare name at column zero
@@ -404,4 +409,5 @@ const FALLBACK_IMPORTS: &[(&str, &str)] = &[
     ("Io.", "import Ipe.Io as Io"),
     ("Debug.", "import Ipe.Debug as Debug"),
     ("Char.", "import Ipe.Char as Char"),
+    ("Tuple.", "import Ipe.Tuple as Tuple"),
 ];

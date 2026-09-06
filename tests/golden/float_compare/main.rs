@@ -204,20 +204,11 @@ pub fn main_bigger() -> bool {
 pub fn main_chosen() -> f64 {
     let _ipe_recursion_guard = crate::recursion_guard();
     static CELL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| (if crate::main_bigger() { 1500.0 } else { 0.02 }))
-        .clone()
+    CELL.get_or_init(|| (if crate::main_bigger() { 1500.0 } else { 0.02 })).clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
     let _ipe_recursion_guard = crate::recursion_guard();
     io_println(string_from_float(crate::main_chosen()))
-}
-
-// Ffi.kernel polyfill — should be unreachable in Rust target;
-// the codegen routes Ffi.kernel calls directly, but some construction
-// paths (e.g. inline let-bindings of Ffi.kernel) leave a residual call.
-#[allow(unreachable_code)]
-fn ffi_kernel_polyfill<T>(_name: String) -> T {
-    panic!("Ffi.kernel '{}' should not be called in Rust target", _name)
 }
 
 // List helpers

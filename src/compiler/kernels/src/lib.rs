@@ -3373,7 +3373,7 @@ impl StdlibKernel {
             ),
             // AEAD arity is 2 (key, plaintext/ciphertext): the Rust runtime
             // (`ipe_aes_gcm_encrypt(key, plaintext)` etc.) prepends/strips a
-            // fresh random nonce internally, so — unlike the the backend which
+            // fresh random nonce internally, so — unlike the backend which
             // took an explicit nonce/AAD arg — there is no third argument.
             Self::CryptoAesGcmEncrypt => d(
                 "Crypto",
@@ -6037,7 +6037,7 @@ impl StdlibKernel {
             arity: identity.arity,
             class: identity.class,
             runtime_fn: identity.emit,
-            capability: self.capability(),
+            capability: self.capability_classification(),
             runtime_module: self.required_runtime_module(),
             scheme: SchemeKey(self),
             shape: self.scheme_shape(),
@@ -9806,9 +9806,12 @@ impl StdlibKernel {
     /// The match is exhaustive with no `_` arm: a newly-added kernel cannot
     /// compile until it is classified here, so a program's inferred capability
     /// set cannot silently drift as the stdlib grows.
-    #[must_use]
+    ///
+    /// This is the single classifying match that populates [`KernelDef::capability`].
+    /// It is private: every consumer reads the capability off the [`KernelDef`]
+    /// row that [`Self::def`] returns, so the fact has exactly one public home.
     #[allow(clippy::too_many_lines)]
-    pub const fn capability(self) -> Option<Capability> {
+    const fn capability_classification(self) -> Option<Capability> {
         match self {
             Self::HttpGet
             | Self::HttpPost
@@ -12907,14 +12910,14 @@ mod tests {
         }
     }
 
-    /// Every wired kernel is callable through `capability()` (the exhaustive
-    /// match is total over the whole registry — no panic, no gap). The compile
-    /// error on a missing arm is the real drift guarantee; this asserts the
-    /// method is live over `ALL`.
+    /// Every wired kernel has a capability decision on its row (the exhaustive
+    /// classifying match is total over the whole registry — no panic, no gap).
+    /// The compile error on a missing arm is the real drift guarantee; this
+    /// asserts the fact is live over `ALL`.
     #[test]
     fn every_wired_kernel_has_a_capability_decision() {
         for k in StdlibKernel::ALL {
-            let _ = k.capability();
+            let _ = k.def().capability;
         }
     }
 
@@ -13025,109 +13028,52 @@ mod tests {
     #[test]
     fn effect_kernels_map_to_their_capability() {
         use super::{Capability, WebCapability};
-        assert_eq!(
-            StdlibKernel::HttpGet.capability(),
-            Some(Capability::Network)
-        );
-        assert_eq!(
-            StdlibKernel::ServerListen.capability(),
-            Some(Capability::Network)
-        );
-        assert_eq!(
-            StdlibKernel::EmailSend.capability(),
-            Some(Capability::Network)
-        );
-        assert_eq!(
-            StdlibKernel::FileReadFile.capability(),
-            Some(Capability::Filesystem)
-        );
-        assert_eq!(
-            StdlibKernel::DbQuery.capability(),
-            Some(Capability::Database)
-        );
-        assert_eq!(
-            StdlibKernel::DbDecString.capability(),
-            Some(Capability::Database)
-        );
-        assert_eq!(
-            StdlibKernel::SystemGetenv.capability(),
-            Some(Capability::Env)
-        );
-        assert_eq!(StdlibKernel::TimeNow.capability(), Some(Capability::Clock));
-        assert_eq!(
-            StdlibKernel::RandomInt.capability(),
-            Some(Capability::Random)
-        );
-        assert_eq!(StdlibKernel::UuidV4.capability(), Some(Capability::Random));
-        assert_eq!(StdlibKernel::StringToUpper.capability(), None);
-        assert_eq!(StdlibKernel::LogInfo.capability(), None);
-        assert_eq!(StdlibKernel::IoPrintln.capability(), None);
-        assert_eq!(StdlibKernel::DebugLog.capability(), None);
-        // `Env.public` reads the live process environment on native, so it
-        // discloses the env axis like `System.getenv` (wasm32 over-reports).
-        assert_eq!(StdlibKernel::EnvPublic.capability(), Some(Capability::Env));
-        // `Ui.widget` ships browser JS → the `custom-element` disclosure axis.
-        assert_eq!(
-            StdlibKernel::UiWidget.capability(),
-            Some(Capability::CustomElement)
-        );
-        // `Js.send` / `Js.subscribe` / `Js.request` exchange typed data with page
-        // JS → the `js-port:raw` uncharacterised-floor axis, inferred through this
-        // same SSOT (the kernel cannot see the hand-written JS's target Web API).
-        assert_eq!(
-            StdlibKernel::JsSend.capability(),
-            Some(Capability::JsPort(WebCapability::Raw))
-        );
-        assert_eq!(
-            StdlibKernel::JsSubscribe.capability(),
-            Some(Capability::JsPort(WebCapability::Raw))
-        );
-        assert_eq!(
-            StdlibKernel::JsRequest.capability(),
-            Some(Capability::JsPort(WebCapability::Raw))
-        );
-        // The session-stream ops exchange typed data with page JS through the same
-        // seal gate → the same `js-port:raw` uncharacterised-floor axis.
-        assert_eq!(
-            StdlibKernel::JsOpenSession.capability(),
-            Some(Capability::JsPort(WebCapability::Raw))
-        );
-        assert_eq!(
-            StdlibKernel::JsSessionFrames.capability(),
-            Some(Capability::JsPort(WebCapability::Raw))
-        );
-        assert_eq!(
-            StdlibKernel::JsSendToSession.capability(),
-            Some(Capability::JsPort(WebCapability::Raw))
-        );
-        assert_eq!(
-            StdlibKernel::JsCloseSession.capability(),
-            Some(Capability::JsPort(WebCapability::Raw))
-        );
-        // Auth kernels that take a live `Db` handle disclose the database axis, not
-        // pure — a library exposing register/login wrappers must report `database`.
-        assert_eq!(
-            StdlibKernel::AuthRegister.capability(),
-            Some(Capability::Database)
-        );
-        assert_eq!(
-            StdlibKernel::AuthLogin.capability(),
-            Some(Capability::Database)
-        );
-        assert_eq!(
-            StdlibKernel::AuthSetRole.capability(),
-            Some(Capability::Database)
-        );
-        // `Auth.signToken` mints a random `jti`; `Auth.verifyToken` reads the clock
-        // to validate `exp` / `nbf`.
-        assert_eq!(
-            StdlibKernel::AuthSignToken.capability(),
-            Some(Capability::Random)
-        );
-        assert_eq!(
-            StdlibKernel::AuthVerifyToken.capability(),
-            Some(Capability::Clock)
-        );
+        let js_raw = Some(Capability::JsPort(WebCapability::Raw));
+        // A representative kernel per family paired with the capability its `def()`
+        // row must project. Notes on the non-obvious rows:
+        //   - `Env.public` reads the live process environment on native, so it
+        //     discloses the env axis like `System.getenv` (wasm32 over-reports).
+        //   - `Ui.widget` ships browser JS → the `custom-element` axis.
+        //   - the `Js.*` / session-stream ops exchange typed data with page JS →
+        //     the `js-port:raw` uncharacterised-floor axis (the kernel cannot see
+        //     the hand-written JS's target Web API).
+        //   - Auth kernels over a live `Db` handle disclose `database`;
+        //     `Auth.signToken` mints a random `jti`, `Auth.verifyToken` reads the
+        //     clock for `exp`/`nbf`.
+        let cases: &[(StdlibKernel, Option<Capability>)] = &[
+            (StdlibKernel::HttpGet, Some(Capability::Network)),
+            (StdlibKernel::ServerListen, Some(Capability::Network)),
+            (StdlibKernel::EmailSend, Some(Capability::Network)),
+            (StdlibKernel::FileReadFile, Some(Capability::Filesystem)),
+            (StdlibKernel::DbQuery, Some(Capability::Database)),
+            (StdlibKernel::DbDecString, Some(Capability::Database)),
+            (StdlibKernel::SystemGetenv, Some(Capability::Env)),
+            (StdlibKernel::TimeNow, Some(Capability::Clock)),
+            (StdlibKernel::RandomInt, Some(Capability::Random)),
+            (StdlibKernel::UuidV4, Some(Capability::Random)),
+            (StdlibKernel::StringToUpper, None),
+            (StdlibKernel::LogInfo, None),
+            (StdlibKernel::IoPrintln, None),
+            (StdlibKernel::DebugLog, None),
+            (StdlibKernel::EnvPublic, Some(Capability::Env)),
+            (StdlibKernel::UiWidget, Some(Capability::CustomElement)),
+            (StdlibKernel::JsSend, js_raw),
+            (StdlibKernel::JsSubscribe, js_raw),
+            (StdlibKernel::JsRequest, js_raw),
+            (StdlibKernel::JsOpenSession, js_raw),
+            (StdlibKernel::JsSessionFrames, js_raw),
+            (StdlibKernel::JsSendToSession, js_raw),
+            (StdlibKernel::JsCloseSession, js_raw),
+            (StdlibKernel::AuthRegister, Some(Capability::Database)),
+            (StdlibKernel::AuthLogin, Some(Capability::Database)),
+            (StdlibKernel::AuthSetRole, Some(Capability::Database)),
+            (StdlibKernel::AuthSignToken, Some(Capability::Random)),
+            (StdlibKernel::AuthVerifyToken, Some(Capability::Clock)),
+        ];
+
+        for (kernel, expected) in cases {
+            assert_eq!(kernel.def().capability, *expected, "{kernel:?}");
+        }
     }
 
     /// Every `Ipe.Http` kernel (qualifier `"Http"`) emits a symbol that lives in

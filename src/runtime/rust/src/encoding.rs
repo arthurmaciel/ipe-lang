@@ -1,6 +1,5 @@
-//! Encoding kernels for Ipe.Encoding — base64 / url-percent / hex
-//! All fns mirror the `stdlib_extra.go` Encoding kernel behaviour
-//! and the Ipê-side signatures declared in `ipe-stdlib/Ipê/Core/Encoding.ipe`.
+//! Encoding kernels for Ipe.Encoding — base64 / url-percent / hex.
+//! Each fn backs an Ipê-side signature declared in `src/stdlib/Ipe/Encoding.ipe`.
 
 use super::IpeResult;
 

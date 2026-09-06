@@ -212,14 +212,6 @@ pub fn ipe_main() -> IpeTask<()> {
     io_println(string_from_int(crate::main_f(7i64)))
 }
 
-// Ffi.kernel polyfill — should be unreachable in Rust target;
-// the codegen routes Ffi.kernel calls directly, but some construction
-// paths (e.g. inline let-bindings of Ffi.kernel) leave a residual call.
-#[allow(unreachable_code)]
-fn ffi_kernel_polyfill<T>(_name: String) -> T {
-    panic!("Ffi.kernel '{}' should not be called in Rust target", _name)
-}
-
 // List helpers
 pub fn list_map_consume<T0, T1>(f: impl Fn(T0) -> T1, list: Vec<T0>) -> Vec<T1> {
     list.into_iter().map(f).collect()

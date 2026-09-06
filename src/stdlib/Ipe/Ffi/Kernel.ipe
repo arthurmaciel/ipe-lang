@@ -1,0 +1,61 @@
+-- | Ipe.Ffi.Kernel — the point-free primitive that aliases a stdlib member to a
+-- compiler kernel.
+--
+-- Mental model: a kernel is a compiler-provided primitive (a Rust function in
+-- the runtime) that no Ipê expression could implement — `String.length`,
+-- `Time.now`, `Crypto.sha256`. `Ipe.Ffi.Kernel` is the one narrow doorway
+-- through which an embedded-stdlib module names such a primitive:
+--
+-- ```ipe
+-- import Ipe.Ffi.Kernel as Kernel
+--
+-- length : String -> Int
+-- length =
+--     Kernel.kernel "String_length"
+-- ```
+--
+-- The body is point-free by construction: `Kernel.kernel "<Name>"` IS the
+-- member. The annotation above it is the whole contract — the compiler infers
+-- nothing from the body — so the declared type is exactly the kernel's type,
+-- checked against the kernel registry at compile time.
+--
+-- Trust boundary — this is a closed, compiler-only capability, not a user
+-- escape hatch:
+--
+--   * A `Kernel.kernel` call is accepted ONLY inside a driver-vouched embedded
+--     stdlib / FFI-interface module. The identical shape in ordinary user
+--     source is rejected fail-closed (IPE-N0042): user code can never mint a
+--     kernel, so it can never reach an unaudited runtime primitive by name.
+--   * The `"<Name>"` string is not free text: it must resolve to a registered
+--     kernel of the SAME type as the annotation, or the module fails to compile
+--     (IPE-N0028). There is no way to name a kernel that does not exist, and no
+--     way to give one the wrong type.
+--
+-- This module documents that surface for discoverability (`ipe doc`); it is a
+-- compiler-internal qualifier, so importing it in your own code does not open a
+-- kernel doorway — the origin gate above still applies.
+module Ipe.Ffi.Kernel exposing (kernel)
+
+
+import Ipe.Debug as Debug
+
+
+-- | `kernel "<Name>"` — the member aliased to the registered compiler kernel
+-- named `"<Name>"`.
+--
+-- The returned type is whatever the enclosing declaration's annotation says, so
+-- the call is written point-free under a full signature:
+--
+-- ```ipe
+-- fromInt : Int -> String
+-- fromInt =
+--     Kernel.kernel "String_fromInt"
+-- ```
+--
+-- `"<Name>"` is checked against the kernel registry: an unknown name, or a name
+-- whose registered type disagrees with the annotation, is a compile error. The
+-- call is legal only in a driver-vouched embedded-stdlib / FFI-interface module
+-- (IPE-N0042 otherwise), so it is never an ambient capability of user code.
+kernel : String -> a
+kernel name =
+    Debug.todo name

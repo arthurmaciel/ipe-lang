@@ -9,7 +9,7 @@
 //! * the UNIT VALUE [`Expr::Unit`] — Ipê's `()` literal — emits the Rust unit
 //!   expression `()`, and [`IrType::Unit`] renders as `()`.
 //!
-//! Behavioural-parity oracle: the the reference compiler at
+//! Behavioural-parity oracle: the reference compiler at
 //! `/home/arthur/Documentos/comp/ipe/out/ipe` compiles + runs the
 //! shape-equivalent program
 //!

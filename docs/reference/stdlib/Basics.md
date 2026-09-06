@@ -19,10 +19,31 @@ before it monomorphises. `toString` carries the `Stringify` bound;
 identity : a -> a
 ```
 
+`identity x` — return `x` unchanged.
+
+The canonical no-op transformation. Useful as a placeholder when a
+higher-order function requires a function argument but you want the
+value to pass through untouched.
+
+```ipe
+identity 42 --> 42
+identity "hello" --> "hello"
+```
+
 ## `always`
 
 ```ipe
 always : a -> b -> a
+```
+
+`always x y` — return `x`, ignoring `y`.
+
+Produces a function that always returns the same value regardless of
+its argument. Handy for filling in callbacks you want to suppress.
+
+```ipe
+always 5 "anything" --> 5
+List.map (always 0) [ 1, 2, 3 ] --> [ 0, 0, 0 ]
 ```
 
 ## `not`
@@ -31,10 +52,24 @@ always : a -> b -> a
 not : Bool -> Bool
 ```
 
+`not b` — boolean negation.
+
+```ipe
+not True --> False
+not False --> True
+```
+
 ## `fst`
 
 ```ipe
 fst : ( a, b ) -> a
+```
+
+`fst pair` — the first component of a 2-tuple.
+
+```ipe
+fst ( 1, 2 ) --> 1
+fst ( "hello", True ) --> "hello"
 ```
 
 ## `snd`
@@ -43,10 +78,29 @@ fst : ( a, b ) -> a
 snd : ( a, b ) -> b
 ```
 
+`snd pair` — the second component of a 2-tuple.
+
+```ipe
+snd ( 1, 2 ) --> 2
+snd ( "hello", True ) --> True
+```
+
 ## `clamp`
 
 ```ipe
 clamp : a -> a -> a -> a
+```
+
+`clamp lo hi x` — constrain `x` to the range `[lo, hi]`.
+
+Returns `lo` when `x < lo`, `hi` when `x > hi`, and `x` otherwise.
+Works on any comparable type: `Int`, `Float`, or `String`.
+
+```ipe
+clamp 0 100 42 --> 42
+clamp 0 100 (-5) --> 0
+clamp 0 100 200 --> 100
+clamp "a" "z" "m" --> "m"
 ```
 
 ## `toString`
@@ -55,10 +109,33 @@ clamp : a -> a -> a -> a
 toString : a -> String
 ```
 
+`toString x` — convert a `Stringify` value to its `String` representation.
+
+The result is the same text you would see in a debug output: numbers are
+decimal, `Bool` is `True`/`False`, and a `String` is returned unchanged.
+
+```ipe
+toString 42 --> "42"
+toString 3.14 --> "3.14"
+toString True --> "True"
+```
+
 ## `modBy`
 
 ```ipe
 modBy : Int -> Int -> Int
+```
+
+`modBy divisor dividend` — the modulo remainder, with the sign of the
+divisor.
+
+This follows the mathematical modulo convention (not C-style remainder):
+the result is always in the range `[0, abs divisor)` when `divisor > 0`.
+
+```ipe
+modBy 3 10 --> 1
+modBy 3 (-1) --> 2
+modBy 5 0 --> 0
 ```
 
 ## `negate`
@@ -67,10 +144,32 @@ modBy : Int -> Int -> Int
 negate : a -> a
 ```
 
+`negate x` — arithmetic negation.
+
+Works on any `Number` type (`Int` or `Float`).
+
+```ipe
+negate 5 --> -5
+negate (-3) --> 3
+negate 0 --> 0
+negate 2.5 --> -2.5
+```
+
 ## `abs`
 
 ```ipe
 abs : a -> a
+```
+
+`abs x` — absolute value.
+
+Works on any `Number` type. Returns the magnitude of `x` without its sign.
+
+```ipe
+abs (-7) --> 7
+abs 7 --> 7
+abs 0 --> 0
+abs (-3.14) --> 3.14
 ```
 
 ## `sqrt`
@@ -79,10 +178,32 @@ abs : a -> a
 sqrt : Float -> Float
 ```
 
+`sqrt x` — the non-negative square root of `x`.
+
+Returns `NaN` for negative inputs (follows IEEE 754). For integer square
+roots, convert with `round`, `floor`, or `ceil`.
+
+```ipe
+sqrt 9.0 --> 3.0
+sqrt 2.0 --> 1.4142135623730951
+sqrt 0.0 --> 0.0
+```
+
 ## `min`
 
 ```ipe
 min : a -> a -> a
+```
+
+`min a b` — the smaller of two comparable values.
+
+Works on any `Comparable` type: `Int`, `Float`, `String`, `Char`,
+or a `List`/tuple of comparables. Returns `a` when `a == b`.
+
+```ipe
+min 3 5 --> 3
+min 5 3 --> 3
+min "apple" "banana" --> "apple"
 ```
 
 ## `max`
@@ -91,9 +212,33 @@ min : a -> a -> a
 max : a -> a -> a
 ```
 
+`max a b` — the larger of two comparable values.
+
+Works on any `Comparable` type: `Int`, `Float`, `String`, `Char`,
+or a `List`/tuple of comparables. Returns `a` when `a == b`.
+
+```ipe
+max 3 5 --> 5
+max 5 3 --> 5
+max "apple" "banana" --> "banana"
+```
+
 ## `compare`
 
 ```ipe
 compare : a -> a -> Order
+```
+
+`compare a b` — the `Order` relation between two comparable values.
+
+Returns `LT` when `a < b`, `EQ` when `a == b`, and `GT` when `a > b`.
+`Order` is a built-in type with three constructors: `LT`, `EQ`, `GT`.
+Use it with `List.sortWith` to build custom orderings.
+
+```ipe
+compare 1 2 --> LT
+compare 2 2 --> EQ
+compare 3 2 --> GT
+compare "abc" "abd" --> LT
 ```
 

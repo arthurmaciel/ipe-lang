@@ -5,6 +5,23 @@ use crate::{
 use ipe_diagnostics::{NameError, Span};
 
 #[test]
+fn widget_tag_collision_from_distinct_paths_is_refused() {
+    let mut origins: BTreeMap<String, String> = BTreeMap::new();
+    // First path claims the tag.
+    assert!(record_widget_tag_origin(&mut origins, "ipe-ce-dead", "src/Widget/A.js").is_ok());
+    // The SAME path (a second view node of one widget) is the legitimate
+    // dedup case.
+    assert!(record_widget_tag_origin(&mut origins, "ipe-ce-dead", "src/Widget/A.js").is_ok());
+    // A DIFFERENT path colliding onto the same tag must fail closed.
+    let collision = record_widget_tag_origin(&mut origins, "ipe-ce-dead", "src/Widget/B.js")
+        .expect_err("a distinct path on an occupied tag must be refused");
+    assert_eq!(collision.existing_path, "src/Widget/A.js");
+    assert_eq!(collision.new_path, "src/Widget/B.js");
+    // A distinct tag is unaffected.
+    assert!(record_widget_tag_origin(&mut origins, "ipe-ce-beef", "src/Widget/B.js").is_ok());
+}
+
+#[test]
 fn bluegreen_defaults_on_when_no_env_set() {
     // No opt-out, no explicit choice → on (the new default).
     assert!(bluegreen_from_env_values(None, None));
@@ -2068,7 +2085,7 @@ fn audit_entry_rejects_when_all_versions_are_already_in_baseline() {
             "1.0.0",
             "https://x.invalid/mylib",
             "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-            "00",
+            "0000000000000000000000000000000000000000000000000000000000000000",
         )],
     );
     write_entry(
@@ -2078,7 +2095,7 @@ fn audit_entry_rejects_when_all_versions_are_already_in_baseline() {
             "1.0.0",
             "https://x.invalid/mylib",
             "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-            "00",
+            "0000000000000000000000000000000000000000000000000000000000000000",
         )],
     );
     let args: Vec<String> = [
@@ -2111,8 +2128,8 @@ fn audit_entry_rejects_when_all_versions_are_already_in_baseline() {
 fn audit_entry_rejects_rewriting_a_published_version() {
     let submitted_root = temp_dir_unique("ae-immutable-sub");
     let baseline_root = temp_dir_unique("ae-immutable-idx");
-    // Baseline published 1.0.0 with sha "00"; the submission keeps the same
-    // version number but rewrites its sha256 to "11".
+    // The baseline publishes 1.0.0 with one content hash; the submission
+    // keeps the same version number but rewrites its sha256 to another.
     write_entry(
         &baseline_root,
         "mylib",
@@ -2120,7 +2137,7 @@ fn audit_entry_rejects_rewriting_a_published_version() {
             "1.0.0",
             "https://x.invalid/mylib",
             "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-            "00",
+            "0000000000000000000000000000000000000000000000000000000000000000",
         )],
     );
     write_entry(
@@ -2130,7 +2147,7 @@ fn audit_entry_rejects_rewriting_a_published_version() {
             "1.0.0",
             "https://x.invalid/mylib",
             "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-            "11",
+            "1111111111111111111111111111111111111111111111111111111111111111",
         )],
     );
     let args: Vec<String> = [
@@ -2187,14 +2204,17 @@ fn audit_entry_rejects_on_hash_mismatch() {
         .expect("git rev-parse");
     let rev = String::from_utf8_lossy(&rev_out.stdout).trim().to_owned();
 
-    // Write an entry that points at this repo but with a deliberately wrong sha256.
+    // Write an entry that points at this repo but with a deliberately wrong
+    // sha256. It is well-formed (64 lowercase-hex chars) so it clears the
+    // parse gate and reaches the content-hash verification, which must then
+    // reject it as a mismatch.
     let entry_root = temp_dir_unique("ae-mismatch-entry");
     let pkgs = entry_root.join("packages");
     std::fs::create_dir_all(&pkgs).expect("packages dir");
     let entry_text = format!(
         "name = \"testlib\"\npublisher = \"tester\"\n\n[[version]]\n\
          version = \"1.0.0\"\nsource = \"{}\"\nrev = \"{rev}\"\n\
-         sha256 = \"000000000000000000000000000000000000000000000000000000000000wrong\"\n\
+         sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
          capabilities = []\n",
         repo.display()
     );

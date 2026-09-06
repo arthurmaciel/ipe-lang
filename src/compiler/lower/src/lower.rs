@@ -1,7 +1,7 @@
 //! The lowering core: a name-resolved [`canon::Module`] plus its
 //! [`SolvedTypes`] become a backend-agnostic [`ipe_ir::Program`].
 //!
-//! This is the narrowed port of the the compiler compiler's `Ipe.Build.Compile`
+//! This is the narrowed port of the reference compiler's `Ipe.Build.Compile`
 //! lowering walk and `Ipe.Build.LowerCtx`. Every step is total, and failures
 //! split into two channels — never a panic, never a guess:
 //!
@@ -101,16 +101,20 @@ fn bug(where_: &'static str, detail: impl Into<String>) -> Diagnostic {
 ///    every byte is `[a-z0-9-]`, none of it copied verbatim from source. An
 ///    attacker who controls the path string cannot steer the tag to an
 ///    arbitrary `customElements.define` name.
-/// 2. **Content-addressed + collision-free across distinct widgets.** A widget
-///    is one-to-one with its hook file, so hashing the file's in-project path
-///    yields a stable, per-widget-distinct identity. (WP5 folds the file's
-///    content hash into SRI serving; the tag identity itself is stable across
-///    that addition.)
+/// 2. **Content-addressed + stable per path.** A widget is one-to-one with its
+///    hook file, so hashing the file's in-project path yields a stable identity
+///    that two view nodes of one widget agree on. (WP5 folds the file's content
+///    hash into SRI serving; the tag identity itself is stable across that
+///    addition.)
 ///
 /// A plain FNV-1a-64 digest is used, not a cryptographic hash: the tag is an
 /// opaque identifier, not a security primitive — its safety comes from property
 /// 1 (no user input), not from collision resistance. Keeping it dependency-free
-/// avoids pulling a crypto crate into the lowerer.
+/// avoids pulling a crypto crate into the lowerer. FNV-1a-64 is NOT
+/// collision-free, so the manifest builder in `ipe-cli` must NOT assume distinct
+/// paths yield distinct tags: it fails the build closed when two distinct hook
+/// paths hash to one tag, rather than silently serving one widget's code under
+/// the other's element name.
 #[must_use]
 pub fn custom_element_tag(cleaned_path: &str) -> String {
     // FNV-1a-64 over the UTF-8 bytes of the sealed path.
@@ -1555,10 +1559,24 @@ fn canon_collect_free_locals(
     }
 }
 
-/// Does `pat` bind ANY symbol in `set`?
-#[inline]
+/// Does `pat` bind ANY symbol in `set`? A single walk of `pat` testing each
+/// bound name against `set`, rather than one full `pat` walk per set member.
 fn pat_binds_any_in(pat: &Pat, set: &BTreeSet<Symbol>) -> bool {
-    set.iter().any(|&s| pat_binds_symbol(pat, s))
+    match pat {
+        Pat::Var(s) => set.contains(s),
+        Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => false,
+        Pat::Alias(inner, s) => set.contains(s) || pat_binds_any_in(inner, set),
+        Pat::Ctor { args, .. } => args.iter().any(|p| pat_binds_any_in(p, set)),
+        Pat::Tuple(elems) => elems.iter().any(|p| pat_binds_any_in(p, set)),
+        Pat::Record(fields) => fields.iter().any(|(_, p)| pat_binds_any_in(p, set)),
+        Pat::Slice { prefix, rest } => {
+            prefix.iter().any(|p| pat_binds_any_in(p, set))
+                || rest.as_deref().is_some_and(|p| pat_binds_any_in(p, set))
+        }
+        // Every alternative of an or-pattern binds the same names, so it binds a
+        // set member iff any (equivalently, the first) alternative does.
+        Pat::Or(alts) => alts.iter().any(|p| pat_binds_any_in(p, set)),
+    }
 }
 
 /// Rewrite a lowered IR expression — the body of a `move` closure — to make
@@ -4203,16 +4221,6 @@ fn pat_binds_any(pat: &Pat, params: &BTreeSet<Symbol>) -> bool {
     params.iter().any(|p| pat_binds_symbol(pat, *p))
 }
 
-/// Is `*tv` a wildcard-`any` generic (a fresh `anyp_`-pooled binder minted by
-/// `split_typed_sig`, or the raw `any` symbol) rather than a genuine named tvar
-/// (`a`/`msg`)? The `IpeRow` bound is restricted to wildcards; the
-/// `Display` bound applies to BOTH.
-fn is_wildcard_any_tv(interner: &Interner, tv: Symbol) -> bool {
-    interner
-        .resolve(tv)
-        .is_some_and(|nm| nm == "any" || nm.starts_with("anyp_"))
-}
-
 /// Does `ty` mention the type variable `tv` anywhere in its structure?
 ///
 /// A total structural walk over every compound [`IrType`] carrier — the nullary
@@ -5275,8 +5283,8 @@ fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
 /// that does not flow into the kernel, so a truly-parametric pass-through stays
 /// unbounded and reusable. This precision is what forbids over-bounding.
 fn apply_kernel_type_param_bounds(
-    interner: &Interner,
     type_params: &mut [(Symbol, BoundSet)],
+    wildcard_any_syms: &BTreeSet<Symbol>,
     params: &[(Symbol, IrType)],
     ret: &IrType,
     body: &Expr,
@@ -5340,7 +5348,7 @@ fn apply_kernel_type_param_bounds(
     };
 
     for (tv, bounds) in type_params.iter_mut() {
-        let is_wildcard = is_wildcard_any_tv(interner, *tv);
+        let is_wildcard = wildcard_any_syms.contains(tv);
         // Resolve the VALUE binder(s) whose type is exactly `Generic(tv)`, then
         // ask each obligation's matcher whether the body applies its kernel to
         // that binder.
@@ -5850,12 +5858,6 @@ fn collect_local_derived_tvars(
     }
 }
 
-/// A callee's forwarding-relevant signature snapshot: its parameter types (in
-/// order) paired with its quantified type parameters and their bounds. Taken
-/// per fixpoint round in [`propagate_call_site_bounds`] so a caller can read a
-/// callee's obligations without aliasing the `&mut [Func]` it writes.
-type CalleeSig = (Vec<IrType>, Vec<(Symbol, BoundSet)>, IrType);
-
 /// Cross-call type-parameter-bound propagation, run to a fixpoint over all
 /// lowered funcs of a module.
 ///
@@ -5910,19 +5912,20 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
         .map(|(i, f)| (f.id.as_raw(), i))
         .collect();
 
+    // Each callee's param types and return type are IMMUTABLE across the fixpoint
+    // — only `type_params` bound bits change (below) — so snapshot the deep
+    // `IrType` trees once, not per round.
+    let sig_param_tys: Vec<Vec<IrType>> = funcs
+        .iter()
+        .map(|f| f.params.iter().map(|(_, t)| t.clone()).collect())
+        .collect();
+    let sig_rets: Vec<IrType> = funcs.iter().map(|f| f.ret.clone()).collect();
+
     loop {
-        // One snapshot of every callee's signature per fixpoint round. Cheap
-        // relative to the emit that follows, and it sidesteps borrow conflicts.
-        let sigs: Vec<CalleeSig> = funcs
-            .iter()
-            .map(|f| {
-                (
-                    f.params.iter().map(|(_, t)| t.clone()).collect(),
-                    f.type_params.clone(),
-                    f.ret.clone(),
-                )
-            })
-            .collect();
+        // Only the mutable half — each callee's `type_params` bounds — is
+        // re-snapshotted per round; the params/ret snapshots above are invariant.
+        let sig_tparams: Vec<Vec<(Symbol, BoundSet)>> =
+            funcs.iter().map(|f| f.type_params.clone()).collect();
 
         let mut changed = false;
         for caller in funcs.iter_mut() {
@@ -5956,9 +5959,11 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                 std::collections::HashMap::new();
 
             for (callee_id, args) in calls {
-                let Some((callee_param_tys, callee_tparams, _)) = by_id
-                    .get(&callee_id.as_raw())
-                    .and_then(|&callee_idx| sigs.get(callee_idx))
+                let Some(callee_idx) = by_id.get(&callee_id.as_raw()).copied() else {
+                    continue;
+                };
+                let (Some(callee_param_tys), Some(callee_tparams)) =
+                    (sig_param_tys.get(callee_idx), sig_tparams.get(callee_idx))
                 else {
                     continue;
                 };
@@ -6024,9 +6029,11 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
             let mut tail_callees: Vec<FuncId> = Vec::new();
             collect_tail_call_callees(&caller.body, &mut tail_callees);
             for callee_id in tail_callees {
-                let Some((_, callee_tparams, sig_ret)) = by_id
-                    .get(&callee_id.as_raw())
-                    .and_then(|&callee_idx| sigs.get(callee_idx))
+                let Some(callee_idx) = by_id.get(&callee_id.as_raw()).copied() else {
+                    continue;
+                };
+                let (Some(callee_tparams), Some(sig_ret)) =
+                    (sig_tparams.get(callee_idx), sig_rets.get(callee_idx))
                 else {
                     continue;
                 };
@@ -8371,6 +8378,7 @@ pub fn analyze_tail_recursion(self_id: FuncId, arity: usize, body: &Expr) -> Tai
 /// (never their `value`). Every other descent — critically `Lambda.body`, all
 /// call/apply arguments, operands, list/tuple/record/ctor elements, and both
 /// `TaskSeq` sub-terms — is non-tail.
+#[allow(clippy::too_many_lines)] // one exhaustive arm per `Expr` variant; the total walk must stay in one place
 fn count_self_calls(
     self_id: FuncId,
     arity: usize,
@@ -8430,6 +8438,15 @@ fn count_self_calls(
         Expr::Match(m) => {
             count_self_calls(self_id, arity, m.scrutinee(), false, tail, non_tail);
             for arm in m.arms() {
+                // A guard is evaluated before the body decides the match; a
+                // self-call inside it is never in tail position, so it must
+                // count as non-tail and disqualify TCO. Scanning the guard also
+                // keeps this soundness-load-bearing walk structurally total over
+                // `Arm` rather than trusting a guarantee from a distant
+                // desugaring pass.
+                if let Some(guard) = &arm.guard {
+                    count_self_calls(self_id, arity, guard, false, tail, non_tail);
+                }
                 count_self_calls(self_id, arity, &arm.body, in_tail, tail, non_tail);
             }
         }
@@ -8834,7 +8851,7 @@ impl KernelUsage {
     /// when the capability scan is active.
     fn record(&mut self, k: KernelFn) {
         if self.collect_caps
-            && let Some(cap) = k.capability()
+            && let Some(cap) = k.def().capability
         {
             self.caps.insert(cap);
         }
@@ -9075,7 +9092,7 @@ fn reachable_func_ids(
 fn collect_ir_type_refs(
     ty: &IrType,
     enums: &mut BTreeSet<(ModPath, Symbol)>,
-    records: &mut Vec<IrType>,
+    records: &mut std::collections::HashSet<IrType>,
 ) {
     // Drive the total, exhaustive [`ir_type_mentions`] traversal — which already
     // recurses into EVERY inner-type-carrying variant (`Cmd`/`Sub`/`Ui`/`Dict`/
@@ -9092,8 +9109,10 @@ fn collect_ir_type_refs(
             IrType::Enum { home, name, .. } => {
                 enums.insert((home.clone(), *name));
             }
-            IrType::Record(_) if !records.contains(t) => {
-                records.push(t.clone());
+            IrType::Record(_) => {
+                // A `HashSet` dedups in O(1) amortized; the reachability set is
+                // consumed only for membership, so insertion order is irrelevant.
+                records.insert(t.clone());
             }
             _ => {}
         }
@@ -9124,7 +9143,7 @@ fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &
     // ret / params / row-generic fields / body — the same surface
     // `func_type_mentions` scans, walked here to accumulate rather than test.
     let mut reachable_enums: BTreeSet<(ModPath, Symbol)> = BTreeSet::new();
-    let mut reachable_records: Vec<IrType> = Vec::new();
+    let mut reachable_records: std::collections::HashSet<IrType> = std::collections::HashSet::new();
     for f in funcs {
         collect_ir_type_refs(&f.ret, &mut reachable_enums, &mut reachable_records);
         for (_, t) in &f.params {
@@ -9178,8 +9197,7 @@ fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &
     types_ir.retain(|td| match td {
         TypeDef::Enum(e) => reachable_enums.contains(&(e.home.clone(), e.name)),
     });
-    let keep: std::collections::HashSet<&IrType> = reachable_records.iter().collect();
-    records.retain(|r| keep.contains(r));
+    records.retain(|r| reachable_records.contains(r));
 }
 
 /// Walk an [`Expr`] body, recording into the accumulators every user-enum
@@ -9203,7 +9221,7 @@ fn prune_dead_type_decls(funcs: &[Func], types_ir: &mut Vec<TypeDef>, records: &
 fn collect_body_ir_type_refs(
     expr: &Expr,
     enums: &mut BTreeSet<(ModPath, Symbol)>,
-    records: &mut Vec<IrType>,
+    records: &mut std::collections::HashSet<IrType>,
 ) {
     collect_node_head_type_refs(expr, enums, records);
     collect_child_ir_type_refs(expr, enums, records);
@@ -9217,7 +9235,7 @@ fn collect_body_ir_type_refs(
 fn collect_node_head_type_refs(
     expr: &Expr,
     enums: &mut BTreeSet<(ModPath, Symbol)>,
-    records: &mut Vec<IrType>,
+    records: &mut std::collections::HashSet<IrType>,
 ) {
     {
         let cell = std::cell::RefCell::new((&mut *enums, &mut *records));
@@ -9257,7 +9275,7 @@ fn collect_node_head_type_refs(
 fn collect_child_ir_type_refs(
     expr: &Expr,
     enums: &mut BTreeSet<(ModPath, Symbol)>,
-    records: &mut Vec<IrType>,
+    records: &mut std::collections::HashSet<IrType>,
 ) {
     // Recurse into every child expression (and match-arm patterns).
     match expr {
@@ -14206,20 +14224,6 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    /// Run the pass, producing the single-module program. On error, returns the
-    /// diagnostic paired with the `home` (module byte-namespace path) of the def
-    /// that produced it, so the driver attributes a lowering diagnostic to the
-    /// correct SOURCE FILE rather than guessing from a bare byte span (the
-    /// misattribution class: a Server.ipe lowering span numerically overlapping
-    /// a Main.ipe def range was blamed on Main.ipe). Mirrors
-    /// [`ipe_types::infer_attributed`]'s `(Diagnostic, Vec<Symbol>)` contract
-    /// exactly. A pre-/post-def error (union lowering, record collection, module
-    /// assembly) carries an EMPTY home — the driver falls back to the byte-offset
-    /// heuristic for those, as it already does for homeless type errors. Every
-    /// `?` below yields a bare `Diagnostic`; the per-def `lower_def` boundary is
-    /// the one site that attaches a non-empty home.
-    #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui_shape` are intentionally similar
-    #[allow(clippy::too_many_lines)] // the module-assembly tail is one linear pass
     /// Resolve a source [`Span`] to a human-readable `"<file>:<line>"` string
     /// using the source path and text threaded into the lowerer at construction
     /// time.  Falls back to `"<unknown>:0"` when source info is absent.
@@ -14241,7 +14245,20 @@ impl<'a> Lowerer<'a> {
         format!("{}:{}", self.source_path, line)
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Run the pass, producing the single-module program. On error, returns the
+    /// diagnostic paired with the `home` (module byte-namespace path) of the def
+    /// that produced it, so the driver attributes a lowering diagnostic to the
+    /// correct SOURCE FILE rather than guessing from a bare byte span (the
+    /// misattribution class: a Server.ipe lowering span numerically overlapping
+    /// a Main.ipe def range was blamed on Main.ipe). Mirrors
+    /// [`ipe_types::infer_attributed`]'s `(Diagnostic, Vec<Symbol>)` contract
+    /// exactly. A pre-/post-def error (union lowering, record collection, module
+    /// assembly) carries an EMPTY home — the driver falls back to the byte-offset
+    /// heuristic for those, as it already does for homeless type errors. Every
+    /// `?` below yields a bare `Diagnostic`; the per-def `lower_def` boundary is
+    /// the one site that attaches a non-empty home.
+    #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui_shape` are intentionally similar
+    #[allow(clippy::too_many_lines)] // the module-assembly tail is one linear pass
     pub fn run(self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
@@ -14907,7 +14924,7 @@ impl<'a> Lowerer<'a> {
         // `SqlValue` is a Prelude built-in (not a user `type`): its constructors
         // carry the empty canon home, so its nominal identity uses the empty
         // `ModPath` everywhere (EnumDef / IrType::Enum / Expr::Ctor). The backend's
-        // empty-home→entry-module naming fallback reproduces the the earlier Rust name
+        // empty-home→entry-module naming fallback reproduces the earlier Rust name
         // byte-for-byte.
         let sv = IrType::Enum {
             home: ModPath(Vec::new()),
@@ -15799,7 +15816,7 @@ impl<'a> Lowerer<'a> {
                 // is the body expression's solved type, which IS the concrete return
                 // type after solving.
                 //
-                // The analogous gate in the the compiler compiler: `Instantiate.fromAnnotation`
+                // The analogous gate in the reference compiler: `Instantiate.fromAnnotation`
                 // filters `"any"` out before treating free vars as polymorphic;
                 // `buildEnv` gives each `any` occurrence a fresh flex UV that the body
                 // constrains to a concrete type.  The Rust port must do the same.
@@ -16146,9 +16163,14 @@ impl<'a> Lowerer<'a> {
                 // IpeRow (`Db.get*`→`IpeRow`, wildcard-only) + Display
                 // (`toString`→`Display`, any tvar). See
                 // `apply_kernel_type_param_bounds`.
+                // The wildcard-only obligations (IpeRow) key on the minted
+                // per-occurrence `any` symbols — the single source of truth for
+                // which tvars are compiler-minted wildcards, so a legal user
+                // tvar can never be misclassified by a name-shape guess.
+                let wildcard_any_syms: BTreeSet<Symbol> = any_syms_minted.iter().copied().collect();
                 apply_kernel_type_param_bounds(
-                    self.interner,
                     &mut type_params,
+                    &wildcard_any_syms,
                     &params,
                     &ret,
                     &lowered_body,
@@ -16311,10 +16333,13 @@ impl<'a> Lowerer<'a> {
                     let mut type_params =
                         compute_type_params(quantified_syms, var_bounds, &params, &ret);
                     // General kernel→type-param-bound propagation (IpeRow +
-                    // Display) — see `apply_kernel_type_param_bounds`.
+                    // Display) — see `apply_kernel_type_param_bounds`. An
+                    // unannotated def's tvars are all genuine HM-quantified
+                    // vars; none are minted wildcard-`any`, so the wildcard set
+                    // is empty and the wildcard-only obligations never fire.
                     apply_kernel_type_param_bounds(
-                        self.interner,
                         &mut type_params,
+                        &BTreeSet::new(),
                         &params,
                         &ret,
                         &lowered_body,
@@ -27921,7 +27946,7 @@ impl<'a> Lowerer<'a> {
         // Redundancy demotion: IPE-T0011 is a WARNING, so arms AFTER
         // an irrefutable catch-all can now reach lowering. They are provably
         // unreachable — the exhaustiveness pass already warned — so DROP them
-        // here (semantics-preserving; the the reference compiles the same
+        // here (semantics-preserving; the reference compiles the same
         // shape). Without the truncation `Match::new_flat`'s structural
         // backstop sees a non-trailing catch-all and raises a CompilerBug.
         //
@@ -28152,7 +28177,7 @@ impl<'a> Lowerer<'a> {
     /// (WHOLE mode with neither flag, and non-str/non-list tuple columns) are
     /// gated: a dispatch-needing alias inner there is rejected at lowering
     /// with a clean diagnostic rather than reaching the backend, where it
-    /// would either double-move (the the earlier E0382 seal hole) or require a
+    /// would either double-move (the earlier E0382 seal hole) or require a
     /// by-reference arm redesign. Dispatch-free aliases pass through — the
     /// backend's `render_arm_pat_alias_safe` repairs those.
     fn gate_by_value_dispatch_needing_aliases(
@@ -30017,8 +30042,8 @@ mod tests {
         // `Decoder a`. Body is irrelevant to the type-walk obligation.
         let mut decoder_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut decoder_params,
+            &std::collections::BTreeSet::new(),
             &[(x, IrType::Generic(a))],
             &IrType::Decoder(Box::new(IrType::Generic(a))),
             &Expr::Unit,
@@ -30043,8 +30068,8 @@ mod tests {
         // (only its incoming `Clone`), proving the obligation cannot over-bound.
         let mut id_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut id_params,
+            &std::collections::BTreeSet::new(),
             &[(x, IrType::Generic(a))],
             &IrType::Generic(a),
             &Expr::Unit,
@@ -30053,6 +30078,117 @@ mod tests {
         assert!(
             !id_bound.has_send(),
             "a plain `a -> a` must NOT gain a `Send` bound (no over-bounding)"
+        );
+    }
+
+    /// A self-call hiding inside a match-arm GUARD is never in tail position, so
+    /// it must disqualify TCO: the guard-aware walk counts it as non-tail. Without
+    /// descending into guards a tail-body self-call would leave the function
+    /// classified `TailRecursive` while a plain self-`Call` survives inside the
+    /// emitted loop — a stranded non-tail call the rewrite must never permit.
+    #[test]
+    fn guard_self_call_disqualifies_tco() {
+        use ipe_ir::{Arm, CallPin, Callee, Expr, FuncId, Match, OnFormKind, Pat};
+
+        let self_id = FuncId(0);
+        let arity = 1;
+        let self_call = |arg: Expr| Expr::Call {
+            callee: Callee::Func(self_id),
+            args: vec![arg],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+
+        // A single catch-all arm whose BODY is a tail self-call (would be TCO) but
+        // whose GUARD also self-calls. The guard call is non-tail, so the whole
+        // function must be `NotTailRecursive`.
+        let guarded_arm = Arm {
+            pat: Pat::Wildcard,
+            body: self_call(Expr::Unit),
+            guard: Some(self_call(Expr::Unit)),
+        };
+        let guarded = Expr::Match(
+            Match::new_flat(Expr::Unit, vec![guarded_arm]).expect("catch-all arm is exhaustive"),
+        );
+        assert_eq!(
+            super::analyze_tail_recursion(self_id, arity, &guarded),
+            super::TailRecursion::NotTailRecursive,
+            "a self-call inside a match guard must disqualify TCO"
+        );
+
+        // Control: the SAME arm without the guard IS tail-recursive, proving the
+        // disqualification above comes from the guard, not the body.
+        let plain_arm = Arm::new(Pat::Wildcard, self_call(Expr::Unit));
+        let plain = Expr::Match(
+            Match::new_flat(Expr::Unit, vec![plain_arm]).expect("catch-all arm is exhaustive"),
+        );
+        assert_eq!(
+            super::analyze_tail_recursion(self_id, arity, &plain),
+            super::TailRecursion::TailRecursive,
+            "an unguarded tail self-call in a match arm is tail-recursive"
+        );
+    }
+
+    /// A user type variable whose NAME collides with the compiler's minted
+    /// wildcard-`any` prefix (`anyp_…`) is a genuine named tvar, not a minted
+    /// wildcard: since it is absent from the minted-symbol set, the wildcard-only
+    /// `IpeRow` obligation must NOT fire on it even when its value flows into a
+    /// `Db` row accessor. Classification is structural (minted-symbol membership),
+    /// never a name-shape guess.
+    #[test]
+    fn user_tvar_with_wildcard_name_prefix_is_not_wildcard() {
+        use ipe_ir::{CallPin, Callee, Expr, IrType, KernelFn, OnFormKind};
+
+        let mut interner = Interner::new();
+        // A legal user tvar that happens to spell the minted-pool prefix.
+        let user_tv = interner.intern("anyp_r").unwrap();
+        let field = interner.intern("field").unwrap();
+        let row = interner.intern("row").unwrap();
+
+        // Body `Db.unsafeGetString field row`: arg index 1 (`row`) is the tracked
+        // row param — the exact shape that obliges the `IpeRow` bound for a real
+        // wildcard.
+        let accessor_call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::DbGetString),
+            args: vec![Expr::Var(field), Expr::Var(row)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let mut type_params = vec![(user_tv, super::BoundSet::UNBOUNDED.with_clone())];
+        // Empty minted-wildcard set: `user_tv` is a genuine named tvar.
+        super::apply_kernel_type_param_bounds(
+            &mut type_params,
+            &std::collections::BTreeSet::new(),
+            &[(row, IrType::Generic(user_tv))],
+            &IrType::Unit,
+            &accessor_call,
+        );
+        let bound = type_params.first().map(|(_, b)| *b).unwrap_or_default();
+        assert!(
+            !bound.has_ipe_row(),
+            "a genuine user tvar named `anyp_r` must NOT receive the \
+             wildcard-only `IpeRow` bound, got: {bound:?}"
+        );
+
+        // Positive control: the SAME tvar, now present in the minted-wildcard
+        // set, DOES gain `IpeRow` — proving the accessor shape is genuinely
+        // IpeRow-obliging and the negative result above is the classification,
+        // not a dead matcher.
+        let mut minted_params = vec![(user_tv, super::BoundSet::UNBOUNDED.with_clone())];
+        let mut minted = std::collections::BTreeSet::new();
+        minted.insert(user_tv);
+        super::apply_kernel_type_param_bounds(
+            &mut minted_params,
+            &minted,
+            &[(row, IrType::Generic(user_tv))],
+            &IrType::Unit,
+            &accessor_call,
+        );
+        let minted_bound = minted_params.first().map(|(_, b)| *b).unwrap_or_default();
+        assert!(
+            minted_bound.has_ipe_row(),
+            "a minted wildcard-`any` tvar flowing into a `Db` row accessor \
+             must gain `IpeRow`, got: {minted_bound:?}"
         );
     }
 
@@ -30078,8 +30214,8 @@ mod tests {
         };
         let mut params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut params,
+            &std::collections::BTreeSet::new(),
             &[(fallback, IrType::Generic(a))],
             &IrType::Decoder(Box::new(IrType::Generic(a))),
             &succeed_call,
@@ -30096,8 +30232,8 @@ mod tests {
         // capture `a`, so the arg-0 matcher does not fire on it.
         let mut carry_params = vec![(a, super::BoundSet::UNBOUNDED.with_clone())];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut carry_params,
+            &std::collections::BTreeSet::new(),
             &[(fallback, IrType::Decoder(Box::new(IrType::Generic(a))))],
             &IrType::Decoder(Box::new(IrType::Generic(a))),
             &Expr::Var(fallback),
@@ -30144,8 +30280,8 @@ mod tests {
             (b, super::BoundSet::UNBOUNDED.with_clone()),
         ];
         super::apply_kernel_type_param_bounds(
-            &interner,
             &mut params,
+            &std::collections::BTreeSet::new(),
             &[
                 (default, IrType::Generic(a)),
                 (

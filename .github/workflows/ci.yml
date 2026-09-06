@@ -2,38 +2,48 @@ name: Build & test
 
 # GitHub-hosted runners (4-core/16GB, ephemeral) with matrix parallelism.
 #
-# Split by trigger so `main` is green by construction:
+# Split by trigger, so a PR runs only the cheap gate and `main` stays green by
+# construction (it advances only by the FF promotion of an already-fully-green
+# development HEAD):
 #   • PULL REQUEST — the FAST required gate (target: minutes). fmt, clippy,
-#     test (nextest unit/integration), cargo-deny (in security.yml), and
-#     seal-smoke (build+run ONE emitted example, a fast proxy for THE SEAL).
-#     A PR merges only when these pass; branch protection lists them as the
-#     required checks.
-#   • PUSH to main + nightly SCHEDULE — the SLOW non-blocking checks: the full
-#     6-shard e2e (THE SEAL in full), miri, and the runtime
-#     feature-combo / full-feature builds. These never gate a PR; they catch
-#     regressions post-merge and on the nightly dep/upstream-drift sweep.
+#     quick-check, test (nextest unit/integration), the docs-drift gates, the
+#     first-party check-floor + shapes build gate, and seal-smoke (build+run ONE
+#     emitted example, a fast proxy for THE SEAL). scripts/fast-gate.sh is the
+#     canonical runner for this set — a developer runs the same script locally
+#     that CI runs, so local == CI. The dev branch-protection ruleset lists these
+#     as the required checks.
+#   • PUSH to development + nightly SCHEDULE — the HEAVY non-blocking checks: the
+#     full 8-shard e2e (THE SEAL in full), the 5-way seal-slice, seal-modset
+#     (vendored), miri, the runtime feature-combo / full-feature builds, the
+#     explain/doc example gates, registry-admission, browser-e2e, and the Tier-2
+#     jails. These never gate a PR; they produce the main-required contexts the FF
+#     promotion waits on and catch regressions on the nightly dep/upstream sweep.
 #   • wasm-floor runs on PRs only when wasm-relevant paths change (paths: filter
 #     below), plus nightly — it is OFF the always-required PR path.
 #
-# Job-level `if:` keys on github.event_name: the slow jobs self-skip on
-# pull_request. E2E is sharded across 6 runners; sccache (GHA backend) keeps
+# Job-level `if:` keys on github.event_name: the heavy jobs self-skip on
+# pull_request. E2E is sharded across 8 runners; sccache (GHA backend) keeps
 # builds warm across runs.
 
 on:
   push:
     branches: [main, master, development]
   pull_request:
-  schedule:
-    - cron: '0 4 * * *'        # nightly full sweep (catches dep/upstream drift)
+  # The nightly heavy sweep is dispatched by nightly-full-gate.yml (a single
+  # scheduled entry point the rerun-failed-once orchestration can watch), which
+  # fires this workflow via workflow_dispatch on development HEAD. A dispatch is
+  # not a pull_request, so the heavy `if: github.event_name != 'pull_request'`
+  # jobs run under it exactly as they do on a development push.
   workflow_dispatch: {}
 
 concurrency:
   # On pull requests, cancel the previous run for the same ref so devs get fast
-  # feedback without wasting runner minutes. On direct pushes to the default
-  # branch (main) and on tags, never cancel: the slow Tier-2 jobs
-  # (windows-run-jail, windows-tier2, freebsd-tier2) only run on push and would
-  # be killed before they complete, making them permanently red.
-  group: ci-${{ github.ref }}
+  # feedback without wasting runner minutes. On direct pushes to development and
+  # on tags, never cancel: the heavy push-only jobs (the full e2e/seal-slice
+  # matrices, the Tier-2 jails) produce the main-required contexts the FF
+  # promotion waits on — killing an in-progress push run would leave those
+  # contexts un-green and stall promotion.
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -157,7 +167,8 @@ jobs:
     name: explain-page example gate (ADR 0059)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    # Heavy (builds ipe): off the cheap PR gate, runs on development push + nightly.
+    if: github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -182,7 +193,8 @@ jobs:
     name: doc-string example gate
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    # Heavy (builds ipe): off the cheap PR gate, runs on development push + nightly.
+    if: github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -198,6 +210,43 @@ jobs:
         env:
           IPE_BIN: ${{ github.workspace }}/target/release/ipe
         run: bash tools/scripts/check-doc-examples.sh
+
+  # Registry supply-chain admission gate: `ipe package publish` computes a correct
+  # index entry, the admission path (validate-entry / audit-entry) accepts a valid
+  # package and denies every malicious/malformed one (bad/absent sha256, unpinned
+  # rev, injection source, name-squat via a divergent source, an over-long version
+  # list, a rewritten immutable version, missing/malformed fields), and the
+  # resolver git-fetches + hash-verifies the pinned tree, rejecting a tamper. The
+  # test drives a real fixture index + source over local git — no real registry.
+  # IPE_E2E=1 arms the publish --dry-run subprocess case (it builds the package
+  # through the local audit gate).
+  registry-admission:
+    name: registry-admission
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    # Heavy (nextest --profile ci over the admission suite): off the cheap PR gate,
+    # runs on development push + nightly.
+    if: github.event_name != 'pull_request'
+    env:
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      # The fixtures shell out to `git init/commit/push`; give the runner an
+      # identity so those commands do not fail on a fresh machine.
+      - name: Configure git identity for fixtures
+        run: |
+          git config --global user.email "ci@ipe-lang.invalid"
+          git config --global user.name "ipe-ci"
+      - name: Registry publish + admission gate
+        env:
+          IPE_E2E: "1"
+        run: cargo nextest run -p ipe --test registry_admission --profile ci
 
   # Fast fail-fast compile check. A non-compiling PR turns this red in ~a minute
   # (no test link, no emit), so the expensive downstream jobs (seal-smoke and the
@@ -352,7 +401,7 @@ jobs:
   # take ONE small `cli` example end to end: `ipe build` → `cargo build` the
   # emitted crate → run it → assert its expected stdout. This proves the
   # emit→build→run floor holds on every PR in ~a couple of minutes, without the
-  # full 6-shard `e2e` (which stays on push/nightly below). A break here means
+  # full 8-shard `e2e` (which stays on push/nightly below). A break here means
   # the compiler emits a crate that no longer builds or runs — a hard stop.
   seal-smoke:
     runs-on: ubuntu-latest
@@ -535,11 +584,12 @@ jobs:
   runtime-full-features:
     runs-on: ubuntu-latest
     needs: changes
-    # Runs on code PRs (so it can be a required status check), plus push and
-    # nightly. `full` ⊇ `live`, so a default-only PR gate goes green while
-    # feature-gated regressions (e.g. a workspace-wide serde_json flag flip
-    # changing signed-token bytes) stay red here — that class must block a PR.
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    # Heavy (nextest --profile ci over the full-feature graph): off the cheap PR
+    # gate, runs on development push + nightly. `full` ⊇ `live`, so this is the one
+    # place feature-gated regressions (e.g. a workspace-wide serde_json flag flip
+    # changing signed-token bytes) are caught — a main-required context the FF
+    # promotion waits on.
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -548,41 +598,253 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
 
-  # Scoped deliberately, not exhaustively. All 5 targets are
-  # `#![forbid(unsafe_code)]`, so Miri's value here is catching UB triggered
-  # indirectly through a DEPENDENCY's own `unsafe` (interning/IR/union-find
-  # data structures are exactly the kind of code that leans on library
-  # invariants) plus Stacked/Tree-Borrows aliasing violations, not scanning
-  # for a nonexistent `unsafe` block of ours. `ipe_db` (the salsa
-  # incremental-compilation database — the other candidate with genuinely
-  # complex invariants, per docs/architecture/ci-and-hosting.md §3.5) was
-  # evaluated and rejected: `cargo +nightly miri test -p ipe_db` timed out
-  # after 280s on the FIRST of 3 tests (salsa's internal thread-pool/
-  # generation-counter machinery is impractical under Miri's interpretation
-  # overhead). `ipe`/`ipe_canon`/`ipe_parse`/`ipe_backend_rust`/`runtime` are
-  # out of scope for a different reason: they spawn real subprocesses / do
-  # real I/O (E2E tests, `ipe_backend_rust::project`'s `rustfmt` spawn, the
-  # runtime's HTTP/DB/websocket kernels), which Miri can't interpret at all —
-  # `posix_spawn` is an unsupported foreign call under Miri.
-  miri:
+  # Forward-guard over EVERY miri-interpretable crate — defense in depth. No
+  # workspace crate holds `unsafe` today (the sole sanctioned block is a runtime
+  # `prctl`, excluded below), so miri's value is catching UB the moment a future
+  # `unsafe` addition — ours or a dependency's own `unsafe` (interning, IR,
+  # union-find, salsa-style structures lean on library invariants) — introduces
+  # a Stacked/Tree-Borrows aliasing violation. Vetting the whole pure-logic
+  # surface, not a hand-picked five, means any such regression is caught wherever
+  # it lands. FFI / syscall / process-spawn crates are the sanitizers' job, not
+  # miri's: `posix_spawn`, network, and DB foreign calls abort as
+  # "unsupported foreign call" under miri, so `ipe` (spawns cargo/ipe),
+  # `ipe-runtime-rust`, `ipe_sandbox`, `ipe_ffi`, and the lsp/wasm IO crates are
+  # out of scope.
+  #
+  # The included set was classified empirically (a small nextest partition per
+  # crate under miri): every crate below interprets cleanly. `ipe_db` is the one
+  # candidate EXCLUDED for cost, not capability — salsa's thread-pool /
+  # generation-counter machinery makes nearly every db test exceed the per-test
+  # ceiling under miri's interpretation overhead, and sharding cannot rescue a
+  # single test that alone overruns. A handful of individual tests inside
+  # otherwise-interpretable crates are likewise long-poles (full-universe
+  # feature-closure walks, whole-stdlib canonicalization, an env-var doc scan);
+  # they are filtered out per-test with `not test(...)` so the crate's remaining
+  # cases still get miri coverage.
+  #
+  # Sharded across nextest partitions so each shard interprets a slice of the
+  # combined test set and stays well under an hour despite miri's 10-50x
+  # slowdown; more crates than the original five means more shards. The driver
+  # `cargo miri nextest run` needs BOTH the miri component AND nextest on the
+  # runner, so this installs nextest like every other nextest-driven job.
+  miri-shard:
+    name: miri-shard (${{ matrix.shard }}/20)
     runs-on: ubuntu-latest
     # Fail-fast: don't start the slow miri interpretation if the workspace does
     # not even compile (quick-check is red). Only reachable off the PR path.
     needs: [changes, quick-check]
     if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: miri
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +nightly miri test -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics
+      # Per-test exclusions: each named test alone overruns the miri per-test
+      # ceiling in its (otherwise interpretable) crate, so sharding can't help it
+      # — filtered out so the crate's other tests still run under miri.
+      #   composed_full_universe_is_closed — full runtime feature-closure walk
+      #   def_is_none_inside_string        — heavy annotate string scan
+      #   all_runtime_env_vars_are_documented — whole env-var doc scan
+      #   *_alias_* / unknown_stdlib_alias — whole-stdlib canonicalization
+      - run: >-
+          cargo +nightly miri nextest run
+          -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics
+          -p ipe_syntax -p ipe_path_core -p ipe_parse -p ipe_lint -p ipe_stdlib
+          -p ipe_backend -p ipe_kernels -p ipe_annotate -p ipe_docs
+          -p ipe_canon -p ipe_backend_rust
+          -E 'not (test(composed_full_universe_is_closed)
+              or test(def_is_none_inside_string)
+              or test(all_runtime_env_vars_are_documented)
+              or test(unknown_stdlib_alias_stays_fail_closed)
+              or test(record_alias_ctor_field_order_is_declared_not_alphabetical)
+              or test(exposed_record_alias_via_list_exports_its_ctor_value))'
+          --partition count:${{ matrix.shard }}/20
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
 
+  # Stable aggregation gate for the sharded miri matrix. The `miri-shard` matrix
+  # expands to one shard-named job per partition, so no single shard name is a
+  # durable required-check target and a `fail-fast: false` shard failure is easy
+  # to miss. This job depends on every shard and is GREEN only when all passed
+  # — one stable context name (`miri`) branch protection can require so a UB /
+  # aliasing regression blocks a landing. The `always()` guard makes a
+  # skipped/failed/cancelled shard a FAILURE here, never a false green; a
+  # legitimate skip (the matrix self-skips on pull_request) passes vacuously so
+  # the PR path is unaffected. A bare, stable `name` so the required-check
+  # context is exactly `miri` (branch protection matches the check name
+  # literally; a parenthetical would make the required-context string brittle).
+  miri:
+    name: miri
+    runs-on: ubuntu-latest
+    needs: miri-shard
+    if: always()
+    steps:
+      - name: Gate on every miri shard result
+        run: |
+          result='${{ needs.miri-shard.result }}'
+          case "$result" in
+            success)
+              echo "miri: every shard passed — no UB/aliasing violation."
+              ;;
+            skipped)
+              # The miri-shard matrix self-skips on pull_request (off the cheap
+              # PR gate); nothing to aggregate, so this passes vacuously.
+              echo "miri: shards skipped for this event — vacuously green."
+              ;;
+            *)
+              echo "miri FAILED: shards result=$result (a UB/aliasing regression or an infra failure)" >&2
+              exit 1
+              ;;
+          esac
+
+  # ── Sanitizers (the UB net) ─────────────────────────────────────────────────
+  # Miri is a forward-guard for the SAFE, `#![forbid(unsafe_code)]` compiler
+  # crates (it catches UB reached indirectly through a dependency's own `unsafe`
+  # + aliasing violations). It CANNOT be the UB net for the project's genuine
+  # first-party `unsafe`: the sandbox's libc-syscall glue (`memfd_create`,
+  # `fcntl`/`F_ADD_SEALS`, `lseek`, `OwnedFd::from_raw_fd`, the seccomp memfd) and
+  # the FFI boundary — Miri cannot interpret those foreign calls at all. ASAN and
+  # TSAN compile+RUN the real code, so they are the net that covers it.
+  #
+  # ASAN (AddressSanitizer + LeakSanitizer): memory-safety UB — out-of-bounds,
+  # use-after-free, double-free, leaks — in the real crates and, crucially, in
+  # any `unsafe` reached through their DEPENDENCY tree. `-Zbuild-std` rebuilds
+  # std/alloc instrumented so allocations inside std are covered too. Nightly is
+  # required for `-Zsanitizer` + `-Zbuild-std`.
+  #
+  # SCOPE is deliberate, not `--workspace`. The `ipe-cli` golden/seal/e2e binaries
+  # cargo-BUILD emitted Ipê projects (THE SEAL) — instrumenting a spawned `cargo`
+  # is meaningless and enormous, so they are out of scope by construction (this
+  # job never selects them). The selected crates are the ones carrying (or
+  # depending on) real `unsafe`: `ipe_sandbox` (the syscall jail glue),
+  # `ipe_ffi` (the FFI boundary), `ipe-runtime-rust` (the emitted-into runtime),
+  # plus the interning/IR/types/lower/diagnostics libs whose dependency unsafe
+  # Miri already watches — here re-checked at RUNTIME.
+  #
+  # EXCLUSIONS (`-E`): two binary classes inside the selected crates are dropped.
+  #   - `run_jail_e2e` / `build_jail_e2e`: REAL bwrap+seccomp jail runs. ASAN is
+  #     incompatible with the seccomp filter (the BPF denies the extra syscalls
+  #     ASAN's runtime itself issues), so an instrumented jailed child aborts.
+  #     These are already `IPE_E2E=1`-gated and self-skip here (this job never
+  #     sets it), but excluding them by name keeps ASAN from even building the
+  #     jail-spawn harness.
+  #   - `*_seal` (the `ipe_ffi` define-transparency seals): each spawns a real
+  #     `cargo build` of the emitted FFI crate — same meaningless-to-instrument
+  #     reason as the SEAL goldens.
+  #
+  # HONEST COVERAGE BOUNDARY. The sandbox's syscall `unsafe` (memfd/lseek/fcntl)
+  # is reachable ONLY through the `IPE_E2E=1` bwrap+seccomp jail path — there is
+  # no non-jail unit test that drives it — and ASAN cannot run under that jail.
+  # So ASAN does NOT exercise the sandbox syscall `unsafe` directly; it nets the
+  # sandbox crate's pure logic + the FFI/runtime/library-dependency `unsafe`.
+  # The bwrap+seccomp jail's own UB is proven instead by the Tier-2 jail jobs
+  # (which run the real filter, un-instrumented). This is a known, accepted gap,
+  # not an oversight.
+  #
+  # ASAN_OPTIONS: `detect_leaks=1` turns on LSAN; `abort_on_error=1` makes the
+  # first report fail the shard hard. No leak suppressions are currently needed;
+  # if a benign third-party leak surfaces, add a checked-in `*.supp` referenced
+  # via `LSAN_OPTIONS=suppressions=…` and document the entry here.
+  #
+  # Report-style, not a required gate: off the PR path (heavy), on push/nightly.
+  # Sharded 1/6 via nextest partitioning; `asan-all` is the single stable context
+  # (mirrors `e2e-all`) that branch protection could require once these are proven
+  # green — deliberately NOT added to the required ruleset yet.
+  asan:
+    name: asan (${{ matrix.shard }}/6)
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: github.event_name != 'pull_request'   # heavy → push/nightly only
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      RUSTFLAGS: -Zsanitizer=address
+      RUSTDOCFLAGS: -Zsanitizer=address
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: ASAN shard ${{ matrix.shard }}/6 (build-std, instrumented std)
+        run: |
+          cargo +nightly nextest run \
+            -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics \
+            -p ipe_sandbox -p ipe_ffi -p ipe-runtime-rust \
+            -Zbuild-std --target x86_64-unknown-linux-gnu \
+            --profile ci --no-fail-fast \
+            --partition count:${{ matrix.shard }}/6 \
+            -E 'not (binary(run_jail_e2e) | binary(build_jail_e2e) | binary(/_seal$/))'
+
+  # Stable aggregation gate for the sharded ASAN run (mirrors `e2e-all`): green
+  # only when every shard passed, and `always()` makes a skipped/failed/cancelled
+  # shard a FAILURE (never a false green), while the PR self-skip passes vacuously.
+  asan-all:
+    name: asan-all
+    runs-on: ubuntu-latest
+    needs: asan
+    if: always()
+    steps:
+      - name: Gate on every asan shard result
+        run: |
+          result='${{ needs.asan.result }}'
+          case "$result" in
+            success) echo "asan-all: every shard passed — no memory UB detected." ;;
+            skipped) echo "asan-all: asan shards skipped for this event — vacuously green." ;;
+            *) echo "asan-all FAILED: asan shards result=$result (a sanitizer report or infra failure)" >&2; exit 1 ;;
+          esac
+
+  # TSAN (ThreadSanitizer): data races / concurrency UB. Focused on the
+  # concurrency-bearing crates — `ipe-runtime-rust` (the async task runtime,
+  # server, websocket client, TEA loop all spawn threads/tokio tasks) and
+  # `ipe_sandbox` (the jail's parallel stdout/stderr drain threads). Same nightly
+  # + `-Zbuild-std` shape and the same jail/seal exclusion as ASAN (a seccomp'd
+  # or cargo-spawning child is as hostile to TSAN as to ASAN). Small enough to
+  # run as a single job, not sharded. Report-style, off the PR path.
+  tsan:
+    name: tsan
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: github.event_name != 'pull_request'
+    env:
+      RUSTFLAGS: -Zsanitizer=thread
+      RUSTDOCFLAGS: -Zsanitizer=thread
+      # TSAN's own reports; `halt_on_error=1` fails on the first race.
+      TSAN_OPTIONS: halt_on_error=1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: TSAN (build-std, concurrency-bearing crates)
+        run: |
+          cargo +nightly nextest run \
+            -p ipe-runtime-rust -p ipe_sandbox \
+            -Zbuild-std --target x86_64-unknown-linux-gnu \
+            --profile ci --no-fail-fast \
+            -E 'not (binary(run_jail_e2e) | binary(build_jail_e2e) | binary(/_seal$/))'
+
+  # MSAN (MemorySanitizer — reads of uninitialized memory) is deliberately NOT
+  # wired: it demands EVERY dependency AND std be instrumented, and any
+  # un-instrumented FFI/syscall boundary (exactly this project's sandbox/ffi
+  # surface) produces false positives — not worth it here; ASAN+TSAN+Miri cover
+  # the real risk.
+
   # E2E builds+runs the emitted Rust per golden (THE SEAL — the soundness floor:
   # every `ipe`-exit-0 golden's emitted Cargo project must `cargo build` + run).
-  # Sharded across 6 runners via nextest partitioning. Each golden self-anchors
+  # Sharded across 8 runners via nextest partitioning. Each golden self-anchors
   # its behaviour against a captured `expected.txt` (the Ipê-native regression
   # anchor). The cached expected_go.txt / oracle.meta Go oracle is retired.
   #
@@ -612,7 +874,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -646,7 +908,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev
-      - name: E2E shard ${{ matrix.shard }}/6 (THE SEAL — build+run emitted Rust)
+      - name: E2E shard ${{ matrix.shard }}/8 (THE SEAL — build+run emitted Rust)
         env:
           IPE_E2E: "1"
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -660,12 +922,12 @@ jobs:
           # ONE target, so the dep tree compiles once and every later golden
           # only links its own `main.rs`.
           IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
-        run: cargo nextest run --workspace --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/6
+        run: cargo nextest run --workspace --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/8
 
-  # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to six
+  # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to eight
   # shard-named jobs, so no single shard name is a durable required-check target
   # and a `fail-fast: false` shard failure is easy to miss. This job depends on
-  # every shard and is GREEN only when all six passed — one stable context name
+  # every shard and is GREEN only when all eight passed — one stable context name
   # (`e2e-all`) branch protection can require so a SEAL regression blocks a
   # landing. The `always()` guard makes a skipped/failed/cancelled shard a
   # FAILURE here, never a false green; a legitimate skip (the `e2e` matrix itself
@@ -697,28 +959,25 @@ jobs:
               ;;
           esac
 
-  # ── PR anti-rot SEAL slice ────────────────────────────────────────────────
-  # The full `e2e` matrix (THE SEAL — build+run every emitted golden) runs only
-  # on push, so a golden or seal that an `ipe`-accepted program no
-  # longer cargo-builds could merge green and only redden main after the fact.
-  # This job runs a representative 1/6 slice of THE SEAL on every code PR: the
-  # `seal_modset` binary (the compact per-shape emit→build proof) plus a 1/6
-  # partition of the golden E2E suite, split across three parallel sub-shards so
-  # the slice's wall-clock stays low WITHOUT dropping coverage. That is enough
-  # surface to catch an emit/const-fold/golden regression pre-merge (the classes
-  # this guard exists for) — the full 6-shard matrix + tier2 jails stay on push
-  # where wall-clock is off the developer's critical path. Change-gated on `code`;
-  # always runs on push/nightly. The `seal-slice` aggregation job below is the
+  # ── SEAL slice ────────────────────────────────────────────────────────────
+  # A representative 1/6 slice of THE SEAL: the `seal_modset` binary (the compact
+  # per-shape emit→build proof) plus a 1/6 partition of the golden E2E suite,
+  # split across five parallel sub-shards so the slice's wall-clock stays low
+  # WITHOUT dropping coverage. Enough surface to catch an emit/const-fold/golden
+  # regression (the classes this guard exists for); the full 8-shard `e2e` matrix
+  # + tier2 jails carry the exhaustive proof. Off the cheap PR gate — runs on
+  # development push + nightly, producing the main-required `seal-slice` context
+  # the FF promotion waits on. The `seal-slice` aggregation job below is the
   # single stable status: green only when every sub-shard passed.
   seal-slice-shard:
-    name: seal-slice-shard (${{ matrix.shard }}/3)
+    name: seal-slice-shard (${{ matrix.shard }}/5)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
@@ -742,10 +1001,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev
-      # Sub-shards 1..3 of an 18-way partition cover the same 1/6 surface as one
-      # 1/6 shard, three runners wide. `seal_modset` (shape emit→build) is
+      # Sub-shards 1..5 of a 30-way partition cover the same 1/6 surface as one
+      # 1/6 shard, five runners wide. `seal_modset` (shape emit→build) is
       # shard-independent, so it runs once, on sub-shard 1.
-      - name: SEAL slice (seal_modset on shard 1 + golden e2e sub-shard ${{ matrix.shard }}/18)
+      - name: SEAL slice (seal_modset on shard 1 + golden e2e sub-shard ${{ matrix.shard }}/30)
         env:
           IPE_E2E: "1"
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -754,14 +1013,14 @@ jobs:
           if [ "${{ matrix.shard }}" = "1" ]; then
             cargo nextest run -p ipe -E 'binary(seal_modset)' --profile ci
           fi
-          cargo nextest run --workspace --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/18 \
+          cargo nextest run --workspace --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/30 \
             -E 'not test(build_run_column_over_a_representative_slice)'
 
-  # Stable aggregation status for the sharded PR SEAL slice. The matrix expands to
-  # three sub-shard-named jobs, so no single sub-shard name is a durable target;
+  # Stable aggregation status for the sharded SEAL slice. The matrix expands to
+  # five sub-shard-named jobs, so no single sub-shard name is a durable target;
   # this job is GREEN only when every sub-shard passed. The `always()` guard makes
   # a skipped/failed/cancelled sub-shard a FAILURE here, while a legitimate
-  # docs-only skip (the change gate self-skips the sub-shards) passes vacuously.
+  # PR-event skip (the sub-shards self-skip off the cheap PR gate) passes vacuously.
   seal-slice:
     name: seal-slice
     runs-on: ubuntu-latest

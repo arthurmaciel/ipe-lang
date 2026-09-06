@@ -1108,7 +1108,12 @@ fn run_inner(
                     }
                 };
 
-                let desired: BTreeMap<Vec<String>, (String, ipe_db::ModuleOrigin)> = sources
+                // Borrow each module's text: `sync_source_root` clones only at
+                // the real mutation points (a new input, or an actually-changed
+                // set), so a settled batch that touches one file no longer copies
+                // every module's source (including the ~130-module injected
+                // stdlib closure) into a map that is immediately discarded.
+                let desired: BTreeMap<Vec<String>, (&str, ipe_db::ModuleOrigin)> = sources
                     .iter()
                     .map(|(p, (_, text))| {
                         let origin = if injected.contains(p) {
@@ -1118,7 +1123,7 @@ fn run_inner(
                         } else {
                             ipe_db::ModuleOrigin::User
                         };
-                        (p.clone(), (text.clone(), origin))
+                        (p.clone(), (text.as_str(), origin))
                     })
                     .collect();
 
@@ -1284,7 +1289,20 @@ fn run_inner(
                             running_emitted.as_ref(),
                         ) {
                             match crate::hot_classify::classify(running, &emitted) {
-                                crate::hot_classify::Classification::HotSwappable(hot) => {
+                                // An EMPTY hot-swap means the two emits were
+                                // byte-identical — a no-op re-emit (a duplicate
+                                // filesystem event on an already-current source, or
+                                // a whitespace-only edit). It applies nothing to the
+                                // running app, so it must NOT short-circuit the
+                                // rebuild: this cycle already killed any in-flight
+                                // cargo build when its batch settled, and taking the
+                                // fast path here would `continue` without restarting
+                                // it — losing the pending rebuild. Fall through to
+                                // the normal build path instead, which re-launches
+                                // the (idempotent) rebuild.
+                                crate::hot_classify::Classification::HotSwappable(hot)
+                                    if !hot.is_empty() =>
+                                {
                                     // The running binary is unchanged, so
                                     // `running_emitted` stays the baseline. Push
                                     // each edited view's appearance patch AND each
@@ -1351,7 +1369,11 @@ fn run_inner(
                                         continue;
                                     }
                                 }
-                                crate::hot_classify::Classification::Logic => {
+                                // An empty hot-swap (byte-identical re-emit, guarded
+                                // out of the fast path above) and a `Logic` edit both
+                                // fall through to the normal rebuild below.
+                                crate::hot_classify::Classification::HotSwappable(_)
+                                | crate::hot_classify::Classification::Logic => {
                                     // Recompile below.
                                 }
                             }

@@ -46,7 +46,12 @@ are enforced by the type-checker at the call site.
 isEmpty : List a -> Bool
 ```
 
-`isEmpty list` — `True` if the list has no elements.
+`isEmpty list` — `True` when the list has no elements.
+
+```ipe
+isEmpty [] --> True
+isEmpty [ 1 ] --> False
+```
 
 ## `length`
 
@@ -56,13 +61,25 @@ length : List a -> Int
 
 `length list` — the number of elements in the list.
 
+```ipe
+length [] --> 0
+length [ 1, 2, 3 ] --> 3
+length (repeat 10 "x") --> 10
+```
+
 ## `head`
 
 ```ipe
 head : List a -> Maybe a
 ```
 
-`head list` — `Just` the first element, or `Nothing` if empty.
+`head list` — `Just` the first element, or `Nothing` when the list is empty.
+
+```ipe
+head [ 1, 2, 3 ] --> Just 1
+head [] --> Nothing
+head [ "only" ] --> Just "only"
+```
 
 ## `tail`
 
@@ -70,7 +87,14 @@ head : List a -> Maybe a
 tail : List a -> Maybe (List a)
 ```
 
-`tail list` — `Just` the list without its first element, or `Nothing` if empty.
+`tail list` — `Just` the list without its first element, or `Nothing` when
+the list is empty.
+
+```ipe
+tail [ 1, 2, 3 ] --> Just [ 2, 3 ]
+tail [ 1 ] --> Just []
+tail [] --> Nothing
+```
 
 ## `cons`
 
@@ -78,7 +102,14 @@ tail : List a -> Maybe (List a)
 cons : a -> List a -> List a
 ```
 
-`cons x list` — prepend `x` to the list; the named form of `x :: list`.
+`cons x list` — prepend `x` to the list.
+
+The named form of `x :: list`.
+
+```ipe
+cons 0 [ 1, 2, 3 ] --> [ 0, 1, 2, 3 ]
+cons 1 [] --> [ 1 ]
+```
 
 ## `singleton`
 
@@ -86,7 +117,12 @@ cons : a -> List a -> List a
 singleton : a -> List a
 ```
 
-`singleton x` — the one-element list `[ x ]`.
+`singleton x` — a one-element list containing `x`.
+
+```ipe
+singleton 5 --> [ 5 ]
+singleton "hi" --> [ "hi" ]
+```
 
 ## `repeat`
 
@@ -94,7 +130,13 @@ singleton : a -> List a
 repeat : Int -> a -> List a
 ```
 
-`repeat n x` — a list with `n` copies of `x`; `[]` when `n <= 0`.
+`repeat n x` — a list with `n` copies of `x`; returns `[]` when `n <= 0`.
+
+```ipe
+repeat 3 "x" --> [ "x", "x", "x" ]
+repeat 0 "x" --> []
+repeat 4 0 --> [ 0, 0, 0, 0 ]
+```
 
 ## `reverse`
 
@@ -104,13 +146,26 @@ reverse : List a -> List a
 
 `reverse list` — the list in reverse order.
 
+```ipe
+reverse [ 1, 2, 3 ] --> [ 3, 2, 1 ]
+reverse [] --> []
+reverse [ 1 ] --> [ 1 ]
+```
+
 ## `take`
 
 ```ipe
 take : Int -> List a -> List a
 ```
 
-`take n list` — the first `n` elements; the whole list when shorter than `n`.
+`take n list` — the first `n` elements; returns the whole list when `n`
+is greater than or equal to the list's length.
+
+```ipe
+take 3 [ 1, 2, 3, 4, 5 ] --> [ 1, 2, 3 ]
+take 0 [ 1, 2, 3 ] --> []
+take 10 [ 1, 2 ] --> [ 1, 2 ]
+```
 
 ## `drop`
 
@@ -120,13 +175,27 @@ drop : Int -> List a -> List a
 
 `drop n list` — the list without its first `n` elements.
 
+```ipe
+drop 2 [ 1, 2, 3, 4 ] --> [ 3, 4 ]
+drop 0 [ 1, 2, 3 ] --> [ 1, 2, 3 ]
+drop 10 [ 1, 2 ] --> []
+```
+
 ## `append`
 
 ```ipe
 append : List a -> List a -> List a
 ```
 
-`append xs ys` — all of `xs` followed by all of `ys`.
+`append xs ys` — all elements of `xs` followed by all elements of `ys`.
+
+The named form of `xs ++ ys`.
+
+```ipe
+append [ 1, 2 ] [ 3, 4 ] --> [ 1, 2, 3, 4 ]
+append [] [ 1, 2 ] --> [ 1, 2 ]
+append [ 1, 2 ] [] --> [ 1, 2 ]
+```
 
 ## `concat`
 
@@ -134,7 +203,13 @@ append : List a -> List a -> List a
 concat : List (List a) -> List a
 ```
 
-`concat lists` — flatten a list of lists into one list.
+`concat lists` — flatten a list of lists into a single list.
+
+```ipe
+concat [ [ 1, 2 ], [ 3 ], [ 4, 5 ] ] --> [ 1, 2, 3, 4, 5 ]
+concat [] --> []
+concat [ [], [], [ 1 ] ] --> [ 1 ]
+```
 
 ## `member`
 
@@ -142,7 +217,13 @@ concat : List (List a) -> List a
 member : a -> List a -> Bool
 ```
 
-`member x list` — `True` if `x` equals any element of `list`.
+`member x list` — `True` when `x` equals at least one element of `list`.
+
+```ipe
+member 2 [ 1, 2, 3 ] --> True
+member 9 [ 1, 2, 3 ] --> False
+member "hi" [] --> False
+```
 
 ## `range`
 
@@ -152,13 +233,27 @@ range : Int -> Int -> List Int
 
 `range lo hi` — ascending integers from `lo` to `hi` inclusive.
 
+Returns `[]` when `lo > hi`.
+
+```ipe
+range 1 5 --> [ 1, 2, 3, 4, 5 ]
+range 3 3 --> [ 3 ]
+range 5 1 --> []
+```
+
 ## `zip`
 
 ```ipe
 zip : List a -> List b -> List ( a, b )
 ```
 
-`zip xs ys` — pair elements position-by-position, stopping at the shorter list.
+`zip xs ys` — pair elements position by position, stopping at the shorter list.
+
+```ipe
+zip [ 1, 2, 3 ] [ "a", "b", "c" ] --> [ ( 1, "a" ), ( 2, "b" ), ( 3, "c" ) ]
+zip [ 1, 2 ] [ "a", "b", "c" ] --> [ ( 1, "a" ), ( 2, "b" ) ]
+zip [] [ 1, 2 ] --> []
+```
 
 ## `map`
 
@@ -166,7 +261,14 @@ zip : List a -> List b -> List ( a, b )
 map : (a -> b) -> List a -> List b
 ```
 
-`map f list` — apply `f` to every element, giving a new list of results in the same order.
+`map f list` — apply `f` to every element, giving a new list of results in
+the same order. The list's length is unchanged.
+
+```ipe
+map (\n -> n * 2) [ 1, 2, 3 ] --> [ 2, 4, 6 ]
+map String.length [ "hi", "hello" ] --> [ 2, 5 ]
+map (\_ -> 0) [ 1, 2, 3 ] --> [ 0, 0, 0 ]
+```
 
 ## `filter`
 
@@ -174,7 +276,14 @@ map : (a -> b) -> List a -> List b
 filter : (a -> Bool) -> List a -> List a
 ```
 
-`filter keep list` — keep only the elements for which `keep` returns `True`.
+`filter keep list` — keep only the elements for which `keep` returns `True`,
+preserving their order.
+
+```ipe
+filter (\n -> n > 2) [ 1, 2, 3, 4 ] --> [ 3, 4 ]
+filter (\n -> modBy 2 n == 0) [ 1, 2, 3, 4 ] --> [ 2, 4 ]
+filter (\_ -> False) [ 1, 2, 3 ] --> []
+```
 
 ## `any`
 
@@ -182,7 +291,15 @@ filter : (a -> Bool) -> List a -> List a
 any : (a -> Bool) -> List a -> Bool
 ```
 
-`any test list` — `True` if `test` returns `True` for at least one element.
+`any test list` — `True` when `test` returns `True` for at least one element.
+
+Short-circuits on the first `True` result.
+
+```ipe
+any (\n -> n > 3) [ 1, 2, 3, 4 ] --> True
+any (\n -> n > 10) [ 1, 2, 3 ] --> False
+any (\_ -> True) [] --> False
+```
 
 ## `all`
 
@@ -190,7 +307,15 @@ any : (a -> Bool) -> List a -> Bool
 all : (a -> Bool) -> List a -> Bool
 ```
 
-`all test list` — `True` if `test` returns `True` for every element.
+`all test list` — `True` when `test` returns `True` for every element.
+
+Short-circuits on the first `False` result. Returns `True` for an empty list.
+
+```ipe
+all (\n -> n > 0) [ 1, 2, 3 ] --> True
+all (\n -> n > 1) [ 1, 2, 3 ] --> False
+all (\_ -> False) [] --> True
+```
 
 ## `find`
 
@@ -198,7 +323,14 @@ all : (a -> Bool) -> List a -> Bool
 find : (a -> Bool) -> List a -> Maybe a
 ```
 
-`find test list` — `Just` the first element satisfying `test`, or `Nothing`.
+`find test list` — `Just` the first element satisfying `test`, or
+`Nothing` when no element does.
+
+```ipe
+find (\n -> n > 2) [ 1, 2, 3, 4 ] --> Just 3
+find (\n -> n > 10) [ 1, 2, 3 ] --> Nothing
+find (\_ -> True) [] --> Nothing
+```
 
 ## `foldl`
 
@@ -206,7 +338,16 @@ find : (a -> Bool) -> List a -> Maybe a
 foldl : (a -> b -> b) -> b -> List a -> b
 ```
 
-`foldl step initial list` — reduce from the left; `step element accumulator`.
+`foldl step initial list` — reduce from the left, accumulating a result.
+
+`step element accumulator` is called for each element left to right.
+The final value of the accumulator is returned.
+
+```ipe
+foldl (\x acc -> acc + x) 0 [ 1, 2, 3 ] --> 6
+foldl (\x acc -> x :: acc) [] [ 1, 2, 3 ] --> [ 3, 2, 1 ]
+foldl (\x acc -> acc ++ String.fromInt x) "" [ 1, 2, 3 ] --> "123"
+```
 
 ## `foldr`
 
@@ -214,7 +355,16 @@ foldl : (a -> b -> b) -> b -> List a -> b
 foldr : (a -> b -> b) -> b -> List a -> b
 ```
 
-`foldr step initial list` — reduce from the right; `step element accumulator`.
+`foldr step initial list` — reduce from the right, accumulating a result.
+
+Like `foldl` but processes elements right to left. Use `foldr` when
+you need to build a list in the original order without reversing.
+
+```ipe
+foldr (\x acc -> x :: acc) [] [ 1, 2, 3 ] --> [ 1, 2, 3 ]
+foldr (\x acc -> acc + x) 0 [ 1, 2, 3 ] --> 6
+foldr (\x acc -> String.fromInt x ++ acc) "" [ 1, 2, 3 ] --> "123"
+```
 
 ## `concatMap`
 
@@ -222,7 +372,16 @@ foldr : (a -> b -> b) -> b -> List a -> b
 concatMap : (a -> List b) -> List a -> List b
 ```
 
-`concatMap f list` — apply `f` to each element and flatten the results.
+`concatMap f list` — apply `f` to each element and flatten the results
+into a single list.
+
+Equivalent to `concat (map f list)`.
+
+```ipe
+concatMap (\n -> [ n, n * 2 ]) [ 1, 2, 3 ] --> [ 1, 2, 2, 4, 3, 6 ]
+concatMap (\_ -> []) [ 1, 2, 3 ] --> []
+concatMap List.singleton [ 1, 2, 3 ] --> [ 1, 2, 3 ]
+```
 
 ## `indexedMap`
 
@@ -230,7 +389,15 @@ concatMap : (a -> List b) -> List a -> List b
 indexedMap : (Int -> a -> b) -> List a -> List b
 ```
 
-`indexedMap f list` — like `map` but `f` also receives each element's index.
+`indexedMap f list` — like `map`, but `f` also receives each element's
+zero-based index.
+
+```ipe
+indexedMap (\i x -> ( i, x )) [ "a", "b", "c" ]
+--> [ ( 0, "a" ), ( 1, "b" ), ( 2, "c" ) ]
+
+indexedMap (\i _ -> i) [ 10, 20, 30 ] --> [ 0, 1, 2 ]
+```
 
 ## `filterMap`
 
@@ -238,7 +405,18 @@ indexedMap : (Int -> a -> b) -> List a -> List b
 filterMap : (a -> Maybe b) -> List a -> List b
 ```
 
-`filterMap f list` — apply `f` to each element, keeping only `Just` payloads.
+`filterMap f list` — apply `f` to each element, keeping only the `Just`
+payloads and dropping `Nothing`.
+
+Combines `map` and `filter` in a single pass.
+
+```ipe
+filterMap (\n -> if n > 2 then Just (n * 10) else Nothing) [ 1, 2, 3, 4 ]
+--> [ 30, 40 ]
+
+filterMap Just [ 1, 2, 3 ] --> [ 1, 2, 3 ]
+filterMap (\_ -> Nothing) [ 1, 2, 3 ] --> []
+```
 
 ## `sortBy`
 
@@ -246,7 +424,16 @@ filterMap : (a -> Maybe b) -> List a -> List b
 sortBy : (a -> b) -> List a -> List a
 ```
 
-`sortBy key list` — stable ascending sort by `key element`.
+`sortBy key list` — stable ascending sort, comparing `key element`.
+
+The `key` function maps each element to a comparable value; elements are
+sorted by those derived values. Elements with equal keys keep their
+relative order.
+
+```ipe
+sortBy String.length [ "banana", "kiwi", "fig" ] --> [ "fig", "kiwi", "banana" ]
+sortBy identity [ 3, 1, 2 ] --> [ 1, 2, 3 ]
+```
 
 ## `sortWith`
 
@@ -254,7 +441,15 @@ sortBy : (a -> b) -> List a -> List a
 sortWith : (a -> a -> Order) -> List a -> List a
 ```
 
-`sortWith cmp list` — stable sort using a comparison function returning `Order`.
+`sortWith cmp list` — stable sort using a custom comparison function.
+
+`cmp a b` must return an `Order` value (`LT`, `EQ`, or `GT`). Use this
+when you need descending order or a multi-field comparison.
+
+```ipe
+sortWith (\a b -> compare b a) [ 3, 1, 2 ] --> [ 3, 2, 1 ]
+sortWith compare [ 3, 1, 2 ] --> [ 1, 2, 3 ]
+```
 
 ## `sort`
 
@@ -262,7 +457,15 @@ sortWith : (a -> a -> Order) -> List a -> List a
 sort : List a -> List a
 ```
 
-`sort list` — stable ascending sort by natural order. Requires a comparable element.
+`sort list` — stable ascending sort by the natural order of the elements.
+
+Requires elements to be comparable (`Int`, `Float`, `String`, `Char`,
+or a list/tuple of comparables).
+
+```ipe
+sort [ 3, 1, 4, 1, 5 ] --> [ 1, 1, 3, 4, 5 ]
+sort [ "banana", "apple", "cherry" ] --> [ "apple", "banana", "cherry" ]
+```
 
 ## `sum`
 
@@ -270,7 +473,15 @@ sort : List a -> List a
 sum : List a -> a
 ```
 
-`sum list` — the sum of all elements; `0` for the empty list.
+`sum list` — the arithmetic sum of all elements; `0` for the empty list.
+
+Requires elements to be a `Number` type (`Int` or `Float`).
+
+```ipe
+sum [ 1, 2, 3 ] --> 6
+sum [] --> 0
+sum [ 1.5, 2.5 ] --> 4.0
+```
 
 ## `product`
 
@@ -278,7 +489,14 @@ sum : List a -> a
 product : List a -> a
 ```
 
-`product list` — the multiplicative fold; `1` for the empty list.
+`product list` — the multiplicative product of all elements; `1` for the
+empty list.
+
+```ipe
+product [ 1, 2, 3, 4 ] --> 24
+product [] --> 1
+product [ 2.0, 0.5 ] --> 1.0
+```
 
 ## `maximum`
 
@@ -286,7 +504,15 @@ product : List a -> a
 maximum : List a -> Maybe a
 ```
 
-`maximum list` — `Just` the largest element, or `Nothing` if empty.
+`maximum list` — `Just` the largest element, or `Nothing` for the empty list.
+
+Requires elements to be comparable.
+
+```ipe
+maximum [ 3, 1, 4, 1, 5 ] --> Just 5
+maximum [] --> Nothing
+maximum [ "banana", "apple" ] --> Just "banana"
+```
 
 ## `minimum`
 
@@ -294,7 +520,15 @@ maximum : List a -> Maybe a
 minimum : List a -> Maybe a
 ```
 
-`minimum list` — `Just` the smallest element, or `Nothing` if empty.
+`minimum list` — `Just` the smallest element, or `Nothing` for the empty list.
+
+Requires elements to be comparable.
+
+```ipe
+minimum [ 3, 1, 4, 1, 5 ] --> Just 1
+minimum [] --> Nothing
+minimum [ "banana", "apple" ] --> Just "apple"
+```
 
 ## `unique`
 
@@ -302,7 +536,14 @@ minimum : List a -> Maybe a
 unique : List a -> List a
 ```
 
-`unique list` — remove duplicates, keeping first occurrence of each element.
+`unique list` — remove duplicate elements, keeping the first occurrence
+of each value and preserving the order of first appearances.
+
+```ipe
+unique [ 1, 2, 1, 3, 2 ] --> [ 1, 2, 3 ]
+unique [] --> []
+unique [ "a", "b", "a" ] --> [ "a", "b" ]
+```
 
 ## `intersperse`
 
@@ -310,7 +551,15 @@ unique : List a -> List a
 intersperse : a -> List a -> List a
 ```
 
-`intersperse sep list` — place `sep` between each adjacent pair of elements.
+`intersperse sep list` — insert `sep` between every adjacent pair of
+elements.
+
+```ipe
+intersperse 0 [ 1, 2, 3 ] --> [ 1, 0, 2, 0, 3 ]
+intersperse "," [ "a", "b", "c" ] --> [ "a", ",", "b", ",", "c" ]
+intersperse 0 [] --> []
+intersperse 0 [ 1 ] --> [ 1 ]
+```
 
 ## `partition`
 
@@ -318,7 +567,14 @@ intersperse : a -> List a -> List a
 partition : (a -> Bool) -> List a -> ( List a, List a )
 ```
 
-`partition pred list` — split into `( keep, reject )` preserving order.
+`partition pred list` — split into `( keep, reject )` preserving the
+order within each group.
+
+```ipe
+partition (\n -> n > 2) [ 1, 2, 3, 4 ] --> ( [ 3, 4 ], [ 1, 2 ] )
+partition (\_ -> True) [ 1, 2 ] --> ( [ 1, 2 ], [] )
+partition (\_ -> False) [ 1, 2 ] --> ( [], [ 1, 2 ] )
+```
 
 ## `unzip`
 
@@ -328,13 +584,26 @@ unzip : List ( a, b ) -> ( List a, List b )
 
 `unzip pairs` — split a list of pairs into two parallel lists.
 
+The inverse of `zip` (up to length; `zip` truncates, `unzip` does not).
+
+```ipe
+unzip [ ( 1, "a" ), ( 2, "b" ) ] --> ( [ 1, 2 ], [ "a", "b" ] )
+unzip [] --> ( [], [] )
+```
+
 ## `map2`
 
 ```ipe
 map2 : (a -> b -> r) -> List a -> List b -> List r
 ```
 
-`map2 f xs ys` — combine two lists element-wise; stops at the shorter.
+`map2 f xs ys` — combine two lists element-wise using `f`; stops at the
+shorter list.
+
+```ipe
+map2 (\a b -> a + b) [ 1, 2, 3 ] [ 10, 20, 30 ] --> [ 11, 22, 33 ]
+map2 Tuple.pair [ 1, 2 ] [ "a", "b", "c" ] --> [ ( 1, "a" ), ( 2, "b" ) ]
+```
 
 ## `map3`
 
@@ -344,6 +613,11 @@ map3 : (a -> b -> c -> r) -> List a -> List b -> List c -> List r
 
 `map3 f xs ys zs` — combine three lists element-wise; stops at the shortest.
 
+```ipe
+map3 (\a b c -> a + b + c) [ 1, 2 ] [ 10, 20 ] [ 100, 200 ]
+--> [ 111, 222 ]
+```
+
 ## `map4`
 
 ```ipe
@@ -352,6 +626,12 @@ map4 : (a -> b -> c -> d -> r) -> List a -> List b -> List c -> List d -> List r
 
 `map4 f` — combine four lists element-wise; stops at the shortest.
 
+```ipe
+map4 (\a b c d -> a + b + c + d)
+    [ 1 ] [ 10 ] [ 100 ] [ 1000 ]
+--> [ 1111 ]
+```
+
 ## `map5`
 
 ```ipe
@@ -359,4 +639,10 @@ map5 : (a -> b -> c -> d -> e -> r) -> List a -> List b -> List c -> List d -> L
 ```
 
 `map5 f` — combine five lists element-wise; stops at the shortest.
+
+```ipe
+map5 (\a b c d e -> a + b + c + d + e)
+    [ 1 ] [ 10 ] [ 100 ] [ 1000 ] [ 10000 ]
+--> [ 11111 ]
+```
 
