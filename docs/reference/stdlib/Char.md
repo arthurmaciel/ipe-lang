@@ -200,6 +200,6 @@ replacement character `'\u{FFFD}'` (`'<27>'`).
 fromCode 65 --> 'A'
 fromCode 97 --> 'a'
 fromCode 48 --> '0'
-fromCode 0x1F600 --> '😀'
+fromCode 128512 --> '😀'
 ```
 

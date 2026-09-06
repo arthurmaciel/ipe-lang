@@ -109,16 +109,15 @@ clamp "a" "z" "m" --> "m"
 toString : a -> String
 ```
 
-`toString x` — convert any value to its `String` representation.
+`toString x` — convert a `Stringify` value to its `String` representation.
 
-The result is the same text you would see in a debug output: numbers
-are decimal, strings are quoted, lists use bracket notation.
+The result is the same text you would see in a debug output: numbers are
+decimal, `Bool` is `True`/`False`, and a `String` is returned unchanged.
 
 ```ipe
 toString 42 --> "42"
 toString 3.14 --> "3.14"
 toString True --> "True"
-toString [ 1, 2 ] --> "[1, 2]"
 ```
 
 ## `modBy`

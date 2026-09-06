@@ -192,7 +192,7 @@ Ipe.Basics — the implicit prelude (Tier-A auto-import, compiled source).
 | `fst` | `fst pair` — the first component of a 2-tuple. |
 | `snd` | `snd pair` — the second component of a 2-tuple. |
 | `clamp` | `clamp lo hi x` — constrain `x` to the range `[lo, hi]`. |
-| `toString` | `toString x` — convert any value to its `String` representation. |
+| `toString` | `toString x` — convert a `Stringify` value to its `String` representation. |
 | `modBy` | `modBy divisor dividend` — the modulo remainder, with the sign of the |
 | `negate` | `negate x` — arithmetic negation. |
 | `abs` | `abs x` — absolute value. |
