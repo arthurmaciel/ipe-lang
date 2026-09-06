@@ -814,4 +814,4 @@ impl std::error::Error for CliError {}
 // target ABI (`std::io::Error` is wider on Windows than on Linux, for one).
 pub(crate) const CLI_ERROR_MAX_BYTES: usize = 128;
 // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); it fails the build if a future `CliError` variant exceeds the size bound rather than boxing its payload [ledger #boundary]
-pub(crate) const _: () = assert!(std::mem::size_of::<CliError>() <= CLI_ERROR_MAX_BYTES);
+const _: () = assert!(std::mem::size_of::<CliError>() <= CLI_ERROR_MAX_BYTES);

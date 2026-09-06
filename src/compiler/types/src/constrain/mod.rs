@@ -481,6 +481,6 @@ mod zonk;
 #[cfg(test)]
 mod tests;
 
-pub use builtins::*;
+pub(crate) use builtins::*;
 pub use zonk::*;
 

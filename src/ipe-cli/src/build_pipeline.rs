@@ -384,9 +384,9 @@ pub(crate) fn build_test_with_project_sources(
 /// The entry file and every sibling `.ipe` module discovered in its source
 /// directory, ready to feed the shared compile core.
 pub(crate) struct CollectedSources {
-    sources: BTreeMap<Vec<String>, (PathBuf, String)>,
-    discovered: Vec<project::DiscoveredModule>,
-    entry_module_path: Vec<String>,
+    pub(crate) sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    pub(crate) discovered: Vec<project::DiscoveredModule>,
+    pub(crate) entry_module_path: Vec<String>,
 }
 
 /// Collect the entry module plus every sibling `.ipe` file in its source
