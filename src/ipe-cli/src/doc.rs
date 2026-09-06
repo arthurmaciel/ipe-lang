@@ -2559,6 +2559,7 @@ fn synthesize_module(body: &str, source_module: &str, module_imports: &[String])
         ("Io.", "import Ipe.Io as Io"),
         ("Debug.", "import Ipe.Debug as Debug"),
         ("Char.", "import Ipe.Char as Char"),
+        ("Tuple.", "import Ipe.Tuple as Tuple"),
     ] {
         let Some(module_for_prefix) = import_line_module(import) else {
             continue;
@@ -2572,22 +2573,80 @@ fn synthesize_module(body: &str, source_module: &str, module_imports: &[String])
 
     out.push('\n');
 
-    // Emit body lines. `-->` expression-assertion lines become `docCheckN = <expr>`
-    // top-level bindings so the type-checker can reach them.
+    // Every example body is one or more expressions, each optionally followed
+    // by a `-->` result or a `-- ==` explanatory comment. An expression may span
+    // several lines (a pipeline, a call with bracketed arguments), so a bare
+    // expression cannot be emitted as a top-level line — it needs a binding.
+    // Each expression becomes a `docCheckN = <expr>` top-level binding so the
+    // type-checker can reach it without a `main` entry point.
+    //
+    // Grouping: blank lines separate independent expressions. Within a run of
+    // non-blank lines, a line carrying an inline `-->` (non-empty left side) is
+    // one complete single-line expression; consecutive lines without an inline
+    // `-->` accumulate into one multi-line expression, terminated by a blank
+    // line, a following inline-`-->` line, or a trailing annotation line (a
+    // standalone `-->` result or a `-- ==` comment).
     let mut check_idx = 0usize;
+    let mut pending: Vec<&str> = Vec::new();
+
+    let flush = |out: &mut String, check_idx: &mut usize, pending: &mut Vec<&str>| {
+        if pending.is_empty() {
+            return;
+        }
+        let expr = pending.join(" ");
+        let expr = expr.trim();
+        if !expr.is_empty() {
+            *check_idx += 1;
+            out.push('\n');
+            let _ = writeln!(out, "docCheck{check_idx} = {expr}");
+        }
+        pending.clear();
+    };
+
     for line in body.lines() {
-        if let Some(arrow_pos) = line.find("-->") {
-            let expr = line[..arrow_pos].trim();
-            if !expr.is_empty() {
-                check_idx += 1;
-                out.push('\n');
-                let _ = writeln!(out, "docCheck{check_idx} = {expr}");
-            }
-        } else {
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            flush(&mut out, &mut check_idx, &mut pending);
+            continue;
+        }
+
+        // A `-- ==` comment shows an order-unspecified expected result for the
+        // preceding expression; it annotates, it does not extend the expression.
+        if trimmed.starts_with("-- ") || trimmed == "--" {
+            flush(&mut out, &mut check_idx, &mut pending);
+            continue;
+        }
+
+        // A top-level construct (an example that opens with its own `import`) is
+        // emitted verbatim, never folded into an expression binding.
+        if trimmed.starts_with("import ")
+            || trimmed.starts_with("module ")
+            || trimmed.starts_with("type ")
+        {
+            flush(&mut out, &mut check_idx, &mut pending);
             out.push('\n');
             out.push_str(line);
+            continue;
         }
+
+        if let Some(arrow_pos) = line.find("-->") {
+            let expr = line[..arrow_pos].trim();
+            // A standalone `--> result` closes the accumulated expression; an
+            // inline `expr --> result` closes any pending expression, then binds
+            // the single-line expression on its own.
+            flush(&mut out, &mut check_idx, &mut pending);
+            if !expr.is_empty() {
+                pending.push(expr);
+                flush(&mut out, &mut check_idx, &mut pending);
+            }
+            continue;
+        }
+
+        pending.push(trimmed);
     }
+    flush(&mut out, &mut check_idx, &mut pending);
+
     out.push('\n');
     out
 }

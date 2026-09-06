@@ -186,20 +186,20 @@ Ipe.Basics — the implicit prelude (Tier-A auto-import, compiled source).
 
 | Export | Summary |
 |--------|----------|
-| `identity` | (no summary) |
-| `always` | (no summary) |
-| `not` | (no summary) |
-| `fst` | (no summary) |
-| `snd` | (no summary) |
-| `clamp` | (no summary) |
-| `toString` | (no summary) |
-| `modBy` | (no summary) |
-| `negate` | (no summary) |
-| `abs` | (no summary) |
-| `sqrt` | (no summary) |
-| `min` | (no summary) |
-| `max` | (no summary) |
-| `compare` | (no summary) |
+| `identity` | `identity x` — return `x` unchanged. |
+| `always` | `always x y` — return `x`, ignoring `y`. |
+| `not` | `not b` — boolean negation. |
+| `fst` | `fst pair` — the first component of a 2-tuple. |
+| `snd` | `snd pair` — the second component of a 2-tuple. |
+| `clamp` | `clamp lo hi x` — constrain `x` to the range `[lo, hi]`. |
+| `toString` | `toString x` — convert a `Stringify` value to its `String` representation. |
+| `modBy` | `modBy divisor dividend` — the modulo remainder, with the sign of the |
+| `negate` | `negate x` — arithmetic negation. |
+| `abs` | `abs x` — absolute value. |
+| `sqrt` | `sqrt x` — the non-negative square root of `x`. |
+| `min` | `min a b` — the smaller of two comparable values. |
+| `max` | `max a b` — the larger of two comparable values. |
+| `compare` | `compare a b` — the `Order` relation between two comparable values. |
 
 ## Bitwise
 
@@ -995,17 +995,17 @@ Ipe.Char — single-character helpers.
 
 | Export | Summary |
 |--------|----------|
-| `isAlpha` | (no summary) |
-| `isDigit` | (no summary) |
-| `isLower` | (no summary) |
-| `isUpper` | (no summary) |
-| `isAlphaNum` | A letter or a digit (`isAlpha` or `isDigit`). |
-| `isHexDigit` | An ASCII hexadecimal digit (`0-9`, `a-f`, `A-F`). |
-| `isOctDigit` | An ASCII octal digit (`0-7`). |
-| `toLower` | (no summary) |
-| `toUpper` | (no summary) |
-| `toCode` | Unicode code-point conversion. |
-| `fromCode` | (no summary) |
+| `isAlpha` | `isAlpha c` — `True` when `c` is a Unicode letter. |
+| `isDigit` | `isDigit c` — `True` when `c` is an ASCII decimal digit (`0`–`9`). |
+| `isLower` | `isLower c` — `True` when `c` is a Unicode lowercase letter. |
+| `isUpper` | `isUpper c` — `True` when `c` is a Unicode uppercase letter. |
+| `isAlphaNum` | `isAlphaNum c` — `True` when `c` is a Unicode letter or an ASCII digit. |
+| `isHexDigit` | `isHexDigit c` — `True` when `c` is an ASCII hexadecimal digit. |
+| `isOctDigit` | `isOctDigit c` — `True` when `c` is an ASCII octal digit (`0`–`7`). |
+| `toLower` | `toLower c` — the lowercase version of `c`, as a `String`. |
+| `toUpper` | `toUpper c` — the uppercase version of `c`, as a `String`. |
+| `toCode` | `toCode c` — the Unicode code point of `c` as an `Int`. |
+| `fromCode` | `fromCode n` — the `Char` whose Unicode code point is `n`. |
 
 ## Codec
 
@@ -1617,25 +1617,25 @@ Ipe.Dict — string-keyed associative map.
 
 | Export | Summary |
 |--------|----------|
-| `empty` | The empty dictionary. |
-| `singleton` | `singleton k v` — a dictionary with the single binding `k → v`. |
-| `isEmpty` | `True` when the dictionary contains no entries. |
-| `size` | Number of key/value pairs. |
-| `insert` | `insert k v d` — bind `k → v`, replacing any prior value. |
-| `update` | `update k fn d` — apply `fn` to the current value at `k` (`Just`/`Nothing`); |
-| `get` | `get k d` — look up `k`; `Nothing` if absent. |
-| `remove` | `remove k d` — drop `k`'s binding; no-op if absent. |
-| `member` | `member k d` — `True` iff `k` is bound in `d`. |
-| `keys` | All keys in the dictionary (unsorted). |
-| `values` | All values in the dictionary (unsorted). |
-| `toList` | `toList d` — every (key, value) pair as a list of tuples. |
-| `fromList` | `fromList pairs` — build a dictionary from a list of tuples. |
-| `map` | `map fn d` — apply `fn k v` to every entry, building a new |
-| `foldl` | `foldl fn acc d` — accumulate over every entry. |
-| `foldr` | `foldr fn acc d` — accumulate over every entry in descending key order. |
-| `union` | `union a b` — merge two dictionaries. `a`'s bindings win on |
-| `filter` | `filter pred d` — keep only entries for which `pred k v` holds. |
-| `partition` | `partition pred d` — split into (satisfying, not-satisfying). |
+| `empty` | The empty dictionary — no keys, no values. |
+| `singleton` | `singleton k v` — a dictionary with exactly one binding: `k → v`. |
+| `isEmpty` | `isEmpty d` — `True` when the dictionary contains no entries. |
+| `size` | `size d` — the number of key/value pairs in the dictionary. |
+| `insert` | `insert k v d` — bind `k → v`, replacing any earlier value for `k`. |
+| `update` | `update k f d` — apply `f` to `k`'s current binding and use the result |
+| `get` | `get k d` — look up the value at `k`; `Nothing` if absent. |
+| `remove` | `remove k d` — drop the binding for `k`; no-op when `k` is absent. |
+| `member` | `member k d` — `True` when `k` is bound in `d`. |
+| `keys` | `keys d` — all keys in the dictionary, in unspecified order. |
+| `values` | `values d` — all values in the dictionary, in unspecified order. |
+| `toList` | `toList d` — every `( key, value )` pair as a list of tuples, in |
+| `fromList` | `fromList pairs` — build a dictionary from a list of `( key, value )` tuples. |
+| `map` | `map f d` — apply `f k v` to every entry, producing a new dictionary |
+| `foldl` | `foldl f acc d` — accumulate over every `( key, value )` pair. |
+| `foldr` | `foldr f acc d` — accumulate over every `( key, value )` pair in |
+| `union` | `union a b` — merge two dictionaries; when a key appears in both, |
+| `filter` | `filter pred d` — keep only the entries for which `pred k v` is `True`. |
+| `partition` | `partition pred d` — split into `( satisfying, not-satisfying )`. |
 | `intersect` | `intersect a b` — keep `a`'s entries whose key also appears in `b`. |
 | `diff` | `diff a b` — keep `a`'s entries whose key does NOT appear in `b`. |
 
@@ -2016,43 +2016,43 @@ Ipe.Level — the `LogLevel` severity-tag ADT.
 
 | Export | Summary |
 |--------|----------|
-| `isEmpty` | `isEmpty list` — `True` if the list has no elements. |
+| `isEmpty` | `isEmpty list` — `True` when the list has no elements. |
 | `length` | `length list` — the number of elements in the list. |
-| `head` | `head list` — `Just` the first element, or `Nothing` if empty. |
-| `tail` | `tail list` — `Just` the list without its first element, or `Nothing` if empty. |
-| `cons` | `cons x list` — prepend `x` to the list; the named form of `x :: list`. |
-| `singleton` | `singleton x` — the one-element list `[ x ]`. |
-| `repeat` | `repeat n x` — a list with `n` copies of `x`; `[]` when `n <= 0`. |
+| `head` | `head list` — `Just` the first element, or `Nothing` when the list is empty. |
+| `tail` | `tail list` — `Just` the list without its first element, or `Nothing` when |
+| `cons` | `cons x list` — prepend `x` to the list. |
+| `singleton` | `singleton x` — a one-element list containing `x`. |
+| `repeat` | `repeat n x` — a list with `n` copies of `x`; returns `[]` when `n <= 0`. |
 | `reverse` | `reverse list` — the list in reverse order. |
-| `take` | `take n list` — the first `n` elements; the whole list when shorter than `n`. |
+| `take` | `take n list` — the first `n` elements; returns the whole list when `n` |
 | `drop` | `drop n list` — the list without its first `n` elements. |
-| `append` | `append xs ys` — all of `xs` followed by all of `ys`. |
-| `concat` | `concat lists` — flatten a list of lists into one list. |
-| `member` | `member x list` — `True` if `x` equals any element of `list`. |
+| `append` | `append xs ys` — all elements of `xs` followed by all elements of `ys`. |
+| `concat` | `concat lists` — flatten a list of lists into a single list. |
+| `member` | `member x list` — `True` when `x` equals at least one element of `list`. |
 | `range` | `range lo hi` — ascending integers from `lo` to `hi` inclusive. |
-| `zip` | `zip xs ys` — pair elements position-by-position, stopping at the shorter list. |
-| `map` | `map f list` — apply `f` to every element, giving a new list of results in the same order. |
-| `filter` | `filter keep list` — keep only the elements for which `keep` returns `True`. |
-| `any` | `any test list` — `True` if `test` returns `True` for at least one element. |
-| `all` | `all test list` — `True` if `test` returns `True` for every element. |
-| `find` | `find test list` — `Just` the first element satisfying `test`, or `Nothing`. |
-| `foldl` | `foldl step initial list` — reduce from the left; `step element accumulator`. |
-| `foldr` | `foldr step initial list` — reduce from the right; `step element accumulator`. |
-| `concatMap` | `concatMap f list` — apply `f` to each element and flatten the results. |
-| `indexedMap` | `indexedMap f list` — like `map` but `f` also receives each element's index. |
-| `filterMap` | `filterMap f list` — apply `f` to each element, keeping only `Just` payloads. |
-| `sortBy` | `sortBy key list` — stable ascending sort by `key element`. |
-| `sortWith` | `sortWith cmp list` — stable sort using a comparison function returning `Order`. |
-| `sort` | `sort list` — stable ascending sort by natural order. Requires a comparable element. |
-| `sum` | `sum list` — the sum of all elements; `0` for the empty list. |
-| `product` | `product list` — the multiplicative fold; `1` for the empty list. |
-| `maximum` | `maximum list` — `Just` the largest element, or `Nothing` if empty. |
-| `minimum` | `minimum list` — `Just` the smallest element, or `Nothing` if empty. |
-| `unique` | `unique list` — remove duplicates, keeping first occurrence of each element. |
-| `intersperse` | `intersperse sep list` — place `sep` between each adjacent pair of elements. |
-| `partition` | `partition pred list` — split into `( keep, reject )` preserving order. |
+| `zip` | `zip xs ys` — pair elements position by position, stopping at the shorter list. |
+| `map` | `map f list` — apply `f` to every element, giving a new list of results in |
+| `filter` | `filter keep list` — keep only the elements for which `keep` returns `True`, |
+| `any` | `any test list` — `True` when `test` returns `True` for at least one element. |
+| `all` | `all test list` — `True` when `test` returns `True` for every element. |
+| `find` | `find test list` — `Just` the first element satisfying `test`, or |
+| `foldl` | `foldl step initial list` — reduce from the left, accumulating a result. |
+| `foldr` | `foldr step initial list` — reduce from the right, accumulating a result. |
+| `concatMap` | `concatMap f list` — apply `f` to each element and flatten the results |
+| `indexedMap` | `indexedMap f list` — like `map`, but `f` also receives each element's |
+| `filterMap` | `filterMap f list` — apply `f` to each element, keeping only the `Just` |
+| `sortBy` | `sortBy key list` — stable ascending sort, comparing `key element`. |
+| `sortWith` | `sortWith cmp list` — stable sort using a custom comparison function. |
+| `sort` | `sort list` — stable ascending sort by the natural order of the elements. |
+| `sum` | `sum list` — the arithmetic sum of all elements; `0` for the empty list. |
+| `product` | `product list` — the multiplicative product of all elements; `1` for the |
+| `maximum` | `maximum list` — `Just` the largest element, or `Nothing` for the empty list. |
+| `minimum` | `minimum list` — `Just` the smallest element, or `Nothing` for the empty list. |
+| `unique` | `unique list` — remove duplicate elements, keeping the first occurrence |
+| `intersperse` | `intersperse sep list` — insert `sep` between every adjacent pair of |
+| `partition` | `partition pred list` — split into `( keep, reject )` preserving the |
 | `unzip` | `unzip pairs` — split a list of pairs into two parallel lists. |
-| `map2` | `map2 f xs ys` — combine two lists element-wise; stops at the shorter. |
+| `map2` | `map2 f xs ys` — combine two lists element-wise using `f`; stops at the |
 | `map3` | `map3 f xs ys zs` — combine three lists element-wise; stops at the shortest. |
 | `map4` | `map4 f` — combine four lists element-wise; stops at the shortest. |
 | `map5` | `map5 f` — combine five lists element-wise; stops at the shortest. |
@@ -2111,44 +2111,44 @@ Ipe.Math — pure numeric helpers.
 
 | Export | Summary |
 |--------|----------|
-| `abs` | (no summary) |
-| `min` | (no summary) |
-| `max` | (no summary) |
-| `sqrt` | (no summary) |
-| `pow` | (no summary) |
-| `log` | (no summary) |
-| `log2` | (no summary) |
-| `log10` | (no summary) |
-| `exp` | (no summary) |
-| `exp2` | (no summary) |
-| `cbrt` | (no summary) |
-| `hypot` | (no summary) |
-| `floor` | (no summary) |
-| `ceil` | (no summary) |
-| `round` | (no summary) |
-| `trunc` | (no summary) |
-| `sin` | (no summary) |
-| `cos` | (no summary) |
-| `tan` | (no summary) |
-| `asin` | (no summary) |
-| `acos` | (no summary) |
-| `atan` | (no summary) |
-| `atan2` | (no summary) |
-| `sinh` | (no summary) |
-| `cosh` | (no summary) |
-| `tanh` | (no summary) |
-| `asinh` | (no summary) |
-| `acosh` | (no summary) |
-| `atanh` | (no summary) |
-| `mod` | (no summary) |
-| `remainder` | (no summary) |
-| `pi` | (no summary) |
-| `e` | (no summary) |
-| `phi` | (no summary) |
-| `sqrt2` | (no summary) |
-| `inf` | (no summary) |
-| `nan` | (no summary) |
-| `isNaN` | (no summary) |
+| `abs` | `abs x` — the absolute (non-negative) value of an integer. |
+| `min` | `min a b` — the smaller of two comparable values. |
+| `max` | `max a b` — the larger of two comparable values. |
+| `sqrt` | `sqrt x` — the non-negative square root of `x`. |
+| `pow` | `pow base exponent` — `base` raised to `exponent`. |
+| `log` | `log x` — the natural logarithm (base *e*) of `x`. |
+| `log2` | `log2 x` — the base-2 logarithm of `x`. |
+| `log10` | `log10 x` — the base-10 (common) logarithm of `x`. |
+| `exp` | `exp x` — the natural exponential *e*^x. |
+| `exp2` | `exp2 x` — 2^x (base-2 exponential). |
+| `cbrt` | `cbrt x` — the real cube root of `x`. |
+| `hypot` | `hypot a b` — the Euclidean hypotenuse `sqrt(a² + b²)`. |
+| `floor` | `floor x` — round `x` toward negative infinity; result is an `Int`. |
+| `ceil` | `ceil x` — round `x` toward positive infinity; result is an `Int`. |
+| `round` | `round x` — round `x` to the nearest integer, half-up; result is an `Int`. |
+| `trunc` | `trunc x` — truncate `x` toward zero; result is an `Int`. |
+| `sin` | `sin x` — the sine of `x` in radians. |
+| `cos` | `cos x` — the cosine of `x` in radians. |
+| `tan` | `tan x` — the tangent of `x` in radians. |
+| `asin` | `asin x` — the arcsine of `x`, result in radians in `[-π/2, π/2]`. |
+| `acos` | `acos x` — the arccosine of `x`, result in radians in `[0, π]`. |
+| `atan` | `atan x` — the arctangent of `x`, result in radians in `(-π/2, π/2)`. |
+| `atan2` | `atan2 y x` — the quadrant-aware arctangent of `y/x`. |
+| `sinh` | `sinh x` — the hyperbolic sine of `x`. |
+| `cosh` | `cosh x` — the hyperbolic cosine of `x`. |
+| `tanh` | `tanh x` — the hyperbolic tangent of `x`. |
+| `asinh` | `asinh x` — the inverse hyperbolic sine of `x`. |
+| `acosh` | `acosh x` — the inverse hyperbolic cosine of `x`. |
+| `atanh` | `atanh x` — the inverse hyperbolic tangent of `x`. |
+| `mod` | `mod x y` — floating-point modulo; result has the same sign as `y`. |
+| `remainder` | `remainder x y` — IEEE 754 floating-point remainder. |
+| `pi` | The ratio of a circle's circumference to its diameter (π ≈ 3.14159). |
+| `e` | Euler's number, the base of the natural logarithm (*e* ≈ 2.71828). |
+| `phi` | The golden ratio (φ ≈ 1.61803), where φ = (1 + √5) / 2. |
+| `sqrt2` | The square root of 2 (√2 ≈ 1.41421). |
+| `inf` | Positive floating-point infinity. |
+| `nan` | Not-a-Number (NaN) — the IEEE 754 indeterminate result. |
+| `isNaN` | `isNaN x` — `True` when `x` is the IEEE 754 Not-a-Number value. |
 
 ## Maybe
 
@@ -2418,27 +2418,27 @@ Ipe.Secret.Unsafe — the raw secret-reveal escape hatch for `Ipe.Secret`
 
 [Full reference](stdlib/Set.md)
 
-Ipe.Set — unordered set of unique elements.
+Ipe.Set — unordered collection of unique elements.
 
 | Export | Summary |
 |--------|----------|
-| `empty` | The empty set. |
-| `size` | Number of distinct elements. |
-| `isEmpty` | `True` when the set has no elements. |
-| `singleton` | `singleton x` — the one-element set `{x}`. |
-| `insert` | `insert x s` — add `x` to `s`. No-op if already present. |
-| `remove` | `remove x s` — drop `x` from `s`. No-op if absent. |
-| `member` | `member x s` — `True` iff `x` is in `s`. |
-| `toList` | All elements in the set (unsorted). |
-| `fromList` | Build a set from a list, de-duplicating along the way. |
-| `union` | `union a b` — every element in `a` OR `b`. |
-| `intersect` | `intersect a b` — every element in BOTH `a` and `b`. |
-| `diff` | `diff a b` — every element in `a` BUT NOT in `b`. |
-| `foldl` | `foldl fn acc s` — fold over the elements in ascending order. |
-| `foldr` | `foldr fn acc s` — fold over the elements in descending order. |
-| `map` | `map fn s` — apply `fn` to every element; duplicate results collapse. |
-| `filter` | `filter pred s` — keep only elements satisfying `pred`. |
-| `partition` | `partition pred s` — split into (satisfying, not-satisfying). |
+| `empty` | The empty set — no elements. |
+| `size` | `size s` — the number of distinct elements in the set. |
+| `isEmpty` | `isEmpty s` — `True` when the set has no elements. |
+| `singleton` | `singleton x` — a set containing exactly one element. |
+| `insert` | `insert x s` — add `x` to `s`; no-op when `x` is already present. |
+| `remove` | `remove x s` — drop `x` from `s`; no-op when `x` is absent. |
+| `member` | `member x s` — `True` when `x` is an element of `s`. |
+| `toList` | `toList s` — all elements of the set as a list, in unspecified order. |
+| `fromList` | `fromList xs` — build a set from a list, dropping duplicates. |
+| `union` | `union a b` — every element in `a` or `b` (or both). |
+| `intersect` | `intersect a b` — every element present in both `a` and `b`. |
+| `diff` | `diff a b` — every element in `a` that is NOT in `b`. |
+| `foldl` | `foldl f acc s` — fold over every element, in unspecified order. |
+| `foldr` | `foldr f acc s` — fold over every element in reverse traversal order. |
+| `map` | `map f s` — apply `f` to every element; duplicate results are merged. |
+| `filter` | `filter pred s` — keep only elements for which `pred` is `True`. |
+| `partition` | `partition pred s` — split into `( satisfying, not-satisfying )`. |
 
 ## String
 
@@ -2732,12 +2732,12 @@ Ipe.Tuple — helpers for 2-tuples (pairs).
 
 | Export | Summary |
 |--------|----------|
-| `first` | Extract the first component of a pair. |
-| `second` | Extract the second component of a pair. |
-| `pair` | Build a pair from its two components. |
-| `mapFirst` | Transform the first component of a pair. |
-| `mapSecond` | Transform the second component of a pair. |
-| `mapBoth` | Transform both components of a pair, each with its own function. |
+| `first` | `first pair` — extract the first component of a 2-tuple. |
+| `second` | `second pair` — extract the second component of a 2-tuple. |
+| `pair` | `pair a b` — construct a 2-tuple from two values. |
+| `mapFirst` | `mapFirst f pair` — apply `f` to the first component, leaving the second unchanged. |
+| `mapSecond` | `mapSecond f pair` — apply `f` to the second component, leaving the first unchanged. |
+| `mapBoth` | `mapBoth f g pair` — apply `f` to the first component and `g` to the second. |
 
 ## Ui
 
