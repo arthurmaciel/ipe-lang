@@ -2221,18 +2221,17 @@ struct SearchEntry {
 /// writing them under `out/{json,markdown,html}/` subfolders.
 ///
 /// Attempts full project + stdlib documentation. When no project source is
-/// reachable at `path` (no source files, no valid project), falls back to
+/// reachable at `path` (an empty directory, no `.ipe` modules), falls back to
 /// stdlib-only so the command succeeds in any directory, including an empty
-/// scratch dir.
+/// scratch dir. A project that exists but fails to build surfaces its error
+/// rather than collapsing to a stdlib-only site.
 ///
 /// # Errors
-/// [`CliError::Io`] on a write failure. Project extraction errors are silently
-/// absorbed by the stdlib-only fallback.
+/// [`CliError::Io`] on a write failure, plus any real project build error from
+/// [`build_docs_or_stdlib`].
 fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), CliError> {
     crate::style::print_command_header();
-    // Attempt full project + stdlib documentation. When no project is reachable
-    // at `path`, fall back to stdlib-only so the command succeeds in any dir.
-    let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
+    let docs = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
 
@@ -2282,6 +2281,29 @@ fn write_format_dir(
         std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
     }
     Ok(())
+}
+
+/// Build project + stdlib docs, falling back to stdlib-only ONLY when no project
+/// is reachable at `path`.
+///
+/// The fallback is reserved for [`DiffError::Empty`] — a directory carrying no
+/// `.ipe` modules, where stdlib-only is the correct and complete answer. Every
+/// other build failure (an unreadable module, a typecheck error, an open
+/// interface) is a real project error the user must see, so it is propagated
+/// rather than masked behind a plausible stdlib-only site that silently omits
+/// every project module.
+///
+/// # Errors
+/// Any non-empty [`build_docs`] failure — [`CliError::Io`], a typecheck
+/// [`CliError::Diff`], or an open-interface [`CliError::Diff`].
+fn build_docs_or_stdlib(path: &Path) -> Result<DocsJson, CliError> {
+    match build_docs(path) {
+        Ok(docs) => Ok(docs),
+        Err(CliError::Diff(crate::api_surface::DiffError::Empty { .. })) => {
+            Ok(build_stdlib_only_docs())
+        }
+        Err(other) => Err(other),
+    }
 }
 
 /// Build a stdlib-only [`DocsJson`] without accessing any project on disk.
@@ -4317,7 +4339,7 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
     use std::net::TcpListener;
 
     crate::style::print_command_header();
-    let docs = build_docs(path).unwrap_or_else(|_| build_stdlib_only_docs());
+    let docs = build_docs_or_stdlib(path)?;
     let docs_root = locate_docs_root();
     let bundle = build_doc_bundle(&docs_root)?;
     let site = render_site_for_serve(&docs, &bundle);
@@ -4358,13 +4380,33 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
 /// and writes the file with its content type — or a `404` when the path names no
 /// built file. Only `GET`/`HEAD`-shaped requests are honoured; the body, if any,
 /// is ignored (nothing here writes or executes).
-fn serve_one(conn: &mut std::net::TcpStream, site: &BTreeMap<String, String>) {
-    use std::io::{BufRead, BufReader, Write};
+/// The largest request line the doc server will read before giving up. A request
+/// line is a method, a path, and a version; a few kilobytes covers any real one,
+/// and the cap turns a client that streams bytes without a newline into a bounded
+/// read rather than an unbounded buffer growth.
+const DOC_SERVE_REQUEST_LINE_CAP: usize = 16 * 1024;
 
-    let mut reader = BufReader::new(match conn.try_clone() {
-        Ok(c) => c,
-        Err(_) => return,
-    });
+/// The wall-clock a single read may block before the doc server abandons the
+/// connection, so a client that opens a socket and never sends stalls one
+/// connection briefly instead of pinning the accept loop forever.
+const DOC_SERVE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn serve_one(conn: &mut std::net::TcpStream, site: &BTreeMap<String, String>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    // Bound the wait: a peer that connects and never writes stalls this one
+    // connection for at most the timeout, never the whole loop (a remote
+    // exhaustion vector otherwise).
+    if conn.set_read_timeout(Some(DOC_SERVE_READ_TIMEOUT)).is_err() {
+        return;
+    }
+    let Ok(clone) = conn.try_clone() else {
+        return;
+    };
+    // Bound the size: read at most one capped request line. `take` caps the byte
+    // count, so a client that never sends a newline yields a bounded buffer, not
+    // unbounded growth.
+    let mut reader = BufReader::new(clone.take(DOC_SERVE_REQUEST_LINE_CAP as u64));
     let mut request_line = String::new();
     if reader.read_line(&mut request_line).is_err() {
         return;
@@ -5124,6 +5166,42 @@ mod tests {
         }
     }
 
+    // ── Fallback is reserved for an empty tree, never a broken project ────────
+
+    #[test]
+    fn build_docs_or_stdlib_falls_back_on_empty_dir() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create empty dir");
+
+        let docs = build_docs_or_stdlib(&tmp).expect("empty dir falls back to stdlib-only");
+        assert!(
+            docs.modules.iter().all(|m| m.kind == ModuleKind::Stdlib),
+            "empty-dir fallback yields stdlib-only modules"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn build_docs_or_stdlib_propagates_a_broken_project() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-broken-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create project dir");
+        // A syntactically broken module: a real project that must NOT collapse to
+        // a plausible stdlib-only site.
+        fs::write(tmp.join("Main.ipe"), "module Main exposing (..)\n\nx =\n")
+            .expect("write broken module");
+
+        let result = build_docs_or_stdlib(&tmp);
+        assert!(
+            result.is_err(),
+            "a broken project surfaces its build error rather than falling back"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
     // ── Hierarchical namespace tree ────────────────────────────────────────
 
     #[test]
@@ -5692,6 +5770,75 @@ withBaseMs = something
             out.matches("import Ipe.List").count(),
             1,
             "Ipe.List must be imported exactly once:\n{out}"
+        );
+    }
+
+    #[test]
+    fn doc_serve_answers_a_normal_request() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("addr");
+
+        let handle = std::thread::spawn(move || {
+            let mut site: BTreeMap<String, String> = BTreeMap::new();
+            site.insert("index.html".to_owned(), "<h1>hi</h1>".to_owned());
+            let (mut conn, _) = listener.accept().expect("accept");
+            serve_one(&mut conn, &site);
+        });
+
+        let mut client = TcpStream::connect(addr).expect("connect");
+        client
+            .write_all(b"GET / HTTP/1.1\r\n\r\n")
+            .expect("write request");
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).expect("read response");
+        handle.join().expect("server thread");
+
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(resp.contains("<h1>hi</h1>"), "body served: {resp}");
+    }
+
+    #[test]
+    fn doc_serve_does_not_hang_on_a_headerless_flood() {
+        // A client that streams bytes without ever sending a newline must not
+        // grow the server's buffer without bound nor pin the connection: the
+        // capped read gives up past the cap and the request-line read timeout
+        // bounds the wait, so `serve_one` returns and the test completes.
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::time::Instant;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("addr");
+
+        let handle = std::thread::spawn(move || {
+            let site: BTreeMap<String, String> = BTreeMap::new();
+            let (mut conn, _) = listener.accept().expect("accept");
+            let started = Instant::now();
+            serve_one(&mut conn, &site);
+            started.elapsed()
+        });
+
+        let mut client = TcpStream::connect(addr).expect("connect");
+        // Send well past the request-line cap with no newline. Ignore write
+        // errors: the server closing early (cap hit) is exactly the bounded
+        // behaviour under test.
+        let chunk = vec![b'a'; 64 * 1024];
+        for _ in 0..64 {
+            if client.write_all(&chunk).is_err() {
+                break;
+            }
+        }
+        drop(client);
+        let elapsed = handle.join().expect("server thread");
+        // The read timeout is 10s; a bounded server returns well within it. A
+        // regression that reverted to an unbounded `read_line` would block until
+        // the client closed (here) or forever (a real slow-loris).
+        assert!(
+            elapsed < DOC_SERVE_READ_TIMEOUT * 3,
+            "serve_one must return promptly, took {elapsed:?}"
         );
     }
 }
