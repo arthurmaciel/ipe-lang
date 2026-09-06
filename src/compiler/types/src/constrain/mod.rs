@@ -120,6 +120,7 @@ pub(crate) const ZONK_NODE_LIMIT: u32 = 4_096;
 /// never appears in source, so the builder interns them up front to
 /// guarantee a stable, resolvable [`Symbol`] for each.
 
+/// The constraint-generation state threaded through the walk.
 pub struct Builder<'a> {
     pub(crate) uf: &'a mut UnionFind<Content>,
     pub(crate) interner: &'a Interner,
@@ -481,8 +482,5 @@ mod zonk;
 mod tests;
 
 pub use builtins::*;
-pub use builder_core::*;
-pub use constrain_ast::*;
-pub use scheme_table::*;
 pub use zonk::*;
 

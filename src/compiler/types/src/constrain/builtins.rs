@@ -1542,5 +1542,3 @@ pub(crate) const fn classify_binop(func: &str) -> BinopClass {
         _ => BinopClass::Poly,
     }
 }
-
-/// The constraint-generation state threaded through the walk.

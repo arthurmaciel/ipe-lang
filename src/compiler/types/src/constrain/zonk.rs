@@ -85,11 +85,11 @@ pub(crate) enum CopyVarTask {
 /// [`TypeError::StepBudgetExceeded`] if the shared budget is exhausted.
 #[allow(clippy::too_many_lines)] // one task-stack state machine, mirrors `zonk` — splitting would obscure the Visit/Build pairing
 pub(crate) fn copy_var(
-    pub(crate) uf: &mut UnionFind<Content>,
-    pub(crate) budget: &mut Budget,
-    pub(crate) var: VarId,
-    pub(crate) quantified: &BTreeMap<VarId, Symbol>,
-    pub(crate) fresh_map: &mut BTreeMap<VarId, VarId>,
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    var: VarId,
+    quantified: &BTreeMap<VarId, Symbol>,
+    fresh_map: &mut BTreeMap<VarId, VarId>,
 ) -> DResult<VarId> {
     let mut work: Vec<CopyVarTask> = vec![CopyVarTask::Visit(var)];
     let mut results: Vec<VarId> = Vec::new();
@@ -230,9 +230,9 @@ pub(crate) fn copy_var_underflow() -> Diagnostic {
 /// excludes any root still reachable from a pending deferred obligation (see
 /// callers).
 pub(crate) fn reachable_flex_roots(
-    pub(crate) uf: &mut UnionFind<Content>,
-    pub(crate) budget: &mut Budget,
-    pub(crate) root: VarId,
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    root: VarId,
 ) -> DResult<std::collections::BTreeSet<VarId>> {
     let mut seen: std::collections::BTreeSet<VarId> = std::collections::BTreeSet::new();
     let mut flex: std::collections::BTreeSet<VarId> = std::collections::BTreeSet::new();
@@ -315,10 +315,10 @@ pub(crate) fn mint_synth_symbol(interner: &mut Interner, next: &mut u32) -> DRes
 /// referencing (`use_home`) module. A union-find invariant violation is a
 /// `Diagnostic::CompilerBug` with an empty home.
 pub fn promote_untyped_boundaries(
-    pub(crate) uf: &mut UnionFind<Content>,
-    pub(crate) budget: &mut Budget,
-    pub(crate) interner: &mut Interner,
-    pub(crate) generated: &Generated,
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    interner: &mut Interner,
+    generated: &Generated,
 ) -> Result<UntypedSchemes, (Diagnostic, Vec<Symbol>)> {
     macro_rules! lift {
         ($e:expr) => {
@@ -477,9 +477,9 @@ pub(crate) enum ReifyTask {
 /// on budget exhaustion.
 #[allow(clippy::too_many_lines)] // one task-stack state machine, mirrors `zonk` — splitting would obscure the Visit/Build pairing
 pub fn reify_scheme(
-    pub(crate) uf: &mut UnionFind<Content>,
-    pub(crate) budget: &mut Budget,
-    pub(crate) scheme: &UntypedScheme,
+    uf: &mut UnionFind<Content>,
+    budget: &mut Budget,
+    scheme: &UntypedScheme,
 ) -> DResult<Option<Ty>> {
     let mut work: Vec<ReifyTask> = vec![ReifyTask::Visit(scheme.root)];
     let mut results: Vec<Ty> = Vec::new();
