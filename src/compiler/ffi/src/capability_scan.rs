@@ -25,7 +25,9 @@
 //! narrowing the wrapper), whereas a false negative would admit an unconstrained
 //! capability. Every ambiguous or unenumerable construct (`extern`, `#[link]`,
 //! `libc::`, `include!`, `#[path]`, a source that does not lex) is treated as an
-//! **opaque** refuse trigger, never as "no capability found".
+//! **opaque** refuse trigger, never as "no capability found". Aliasing the
+//! crate root itself (`use std as s`, `extern crate std`) is one of these: the
+//! alias carries the whole `std` surface no path rule can see, so it refuses.
 
 use std::collections::BTreeSet;
 
@@ -587,9 +589,15 @@ fn scan_ident(
     id: &proc_macro2::Ident,
     out: &mut ScanOutcome,
 ) {
-    let name = id.to_string();
+    // Compare on the UN-RAW spelling: a raw identifier `r#std` is the crate root
+    // `std` to the Rust resolver, so `use r#std as s;` reaches `std::fs` exactly
+    // as `use std as s;` does. Stripping the `r#` before every crate-root/keyword
+    // match closes that aliasing evasion for this guard AND the path/extern/libc/
+    // include matches below, which all key off `name`.
+    let raw = id.to_string();
+    let name = raw.strip_prefix("r#").unwrap_or(&raw);
     let line = id.span().start().line;
-    match name.as_str() {
+    match name {
         // `extern` block / `extern "C" fn` is native FFI. Bare `extern crate`
         // (a 2015-edition import) is NOT, so require the next token is not
         // `crate`.
@@ -662,6 +670,42 @@ fn scan_ident(
                 construct: "std::<unrecognised>",
             });
         }
+    } else if name == "std" || name == "core" {
+        // A `std` / `core` crate-root token that did NOT continue as a
+        // recognised `::Ident` path. Deny by default on the CONTINUATION SHAPE,
+        // rather than enumerate evasions: any shape that can rename or splat the
+        // crate root is unenumerable and refused.
+        //
+        //   * followed by `::` whose next-next token is NOT an `Ident` — a
+        //     `{…}` group (`std::{self as s}`, `std::{fs, …}`) or a `*` glob
+        //     (`std::*`). A `self`-alias renames the crate root; a group or glob
+        //     splats it. `colon_colon_ident` (which requires a 4th-token Ident)
+        //     returned None for these, so neither the path rules nor the
+        //     `std::<unrecognised>` catch-all above could see them.
+        //   * not followed by `::` at all — an alias or bare import of the crate
+        //     root: `use std as s;`, `use core as c;`, `extern crate std;`,
+        //     `extern crate std as s;`. The alias bears a full-crate surface the
+        //     path rules never see (`s::fs::…` matches nothing).
+        //
+        // Either way the whole crate root is reachable under a name the scan
+        // cannot follow, so refuse — matching the closed-allowlist policy of the
+        // catch-all above.
+        let opaque = if next_is_colon(toks, i) {
+            // `std ::` — the 4th token after `std` decides. `colon_colon_ident`
+            // already handled the `::Ident` case (returned Some), so reaching
+            // here with a `::` means the continuation is a Group or glob.
+            !matches!(toks.get(i + 3), Some(TokenTree::Ident(_)))
+        } else {
+            // Bare / aliased crate root.
+            true
+        };
+        if opaque {
+            out.opacities.push(Opacity::UnenumerableModule {
+                file: file.to_owned(),
+                line,
+                construct: "std-root-alias",
+            });
+        }
     }
 }
 
@@ -721,7 +765,9 @@ fn colon_colon_ident(toks: &[TokenTree], i: usize) -> Option<String> {
         return None;
     };
     if c1.as_char() == ':' && c2.as_char() == ':' {
-        Some(second.to_string())
+        // Un-raw the trailing segment too: `std::r#fs` reaches `std::fs`.
+        let s = second.to_string();
+        Some(s.strip_prefix("r#").unwrap_or(&s).to_owned())
     } else {
         None
     }
@@ -1031,6 +1077,152 @@ mod tests {
             o.opacities
         );
         assert!(o.must_refuse());
+    }
+
+    #[test]
+    fn a_crate_root_alias_of_std_is_an_unenumerable_module() {
+        // `use std as s;` renames the crate root, so `s::fs::write(...)` matches
+        // no path rule and would otherwise scan to an empty, admissible set. The
+        // alias itself must refuse as an unenumerable module.
+        let src = "use std as s; pub fn f() { s::fs::write(\"a\", \"b\").ok(); }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "aliasing the std crate root must refuse: {:?}",
+            o.opacities
+        );
+        assert!(
+            o.must_refuse(),
+            "a hidden-capability alias must force a refuse"
+        );
+    }
+
+    #[test]
+    fn a_crate_root_alias_of_core_is_an_unenumerable_module() {
+        let src = "use core as c; pub fn f() -> c::cmp::Ordering { c::cmp::Ordering::Less }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "aliasing the core crate root must refuse: {:?}",
+            o.opacities
+        );
+        assert!(o.must_refuse());
+    }
+
+    #[test]
+    fn an_extern_crate_std_is_an_unenumerable_module() {
+        // `extern crate std;` / `extern crate std as s;` is the 2015-edition
+        // crate-root alias — the same evasion, caught when the scan reaches the
+        // `std` ident (which is not followed by `::`).
+        let src = "extern crate std as s; pub fn f() { s::fs::write(\"a\", \"b\").ok(); }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "extern crate std alias must refuse: {:?}",
+            o.opacities
+        );
+        assert!(o.must_refuse());
+    }
+
+    #[test]
+    fn an_extern_crate_of_a_third_party_still_does_not_refuse_here() {
+        // A non-std `extern crate` is a plain dependency import; the crate-root
+        // refuse rule is scoped to `std` / `core` and must not widen to it.
+        let src = "extern crate serde as s; pub fn f() -> i32 { 1 }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            !o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "a third-party extern crate must not trip the std-root rule: {:?}",
+            o.opacities
+        );
+    }
+
+    #[test]
+    fn a_raw_ident_alias_of_std_still_refuses() {
+        // `use r#std as s;` — the raw identifier `r#std` is the crate root `std`
+        // to the resolver, so `s::fs::write(...)` reaches the filesystem. The scan
+        // must compare on the un-raw spelling and still refuse the alias.
+        let src = "use r#std as s; pub fn f() { s::fs::write(\"a\", \"b\").ok(); }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "a raw-identifier crate-root alias must refuse: {:?}",
+            o.opacities
+        );
+        assert!(o.must_refuse(), "r#std aliasing must force a refuse");
+    }
+
+    #[test]
+    fn a_nested_self_alias_of_std_still_refuses() {
+        // `pub use std::{self as s};` renames the crate root through a `::{…}`
+        // group. `std` is followed by `::` then a Group (not an Ident), so neither
+        // the path rules nor the `std::<unrecognised>` catch-all fire — the
+        // continuation-shape guard must refuse the self-import group.
+        let src = "pub use std::{self as s}; pub fn f() { s::fs::write(\"a\", \"b\").ok(); }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "a nested `::{{self as s}}` crate-root alias must refuse: {:?}",
+            o.opacities
+        );
+        assert!(o.must_refuse(), "a self-alias group must force a refuse");
+    }
+
+    #[test]
+    fn a_glob_import_of_std_still_refuses() {
+        // `use std::*;` splats the crate root into scope, so a later bare `fs`
+        // resolves to `std::fs`. `std` is followed by `::` then a `*` glob (not an
+        // Ident), which the continuation-shape guard must refuse.
+        let src = "use std::*; pub fn f() { fs::write(\"a\", \"b\").ok(); }";
+        let o = scan_source("lib.rs", src);
+        assert!(
+            o.opacities.iter().any(|op| matches!(
+                op,
+                Opacity::UnenumerableModule {
+                    construct: "std-root-alias",
+                    ..
+                }
+            )),
+            "a glob import of the std crate root must refuse: {:?}",
+            o.opacities
+        );
+        assert!(o.must_refuse(), "a std glob import must force a refuse");
     }
 
     #[test]

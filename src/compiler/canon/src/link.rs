@@ -68,13 +68,18 @@ pub fn link(
     // deep dependency's disclosure is never dropped from the entry's set.
     let mut imported_web_capabilities: BTreeSet<WebCapability> = BTreeSet::new();
     // Nominal-identity gate: reject a genuine duplicate `(home, name)` (the same
-    // type declared twice), but ALLOW two distinct homes sharing a short name.
-    let mut seen: HashSet<(Vec<Symbol>, Symbol)> = HashSet::new();
+    // type or value declared twice), but ALLOW two distinct homes sharing a
+    // short name. Types and values live in separate namespaces, so each has its
+    // own seen-set. Gating defs here — not only unions — closes the exit-0-then-
+    // cargo-fail hole where a value-only module linked twice emits duplicate
+    // Rust fns.
+    let mut seen_types: HashSet<(Vec<Symbol>, Symbol)> = HashSet::new();
+    let mut seen_defs: HashSet<(Vec<Symbol>, Symbol)> = HashSet::new();
     for m in modules {
         imports_unsafe_submodule |= m.imports_unsafe_submodule;
         imported_web_capabilities.extend(m.imported_web_capabilities.iter().copied());
         for u in &m.unions {
-            if !seen.insert((u.home.clone(), u.name)) {
+            if !seen_types.insert((u.home.clone(), u.name)) {
                 let name = interner
                     .resolve(u.name)
                     .unwrap_or("<?>")
@@ -83,6 +88,22 @@ pub fn link(
                 return Err(Diagnostic::Name {
                     span: Span::DUMMY,
                     msg: NameError::DuplicateType {
+                        name,
+                        first: Span::DUMMY,
+                    },
+                });
+            }
+        }
+        for d in &m.defs {
+            if !seen_defs.insert((d.home().to_vec(), d.name().value)) {
+                let name = interner
+                    .resolve(d.name().value)
+                    .unwrap_or("<?>")
+                    .to_owned()
+                    .into_boxed_str();
+                return Err(Diagnostic::Name {
+                    span: d.name().span,
+                    msg: NameError::DuplicateValue {
                         name,
                         first: Span::DUMMY,
                     },

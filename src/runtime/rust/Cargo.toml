@@ -437,7 +437,9 @@ http_client = ["tokio", "reqwest", "futures-util", "url", "random", "serde"]
 # `ssrf_pinned_ws_addr`. Both need the http_client module present. (`sha2` is a
 # non-optional base dep now.)
 # `crypto-core`: `email.rs` HMAC-SHA-256s the SMTP auth.
-email = ["tokio", "reqwest", "lettre", "dep:serde_json", "json", "serde", "http_client", "encoding", "crypto-core"]
+# `secret`: `email.rs` takes the SMTP password as a `crate::secret::Secret`, so
+# the `secret` module must be present whenever the email surface is imported.
+email = ["tokio", "reqwest", "lettre", "dep:serde_json", "json", "serde", "http_client", "encoding", "crypto-core", "secret"]
 # ws needs ONLY the reqwest-free ssrf validators (which use `url`, behind the
 # `url` feature), NOT the reqwest HTTP client — so it does not pull
 # `http_client`. `tokio/net`: `ws_client.rs` opens the pinned TCP socket.

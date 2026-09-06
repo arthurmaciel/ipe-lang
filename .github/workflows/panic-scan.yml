@@ -12,7 +12,7 @@ name: No-panic
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, development]
     paths:
       - 'src/**/*.rs'
       - 'tools/panic-scan/**'

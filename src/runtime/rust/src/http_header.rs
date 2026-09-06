@@ -18,16 +18,20 @@
 /// hyper/axum reject invalid header names on parse — so the divergence is
 /// unobservable in practice.
 pub(crate) fn canonical_header(k: &str) -> String {
-    k.split('-')
-        .map(|w| {
-            let mut c = w.chars();
-            match c.next() {
-                Some(f) => f.to_ascii_uppercase().to_string() + &c.as_str().to_ascii_lowercase(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("-")
+    let mut out = String::with_capacity(k.len());
+    let mut at_segment_start = true;
+    for c in k.chars() {
+        if c == '-' {
+            out.push('-');
+            at_segment_start = true;
+        } else if at_segment_start {
+            out.push(c.to_ascii_uppercase());
+            at_segment_start = false;
+        } else {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
 }
 
 /// Strip a scheme's IMPLICIT default port (`:443` for `https`, `:80` for

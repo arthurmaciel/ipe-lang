@@ -381,136 +381,168 @@ const WASM_PRESENT_OVERRIDES: &[&str] = &[
     "ipe_runtime::task::task_sequence",
 ];
 
-/// The wasm-target kernel-wrapper prelude: [`runtime_bindings`] filtered to the
-/// wrappers whose OWN `ipe_runtime::<module>::` call path denotes a kernel present
-/// on the browser-wasm target. An allowlist, not a denylist: a wrapper is kept
-/// only when it is classified PRESENT, and a wrapper naming a runtime module
-/// neither classified present nor absent fails loud (IPE-I0203) rather than
-/// defaulting to KEPT — so a new native-only wrapper can never silently ship into
-/// a wasm crate and E0433 after ipe exit-0. The classification reads the wrapper's
-/// body call path (not the comment-inclusive block text), so a doc comment
-/// mentioning another module can neither keep nor drop the wrong wrapper.
-///
-/// A body path is PRESENT iff it is an exact [`WASM_PRESENT_OVERRIDES`] entry, or
-/// its module is declared in [`WASM_RUNTIME_MOD_RS`] and not shadowed by a
-/// [`WASM_ABSENT_MODULE_PATHS`] entry (a mostly-native module whose non-override
-/// functions have no wasm arm). The Layer-1 gate already denies the kernels behind
-/// the dropped wrappers, so no emitted call site can reference them.
-fn wasm_runtime_bindings() -> DResult<String> {
-    let full = runtime_bindings()?;
-    let declared = wasm_declared_modules();
-    let mut out = String::with_capacity(full.len());
-    let mut first = true;
-    for block in full.split("\npub fn ") {
-        if first {
-            // The head segment (IpeError re-export + type aliases), never a
-            // wrapper.
-            out.push_str(block);
-            first = false;
-            continue;
-        }
-        if wasm_wrapper_is_present(block, &declared)? {
-            out.push_str("\npub fn ");
-            out.push_str(block);
-        }
-    }
-    Ok(out)
-}
-
-/// The `pub mod <name>;` module names [`WASM_RUNTIME_MOD_RS`] declares — the set a
-/// wrapper's own call-path module is checked against.
-fn wasm_declared_modules() -> std::collections::BTreeSet<&'static str> {
+/// The modules [`WASM_RUNTIME_MOD_RS`] declares present on the wasm target,
+/// parsed from its `pub mod <name>;` lines. A kernel wrapper whose denotation
+/// targets a module outside this set — and outside the partial-module carve-outs
+/// ([`WASM_ABSENT_MODULE_PATHS`] / [`WASM_PRESENT_OVERRIDES`]) — is unclassified
+/// against the wasm module set, and [`wasm_runtime_bindings`] fails loud rather
+/// than emitting a wrapper that names a module the manifest never compiles.
+fn wasm_present_modules() -> BTreeSet<&'static str> {
     WASM_RUNTIME_MOD_RS
         .lines()
         .filter_map(|line| {
-            line.trim()
-                .strip_prefix("pub mod ")
-                .and_then(|rest| rest.strip_suffix(';'))
+            let trimmed = line.trim();
+            let rest = trimmed.strip_prefix("pub mod ")?;
+            let name = rest.strip_suffix(';').or_else(|| rest.strip_suffix(" {"))?;
+            Some(name.trim())
         })
         .collect()
 }
 
-/// Whether one kernel-wrapper `block` (the text following a `\npub fn ` split, so
-/// its signature then body) denotes a browser-wasm-present kernel.
-///
-/// Classifies on the wrapper's OWN `ipe_runtime::<module>::<fn>` call path parsed
-/// from the body (the text after the signature's opening `{`), never the leading
-/// doc comment — a comment mentioning another module cannot mis-route the decision.
-/// Fails loud (IPE-I0203) when the wrapper names a runtime module that is neither
-/// declared present in [`WASM_RUNTIME_MOD_RS`] nor listed absent, so an
-/// unclassified native-only wrapper is rejected at emit rather than shipped.
-fn wasm_wrapper_is_present(
-    block: &str,
-    declared: &std::collections::BTreeSet<&'static str>,
-) -> DResult<bool> {
-    // The wrapper body begins at the signature's opening brace; classify only the
-    // call paths inside it, so a preceding doc comment never contributes a path.
-    let body = block.split_once('{').map_or(block, |(_, rest)| rest);
-    let mut classified = false;
-    let mut present = false;
-    for path in ipe_runtime_call_paths(body) {
-        // An explicit per-function present override wins outright.
-        if WASM_PRESENT_OVERRIDES.contains(&path) {
-            classified = true;
-            present = true;
-            continue;
-        }
-        // A module/function shadowed absent (a mostly-native module's non-override
-        // function) is not present on wasm.
-        if WASM_ABSENT_MODULE_PATHS.iter().any(|p| path.starts_with(p)) {
-            classified = true;
-            continue;
-        }
-        // Otherwise the wrapper is present iff its module is declared in the wasm
-        // module set; a module neither declared nor listed absent is unclassified.
-        let module = path
-            .strip_prefix("ipe_runtime::")
-            .and_then(|rest| rest.split_once("::"))
-            .map(|(m, _)| m);
-        match module {
-            Some(m) if declared.contains(m) => {
-                classified = true;
-                present = true;
-            }
-            _ => {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "backend.wasm_prelude_classify",
-                    detail: format!(
-                        "wasm kernel-wrapper references unclassified runtime path {path:?} \
-                         (neither WASM_RUNTIME_MOD_RS-declared nor WASM_ABSENT_MODULE_PATHS-listed)"
-                    ),
-                });
-            }
-        }
-    }
-    // A wrapper with no `ipe_runtime::` call path (a pure re-export/type alias
-    // helper) carries nothing native to gate — keep it.
-    Ok(present || !classified)
-}
-
-/// Every distinct `ipe_runtime::<module>::<fn>` call path appearing in `body`, as
-/// borrowed slices. Scans for the `ipe_runtime::` prefix and takes the following
-/// `<module>::<fn>` identifier path (segments of ASCII identifier characters
-/// separated by `::`), stopping at the first non-path character.
-fn ipe_runtime_call_paths(body: &str) -> Vec<&str> {
+/// The `ipe_runtime::<module>::` denotations a kernel-wrapper `pub fn` body calls,
+/// each as `(full_call_path, module)`. Only call paths are collected — a segment
+/// followed by `(` — so an incidental parameter/return TYPE reference
+/// (`ipe_runtime::path::Path`) is ignored and the classification keys on the
+/// denotation the wrapper actually invokes.
+fn wrapper_call_paths(block: &str) -> Vec<(&str, &str)> {
     const PREFIX: &str = "ipe_runtime::";
     let mut paths = Vec::new();
-    let mut rest = body;
-    while let Some(idx) = rest.find(PREFIX) {
-        let after = &rest[idx..];
-        let end = after
-            .char_indices()
-            .find(|&(_, c)| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
-            .map_or(after.len(), |(i, _)| i);
-        let path = &after[..end];
-        // Only a full `ipe_runtime::<module>::<fn>` path (two `::` after the prefix)
-        // classifies a wrapper; a bare `ipe_runtime::Type` reference is not a call.
-        if path[PREFIX.len()..].contains("::") && !paths.contains(&path) {
-            paths.push(path);
+    let bytes = block.as_bytes();
+    let mut search_from = 0usize;
+    while let Some(rel) = block.get(search_from..).and_then(|s| s.find(PREFIX)) {
+        let start = search_from + rel;
+        let after = start + PREFIX.len();
+        // A path segment run: identifier chars, `::`, until a non-path byte.
+        let mut end = after;
+        while let Some(&c) = bytes.get(end) {
+            if c.is_ascii_alphanumeric() || c == b'_' || c == b':' {
+                end += 1;
+            } else {
+                break;
+            }
         }
-        rest = &after[end..];
+        search_from = end;
+        // A call denotation is immediately followed by `(`.
+        if bytes.get(end) != Some(&b'(') {
+            continue;
+        }
+        let Some(full) = block.get(start..end) else {
+            continue;
+        };
+        // Module = the first segment after the `ipe_runtime::` prefix.
+        let module = full
+            .get(PREFIX.len()..)
+            .and_then(|rest| rest.split("::").next())
+            .unwrap_or("");
+        if !module.is_empty() {
+            paths.push((full, module));
+        }
     }
     paths
+}
+
+/// The wasm-target kernel-wrapper prelude: [`runtime_bindings`] filtered to the
+/// wrappers whose denotation is reachable on wasm32. A wrapper is kept only when
+/// its call path is explicitly allowlisted ([`WASM_PRESENT_OVERRIDES`]) or targets
+/// a module [`WASM_RUNTIME_MOD_RS`] declares present; a wrapper whose module is a
+/// partial/absent carve-out ([`WASM_ABSENT_MODULE_PATHS`]) without an override is
+/// dropped; and a wrapper whose denotation is none of these fails loud rather than
+/// emitting a call the wasm manifest cannot resolve. The Layer-1 gate already
+/// denies the kernels behind the dropped wrappers, so no emitted call site can
+/// reference them.
+fn wasm_runtime_bindings() -> DResult<String> {
+    let full = runtime_bindings()?;
+    let present = wasm_present_modules();
+    let mut out = String::with_capacity(full.len());
+
+    // Tokenize into a leading `head` (up to the first wrapper's own comment run or
+    // `pub fn`) and a sequence of wrapper units, each owning its LEADING comment
+    // lines. A unit's classification reads only its own `pub fn` body, and a
+    // dropped unit takes its leading comment with it — so a comment mentioning a
+    // carved-out module never drops an unrelated wrapper, and a dropped wrapper
+    // never orphans its doc onto a kept neighbour.
+    let mut pending_comments = String::new();
+    let mut current: Option<String> = None;
+    let mut head_done = false;
+
+    // Emit the accumulated `current` wrapper unit iff it is wasm-reachable.
+    let flush =
+        |out: &mut String, comments: &mut String, unit: &mut Option<String>| -> DResult<()> {
+            if let Some(body) = unit.take() {
+                let block = format!("{comments}{body}");
+                if wrapper_is_wasm_reachable(&block, &present)? {
+                    out.push_str(&block);
+                }
+                comments.clear();
+            }
+            Ok(())
+        };
+
+    for line in full.split_inclusive('\n') {
+        let is_comment = line.trim_start().starts_with("//");
+        let is_fn = line.starts_with("pub fn ");
+        if is_fn {
+            // A new wrapper starts: emit the previous unit, then this line opens
+            // the current unit with the pending comment run as its leading doc.
+            flush(&mut out, &mut pending_comments, &mut current)?;
+            head_done = true;
+            current = Some(line.to_owned());
+        } else if is_comment && (head_done || current.is_none()) {
+            // A comment line: it leads the NEXT wrapper. Flush the current unit
+            // first so the comment does not attach to it.
+            flush(&mut out, &mut pending_comments, &mut current)?;
+            pending_comments.push_str(line);
+        } else if let Some(body) = current.as_mut() {
+            // A continuation line of the current wrapper body.
+            body.push_str(line);
+        } else {
+            // Head lines (before any `pub fn`): emitted verbatim.
+            out.push_str(line);
+        }
+    }
+    flush(&mut out, &mut pending_comments, &mut current)?;
+    // Any trailing comment run with no following wrapper is emitted verbatim.
+    out.push_str(&pending_comments);
+    Ok(out)
+}
+
+/// Whether a wrapper unit's `pub fn` denotation is reachable on the wasm target:
+/// an allowlisted override, or every call path targets a present module and none
+/// hits a carve-out. A call path outside all three sets is unclassified and fails
+/// loud rather than emitting an unresolved-path wasm crate.
+fn wrapper_is_wasm_reachable(block: &str, present: &BTreeSet<&str>) -> DResult<bool> {
+    let call_paths = wrapper_call_paths(block);
+    // A wrapper is kept when its denotation is explicitly substituted on wasm.
+    if call_paths
+        .iter()
+        .any(|(path, _)| WASM_PRESENT_OVERRIDES.contains(path))
+    {
+        return Ok(true);
+    }
+    for (path, module) in call_paths {
+        if WASM_ABSENT_MODULE_PATHS.iter().any(|p| path.starts_with(p)) {
+            return Ok(false);
+        }
+        if !present.contains(module) {
+            return Err(unclassified_wrapper(path));
+        }
+    }
+    // No carve-out reference and every call path targets a present module (or the
+    // block calls nothing under `ipe_runtime::`) -> keep.
+    Ok(true)
+}
+
+/// A kernel wrapper whose denotation targets a module absent from the wasm module
+/// set and not carved out — a fail-closed refusal in place of emitting an
+/// unresolved-path (E0433) wasm crate.
+fn unclassified_wrapper(path: &str) -> Diagnostic {
+    Diagnostic::CompilerBug {
+        where_: "backend.wasm_prelude",
+        detail: format!(
+            "kernel-wrapper denotation {path:?} targets a module not declared in the wasm \
+             module set and not carved out by WASM_ABSENT_MODULE_PATHS / WASM_PRESENT_OVERRIDES"
+        ),
+    }
 }
 
 /// The `--target wasm` entry: `#[wasm_bindgen(start)]` replacing `fn main`.
@@ -5274,9 +5306,11 @@ impl {sf} {{
 mod tests {
     use super::{
         CARGO_DEP_TOML, CARGO_TOML, CARGO_WASM_DEP_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES,
-        RUNTIME_CONFIG_RS_DB_SQLITE, RUNTIME_MOD_RS_WEB_APPEND, WASM_CARGO_TOML,
-        async_runtime_cargo_toml, crypto_core_heavy_cargo_toml, db_cargo_toml, jwt_cargo_toml,
-        server_cargo_toml, shake_ffi_by_fn_ident, web_cargo_toml,
+        RUNTIME_CONFIG_RS_DB_SQLITE, RUNTIME_MOD_RS_WEB_APPEND, WASM_ABSENT_MODULE_PATHS,
+        WASM_CARGO_TOML, WASM_PRESENT_OVERRIDES, async_runtime_cargo_toml,
+        crypto_core_heavy_cargo_toml, db_cargo_toml, jwt_cargo_toml, runtime_bindings,
+        server_cargo_toml, shake_ffi_by_fn_ident, wasm_present_modules, wasm_runtime_bindings,
+        web_cargo_toml, wrapper_call_paths,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -5496,6 +5530,106 @@ mod tests {
     #[test]
     fn crypto_core_heavy_toml_anchor_miss_is_a_compiler_bug() {
         assert!(crypto_core_heavy_cargo_toml("[package]\nname = \"x\"\n").is_err());
+    }
+
+    // ── wasm kernel-wrapper prelude allowlist ───────────────────────────
+
+    /// The wasm prelude keeps every present-module and allowlisted-override
+    /// wrapper, and drops every carve-out wrapper.
+    #[test]
+    fn wasm_prelude_keeps_present_and_override_wrappers_drops_carveouts() {
+        let prelude = wasm_runtime_bindings().expect("wasm prelude must build");
+        // A present-module wrapper (log.rs is fully wasm-safe) is kept.
+        assert!(
+            prelude.contains("ipe_runtime::log::log_info"),
+            "present-module log wrapper must survive: {prelude}"
+        );
+        // An override re-adds a wrapper whose module is carved out (time.rs).
+        assert!(
+            prelude.contains("ipe_runtime::time::time_now"),
+            "override time_now must survive: {prelude}"
+        );
+        // A carved-out wrapper with no override is dropped (crypto AEAD, http_get
+        // is override-kept but the bulk crypto module is not — random tokens go
+        // via crypto_core override; the plain terminal secret read is dropped).
+        assert!(
+            !prelude.contains("ipe_runtime::io::io_read_secret"),
+            "terminal-secret wrapper must be dropped on wasm: {prelude}"
+        );
+    }
+
+    /// A wrapper whose denotation targets a module outside the wasm module set
+    /// and outside the carve-outs fails loud rather than emitting an
+    /// unresolved-path wasm crate — the fail-closed direction the prelude filter
+    /// guarantees.
+    #[test]
+    fn wasm_prelude_fails_loud_on_an_unclassified_wrapper() {
+        // A synthetic wrapper naming a module that is neither present nor carved
+        // out. `native_only` is not declared in WASM_RUNTIME_MOD_RS, not in
+        // WASM_ABSENT_MODULE_PATHS, and not overridden.
+        let block = "pub fn ghost() -> IpeTask<()> {\n    ipe_runtime::native_only::ghost()\n}\n";
+        let paths = wrapper_call_paths(block);
+        assert_eq!(
+            paths,
+            vec![("ipe_runtime::native_only::ghost", "native_only")]
+        );
+        assert!(
+            !wasm_present_modules().contains("native_only"),
+            "native_only must be absent from the wasm module set"
+        );
+        assert!(
+            !WASM_ABSENT_MODULE_PATHS
+                .iter()
+                .any(|p| "ipe_runtime::native_only::ghost".starts_with(p)),
+            "native_only must not be a carve-out prefix"
+        );
+        assert!(
+            !WASM_PRESENT_OVERRIDES
+                .iter()
+                .any(|p| p == &"ipe_runtime::native_only::ghost"),
+            "native_only must not be overridden"
+        );
+    }
+
+    /// `wrapper_call_paths` collects call denotations only, skipping an incidental
+    /// parameter/return TYPE reference — the classification keys on what the
+    /// wrapper invokes, not the types it names.
+    #[test]
+    fn wrapper_call_paths_ignores_type_references() {
+        let block = "pub fn f(p: ipe_runtime::path::Path) -> IpeTask<()> {\n    \
+                     ipe_runtime::file::file_delete(p)\n}\n";
+        assert_eq!(
+            wrapper_call_paths(block),
+            vec![("ipe_runtime::file::file_delete", "file")]
+        );
+    }
+
+    /// A dropped wrapper takes its own leading doc comment with it: the terminal
+    /// secret-read wrapper is carved out on wasm, so neither its `pub fn` nor its
+    /// `Io.readSecret` doc comment survives into the wasm prelude.
+    #[test]
+    fn dropped_wrapper_takes_its_leading_comment() {
+        let prelude = wasm_runtime_bindings().expect("wasm prelude must build");
+        assert!(
+            !prelude.contains("io_read_secret"),
+            "the carved-out secret-read wrapper and its doc must both be dropped: {prelude}"
+        );
+    }
+
+    /// The wasm prelude is a substring-filtering of the native prelude: every
+    /// wrapper it keeps appears verbatim in the full prelude (the filter only
+    /// drops, never rewrites).
+    #[test]
+    fn wasm_prelude_is_a_filtered_native_prelude() {
+        let full = runtime_bindings().expect("native prelude must slice");
+        let wasm = wasm_runtime_bindings().expect("wasm prelude must build");
+        for block in wasm.split("\npub fn ").skip(1) {
+            let head = block.lines().next().unwrap_or("");
+            assert!(
+                full.contains(head),
+                "wasm wrapper head {head:?} must appear verbatim in the native prelude"
+            );
+        }
     }
 
     // ── seal tests: JWT feature in vendored defaults ────────────────────

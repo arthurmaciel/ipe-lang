@@ -52,35 +52,39 @@ impl DocString {
 /// content between the opening and closing fences.
 fn extract_ipe_fences(text: &str) -> Vec<Span> {
     const OPEN: &str = "```ipe";
-    const CLOSE: &str = "```";
+    const FENCE: &str = "```";
     let mut spans = Vec::new();
-    let bytes = text.as_bytes();
-    let len = bytes.len();
-    let mut i = 0usize;
-    while i < len {
-        // Find next opening fence.
-        let Some(rel) = text[i..].find(OPEN) else {
-            break;
-        };
-        let fence_start = i + rel;
-        // Content starts after the opening fence line (skip to next newline).
-        let after_open = fence_start + OPEN.len();
-        // Skip rest of the opening fence line.
-        let content_start = text[after_open..]
-            .find('\n')
-            .map_or(len, |nl| after_open + nl + 1);
-        // Find matching closing fence (a line that begins with ` ``` `).
-        let Some(close_rel) = text[content_start..].find(CLOSE) else {
-            // Unclosed fence — skip to next fence-open search.
-            i = after_open;
-            continue;
-        };
-        let content_end = content_start + close_rel;
-        // Clamp both ends to valid u32 byte offsets.
-        let lo = u32::try_from(content_start).unwrap_or(u32::MAX);
-        let hi = u32::try_from(content_end).unwrap_or(u32::MAX);
-        spans.push(Span::new(lo, hi));
-        i = content_end + CLOSE.len();
+    // Scan line by line. A fence is only honoured when its ` ``` ` sits at the
+    // start of the line (after optional leading whitespace), so inline
+    // triple-backticks inside prose or an example body never open or close a
+    // span. Byte offsets are tracked so each [`Span`] stays relative to `text`.
+    let mut line_start = 0usize;
+    // When inside a fenced block, `content_start` is the byte offset just after
+    // the opening fence line; otherwise the block is closed.
+    let mut content_start: Option<usize> = None;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let fence_at_line_start = trimmed.starts_with(FENCE);
+        match content_start {
+            None => {
+                // Outside a block: only an ` ```ipe ` fence at line start opens one.
+                if fence_at_line_start && trimmed.starts_with(OPEN) {
+                    content_start = Some(line_start + line.len());
+                }
+            }
+            Some(start) => {
+                // Inside a block: any line-start ` ``` ` closes it.
+                if fence_at_line_start {
+                    // Content ends where the leading whitespace before the
+                    // closing fence begins (i.e. at the start of this line).
+                    let lo = u32::try_from(start).unwrap_or(u32::MAX);
+                    let hi = u32::try_from(line_start).unwrap_or(u32::MAX);
+                    spans.push(Span::new(lo, hi));
+                    content_start = None;
+                }
+            }
+        }
+        line_start += line.len();
     }
     spans
 }
@@ -585,5 +589,62 @@ mod strip_tests {
         // spans are untouched.
         let raw = "head\n        value={{count}}";
         assert_eq!(strip_anchor_margin(raw, 9), "head\nvalue={{count}}");
+    }
+}
+
+#[cfg(test)]
+mod fence_tests {
+    use super::extract_ipe_fences;
+
+    // Collect each span's `[lo, hi)` slice of the input, for readable assertions.
+    fn slices(text: &str) -> Vec<String> {
+        extract_ipe_fences(text)
+            .into_iter()
+            .map(|span| {
+                let lo = span.lo as usize;
+                let hi = span.hi as usize;
+                text.get(lo..hi).unwrap_or("<oob>").to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn well_formed_block_spans_its_content() {
+        let text = "intro\n```ipe\ngreet \"world\"\n```\ntail";
+        assert_eq!(slices(text), vec!["greet \"world\"\n".to_owned()]);
+    }
+
+    #[test]
+    fn inline_close_fence_does_not_terminate_early() {
+        // The example body contains an inline ` ``` ` mid-line; it must NOT be
+        // read as the closing fence.
+        let text = "```ipe\nlet s = \"a ``` b\"\n```\n";
+        assert_eq!(slices(text), vec!["let s = \"a ``` b\"\n".to_owned()]);
+    }
+
+    #[test]
+    fn inline_open_fence_in_prose_opens_nothing() {
+        // An ` ```ipe ` appearing mid-line in prose is not a fence.
+        let text = "see the ```ipe``` marker inline here\nno block\n";
+        assert!(slices(text).is_empty());
+    }
+
+    #[test]
+    fn leading_whitespace_before_fence_is_honoured() {
+        // Fences indented by whitespace are still line-start fences.
+        let text = "  ```ipe\n  body\n  ```\n";
+        assert_eq!(slices(text), vec!["  body\n".to_owned()]);
+    }
+
+    #[test]
+    fn two_blocks_produce_two_spans() {
+        let text = "```ipe\none\n```\nmid\n```ipe\ntwo\n```\n";
+        assert_eq!(slices(text), vec!["one\n".to_owned(), "two\n".to_owned()]);
+    }
+
+    #[test]
+    fn unclosed_block_yields_no_span() {
+        let text = "```ipe\ndangling body with no closer\n";
+        assert!(slices(text).is_empty());
     }
 }

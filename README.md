@@ -10,6 +10,7 @@
 [![Supply-chain security](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/security.yml)
 [![Static binaries](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
 [![No-panic](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml)
+[![Docs deploy](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml)
 
 
 # Ipê language
