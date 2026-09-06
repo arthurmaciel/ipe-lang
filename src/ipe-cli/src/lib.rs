@@ -3190,6 +3190,15 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     if intercept_help(args).is_some() {
         return Ok(());
     }
+    // `--version`/`-V` is an alias of the `version` command, symmetric with the
+    // `--help`/`-h` interception above: the near-universal version probe that
+    // editors, version managers, and CI use must not fall through to
+    // unknown-command. Any trailing flags (e.g. `--json`) pass to the command.
+    if let Some((first, rest)) = args.split_first()
+        && (first == "--version" || first == "-V")
+    {
+        return with_help_on_misuse("version", run_version(rest));
+    }
     let Some((cmd, rest)) = args.split_first() else {
         // A bare `ipe` (no command) carries an empty token and just shows help.
         return Err(CliError::UnknownCommand {
@@ -3204,8 +3213,8 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     }
     // One registry drives both dispatch and help: a command runs exactly when it
     // is described, so the two cannot drift. The handler carries the canonical
-    // static name its misuse `--help` page keys on. Version is the `version`
-    // command only — there is no `--version`/`-V` flag alias.
+    // static name its misuse `--help` page keys on. `--version`/`-V` is aliased
+    // to the `version` command above the dispatch table.
     match help::handler(cmd.as_str()) {
         Some((name, run)) => with_help_on_misuse(name, run(rest)),
         // An unknown command is misuse: show the top-level help and fail. Unlike
@@ -6467,7 +6476,7 @@ fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
     match manifest {
         Some(m) => {
             let parsed = project::parse_manifest(&m)?;
-            Ok(analysis_root_of(&parsed))
+            analysis_root_of(&parsed)
         }
         None => Ok(path.to_path_buf()),
     }
@@ -6479,26 +6488,35 @@ fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
 /// An application uses `<src_root>/Main.ipe`. A library (a manifest declaring
 /// `exposedModules` with no `src/Main.ipe` and no runnable program) has no
 /// `main` to check, so its analysis root is its first exposed module's file —
-/// checking the public surface is a library's meaningful verification. The
-/// declared-program entry (when a `programs` stage names one) takes precedence
-/// via [`ProjectManifest::resolved_entry`]'s module path, mapped back to a file
-/// under the source root.
-fn analysis_root_of(parsed: &project::ProjectManifest) -> PathBuf {
+/// checking the public surface is a library's meaningful verification. A
+/// declared-program entry (when a `programs` stage names one) takes precedence,
+/// resolved through the same [`contained_path::ContainedRelPath`] gate the build
+/// path uses so an absolute or `..` entry cannot escape the source root.
+///
+/// # Errors
+/// [`CliError::PathEscape`] when a declared program's entry resolves outside the
+/// source root.
+fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, CliError> {
     let main = parsed.src_root.join("Main.ipe");
     if main.is_file() {
-        return main;
+        return Ok(main);
     }
     // No Main: prefer a declared program's entry file, else the first exposed
     // module's file. Fall back to `Main.ipe` (the caller surfaces a clean
     // missing-entry diagnostic) when the manifest names neither.
     if let Some(program) = parsed.default_program() {
-        return parsed.src_root.join(&program.entry);
+        let contained = contained_path::ContainedRelPath::parse(&parsed.src_root, &program.entry)
+            .map_err(|reason| CliError::PathEscape {
+            raw: program.entry.clone(),
+            reason,
+        })?;
+        return Ok(contained.resolved().to_path_buf());
     }
     if let Some(module) = parsed.exposed_modules.first() {
         let rel: PathBuf = module.split('.').collect();
-        return parsed.src_root.join(rel).with_extension("ipe");
+        return Ok(parsed.src_root.join(rel).with_extension("ipe"));
     }
-    main
+    Ok(main)
 }
 
 /// `ipe type-check [<path>]` — type-check a program and stop. Runs the same
@@ -9750,7 +9768,10 @@ pub mod web {
         )
         .expect("main");
         let app_manifest = project::parse_manifest(&app.join("package.ipe")).expect("app parses");
-        assert_eq!(analysis_root_of(&app_manifest), app_src.join("Main.ipe"));
+        assert_eq!(
+            analysis_root_of(&app_manifest).expect("app root resolves"),
+            app_src.join("Main.ipe")
+        );
         let _ = fs::remove_dir_all(&app);
 
         // A library (exposedModules, no Main) uses its first exposed module's file.
@@ -9763,10 +9784,63 @@ pub mod web {
         // file itself need not exist for the pure path derivation under test.
         let lib_manifest = project::parse_manifest(&lib.join("package.ipe")).expect("lib parses");
         assert_eq!(
-            analysis_root_of(&lib_manifest),
+            analysis_root_of(&lib_manifest).expect("lib root resolves"),
             lib_src.join("Core").join("Utils.ipe")
         );
         let _ = fs::remove_dir_all(&lib);
+    }
+
+    #[test]
+    fn version_flags_alias_the_version_command() {
+        // `--version` / `-V` are the near-universal version probe; both resolve
+        // to the `version` command rather than falling through to an
+        // unknown-command failure with the full help screen.
+        assert!(run_cli(&["--version".to_owned()]).is_ok());
+        assert!(run_cli(&["-V".to_owned()]).is_ok());
+        // Trailing format flags still reach the command.
+        assert!(run_cli(&["--version".to_owned(), "--json".to_owned()]).is_ok());
+    }
+
+    #[test]
+    fn analysis_root_rejects_a_program_entry_that_escapes_the_source_root() {
+        // A manifest whose declared program entry is an absolute path (or a `..`
+        // traversal) must not let `ipe type-check` read a file outside the
+        // project: analysis_root_of routes the entry through the same containment
+        // gate the build path uses, so the escape is a typed refusal.
+        let proj = std::env::temp_dir().join("ipe_analysis_root_escape");
+        let _ = fs::remove_dir_all(&proj);
+        let proj_src = proj.join("src");
+        fs::create_dir_all(&proj_src).expect("create src/");
+        fs::write(
+            proj.join("package.ipe"),
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"escape\"\n    , programs = [ { name = \"x\", entry = \"/etc/passwd\" } ]\n    }\n",
+        )
+        .expect("pkg");
+        // No src/Main.ipe: the program entry is the analysis root candidate.
+        let manifest = project::parse_manifest(&proj.join("package.ipe")).expect("parses");
+        assert!(
+            matches!(
+                analysis_root_of(&manifest),
+                Err(CliError::PathEscape { .. })
+            ),
+            "an absolute program entry must be refused, not joined and read"
+        );
+
+        // A `..` traversal is refused the same way.
+        fs::write(
+            proj.join("package.ipe"),
+            "module Package exposing (package)\n\n\npackage =\n    { name = \"escape\"\n    , programs = [ { name = \"x\", entry = \"../../secret.ipe\" } ]\n    }\n",
+        )
+        .expect("pkg");
+        let manifest = project::parse_manifest(&proj.join("package.ipe")).expect("parses");
+        assert!(
+            matches!(
+                analysis_root_of(&manifest),
+                Err(CliError::PathEscape { .. })
+            ),
+            "a dot-dot program entry must be refused, not joined and read"
+        );
+        let _ = fs::remove_dir_all(&proj);
     }
 
     #[test]

@@ -45,11 +45,11 @@ fn add_and_remove_have_help_pages() {
 }
 
 #[test]
-fn top_level_help_lists_the_external_packages_section() {
+fn top_level_help_de_advertises_add_and_remove() {
     let (ok, stdout, _) = run(&["--help"]);
     assert!(ok);
     assert!(
-        stdout.contains("Using external packages"),
-        "top-level help must carry the Using external packages section, got:\n{stdout}"
+        !stdout.contains("ipe add ") && !stdout.contains("ipe remove "),
+        "top-level help must not advertise `add`/`remove` (de-advertised), got:\n{stdout}"
     );
 }
