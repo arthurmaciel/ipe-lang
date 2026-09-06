@@ -494,7 +494,10 @@ fn scan_css_value(v: &str) -> Result<(), CssStripReason> {
     if !value_grammar_parses(&low) {
         return Err(CssStripReason::RawBreakout);
     }
-    if !value_grammar_parses(&css_unescape(&low)) {
+    // `css_unescape` is the identity on backslash-free input, so the escaped-form
+    // pass runs only when a backslash is present; a backslash-free value can never
+    // be an `EscapedBreakout`, keeping both the decision and the reason identical.
+    if low.contains('\\') && !value_grammar_parses(&css_unescape(&low)) {
         return Err(CssStripReason::EscapedBreakout);
     }
     Ok(())
