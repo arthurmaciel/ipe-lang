@@ -354,7 +354,7 @@ fn value_grammar_parses(s: &str) -> bool {
         if c == b'!' {
             return s
                 .get(i + 1..)
-                .is_some_and(|rest| rest.trim_start() == "important");
+                .is_some_and(|rest| rest.trim() == "important");
         }
         if c == b'"' || c == b'\'' {
             match value_parse_string(bytes, i, c) {
@@ -1228,6 +1228,8 @@ mod tests {
             "rgba(0,0,0,0.2)",
             "1px solid #ccc",
             "translateX(100px)",
+            "red !important",
+            "red !important ",
             // adversarial — rejected by both
             "expression(alert(1))",
             "0; background:url(javascript:alert(1))",
