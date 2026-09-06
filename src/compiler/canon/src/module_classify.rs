@@ -194,8 +194,9 @@ fn chain_error(path: &[Vec<Symbol>], offending: &ModuleInfo, interner: &Interner
     }
 }
 
-/// Same iterative (heap-stack) traversal shape as `target_gate::check_expr`,
-/// generalised to a visitor: called on every node.
+/// An iterative (heap-stack) traversal, generalised to a visitor called on
+/// every node. Unlike `target_gate::first_denied`, which recurses over the same
+/// expression shape, this keeps native call depth O(1).
 fn walk_expr<'e>(root: &'e Expr, visit: &mut impl FnMut(&'e Expr)) {
     let mut stack: Vec<&'e Expr> = vec![root];
     while let Some(e) = stack.pop() {

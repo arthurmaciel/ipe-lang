@@ -1338,6 +1338,13 @@ impl<'a> Parser<'a> {
         let mut ops: Vec<(Expr, Located<Symbol>)> = Vec::new();
         let mut operand = first;
         while let Some((op, op_span)) = self.peek_binop(threshold) {
+            // A flat operator chain re-associates into a nesting-deep Binop/Cons
+            // tree downstream, so each operator must cost one depth level here or
+            // the chain escapes `MAX_DEPTH` and overflows the recursive walkers
+            // (and Drop) that traverse the canonical tree.
+            if depth.saturating_add(u32::try_from(ops.len()).unwrap_or(u32::MAX)) >= MAX_DEPTH {
+                return Err(self.too_deep(Construct::Expression));
+            }
             let op_sym = self.intern(op)?;
             self.bump(Construct::Expression)?;
             ops.push((operand, Located::new(op_span, op_sym)));

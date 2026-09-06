@@ -1,28 +1,17 @@
-//! Regression test for CO-FRONT-001: a long right-associative operator chain
-//! must parse and canon-compile without a stack overflow.
-//!
-//! The old recursive `climb_binops` consumed one native stack frame per
-//! right-associative operator: `++` is right-assoc at precedence 5, so a chain
-//! of N operators causes N recursive calls (~200 B/frame × 50k = ~10 MB).
-//! This overflows the default 8 MB thread stack → SIGSEGV before producing a
-//! result.
-//!
-//! The iterative explicit-stack rewrite makes `climb_binops` O(1) in call-stack
-//! depth. The test proves this: it calls `ipe_canon::canonicalise` on a 50k-
-//! operator chain and asserts it returns. The resulting deeply-nested canon tree
-//! is leaked (`std::mem::forget`) so that its recursive drop does not itself
-//! overflow the stack — the property under test is that the compile succeeds,
-//! not the cleanup.
+//! A flat operator chain re-associates into a nesting-deep canonical tree that
+//! recursive downstream walkers (and the AST's own `Drop`) traverse, so an
+//! unbounded chain is a stack-overflow / denial-of-service surface on accepted
+//! input. The parser must count each operator toward its nesting limit and
+//! reject an over-long chain with a diagnostic rather than build the tree.
 
 use ipe_intern::Interner;
 
+/// A chain far longer than the parser's nesting limit must be REJECTED at parse
+/// time (fail-closed), not accepted into a tree that overflows a later walker.
 #[test]
-#[allow(clippy::expect_used)] // test setup: a failed parse IS the failure signal
-#[allow(clippy::panic)] // test assertion: a canon Err IS the failure signal
-fn deep_right_assoc_chain_does_not_crash() {
-    // 50_000 `++` operators (right-assoc at precedence 5).
-    // Old code: climb_binops recurses 50k deep → ~10 MB of stack → SIGSEGV.
-    // New code: climb_binops uses an explicit heap stack, O(1) native depth.
+fn over_deep_binop_chain_is_rejected() {
+    // Well beyond MAX_DEPTH (256): a chain this long previously parsed into a
+    // multi-thousand-deep Binop tree.
     const N: usize = 50_000;
 
     let mut src = String::with_capacity(N * 10 + 300);
@@ -34,29 +23,33 @@ fn deep_right_assoc_chain_does_not_crash() {
     src.push_str(")\n");
 
     let mut interner = Interner::new();
-    let parsed = ipe_parse::parse_module(&src, &mut interner).expect("parse must succeed");
+    let parsed = ipe_parse::parse_module(&src, &mut interner);
 
-    // This call SIGSEGV'd before the fix: climb_binops recursed 50k deep.
-    // After the fix it returns a 50k-deep canon tree in O(1) stack depth.
-    let result = ipe_canon::canonicalise(&parsed, &mut interner);
+    // The over-deep chain must be refused; a bounded tree never reaches canon.
+    assert!(
+        parsed.is_err(),
+        "over-deep operator chain must be rejected at parse"
+    );
+}
 
-    // Leak the deeply-nested canon tree so that the recursive drop does not
-    // itself overflow the stack. The property under test is that canonicalise
-    // RETURNS without a stack overflow — cleanup is irrelevant to the fix.
-    //
-    // `forget` is safe and deterministic: the heap allocation is freed by the
-    // OS at process exit; there are no destructors with side effects in the
-    // canon AST.
-    if let Ok(module) = result {
-        std::mem::forget(module);
-    } else {
-        // Canonicalise returned an Err.  The important thing is that it
-        // returned at all (no crash) — but we also assert Ok to catch
-        // correctness regressions.
-        panic!(
-            "deep right-assoc chain ({N} operators) must canon-compile successfully; \
-             error indicates a regression: {:?}",
-            result.err()
+/// A short chain (well within the limit) still parses and canon-compiles — the
+/// bound must not regress ordinary expressions.
+#[test]
+fn short_binop_chain_still_compiles() {
+    let mut src = String::from("module Main exposing (main)\n\nmain =\n    (");
+    src.push_str(r#""a""#);
+    for _ in 0..8 {
+        src.push_str(r#" ++ "a""#);
+    }
+    src.push_str(")\n");
+
+    let mut interner = Interner::new();
+    let parsed = ipe_parse::parse_module(&src, &mut interner);
+    assert!(parsed.is_ok(), "short operator chain must parse");
+    if let Ok(parsed) = parsed {
+        assert!(
+            ipe_canon::canonicalise(&parsed, &mut interner).is_ok(),
+            "short operator chain must canon-compile"
         );
     }
 }
