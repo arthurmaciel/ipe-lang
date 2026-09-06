@@ -9,7 +9,7 @@ name: Install
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, development]
     paths:
       - 'install.sh'
       - '.github/workflows/install-smoke.yml'

@@ -28,7 +28,7 @@ name: Supply-chain security
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, development]
   pull_request:
   schedule:
     - cron: '13 5 * * *'       # nightly, offset from ci.yml's 04:00 UTC sweep

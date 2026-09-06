@@ -1,0 +1,69 @@
+name: promote development to main
+# Fast-forward main to development ONLY when every branch-protection required check
+# is green on development's HEAD. The full CI (Build & test, Supply-chain security,
+# Sandbox, No-panic, Install, Static binaries) runs on each development push; this
+# workflow re-evaluates as each finishes and promotes when the whole required set is
+# green. main advances only by this FF to an already-fully-green tree, and nothing
+# else writes main -> main is green by construction.
+on:
+  workflow_run:
+    workflows:
+      - "Build & test"
+      - "Supply-chain security"
+      - "Sandbox"
+      - "No-panic"
+      - "Install"
+      - "Static binaries"
+    types: [completed]
+    branches: [development]
+permissions:
+  contents: write
+  checks: read
+  statuses: read
+concurrency:
+  group: promote-main
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: github.event.workflow_run.head_branch == 'development'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Promote iff every required check is green on development HEAD
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTE_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA=$(gh api "repos/$REPO/branches/development" --jq '.commit.sha')
+          echo "development HEAD = $SHA"
+
+          # Required contexts, straight from the main-protection ruleset (SSOT — the
+          # gate can never drift from the required-check set).
+          gh api "repos/$REPO/rulesets/22326541" \
+            --jq '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context' \
+            | sort -u > /tmp/req.txt
+
+          # Everything green on this commit (check-runs and legacy statuses).
+          : > /tmp/ok.txt
+          gh api --paginate "repos/$REPO/commits/$SHA/check-runs" \
+            --jq '.check_runs[]|select(.conclusion=="success")|.name' >> /tmp/ok.txt || true
+          gh api --paginate "repos/$REPO/commits/$SHA/statuses" \
+            --jq '.[]|select(.state=="success")|.context' >> /tmp/ok.txt || true
+          sort -u /tmp/ok.txt -o /tmp/ok.txt
+
+          missing=$(comm -23 /tmp/req.txt /tmp/ok.txt || true)
+          if [ -n "$missing" ]; then
+            echo "development not yet fully green — waiting on required checks:"
+            echo "$missing"
+            exit 0
+          fi
+          echo "every required check is green on $SHA — promoting."
+
+          # Fast-forward main. force=false => GitHub rejects any non-fast-forward, so
+          # this can never rewrite or diverge main.
+          if gh api -X PATCH "repos/$REPO/git/refs/heads/main" -f sha="$SHA" -F force=false >/dev/null; then
+            echo "Promoted main -> $SHA"
+          else
+            echo "FF ref update failed (divergence or missing bypass) — manual reconcile." >&2
+            exit 1
+          fi

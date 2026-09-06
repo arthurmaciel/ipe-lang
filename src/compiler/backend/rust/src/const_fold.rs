@@ -447,7 +447,11 @@ fn specialize_whitelisted_call(
         // `description` reach the registry past a computed `src`.
         let is_image_veneer = modpath_is(&func.home, &["Ipe", "Ui"], interner)
             && interner.resolve(func.name) == Some("image");
-        if !is_image_veneer && args.iter().any(|a| fold_const(a, &env).is_none()) {
+        // Fold each argument once. The all-constant gate reads these, and the
+        // substitution below reuses a scalar fold as its already-reduced literal so
+        // the inlined body's fold does not re-walk that argument a further time.
+        let arg_folds: Vec<Option<ConstValue>> = args.iter().map(|a| fold_const(a, &env)).collect();
+        if !is_image_veneer && arg_folds.iter().any(Option::is_none) {
             return None;
         }
         // A tail-recursive builder body carries a `TailLoop` / `TailRecur` that
@@ -459,8 +463,15 @@ fn specialize_whitelisted_call(
             return None;
         }
         let mut subst = BTreeMap::new();
-        for ((param, _), arg) in func.params.iter().zip(args) {
-            subst.insert(*param, arg.clone());
+        for (((param, _), arg), fold) in func.params.iter().zip(args).zip(&arg_folds) {
+            // A scalar-folding argument substitutes as its direct literal (the value
+            // the inlined body's fold would reduce it to anyway); every other argument
+            // substitutes verbatim so its own expression re-folds in place.
+            let replacement = fold
+                .as_ref()
+                .and_then(ConstValue::to_literal_expr)
+                .unwrap_or_else(|| arg.clone());
+            subst.insert(*param, replacement);
         }
         let inlined = substitute(func.body.clone(), &subst);
         return Some(fold_expr(inlined, funcs, interner));

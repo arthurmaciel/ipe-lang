@@ -242,7 +242,7 @@ fn render_into_ctx<M>(
             if raw_text {
                 s.push_str(t);
             } else {
-                s.push_str(&escape_text(t));
+                escape_html_into(t, false, s);
             }
         }
         Html::HRaw(r) => s.push_str(r),
@@ -373,7 +373,7 @@ fn render_into_ctx<M>(
                 s.push(' ');
                 s.push_str(safe_key.as_str());
                 s.push_str("=\"");
-                s.push_str(&escape_attr(sanitise_url_attr(k, v)));
+                escape_html_into(sanitise_url_attr(k, v), true, s);
                 s.push('"');
             }
             // Browser-client wire markers (live/client.js): the delegated
@@ -393,7 +393,7 @@ fn render_into_ctx<M>(
                 s.push('"');
                 if let Some(id) = ipe_id {
                     s.push_str(" data-ipe-hid=\"");
-                    s.push_str(&escape_attr(id));
+                    escape_html_into(id, true, s);
                     s.push('"');
                 }
                 for ev in &events {
@@ -430,7 +430,7 @@ fn render_into_ctx<M>(
                 && !v.is_empty()
                 && kids.is_empty()
             {
-                s.push_str(&escape_text(v));
+                escape_html_into(v, false, s);
             }
             // <script>/<style> emit text children verbatim (rawBody); a
             // <select> threads its value to option children for the `selected`
@@ -499,20 +499,28 @@ fn escape_attr(t: &str) -> String {
     escape_html(t, true)
 }
 
-/// Shared single-pass escaper behind [`escape_text`] / [`escape_attr`].
-///
-/// Replaces the former 4–5 sequential allocating `.replace()` passes
-/// (efficiency-audit §6 high). Byte-identical to the multi-pass form: the
-/// multi-pass order only mattered so the `&` of an inserted `&amp;`-style
-/// entity wasn't re-escaped by a later pass — a single original→output map
-/// never re-scans its own output, so the escape set and every emitted entity
-/// are unchanged. The metacharacter-free common case returns one plain copy
-/// without any scanning passes.
+/// Shared single-pass escaper behind [`escape_text`] / [`escape_attr`],
+/// returning a fresh `String`. Prefer [`escape_html_into`] when the result is
+/// immediately appended to an existing buffer — that path skips the extra
+/// allocation and copy the caller would otherwise pay.
 fn escape_html(t: &str, escape_quote: bool) -> String {
-    if !t.contains(['&', '<', '>', '\'', '"']) {
-        return t.to_owned();
-    }
     let mut out = String::with_capacity(t.len() + 8);
+    escape_html_into(t, escape_quote, &mut out);
+    out
+}
+
+/// Append `t`, HTML-escaped, directly to `out`.
+///
+/// A single original→output map never re-scans its own output, so the escape
+/// set and every emitted entity are the same as a multi-pass form; the
+/// metacharacter-free common case appends the input verbatim without any
+/// scanning passes or intermediate allocation.
+fn escape_html_into(t: &str, escape_quote: bool, out: &mut String) {
+    if !t.contains(['&', '<', '>', '\'', '"']) {
+        out.push_str(t);
+        return;
+    }
+    out.reserve(t.len() + 8);
     for c in t.chars() {
         match c {
             '&' => out.push_str("&amp;"),
@@ -523,7 +531,6 @@ fn escape_html(t: &str, escape_quote: bool) -> String {
             _ => out.push(c),
         }
     }
-    out
 }
 
 /// True when `name` is safe to emit UNESCAPED as a tag name, attribute key, or
