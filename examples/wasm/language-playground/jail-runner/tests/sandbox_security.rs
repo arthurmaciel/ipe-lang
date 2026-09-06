@@ -41,8 +41,29 @@ fn e2e_enabled() -> bool {
 /// `None` — tests that run under `--unshare-net` skip rather than hard-fail when
 /// the host cannot configure loopback inside an unprivileged user namespace.
 fn jail_or_skip(test: &str) -> Option<std::path::PathBuf> {
-    let bwrap = ipe_sandbox::probe().bwrap?;
+    // In E2E mode (the CI gate sets IPE_PLAYGROUND_E2E=1 after installing bwrap),
+    // refuse to skip: a required jail proof that silently skips would pass green
+    // having verified nothing. A missing jail primitive here is a hard failure,
+    // not a skip. Locally, without the flag, skipping stays a dev convenience.
+    let require = std::env::var("IPE_PLAYGROUND_E2E").is_ok();
+    let bwrap = match ipe_sandbox::probe().bwrap {
+        Some(b) => b,
+        None => {
+            assert!(
+                !require,
+                "{test}: IPE_PLAYGROUND_E2E=1 but bwrap is absent — refusing to \
+                 skip a required jail proof (the sandbox was never exercised)"
+            );
+            eprintln!("{test}: SKIP — bwrap absent on this host");
+            return None;
+        }
+    };
     if !netns_jail_available(&bwrap) {
+        assert!(
+            !require,
+            "{test}: IPE_PLAYGROUND_E2E=1 but the netns jail is unavailable — \
+             refusing to skip a required jail proof (the sandbox was never exercised)"
+        );
         eprintln!(
             "{test}: SKIP — netns jail unavailable on this host \
              (unprivileged userns cannot configure loopback)"
