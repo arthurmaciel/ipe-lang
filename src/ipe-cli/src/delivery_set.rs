@@ -359,6 +359,11 @@ const fn ship_builder_word(entry: ShipEntry) -> &'static str {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::match_wildcard_for_single_variants
+)]
 mod tests {
     use super::*;
 
