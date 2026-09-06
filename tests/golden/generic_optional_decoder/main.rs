@@ -534,29 +534,26 @@ pub fn ipe_main() -> IpeTask<()> {
                                             MainSqlValue::SqlInt(30i64),
                                         ])
                                         .into_iter()
-                                        .map(::core::convert::Into::into)
-                                        .collect::<Vec<ipe_runtime::db::SqlParam>>(),
+                                            .map(::core::convert::Into::into)
+                                            .collect::<Vec<ipe_runtime::db::SqlParam>>(),
                                     ),
                                     Box::new(move |_| {
                                         ({
                                             let j1 = crate::main_report_json(
                                                 crate::main_json_int_result(
-                                                    "{\"name\":\"Bob\"}"
-                                                        .to_string(),
+                                                    "{\"name\":\"Bob\"}".to_string(),
                                                 ),
                                             );
                                             ({
                                                 let j2 = crate::main_report_json(
                                                     crate::main_json_int_result(
-                                                        "{\"name\":\"Cara\",\"age\":25}"
-                                                            .to_string(),
+                                                        "{\"name\":\"Cara\",\"age\":25}".to_string(),
                                                     ),
                                                 );
                                                 ({
                                                     let j3 = crate::main_report_json(
                                                         crate::main_json_string_result(
-                                                            "{\"name\":\"Dan\"}"
-                                                                .to_string(),
+                                                            "{\"name\":\"Dan\"}".to_string(),
                                                         ),
                                                     );
                                                     ({

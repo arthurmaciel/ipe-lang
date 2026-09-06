@@ -1,15 +1,10 @@
-//! The P3-cutover gate: run the native Doc emit path against the legacy
-//! `emit_expr_at` + `rustfmt` path over the WHOLE golden corpus, and enumerate
-//! every function body whose two renders disagree.
+//! The native-vs-legacy equivalence gate over the WHOLE golden corpus: run the
+//! native Doc emit path against the legacy `emit_expr_at` + `rustfmt` path for every
+//! single-module fixture and assert the two renders agree byte-for-byte. The native
+//! path is the live emit path, so a divergence here is a native-renderer layout bug.
 //!
-//! The native path is safe to make the default emit path (dropping the
-//! `run_rustfmt` subprocess) only when this sweep reports zero divergences across
-//! the corpus. Until then it lists exactly which expression shapes still need a
-//! structured Doc builder — the honest remaining-work ledger for the cutover.
-//!
-//! Ignored by default: it lowers every corpus program and spawns `rustfmt` per
-//! function body, so it is run explicitly (`--run-ignored` / `--ignored`) rather
-//! than on every `cargo test`. Requires `rustfmt` on `PATH`.
+//! It lowers every corpus program and spawns `rustfmt` per function body, so it
+//! requires `rustfmt` on `PATH`.
 
 use std::path::{Path, PathBuf};
 
@@ -55,8 +50,6 @@ fn corpus_entries() -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "whole-corpus native-vs-legacy P3-cutover gate — run explicitly; \
-            needs rustfmt on PATH and enumerates every remaining divergence"]
 fn native_vs_legacy_whole_corpus_sweep() {
     let entries = corpus_entries();
     assert!(
@@ -107,8 +100,7 @@ fn native_vs_legacy_whole_corpus_sweep() {
     assert!(
         all_divergences.is_empty(),
         "{} function body/bodies diverge between the native render and legacy \
-         rustfmt across the corpus (see stderr) — the P3-cutover gate is not yet \
-         green",
+         rustfmt across the corpus (see stderr) — a native-renderer layout bug",
         all_divergences.len()
     );
 }

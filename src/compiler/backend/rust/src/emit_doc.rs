@@ -715,27 +715,26 @@ fn build_call_binop(
             Doc::text(")"),
         )),
         // Polymorphic `Number a` `+`/`-`/`*`: method-call form `l.ipe_wrapping_*(r)`.
-        // The receiver `l` is the doc for the left operand; the argument list
-        // is just `r` (one argument, trailing comma). This mirrors the string
-        // emitter's `format!("{l}.ipe_wrapping_add({r})")` shape.
-        BinOp::Add => Ok(Doc::concat(vec![
+        // The receiver `l` is the doc for the left operand; the trailing
+        // `.ipe_wrapping_*(r)` is a method applied to it. Built as a
+        // [`Doc::MethodChain`] so it inherits `rustfmt`'s method-chain layout: the
+        // method drops onto its own line at the receiver's begin-line indent when the
+        // receiver renders multiline (`(if …\n})\n.ipe_wrapping_add(x)`), and a nested
+        // arithmetic run breaks one `.ipe_wrapping_*()` per line when the flat chain
+        // overflows the width — the shapes a flat concat could never reach. This
+        // mirrors the string emitter's `format!("{l}.ipe_wrapping_add({r})")` bytes.
+        BinOp::Add => Ok(Doc::method_chain(
             l,
-            Doc::text(".ipe_wrapping_add("),
-            r,
-            Doc::text(")"),
-        ])),
-        BinOp::Sub => Ok(Doc::concat(vec![
+            Doc::concat(vec![Doc::text(".ipe_wrapping_add("), r, Doc::text(")")]),
+        )),
+        BinOp::Sub => Ok(Doc::method_chain(
             l,
-            Doc::text(".ipe_wrapping_sub("),
-            r,
-            Doc::text(")"),
-        ])),
-        BinOp::Mul => Ok(Doc::concat(vec![
+            Doc::concat(vec![Doc::text(".ipe_wrapping_sub("), r, Doc::text(")")]),
+        )),
+        BinOp::Mul => Ok(Doc::method_chain(
             l,
-            Doc::text(".ipe_wrapping_mul("),
-            r,
-            Doc::text(")"),
-        ])),
+            Doc::concat(vec![Doc::text(".ipe_wrapping_mul("), r, Doc::text(")")]),
+        )),
         // The caller's guard restricts `op` to the call-shaped binops; any
         // other operator is a chain operator built elsewhere. Fail closed rather
         // than emit a wrong shape.
@@ -4226,14 +4225,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "native-vs-legacy corpus diff sweep — run explicitly; needs rustfmt \
-                on PATH and enumerates the remaining P3-cutover divergences"]
     fn native_vs_legacy_corpus_diff_sweep() {
-        // The P3-cutover gate: render every fixture BOTH ways — the native Doc path
-        // (`render(build_doc)`) and the legacy path (`emit_expr_at` then real
-        // `rustfmt`) — and enumerate exactly which expression shapes still diverge.
-        // Cutover is safe only when this list is empty for the whole corpus. Run with
-        // `--ignored` (it spawns `rustfmt` per fixture).
+        // The native-vs-legacy equivalence gate: render every fixture BOTH ways — the
+        // native Doc path (`render(build_doc)`) and the legacy path (`emit_expr_at`
+        // then real `rustfmt`) — and assert they agree byte-for-byte. Any divergence
+        // is a native-renderer layout bug (it spawns `rustfmt` per fixture, so a
+        // `rustfmt` on PATH is required).
         let fx = fixture();
         with_ctx(&fx, |ctx| {
             let scope = GenericScope::new(&[]);
@@ -4266,7 +4263,7 @@ mod tests {
             assert!(
                 divergences.is_empty(),
                 "{} fixture(s) diverge between native render and legacy rustfmt \
-                 (see stderr) — the P3-cutover gate is not yet green",
+                 (see stderr) — a native-renderer layout bug",
                 divergences.len()
             );
         });
