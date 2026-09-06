@@ -2630,6 +2630,7 @@ version = "0.1.78"
 dependencies = [
  "base64 0.22.1",
  "e2e-support",
+ "getrandom 0.3.4",
  "hex",
  "include_dir",
  "ipe-runtime-rust",
@@ -2934,6 +2935,7 @@ dependencies = [
  "ipe_diagnostics",
  "ipe_intern",
  "ipe_lint",
+ "ipe_parse",
  "ipe_syntax",
  "ipe_types",
  "lsp-types",

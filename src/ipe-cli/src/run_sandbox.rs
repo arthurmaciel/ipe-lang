@@ -290,10 +290,19 @@ pub fn profile_axes(profile: &SandboxProfile) -> BTreeSet<Capability> {
 /// `.rodata` (referenced from `fn main`) so it survives linker GC and `strip`.
 #[must_use]
 pub fn capfloor_static_source(profile: &SandboxProfile) -> String {
-    let line = profile.to_capfloor_line();
+    let mut line = profile.to_capfloor_line();
+    // A trailing newline TERMINATES the floor line inside `.rodata`. `scan_capfloor`
+    // reads from the marker to the first NUL or newline; without an explicit
+    // terminator the scanner would run on into whatever bytes the linker places
+    // adjacent, either garbling the line (parse fails -> the floor reads as absent
+    // -> a legitimate binary is spuriously refused) or letting an attacker-linked
+    // adjacent static extend the single legitimate line with extra grants. The
+    // emitted terminator makes the line self-delimiting regardless of `.rodata`
+    // layout — the scanner stops here, before any neighbour.
+    line.push('\n');
     let bytes = line.as_bytes();
-    // A byte array literal so the section holds exactly the floor line (no NUL,
-    // no rustc string-merging surprises).
+    // A byte array literal so the section holds exactly the terminated floor line
+    // (no rustc string-merging surprises).
     let mut arr = String::new();
     for (i, b) in bytes.iter().enumerate() {
         if i > 0 {
@@ -627,6 +636,52 @@ mod tests {
             "byte array present: {src}"
         );
         assert!(line.contains("net=true"), "line grants network: {line}");
+    }
+
+    #[test]
+    fn floor_static_terminates_the_line_with_a_newline() {
+        let p = SandboxProfile {
+            network: true,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let src = capfloor_static_source(&p);
+        // The emitted byte array is exactly `to_capfloor_line()` + a terminating
+        // newline, so the last array element is the newline's byte value (10).
+        let line = p.to_capfloor_line();
+        let len = line.len() + 1;
+        assert!(
+            src.contains(&format!("[u8; {len}]")),
+            "the static holds the line plus one terminator byte: {src}"
+        );
+        assert!(
+            src.contains(", 10];"),
+            "the last emitted byte is a newline terminator: {src}"
+        );
+    }
+
+    #[test]
+    fn embedded_floor_line_is_self_delimiting_against_adjacent_rodata() {
+        // The floor as it lands in `.rodata`: the terminated line the emitter
+        // encodes, immediately followed by whatever the linker packs next.
+        let profile = SandboxProfile {
+            network: false,
+            ..SandboxProfile::maximally_isolated()
+        };
+        let mut rodata = profile.to_capfloor_line().into_bytes();
+        rodata.push(b'\n'); // the emitter's terminator
+        // Adjacent bytes an attacker-linked static could place next — including a
+        // second, more-permissive floor marker. The terminator must stop the scan
+        // before any of it.
+        rodata.extend_from_slice(b"ipe-capfloor 1 net=true fs=rw sub=true env=");
+
+        let recovered = run_jail::scan_capfloor(&rodata)
+            .expect("the terminated floor line is recovered from .rodata");
+        // The recovered floor is the strict legitimate one — the trailing permissive
+        // bytes did not extend it into a wider grant.
+        assert!(
+            !recovered.network,
+            "adjacent permissive bytes cannot raise the network ceiling"
+        );
     }
 
     #[test]

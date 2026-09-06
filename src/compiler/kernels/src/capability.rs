@@ -319,6 +319,45 @@ impl WebCapability {
         }
     }
 
+    /// The reserved `Ipe.Browser.*` module segments that disclose this axis, or
+    /// `None` for [`Self::Raw`] (the uncharacterised-port floor, which no module
+    /// maps to). This is the exhaustive inverse of [`Self::for_browser_module`]:
+    /// its match has no wildcard, so a newly added `WebCapability` variant fails to
+    /// compile until it is given a module path here, and the
+    /// `for_browser_module_covers_every_web_axis` drift test round-trips every
+    /// non-`Raw` axis through both directions.
+    #[must_use]
+    pub const fn browser_module_segments(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Geolocation => Some(&["Ipe", "Browser", "Geolocation"]),
+            Self::Clipboard => Some(&["Ipe", "Browser", "Clipboard"]),
+            Self::Notification => Some(&["Ipe", "Browser", "Notification"]),
+            Self::Storage => Some(&["Ipe", "Browser", "Storage"]),
+            Self::Vibration => Some(&["Ipe", "Browser", "Vibration"]),
+            Self::Share => Some(&["Ipe", "Browser", "Share"]),
+            Self::Battery => Some(&["Ipe", "Browser", "Battery"]),
+            Self::NetworkInfo => Some(&["Ipe", "Browser", "NetworkInfo"]),
+            Self::File => Some(&["Ipe", "Browser", "FilePicker"]),
+            Self::Camera => Some(&["Ipe", "Browser", "Camera"]),
+            Self::Microphone => Some(&["Ipe", "Browser", "Microphone"]),
+            Self::Gamepad => Some(&["Ipe", "Browser", "Gamepad"]),
+            Self::Recorder => Some(&["Ipe", "Browser", "Recorder"]),
+            Self::Visibility => Some(&["Ipe", "Browser", "Visibility"]),
+            Self::MediaQuery => Some(&["Ipe", "Browser", "MediaQuery"]),
+            Self::Connectivity => Some(&["Ipe", "Browser", "Connectivity"]),
+            Self::Speech => Some(&["Ipe", "Browser", "Speech"]),
+            Self::Permission => Some(&["Ipe", "Browser", "Permission"]),
+            Self::Orientation => Some(&["Ipe", "Browser", "Orientation"]),
+            Self::Motion => Some(&["Ipe", "Browser", "Motion"]),
+            Self::Channel => Some(&["Ipe", "Browser", "Channel"]),
+            Self::Fullscreen => Some(&["Ipe", "Browser", "Fullscreen"]),
+            Self::ScreenOrientation => Some(&["Ipe", "Browser", "ScreenOrientation"]),
+            Self::WakeLock => Some(&["Ipe", "Browser", "WakeLock"]),
+            Self::WebAuthn => Some(&["Ipe", "Browser", "WebAuthn"]),
+            Self::Raw => None,
+        }
+    }
+
     /// One-line description of what granting this web capability permits.
     ///
     /// Used by [`Capability::grants`] for the `JsPort(_)` case.
@@ -825,6 +864,33 @@ mod tests {
             assert!(
                 Capability::ALL.contains(&Capability::JsPort(w)),
                 "ALL is missing js-port sub-axis {w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn for_browser_module_covers_every_web_axis() {
+        // Every web axis except the uncharacterised-port floor must map to a
+        // reserved `Ipe.Browser.*` module and round-trip back to itself. A missed
+        // `for_browser_module` row would degrade that module's ports to the
+        // `js-port:raw` floor, losing the specific-API disclosure; the exhaustive
+        // `browser_module_segments` inverse forces a module path per variant at
+        // compile time and this test round-trips both directions.
+        for &w in WebCapability::ALL {
+            if w == WebCapability::Raw {
+                assert!(
+                    w.browser_module_segments().is_none(),
+                    "the raw floor has no module path"
+                );
+                continue;
+            }
+            let segments = w
+                .browser_module_segments()
+                .expect("every non-raw axis has a module path");
+            assert_eq!(
+                WebCapability::for_browser_module(segments),
+                Some(w),
+                "{w:?}: module path {segments:?} must resolve back to this axis"
             );
         }
     }

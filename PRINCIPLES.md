@@ -193,10 +193,10 @@ When a lint or gate fires, fix the code — never the lint level, never the gate
   `#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::panic,
   clippy::unreachable, clippy::todo, clippy::unimplemented,
   clippy::panic_in_result_fn))]`.
-- **Escape hatch:** per-site `#[allow(lint)] // one-line why` ONLY — the 3
-  INFALLIBLE-tagged HMAC sites in `runtime/`, the 2 `ffi_polyfills`
-  dynamic-dispatch `clippy::panic` fallbacks, a shared-test-helper
-  `dead_code`. Never a crate- or gate-wide relaxation.
+- **Escape hatch:** per-site `#[allow(lint)] // one-line why` ONLY — never a
+  crate- or gate-wide relaxation. Every ledgered production allow carries an
+  `IPE-RUST-AUDIT:ACCEPTED` marker; `tools/panic-scan` is the single source of
+  truth for that inventory, so the set is read from the code, not restated here.
 - **`unsafe` is forbidden.** Exactly ONE sanctioned `unsafe` block exists —
   `prctl(PR_SET_PDEATHSIG)` in `live::console_proxy` — the only reason the
   runtime is not crate-wide `forbid(unsafe_code)`. Every other module is
