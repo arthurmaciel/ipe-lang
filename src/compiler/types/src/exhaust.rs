@@ -66,6 +66,17 @@ const DEFAULT_EXHAUST_BUDGET: u64 = 2_000_000;
 /// three-mode resolution (unset → default; `0` → unbounded; `N` → absolute).
 const EXHAUST_BUDGET_ENV: &str = "IPE_EXHAUST_BUDGET";
 
+/// Ceiling on the length of a list-literal pattern (`[e0, e1, …]`).
+///
+/// A flat `[e0, …, eN]` pattern desugars to a depth-`N` `Nil | Cons` spine, and
+/// the usefulness walk descends one native recursion frame per spine level. The
+/// per-node work budget bounds breadth but not native-stack depth, so an
+/// otherwise-legal source file with a thousands-long list pattern would overflow
+/// the native stack and abort the process. A list literal wider than this fails
+/// closed with [`TypeError::StepBudgetExceeded`] — a typed limit far below native
+/// stack capacity, well above any list pattern a real program writes by hand.
+const MAX_LIST_PATTERN_LEN: usize = 1024;
+
 /// A decrementing work budget for one `case`'s exhaustiveness analysis.
 ///
 /// Each unit of expansion / usefulness work ticks it; reaching zero raises
@@ -142,15 +153,16 @@ type TyId = (Vec<Symbol>, Symbol);
 
 /// Constructor-signature tables, built once per module from its `type` decls.
 struct Sigs {
-    /// Constructor identity `(home, ctor name)` → its owning union's identity
-    /// `(home, union name)`.
-    ctor_to_union: BTreeMap<TyId, TyId>,
+    /// Home module → (constructor name → its owning union's identity). Nesting on
+    /// the home path lets a lookup borrow the home as a `&[Symbol]` slice instead
+    /// of cloning it to build a composite `(home, ctor)` key.
+    ctor_to_union: BTreeMap<Vec<Symbol>, BTreeMap<Symbol, TyId>>,
     /// Union identity `(home, name)` → its constructors in declaration (`index`)
     /// order, each paired with its payload arity.
     union_ctors: BTreeMap<TyId, Vec<(Symbol, usize)>>,
-    /// Constructor identity `(home, ctor name)` → payload arity (the field count
-    /// its pattern binds).
-    ctor_arity: BTreeMap<TyId, usize>,
+    /// Home module → (constructor name → payload arity). Nested for the same
+    /// borrow-not-clone lookup as `ctor_to_union`.
+    ctor_arity: BTreeMap<Vec<Symbol>, BTreeMap<Symbol, usize>>,
 }
 
 impl Sigs {
@@ -159,9 +171,9 @@ impl Sigs {
         extra_unions: &[&canon::Union],
         interner: &mut Interner,
     ) -> DResult<Self> {
-        let mut ctor_to_union = BTreeMap::new();
-        let mut union_ctors = BTreeMap::new();
-        let mut ctor_arity = BTreeMap::new();
+        let mut ctor_to_union: BTreeMap<Vec<Symbol>, BTreeMap<Symbol, TyId>> = BTreeMap::new();
+        let mut union_ctors: BTreeMap<TyId, Vec<(Symbol, usize)>> = BTreeMap::new();
+        let mut ctor_arity: BTreeMap<Vec<Symbol>, BTreeMap<Symbol, usize>> = BTreeMap::new();
 
         // Seed EVERY Prelude-built-in closed union from the ONE shared table
         // (`ipe_canon::builtins`) that canon and lower also consume, so a `case`
@@ -181,8 +193,14 @@ impl Sigs {
         let ph: Vec<Symbol> = Vec::new();
         for (&union, ctors) in &builtins.exhaust_union_ctors {
             for &(ctor, arity) in ctors {
-                ctor_to_union.insert((ph.clone(), ctor), (ph.clone(), union));
-                ctor_arity.insert((ph.clone(), ctor), arity);
+                ctor_to_union
+                    .entry(ph.clone())
+                    .or_default()
+                    .insert(ctor, (ph.clone(), union));
+                ctor_arity
+                    .entry(ph.clone())
+                    .or_default()
+                    .insert(ctor, arity);
             }
             union_ctors.insert((ph.clone(), union), ctors.clone());
         }
@@ -196,8 +214,14 @@ impl Sigs {
             ctors.sort_by_key(|c| c.index);
             let mut list = Vec::with_capacity(ctors.len());
             for c in ctors {
-                ctor_to_union.insert((uhome.clone(), c.name), ukey.clone());
-                ctor_arity.insert((uhome.clone(), c.name), c.arity);
+                ctor_to_union
+                    .entry(uhome.clone())
+                    .or_default()
+                    .insert(c.name, ukey.clone());
+                ctor_arity
+                    .entry(uhome.clone())
+                    .or_default()
+                    .insert(c.name, c.arity);
                 list.push((c.name, c.arity));
             }
             union_ctors.insert(ukey, list);
@@ -217,7 +241,12 @@ impl Sigs {
     fn arity(&self, head: &Head) -> usize {
         match head {
             Head::Tuple(n) => *n,
-            Head::Adt(h, c) => self.ctor_arity.get(&(h.clone(), *c)).copied().unwrap_or(0),
+            Head::Adt(h, c) => self
+                .ctor_arity
+                .get(h.as_slice())
+                .and_then(|by_ctor| by_ctor.get(c))
+                .copied()
+                .unwrap_or(0),
             // Literal heads carry no sub-patterns; the empty-list `[]` (`Nil`) is
             // likewise nullary.
             Head::Bool(_) | Head::Int(_) | Head::Char(_) | Head::Str(_) | Head::Nil => 0,
@@ -352,6 +381,17 @@ fn expand_upats(p: &canon::Pattern_, budget: &mut ExhaustBudget) -> DResult<Vec<
                 .collect())
         }
         canon::Pattern_::PList(elems) => {
+            // The spine this builds is as deep as the list is long, and the
+            // usefulness walk recurses natively once per level. Refuse a spine
+            // deep enough to overflow the native stack, before building it.
+            if elems.len() > MAX_LIST_PATTERN_LEN {
+                return Err(Diagnostic::Type {
+                    span: Span::DUMMY,
+                    msg: TypeError::StepBudgetExceeded {
+                        budget: MAX_LIST_PATTERN_LEN as u64,
+                    },
+                });
+            }
             let mut rows = vec![UPat::Ctor(Head::Nil, Vec::new())];
             for e in elems.iter().rev() {
                 let heads = expand_upats(&e.value, budget)?;
@@ -428,7 +468,10 @@ fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
         canon::Pattern_::PCtor {
             home, name, args, ..
         } => {
-            !sigs.ctor_to_union.contains_key(&(home.clone(), *name))
+            !sigs
+                .ctor_to_union
+                .get(home.as_slice())
+                .is_some_and(|by_ctor| by_ctor.contains_key(name))
                 || args
                     .iter()
                     .any(|a| pattern_uses_unknown_ctor(&a.value, sigs))
@@ -1015,7 +1058,7 @@ fn complete_signature(roots: &[Head], sigs: &Sigs) -> Option<Vec<(Head, usize)>>
             }
         }
         Head::Adt(h, c) => {
-            let union = sigs.ctor_to_union.get(&(h.clone(), *c))?;
+            let union = sigs.ctor_to_union.get(h.as_slice())?.get(c)?;
             let all = sigs.union_ctors.get(union)?;
             // The union's home fixes each missing/present head's identity. All
             // roots in one column share this union (the type checker pins the
@@ -1063,7 +1106,11 @@ fn missing_heads(roots: &[Head], sigs: &Sigs) -> Vec<UPat> {
             out
         }
         Some(Head::Adt(h, c)) => {
-            let Some(union) = sigs.ctor_to_union.get(&(h.clone(), *c)) else {
+            let Some(union) = sigs
+                .ctor_to_union
+                .get(h.as_slice())
+                .and_then(|by_ctor| by_ctor.get(c))
+            else {
                 return vec![UPat::Wild];
             };
             let Some(all) = sigs.union_ctors.get(union) else {
@@ -1273,6 +1320,48 @@ mod tests {
         let mut budget = ExhaustBudget::unbounded();
         let rows = expand_upats(&pat, &mut budget).expect("unbounded budget never errors");
         assert_eq!(rows.len(), 1 << 8, "8-wide product expands to 2^8 rows");
+    }
+
+    /// A list literal `[e0, …, eN]` desugars to a depth-`N` cons spine the
+    /// usefulness walk recurses over natively. A list wider than the dedicated
+    /// depth cap must fail closed with a typed limit error EVEN under an
+    /// unbounded work budget — the cap, not the budget, is what keeps the native
+    /// stack safe. One element past the cap is the boundary that must reject.
+    #[test]
+    fn over_length_list_pattern_is_rejected_even_when_budget_disabled() {
+        let elems: Vec<canon::Pattern> = (0..=MAX_LIST_PATTERN_LEN)
+            .map(|_| Located::new(Span::DUMMY, canon::Pattern_::PAnything))
+            .collect();
+        let pat = canon::Pattern_::PList(elems);
+        let mut budget = ExhaustBudget::unbounded();
+        let result = expand_upats(&pat, &mut budget);
+        assert!(
+            matches!(
+                result,
+                Err(Diagnostic::Type {
+                    msg: TypeError::StepBudgetExceeded { .. },
+                    ..
+                })
+            ),
+            "a list pattern past the depth cap must reject, got Ok={}",
+            result.is_ok()
+        );
+    }
+
+    /// A list literal exactly at the depth cap is still legal — the cap rejects
+    /// only strictly longer spines, so a real (short) list pattern is never
+    /// turned away.
+    #[test]
+    fn at_length_list_pattern_is_accepted() {
+        let elems: Vec<canon::Pattern> = (0..MAX_LIST_PATTERN_LEN)
+            .map(|_| Located::new(Span::DUMMY, canon::Pattern_::PAnything))
+            .collect();
+        let pat = canon::Pattern_::PList(elems);
+        let mut budget = ExhaustBudget::unbounded();
+        assert!(
+            expand_upats(&pat, &mut budget).is_ok(),
+            "a list pattern at the cap must still expand"
+        );
     }
 
     #[test]
