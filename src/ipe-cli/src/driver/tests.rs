@@ -1,4 +1,5 @@
 use super::*;
+use crate::{fs, Path, PathBuf, BTreeMap, ALL_CODES, Applicability, Diagnostic, Suggestion, style, project};
 use ipe_diagnostics::{NameError, Span};
 
 #[test]
