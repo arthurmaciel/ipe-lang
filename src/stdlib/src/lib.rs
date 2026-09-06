@@ -1939,6 +1939,78 @@ pub fn is_compiled_source_segments(segments: &[String]) -> bool {
     compiled_std_source_segments(segments).is_some()
 }
 
+/// Transitively inject the embedded compiled-source stdlib modules the graph imports.
+///
+/// Every embedded module reachable from `sources` is injected into it, and the set
+/// of module paths actually injected from the embed table is returned — the caller's
+/// unforgeable record of which modules earn `EmbeddedStdlib` trust.
+///
+/// This is the single source of truth for the injection algorithm and its
+/// **squat-guard**: a module path already present in `sources` (a user file
+/// squatting on an `Ipe.*` name, or an already-injected node) is never
+/// re-inserted and never tagged trusted, so a hostile `src/Ipe/Palette.ipe`
+/// stays `ModuleOrigin::User` and remains IPE-N0025-rejected. Both frontends —
+/// the native CLI driver and the WebAssembly injector — call this one closure so
+/// the trust set can never drift between them.
+///
+/// `extract_imports` is supplied by the caller (the compiler's token-level
+/// import scan) so this leaf crate stays dependency-free — it takes no compiler
+/// crate in its runtime graph. `on_injected` is invoked once per newly-injected
+/// module with its path and its synthetic on-disk-looking path, letting the
+/// native caller record a `DiscoveredModule` while the wasm caller ignores it.
+///
+/// Efficiency: the worklist is seeded only from imports that match a
+/// compiled-source module, so a build importing none does zero work.
+pub fn inject_compiled_std_closure(
+    sources: &mut std::collections::BTreeMap<Vec<String>, (std::path::PathBuf, String)>,
+    extract_imports: impl Fn(&str) -> Vec<Vec<String>>,
+    mut on_injected: impl FnMut(&[String], &std::path::Path),
+) -> std::collections::BTreeSet<Vec<String>> {
+    let mut injected: std::collections::BTreeSet<Vec<String>> = std::collections::BTreeSet::new();
+
+    // Seed the worklist from every compiled-source import across current sources.
+    // Short-circuit: an unused-stdlib build enqueues nothing and returns empty.
+    let mut work: std::collections::VecDeque<Vec<String>> = std::collections::VecDeque::new();
+    for (_, src) in sources.values() {
+        for imp in extract_imports(src) {
+            if is_compiled_source_segments(&imp) {
+                work.push_back(imp);
+            }
+        }
+    }
+
+    while let Some(path) = work.pop_front() {
+        // Already present — a user file OR an already-injected node. Skip; do NOT
+        // tag trusted (BTreeMap key = free dedup; a user squat stays User origin).
+        if sources.contains_key(&path) {
+            continue;
+        }
+        let Some(embedded) = compiled_std_source_segments(&path) else {
+            // Not a compiled-source module (e.g. a kernel import like `Ipe.String`
+            // inside an embedded source): leave it kernel-resolved.
+            continue;
+        };
+
+        // Synthetic on-disk-looking path, for diagnostics only — never read from
+        // disk: `sources` already carries the embedded text.
+        let synth_path = std::path::PathBuf::from("<embedded-stdlib>").join(path.join("."));
+        sources.insert(path.clone(), (synth_path.clone(), embedded.to_owned()));
+        on_injected(&path, &synth_path);
+        injected.insert(path.clone());
+
+        // Std -> Std closure: enqueue the embedded module's OWN compiled-source
+        // imports (a kernel import inside it stays qualifier-resolved). Fixpoint
+        // via the `sources.contains_key` guard above.
+        for imp in extract_imports(embedded) {
+            if is_compiled_source_segments(&imp) && !sources.contains_key(&imp) {
+                work.push_back(imp);
+            }
+        }
+    }
+
+    injected
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
