@@ -51,9 +51,11 @@ use ipe_diagnostics::{Located, Span};
 use ipe_intern::Interner;
 use ipe_syntax::{Expr, Expr_, Module};
 
+use ipe_backend_rust::static_build::StaticTriple;
 use ipe_kernels::WebCapability;
 
 use crate::CliError;
+use crate::delivery_set::{BinaryTarget, ShipEntry};
 use crate::project::{
     BrowserDelivery, Capability, DeliveryConfig, DesktopDelivery, EntryShape, IpeDep,
     MobileDelivery, Program, ProjectManifest, RustDep, ScreenOrientation, WasmConfig,
@@ -777,6 +779,7 @@ impl Reader<'_> {
         let mut config = DeliveryConfig::default();
         for (fname, value) in self.expect_record(expr)? {
             match self.text(fname.value) {
+                "ships" => config.ships = self.read_ships(value)?,
                 "desktop" => config.desktop = self.read_desktop(value)?,
                 "mobile" => config.mobile = self.read_mobile(value)?,
                 "browser" => config.browser = self.read_browser(value)?,
@@ -784,14 +787,81 @@ impl Reader<'_> {
                     return Err(self.reject(
                         fname.span,
                         &format!(
-                            "`{other}` is not a delivery field — expected `desktop`, `mobile`, \
-                             or `browser`"
+                            "`{other}` is not a delivery field — expected `ships`, `desktop`, \
+                             `mobile`, or `browser`"
                         ),
                     ));
                 }
             }
         }
         Ok(config)
+    }
+
+    /// Read the `delivery.ships = [ … ]` list into the typed [`ShipEntry`]
+    /// vector: which deliveries the project releases. Each element is one of the
+    /// closed ship builder vocabulary; an unknown builder, a duplicate, or an
+    /// empty list is a read-time rejection, so the resolved set is non-empty and
+    /// duplicate-free by parse.
+    fn read_ships(&self, expr: &Expr) -> Result<Vec<ShipEntry>, CliError> {
+        let items = self.expect_list(expr)?;
+        if items.is_empty() {
+            return Err(self.reject(
+                expr.span,
+                "`ships` is empty — a project that ships nothing has no release. Omit the \
+                 `ships` field entirely for the default single delivery, or list at least one \
+                 entry.",
+            ));
+        }
+        let mut ships: Vec<ShipEntry> = Vec::with_capacity(items.len());
+        for item in items {
+            let entry = self.read_one_ship(item)?;
+            if ships.contains(&entry) {
+                return Err(self.reject(
+                    item.span,
+                    "duplicate `ships` entry — a delivery is shipped once. Remove the repeat.",
+                ));
+            }
+            ships.push(entry);
+        }
+        Ok(ships)
+    }
+
+    /// Read one `ships` builder into its [`ShipEntry`]. `crossBinary` carries a
+    /// target triple parsed against the build-plan layer's supported set (one
+    /// source), so an unsupported triple is a `package.ipe:LINE:COL` rejection.
+    fn read_one_ship(&self, expr: &Expr) -> Result<ShipEntry, CliError> {
+        let (builder, args) = self.expect_ctor_app(expr, "a ship builder")?;
+        match builder {
+            "binary" => Ok(ShipEntry::Binary(BinaryTarget::Host)),
+            "staticBinary" => Ok(ShipEntry::Binary(BinaryTarget::Static)),
+            "crossBinary" => {
+                let raw = self.expect_string(self.nth_arg(expr.span, builder, args, 0)?)?;
+                let triple = StaticTriple::parse(&raw).ok_or_else(|| {
+                    self.reject(
+                        expr.span,
+                        &format!(
+                            "`crossBinary` target {raw:?} is not a supported triple — use one of \
+                             {}",
+                            StaticTriple::SUPPORTED.join(", ")
+                        ),
+                    )
+                })?;
+                Ok(ShipEntry::Binary(BinaryTarget::Cross(triple)))
+            }
+            "desktop" => Ok(ShipEntry::Desktop),
+            "spa" => Ok(ShipEntry::Spa),
+            "spaDesktop" => Ok(ShipEntry::SpaDesktop),
+            "spaIos" => Ok(ShipEntry::SpaIos),
+            "spaAndroid" => Ok(ShipEntry::SpaAndroid),
+            other => Err(self.reject(
+                expr.span,
+                &format!(
+                    "`{other}` is not a ship builder — use `binary`, `staticBinary`, \
+                     `crossBinary \"<triple>\"`, `desktop`, `spa`, `spaDesktop`, `spaIos`, or \
+                     `spaAndroid`"
+                ),
+            )),
+        }
     }
 
     /// Read `delivery.desktop = { title, width, height }`.
@@ -1264,6 +1334,9 @@ pub fn render_manifest_record(manifest: &ProjectManifest) -> String {
     if let Some(build) = render_build(manifest) {
         fields.push(build);
     }
+    if let Some(delivery) = render_delivery(&manifest.delivery) {
+        fields.push(delivery);
+    }
 
     let mut out = String::new();
     out.push_str("module Package exposing (package)\n\n");
@@ -1470,6 +1543,42 @@ fn render_wasm(wasm: &WasmConfig) -> Option<String> {
         parts.push(format!("optLevel = {}", quote(opt)));
     }
     Some(format!("wasm =\n        On {{ {} }}", parts.join(", ")))
+}
+
+/// Render the `delivery = { ships = [ … ] }` field, or `None` when the delivery
+/// set is the implicit default (no `ships`) — so a minimal manifest stays
+/// minimal and round-trips unchanged. Only the `ships` declaration is emitted;
+/// the host config sections keep their absent-section defaults.
+fn render_delivery(delivery: &DeliveryConfig) -> Option<String> {
+    if delivery.ships.is_empty() {
+        return None;
+    }
+    let items = delivery
+        .ships
+        .iter()
+        .map(|s| ship_builder_expr(*s))
+        .collect::<Vec<_>>()
+        .join("\n            , ");
+    Some(format!(
+        "delivery =\n        {{ ships =\n            [ {items} ]\n        }}"
+    ))
+}
+
+/// The `Ipe.Package` ship builder expression for a [`ShipEntry`] — the inverse
+/// of the manifest reader.
+fn ship_builder_expr(entry: ShipEntry) -> String {
+    match entry {
+        ShipEntry::Binary(BinaryTarget::Host) => "binary".to_owned(),
+        ShipEntry::Binary(BinaryTarget::Static) => "staticBinary".to_owned(),
+        ShipEntry::Binary(BinaryTarget::Cross(triple)) => {
+            format!("crossBinary {}", quote(triple.as_str()))
+        }
+        ShipEntry::Desktop => "desktop".to_owned(),
+        ShipEntry::Spa => "spa".to_owned(),
+        ShipEntry::SpaDesktop => "spaDesktop".to_owned(),
+        ShipEntry::SpaIos => "spaIos".to_owned(),
+        ShipEntry::SpaAndroid => "spaAndroid".to_owned(),
+    }
 }
 
 /// Render the `build = { … }` field, or `None` when every build setting is at
@@ -2133,5 +2242,98 @@ mod tests {
         assert_eq!(line_col("abc", 2), (1, 3));
         assert_eq!(line_col("a\nbc", 2), (2, 1));
         assert_eq!(line_col("a", 999), (1, 2));
+    }
+
+    // ── delivery `ships` ──────────────────────────────────────────────────────
+
+    #[test]
+    fn ships_parses_every_builder() {
+        let m = read(
+            "ships_all",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships =\n        [ binary\n        , staticBinary\n        , crossBinary \"aarch64-unknown-linux-musl\"\n        , desktop\n        , spa\n        , spaDesktop\n        , spaIos\n        , spaAndroid\n        ] }} }}\n"
+            ),
+        )
+        .expect("every ship builder must parse");
+        assert_eq!(
+            m.delivery.ships,
+            vec![
+                ShipEntry::Binary(BinaryTarget::Host),
+                ShipEntry::Binary(BinaryTarget::Static),
+                ShipEntry::Binary(BinaryTarget::Cross(StaticTriple::Aarch64LinuxMusl)),
+                ShipEntry::Desktop,
+                ShipEntry::Spa,
+                ShipEntry::SpaDesktop,
+                ShipEntry::SpaIos,
+                ShipEntry::SpaAndroid,
+            ]
+        );
+    }
+
+    #[test]
+    fn absent_ships_is_the_empty_default() {
+        let m = read(
+            "ships_absent",
+            &format!("{HEADER}package =\n    {{ name = \"x\" }}\n"),
+        )
+        .expect("absent ships parses");
+        assert!(m.delivery.ships.is_empty());
+    }
+
+    #[test]
+    fn ships_rejects_unknown_builder() {
+        let r = read(
+            "ships_unknown",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships = [ wasmThing ] }} }}\n"
+            ),
+        );
+        assert_rejected(&r);
+    }
+
+    #[test]
+    fn ships_rejects_unsupported_cross_triple() {
+        let r = read(
+            "ships_bad_triple",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships = [ crossBinary \"sparc-nope\" ] }} }}\n"
+            ),
+        );
+        assert_rejected(&r);
+    }
+
+    #[test]
+    fn ships_rejects_duplicate_entry() {
+        let r = read(
+            "ships_dup",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships = [ spa, spa ] }} }}\n"
+            ),
+        );
+        assert_rejected(&r);
+    }
+
+    #[test]
+    fn ships_rejects_empty_list() {
+        let r = read(
+            "ships_empty",
+            &format!("{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships = [] }} }}\n"),
+        );
+        assert_rejected(&r);
+    }
+
+    #[test]
+    fn ships_render_round_trips() {
+        let source = format!(
+            "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships = [ binary, spaIos ] }} }}\n"
+        );
+        let m = read("ships_render_in", &source).expect("parse");
+        let rendered = render_manifest_record(&m);
+        assert!(
+            rendered.contains("ships"),
+            "the render emits the declared ships: {rendered}"
+        );
+        let reparsed = read("ships_render_out", &rendered).expect("rendered manifest re-parses");
+        assert_eq!(reparsed.delivery.ships, m.delivery.ships);
     }
 }

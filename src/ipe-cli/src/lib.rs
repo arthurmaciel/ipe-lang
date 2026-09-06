@@ -26,6 +26,7 @@ pub mod cli_args;
 pub mod contained_path;
 pub mod coverage;
 pub mod delivery;
+pub mod delivery_set;
 pub mod diff;
 pub mod doc;
 pub mod doc_bundle;
@@ -447,6 +448,14 @@ impl From<api_surface::DiffError> for CliError {
 impl From<build_plan::Refusal> for CliError {
     fn from(refusal: build_plan::Refusal) -> Self {
         Self::StaticRefusal(refusal)
+    }
+}
+
+impl From<delivery::DeliveryError> for CliError {
+    /// A delivery refusal is a pedagogical, user-facing message; it surfaces
+    /// through the reader's named-error channel.
+    fn from(err: delivery::DeliveryError) -> Self {
+        Self::UsageOwned(err.to_string())
     }
 }
 
