@@ -1,16 +1,17 @@
-use crate::{help, CliError, run_version, package_manifest, project, cli_args, Path, PathBuf, resolve_vendored_runtime_dir, toolchain, watch, bluegreen_enabled, style, delivery, resolve_analysis_entry, io_bounded, Interner, find_manifest_for_ipe_file, build_plan, emit_pipeline_json, apply_fixes_cmd, runtime_dep_from_env, BuildOptions, build_with_sibling_discovery_with_options, build_project_with_options, run_sandbox, ffi, render_capabilities, Write, RuntimeContext, runtime_embed, fs, io_err, ALL_CODES, title, explain_page, BTreeMap, Diagnostic, attribute_canon_errors, home_to_source_map, attribute_post_link_error, collect_entry_and_siblings, create_source_root, unsafe_ack, web_consent, native_ffi_consent, gate_decoder_pipelines};
+use crate::{help, package_manifest, project, cli_args, Path, PathBuf, toolchain, watch, style, delivery, io_bounded, Interner, build_plan, run_sandbox, ffi, Write, runtime_embed, fs, ALL_CODES, title, explain_page, BTreeMap, Diagnostic, unsafe_ack, web_consent, native_ffi_consent};
+use super::{CliError, run_version, resolve_vendored_runtime_dir, bluegreen_enabled, resolve_analysis_entry, find_manifest_for_ipe_file, emit_pipeline_json, apply_fixes_cmd, runtime_dep_from_env, BuildOptions, build_with_sibling_discovery_with_options, build_project_with_options, render_capabilities, RuntimeContext, io_err, attribute_canon_errors, home_to_source_map, attribute_post_link_error, collect_entry_and_siblings, create_source_root, gate_decoder_pipelines};
 
 /// The misuse reason shown when `build` / `run` / `watch` are invoked with no
 /// entry and none can be discovered. Just the reason — the command's own
 /// `--help` page (appended by [`CliError::CommandUsage`]) carries the synopsis
 /// and options, so this never re-lists them.
-pub(crate) const NO_ENTRY: &str = "nothing to build here — pass a source file or run inside a project (a \
+pub const NO_ENTRY: &str = "nothing to build here — pass a source file or run inside a project (a \
      package.ipe, or a src/Main.ipe)";
 
 /// A request for help asks for output, not an error: it prints to stdout and
 /// exits successfully. Returned by [`intercept_help`] so [`run_cli`] can honour
 /// it before any command runs.
-pub(crate) struct HelpRequest;
+pub struct HelpRequest;
 
 /// Recognise a help request in `args` and, when found, print the matching page
 /// to stdout. Handles the top-level screen (no args, or a leading `--help` /
@@ -18,7 +19,7 @@ pub(crate) struct HelpRequest;
 ///
 /// Returns `Some(HelpRequest)` when help was printed (the caller returns `Ok`),
 /// or `None` when `args` is an ordinary command to dispatch.
-pub(crate) fn intercept_help(args: &[String]) -> Option<HelpRequest> {
+pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
     let is_help_flag = |a: &str| a == "--help" || a == "-h" || a == "help";
 
     // No arguments, or a leading bare help token: the top-level screen.
@@ -103,7 +104,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
 /// "misuse shows help" output. Any non-usage error (a compile failure, a
 /// filesystem error) passes through untouched, since it is not a help-worthy
 /// misuse. `command` is always a known command name.
-pub(crate) fn with_help_on_misuse(
+pub fn with_help_on_misuse(
     command: &'static str,
     result: Result<(), CliError>,
 ) -> Result<(), CliError> {
@@ -128,7 +129,7 @@ pub(crate) fn with_help_on_misuse(
 /// 3. A bare `./ipe.toml` with no `package.ipe` — a clear migration error, so
 ///    the legacy manifest never silently governs a build.
 /// 4. Neither — usage error: nothing to build here.
-pub(crate) fn default_entry() -> Result<String, CliError> {
+pub fn default_entry() -> Result<String, CliError> {
     if std::path::Path::new(package_manifest::PACKAGE_IPE).exists() {
         return Ok(".".to_owned());
     }
@@ -145,7 +146,7 @@ pub(crate) fn default_entry() -> Result<String, CliError> {
 /// (`crate::watch`). Never returns
 /// `Err` for a build failure (INV-3: a red build is logged, not fatal);
 /// only misuse / setup failures propagate.
-pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
+pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_watch(rest)?;
     let entry = match args.entry {
         Some(e) => e,
@@ -207,7 +208,7 @@ pub(crate) fn run_watch(rest: &[String]) -> Result<(), CliError> {
 /// # Errors
 /// [`CliError::Io`] when the entry source cannot be read, or the manifest /
 /// entry-resolution errors of [`resolve_analysis_entry`].
-pub(crate) fn classify_entry_shape(entry_arg: &Path) -> Result<delivery::Shape, CliError> {
+pub fn classify_entry_shape(entry_arg: &Path) -> Result<delivery::Shape, CliError> {
     let entry_file = resolve_analysis_entry(entry_arg)?;
     let source = io_bounded::read_to_string_capped(&entry_file, io_bounded::SOURCE_READ_CAP)?;
     let mut interner = Interner::new();
@@ -233,7 +234,7 @@ pub(crate) fn classify_entry_shape(entry_arg: &Path) -> Result<delivery::Shape, 
 /// [`CliError::UsageOwned`] carrying the delivery lesson on a shape mismatch, an
 /// invalid runtime/host combination, or a `--static` request the delivery
 /// cannot honour; the I/O errors of [`classify_entry_shape`].
-pub(crate) fn resolve_delivery(
+pub fn resolve_delivery(
     entry_arg: &Path,
     positionals: &cli_args::DeliveryPositionals,
     wants_static: bool,
@@ -253,7 +254,7 @@ pub(crate) fn resolve_delivery(
 /// a directory must contain one, and a `.ipe` entry walks up the tree looking
 /// for one (returning no manifest — single-file mode — when none exists). A
 /// directory carrying only a legacy `ipe.toml` is a clear migration error.
-pub(crate) fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
+pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
     if entry_path.is_dir() {
         if let Some(manifest) = project::manifest_in_dir(entry_path) {
             return Ok(Some(manifest));
@@ -278,7 +279,7 @@ pub(crate) fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, Cl
 /// `IPE_TARGET=wasm` is a wasm-target axis signal (resolved by
 /// [`resolve_wasm_target`]) and is NOT a static-link triple; it is stripped
 /// here so it never reaches the musl-triple gate in [`build_plan::resolve`].
-pub(crate) fn resolve_static_plan(
+pub fn resolve_static_plan(
     cli_layer: build_plan::StaticRequestLayer,
     manifest: Option<&Path>,
 ) -> Result<Option<ipe_backend_rust::static_build::StaticPlan>, CliError> {
@@ -317,7 +318,7 @@ pub(crate) fn resolve_static_plan(
 /// `wasm_config` is `None` when there is no manifest (sibling-discovery build).
 ///
 /// Returns `true` when the resolved target is `WasmClient`.
-pub(crate) fn resolve_wasm_target(cli_wasm: bool, wasm_config: Option<&project::WasmConfig>) -> bool {
+pub fn resolve_wasm_target(cli_wasm: bool, wasm_config: Option<&project::WasmConfig>) -> bool {
     cli_wasm
         || std::env::var("IPE_TARGET").ok().as_deref() == Some("wasm")
         || wasm_config.is_some_and(project::WasmConfig::implies_wasm_target)
@@ -329,7 +330,7 @@ pub(crate) fn resolve_wasm_target(cli_wasm: bool, wasm_config: Option<&project::
 // reads worse than the whole.
 /// The outcome of a successful `ipe build`, carrying the facts needed to render
 /// either a human progress line or a JSON success object.
-pub(crate) struct BuildSuccess {
+pub struct BuildSuccess {
     /// The entry source file that was compiled.
     entry: String,
     /// The output directory holding the emitted Rust project.
@@ -337,7 +338,7 @@ pub(crate) struct BuildSuccess {
 }
 
 #[allow(clippy::too_many_lines)]
-pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
+pub fn run_build(rest: &[String]) -> Result<(), CliError> {
     // Parse args once to learn the format before running the body.
     let format = cli_args::parse_build(rest)
         .map(|a| a.format)
@@ -368,7 +369,7 @@ pub(crate) fn run_build(rest: &[String]) -> Result<(), CliError> {
 /// Inner implementation of `run_build`, format-agnostic on the success path.
 /// Returns a [`BuildSuccess`] describing the outcome; the caller renders it.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
+pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     let args = cli_args::parse_build(rest)?;
     let entry = match args.entry {
         Some(e) => e,
@@ -597,7 +598,7 @@ pub(crate) fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> 
 /// - [`CliError::EmittedBuildFailed`] when the emitted crate fails to compile.
 /// - The toolchain, manifest-parse, and capability-resolution errors of the
 ///   steps it composes.
-pub(crate) fn compile_and_finalize_native_build(
+pub fn compile_and_finalize_native_build(
     out_dir: &Path,
     native_cargo: Option<toolchain::CargoBin>,
     static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
@@ -668,7 +669,7 @@ pub(crate) fn compile_and_finalize_native_build(
 /// # Errors
 /// [`CliError::EjectUnsupported`] for an FFI-bearing program; the same
 /// pipeline / filesystem / runtime-resolution errors as [`build_project`].
-pub(crate) fn run_eject(rest: &[String]) -> Result<(), CliError> {
+pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_eject(rest)?;
     let entry = match args.entry {
         Some(e) => e,
@@ -803,7 +804,7 @@ pub(crate) fn run_eject(rest: &[String]) -> Result<(), CliError> {
 /// Build, toolchain, manifest-parse, filesystem, and capability-resolution
 /// errors.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
+pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_release(rest)?;
     let entry = match args.entry {
         Some(e) => e,
@@ -1199,7 +1200,7 @@ pub(crate) fn run_release(rest: &[String]) -> Result<(), CliError> {
 
 /// Inspect the inferred capability model for `entry_path` without building or
 /// writing anything — the body of `ipe release --capabilities` / `--show-profile`.
-pub(crate) fn run_release_capabilities(
+pub fn run_release_capabilities(
     entry_path: &Path,
     manifest: Option<&Path>,
     format: cli_args::OutputFormat,
@@ -1219,7 +1220,7 @@ pub(crate) fn run_release_capabilities(
 
 /// The human-readable post-build report for a native-bearing release bundle:
 /// link kind, artifact path, and the enforced capability model.
-pub(crate) fn release_bundle_report(
+pub fn release_bundle_report(
     artifact: &Path,
     capabilities: &[&str],
     mode: cli_args::ReleaseMode,
@@ -1248,7 +1249,7 @@ pub(crate) fn release_bundle_report(
 /// # Errors
 ///
 /// [`CliError::UsageOwned`] if the workspace root cannot be found.
-pub(crate) fn find_workspace_root() -> Result<PathBuf, CliError> {
+pub fn find_workspace_root() -> Result<PathBuf, CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::Io {
         path: PathBuf::from("."),
         source: e,
@@ -1284,7 +1285,7 @@ pub(crate) fn find_workspace_root() -> Result<PathBuf, CliError> {
 ///
 /// [`CliError::Io`] when the permission cannot be set.
 #[cfg(unix)]
-pub(crate) fn set_executable(path: &Path) -> Result<(), CliError> {
+pub fn set_executable(path: &Path) -> Result<(), CliError> {
     use std::os::unix::fs::PermissionsExt as _;
     let meta = std::fs::metadata(path).map_err(|e| CliError::Io {
         path: path.to_path_buf(),
@@ -1319,7 +1320,7 @@ pub(crate) fn set_executable(path: &Path) -> Result<(), CliError> {
 /// - [`CliError::Io`] if `cargo` cannot be spawned or its stderr pipe cannot be
 ///   opened.
 /// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
-pub(crate) fn build_emitted_project(
+pub fn build_emitted_project(
     cargo: &mut std::process::Command,
     what: &'static str,
     runtime: Option<RuntimeContext>,
@@ -1387,7 +1388,7 @@ pub(crate) fn build_emitted_project(
 ///
 /// # Errors
 /// Propagates the underlying read error from the `cargo` stderr pipe.
-pub(crate) fn read_progress_chunk<R: std::io::Read>(
+pub fn read_progress_chunk<R: std::io::Read>(
     reader: &mut R,
     out: &mut String,
 ) -> std::io::Result<usize> {
@@ -1415,7 +1416,7 @@ pub(crate) fn read_progress_chunk<R: std::io::Read>(
 /// `cargo` draws no bar at all (it reads the bar width from its piped stderr,
 /// which reports no size).
 #[cfg(unix)]
-pub(crate) fn force_cargo_terminal_ui(cmd: &mut std::process::Command) {
+pub fn force_cargo_terminal_ui(cmd: &mut std::process::Command) {
     let stderr = std::io::stderr();
     if !crate::style::use_color(&stderr) {
         return;
@@ -1428,12 +1429,12 @@ pub(crate) fn force_cargo_terminal_ui(cmd: &mut std::process::Command) {
 
 /// No-op shim for non-Unix targets where `rustix::termios` is unavailable.
 #[cfg(not(unix))]
-pub(crate) fn force_cargo_terminal_ui(_cmd: &mut std::process::Command) {}
+pub fn force_cargo_terminal_ui(_cmd: &mut std::process::Command) {}
 
 /// The column width of `stream`'s terminal, or `None` when it is not a terminal
 /// or the size cannot be read. Uses `TIOCGWINSZ` via rustix — no libc binding.
 #[cfg(unix)]
-pub(crate) fn terminal_width(stream: &impl std::os::fd::AsFd) -> Option<u16> {
+pub fn terminal_width(stream: &impl std::os::fd::AsFd) -> Option<u16> {
     let ws = rustix::termios::tcgetwinsize(stream).ok()?;
     (ws.ws_col > 0).then_some(ws.ws_col)
 }
@@ -1443,7 +1444,7 @@ pub(crate) fn terminal_width(stream: &impl std::os::fd::AsFd) -> Option<u16> {
 /// (a wasm or vendored build), in which case a feature-gap message simply omits
 /// the crate reference. Resolution failure is swallowed to `None` — this is only
 /// for enriching an error message, never a gate.
-pub(crate) fn runtime_context_for_message() -> Option<RuntimeContext> {
+pub fn runtime_context_for_message() -> Option<RuntimeContext> {
     runtime_embed::resolve().ok().map(|r| RuntimeContext {
         root: r.root().to_path_buf(),
         version: r.version().to_owned(),
@@ -1461,7 +1462,7 @@ pub(crate) fn runtime_context_for_message() -> Option<RuntimeContext> {
 /// # Errors
 /// [`CliError::EmittedBuildFailed`] when the wasm `cargo build` fails;
 /// [`CliError::UsageOwned`] when `wasm-bindgen` fails.
-pub(crate) fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
+pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     // Fail closed before the cross-compile: a missing toolchain becomes a clear
     // root-cause message rather than an opaque OS spawn error.
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::BundleWasm)?;
@@ -1584,7 +1585,7 @@ pub(crate) fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
 // A linear pipeline (compile → cargo build → resolve capabilities → jail →
 // exec); the steps share enough locals that splitting reads worse than the whole.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
+pub fn run_run(rest: &[String]) -> Result<(), CliError> {
     let format = cli_args::parse_run(rest)
         .map(|a| a.format)
         .unwrap_or_default();
@@ -1599,7 +1600,7 @@ pub(crate) fn run_run(rest: &[String]) -> Result<(), CliError> {
 
 /// Inner implementation of `run_run`, unaware of JSON formatting.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn run_run_body(rest: &[String]) -> Result<(), CliError> {
+pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
     let bin_args = args.bin_args;
     let cli_layer = args.static_layer;
@@ -1906,7 +1907,7 @@ pub(crate) fn run_run_body(rest: &[String]) -> Result<(), CliError> {
 /// # Errors
 /// [`CliError::UsageOwned`] on a missing binary, a native artifact whose profile
 /// is missing/tampered, a refused floor check, or a fail-closed jail refusal.
-pub(crate) fn run_exec(rest: &[String]) -> Result<(), CliError> {
+pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // Split `<dir> [-- args…]`.
     let (dir_arg, app_args) = rest
         .iter()
@@ -2017,7 +2018,7 @@ pub(crate) fn run_exec(rest: &[String]) -> Result<(), CliError> {
 /// Read the `[package] name` from an emitted project's `Cargo.toml` so
 /// `ipe run` / `ipe exec` / `ipe test` locate the correct binary. Falls back
 /// to `"ipe-app"` when the manifest is absent or unparseable — never panics.
-pub(crate) fn emitted_bin_name(crate_dir: &Path) -> String {
+pub fn emitted_bin_name(crate_dir: &Path) -> String {
     let manifest = crate_dir.join("Cargo.toml");
     let Ok(text) = std::fs::read_to_string(&manifest) else {
         return "ipe-app".to_owned();
@@ -2041,7 +2042,7 @@ pub(crate) fn emitted_bin_name(crate_dir: &Path) -> String {
 /// resolved by cargo itself (`cargo metadata`) so every relocation source —
 /// `CARGO_TARGET_DIR`, a user-level `[build] target-dir` pin, a config in an
 /// ancestor dir — is honoured instead of guessed at.
-pub(crate) fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
+pub fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
     let output = std::process::Command::new("cargo")
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .current_dir(crate_dir)
@@ -2073,7 +2074,7 @@ pub(crate) fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliErr
 /// Invoking `ipe explain` emits a pointer to `ipe doc` and returns a usage
 /// error so the dispatcher shows the `ipe doc` help page. The command is no
 /// longer advertised; the COMMANDS registry entry was removed.
-pub(crate) fn run_explain(_rest: &[String]) -> Result<(), CliError> {
+pub fn run_explain(_rest: &[String]) -> Result<(), CliError> {
     Err(CliError::UsageOwned(
         "`ipe explain` has moved: use `ipe doc <key>` instead\n\
          \n\
@@ -2089,7 +2090,7 @@ pub(crate) fn run_explain(_rest: &[String]) -> Result<(), CliError> {
 /// `ipe fix <path>` — apply machine-applicable fixes to the source file.
 /// Default is interactive per-edit confirmation;
 /// `--yes` is durable authorization to apply every machine-applicable edit.
-pub(crate) fn run_fix(rest: &[String]) -> Result<(), CliError> {
+pub fn run_fix(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_fix(rest)?;
     apply_fixes_cmd(
         &PathBuf::from(&args.entry),
@@ -2151,7 +2152,7 @@ pub fn explain_lookup(input: &str) -> Result<&'static str, CliError> {
 /// small edit threshold — the "maybe ...?" hint for a mistyped command. `None`
 /// when nothing is close enough, so a wildly different token gets only the help
 /// screen, not a misleading guess.
-pub(crate) fn nearest_command(attempted: &str) -> Option<&'static str> {
+pub fn nearest_command(attempted: &str) -> Option<&'static str> {
     help::command_names()
         .into_iter()
         .map(|name| (levenshtein(attempted, name), name))
@@ -2162,7 +2163,7 @@ pub(crate) fn nearest_command(attempted: &str) -> Option<&'static str> {
 
 /// The closest known codes to `canonical` (already upper-cased), ranked by
 /// `(Levenshtein, code)` and filtered to a small edit distance. Deterministic.
-pub(crate) fn did_you_mean_codes(canonical: &str) -> Vec<&'static str> {
+pub fn did_you_mean_codes(canonical: &str) -> Vec<&'static str> {
     let mut scored: Vec<(usize, &'static str)> = ALL_CODES
         .iter()
         .map(|&c| (levenshtein(canonical, c.as_str()), c.as_str()))
@@ -2178,7 +2179,7 @@ pub(crate) fn did_you_mean_codes(canonical: &str) -> Vec<&'static str> {
 
 /// Classic two-row Levenshtein edit distance. Uses no slice indexing (only
 /// `get`/`push`/`last`), so it cannot panic.
-pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
+pub fn levenshtein(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut prev: Vec<usize> = (0..=b.len()).collect();
     for (i, ca) in a.chars().enumerate() {
@@ -2238,7 +2239,7 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
 /// This is the single inference point every capability consumer routes through —
 /// the report, the declared-set verify, package inference, and index admission —
 /// so none of them can disclose a different set than the emitter serves.
-pub(crate) fn capabilities_including_served_widgets(
+pub fn capabilities_including_served_widgets(
     db: &dyn ipe_db::Db,
     root: ipe_db::SourceRoot,
     entry_file: ipe_db::SourceFile,
@@ -2259,7 +2260,7 @@ pub(crate) fn capabilities_including_served_widgets(
 /// A program whose linking fails has no served widget (nothing is emitted), so a
 /// link failure conservatively contributes no widget disclosure here; the failing
 /// pipeline surfaces its own diagnostic through the caller's own lowering.
-pub(crate) fn program_constructs_a_widget(
+pub fn program_constructs_a_widget(
     db: &dyn ipe_db::Db,
     root: ipe_db::SourceRoot,
     entry_file: ipe_db::SourceFile,
@@ -2284,7 +2285,7 @@ pub(crate) fn program_constructs_a_widget(
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic;
 /// [`CliError::Io`] when a source file cannot be read.
-pub(crate) fn lower_entry_via_graph(
+pub fn lower_entry_via_graph(
     entry: &Path,
 ) -> Result<(ipe_db::IpeDatabase, std::sync::Arc<ipe_ir::Program>), CliError> {
     let graph = build_source_graph(entry)?;
@@ -2298,7 +2299,7 @@ pub(crate) fn lower_entry_via_graph(
 /// source root, and the entry module's [`ipe_db::SourceFile`] handle — the
 /// product of sibling discovery + compiled-source stdlib injection shared by
 /// every single-entry analysis path.
-pub(crate) struct SourceGraph {
+pub struct SourceGraph {
     pub(crate) db: ipe_db::IpeDatabase,
     pub(crate) source_root: ipe_db::SourceRoot,
     pub(crate) entry_file: ipe_db::SourceFile,
@@ -2327,7 +2328,7 @@ impl SourceGraph {
     /// # Errors
     /// [`CliError::Pipeline`] carrying the first compiler diagnostic; the query
     /// closure's own error otherwise.
-    pub(crate) fn run_attributed<T>(
+    pub fn run_attributed<T>(
         &self,
         blame_path: &Path,
         run_query: impl FnOnce(
@@ -2392,7 +2393,7 @@ impl SourceGraph {
 /// # Errors
 /// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`] on any
 /// filesystem failure; [`CliError::Usage`] if the entry is not in the built map.
-pub(crate) fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
+pub fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> {
     let mut collected = collect_entry_and_siblings(entry)?;
     let injected =
         project::inject_compiled_std_closure(&mut collected.sources, &mut collected.discovered);
@@ -2431,7 +2432,7 @@ pub(crate) fn build_source_graph(entry: &Path) -> Result<SourceGraph, CliError> 
 ///
 /// # Errors
 /// [`CliError::Io`] when any discovered module cannot be read.
-pub(crate) fn user_sources_for_unsafe_scan(
+pub fn user_sources_for_unsafe_scan(
     manifest: Option<&Path>,
     entry: &Path,
 ) -> Result<Vec<String>, CliError> {
@@ -2477,7 +2478,7 @@ pub(crate) fn user_sources_for_unsafe_scan(
 /// # Errors
 /// [`CliError::UsageOwned`] (`IPE-S0001`) when consent is required but absent;
 /// the capability-resolution errors it composes.
-pub(crate) fn acknowledge_unsafe_imports(
+pub fn acknowledge_unsafe_imports(
     manifest_parsed: Option<&project::ProjectManifest>,
     manifest_path: Option<&Path>,
     entry: &Path,
@@ -2520,7 +2521,7 @@ pub(crate) fn acknowledge_unsafe_imports(
 /// # Errors
 /// [`CliError::UsageOwned`] (`IPE-S0002`) when a disclosed web axis is ungranted;
 /// the capability-resolution errors it composes.
-pub(crate) fn gate_web_consent(
+pub fn gate_web_consent(
     manifest_parsed: Option<&project::ProjectManifest>,
     manifest_path: Option<&Path>,
     entry: &Path,
@@ -2571,7 +2572,7 @@ pub(crate) fn gate_web_consent(
 /// # Errors
 /// [`CliError::UsageOwned`] (`IPE-S0003`) when the disclosed native crossing is
 /// ungranted; the capability-resolution errors it composes.
-pub(crate) fn gate_native_ffi_consent(
+pub fn gate_native_ffi_consent(
     manifest_parsed: Option<&project::ProjectManifest>,
     manifest_path: Option<&Path>,
     entry: &Path,
@@ -2601,7 +2602,7 @@ pub(crate) fn gate_native_ffi_consent(
 /// siblings (and, when a manifest is present, every discovered package module),
 /// for the web-axis provenance scan. Falls back to the bare entry when sibling
 /// discovery fails, exactly as the `.Unsafe` scan does.
-pub(crate) fn named_sources_for_web_scan(
+pub fn named_sources_for_web_scan(
     manifest_path: Option<&Path>,
     entry: &Path,
 ) -> Result<Vec<(String, String)>, CliError> {
@@ -2640,7 +2641,7 @@ pub(crate) fn named_sources_for_web_scan(
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic;
 /// [`CliError::Io`] when a source file cannot be read.
-pub(crate) fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
+pub fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
     let graph = build_source_graph(entry)?;
     graph.run_attributed(entry, |db, root, file| {
         // Type-check first so an ordinary type error surfaces ahead of the

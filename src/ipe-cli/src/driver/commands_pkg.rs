@@ -1,4 +1,5 @@
-use crate::{cli_args, CliError, pack, PathBuf, discover_manifest, project, classify_entry_shape, delivery, resolve_vendored_runtime_dir, build_project, toolchain, force_cargo_terminal_ui, build_emitted_project, cargo_target_directory, emitted_bin_name, Path, Write, audit, publish, index, style, resolve, contained_path, default_entry, typecheck_entry_via_graph, emit_pipeline_json, fmt, run_build, resolve_runtime, scratch, build_test_with_project_sources, build_with_sibling_discovery, runtime_context_for_message, progress, build_source_graph, capabilities_including_served_widgets, version_check, BTreeMap, ffi, create_source_root, Diagnostic, Interner, Suggestion, HelpLine, Applicability, fs};
+use crate::{cli_args, pack, PathBuf, project, delivery, toolchain, Path, Write, audit, publish, index, style, resolve, contained_path, fmt, scratch, progress, version_check, BTreeMap, ffi, Diagnostic, Interner, Suggestion, HelpLine, Applicability, fs};
+use super::{CliError, discover_manifest, classify_entry_shape, resolve_vendored_runtime_dir, build_project, force_cargo_terminal_ui, build_emitted_project, cargo_target_directory, emitted_bin_name, default_entry, typecheck_entry_via_graph, emit_pipeline_json, run_build, resolve_runtime, build_test_with_project_sources, build_with_sibling_discovery, runtime_context_for_message, build_source_graph, capabilities_including_served_widgets, create_source_root};
 
 /// `ipe pack --emit-permissions <platform> [<path>]` — derive and print the
 /// native-shell OS-permission declarations a packaged app requires on `platform`
@@ -14,7 +15,7 @@ use crate::{cli_args, CliError, pack, PathBuf, discover_manifest, project, class
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] on a missing/unknown
 /// `--emit-permissions` platform or a stray argument; the manifest's own parse
 /// errors when the project's `package.ipe` is malformed.
-pub(crate) fn run_pack(rest: &[String]) -> Result<(), CliError> {
+pub fn run_pack(rest: &[String]) -> Result<(), CliError> {
     match rest.split_first() {
         Some((flag, tail)) if flag == "--emit-permissions" => {
             let (raw, path_args) = tail.split_first().ok_or(CliError::Usage(
@@ -100,7 +101,7 @@ pub(crate) fn run_pack(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError::UsageOwned`] wrapping a [`pack::desktop::DesktopRefusal`];
 /// build/emit errors from the underlying compile; [`CliError::Io`] on any
 /// filesystem failure while materialising the bundle.
-pub(crate) fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), CliError> {
+pub fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), CliError> {
     let os =
         pack::desktop::resolve_os(explicit_os).map_err(|r| CliError::UsageOwned(r.to_string()))?;
 
@@ -216,7 +217,7 @@ pub(crate) fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Res
 /// [`CliError::UsageOwned`] wrapping a [`pack::mobile::MobileRefusal`]; the wasm
 /// build's own errors; [`CliError::Io`] on any filesystem failure while
 /// collecting the bundle or materialising the shell.
-pub(crate) fn pack_mobile(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), CliError> {
+pub fn pack_mobile(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), CliError> {
     let os =
         pack::mobile::resolve_os(explicit_os).map_err(|r| CliError::UsageOwned(r.to_string()))?;
 
@@ -302,7 +303,7 @@ pub(crate) fn pack_mobile(explicit_os: Option<&str>, path: Option<&str>) -> Resu
 /// # Errors
 /// [`CliError::UsageOwned`] when this binary's path cannot be resolved or the
 /// wasm build exits non-zero; [`CliError::Io`] when the build cannot be spawned.
-pub(crate) fn build_wasm_for_mobile(manifest_path: &Path, build_dir: &Path) -> Result<(), CliError> {
+pub fn build_wasm_for_mobile(manifest_path: &Path, build_dir: &Path) -> Result<(), CliError> {
     let exe = std::env::current_exe().map_err(|e| {
         CliError::UsageOwned(format!(
             "ipe pack: cannot locate the ipe binary to build wasm: {e}"
@@ -331,7 +332,7 @@ pub(crate) fn build_wasm_for_mobile(manifest_path: &Path, build_dir: &Path) -> R
 
 /// Resolve the project manifest, read its accepted capabilities, and print the
 /// derived OS-permission declarations for `platform`.
-pub(crate) fn emit_permissions(
+pub fn emit_permissions(
     platform: pack::permissions::Platform,
     path: Option<&str>,
 ) -> Result<(), CliError> {
@@ -413,7 +414,7 @@ pub(crate) fn emit_permissions(
 /// [`CliError::UsageOwned`] on a missing or unknown subcommand; the subcommand's
 /// own errors (a build failure, a [`CliError::PackageAudit`] reject, or a
 /// [`CliError::Publish`] refusal) otherwise.
-pub(crate) fn run_package(rest: &[String]) -> Result<(), CliError> {
+pub fn run_package(rest: &[String]) -> Result<(), CliError> {
     match rest.split_first() {
         Some((sub, tail)) if sub == "audit" => audit::run_audit(tail),
         Some((sub, tail)) if sub == "publish" => publish::run_publish(tail),
@@ -444,7 +445,7 @@ pub(crate) fn run_package(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError::Usage`] when no entry file is given; [`CliError::UsageOwned`] on a
 /// bad path or an extra argument; the parser's [`CliError::Resolve`] /
 /// [`CliError::Io`] when the entry is malformed or unreadable.
-pub(crate) fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
+pub fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
     let path = match rest {
         [one] => PathBuf::from(one),
         [] => {
@@ -505,7 +506,7 @@ pub(crate) fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
 /// argument misuse; [`CliError::Resolve`] / [`CliError::Io`] on a schema or read
 /// failure; [`CliError::HashMismatch`] on an integrity mismatch; and
 /// [`CliError::PackageAudit`] when a Tier-1 check rejects a version.
-pub(crate) fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
+pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
     let (entry_path, index_root_opt) = parse_audit_entry_args(rest)?;
 
     // Step 1 — schema: parse + validate the submitted entry file.
@@ -640,7 +641,7 @@ pub(crate) fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
 /// # Errors
 /// [`CliError::Usage`] when the entry file is missing; [`CliError::UsageOwned`] on
 /// an unknown flag, a missing `--index` value, or a duplicate flag/positional.
-pub(crate) fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>), CliError> {
+pub fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option<PathBuf>), CliError> {
     let mut entry_path: Option<PathBuf> = None;
     let mut index_root: Option<PathBuf> = None;
     let mut it = rest.iter();
@@ -688,7 +689,7 @@ pub(crate) fn parse_audit_entry_args(rest: &[String]) -> Result<(PathBuf, Option
 /// # Errors
 /// [`CliError::Usage`] for a directory with no `package.ipe`; the manifest's own
 /// parse errors otherwise.
-pub(crate) fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
+pub fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
     let manifest = discover_manifest(path)?;
     match manifest {
         Some(m) => {
@@ -713,7 +714,7 @@ pub(crate) fn resolve_analysis_entry(path: &Path) -> Result<PathBuf, CliError> {
 /// # Errors
 /// [`CliError::PathEscape`] when a declared program's entry resolves outside the
 /// source root.
-pub(crate) fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, CliError> {
+pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, CliError> {
     let main = parsed.src_root.join("Main.ipe");
     if main.is_file() {
         return Ok(main);
@@ -744,7 +745,7 @@ pub(crate) fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<Path
 ///
 /// With `--json`, each diagnostic is a JSON object on stderr, and success
 /// is `{"status":"ok"}` on stdout — both machine-parseable.
-pub(crate) fn run_type_check(rest: &[String]) -> Result<(), CliError> {
+pub fn run_type_check(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_type_check(rest)?;
     let arg = match args.entry {
         Some(e) => PathBuf::from(e),
@@ -784,14 +785,14 @@ pub(crate) fn run_type_check(rest: &[String]) -> Result<(), CliError> {
 /// A single `ipe verify` stage: run the underlying check over an optional
 /// `<path>` (the current project when `None`), returning its own error on
 /// failure.
-pub(crate) type VerifyStage = fn(Option<&str>) -> Result<(), CliError>;
+pub type VerifyStage = fn(Option<&str>) -> Result<(), CliError>;
 
 /// The ordered stages `ipe verify` runs, each composing the same code path its
 /// standalone command uses. The order is the cheapest, most localised check
 /// first: a formatting scan reads source only; a type-check parses and infers
 /// but emits nothing; a build compiles all the way to an artifact; a test run
 /// exercises the project's `tests/Main.ipe` entry (when one exists).
-pub(crate) const VERIFY_STAGES: &[(&str, VerifyStage)] = &[
+pub const VERIFY_STAGES: &[(&str, VerifyStage)] = &[
     ("format", verify_fmt),
     ("type-check", verify_check),
     ("build", verify_build),
@@ -800,7 +801,7 @@ pub(crate) const VERIFY_STAGES: &[(&str, VerifyStage)] = &[
 
 /// Stage 1: the formatting scan — `ipe fmt --check` over `<path>` (the current
 /// directory when none is given), reporting unformatted files without rewriting.
-pub(crate) fn verify_fmt(path: Option<&str>) -> Result<(), CliError> {
+pub fn verify_fmt(path: Option<&str>) -> Result<(), CliError> {
     let mut rest: Vec<String> = Vec::new();
     if let Some(p) = path {
         rest.push(p.to_owned());
@@ -810,12 +811,12 @@ pub(crate) fn verify_fmt(path: Option<&str>) -> Result<(), CliError> {
 }
 
 /// Stage 2: the type-check — the same source-graph pipeline as `ipe type-check`.
-pub(crate) fn verify_check(path: Option<&str>) -> Result<(), CliError> {
+pub fn verify_check(path: Option<&str>) -> Result<(), CliError> {
     run_type_check(&path.map(str::to_owned).into_iter().collect::<Vec<_>>())
 }
 
 /// Stage 3: the build — the same compilation as `ipe build`.
-pub(crate) fn verify_build(path: Option<&str>) -> Result<(), CliError> {
+pub fn verify_build(path: Option<&str>) -> Result<(), CliError> {
     run_build(&path.map(str::to_owned).into_iter().collect::<Vec<_>>())
 }
 
@@ -830,7 +831,7 @@ pub(crate) fn verify_build(path: Option<&str>) -> Result<(), CliError> {
 /// a `TestOutcome` value can never represent a failure, so no caller can
 /// accidentally return success over failing tests.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum TestOutcome {
+pub enum TestOutcome {
     /// The project has no `tests/Main.ipe` — there is nothing to run, which is
     /// not an error.
     NoTestEntry,
@@ -845,7 +846,7 @@ pub(crate) enum TestOutcome {
 /// the progress lines; the `--json` path routes it to stderr so stdout carries
 /// exactly the one JSON verdict line a consumer parses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TestStdio {
+pub enum TestStdio {
     /// Inherit stdout — the child's summary prints where the user sees it.
     Inherit,
     /// Redirect the child's stdout to stderr — keep our stdout machine-clean.
@@ -872,7 +873,7 @@ pub(crate) enum TestStdio {
 /// [`CliError::TestFailed`] when the test binary exits non-zero (one or more
 /// cases failed) — the binary's own output is the report. Otherwise any build
 /// or toolchain error encountered while compiling the runner.
-pub(crate) fn run_project_tests(path: Option<&str>) -> Result<TestOutcome, CliError> {
+pub fn run_project_tests(path: Option<&str>) -> Result<TestOutcome, CliError> {
     run_project_tests_with(path, TestStdio::Inherit)
 }
 
@@ -881,7 +882,7 @@ pub(crate) fn run_project_tests(path: Option<&str>) -> Result<TestOutcome, CliEr
 ///
 /// # Errors
 /// As [`run_project_tests`].
-pub(crate) fn run_project_tests_with(path: Option<&str>, stdio: TestStdio) -> Result<TestOutcome, CliError> {
+pub fn run_project_tests_with(path: Option<&str>, stdio: TestStdio) -> Result<TestOutcome, CliError> {
     // Resolve the project root from the supplied path (or cwd defaults).
     let entry_path = match path {
         Some(p) => PathBuf::from(p),
@@ -974,7 +975,7 @@ pub(crate) fn run_project_tests_with(path: Option<&str>, stdio: TestStdio) -> Re
 /// The compile/build error on a compile or cargo failure; [`CliError::Io`] when
 /// the test binary cannot be spawned; [`CliError::TestFailed`] when it exits
 /// non-zero (a failing case, or a crash/signal with no exit code).
-pub(crate) fn build_and_run_test_entry(
+pub fn build_and_run_test_entry(
     project_src_root: &Path,
     test_entry: &Path,
     out_dir: &Path,
@@ -1050,7 +1051,7 @@ pub(crate) fn build_and_run_test_entry(
 /// # Errors
 /// [`CliError::TestFailed`] when a test case fails; otherwise any build or
 /// toolchain error from compiling the runner.
-pub(crate) fn verify_test(path: Option<&str>) -> Result<(), CliError> {
+pub fn verify_test(path: Option<&str>) -> Result<(), CliError> {
     run_project_tests(path).map(|_| ())
 }
 
@@ -1069,7 +1070,7 @@ pub(crate) fn verify_test(path: Option<&str>) -> Result<(), CliError> {
 /// [`CliError::UsageOwned`] on an unexpected option or extra argument.
 /// [`CliError::TestFailed`] when a test case fails (the non-zero exit contract).
 /// Otherwise any build or toolchain error from compiling the runner.
-pub(crate) fn run_test(rest: &[String]) -> Result<(), CliError> {
+pub fn run_test(rest: &[String]) -> Result<(), CliError> {
     let (path, format) = cli_args::single_positional_with_format(rest, "test")?;
 
     if format == cli_args::OutputFormat::Json {
@@ -1105,7 +1106,7 @@ pub(crate) fn run_test(rest: &[String]) -> Result<(), CliError> {
 /// (via [`TestStdio::Quiet`]) so stdout carries exactly one JSON line a consumer
 /// can parse. A failing case still exits non-zero: the verdict object is written,
 /// then the already-emitted sentinel drives the exit without a second message.
-pub(crate) fn run_test_json(path: Option<&str>) -> Result<(), CliError> {
+pub fn run_test_json(path: Option<&str>) -> Result<(), CliError> {
     use cli_args::json;
 
     let verdict = |result: &str| json::object(&[("result", json::string(result))]);
@@ -1148,7 +1149,7 @@ pub(crate) fn run_test_json(path: Option<&str>) -> Result<(), CliError> {
 /// [`CliError::UsageOwned`] on an unexpected option or extra argument. Otherwise
 /// the first failing stage's own error, which carries its diagnostic and drives
 /// the non-zero exit; a clean run exits 0.
-pub(crate) fn run_verify(rest: &[String]) -> Result<(), CliError> {
+pub fn run_verify(rest: &[String]) -> Result<(), CliError> {
     let (path, format) = cli_args::single_positional_with_format(rest, "verify")?;
 
     if format == cli_args::OutputFormat::Json {
@@ -1191,7 +1192,7 @@ pub(crate) fn run_verify(rest: &[String]) -> Result<(), CliError> {
 /// Each stage runs in a machine-quiet form so stdout carries EXACTLY the verdict
 /// line: the type-check core prints nothing, the build banner and any stage
 /// diagnostic go to stderr, and the test binary's summary is captured to stderr.
-pub(crate) fn run_verify_json(path: Option<&str>) -> Result<(), CliError> {
+pub fn run_verify_json(path: Option<&str>) -> Result<(), CliError> {
     use cli_args::json;
 
     let stages: &[(&str, VerifyStage)] = &[
@@ -1226,7 +1227,7 @@ pub(crate) fn run_verify_json(path: Option<&str>) -> Result<(), CliError> {
 /// The type-check stage in machine-quiet form: the same source-graph type-check
 /// as [`verify_check`], but through the non-printing core so stdout stays clean
 /// for the JSON verdict (a diagnostic still renders through the error channel).
-pub(crate) fn verify_check_quiet(path: Option<&str>) -> Result<(), CliError> {
+pub fn verify_check_quiet(path: Option<&str>) -> Result<(), CliError> {
     let arg = match path {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
@@ -1237,11 +1238,11 @@ pub(crate) fn verify_check_quiet(path: Option<&str>) -> Result<(), CliError> {
 
 /// The test stage in machine-quiet form: the shared runner with the test
 /// binary's own summary routed to stderr, so stdout stays the JSON verdict alone.
-pub(crate) fn verify_test_quiet(path: Option<&str>) -> Result<(), CliError> {
+pub fn verify_test_quiet(path: Option<&str>) -> Result<(), CliError> {
     run_project_tests_with(path, TestStdio::Quiet).map(|_| ())
 }
 
-pub(crate) fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
+pub fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     let (format, positional) = cli_args::split_format(rest, "capabilities")?;
     let arg = match positional.first() {
         Some(e) => PathBuf::from(e),
@@ -1278,7 +1279,7 @@ pub(crate) fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
 ///   at all for a pure program — the scriptable form pipelines already consume).
 /// - `--json`: `{"capabilities": ["network", …]}`, a stable object whose one
 ///   `capabilities` field is the sorted name array (empty for a pure program).
-pub(crate) fn render_capabilities(
+pub fn render_capabilities(
     names: &[&str],
     format: cli_args::OutputFormat,
     stream: &impl std::io::IsTerminal,
@@ -1337,7 +1338,7 @@ pub(crate) fn render_capabilities(
 }
 
 /// `ipe version` — print the ipe version in the requested format.
-pub(crate) fn run_version(rest: &[String]) -> Result<(), CliError> {
+pub fn run_version(rest: &[String]) -> Result<(), CliError> {
     let (format, positional) = cli_args::split_format(rest, "version")?;
     if let Some(extra) = positional.first() {
         return Err(cli_args::usage_unexpected_argument("version", extra));
@@ -1540,7 +1541,7 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError::UsageOwned`] when the host is not POSIX, the installer cannot
 /// be launched, or it exits with a non-zero code that is not 2.
 /// [`CliError::UpgradeNoPrebuilt`] when the installer exits 2.
-pub(crate) fn run_installer(command: &str) -> Result<(), CliError> {
+pub fn run_installer(command: &str) -> Result<(), CliError> {
     if cfg!(not(unix)) {
         return Err(CliError::UsageOwned(format!(
             "upgrade: not supported on this platform — run the installer manually:\n  {command}"
@@ -1611,7 +1612,7 @@ pub(crate) fn run_installer(command: &str) -> Result<(), CliError> {
 
 /// The process exit code for `ipe upgrade --check --exit-code`, mirroring
 /// git's `--exit-code` convention.
-pub(crate) const fn check_exit_code(action: &version_check::UpgradeAction) -> i32 {
+pub const fn check_exit_code(action: &version_check::UpgradeAction) -> i32 {
     match action {
         version_check::UpgradeAction::Available => 10,
         version_check::UpgradeAction::UpToDate => 0,
@@ -1624,7 +1625,7 @@ pub(crate) const fn check_exit_code(action: &version_check::UpgradeAction) -> i3
 /// `upgraded` is `true` when the installer was actually run this session,
 /// yielding `"action":"upgraded"` in JSON rather than `"checked"`.
 /// Neither format ever prompts.
-pub(crate) fn render_upgrade(
+pub fn render_upgrade(
     check: &version_check::VersionCheck,
     action: &version_check::UpgradeAction,
     upgraded: bool,
@@ -1691,7 +1692,7 @@ pub(crate) fn render_upgrade(
 /// - Human (default): a guttered `ipe <version>` line.
 /// - `--plain`: the bare version string, flush-left, nothing else.
 /// - `--json`: `{"version": "<x.y.z>"}`, a stable single-field object.
-pub(crate) fn render_version(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerminal) -> String {
+pub fn render_version(format: cli_args::OutputFormat, _stream: &impl std::io::IsTerminal) -> String {
     use cli_args::OutputFormat::{Human, Json, Plain};
     let version = env!("CARGO_PKG_VERSION");
     match format {
@@ -1842,7 +1843,7 @@ pub fn infer_package_capabilities(
 
 /// Run the front of the pipeline (parse → canon → types → lower) and return the
 /// first diagnostic it raises, or `None` when the program compiles cleanly.
-pub(crate) fn pipeline_first_diagnostic(source: &str) -> Option<Diagnostic> {
+pub fn pipeline_first_diagnostic(source: &str) -> Option<Diagnostic> {
     let mut interner = Interner::new();
     let module = match ipe_parse::parse_module(source, &mut interner) {
         Ok(m) => m,
@@ -1865,7 +1866,7 @@ pub(crate) fn pipeline_first_diagnostic(source: &str) -> Option<Diagnostic> {
 
 /// Collect every [`Applicability::MachineApplicable`] suggestion a diagnostic
 /// carries — the only kind eligible for auto-patch.
-pub(crate) fn machine_applicable_suggestions(diag: &Diagnostic) -> Vec<Suggestion> {
+pub fn machine_applicable_suggestions(diag: &Diagnostic) -> Vec<Suggestion> {
     diag.help()
         .into_iter()
         .filter_map(|line| match line {
@@ -1928,7 +1929,7 @@ pub fn apply_fixes(src: &str, fixes: &[Suggestion]) -> Option<String> {
 
 /// 1-based `(line, column)` of a byte `offset` into `src`, counting columns in
 /// characters. Clamps gracefully — never panics.
-pub(crate) fn line_col(src: &str, offset: usize) -> (usize, usize) {
+pub fn line_col(src: &str, offset: usize) -> (usize, usize) {
     let mut line = 1usize;
     let mut col = 1usize;
     for (i, ch) in src.char_indices() {
@@ -1958,7 +1959,7 @@ pub(crate) fn line_col(src: &str, offset: usize) -> (usize, usize) {
 ///
 /// # Errors
 /// Returns [`CliError::Io`] on a filesystem failure.
-pub(crate) fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<(), CliError> {
+pub fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<(), CliError> {
     let source =
         crate::io_bounded::read_to_string_capped(entry, crate::io_bounded::SOURCE_READ_CAP)?;
 
@@ -2053,7 +2054,7 @@ pub(crate) fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> 
 
 /// Read a line from stdin and interpret it as a yes/no answer. EOF or any read
 /// error is treated as "no" (the safe default for a mutating action).
-pub(crate) fn read_yes_no() -> bool {
+pub fn read_yes_no() -> bool {
     read_yes_no_default(false)
 }
 
@@ -2061,7 +2062,7 @@ pub(crate) fn read_yes_no() -> bool {
 /// when the answer is empty (a bare Enter). An explicit `y`/`yes` or `n`/`no`
 /// overrides the default; EOF or any read error takes the default, so the caller
 /// controls the fail-safe direction (default `false` for a mutating action).
-pub(crate) fn read_yes_no_default(default: bool) -> bool {
+pub fn read_yes_no_default(default: bool) -> bool {
     let mut line = String::new();
     match std::io::stdin().read_line(&mut line) {
         Ok(_) => {
@@ -2091,7 +2092,7 @@ pub(crate) fn read_yes_no_default(default: bool) -> bool {
 /// retry recovers from that transient case; a genuinely permanent failure
 /// (permissions, a disallowed ancestor) still surfaces as an error after the
 /// retry.
-pub(crate) fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
+pub fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
     let name = target.file_name().map_or_else(
         || String::from("source.ipe"),
@@ -2117,7 +2118,7 @@ pub(crate) fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError
 
 /// Write `contents` to `tmp`, then rename it over `target`. On a rename
 /// failure the temp file is removed so no debris is left behind.
-pub(crate) fn write_and_rename(tmp: &Path, target: &Path, contents: &str) -> Result<(), CliError> {
+pub fn write_and_rename(tmp: &Path, target: &Path, contents: &str) -> Result<(), CliError> {
     fs::write(tmp, contents).map_err(|e| io_err(tmp, e))?;
     if let Err(e) = fs::rename(tmp, target) {
         let _ = fs::remove_file(tmp);
@@ -2126,7 +2127,7 @@ pub(crate) fn write_and_rename(tmp: &Path, target: &Path, contents: &str) -> Res
     Ok(())
 }
 
-pub(crate) fn io_err(path: &Path, source: std::io::Error) -> CliError {
+pub fn io_err(path: &Path, source: std::io::Error) -> CliError {
     CliError::Io {
         path: path.to_path_buf(),
         source,
@@ -2138,7 +2139,7 @@ pub(crate) fn io_err(path: &Path, source: std::io::Error) -> CliError {
 ///
 /// Used by the cross-module error-attribution path in [`compile_modules`] to
 /// locate the source file that owns a diagnostic.
-pub(crate) const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
+pub const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
     match d {
         Diagnostic::Parse { span, .. }
         | Diagnostic::Name { span, .. }
