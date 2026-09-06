@@ -983,11 +983,18 @@ fn to_axum_response(r: ServerResponse) -> axum::response::Response {
     // Prefix test matches  `strings.HasPrefix(ct, "text/html")` exactly:
     // case-sensitive, no trimming — Ipê's html builder always sets a lowercase
     // `text/html; charset=utf-8`, so this is the byte-parity comparison.
-    let body = if effective_ct.starts_with("text/html") {
-        let banner = crate::telemetry::dev_console_banner("");
-        crate::telemetry::inject_dev_banner(&r.body, &banner)
+    let banner = if effective_ct.starts_with("text/html") {
+        crate::telemetry::dev_console_banner("")
     } else {
+        String::new()
+    };
+    // An empty banner (production, or banner-off env, or a non-html response)
+    // leaves the body unchanged, so move it rather than copy it through the
+    // injector's no-op branch.
+    let body = if banner.is_empty() {
         r.body
+    } else {
+        crate::telemetry::inject_dev_banner(&r.body, &banner)
     };
     match builder.body(axum::body::Body::from(body)) {
         Ok(resp) => resp,

@@ -81,14 +81,14 @@ fn walk<M: Clone>(root: &Html<M>, map: &mut HashMap<String, HashMap<String, Even
             let id = attrs
                 .iter()
                 .find_map(|a| match a {
-                    Attribute::Attr(k, v) if k == "ipe-id" => Some(v.clone()),
+                    Attribute::Attr(k, v) if k == "ipe-id" => Some(v.as_str()),
                     _ => None,
                 })
                 .unwrap_or_default();
 
             for a in attrs {
                 if let Attribute::EventAttr(e) = a {
-                    map.entry(id.clone())
+                    map.entry(id.to_string())
                         .or_default()
                         .insert(e.name().to_string(), e.clone());
                 }
