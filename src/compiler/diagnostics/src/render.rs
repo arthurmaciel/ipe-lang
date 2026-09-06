@@ -17,7 +17,7 @@
 //!    gutter, the primary span underlined with `^` and an inline payload-derived
 //!    label, plus any secondary span underlined with `-` and its own label.
 //! 5. **help / note** — the structured [`Diagnostic::help`] lines.
-//! 6. **code footer** — the machine code and the `ipe explain` next step, last:
+//! 6. **code footer** — the machine code and the `ipe doc` next step, last:
 //!    a reader reaches for the lookup key only after reading the message above.
 //!
 //! The function is pure and **deterministic**: every list is walked in producer
@@ -48,9 +48,8 @@ const RESET: &str = "\x1b[0m";
 
 /// The CLI verb that looks up diagnostic codes and teaching pages.
 ///
-/// Every diagnostic footer and help-line that points a reader at a lookup
-/// derives from this one constant so renaming the command requires a single
-/// change here.
+/// Every rendered diagnostic footer and help-line that points a reader at a
+/// lookup interpolates this constant rather than spelling the verb inline.
 pub const DOC_HINT_CMD: &str = "ipe doc";
 
 /// Render a diagnostic against its source file.
@@ -100,10 +99,15 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
 
     // Gutter width is the digit-count of the largest line number we will print.
     let gutter = if has_snippet {
-        let mut max_line = locate(source, primary.lo).line;
+        // The gutter must fit the largest line number any span will PRINT, and
+        // `push_span_block` prints through `locate(span.hi).line`; a hi line with
+        // more digits than the lo line (a span crossing a digit boundary, e.g.
+        // 9→10) would otherwise widen the source row past the underline row and
+        // shift the carets. Fold in every span's hi line, not just its lo line.
+        let mut max_line = locate(source, primary.hi).line;
         for (span, _) in &secondaries {
             if *span != Span::DUMMY {
-                max_line = max_line.max(locate(source, span.lo).line);
+                max_line = max_line.max(locate(source, span.hi).line);
             }
         }
         max_line.to_string().len()
@@ -184,7 +188,7 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     }
 
     // Band 6 — code footer. The lookup key and the next step, last: a reader
-    // reaches for `ipe explain` only after reading the message above.
+    // reaches for `ipe doc` only after reading the message above.
     out.push('\n');
     out.push_str(&paint(color, severity_color(severity), code.as_str()));
     let _ = write!(out, " · run `{DOC_HINT_CMD} {}`", code.as_str());
@@ -803,7 +807,6 @@ fn an_article(rendered: &str) -> String {
     format!("{article} `{rendered}`")
 }
 
-/// The uppercase title shown in the rule, chosen per code so it names what
 /// The uppercase title for the human-facing header rule.
 ///
 /// Derives mechanically from the [`crate::code::title`] SSOT: every code's
@@ -899,9 +902,13 @@ pub fn plain_message(d: &Diagnostic, source: &str) -> String {
 ///       "replacement": "…",
 ///       "applicability": "machine-applicable" | "maybe-incorrect" | "has-placeholders" }
 ///   ],
-///   "explain_ref": "ipe explain IPE-T0001"
+///   "explain_ref": "ipe doc IPE-T0001"
 /// }
 /// ```
+///
+/// `explain_ref` is `<DOC_HINT_CMD> <code>` — the verb is [`DOC_HINT_CMD`], not
+/// a literal, so a consumer reads the prefix from that constant rather than
+/// hard-coding it.
 ///
 /// The object ends with a newline so callers can concatenate records (one per
 /// line) without inserting separators. Escaping follows RFC 8259: `\n`, `\r`,
@@ -2107,8 +2114,8 @@ const fn feature_label(f: Feature) -> &'static str {
         }
         Feature::BoundedRecordUpdate => {
             "updating a generic record is not supported yet — it needs a \
-             `Clone`-bounded type parameter (bounded generics are M2d) \
-             [feature: bounded-record-update]"
+             `Clone`-bounded type parameter, and bounded generics are not \
+             supported yet [feature: bounded-record-update]"
         }
         Feature::NestedPayloadPatterns => {
             "a record pattern is supported at a `case` scrutinee or a `let` \

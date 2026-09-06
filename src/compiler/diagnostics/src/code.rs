@@ -2,7 +2,7 @@
 //!
 //! Every [`crate::Diagnostic`] maps to exactly one [`Code`] via
 //! [`crate::Diagnostic::code`]. Codes are the machine-greppable, user-facing
-//! handle a reader passes to `ipe explain <CODE>`; they never change once
+//! handle a reader passes to `ipe doc <CODE>`; they never change once
 //! shipped. The taxonomy is authoritative here (this file + the explain
 //! pages under `crates/ipe_diagnostics/explain/`); the original design spec
 //! is preserved in git history.
@@ -12,7 +12,7 @@
 //! `IPE-I####` internal (compiler bug).
 //!
 //! Single source of truth: the [`code!`] table below declares every code once,
-//! pairing its wire string with its one-line title and its `ipe explain` page.
+//! pairing its wire string with its one-line title and its `ipe doc` page.
 //! [`ALL_CODES`], [`title`], and [`explain_page`] are all generated from that
 //! one table, so a code cannot exist in one and be missing from another, and
 //! the taxonomy size is derived by counting rows — never a hand-pinned literal.
@@ -85,10 +85,10 @@ macro_rules! code {
             pub const $ident: Code = Code($wire);
         )*
 
-        /// Every taxonomy code, authoritative for `ipe explain` and drift detection.
+        /// Every taxonomy code, authoritative for `ipe doc` and drift detection.
         ///
         /// This is the single source of truth. `ipe` iterates this slice to resolve
-        /// `explain <CODE>` — no hand-mirror needed. Its length is the taxonomy size.
+        /// `doc <CODE>` — no hand-mirror needed. Its length is the taxonomy size.
         pub const ALL_CODES: &[Code] = &[$($ident),*];
 
         /// The one-line human title for a code.
@@ -105,7 +105,7 @@ macro_rules! code {
             }
         }
 
-        /// The embedded `ipe explain` page for a code.
+        /// The embedded `ipe doc` page for a code.
         ///
         /// Each page is `include_str!`d from `explain/<CODE>.md` at compile time,
         /// so a missing or renamed page is a build error — the registry cannot
@@ -357,7 +357,7 @@ code! {
     IPE_L0108 = "IPE-L0108", "kernel function not available yet", "IPE-L0108";
     /// partial or over-application of a function not supported yet
     IPE_L0110 = "IPE-L0110", "partial or over-application not supported yet", "IPE-L0110";
-    /// updating a generic record needs a bounded type parameter (M2d)
+    /// updating a generic record needs a bounded type parameter
     IPE_L0111 = "IPE-L0111", "updating a generic record is not supported yet", "IPE-L0111";
     /// a constructor payload sub-pattern other than a variable / wildcard
     IPE_L0112 = "IPE-L0112", "nested constructor payload patterns not supported yet", "IPE-L0112";
@@ -677,7 +677,7 @@ mod tests {
     /// `IPE-N0030` is a real, emitted diagnostic — its entry in `ALL_CODES` must
     /// be reachable and its title must match the taxonomy declaration exactly.
     ///
-    /// This pins the `ipe explain IPE-N0030` and did-you-mean surfaces against
+    /// This pins the `ipe doc IPE-N0030` and did-you-mean surfaces against
     /// silent omission.
     #[test]
     fn n0030_is_registered_and_explain_surface_finds_it() {
