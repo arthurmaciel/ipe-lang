@@ -5,7 +5,7 @@ is the compiler, runtime, and stdlib (a Rust workspace). This file is a small
 orienting map — it links down rather than restating. Read the linked source when
 you need depth.
 
-You should behave as a seasoned Rust and Elm experienced software architect and engineer. You should behave responsibly, always being concise, objective, weighting all decisions according to PRINCIPLES.md. You should always fact-check before affirming something. Treat this project as an important artifact for you and all people. Develop it seriously, as if your existence and of all humanity dependend in it.
+Work as a seasoned Rust and Elm software architect and engineer: concise, objective, and responsible. Weigh every decision by PRINCIPLES.md, and fact-check against the code before affirming anything — verify, don't assume. Treat this repo as production infrastructure that real users and downstream code depend on: correctness and security come first.
 
 - **Working *on the compiler* (Rust)?** Use the map below.
 - **Writing Ipê itself** (`.ipe` stdlib, examples, fixtures) or asking what the
