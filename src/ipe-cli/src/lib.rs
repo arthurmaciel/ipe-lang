@@ -2239,7 +2239,8 @@ pub fn compile_prepared(
         // The tag is the SINGLE lowerer definition, keyed on the same cleaned
         // path the view node hashed — never a second, drift-prone hash here.
         let tag = ipe_lower::custom_element_tag(&widget.cleaned_path);
-        if let Err(collision) = record_widget_tag_origin(&mut tag_origin, &tag, &widget.cleaned_path)
+        if let Err(collision) =
+            record_widget_tag_origin(&mut tag_origin, &tag, &widget.cleaned_path)
         {
             return Err(reject(format!(
                 "the widget-hook files `{}` and `{}` hash to the same \
