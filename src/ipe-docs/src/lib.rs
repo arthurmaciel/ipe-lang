@@ -87,8 +87,10 @@ pub struct Entry {
 pub struct CommandInfo {
     /// The subcommand name, e.g. `build`.
     pub name: &'static str,
-    /// The one-line summary, as written in `COMMANDS`.
-    pub summary: &'static str,
+    /// The full command help rendered as Markdown from `help.rs`'s `COMMANDS`
+    /// registry — synopsis, arguments, and options — so `ipe doc <command>`
+    /// mirrors `ipe <command> --help` from one source.
+    pub help: String,
 }
 
 // ── Index ─────────────────────────────────────────────────────────────────────
@@ -389,7 +391,7 @@ impl IndexBuilder {
             let entry = Entry {
                 kind: EntryKind::Command,
                 source_key: cmd.name.to_owned(),
-                text: cmd.summary.to_owned(),
+                text: cmd.help.clone(),
             };
             self.entries.insert(cmd.name.to_owned(), entry);
         }
@@ -556,11 +558,13 @@ mod tests {
         vec![
             CommandInfo {
                 name: "version",
-                summary: "Print the ipe version.",
+                help: "Print the ipe version.\n\n```\nipe version\n```\n".to_owned(),
             },
             CommandInfo {
                 name: "build",
-                summary: "Compile a program to a native or WebAssembly artifact.",
+                help: "Compile a program to a native or WebAssembly artifact.\n\n\
+                       ```\nipe build [<path>]\n```\n"
+                    .to_owned(),
             },
         ]
     }

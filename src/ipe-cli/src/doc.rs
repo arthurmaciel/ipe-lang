@@ -685,7 +685,7 @@ fn build_index() -> Result<Index, CliError> {
     let commands: Vec<CommandInfo> = crate::help::command_names()
         .into_iter()
         .filter_map(|name| {
-            crate::help::command_summary(name).map(|summary| CommandInfo { name, summary })
+            crate::help::command_doc_markdown(name).map(|help| CommandInfo { name, help })
         })
         .collect();
     builder.add_commands(&commands);
@@ -749,14 +749,20 @@ fn build_doc_bundle(docs_root: &std::path::Path) -> Result<DocBundle, CliError> 
         })
         .collect();
 
-    // CLI commands: from the COMMANDS registry. The summary is the title, so a
-    // list reads `<command>  <summary>` in an aligned table.
+    // CLI commands: from the COMMANDS registry. The summary is the title (so a
+    // list reads `<command>  <summary>` in an aligned table); the body is the
+    // command's full help rendered as Markdown from the same registry, so the
+    // HTML command page mirrors `ipe <command> --help`.
     let cli_sources: Vec<BundleSource> = crate::help::command_names()
         .into_iter()
         .filter_map(|name| {
-            crate::help::command_summary(name).map(|summary| {
-                BundleSource::with_body(name.to_owned(), summary.to_owned(), summary.to_owned())
-            })
+            let summary = crate::help::command_summary(name)?;
+            let body = crate::help::command_doc_markdown(name)?;
+            Some(BundleSource::with_body(
+                name.to_owned(),
+                summary.to_owned(),
+                body,
+            ))
         })
         .collect();
 
@@ -2145,6 +2151,100 @@ fn signature_references(ty: &TyDoc, index: &AnchorIndex) -> Vec<TypeRef> {
 /// resolves within `html/`; Markdown `[…](Ipe-List.md)` within `markdown/`).
 /// The `docs.json` cross-reference anchors are format-neutral logical
 /// addresses, identical across all three renderings.
+/// Resolve a page-relative href against the directory its page lives in,
+/// dropping any `#fragment`, to the flat site-map key it must hit. `..` walks
+/// up, `.`/empty segments are ignored.
+fn resolve_site_href(page_key: &str, href: &str) -> String {
+    let target = href.split('#').next().unwrap_or(href);
+    let dir = page_key.rsplit_once('/').map_or("", |(d, _)| d);
+    let mut parts: Vec<&str> = Vec::new();
+    if !dir.is_empty() {
+        parts.extend(dir.split('/'));
+    }
+    for seg in target.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
+/// Rewrite any relative `<a href="…">…</a>` whose target is not a generated
+/// page into a plain `<span class="dead-link">…</span>`.
+///
+/// Curated Markdown bodies cross-reference source paths (`../adr/*.md`, example
+/// sources, bare construct slugs) that the self-contained site does not
+/// generate. Rendering those as live anchors would 404; degrading them to
+/// styled text keeps the prose readable and the site link-clean (fail-closed:
+/// a link the site cannot honour never ships as a dead link). Absolute
+/// (`http`/`https`/`mailto`) and pure-`#fragment` hrefs are left untouched.
+fn neutralize_dead_links(html: &str, page_key: &str, site: &BTreeMap<String, String>) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(pos) = rest.find("<a href=\"") {
+        let (before, from_anchor) = rest.split_at(pos);
+        let attr_start = pos + "<a href=\"".len();
+        let Some(quote_end) = rest.get(attr_start..).and_then(|r| r.find('"')) else {
+            // Malformed anchor open: emit the remainder verbatim and stop.
+            out.push_str(rest);
+            return out;
+        };
+        let href = rest.get(attr_start..attr_start + quote_end).unwrap_or("");
+        let Some(close_tag) = from_anchor.find('>') else {
+            out.push_str(rest);
+            return out;
+        };
+        let Some(end_anchor) = from_anchor.find("</a>") else {
+            out.push_str(rest);
+            return out;
+        };
+        let inner = from_anchor
+            .get(close_tag + 1..end_anchor)
+            .unwrap_or_default();
+        out.push_str(before);
+
+        let is_absolute = href.is_empty()
+            || href.starts_with('#')
+            || href.starts_with("http://")
+            || href.starts_with("https://")
+            || href.starts_with("mailto:");
+        let resolves = is_absolute || {
+            let target = resolve_site_href(page_key, href);
+            target.is_empty() || site.contains_key(&target)
+        };
+        if resolves {
+            out.push_str(from_anchor.get(..end_anchor + "</a>".len()).unwrap_or(""));
+        } else {
+            let _ = write!(out, "<span class=\"dead-link\">{inner}</span>");
+        }
+        rest = from_anchor.get(end_anchor + "</a>".len()..).unwrap_or("");
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Rewrite dead relative links across every HTML page in a site map in place.
+fn neutralize_site_dead_links(site: &mut BTreeMap<String, String>) {
+    let keys: Vec<String> = site.keys().cloned().collect();
+    let snapshot = site.clone();
+    for key in keys {
+        if !std::path::Path::new(&key)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("html"))
+        {
+            continue;
+        }
+        if let Some(html) = site.get(&key) {
+            let fixed = neutralize_dead_links(html, &key, &snapshot);
+            site.insert(key, fixed);
+        }
+    }
+}
+
 fn render_site_split(
     docs: &DocsJson,
     bundle: &crate::doc_bundle::DocBundle,
@@ -2205,6 +2305,7 @@ fn render_site_split(
         for (path, content) in render_entry_pages(bundle, &ref_search) {
             html_files.insert(path, content);
         }
+        neutralize_site_dead_links(&mut html_files);
     }
 
     (json_files, markdown_files, html_files)
@@ -2250,6 +2351,7 @@ fn render_site_for_serve(
     for (path, content) in render_entry_pages(bundle, &ref_search) {
         files.insert(path, content);
     }
+    neutralize_site_dead_links(&mut files);
     files
 }
 
@@ -3294,6 +3396,18 @@ body {
 .page-body { max-width: 60rem; margin-inline: auto; padding: 1.5rem 2rem; }
 h1 { font-size: 1.6rem; color: var(--accent); }
 h2 { font-size: 1.2rem; margin-top: 2rem; color: var(--accent); }
+h3 { font-size: 1.05rem; margin-top: 1.5rem; color: var(--accent); }
+h4, h5, h6 { font-size: 1rem; margin-top: 1.2rem; color: var(--fg); }
+table.doc-table {
+  border-collapse: collapse; margin: 1rem 0; width: 100%;
+  font-size: 0.9rem;
+}
+table.doc-table th, table.doc-table td {
+  border: 1px solid var(--border); padding: 0.4rem 0.7rem; text-align: left;
+  vertical-align: top;
+}
+table.doc-table th { background: var(--surface); color: var(--fg); }
+.dead-link { color: inherit; }
 a { color: var(--accent); text-decoration: none; }
 a:hover, a:focus { color: var(--accent-strong); text-decoration: underline; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -3775,82 +3889,251 @@ fn html_escape(s: &str) -> String {
 /// Prose paragraphs are blank-line–separated runs of non-code lines emitted as
 /// `<p class="comment">…</p>`.  Within prose, spans delimited by single
 /// backticks become `<code>…</code>`; all other text is html-escaped.
+/// Render inline Markdown spans in prose text: backtick code, `[text](url)`
+/// links, and `**bold**` / `*italic*` / `_italic_` emphasis. A `` ` `` code
+/// span is opaque — its interior is escaped verbatim, never re-scanned for
+/// emphasis or links. Any unmatched marker is emitted literally (fail-closed:
+/// malformed input renders as harmless text, never markup or a panic).
+fn render_inline(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        match b {
+            b'`' => {
+                // Code span: copy verbatim (escaped) to the matching backtick.
+                if let Some(rel) = text.get(i + 1..).and_then(|r| r.find('`')) {
+                    let inner = text.get(i + 1..i + 1 + rel).unwrap_or("");
+                    out.push_str("<code>");
+                    out.push_str(&html_escape(inner));
+                    out.push_str("</code>");
+                    i += 1 + rel + 1;
+                } else {
+                    out.push('`');
+                    i += 1;
+                }
+            }
+            b'[' => {
+                // Link: `[text](url)`. Only a well-formed pair is a link.
+                if let Some((label, url, consumed)) = parse_link(text.get(i..).unwrap_or("")) {
+                    let _ = write!(
+                        out,
+                        "<a href=\"{}\">{}</a>",
+                        html_escape(&url),
+                        render_inline(&label)
+                    );
+                    i += consumed;
+                } else {
+                    out.push('[');
+                    i += 1;
+                }
+            }
+            b'*' | b'_' => {
+                let strong = b == b'*' && bytes.get(i + 1) == Some(&b'*');
+                let marker: &str = if strong {
+                    "**"
+                } else if b == b'*' {
+                    "*"
+                } else {
+                    "_"
+                };
+                let start = i + marker.len();
+                if let Some(rel) = text.get(start..).and_then(|r| r.find(marker))
+                    && rel > 0
+                {
+                    let inner = text.get(start..start + rel).unwrap_or("");
+                    let tag = if strong { "strong" } else { "em" };
+                    let _ = write!(out, "<{tag}>{}</{tag}>", render_inline(inner));
+                    i = start + rel + marker.len();
+                } else {
+                    out.push(char::from(b));
+                    i += 1;
+                }
+            }
+            _ => {
+                // Escape one HTML-significant char, or copy one plain char.
+                let ch = text.get(i..).and_then(|s| s.chars().next()).unwrap_or(' ');
+                match ch {
+                    '&' => out.push_str("&amp;"),
+                    '<' => out.push_str("&lt;"),
+                    '>' => out.push_str("&gt;"),
+                    '"' => out.push_str("&quot;"),
+                    other => out.push(other),
+                }
+                i += ch.len_utf8();
+            }
+        }
+    }
+    out
+}
+
+/// Parse a leading `[label](url)` link. Returns the label text, the URL, and
+/// the byte length consumed, or `None` when the slice does not open a
+/// well-formed link. Nested brackets in the label and parens in the URL are
+/// not supported (rendered literally) — a deliberately small, safe subset.
+fn parse_link(s: &str) -> Option<(String, String, usize)> {
+    let after_open = s.strip_prefix('[')?;
+    let close = after_open.find(']')?;
+    let label = after_open.get(..close)?;
+    let after_label = after_open.get(close + 1..)?;
+    let after_paren = after_label.strip_prefix('(')?;
+    let close_paren = after_paren.find(')')?;
+    let url = after_paren.get(..close_paren)?;
+    // Reject a scheme that could execute script; allow only safe URL forms.
+    if !is_safe_href(url) {
+        return None;
+    }
+    let consumed = 1 + close + 1 + 1 + close_paren + 1;
+    Some((label.to_owned(), url.to_owned(), consumed))
+}
+
+/// A link target is safe when it is relative, a fragment, or an
+/// `http`/`https`/`mailto` absolute — never `javascript:` or `data:`.
+fn is_safe_href(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    if let Some(scheme) = lower.split(':').next()
+        && scheme != lower
+        && !scheme.is_empty()
+        && !scheme.contains(['/', '?', '#'])
+        && scheme
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
+    {
+        // A `:` after a valid scheme name (before any `/`, `?`, `#`) is an
+        // absolute URL; only the safe schemes are admitted.
+        return matches!(scheme, "http" | "https" | "mailto");
+    }
+    true
+}
+
+/// Flush a prose paragraph buffer to `out`.
+fn flush_prose(out: &mut String, prose: &mut Vec<String>) {
+    if prose.is_empty() {
+        return;
+    }
+    let text = prose.join(" ");
+    let _ = writeln!(out, "<p class=\"comment\">{}</p>", render_inline(&text));
+    prose.clear();
+}
+
+/// Flush a code block buffer to `out`, syntax-highlighting it when it parses
+/// as Ipê and falling back to escaped text otherwise. A contiguous run of
+/// code lines stays one `<pre>` block.
+fn flush_code(out: &mut String, code: &mut Vec<String>) {
+    if code.is_empty() {
+        return;
+    }
+    let source = code.join("\n");
+    out.push_str("<pre class=\"doc-code\">");
+    out.push_str(&highlight_ipe_snippet(&source));
+    out.push_str("</pre>\n");
+    code.clear();
+}
+
+/// Flush a bullet-list buffer as a `<ul>`, each item its own `<li>` — the raw
+/// `*`/`-` marker dropped, inline spans rendered.
+fn flush_list(out: &mut String, items: &mut Vec<String>) {
+    if items.is_empty() {
+        return;
+    }
+    out.push_str("<ul class=\"doc-list\">\n");
+    for item in items.iter() {
+        let _ = writeln!(out, "<li>{}</li>", render_inline(item));
+    }
+    out.push_str("</ul>\n");
+    items.clear();
+}
+
+/// Strip a leading bullet marker (`* `, `- `, or `+ `), returning the item
+/// text when the line is a list item.
+fn bullet_item(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    for marker in ["* ", "- ", "+ "] {
+        if let Some(rest) = t.strip_prefix(marker) {
+            return Some(rest.trim());
+        }
+    }
+    None
+}
+
+/// Parse an ATX heading (`#`..`######` then a space), returning the level
+/// (clamped so a page heading never outranks the surrounding `<h1>`/`<h2>`)
+/// and the trimmed heading text.
+fn atx_heading(line: &str) -> Option<(u8, &str)> {
+    let t = line.trim_start();
+    let hashes = t.bytes().take_while(|&c| c == b'#').count();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    let rest = t.get(hashes..)?;
+    let text = rest.strip_prefix(' ')?.trim_end_matches(['#', ' ']).trim();
+    // Section headings inside a page body start at h3 so they nest under the
+    // page's own h1/h2 chrome.
+    let level = u8::try_from(hashes).unwrap_or(6).saturating_add(2).min(6);
+    Some((level, text))
+}
+
+/// Split a Markdown table row `| a | b |` into its trimmed cells, or `None`
+/// when the line is not a pipe-delimited row.
+fn table_cells(line: &str) -> Option<Vec<&str>> {
+    let t = line.trim();
+    if !t.starts_with('|') {
+        return None;
+    }
+    let inner = t.trim_start_matches('|').trim_end_matches('|');
+    Some(inner.split('|').map(str::trim).collect())
+}
+
+/// Whether a row is a header/body separator (`|---|:--:|`) — all cells are
+/// runs of `-` with optional leading/trailing `:` alignment marks.
+fn is_table_separator(cells: &[&str]) -> bool {
+    !cells.is_empty()
+        && cells.iter().all(|c| {
+            let t = c.trim_matches(':');
+            !t.is_empty() && t.bytes().all(|b| b == b'-')
+        })
+}
+
+/// Flush an accumulated Markdown table (its first row treated as the header)
+/// as an HTML `<table>`.
+fn flush_table(out: &mut String, rows: &mut Vec<Vec<String>>) {
+    if rows.is_empty() {
+        return;
+    }
+    out.push_str("<table class=\"doc-table\">\n");
+    for (idx, row) in rows.iter().enumerate() {
+        let cell_tag = if idx == 0 { "th" } else { "td" };
+        if idx == 0 {
+            out.push_str("<thead>\n");
+        } else if idx == 1 {
+            out.push_str("<tbody>\n");
+        }
+        out.push_str("<tr>");
+        for cell in row {
+            let _ = write!(out, "<{cell_tag}>{}</{cell_tag}>", render_inline(cell));
+        }
+        out.push_str("</tr>\n");
+        if idx == 0 {
+            out.push_str("</thead>\n");
+        }
+    }
+    if rows.len() > 1 {
+        out.push_str("</tbody>\n");
+    }
+    out.push_str("</table>\n");
+    rows.clear();
+}
+
+/// Render a doc-comment / Markdown body to HTML: paragraphs, ATX headings,
+/// bullet lists, pipe tables, fenced and indented code (Ipê-highlighted), and
+/// inline spans (code, links, emphasis). Unrecognised or malformed markup
+/// renders as safe escaped text — never a panic, never injected markup.
 fn render_comment_html(comment: &str) -> String {
-    /// Render inline backtick spans in prose text as `<code>`.
-    fn render_inline(text: &str) -> String {
-        let mut out = String::new();
-        let mut rest = text;
-        while let Some(open) = rest.find('`') {
-            out.push_str(&html_escape(&rest[..open]));
-            rest = &rest[open + 1..];
-            if let Some(close) = rest.find('`') {
-                out.push_str("<code>");
-                out.push_str(&html_escape(&rest[..close]));
-                out.push_str("</code>");
-                rest = &rest[close + 1..];
-            } else {
-                // Unmatched backtick: emit literally.
-                out.push('`');
-            }
-        }
-        out.push_str(&html_escape(rest));
-        out
-    }
-
-    /// Flush a prose paragraph buffer to `out`.
-    fn flush_prose(out: &mut String, prose: &mut Vec<String>) {
-        if prose.is_empty() {
-            return;
-        }
-        let text = prose.join(" ");
-        let _ = writeln!(out, "<p class=\"comment\">{}</p>", render_inline(&text));
-        prose.clear();
-    }
-
-    /// Flush a code block buffer to `out`, syntax-highlighting it when it parses
-    /// as Ipê and falling back to escaped text otherwise. A contiguous run of
-    /// code lines stays one `<pre>` block.
-    fn flush_code(out: &mut String, code: &mut Vec<String>) {
-        if code.is_empty() {
-            return;
-        }
-        let source = code.join("\n");
-        out.push_str("<pre class=\"doc-code\">");
-        out.push_str(&highlight_ipe_snippet(&source));
-        out.push_str("</pre>\n");
-        code.clear();
-    }
-
-    /// Flush a bullet-list buffer as a `<ul>`, each item its own `<li>` — the raw
-    /// `*`/`-` marker dropped, inline spans rendered (issue #1874, item 12).
-    fn flush_list(out: &mut String, items: &mut Vec<String>) {
-        if items.is_empty() {
-            return;
-        }
-        out.push_str("<ul class=\"doc-list\">\n");
-        for item in items.iter() {
-            let _ = writeln!(out, "<li>{}</li>", render_inline(item));
-        }
-        out.push_str("</ul>\n");
-        items.clear();
-    }
-
-    /// Strip a leading bullet marker (`* `, `- `, or `+ `), returning the item
-    /// text when the line is a list item.
-    fn bullet_item(line: &str) -> Option<&str> {
-        let t = line.trim_start();
-        for marker in ["* ", "- ", "+ "] {
-            if let Some(rest) = t.strip_prefix(marker) {
-                return Some(rest.trim());
-            }
-        }
-        None
-    }
-
     let mut out = String::new();
     let mut prose: Vec<String> = Vec::new();
     let mut code_buf: Vec<String> = Vec::new();
     let mut list_buf: Vec<String> = Vec::new();
+    let mut table_buf: Vec<Vec<String>> = Vec::new();
     let mut fenced = false;
 
     for line in comment.lines() {
@@ -3869,29 +4152,50 @@ fn render_comment_html(comment: &str) -> String {
             // Opening delimiter: flush open blocks, then enter fenced mode.
             flush_prose(&mut out, &mut prose);
             flush_list(&mut out, &mut list_buf);
+            flush_table(&mut out, &mut table_buf);
             fenced = true;
             // The opening delimiter line (plus any language tag) is dropped.
+        } else if let Some((level, text)) = atx_heading(line) {
+            // ATX heading: close open blocks, emit an `<hN>`.
+            flush_prose(&mut out, &mut prose);
+            flush_code(&mut out, &mut code_buf);
+            flush_list(&mut out, &mut list_buf);
+            flush_table(&mut out, &mut table_buf);
+            let _ = writeln!(out, "<h{level}>{}</h{level}>", render_inline(text));
+        } else if let Some(cells) = table_cells(line) {
+            // A table row: a separator row is dropped (it only marks the header
+            // boundary), any other row is a header or body row.
+            flush_prose(&mut out, &mut prose);
+            flush_code(&mut out, &mut code_buf);
+            flush_list(&mut out, &mut list_buf);
+            if !is_table_separator(&cells) {
+                table_buf.push(cells.into_iter().map(str::to_owned).collect());
+            }
         } else if let Some(item) = bullet_item(line) {
             // A list item: close any open prose/code, accumulate into the list.
             flush_prose(&mut out, &mut prose);
             flush_code(&mut out, &mut code_buf);
+            flush_table(&mut out, &mut table_buf);
             list_buf.push(item.to_owned());
         } else if list_buf.is_empty()
+            && table_buf.is_empty()
             && let Some(rest) = line.strip_prefix("    ")
         {
-            // Indented code block (only when not continuing a list): flush prose,
-            // strip the four-space marker.
+            // Indented code block (only when not continuing a list/table): flush
+            // prose, strip the four-space marker.
             flush_prose(&mut out, &mut prose);
             code_buf.push(rest.to_owned());
         } else if line.trim().is_empty() {
-            // Blank line: close any open paragraph, code, or list.
+            // Blank line: close any open paragraph, code, list, or table.
             flush_prose(&mut out, &mut prose);
             flush_code(&mut out, &mut code_buf);
             flush_list(&mut out, &mut list_buf);
+            flush_table(&mut out, &mut table_buf);
         } else {
-            // Prose line: close any open code or list first.
+            // Prose line: close any open code, list, or table first.
             flush_code(&mut out, &mut code_buf);
             flush_list(&mut out, &mut list_buf);
+            flush_table(&mut out, &mut table_buf);
             prose.push(line.trim().to_owned());
         }
     }
@@ -3900,6 +4204,7 @@ fn render_comment_html(comment: &str) -> String {
     flush_prose(&mut out, &mut prose);
     flush_code(&mut out, &mut code_buf);
     flush_list(&mut out, &mut list_buf);
+    flush_table(&mut out, &mut table_buf);
 
     out
 }
@@ -4054,11 +4359,38 @@ fn first_sentence(body: &str) -> String {
         if t.is_empty() || t.starts_with('#') || t.starts_with("---") {
             continue;
         }
-        // Drop backtick delimiters for a plain-text summary.
-        let plain: String = t.chars().filter(|&c| c != '`').take(120).collect();
+        // A plain-text summary: unwrap `[text](url)` links to their text and drop
+        // backtick/emphasis markers so no Markdown syntax leaks into the escaped
+        // summary.
+        let unlinked = strip_markdown_links(t);
+        let plain: String = unlinked
+            .chars()
+            .filter(|&c| !matches!(c, '`' | '*' | '_'))
+            .take(120)
+            .collect();
         return plain;
     }
     String::new()
+}
+
+/// Replace every `[text](url)` with just `text`, leaving other text untouched.
+/// A malformed pair is left verbatim.
+fn strip_markdown_links(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        out.push_str(rest.get(..open).unwrap_or(""));
+        let after = rest.get(open..).unwrap_or("");
+        if let Some((label, _url, consumed)) = parse_link(after) {
+            out.push_str(&label);
+            rest = after.get(consumed..).unwrap_or("");
+        } else {
+            out.push('[');
+            rest = after.get(1..).unwrap_or("");
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Render the Reference (module) index page.
@@ -5209,6 +5541,117 @@ mod tests {
         assert!(html.contains("foo =\n    bar"), "{html}");
         assert!(!html.contains("```"), "{html}");
         assert!(html.contains("End."), "{html}");
+    }
+
+    #[test]
+    fn render_comment_atx_heading_becomes_nested_heading() {
+        let html = render_comment_html("# Top\n\n## Sub\n\nbody");
+        // A page-body heading nests under the page's own h1/h2 chrome, so `#`
+        // becomes `<h3>` and `##` becomes `<h4>`; never a literal `#`.
+        assert!(html.contains("<h3>Top</h3>"), "{html}");
+        assert!(html.contains("<h4>Sub</h4>"), "{html}");
+        assert!(!html.contains("# "), "no raw ATX marker survives: {html}");
+    }
+
+    #[test]
+    fn render_comment_link_becomes_anchor() {
+        let html = render_comment_html("See [the docs](guide.html) now.");
+        assert!(
+            html.contains("<a href=\"guide.html\">the docs</a>"),
+            "{html}"
+        );
+        assert!(!html.contains("]("), "no raw link markup survives: {html}");
+    }
+
+    #[test]
+    fn render_comment_emphasis_becomes_strong_and_em() {
+        let html = render_comment_html("A **bold** and an *italic* and an _under_.");
+        assert!(html.contains("<strong>bold</strong>"), "{html}");
+        assert!(html.contains("<em>italic</em>"), "{html}");
+        assert!(html.contains("<em>under</em>"), "{html}");
+    }
+
+    #[test]
+    fn render_comment_table_becomes_html_table() {
+        let html = render_comment_html("| A | B |\n|---|---|\n| 1 | 2 |");
+        assert!(html.contains("<table class=\"doc-table\">"), "{html}");
+        assert!(html.contains("<th>A</th>"), "{html}");
+        assert!(html.contains("<td>1</td>"), "{html}");
+        // The `|---|` separator row is consumed, never emitted as a data row.
+        assert!(!html.contains("---"), "separator row dropped: {html}");
+    }
+
+    #[test]
+    fn render_comment_rejects_javascript_link_scheme() {
+        // A `javascript:` target must not become an executable link; it stays
+        // literal text (fail-closed).
+        let html = render_comment_html("[x](javascript:alert(1))");
+        assert!(
+            !html.contains("href=\"javascript:"),
+            "javascript scheme must not become an anchor: {html}"
+        );
+    }
+
+    #[test]
+    fn render_comment_unmatched_markers_stay_literal() {
+        // Malformed inline markers render as harmless text, never markup.
+        let html = render_comment_html("a * b and [x](y and `z");
+        assert!(!html.contains("<em>"), "lone asterisk not emphasis: {html}");
+        assert!(!html.contains("<a "), "lone bracket not a link: {html}");
+        assert!(!html.contains("<code>"), "lone backtick not code: {html}");
+    }
+
+    /// The HTML command page renders the same command metadata as
+    /// `ipe <command>`'s help: the two are projected from the one `COMMANDS`
+    /// table in `help.rs`, so a page can never advertise a flag or argument the
+    /// terminal help omits.
+    #[test]
+    fn html_command_page_mirrors_command_help_ssot() {
+        let command = "build";
+        let markdown = crate::help::command_doc_markdown(command).expect("build has help");
+        let entry = crate::doc_bundle::DocEntry {
+            kind: crate::doc_bundle::DocKind::Cli,
+            key: command.to_owned(),
+            title: crate::help::command_summary(command).unwrap().to_owned(),
+            body: markdown,
+            order: None,
+        };
+        let html = render_entry_page(crate::doc_bundle::DocKind::Cli, &entry, "");
+
+        // Every option flag and its description from the SSOT appears on the page.
+        for spec in crate::help::all_command_specs() {
+            if spec.name != command {
+                continue;
+            }
+            for opt in &spec.options {
+                assert!(
+                    html.contains(&html_escape(opt.flag)),
+                    "HTML command page omits flag {} from the help SSOT",
+                    opt.flag
+                );
+            }
+        }
+        // The synopsis and the Arguments/Options headings are present.
+        assert!(html.contains("ipe build"), "synopsis present: {html}");
+        assert!(html.contains("Arguments"), "arguments section present");
+        assert!(html.contains("Options"), "options section present");
+        // No raw Markdown leaks through the renderer.
+        assert!(!html.contains("## "), "no raw ATX heading survives");
+    }
+
+    /// `ipe doc serve` and `ipe doc --write-format html` are two views over one
+    /// site model: the HTML each surface produces is byte-identical, so a fix to
+    /// the engine fixes both at once.
+    #[test]
+    fn serve_html_matches_write_format_html_byte_for_byte() {
+        let docs = build_stdlib_only_docs();
+        let bundle = build_doc_bundle(&locate_docs_root()).expect("bundle builds");
+        let (_json, _md, split_html) = render_site_split(&docs, &bundle, WriteFormat::Html);
+        let serve_html = render_site_for_serve(&docs, &bundle);
+        assert_eq!(
+            split_html, serve_html,
+            "serve and write-format html must produce an identical site map"
+        );
     }
 
     #[test]
