@@ -11,13 +11,40 @@
 
 #![forbid(unsafe_code)]
 
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// The expected-output file name inside a golden directory.
 pub const EXPECTED_FILE: &str = "expected.txt";
 /// The Ipê entry point inside every golden directory.
 pub const MAIN_IPE: &str = "Main.ipe";
+
+/// Fail-fast ceiling for the emitted-crate `cargo build`, in seconds.
+///
+/// A hung or lock-contended build would otherwise spin to the outer nextest
+/// per-test cap (300s under `--profile ci`) and read as a whole-shard straggler.
+/// Every emitted app links against a warm shared dependency target, so even the
+/// heaviest axum/tokio SEAL crate finishes well inside this window; a genuine
+/// wedge fails here in minutes with a clear message instead. Overridable via
+/// `IPE_E2E_BUILD_TIMEOUT_SECS` for a cold, deps-not-yet-warm environment.
+const DEFAULT_EMITTED_BUILD_TIMEOUT_SECS: u64 = 240;
+
+/// Resolve the emitted-build fail-fast ceiling from the environment, falling
+/// back to [`DEFAULT_EMITTED_BUILD_TIMEOUT_SECS`].
+///
+/// A non-empty, parseable positive value wins; anything else (absent, empty,
+/// non-numeric, zero) uses the default — an unreadable override must never
+/// silently disable the cap.
+fn emitted_build_timeout() -> Duration {
+    let secs = std::env::var("IPE_E2E_BUILD_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(DEFAULT_EMITTED_BUILD_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
 
 /// Stable token stored in a portable golden `Cargo.toml` instead of the
 /// machine-specific `ipe-runtime-rust` crate path.
@@ -225,9 +252,7 @@ fn build_emitted_binary(golden_name: &str, emitted_dir: &Path) -> Result<String,
     if let Some(p) = resolve_emitted_target(shared.as_deref()) {
         cmd.env("CARGO_TARGET_DIR", p);
     }
-    let build = cmd
-        .output()
-        .map_err(|e| format!("{golden_name}: failed to spawn `cargo build`: {e}"))?;
+    let build = run_bounded_build(cmd, golden_name, emitted_build_timeout())?;
     if !build.status.success() {
         return Err(format!(
             "{golden_name}: emitted project must build\n--- cargo stderr ---\n{}",
@@ -239,6 +264,86 @@ fn build_emitted_binary(golden_name: &str, emitted_dir: &Path) -> Result<String,
     find_executable(&json_stdout, &unique_pkg).ok_or_else(|| {
         format!("{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON")
     })
+}
+
+/// The captured result of a bounded `cargo build`: its exit status and the
+/// stdout / stderr streams drained from the child.
+#[derive(Debug)]
+struct BuildCapture {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+/// Spawn `cmd`, draining stdout/stderr on reader threads, and wait for it to
+/// finish within `timeout`. On timeout the child is killed and an `Err` is
+/// returned naming the ceiling, so a wedged or lock-contended emitted build
+/// fails fast here instead of spinning to the outer nextest per-test cap.
+///
+/// The streams are drained by dedicated threads because cargo's
+/// `--message-format=json` stdout can exceed the OS pipe buffer; polling
+/// `try_wait` while the child blocks on a full pipe would otherwise deadlock.
+fn run_bounded_build(
+    mut cmd: Command,
+    golden_name: &str,
+    timeout: Duration,
+) -> Result<BuildCapture, String> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{golden_name}: failed to spawn `cargo build`: {e}"))?;
+
+    let stdout_reader = child.stdout.take().map(drain_stream);
+    let stderr_reader = child.stderr.take().map(drain_stream);
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "{golden_name}: emitted `cargo build` exceeded {}s and was killed \
+                         (fail-fast cap; raise IPE_E2E_BUILD_TIMEOUT_SECS for a cold environment)",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{golden_name}: waiting on `cargo build` failed: {e}"
+                ));
+            }
+        }
+    };
+
+    let stdout = stdout_reader.map(join_stream).unwrap_or_default();
+    let stderr = stderr_reader.map(join_stream).unwrap_or_default();
+    Ok(BuildCapture {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// Spawn a thread that reads a child stream to EOF, returning its join handle.
+fn drain_stream<R: Read + Send + 'static>(mut stream: R) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stream.read_to_end(&mut buf);
+        buf
+    })
+}
+
+/// Join a drain thread, returning the bytes it read (empty if the thread panicked).
+fn join_stream(handle: std::thread::JoinHandle<Vec<u8>>) -> Vec<u8> {
+    handle.join().unwrap_or_default()
 }
 
 /// Build the emitted Rust project at `emitted_dir` and run the resulting binary,
@@ -291,7 +396,59 @@ pub fn read_expected(golden_dir: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{replace_package_name, resolve_emitted_target};
+    use super::{
+        DEFAULT_EMITTED_BUILD_TIMEOUT_SECS, emitted_build_timeout, replace_package_name,
+        resolve_emitted_target, run_bounded_build,
+    };
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn bounded_build_kills_a_hung_process_before_the_cap() {
+        // A process that sleeps far longer than the tight cap stands in for a
+        // wedged `cargo build`. The bounded wait must kill it and return the
+        // fail-fast error well before the sleep would finish — proving the cap
+        // fires, not the outer nextest terminate.
+        let mut cmd = Command::new("sleep");
+        cmd.arg("120");
+        let started = Instant::now();
+        let result = run_bounded_build(cmd, "hung_build_probe", Duration::from_millis(300));
+        let elapsed = started.elapsed();
+
+        let err = result.expect_err("a 120s sleep under a 300ms cap must be killed");
+        assert!(
+            err.contains("exceeded") && err.contains("fail-fast cap"),
+            "the timeout error must name the fail-fast cap, got: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the cap must fire promptly (killed the child), took {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn bounded_build_returns_a_fast_process_output() {
+        // A process that finishes inside the cap must return its captured
+        // output normally — the cap only bites a genuine hang.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("printf hello; printf oops 1>&2");
+        let capture = run_bounded_build(cmd, "fast_build_probe", Duration::from_secs(30))
+            .expect("a fast process must return its output");
+        assert!(capture.status.success());
+        assert_eq!(capture.stdout, b"hello");
+        assert_eq!(capture.stderr, b"oops");
+    }
+
+    #[test]
+    fn build_timeout_defaults_when_env_absent_or_invalid() {
+        // The helper reads a process-global env var; assert only the default
+        // path (env unset in the test harness) so the test needs no env mutation.
+        // A parse guard in the helper covers empty/zero/non-numeric overrides.
+        assert_eq!(
+            emitted_build_timeout(),
+            Duration::from_secs(DEFAULT_EMITTED_BUILD_TIMEOUT_SECS)
+        );
+    }
 
     #[test]
     fn rewrites_single_file_ipe_app_name() {

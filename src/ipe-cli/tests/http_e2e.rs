@@ -40,6 +40,30 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
+use std::time::{Duration, Instant};
+
+/// Default fail-fast ceiling for the fixture server's single `accept`.
+///
+/// If the compiled client never connects (a wedged runtime, a build that
+/// produced a broken binary) the fixture thread would otherwise block in
+/// `accept` until the outer nextest per-test cap. Bounding the accept lets the
+/// thread exit promptly; the client-run assertion then fails on stdout with a
+/// clear message rather than the whole shard stalling. The Ipê client connects
+/// within milliseconds, so this window is never approached in the normal case.
+const DEFAULT_FIXTURE_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Resolve the fixture accept deadline, honouring `IPE_HTTP_FIXTURE_ACCEPT_MS`
+/// (milliseconds) when set to a positive value; otherwise the default.
+///
+/// The override exists so the fail-fast behaviour can be proven with a short
+/// deadline in a test without a 30s wait; production runs leave it unset.
+fn fixture_accept_timeout() -> Duration {
+    std::env::var("IPE_HTTP_FIXTURE_ACCEPT_MS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|&ms| ms > 0)
+        .map_or(DEFAULT_FIXTURE_ACCEPT_TIMEOUT, Duration::from_millis)
+}
 
 /// Shared error type for E2E helpers: propagated via `?` so helpers and test
 /// functions never call `panic!` or `expect`.
@@ -110,18 +134,50 @@ fn start_fixture(
         .port();
     let url = format!("http://127.0.0.1:{port}/");
 
+    // Non-blocking accept so the thread is not wedged forever if the client
+    // never connects: a bounded poll gives the fixture a fail-fast deadline
+    // instead of blocking to the outer per-test cap.
+    listener.set_nonblocking(true).map_err(|e| -> BoxError {
+        format!("{test_name}: cannot set fixture listener non-blocking: {e}").into()
+    })?;
+
     let handle = thread::spawn(move || {
-        // Accept exactly one connection; if accept fails the fixture thread
-        // exits silently (the running binary will see a connection refused and
-        // the test assertion on stdout will fail with a clear message).
-        if let Ok((mut stream, _)) = listener.accept() {
-            // Drain enough bytes so the client finishes sending its request
-            // before we write the response.  We never need to parse it.
-            let mut buf = [0u8; 4096];
-            let _ = stream.read(&mut buf);
-            let _ = stream.write_all(raw_response.as_bytes());
-            let _ = stream.flush();
-            // `stream` drops here, closing the connection.
+        // Accept exactly one connection within the deadline. If none arrives
+        // (a wedged or broken client) the fixture thread exits when the
+        // deadline elapses; the running binary then produces no/short stdout
+        // and the test assertion fails fast with a clear message rather than
+        // hanging to the outer cap.
+        let deadline = Instant::now() + fixture_accept_timeout();
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    // The accepted stream inherits the listener's non-blocking
+                    // flag; restore blocking so the drain + write below block
+                    // normally. Bound them with explicit read/write timeouts so
+                    // a peer that connects but never speaks cannot re-introduce
+                    // a hang.
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+                    // Drain enough bytes so the client finishes sending its
+                    // request before we write the response. We never parse it.
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf);
+                    let _ = stream.write_all(raw_response.as_bytes());
+                    let _ = stream.flush();
+                    // `stream` drops here, closing the connection.
+                    break;
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+                // A real accept error is terminal: exit so the client sees a
+                // connection failure and the test assertion reports it.
+                Err(_) => break,
+            }
         }
     });
 
@@ -341,6 +397,46 @@ fn http_ssrf_deny_loopback() -> Result<(), BoxError> {
         out.status.code(),
         Some(0),
         "http_ssrf_deny_loopback: binary must exit 0 (Task.onError recovered)"
+    );
+    Ok(())
+}
+
+/// The fixture accept deadline fires: with no client ever connecting, the
+/// fixture thread must exit promptly once the deadline elapses rather than
+/// blocking forever (which would spin to the outer per-test cap).
+///
+/// A short `IPE_HTTP_FIXTURE_ACCEPT_MS` override makes the proof fast. This test
+/// needs no compiled binary, so it runs without `IPE_E2E`.
+///
+/// # Errors
+///
+/// Propagates a fixture-bind failure.
+#[test]
+fn fixture_accept_deadline_fires_when_no_client_connects() -> Result<(), BoxError> {
+    // SAFETY: `set_var` mutates process-global env. This test is self-contained
+    // (no other test reads this var) and the `cwd-mutating`/`heavy-server-e2e`
+    // groups already serialize env-sensitive members; the short window here does
+    // not overlap a fixture that expects the default deadline.
+    unsafe {
+        std::env::set_var("IPE_HTTP_FIXTURE_ACCEPT_MS", "200");
+    }
+    let started = Instant::now();
+    let (_url, handle) = start_fixture(
+        "fixture_accept_deadline",
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    )?;
+    // Never connect. The thread must exit near the 200ms deadline, well under
+    // any outer cap; join it and assert it returned promptly.
+    handle
+        .join()
+        .map_err(|_| -> BoxError { "fixture thread panicked".into() })?;
+    let elapsed = started.elapsed();
+    unsafe {
+        std::env::remove_var("IPE_HTTP_FIXTURE_ACCEPT_MS");
+    }
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the accept deadline must fire fast (no-connect), took {elapsed:?}"
     );
     Ok(())
 }
