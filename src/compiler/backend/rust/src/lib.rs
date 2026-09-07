@@ -2196,7 +2196,7 @@ impl<'a> EmitCtx<'a> {
     /// (nested lambdas inside the arm bodies never inherit the arming — the arm
     /// bodies are emitted as ordinary expressions, so only the top `case msg of`
     /// is transition-aware). A no-op arming (`None`) leaves every `case` compiled.
-    fn begin_transition_update(
+    pub(crate) fn begin_transition_update(
         &self,
         model_param: Option<ipe_intern::Symbol>,
     ) -> Option<ipe_intern::Symbol> {
@@ -2204,7 +2204,7 @@ impl<'a> EmitCtx<'a> {
     }
 
     /// Restore the transition-update arming saved by [`Self::begin_transition_update`].
-    fn end_transition_update(&self, prev: Option<ipe_intern::Symbol>) {
+    pub(crate) fn end_transition_update(&self, prev: Option<ipe_intern::Symbol>) {
         *self.transition_model_param.borrow_mut() = prev;
     }
 

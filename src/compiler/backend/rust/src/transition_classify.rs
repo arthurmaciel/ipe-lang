@@ -543,17 +543,52 @@ impl CompileCmdWiring {
     }
 }
 
+/// An `update` arm's Cmd position reduced to a wiring datum PLUS the arm's ordered
+/// table of compiled effect expressions (stable id = index).
+///
+/// The datum names WHICH effect fires (or none); the effect expressions stay
+/// compiled — the backend emits each as a lazy thunk and the runtime fires only the
+/// selected one.
+#[derive(Clone, Debug)]
+pub struct ArmWiring<'e> {
+    /// Which compiled effect the arm fires, or `None` (`Cmd.none`).
+    pub wiring: CompileCmdWiring,
+    /// The arm's compiled effect expressions, indexed by stable id. Empty for
+    /// `Cmd.none`; one entry for a single `Cmd.perform`. A `wiring.effect` id, when
+    /// present, is a valid index into this table by construction.
+    pub effects: Vec<&'e Expr>,
+}
+
 /// Classify an `update` arm's Cmd position (the second tuple element) into an
 /// inert [`CompileCmdWiring`], or `None` when the Cmd is not a recognised wiring.
 ///
-/// Recognised: `Cmd.none` → the no-effect wiring (`effect: None`). Everything else
-/// — a real `Cmd.perform`, `Cmd.batch`, a variable, a call — is an effect BODY
-/// this slice keeps compiled, so it returns `None` (the arm's Cmd stays compiled).
-/// Conservative by construction: a false `None` is a slower rebuild; a false
-/// `Some` that fired the wrong effect would be a correctness defect, so every
-/// unrecognised Cmd refuses.
+/// Recognised: `Cmd.none` → the no-effect wiring (`effect: None`); a single literal
+/// `Cmd.perform` → the effect-0 wiring. Everything else — a `Cmd.batch`, a
+/// `Cmd.map`, a variable, a computed Cmd — is not enumerable, so it returns `None`
+/// (the arm's Cmd stays compiled). Conservative by construction: a false `None` is
+/// a slower rebuild; a false `Some` that fired the wrong effect would be a
+/// correctness defect, so every unrecognised Cmd refuses.
 #[must_use]
 pub fn cmd_wiring_of_arm(body: &Expr) -> Option<CompileCmdWiring> {
+    arm_wiring_of_arm(body).map(|w| w.wiring)
+}
+
+/// Classify an `update` arm's Cmd position into an [`ArmWiring`] — the wiring datum
+/// AND the arm's ordered compiled-effect table — or `None` for a non-enumerable Cmd.
+///
+/// The closed *choice* vocabulary, exhaustively:
+/// * `Cmd.none` → the no-effect wiring (`effect: None`), an empty effect table;
+/// * a single literal `Cmd.perform <task> <toMsg>` → the wiring `effect: Some(0)`
+///   over a one-entry effect table holding that `Cmd.perform` expression.
+///
+/// Everything else — a `Cmd.batch`, a `Cmd.map`, a variable, a computed/dynamic
+/// Cmd, an `if`/`case` over Cmds, or a `Cmd.perform` under any other spelling — is
+/// NOT enumerable and refuses (`None`), keeping the arm's Cmd compiled. This is
+/// fail-closed by construction: a false `None` is a slower rebuild; a false `Some`
+/// that wired the wrong effect crosses the Msg/effect trust boundary, so every
+/// non-enumerable Cmd refuses.
+#[must_use]
+pub fn arm_wiring_of_arm(body: &Expr) -> Option<ArmWiring<'_>> {
     let Expr::Tuple(elems) = body else {
         return None;
     };
@@ -561,9 +596,36 @@ pub fn cmd_wiring_of_arm(body: &Expr) -> Option<CompileCmdWiring> {
         return None;
     };
     if is_cmd_none(cmd_expr) {
-        return Some(CompileCmdWiring { effect: None });
+        return Some(ArmWiring {
+            wiring: CompileCmdWiring { effect: None },
+            effects: Vec::new(),
+        });
+    }
+    if is_literal_perform(cmd_expr) {
+        // A single literal `Cmd.perform` is the arm's sole compiled effect, id 0.
+        return Some(ArmWiring {
+            wiring: CompileCmdWiring { effect: Some(0) },
+            effects: vec![cmd_expr],
+        });
     }
     None
+}
+
+/// Whether `expr` is exactly a literal `Cmd.perform <task> <toMsg>` — the arity-2
+/// `CmdPerform` kernel call. A `Task.attempt`, `Cmd.map`, `Cmd.batch`, a variable,
+/// or a `Cmd.perform` with the wrong argument count is NOT this closed shape and
+/// refuses (the arm's Cmd stays compiled). The task/toMsg arguments are NOT
+/// inspected — the effect BODY stays compiled exactly as written; only the WIRING
+/// (that this arm fires this one effect) becomes data.
+const fn is_literal_perform(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdPerform),
+            args,
+            ..
+        } if args.len() == 2
+    )
 }
 
 #[cfg(test)]
@@ -1048,7 +1110,76 @@ mod tests {
 
     // ── Cmd wiring → an inert wiring datum ───────────────────────────────
 
-    use super::{CompileCmdWiring, cmd_wiring_of_arm};
+    use super::{CompileCmdWiring, arm_wiring_of_arm, cmd_wiring_of_arm};
+
+    fn cmd_perform() -> Expr {
+        // `Cmd.perform <task> <toMsg>` — a literal arity-2 perform. The argument
+        // exprs are opaque stand-ins; the classifier does not inspect them.
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdPerform),
+            args: vec![
+                Expr::Var(Symbol::from_raw(80)),
+                Expr::Var(Symbol::from_raw(81)),
+            ],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    #[test]
+    fn cmd_perform_arm_wires_effect_zero() {
+        // A single literal `Cmd.perform` arm classifies as the effect-0 wiring over a
+        // one-entry compiled effect table.
+        let body = Expr::Tuple(vec![Expr::Int(0), cmd_perform()]);
+        let arm = arm_wiring_of_arm(&body).expect("a literal Cmd.perform arm is enumerable");
+        assert_eq!(arm.wiring, CompileCmdWiring { effect: Some(0) });
+        assert_eq!(arm.effects.len(), 1, "the perform is the arm's sole effect");
+    }
+
+    #[test]
+    fn cmd_none_arm_has_empty_effect_table() {
+        // A `Cmd.none` arm is the no-effect wiring over an empty table.
+        let body = Expr::Tuple(vec![Expr::Int(0), cmd_none()]);
+        let arm = arm_wiring_of_arm(&body).expect("Cmd.none is enumerable");
+        assert_eq!(arm.wiring, CompileCmdWiring { effect: None });
+        assert!(arm.effects.is_empty());
+    }
+
+    #[test]
+    fn cmd_batch_arm_is_not_enumerable() {
+        // A `Cmd.batch` (a dynamic list of effects) is NOT a closed choice — refuses.
+        let real = Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdBatch),
+            args: vec![Expr::List {
+                elem: IrType::Int,
+                items: vec![],
+            }],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let body = Expr::Tuple(vec![Expr::Int(0), real]);
+        assert!(arm_wiring_of_arm(&body).is_none());
+    }
+
+    #[test]
+    fn cmd_variable_arm_is_not_enumerable() {
+        // A Cmd bound to a variable (a computed / passed-through effect) refuses.
+        let body = Expr::Tuple(vec![Expr::Int(0), Expr::Var(Symbol::from_raw(90))]);
+        assert!(arm_wiring_of_arm(&body).is_none());
+    }
+
+    #[test]
+    fn cmd_map_arm_is_not_enumerable() {
+        // `Cmd.map` (a retagged sub-component effect) is outside the closed vocabulary.
+        let mapped = Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdMap),
+            args: vec![Expr::Var(Symbol::from_raw(91)), cmd_perform()],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let body = Expr::Tuple(vec![Expr::Int(0), mapped]);
+        assert!(arm_wiring_of_arm(&body).is_none());
+    }
 
     #[test]
     fn cmd_none_arm_wires_no_effect() {

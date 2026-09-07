@@ -226,6 +226,43 @@ pub fn select_cmd_hot(default_json: &str, effect_count: usize) -> Option<usize> 
     }
 }
 
+/// Fire the wiring-selected effect from an arm's ordered table of compiled effect
+/// thunks, or [`crate::tea::IpeCmd::None`] when the wiring names no effect.
+///
+/// The compiler emits a classified `update` arm's Cmd position as
+/// `fire_cmd_wiring("<baked wiring JSON>", vec![<effect-0 thunk>, ...])`, where
+/// each thunk builds ONE of the arm's OWN compiled effects. This selects which id
+/// to fire through the bounded [`select_cmd_hot`] (dev overlay consulted under the
+/// dev gate; the baked id otherwise, dev == prod), then runs ONLY that thunk — the
+/// others are dropped unrun, so effect construction stays lazy.
+///
+/// Bounded and fail-closed at every seam. `select_cmd_hot` already guarantees the
+/// returned id indexes a real thunk (`id < len`); this consumes the thunk table
+/// with `into_iter().nth(id)`, which returns `None` (never an out-of-bounds index,
+/// never a panic) for any id past the table, so even a defence-in-depth breach of
+/// that guarantee fires no effect rather than aborting. An id naming no effect
+/// (`Cmd.none`, a stale/crafted dev id past the table, or a datum that fails to
+/// decode) fires [`IpeCmd::None`] — a wiring patch can never fire an effect the arm
+/// never compiled.
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+#[must_use]
+pub fn fire_cmd_wiring<M>(
+    default_json: &str,
+    thunks: Vec<Box<dyn FnOnce() -> crate::tea::IpeCmd<M>>>,
+) -> crate::tea::IpeCmd<M> {
+    match select_cmd_hot(default_json, thunks.len()) {
+        // `nth` consumes the table and yields the selected thunk by OWNERSHIP (an
+        // `FnOnce` cannot be called through a shared `.get` reference), bounded: a
+        // stale id past the table yields `None` and fires no effect — never `[i]`,
+        // never a panic. Only the selected thunk runs; the rest drop unrun.
+        Some(id) => thunks
+            .into_iter()
+            .nth(id)
+            .map_or(crate::tea::IpeCmd::None, |thunk| thunk()),
+        None => crate::tea::IpeCmd::None,
+    }
+}
+
 #[cfg(test)]
 #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
 mod hot_tests {
@@ -305,6 +342,109 @@ mod hot_tests {
         // unintended effect.
         assert_eq!(select_cmd_hot("not json", 3), None);
 
+        set_dev_overlay_active_for_test(None);
+    }
+}
+
+#[cfg(test)]
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+mod fire_tests {
+    use super::super::literal_table::{overlay_test_lock, set_dev_overlay_active_for_test};
+    use super::{CmdWiring, clear_dev_wiring_for_test, fire_cmd_wiring, register_dev_wiring};
+    use crate::tea::IpeCmd;
+
+    /// A thunk building a marker `Batch` effect — a stand-in for an arm's compiled
+    /// effect, distinguishable from `None` by `matches!`.
+    fn marker_effect() -> Box<dyn FnOnce() -> IpeCmd<i64>> {
+        Box::new(|| IpeCmd::Batch(vec![]))
+    }
+
+    fn baked_none() -> String {
+        serde_json::to_string(&CmdWiring::none()).expect("serialize wiring")
+    }
+    fn baked_effect(id: u32) -> String {
+        serde_json::to_string(&CmdWiring::effect(id)).expect("serialize wiring")
+    }
+
+    #[test]
+    fn none_wiring_fires_no_effect() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(false));
+        clear_dev_wiring_for_test();
+
+        // A `Cmd.none` wiring fires `IpeCmd::None` even with effects available.
+        let cmd = fire_cmd_wiring::<i64>(&baked_none(), vec![marker_effect()]);
+        assert!(matches!(cmd, IpeCmd::None));
+
+        set_dev_overlay_active_for_test(None);
+    }
+
+    #[test]
+    fn in_range_wiring_fires_that_effect() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(false));
+        clear_dev_wiring_for_test();
+
+        // The baked id 0 fires the arm's compiled effect 0 (dev == prod).
+        let cmd = fire_cmd_wiring::<i64>(&baked_effect(0), vec![marker_effect()]);
+        assert!(matches!(cmd, IpeCmd::Batch(_)));
+
+        set_dev_overlay_active_for_test(None);
+    }
+
+    #[test]
+    fn out_of_range_baked_id_fires_no_effect() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(false));
+        clear_dev_wiring_for_test();
+
+        // A baked id past the arm's compiled effect table fires no effect — never an
+        // out-of-bounds index, never a panic.
+        let cmd = fire_cmd_wiring::<i64>(&baked_effect(5), vec![marker_effect()]);
+        assert!(matches!(cmd, IpeCmd::None));
+
+        set_dev_overlay_active_for_test(None);
+    }
+
+    #[test]
+    fn empty_table_fires_no_effect() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(false));
+        clear_dev_wiring_for_test();
+
+        // An id against an empty effect table (no compiled effects) fires no effect.
+        let cmd = fire_cmd_wiring::<i64>(&baked_effect(0), Vec::new());
+        assert!(matches!(cmd, IpeCmd::None));
+
+        set_dev_overlay_active_for_test(None);
+    }
+
+    #[test]
+    fn corrupt_datum_fires_no_effect() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(false));
+        clear_dev_wiring_for_test();
+
+        // A datum that does not decode fires no effect — never a panic.
+        let cmd = fire_cmd_wiring::<i64>("not json", vec![marker_effect()]);
+        assert!(matches!(cmd, IpeCmd::None));
+
+        set_dev_overlay_active_for_test(None);
+    }
+
+    #[test]
+    fn overlay_hot_swaps_the_fired_effect() {
+        let _g = overlay_test_lock();
+        set_dev_overlay_active_for_test(Some(true));
+        clear_dev_wiring_for_test();
+
+        // The wiring SEAL through the fire path: an arm baked to fire no effect now
+        // fires the already-compiled effect 0 after a dev wiring patch — no recompile.
+        register_dev_wiring(&baked_none(), CmdWiring::effect(0));
+        let cmd = fire_cmd_wiring::<i64>(&baked_none(), vec![marker_effect()]);
+        assert!(matches!(cmd, IpeCmd::Batch(_)));
+
+        clear_dev_wiring_for_test();
         set_dev_overlay_active_for_test(None);
     }
 }
