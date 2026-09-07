@@ -866,8 +866,11 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     # off the PR gate (seal-smoke is the PR proxy); runs on push, nightly, and
-    # push/nightly gate. Fail-fast on a non-compiling tree.
-    needs: [changes, quick-check]
+    # push/nightly gate. Fail-fast on a non-compiling tree. `test-prep` compiles
+    # the whole test-binary set once into `nextest.tar.zst`; each shard downloads
+    # and RUNS from that archive under IPE_E2E=1 (which changes only runtime
+    # behaviour, not the archived binaries), so no shard recompiles the workspace.
+    needs: [changes, quick-check, test-prep]
     if: github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
@@ -882,6 +885,9 @@ jobs:
       # The shard driver is `cargo nextest run`; the runner has no nextest unless
       # this installs it (every other nextest-driven job installs it too).
       - uses: taiki-e/install-action@nextest
+      - uses: actions/download-artifact@v7
+        with:
+          name: nextest-archive
       - uses: mozilla-actions/sccache-action@v0.0.9
       # Cache the shared emitted-crate target across runs so the runtime dep tree
       # (axum/tokio/sqlx/serde) stays warm and each shard's goldens link
@@ -922,7 +928,14 @@ jobs:
           # ONE target, so the dep tree compiles once and every later golden
           # only links its own `main.rs`.
           IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
-        run: cargo nextest run --workspace --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/8
+        # Run this shard's partition from the prebuilt archive (`--workspace-remap
+        # .` re-roots archived paths at this checkout) — no from-scratch compile.
+        # `--test-threads=2`: every E2E test under IPE_E2E=1 drives a memory-heavy
+        # emitted-project `cargo build`, and each such build itself parallelizes
+        # across the runner's cores; capping to 2 concurrent tests keeps two heavy
+        # builds (~all cores) in flight at once instead of one-per-core, which OOMs
+        # the 4-core/16GB runner into a 10-15x thrash and a timeout.
+        run: cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/8 --test-threads=2
 
   # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to eight
   # shard-named jobs, so no single shard name is a durable required-check target
@@ -938,11 +951,19 @@ jobs:
   e2e-all:
     name: e2e-all
     runs-on: ubuntu-latest
-    needs: e2e
+    needs: [e2e, test-prep]
     if: always()
     steps:
       - name: Gate on every e2e shard result
         run: |
+          # A failed `test-prep` skips every e2e shard (they `needs` it); catch
+          # that here so the archive-build failure can't slip through as a
+          # vacuous skip below.
+          prep='${{ needs.test-prep.result }}'
+          if [ "$prep" = failure ] || [ "$prep" = cancelled ]; then
+            echo "e2e-all FAILED: test-prep result=$prep (the shared nextest archive never built)" >&2
+            exit 1
+          fi
           result='${{ needs.e2e.result }}'
           case "$result" in
             success)
@@ -972,7 +993,9 @@ jobs:
   seal-slice-shard:
     name: seal-slice-shard (${{ matrix.shard }}/5)
     runs-on: ubuntu-latest
-    needs: [changes, quick-check]
+    # Reuse `test-prep`'s single-compile archive (see the e2e job) rather than
+    # rebuilding the workspace per sub-shard.
+    needs: [changes, quick-check, test-prep]
     if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
@@ -985,6 +1008,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: rui314/setup-mold@v1
       - uses: taiki-e/install-action@nextest
+      - uses: actions/download-artifact@v7
+        with:
+          name: nextest-archive
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
         with:
@@ -1009,11 +1035,14 @@ jobs:
           IPE_E2E: "1"
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
           IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
+        # Run both selections from the prebuilt archive — no from-scratch compile.
+        # `--test-threads=2` caps concurrent heavy emitted-project builds so the
+        # sub-shard stays inside runner memory (see the e2e job for the rationale).
         run: |
           if [ "${{ matrix.shard }}" = "1" ]; then
-            cargo nextest run -p ipe -E 'binary(seal_modset)' --profile ci
+            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . -E 'binary(seal_modset)' --profile ci --test-threads=2
           fi
-          cargo nextest run --workspace --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/30 \
+          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/30 --test-threads=2 \
             -E 'not test(build_run_column_over_a_representative_slice)'
 
   # Stable aggregation status for the sharded SEAL slice. The matrix expands to
@@ -1024,11 +1053,18 @@ jobs:
   seal-slice:
     name: seal-slice
     runs-on: ubuntu-latest
-    needs: [changes, seal-slice-shard]
+    needs: [changes, seal-slice-shard, test-prep]
     if: always()
     steps:
       - name: Gate on every seal-slice sub-shard
         run: |
+          # A failed `test-prep` skips every sub-shard (they `needs` it); catch it
+          # here so the archive-build failure can't slip through as a vacuous skip.
+          prep='${{ needs.test-prep.result }}'
+          if [ "$prep" = failure ] || [ "$prep" = cancelled ]; then
+            echo "seal-slice FAILED: test-prep result=$prep (the shared nextest archive never built)" >&2
+            exit 1
+          fi
           result='${{ needs.seal-slice-shard.result }}'
           case "$result" in
             success)
