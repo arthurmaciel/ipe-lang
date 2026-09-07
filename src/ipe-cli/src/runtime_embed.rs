@@ -22,7 +22,9 @@
 //!
 //! Nothing is ever written outside the resolved `IPE_HOME`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use include_dir::{Dir, include_dir};
 
@@ -225,10 +227,28 @@ fn prepare_bundled_manifest(manifest: &str) -> String {
 /// UTF-8 (unexpected for in-repo source; surfaced loudly rather than silently
 /// skipped).
 pub fn collect_embedded_crate_text()
--> Result<std::collections::BTreeMap<std::path::PathBuf, String>, CliError> {
-    let mut out = std::collections::BTreeMap::new();
-    collect_dir_text_from_embedded(&RUNTIME_CRATE, std::path::Path::new(""), true, &mut out)?;
-    Ok(out)
+-> Result<&'static std::collections::BTreeMap<std::path::PathBuf, String>, CliError> {
+    // The embedded runtime crate is compiled-in (`include_dir!`) and thus
+    // invariant for the process lifetime, as is the pure manifest transform
+    // applied to it. Compute the path→text map once and reuse it across every
+    // emit cycle rather than re-walking + re-validating the tree each time. On
+    // the UTF-8 refusal path the detail is cached so the fail-closed error
+    // still surfaces (once, at first use, deterministically).
+    static EMBEDDED: LazyLock<Result<BTreeMap<PathBuf, String>, String>> = LazyLock::new(|| {
+        let mut out = BTreeMap::new();
+        collect_dir_text_from_embedded(&RUNTIME_CRATE, Path::new(""), true, &mut out).map_err(
+            |e| match e {
+                CliError::RuntimeMaterializeFailed { detail } => detail,
+                other => other.to_string(),
+            },
+        )?;
+        Ok(out)
+    });
+    EMBEDDED
+        .as_ref()
+        .map_err(|detail| CliError::RuntimeMaterializeFailed {
+            detail: detail.clone(),
+        })
 }
 
 /// Recursive helper for [`collect_embedded_crate_text`]: traverses `dir`,

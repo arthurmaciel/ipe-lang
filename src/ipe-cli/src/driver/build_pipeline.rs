@@ -1875,7 +1875,7 @@ pub fn build_emit_manifest(
         // identical to the in-repo tree by construction.
         let embedded = runtime_embed::collect_embedded_crate_text()?;
         for (rel, text) in embedded {
-            manifest.insert(PathBuf::from("ipe_runtime_dep").join(rel), text);
+            manifest.insert(PathBuf::from("ipe_runtime_dep").join(rel), text.clone());
         }
     }
     manifest.insert(PathBuf::from("Cargo.toml"), emitted.cargo_toml.clone());
@@ -2009,7 +2009,13 @@ pub fn reconcile_emitted_project(
 /// its established tmp-then-rename + cleanup-on-failure behaviour rather than
 /// a second, parallel atomic-write implementation.
 pub fn write_if_changed(path: &Path, contents: &str) -> Result<(), CliError> {
-    if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
+    // A differing byte length is sufficient proof of differing content, so skip
+    // the whole-file read on the common size-changed case; equal-length files
+    // fall through to the exact byte compare that preserves the no-op mtime
+    // guarantee (avoids spurious cargo rebuilds from identical rewrites).
+    if fs::metadata(path).is_ok_and(|meta| meta.len() == contents.len() as u64)
+        && fs::read_to_string(path).is_ok_and(|existing| existing == contents)
+    {
         return Ok(());
     }
     write_atomic(path, contents)
@@ -2280,5 +2286,63 @@ pub fn resolve_vendored_runtime_dir(
         Some(r) => Ok(PathBuf::from(r)),
         None if needs_vendored => resolve_runtime(),
         None => Ok(PathBuf::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A same-length, same-content file is left untouched (no rewrite, mtime
+    /// preserved) while a differing-length file is rewritten — the two branches
+    /// of the length pre-check in [`write_if_changed`].
+    #[test]
+    fn write_if_changed_length_precheck() {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_write_if_changed_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // Same content: the write is skipped, so mtime does not advance.
+        let same = dir.join("same.txt");
+        write_if_changed(&same, "hello").expect("initial write");
+        let mtime_before = fs::metadata(&same)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        write_if_changed(&same, "hello").expect("no-op write");
+        let mtime_after = fs::metadata(&same)
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        assert_eq!(
+            mtime_before, mtime_after,
+            "identical content must not rewrite the file"
+        );
+
+        // Differing length: content is overwritten.
+        let changed = dir.join("changed.txt");
+        write_if_changed(&changed, "abc").expect("initial write");
+        write_if_changed(&changed, "abcdef").expect("length-changed write");
+        assert_eq!(
+            fs::read_to_string(&changed).expect("read back"),
+            "abcdef",
+            "a differing-length write must land"
+        );
+
+        // Same length, different bytes: still rewritten (falls through to the
+        // exact compare, which reports a difference).
+        let flip = dir.join("flip.txt");
+        write_if_changed(&flip, "aaa").expect("initial write");
+        write_if_changed(&flip, "bbb").expect("same-length differing write");
+        assert_eq!(
+            fs::read_to_string(&flip).expect("read back"),
+            "bbb",
+            "a same-length differing-byte write must land"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
