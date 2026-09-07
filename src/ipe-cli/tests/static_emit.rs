@@ -143,91 +143,116 @@ fn static_emit_mimalloc_optin_activates_mimalloc() {
     assert_eq!(def.matches("alloc_").count(), 1, "{def}");
 }
 
-/// CLI flag refusals fire before any compilation or filesystem write.
+/// CLI flag refusals are BOTH typed and artifact-free:
+///
+/// * **Typed** — each refusal is asserted to be its SPECIFIC `CliError` /
+///   `Refusal` variant (not a bare "is an error"), so a refusal that silently
+///   changed class — or degraded into a generic error — fails the test.
+/// * **Artifact-free** — each invocation is given an explicit `--out <fresh dir>`
+///   that does not exist beforehand; after the refusal, that directory must
+///   STILL not exist. A refusal that leaked a partially-emitted crate (created
+///   the out dir before validating flags) would fail here. The refusals fire at
+///   the CLI/plan boundary, before any compilation or filesystem write, so the
+///   out dir is never created.
 #[test]
 fn cli_refusals_are_typed_and_artifact_free() {
+    // A fresh, guaranteed-absent out dir per case; the refusal must not create it.
+    let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("cli_refusal_out");
+    let _ = std::fs::remove_dir_all(&scratch);
+    let mut case = 0u32;
+    let mut refuse = |args: &[&str], label: &str| -> CliError {
+        let out = scratch.join(format!("case_{case}"));
+        case += 1;
+        assert!(
+            !out.exists(),
+            "{label}: out dir must be absent before the refusal"
+        );
+        let mut argv: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+        argv.push("--out".into());
+        argv.push(out.to_string_lossy().into_owned());
+        let err = ipe::run_cli(&argv).expect_err(label);
+        assert!(
+            !out.exists(),
+            "{label}: refusal must be artifact-free — out dir {} was created",
+            out.display()
+        );
+        err
+    };
+
     // Unknown allocator: the closed `--allocator` enum is parsed at the CLI
     // boundary, so an unknown name is a typed command-usage refusal there — never
     // reaching the build plan. The dispatcher wraps it as `CommandUsage` so the
     // caller shows `build`'s help; the reason still names the bad allocator.
-    let err = ipe::run_cli(&[
-        "build".into(),
-        "NoSuch.ipe".into(),
-        "--static".into(),
-        "--allocator".into(),
-        "jemalloc".into(),
-    ])
-    .expect_err("unknown allocator must refuse");
+    let err = refuse(
+        &["build", "NoSuch.ipe", "--static", "--allocator", "jemalloc"],
+        "unknown allocator must refuse",
+    );
     assert!(
         matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.contains("jemalloc")),
         "got: {err:?}"
     );
 
     // --target without --static.
-    let err = ipe::run_cli(&[
-        "build".into(),
-        "NoSuch.ipe".into(),
-        "--target".into(),
-        "x86_64-unknown-linux-musl".into(),
-    ])
-    .expect_err("--target without --static must refuse");
+    let err = refuse(
+        &[
+            "build",
+            "NoSuch.ipe",
+            "--target",
+            "x86_64-unknown-linux-musl",
+        ],
+        "--target without --static must refuse",
+    );
     assert!(
         matches!(
             err,
             CliError::StaticRefusal(build_plan::Refusal::TargetRequiresStatic { .. })
         ),
-        "wrong refusal"
+        "wrong refusal: {err:?}"
     );
 
     // Unsupported static target.
-    let err = ipe::run_cli(&[
-        "build".into(),
-        "NoSuch.ipe".into(),
-        "--static".into(),
-        "--target".into(),
-        "x86_64-apple-darwin".into(),
-    ])
-    .expect_err("mac static must refuse");
+    let err = refuse(
+        &[
+            "build",
+            "NoSuch.ipe",
+            "--static",
+            "--target",
+            "x86_64-apple-darwin",
+        ],
+        "mac static must refuse",
+    );
     assert!(
         matches!(
             err,
             CliError::StaticRefusal(build_plan::Refusal::UnknownStaticTarget { .. })
         ),
-        "wrong refusal"
+        "wrong refusal: {err:?}"
     );
 
     // The musl-malloc cliff needs the two-key acknowledgment.
-    let err = ipe::run_cli(&[
-        "build".into(),
-        "NoSuch.ipe".into(),
-        "--static".into(),
-        "--allocator".into(),
-        "system".into(),
-    ])
-    .expect_err("system-on-musl without ack must refuse");
+    let err = refuse(
+        &["build", "NoSuch.ipe", "--static", "--allocator", "system"],
+        "system-on-musl without ack must refuse",
+    );
     assert!(
         matches!(
             err,
             CliError::StaticRefusal(build_plan::Refusal::MuslMallocCliff)
         ),
-        "wrong refusal"
+        "wrong refusal: {err:?}"
     );
 
     // talc is refused until the arena design lands.
-    let err = ipe::run_cli(&[
-        "build".into(),
-        "NoSuch.ipe".into(),
-        "--static".into(),
-        "--allocator".into(),
-        "talc".into(),
-    ])
-    .expect_err("talc must refuse");
+    let err = refuse(
+        &["build", "NoSuch.ipe", "--static", "--allocator", "talc"],
+        "talc must refuse",
+    );
     assert!(
         matches!(
             err,
             CliError::StaticRefusal(build_plan::Refusal::TalcRequiresArenaDesign)
         ),
-        "wrong refusal"
+        "wrong refusal: {err:?}"
     );
 }
 
@@ -377,6 +402,21 @@ fn package_ipe_rust_stages_parse_and_reject_typos() {
 /// Three sources write dependency lines into an emitted `Cargo.toml`:
 /// the golden base manifest, the vendored runtime's manifest, and the
 /// surgery strings in the backend's `project.rs`. All three are scanned.
+///
+/// The check has two halves, and the POSITIVE half is what makes it sound:
+///
+/// * **Negative** — no source's effective (non-comment) content may contain a
+///   forbidden backend (`native-tls`, `openssl`, `rustls-tls-native-roots`).
+///   Comment lines are stripped so a comment DOCUMENTING a deliberate exclusion
+///   (the runtime manifest says "the `native-tls` feature is deliberately NOT
+///   listed") is not a false positive.
+/// * **Positive** — every TLS-capable dep's effective line must carry its
+///   rustls arm (`reqwest`/`lettre`/`sqlx`/`tokio-tungstenite`). This is the
+///   guard that survives the comment-stripping: a negative-only scan could not
+///   tell a documented exclusion from an actual flip to native-tls, but a
+///   flipped backend loses its rustls feature and fails the positive assert.
+///   Comments can only ADD text, never remove a required feature, so the
+///   positive half cannot be blinded.
 #[test]
 fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
     fn read(path: &Path) -> String {
@@ -460,6 +500,22 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
     assert!(
         sqlx.contains(r#""runtime-tokio-rustls""#),
         "sqlx must use the runtime-tokio-rustls arm: {sqlx}"
+    );
+
+    // POSITIVE proof for the WebSocket TLS dep — the strengthening that makes
+    // this test robust against the comment-stripping in `effective()`. The
+    // negative forbidden-backend scan above filters out comment lines so a
+    // comment DOCUMENTING the `native-tls` exclusion is not a false positive;
+    // but that same filtering means a negative scan alone could not tell a
+    // documented exclusion apart from an actual flip. Asserting the POSITIVE —
+    // `tokio-tungstenite` carries its rustls feature on its effective (non-
+    // comment) dep line — cannot be defeated by any comment: if the backend were
+    // flipped to native-tls, the rustls feature would be gone and this fails.
+    let tungstenite = dep_line(&runtime, "tokio-tungstenite", &runtime_path);
+    assert!(
+        tungstenite.contains(r#""rustls-tls-webpki-roots""#),
+        "tokio-tungstenite must carry the rustls-tls-webpki-roots arm (rustls-only \
+         TLS, bundled webpki roots — no native-tls): {tungstenite}"
     );
 }
 
