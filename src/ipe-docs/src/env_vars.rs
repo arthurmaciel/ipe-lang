@@ -195,6 +195,16 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_EMIT_PACKAGE_NAME",
+        default: "unset (`ipe-app`)",
+        purpose: "Overrides the emitted crate's package name for a single-file build \
+                  (validated through the package-name sanitizer). Set by the coverage \
+                  probe to give each emitted build a unique crate identity; not intended \
+                  for operator use.",
+        subsystem: Subsystem::Build,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_INDEX_DIR",
         default: "unset (~/.ipe/index)",
         purpose: "Override the root directory of the package-index checkout used by \
