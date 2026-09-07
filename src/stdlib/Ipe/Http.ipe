@@ -49,6 +49,7 @@ module Ipe.Http exposing
     , RedirectPolicy(..)
     , defaultRequest
     , defaultRequestFromString
+    , defaultTimeout
     , get
     , methodFromString
     , methodToString
@@ -65,6 +66,7 @@ module Ipe.Http exposing
 
 
 import Ipe.Dict exposing (Dict)
+import Ipe.Duration as Duration exposing (Duration)
 import Ipe.Error as Error exposing (Error)
 import Ipe.Ffi.Kernel as Kernel
 import Ipe.Maybe exposing (Maybe)
@@ -191,6 +193,14 @@ narrowHttpScheme url =
                 )
 
 
+-- | The default request timeout applied by `defaultRequest`: 30 seconds,
+-- spelled as a typed `Ipe.Duration` rather than a bare millisecond literal so
+-- the unit is explicit and a negative floor is unrepresentable.
+defaultTimeout : Duration
+defaultTimeout =
+    Duration.seconds 30
+
+
 -- | `defaultRequest url` — the primary request constructor. Takes an
 -- already-sealed typed `Url` (parsed once at `Url.fromString`), narrows its
 -- scheme to `http`/`https` at this API layer, and carries the single
@@ -206,7 +216,7 @@ defaultRequest url =
                 , headers = []
                 , method = Get
                 , redirects = FollowRedirects 10
-                , timeout = 30000
+                , timeout = Duration.toMillis defaultTimeout
                 , url = Url.toString ok
                 }
 
@@ -234,9 +244,14 @@ withMethod m req =
     { req | method = m }
 
 
-withTimeout : Int -> HttpRequest -> HttpRequest
-withTimeout t req =
-    { req | timeout = t }
+-- | `withTimeout span req` — override the request timeout. Takes a typed
+-- `Ipe.Duration` (e.g. `Duration.seconds 5`) so a caller names the unit at the
+-- call site and a negative span is not representable; the raw milliseconds are
+-- unwrapped into the transport DTO for the runtime, exactly as
+-- `WebSocket.withTimeout` / `Cache.withTTL` do.
+withTimeout : Duration -> HttpRequest -> HttpRequest
+withTimeout span req =
+    { req | timeout = Duration.toMillis span }
 
 
 withBody : String -> HttpRequest -> HttpRequest
