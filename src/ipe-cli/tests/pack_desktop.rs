@@ -1,4 +1,4 @@
-//! Desktop packaging (`ipe pack --target desktop`): the Linux tarball is
+//! Desktop packaging (`ipe build|release web desktop`): the Linux tarball is
 //! materialised end-to-end on this box from a real compiled binary, and the
 //! per-OS layout / macOS `Info.plist` content is asserted as pure data.
 //!

@@ -12,91 +12,104 @@ use crate::{
     publish, resolve, scratch, style, toolchain, version_check,
 };
 
-/// `ipe pack --emit-permissions <platform> [<path>]` — derive and print the
-/// native-shell OS-permission declarations a packaged app requires on `platform`
-/// (`ios` / `macos` / `android`), from the app's `[capabilities] accepts` set.
-///
-/// A read-only dry-run: nothing is written. It is the CLI face of the packager's
-/// permission derivation ([`pack::permissions::derive_permissions`]) — the single
-/// source of truth for what a packaged app may do — so a package author can see
-/// exactly which plist keys or Android manifest entries their consent set yields
-/// before a bundle is built.
-///
-/// # Errors
-/// [`CliError::Usage`] / [`CliError::UsageOwned`] on a missing/unknown
-/// `--emit-permissions` platform or a stray argument; the manifest's own parse
-/// errors when the project's `package.ipe` is malformed.
-pub fn run_pack(rest: &[String]) -> Result<(), CliError> {
-    match rest.split_first() {
-        Some((flag, tail)) if flag == "--emit-permissions" => {
-            let (raw, path_args) = tail.split_first().ok_or(CliError::Usage(
-                "usage: ipe pack --emit-permissions <ios|macos|android> [<path>]",
-            ))?;
-            let platform = raw
-                .parse::<pack::permissions::Platform>()
-                .map_err(|e| CliError::UsageOwned(format!("ipe pack: {e}")))?;
-            if let Some(extra) = path_args.get(1) {
-                return Err(cli_args::usage_unexpected_argument("pack", extra));
-            }
-            emit_permissions(platform, path_args.first().map(String::as_str))
-        }
-        Some((flag, tail)) if flag == "--target" => {
-            let (target, path_args) = tail.split_first().ok_or(CliError::Usage(
-                "usage: ipe pack --target desktop[:<linux|macos|windows>] [<path>]  |  \
-                 ipe pack --target mobile:<ios|android> [<path>]",
-            ))?;
-            if let Some(extra) = path_args.get(1) {
-                return Err(cli_args::usage_unexpected_argument("pack", extra));
-            }
-            let path = path_args.first().map(String::as_str);
+/// Whether a delivery-routed bundle is a fast development build or a production
+/// distributable. `build web <host>` yields [`BundleProfile::Dev`]; `release web
+/// <host>` yields [`BundleProfile::Release`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleProfile {
+    /// A fast, unoptimised bundle for the inner loop — a debug binary and the
+    /// per-OS layout for local inspection. The `build` verb's bundle.
+    Dev,
+    /// The production distributable — an optimised binary and the per-OS runner
+    /// notes a distributor follows to sign and finish the artifact. The `release`
+    /// verb's bundle.
+    Release,
+}
 
-            // `mobile:<os>` wraps the client-wasm SPA; `desktop[:<os>]` wraps the
-            // native webview app. A `mobile` family has no host default (this host
-            // is not a device), so the OS is always explicit.
-            if let Some(os_arg) = target.strip_prefix("mobile") {
-                let explicit_os = match os_arg.strip_prefix(':') {
-                    Some(os) => Some(os),
-                    None if os_arg.is_empty() => None,
-                    None => {
-                        return Err(CliError::UsageOwned(format!(
-                            "ipe pack: unknown target {target:?} (expected \
-                             `mobile:<ios|android>`)"
-                        )));
-                    }
-                };
-                return pack_mobile(explicit_os, path);
-            }
+impl BundleProfile {
+    /// The cargo build the bundle's binary is compiled with: a plain debug build
+    /// for [`Self::Dev`], an optimised `--release` build for [`Self::Release`].
+    /// The one place the profile decides the compile, so the two bundle verbs
+    /// stay a single packager parameterised by profile, not two code paths.
+    const fn cargo_release(self) -> bool {
+        matches!(self, Self::Release)
+    }
 
-            let os_arg = target.strip_prefix("desktop").ok_or_else(|| {
-                CliError::UsageOwned(format!(
-                    "ipe pack: unknown target {target:?} (expected \
-                     `desktop[:<linux|macos|windows>]` or `mobile:<ios|android>`)"
-                ))
-            })?;
-            // `desktop` → host OS; `desktop:<os>` → that OS. Anything between
-            // `desktop` and a `:` is a malformed target.
-            let explicit_os = match os_arg.strip_prefix(':') {
-                Some(os) => Some(os),
-                None if os_arg.is_empty() => None,
-                None => {
-                    return Err(CliError::UsageOwned(format!(
-                        "ipe pack: unknown target {target:?} (expected \
-                         `desktop[:<linux|macos|windows>]`)"
-                    )));
-                }
-            };
-            pack_desktop(explicit_os, path)
+    /// The compiled binary's `target/` profile subdirectory (`debug` / `release`),
+    /// matching [`Self::cargo_release`].
+    const fn target_subdir(self) -> &'static str {
+        match self {
+            Self::Dev => "debug",
+            Self::Release => "release",
         }
-        _ => Err(CliError::Usage(
-            "usage: ipe pack --emit-permissions <ios|macos|android> [<path>]  |  \
-             ipe pack --target desktop[:<linux|macos|windows>] [<path>]  |  \
-             ipe pack --target mobile:<ios|android> [<path>]",
-        )),
     }
 }
 
-/// `ipe pack --target desktop[:<os>] [<path>]` — build the app and lay out a
-/// self-contained desktop bundle for `os` (the host OS by default).
+/// The delivery host a bundling verb (`build`/`release`) targets.
+///
+/// Resolved from the delivery grammar's [`delivery::Host`]: `desktop` routes to
+/// the webview-native desktop packager, `ios`/`android` to the mobile
+/// system-webview packager. The served/default host produces no bundle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleHost {
+    /// `web desktop` — a self-contained per-OS desktop bundle for the host OS.
+    Desktop,
+    /// `web spa ios` / `web spa android` — a native mobile system-webview shell.
+    Mobile(pack::mobile::MobileOs),
+}
+
+impl BundleHost {
+    /// Map a resolved delivery [`delivery::Host`] onto the bundle host it
+    /// packages, or `None` for the served/default host (which produces a plain
+    /// artifact, not a bundle). The mobile host word is the delivery grammar's own
+    /// `ios`/`android`, so the closed-set resolution below cannot fail in practice
+    /// — a refusal is surfaced, never panicked.
+    ///
+    /// # Errors
+    /// [`CliError::UsageOwned`] if the mobile OS resolution refuses (unreachable
+    /// through the typed [`delivery::Host`]).
+    pub fn from_delivery_host(host: delivery::Host) -> Result<Option<Self>, CliError> {
+        let mobile = |word| {
+            pack::mobile::resolve_os(Some(word))
+                .map(Self::Mobile)
+                .map_err(|r| CliError::UsageOwned(r.to_string()))
+        };
+        Ok(match host {
+            delivery::Host::Default => None,
+            delivery::Host::Desktop => Some(Self::Desktop),
+            delivery::Host::Ios => Some(mobile("ios")?),
+            delivery::Host::Android => Some(mobile("android")?),
+        })
+    }
+}
+
+/// Produce the delivery-routed application bundle for a resolved `web <host>`
+/// delivery — the single entry point `build`/`release` call once they know the
+/// bundle host and profile.
+///
+/// `web desktop` lays out a webview-native desktop bundle; `web spa ios|android`
+/// builds the client-wasm SPA and lays out a native mobile system-webview shell.
+/// The permission-manifest derivation ([`pack::permissions`]) remains the single
+/// source of truth for what each bundle may do — this routing never authors a
+/// permission, only chooses which packager runs.
+///
+/// # Errors
+/// A [`pack::desktop::DesktopRefusal`] / [`pack::mobile::MobileRefusal`] wrapped
+/// as [`CliError::UsageOwned`] when the app's shape/target does not fit the host;
+/// the underlying build's errors; [`CliError::Io`] on any filesystem failure.
+pub fn bundle_delivery(
+    host: BundleHost,
+    profile: BundleProfile,
+    path: Option<&str>,
+) -> Result<(), CliError> {
+    match host {
+        BundleHost::Desktop => pack_desktop(profile, path),
+        BundleHost::Mobile(os) => pack_mobile(os, profile, path),
+    }
+}
+
+/// `build|release web desktop [<path>]` — build the app and lay out a
+/// self-contained desktop bundle for the host OS.
 ///
 /// A webview app is required: an app whose `programs` shape is declared
 /// non-`WebView` is a typed refusal ([`pack::desktop::DesktopRefusal::NotWebView`])
@@ -104,7 +117,7 @@ pub fn run_pack(rest: &[String]) -> Result<(), CliError> {
 /// permission derivation ([`pack::permissions`]).
 ///
 /// The Linux bundle is produced end-to-end on this host (the binary is built and
-/// the tarball layout materialised). A macOS/Windows target does not run its OS
+/// the tarball layout materialised). A macOS/Windows host does not run its OS
 /// toolchain here; it reports the bundle layout + manifest it *would* produce so
 /// the author can inspect it, and directs the actual build to that OS's runner.
 ///
@@ -112,13 +125,15 @@ pub fn run_pack(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError::UsageOwned`] wrapping a [`pack::desktop::DesktopRefusal`];
 /// build/emit errors from the underlying compile; [`CliError::Io`] on any
 /// filesystem failure while materialising the bundle.
-pub fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), CliError> {
-    let os =
-        pack::desktop::resolve_os(explicit_os).map_err(|r| CliError::UsageOwned(r.to_string()))?;
+pub fn pack_desktop(profile: BundleProfile, path: Option<&str>) -> Result<(), CliError> {
+    // The desktop bundle is the host OS's webview-native app; the delivery
+    // grammar carries no per-OS override (a cross-OS artifact is finished on that
+    // OS's own runner), so the packager always targets this host's OS.
+    let os = pack::desktop::resolve_os(None).map_err(|r| CliError::UsageOwned(r.to_string()))?;
 
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
     let manifest_path = discover_manifest(&root)?.ok_or(CliError::Usage(
-        "ipe pack: no package.ipe found — run inside a project or pass its path",
+        "no package.ipe found — run inside a project or pass its path",
     ))?;
     let manifest = project::parse_manifest(&manifest_path)?;
 
@@ -171,6 +186,11 @@ pub fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(),
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
     let mut cargo = std::process::Command::new(cargo_bin.path());
     cargo.arg("build").current_dir(&build_dir);
+    // A `release web desktop` bundle carries an optimised binary; the `build`
+    // dev bundle carries a plain debug one.
+    if profile.cargo_release() {
+        cargo.arg("--release");
+    }
     force_cargo_terminal_ui(&mut cargo);
     build_emitted_project(&mut cargo, "the desktop app", None, &build_dir)?;
 
@@ -178,10 +198,10 @@ pub fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(),
     // global CARGO_TARGET_DIR), then materialise (Linux) or describe (mac/Windows).
     let target_dir = cargo_target_directory(&build_dir)?;
     let bin_name = emitted_bin_name(&build_dir);
-    let binary = target_dir.join("debug").join(&bin_name);
+    let binary = target_dir.join(profile.target_subdir()).join(&bin_name);
     if !binary.is_file() {
         return Err(CliError::UsageOwned(format!(
-            "ipe pack: expected app binary at {} — cargo build succeeded but the binary is missing",
+            "expected app binary at {} — cargo build succeeded but the binary is missing",
             binary.display()
         )));
     }
@@ -209,32 +229,33 @@ pub fn pack_desktop(explicit_os: Option<&str>, path: Option<&str>) -> Result<(),
     Ok(())
 }
 
-/// `ipe pack --target mobile:<os> [<path>]` — build the client-wasm SPA and lay
-/// out a native mobile system-webview shell for `os` (`ios` / `android`) that
-/// hosts the SPA offline from app assets.
+/// `build|release web spa <os> [<path>]` — build the client-wasm SPA and lay out
+/// a native mobile system-webview shell for `os` (`ios` / `android`) that hosts
+/// the SPA offline from app assets.
 ///
 /// A wasm-enabled `Web` app is required: a non-`Web` shape or a project with the
 /// `[wasm]` mode off is a typed refusal ([`pack::mobile::MobileRefusal`]) BEFORE
 /// any build. The `Info.plist` / `AndroidManifest.xml` permission entries come
 /// only from the permission derivation ([`pack::permissions`]).
 ///
-/// The `--target wasm` bundle is produced end-to-end on this host (the SPA is
-/// built and its `www/` tree collected into the shell). The Android build MAY run
-/// where the SDK is present; the iOS build needs macOS + Xcode + signing and is
-/// authored-but-unrun here — the layout + derived-permission manifest are written
-/// for inspection, and the actual build is directed to that OS's runner.
+/// The wasm bundle is produced end-to-end on this host (the SPA is built and its
+/// `www/` tree collected into the shell). The Android build MAY run where the SDK
+/// is present; the iOS build needs macOS + Xcode + signing and is authored-but-unrun
+/// here — the layout + derived-permission manifest are written for inspection, and
+/// the actual build is directed to that OS's runner.
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] wrapping a [`pack::mobile::MobileRefusal`]; the wasm
 /// build's own errors; [`CliError::Io`] on any filesystem failure while
 /// collecting the bundle or materialising the shell.
-pub fn pack_mobile(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), CliError> {
-    let os =
-        pack::mobile::resolve_os(explicit_os).map_err(|r| CliError::UsageOwned(r.to_string()))?;
-
+pub fn pack_mobile(
+    os: pack::mobile::MobileOs,
+    profile: BundleProfile,
+    path: Option<&str>,
+) -> Result<(), CliError> {
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
     let manifest_path = discover_manifest(&root)?.ok_or(CliError::Usage(
-        "ipe pack: no package.ipe found — run inside a project or pass its path",
+        "no package.ipe found — run inside a project or pass its path",
     ))?;
     let manifest = project::parse_manifest(&manifest_path)?;
 
@@ -273,10 +294,10 @@ pub fn pack_mobile(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), 
     // the single source of the hostable bundle; invoking it through this binary
     // keeps that pipeline authoritative rather than re-implemented here.
     let build_dir = manifest.root.join("out").join("rust");
-    build_wasm_for_mobile(&manifest_path, &build_dir)?;
+    build_wasm_for_mobile(&manifest_path, &build_dir, profile)?;
     let www_dir = build_dir.join("www");
     let bundle = pack::mobile::SpaBundle::from_www_dir(&www_dir)
-        .map_err(|e| CliError::UsageOwned(format!("ipe pack: {e}")))?;
+        .map_err(|e| CliError::UsageOwned(e.to_string()))?;
 
     let layout = pack::mobile::layout(os, &identity, &accepts, &bundle, icon.as_deref())?;
 
@@ -285,7 +306,7 @@ pub fn pack_mobile(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), 
         .map_err(|e| io_err(&e.path, e.source))?;
 
     println!(
-        "packaged `{}` for mobile:{} → {}",
+        "packaged `{}` for {} → {}",
         manifest.name,
         os.as_str(),
         shell_root.display()
@@ -304,25 +325,35 @@ pub fn pack_mobile(explicit_os: Option<&str>, path: Option<&str>) -> Result<(), 
     Ok(())
 }
 
-/// Run `ipe build --target wasm <manifest-dir>` through this binary to produce the
-/// hostable SPA bundle at `build_dir/www/`.
+/// Build the hostable SPA bundle at `build_dir/www/` through this binary —
+/// `ipe build --target wasm` for a dev bundle, `ipe release --target wasm` for a
+/// production one.
 ///
 /// Invoking the same binary keeps the wasm bundle pipeline (emit + cargo +
-/// wasm-bindgen) authoritative — the mobile packager hosts exactly the bundle a
-/// plain `ipe build --target wasm` produces, never a re-implemented variant.
+/// wasm-bindgen) authoritative — the mobile shell hosts exactly the bundle a
+/// plain wasm build/release produces, never a re-implemented variant. The profile
+/// carries through so a `release web spa <os>` shell hosts the production SPA.
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] when this binary's path cannot be resolved or the
 /// wasm build exits non-zero; [`CliError::Io`] when the build cannot be spawned.
-pub fn build_wasm_for_mobile(manifest_path: &Path, build_dir: &Path) -> Result<(), CliError> {
+pub fn build_wasm_for_mobile(
+    manifest_path: &Path,
+    build_dir: &Path,
+    profile: BundleProfile,
+) -> Result<(), CliError> {
     let exe = std::env::current_exe().map_err(|e| {
-        CliError::UsageOwned(format!(
-            "ipe pack: cannot locate the ipe binary to build wasm: {e}"
-        ))
+        CliError::UsageOwned(format!("cannot locate the ipe binary to build wasm: {e}"))
     })?;
     let project_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    // A dev shell hosts a `build --target wasm` bundle; a release shell hosts a
+    // production `release --target wasm` bundle (Debug.* gated, optimised).
+    let verb = match profile {
+        BundleProfile::Dev => "build",
+        BundleProfile::Release => "release",
+    };
     let status = std::process::Command::new(&exe)
-        .arg("build")
+        .arg(verb)
         .arg(project_dir)
         .args(["--target", "wasm", "--out"])
         .arg(build_dir)
@@ -333,7 +364,7 @@ pub fn build_wasm_for_mobile(manifest_path: &Path, build_dir: &Path) -> Result<(
         })?;
     if !status.success() {
         return Err(CliError::UsageOwned(format!(
-            "ipe pack: the `--target wasm` build failed (exit {}) — the mobile shell hosts that \
+            "the `--target wasm` build failed (exit {}) — the mobile shell hosts that \
              bundle, so it must build first",
             status.code().unwrap_or(1)
         )));
@@ -341,17 +372,34 @@ pub fn build_wasm_for_mobile(manifest_path: &Path, build_dir: &Path) -> Result<(
     Ok(())
 }
 
-/// Resolve the project manifest, read its accepted capabilities, and print the
-/// derived OS-permission declarations for `platform`.
+/// `build|release --emit-permissions <ios|macos|android> [<path>]` — the
+/// read-only inspection face of the packager's permission derivation
+/// ([`pack::permissions::derive_permissions`]), the single source of truth for
+/// what a bundled app may do. Resolves the project manifest, reads its accepted
+/// web capabilities, and prints the derived plist keys / Android manifest entries
+/// for `raw_platform`, without building or writing anything.
+///
+/// `verb` names the calling delivery verb (`build` / `release`) so a bad platform
+/// word errors in that command's voice.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on a platform word outside the closed
+/// `ios|macos|android` set; [`CliError::Usage`] when no `package.ipe` governs the
+/// path; the manifest's own parse errors when it is malformed.
 pub fn emit_permissions(
-    platform: pack::permissions::Platform,
+    raw_platform: &str,
     path: Option<&str>,
+    verb: &str,
 ) -> Result<(), CliError> {
     use std::fmt::Write as _;
 
+    let platform = raw_platform
+        .parse::<pack::permissions::Platform>()
+        .map_err(|e| CliError::UsageOwned(format!("ipe {verb} --emit-permissions: {e}")))?;
+
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
     let manifest_path = discover_manifest(&root)?.ok_or(CliError::Usage(
-        "ipe pack: no package.ipe found — run inside a project or pass its path",
+        "no package.ipe found — run inside a project or pass its path",
     ))?;
 
     let manifest = project::parse_manifest(&manifest_path)?;

@@ -45,8 +45,8 @@ pub enum MobileOs {
 }
 
 impl MobileOs {
-    /// The lowercase wire name of this OS, used in the `--target mobile:<os>`
-    /// surface and diagnostics.
+    /// The lowercase wire name of this OS — the `web spa <os>` delivery host word
+    /// and the `dist/<os>/` bundle directory.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -86,7 +86,7 @@ impl std::str::FromStr for MobileOs {
     }
 }
 
-/// An unrecognised mobile-OS token from a `--target mobile:<os>` argument.
+/// An unrecognised mobile-OS token where an `ios`/`android` host was expected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnknownMobileOs(pub String);
 
@@ -102,15 +102,15 @@ impl std::fmt::Display for UnknownMobileOs {
 
 impl std::error::Error for UnknownMobileOs {}
 
-/// Resolve the mobile OS a `--target mobile:<os>` request names.
+/// Resolve the mobile OS a `web spa <os>` delivery host names.
 ///
-/// Unlike desktop, a bare `--target mobile` has no host default: this host is not
-/// a mobile device, so the OS must be named explicitly. A missing suffix is a
-/// typed refusal naming the remedy.
+/// The mobile host word is always explicit — this host is not a mobile device, so
+/// there is no host default. An absent word is a typed refusal, an unrecognised
+/// one another; the delivery grammar only ever passes `ios`/`android`.
 ///
 /// # Errors
-/// [`MobileRefusal::MissingOs`] for a bare `mobile` with no `:os`;
-/// [`MobileRefusal::UnknownOs`] for an unrecognised `:os` suffix.
+/// [`MobileRefusal::MissingOs`] for an absent OS word;
+/// [`MobileRefusal::UnknownOs`] for an OS word outside the closed set.
 pub fn resolve_os(explicit: Option<&str>) -> Result<MobileOs, MobileRefusal> {
     explicit.map_or(Err(MobileRefusal::MissingOs), |name| {
         name.parse::<MobileOs>()
@@ -160,10 +160,10 @@ pub const fn require_web_spa(cap: WebSpaCapability) -> Result<(), MobileRefusal>
 /// produces a bundle it should have refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MobileRefusal {
-    /// A bare `--target mobile` was given with no `:os` suffix, and there is no
-    /// host default for a mobile target.
+    /// No mobile-OS host word was given, and there is no host default for a
+    /// mobile target.
     MissingOs,
-    /// A `--target mobile:<os>` named an OS outside the closed set.
+    /// The mobile-OS host word named an OS outside the closed set.
     UnknownOs(String),
     /// The app's declared shape is not `Web`, so it has no client-wasm SPA to host
     /// in a webview.
@@ -178,25 +178,25 @@ impl std::fmt::Display for MobileRefusal {
         match self {
             Self::MissingOs => write!(
                 f,
-                "error[IPE-P0020]: `ipe pack --target mobile` needs an OS — \
-                 name one explicitly: `--target mobile:<ios|android>`"
+                "error[IPE-P0020]: a mobile bundle needs an OS — \
+                 name one: `ipe build web spa <ios|android>`"
             ),
             Self::UnknownOs(got) => write!(
                 f,
                 "error[IPE-P0021]: unknown mobile OS {got:?} \
-                 (expected `--target mobile:<ios|android>`)"
+                 (expected `ipe build web spa <ios|android>`)"
             ),
             Self::NotWebShape => write!(
                 f,
-                "error[IPE-P0022]: `ipe pack --target mobile` wraps a client-wasm `Web` SPA, \
+                "error[IPE-P0022]: `web spa <ios|android>` wraps a client-wasm `Web` SPA, \
                  but this app's shape is not `Web`\n  \
                  = a mobile bundle hosts the app's browser SPA in a system webview; only a \
                  `Web` app compiled to wasm has such a bundle. Declare a `Web` program shape, \
-                 or choose the matching target for this app."
+                 or choose the matching host for this app."
             ),
             Self::WasmDisabled => write!(
                 f,
-                "error[IPE-P0023]: `ipe pack --target mobile` wraps the `--target wasm` SPA, \
+                "error[IPE-P0023]: `web spa <ios|android>` wraps the wasm SPA, \
                  but this project's `[wasm]` mode is off (or absent)\n  \
                  = enable the wasm client target so a hostable browser bundle exists: set \
                  `[wasm] mode = \"spa\"` (or `\"hydrate\"`) in package.ipe."

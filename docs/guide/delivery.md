@@ -22,7 +22,9 @@ Two independent questions decide how a program ships:
 The knot to spot: **shape is not host.** A "desktop app" and a "mobile app" are
 both the *`Web` shape* delivered to a different host — the same `main`, the same
 `update`/`view` loop, packaged differently. You do not write a separate program
-for each; you point the packager at one `Web` app.
+for each; you name the host in one uniform grammar: `ipe <verb> <shape> <host>`.
+`build web <host>` lays out a fast development bundle; `release web <host>` the
+production distributable.
 
 Only the `Web` shape has these axes. A `tui`, `cli`, `server`, or `script` app
 builds one way, so it has no runtime or host to choose.
@@ -60,7 +62,7 @@ the `main` head `Web.app` is enough.
 Package it:
 
 ```
-ipe pack --target desktop
+ipe release web desktop
 ```
 
 This compiles the app and lays out a bundle for the host OS:
@@ -79,11 +81,12 @@ dist/linux/ui-layout/
   RUNTIME.txt          the runtime dependency note
 ```
 
-Target another OS with `--target desktop:macos` or `--target desktop:windows`.
-The **Linux** artifact is built end to end on a Linux host; a macOS `.app` or a
-Windows `.exe` + zip has its *layout and manifest* written for inspection here,
-but the signed, runnable artifact must be finished on that OS's own runner
-(cross-OS toolchains are out of scope).
+`build web desktop` lays out the same bundle from a fast, unoptimised build for
+the inner loop; `release web desktop` produces the optimised distributable. The
+bundle is always the **host OS's** — the **Linux** artifact is built end to end on
+a Linux host; a macOS `.app` or a Windows `.exe` + zip has its *layout and
+manifest* written for inspection here, but the signed, runnable artifact must be
+finished on that OS's own runner (cross-OS toolchains are out of scope).
 
 ## Mobile: a wasm SPA in a system-webview shell
 
@@ -101,10 +104,11 @@ package =
     }
 ```
 
-Then package for a device OS:
+Then package for a device OS. Because mobile is the `spa` runtime, the host is
+spelled `web spa <os>`:
 
 ```
-ipe pack --target mobile:android
+ipe release web spa android
 ```
 
 This builds the wasm bundle and materialises a native shell:
@@ -112,7 +116,7 @@ This builds the wasm bundle and materialises a native shell:
 ```
   wasm bundle ready at out/rust/www/
   bundle size: 196 KB (out/rust/www/pkg/ipe_app_bg.wasm)
-packaged `ui-layout` for mobile:android → dist/android/ui-layout-android
+packaged `ui-layout` for android → dist/android/ui-layout-android
   note: an Android shell project is written here; run `./gradlew assembleDebug`
         inside it with the Android SDK to produce an APK.
 ```
@@ -122,10 +126,11 @@ The Android shell is a ready-to-build Gradle project; the SPA rides under
 there is no remote host and no `file://` access. Finish the APK with
 `./gradlew assembleDebug` where the Android SDK is present.
 
-`--target mobile:ios` writes the equivalent Xcode project (`WKWebView` +
+`ipe release web spa ios` writes the equivalent Xcode project (`WKWebView` +
 `WKURLSchemeHandler`). Its layout and derived-permission manifest are written for
 inspection, but a signed `.ipa` must be produced on a macOS runner with Xcode and
-a signing identity.
+a signing identity. As with desktop, `build web spa <os>` lays out the same shell
+around a fast dev SPA; `release web spa <os>` hosts the production SPA.
 
 ## OS permissions come from your capabilities
 
@@ -138,7 +143,7 @@ See exactly what a consent set yields, without building, with a read-only
 dry-run:
 
 ```
-ipe pack --emit-permissions android
+ipe build --emit-permissions android
 ```
 
 For an app that accepts `JsPort Geolocation`, that prints:
@@ -161,6 +166,6 @@ path selects a project other than the current directory.
   model in full: the five shapes, the two web runtimes, and why each is where it
   is.
 - `ipe doc Ipe.Package` — every `delivery`, `wasm`, and `capabilities` field.
-- `ipe build --help` — the delivery grammar (`ipe build [shape] [runtime]
-  [host]`) that compiles a single delivery in the inner loop, the counterpart to
-  the distributable bundle `ipe pack` produces.
+- `ipe build --help` / `ipe release --help` — the one delivery grammar (`ipe
+  <verb> [shape] [runtime] [host]`): `build` compiles or bundles a single
+  delivery for the inner loop, `release` produces the production distributable.
