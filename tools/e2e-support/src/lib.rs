@@ -352,4 +352,83 @@ mod tests {
         assert_eq!(resolve_emitted_target(Some("relative/target")), None);
         assert_eq!(resolve_emitted_target(Some("./target")), None);
     }
+
+    /// The load-bearing soundness guarantee of the warm-deps/cold-app dep cache:
+    /// a shared cargo target reuses only DEPENDENCY artifacts, never masking a
+    /// broken app crate. Two crates build into ONE shared `CARGO_TARGET_DIR`;
+    /// the first is well-typed and warms the target, the second carries a
+    /// deliberate type error. cargo fingerprints each crate on its own source
+    /// hash, so the second must FAIL to compile even though the target is warm —
+    /// proving the SEAL cannot be greened by cache reuse.
+    #[test]
+    fn shared_target_never_masks_a_broken_crate() {
+        use std::process::Command;
+
+        let root = std::env::temp_dir().join(format!(
+            "e2e_support_soundness_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let shared_target = root.join("shared-target");
+
+        // Minimal, dependency-free crates so the proof is fast and hermetic —
+        // the fingerprint mechanism under test is cargo's, independent of the
+        // dependency set. Each gets a UNIQUE package name (the same rule the
+        // real harness applies), so both coexist in the one shared target.
+        let write_crate = |name: &str, main_rs: &str| -> std::path::PathBuf {
+            let dir = root.join(name);
+            std::fs::create_dir_all(dir.join("src")).expect("create crate dir");
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n"
+                ),
+            )
+            .expect("write Cargo.toml");
+            std::fs::write(dir.join("src").join("main.rs"), main_rs).expect("write main.rs");
+            dir
+        };
+
+        let build_into_shared = |dir: &std::path::Path| -> std::process::Output {
+            Command::new("cargo")
+                .arg("build")
+                .current_dir(dir)
+                .env("CARGO_TARGET_DIR", &shared_target)
+                .env("CARGO_BUILD_RUSTC_WRAPPER", "")
+                .env("RUSTC_WRAPPER", "")
+                .output()
+                .expect("cargo must spawn")
+        };
+
+        // 1. Well-typed crate → warms the shared target and succeeds.
+        let good = write_crate("e2e_soundness_good", "fn main() { println!(\"ok\"); }");
+        let good_out = build_into_shared(&good);
+        assert!(
+            good_out.status.success(),
+            "the well-typed crate must build into the shared target\n{}",
+            String::from_utf8_lossy(&good_out.stderr)
+        );
+
+        // 2. Broken crate (E0308) → the warm target MUST NOT mask it.
+        let bad = write_crate(
+            "e2e_soundness_bad",
+            "fn main() { let _x: u32 = \"not a number\"; }",
+        );
+        let bad_out = build_into_shared(&bad);
+        assert!(
+            !bad_out.status.success(),
+            "SOUNDNESS BREACH: a crate with a deliberate type error built \
+             successfully into the warm shared target — the dep cache masked a \
+             broken app. The SEAL is only sound if this build FAILS."
+        );
+        assert!(
+            String::from_utf8_lossy(&bad_out.stderr).contains("E0308"),
+            "the broken crate must fail with the injected type mismatch (E0308)\n{}",
+            String::from_utf8_lossy(&bad_out.stderr)
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

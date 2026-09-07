@@ -16,7 +16,16 @@
 slow-timeout = { period = "60s", terminate-after = 2 }
 
 [profile.ci]
-slow-timeout = { period = "60s", terminate-after = 10 }
+# Fail-fast per-test cap: every test is TERMINATED (and so FAILS) if it exceeds
+# 300s (5 × 60s). With the warm dependency cache (each emitted app builds fresh
+# but reuses the pre-built dep tree) even the heaviest emit→build→run SEAL test
+# finishes in a few minutes on a cold runner, so no legitimate test approaches
+# this cap — but a genuine HANG (a wedged `cargo build`, a server that never
+# binds) now fails in minutes with a clear terminate, never the 90-minute
+# straggler that eats a whole shard. A handful of full-stdlib sweeps that
+# legitimately need longer keep their own wider override below; everything else
+# lives under this cap.
+slow-timeout = { period = "60s", terminate-after = 5 }
 
 # Serialized resource groups. A group caps how many of its members run at once;
 # use it only for tests that contend on a resource a code fix cannot isolate.
@@ -69,14 +78,17 @@ wasm-external-cargo = { max-threads = 1 }
 
 # The heavy-server-e2e members cold-`cargo build` a full axum/tokio crate and
 # bind a real TCP port. Serialization (max-threads = 1) removes the shared-target
-# lock contention, but a transient teardown/serve timeout under runner scheduler
-# pressure can still surface on a single attempt. Two in-run retries let such a
-# transient self-heal without masking a real regression (a genuinely broken emit
-# fails all three attempts).
+# lock contention. With the warm dependency cache each member's emitted crate
+# builds fresh but links against a pre-built dep tree, so a member finishes in a
+# few minutes and a single retry is enough to let a rare transient teardown/serve
+# timeout self-heal without masking a real regression (a genuinely broken emit
+# fails both attempts). One retry, not more: a retry multiplies a HUNG test's
+# wall-clock by its per-test cap, so a single retry bounds a hang's blast radius
+# to 2 × the 300s cap while still absorbing a lone transient.
 [[profile.ci.overrides]]
 filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
-retries = 2
+retries = 1
 
 [[profile.ci.overrides]]
 filter = 'binary(build_no_arg) | binary(release_subcommand)'
@@ -99,20 +111,21 @@ filter = 'test(every_listed_module_is_queryable)'
 slow-timeout = { period = "60s", terminate-after = 30 }
 
 # The `stdlib_coverage_dynamic` build+run column drives a real `cargo build` per
-# higher-order stdlib symbol across a representative slice. Even serialized into
-# `heavy-server-e2e`, the whole slice legitimately runs past the 1200s (20-period)
-# ceiling the parity binaries use on a cold CI runner — a real build cost, not a
-# hang. It is the same full-sweep class as `every_listed_module_is_queryable`, so
-# it gets the same 1800s (30-period) ceiling. Placed before the parity override so
-# nextest's first-match-per-setting picks this wider window for the binary.
+# higher-order stdlib symbol across a representative slice — one test that builds
+# MANY emitted crates in sequence. Even with the warm dep cache the whole slice
+# is legitimately long (its cost is the count of emitted crates it builds, not a
+# hang), so it keeps a wider 900s (15-period) window. Not 1800s: warm deps roughly
+# halve each per-symbol build, so the slice fits comfortably under 900s while a
+# genuine wedge still fails within it.
 #
-# `g_http_live` is the same class: each golden in it (e.g.
-# `golden_live_param_routes::param_route_solo_cargo_builds_and_delivers_param`)
-# runs a real `cargo build` of an emitted HTTP project, which on a cold CI runner
-# passes the default 600s ceiling. It gets the same 1800s (30-period) window.
+# `g_http_live` is intentionally NOT in this list. Its goldens build through
+# `e2e_support::build_rust_binary`, which reuses the warm shared dependency
+# target, so each emitted HTTP project links in a handful of seconds rather than
+# cold-building axum/tokio — they fit the profile's 300s fail-fast cap, and a
+# hung one fails in minutes instead of eating a whole shard.
 [[profile.ci.overrides]]
-filter = 'binary(stdlib_coverage_dynamic) | binary(g_http_live)'
-slow-timeout = { period = "60s", terminate-after = 30 }
+filter = 'binary(stdlib_coverage_dynamic)'
+slow-timeout = { period = "60s", terminate-after = 15 }
 
 # The parity probes compile every golden fixture twice (clean + incremental),
 # per shard — a shard legitimately approaches the default 600s ceiling under CI

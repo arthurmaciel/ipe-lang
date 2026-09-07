@@ -100,9 +100,10 @@ fn live_let_bound_routes_renders_route_page() {
     );
 }
 
-/// `IPE_E2E` tier: the emitted project must CARGO-build. Isolated
-/// `CARGO_TARGET_DIR` per fixture — never shared (fingerprint reuse can mask
-/// an E0107/E0308 as a false pass).
+/// `IPE_E2E` tier: the emitted project must CARGO-build. Builds through the
+/// shared `e2e_support` core: a unique package name gives the app crate its own
+/// fresh fingerprint (a broken emit E0107/E0308 still fails) while the warm
+/// shared dependency target is reused, so the deps compile once, not per fixture.
 #[test]
 fn live_let_bound_routes_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
@@ -116,17 +117,11 @@ fn live_let_bound_routes_cargo_builds() {
         return;
     };
     assert!(result.is_ok(), "must compile: {:?}", result.err());
-    let target = std::env::temp_dir().join("r4").join("m7_let_bound_routes");
-    let build = std::process::Command::new("cargo")
-        .arg("build")
-        .env("CARGO_TARGET_DIR", &target)
-        .current_dir(&out)
-        .output()
-        .expect("cargo must spawn");
+    let built = e2e_support::build_rust_binary("m7_let_bound_routes", &out);
     assert!(
-        build.status.success(),
+        built.is_ok(),
         "#108 hole 1: the let-bound routes golden must cargo-build \
-         (pre-fix: E0107 at the `routeTable` fn signature)\n--- cargo stderr ---\n{}",
-        String::from_utf8_lossy(&build.stderr),
+         (pre-fix: E0107 at the `routeTable` fn signature)\n{}",
+        built.err().unwrap_or_default(),
     );
 }

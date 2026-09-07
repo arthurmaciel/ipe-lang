@@ -425,9 +425,11 @@ fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
     );
 }
 
-/// `IPE_E2E` tier: the emitted project must CARGO-build. Uses an ISOLATED
-/// `CARGO_TARGET_DIR` (`/tmp/r4/<case>` shape — NEVER the shared target: a
-/// shared dir's fingerprint reuse can mask an E0308/E0107 as a false pass).
+/// `IPE_E2E` tier: the emitted project must CARGO-build. Builds through the
+/// shared `e2e_support` core, which gives the fixture a unique package name
+/// (fresh app fingerprint) and reuses the warm shared dependency target. The
+/// app crate always compiles fresh from its own source hash — a broken emit
+/// (E0308/E0107) still fails — so the warm deps never mask a SEAL break.
 #[test]
 fn routed_empty_routes_well_typed_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
@@ -442,18 +444,12 @@ fn routed_empty_routes_well_typed_cargo_builds() {
         return;
     };
     assert!(result.is_ok(), "must compile: {:?}", result.err());
-    let target = std::env::temp_dir().join("r4").join("m7_empty_routes_ok");
-    let build = std::process::Command::new("cargo")
-        .arg("build")
-        .env("CARGO_TARGET_DIR", &target)
-        .current_dir(&out)
-        .output()
-        .expect("cargo must spawn");
+    let built = e2e_support::build_rust_binary("m7_empty_routes_ok", &out);
     assert!(
-        build.status.success(),
+        built.is_ok(),
         "#108 hole 1: emitted empty-routes project must cargo-build \
-         (pre-fix: E0107 missing generics for `route::Route`)\n--- cargo stderr ---\n{}",
-        String::from_utf8_lossy(&build.stderr),
+         (pre-fix: E0107 missing generics for `route::Route`)\n{}",
+        built.err().unwrap_or_default(),
     );
 }
 

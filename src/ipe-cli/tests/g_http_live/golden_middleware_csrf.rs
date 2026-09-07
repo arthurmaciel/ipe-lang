@@ -4,9 +4,10 @@
 //! `middleware_with_csrf(...)` and that the emitted crate `cargo build`s (the
 //! Seal: `ipe` exit 0 implies `cargo build` exit 0).
 //!
-//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated
-//! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can
-//! mask a rustc failure as a false pass).
+//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated and
+//! runs through `e2e_support::build_rust_binary` (unique package name → fresh
+//! app fingerprint, warm shared dependency target reused). A broken emit still
+//! fails to build, so the SEAL stays sound.
 
 use std::path::{Path, PathBuf};
 
@@ -53,7 +54,8 @@ fn middleware_with_csrf_emits_wrapped_handler() {
     );
 }
 
-/// `IPE_E2E` tier: the emitted project must cargo-build (isolated target dir)
+/// `IPE_E2E` tier: the emitted project must cargo-build (shared `e2e_support`
+/// core: unique package, warm dep target)
 /// — proves the seal (ipe exit 0 implies cargo build exit 0) for the new
 /// `ServerResponse.cookies` field and the `middleware_with_csrf` kernel.
 #[test]
@@ -74,16 +76,10 @@ fn middleware_with_csrf_cargo_builds() {
         result.err(),
     );
 
-    let target = std::env::temp_dir().join("r63").join("middleware_csrf");
-    let build = std::process::Command::new("cargo")
-        .arg("build")
-        .env("CARGO_TARGET_DIR", &target)
-        .current_dir(&out)
-        .output()
-        .expect("cargo must spawn");
+    let built = e2e_support::build_rust_binary("middleware_csrf", &out);
     assert!(
-        build.status.success(),
-        "#63: Middleware.withCsrf project must cargo-build\n--- cargo stderr ---\n{}",
-        String::from_utf8_lossy(&build.stderr),
+        built.is_ok(),
+        "#63: Middleware.withCsrf project must cargo-build\n{}",
+        built.err().unwrap_or_default(),
     );
 }
