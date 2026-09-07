@@ -3207,4 +3207,123 @@ mod hot_appearance_tests {
         );
         Ok(())
     }
+
+    // ── Cmd-wiring composition at the update-arm Cmd position ─────────────
+
+    /// A literal `Cmd.perform <task> <toMsg>` where task/toMsg are opaque idents —
+    /// the closed single-effect wiring shape.
+    fn cmd_perform(interner: &mut Interner) -> DResult<Expr> {
+        let task = interner.intern("t")?;
+        let to_msg = interner.intern("f")?;
+        Ok(Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdPerform),
+            args: vec![Expr::Var(task), Expr::Var(to_msg)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    fn cmd_none() -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::CmdNone),
+            args: vec![],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// Under an armed `update` body a `(model, Cmd.perform …)` arm composes its Cmd
+    /// position into a `fire_cmd_wiring` dispatch over a one-entry compiled effect
+    /// table: the effect stays compiled (wrapped in a lazy `move` thunk), only the
+    /// wiring id is baked as data.
+    #[test]
+    fn cmd_perform_arm_composes_fire_cmd_wiring() -> DResult<()> {
+        let mut interner = Interner::new();
+        let perform = cmd_perform(&mut interner)?;
+        // Arm the update transition rewrite (a real `update` emit arms it from the
+        // function's Model parameter; here we arm it directly to exercise the arm
+        // emitter in isolation).
+        let model_param = interner.intern("m")?;
+        let (program, _view) = one_view_program(&mut interner, Expr::Int(0))?;
+        let backend = RustBackend::new(&interner).with_hot_appearance(true);
+        let ctx = backend.emit_ctx_for_tests(&program)?;
+        let saved = ctx.begin_transition_update(Some(model_param));
+
+        let body = Expr::Tuple(vec![Expr::Int(0), perform]);
+        let out = crate::emit_expr::emit_cmd_wiring_arm(
+            &ctx,
+            &body,
+            1,
+            0,
+            crate::emit_types::GenericScope::new(&[]),
+        )?
+        .expect("a literal Cmd.perform arm composes the wiring dispatch");
+
+        ctx.end_transition_update(saved);
+
+        assert!(
+            out.contains("ipe_runtime::web::fire_cmd_wiring(\"{\\\"effect\\\":0}\""),
+            "the arm bakes the effect-0 wiring datum, got:\n{out}"
+        );
+        assert!(
+            out.contains("Box::new(move ||"),
+            "the effect is wrapped in a lazy move thunk, got:\n{out}"
+        );
+        assert!(
+            out.contains("vec!["),
+            "the effect table is a vec of thunks, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A `Cmd.none` arm is left to the transition path (fires no effect already), so
+    /// the wiring composer returns `None` — no `fire_cmd_wiring` for the no-effect
+    /// case, keeping its emit unchanged.
+    #[test]
+    fn cmd_none_arm_is_not_composed_by_wiring() -> DResult<()> {
+        let mut interner = Interner::new();
+        let model_param = interner.intern("m")?;
+        let (program, _view) = one_view_program(&mut interner, Expr::Int(0))?;
+        let backend = RustBackend::new(&interner).with_hot_appearance(true);
+        let ctx = backend.emit_ctx_for_tests(&program)?;
+        let saved = ctx.begin_transition_update(Some(model_param));
+
+        let body = Expr::Tuple(vec![Expr::Int(0), cmd_none()]);
+        let out = crate::emit_expr::emit_cmd_wiring_arm(
+            &ctx,
+            &body,
+            1,
+            0,
+            crate::emit_types::GenericScope::new(&[]),
+        )?;
+
+        ctx.end_transition_update(saved);
+        assert!(out.is_none(), "a Cmd.none arm is not wiring-composed");
+        Ok(())
+    }
+
+    /// With `hot_appearance` OFF the wiring composer is inert: a `Cmd.perform` arm
+    /// returns `None`, so the arm emits normally (byte-identical to the direct form).
+    #[test]
+    fn flag_off_leaves_perform_arm_uncomposed() -> DResult<()> {
+        let mut interner = Interner::new();
+        let perform = cmd_perform(&mut interner)?;
+        let (program, _view) = one_view_program(&mut interner, Expr::Int(0))?;
+        let backend = RustBackend::new(&interner).with_hot_appearance(false);
+        let ctx = backend.emit_ctx_for_tests(&program)?;
+
+        let body = Expr::Tuple(vec![Expr::Int(0), perform]);
+        let out = crate::emit_expr::emit_cmd_wiring_arm(
+            &ctx,
+            &body,
+            1,
+            0,
+            crate::emit_types::GenericScope::new(&[]),
+        )?;
+        assert!(
+            out.is_none(),
+            "flag-off: no wiring composition, the arm stays byte-identical"
+        );
+        Ok(())
+    }
 }

@@ -2020,11 +2020,22 @@ fn build_match(
         // exact. `None` falls through to the ordinary Doc body emit, byte-identical
         // to the flag-off form.
         let hot_arm = crate::emit_expr::emit_transition_arm(ctx, &arm.body)?;
+        // The Cmd-wiring rewrite (a single literal `Cmd.perform` arm's Cmd position
+        // → `fire_cmd_wiring` over the arm's compiled effect table). It shares the
+        // string-path mirror in [`crate::emit_expr::emit_match`] via the same
+        // produced string, keeping the SEAL exact. At most one of the two hot
+        // rewrites fires (a `Cmd.none` transition arm is never a `Cmd.perform` arm).
+        let wired_arm = if hot_arm.is_some() {
+            None
+        } else {
+            crate::emit_expr::emit_cmd_wiring_arm(ctx, &arm.body, indent, depth, generics)?
+        };
         // The body is emitted at one indent step past the `match` (the arm indent),
         // exactly as the string emitter passes `indent + 1`.
-        let body_doc = match &hot_arm {
-            Some(hot) => Doc::owned(hot.clone()),
-            None => build_doc(ctx, &arm.body, indent + 1, child, generics)?,
+        let body_doc = match (&hot_arm, &wired_arm) {
+            (Some(hot), _) => Doc::owned(hot.clone()),
+            (None, Some(wired)) => Doc::owned(wired.clone()),
+            (None, None) => build_doc(ctx, &arm.body, indent + 1, child, generics)?,
         };
         let ir_guard = match &arm.guard {
             Some(g) => Some(emit_expr_at(ctx, g, indent + 1, child, generics)?),
@@ -2047,9 +2058,10 @@ fn build_match(
         let head = Doc::concat(vec![pat_doc, arrow]);
         let tail = if prelude.is_empty() {
             // Plain body: the arm-tail token applies the brace/comma rule by the
-            // body's head kind. A hot-swap reduction is a single-line tuple leaf,
-            // never control-shaped, so no braces are synthesized for it.
-            let control = hot_arm.is_none() && arm_body_is_control(&arm.body);
+            // body's head kind. A hot-swap reduction (transition or Cmd-wiring) is a
+            // tuple leaf, never control-shaped, so no braces are synthesized for it.
+            let control =
+                hot_arm.is_none() && wired_arm.is_none() && arm_body_is_control(&arm.body);
             Doc::match_arm_tail(body_doc, control)
         } else {
             // Prelude present: the string emitter wraps `{{ prelude body }}`. Keep

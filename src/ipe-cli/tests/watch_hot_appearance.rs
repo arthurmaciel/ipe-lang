@@ -2114,3 +2114,90 @@ fn subscriptions_interval_edit_hot_swaps_without_rebuild() -> Result<(), BoxErro
 
     stop_and_join(&handle, join)
 }
+
+/// A `Web.app` whose `update` arm fires a single literal `Cmd.perform`
+/// (`Fetch -> ( model, Cmd.perform (Time.now ()) GotTime )`). Under the hot flag
+/// that arm's Cmd position composes to `fire_cmd_wiring("<baked wiring>", vec![…])`
+/// over the arm's OWN compiled effect table (the `Cmd.perform` stays compiled,
+/// wrapped in a lazy `move` thunk; only the wiring id is data). A marker text
+/// confirms the app is up.
+fn web_fixture_cmd_perform() -> String {
+    "module Main exposing (main)\n\n\
+     import Ipe.Tea.Web as Web\n\
+     import Ipe.Ui as Ui\n\
+     import Ipe.Tea.Web.Cmd\n\
+     import Ipe.Tea.Web.Sub\n\
+     import Ipe.Time as Time\n\
+     import Ipe.Time.Timestamp exposing (Timestamp)\n\
+     import Ipe.Error exposing (Error)\n\n\
+     type alias Model = { count : Int }\n\n\
+     type Msg = Fetch | GotTime (Result Error Timestamp)\n\n\
+     init : WebReq -> ( Model, Cmd Msg )\n\
+     init _req =\n    \
+         ( { count = 0 }, Cmd.none )\n\n\
+     update : Msg -> Model -> ( Model, Cmd Msg )\n\
+     update msg model =\n    \
+         case msg of\n        \
+             Fetch ->\n            \
+                 ( model, Cmd.perform (Time.now ()) GotTime )\n\n        \
+             GotTime _result ->\n            \
+                 ( { model | count = model.count + 1 }, Cmd.none )\n\n\
+     view : Model -> Element Msg\n\
+     view model =\n    \
+         Ui.column []\n        \
+             [ Ui.text \"marker\" ]\n\n\
+     subscriptions : Model -> Sub Msg\n\
+     subscriptions _model =\n    \
+         Sub.none\n\n\
+     main =\n    \
+         Web.app\n        \
+             { init = init, update = update, view = view, subscriptions = subscriptions\n        \
+             , routes = [], notFound = Fetch\n        \
+             }\n"
+        .to_owned()
+}
+
+/// The Cmd-wiring composition SEAL: a web app whose `update` has a single literal
+/// `Cmd.perform` arm cold-builds and SERVES under the hot flag — which is the
+/// compiler↔runtime SEAL for this slice (`ipe`-accepts ⇒ `cargo`-builds ⇒ the app
+/// runs). The composed arm emits `fire_cmd_wiring("<baked wiring>", vec![Box::new(
+/// move || <compiled Cmd.perform>)])` at the Cmd position; a build failure here
+/// would mean the emitted dispatch does not type-check. The effect-firing and
+/// fail-closed selection are proven in the runtime `cmd_wiring::fire_tests`; this
+/// locks that the composed emit itself compiles and boots.
+#[test]
+#[cfg(target_os = "linux")]
+fn cmd_perform_arm_composes_and_serves() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // SAFETY: single-threaded here (no watch thread spawned yet); nextest isolates
+    // this process, so the var neither races nor leaks.
+    unsafe {
+        std::env::set_var("IPE_WATCH_HOT_APPEARANCE", "1");
+    }
+
+    let (ipe_dir, out_dir) = fresh_dirs("cmdperform")?;
+    write_main(&ipe_dir, &web_fixture_cmd_perform())?;
+
+    let sink = EventSink::default();
+    let port = 19184;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    assert!(
+        wait_for_serving(port, Duration::from_mins(4)),
+        "the flag-on cold build of a Cmd.perform update arm must serve \
+         (the composed fire_cmd_wiring dispatch compiles and boots)"
+    );
+    assert!(
+        wait_for(Duration::from_secs(10), || sink.count_restarted() >= 1),
+        "the cold build must record its initial Restarted event"
+    );
+    assert!(
+        http_get_body(port).is_some_and(|b| b.contains("marker")),
+        "the composed-wiring app must serve its view"
+    );
+
+    stop_and_join(&handle, join)
+}

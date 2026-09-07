@@ -89,7 +89,7 @@ pub use init_datum::{InitDatum, apply_init, apply_init_hot};
 // `select_cmd_hot`; a genuinely-new effect body grows the arm's effect table and
 // recompiles. See the module doc.
 pub mod cmd_wiring;
-pub use cmd_wiring::{CmdWiring, select_cmd_hot, select_effect};
+pub use cmd_wiring::{CmdWiring, fire_cmd_wiring, select_cmd_hot, select_effect};
 // Explicit re-export of ONLY the codegen-referenced kernel functions. A glob
 // (`pub use pubsub::*`) leaked the broker's `Event<T>` into this namespace,
 // colliding with the HTML `Event` enum re-exported below (`pub use …html::*`)

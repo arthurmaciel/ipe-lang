@@ -872,9 +872,19 @@ pub fn emit_match(
         // SEAL stays exact. `None` (flag off, not an update body, or a
         // non-describable arm) falls through to the ordinary arm-body emit below,
         // byte-identical.
+        //
+        // A second dev-gated hot rewrite of a TEA `update` arm shares the same
+        // produced-string mirror with the Doc path: the Cmd-wiring rewrite (a single
+        // literal `Cmd.perform` arm's Cmd position → `fire_cmd_wiring` over the arm's
+        // compiled effect table). At most one of the two fires (a `Cmd.none` arm is
+        // never a `Cmd.perform` arm); `None` from both falls through to the ordinary
+        // arm-body emit, byte-identical to the flag-off form.
         let body = match emit_transition_arm(ctx, &arm.body)? {
             Some(hot) => hot,
-            None => emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?,
+            None => match emit_cmd_wiring_arm(ctx, &arm.body, indent, depth, generics)? {
+                Some(wired) => wired,
+                None => emit_expr_at(ctx, &arm.body, indent + 1, child, generics)?,
+            },
         };
         let arm_body = if prelude.is_empty() {
             body
@@ -1041,40 +1051,87 @@ pub fn emit_init_datum(
     )))
 }
 
-/// Reduce a data-describable `update` arm's Cmd WIRING to a `select_cmd_hot`
-/// selection expression, or `None` when the arm's Cmd is not a recognised wiring.
+/// Compose a TEA `update` arm's Cmd WIRING at the arm's Cmd position: reduce a
+/// data-describable arm whose Cmd fires a single literal `Cmd.perform` effect to a
+/// `fire_cmd_wiring` dispatch over the arm's OWN compiled effect table, or `None`
+/// when the arm's Cmd is not an enumerable wiring (the arm stays compiled).
 ///
-/// Emits `ipe_runtime::web::select_cmd_hot("<baked wiring JSON>", <effect count>)`
-/// — the compiled selector returns which of the arm's `effect_count` compiled
-/// effects to fire (or `None` for `Cmd.none`). The effect BODIES are the arm's
-/// OWN compiled effects (not reduced here); only the WIRING — which id fires — is
-/// data. A wiring edit swaps the baked id (a data patch); a genuinely-new effect
-/// body grows `effect_count` and recompiles.
+/// Emits the whole arm body as
+/// `(<compiled model>, ipe_runtime::web::fire_cmd_wiring("<baked wiring JSON>",
+/// vec![Box::new(move || <compiled effect 0>), ...]))`: the model half is the arm's
+/// OWN compiled model (unchanged), and the Cmd half is the wiring dispatch. Each
+/// effect thunk builds ONE of the arm's compiled effects; the runtime selector
+/// picks WHICH id fires (dev overlay under the dev gate, the baked id otherwise —
+/// dev == prod) and runs only that thunk. The effect BODIES are compiled exactly as
+/// written — only the WIRING (which id fires) is data.
 ///
 /// The baked JSON is
-/// [`crate::transition_classify::CompileCmdWiring::to_json`], byte-identical to
-/// the runtime `CmdWiring`'s serde form (pinned by the classifier's conformance
-/// test), so the selector round-trips it exactly.
+/// [`crate::transition_classify::CompileCmdWiring::to_json`], byte-identical to the
+/// runtime `CmdWiring`'s serde form (pinned by the classifier's conformance test),
+/// so the selector round-trips it exactly. The effect count passed to the runtime
+/// is the compiled table length, so `select_effect`'s `id < effect_count` bound and
+/// `fire_cmd_wiring`'s `nth(id)` bound both agree with the table — an id past it
+/// fires no effect (fail-closed), never an out-of-range access.
 ///
-/// Conservative: only the closed wiring vocabulary classifies; a real effect body
-/// returns `None` and keeps the arm's Cmd compiled.
+/// Only fires under an armed `update` body (`transition_model_param` set, i.e.
+/// `hot_appearance` on): with the flag off this returns `None` and the arm is
+/// emitted normally, byte-identical. Conservative: only the closed wiring
+/// vocabulary (`Cmd.none`, a single literal `Cmd.perform`) classifies; the
+/// `Cmd.none` no-effect case is left to the transition path (which fires no effect
+/// already), so only the genuinely-new `Cmd.perform` wiring composes here. A
+/// non-enumerable Cmd returns `None` and keeps the arm compiled.
 ///
-/// This is the emit-ready wiring selector for the Cmd-wiring data path. The
-/// wiring MECHANISM it feeds — the runtime `select_cmd_hot`, the classifier
-/// [`crate::transition_classify::cmd_wiring_of_arm`], the `/_ipe/hot-wiring`
-/// endpoint, and the watch push leg — is complete and tested. Composing this
-/// selector at the arm's Cmd position requires threading the arm's compiled
-/// effect table through the shared `update`-arm emitter, a language-boundary
-/// change that lands behind the security-soundness guardian separately from this
-/// data-path slice; until then this helper has no caller in the lib build, so the
-/// `dead_code` allow is ledgered here (not an un-reasoned suppression).
-#[allow(dead_code)]
-#[must_use]
-pub fn emit_cmd_wiring_arm(body: &Expr, effect_count: usize) -> Option<String> {
-    let cw = crate::transition_classify::cmd_wiring_of_arm(body)?;
-    let json = cw.to_json();
+/// Shared with [`crate::emit_doc::build_match`] via the same produced string, so the
+/// Doc (production) and string (SEAL / byte-golden) paths carry identical tokens and
+/// the SEAL stays exact.
+pub fn emit_cmd_wiring_arm(
+    ctx: &EmitCtx,
+    body: &Expr,
+    indent: usize,
+    depth: u16,
+    generics: GenericScope,
+) -> DResult<Option<String>> {
+    // Only compose under an armed `update` body — the same gate the transition
+    // rewrite uses. With `hot_appearance` off this is `None` and the arm emits
+    // normally (byte-identical).
+    if ctx.transition_model_param().is_none() {
+        return Ok(None);
+    }
+    let Some(arm) = crate::transition_classify::arm_wiring_of_arm(body) else {
+        return Ok(None);
+    };
+    // The `Cmd.none` no-effect wiring is already handled by the transition path
+    // (which emits `cmd_none()` at the Cmd position, fail-closed to no effect);
+    // wiring it here would only churn its emit for zero behaviour gain. Compose only
+    // when the arm names at least one compiled effect (a real `Cmd.perform`).
+    if arm.effects.is_empty() {
+        return Ok(None);
+    }
+    // The arm body is `(Model, Cmd)`; re-extract the model sub-expression to emit as
+    // the arm's own compiled model. A shape that does not match here would mean the
+    // classifier and this extraction drifted; it fails closed (`None` → ordinary
+    // emit), never a wrong rewrite.
+    let Expr::Tuple(elems) = body else {
+        return Ok(None);
+    };
+    let [model_expr, _cmd] = elems.as_slice() else {
+        return Ok(None);
+    };
+    let child = depth + 1;
+    let model_s = emit_expr_at(ctx, model_expr, indent + 1, child, generics)?;
+    // The ordered compiled-effect table: each effect wrapped in a `move` thunk so
+    // only the wiring-selected one is built and fired (the rest drop unrun). A
+    // `move` closure lets the effect capture the arm's bindings by value, sound
+    // because only one match arm runs.
+    let mut thunks = Vec::with_capacity(arm.effects.len());
+    for effect in &arm.effects {
+        let effect_s = emit_expr_at(ctx, effect, indent + 1, child, generics)?;
+        thunks.push(format!("Box::new(move || {effect_s})"));
+    }
+    let table = thunks.join(", ");
+    let json = arm.wiring.to_json();
     let json_lit = rust_string_literal(&json);
-    Some(format!(
-        "ipe_runtime::web::select_cmd_hot({json_lit}, {effect_count})"
-    ))
+    Ok(Some(format!(
+        "({model_s}, ipe_runtime::web::fire_cmd_wiring({json_lit}, vec![{table}]))"
+    )))
 }
