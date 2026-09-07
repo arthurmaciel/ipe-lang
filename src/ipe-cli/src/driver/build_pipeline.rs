@@ -122,6 +122,28 @@ pub fn runtime_dep_from_env() -> bool {
     !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
 }
 
+/// The emitted-crate package name for a no-manifest (single-file) build, read
+/// from `IPE_EMIT_PACKAGE_NAME` when set, empty (the `"ipe-app"` default)
+/// otherwise.
+///
+/// A single-file build carries no `package.ipe`, so its emitted crate is always
+/// named `ipe-app`. When many single-file builds share ONE cargo target dir
+/// (the coverage harness driving a per-symbol emit into a warm shared dep
+/// target) that constant name makes their app-crate cargo fingerprints collide:
+/// cargo could reuse a prior probe's compiled `ipe-app` and mask a genuinely
+/// broken emit, defeating the seal the coverage sweep exists to hold. Setting a
+/// UNIQUE name per build gives each app crate its own fingerprint, so a broken
+/// emit still fails to build even against a warm target. Unset (every ordinary
+/// `ipe run` / `ipe build`), the name is empty and the emit keeps the `ipe-app`
+/// default — this lever changes nothing for a normal build.
+#[must_use]
+pub fn single_file_cargo_name_from_env() -> String {
+    std::env::var("IPE_EMIT_PACKAGE_NAME")
+        .ok()
+        .map(|name| ipe_backend_rust::sanitize_cargo_name(&name))
+        .unwrap_or_default()
+}
+
 /// Whether the dev-only appearance hot-swap emit is enabled for `ipe watch`.
 ///
 /// Default ON: `ipe watch` hot-swaps appearance-only edits (e.g. `Ui.spacing`)
@@ -219,6 +241,7 @@ impl BuildOptions {
     pub fn from_env() -> Self {
         Self {
             runtime_dep: runtime_dep_from_env(),
+            cargo_name: single_file_cargo_name_from_env(),
             ..Self::default()
         }
     }
