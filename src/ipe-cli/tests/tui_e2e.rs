@@ -159,8 +159,17 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
 /// |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
 /// ```
 ///
-/// This test runs WITHOUT `IPE_E2E` (ipe-level only — no cargo build), so it
-/// is always live in CI.
+/// What this test proves and what it does NOT: it typechecks the program
+/// (`ipe build` accepts the record-alias `onKey`, no IPE-T0001) and asserts the
+/// emitter produces the exact record-bridge wrapper — a `|kind, value|` closure
+/// that constructs `RecKindValue { kind, value }` from BOTH parameters in ONE
+/// expression, so both key fields provably flow from the runtime's
+/// `Fn(String, String)` call site into the record and on into the record-typed
+/// handler. It does NOT run the emitted binary (a `Tui.app` needs a real TTY;
+/// the sibling `tui_e2e::tui_app_vendored` build-only test carries the
+/// `cargo build` seal for the same wrapper, and the runtime `tui` module tests
+/// exercise the dispatch call). This test runs WITHOUT `IPE_E2E` (ipe-level
+/// only — no cargo build), so it is always live in CI.
 #[test]
 fn tui_onkey_record_typechecks() {
     // ── helper: write Ipê source to a temp file, run ipe::build, check ok ──
@@ -220,17 +229,39 @@ fn tui_onkey_record_typechecks() {
         return; // runtime unavailable — structural assertions skipped
     }
 
-    // The emitter must produce the bridging wrapper closure.
+    // The emitter must produce the bridging wrapper as ONE expression: the
+    // `|kind: String, value: String|` closure whose body constructs
+    // `RecKindValue { kind, value }` from BOTH closure parameters. Two separate
+    // `contains` checks could each match unrelated emitted code; requiring the
+    // closure header immediately followed (modulo whitespace) by a call passing
+    // the `RecKindValue { kind, value }` record proves both key fields flow from
+    // the runtime's `Fn(String, String)` call site through the record and into
+    // the record-typed handler — the round-trip the bridge exists to make.
+    let normalized: String = app_rs.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        app_rs.contains("|kind: String, value: String|"),
+        normalized.contains("|kind: String, value: String|"),
         "Tui.app emitted Rust must contain the `|kind: String, value: String|` \
          wrapper closure (onKey record bridge); got:\n{app_rs}"
     );
-    // The record struct `RecKindValue` must be referenced inside the wrapper.
+    // The closure body must build the closed record from both parameters and hand
+    // it to the handler — not merely mention `RecKindValue` somewhere.
     assert!(
-        app_rs.contains("RecKindValue"),
-        "Tui.app emitted Rust must reference `RecKindValue` struct in the wrapper; \
+        normalized.contains("(RecKindValue { kind, value })"),
+        "Tui.app emitted Rust must pass `RecKindValue {{ kind, value }}` (both key \
+         fields, from the closure parameters) into the record-typed onKey handler; \
          got:\n{app_rs}"
+    );
+    let closure_at = normalized
+        .find("|kind: String, value: String|")
+        .unwrap_or(usize::MAX);
+    let record_at = normalized
+        .find("(RecKindValue { kind, value })")
+        .unwrap_or(0);
+    assert!(
+        closure_at != usize::MAX && record_at > closure_at,
+        "the `RecKindValue {{ kind, value }}` construction must appear inside the \
+         key-event wrapper closure body (after its `|kind, value|` header), proving \
+         the bridge wires both fields through in one expression; got:\n{app_rs}"
     );
 }
 

@@ -4,7 +4,7 @@ use super::{
     build_with_sibling_discovery_with_options, collect_entry_and_siblings, create_source_root,
     emit_pipeline_json, find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map,
     io_err, render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
-    runtime_dep_from_env,
+    runtime_dep_from_env, single_file_cargo_name_from_env,
 };
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, Write, build_plan, cli_args,
@@ -516,8 +516,11 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         // build keeps the full tree so rustc, not the driver, drops the unreached
         // files. Only `ipe eject` sets this.
         tree_shake_vendored: false,
-        // Filled in by build_project_with_options once the manifest is parsed.
-        cargo_name: String::new(),
+        // Manifest projects overwrite this from `package.ipe` in
+        // build_project_with_options; a single-file (no-manifest) build keeps
+        // this value, defaulting to `ipe-app` unless `IPE_EMIT_PACKAGE_NAME`
+        // names a unique per-build crate (the shared-target coverage harness).
+        cargo_name: single_file_cargo_name_from_env(),
         debugger: args.debugger,
         // `ipe build` never emits appearance hot-swap scaffolding — that is a
         // `ipe watch`-only dev affordance. A release artifact stays clean.
@@ -1709,8 +1712,11 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         // `ipe run` builds and executes; it never tree-shakes the vendored tree
         // (only `ipe eject` does).
         tree_shake_vendored: false,
-        // Filled in by build_project_with_options once the manifest is parsed.
-        cargo_name: String::new(),
+        // Manifest projects overwrite this from `package.ipe` in
+        // build_project_with_options; a single-file (no-manifest) run keeps this
+        // value, defaulting to `ipe-app` unless `IPE_EMIT_PACKAGE_NAME` names a
+        // unique per-build crate (the shared-target coverage harness).
+        cargo_name: single_file_cargo_name_from_env(),
         debugger: args.debugger,
         // `ipe run` never emits appearance hot-swap scaffolding — that is a
         // `ipe watch`-only dev affordance.

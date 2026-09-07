@@ -511,6 +511,13 @@ pub mod css_safety;
 pub mod css;
 pub use css::*;
 
+// Ipe.Color — the one opaque colour type shared by every surface (Ui/Html/Css
+// and the terminal Tui/Cli). Constructors clamp/parse at the boundary; the
+// conversions out (`to_css`/`to_hex`/`to_ansi`) are the single renderers each
+// surface calls. `to_ansi` is the sole truecolour→256→16 degradation point.
+// Referenced by qualified path (`ipe_runtime::color::*`) from generated code.
+pub mod color;
+
 // In-process telemetry sink (log/error rings + request counters) — always
 // compiled so `Ipe.Log.*` can feed it; the Ipe.Web `console` module serves it.
 pub mod telemetry;

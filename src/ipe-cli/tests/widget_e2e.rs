@@ -634,6 +634,32 @@ main =
         }
 "#;
 
+/// Read and concatenate the whole emitted Ipê-side Rust tree (`main.rs` +
+/// `src/ipe_mods/*.rs`) so a test can assert the SHAPE of the lowering, not
+/// only that `cargo build` succeeded. A build can succeed on a program whose
+/// port calls were never emitted (dead-code elimination, a stubbed arm); the
+/// only way to prove the ports actually lowered to the transport is to read
+/// the emitted source.
+fn emitted_source(out_dir: &std::path::Path) -> String {
+    let src = out_dir.join("src");
+    let mut combined = std::fs::read_to_string(src.join("main.rs")).unwrap_or_default();
+    if let Ok(entries) = std::fs::read_dir(src.join("ipe_mods")) {
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .collect();
+        files.sort();
+        for path in files {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                combined.push('\n');
+                combined.push_str(&text);
+            }
+        }
+    }
+    combined
+}
+
 /// THE SEAL for `Ipe.Ffi.Js` ports: a seal-legal port program `ipe`-accepts (exit 0)
 /// AND the emitted Rust `cargo build`s. A `Js.send model.n` lowers to
 /// `js_send(...)` and `Js.subscribe Decode.int Got` to
@@ -641,6 +667,24 @@ main =
 /// already present (the seal-legality gate guarantees it), so the generic
 /// transport call resolves with no per-port adapter. If either the lowering arm
 /// or the runtime signature drifted, this build would fail — the whole point.
+///
+/// Two guarantees, two proofs:
+///
+/// 1. **Compile seal** — `compile_and_build` reaching the built binary means
+///    `ipe build` accepted + emitted AND `cargo build` linked the runtime
+///    transport signatures (THE SEAL).
+/// 2. **Lowering shape** — the emitted Rust actually CONTAINS the transport
+///    calls (`js_send(` outbound, `js_subscribe(` inbound). A green
+///    `cargo build` alone does not prove the port calls survived into the
+///    emitted program; asserting the lowered calls are present does. The
+///    behaviour of those calls — a payload seal-encoded outbound and a clean
+///    inbound frame decoded fail-closed and emitted as a `Msg`, per session,
+///    with cross-session isolation — is proven in-process by the runtime's
+///    `js_port` transport suite (`ipe_runtime::js_port` `#[tokio::test]`s:
+///    `inbound_clean_payload_is_emitted`,
+///    `outbound_send_encodes_and_delivers_to_origin_sink`,
+///    `sessions_are_isolated_inbound_and_outbound`, …), which drives the same
+///    `js_send`/`js_subscribe` this program lowers to.
 #[test]
 fn js_port_seal_legal_lowers_and_builds() -> Result<(), BoxError> {
     if std::env::var("IPE_E2E").is_err() {
@@ -649,5 +693,25 @@ fn js_port_seal_legal_lowers_and_builds() -> Result<(), BoxError> {
     // `compile_and_build` returns the built binary path; reaching it means both
     // `ipe build` (accept + emit) and `cargo build` (THE SEAL) succeeded.
     let _exe = compile_and_build("js_port_seal", JS_PORT_APP)?;
+
+    // The compile seal alone would pass even if the port calls were elided; the
+    // emitted source must actually carry both transport arms. `cargo build` has
+    // already succeeded, so the emitted tree exists and must contain them.
+    let out_dir = std::env::temp_dir().join("widget_e2e_js_port_seal_emitted");
+    let emitted = emitted_source(&out_dir);
+    if !emitted.contains("js_send(") {
+        return Err(format!(
+            "emitted Rust must lower `Js.send` to a `js_send(` transport call; \
+             emitted source did not contain it:\n{emitted}"
+        )
+        .into());
+    }
+    if !emitted.contains("js_subscribe(") {
+        return Err(format!(
+            "emitted Rust must lower `Js.subscribe` to a `js_subscribe(` transport call; \
+             emitted source did not contain it:\n{emitted}"
+        )
+        .into());
+    }
     Ok(())
 }

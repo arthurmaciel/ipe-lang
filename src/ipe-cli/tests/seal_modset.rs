@@ -469,14 +469,41 @@ fn tui_app_vendored_builds() {
     );
 }
 
-/// The runtime source tree must resolve for every shape above — a smoke check
-/// that fails loudly (rather than silently skipping) when the tree moved.
+/// The runtime source tree the SEAL tests above vendor and build must resolve
+/// to the ACTUAL runtime module tree — not merely to some directory.
+/// `resolve_runtime` returns the module-tree root (the crate's `src/`), which
+/// the emit SEALs copy and trim/append as `ipe_runtime/mod.rs`; the crate
+/// `Cargo.toml` the SEALs splice feature flags into sits one level up. If
+/// either load-bearing entry moved, every SEAL above would fail deep inside a
+/// `cargo build` with an opaque error. Asserting both are present at their
+/// contracted positions makes a tree move fail HERE, loudly and precisely.
 #[test]
 fn runtime_tree_resolves() {
     let runtime = ipe::resolve_runtime().expect("runtime tree must resolve from the workspace");
+    let module_root = Path::new(&runtime);
     assert!(
-        Path::new(&runtime).is_dir(),
+        module_root.is_dir(),
         "resolved runtime path must be a directory: {}",
-        runtime.display()
+        module_root.display()
+    );
+    // The module-set root (`ipe_runtime/mod.rs`) the backend trims and appends —
+    // directly in the resolved module tree.
+    let mod_rs = module_root.join("mod.rs");
+    assert!(
+        mod_rs.is_file(),
+        "resolved runtime tree must contain `mod.rs` (the module set the emit \
+         SEALs trim and append): {}",
+        mod_rs.display()
+    );
+    // The vendored crate manifest the emit SEALs splice feature flags into sits
+    // at the crate root, one level above the module tree.
+    let manifest = module_root
+        .parent()
+        .map(|crate_root| crate_root.join("Cargo.toml"));
+    assert!(
+        manifest.as_ref().is_some_and(|m| m.is_file()),
+        "resolved runtime crate root (parent of the module tree) must contain the \
+         vendored `Cargo.toml` the SEALs splice: {:?}",
+        manifest
     );
 }

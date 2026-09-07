@@ -307,6 +307,11 @@ fn fill_package(template: &str, project_name: &str, runtime: InitRuntime) -> Str
 pub fn run_init(rest: &[String]) -> Result<(), CliError> {
     let args = parse_init_args(rest)?;
 
+    // Banner: stderr, terminal-only (piped / CI output stays clean).
+    if std::io::stderr().is_terminal() {
+        style::print_command_header();
+    }
+
     let target = args.target_arg.as_deref().unwrap_or(".");
     let target_dir = PathBuf::from(target);
     let project_name = project_name_for(&target_dir)?;

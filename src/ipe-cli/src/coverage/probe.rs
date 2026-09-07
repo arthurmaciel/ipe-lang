@@ -237,13 +237,96 @@ pub fn typechecks(source: &str, snippet: &Path) -> StageOutcome {
     }
 }
 
+/// The env var naming the warm shared cargo target the emitted per-probe build
+/// links its dependency tree from, set by the CI e2e / seal-slice jobs. Mirrors
+/// the golden E2E harness (`tools/e2e-support`), which reads the same variable.
+const ORACLE_SHARED_TARGET: &str = "IPE_ORACLE_SHARED_TARGET";
+
+/// The env var naming a unique emitted-crate package name, honoured by the
+/// single-file `ipe run` emit ([`crate::driver::single_file_cargo_name_from_env`]).
+const EMIT_PACKAGE_NAME: &str = "IPE_EMIT_PACKAGE_NAME";
+
+/// Locate the `ipe` binary the probe drives `ipe run` through.
+///
+/// Cargo sets `CARGO_BIN_EXE_ipe` in every integration test's environment,
+/// pointing at the compiled `ipe` binary — the one that must run the probe. That
+/// is preferred over [`std::env::current_exe`], which under an integration test
+/// is the TEST-harness binary, not `ipe`: re-invoking the harness with `run`
+/// would run libtest (re-entering the very coverage test, or rejecting the
+/// arguments) rather than compiling the probe. `current_exe` is the fallback for
+/// the case the coverage matrix is driven directly by the `ipe` binary itself
+/// (where it already is `ipe`).
+///
+/// # Errors
+/// The rendered failure when neither source yields a path.
+fn ipe_binary() -> Result<std::path::PathBuf, String> {
+    if let Some(p) = std::env::var_os("CARGO_BIN_EXE_ipe") {
+        return Ok(std::path::PathBuf::from(p));
+    }
+    std::env::current_exe().map_err(|e| format!("could not locate the ipe binary: {e}"))
+}
+
+/// The warm shared cargo target for the emitted probe build, or `None` to
+/// inherit the ambient env (isolate).
+///
+/// Returns `Some(path)` only when `IPE_ORACLE_SHARED_TARGET` is a non-empty
+/// absolute path; anything else (absent, relative, whitespace) returns `None`.
+/// This is the same fail-safe the golden harness applies: a relative or empty
+/// value never silently pins the build to a surprising target.
+fn shared_dep_target() -> Option<String> {
+    let raw = std::env::var(ORACLE_SHARED_TARGET).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || !Path::new(trimmed).is_absolute() {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+/// A process-monotonic counter giving every probe build a distinct identity.
+///
+/// The columns share ONE scratch dir across a run, so a per-probe working
+/// directory and package name cannot be derived from the (constant) snippet
+/// path alone. This counter names each probe's own working subdirectory and
+/// emitted crate, so no two probes collide in the shared cargo target.
+static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A cargo-package-safe, unique-per-probe crate name for the probe `seq`.
+///
+/// `sanitize_cargo_name` maps the token to a valid Cargo package name. The
+/// distinct `seq` per probe keeps each emitted app crate's cargo fingerprint on
+/// its own package id, so a shared target reuses only dependency artifacts and
+/// never masks a broken emit.
+fn unique_package_name(seq: u64) -> String {
+    ipe_backend_rust::sanitize_cargo_name(&format!("ipe-probe-{seq}"))
+}
+
 /// Build and RUN a probe program, returning whether the emitted crate builds and
 /// the produced binary runs to a zero exit.
 ///
-/// Re-invokes this binary as `ipe run <snippet>` — the same emit → cargo build →
-/// execute path a user's `ipe run` takes — so a symbol whose program emits and
-/// type-checks but whose emitted crate does not build or whose binary does not
-/// run is a real gap. Heavy: the caller gates this behind the E2E path.
+/// Re-invokes this binary as `ipe run <snippet>` from a per-probe working
+/// directory — the same emit → cargo build → execute path a user's `ipe run`
+/// takes — so a symbol whose program emits and type-checks but whose emitted
+/// crate does not build or whose binary does not run is a real gap. Heavy: the
+/// caller gates this behind the E2E path.
+///
+/// Each probe runs from its OWN working directory beside the snippet, so the
+/// default emitted-project dir (`out/rust`, resolved against the working dir)
+/// never collides with a sibling probe nor leaks an `out/` tree into the test's
+/// cwd. When the CI warm shared cargo target is offered
+/// (`IPE_ORACLE_SHARED_TARGET`) the emitted build links its heavy dependency
+/// tree from that pre-built target instead of cold-compiling it per symbol.
+/// Soundness is preserved by giving each probe a UNIQUE emitted-crate package
+/// name (`IPE_EMIT_PACKAGE_NAME`): cargo fingerprints an app crate on its own
+/// source hash under its own package id, so a genuinely broken emit still fails
+/// to build even against a warm target — the shared target reuses only
+/// DEPENDENCY artifacts, never masking a broken app. Without the shared-target
+/// env the build inherits the ambient target unchanged (a local `ipe run` is
+/// untouched).
+///
+/// The emit location is selected by the subprocess working directory rather
+/// than a `--out` flag, so the invocation surface stays exactly the plain
+/// `ipe run <snippet>` — the entry is passed absolute, and `out/rust` resolves
+/// under the per-probe working directory.
 #[must_use]
 pub fn build_and_run(source: &str, snippet: &Path) -> StageOutcome {
     use std::process::Command;
@@ -253,16 +336,60 @@ pub fn build_and_run(source: &str, snippet: &Path) -> StageOutcome {
             message,
         };
     }
-    let ipe_bin = match std::env::current_exe() {
+    let ipe_bin = match ipe_binary() {
+        Ok(p) => p,
+        Err(message) => {
+            return StageOutcome::Failed {
+                code: None,
+                message,
+            };
+        }
+    };
+
+    // A unique per-probe identity: the columns share ONE scratch dir, so a
+    // monotonic sequence names both this probe's own working subdirectory and
+    // its emitted crate. The working subdir under the shared scratch keeps the
+    // default `out/rust` emit unique per probe (self-cleaning with the scratch
+    // dir, never an `out/` tree in the test's cwd), and the crate name keeps the
+    // app-crate fingerprint distinct in the shared cargo target.
+    let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let package_name = unique_package_name(seq);
+    let work_dir = snippet
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("probe-{seq}"));
+    if let Err(e) = std::fs::create_dir_all(&work_dir) {
+        return StageOutcome::Failed {
+            code: None,
+            message: format!("could not create the probe working directory: {e}"),
+        };
+    }
+
+    // `ipe run` reads the snippet by an absolute path so it resolves regardless
+    // of the working directory the subprocess is launched in.
+    let entry = match std::path::absolute(snippet) {
         Ok(p) => p,
         Err(e) => {
             return StageOutcome::Failed {
                 code: None,
-                message: format!("could not locate the ipe binary: {e}"),
+                message: format!("could not resolve the probe snippet path: {e}"),
             };
         }
     };
-    let output = match Command::new(&ipe_bin).arg("run").arg(snippet).output() {
+
+    let mut cmd = Command::new(&ipe_bin);
+    cmd.arg("run")
+        .arg(&entry)
+        .current_dir(&work_dir)
+        .env(EMIT_PACKAGE_NAME, &package_name);
+    // Link the heavy dependency tree from the warm shared target when the CI
+    // job offers one; otherwise inherit the ambient env (isolate — the default
+    // for a local run).
+    if let Some(target) = shared_dep_target() {
+        cmd.env("CARGO_TARGET_DIR", target);
+    }
+
+    let output = match cmd.output() {
         Ok(o) => o,
         Err(e) => {
             return StageOutcome::Failed {
