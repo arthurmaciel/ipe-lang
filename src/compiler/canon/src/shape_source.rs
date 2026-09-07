@@ -324,6 +324,67 @@ fn import_exposes_value(import: &Import, name: &str, interner: &Interner) -> boo
     })
 }
 
+/// A **lenient** shape read for scaffolding UX only — NOT a capability gate.
+///
+/// [`classify_main_shape`] resolves a head's written qualifier through the import
+/// table (the strict rule the capability gate keys on: an alias must not smuggle a
+/// shape). That strictness is right for gating but wrong for `ipe init`'s
+/// scaffold-detection, which runs against a *partially written* `src/Main.ipe`
+/// that may spell `main = Tui.app config` before its `import Ipe.Tea.Tui` line is
+/// typed. There the strict classifier reads Script (no import to resolve), and the
+/// re-run guard would stop recognising the project's shape.
+///
+/// So this reads the shape by the *written* head qualifier's leaf spelling
+/// (`Tui.app`/`Web.app`/`Cli.app`/`Server.listen`), matching the shape entries by
+/// their module leaf and entry name, without requiring the import to resolve. It
+/// exists purely to pick a scaffold template / detect a re-run conflict — a wrong
+/// read scaffolds the wrong thing or misses a conflict, it can NEVER escalate a
+/// capability. It must never be used where a capability decision is made; use
+/// [`classify_main_shape`] there.
+#[must_use]
+pub fn scaffold_shape_hint(module: &Module, interner: &Interner) -> MainShape {
+    let Some(main_sym) = interner.lookup("main") else {
+        return MainShape::Script;
+    };
+    let Some(value) = module
+        .values
+        .iter()
+        .find(|v| v.value.name.value == main_sym)
+    else {
+        return MainShape::Script;
+    };
+    lenient_head_shape(&value.value.body, interner).unwrap_or(MainShape::Script)
+}
+
+/// Peel a `main` body to its head the same way [`head_shape`] does, but classify
+/// a qualified head by the written qualifier's leaf spelling — no import
+/// resolution. Scaffolding-only (see [`scaffold_shape_hint`]).
+fn lenient_head_shape(body: &Expr, interner: &Interner) -> Option<MainShape> {
+    let mut node = body;
+    loop {
+        match &node.value {
+            Expr_::Call(callee, _) => node = callee,
+            Expr_::Lambda(_, inner) | Expr_::Let(_, inner) => node = inner,
+            Expr_::VarQual(qual, name) => {
+                let (q, n) = (interner.resolve(*qual)?, interner.resolve(*name)?);
+                return shape_for_written_leaf(q, n);
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// The shape a `leaf.name` head spells, matching the written qualifier leaf and
+/// entry name against the shape entries' module leaf and name. Lenient: it does
+/// not confirm the qualifier resolves to the shape module, so it must never gate a
+/// capability (see [`scaffold_shape_hint`]).
+fn shape_for_written_leaf(qualifier_leaf: &str, name: &str) -> Option<MainShape> {
+    SHAPE_ENTRIES
+        .iter()
+        .find(|(module_path, n, _)| *n == name && module_path.last() == Some(&qualifier_leaf))
+        .map(|(_, _, shape)| *shape)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,6 +487,58 @@ mod tests {
         );
     }
 
+    fn scaffold_hint(src: &str) -> MainShape {
+        let mut interner = Interner::new();
+        let module = ipe_parse::parse_module(src, &mut interner).expect("parse");
+        scaffold_shape_hint(&module, &interner)
+    }
+
+    #[test]
+    fn scaffold_hint_reads_a_written_head_without_its_import() {
+        // A partially written entry — `Tui.app` before its `import Ipe.Tea.Tui`
+        // line is typed — reads its shape leniently for scaffold detection, where
+        // the strict gate classifier correctly fails safe to Script. The two must
+        // disagree here: the gate stays strict, the UX read is lenient.
+        let src = "module Main exposing (main)\n\nmain =\n    Tui.app config\n";
+        assert_eq!(scaffold_hint(src), MainShape::Tui);
+        assert_eq!(classify(src), MainShape::Script);
+    }
+
+    #[test]
+    fn scaffold_hint_stays_script_for_a_plain_task_and_a_bare_head() {
+        // The lenient read is qualified-head-only: a plain Task or an unqualified
+        // head is not confidently a shape.
+        assert_eq!(
+            scaffold_hint("module Main exposing (main)\n\nmain = Io.println \"hi\"\n"),
+            MainShape::Script
+        );
+        assert_eq!(
+            scaffold_hint("module Main exposing (main)\n\nmain =\n    app config\n"),
+            MainShape::Script
+        );
+    }
+
+    #[test]
+    fn scaffold_hint_does_not_confuse_a_like_spelled_leaf_across_shapes() {
+        // Every shape leaf reads its own shape; a non-shape head stays Script.
+        assert_eq!(
+            scaffold_hint("module Main exposing (main)\n\nmain = Web.app config\n"),
+            MainShape::Web
+        );
+        assert_eq!(
+            scaffold_hint("module Main exposing (main)\n\nmain = Cli.app config\n"),
+            MainShape::Cli
+        );
+        assert_eq!(
+            scaffold_hint("module Main exposing (main)\n\nmain = Server.listen config\n"),
+            MainShape::Server
+        );
+        assert_eq!(
+            scaffold_hint("module Main exposing (main)\n\nmain = Widget.app config\n"),
+            MainShape::Script
+        );
+    }
+
     #[test]
     fn let_bound_config_still_classifies() {
         assert_eq!(
@@ -524,7 +637,9 @@ mod tests {
             ),
             "wrong diagnostic: {hint:?}"
         );
-        // And it is warning-severity — it must not fail the build.
+        // It carries the Script-hole wire code and is warning-severity — it
+        // must not fail the build.
+        assert_eq!(hint.code(), ipe_diagnostics::IPE_N0050);
         assert_eq!(hint.severity(), ipe_diagnostics::Severity::Warning);
     }
 
