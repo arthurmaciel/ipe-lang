@@ -431,7 +431,7 @@ server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-uti
 # re-exports as `reqwest::Url`); `url` is behind the `url` feature.
 # `serde`: `http_stream.rs` derives Serialize/Deserialize on its SSE event
 # wire types.
-http_client = ["tokio", "reqwest", "futures-util", "url", "random", "serde"]
+http_client = ["tokio", "reqwest", "futures-util", "url", "random", "serde", "encoding"]
 # `http_client`: email.rs reuses `http_client::ssrf_apply` for outbound-request
 # SSRF hardening; ws_client.rs reuses `http_client::ssrf_validate_url` +
 # `ssrf_pinned_ws_addr`. Both need the http_client module present. (`sha2` is a
