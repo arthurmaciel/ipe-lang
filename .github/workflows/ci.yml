@@ -13,7 +13,7 @@ name: Build & test
 #     that CI runs, so local == CI. The dev branch-protection ruleset lists these
 #     as the required checks.
 #   • PUSH to development + nightly SCHEDULE — the HEAVY non-blocking checks: the
-#     full 8-shard e2e (THE SEAL in full), the 5-way seal-slice, seal-modset
+#     full 14-shard e2e (THE SEAL in full), the 8-way seal-slice, seal-modset
 #     (vendored), miri, the runtime feature-combo / full-feature builds, the
 #     explain/doc example gates, registry-admission, browser-e2e, and the Tier-2
 #     jails. These never gate a PR; they produce the main-required contexts the FF
@@ -401,7 +401,7 @@ jobs:
   # take ONE small `cli` example end to end: `ipe build` → `cargo build` the
   # emitted crate → run it → assert its expected stdout. This proves the
   # emit→build→run floor holds on every PR in ~a couple of minutes, without the
-  # full 8-shard `e2e` (which stays on push/nightly below). A break here means
+  # full 14-shard `e2e` (which stays on push/nightly below). A break here means
   # the compiler emits a crate that no longer builds or runs — a hard stop.
   seal-smoke:
     runs-on: ubuntu-latest
@@ -874,10 +874,23 @@ jobs:
     if: github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      # The ~13 goldens whose emitted project drives a real, multi-minute cold
+      # `cargo build` (webview/wry, server/axum, the live-HTTP set, the watch
+      # daemons). The `ci` nextest profile serializes exactly this set into the
+      # `heavy-server-e2e` group (max-threads=1), so when count-partitioning
+      # clustered several of them into one shard they ran one-after-another —
+      # the 50-95 min straggler class. Shards 1-5 run ONLY this set (spread
+      # `count:k/5` so each heavy runner serializes ~1/5 of them in parallel with
+      # the others); shards 6-14 run the complement, which is heavy-free and so
+      # runs at full `--test-threads=2` width. Selection + partition are disjoint
+      # and exhaustive, so the union across all shards is byte-identical to the
+      # old `count:k/8` union — zero SEAL coverage dropped, every accepted golden
+      # still built+run exactly once.
+      E2E_HEAVY: 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(watch_cancellation) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -914,7 +927,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev
-      - name: E2E shard ${{ matrix.shard }}/8 (THE SEAL — build+run emitted Rust)
+      - name: E2E shard ${{ matrix.shard }}/14 (THE SEAL — build+run emitted Rust)
         env:
           IPE_E2E: "1"
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -935,12 +948,27 @@ jobs:
         # across the runner's cores; capping to 2 concurrent tests keeps two heavy
         # builds (~all cores) in flight at once instead of one-per-core, which OOMs
         # the 4-core/16GB runner into a 10-15x thrash and a timeout.
-        run: cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/8 --test-threads=2
+        #
+        # Shards 1-5 are the HEAVY leg: `-E "$E2E_HEAVY"` selects only the
+        # cold-build goldens and `count:k/5` spreads them across five parallel
+        # runners (was: all clustered into 2-3 count-partitions). Shards 6-14 are
+        # the LIGHT leg: `-E "not ($E2E_HEAVY)"` selects the heavy-free complement
+        # and `count:(k-5)/9` partitions it nine ways. Heavy ∪ Light = every test,
+        # partitioned exactly once, so the SEAL union is identical to the old
+        # `count:k/8` scheme — no coverage dropped, just re-timed.
+        run: |
+          if [ "${{ matrix.shard }}" -le 5 ]; then
+            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast \
+              -E "$E2E_HEAVY" --partition count:${{ matrix.shard }}/5 --test-threads=2
+          else
+            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast \
+              -E "not ($E2E_HEAVY)" --partition count:$((${{ matrix.shard }} - 5))/9 --test-threads=2
+          fi
 
-  # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to eight
-  # shard-named jobs, so no single shard name is a durable required-check target
-  # and a `fail-fast: false` shard failure is easy to miss. This job depends on
-  # every shard and is GREEN only when all eight passed — one stable context name
+  # Stable aggregation gate for the sharded SEAL. The `e2e` matrix expands to one
+  # shard-named job per partition, so no single shard name is a durable
+  # required-check target and a `fail-fast: false` shard failure is easy to miss.
+  # This job depends on every shard and is GREEN only when all passed — one stable context name
   # (`e2e-all`) branch protection can require so a SEAL regression blocks a
   # landing. The `always()` guard makes a skipped/failed/cancelled shard a
   # FAILURE here, never a false green; a legitimate skip (the `e2e` matrix itself
@@ -981,17 +1009,17 @@ jobs:
           esac
 
   # ── SEAL slice ────────────────────────────────────────────────────────────
-  # A representative 1/6 slice of THE SEAL: the `seal_modset` binary (the compact
-  # per-shape emit→build proof) plus a 1/6 partition of the golden E2E suite,
-  # split across five parallel sub-shards so the slice's wall-clock stays low
-  # WITHOUT dropping coverage. Enough surface to catch an emit/const-fold/golden
-  # regression (the classes this guard exists for); the full 8-shard `e2e` matrix
-  # + tier2 jails carry the exhaustive proof. Off the cheap PR gate — runs on
-  # development push + nightly, producing the main-required `seal-slice` context
+  # A representative slice of THE SEAL: the `seal_modset` binary (the compact
+  # per-shape emit→build proof) plus a representative partition of the golden E2E
+  # suite, split across eight parallel sub-shards so the slice's wall-clock stays
+  # low WITHOUT dropping coverage. Enough surface to catch an emit/const-fold/
+  # golden regression (the classes this guard exists for); the full 14-shard `e2e`
+  # matrix + tier2 jails carry the exhaustive proof. Off the cheap PR gate — runs
+  # on development push + nightly, producing the main-required `seal-slice` context
   # the FF promotion waits on. The `seal-slice` aggregation job below is the
   # single stable status: green only when every sub-shard passed.
   seal-slice-shard:
-    name: seal-slice-shard (${{ matrix.shard }}/5)
+    name: seal-slice-shard (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     # Reuse `test-prep`'s single-compile archive (see the e2e job) rather than
     # rebuilding the workspace per sub-shard.
@@ -1000,7 +1028,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
@@ -1027,10 +1055,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev
-      # Sub-shards 1..5 of a 30-way partition cover the same 1/6 surface as one
-      # 1/6 shard, five runners wide. `seal_modset` (shape emit→build) is
+      # Sub-shards 1..8 of a 48-way partition cover a representative slice of the
+      # golden suite, eight runners wide (was five sub-shards of a 30-way
+      # partition). Widening the sub-shard count spreads the same class of work
+      # over more parallel runners — the union of sub-shards 1..8 of `count:k/48`
+      # is a superset of the old sub-shards 1..5 of `count:k/30`, so this drops no
+      # coverage; it only lowers each sub-shard's load and de-clusters the heavy
+      # goldens a little further. `seal_modset` (shape emit→build) is
       # shard-independent, so it runs once, on sub-shard 1.
-      - name: SEAL slice (seal_modset on shard 1 + golden e2e sub-shard ${{ matrix.shard }}/30)
+      - name: SEAL slice (seal_modset on shard 1 + golden e2e sub-shard ${{ matrix.shard }}/48)
         env:
           IPE_E2E: "1"
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -1042,11 +1075,11 @@ jobs:
           if [ "${{ matrix.shard }}" = "1" ]; then
             cargo nextest run --archive-file nextest.tar.zst --workspace-remap . -E 'binary(seal_modset)' --profile ci --test-threads=2
           fi
-          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/30 --test-threads=2 \
+          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/48 --test-threads=2 \
             -E 'not test(build_run_column_over_a_representative_slice)'
 
   # Stable aggregation status for the sharded SEAL slice. The matrix expands to
-  # five sub-shard-named jobs, so no single sub-shard name is a durable target;
+  # one sub-shard-named job per partition, so no single sub-shard name is a durable target;
   # this job is GREEN only when every sub-shard passed. The `always()` guard makes
   # a skipped/failed/cancelled sub-shard a FAILURE here, while a legitimate
   # PR-event skip (the sub-shards self-skip off the cheap PR gate) passes vacuously.
