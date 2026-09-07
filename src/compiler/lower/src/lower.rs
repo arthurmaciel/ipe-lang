@@ -1559,23 +1559,26 @@ fn canon_collect_free_locals(
     }
 }
 
-/// Does `pat` bind ANY symbol in `set`? A single walk of `pat` testing each
-/// bound name against `set`, rather than one full `pat` walk per set member.
-fn pat_binds_any_in(pat: &Pat, set: &BTreeSet<Symbol>) -> bool {
+/// Does `pat` bind ANY symbol in `a` OR `b`? One walk of `pat` tests each bound
+/// name against both sets at once — a bound name is caught iff it is in either
+/// set, so this is the `pat`-binds-any-in-the-union predicate the clone/non-clone
+/// capture split needs, in a single traversal rather than one walk per set.
+fn pat_binds_any_in_either(pat: &Pat, a: &BTreeSet<Symbol>, b: &BTreeSet<Symbol>) -> bool {
+    let in_either = |s: &Symbol| a.contains(s) || b.contains(s);
     match pat {
-        Pat::Var(s) => set.contains(s),
+        Pat::Var(s) => in_either(s),
         Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => false,
-        Pat::Alias(inner, s) => set.contains(s) || pat_binds_any_in(inner, set),
-        Pat::Ctor { args, .. } => args.iter().any(|p| pat_binds_any_in(p, set)),
-        Pat::Tuple(elems) => elems.iter().any(|p| pat_binds_any_in(p, set)),
-        Pat::Record(fields) => fields.iter().any(|(_, p)| pat_binds_any_in(p, set)),
+        Pat::Alias(inner, s) => in_either(s) || pat_binds_any_in_either(inner, a, b),
+        Pat::Ctor { args, .. } => args.iter().any(|p| pat_binds_any_in_either(p, a, b)),
+        Pat::Tuple(elems) => elems.iter().any(|p| pat_binds_any_in_either(p, a, b)),
+        Pat::Record(fields) => fields.iter().any(|(_, p)| pat_binds_any_in_either(p, a, b)),
         Pat::Slice { prefix, rest } => {
-            prefix.iter().any(|p| pat_binds_any_in(p, set))
-                || rest.as_deref().is_some_and(|p| pat_binds_any_in(p, set))
+            prefix.iter().any(|p| pat_binds_any_in_either(p, a, b))
+                || rest
+                    .as_deref()
+                    .is_some_and(|p| pat_binds_any_in_either(p, a, b))
         }
-        // Every alternative of an or-pattern binds the same names, so it binds a
-        // set member iff any (equivalently, the first) alternative does.
-        Pat::Or(alts) => alts.iter().any(|p| pat_binds_any_in(p, set)),
+        Pat::Or(alts) => alts.iter().any(|p| pat_binds_any_in_either(p, a, b)),
     }
 }
 
@@ -1746,7 +1749,7 @@ fn rewrite_captured_clones(
                 *value,
                 depth,
             )?);
-            if pat_binds_any_in(&binder, clone_set) || pat_binds_any_in(&binder, noncl_set) {
+            if pat_binds_any_in_either(&binder, clone_set, noncl_set) {
                 let inner_clone: BTreeSet<Symbol> = clone_set
                     .iter()
                     .copied()
@@ -1856,9 +1859,7 @@ fn rewrite_captured_clones(
                 rewrite_captured_clones(clone_set, noncl_set, lambda_span, scrutinee, depth)
             },
             |pat, body, guard| {
-                let new_body = if pat_binds_any_in(pat, clone_set)
-                    || pat_binds_any_in(pat, noncl_set)
-                {
+                let new_body = if pat_binds_any_in_either(pat, clone_set, noncl_set) {
                     let inner_clone: BTreeSet<Symbol> = clone_set
                         .iter()
                         .copied()
