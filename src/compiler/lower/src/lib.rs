@@ -90,7 +90,7 @@ pub fn lower(
     // (a composed higher-order combinator such as `a |> andThen (\x -> b |>
     // andThen …)`) draws DISJOINT names rather than shadowing a still-live outer
     // one. Sizing therefore covers the SUM of eta demand along the deepest nesting
-    // path per def, which [`max_live_eta_params`] bounds; the `MAX_CALLEE_ARITY`
+    // path per def, which `module_symbol_pool_counts` bounds; the `MAX_CALLEE_ARITY`
     // floor keeps a single partial-application gap covered in a `main`-only program
     // with no local defs. An overrun fails closed as a `CompilerBug`, never an
     // index panic, never a silent reuse.
@@ -101,10 +101,16 @@ pub fn lower(
     // govern both pool sizes. Fold it into each so a wide first-class constructor
     // never overruns (which would fail closed as a `CompilerBug`, never compile).
     let max_ctor_arity = lower::max_ctor_arity_per_module(m);
+    // Every body-derived pool size in ONE module walk, ahead of the mutable
+    // mints below (the count is an immutable borrow; the two would otherwise
+    // conflict within one `fresh_symbols` expression). Each field equals its
+    // former standalone `count_*` / `max_*` walker.
+    let pool_counts = lower::module_symbol_pool_counts(m, interner);
     let eta_params = interner
         .fresh_symbols(
             "eta_",
-            lower::max_live_eta_params(m)
+            pool_counts
+                .max_live_eta_params
                 .max(max_ctor_arity)
                 .max(MAX_CALLEE_ARITY),
         )
@@ -130,7 +136,7 @@ pub fn lower(
     // inside its body can never collide on `arg_i` (no reliance on shadowing).
     // Minted through the same owned `&mut Interner`.
     let param_binders = interner
-        .fresh_symbols("arg_", lower::count_destructure_param_sites(m))
+        .fresh_symbols("arg_", pool_counts.destructure_param_sites)
         .map_err(homeless)?;
     // AUD-01 seal fix: one fresh symbol per bare `any`-in-param-position
     // occurrence, so `split_typed_sig` never shares the single interned
@@ -145,11 +151,9 @@ pub fn lower(
         .map_err(homeless)?;
     // One bounded group of fresh binders per `Store.selectToList` /
     // `Store.selectToMaybe` call site, for the concrete per-column decode the
-    // intercept emits there. Same two-borrow ordering as the `anyp_` pool: the
-    // (immutable-borrow) count precedes the (mutable-mint) `fresh_symbols` call.
-    let projection_decode_site_count = lower::count_projection_decode_sites(m, interner);
+    // intercept emits there.
     let projection_decode_binders = interner
-        .fresh_symbols("projdec_", projection_decode_site_count)
+        .fresh_symbols("projdec_", pool_counts.projection_decode_sites)
         .map_err(homeless)?;
     // one fresh thunk-binder symbol per syntactic destructure-binder
     // `let` / single-arm product `case` site, consumed only when the bound
@@ -157,33 +161,26 @@ pub fn lower(
     // inside the lowerer; this count is purely syntactic, so it over-counts
     // harmlessly).
     let destructure_thunk_binders = interner
-        .fresh_symbols("destr_thunk_", lower::count_destructure_thunk_sites(m))
+        .fresh_symbols("destr_thunk_", pool_counts.destructure_thunk_sites)
         .map_err(homeless)?;
     // C2: one fresh `Vec` payload binder per `case`-arm site that nests a
-    // list / cons sub-pattern inside a constructor payload. `fresh_symbols`
-    // (mutable-mint) runs after the count (immutable borrow), same two-borrow
-    // ordering the `anyp_` pool documents above.
-    let nested_cons_site_count = lower::count_nested_cons_payload_sites(m);
+    // list / cons sub-pattern inside a constructor payload.
     let nested_cons_binders = interner
-        .fresh_symbols("ncons_", nested_cons_site_count)
+        .fresh_symbols("ncons_", pool_counts.nested_cons_payload_sites)
         .map_err(homeless)?;
     // Sibling desugaring: one fresh `String` payload binder per `case`-arm site
     // that nests a string-literal sub-pattern directly inside a constructor
-    // payload (`Just "live"`). Same two-borrow ordering as the `ncons_` pool
-    // above.
-    let nested_strlit_site_count = lower::count_nested_strlit_payload_sites(m);
+    // payload (`Just "live"`).
     let nested_strlit_binders = interner
-        .fresh_symbols("nstrlit_", nested_strlit_site_count)
+        .fresh_symbols("nstrlit_", pool_counts.nested_strlit_payload_sites)
         .map_err(homeless)?;
     // One fresh binder per tuple-element position for the tuple-elem-rebind
     // synthesis: a multi-arm `case` on a non-literal tuple scrutinee with
     // direct list / cons columns is rewritten to bind the scrutinee's elements
     // to fresh temps and construct a synthetic literal-tuple scrutinee, enabling
-    // the coerced-column backend path. Sized by `count_tuple_elem_rebind_sites`
-    // (an upper bound); same two-borrow ordering as `ncons_` / `nstrlit_` pools.
-    let tuple_elem_site_count = lower::count_tuple_elem_rebind_sites(m);
+    // the coerced-column backend path. Sized as an upper bound.
     let tuple_elem_binders = interner
-        .fresh_symbols("telem_", tuple_elem_site_count)
+        .fresh_symbols("telem_", pool_counts.tuple_elem_rebind_sites)
         .map_err(homeless)?;
     // The built-in `Maybe` / `Result` types + constructors are Prelude
     // built-ins (no `type` declaration), so the lowerer needs their symbols to

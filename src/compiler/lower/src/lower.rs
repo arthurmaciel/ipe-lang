@@ -10682,7 +10682,7 @@ pub struct Lowerer<'a> {
     /// never relies on Rust shadowing for a live binding). Reset to 0 at each
     /// [`Self::lower_def`]: eta names are scope-local to one emitted function, so
     /// distinct defs reuse `eta_0, eta_1, …` freely. Sized by
-    /// [`max_live_eta_params`] to cover a def's whole eta demand.
+    /// `max_live_eta_params` to cover a def's whole eta demand.
     eta_base: Cell<usize>,
     /// Pre-minted, collision-free names for capturing a supplied argument
     /// expression in an eta-expand-partial hoist (T4). When a supplied arg
@@ -10703,7 +10703,7 @@ pub struct Lowerer<'a> {
     /// [`Interner::fresh_symbols`] guarantees the names dodge every user
     /// identifier and each other.
     ///
-    /// Sized by [`count_destructure_param_sites`] (defs AND every lambda), the
+    /// Sized by `count_destructure_param_sites` (defs AND every lambda), the
     /// pool is handed out through [`Self::param_cursor`] as a GLOBALLY-unique
     /// supply — never positionally — so a def param and a lambda param inside its
     /// body can never be minted the same `arg_i`. Distinct-per-site binders make
@@ -10731,7 +10731,7 @@ pub struct Lowerer<'a> {
     /// Pre-minted, collision-free binder names for the concrete per-column decode
     /// the `Store.selectToList` / `Store.selectToMaybe` intercept emits at each
     /// call site (the `rows` / `row` / per-column / `xs` binders). Sized by
-    /// [`count_projection_decode_sites`] and handed out through
+    /// `count_projection_decode_sites` and handed out through
     /// [`Self::projection_decode_cursor`] as a GLOBALLY-unique supply, mirroring
     /// [`Self::param_binders`]; [`Interner::fresh_symbols`] guarantees the names
     /// dodge every user identifier and each other, so the emitted closures never
@@ -10745,7 +10745,7 @@ pub struct Lowerer<'a> {
     /// [`Self::build_destructure_or_decoder_thunk`] introduces when a
     /// tuple / record / alias destructure binds a value whose type
     /// contains `IrType::Decoder`. Sized by
-    /// [`count_destructure_thunk_sites`] (every syntactic destructure
+    /// `count_destructure_thunk_sites` (every syntactic destructure
     /// site, regardless of type — the type gate runs post-solve) and
     /// handed out through [`Self::destructure_thunk_cursor`] as a
     /// GLOBALLY-unique supply, mirroring [`Self::param_binders`].
@@ -10757,7 +10757,7 @@ pub struct Lowerer<'a> {
     /// nested-cons desugaring — a `PList` / `PCons` sub-pattern nested in
     /// a `PCtor` arm payload (`Just (h :: t)`) lowers to a fresh `Vec` binder in
     /// that ctor-arg slot plus an arm guard, with the named head / tail bindings
-    /// recovered in the body prelude. Sized by [`count_nested_cons_payload_sites`]
+    /// recovered in the body prelude. Sized by `count_nested_cons_payload_sites`
     /// (an upper bound over every `case`-arm head) and handed out through
     /// [`Self::nested_cons_cursor`] as a GLOBALLY-unique supply, mirroring
     /// [`Self::param_binders`].
@@ -10775,7 +10775,7 @@ pub struct Lowerer<'a> {
     /// scrutinee — the same "a Vec/String enum field cannot be pattern-
     /// matched inline" shape [`Self::nested_cons_binders`] documents, applied
     /// to `String` instead of `List`. Sized by
-    /// [`count_nested_strlit_payload_sites`] (an upper bound over every
+    /// `count_nested_strlit_payload_sites` (an upper bound over every
     /// `case`-arm head) and handed out through [`Self::nested_strlit_cursor`]
     /// as a GLOBALLY-unique supply, mirroring [`Self::param_binders`].
     nested_strlit_binders: Vec<Symbol>,
@@ -10788,7 +10788,7 @@ pub struct Lowerer<'a> {
     /// scrutinee so the coerced-column backend path can emit `.as_slice()`
     /// coercions. The lowerer binds each tuple element to a fresh temp and
     /// rewrites the match scrutinee to `( __telem_0, __telem_1, … )`. Sized
-    /// by [`count_tuple_elem_rebind_sites`] (an upper bound: the sum of
+    /// by `count_tuple_elem_rebind_sites` (an upper bound: the sum of
     /// arities of every qualifying `case` in the module) and handed out through
     /// [`Self::tuple_elem_cursor`] as a GLOBALLY-unique supply, mirroring
     /// [`Self::param_binders`].
@@ -11274,6 +11274,10 @@ pub fn max_ctor_arity_per_module(m: &canon::Module) -> usize {
 /// only the advances a program's OWN eta sites produce reach the emitted names);
 /// undersizing fails closed as a [`bug`] via [`Lowerer::eta_sym`], never an index
 /// panic and never a silent reuse.
+///
+/// Reference walker for the `module_symbol_pool_counts` fusion pin — production
+/// draws this count from the fused single walk, not from here.
+#[cfg(test)]
 #[must_use]
 pub fn max_live_eta_params(m: &canon::Module) -> usize {
     /// The widest eta block any single call / fn-typed-let site can draw:
@@ -11357,6 +11361,9 @@ pub fn max_live_eta_params(m: &canon::Module) -> usize {
 /// Over-counting is harmless (a few unused interned symbols); under-counting
 /// would let the cursor overrun, which fails closed as a [`bug`] — never an
 /// index panic, never a silent reuse.
+///
+/// Reference walker for the `module_symbol_pool_counts` fusion pin.
+#[cfg(test)]
 pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
     fn non_var_params(pats: &[canon::Pattern]) -> usize {
         pats.iter()
@@ -11434,6 +11441,9 @@ const SELECT_DECODE_BINDERS_PER_SITE: usize = 8;
 /// count is purely syntactic (the callee's spelling), so it over-counts a
 /// same-named non-`Store` call harmlessly; under-counting would overrun the
 /// pool, which fails closed as a [`bug`], never an index panic.
+///
+/// Reference walker for the `module_symbol_pool_counts` fusion pin.
+#[cfg(test)]
 pub fn count_projection_decode_sites(m: &canon::Module, interner: &Interner) -> usize {
     fn is_select_to(callee: &canon::Expr, interner: &Interner) -> bool {
         match &callee.value {
@@ -11597,13 +11607,16 @@ pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
 /// Decoder-thunk generalization (spec §2.6), REGARDLESS of whether that
 /// binding ultimately turns out to be Decoder-typed (the type-dependent
 /// gate runs later, once solving has completed; this pass is purely
-/// syntactic, like its [`count_destructure_param_sites`] sibling). A `let`
+/// syntactic, like its `count_destructure_param_sites` sibling). A `let`
 /// binding counts whenever its pattern is neither `PVar` nor `PAnything` —
 /// exactly the set that reaches [`Lowerer::lower_let`]'s destructure
 /// catch-all; a `case` counts when it has exactly one arm whose head is a
 /// product destructure ([`Lowerer::is_destructure_head`]'s shape). Over-
 /// counting is harmless; under-counting fails closed as a [`bug`], never an
 /// index panic.
+///
+/// Reference walker for the `module_symbol_pool_counts` fusion pin.
+#[cfg(test)]
 pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
     const fn is_thunk_countable_binding(pat: &canon::Pattern_) -> bool {
         !matches!(
@@ -11694,7 +11707,10 @@ pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
 /// whether that arm ultimately takes the C2 path (a same-position wildcard arm,
 /// a fully-generic element type, etc. may bail out before minting a binder). An
 /// over-count is harmless: unused pool entries are simply never handed out, the
-/// same policy [`count_destructure_thunk_sites`] documents.
+/// same policy the destructure-thunk count documents.
+///
+/// Reference walker for the `module_symbol_pool_counts` fusion pin.
+#[cfg(test)]
 pub fn count_nested_cons_payload_sites(m: &canon::Module) -> usize {
     fn direct_list_args(pat: &canon::Pattern_) -> usize {
         match pat {
@@ -11774,16 +11790,19 @@ pub fn count_nested_cons_payload_sites(m: &canon::Module) -> usize {
 /// argument of a `PCtor` arm head (`Just "live"`, `Ok "done"`). Each such
 /// argument lowers to one fresh `String` binder plus an arm guard
 /// (`binder == "live"`) — the same "an enum FIELD cannot be inline-pattern-
-/// matched" shape [`count_nested_cons_payload_sites`] documents for
+/// matched" shape `count_nested_cons_payload_sites` documents for
 /// `PList`/`PCons`, mirrored here for `PStr` (a ctor's `String` field cannot
 /// take a bare `&str` literal pattern the way a top-level `String`
 /// scrutinee's `.as_str()` coercion allows).
 ///
 /// The count is deliberately an UPPER BOUND, exactly mirroring
-/// [`count_nested_cons_payload_sites`]'s policy: it walks every `case` arm
+/// `count_nested_cons_payload_sites`'s policy: it walks every `case` arm
 /// HEAD in the module and counts every nested `PStr` argument regardless of
 /// whether that arm ultimately takes this desugaring path. An over-count is
 /// harmless — unused pool entries are simply never handed out.
+///
+/// Reference walker for the `module_symbol_pool_counts` fusion pin.
+#[cfg(test)]
 pub fn count_nested_strlit_payload_sites(m: &canon::Module) -> usize {
     fn direct_strlit_args(pat: &canon::Pattern_) -> usize {
         match pat {
@@ -11865,6 +11884,9 @@ pub fn count_nested_strlit_payload_sites(m: &canon::Module) -> usize {
 /// detects but restricted to direct columns so nested-tuple-column shapes (PROBE G)
 /// remain fail-closed. Each qualifying `case` needs one fresh binder per tuple
 /// position. This count is an upper bound; unused pool entries are never handed out.
+///
+/// Reference walker for the `module_symbol_pool_counts` fusion pin.
+#[cfg(test)]
 pub fn count_tuple_elem_rebind_sites(m: &canon::Module) -> usize {
     /// A top-level (non-nested) column directly contains a list / cons leaf.
     const fn top_col_needs_slice(pat: &canon::Pattern) -> bool {
@@ -11945,6 +11967,320 @@ pub fn count_tuple_elem_rebind_sites(m: &canon::Module) -> usize {
         .sum()
 }
 
+/// The synthetic-symbol pool sizes [`crate::lower`] pre-mints — every
+/// body-derived count gathered in ONE module walk instead of one full walk
+/// per field. [`module_symbol_pool_counts`] fuses the traversals so a new
+/// [`canon::Expr_`] variant cannot be missed in one walk but not another.
+///
+/// Every field is a safe over-approximation whose value never reaches emitted
+/// bytes (pools are drawn positionally, so an unreferenced tail is never
+/// named); an identical count therefore gives byte-identical output. The
+/// `module_symbol_pool_counts_match_individual_walkers` test pins each field
+/// to a standalone reference walker.
+#[derive(Default)]
+pub struct PoolCounts {
+    /// Widest eta / cap demand — a per-def MAX of (head arity + body eta sum),
+    /// not a module-wide sum, because the per-def eta cursor resets each def.
+    pub max_live_eta_params: usize,
+    /// Non-variable parameter patterns across every def head AND lambda — each
+    /// needs one globally-unique `arg_N` synthetic binder.
+    pub destructure_param_sites: usize,
+    /// `Store.selectToList` / `Store.selectToMaybe` call sites, each charged a
+    /// bounded group of per-column decode binders.
+    pub projection_decode_sites: usize,
+    /// Destructure-binder `let` / single-arm product `case` sites (syntactic
+    /// over-approximation of the Decoder-thunk generalization).
+    pub destructure_thunk_sites: usize,
+    /// `case`-arm sites nesting a `PList` / `PCons` directly in a `PCtor`
+    /// payload (the C2 nested-cons desugaring).
+    pub nested_cons_payload_sites: usize,
+    /// `case`-arm sites nesting a `PStr` directly in a `PCtor` payload (the
+    /// sibling nested-string-literal desugaring).
+    pub nested_strlit_payload_sites: usize,
+    /// Fresh element binders for the tuple-elem-rebind synthesis, summed over
+    /// qualifying multi-column `case` sites.
+    pub tuple_elem_rebind_sites: usize,
+}
+
+/// Body-derived counters accumulated during a single expression walk. Kept
+/// apart from [`PoolCounts`] because the eta charge aggregates per def as a
+/// MAX while the rest sum: the walk fills one of these per expression, the
+/// caller then folds each def's eta charge with `max` and the rest with `+`.
+#[derive(Default)]
+struct BodyCounters {
+    eta: usize,
+    destructure_param_sites: usize,
+    projection_decode_sites: usize,
+    destructure_thunk_sites: usize,
+    nested_cons_payload_sites: usize,
+    nested_strlit_payload_sites: usize,
+    tuple_elem_rebind_sites: usize,
+}
+
+impl BodyCounters {
+    const fn add(&mut self, other: &Self) {
+        self.eta += other.eta;
+        self.destructure_param_sites += other.destructure_param_sites;
+        self.projection_decode_sites += other.projection_decode_sites;
+        self.destructure_thunk_sites += other.destructure_thunk_sites;
+        self.nested_cons_payload_sites += other.nested_cons_payload_sites;
+        self.nested_strlit_payload_sites += other.nested_strlit_payload_sites;
+        self.tuple_elem_rebind_sites += other.tuple_elem_rebind_sites;
+    }
+}
+
+/// Non-variable parameter patterns in one head / lambda param list — a `PVar`
+/// reuses its own name and needs no synthetic `arg_N` binder.
+fn non_var_params(pats: &[canon::Pattern]) -> usize {
+    pats.iter()
+        .filter(|p| !matches!(p.value, canon::Pattern_::PVar(_)))
+        .count()
+}
+
+/// A callee spelled `selectToList` / `selectToMaybe` — the projection-decode
+/// intercept site (matched syntactically by name).
+fn is_select_to_callee(callee: &canon::Expr, interner: &Interner) -> bool {
+    match &callee.value {
+        canon::Expr_::VarTopLevel { name, .. } | canon::Expr_::VarKernel { name, .. } => {
+            matches!(
+                interner.resolve(*name),
+                Some("selectToList" | "selectToMaybe")
+            )
+        }
+        _ => false,
+    }
+}
+
+/// A `let` binding whose pattern is neither `PVar`, `PAnything`, nor `PUnit` —
+/// the destructure-thunk-countable set.
+const fn is_thunk_countable_binding(pat: &canon::Pattern_) -> bool {
+    !matches!(
+        pat,
+        canon::Pattern_::PVar(_) | canon::Pattern_::PAnything | canon::Pattern_::PUnit
+    )
+}
+
+/// A single-arm `case` head shape that reaches the destructure catch-all.
+fn is_destructure_headed(pat: &canon::Pattern_) -> bool {
+    match pat {
+        canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_) => true,
+        canon::Pattern_::PAlias(inner, _) => is_destructure_headed(&inner.value),
+        _ => false,
+    }
+}
+
+/// `PList` / `PCons` sub-patterns that are DIRECT arguments of a `PCtor` head —
+/// the nested-cons desugaring sites in one arm pattern.
+fn direct_list_args(pat: &canon::Pattern_) -> usize {
+    match pat {
+        canon::Pattern_::PCtor { args, .. } => args
+            .iter()
+            .map(|a| {
+                usize::from(matches!(
+                    a.value,
+                    canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
+                )) + direct_list_args(&a.value)
+            })
+            .sum(),
+        canon::Pattern_::PTuple(elems) => elems.iter().map(|e| direct_list_args(&e.value)).sum(),
+        canon::Pattern_::PAlias(inner, _) => direct_list_args(&inner.value),
+        _ => 0,
+    }
+}
+
+/// `PStr` sub-patterns that are DIRECT arguments of a `PCtor` head — the
+/// nested-string-literal desugaring sites in one arm pattern.
+fn direct_strlit_args(pat: &canon::Pattern_) -> usize {
+    match pat {
+        canon::Pattern_::PCtor { args, .. } => args
+            .iter()
+            .map(|a| {
+                usize::from(matches!(a.value, canon::Pattern_::PStr(_)))
+                    + direct_strlit_args(&a.value)
+            })
+            .sum(),
+        canon::Pattern_::PTuple(elems) => elems.iter().map(|e| direct_strlit_args(&e.value)).sum(),
+        canon::Pattern_::PAlias(inner, _) => direct_strlit_args(&inner.value),
+        _ => 0,
+    }
+}
+
+/// A top-level (non-nested) tuple column that directly contains a list / cons
+/// leaf — a tuple-elem-rebind trigger column.
+const fn top_col_needs_slice(pat: &canon::Pattern) -> bool {
+    matches!(
+        pat.value,
+        canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
+    )
+}
+
+/// The widest eta block any single call / fn-typed-`let` site can draw — the
+/// residual-arrow floor shared with the eta / cap pool sizing.
+const MAX_ETA_PER_SITE: usize = 16;
+
+/// One exhaustive per-expression walk accumulating every body-derived pool
+/// counter at once. Each arm charges its own counters, then folds the
+/// children — the exhaustive `Expr_` `match` is what makes a newly added
+/// variant a compile error rather than a silently dropped count, the drift a
+/// per-counter walk each risks independently. `ctor_charge` is the widest ctor
+/// arity a bare / partial constructor reference eta-expands over.
+#[allow(clippy::too_many_lines)] // one exhaustive `Expr_` match — splitting fragments the exhaustiveness the fusion relies on
+fn count_body_pool_sites(e: &canon::Expr, ctor_charge: usize, interner: &Interner) -> BodyCounters {
+    let mut acc = BodyCounters::default();
+    let recur = |sub: &canon::Expr, acc: &mut BodyCounters| {
+        acc.add(&count_body_pool_sites(sub, ctor_charge, interner));
+    };
+    match &e.value {
+        canon::Expr_::Lambda(params, body) => {
+            acc.eta += params.len();
+            acc.destructure_param_sites += non_var_params(params);
+            recur(body, &mut acc);
+        }
+        canon::Expr_::Call(callee, args) => {
+            acc.eta += MAX_ETA_PER_SITE;
+            if is_select_to_callee(callee, interner) {
+                acc.projection_decode_sites += SELECT_DECODE_BINDERS_PER_SITE;
+            }
+            recur(callee, &mut acc);
+            for a in args {
+                recur(a, &mut acc);
+            }
+        }
+        canon::Expr_::ForeignCall { args, .. } => {
+            for a in args {
+                recur(a, &mut acc);
+            }
+        }
+        canon::Expr_::Binop { lhs, rhs, .. } => {
+            recur(lhs, &mut acc);
+            recur(rhs, &mut acc);
+        }
+        canon::Expr_::Case(scrut, branches) => {
+            let single_destructure_head = branches.len() == 1
+                && branches
+                    .first()
+                    .is_some_and(|b| is_destructure_headed(&b.pat.value));
+            acc.destructure_thunk_sites += usize::from(single_destructure_head);
+            recur(scrut, &mut acc);
+            for b in branches {
+                acc.nested_cons_payload_sites += direct_list_args(&b.pat.value);
+                acc.nested_strlit_payload_sites += direct_strlit_args(&b.pat.value);
+                recur(&b.body, &mut acc);
+            }
+            acc.tuple_elem_rebind_sites += tuple_elem_rebind_charge(scrut, branches);
+        }
+        canon::Expr_::Let(bindings, body) => {
+            for b in bindings {
+                acc.eta += MAX_ETA_PER_SITE;
+                acc.destructure_thunk_sites +=
+                    usize::from(is_thunk_countable_binding(&b.pat.value));
+                recur(&b.body, &mut acc);
+            }
+            recur(body, &mut acc);
+        }
+        canon::Expr_::If(branches, else_expr) => {
+            for (c, b) in branches {
+                recur(c, &mut acc);
+                recur(b, &mut acc);
+            }
+            recur(else_expr, &mut acc);
+        }
+        canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+            for x in elems {
+                recur(x, &mut acc);
+            }
+        }
+        canon::Expr_::Cons(head, tail) => {
+            recur(head, &mut acc);
+            recur(tail, &mut acc);
+        }
+        canon::Expr_::Record(fields) => {
+            for (_, v) in fields {
+                recur(v, &mut acc);
+            }
+        }
+        canon::Expr_::Access(record, _) => recur(record, &mut acc),
+        canon::Expr_::Update(base, fields) => {
+            recur(base, &mut acc);
+            for (_, v) in fields {
+                recur(v, &mut acc);
+            }
+        }
+        // A bare / partially-applied constructor reference eta-expands into a
+        // closure over up to `ctor_charge` fresh params (the widest ctor arity).
+        canon::Expr_::VarCtor { .. } => acc.eta += ctor_charge,
+        canon::Expr_::VarLocal(_)
+        | canon::Expr_::VarTopLevel { .. }
+        | canon::Expr_::VarKernel { .. }
+        | canon::Expr_::Int(_)
+        | canon::Expr_::Float(_)
+        | canon::Expr_::Str(_)
+        | canon::Expr_::PathLit(_)
+        | canon::Expr_::CustomElementCtor(_)
+        | canon::Expr_::Char(_)
+        | canon::Expr_::Unit => {}
+    }
+    acc
+}
+
+/// Tuple-elem-rebind binders one `case` site charges: fires on a non-literal-
+/// tuple scrutinee whose arms have tuple heads with at least one direct
+/// list / cons column, charging one binder per tuple position.
+fn tuple_elem_rebind_charge(scrut: &canon::Expr, branches: &[canon::CaseBranch]) -> usize {
+    if matches!(scrut.value, canon::Expr_::Tuple(_)) {
+        return 0;
+    }
+    let Some(arity) = branches.iter().find_map(|br| match &br.pat.value {
+        canon::Pattern_::PTuple(cols) => Some(cols.len()),
+        _ => None,
+    }) else {
+        return 0;
+    };
+    let needs = branches.iter().any(|br| {
+        let canon::Pattern_::PTuple(cols) = &br.pat.value else {
+            return false;
+        };
+        cols.iter().any(top_col_needs_slice)
+    });
+    if needs { arity } else { 0 }
+}
+
+/// All body-derived pool sizes in ONE module walk, replacing the several
+/// per-field passes that each re-walked every def body. The arithmetic per
+/// counter is unchanged; only the traversal is shared, so the result equals
+/// what a per-counter walk would produce field for field (pinned by the
+/// `module_symbol_pool_counts_match_individual_walkers` test).
+///
+/// [`count_any_param_sites`] walks the type annotation, not the body, so it
+/// stays a separate call. The per-def-head param count folds into the
+/// destructure-param total here; the eta charge aggregates per def as a MAX,
+/// every other counter as a module-wide sum.
+#[must_use]
+pub fn module_symbol_pool_counts(m: &canon::Module, interner: &Interner) -> PoolCounts {
+    let ctor_charge = MAX_ETA_PER_SITE.max(max_ctor_arity_per_module(m));
+    let mut counts = PoolCounts::default();
+    for d in &m.defs {
+        let (patterns, body) = match d {
+            canon::Def::Typed { patterns, body, .. }
+            | canon::Def::Untyped { patterns, body, .. } => (patterns, body),
+        };
+        let body_counts = count_body_pool_sites(body, ctor_charge, interner);
+        // Eta demand aggregates as a per-def MAX of (head arity + body sum).
+        counts.max_live_eta_params = counts
+            .max_live_eta_params
+            .max(patterns.len() + body_counts.eta);
+        // The rest sum over defs; the def head charges the destructure-param pool.
+        counts.destructure_param_sites +=
+            non_var_params(patterns) + body_counts.destructure_param_sites;
+        counts.projection_decode_sites += body_counts.projection_decode_sites;
+        counts.destructure_thunk_sites += body_counts.destructure_thunk_sites;
+        counts.nested_cons_payload_sites += body_counts.nested_cons_payload_sites;
+        counts.nested_strlit_payload_sites += body_counts.nested_strlit_payload_sites;
+        counts.tuple_elem_rebind_sites += body_counts.tuple_elem_rebind_sites;
+    }
+    counts
+}
+
 /// Every pre-minted, collision-free synthetic-symbol pool [`Lowerer::new`]
 /// needs — bundled into one argument so the constructor stays under
 /// clippy's arg-count ceiling. Each field is documented at its matching
@@ -11960,7 +12296,7 @@ pub struct SymbolPools {
     pub nested_cons_binders: Vec<Symbol>,
     pub nested_strlit_binders: Vec<Symbol>,
     /// One fresh symbol per element position in every synthesised literal-tuple
-    /// scrutinee — see [`count_tuple_elem_rebind_sites`] and
+    /// scrutinee — sized by [`module_symbol_pool_counts`] and consumed via
     /// [`Lowerer::tuple_elem_binders`].
     pub tuple_elem_binders: Vec<Symbol>,
 }
@@ -12271,7 +12607,7 @@ impl<'a> Lowerer<'a> {
     /// Hand out the next globally-unique synthetic parameter binder from
     /// [`Self::param_binders`], advancing the monotonic cursor. Fails closed as a
     /// [`bug`] if the pool is exhausted — the pool is sized by
-    /// [`count_destructure_param_sites`] to cover every non-var param site in the
+    /// `count_destructure_param_sites` to cover every non-var param site in the
     /// module, so an overrun is an internal invariant violation, never a user
     /// error and never an index panic.
     fn fresh_param_binder(&self) -> DResult<Symbol> {
@@ -12292,7 +12628,7 @@ impl<'a> Lowerer<'a> {
     /// block with `eta_sym(0..k)`, then calls [`Self::advance_eta`] once it has
     /// committed the block, so the NEXT site — including one lowered from this
     /// site's own body — gets disjoint names. Fails closed as a [`bug`] on
-    /// overrun (never an index panic); the pool is sized by [`max_live_eta_params`]
+    /// overrun (never an index panic); the pool is sized by `max_live_eta_params`
     /// to cover a def's whole eta demand.
     fn eta_sym(&self, offset: usize) -> DResult<Symbol> {
         let i = self.eta_base.get().saturating_add(offset);
@@ -12542,7 +12878,7 @@ impl<'a> Lowerer<'a> {
     /// Hand out the next globally-unique destructure-thunk binder from
     /// [`Self::destructure_thunk_binders`]. Mirrors
     /// [`Self::fresh_param_binder`] exactly; sized by
-    /// [`count_destructure_thunk_sites`], so an overrun is an internal
+    /// `count_destructure_thunk_sites`, so an overrun is an internal
     /// invariant violation, never an index panic.
     fn fresh_destructure_thunk_symbol(&self) -> DResult<Symbol> {
         let i = self.destructure_thunk_cursor.get();
@@ -12559,7 +12895,7 @@ impl<'a> Lowerer<'a> {
     /// Hand out the next globally-unique Class 4 item C2 nested-cons
     /// payload binder from [`Self::nested_cons_binders`]. Mirrors
     /// [`Self::fresh_param_binder`] exactly; sized by
-    /// [`count_nested_cons_payload_sites`] (an upper bound), so an overrun is an
+    /// `count_nested_cons_payload_sites` (an upper bound), so an overrun is an
     /// internal invariant violation, never an index panic.
     fn fresh_nested_cons_binder(&self) -> DResult<Symbol> {
         let i = self.nested_cons_cursor.get();
@@ -12576,7 +12912,7 @@ impl<'a> Lowerer<'a> {
     /// Hand out the next globally-unique nested-string-literal payload binder
     /// from [`Self::nested_strlit_binders`]. Mirrors
     /// [`Self::fresh_nested_cons_binder`] exactly; sized by
-    /// [`count_nested_strlit_payload_sites`] (an upper bound), so an overrun
+    /// `count_nested_strlit_payload_sites` (an upper bound), so an overrun
     /// is an internal invariant violation, never an index panic.
     fn fresh_nested_strlit_binder(&self) -> DResult<Symbol> {
         let i = self.nested_strlit_cursor.get();
@@ -12592,7 +12928,7 @@ impl<'a> Lowerer<'a> {
 
     /// Hand out the next globally-unique tuple-element rebind binder from
     /// [`Self::tuple_elem_binders`]. Mirrors [`Self::fresh_nested_cons_binder`]
-    /// exactly; sized by [`count_tuple_elem_rebind_sites`] (an upper bound),
+    /// exactly; sized by `count_tuple_elem_rebind_sites` (an upper bound),
     /// so an overrun is an internal invariant violation, never an index panic.
     fn fresh_tuple_elem_binder(&self) -> DResult<Symbol> {
         let i = self.tuple_elem_cursor.get();
@@ -13895,7 +14231,7 @@ impl<'a> Lowerer<'a> {
     /// Hand out the next globally-unique fresh binder from
     /// [`Self::projection_decode_binders`] for the emitted projection decode.
     /// Mirrors [`Self::fresh_param_binder`]; sized by
-    /// [`count_projection_decode_sites`], so an overrun is an internal invariant
+    /// `count_projection_decode_sites`, so an overrun is an internal invariant
     /// violation surfaced as a [`bug`], never an index panic.
     fn fresh_projection_decode_binder(&self) -> DResult<Symbol> {
         let i = self.projection_decode_cursor.get();
@@ -28611,6 +28947,12 @@ mod tests {
 
     use super::{BuiltinCtors, Lowerer, SymbolPools};
 
+    /// Wrap a value in a dummy-span [`Located`] — the span is irrelevant to the
+    /// counting/pinning tests that build canonical AST fragments by hand.
+    fn dummy<T>(value: T) -> Located<T> {
+        Located::new(Span::DUMMY, value)
+    }
+
     /// Intern every constructor / ADT-payload name [`Lowerer::new`] needs to
     /// seed `enum_variants` (`Maybe`/`Result`/`SqlValue`/`SqlField`/`Order`/
     /// `Error`/`ErrorKind` and their payload variants), and return the
@@ -31696,5 +32038,161 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The fused [`module_symbol_pool_counts`] must return, field for field,
+    /// exactly what the standalone `count_*` / `max_live_eta_params` walkers
+    /// return on the same module. This pins the fusion: identical counts are
+    /// what make the shared traversal byte-neutral, since each pool is drawn
+    /// positionally. Built over a module that exercises every counter — a
+    /// destructure def head and lambda param, a `selectToList` call, a
+    /// destructure `let`, a single-arm destructure `case`, ctor-arg nested
+    /// list / string-literal patterns, a tuple-elem-rebind `case`, and a bare
+    /// constructor reference.
+    #[test]
+    #[allow(clippy::too_many_lines)] // straight-line construction of one representative canonical module
+    fn module_symbol_pool_counts_match_individual_walkers() {
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let alpha = interner.intern("alpha").expect("intern");
+        let beta = interner.intern("beta").expect("intern");
+        let scrut = interner.intern("scrut").expect("intern");
+        let just = interner.intern("Just").expect("intern");
+        let select = interner.intern("selectToList").expect("intern");
+        let store = interner.intern("Store").expect("intern");
+
+        let var_pat = |sym| dummy(canon::Pattern_::PVar(sym));
+        let two_var_tuple = || dummy(canon::Pattern_::PTuple(vec![var_pat(alpha), var_pat(beta)]));
+        let just_ctor_pat = |args| {
+            dummy(canon::Pattern_::PCtor {
+                home: vec![main],
+                type_name: just,
+                name: just,
+                index: 0,
+                args,
+            })
+        };
+        let unit = || dummy(canon::Expr_::Unit);
+        let named_def = |name, patterns, body| canon::Def::Untyped {
+            home: vec![main],
+            name: dummy(name),
+            patterns,
+            body,
+        };
+        let intern = |interner: &mut Interner, s: &str| interner.intern(s).expect("intern");
+
+        // `f (alpha, beta) = Just` — destructure param head + bare ctor ref body.
+        let def_f = named_def(
+            intern(&mut interner, "f"),
+            vec![two_var_tuple()],
+            dummy(canon::Expr_::VarCtor {
+                home: vec![main],
+                type_name: just,
+                name: just,
+                index: 0,
+            }),
+        );
+        // `g = \(alpha, beta) -> selectToList ()` — lambda destructure param +
+        // a `selectToList` call (projection-decode counter).
+        let def_g = named_def(
+            intern(&mut interner, "g"),
+            vec![],
+            dummy(canon::Expr_::Lambda(
+                vec![two_var_tuple()],
+                Box::new(dummy(canon::Expr_::Call(
+                    Box::new(dummy(canon::Expr_::VarTopLevel {
+                        module: vec![store],
+                        name: select,
+                    })),
+                    vec![unit()],
+                ))),
+            )),
+        );
+        // `h = let (alpha, beta) = () in case scrut of Just [alpha] -> ()` — a
+        // destructure `let` (thunk) + a `PList` nested in a `PCtor` (nested-cons).
+        let def_h = named_def(
+            intern(&mut interner, "h"),
+            vec![],
+            dummy(canon::Expr_::Let(
+                vec![canon::LetBinding {
+                    pat: two_var_tuple(),
+                    body: unit(),
+                }],
+                Box::new(dummy(canon::Expr_::Case(
+                    Box::new(dummy(canon::Expr_::VarLocal(scrut))),
+                    vec![canon::CaseBranch {
+                        pat: just_ctor_pat(vec![dummy(canon::Pattern_::PList(vec![var_pat(
+                            alpha,
+                        )]))]),
+                        body: unit(),
+                    }],
+                ))),
+            )),
+        );
+        // `i = case scrut of Just "s" -> ()` — a `PStr` nested in a `PCtor`
+        // (nested-strlit counter).
+        let def_i = named_def(
+            intern(&mut interner, "i"),
+            vec![],
+            dummy(canon::Expr_::Case(
+                Box::new(dummy(canon::Expr_::VarLocal(scrut))),
+                vec![canon::CaseBranch {
+                    pat: just_ctor_pat(vec![dummy(canon::Pattern_::PStr("s".to_owned()))]),
+                    body: unit(),
+                }],
+            )),
+        );
+        // `j = case scrut of (alpha, [beta]) -> ()` — multi-column tuple head on
+        // a non-literal scrutinee with a direct list column (tuple-elem-rebind).
+        let def_j = named_def(
+            intern(&mut interner, "j"),
+            vec![],
+            dummy(canon::Expr_::Case(
+                Box::new(dummy(canon::Expr_::VarLocal(scrut))),
+                vec![canon::CaseBranch {
+                    pat: dummy(canon::Pattern_::PTuple(vec![
+                        var_pat(alpha),
+                        dummy(canon::Pattern_::PList(vec![var_pat(beta)])),
+                    ])),
+                    body: unit(),
+                }],
+            )),
+        );
+
+        let module = canon::Module {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: BTreeSet::new(),
+            name: vec![main],
+            unions: vec![],
+            defs: vec![def_f, def_g, def_h, def_i, def_j],
+        };
+
+        let fused = super::module_symbol_pool_counts(&module, &interner);
+        let eta = super::max_live_eta_params(&module);
+        let params = super::count_destructure_param_sites(&module);
+        let proj = super::count_projection_decode_sites(&module, &interner);
+        let thunk = super::count_destructure_thunk_sites(&module);
+        let ncons = super::count_nested_cons_payload_sites(&module);
+        let nstr = super::count_nested_strlit_payload_sites(&module);
+        let telem = super::count_tuple_elem_rebind_sites(&module);
+        assert_eq!(fused.max_live_eta_params, eta, "eta");
+        assert_eq!(fused.destructure_param_sites, params, "destructure params");
+        assert_eq!(fused.projection_decode_sites, proj, "projection decode");
+        assert_eq!(fused.destructure_thunk_sites, thunk, "destructure thunk");
+        assert_eq!(fused.nested_cons_payload_sites, ncons, "nested cons");
+        assert_eq!(fused.nested_strlit_payload_sites, nstr, "nested strlit");
+        assert_eq!(fused.tuple_elem_rebind_sites, telem, "tuple elem rebind");
+
+        // Guard the module actually exercises the counters (a pin over all-zero
+        // counts would pass vacuously).
+        assert!(
+            fused.destructure_param_sites >= 2,
+            "destructure params seen"
+        );
+        assert!(fused.projection_decode_sites >= 1, "select site seen");
+        assert!(fused.destructure_thunk_sites >= 1, "thunk site seen");
+        assert!(fused.nested_cons_payload_sites >= 1, "nested cons seen");
+        assert!(fused.nested_strlit_payload_sites >= 1, "nested strlit seen");
+        assert!(fused.tuple_elem_rebind_sites >= 1, "tuple rebind seen");
     }
 }
