@@ -1,7 +1,10 @@
+use strum::EnumCount as _;
+
 use super::{
     BTreeMap, BTreeSet, BinopClass, Builder, Builtins, Constraint, Content, CtorScheme, DResult,
-    Diagnostic, FlatType, Generated, Interner, Rc, RowTail, Span, Symbol, Ty, TyBounds, UnionFind,
-    VarId, canon, classify_binop, from_canon, is_solver_var, pin_any_in_ty,
+    Diagnostic, FlatType, Generated, Interner, Rc, RefCell, RowTail, SchemeSlot, Span,
+    StdlibKernel, Symbol, Ty, TyBounds, UnionFind, VarId, canon, classify_binop, from_canon,
+    is_solver_var, pin_any_in_ty,
 };
 
 impl<'a> Builder<'a> {
@@ -61,6 +64,7 @@ impl<'a> Builder<'a> {
             scheme_apps: Vec::new(),
             super_vars: Vec::new(),
             pending_instantiations: Vec::new(),
+            scheme_cache: RefCell::new(vec![SchemeSlot::Unresolved; StdlibKernel::COUNT]),
         };
 
         // Register the Prelude-built-in constructor schemes (`True` / `False` /

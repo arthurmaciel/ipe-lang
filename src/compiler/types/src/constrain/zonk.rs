@@ -1,7 +1,7 @@
 use super::{
     BTreeMap, BTreeSet, Budget, Builder, Builtins, Content, DResult, Diagnostic, FlatType,
-    Generated, Interner, RowTail, STAGE, SchemeKey, StdlibKernel, Symbol, Ty, UnionFind, VarId,
-    ZONK_NODE_LIMIT, tag_solver_var, unify,
+    Generated, Interner, RefCell, RowTail, STAGE, SchemeKey, StdlibKernel, Symbol, Ty, UnionFind,
+    VarId, ZONK_NODE_LIMIT, tag_solver_var, unify,
 };
 
 // ===========================================================================
@@ -674,7 +674,10 @@ fn zonk_visit(
             where_: STAGE,
             detail: "type exceeded read-back node limit".to_owned(),
         })?;
-    match uf.content(root)? {
+    // Borrow the descriptor: leaf arms need no owned copy, and the structural
+    // arms clone only the field they genuinely move into a rebuild task (the
+    // module path, the record field names) rather than the whole descriptor.
+    match uf.root_content(root)? {
         // A flexible, rigid, or super-typed variable that survives solving reads
         // back as a type variable named by its representative's id. (A
         // super-typed variable is still a variable; its obligations are read
@@ -695,6 +698,7 @@ fn zonk_visit(
             // Cache this representative once its children reassemble, then push
             // the rebuild and children so that `a` is visited before `b` and
             // lands lower on `results`.
+            let (a, b) = (*a, *b);
             work.push(ZonkTask::Memoize { root });
             work.push(ZonkTask::BuildFun);
             work.push(ZonkTask::Visit(b));
@@ -704,13 +708,13 @@ fn zonk_visit(
             let arity = args.len();
             work.push(ZonkTask::Memoize { root });
             work.push(ZonkTask::BuildCon {
-                module,
-                name,
+                module: module.clone(),
+                name: *name,
                 arity,
             });
             // Reverse so args land on `results` in source order.
-            for a in args.into_iter().rev() {
-                work.push(ZonkTask::Visit(a));
+            for a in args.iter().rev() {
+                work.push(ZonkTask::Visit(*a));
             }
         }
         Content::Structure(FlatType::Tuple(elems)) => {
@@ -718,8 +722,8 @@ fn zonk_visit(
             work.push(ZonkTask::Memoize { root });
             work.push(ZonkTask::BuildTuple { arity });
             // Reverse so elements land on `results` in source order.
-            for e in elems.into_iter().rev() {
-                work.push(ZonkTask::Visit(e));
+            for e in elems.iter().rev() {
+                work.push(ZonkTask::Visit(*e));
             }
         }
         Content::Structure(FlatType::Record(fields, _ext)) => {
@@ -734,8 +738,8 @@ fn zonk_visit(
             let names: Vec<Symbol> = fields.keys().copied().collect();
             work.push(ZonkTask::Memoize { root });
             work.push(ZonkTask::BuildRecord { names });
-            for v in fields.values().copied().rev() {
-                work.push(ZonkTask::Visit(v));
+            for v in fields.values().rev() {
+                work.push(ZonkTask::Visit(*v));
             }
         }
         Content::Structure(FlatType::EmptyRecord) => {
@@ -900,6 +904,11 @@ impl<'a> Builder<'a> {
             scheme_apps: Vec::new(),
             super_vars: Vec::new(),
             pending_instantiations: Vec::new(),
+            // Empty: this minimal builder reads the scheme table directly; an
+            // empty cache is an all-miss cache, so `resolve_scheme` still
+            // resolves each kernel (just unmemoised here, where it is called at
+            // most once per kernel by the tripwire lift anyway).
+            scheme_cache: RefCell::new(Vec::new()),
         }
     }
 }

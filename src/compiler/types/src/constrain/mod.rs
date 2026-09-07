@@ -24,6 +24,7 @@ pub use ipe_canon::ast as canon;
 pub use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
 pub use ipe_intern::{Interner, Symbol};
 pub use ipe_kernels::{BuiltinTag, FieldTag, RowTailShape, SchemeKey, StdlibKernel, TyShape};
+pub use std::cell::RefCell;
 pub use std::collections::{BTreeMap, BTreeSet};
 pub use std::rc::Rc;
 
@@ -247,6 +248,21 @@ pub struct Builder<'a> {
     /// Scheme Promotion" design at
     /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
     pub pending_instantiations: Vec<PendingInstantiation>,
+    /// Per-kernel memo of [`Builder::resolve_scheme`]. A kernel's scheme is a
+    /// pure function of the interned built-in names (fixed for the builder's
+    /// lifetime), so it is materialised at most once and cloned on subsequent
+    /// references instead of rebuilding the whole scheme `Ty` tree per use site.
+    /// Indexed by `StdlibKernel as usize`.
+    pub scheme_cache: RefCell<Vec<SchemeSlot>>,
+}
+
+/// One entry of [`Builder::scheme_cache`]: either not yet resolved, or resolved
+/// to the same `Option<Ty>` [`Builder::resolve_scheme`] returns (a `None`
+/// mirroring its fail-closed miss).
+#[derive(Clone)]
+pub enum SchemeSlot {
+    Unresolved,
+    Resolved(Option<Ty>),
 }
 
 /// A cross-module reference to an untyped top-level binding, recorded during

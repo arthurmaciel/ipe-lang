@@ -1,6 +1,6 @@
 use super::{
-    BTreeMap, Builder, BuiltinTag, FieldTag, RowTail, RowTailShape, SchemeKey, StdlibKernel,
-    Symbol, Ty, TyShape,
+    BTreeMap, Builder, BuiltinTag, FieldTag, RowTail, RowTailShape, SchemeKey, SchemeSlot,
+    StdlibKernel, Symbol, Ty, TyShape,
 };
 
 impl Builder<'_> {
@@ -17,14 +17,27 @@ impl Builder<'_> {
     /// `def().scheme` read through this one adapter means the descriptor's scheme
     /// reference and the table can never resolve to different types.
     pub fn resolve_scheme(&self, key: SchemeKey) -> Option<Ty> {
+        // Memoised per kernel: a kernel's scheme depends only on the interned
+        // built-in names, fixed for the builder's lifetime, so it is built at
+        // most once and cloned thereafter. A cached value is byte-identical to a
+        // rebuild by construction (same pure inputs); `instantiate_in` still
+        // alpha-renames per use site, so instantiation is unaffected.
+        let idx = key.0 as usize;
+        if let Some(SchemeSlot::Resolved(cached)) = self.scheme_cache.borrow().get(idx) {
+            return cached.clone();
+        }
         // A kernel that carries a structural `TyShape` is resolved by
         // interpreting it; the result is byte-identical to the `stdlib_scheme`
         // table's (pinned by `interpreted_shape_matches_legacy`). One without a
         // shape (`shape == None`) resolves through the table.
-        if let Some(shape) = key.0.def().shape {
-            return Some(self.interpret_shape(shape));
+        let resolved = key.0.def().shape.map_or_else(
+            || self.stdlib_scheme(key.0),
+            |shape| Some(self.interpret_shape(shape)),
+        );
+        if let Some(slot) = self.scheme_cache.borrow_mut().get_mut(idx) {
+            *slot = SchemeSlot::Resolved(resolved.clone());
         }
-        self.stdlib_scheme(key.0)
+        resolved
     }
 
     /// Interpret a `'static` [`TyShape`] into a concrete [`Ty`], resolving each
