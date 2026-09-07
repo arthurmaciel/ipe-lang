@@ -2154,7 +2154,7 @@ fn web_fixture_cmd_perform() -> String {
              { init = init, update = update, view = view, subscriptions = subscriptions\n        \
              , routes = [], notFound = Fetch\n        \
              }\n"
-        .to_owned()
+    .to_owned()
 }
 
 /// The Cmd-wiring composition SEAL: a web app whose `update` has a single literal
