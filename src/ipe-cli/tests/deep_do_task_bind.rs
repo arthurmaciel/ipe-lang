@@ -120,17 +120,17 @@ fn deep_do_task_bind_e2e_seal() {
         built.err()
     );
 
-    // THE SEAL: emitted Rust must compile with cargo.
-    let cargo_status = std::process::Command::new("cargo")
-        .arg("build")
-        .current_dir(&emit_dir)
-        .env("CARGO_TARGET_DIR", emit_dir.join("target"))
-        .status();
+    // THE SEAL: emitted Rust must compile with cargo. Built through the shared
+    // e2e_support core — a unique package name gives this emitted crate its own
+    // fresh fingerprint (a broken emit still fails to build), while the heavy
+    // dependency tree is reused from the warm shared target instead of being
+    // cold-compiled and thrown away per run.
+    let built = e2e_support::build_rust_binary("deep_do_task_bind", &emit_dir);
     assert!(
-        matches!(&cargo_status, Ok(s) if s.success()),
-        "cargo build on emitted {N}-bind do-block must succeed: {cargo_status:?}"
+        built.is_ok(),
+        "cargo build on emitted {N}-bind do-block must succeed: {}",
+        built.err().unwrap_or_default()
     );
 
-    let _ = std::fs::remove_dir_all(emit_dir.join("target"));
     let _ = std::fs::remove_dir_all(&out_dir);
 }

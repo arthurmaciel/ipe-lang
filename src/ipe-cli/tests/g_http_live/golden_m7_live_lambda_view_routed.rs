@@ -18,9 +18,10 @@
 //! side is pinned in `model_admissibility.rs` (`live_lambda_view_*`); THIS file
 //! pins the routed emit side.
 //!
-//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated
-//! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can
-//! mask a rustc failure as a false pass).
+//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated and
+//! runs through `e2e_support::build_rust_binary` (unique package name → fresh
+//! app fingerprint; warm shared dependency target reused). A broken emit still
+//! fails to build, so the SEAL stays sound.
 
 use std::path::{Path, PathBuf};
 
@@ -101,7 +102,8 @@ fn lambda_view_routed_app_emits_web_app_routed() {
     );
 }
 
-/// `IPE_E2E` tier: the emitted project must cargo-build (isolated target dir).
+/// `IPE_E2E` tier: the emitted project must cargo-build (shared `e2e_support`
+/// core: unique package name → fresh app fingerprint, warm dep target reused).
 #[test]
 fn lambda_view_routed_app_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
@@ -120,18 +122,10 @@ fn lambda_view_routed_app_cargo_builds() {
         result.err(),
     );
 
-    let target = std::env::temp_dir()
-        .join("r4")
-        .join("m7_lambda_view_routed");
-    let build = std::process::Command::new("cargo")
-        .arg("build")
-        .env("CARGO_TARGET_DIR", &target)
-        .current_dir(&out)
-        .output()
-        .expect("cargo must spawn");
+    let built = e2e_support::build_rust_binary("m7_lambda_view_routed", &out);
     assert!(
-        build.status.success(),
-        "#108 hole 2: lambda-view routed project must cargo-build\n--- cargo stderr ---\n{}",
-        String::from_utf8_lossy(&build.stderr),
+        built.is_ok(),
+        "#108 hole 2: lambda-view routed project must cargo-build\n{}",
+        built.err().unwrap_or_default(),
     );
 }

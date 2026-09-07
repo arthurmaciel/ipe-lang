@@ -22,9 +22,11 @@
 //! Full design: `docs/adr/0021-tea-state-engine-and-prescriptive-init.md`;
 //! Sanctioned divergence B24.
 //!
-//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated
-//! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can
-//! mask a rustc failure as a false pass).
+//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated and
+//! runs through `e2e_support::build_rust_binary`, which gives the fixture a
+//! unique package name (fresh app fingerprint) and reuses the warm shared
+//! dependency target — a broken emit still fails to build, so the SEAL stays
+//! sound while the heavy dep tree compiles once.
 
 use std::path::PathBuf;
 
@@ -195,8 +197,9 @@ fn live_init_poly_var_is_rejected() {
     );
 }
 
-/// `IPE_E2E` tier: the `init : WebReq` project must cargo-build (isolated
-/// target dir) — the SEAL check that ipe-0 implies cargo-0.
+/// `IPE_E2E` tier: the `init : WebReq` project must cargo-build — the SEAL
+/// check that ipe-0 implies cargo-0. Builds through the shared `e2e_support`
+/// (unique package, warm dep target).
 ///
 /// Emits into a PRIVATE dir this test alone owns, so a sibling compile-only
 /// test re-emitting into `ok_out_dir()` in parallel can never delete rustc's
@@ -216,18 +219,17 @@ fn live_init_reads_req_path_cargo_builds() {
         result.err(),
     );
 
-    let target = std::env::temp_dir()
-        .join("i180")
-        .join("init_reads_req_path");
-    let build = std::process::Command::new("cargo")
-        .arg("build")
-        .env("CARGO_TARGET_DIR", &target)
-        .current_dir(&out)
-        .output()
-        .expect("cargo must spawn");
+    // Build via the shared e2e_support core: it gives this fixture a UNIQUE
+    // package name and honours IPE_ORACLE_SHARED_TARGET, so the emitted app
+    // crate builds FRESH (its own source hash → its own fingerprint; a broken
+    // emit still fails E0308) while the heavy dependency tree is reused from the
+    // warm shared target instead of cold-compiling tokio/axum/hyper per fixture.
+    // When the env is unset (a plain local run) it fails safe to an isolated
+    // ambient target.
+    let built = e2e_support::build_rust_binary("i180_init_reads_req_path", &out);
     assert!(
-        build.status.success(),
-        "#180: the `init : WebReq` project must cargo-build\n--- cargo stderr ---\n{}",
-        String::from_utf8_lossy(&build.stderr),
+        built.is_ok(),
+        "#180: the `init : WebReq` project must cargo-build\n{}",
+        built.err().unwrap_or_default(),
     );
 }

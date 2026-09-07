@@ -12,9 +12,10 @@
 //! consumer's `Fn(Model) -> Html<Msg>` bound at cargo time) and never a spurious
 //! `Html<T1>` generic.
 //!
-//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated with
-//! an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can mask a
-//! rustc failure as a false pass).
+//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated and
+//! runs through `e2e_support::build_rust_binary` (unique package name → fresh
+//! app fingerprint, warm shared dependency target reused). A broken emit still
+//! fails to build, so the SEAL stays sound.
 
 use std::path::{Path, PathBuf};
 
@@ -173,8 +174,10 @@ fn bare_attribute_and_element_arity_fill() {
     );
 }
 
-/// `IPE_E2E` tier: the bare-`Html` Webview app must cargo-build (isolated target
-/// dir) — the SEAL check that ipe-0 implies cargo-0 for the arity-filled return.
+/// `IPE_E2E` tier: the bare-`Html` Webview app must cargo-build (through the
+/// shared `e2e_support` core: unique package name → fresh app fingerprint, warm
+/// dep target reused) — the SEAL check that ipe-0 implies cargo-0 for the
+/// arity-filled return.
 #[test]
 fn bare_html_view_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
@@ -182,16 +185,11 @@ fn bare_html_view_cargo_builds() {
     }
     bare_html_view_emits_concrete_msg();
 
-    let target = std::env::temp_dir().join("bare_ui").join("html_app");
-    let build = std::process::Command::new("cargo")
-        .arg("build")
-        .env("CARGO_TARGET_DIR", &target)
-        .current_dir(html_app_out_dir())
-        .output()
-        .expect("cargo must spawn");
+    let out = html_app_out_dir();
+    let built = e2e_support::build_rust_binary("bare_html_view", &out);
     assert!(
-        build.status.success(),
-        "the bare-`Html` Webview app must cargo-build\n--- cargo stderr ---\n{}",
-        String::from_utf8_lossy(&build.stderr),
+        built.is_ok(),
+        "the bare-`Html` Webview app must cargo-build\n{}",
+        built.err().unwrap_or_default(),
     );
 }

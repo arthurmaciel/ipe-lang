@@ -22,9 +22,11 @@
 //!   `params.get(0)` conversion (compile-only, always runs).
 //! * MIXED: nullary + param routes in ONE list → ipe-0 (compile-only).
 //! * WRONG-ADT: a param ctor from another ADT → IPE-T0001 (compile-only).
-//! * `IPE_E2E=1`: the solo project cargo-builds (ISOLATED `CARGO_TARGET_DIR`)
-//!   and, when run, a GET on `/u/42` renders `user:42` — the captured `:param`
-//!   delivered through `match_routes` into the page constructor.
+//! * `IPE_E2E=1`: the solo project cargo-builds (through the shared
+//!   `e2e_support` core: unique package name → fresh app fingerprint, warm
+//!   shared dependency target reused) and, when run, a GET on `/u/42` renders
+//!   `user:42` — the captured `:param` delivered through `match_routes` into
+//!   the page constructor.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -200,11 +202,18 @@ fn param_route_wrong_adt_ctor_is_ipe_t0001() {
 /// earlier `[ipe.live] listening on …` line (on an unrelated port), so a bare
 /// "listening on" match returns before the app's listener is bound and the
 /// subsequent GET races it. Belt-and-braces alongside `IPE_CONSOLE_EMBED=off`.
+///
+/// The needle keys on the `:{port}` suffix, not the host: the runtime resolves
+/// its bind host through `resolve_host_bind` (loopback `127.0.0.1` off a dev
+/// run, `0.0.0.0` only in production or under `IPE_HTTP_BIND`), so pinning the
+/// host would miss the readiness line and hang. The port is the app's own and
+/// is what disambiguates it from the console child's line.
 fn wait_ready(child: &mut std::process::Child, port: u16) -> bool {
     let Some(stderr) = child.stderr.take() else {
         return false;
     };
-    let needle = format!("listening on http://0.0.0.0:{port}");
+    let needle = "listening on http://";
+    let port_suffix = format!(":{port}");
     let mut reader = BufReader::new(stderr);
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut line = String::new();
@@ -212,7 +221,7 @@ fn wait_ready(child: &mut std::process::Child, port: u16) -> bool {
         line.clear();
         match reader.read_line(&mut line) {
             Ok(0) | Err(_) => return false,
-            Ok(_) if line.contains(&needle) => return true,
+            Ok(_) if line.contains(needle) && line.contains(&port_suffix) => return true,
             Ok(_) => {}
         }
     }
@@ -232,9 +241,10 @@ fn http_get(port: u16, path: &str) -> std::io::Result<String> {
     Ok(buf)
 }
 
-/// `IPE_E2E`: cargo-build the solo param-route project (ISOLATED
-/// `CARGO_TARGET_DIR` — a shared dir's fingerprint reuse can mask an E0308 as
-/// a false pass), run it, and assert GET `/u/42` renders `user:42` — the
+/// `IPE_E2E`: cargo-build the solo param-route project (through the shared
+/// `e2e_support` core — a unique package name gives the app crate a fresh
+/// fingerprint so a broken emit still fails E0308, while the warm shared dep
+/// target is reused), run it, and assert GET `/u/42` renders `user:42` — the
 /// captured `:param` delivered through `match_routes` into `UserPage`.
 #[test]
 fn param_route_solo_cargo_builds_and_delivers_param() {
@@ -254,32 +264,19 @@ fn param_route_solo_cargo_builds_and_delivers_param() {
         result.err(),
     );
 
-    let target = std::env::temp_dir().join("r4").join("m7_param_routes");
-    let build = std::process::Command::new("cargo")
-        .arg("build")
-        .arg("--message-format=json")
-        .env("CARGO_TARGET_DIR", &target)
-        .current_dir(&out)
-        .output()
-        .expect("cargo must spawn");
+    // Build through the shared e2e_support core: a unique package name gives the
+    // emitted app crate its own fresh fingerprint (a broken emit still fails to
+    // build — the warm target never masks a SEAL break), while the heavy runtime
+    // dependency tree is reused from the warm shared target instead of being
+    // cold-compiled per fixture. Returns the located binary path for the run
+    // below. Falls back to an isolated ambient target when the env is unset.
+    let built = e2e_support::build_rust_binary("m7_param_routes", &out);
     assert!(
-        build.status.success(),
-        "#108 hole 3: the param-route project must cargo-build\n--- cargo stderr ---\n{}",
-        String::from_utf8_lossy(&build.stderr),
+        built.is_ok(),
+        "#108 hole 3: the param-route project must cargo-build\n{}",
+        built.as_ref().err().cloned().unwrap_or_default(),
     );
-
-    // Locate the built binary from cargo's JSON output.
-    let stdout = String::from_utf8_lossy(&build.stdout);
-    let exe = stdout
-        .lines()
-        .filter(|l| l.contains("\"executable\":\""))
-        .filter_map(|l| {
-            let (_, rest) = l.split_once("\"executable\":\"")?;
-            let (path, _) = rest.split_once('"')?;
-            Some(path.to_owned())
-        })
-        .next_back()
-        .expect("cargo JSON must name the built executable");
+    let exe = built.unwrap_or_default();
 
     // Ephemeral port: bind-then-drop.
     let port = {
