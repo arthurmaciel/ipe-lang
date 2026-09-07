@@ -503,7 +503,6 @@ fn runtime_tree_resolves() {
     assert!(
         manifest.as_ref().is_some_and(|m| m.is_file()),
         "resolved runtime crate root (parent of the module tree) must contain the \
-         vendored `Cargo.toml` the SEALs splice: {:?}",
-        manifest
+         vendored `Cargo.toml` the SEALs splice: {manifest:?}",
     );
 }
