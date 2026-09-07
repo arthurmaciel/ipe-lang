@@ -8,6 +8,11 @@
 # Dispositions
 #   gate          Blocks development -> main promotion (a required status
 #                 context) and runs per relevant change.
+#   gate-external Required promotion gate that is intentionally NOT produced by
+#                 any CI workflow. The status is posted out-of-band (e.g. by a
+#                 human-run whole-tree security-soundness guardian). Counted in
+#                 the derived required set; never flagged as orphaned by the drift
+#                 gate, because absence of a CI producer is the correct state.
 #   nightly-gate  Heavy; runs nightly + on development push, not on every PR. A
 #                 red blocks the NEXT promotion via the fail-closed
 #                 `promotion-ready` job (absence != pass). Never silently advisory.
@@ -261,15 +266,17 @@ checks:
     owner: docs
     note: playground.yml build leg; playground-jail is the Security gate.
 
-  # ── Orphaned required context — delete from the required set ───────────────
+  # ── External (guardian-produced) promotion gate ───────────────────────────
   - context: guardian-sound
-    disposition: delete
-    producer: null
+    disposition: gate-external
+    guards: Security
     note: >-
-      Orphaned required context — no workflow produces a status of this name.
-      With strict_required_status_checks_policy:false a never-reported required
-      check does NOT block (a false gate satisfied by absence). Remove from the
-      main-protection ruleset. See ci/RECONCILIATION.md.
+      Required promotion gate posted by the whole-tree security-soundness
+      guardian, not by any CI job. The guardian runs `origin/main..development`
+      and posts this status only when it judges the diff sound. Intentionally
+      absent from every workflow; `promote.yml` reads required contexts straight
+      from ruleset 22326541, so this gate enforces the promotion invariant even
+      though CI never produces it. Do NOT remove from the ruleset.
 
   # ── Utility / non-status jobs (not gates; declared so drift stays quiet) ───
   # `changes` (paths-filter fan-out), release/promote/backport automation, and
