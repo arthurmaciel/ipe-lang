@@ -186,10 +186,14 @@ pub mod json {
 /// repeat that would re-assert the same one — is rejected here so `--plain
 /// --json` can never resolve to a single silent winner.
 ///
+/// Exposed as `pub(crate)` so command modules with bespoke argument parsers
+/// (those that cannot use [`split_format`] directly) can consume format flags
+/// without duplicating the mutual-exclusion logic.
+///
 /// # Errors
 /// [`CliError::UsageOwned`] when a format flag is given after a different one,
 /// naming `command` so the message points at the misused command.
-fn consume_format(
+pub(crate) fn consume_format_flag(
     slot: &mut Option<OutputFormat>,
     flag: &str,
     command: &str,
@@ -233,7 +237,7 @@ pub fn split_format<'a>(
     let mut format: Option<OutputFormat> = None;
     let mut positional: Vec<&'a str> = Vec::new();
     for arg in rest {
-        if consume_format(&mut format, arg, command)? {
+        if consume_format_flag(&mut format, arg, command)? {
             continue;
         }
         if arg.starts_with('-') {
@@ -556,7 +560,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         if static_flags.consume(flag, &mut it, "build")? {
             continue;
         }
-        if consume_format(&mut format, flag, "build")? {
+        if consume_format_flag(&mut format, flag, "build")? {
             continue;
         }
         match flag.as_str() {
@@ -725,7 +729,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
         if static_flags.consume(flag, &mut it, "run")? {
             continue;
         }
-        if consume_format(&mut format, flag, "run")? {
+        if consume_format_flag(&mut format, flag, "run")? {
             continue;
         }
         match flag.as_str() {
@@ -929,7 +933,7 @@ pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
     let mut capabilities_only = false;
 
     while let Some(flag) = it.next() {
-        if consume_format(&mut format, flag, "release")? {
+        if consume_format_flag(&mut format, flag, "release")? {
             continue;
         }
         match flag.as_str() {
@@ -1138,7 +1142,7 @@ pub fn parse_type_check(rest: &[String]) -> Result<TypeCheckArgs, CliError> {
     let mut entry: Option<String> = None;
     let mut format: Option<OutputFormat> = None;
     for arg in rest {
-        if consume_format(&mut format, arg, "type-check")? {
+        if consume_format_flag(&mut format, arg, "type-check")? {
             continue;
         }
         if arg.starts_with('-') {
@@ -1176,7 +1180,7 @@ pub fn parse_health(rest: &[String]) -> Result<HealthArgs, CliError> {
     let mut format: Option<OutputFormat> = None;
     let mut assume_yes = false;
     for arg in rest {
-        if consume_format(&mut format, arg, "health")? {
+        if consume_format_flag(&mut format, arg, "health")? {
             continue;
         }
         match arg.as_str() {
@@ -1241,7 +1245,7 @@ pub fn parse_fmt(rest: &[String]) -> Result<FmtMode, CliError> {
     let mut stdin = false;
     let mut format: Option<OutputFormat> = None;
     for arg in rest {
-        if consume_format(&mut format, arg, "fmt")? {
+        if consume_format_flag(&mut format, arg, "fmt")? {
             continue;
         }
         match arg.as_str() {

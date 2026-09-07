@@ -8,32 +8,52 @@
 //! machine-applicable (semantics-preserving) rewrite and reports what changed;
 //! otherwise a surviving finding at or above the configured gate severity exits
 //! non-zero for CI.
+//!
+//! `--json` emits findings as `{"schema":"ipe.cli.lint/1","findings":[…]}`.
+//! `--plain` prints one line per finding: `<severity>:<file>:<line>:<col>: <message>`.
+//! Both forms are mutually exclusive with each other and fail closed against
+//! `--fix` (a data form must not trigger mutations — the same rule `health` uses).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ipe_lint::{LintConfig, SourceModule};
 
-use crate::{CliError, watch};
+use crate::{CliError, cli_args, watch};
 
 /// The `lint.ipe` file name, resolved next to a project's `package.ipe` (or in
 /// the current directory for a single-file lint).
 const LINT_IPE: &str = "lint.ipe";
 
 /// Parsed `ipe lint` arguments.
-struct LintArgs {
+pub(crate) struct LintArgs {
     /// The path to lint: a `.ipe` file or a project directory. Defaults to the
     /// current project.
-    entry: Option<String>,
+    pub(crate) entry: Option<String>,
     /// Apply every machine-applicable fix instead of only reporting.
-    fix: bool,
+    pub(crate) fix: bool,
+    /// The output format for the findings report.
+    pub(crate) format: cli_args::OutputFormat,
 }
 
-/// Parse `ipe lint` arguments: an optional positional path and `--fix`.
-fn parse_lint(rest: &[String]) -> Result<LintArgs, CliError> {
+/// Parse `ipe lint` arguments: an optional positional path, `--fix`, and the
+/// shared `--json`/`--plain` output-format flags.
+///
+/// `--fix` and a data form (`--json`/`--plain`) are mutually exclusive: a data
+/// form is a read-only observation; `--fix` mutates sources. The two must not
+/// be combined (same rule as `health --yes --json`).
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unknown flag, a second positional, or
+/// `--fix` combined with `--json`/`--plain`.
+pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
     let mut entry: Option<String> = None;
     let mut fix = false;
+    let mut format: Option<cli_args::OutputFormat> = None;
     for arg in rest {
+        if cli_args::consume_format_flag(&mut format, arg, "lint")? {
+            continue;
+        }
         match arg.as_str() {
             "--fix" => fix = true,
             flag if flag.starts_with('-') => {
@@ -47,7 +67,15 @@ fn parse_lint(rest: &[String]) -> Result<LintArgs, CliError> {
             }
         }
     }
-    Ok(LintArgs { entry, fix })
+    let format = format.unwrap_or_default();
+    if fix && format != cli_args::OutputFormat::Human {
+        return Err(CliError::UsageOwned(
+            "ipe lint: --fix and a data form (--json/--plain) are mutually exclusive — \
+             a data form reports without mutating"
+                .to_owned(),
+        ));
+    }
+    Ok(LintArgs { entry, fix, format })
 }
 
 /// `ipe lint [<path>]` — run the linter, printing findings (or applying fixes).
@@ -58,7 +86,7 @@ fn parse_lint(rest: &[String]) -> Result<LintArgs, CliError> {
 /// for a malformed `lint.ipe`; [`CliError::LintGateFailed`] when a surviving
 /// finding is at or above the gate severity (report path only).
 pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
-    let args = parse_lint(rest)?;
+    let args = parse_lint_args(rest)?;
     let entry = match args.entry {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(crate::default_entry()?),
@@ -84,7 +112,7 @@ pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
     if args.fix {
         return apply_and_report(&modules, &config, &paths);
     }
-    report_findings(&modules, &config, &paths)
+    report_findings(&modules, &config, &paths, args.format)
 }
 
 /// Read `lint.ipe` from the directory holding `blame_path` (the resolved
@@ -105,52 +133,158 @@ fn load_config(blame_path: &Path) -> Result<LintConfig, CliError> {
 
 /// Run the linter and print each finding; fail the gate if any survives at or
 /// above the gate severity.
+// The three output formats (JSON, plain, human) each need their own rendering
+// path. Splitting into separate functions would obscure that they all read the
+// same report and share the same gate-trip logic, so the body is intentionally
+// kept together.
+#[allow(clippy::too_many_lines)]
 fn report_findings(
     modules: &[SourceModule],
     config: &LintConfig,
     paths: &BTreeMap<Vec<String>, PathBuf>,
+    format: cli_args::OutputFormat,
 ) -> Result<(), CliError> {
+    use crate::cli_args::json;
+    use cli_args::OutputFormat::{Human, Json, Plain};
+
     let report = ipe_lint::run(modules, config);
     let source_of: BTreeMap<&[String], &str> = modules
         .iter()
         .map(|m| (m.module.as_slice(), m.source.as_str()))
         .collect();
 
-    if report.findings.is_empty() {
-        println!("{}", crate::style::gutter("lint: no findings"));
-        return Ok(());
-    }
+    match format {
+        Json => {
+            // Emit a stable JSON object with schema tag and a findings array.
+            // Each finding is a JSON object with rule, severity, file, line, col,
+            // message, help lines, and whether a fix is available.
+            let finding_objs: Vec<String> = report
+                .findings
+                .iter()
+                .map(|f| {
+                    let file = paths
+                        .get(&f.module)
+                        .map_or_else(|| f.module.join("."), |p| p.display().to_string());
+                    let source = source_of.get(f.module.as_slice()).copied().unwrap_or("");
+                    let severity = config.severity_of(f.rule);
+                    // Resolve line/col from the byte offset in source.
+                    let (line, col) = byte_to_line_col(source, f.span.lo);
+                    let help_arr: Vec<String> = f.help.iter().map(|h| json::string(h)).collect();
+                    json::object(&[
+                        ("rule", json::string(f.rule)),
+                        ("severity", json::string(severity.word())),
+                        ("file", json::string(&file)),
+                        ("line", line.to_string()),
+                        ("col", col.to_string()),
+                        ("message", json::string(&f.message)),
+                        ("help", json::array(&help_arr)),
+                        (
+                            "fixable",
+                            if f.fix.is_some() || f.sig_fix.is_some() {
+                                "true".to_owned()
+                            } else {
+                                "false".to_owned()
+                            },
+                        ),
+                    ])
+                })
+                .collect();
+            let gate_tripped = report.gate_tripped(config);
+            println!(
+                "{}",
+                json::object(&[
+                    ("schema", json::string("ipe.cli.lint/1")),
+                    ("findings", json::array(&finding_objs)),
+                    (
+                        "gate_tripped",
+                        if gate_tripped {
+                            "true".to_owned()
+                        } else {
+                            "false".to_owned()
+                        },
+                    ),
+                ])
+            );
+            if gate_tripped {
+                return Err(CliError::LintGateFailed);
+            }
+        }
+        Plain => {
+            // One line per finding: `<severity>:<file>:<line>:<col>: <message>`.
+            for f in &report.findings {
+                let file = paths
+                    .get(&f.module)
+                    .map_or_else(|| f.module.join("."), |p| p.display().to_string());
+                let source = source_of.get(f.module.as_slice()).copied().unwrap_or("");
+                let severity = config.severity_of(f.rule);
+                let (line, col) = byte_to_line_col(source, f.span.lo);
+                println!(
+                    "{}:{}:{}:{}: {}",
+                    severity.word(),
+                    file,
+                    line,
+                    col,
+                    f.message
+                );
+            }
+            if report.gate_tripped(config) {
+                return Err(CliError::LintGateFailed);
+            }
+        }
+        Human => {
+            if report.findings.is_empty() {
+                println!("{}", crate::style::gutter("lint: no findings"));
+                return Ok(());
+            }
 
-    for finding in &report.findings {
-        let file = paths
-            .get(&finding.module)
-            .map_or_else(|| finding.module.join("."), |p| p.display().to_string());
-        let source = source_of
-            .get(finding.module.as_slice())
-            .copied()
-            .unwrap_or("");
-        let severity = config.severity_of(finding.rule);
-        // `render_finding` ends with a newline; `println!` adds the blank line
-        // that separates one finding's block from the next.
-        println!(
-            "{}",
-            ipe_lint::render_finding(finding, &file, source, severity)
-        );
-    }
+            for finding in &report.findings {
+                let file = paths
+                    .get(&finding.module)
+                    .map_or_else(|| finding.module.join("."), |p| p.display().to_string());
+                let source = source_of
+                    .get(finding.module.as_slice())
+                    .copied()
+                    .unwrap_or("");
+                let severity = config.severity_of(finding.rule);
+                // `render_finding` ends with a newline; `println!` adds the blank
+                // line that separates one finding's block from the next.
+                println!(
+                    "{}",
+                    ipe_lint::render_finding(finding, &file, source, severity)
+                );
+            }
 
-    let count = report.findings.len();
-    println!(
-        "{}",
-        crate::style::gutter(&format!(
-            "lint: {count} finding{}",
-            if count == 1 { "" } else { "s" }
-        ))
-    );
+            let count = report.findings.len();
+            println!(
+                "{}",
+                crate::style::gutter(&format!(
+                    "lint: {count} finding{}",
+                    if count == 1 { "" } else { "s" }
+                ))
+            );
 
-    if report.gate_tripped(config) {
-        return Err(CliError::LintGateFailed);
+            if report.gate_tripped(config) {
+                return Err(CliError::LintGateFailed);
+            }
+        }
     }
     Ok(())
+}
+
+/// Convert a byte offset into a 1-based `(line, col)` pair by scanning the
+/// source. Clamps out-of-range offsets to the nearest valid position.
+fn byte_to_line_col(source: &str, offset: u32) -> (usize, usize) {
+    let byte = (offset as usize).min(source.len());
+    // Walk back to char boundary.
+    let mut b = byte;
+    while b > 0 && !source.is_char_boundary(b) {
+        b -= 1;
+    }
+    let before = &source[..b];
+    let line = before.bytes().filter(|&c| c == b'\n').count() + 1;
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    let col = source[line_start..b].chars().count() + 1;
+    (line, col)
 }
 
 /// Apply every machine-applicable fix (local and cross-module signature fixes),

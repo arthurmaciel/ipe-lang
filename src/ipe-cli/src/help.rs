@@ -9,6 +9,10 @@
 //! Colour is opt-in per output stream: ANSI escapes are emitted only when the
 //! destination is a terminal and `NO_COLOR` is unset. Piped or redirected
 //! output — and any run under `NO_COLOR` — is clean, aligned plain text.
+//!
+//! `--help --json` emits the entire command grammar as a stable JSON object (schema
+//! `"ipe.cli.help/1"`), so tooling can discover every command, flag, and section
+//! without scraping the human-text screen.
 
 use std::fmt::Write as _;
 use std::io::IsTerminal;
@@ -454,10 +458,20 @@ const COMMANDS: &[Command] = &[
         summary: "Run extensible static analysis over Ipê source (idiom, consistency, safety-by-convention).",
         args: "[<path>]",
         args_desc: "A source file or a project directory to lint. Defaults to the current project.",
-        options: &[Opt {
-            flag: "[--fix]",
-            desc: "apply every machine-applicable (semantics-preserving) fix instead of only reporting",
-        }],
+        options: &[
+            Opt {
+                flag: "[--fix]",
+                desc: "apply every machine-applicable (semantics-preserving) fix instead of only reporting",
+            },
+            Opt {
+                flag: "[--json]",
+                desc: "emit findings as a JSON array ({\"schema\":\"ipe.cli.lint/1\",\"findings\":[…]}); exit non-zero when the gate trips",
+            },
+            Opt {
+                flag: "[--plain]",
+                desc: "print one finding per line flush-left (rule:file:line:col: message), no decoration",
+            },
+        ],
         hidden: false,
     },
     Command {
@@ -466,7 +480,16 @@ const COMMANDS: &[Command] = &[
         summary: "Remove the project's build-generated output (out/, target/, .ipe/).",
         args: "",
         args_desc: "",
-        options: &[],
+        options: &[
+            Opt {
+                flag: "[--json]",
+                desc: "emit the result as JSON ({\"schema\":\"ipe.cli.clean/1\",\"removed\":[…]})",
+            },
+            Opt {
+                flag: "[--plain]",
+                desc: "print one removed path per line, flush-left",
+            },
+        ],
         hidden: false,
     },
     Command {
@@ -475,7 +498,16 @@ const COMMANDS: &[Command] = &[
         summary: "Convert an interim manifest to the package.ipe record form.",
         args: "config",
         args_desc: "The migration to run. `config` rewrites the interim manifest (a `Package.named |>` package.ipe, or a legacy ipe.toml) as the record form.",
-        options: &[],
+        options: &[
+            Opt {
+                flag: "[--json]",
+                desc: "emit the migration result as JSON ({\"schema\":\"ipe.cli.migrate/1\",\"action\":…,\"path\":…})",
+            },
+            Opt {
+                flag: "[--plain]",
+                desc: "print a single status line flush-left, no decoration",
+            },
+        ],
         hidden: false,
     },
     Command {
@@ -940,6 +972,122 @@ fn render_top_level(p: &Palette) -> String {
     gutter(&out)
 }
 
+/// Emit the full command grammar as a compact JSON object (schema `"ipe.cli.help/1"`).
+///
+/// The payload is a pure read-only view over [`COMMANDS`] and [`SECTIONS`] —
+/// the same data the human screen and the dispatch table read — so the JSON
+/// grammar cannot drift from what the CLI accepts. The schema tag (`"schema"`)
+/// lets a consumer fail closed on a breaking change: additive new fields are
+/// minor (no bump); a removed or retyped field bumps the major version number.
+///
+/// Shape:
+/// ```text
+/// { "schema": "ipe.cli.help/1",
+///   "version": "<cargo-pkg-version>",
+///   "sections": [ { "title": "<name>", "commands": ["<name>",…] }, … ],
+///   "commands": [ { "name": "<name>", "summary": "<text>",
+///                   "args": "<synopsis>", "args_desc": "<text>",
+///                   "hidden": <bool>,
+///                   "options": [ { "flag": "<synopsis>", "desc": "<text>" }, … ]
+///                 }, … ] }
+/// ```
+#[must_use]
+pub fn help_json() -> String {
+    use crate::cli_args::json;
+    let version = env!("CARGO_PKG_VERSION");
+
+    let sections_arr: Vec<String> = SECTIONS
+        .iter()
+        .map(|s| {
+            let cmds = s
+                .commands
+                .iter()
+                .map(|n| json::string(n))
+                .collect::<Vec<_>>();
+            json::object(&[
+                ("title", json::string(s.title)),
+                ("commands", json::array(&cmds)),
+            ])
+        })
+        .collect();
+
+    let commands_arr: Vec<String> = COMMANDS
+        .iter()
+        .map(|c| {
+            let opts: Vec<String> = c
+                .options
+                .iter()
+                .map(|o| {
+                    json::object(&[
+                        ("flag", json::string(o.flag)),
+                        ("desc", json::string(o.desc)),
+                    ])
+                })
+                .collect();
+            json::object(&[
+                ("name", json::string(c.name)),
+                ("summary", json::string(c.summary)),
+                ("args", json::string(c.args)),
+                ("args_desc", json::string(c.args_desc)),
+                (
+                    "hidden",
+                    if c.hidden {
+                        "true".to_owned()
+                    } else {
+                        "false".to_owned()
+                    },
+                ),
+                ("options", json::array(&opts)),
+            ])
+        })
+        .collect();
+
+    let obj = json::object(&[
+        ("schema", json::string("ipe.cli.help/1")),
+        ("version", json::string(version)),
+        ("sections", json::array(&sections_arr)),
+        ("commands", json::array(&commands_arr)),
+    ]);
+    format!("{obj}\n")
+}
+
+/// Emit one command's grammar as a compact JSON object (schema `"ipe.cli.help/1"`).
+///
+/// Returns `None` when `name` is not a known command (the same condition
+/// [`command`] returns `None` for).
+#[must_use]
+pub fn command_json(name: &str) -> Option<String> {
+    use crate::cli_args::json;
+    let c = find(name)?;
+    let opts: Vec<String> = c
+        .options
+        .iter()
+        .map(|o| {
+            json::object(&[
+                ("flag", json::string(o.flag)),
+                ("desc", json::string(o.desc)),
+            ])
+        })
+        .collect();
+    let obj = json::object(&[
+        ("schema", json::string("ipe.cli.help/1")),
+        ("name", json::string(c.name)),
+        ("summary", json::string(c.summary)),
+        ("args", json::string(c.args)),
+        ("args_desc", json::string(c.args_desc)),
+        (
+            "hidden",
+            if c.hidden {
+                "true".to_owned()
+            } else {
+                "false".to_owned()
+            },
+        ),
+        ("options", json::array(&opts)),
+    ]);
+    Some(format!("{obj}\n"))
+}
+
 /// Render one command's `--help` page: summary, synopsis, the positional
 /// argument, then each option with its description.
 ///
@@ -1208,5 +1356,56 @@ mod tests {
         });
         assert_help_flags_are_accepted("health", |a| crate::cli_args::parse_health(a).map(|_| ()));
         assert_help_flags_are_accepted("fmt", |a| crate::cli_args::parse_fmt(a).map(|_| ()));
+        assert_help_flags_are_accepted("lint", |a| crate::lint::parse_lint_args(a).map(|_| ()));
+        assert_help_flags_are_accepted("clean", |a| crate::clean::parse_clean_args(a).map(|_| ()));
+        assert_help_flags_are_accepted("migrate", |a| {
+            crate::migrate::parse_migrate_args(a).map(|_| ())
+        });
+    }
+
+    /// `help_json` emits valid JSON covering every command and section.
+    #[test]
+    fn help_json_covers_all_commands_and_sections() {
+        let json = help_json();
+        // Schema tag and version must be present.
+        assert!(
+            json.contains("\"ipe.cli.help/1\""),
+            "schema tag missing from help_json"
+        );
+        // Every command name must appear.
+        for cmd in COMMANDS {
+            assert!(
+                json.contains(&format!("\"{}\"", cmd.name)),
+                "command {} missing from help_json",
+                cmd.name
+            );
+        }
+        // Every section title must appear.
+        for section in SECTIONS {
+            assert!(
+                json.contains(section.title),
+                "section {} missing from help_json",
+                section.title
+            );
+        }
+        // Output is not empty and ends with a newline.
+        assert!(json.ends_with('\n'), "help_json must end with a newline");
+        assert!(
+            !json.contains('\x1b'),
+            "help_json must carry no ANSI escapes"
+        );
+    }
+
+    /// `command_json` returns a per-command object for every known command and
+    /// `None` for an unknown name.
+    #[test]
+    fn command_json_returns_per_command_object() {
+        // Known command produces JSON with schema tag and the command name.
+        let j = command_json("version").expect("version must be known");
+        assert!(j.contains("\"ipe.cli.help/1\""), "schema tag missing");
+        assert!(j.contains("\"version\""), "command name missing");
+        assert!(j.ends_with('\n'), "command_json must end with a newline");
+        // Unknown command returns None.
+        assert!(command_json("no-such-command").is_none());
     }
 }
