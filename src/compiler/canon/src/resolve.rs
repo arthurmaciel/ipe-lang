@@ -5694,13 +5694,18 @@ fn resolve_qual_var(
     if let Some(diag) = reject_bare_reserved_constructor(qualifier, name, span, env, interner) {
         return Err(diag);
     }
+    // Resolve the qualifier and member text once and reuse across the
+    // removed-surface and negate gates below — the interner lookup is a Vec
+    // index plus a content compare, and both symbols are consulted twice.
+    let qualifier_text = interner.resolve(qualifier);
+    let name_text = interner.resolve(name);
     // Removed-surface gate (IPE-N0036): bindings intentionally dropped from
     // the Ipê surface are intercepted here before any catalog lookup, so the
     // user gets a clear migration diagnostic rather than "no such member".
     // Checked ahead of the import gate since the surface binding is gone
     // regardless of whether the module was imported.
-    if interner.resolve(qualifier) == Some("Task") {
-        match interner.resolve(name) {
+    if qualifier_text == Some("Task") {
+        match name_text {
             Some("run") => {
                 return Err(Diagnostic::Name {
                     span,
@@ -5732,7 +5737,7 @@ fn resolve_qual_var(
     // `-x` always means arithmetic negation. `Basics` is the ambient prelude
     // (Tier A) and is not otherwise a resolvable qualifier, so this is the sole
     // `Basics.member` spelling — no member table to consult.
-    if interner.resolve(qualifier) == Some("Basics") && interner.resolve(name) == Some("negate") {
+    if qualifier_text == Some("Basics") && name_text == Some("negate") {
         return Ok(canon::Expr_::VarKernel {
             id: Some(StdlibKernel::BasicsNegate),
             module: qualifier,

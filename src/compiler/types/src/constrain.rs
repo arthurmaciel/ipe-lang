@@ -13,8 +13,10 @@
 //! the solver level: [`Builder::instantiate`] (a [`Ty`] → fresh union-find
 //! structure) and [`Builder::zonk`] (a settled union-find variable → [`Ty`]).
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use strum::EnumCount as _;
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, Feature, LowerError, Span, TypeError};
@@ -1796,6 +1798,21 @@ pub struct Builder<'a> {
     /// Scheme Promotion" design at
     /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
     pending_instantiations: Vec<PendingInstantiation>,
+    /// Per-kernel memo of [`Self::resolve_scheme`]. A kernel's scheme is a pure
+    /// function of the interned built-in names (fixed for the builder's
+    /// lifetime), so it is materialised at most once and cloned on subsequent
+    /// references instead of rebuilding the whole scheme `Ty` tree per use site.
+    /// Indexed by `StdlibKernel as usize`.
+    scheme_cache: RefCell<Vec<SchemeSlot>>,
+}
+
+/// One entry of [`Builder::scheme_cache`]: either not yet resolved, or resolved
+/// to the same `Option<Ty>` [`Builder::resolve_scheme`] returns (a `None`
+/// mirroring its fail-closed miss).
+#[derive(Clone)]
+enum SchemeSlot {
+    Unresolved,
+    Resolved(Option<Ty>),
 }
 
 /// A cross-module reference to an untyped top-level binding, recorded during
@@ -2073,6 +2090,7 @@ impl<'a> Builder<'a> {
             scheme_apps: Vec::new(),
             super_vars: Vec::new(),
             pending_instantiations: Vec::new(),
+            scheme_cache: RefCell::new(vec![SchemeSlot::Unresolved; StdlibKernel::COUNT]),
         };
 
         // Register the Prelude-built-in constructor schemes (`True` / `False` /
@@ -4355,14 +4373,27 @@ impl<'a> Builder<'a> {
     /// `def().scheme` read through this one adapter means the descriptor's scheme
     /// reference and the table can never resolve to different types.
     fn resolve_scheme(&self, key: SchemeKey) -> Option<Ty> {
+        // Memoised per kernel: a kernel's scheme depends only on the interned
+        // built-in names, fixed for the builder's lifetime, so it is built at
+        // most once and cloned thereafter. A cached value is byte-identical to a
+        // rebuild by construction (same pure inputs); `instantiate_in` still
+        // alpha-renames per use site, so instantiation is unaffected.
+        let idx = key.0 as usize;
+        if let Some(SchemeSlot::Resolved(cached)) = self.scheme_cache.borrow().get(idx) {
+            return cached.clone();
+        }
         // A kernel that carries a structural `TyShape` is resolved by
         // interpreting it; the result is byte-identical to the `stdlib_scheme`
         // table's (pinned by `interpreted_shape_matches_legacy`). One without a
         // shape (`shape == None`) resolves through the table.
-        if let Some(shape) = key.0.def().shape {
-            return Some(self.interpret_shape(shape));
+        let resolved = key.0.def().shape.map_or_else(
+            || self.stdlib_scheme(key.0),
+            |shape| Some(self.interpret_shape(shape)),
+        );
+        if let Some(slot) = self.scheme_cache.borrow_mut().get_mut(idx) {
+            *slot = SchemeSlot::Resolved(resolved.clone());
         }
-        self.stdlib_scheme(key.0)
+        resolved
     }
 
     /// Interpret a `'static` [`TyShape`] into a concrete [`Ty`], resolving each
@@ -9429,7 +9460,10 @@ fn zonk_visit(
             where_: STAGE,
             detail: "type exceeded read-back node limit".to_owned(),
         })?;
-    match uf.content(root)? {
+    // Borrow the descriptor: leaf arms need no owned copy, and the structural
+    // arms clone only the field they genuinely move into a rebuild task (the
+    // module path, the record field names) rather than the whole descriptor.
+    match uf.root_content(root)? {
         // A flexible, rigid, or super-typed variable that survives solving reads
         // back as a type variable named by its representative's id. (A
         // super-typed variable is still a variable; its obligations are read
@@ -9450,6 +9484,7 @@ fn zonk_visit(
             // Cache this representative once its children reassemble, then push
             // the rebuild and children so that `a` is visited before `b` and
             // lands lower on `results`.
+            let (a, b) = (*a, *b);
             work.push(ZonkTask::Memoize { root });
             work.push(ZonkTask::BuildFun);
             work.push(ZonkTask::Visit(b));
@@ -9459,13 +9494,13 @@ fn zonk_visit(
             let arity = args.len();
             work.push(ZonkTask::Memoize { root });
             work.push(ZonkTask::BuildCon {
-                module,
-                name,
+                module: module.clone(),
+                name: *name,
                 arity,
             });
             // Reverse so args land on `results` in source order.
-            for a in args.into_iter().rev() {
-                work.push(ZonkTask::Visit(a));
+            for a in args.iter().rev() {
+                work.push(ZonkTask::Visit(*a));
             }
         }
         Content::Structure(FlatType::Tuple(elems)) => {
@@ -9473,8 +9508,8 @@ fn zonk_visit(
             work.push(ZonkTask::Memoize { root });
             work.push(ZonkTask::BuildTuple { arity });
             // Reverse so elements land on `results` in source order.
-            for e in elems.into_iter().rev() {
-                work.push(ZonkTask::Visit(e));
+            for e in elems.iter().rev() {
+                work.push(ZonkTask::Visit(*e));
             }
         }
         Content::Structure(FlatType::Record(fields, _ext)) => {
@@ -9489,8 +9524,8 @@ fn zonk_visit(
             let names: Vec<Symbol> = fields.keys().copied().collect();
             work.push(ZonkTask::Memoize { root });
             work.push(ZonkTask::BuildRecord { names });
-            for v in fields.values().copied().rev() {
-                work.push(ZonkTask::Visit(v));
+            for v in fields.values().rev() {
+                work.push(ZonkTask::Visit(*v));
             }
         }
         Content::Structure(FlatType::EmptyRecord) => {
@@ -9638,6 +9673,11 @@ impl<'a> Builder<'a> {
             scheme_apps: Vec::new(),
             super_vars: Vec::new(),
             pending_instantiations: Vec::new(),
+            // Empty: this minimal builder reads the scheme table directly; an
+            // empty cache is an all-miss cache, so `resolve_scheme` still
+            // resolves each kernel (just unmemoised here, where it is called at
+            // most once per kernel by the tripwire lift anyway).
+            scheme_cache: RefCell::new(Vec::new()),
         }
     }
 }

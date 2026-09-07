@@ -3010,6 +3010,7 @@ dependencies = [
  "ipe_intern",
  "ipe_kernels",
  "ipe_parse",
+ "strum 0.26.3",
 ]
 
 [[package]]
