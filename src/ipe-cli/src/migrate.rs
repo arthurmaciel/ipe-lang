@@ -19,22 +19,34 @@ use ipe_intern::Interner;
 use ipe_syntax::{Expr, Expr_, Module};
 
 use crate::CliError;
+use crate::cli_args::{self, OutputFormat};
 use crate::package_manifest::{PACKAGE_IPE, render_manifest_record};
 use crate::project::{
     Capability, EntryShape, IPE_TOML, IpeDep, Program, ProjectManifest, RustDep, WasmConfig,
     is_denylisted_public_env_name,
 };
 
-/// `ipe migrate config` — rewrite the current directory's interim manifest as the
-/// record form.
+/// Parsed `ipe migrate` arguments.
+pub(crate) struct MigrateArgs {
+    /// The subcommand positional (only `config` is defined).
+    pub(crate) sub: Option<String>,
+    /// The output format for the migration report.
+    pub(crate) format: OutputFormat,
+}
+
+/// Parse `ipe migrate` arguments: an optional subcommand positional and the
+/// shared `--json`/`--plain` format flags.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on an unrecognised flag or argument, when no manifest
-/// is found, or when the manifest is malformed; [`CliError::Io`] on a filesystem
-/// failure.
-pub fn run_migrate(rest: &[String]) -> Result<(), CliError> {
+/// [`CliError::UsageOwned`] on an unrecognised flag, a second positional, or
+/// `--plain`/`--json` in combination.
+pub(crate) fn parse_migrate_args(rest: &[String]) -> Result<MigrateArgs, CliError> {
     let mut sub: Option<String> = None;
+    let mut format: Option<OutputFormat> = None;
     for arg in rest {
+        if cli_args::consume_format_flag(&mut format, arg, "migrate")? {
+            continue;
+        }
         match arg.as_str() {
             flag if flag.starts_with('-') => {
                 return Err(crate::cli_args::usage_unknown_flag("migrate", flag));
@@ -43,8 +55,26 @@ pub fn run_migrate(rest: &[String]) -> Result<(), CliError> {
             other => return Err(crate::cli_args::usage_unexpected_argument("migrate", other)),
         }
     }
-    match sub.as_deref() {
-        Some("config") | None => migrate_config(Path::new(".")),
+    Ok(MigrateArgs {
+        sub,
+        format: format.unwrap_or_default(),
+    })
+}
+
+/// `ipe migrate config` — rewrite the current directory's interim manifest as the
+/// record form.
+///
+/// `--json` emits `{"schema":"ipe.cli.migrate/1","action":"migrated"|"already-record","path":"…"}`.
+/// `--plain` prints a single status line flush-left.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unrecognised flag or argument, when no manifest
+/// is found, or when the manifest is malformed; [`CliError::Io`] on a filesystem
+/// failure.
+pub fn run_migrate(rest: &[String]) -> Result<(), CliError> {
+    let args = parse_migrate_args(rest)?;
+    match args.sub.as_deref() {
+        Some("config") | None => migrate_config(Path::new("."), args.format),
         Some(other) => Err(CliError::UsageOwned(format!(
             "migrate: unknown subcommand {other:?} — the only subcommand is `config`"
         ))),
@@ -52,24 +82,45 @@ pub fn run_migrate(rest: &[String]) -> Result<(), CliError> {
 }
 
 /// Migrate the manifest in `dir`, writing the record form in place.
-fn migrate_config(dir: &Path) -> Result<(), CliError> {
+fn migrate_config(dir: &Path, format: OutputFormat) -> Result<(), CliError> {
     let package_ipe = dir.join(PACKAGE_IPE);
     if package_ipe.is_file() {
-        return migrate_package_ipe(&package_ipe);
+        return migrate_package_ipe(&package_ipe, format);
     }
     let ipe_toml = dir.join(IPE_TOML);
     if ipe_toml.is_file() {
-        return migrate_ipe_toml(dir, &ipe_toml, &package_ipe);
+        return migrate_ipe_toml(dir, &ipe_toml, &package_ipe, format);
     }
     Err(CliError::Usage(
         "migrate config: no package.ipe or ipe.toml in this directory — nothing to migrate",
     ))
 }
 
+/// Emit a migration result message in the requested format.
+///
+/// `action` is either `"migrated"` or `"already-record"`.
+fn emit_migrate_result(path: &Path, action: &str, human_msg: &str, format: OutputFormat) {
+    use OutputFormat::{Human, Json, Plain};
+    match format {
+        Json => {
+            use crate::cli_args::json;
+            println!(
+                "{}",
+                json::object(&[
+                    ("schema", json::string("ipe.cli.migrate/1")),
+                    ("action", json::string(action)),
+                    ("path", json::string(&path.display().to_string())),
+                ])
+            );
+        }
+        Plain | Human => println!("{human_msg}"),
+    }
+}
+
 /// Migrate an existing `package.ipe`. If it already reads as the record form,
 /// leave it untouched (idempotent). Otherwise read it as the interim
 /// pipe-builder form and rewrite it as a record.
-fn migrate_package_ipe(path: &Path) -> Result<(), CliError> {
+fn migrate_package_ipe(path: &Path, format: OutputFormat) -> Result<(), CliError> {
     let root = path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
@@ -77,9 +128,14 @@ fn migrate_package_ipe(path: &Path) -> Result<(), CliError> {
         crate::io_bounded::read_to_string_capped(path, crate::io_bounded::MANIFEST_READ_CAP)?;
 
     if crate::package_manifest::read_package_manifest(&text, &root, path).is_ok() {
-        println!(
-            "{} is already in the record form — nothing to migrate",
-            path.display()
+        emit_migrate_result(
+            path,
+            "already-record",
+            &format!(
+                "{} is already in the record form — nothing to migrate",
+                path.display()
+            ),
+            format,
         );
         return Ok(());
     }
@@ -87,7 +143,12 @@ fn migrate_package_ipe(path: &Path) -> Result<(), CliError> {
     let manifest = read_interim_builder(&text, &root, path)?;
     let record = render_manifest_record(&manifest);
     write_manifest(path, &record)?;
-    println!("migrated {} to the record form", path.display());
+    emit_migrate_result(
+        path,
+        "migrated",
+        &format!("migrated {} to the record form", path.display()),
+        format,
+    );
     Ok(())
 }
 
@@ -95,17 +156,27 @@ fn migrate_package_ipe(path: &Path) -> Result<(), CliError> {
 /// with the line-scanner into a [`ProjectManifest`], serialised as a record, and
 /// written to `package.ipe`; the `ipe.toml` is left in place for the author to
 /// remove.
-fn migrate_ipe_toml(root: &Path, toml_path: &Path, out_path: &Path) -> Result<(), CliError> {
+fn migrate_ipe_toml(
+    root: &Path,
+    toml_path: &Path,
+    out_path: &Path,
+    format: OutputFormat,
+) -> Result<(), CliError> {
     let text =
         crate::io_bounded::read_to_string_capped(toml_path, crate::io_bounded::MANIFEST_READ_CAP)?;
     let manifest = read_legacy_toml(&text, root)?;
     let record = render_manifest_record(&manifest);
     write_manifest(out_path, &record)?;
-    println!(
-        "migrated {} to {} (the record form) — you can now remove {}",
-        toml_path.display(),
-        out_path.display(),
-        toml_path.display()
+    emit_migrate_result(
+        out_path,
+        "migrated",
+        &format!(
+            "migrated {} to {} (the record form) — you can now remove {}",
+            toml_path.display(),
+            out_path.display(),
+            toml_path.display()
+        ),
+        format,
     );
     Ok(())
 }
@@ -656,7 +727,7 @@ mod tests {
             "module Package exposing (package)\n\npackage =\n    Package.named \"demo\"\n        |> Package.version \"0.2.0\"\n",
         )
         .expect("write");
-        migrate_config(&root).expect("migrate");
+        migrate_config(&root, OutputFormat::Human).expect("migrate");
         let out = std::fs::read_to_string(&path).expect("read back");
         assert!(out.contains("{ name = \"demo\""), "record name: {out}");
         assert!(out.contains("version = \"0.2.0\""), "record version: {out}");
@@ -677,7 +748,7 @@ mod tests {
             "module Package exposing (package)\n\npackage =\n    Package.named \"w\"\n        |> Package.wasm (Wasm.spa |> Wasm.mount \"#app\")\n        |> Package.accepts [ Capability.unsafe ]\n",
         )
         .expect("write");
-        migrate_config(&root).expect("migrate");
+        migrate_config(&root, OutputFormat::Human).expect("migrate");
         let out = std::fs::read_to_string(&path).expect("read back");
         let m = crate::package_manifest::read_package_manifest(&out, &root, &path)
             .expect("record reads");
@@ -693,7 +764,7 @@ mod tests {
         let path = root.join(PACKAGE_IPE);
         let record = "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\npackage : Package\npackage =\n    { name = \"already\"\n    , version = \"1.0.0\"\n    }\n";
         std::fs::write(&path, record).expect("write");
-        migrate_config(&root).expect("migrate no-op");
+        migrate_config(&root, OutputFormat::Human).expect("migrate no-op");
         let out = std::fs::read_to_string(&path).expect("read back");
         assert_eq!(out, record, "an already-record manifest is untouched");
         let _ = std::fs::remove_dir_all(&root);
@@ -707,7 +778,7 @@ mod tests {
             "[project]\nname = \"legacy\"\nversion = \"2.1.0\"\n\n[database]\ndriver = \"postgres\"\n\n[dependencies]\nhttp = \"^1.2\"\n",
         )
         .expect("write toml");
-        migrate_config(&root).expect("migrate");
+        migrate_config(&root, OutputFormat::Human).expect("migrate");
         let path = root.join(PACKAGE_IPE);
         let out = std::fs::read_to_string(&path).expect("read back package.ipe");
         let m = crate::package_manifest::read_package_manifest(&out, &root, &path)

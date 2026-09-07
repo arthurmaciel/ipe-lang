@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::CliError;
+use crate::cli_args::{self, OutputFormat};
 use crate::style::{self, glyph};
 
 /// The generated directories `clean` removes, named relative to the project
@@ -20,20 +21,48 @@ use crate::style::{self, glyph};
 /// carries (`out/`, `target/`, `.ipe/`).
 const GENERATED_DIRS: &[&str] = &["out", "target", ".ipe"];
 
+/// Parsed `ipe clean` arguments.
+pub(crate) struct CleanArgs {
+    /// The output format for the removal report.
+    pub(crate) format: OutputFormat,
+}
+
+/// Parse `ipe clean` arguments: only the shared `--json`/`--plain` format flags;
+/// the command takes no positional argument.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on an unknown flag or any positional argument.
+pub(crate) fn parse_clean_args(rest: &[String]) -> Result<CleanArgs, CliError> {
+    let mut format: Option<OutputFormat> = None;
+    for arg in rest {
+        if cli_args::consume_format_flag(&mut format, arg, "clean")? {
+            continue;
+        }
+        if arg.starts_with('-') {
+            return Err(crate::cli_args::usage_unknown_flag("clean", arg));
+        }
+        return Err(crate::cli_args::usage_unexpected_argument("clean", arg));
+    }
+    Ok(CleanArgs {
+        format: format.unwrap_or_default(),
+    })
+}
+
 /// `ipe clean` — remove the current project's generated build output.
 ///
 /// Takes no positional argument: it operates on the project rooted at the
 /// current directory. Prints one line per removed directory and a closing
 /// summary.
 ///
+/// `--json` emits `{"schema":"ipe.cli.clean/1","removed":[…]}`.
+/// `--plain` prints one removed path per line, flush-left.
+///
 /// # Errors
-/// [`CliError::UsageOwned`] on any argument (it takes none) or when the current
+/// [`CliError::UsageOwned`] on any unrecognised argument or when the current
 /// directory is not an Ipê project (no `package.ipe`); [`CliError::Io`] on a
 /// filesystem failure while removing a directory.
 pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
-    if let Some(arg) = rest.first() {
-        return Err(crate::cli_args::usage_unexpected_argument("clean", arg));
-    }
+    let args = parse_clean_args(rest)?;
 
     let root = project_root()?;
     let mut removed: Vec<String> = Vec::new();
@@ -43,7 +72,7 @@ pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
         }
     }
 
-    print_summary(&removed);
+    print_summary(&removed, args.format);
     Ok(())
 }
 
@@ -108,25 +137,49 @@ fn remove_generated_dir(root: &Path, name: &str) -> Result<Option<String>, CliEr
     Ok(Some(format!("{name}/")))
 }
 
-/// Print the friendly result: one `removed <dir>` line per deleted directory,
-/// then a one-line summary. When nothing was generated, say so plainly.
-fn print_summary(removed: &[String]) {
-    let p = style::Palette::for_stream(&std::io::stdout());
-    let mut body = String::new();
-    if removed.is_empty() {
-        body.push_str("Nothing to clean — no generated output found.\n");
-    } else {
-        for dir in removed {
-            let _ = writeln!(body, "{} removed {dir}", glyph::OK);
+/// Print the removal result in the requested format.
+///
+/// `--json` emits `{"schema":"ipe.cli.clean/1","removed":[…]}`.
+/// `--plain` prints one removed path per line, flush-left, with no summary.
+/// Human (default) prints a decorated frame with a one-line count.
+fn print_summary(removed: &[String], format: OutputFormat) {
+    use OutputFormat::{Human, Json, Plain};
+    match format {
+        Json => {
+            use crate::cli_args::json;
+            let items: Vec<String> = removed.iter().map(|s| json::string(s)).collect();
+            println!(
+                "{}",
+                json::object(&[
+                    ("schema", json::string("ipe.cli.clean/1")),
+                    ("removed", json::array(&items)),
+                ])
+            );
         }
-        let n = removed.len();
-        let noun = if n == 1 { "directory" } else { "directories" };
-        let _ = writeln!(body, "\nCleaned {n} generated {noun}.");
+        Plain => {
+            for dir in removed {
+                println!("{dir}");
+            }
+        }
+        Human => {
+            let p = style::Palette::for_stream(&std::io::stdout());
+            let mut body = String::new();
+            if removed.is_empty() {
+                body.push_str("Nothing to clean — no generated output found.\n");
+            } else {
+                for dir in removed {
+                    let _ = writeln!(body, "{} removed {dir}", glyph::OK);
+                }
+                let n = removed.len();
+                let noun = if n == 1 { "directory" } else { "directories" };
+                let _ = writeln!(body, "\nCleaned {n} generated {noun}.");
+            }
+            print!(
+                "{}",
+                style::frame(&style::gutter(&format!("{}{body}{}", p.green, p.reset)))
+            );
+        }
     }
-    print!(
-        "{}",
-        style::frame(&style::gutter(&format!("{}{body}{}", p.green, p.reset)))
-    );
 }
 
 #[cfg(test)]

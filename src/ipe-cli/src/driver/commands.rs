@@ -28,10 +28,16 @@ pub struct HelpRequest;
 /// to stdout. Handles the top-level screen (no args, or a leading `--help` /
 /// `-h` / `help`) and every per-command page (`<cmd> --help` or `help <cmd>`).
 ///
+/// When `--json` accompanies the help flag the output is a stable JSON object
+/// (schema `"ipe.cli.help/1"`) rather than the human screen — both for the
+/// top-level grammar and for `<cmd> --help --json`. Human output remains the
+/// default; `--json` is explicit opt-in.
+///
 /// Returns `Some(HelpRequest)` when help was printed (the caller returns `Ok`),
 /// or `None` when `args` is an ordinary command to dispatch.
 pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
     let is_help_flag = |a: &str| a == "--help" || a == "-h" || a == "help";
+    let has_json = |slice: &[String]| slice.iter().any(|a| a == "--json");
 
     // No arguments, or a leading bare help token: the top-level screen.
     match args.split_first() {
@@ -40,28 +46,51 @@ pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
             return Some(HelpRequest);
         }
         Some((first, rest)) if is_help_flag(first) => {
-            // `help <cmd>` / `--help <cmd>`: that command's page, else the
-            // top-level screen.
-            let named = rest
-                .first()
-                .and_then(|c| help::command(c, &std::io::stdout()));
-            match named {
-                Some(page) => print!("{page}"),
-                None => print!("{}", help::top_level(&std::io::stdout())),
+            // Detect `--json` in the remaining tokens.
+            let want_json = has_json(rest);
+            // Strip --json from the token list before looking for a command name.
+            let rest_no_json: Vec<&String> =
+                rest.iter().filter(|a| a.as_str() != "--json").collect();
+
+            if want_json {
+                // `--help --json [<cmd>]` / `help --json [<cmd>]`
+                let named_json = rest_no_json
+                    .first()
+                    .and_then(|c| help::command_json(c.as_str()));
+                match named_json {
+                    Some(json) => print!("{json}"),
+                    None => print!("{}", help::help_json()),
+                }
+            } else {
+                // `help <cmd>` / `--help <cmd>`: that command's page, else the
+                // top-level screen.
+                let named = rest_no_json
+                    .first()
+                    .and_then(|c| help::command(c.as_str(), &std::io::stdout()));
+                match named {
+                    Some(page) => print!("{page}"),
+                    None => print!("{}", help::top_level(&std::io::stdout())),
+                }
             }
             return Some(HelpRequest);
         }
         _ => {}
     }
 
-    // `<cmd> --help`: the command's own page, when the command is known.
+    // `<cmd> --help [--json]`: the command's own page, when the command is known.
     if let Some((cmd, rest)) = args.split_first()
         && help::is_command(cmd)
         && rest.iter().any(|a| is_help_flag(a))
-        && let Some(page) = help::command(cmd, &std::io::stdout())
     {
-        print!("{page}");
-        return Some(HelpRequest);
+        if has_json(rest) {
+            if let Some(json) = help::command_json(cmd) {
+                print!("{json}");
+                return Some(HelpRequest);
+            }
+        } else if let Some(page) = help::command(cmd, &std::io::stdout()) {
+            print!("{page}");
+            return Some(HelpRequest);
+        }
     }
     None
 }

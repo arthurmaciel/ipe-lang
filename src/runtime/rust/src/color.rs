@@ -588,7 +588,14 @@ fn nearest_256(r: i64, g: i64, b: i64) -> i64 {
     };
     let (ri, gi, bi) = (nearest_level(r), nearest_level(g), nearest_level(b));
     let cube_index = 16 + 36 * ri as i64 + 6 * gi as i64 + bi as i64;
-    let cube_rgb = (levels[ri], levels[gi], levels[bi]);
+    // `ri`, `gi`, `bi` each come from `nearest_level`, which scans `levels`
+    // (length 6) and only updates the index inside the iteration — the result
+    // is always a valid index into `levels`.
+    let cube_rgb = (
+        levels.get(ri).copied().unwrap_or(255),
+        levels.get(gi).copied().unwrap_or(255),
+        levels.get(bi).copied().unwrap_or(255),
+    );
     let cube_d = dist2((r, g, b), cube_rgb);
 
     // Greyscale ramp 232..=255: grey level 8 + 10*n for n in 0..24.
