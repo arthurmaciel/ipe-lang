@@ -1,0 +1,283 @@
+# CI check-disposition SSOT
+#
+# Single source of truth mapping every produced status context to exactly one
+# disposition. The branch-protection required set is DERIVED from this file
+# (every `gate` entry), never hand-synced; `ci/verify-manifest.py` fails CI if a
+# produced context is missing here, or if a `gate` entry lacks a producer.
+#
+# Dispositions
+#   gate          Blocks development -> main promotion (a required status
+#                 context) and runs per relevant change.
+#   nightly-gate  Heavy; runs nightly + on development push, not on every PR. A
+#                 red blocks the NEXT promotion via the fail-closed
+#                 `promotion-ready` job (absence != pass). Never silently advisory.
+#   informational Never blocks. MANDATORY low-noise surface (the ci-health
+#                 dedup issue + summary) and a named owner. May NOT guard a
+#                 Security / Soundness / SEAL invariant.
+#   delete        Dead / orphaned / make-up. Kept here only until removed, with a
+#                 reason, so the drift gate does not flag it as unclassified.
+#
+# `context` is the exact status-context string GitHub reports (the job `name:`,
+# or the job id when no `name:` is set). Matrix jobs report one context per leg;
+# they are covered by their `aggregator` (the single promotable context) so the
+# matrix legs are marked `internal: true` and excluded from the required set.
+#
+# `owner` is required for every `informational` entry (who watches its surface).
+# `guards` records the Security / Soundness / SEAL invariant a check protects;
+# an entry that `guards` such an invariant may not be `informational`.
+
+version: 1
+
+checks:
+  # ── Fast per-change gates (ci.yml, PR + push) ─────────────────────────────
+  - context: fmt
+    disposition: gate
+    producer: ci.yml
+  - context: clippy
+    disposition: gate
+    producer: ci.yml
+  - context: quick-check
+    disposition: gate
+    producer: ci.yml
+  - context: test
+    disposition: gate
+    producer: ci.yml
+    aggregates: [test-prep, test-run]
+  - context: artifact-guard
+    disposition: gate
+    producer: ci.yml
+  - context: diagnostic-tone
+    disposition: gate
+    producer: ci.yml
+  - context: "explain-page example gate (ADR 0059)"
+    disposition: gate
+    producer: ci.yml
+  - context: "doc-string example gate"
+    disposition: gate
+    producer: ci.yml
+  - context: "first-party check floor (ipe type-check only)"
+    disposition: gate
+    producer: ci.yml
+  - context: "first-party shapes (build gate)"
+    disposition: gate
+    producer: ci.yml
+  - context: wasm-floor
+    disposition: gate
+    producer: ci.yml
+  - context: seal-smoke
+    disposition: gate
+    producer: ci.yml
+    guards: SEAL
+  - context: stdlib-docs-drift
+    disposition: gate
+    producer: ci.yml
+  - context: env-docs-drift
+    disposition: gate
+    producer: ci.yml
+  - context: capabilities-docs-drift
+    disposition: gate
+    producer: ci.yml
+  - context: no-reference-impl-leak
+    disposition: gate
+    producer: ci.yml
+    guards: Security
+  - context: runtime-full-features
+    disposition: gate
+    producer: ci.yml
+    guards: SEAL
+  - context: registry-admission
+    disposition: gate
+    producer: ci.yml
+
+  # ── Panic-scan / cargo-deny / playground / admission (per-change gates) ────
+  - context: panic-scan
+    disposition: gate
+    producer: panic-scan.yml
+    guards: Soundness
+  - context: cargo-deny
+    disposition: gate
+    producer: security.yml
+    guards: Security
+  - context: playground-jail
+    disposition: gate
+    producer: playground.yml
+    guards: Security
+  - context: "linux-x64 (seccomp socket-deny + bubblewrap)"
+    disposition: gate
+    producer: admission-sandbox.yml
+    guards: Security
+  - context: "linux-arm64 (seccomp socket-deny + bubblewrap)"
+    disposition: gate
+    producer: admission-sandbox.yml
+    guards: Security
+  - context: "macos-arm64 (sandbox-exec / Seatbelt)"
+    disposition: gate
+    producer: admission-sandbox.yml
+    guards: Security
+
+  # ── E2E + seal-slice aggregators (gate) ───────────────────────────────────
+  - context: e2e-all
+    disposition: gate
+    producer: ci.yml
+    guards: SEAL
+    aggregates: [e2e]
+  - context: seal-slice
+    disposition: gate
+    producer: ci.yml
+    guards: SEAL
+    aggregates: [seal-slice-shard]
+
+  # ── Heavy soundness / sanitizers — nightly-gate ───────────────────────────
+  - context: miri
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Soundness
+    aggregates: [miri-shard]
+  - context: asan-all
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Soundness
+    aggregates: [asan]
+  - context: tsan
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Soundness
+  - context: "seal-modset (vendored emit model)"
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: SEAL
+  - context: "browser-e2e (Ipe.Browser geo+clipboard — headless Playwright)"
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Security
+  - context: runtime-feature-combos
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: SEAL
+
+  # ── Cross-platform jail proofs — nightly-gate (Security §1) ───────────────
+  - context: "macos-tier2 (sandbox-exec — the real macOS jail proof)"
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Security
+  - context: "macos-run-jail (sandbox-exec — the real macOS run-jail proof)"
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Security
+  - context: "linux-x64-tier2 (bwrap+seccomp — the real Linux jail proof)"
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Security
+  - context: "linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)"
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Security
+  - context: "windows-tier2 (Job Object + AppContainer — the real Windows build-jail proof)"
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Security
+  - context: "windows-run-jail (Job Object + AppContainer — the real Windows run-jail proof)"
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Security
+  - context: "freebsd-tier2 (jail(8) inside vmactions VM — the real FreeBSD build-jail proof)"
+    disposition: nightly-gate
+    producer: ci.yml
+    guards: Security
+  - context: "windows-x64 (Docker Windows container, process isolation)"
+    disposition: nightly-gate
+    producer: admission-sandbox.yml
+    guards: Security
+  - context: "freebsd-x64 (jail(8) inside vmactions VM)"
+    disposition: nightly-gate
+    producer: admission-sandbox.yml
+    guards: Security
+
+  # ── C-free / static portability — nightly-gate + informational ────────────
+  - context: "linux-cfree-gate (refusal is fail-closed)"
+    disposition: nightly-gate
+    producer: static.yml
+    guards: Security
+  - context: "linux-static-x64 (dlmalloc)"
+    disposition: informational
+    producer: static.yml
+    owner: release
+    internal: true
+    note: portability build (matrix leg); a red is a build-portability regression, not a guarantee.
+  - context: "linux-static-x64 (mimalloc)"
+    disposition: informational
+    producer: static.yml
+    owner: release
+    internal: true
+    note: portability build (matrix leg).
+  - context: "linux-static-arm64 (dlmalloc)"
+    disposition: informational
+    producer: static.yml
+    owner: release
+    note: portability build.
+  - context: "windows-static (dlmalloc, MSVC +crt-static)"
+    disposition: informational
+    producer: static.yml
+    owner: release
+    note: >-
+      Portability build. Currently carries continue-on-error:true (a red reports
+      GREEN — worse than advisory); drop continue-on-error so the ci-health
+      surface can see it. Tracked in the reconciliation doc.
+  - context: "freebsd-cross (x86_64-unknown-freebsd, build-only)"
+    disposition: informational
+    producer: static.yml
+    owner: release
+    note: >-
+      Cross build-only. Currently continue-on-error:true; drop it so the
+      surface sees a red.
+
+  # ── Install-smoke — informational (installer UX; artifact separately gated) ─
+  - context: "install-smoke (ubuntu-latest)"
+    disposition: informational
+    producer: install-smoke.yml
+    owner: release
+  - context: "install-smoke (macos-latest)"
+    disposition: informational
+    producer: install-smoke.yml
+    owner: release
+  - context: "install-smoke (windows-latest)"
+    disposition: informational
+    producer: install-smoke.yml
+    owner: release
+  - context: "install-smoke (freebsd)"
+    disposition: informational
+    producer: install-smoke.yml
+    owner: release
+
+  # ── Docs deploy — informational ───────────────────────────────────────────
+  - context: deploy
+    disposition: informational
+    producer: docs-pages.yml
+    owner: docs
+    note: GitHub Pages deploy; not a code guarantee.
+  - context: build
+    disposition: informational
+    producer: playground.yml
+    owner: docs
+    note: playground.yml build leg; playground-jail is the Security gate.
+
+  # ── Orphaned required context — delete from the required set ───────────────
+  - context: guardian-sound
+    disposition: delete
+    producer: null
+    note: >-
+      Orphaned required context — no workflow produces a status of this name.
+      With strict_required_status_checks_policy:false a never-reported required
+      check does NOT block (a false gate satisfied by absence). Remove from the
+      main-protection ruleset. See ci/RECONCILIATION.md.
+
+  # ── Utility / non-status jobs (not gates; declared so drift stays quiet) ───
+  # `changes` (paths-filter fan-out), release/promote/backport automation, and
+  # the rerun helper are plumbing, not guarantees. Marked internal so the drift
+  # gate does not demand a gate/informational disposition for them.
+  - context: changes
+    disposition: informational
+    producer: ci.yml
+    owner: infra
+    internal: true
+    note: paths-filter fan-out; not a guarantee.
