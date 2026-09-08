@@ -26,6 +26,23 @@
 //! ```text
 //! IPE_E2E=1 cargo test live_e2e
 //! ```
+//!
+//! ## SEAL tiering (three-way split)
+//!
+//! Each live-server guarantee is proved by three tiers, so no single test has to
+//! pay for all of them:
+//!   1. compile-proof — the `*_build_only` tests here run the real `ipe` + `cargo
+//!      build` and are the accept ⇒ build half of THE SEAL;
+//!   2. in-process behavior — `ipe_runtime::web`'s `emitted_router_behavior_tests`
+//!      drive the SAME fully-layered production router
+//!      (`build_web_router`) via `tower::ServiceExt::oneshot` and carry the
+//!      behavioral asserts (`>0<`, click→`>1<`, SSE `data-ipe-hid`, typed-record
+//!      submit→decoded record) with no socket, subprocess, or cold build;
+//!   3. socket smoke — `live_get_root_contains_initial_count` keeps ONE real
+//!      bind+serve+request per transport, proving the listener path oneshot skips.
+//!
+//! The remaining socket-driven behavior tests below stay for now (belt-and-braces
+//! coverage) pending the guardian-reviewed narrowing tracked in #2134.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
