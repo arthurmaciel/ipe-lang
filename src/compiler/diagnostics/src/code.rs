@@ -294,6 +294,8 @@ code! {
     IPE_N0048 = "IPE-N0048", "two definitions fold to one generated Rust name", "IPE-N0048";
     /// a pattern binds the same variable name more than once
     IPE_N0049 = "IPE-N0049", "a pattern binds the same name twice", "IPE-N0049";
+    /// a Script imports a shape's view module but renders nothing
+    IPE_N0050 = "IPE-N0050", "a Script imports a shape's UI, which it cannot render", "IPE-N0050";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)

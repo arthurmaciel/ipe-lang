@@ -409,12 +409,14 @@ fn guard_rerun_conflict(
 /// The shape an existing project's `src/Main.ipe` *confidently* pins, or `None`
 /// when the entry is absent, unparseable, or not confidently classifiable.
 ///
-/// The four rendering shapes (`web`/`tui`/`cli`/`server`) are pinned only by a
-/// qualified entry head (`Web.app`/`Tui.app`/…), so classifying to one of them is
-/// confident. The classifier collapses both a genuine `Task Error ()` script and
-/// an un-pinnable head into [`ipe_canon::shape_source::MainShape::Script`], so a
-/// `Script` result is ambiguous — refusing on it would risk a false conflict
-/// against a project the classifier merely could not read. Soundness direction
+/// The four rendering shapes (`web`/`tui`/`cli`/`server`) are recognised by a
+/// qualified entry head (`Web.app`/`Tui.app`/…) via the lenient scaffold-detection
+/// classifier ([`ipe_canon::shape_source::scaffold_shape_hint`]) — deliberately
+/// NOT the strict capability-gate classifier, so a partially written entry still
+/// reads its shape. Both a genuine `Task Error ()` script and an un-spellable head
+/// collapse to [`ipe_canon::shape_source::MainShape::Script`], so a `Script`
+/// result is ambiguous — refusing on it would risk a false conflict against a
+/// project this read merely could not classify. Soundness direction
 /// (spec § 5): the re-run guard over-permits toward *reconcile* rather than refuse
 /// a project that is not confidently a different shape; the only cost of a missed
 /// conflict is a reconcile that leaves every present file untouched anyway.
@@ -436,7 +438,14 @@ fn existing_project_shape(target_dir: &Path) -> Result<Option<InitShape>, CliErr
         // untouched and the user's own build reports the real parse error.
         return Ok(None);
     };
-    let shape = ipe_canon::shape_source::classify_main_shape(&module, &interner);
+    // Scaffold detection is a UX read, never a capability gate: it picks which
+    // template a re-run reconciles against. It uses the LENIENT written-qualifier
+    // classifier (not the strict `classify_main_shape` the capability gate keys
+    // on) so a partially written `src/Main.ipe` — `main = Tui.app config` before
+    // its `import Ipe.Tea.Tui` line is typed — is still recognised as its shape. A
+    // wrong read only mis-scaffolds or misses a re-run conflict; it cannot escalate
+    // a capability.
+    let shape = ipe_canon::shape_source::scaffold_shape_hint(&module, &interner);
     Ok(confidently_pinned_shape(shape))
 }
 

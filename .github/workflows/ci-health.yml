@@ -1,0 +1,60 @@
+# The advisory-red surface (issue #2138).
+#
+# A non-blocking (informational / nightly-gate) check that goes RED must be
+# VISIBLE without a per-failure email flood. This workflow is that single
+# low-noise surface. On completion of a CI-producing workflow it reads the
+# check-runs for the head commit, maps each to its manifest disposition, and:
+#
+#   * writes a run-summary table (Gates vs Nightly-gate vs Informational, with
+#     pass/fail) to the job summary — the manifest-driven CI-health dashboard;
+#   * maintains ONE dedup tracking issue per red non-gate context
+#     ("ci-health: <context>"): opened on first red, EDITED IN PLACE on continued
+#     red (no new notification), auto-closed on green.
+#
+# `gate` reds are already forced into the merge path by branch protection, so
+# they are shown in the table but never get a tracking issue (no duplication).
+# This replaces GitHub's per-failure email for the advisory buckets: turn email
+# off for informational/nightly-gate jobs and read this surface instead.
+name: CI health
+
+on:
+  workflow_run:
+    workflows:
+      - "Build & test"          # ci.yml
+      - "Sandbox"               # admission-sandbox.yml
+      - "Static binaries"       # static.yml
+      - "Install"               # install-smoke.yml
+    types: [completed]
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+  checks: read
+
+concurrency:
+  group: ci-health-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  surface:
+    name: ci-health-surface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Surface advisory reds (dedup issue + summary)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        # GITHUB_STEP_SUMMARY is injected into the step env by the runner; the
+        # script reads it directly to write the CI-health dashboard table.
+        run: python3 ci/ci_health_surface.py

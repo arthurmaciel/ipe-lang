@@ -566,6 +566,15 @@ fn name_prose(msg: &NameError) -> String {
         NameError::DuplicatePatternBinder { name, .. } => {
             format!("`{name}` is bound twice in the same pattern, so I don't know which you mean.")
         }
+        NameError::ScriptImportsShapeView {
+            shape_ui_module,
+            shape,
+            ..
+        } => format!(
+            "This is a script — its `main` is a plain `Task`, so it renders nothing — but it \
+             imports `{shape_ui_module}`, the {shape} view. A script has no `view`, so that UI \
+             never reaches the screen."
+        ),
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -1610,6 +1619,9 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::DuplicatePatternBinder { .. } => {
             Some("this name is already bound in this pattern".to_string())
         }
+        NameError::ScriptImportsShapeView { shape, entry, .. } => Some(format!(
+            "this script has no `view`; did you mean `main = {entry} {{ … }}` to run a {shape} app?"
+        )),
         NameError::RustNameFold { .. } | NameError::Unknown => None,
     }
 }
