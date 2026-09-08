@@ -7431,3 +7431,459 @@ mod reset_state_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod emitted_router_behavior_tests {
+    //! In-process behavior tier for THE SEAL's live-server guarantees.
+    //!
+    //! The heavy `live_e2e` SEAL tests each `ipe`-emit a counter app, run a full
+    //! cold `cargo build`, bind a real TCP port, spawn the binary, and drive it
+    //! over an HTTP/1.1 socket — the maximally-expensive way to prove a
+    //! *behavior* (GET renders the initial model; a click increments it; the SSE
+    //! resync frame stamps event ids; a typed-record form submit decodes and
+    //! dispatches). The build-and-behave cost is the 4-6 min per-golden wall
+    //! that stacks into the multi-shard straggler.
+    //!
+    //! The BEHAVIOR half needs none of that. `build_web_router` is the exact,
+    //! fully-layered `axum::Router` the served app runs — the same handlers, the
+    //! same CSRF/panic/observability middleware stack — assembled from a
+    //! `WebState`. Driving it through `tower::ServiceExt::oneshot` exercises the
+    //! whole TEA wire loop (`init → view → event → update → re-view` and the SSE
+    //! resync) in-process: no socket, no subprocess, no port TOCTOU, no
+    //! stderr-scrape, no sleeps for a spawned build. The COMPILE half stays the
+    //! `*_build_only` seals (a real `ipe` + `cargo` build) and one socket smoke
+    //! per transport keeps the bind/serve path standing; together the three
+    //! tiers prove exactly what the old single socket test did, split so a
+    //! build regression fails in the compile-proof and a behavior regression
+    //! fails here — neither needs the full cold build+socket every run.
+    //!
+    //! These are ordinary crate tests (no `IPE_E2E` gate): they compile and run
+    //! in the normal `cargo test` pass because they never shell out.
+
+    use super::*;
+    use crate::web::req::WebReq;
+    use crate::web::store::{MemoryStore, SessionStore, StoreHit};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use serde::{Deserialize, Serialize};
+    use std::time::Duration;
+    use tower::ServiceExt; // oneshot
+
+    // ── Counter fixture — the hand-written twin of the `IPE_LIVE_COUNTER`
+    //    program the socket `live_e2e` tests emit. `update` and `view` carry the
+    //    real behavior the socket tests assert over the wire. ──────────────────
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    struct Creds {
+        username: String,
+        password: String,
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+    struct Model {
+        count: i64,
+        last_username: String,
+    }
+
+    impl crate::stringify::IpeStringify for Model {
+        fn ipe_show(&self) -> String {
+            format!(
+                "Model {{ count: {}, last_username: {:?} }}",
+                self.count, self.last_username
+            )
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    enum Msg {
+        Increment,
+        Decrement,
+        SignIn(Creds),
+    }
+
+    impl crate::stringify::IpeStringify for Msg {
+        fn ipe_show(&self) -> String {
+            format!("{self:?}")
+        }
+    }
+
+    fn init(_req: WebReq) -> (Model, IpeCmd<Msg>) {
+        (
+            Model {
+                count: 0,
+                last_username: String::new(),
+            },
+            IpeCmd::None,
+        )
+    }
+
+    fn update(msg: Msg, model: Model) -> (Model, IpeCmd<Msg>) {
+        let next = match msg {
+            Msg::Increment => Model {
+                count: model.count + 1,
+                ..model
+            },
+            Msg::Decrement => Model {
+                count: model.count - 1,
+                ..model
+            },
+            Msg::SignIn(creds) => Model {
+                last_username: creds.username,
+                ..model
+            },
+        };
+        (next, IpeCmd::None)
+    }
+
+    /// The hand-written twin of the counter app's `view`:
+    /// `Ui.el [onClick Increment] (text "+")`, the count text, an
+    /// `Ui.el [onClick Decrement] (text "-")`, and a typed-record `onSubmit`
+    /// form (`SignIn : Creds -> Msg`). The renderer stamps `data-ipe-hid` on
+    /// every element carrying a handler, exactly as the socket path does.
+    fn view(model: Model) -> Html<Msg> {
+        use crate::html::{Attribute, Event};
+        let plus = Html::HElement(
+            "div".to_string(),
+            vec![Attribute::EventAttr(Event::OnMsg(
+                "click".to_string(),
+                Msg::Increment,
+            ))],
+            vec![Html::HText("+".to_string())],
+        );
+        let count = Html::HText(model.count.to_string());
+        let minus = Html::HElement(
+            "div".to_string(),
+            vec![Attribute::EventAttr(Event::OnMsg(
+                "click".to_string(),
+                Msg::Decrement,
+            ))],
+            vec![Html::HText("-".to_string())],
+        );
+        // Typed-record form: OnForm decodes the posted FormData into `Creds` and
+        // dispatches `SignIn`. A decode miss yields `None` (no Msg) — the exact
+        // `decode_form_or_warn::<Creds>` contract the emitted `Ui.onSubmit` uses.
+        let form = Html::HElement(
+            "form".to_string(),
+            vec![Attribute::EventAttr(Event::OnForm(
+                "submit".to_string(),
+                std::sync::Arc::new(|fd: crate::html::FormData| {
+                    let username = fd.get("username").cloned().unwrap_or_default();
+                    let password = fd.get("password").cloned().unwrap_or_default();
+                    Some(Msg::SignIn(Creds { username, password }))
+                }),
+            ))],
+            vec![Html::HElement(
+                "input".to_string(),
+                vec![Attribute::Attr("name".to_string(), "username".to_string())],
+                vec![],
+            )],
+        );
+        let username_echo = Html::HText(model.last_username.clone());
+        Html::HElement(
+            "div".to_string(),
+            vec![],
+            vec![plus, count, minus, form, username_echo],
+        )
+    }
+
+    fn subs(_model: Model) -> IpeSub<Msg> {
+        IpeSub::None
+    }
+
+    type Store = MemoryStore<Model, Msg>;
+    type State = WebState<
+        Model,
+        Msg,
+        fn(WebReq) -> (Model, IpeCmd<Msg>),
+        fn(Msg, Model) -> (Model, IpeCmd<Msg>),
+        fn(Model) -> Html<Msg>,
+        fn(Model) -> IpeSub<Msg>,
+    >;
+
+    fn route_resolver(m: Model, _path: &str) -> Model {
+        m
+    }
+    fn param_resolver(_path: &str) -> crate::dict::IpeDict<String> {
+        crate::dict::dict_empty()
+    }
+    fn route_matched(p: &str) -> bool {
+        p == "/"
+    }
+
+    fn make_state(store: Arc<Store>) -> State {
+        WebState {
+            store: store as Arc<dyn store::SessionStore<Model, Msg>>,
+            init: Arc::new(init),
+            update: Arc::new(update),
+            view: Arc::new(view),
+            subs: Arc::new(subs),
+            route_resolver: Arc::new(route_resolver),
+            param_resolver: Arc::new(param_resolver),
+            route_matched: Arc::new(route_matched),
+            session_count: Arc::new(AtomicUsize::new(0)),
+            watch_build_status: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// The real production router — the same one `web_app` serves. CSRF is
+    /// disabled for the test the SAME way the socket `live_e2e` tests do it
+    /// (`IPE_CSRF=off`), so a raw POST exercises the full handler chain without
+    /// cookie plumbing.
+    fn make_router(store: Arc<Store>) -> axum::Router {
+        build_web_router::<
+            Model,
+            Msg,
+            fn(WebReq) -> (Model, IpeCmd<Msg>),
+            fn(Msg, Model) -> (Model, IpeCmd<Msg>),
+            fn(Model) -> Html<Msg>,
+            fn(Model) -> IpeSub<Msg>,
+        >(make_state(store), false)
+    }
+
+    /// `data-ipe-hid` on the nearest element start-tag that directly wraps the
+    /// `>text<` node — mirrors the socket test's `extract_hid_near_text`.
+    fn hid_near_text(html: &str, text: &str) -> Option<String> {
+        let marker = format!(">{text}<");
+        let before = &html[..html.find(&marker)?];
+        let prefix = "data-ipe-hid=\"";
+        let pos = before.rfind(prefix)?;
+        let after = &before[pos + prefix.len()..];
+        Some(after[..after.find('"')?].to_string())
+    }
+
+    /// `data-ipe-hid` on the first `<tag …>` open tag — mirrors
+    /// `extract_hid_for_open_tag`.
+    fn hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
+        let open = format!("<{tag} ");
+        let after_tag = &html[html.find(&open)?..];
+        let tag_slice = &after_tag[..after_tag.find('>')?];
+        let prefix = "data-ipe-hid=\"";
+        let pos = tag_slice.find(prefix)?;
+        let after = &tag_slice[pos + prefix.len()..];
+        Some(after[..after.find('"')?].to_string())
+    }
+
+    /// GET `path` (optionally with an `ipe_sid` cookie) and return
+    /// `(minted_sid, body)`. `minted_sid` is the `ipe_sid` from any `Set-Cookie`
+    /// header (the response also sets a CSRF cookie, so scan ALL of them), or
+    /// empty when none was set.
+    async fn get(router: axum::Router, path: &str, cookie: Option<&str>) -> (String, String) {
+        let mut b = Request::builder().method("GET").uri(path);
+        if let Some(c) = cookie {
+            b = b.header(header::COOKIE, format!("ipe_sid={c}"));
+        }
+        let resp = router
+            .oneshot(b.body(Body::empty()).expect("build GET"))
+            .await
+            .expect("router responds");
+        let mut sid = String::new();
+        for val in resp.headers().get_all(header::SET_COOKIE) {
+            let s = val.to_str().unwrap_or("");
+            if let Some(rest) = s.strip_prefix("ipe_sid=") {
+                sid = rest.split(';').next().unwrap_or("").trim().to_string();
+                break;
+            }
+        }
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        (sid, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    async fn post_event(router: axum::Router, cookie: &str, body: &str) -> StatusCode {
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/_ipe/event")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::COOKIE, format!("ipe_sid={cookie}"))
+                    .body(Body::from(body.to_owned()))
+                    .expect("build POST"),
+            )
+            .await
+            .expect("router responds");
+        resp.status()
+    }
+
+    /// The store's live Model for `sid` (the driver commits `update` results
+    /// here; polling it avoids a fixed sleep — the same commit the second socket
+    /// GET observes).
+    async fn model_of(store: &Arc<Store>, sid: &str) -> Option<Model> {
+        match store.get(sid).await {
+            Some(StoreHit::Web(h)) => {
+                Some(h.lock().unwrap_or_else(|e| e.into_inner()).model.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Wait (bounded) for the async `drive_session` task to commit a model
+    /// satisfying `pred`. Fails the test on timeout rather than hanging —
+    /// deterministic seconds, never the socket path's fixed `sleep(200ms)`.
+    async fn await_model(store: &Arc<Store>, sid: &str, pred: impl Fn(&Model) -> bool) -> Model {
+        for _ in 0..200 {
+            if let Some(m) = model_of(store, sid).await
+                && pred(&m)
+            {
+                return m;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("model did not reach the expected state within 2s");
+    }
+
+    fn with_csrf_off<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
+        // Serialize env mutation across these tests; `IPE_CSRF` is process-global.
+        let _g = crate::web::literal_table::overlay_test_lock();
+        crate::system::locked_set_var("IPE_CSRF", "off");
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("multi-thread runtime");
+        rt.block_on(body());
+        crate::system::locked_remove_var("IPE_CSRF");
+    }
+
+    // ── (ii) In-process behavior — ported from the socket `live_e2e` tests ────
+
+    /// Ports `live_get_root_contains_initial_count`: GET `/` renders the initial
+    /// model (`>0<`) as a real HTML document.
+    #[test]
+    fn get_root_renders_initial_count() {
+        with_csrf_off(|| async {
+            let store = Arc::new(Store::new(Duration::from_secs(60)));
+            let (_, body) = get(make_router(store), "/", None).await;
+            assert!(
+                body.contains(">0<"),
+                "initial counter (>0<) missing from GET / body:\n{}",
+                &body[..body.len().min(1500)]
+            );
+            assert!(
+                body.contains("<!DOCTYPE html>") || body.contains("<html"),
+                "GET / did not return an HTML document"
+            );
+        });
+    }
+
+    /// Ports `live_onclick_increments_counter`: GET → POST click on the `+`
+    /// element → the driver applies `update` → the model increments to 1. Drives
+    /// the identical wire (`/_ipe/event` with `{"id":hid,"msg":"click"}`) the
+    /// socket test does, minus the socket.
+    #[test]
+    fn onclick_increments_counter() {
+        with_csrf_off(|| async {
+            let store = Arc::new(Store::new(Duration::from_secs(60)));
+            let (sid, body) = get(make_router(store.clone()), "/", None).await;
+            assert!(!sid.is_empty(), "GET / must set an ipe_sid cookie");
+            let hid = hid_near_text(&body, "+").expect("data-ipe-hid near >+<");
+
+            let event = format!(r#"{{"id":"{hid}","msg":"click","args":[],"sessionId":""}}"#);
+            let status = post_event(make_router(store.clone()), &sid, &event).await;
+            assert_eq!(status, StatusCode::OK, "click event must be accepted");
+
+            let m = await_model(&store, &sid, |m| m.count == 1).await;
+            assert_eq!(m.count, 1, "click must increment the model to 1");
+
+            // And the re-render reflects it over the same GET path the socket
+            // test asserts `>1<` on.
+            let (_, body2) = get(make_router(store.clone()), "/", Some(&sid)).await;
+            assert!(
+                body2.contains(">1<"),
+                "re-render after click must show >1<:\n{}",
+                &body2[..body2.len().min(1500)]
+            );
+        });
+    }
+
+    /// Ports `live_sse_resync_body_carries_event_hids`: the SSE resync frame on
+    /// connect must carry `data-ipe-hid` on event elements, or the client DOM is
+    /// un-clickable. Reads the streaming body's first frames in-process.
+    #[test]
+    fn sse_resync_body_carries_event_hids() {
+        with_csrf_off(|| async {
+            let store = Arc::new(Store::new(Duration::from_secs(60)));
+            let (sid, _) = get(make_router(store.clone()), "/", None).await;
+            assert!(!sid.is_empty(), "GET / must set an ipe_sid cookie");
+
+            let resp = make_router(store.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri("/_ipe/sse?path=%2F")
+                        .header(header::ACCEPT, "text/event-stream")
+                        .header(header::COOKIE, format!("ipe_sid={sid}"))
+                        .body(Body::empty())
+                        .expect("build SSE GET"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(resp.status(), StatusCode::OK, "SSE connect must be 200");
+
+            // Drain the stream until the resync `event: patch` frame arrives (the
+            // heartbeat keepalive means it never EOFs, so stop on the frame).
+            use futures_util::StreamExt;
+            let mut stream = resp.into_body().into_data_stream();
+            let mut acc = String::new();
+            let read = tokio::time::timeout(Duration::from_secs(5), async {
+                while acc.len() < 256 * 1024 {
+                    match stream.next().await {
+                        Some(Ok(chunk)) => {
+                            acc.push_str(&String::from_utf8_lossy(&chunk));
+                            if acc.contains("event: patch") && acc.contains("data-ipe-hid") {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+            })
+            .await;
+            assert!(read.is_ok(), "SSE read timed out before the resync frame");
+            assert!(
+                acc.contains("event: patch"),
+                "no resync patch frame on SSE connect:\n{}",
+                &acc[..acc.len().min(800)]
+            );
+            assert!(
+                acc.contains("data-ipe-hid"),
+                "SSE resync body has no data-ipe-hid — event elements un-clickable:\n{}",
+                &acc[..acc.len().min(1500)]
+            );
+        });
+    }
+
+    /// Ports `live_onsubmit_typed_record_dispatches_decoded_payload`: submitting
+    /// the typed-record form must dispatch `SignIn` with the DECODED `Creds`, so
+    /// the re-render shows the username — proving `resolve_form` →
+    /// `decode_form_or_warn::<Creds>` → `update` ran with the concrete record.
+    #[test]
+    fn onsubmit_typed_record_dispatches_decoded_payload() {
+        with_csrf_off(|| async {
+            let store = Arc::new(Store::new(Duration::from_secs(60)));
+            let (sid, body) = get(make_router(store.clone()), "/", None).await;
+            assert!(!sid.is_empty(), "GET / must set an ipe_sid cookie");
+            let hid = hid_for_open_tag(&body, "form").expect("data-ipe-hid on <form>");
+
+            let event = format!(
+                r#"{{"id":"{hid}","event":"submit","args":[{{"username":"alice","password":"s3cr3t"}}],"sessionId":""}}"#
+            );
+            let status = post_event(make_router(store.clone()), &sid, &event).await;
+            assert_eq!(status, StatusCode::OK, "submit event must be accepted");
+
+            let m = await_model(&store, &sid, |m| m.last_username == "alice").await;
+            assert_eq!(
+                m.last_username, "alice",
+                "SignIn must dispatch with the decoded Creds record"
+            );
+
+            let (_, body2) = get(make_router(store.clone()), "/", Some(&sid)).await;
+            assert!(
+                body2.contains(">alice<"),
+                "re-render after submit must show the decoded username:\n{}",
+                &body2[..body2.len().min(1500)]
+            );
+        });
+    }
+}

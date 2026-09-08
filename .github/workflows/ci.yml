@@ -871,6 +871,15 @@ jobs:
     # behaviour, not the archived binaries), so no shard recompiles the workspace.
     needs: [changes, quick-check, test-prep]
     if: github.event_name != 'pull_request'
+    # Wall-clock cap on the shard. Each per-test `cargo build` is already bounded
+    # (nextest ci `slow-timeout` + `e2e_support`'s per-build 240s ceiling), but
+    # nothing capped the SHARD as a whole, so it inherited GitHub's 360-min
+    # default — a wedged runner once ran ~92 min before this. Against the warm
+    # shared dependency target each heavy golden links in a few minutes and a
+    # heavy shard serializes ~1/5 of the heavy set, so a healthy shard finishes
+    # well under 25 min; 45 (≈2× the warm-cache max) kills a genuine hang fast
+    # while never tripping a legitimately slow-but-progressing shard.
+    timeout-minutes: 45
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       # The ~13 goldens whose emitted project drives a real, multi-minute cold
@@ -1024,6 +1033,11 @@ jobs:
     # rebuilding the workspace per sub-shard.
     needs: [changes, quick-check, test-prep]
     if: github.event_name != 'pull_request'
+    # Wall-clock cap on the sub-shard (same rationale as the `e2e` job). This
+    # slice is a golden-e2e partition against the warm shared target — lighter
+    # than a heavy `e2e` shard — so 30 min (≈2× the warm-cache max) fails a hung
+    # sub-shard fast without tripping a healthy one.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
