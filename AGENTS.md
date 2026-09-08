@@ -1,5 +1,7 @@
 # AGENTS.md — working on the Ipê compiler
 
+@PRINCIPLES.md
+
 **Ipê** is an Elm-family pure-functional language that compiles to Rust; this repo
 is the compiler, runtime, and stdlib (a Rust workspace). This file is a small
 orienting map — it links down rather than restating. Read the linked source when
@@ -11,7 +13,7 @@ Work as a seasoned Rust and Elm software architect and engineer: concise, object
 - **Writing Ipê itself** (`.ipe` stdlib, examples, fixtures) or asking what the
   compiler accepts? That's a separate reference: `ipe doc <Module>` for the language
   surface, and `src/ipe-cli/templates/AGENTS.md.in` (what `ipe init` ships).
-- **Rules & enforcement:** `PRINCIPLES.md` is the SSOT (read it — not restated here).
+- **Rules & enforcement:** `PRINCIPLES.md` is the SSOT (  now).
   `docs/adr/` holds history and rationale (the only place archaeology belongs).
 
 ## Compiler pipeline — where a change lands
