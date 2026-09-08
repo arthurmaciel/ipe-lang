@@ -2,7 +2,7 @@
 
 `Ipe.WebSocket` is the outbound WebSocket client — a long-lived, bidirectional
 connection to a peer, for a chat stream, a collaborative editor, or a live feed.
-Opening and driving a socket happens inside a `Ipe.Tea.Web` update loop; this
+Opening and driving a socket happens inside a `Ipe.App.Tea.Web` update loop; this
 guide covers the typed values you build before connecting: the sealed URL and
 the connect configuration.
 
@@ -76,7 +76,7 @@ interval as milliseconds.
 ## Driving a live socket
 
 Sealing and configuring are pure; the live lifecycle runs inside a
-`Ipe.Tea.Web` app:
+`Ipe.App.Tea.Web` app:
 
 1. `Cmd.perform (WebSocket.connect wsUrl) Connected` — start the handshake; the
    task resolves to a `WebSocket` handle once it completes.

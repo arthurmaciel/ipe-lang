@@ -6,11 +6,11 @@ module Main exposing (main)
 -- named startup `ConfigError`, not an empty secret). ipe MUST exit 0 AND the
 -- emitted project MUST cargo-build (THE SEAL for item 2).
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 import Ipe.App as App
 import Ipe.Db as Db
 

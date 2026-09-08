@@ -10,11 +10,11 @@ module Main exposing (main)
 -- Before Part B: the empty-routes hole let var(2) unify with Msg (the type of
 -- `Increment`), so ipec exited 0, then cargo emitted E0631 / E0308.
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Page
     = CounterPage

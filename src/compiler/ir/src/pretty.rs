@@ -178,7 +178,7 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
                 UiCtor::Placeholder => "Input.Placeholder",
                 // Ipe.Ui.Input radio option type.
                 UiCtor::RadioOption => "Input.RadioOption",
-                // Ipe.Tea.Cli.Ui structured Lines view + its line-native attribute.
+                // Ipe.Ui.Cli structured Lines view + its line-native attribute.
                 UiCtor::CliLines => "Cli.Lines",
                 UiCtor::CliAttribute => "Cli.Ui.Attribute",
             };

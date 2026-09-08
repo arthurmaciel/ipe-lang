@@ -35,7 +35,7 @@ module Ipe.Browser.Camera exposing
 import Ipe.Browser.Camera.Internals as Internals exposing (JsMsg(..))
 import Ipe.Error as Error exposing (Error)
 import Ipe.Task as Task
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Sub as Sub
 
 
 -- | A captured image: the browser-assigned filename, the image MIME type, and

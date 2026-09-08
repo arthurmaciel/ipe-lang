@@ -1,9 +1,9 @@
 module Main exposing (main)
 
-import Ipe.Tea.Cli exposing (app)
-import Ipe.Tea.Cli.Cmd as Cmd
-import Ipe.Tea.Cli.Sub as Sub
-import Ipe.Tea.Cli.Ui as Ui
+import Ipe.App.Tea.Cli exposing (app)
+import Ipe.App.Tea.Cli.Cmd as Cmd
+import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Ui.Cli as Ui
 
 
 type Msg

@@ -34,10 +34,10 @@ use std::path::PathBuf;
 /// Non-routed for brevity; plain-data Model so the admissibility gate
 /// passes, isolating the init-field + field-access behaviour.
 const LIVE_INIT_READS_REQ_PATH: &str = r#"module Main exposing (main)
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page, path : String }
@@ -61,10 +61,10 @@ main =
 /// The SAME app but with `init : a -> …` — a free type variable the
 /// prescriptive scheme must reject with IPE-N0046.
 const LIVE_INIT_POLY_REJECTED: &str = r#"module Main exposing (main)
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page }
@@ -88,10 +88,10 @@ main =
 /// The SAME app but with `init : {} -> …` — the non-`WebReq` shape the
 /// prescriptive scheme must reject with a clear IPE-T0001.
 const LIVE_INIT_UNIT_REJECTED: &str = r#"module Main exposing (main)
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page }

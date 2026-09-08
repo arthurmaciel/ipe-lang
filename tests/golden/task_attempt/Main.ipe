@@ -8,11 +8,11 @@ module Main exposing (main)
 -- the program runs: `Cli.app` renders the initial view once at stdin EOF and
 -- exits 0.
 
-import Ipe.Tea.Cli as Cli
+import Ipe.App.Tea.Cli as Cli
 import Ipe.Task as Task
-import Ipe.Tea.Terminal.Cmd
+import Ipe.App.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.App.Tea.Terminal.Sub
 
 type Msg
     = Loaded (Result Error Int)

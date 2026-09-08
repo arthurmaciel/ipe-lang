@@ -5,10 +5,10 @@ module Main exposing (main)
 -- `config` binding can never be threaded in — its settings would be silently
 -- dropped. This MUST be rejected at ipe time with IPE-N0043.
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 import Ipe.App as App
 import Ipe.Host as Host
 import Ipe.Db as Db

@@ -4,11 +4,11 @@ module Main exposing (main)
 -- `Secret`) MUST be an ipe-time type error — the only way to a config secret is
 -- `App.fromEnv` / `App.fromEnvRequired`, never an in-source literal.
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 import Ipe.Console as Console
 
 

@@ -11,9 +11,9 @@ module Main exposing (main)
 
 import Ipe.Maybe as Maybe
 import Ipe.String
-import Ipe.Tea.Cli as Cli
-import Ipe.Tea.Terminal.Cmd
-import Ipe.Tea.Terminal.Sub
+import Ipe.App.Tea.Cli as Cli
+import Ipe.App.Tea.Terminal.Cmd
+import Ipe.App.Tea.Terminal.Sub
 import Ipe.Url as Url
 import Ipe.Url.Parser as Parser
 

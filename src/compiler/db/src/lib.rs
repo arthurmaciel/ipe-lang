@@ -1274,7 +1274,7 @@ pub type EmitResult = Result<Arc<ipe_backend::EmittedProject>, (Diagnostic, Vec<
 /// This is the SINGLE gate site, called from every emit route: the
 /// single-home collapse ([`emit_project`]) AND the multi-home split assembly
 /// ([`emit_manifest`]). Both must gate — a program that pulls in a
-/// compiled-source stdlib module (`Ipe.Ui`, `Ipe.Tea.Web`, …) has two or more
+/// compiled-source stdlib module (`Ipe.Ui`, `Ipe.App.Tea.Web`, …) has two or more
 /// emitted homes and takes the split path, so gating only the collapse path
 /// would let a reachable `Debug.explain` in a rendered view ship.
 fn reject_dev_only_in_production(
@@ -1531,7 +1531,7 @@ pub fn emit_manifest(
 
     // The production `Debug.*` gate must fire on this multi-home path too, not
     // only on the single-home collapse: a program that pulls in a
-    // compiled-source stdlib module (`Ipe.Ui`, `Ipe.Tea.Web`, …) has two or
+    // compiled-source stdlib module (`Ipe.Ui`, `Ipe.App.Tea.Web`, …) has two or
     // more emitted homes and reaches here, so a reachable `Debug.explain` in a
     // rendered view would otherwise ship past the gate.
     reject_dev_only_in_production(db, &program, config)?;

@@ -3,7 +3,7 @@ module Main exposing (main)
 {-|
 A full-screen TEA counter over the canonical `Tui.app` surface.
 
-The `view` returns `Screen msg` from `Ipe.Tea.Tui.Ui` — the terminal shape's
+The `view` returns `Screen msg` from `Ipe.Ui.Tui` — the terminal shape's
 own view surface, with cell-native attributes.  The `onKey` callback maps each
 key event to a `Msg`.
 
@@ -17,11 +17,11 @@ Keys:
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
-import Ipe.Tea.Tui as Tui
-import Ipe.Tea.Tui.Cmd as Cmd
-import Ipe.Tea.Tui.Sub as Sub
-import Ipe.Tea.Tui.Ui as Ui
-import Ipe.Tea.Tui.Ui exposing (Screen)
+import Ipe.App.Tea.Tui as Tui
+import Ipe.App.Tea.Tui.Cmd as Cmd
+import Ipe.App.Tea.Tui.Sub as Sub
+import Ipe.Ui.Tui as Ui
+import Ipe.Ui.Tui exposing (Screen)
 
 
 type Msg

@@ -1,15 +1,15 @@
--- | Ipe.Tea.Terminal.Color — the first-class terminal colour palette.
+-- | Ipe.App.Tea.Terminal.Color — the first-class terminal colour palette.
 --
 -- `Color` (spelled `Terminal.Color` in a view) is a closed sum over the
 -- sixteen named ANSI colours plus `default` (the terminal's own foreground or
 -- background). The set is fixed: an invalid colour has no representation, so a
 -- view can never name a colour the terminal cannot render.
 --
--- Both the Tui view surface (`Ipe.Tea.Tui.Ui.color` / `bg`) and the Cli line
--- surface (`Ipe.Tea.Cli.Ui.color` / `bg`) accept this palette. Truecolour
--- (`Ipe.Tea.Tui.Ui.rgb` / `rgba`) remains available as a separate path for
+-- Both the Tui view surface (`Ipe.Ui.Tui.color` / `bg`) and the Cli line
+-- surface (`Ipe.Ui.Cli.color` / `bg`) accept this palette. Truecolour
+-- (`Ipe.Ui.Tui.rgb` / `rgba`) remains available as a separate path for
 -- terminals that support it; the palette is the portable, first-class surface.
-module Ipe.Tea.Terminal.Color exposing
+module Ipe.App.Tea.Terminal.Color exposing
     ( Color
     , black, red, green, yellow, blue, magenta, cyan, white
     , brightBlack, brightRed, brightGreen, brightYellow

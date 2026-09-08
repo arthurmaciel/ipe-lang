@@ -289,7 +289,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         // size, or a `Length` constructor carrying pixels.
         KernelFn::UiSpacing
         | KernelFn::UiPadding
-        // `Ipe.Tea.Tui.Ui.spacing / .padding : Int -> Attribute msg` — cells.
+        // `Ipe.Ui.Tui.spacing / .padding : Int -> Attribute msg` — cells.
         | KernelFn::TuiUiSpacing
         | KernelFn::TuiUiPadding
         | KernelFn::FontSize
@@ -1592,7 +1592,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::UiCellsRow => pos("ipe_runtime::tui::cells_row_", 2),
         KernelFn::UiCellsColumn => pos("ipe_runtime::tui::cells_column_", 2),
         KernelFn::UiCellsCells => pos("ipe_runtime::tui::cells_cells_", 1),
-        // ── Ipe.Tea.Tui.Ui cell-native attribute builders. No shape guard: the
+        // ── Ipe.Ui.Tui cell-native attribute builders. No shape guard: the
         // type system rejects a `TuiAttr msg` where a DOM `Attribute msg` is
         // expected (and vice-versa) via distinct type constructors (IPE-T0001).
         KernelFn::TuiUiSpacing => pos("ipe_runtime::tui::tui_spacing_", 1),
@@ -1606,7 +1606,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::TuiUiReverse => pos("ipe_runtime::tui::tui_reverse_", 0),
         KernelFn::TuiUiColor => pos("ipe_runtime::tui::tui_color_", 1),
         KernelFn::TuiUiBg => pos("ipe_runtime::tui::tui_bg_", 1),
-        // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ──
+        // ── Ipe.Ui.Cli line-oriented view + attribute builders ──
         KernelFn::CliUiNone => pos("ipe_runtime::tui::cli_none_", 0),
         KernelFn::CliUiText => pos("ipe_runtime::tui::cli_text_", 1),
         KernelFn::CliUiLine => pos("ipe_runtime::tui::cli_line_", 2),
@@ -1617,7 +1617,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::CliUiReverse => pos("ipe_runtime::tui::cli_reverse_", 0),
         KernelFn::CliUiColor => pos("ipe_runtime::tui::cli_color_", 1),
         KernelFn::CliUiBg => pos("ipe_runtime::tui::cli_bg_", 1),
-        // ── Ipe.Tea.Terminal.Color palette constructors ──
+        // ── Ipe.App.Tea.Terminal.Color palette constructors ──
         KernelFn::TermColorBlack => pos("ipe_runtime::tui::term_color_black_", 0),
         KernelFn::TermColorRed => pos("ipe_runtime::tui::term_color_red_", 0),
         KernelFn::TermColorGreen => pos("ipe_runtime::tui::term_color_green_", 0),

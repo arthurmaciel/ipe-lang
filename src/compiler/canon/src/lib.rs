@@ -1261,7 +1261,7 @@ mod tests {
         // inline-qualifier convenience aliases (`Ipe.Html`, …), not import targets.
         //
         // The canonical `Cmd` / `Sub` kernel qualifiers are internal-only: they
-        // back the shape-scoped re-export modules (`Ipe.Tea.Web.Cmd`, …) but are
+        // back the shape-scoped re-export modules (`Ipe.App.Tea.Web.Cmd`, …) but are
         // themselves not user-importable, so they deliberately carry no import
         // path. Users reach `Cmd` / `Sub` through a shape, which does have one.
         const INTERNAL_ONLY_QUALIFIERS: &[&str] = &["Cmd", "Sub"];
@@ -3038,11 +3038,11 @@ mod tests {
 
     #[test]
     fn stdlib_exposing_brings_value_into_unqualified_scope() {
-        // `import Ipe.Tea.Web exposing (app, route)` → bare `app` resolves to the
+        // `import Ipe.App.Tea.Web exposing (app, route)` → bare `app` resolves to the
         // same `VarKernel { module: Web, name: app }` a `Web.app` reference
         // would. Previously this was `IPE-N0001` "app not found".
         let src = "module Main exposing (main)\n\
-                   import Ipe.Tea.Web exposing (app, route)\n\n\
+                   import Ipe.App.Tea.Web exposing (app, route)\n\n\
                    main = app\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "exposing (app, route) must canonicalise");
@@ -3075,7 +3075,7 @@ mod tests {
     #[test]
     fn program_importing_ipe_html_is_not_a_tea_app() {
         // ADR 0048: a module is a TEA app iff it imports something under
-        // `Ipe.Tea.*`. Importing the shape-neutral `Ipe.Html` (where the static
+        // `Ipe.App.Tea.*`. Importing the shape-neutral `Ipe.Html` (where the static
         // render bridge `renderStatic` lives, next to `render`) must NOT be
         // rejected as a Program-importing-a-shape contradiction (IPE-N0033). The
         // canon-only harness does not inject the compiled-source `Ipe.Html` dep,
@@ -3103,8 +3103,8 @@ mod tests {
         // its shape at run time — refused (static pinning). This precise gate
         // fires ahead of the coarser IPE-N0033 import contradiction.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Tea.Web as Web\n\
-                   import Ipe.Tea.Tui as Tui\n\n\
+                   import Ipe.App.Tea.Web as Web\n\
+                   import Ipe.App.Tea.Tui as Tui\n\n\
                    flag = True\n\
                    cfg = 0\n\n\
                    main =\n    if flag then\n        Web.app cfg\n    else\n        Tui.app cfg\n";
@@ -3125,7 +3125,7 @@ mod tests {
         // The `case` head is the other run-time shape choice; one branch reaching
         // an app entry is enough to make the shape a value, so it is refused.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Tea.Web as Web\n\n\
+                   import Ipe.App.Tea.Web as Web\n\n\
                    mode = 0\n\
                    cfg = 0\n\n\
                    main =\n    case mode of\n        first ->\n            Web.app cfg\n";
@@ -3146,7 +3146,7 @@ mod tests {
         // The branch peeler recurses, so an app entry nested in an `else if` is
         // still caught — the shape choice cannot hide one level down.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Tea.Web as Web\n\n\
+                   import Ipe.App.Tea.Web as Web\n\n\
                    a = True\n\
                    b = True\n\
                    cfg = 0\n\n\
@@ -3167,12 +3167,12 @@ mod tests {
     fn tui_app_importing_web_cmd_sub_is_rejected_n0035() {
         // `Tui.app` is a terminal-family entry, so its app shape folds to
         // `Terminal`. Importing another shape's
-        // `Sub` (`Ipe.Tea.Web.Sub`) has no denotation in a terminal app and must
+        // `Sub` (`Ipe.App.Tea.Web.Sub`) has no denotation in a terminal app and must
         // fail closed (IPE-N0035) — the `canonical_shape` fold admits only the
         // terminal-family surfaces, never `Web`.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Tea.Tui as Tui\n\
-                   import Ipe.Tea.Web.Sub as Sub\n\n\
+                   import Ipe.App.Tea.Tui as Tui\n\
+                   import Ipe.App.Tea.Web.Sub as Sub\n\n\
                    cfg = 0\n\n\
                    main = Tui.app cfg\n";
         assert!(
@@ -3183,18 +3183,18 @@ mod tests {
                     ..
                 })
             ),
-            "a `Tui.app` importing `Ipe.Tea.Web.Sub` must be rejected IPE-N0035"
+            "a `Tui.app` importing `Ipe.App.Tea.Web.Sub` must be rejected IPE-N0035"
         );
     }
 
     #[test]
     fn web_app_importing_tui_cmd_sub_is_rejected_n0035() {
         // The reverse direction: a `Web.app` importing the terminal-family
-        // `Ipe.Tea.Tui.Sub` must also fail closed. The fold folds only the
+        // `Ipe.App.Tea.Tui.Sub` must also fail closed. The fold folds only the
         // imported segment; a `Web` app never folds to `Terminal`.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Tea.Web as Web\n\
-                   import Ipe.Tea.Tui.Sub as Sub\n\n\
+                   import Ipe.App.Tea.Web as Web\n\
+                   import Ipe.App.Tea.Tui.Sub as Sub\n\n\
                    cfg = 0\n\n\
                    main = Web.app cfg\n";
         assert!(
@@ -3205,18 +3205,18 @@ mod tests {
                     ..
                 })
             ),
-            "a `Web.app` importing `Ipe.Tea.Tui.Sub` must be rejected IPE-N0035"
+            "a `Web.app` importing `Ipe.App.Tea.Tui.Sub` must be rejected IPE-N0035"
         );
     }
 
     #[test]
     fn cli_app_importing_tui_cmd_sub_is_admitted() {
         // `Tui` and `Cli` are the two drive axes of the one terminal shape, so
-        // both fold to `Terminal`: a `Cli.app` may import `Ipe.Tea.Tui.Sub`. The
+        // both fold to `Terminal`: a `Cli.app` may import `Ipe.App.Tea.Tui.Sub`. The
         // cross-shape gate (IPE-N0035) must NOT fire here.
         let src = "module Main exposing (main)\n\
-                   import Ipe.Tea.Cli as Cli\n\
-                   import Ipe.Tea.Tui.Sub as Sub\n\n\
+                   import Ipe.App.Tea.Cli as Cli\n\
+                   import Ipe.App.Tea.Tui.Sub as Sub\n\n\
                    cfg = 0\n\n\
                    main = Cli.app cfg\n";
         assert!(
@@ -3227,7 +3227,7 @@ mod tests {
                     ..
                 })
             ),
-            "a `Cli.app` importing the terminal-family `Ipe.Tea.Tui.Sub` must be \
+            "a `Cli.app` importing the terminal-family `Ipe.App.Tea.Tui.Sub` must be \
              admitted — both fold to the one `Terminal` shape"
         );
     }
@@ -3258,11 +3258,11 @@ mod tests {
     fn helper_submodule_without_main_importing_tea_shape_is_not_gated_n0033() {
         // The Program/TEA distinction is only about an ENTRY module (one that
         // defines `main`). A helper submodule with no `main` that imports
-        // `Ipe.Tea.Web.Cmd` solely to name `Cmd` in an `update` signature and
+        // `Ipe.App.Tea.Web.Cmd` solely to name `Cmd` in an `update` signature and
         // build `Cmd.none` effects is a library module — neither a Program nor
         // an app entry — so it must NOT trip the IPE-N0033 gate.
         let src = "module Update exposing (update)\n\
-                   import Ipe.Tea.Web.Cmd as Cmd\n\n\
+                   import Ipe.App.Tea.Web.Cmd as Cmd\n\n\
                    update msg model =\n    ( model, Cmd.none )\n";
         assert!(
             canon_err(src).is_none(),
@@ -3291,7 +3291,7 @@ mod tests {
         // module surfaces `NameNotExposed`, never a dangling unqualified binding.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Tea.Web exposing (bogusFn)\n\
+             import Ipe.App.Tea.Web exposing (bogusFn)\n\
              main = 0\n",
         );
         let Some(Diagnostic::Name {
@@ -3303,7 +3303,7 @@ mod tests {
             return;
         };
         assert_eq!(&**name, "bogusFn");
-        assert_eq!(&**module, "Ipe.Tea.Web");
+        assert_eq!(&**module, "Ipe.App.Tea.Web");
     }
 
     #[test]
@@ -3313,7 +3313,7 @@ mod tests {
         // rule that importing a name and defining it locally clash.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Tea.Web exposing (app)\n\
+             import Ipe.App.Tea.Web exposing (app)\n\
              app = 1\n\
              main = 0\n",
         );
@@ -3634,7 +3634,7 @@ mod tests {
         // with a local `app` (`DuplicateValue`) — unlike a wildcard member.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Ipe.Tea.Web exposing (app)\n\
+             import Ipe.App.Tea.Web exposing (app)\n\
              app = 1\n\
              main = 0\n",
         );

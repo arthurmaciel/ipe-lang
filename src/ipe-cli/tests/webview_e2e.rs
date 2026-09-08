@@ -41,10 +41,10 @@
 /// `init` takes `WebReq`, matching the `Web.app` cfg scheme.
 const IPE_WEB_COUNTER: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.String
 
 type Msg
@@ -98,10 +98,10 @@ main =
 /// `Web` build. This fixture proves the closed seam: ipe-accept ⇒ cargo-build.
 const IPE_WEB_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 
 type alias EditorState = { text : String, line : Int }
 

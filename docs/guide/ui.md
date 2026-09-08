@@ -1,6 +1,6 @@
 # UI layout
 
-`Ipe.Ui` is the element and attribute surface a `Ipe.Tea.Web` view returns. You
+`Ipe.Ui` is the element and attribute surface a `Ipe.App.Tea.Web` view returns. You
 describe a page as a tree of typed `Element msg` values — `row`, `column`, `el`,
 `text`, `button` — each carrying a list of typed `Attribute msg`. Layout is
 composition of these builders, not markup you write by hand.
@@ -28,7 +28,7 @@ Three knots.
 
 The example under
 [`examples/shapes/web/ui-layout`](../../examples/shapes/web/ui-layout/src/Main.ipe)
-is a minimal `Ipe.Tea.Web` counter. The whole page is one `view` function.
+is a minimal `Ipe.App.Tea.Web` counter. The whole page is one `view` function.
 
 `column` stacks a heading and a counter row with `spacing`; the inner `row`
 places two buttons and the live count side by side. Colours and padding are

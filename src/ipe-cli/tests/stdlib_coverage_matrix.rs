@@ -86,7 +86,7 @@ fn list_map_has_the_right_facets() {
 ///
 /// `Cmd` and `Sub` are the only genuinely home-less kernel qualifiers: they are
 /// TEA-loop machinery that is always imported through the shape-scoped
-/// `Ipe.Tea.<Shape>.Cmd` / `.Sub` paths rather than a standalone `Ipe.Cmd` /
+/// `Ipe.App.Tea.<Shape>.Cmd` / `.Sub` paths rather than a standalone `Ipe.Cmd` /
 /// `Ipe.Sub` module. A standalone module is deliberately absent (importing it
 /// would create an ambiguous shape association); the qualifiers are internal
 /// routing tokens, not importable paths. No `QUALIFIER_MODULE_OVERRIDES` entry
@@ -99,62 +99,62 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "home",
         "Ipe.Cmd.batch",
-        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
+        "qualifier `Cmd` is shape-scoped (Ipe.App.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.map",
-        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
+        "qualifier `Cmd` is shape-scoped (Ipe.App.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.none",
-        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
+        "qualifier `Cmd` is shape-scoped (Ipe.App.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.perform",
-        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
+        "qualifier `Cmd` is shape-scoped (Ipe.App.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.publish",
-        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
+        "qualifier `Cmd` is shape-scoped (Ipe.App.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Cmd.publishNoEcho",
-        "qualifier `Cmd` is shape-scoped (Ipe.Tea.<Shape>.Cmd); no standalone module by design",
+        "qualifier `Cmd` is shape-scoped (Ipe.App.Tea.<Shape>.Cmd); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.batch",
-        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
+        "qualifier `Sub` is shape-scoped (Ipe.App.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.every",
-        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
+        "qualifier `Sub` is shape-scoped (Ipe.App.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.map",
-        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
+        "qualifier `Sub` is shape-scoped (Ipe.App.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.none",
-        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
+        "qualifier `Sub` is shape-scoped (Ipe.App.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.subscribeTopic",
-        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
+        "qualifier `Sub` is shape-scoped (Ipe.App.Tea.<Shape>.Sub); no standalone module by design",
     ),
     (
         "home",
         "Ipe.Sub.subscribeWebSocket",
-        "qualifier `Sub` is shape-scoped (Ipe.Tea.<Shape>.Sub); no standalone module by design",
+        "qualifier `Sub` is shape-scoped (Ipe.App.Tea.<Shape>.Sub); no standalone module by design",
     ),
 ];
 

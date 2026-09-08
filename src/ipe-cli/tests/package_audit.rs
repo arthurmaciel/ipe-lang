@@ -105,11 +105,11 @@ const NETWORK_MAIN: &str = "module Main exposing (main)\n\
 /// set is `{custom-element}` because it ships author browser JS.
 const WIDGET_MAIN: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.String as String
 
 type alias WidgetState = { count : Int }
@@ -157,11 +157,11 @@ main =
 /// hole a mounted-only audit test never exercised.
 const UNMOUNTED_WIDGET_MAIN: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.String as String
 
 type alias WidgetState = { count : Int }

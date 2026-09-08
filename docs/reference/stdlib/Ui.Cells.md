@@ -6,10 +6,10 @@
 
 Ipe.Ui.Cells — retained alias for the Tui view surface.
 
-The Tui view surface now lives at `Ipe.Tea.Tui.Ui` (view type `Screen msg`,
+The Tui view surface now lives at `Ipe.Ui.Tui` (view type `Screen msg`,
 with its own cell-native `Attribute msg`).  This module re-exposes the same
 builders under their historical `Ipe.Ui.Cells` path, spelling the view type
-`Screen`.  Prefer `Ipe.Tea.Tui.Ui` in new code.
+`Screen`.  Prefer `Ipe.Ui.Tui` in new code.
 
 ## `none`
 

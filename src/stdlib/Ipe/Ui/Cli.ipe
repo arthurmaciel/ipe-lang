@@ -1,4 +1,4 @@
--- | Ipe.Tea.Cli.Ui — the Cli shape's line-oriented view surface.
+-- | Ipe.Ui.Cli — the Cli shape's line-oriented view surface.
 --
 -- A `Lines msg` value is a structured, line-scoped view: a stack of styled
 -- text lines. It is distinct from both the web `Element msg` and the Tui
@@ -17,7 +17,7 @@
 -- that field to `Lines msg` (with `text` as the bridge for existing
 -- string-returning views) is a tracked follow-up. This module ships the
 -- structured surface and its shape-gate today.
-module Ipe.Tea.Cli.Ui exposing
+module Ipe.Ui.Cli exposing
     ( Lines
     , none, text, line, lines
     , Attribute
@@ -27,7 +27,7 @@ module Ipe.Tea.Cli.Ui exposing
 
 
 import Ipe.Ffi.Kernel as Kernel
-import Ipe.Tea.Terminal.Color exposing (Color)
+import Ipe.App.Tea.Terminal.Color exposing (Color)
 
 
 -- | An empty view — renders nothing.
