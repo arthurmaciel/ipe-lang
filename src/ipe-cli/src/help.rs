@@ -133,14 +133,18 @@ pub fn group_members(group: &str) -> Option<&'static [&'static str]> {
 }
 
 /// The canonical `'static` name for a known group, or `None` when `name` is not
-/// a group. Lets a dispatcher carry the interned group name into a typed error
+/// a group.
+///
+/// Lets a dispatcher carry the interned group name into a typed error
 /// without leaking a runtime `String` where a `&'static str` is required.
 #[must_use]
 pub fn group_name(name: &str) -> Option<&'static str> {
     find_group(name).map(|g| g.name)
 }
 
-/// Whether the command `name` is a member of some group. A grouped command is
+/// Whether the command `name` is a member of some group.
+///
+/// A grouped command is
 /// advertised on the top-level screen through its group's node (e.g. `ipe dev`),
 /// not as its own top-level line, so the "appears in exactly one section"
 /// invariant excuses it.
@@ -997,7 +1001,9 @@ pub fn command(name: &str, stream: &impl IsTerminal) -> Option<String> {
 
 /// Render a command group's subpage — its summary, then each member subcommand
 /// as a ready-to-run `ipe <group> <verb> --help` line — or `None` if `name` is
-/// not a known group. This is the `ipe dev` / `ipe dev --help` screen, and the
+/// not a known group.
+///
+/// This is the `ipe dev` / `ipe dev --help` screen, and the
 /// body of the misuse page shown for `ipe dev <unknown>`.
 #[must_use]
 pub fn group(name: &str, stream: &impl IsTerminal) -> Option<String> {

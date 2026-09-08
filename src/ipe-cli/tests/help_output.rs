@@ -313,7 +313,10 @@ fn dev_group_bare_prints_its_subpage_and_succeeds() {
     let r = run(&["dev"]);
     assert!(r.ok, "`ipe dev` must exit 0");
     assert!(r.stderr.is_empty(), "`ipe dev` must not write to stderr");
-    assert!(r.stdout.contains("ipe dev <verb>"), "must show the synopsis");
+    assert!(
+        r.stdout.contains("ipe dev <verb>"),
+        "must show the synopsis"
+    );
     for verb in DEV_VERBS {
         assert!(
             r.stdout.contains(&format!("ipe dev {verb}")),
