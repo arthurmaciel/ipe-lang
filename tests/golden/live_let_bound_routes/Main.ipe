@@ -14,11 +14,11 @@ module Main exposing (main)
 --   * The `routed_page_field` helper sees the `page` field in the Model and
 --     emits `live_app_routed` (not `live_app`).
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Page
     = CounterPage

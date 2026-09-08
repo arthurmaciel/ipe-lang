@@ -506,7 +506,7 @@ const STD_UI_TRANSFORM: &str = include_str!("../Ipe/Ui/Transform.ipe");
 /// Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Animation — Animation.attribute).
 const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 
-/// `Ipe.Ui.Cells` — retained alias re-exposing the `Ipe.Tea.Tui.Ui` builders
+/// `Ipe.Ui.Cells` — retained alias re-exposing the `Ipe.Ui.Tui` builders
 /// under their historical path.
 ///
 /// The Tui view type is `Screen msg` (a newtype distinct from `Element msg`),
@@ -518,24 +518,24 @@ const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_UI_CELLS: &str = include_str!("../Ipe/Ui/Cells.ipe");
 
-/// `Ipe.Tea.Tui.Ui` — the Tui shape's view surface: the `Screen msg` view type,
+/// `Ipe.Ui.Tui` — the Tui shape's view surface: the `Screen msg` view type,
 /// its builders, and its OWN cell-native `Attribute msg` (spacing/padding/align/
 /// bold/underline/colour). A terminal author imports this instead of `Ipe.Ui`,
 /// so DOM attributes are unnameable in a `Screen` view (a type error, never a
 /// silent render-time drop).
-const STD_TEA_TUI_UI: &str = include_str!("../Ipe/Tea/Tui/Ui.ipe");
+const STD_UI_TUI: &str = include_str!("../Ipe/Ui/Tui.ipe");
 
-/// `Ipe.Tea.Cli.Ui` — the Cli shape's line-oriented view surface: the
+/// `Ipe.Ui.Cli` — the Cli shape's line-oriented view surface: the
 /// `Lines msg` view type, its builders, and its OWN line-native `Attribute msg`
 /// (bold/underline/dim/reverse/colour). A line author imports this instead of
-/// `Ipe.Ui` or `Ipe.Tea.Tui.Ui`, so DOM and 2D cell-grid attributes are
+/// `Ipe.Ui` or `Ipe.Ui.Tui`, so DOM and 2D cell-grid attributes are
 /// unnameable in a `Lines` view (a type error, never a silent render-time drop).
-const STD_TEA_CLI_UI: &str = include_str!("../Ipe/Tea/Cli/Ui.ipe");
+const STD_UI_CLI: &str = include_str!("../Ipe/Ui/Cli.ipe");
 
-/// `Ipe.Tea.Terminal.Color` — the first-class terminal colour palette: a closed
+/// `Ipe.App.Tea.Terminal.Color` — the first-class terminal colour palette: a closed
 /// sum over the sixteen named ANSI colours plus `default`. Both the Tui and Cli
 /// view surfaces accept it in their `color` / `bg` builders.
-const STD_TEA_TERMINAL_COLOR: &str = include_str!("../Ipe/Tea/Terminal/Color.ipe");
+const STD_TEA_TERMINAL_COLOR: &str = include_str!("../Ipe/App/Tea/Terminal/Color.ipe");
 
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
 ///
@@ -1507,15 +1507,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: STD_UI_CELLS,
     },
     CompiledStdModule {
-        dotted: "Ipe.Tea.Tui.Ui",
-        source: STD_TEA_TUI_UI,
+        dotted: "Ipe.Ui.Tui",
+        source: STD_UI_TUI,
     },
     CompiledStdModule {
-        dotted: "Ipe.Tea.Cli.Ui",
-        source: STD_TEA_CLI_UI,
+        dotted: "Ipe.Ui.Cli",
+        source: STD_UI_CLI,
     },
     CompiledStdModule {
-        dotted: "Ipe.Tea.Terminal.Color",
+        dotted: "Ipe.App.Tea.Terminal.Color",
         source: STD_TEA_TERMINAL_COLOR,
     },
     CompiledStdModule {

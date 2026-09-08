@@ -28,10 +28,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// the down/up seam takes the wasm-client adapter (property / `CustomEvent`).
 const WIDGET_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 
 type alias EditorState = { text : String, line : Int }
 

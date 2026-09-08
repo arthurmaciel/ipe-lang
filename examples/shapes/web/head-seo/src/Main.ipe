@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- | head-seo — per-page `<head>` content with `Ipe.Web.Head`.
 --
--- A `Ipe.Tea.Web` app can supply an optional `head : Model -> List (Html msg)`
+-- A `Ipe.App.Tea.Web` app can supply an optional `head : Model -> List (Html msg)`
 -- field on its `Web.app` cfg. The runtime calls it once per full page load and
 -- splices the rendered tags into `<head>` — after the required charset/viewport
 -- tags, before the style reset. `Ipe.Web.Head` gives typed helpers for the common
@@ -10,12 +10,12 @@ module Main exposing (main)
 -- values, not bare strings that could smuggle a `javascript:` href.
 
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Web.Head as Head
 import Ipe.Html as Html exposing (Html)
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Url as Url
 import Ipe.Result exposing (Result(..))
 

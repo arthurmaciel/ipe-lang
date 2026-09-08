@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 import Ipe.Io as Io
-import Ipe.Tea.Terminal.Cmd as Cmd
+import Ipe.App.Tea.Terminal.Cmd as Cmd
 
 -- `Cmd` is shape-scoped, so importing a shape's `Cmd` marks a module a TEA app.
 -- This module has a plain `main` (a Program), so the import itself is a

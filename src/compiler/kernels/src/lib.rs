@@ -372,23 +372,23 @@ pub enum BuiltinTag {
     /// message type.
     UiElement,
     /// `Cells` — the Tui-only view type constructor `Screen msg` (exposed name).
-    /// Distinct from `Element msg`; produced exclusively by `Ipe.Tea.Tui.Ui.*`
+    /// Distinct from `Element msg`; produced exclusively by `Ipe.Ui.Tui.*`
     /// builders and consumed only by `Tui.app`'s view field. The internal tag
     /// keeps the `Cells` spelling (the rendering model); the user-facing type is
     /// `Screen`.
     Cells,
     /// `TuiAttr` — the cell-native attribute type constructor
-    /// `Ipe.Tea.Tui.Ui.Attribute msg`. Distinct from the DOM `UiAttribute`:
+    /// `Ipe.Ui.Tui.Attribute msg`. Distinct from the DOM `UiAttribute`:
     /// only terminal-honorable attributes inhabit it, so a DOM attribute is
     /// unnameable in a `Screen` view (a type error, never a silent drop).
     TuiAttr,
     /// `Lines` — the Cli-only line-oriented view type constructor `Lines msg`
     /// (exposed name `Lines`). Distinct from both `Element msg` and `Screen msg`;
-    /// produced exclusively by `Ipe.Tea.Cli.Ui.*` builders. Line-scoped: it has
+    /// produced exclusively by `Ipe.Ui.Cli.*` builders. Line-scoped: it has
     /// no 2D geometry, so a cell-grid or DOM builder is unnameable in it.
     CliLines,
     /// `CliAttr` — the line-native attribute type constructor
-    /// `Ipe.Tea.Cli.Ui.Attribute msg`. Only line-scoped styles inhabit it
+    /// `Ipe.Ui.Cli.Attribute msg`. Only line-scoped styles inhabit it
     /// (bold/underline/dim/reverse/colour), so a 2D cell attribute or a DOM
     /// attribute is unnameable in a `Lines` view (a type error, never a drop).
     CliAttr,
@@ -1801,7 +1801,7 @@ pub enum StdlibKernel {
     /// `UiCells.cells : List (List Char) -> Cells msg` — a raw character-grid
     /// island inside a `Cells`-typed Tui view.
     UiCellsCells,
-    // ── Ipe.Tea.Tui.Ui cell-native attribute builders ─────────────────────────
+    // ── Ipe.Ui.Tui cell-native attribute builders ─────────────────────────
     /// `TuiUi.spacing : Int -> Attribute msg` — gap between children, in cells.
     TuiUiSpacing,
     /// `TuiUi.padding : Int -> Attribute msg` — inner padding, in cells.
@@ -1824,7 +1824,7 @@ pub enum StdlibKernel {
     TuiUiColor,
     /// `TuiUi.bg : Color -> Attribute msg` — background colour.
     TuiUiBg,
-    // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ─────────────────
+    // ── Ipe.Ui.Cli line-oriented view + attribute builders ─────────────────
     /// `CliUi.none : Lines msg` — the empty line view.
     CliUiNone,
     /// `CliUi.text : String -> Lines msg` — one unstyled line.
@@ -1845,7 +1845,7 @@ pub enum StdlibKernel {
     CliUiColor,
     /// `CliUi.bg : Color -> Attribute msg` — background colour.
     CliUiBg,
-    // ── Ipe.Tea.Terminal.Color palette constructors (nullary closed sum) ───────
+    // ── Ipe.App.Tea.Terminal.Color palette constructors (nullary closed sum) ───────
     /// `TermColor.black : Color`
     TermColorBlack,
     /// `TermColor.red : Color`
@@ -3886,7 +3886,7 @@ impl StdlibKernel {
             Self::UiCellsRow => d("UiCells", "row", 2, Ui, "cells_row_"),
             Self::UiCellsColumn => d("UiCells", "column", 2, Ui, "cells_column_"),
             Self::UiCellsCells => d("UiCells", "cells", 1, Ui, "cells_cells_"),
-            // ── Ipe.Tea.Tui.Ui cell-native attribute builders ────────────
+            // ── Ipe.Ui.Tui cell-native attribute builders ────────────
             Self::TuiUiSpacing => d("TuiUi", "spacing", 1, Ui, "tui_spacing_"),
             Self::TuiUiPadding => d("TuiUi", "padding", 1, Ui, "tui_padding_"),
             Self::TuiUiAlignLeft => d("TuiUi", "alignLeft", 0, Ui, "tui_align_left_"),
@@ -3898,7 +3898,7 @@ impl StdlibKernel {
             Self::TuiUiReverse => d("TuiUi", "reverse", 0, Ui, "tui_reverse_"),
             Self::TuiUiColor => d("TuiUi", "color", 1, Ui, "tui_color_"),
             Self::TuiUiBg => d("TuiUi", "bg", 1, Ui, "tui_bg_"),
-            // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ────
+            // ── Ipe.Ui.Cli line-oriented view + attribute builders ────
             Self::CliUiNone => d("CliUi", "none", 0, Ui, "cli_none_"),
             Self::CliUiText => d("CliUi", "text", 1, Ui, "cli_text_"),
             Self::CliUiLine => d("CliUi", "line", 2, Ui, "cli_line_"),
@@ -3909,7 +3909,7 @@ impl StdlibKernel {
             Self::CliUiReverse => d("CliUi", "reverse", 0, Ui, "cli_reverse_"),
             Self::CliUiColor => d("CliUi", "color", 1, Ui, "cli_color_"),
             Self::CliUiBg => d("CliUi", "bg", 1, Ui, "cli_bg_"),
-            // ── Ipe.Tea.Terminal.Color palette constructors ──────────────
+            // ── Ipe.App.Tea.Terminal.Color palette constructors ──────────────
             Self::TermColorBlack => d("TermColor", "black", 0, Pure, "term_color_black_"),
             Self::TermColorRed => d("TermColor", "red", 0, Pure, "term_color_red_"),
             Self::TermColorGreen => d("TermColor", "green", 0, Pure, "term_color_green_"),
@@ -5467,7 +5467,7 @@ impl StdlibKernel {
         Self::UiCellsRow,
         Self::UiCellsColumn,
         Self::UiCellsCells,
-        // Ipe.Tea.Tui.Ui cell-native attribute builders
+        // Ipe.Ui.Tui cell-native attribute builders
         Self::TuiUiSpacing,
         Self::TuiUiPadding,
         Self::TuiUiAlignLeft,
@@ -5479,7 +5479,7 @@ impl StdlibKernel {
         Self::TuiUiReverse,
         Self::TuiUiColor,
         Self::TuiUiBg,
-        // Ipe.Tea.Cli.Ui line-oriented view + attribute builders
+        // Ipe.Ui.Cli line-oriented view + attribute builders
         Self::CliUiNone,
         Self::CliUiText,
         Self::CliUiLine,
@@ -5490,7 +5490,7 @@ impl StdlibKernel {
         Self::CliUiReverse,
         Self::CliUiColor,
         Self::CliUiBg,
-        // Ipe.Tea.Terminal.Color palette constructors
+        // Ipe.App.Tea.Terminal.Color palette constructors
         Self::TermColorBlack,
         Self::TermColorRed,
         Self::TermColorGreen,
@@ -7814,11 +7814,11 @@ impl StdlibKernel {
         const LIST_UI_ELEM_A: TyShape = TyShape::Con(BuiltinTag::List, &[UI_ELEM_A]);
         const LIST_HTML_A: TyShape = TyShape::Con(BuiltinTag::List, &[HTML_A]);
         const LIST_HTML_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[HTML_ATTR_A]);
-        // `Screen msg` (var(0) = msg), and derived forms for `Ipe.Tea.Tui.Ui`
+        // `Screen msg` (var(0) = msg), and derived forms for `Ipe.Ui.Tui`
         // builders. The internal `Cells` tag is the exposed `Screen` type.
         const CELLS_A: TyShape = TyShape::Con(BuiltinTag::Cells, &[A]);
         const LIST_CELLS_A: TyShape = TyShape::Con(BuiltinTag::List, &[CELLS_A]);
-        // The cell-native attribute type `Ipe.Tea.Tui.Ui.Attribute msg` and its
+        // The cell-native attribute type `Ipe.Ui.Tui.Attribute msg` and its
         // list slot — DISTINCT from the DOM `UI_ATTR_A`, so a `Screen` builder
         // rejects a DOM attribute at type-check (make-invalid-states-unrepresentable).
         const TUI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::TuiAttr, &[A]);
@@ -9354,7 +9354,7 @@ impl StdlibKernel {
             | Self::TuiUiDim
             | Self::TuiUiReverse => Some(&TUI_ATTR_A),
             Self::TuiUiColor | Self::TuiUiBg => Some(&COLOR_TO_TUI_ATTR_A),
-            // ── Ipe.Tea.Cli.Ui line-oriented builders. ──
+            // ── Ipe.Ui.Cli line-oriented builders. ──
             Self::CliUiNone => Some(&LINES_A),
             Self::CliUiText => Some(&STRING_TO_LINES_A),
             Self::CliUiLine => Some(&CLI_LINE),
@@ -9363,7 +9363,7 @@ impl StdlibKernel {
                 Some(&CLI_ATTR_A)
             }
             Self::CliUiColor | Self::CliUiBg => Some(&COLOR_TO_CLI_ATTR_A),
-            // ── Ipe.Tea.Terminal.Color palette constructors. ──
+            // ── Ipe.App.Tea.Terminal.Color palette constructors. ──
             Self::TermColorBlack
             | Self::TermColorRed
             | Self::TermColorGreen

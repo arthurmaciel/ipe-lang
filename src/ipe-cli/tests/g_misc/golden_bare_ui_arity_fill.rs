@@ -25,9 +25,9 @@ use std::path::{Path, PathBuf};
 /// type to the concrete `Msg`, so the arity-filled inner `Html` return must
 /// solve to `Html<MainMsg>`.
 const BARE_HTML_VIEW_APP: &str = r#"module Main exposing (main)
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Html as Html
 type alias Model = { n : Int }

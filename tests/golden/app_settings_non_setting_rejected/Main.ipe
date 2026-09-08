@@ -5,11 +5,11 @@ module Main exposing (main)
 -- in the list (IPE-T0001, expected `Setting Web`). This pins the phantom shape:
 -- only web-shaped (or cross-cutting `Setting a`) settings reach a web app.
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 
 type Page

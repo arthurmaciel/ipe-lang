@@ -17,9 +17,9 @@ Type:
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
-import Ipe.Tea.Cli as Cli
-import Ipe.Tea.Cli.Cmd as Cmd
-import Ipe.Tea.Cli.Sub as Sub
+import Ipe.App.Tea.Cli as Cli
+import Ipe.App.Tea.Cli.Cmd as Cmd
+import Ipe.App.Tea.Cli.Sub as Sub
 
 type Msg
     = Increment

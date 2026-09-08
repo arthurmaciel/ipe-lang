@@ -31,7 +31,7 @@ module Ipe.Browser.FilePicker exposing
 import Ipe.Browser.FilePicker.Internals as Internals exposing (JsMsg(..))
 import Ipe.Error as Error exposing (Error)
 import Ipe.Task as Task
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Sub as Sub
 
 
 -- | A file returned by the picker: the filename, its MIME type, and the full

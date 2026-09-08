@@ -17,8 +17,8 @@ module Ipe.Browser.Visibility.Internals exposing
 import Ipe.Error as Error exposing (Error)
 import Ipe.Ffi.Js as Js
 import Ipe.Json.Decode as Decode
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 
 
 -- | The ONE closed OUTBOUND port type: the whole outbound surface as a single

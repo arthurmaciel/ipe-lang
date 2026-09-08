@@ -33,7 +33,7 @@
 //! * `sub_ctors` — `subscriptions` `Sub.batch [Sub.none, Sub.every 500 Tick]`;
 //!   proves `sub_none` infers `msg` from a sibling.
 //! * `gate_undetermined_msg` — a plain-`main` Program reaching for
-//!   `Ipe.Tea.Terminal.Cmd.none` must surface IPE-N0033, never emit any Rust.
+//!   `Ipe.App.Tea.Terminal.Cmd.none` must surface IPE-N0033, never emit any Rust.
 //!
 //! Run:
 //!
