@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- | ui-layout — building a view with `Ipe.Ui` layout primitives.
 --
--- `Ipe.Ui` is the element/attribute surface a `Ipe.Tea.Web` view returns. You
+-- `Ipe.Ui` is the element/attribute surface a `Ipe.App.Tea.Web` view returns. You
 -- describe a page as a tree of typed `Element msg` values — `row`, `column`,
 -- `el`, `text`, `button` — with a list of typed `Attribute msg` on each. The
 -- ideas this example turns on:
@@ -16,10 +16,10 @@ module Main exposing (main)
 --     a button; when it fires, the TEA loop routes it through `update`.
 
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.String as String
 
 

@@ -17567,7 +17567,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Ipe.Tea.Tui.Ui.Attribute msg` — the cell-native attribute type.
+                // `Ipe.Ui.Tui.Attribute msg` — the cell-native attribute type.
                 "TuiAttr" if args.len() == 1 => {
                     let msg = self.ir_ui_msg_from_canon(
                         args.first().ok_or_else(|| {
@@ -17599,7 +17599,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Ipe.Tea.Cli.Ui.Attribute msg` — the line-native attribute type.
+                // `Ipe.Ui.Cli.Attribute msg` — the line-native attribute type.
                 "CliAttr" if args.len() == 1 => {
                     let msg = self.ir_ui_msg_from_canon(
                         args.first().ok_or_else(|| {
@@ -18906,7 +18906,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Ipe.Tea.Tui.Ui.Attribute msg` — the cell-native attribute type.
+                // `Ipe.Ui.Tui.Attribute msg` — the cell-native attribute type.
                 "TuiAttr" if args.len() == 1 => {
                     let msg = self.ir_type_from_ty_ui_msg(
                         args.first().ok_or_else(|| {
@@ -18938,7 +18938,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Ipe.Tea.Cli.Ui.Attribute msg` — the line-native attribute type.
+                // `Ipe.Ui.Cli.Attribute msg` — the line-native attribute type.
                 "CliAttr" if args.len() == 1 => {
                     let msg = self.ir_type_from_ty_ui_msg(
                         args.first().ok_or_else(|| {
@@ -24599,7 +24599,7 @@ impl<'a> Lowerer<'a> {
                 KernelFn::UiNone
                 // `UiCells.none : Cells msg`
                 | KernelFn::UiCellsNone
-                // `Ipe.Tea.Tui.Ui` nullary cell-native attributes.
+                // `Ipe.Ui.Tui` nullary cell-native attributes.
                 | KernelFn::TuiUiAlignLeft
                 | KernelFn::TuiUiAlignRight
                 | KernelFn::TuiUiCenter
@@ -24607,13 +24607,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TuiUiUnderline
                 | KernelFn::TuiUiDim
                 | KernelFn::TuiUiReverse
-                // `Ipe.Tea.Cli.Ui` nullary line view + line-native attributes.
+                // `Ipe.Ui.Cli` nullary line view + line-native attributes.
                 | KernelFn::CliUiNone
                 | KernelFn::CliUiBold
                 | KernelFn::CliUiUnderline
                 | KernelFn::CliUiDim
                 | KernelFn::CliUiReverse
-                // `Ipe.Tea.Terminal.Color` nullary palette constructors.
+                // `Ipe.App.Tea.Terminal.Color` nullary palette constructors.
                 | KernelFn::TermColorBlack
                 | KernelFn::TermColorRed
                 | KernelFn::TermColorGreen
@@ -24752,12 +24752,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiCellsText
                 // `UiCells.cells : List (List Char) -> Cells msg`
                 | KernelFn::UiCellsCells
-                // `Ipe.Tea.Tui.Ui` arity-1 cell-native attributes.
+                // `Ipe.Ui.Tui` arity-1 cell-native attributes.
                 | KernelFn::TuiUiSpacing
                 | KernelFn::TuiUiPadding
                 | KernelFn::TuiUiColor
                 | KernelFn::TuiUiBg
-                // `Ipe.Tea.Cli.Ui` arity-1 line view + line-native attributes.
+                // `Ipe.Ui.Cli` arity-1 line view + line-native attributes.
                 | KernelFn::CliUiText
                 | KernelFn::CliUiLines
                 | KernelFn::CliUiColor
@@ -26332,7 +26332,7 @@ impl<'a> Lowerer<'a> {
                     ("UiCells", "row") => Ok(Callee::Kernel(KernelFn::UiCellsRow)),
                     ("UiCells", "column") => Ok(Callee::Kernel(KernelFn::UiCellsColumn)),
                     ("UiCells", "cells") => Ok(Callee::Kernel(KernelFn::UiCellsCells)),
-                    // ── Ipe.Tea.Tui.Ui cell-native attribute builders ─────
+                    // ── Ipe.Ui.Tui cell-native attribute builders ─────
                     ("TuiUi", "spacing") => Ok(Callee::Kernel(KernelFn::TuiUiSpacing)),
                     ("TuiUi", "padding") => Ok(Callee::Kernel(KernelFn::TuiUiPadding)),
                     ("TuiUi", "alignLeft") => Ok(Callee::Kernel(KernelFn::TuiUiAlignLeft)),
@@ -26344,7 +26344,7 @@ impl<'a> Lowerer<'a> {
                     ("TuiUi", "reverse") => Ok(Callee::Kernel(KernelFn::TuiUiReverse)),
                     ("TuiUi", "color") => Ok(Callee::Kernel(KernelFn::TuiUiColor)),
                     ("TuiUi", "bg") => Ok(Callee::Kernel(KernelFn::TuiUiBg)),
-                    // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ─
+                    // ── Ipe.Ui.Cli line-oriented view + attribute builders ─
                     ("CliUi", "none") => Ok(Callee::Kernel(KernelFn::CliUiNone)),
                     ("CliUi", "text") => Ok(Callee::Kernel(KernelFn::CliUiText)),
                     ("CliUi", "line") => Ok(Callee::Kernel(KernelFn::CliUiLine)),
@@ -26355,7 +26355,7 @@ impl<'a> Lowerer<'a> {
                     ("CliUi", "reverse") => Ok(Callee::Kernel(KernelFn::CliUiReverse)),
                     ("CliUi", "color") => Ok(Callee::Kernel(KernelFn::CliUiColor)),
                     ("CliUi", "bg") => Ok(Callee::Kernel(KernelFn::CliUiBg)),
-                    // ── Ipe.Tea.Terminal.Color palette constructors ──
+                    // ── Ipe.App.Tea.Terminal.Color palette constructors ──
                     ("TermColor", "black") => Ok(Callee::Kernel(KernelFn::TermColorBlack)),
                     ("TermColor", "red") => Ok(Callee::Kernel(KernelFn::TermColorRed)),
                     ("TermColor", "green") => Ok(Callee::Kernel(KernelFn::TermColorGreen)),

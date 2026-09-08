@@ -60,12 +60,12 @@
 /// cells; there is no HTML step.
 const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
+import Ipe.App.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.Tea.Terminal.Cmd
+import Ipe.App.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.App.Tea.Terminal.Sub
 
 type alias KeyEvent = { kind : String, value : String }
 

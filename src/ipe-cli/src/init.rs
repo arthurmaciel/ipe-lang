@@ -442,7 +442,7 @@ fn existing_project_shape(target_dir: &Path) -> Result<Option<InitShape>, CliErr
     // template a re-run reconciles against. It uses the LENIENT written-qualifier
     // classifier (not the strict `classify_main_shape` the capability gate keys
     // on) so a partially written `src/Main.ipe` — `main = Tui.app config` before
-    // its `import Ipe.Tea.Tui` line is typed — is still recognised as its shape. A
+    // its `import Ipe.App.Tea.Tui` line is typed — is still recognised as its shape. A
     // wrong read only mis-scaffolds or misses a re-run conflict; it cannot escalate
     // a capability.
     let shape = ipe_canon::shape_source::scaffold_shape_hint(&module, &interner);

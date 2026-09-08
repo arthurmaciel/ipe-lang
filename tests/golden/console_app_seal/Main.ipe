@@ -3,10 +3,10 @@ module Main exposing (main)
 -- #111 reconciler fixture: Cli.app is FULLY WIRED.
 -- Expected: ipec-0 AND cargo-0 on the emitted project.
 
-import Ipe.Tea.Cli as Cli
-import Ipe.Tea.Terminal.Cmd
+import Ipe.App.Tea.Cli as Cli
+import Ipe.App.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.App.Tea.Terminal.Sub
 
 type Msg = GotLine String
 

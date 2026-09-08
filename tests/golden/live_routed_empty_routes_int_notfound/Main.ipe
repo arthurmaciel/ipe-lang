@@ -10,11 +10,11 @@ module Main exposing (main)
 -- Before Part B: ipec exited 0 (the empty-routes hole let var(2) = Int slip
 -- through), then cargo rejected the emitted `set_page` closure with E0308.
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Page
     = CounterPage

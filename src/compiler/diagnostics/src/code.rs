@@ -243,7 +243,7 @@ code! {
     /// type alias expansion exceeded the depth or node-count budget (cyclic or
     /// exponentially-fanning alias chain)
     IPE_N0032 = "IPE-N0032", "type alias expansion too deep or too large", "IPE-N0032";
-    /// a plain-`main` Program imports a managed-update-loop shape under `Ipe.Tea.*`
+    /// a plain-`main` Program imports a managed-update-loop shape under `Ipe.App.Tea.*`
     IPE_N0033 = "IPE-N0033", "a Program may not import a managed-update-loop shape", "IPE-N0033";
     /// a known standard-library module is used qualified without importing it
     IPE_N0034 = "IPE-N0034", "standard-library module used without importing it", "IPE-N0034";

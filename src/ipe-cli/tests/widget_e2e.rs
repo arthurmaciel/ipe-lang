@@ -56,11 +56,11 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// assertions can read the model without parsing the widget attribute.
 const WIDGET_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 import Ipe.String
 
 type alias WidgetState = { count : Int }
@@ -595,9 +595,9 @@ fn ui_widget_serves_sri_glue_and_round_trips_up_event() -> Result<(), BoxError> 
 /// through `subscriptions`) — the minimal seal-legal port program.
 const JS_PORT_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js as Js
 import Ipe.Json.Decode as Decode

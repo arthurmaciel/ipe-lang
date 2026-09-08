@@ -25,7 +25,7 @@ fn runtime() -> PathBuf {
     ipe::resolve_runtime().expect("runtime must resolve for animation const-fold test")
 }
 
-/// A `Ipe.Tea.Web` app whose view attaches an animation built from a fully
+/// A `Ipe.App.Tea.Web` app whose view attaches an animation built from a fully
 /// literal `Ipe.Ui.Animation` pipeline — every knob a compile-time constant, so
 /// the whole `Spec` and its rendered strings fold. Empty `keyframes` keep the
 /// fixture focused on the shorthand-tail fold (a populated list folds the same
@@ -33,10 +33,10 @@ fn runtime() -> PathBuf {
 /// pipeline the fold must reduce).
 const MAIN_IPE: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 import Ipe.Ui.Animation as Animation
 
 

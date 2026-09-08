@@ -1652,7 +1652,7 @@ pub enum IrType {
     /// datum).  Model-schema tag: 62.
     Locale,
     // ── Shape opaque app leaves ─────────────────────────────────────────────
-    /// The msg-erased result of `Ipe.Tea.Web.app` — an opaque handle carrying
+    /// The msg-erased result of `Ipe.App.Tea.Web.app` — an opaque handle carrying
     /// a fully-initialised web app whose `msg` type was erased at the
     /// `app`-call boundary.
     ///
@@ -1661,12 +1661,12 @@ pub enum IrType {
     /// so `mountApp : WebApp -> Route` can reject a `TuiApp` at compile time.
     /// Non-derivable, non-serde: the handle wraps live runtime state.
     WebApp,
-    /// The msg-erased result of `Ipe.Tea.Tui.app` — a live TUI
+    /// The msg-erased result of `Ipe.App.Tea.Tui.app` — a live TUI
     /// (terminal full-screen) app handle.
     ///
     /// Rendered as `ipe_runtime::tea::TuiApp`.
     TuiApp,
-    /// The msg-erased result of `Ipe.Tea.Cli.app` — a live
+    /// The msg-erased result of `Ipe.App.Tea.Cli.app` — a live
     /// line-oriented CLI app handle.
     ///
     /// Rendered as `ipe_runtime::tea::CliApp`.
@@ -1690,16 +1690,16 @@ pub enum UiCtor {
     Cells,
     /// `Attribute msg` from `Ipe.Ui` — a layout attribute (`ipe_runtime::ui::element::Attribute<M>`).
     UiAttribute,
-    /// `Attribute msg` from `Ipe.Tea.Tui.Ui` — a cell-native attribute
+    /// `Attribute msg` from `Ipe.Ui.Tui` — a cell-native attribute
     /// (`ipe_runtime::tui::TuiAttr<M>`). Distinct from `UiAttribute`: only
     /// terminal-honorable attributes inhabit it, so a DOM attribute is a
     /// type error in a `Screen` view rather than a silent render-time drop.
     TuiAttribute,
-    /// `Lines msg` from `Ipe.Tea.Cli.Ui` — a line-oriented view
+    /// `Lines msg` from `Ipe.Ui.Cli` — a line-oriented view
     /// (`ipe_runtime::tui::LinesView<M>`). Distinct from both `Element msg` and
     /// `Cells msg`: line-scoped, so 2D cell and DOM builders cannot appear in it.
     CliLines,
-    /// `Attribute msg` from `Ipe.Tea.Cli.Ui` — a line-native attribute
+    /// `Attribute msg` from `Ipe.Ui.Cli` — a line-native attribute
     /// (`ipe_runtime::tui::CliAttr<M>`). Only line-scoped styles inhabit it, so a
     /// 2D cell attribute or a DOM attribute is a type error in a `Lines` view.
     CliAttribute,

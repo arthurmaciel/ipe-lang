@@ -9,11 +9,11 @@ module Main exposing (main)
 --
 -- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 import Ipe.App as App
 import Ipe.Host as Host
 import Ipe.Db as Db

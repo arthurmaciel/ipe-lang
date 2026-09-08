@@ -1294,10 +1294,10 @@ fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
 #[test]
 fn custom_element_widget_program_ipe_accepts() {
     let src = format!(
-        "{HEAD}import Ipe.Tea.Web as Web\n\
+        "{HEAD}import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ffi.Js.CustomElement as CustomElement\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          type alias EditorState = {{ text : String, line : Int }}\n\
          type EditorEvent = Changed String | Saved\n\
          type Msg = Edited EditorEvent\n\
@@ -1406,9 +1406,9 @@ fn canon_user_kernel_alias_is_rejected() {
 fn js_port_app(decoder_expr: &str) -> String {
     format!(
         "module Main exposing (main)\n\
-         import Ipe.Tea.Web as Web\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Json.Decode as Decode\n\
@@ -1460,9 +1460,9 @@ fn js_port_seal_legal_lowers_and_builds() {
 #[test]
 fn js_port_subscribe_value_decoder_rejected() {
     let src = "module Main exposing (main)\n\
-         import Ipe.Tea.Web as Web\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Json.Decode as Decode\n\
@@ -1495,9 +1495,9 @@ fn js_port_subscribe_value_decoder_rejected() {
 #[test]
 fn js_port_send_secret_rejected() {
     let src = "module Main exposing (main)\n\
-         import Ipe.Tea.Web as Web\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
@@ -1533,9 +1533,9 @@ fn js_port_send_secret_rejected() {
 #[test]
 fn js_port_send_nested_secret_in_adt_rejected() {
     let src = "module Main exposing (main)\n\
-         import Ipe.Tea.Web as Web\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
@@ -1571,9 +1571,9 @@ fn js_port_send_nested_secret_in_adt_rejected() {
 #[test]
 fn js_port_send_polymorphic_wrapper_secret_rejected() {
     let src = "module Main exposing (main)\n\
-         import Ipe.Tea.Web as Web\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
@@ -1908,9 +1908,9 @@ fn effect_secret_in_live_model() {
     let src = "module Main exposing (main)\n\
          import Ipe.Secret as Secret\n\
          import Ipe.System as System\n\
-         import Ipe.Tea.Web exposing (app)\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web exposing (app)\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = HomePage\n\
@@ -2415,10 +2415,10 @@ fn release_accepts_dead_debug_explain() {
 /// field. Shared by the reject/accept companions above.
 fn explain_reachable_src() -> String {
     format!(
-        "{HEAD}import Ipe.Tea.Web as Web\n\
+        "{HEAD}import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Debug as Debug\n\
          type Msg = Noop\n\
          type alias Model = {{}}\n\
@@ -2569,9 +2569,9 @@ fn lower_pipeline_curried_constructor_compiles() {
 #[test]
 fn lower_let_bound_app_cfg() {
     let src = "module Main exposing (main)\n\
-         import Ipe.Tea.Web exposing (app)\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web exposing (app)\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = HomePage\n\
@@ -2607,10 +2607,10 @@ fn lower_let_bound_app_cfg() {
 #[test]
 fn name_web_init_poly_var() {
     let src = r#"module Main exposing (main)
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page }

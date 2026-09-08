@@ -266,7 +266,7 @@ const fn compiled_symbol(
 /// invented `Ipe.<qualifier>` path.
 ///
 /// `Cmd` / `Sub` are intentionally absent — they are shape-scoped and have no
-/// canonical standalone module (reached via `Ipe.Tea.<Shape>.Cmd` / `.Sub`).
+/// canonical standalone module (reached via `Ipe.App.Tea.<Shape>.Cmd` / `.Sub`).
 const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
     // `Attr` kernels (`attribute`, `boolAttribute`, `noAttr`) are the three
     // primitive `Kernel.kernel "Attr_*"` aliases that `Ipe.Html.Attributes` wraps.
@@ -283,15 +283,15 @@ const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
     ("UiCells", &["Ipe", "Ui", "Cells"]),
     // `TuiUi` cell-native attribute builders (`spacing`, `padding`, `alignLeft`,
     // `alignRight`, `center`, `bold`, `underline`, `color`, `bg`) live in
-    // `Ipe.Tea.Tui.Ui`.
-    ("TuiUi", &["Ipe", "Tea", "Tui", "Ui"]),
+    // `Ipe.Ui.Tui`.
+    ("TuiUi", &["Ipe", "Ui", "Tui"]),
     // `CliUi` line-native view builders and attributes (`none`, `text`, `line`,
     // `lines`, `bold`, `underline`, `dim`, `reverse`, `color`, `bg`) live in
-    // `Ipe.Tea.Cli.Ui`.
-    ("CliUi", &["Ipe", "Tea", "Cli", "Ui"]),
+    // `Ipe.Ui.Cli`.
+    ("CliUi", &["Ipe", "Ui", "Cli"]),
     // `TermColor` palette constructors (`black` … `brightWhite`, `default`) live
-    // in `Ipe.Tea.Terminal.Color`.
-    ("TermColor", &["Ipe", "Tea", "Terminal", "Color"]),
+    // in `Ipe.App.Tea.Terminal.Color`.
+    ("TermColor", &["Ipe", "App", "Tea", "Terminal", "Color"]),
 ];
 
 /// The dotted module path a kernel qualifier lives under.
@@ -299,7 +299,7 @@ const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
 /// Resolution order (first match wins):
 ///
 /// 1. [`ipe_canon::STDLIB_MODULE_QUALIFIERS`] — the authoritative
-///    qualifier→path registry (`"Web"` → `Ipe.Tea.Web`).
+///    qualifier→path registry (`"Web"` → `Ipe.App.Tea.Web`).
 /// 2. The compiled-source module whose dotted name is `Ipe.<qualifier>`
 ///    (`"List"` → `Ipe.List`; `"Db.Dsn"` → `Ipe.Db.Dsn`).
 /// 3. The compiled-source module whose final segment equals the qualifier

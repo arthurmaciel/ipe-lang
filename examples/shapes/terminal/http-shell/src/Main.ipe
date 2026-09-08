@@ -16,12 +16,12 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.System as System
-import Ipe.Tea.Cli as Cli
+import Ipe.App.Tea.Cli as Cli
 import Ipe.Http as Http
 import Ipe.Url as Url
 import Ipe.Task as Task
-import Ipe.Tea.Cli.Cmd as Cmd
-import Ipe.Tea.Cli.Sub as Sub
+import Ipe.App.Tea.Cli.Cmd as Cmd
+import Ipe.App.Tea.Cli.Sub as Sub
 
 
 -- A parsed input line. Parsing happens once, in `onLine`, so `update` never

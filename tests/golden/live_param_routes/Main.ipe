@@ -14,11 +14,11 @@ module Main exposing (main)
 -- into one routes list, ipec exits 0, the emitted project cargo-builds, and
 -- a GET on `/u/:id` delivers the captured param to the page constructor.
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Page
     = CounterPage

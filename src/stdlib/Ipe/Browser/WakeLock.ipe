@@ -27,7 +27,7 @@ module Ipe.Browser.WakeLock exposing
 import Ipe.Browser.WakeLock.Internals as Internals exposing (JsMsg(..))
 import Ipe.Error as Error exposing (Error)
 import Ipe.Task as Task
-import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Cmd as Cmd
 
 
 -- | `acquire` — request a screen wake lock, as a `Task Error ()`.

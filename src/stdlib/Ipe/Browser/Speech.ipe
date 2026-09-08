@@ -32,8 +32,8 @@ module Ipe.Browser.Speech exposing
 import Ipe.Browser.Speech.Internals as Internals exposing (JsMsg(..))
 import Ipe.Error as Error exposing (Error)
 import Ipe.Task as Task
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 
 
 -- | Synthesis options — see `Ipe.Browser.Speech.Internals.Options` for field

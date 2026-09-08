@@ -66,11 +66,11 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 /// `Ipe.Web` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
 const LIVE_CMD_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Msg
     = Tick
@@ -113,11 +113,11 @@ main =
 /// bound because of the embedded function, `IPE-L0125`.
 const LIVE_FN_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Msg
     = Noop
@@ -156,11 +156,11 @@ main =
 /// Exercises the `fn_param_ty` Lambda recovery path for Msg.
 const LIVE_LAMBDA_UPDATE_CMD_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Msg
     = Tick
@@ -196,12 +196,12 @@ main =
 /// `Ipe.Tui` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
 const TUI_CMD_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
+import Ipe.App.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.Tea.Terminal.Cmd
+import Ipe.App.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.App.Tea.Terminal.Sub
 
 type Msg
     = Increment
@@ -249,12 +249,12 @@ main =
 /// `LIVE_FN_MSG` — falls through to the Msg gate, `IPE-L0125`.
 const TUI_FN_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
+import Ipe.App.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.Tea.Terminal.Cmd
+import Ipe.App.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.App.Tea.Terminal.Sub
 
 type Msg
     = NoOp
@@ -304,11 +304,11 @@ main =
 /// invariant that Msg and Model use different admissibility predicates.
 const LIVE_HTML_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Msg
     = Noop
@@ -346,11 +346,11 @@ main =
 /// Plain-data Msg + `Ipe.Web` app — the normal happy path. Must be accepted.
 const LIVE_PLAIN_MSG: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Msg
     = Increment

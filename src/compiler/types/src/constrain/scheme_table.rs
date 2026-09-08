@@ -928,7 +928,7 @@ impl Builder<'_> {
             name: self.builtins.cells,
             args: vec![m],
         };
-        // `tui_attr(msg)` — the cell-native attribute type `Ipe.Tea.Tui.Ui.Attribute msg`.
+        // `tui_attr(msg)` — the cell-native attribute type `Ipe.Ui.Tui.Attribute msg`.
         // Distinct from the DOM `attr` above, so `Screen`-view builders never
         // admit a DOM attribute.
         let tui_attr = |m: Ty| Ty::Con {
@@ -944,7 +944,7 @@ impl Builder<'_> {
             args: vec![m],
         };
         // `cli_attr(msg)` — the line-native attribute type
-        // `Ipe.Tea.Cli.Ui.Attribute msg`. Distinct from the DOM `attr` and the
+        // `Ipe.Ui.Cli.Attribute msg`. Distinct from the DOM `attr` and the
         // cell-native `tui_attr`, so a `Lines`-view builder admits neither.
         let cli_attr = |m: Ty| Ty::Con {
             module: Vec::new(),
@@ -2962,7 +2962,7 @@ impl Builder<'_> {
                 list(tui_attr(var(0))),
                 fun(list(cells_t(var(0))), cells_t(var(0))),
             ),
-            // ── Ipe.Tea.Tui.Ui cell-native attribute builders ──
+            // ── Ipe.Ui.Tui cell-native attribute builders ──
             K::TuiUiSpacing | K::TuiUiPadding => fun(int(), tui_attr(var(0))),
             K::TuiUiAlignLeft
             | K::TuiUiAlignRight
@@ -2972,7 +2972,7 @@ impl Builder<'_> {
             | K::TuiUiDim
             | K::TuiUiReverse => tui_attr(var(0)),
             K::TuiUiColor | K::TuiUiBg => fun(term_color(), tui_attr(var(0))),
-            // ── Ipe.Tea.Cli.Ui line-oriented view + attribute builders ──
+            // ── Ipe.Ui.Cli line-oriented view + attribute builders ──
             K::CliUiNone => lines_t(var(0)),
             K::CliUiText => fun(string(), lines_t(var(0))),
             // `Cli.Ui.line : List (Attribute msg) -> String -> Lines msg`
@@ -2986,7 +2986,7 @@ impl Builder<'_> {
                 cli_attr(var(0))
             }
             K::CliUiColor | K::CliUiBg => fun(term_color(), cli_attr(var(0))),
-            // ── Ipe.Tea.Terminal.Color palette constructors ──
+            // ── Ipe.App.Tea.Terminal.Color palette constructors ──
             K::TermColorBlack
             | K::TermColorRed
             | K::TermColorGreen
