@@ -651,6 +651,18 @@ mod tests {
         assert!(out.contains("hello"));
     }
 
+    // A single unstyled `text` line renders to exactly its own bytes — no
+    // width-padding, no trailing newline, no SGR. This is the byte-for-byte
+    // parity that lets a `Cli.app` view migrate from `model -> String` to
+    // `model -> Lines msg` (via `Cli.Ui.text`) with identical stdout.
+    #[test]
+    fn render_lines_view_text_is_byte_exact() {
+        assert_eq!(
+            render_lines_view(cli_text_::<()>("lines: 0".to_owned())),
+            "lines: 0"
+        );
+    }
+
     #[test]
     fn render_lines_view_has_no_trailing_newline() {
         let out = render_lines_view(cli_text_::<()>("prompt > ".to_owned()));

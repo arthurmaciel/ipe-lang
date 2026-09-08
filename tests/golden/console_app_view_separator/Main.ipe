@@ -6,6 +6,8 @@ module Main exposing (main)
 -- app that wants each render on its own line appends "\n" itself.
 
 import Ipe.App.Tea.Cli as Cli
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 import Ipe.App.Tea.Terminal.Cmd
 import Ipe.String
 import Ipe.App.Tea.Terminal.Sub
@@ -26,9 +28,9 @@ update msg model =
         LineReceived _ ->
             ( { model | count = model.count + 1 }, Cmd.none )
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "lines: " ++ String.fromInt model.count
+    Ui.text ("lines: " ++ String.fromInt model.count)
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =

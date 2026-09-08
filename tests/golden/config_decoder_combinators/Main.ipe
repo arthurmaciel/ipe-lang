@@ -8,6 +8,8 @@ module Main exposing (main)
 -- stdin EOF and exits 0.
 
 import Ipe.App.Tea.Cli as Cli
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Config as Config
 import Ipe.Dict as Dict
 import Ipe.App.Tea.Terminal.Cmd
@@ -106,9 +108,9 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model =
     ( model, Cmd.none )
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "server: " ++ model.rendered
+    Ui.text ("server: " ++ model.rendered)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

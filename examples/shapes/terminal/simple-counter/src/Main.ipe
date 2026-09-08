@@ -20,6 +20,8 @@ import Ipe.Task as Task
 import Ipe.App.Tea.Cli as Cli
 import Ipe.App.Tea.Cli.Cmd as Cmd
 import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 
 type Msg
     = Increment
@@ -57,9 +59,9 @@ update msg model =
             ( model, Cmd.none )
 
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "count=" ++ String.fromInt model.count ++ "  (+, -, r, q) > "
+    Ui.text ("count=" ++ String.fromInt model.count ++ "  (+, -, r, q) > ")
 
 
 subscriptions : Model -> Sub Msg

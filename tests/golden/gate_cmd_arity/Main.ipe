@@ -1,6 +1,8 @@
 module Main exposing (main)
 
 import Ipe.App.Tea.Cli as Cli
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 import Ipe.App.Tea.Terminal.Cmd as Cmd
 import Ipe.App.Tea.Terminal.Sub as Sub
 
@@ -25,9 +27,9 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model =
     ( model, Cmd.none )
 
-view : Model -> String
+view : Model -> Lines Msg
 view _model =
-    "ok"
+    Ui.text ("ok")
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

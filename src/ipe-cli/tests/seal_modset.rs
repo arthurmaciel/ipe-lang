@@ -124,6 +124,7 @@ const BARE: &str = "module Main exposing (main)\n\
 /// run of an actual interactive binary.
 const CLI_APP_LINES: &str = "module Main exposing (main)\n\
     import Ipe.App.Tea.Cli as Cli\n\
+    import Ipe.Ui.Cli as Ui\n\
     import Ipe.App.Tea.Terminal.Cmd\n\
     import Ipe.App.Tea.Terminal.Sub\n\
     type Msg = Line String\n\
@@ -131,7 +132,7 @@ const CLI_APP_LINES: &str = "module Main exposing (main)\n\
     init _unit = ( { count = 0 }, Cmd.none )\n\
     update msg model = case msg of\n\
     \x20   Line _ -> ( { model | count = model.count + 1 }, Cmd.none )\n\
-    view _model = \"ok\"\n\
+    view _model = Ui.text \"ok\"\n\
     subscriptions _model = Sub.none\n\
     onLine s = Line s\n\
     main = Cli.app\n\

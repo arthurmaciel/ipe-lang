@@ -2526,11 +2526,15 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // When the program uses Tui, add "tui" to the default features
-    // and inject the crossterm + unicode-width deps required by the tui runtime.
-    // The base manifest declares `tui = []` as a non-default feature; we promote
-    // it and add the deps so the compiled binary includes the `tui` module.
-    let cargo_toml = if ctx.uses_tui {
+    // When the program uses the terminal shape — either `Tui.app` (full-screen)
+    // or `Cli.app` (line-oriented) — add "tui" to the default features and
+    // inject the crossterm + unicode-width deps required by the terminal
+    // runtime. Both drive axes share the one `tui` Cargo feature: a `Cli.app`
+    // view returns `Lines msg`, rendered by `ipe_runtime::tui::render_lines_view`
+    // (behind `feature = "tui"`). The base manifest declares `tui = []` as a
+    // non-default feature; we promote it and add the deps so the compiled binary
+    // includes the terminal module.
+    let cargo_toml = if ctx.uses_tui || ctx.uses_console {
         tui_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml

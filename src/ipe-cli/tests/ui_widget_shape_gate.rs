@@ -185,14 +185,15 @@ fn web_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
 
 /// `Ui.widget` inside a `Cli.app` (Cli shape) view.
 ///
-/// A Cli view has type `Model -> String`. `Ui.widget` returns `Element msg`, so
-/// the type checker rejects the program before the `RejectInNonWebShape` shape
-/// gate is reached — the type mismatch is the primary rejection. The shape gate
-/// is defense-in-depth for any hypothetical path that bypasses type inference
-/// (e.g., programmatic IR construction in tests).
+/// A Cli view has type `Model -> Lines msg`. `Ui.widget` returns `Element msg`,
+/// so the type checker rejects the program before the `RejectInNonWebShape`
+/// shape gate is reached — the type mismatch is the primary rejection. The shape
+/// gate is defense-in-depth for any hypothetical path that bypasses type
+/// inference (e.g., programmatic IR construction in tests).
 const CLI_UI_WIDGET: &str = r#"module Main exposing (main)
 
 import Ipe.App.Tea.Cli as Cli
+import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Ffi.Js.CustomElement as CustomElement
 
 type alias EditorState = { text : String, line : Int }
@@ -214,7 +215,7 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update _msg model =
     ( model, Cmd.none )
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
     CustomElement.node codeEditor model.state Edited
 
@@ -234,7 +235,7 @@ main =
 "#;
 
 /// `Ui.widget` in a `Cli.app` view is rejected because `Ui.widget`
-/// returns `Element msg` but the Cli view expects `String`. The type checker
+/// returns `Element msg` but the Cli view expects `Lines msg`. The type checker
 /// rejects it (IPE-T0001) before the `RejectInNonWebShape` shape gate fires.
 /// The gate is defense-in-depth for any IR path that bypasses type inference.
 #[test]

@@ -9,6 +9,8 @@ module Main exposing (main)
 -- exits 0.
 
 import Ipe.App.Tea.Cli as Cli
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Task as Task
 import Ipe.App.Tea.Terminal.Cmd
 import Ipe.String
@@ -44,9 +46,9 @@ update msg model =
         GotLine _line ->
             ( model, Cmd.none )
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "value: " ++ String.fromInt model.value
+    Ui.text ("value: " ++ String.fromInt model.value)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

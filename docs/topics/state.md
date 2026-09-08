@@ -48,9 +48,9 @@ update msg model =
         Decrement ->
             { model | count = model.count - 1 }
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "Count: " ++ String.fromInt model.count
+    Ui.text ("Count: " ++ String.fromInt model.count)
 
 main : Task Error ()
 main =
@@ -66,7 +66,8 @@ main =
 - **`init`** — the starting model value.
 - **`update : Msg -> Model -> Model`** — given a message and the current model,
   produce the next model. Pure function; no effects.
-- **`view`** — render the model into output (HTML, a string, etc.).
+- **`view`** — render the model into output (a web `Element`, a terminal
+  `Lines` view, etc.).
 
 ## Idiom: no functions in record fields
 

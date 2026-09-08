@@ -312,7 +312,14 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     if ctx.uses_web || ctx.uses_webview {
         set.insert(RuntimeFeature::Web);
     }
-    if ctx.uses_tui {
+    // Both terminal drive axes select the `tui` Cargo feature: `Tui.app`
+    // (full-screen `Screen`) and `Cli.app` (line-oriented `Lines`) share the
+    // one terminal runtime module. A `Cli.app` view returns `Lines msg`, whose
+    // runtime renderer (`ipe_runtime::tui::render_lines_view`) and builder
+    // symbols (`cli_text_`/`cli_line_`/`cli_lines_`) live behind `feature =
+    // "tui"`, so a line-oriented program needs the feature just as a
+    // full-screen one does.
+    if ctx.uses_tui || ctx.uses_console {
         set.insert(RuntimeFeature::Tui);
     }
     if ctx.uses_webview {
@@ -664,6 +671,20 @@ mod tests {
             !f.contains(&"json"),
             "a bare tui program drops `json`: {f:?}"
         );
+    }
+
+    #[test]
+    fn cli_selects_tui() {
+        // A `Cli.app` (line-oriented) program renders its `Lines msg` view
+        // through the terminal runtime module, so it selects the same `tui`
+        // Cargo feature as a full-screen `Tui.app` — the two drive axes share
+        // one runtime module.
+        let f = features_for(|m| {
+            m.uses_console = true;
+            m.uses_ui = true;
+            m.uses_async_runtime = true;
+        });
+        assert!(f.contains(&"tui"), "a Cli program selects `tui`: {f:?}");
     }
 
     #[test]

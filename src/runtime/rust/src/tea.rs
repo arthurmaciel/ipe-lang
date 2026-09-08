@@ -295,13 +295,15 @@ where
 /// or subscription emission: only `PerformDone` counts toward the outstanding
 /// one-shot effects that must be delivered before EOF may terminate the loop. A
 /// ticker `Msg` can arrive forever and so must never keep the loop alive.
-#[cfg(not(target_arch = "wasm32"))]
+///
+/// Terminal-loop-only: both drivers that consume it (`console_app`, `tui_app`)
+/// are `feature = "tui"`-gated, so a tui-less `tokio` build (web/server) drops
+/// the shared TEA event plumbing rather than carrying it as dead code.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub(crate) enum CliEvent<M> {
     Line(String),
     // Constructed only by the `tui` raw-key reader; console_app matches it
-    // defensively (keys are ignored under Cli). In a non-tui build the variant
-    // is never constructed but must remain in the shared enum for that arm.
-    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    // defensively (keys are ignored under Cli).
     Key(String, String),
     Msg(M),
     PerformDone(M),
@@ -311,13 +313,16 @@ pub(crate) enum CliEvent<M> {
 /// Tracks the goroutine-equivalent ticker tasks spawned for the active
 /// `Sub.every` subscriptions. `update` stops all + respawns from the new Sub
 /// (one program, one model, re-evaluated each tick).
-#[cfg(not(target_arch = "wasm32"))]
+///
+/// Terminal-loop-only (see [`CliEvent`]): both consuming drivers are
+/// `feature = "tui"`-gated.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub(crate) struct SubManager<M> {
     tx: tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
     handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 impl<M: Clone + Send + 'static> SubManager<M> {
     pub(crate) fn new(tx: tokio::sync::mpsc::UnboundedSender<CliEvent<M>>) -> Self {
         SubManager {
@@ -393,7 +398,12 @@ pub(crate) fn cli_run_cmd<M: Send + 'static>(
 /// effect an `init`/`update` issued has delivered its Msg — without letting
 /// unbounded ticker/subscription `Msg`s (which never touch the counter) keep
 /// the loop alive.
-#[cfg(not(target_arch = "wasm32"))]
+///
+/// Both callers (`cli_run_cmd`, the Tui driver's untracked wrapper, and
+/// `console_app`) are `feature = "tui"`-gated, so this shares the gate — a
+/// tui-less `tokio` build would otherwise flag it as dead code under
+/// `-D warnings`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
     cmd: IpeCmd<M>,
     tx: &tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
@@ -470,7 +480,12 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
 /// onLine, ticker/Cmd.perform Msg) through update -> re-fire cmd -> re-subs ->
 /// view, until stdin EOF. Stdin is read on a blocking task; tickers + perform
 /// results merge into the same single-threaded update sequence via one channel.
-#[cfg(not(target_arch = "wasm32"))]
+///
+/// Gated on `feature = "tui"`: the `Lines msg` view rasterizes through
+/// `crate::tui::render_lines_view`, which shares the terminal runtime module
+/// with `tui_app`. A `Cli.app` program selects the `tui` feature, so a plain
+/// `tokio` program (web/server, no terminal shape) never compiles this entry.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub fn console_app<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnLine>(
     init: FInit,
     update: FUpdate,
@@ -484,7 +499,7 @@ where
     Msg: Clone + Send + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
-    FView: Fn(Model) -> String + Send + 'static,
+    FView: Fn(Model) -> crate::tui::LinesView<Msg> + Send + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     FOnLine: Fn(String) -> Msg + Send + 'static,
 {
@@ -533,11 +548,13 @@ where
         // Inline render (a closure borrowing `view` would make the future non-Send).
         // Fallible writes (NOT print!/println!, which panic on a broken pipe).
         //
-        // A render writes the view's text to stdout with NO forced trailing "\n":
-        // the prompt formatting is the view's own to decide, so a prompt that ends
-        // `"> "` keeps the cursor on the prompt line for the user's input. Exactly
-        // one terminating newline is written after the event loop exits. A view
-        // that wants each render on its own line supplies its own trailing "\n".
+        // A render rasterizes the model's `Lines` view to a styled terminal
+        // string via `render_lines_view` and writes it to stdout with NO forced
+        // trailing "\n": the prompt formatting is the view's own to decide, so a
+        // view whose last line ends `"> "` keeps the cursor on the prompt line
+        // for the user's input. Exactly one terminating newline is written after
+        // the event loop exits. A view that wants each render on its own line
+        // supplies its own trailing empty line.
         //
         // The initial render is skipped when `init` issued an outstanding
         // effect: that effect's Msg folds through `update` and renders the
@@ -546,7 +563,8 @@ where
         // (`Cmd.none`) has nothing to settle, so its initial model renders now
         // (the `lines: 0` frame the separator fixture pins).
         if outstanding.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-            let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());
+            let rendered = crate::tui::render_lines_view(view(model.clone()));
+            let _ = std::io::stdout().write_all(rendered.as_bytes());
             let _ = std::io::stdout().flush();
         }
 
@@ -578,7 +596,8 @@ where
             model = next;
             cli_run_cmd_tracked(cmd, &tx, Some(&outstanding));
             submgr.update(subscriptions(model.clone()));
-            let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());
+            let rendered = crate::tui::render_lines_view(view(model.clone()));
+            let _ = std::io::stdout().write_all(rendered.as_bytes());
             let _ = std::io::stdout().flush();
             // After folding an effect's result, if EOF was already seen and no
             // effects remain outstanding, terminate as EOF would have.

@@ -12,6 +12,8 @@ module Main exposing (main)
 import Ipe.Maybe as Maybe
 import Ipe.String
 import Ipe.App.Tea.Cli as Cli
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 import Ipe.App.Tea.Terminal.Cmd
 import Ipe.App.Tea.Terminal.Sub
 import Ipe.Url as Url
@@ -114,9 +116,9 @@ update _msg model =
     ( model, Cmd.none )
 
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "routes: " ++ model.rendered
+    Ui.text ("routes: " ++ model.rendered)
 
 
 subscriptions : Model -> Sub Msg

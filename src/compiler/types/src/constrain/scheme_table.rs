@@ -2837,10 +2837,16 @@ impl Builder<'_> {
             // ── Ipe.Terminal line-oriented app-entry (`Cli.app`) ───────────────
             // `Cli.app : { init : () -> (model, Cmd msg)
             //                      , update : msg -> model -> (model, Cmd msg)
-            //                      , view : model -> String
+            //                      , view : model -> Lines msg
             //                      , subscriptions : model -> Sub msg
             //                      , onLine : String -> msg
             //                      } -> Task () ()`
+            //
+            // `view` returns the line-oriented `Lines msg` view (the Cli shape's
+            // own `View`-family type), matching the per-shape View direction:
+            // Web → `Element msg`, Tui → `Screen msg`, Cli → `Lines msg`. A raw
+            // `String` no longer satisfies the field — bridge an existing
+            // string view with `Cli.Ui.text`.
             K::TerminalAppLines => {
                 let tup = tuple2(var(0), cmd(var(1)));
                 let cfg_rec = Ty::Record(
@@ -2848,7 +2854,7 @@ impl Builder<'_> {
                         let mut m = BTreeMap::new();
                         m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
                         m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
-                        m.insert(self.builtins.live_f_view, fun(var(0), string()));
+                        m.insert(self.builtins.live_f_view, fun(var(0), lines_t(var(1))));
                         m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
                         m.insert(self.builtins.cli_f_on_line, fun(string(), var(1)));
                         m

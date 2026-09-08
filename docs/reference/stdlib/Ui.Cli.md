@@ -18,11 +18,9 @@ reverse, and terminal-palette foreground/background colour. There is no
 grid alignment — because a line-oriented surface cannot honour them; those
 attributes are simply absent from the type rather than quietly discarded.
 
-`text` is the plain-string escape hatch: `Cli.Ui.text s` renders `s` as one
-line. `Cli.app`'s `view` field currently still returns `String`; migrating
-that field to `Lines msg` (with `text` as the bridge for existing
-string-returning views) is a tracked follow-up. This module ships the
-structured surface and its shape-gate today.
+`text` is the plain-string escape hatch: `Cli.text s` renders `s` as one
+line. `Cli.app`'s `view` field returns `Lines msg`, so `text` is the bridge
+for a view that only wants to emit a plain string.
 
 ## `none`
 

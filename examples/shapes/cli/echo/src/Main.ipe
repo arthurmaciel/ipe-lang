@@ -4,7 +4,7 @@ module Main exposing (main)
 A line-oriented TEA echo over the canonical `Cli.app` surface.
 
 `Cli.app` re-exports the terminal `appLines` entry: the `view` renders a
-`String` prompt, and the `onLine` callback maps each stdin line to a `Msg`.
+`Lines Msg` prompt, and the `onLine` callback maps each stdin line to a `Msg`.
 Each non-empty line is echoed back and counted.
 
 Type a line and press Enter to echo it; `q` (or Ctrl-D) quits.
@@ -16,6 +16,8 @@ import Ipe.Task as Task
 import Ipe.App.Tea.Cli as Cli
 import Ipe.App.Tea.Cli.Cmd as Cmd
 import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 
 
 type Msg
@@ -48,13 +50,15 @@ update msg model =
             ( model, Cmd.none )
 
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "echoed "
-        ++ String.fromInt model.count
-        ++ " ["
-        ++ model.last
-        ++ "] > "
+    Ui.text
+        ("echoed "
+            ++ String.fromInt model.count
+            ++ " ["
+            ++ model.last
+            ++ "] > "
+        )
 
 
 subscriptions : Model -> Sub Msg
