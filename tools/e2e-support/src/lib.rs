@@ -216,6 +216,47 @@ fn resolve_emitted_target(shared: Option<&str>) -> Option<String> {
     Some(trimmed.to_owned())
 }
 
+/// The `CARGO_TARGET_DIR` a child `ipe`/`cargo` process should inherit so its
+/// emitted build links against the warm shared dependency target.
+///
+/// A test spawning the `ipe` subprocess (`ipe run|build|watch`) forwards this on
+/// the child's environment. The resolution order:
+///   * `IPE_ORACLE_SHARED_TARGET`, when it is an absolute path — CI's e2e/seal
+///     jobs export ONLY this variable, and production `ipe` never reads it, so
+///     the harness must translate it into the child's `CARGO_TARGET_DIR` or the
+///     child cold-builds the full tokio/axum/runtime tree.
+///   * else the ambient `CARGO_TARGET_DIR`, when a local run set one — the child
+///     inherits it untouched, so agent-lane target isolation is preserved.
+///   * else `None` (nothing to forward; cargo's default per-crate target).
+///
+/// Returning `None` when neither is set keeps a bare local run hermetic and
+/// unchanged; a non-absolute `IPE_ORACLE_SHARED_TARGET` fails safe exactly as
+/// [`resolve_emitted_target`] does (isolate rather than reuse a stale target).
+#[must_use]
+pub fn child_shared_target(
+    shared: Option<&str>,
+    ambient_cargo_target: Option<&str>,
+) -> Option<String> {
+    resolve_emitted_target(shared).or_else(|| {
+        ambient_cargo_target
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+/// Resolve [`child_shared_target`] from the current process environment.
+///
+/// Convenience wrapper reading `IPE_ORACLE_SHARED_TARGET` and `CARGO_TARGET_DIR`
+/// from the ambient environment for the common call site that forwards the warm
+/// target onto a spawned `ipe`/`cargo` child.
+#[must_use]
+pub fn child_shared_target_from_env() -> Option<String> {
+    let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
+    let ambient = std::env::var("CARGO_TARGET_DIR").ok();
+    child_shared_target(shared.as_deref(), ambient.as_deref())
+}
+
 /// Build the emitted project at `emitted_dir` for `golden_name`, returning the
 /// located binary path. The shared core of [`build_and_run_rust`] and
 /// [`build_rust_binary`], so both drive `cargo build` identically.
@@ -508,6 +549,43 @@ mod tests {
     fn relative_path_fails_safe() {
         assert_eq!(resolve_emitted_target(Some("relative/target")), None);
         assert_eq!(resolve_emitted_target(Some("./target")), None);
+    }
+
+    // `child_shared_target` layers the ambient-CARGO_TARGET_DIR fallback over the
+    // same fail-safe resolution, so an `ipe`-subprocess site can forward the warm
+    // target whether CI exports IPE_ORACLE_SHARED_TARGET or a local lane exports
+    // CARGO_TARGET_DIR.
+    use super::child_shared_target;
+
+    #[test]
+    fn child_prefers_absolute_shared_over_ambient() {
+        assert_eq!(
+            child_shared_target(Some("/warm/shared"), Some("/lane/target")),
+            Some("/warm/shared".to_owned())
+        );
+    }
+
+    #[test]
+    fn child_falls_back_to_ambient_when_shared_absent() {
+        assert_eq!(
+            child_shared_target(None, Some("/lane/target")),
+            Some("/lane/target".to_owned())
+        );
+    }
+
+    #[test]
+    fn child_falls_back_to_ambient_when_shared_non_absolute() {
+        // A non-absolute shared value fails safe; a valid ambient value still wins.
+        assert_eq!(
+            child_shared_target(Some("relative/target"), Some("/lane/target")),
+            Some("/lane/target".to_owned())
+        );
+    }
+
+    #[test]
+    fn child_is_none_when_neither_set() {
+        assert_eq!(child_shared_target(None, None), None);
+        assert_eq!(child_shared_target(Some("  "), Some("")), None);
     }
 
     /// The load-bearing soundness guarantee of the warm-deps/cold-app dep cache:
