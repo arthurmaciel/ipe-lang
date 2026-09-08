@@ -102,7 +102,25 @@ pub enum Cell {
     Hole(String),
     /// An advisory the aspect flags without failing the gate.
     Warn(String),
-    /// The aspect does not apply to this symbol (e.g. composition for a
-    /// first-order value, `wasm` for a native-only kernel).
-    NotApplicable,
+    /// The aspect does not apply to this symbol, carrying a one-line reason
+    /// DERIVED from a real property (composition for a first-order value, `wasm`
+    /// for a native-only kernel, a browser web axis a standalone build+run cannot
+    /// run). A first-class, justified pass verdict — distinct from [`Self::Ok`] (a
+    /// proven-holding aspect) so an inapplicability is never a silent
+    /// [`Self::Hole`]→pass, and its reason is surfaced in the rendered report.
+    NotApplicable {
+        /// Why the aspect does not apply, named from the deriving property.
+        reason: String,
+    },
+}
+
+impl Cell {
+    /// A [`Self::NotApplicable`] with a static reason — the ergonomic constructor
+    /// for the common case a column knows the inapplicability reason as a literal.
+    #[must_use]
+    pub fn not_applicable(reason: impl Into<String>) -> Self {
+        Self::NotApplicable {
+            reason: reason.into(),
+        }
+    }
 }

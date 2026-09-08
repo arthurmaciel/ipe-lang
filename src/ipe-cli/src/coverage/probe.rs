@@ -20,6 +20,26 @@ use std::path::Path;
 
 use crate::coverage::contract::StdlibSymbol;
 
+/// The browser web axis a symbol's module discloses, when it lives under a
+/// reserved `Ipe.Browser.<Api>` module — the structural property that makes a
+/// standalone build+run inapplicable to it.
+///
+/// A symbol homed under `Ipe.Browser.*` binds client-side browser JavaScript
+/// (a `js-port:<axis>` capability): its emitted crate serves JS that runs in a
+/// live browser page, and merely referencing it discloses the axis to the
+/// app-boundary consent gate (`IPE-S0002`), which a bare single-file probe with
+/// no `package.ipe` grant cannot satisfy. Even granted, the axis has no server
+/// process to exercise — the effect lives in the page, not in the emitted binary —
+/// so a standalone build+run cannot RUN it. The web axis is read from the module
+/// path through the compiler-owned reserved-namespace SSOT
+/// ([`ipe_kernels::WebCapability::for_browser_module`]), never a hand-kept symbol
+/// list, so it derives from a real structural property of the symbol.
+#[must_use]
+pub fn browser_web_axis(sym: &StdlibSymbol) -> Option<ipe_kernels::WebCapability> {
+    let segments: Vec<&str> = sym.module.iter().map(String::as_str).collect();
+    ipe_kernels::WebCapability::for_browser_module(&segments)
+}
+
 /// Why a probe could not be formed for a symbol — distinct from a stage failure,
 /// so a symbol the generator cannot express is reported as inapplicable rather
 /// than as a false hole.
@@ -83,6 +103,49 @@ pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
         StageOutcome::Failed { code: Some(code), .. }
             if *code == IPE_L0102 || *code == IPE_L0146 || *code == IPE_L0151
     )
+}
+
+/// The name-resolution rejection code, when a probe fails to even NAME-RESOLVE
+/// because the point-free reference form cannot address the symbol — distinct
+/// from a lowering gap.
+///
+/// A value-reference probe imports the symbol's module qualified and binds it
+/// point-free. For a class of symbols that reference form cannot be formed at the
+/// name-resolution layer at all:
+///
+/// * [`IPE_N0020`] / [`IPE_N0004`] — the symbol's module has no standalone
+///   importable home on disk (a shape-scoped module reached only through an app
+///   shape, e.g. `Ipe.Cmd` / `Ipe.Sub`), so the generated `import` finds nothing.
+/// * [`IPE_N0027`] — the qualified import's short qualifier self-collides (a
+///   deeply-nested module whose last segment the point-free import form claims
+///   twice, e.g. `Ipe.Server.Http` / `Ipe.Http.Stream`).
+/// * [`IPE_N0023`] — the module path does not match the probe module name.
+/// * [`IPE_N0005`] — the module has no member of that name (a kernel-homed symbol
+///   the surface enumerates but the compiled-source module does not expose under
+///   this name, e.g. `Ipe.Ui.widget`).
+///
+/// In each the rejection is a property of the point-free probe FORM for that
+/// symbol — the reference cannot be addressed — not a build+run gap, so the
+/// build+run column reports the symbol inapplicable rather than a false hole. This
+/// is the name-resolution sibling of [`is_probe_form_limitation`] (which classifies
+/// the lowering-layer point-free limitations), and it carries the offending code so
+/// the verdict names exactly why the probe form does not apply.
+#[must_use]
+pub fn probe_form_unaddressable_code(outcome: &StageOutcome) -> Option<ipe_diagnostics::Code> {
+    use ipe_diagnostics::{IPE_N0004, IPE_N0005, IPE_N0020, IPE_N0023, IPE_N0027};
+    match outcome {
+        StageOutcome::Failed {
+            code: Some(code), ..
+        } if *code == IPE_N0020
+            || *code == IPE_N0004
+            || *code == IPE_N0027
+            || *code == IPE_N0023
+            || *code == IPE_N0005 =>
+        {
+            Some(*code)
+        }
+        _ => None,
+    }
 }
 
 /// Whether a lowering rejection is an internal compiler error ([`IPE_I0001`]).

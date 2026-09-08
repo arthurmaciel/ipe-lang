@@ -70,7 +70,10 @@ impl AspectCheck<StdlibSymbol> for DocumentedColumn {
 
     fn check(&self, sym: &StdlibSymbol) -> Cell {
         if !sym.exported || sym.kind == SymbolKind::Ctor {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not an exported value or type — a doc-string is judged on exported \
+                 values/types, not on unexported symbols or constructors",
+            );
         }
         match self.documented.get(&(short_module(sym), sym.name.clone())) {
             Some(true) => Cell::Ok,
@@ -84,7 +87,10 @@ impl AspectCheck<StdlibSymbol> for DocumentedColumn {
             // symbol with no source declaration (a kernel-alias whose scheme
             // lives in the kernel table, addressed only through `exposing`) is not
             // a documentation hole here — its home module owns its surface.
-            None => Cell::NotApplicable,
+            None => Cell::not_applicable(
+                "no compiled-source declaration (a kernel-alias addressed only through \
+                 `exposing`) — its home module owns its documentation surface",
+            ),
         }
     }
 }
@@ -179,15 +185,23 @@ impl AspectCheck<StdlibSymbol> for DocExampleColumn {
 
     fn check(&self, sym: &StdlibSymbol) -> Cell {
         if !sym.exported || sym.kind == SymbolKind::Ctor {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not an exported value or type — doc-example checking applies to exported \
+                 values/types only",
+            );
         }
         let short = short_module(sym);
         let Some(doc) = self.docs.get(&(short.clone(), sym.name.clone())) else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "no compiled-source doc-string for this symbol — nothing to extract an \
+                 example from",
+            );
         };
         let examples = fenced_ipe_examples(doc);
         if examples.is_empty() {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "the doc-string carries no fenced ```ipe example — nothing to type-check",
+            );
         }
         let dotted = self
             .dotted_of_short
