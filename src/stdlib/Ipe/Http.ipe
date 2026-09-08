@@ -49,7 +49,6 @@ module Ipe.Http exposing
     , RedirectPolicy(..)
     , defaultRequest
     , defaultRequestFromString
-    , defaultTimeout
     , get
     , methodFromString
     , methodToString

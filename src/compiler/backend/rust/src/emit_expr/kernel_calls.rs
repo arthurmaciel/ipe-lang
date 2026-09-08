@@ -496,7 +496,15 @@ pub fn emit_http_builder_call(
             )))
         }
         KernelFn::HttpWithTimeout => {
-            // withTimeout : Int -> HttpRequest -> HttpRequest
+            // withTimeout : Duration -> HttpRequest -> HttpRequest
+            //
+            // The timeout is a typed `Ipe.Duration` (opaque, non-negative); the
+            // transport DTO's `timeout` field is raw `i64` milliseconds. Unwrap
+            // the span through the compiled-module accessor `Ipe.Duration.toMillis`
+            // before it lands in the field — the same unwrap the pure-`.ipe`
+            // siblings (`WebSocket.withTimeout` / `Cache.withTTL`) perform in
+            // source. `module_value` is the naming SSOT shared with the accessor's
+            // definition site, so the emitted call name matches by construction.
             let t = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_http_builder_call",
                 detail: "HttpWithTimeout expects 2 arguments (timeout, req)".to_owned(),
@@ -507,9 +515,10 @@ pub fn emit_http_builder_call(
             })?;
             let t_s = emit_expr_at(ctx, t, indent, child, generics)?;
             let req_s = emit_expr_at(ctx, req, indent, child, generics)?;
+            let to_millis = crate::naming::module_value(&["Ipe", "Duration"], "toMillis");
             Ok(Some(format!(
                 "{{ let mut __ipe_rec = ({req_s}).clone(); \
-                 __ipe_rec.timeout = {t_s}; __ipe_rec }}"
+                 __ipe_rec.timeout = crate::{to_millis}({t_s}); __ipe_rec }}"
             )))
         }
         KernelFn::HttpWithBody => {

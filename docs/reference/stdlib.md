@@ -1975,7 +1975,6 @@ Ipe.Http — outbound HTTP client.
 | `RedirectPolicy` | Redirect behaviour for an outbound request.  `NoRedirects` prevents all |
 | `defaultRequest` | `defaultRequest url` — the primary request constructor. Takes an |
 | `defaultRequestFromString` | `defaultRequestFromString raw` — the MARKED parse-at-the-boundary helper |
-| `defaultTimeout` | The default request timeout applied by `defaultRequest`: 30 seconds, |
 | `get` | `get url` — outbound GET. Takes an already-sealed typed `Url` (parsed once |
 | `methodFromString` | `methodFromString s` — the single typed parse boundary for inbound method |
 | `methodToString` | `methodToString m` — the canonical uppercase string for `m` |

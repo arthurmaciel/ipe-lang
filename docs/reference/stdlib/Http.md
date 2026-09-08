@@ -92,16 +92,6 @@ string) and then the same scheme narrowing, returning `Result` so a raw
 string is an EXPLICIT parse boundary, never a silent stringly default. A
 relative / scheme-less / non-`http(s)` string is a typed `Err`.
 
-## `defaultTimeout`
-
-```ipe
-defaultTimeout : Duration
-```
-
-The default request timeout applied by `defaultRequest`: 30 seconds,
-spelled as a typed `Ipe.Duration` rather than a bare millisecond literal so
-the unit is explicit and a negative floor is unrepresentable.
-
 ## `get`
 
 ```ipe

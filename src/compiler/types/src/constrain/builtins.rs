@@ -109,6 +109,11 @@ pub struct Builtins {
     pub http_f_redirects: Symbol,
     /// `"RedirectPolicy"` — the `Ipe.Http.RedirectPolicy` ADT type constructor.
     pub redirect_policy: Symbol,
+    /// `"Duration"` — the `Ipe.Duration.Duration` opaque ADT type constructor.
+    /// Consumed by the `Http.withTimeout` kernel (its typed timeout argument);
+    /// homed via [`Self::duration_home`] so a point-free reference lowers to the
+    /// compiled-module enum, mirroring `EmailProvider` / [`Self::email_home`].
+    pub duration: Symbol,
     /// `"NoRedirects"` — nullary `RedirectPolicy` constructor.
     pub no_redirects: Symbol,
     /// `"FollowRedirects"` — `Int -> RedirectPolicy` constructor.
@@ -681,6 +686,12 @@ pub struct Builtins {
     /// through the lowerer's home-keyed variant lookup into the unknown-builtin
     /// internal-compiler-error arm.
     pub email_home: Vec<Symbol>,
+    /// The interned module segments `["Ipe", "Duration"]` — the real home of the
+    /// `Duration` ADT. The `Http.withTimeout` kernel scheme carries this home so a
+    /// point-free reference lowers to the compiled-module enum instead of dropping
+    /// through the lowerer's home-keyed variant lookup into the unknown-builtin
+    /// internal-compiler-error arm (mirrors [`Self::email_home`]).
+    pub duration_home: Vec<Symbol>,
 }
 
 impl Builtins {
@@ -743,6 +754,7 @@ impl Builtins {
             http_f_timeout: interner.intern("timeout")?,
             http_f_redirects: interner.intern("redirects")?,
             redirect_policy: interner.intern("RedirectPolicy")?,
+            duration: interner.intern("Duration")?,
             no_redirects: interner.intern("NoRedirects")?,
             follow_redirects: interner.intern("FollowRedirects")?,
             // Db symbols.
@@ -962,6 +974,7 @@ impl Builtins {
             ],
             codec_home: vec![interner.intern("Ipe")?, interner.intern("Codec")?],
             email_home: vec![interner.intern("Ipe")?, interner.intern("Email")?],
+            duration_home: vec![interner.intern("Ipe")?, interner.intern("Duration")?],
         })
     }
 

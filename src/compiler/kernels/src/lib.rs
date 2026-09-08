@@ -313,6 +313,11 @@ pub enum BuiltinTag {
     HttpMethod,
     /// `RedirectPolicy` — the redirect-behaviour ADT (`NoRedirects | FollowRedirects Int`).
     RedirectPolicy,
+    /// `Duration` — the `Ipe.Duration.Duration` opaque non-negative time span
+    /// (`Duration Int`, compiled-source), consumed by the `Http.withTimeout`
+    /// kernel's typed timeout argument. Homed at `["Ipe", "Duration"]` (see
+    /// `builtin_con_module`), mirroring `EmailProvider`.
+    Duration,
     /// `CryptoKey` — the nullary opaque role-typed crypto key.
     CryptoKey,
     /// `CryptoMac` — the nullary opaque role-typed MAC output.
@@ -8113,6 +8118,7 @@ impl StdlibKernel {
             tail: RowTailShape::Closed,
         };
         const REDIRECT_POLICY: TyShape = TyShape::Con(BuiltinTag::RedirectPolicy, &[]);
+        const DURATION: TyShape = TyShape::Con(BuiltinTag::Duration, &[]);
         // `HttpRequest { body, headers, method, url, timeout, redirects }`.
         // Field order matches the BTreeMap iteration order (ascending intern-symbol
         // order from the Builtins constructor): body, headers, method, url, timeout,
@@ -8404,7 +8410,7 @@ impl StdlibKernel {
             TyShape::Fun(&STRING, &RESULT_ERROR_HTTP_REQUEST);
         const HTTP_REQUEST_TO_HTTP_REQUEST: TyShape = TyShape::Fun(&HTTP_REQUEST, &HTTP_REQUEST);
         const HTTP_WITH_METHOD: TyShape = TyShape::Fun(&HTTP_METHOD, &HTTP_REQUEST_TO_HTTP_REQUEST);
-        const HTTP_WITH_TIMEOUT: TyShape = TyShape::Fun(&INT, &HTTP_REQUEST_TO_HTTP_REQUEST);
+        const HTTP_WITH_TIMEOUT: TyShape = TyShape::Fun(&DURATION, &HTTP_REQUEST_TO_HTTP_REQUEST);
         const HTTP_WITH_REDIRECTS: TyShape =
             TyShape::Fun(&REDIRECT_POLICY, &HTTP_REQUEST_TO_HTTP_REQUEST);
         const HTTP_WITH_BODY: TyShape = TyShape::Fun(&STRING, &HTTP_REQUEST_TO_HTTP_REQUEST);
