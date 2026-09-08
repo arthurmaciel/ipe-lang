@@ -22,6 +22,8 @@ import Ipe.Url as Url
 import Ipe.Task as Task
 import Ipe.Tea.Cli.Cmd as Cmd
 import Ipe.Tea.Cli.Sub as Sub
+import Ipe.Tea.Cli.Ui as Ui
+import Ipe.Tea.Cli.Ui exposing (Lines)
 
 
 -- A parsed input line. Parsing happens once, in `onLine`, so `update` never
@@ -117,13 +119,17 @@ summarise response =
     { status = response.status, body = response.body }
 
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "── http-shell ── ("
-        ++ String.fromInt model.requests
-        ++ " request(s))\n"
-        ++ model.outcome
-        ++ "\n> "
+    Ui.lines
+        [ Ui.text
+            ("── http-shell ── ("
+                ++ String.fromInt model.requests
+                ++ " request(s))"
+            )
+        , Ui.text model.outcome
+        , Ui.text "> "
+        ]
 
 
 subscriptions : Model -> Sub Msg

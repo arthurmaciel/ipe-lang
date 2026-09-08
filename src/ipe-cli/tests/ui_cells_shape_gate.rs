@@ -161,10 +161,10 @@ fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
 
 /// `Ui.cells` in a `Cli.app` (Cli shape) view.
 ///
-/// `Cli.app` requires `view : Model -> String`. `Ui.cells` returns
-/// `Element msg`, which is incompatible with `String`. The type checker
-/// rejects the program with IPE-T0001 (type mismatch) before the backend
-/// shape gate (IPE-L0153) is reached. The shape gate is defense-in-depth:
+/// `Cli.app` requires `view : Model -> Lines msg`. `Ui.cells` returns
+/// `Element msg` (a 2D cell grid), which is incompatible with `Lines msg`. The
+/// type checker rejects the program with IPE-T0001 (type mismatch) before the
+/// backend shape gate (IPE-L0153) is reached. The shape gate is defense-in-depth:
 /// unreachable helper functions containing `Ui.cells` are eliminated by dead
 /// code analysis before emission, so the gate fires only if the type system
 /// is bypassed (e.g., programmatic IR construction). This test confirms
@@ -172,6 +172,7 @@ fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
 const CLI_UI_CELLS: &str = r"module Main exposing (main)
 
 import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Ui exposing (Lines)
 import Ipe.Ui as Ui
 
 type Msg = NoOp
@@ -188,7 +189,7 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
-view : Model -> String
+view : Model -> Lines Msg
 view _model =
     Ui.cells [ [ 'h', 'i' ] ]
 
@@ -208,7 +209,7 @@ main =
 ";
 
 /// `Ui.cells` in a `Cli.app` view is rejected because the type checker
-/// rejects `Element msg` where `String` is required (IPE-T0001). The backend
+/// rejects `Element msg` where `Lines msg` is required (IPE-T0001). The backend
 /// shape gate (IPE-L0153) is defense-in-depth for paths that bypass type
 /// inference.
 #[test]
@@ -361,9 +362,9 @@ banner model =
         , Ui.text "(type a line)"
         ]
 
-view : Model -> String
-view _model =
-    "> "
+view : Model -> Lines Msg
+view model =
+    banner model
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -382,8 +383,8 @@ main =
 
 /// The structured `Lines` view surface, its line-native `Attribute` builders,
 /// and the first-class `Terminal.Color` palette type-check + lower + emit under
-/// the Cli shape (ipe-0). A `Lines`-returning helper is admissible alongside the
-/// canonical `Cli.app` string `view`.
+/// the Cli shape (ipe-0). The `Cli.app` `view` returns a `Lines msg` value built
+/// from those builders.
 #[test]
 fn cli_lines_surface_with_palette_is_accepted() -> Result<(), BoxError> {
     assert_accepted("cli_lines_palette", CLI_WITH_LINES_HELPER)
@@ -414,9 +415,9 @@ banner : Model -> Lines Msg
 banner _model =
     Ui.line [ Dom.onClick Clicked ] "hello"
 
-view : Model -> String
-view _model =
-    "> "
+view : Model -> Lines Msg
+view model =
+    banner model
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

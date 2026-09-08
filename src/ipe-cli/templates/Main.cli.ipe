@@ -1,39 +1,54 @@
 module Main exposing (main)
 
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
 import Ipe.Tea.Cli exposing (app)
 import Ipe.Tea.Cli.Cmd as Cmd
 import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Tea.Cli.Ui as Ui
+import Ipe.Tea.Cli.Ui exposing (Lines)
 
 
 type Msg
-    = Done
+    = Echo String
+    | Quit
+    | NoOp
 
 
 type alias Model =
-    { message : String
+    { count : Int
+    , last : String
     }
 
 
-init : List String -> ( Model, Cmd Msg )
-init args =
-    let
-        greeting =
-            case args of
-                [] ->
-                    "Hello, world!"
-
-                name :: _ ->
-                    "Hello, " ++ name ++ "!"
-    in
-    ( { message = greeting }, Cmd.none )
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { count = 0, last = "" }, Cmd.none )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        Done ->
+        Echo line ->
+            ( { count = model.count + 1, last = line }, Cmd.none )
+
+        Quit ->
+            ( model, Cmd.perform (System.exit 0) (\_ -> NoOp) )
+
+        NoOp ->
             ( model, Cmd.none )
+
+
+view : Model -> Lines Msg
+view model =
+    Ui.text
+        ("echoed "
+            ++ String.fromInt model.count
+            ++ " ["
+            ++ model.last
+            ++ "] > "
+        )
 
 
 subscriptions : Model -> Sub Msg
@@ -41,9 +56,17 @@ subscriptions _model =
     Sub.none
 
 
-view : Model -> Lines Msg
-view model =
-    Ui.lines [ Ui.line model.message ]
+onLine : String -> Msg
+onLine line =
+    case String.trim line of
+        "q" ->
+            Quit
+
+        "" ->
+            NoOp
+
+        trimmed ->
+            Echo trimmed
 
 
 main =
@@ -52,4 +75,5 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
+        , onLine = onLine
         }

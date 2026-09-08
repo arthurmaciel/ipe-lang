@@ -2,7 +2,8 @@
 //!
 //! * [`KernelFn::TerminalAppLines`] — `Cli.app cfg` →
 //!   `ipe_runtime::console_app(init, update, view, subscriptions, on_line)`.
-//!   View returns `String` (printed to stdout on each state change).
+//!   View returns a `Lines msg` value (`ipe_runtime::tui::LinesView`), which the
+//!   runtime rasterizes to a styled terminal string on each state change.
 //!   5-field closed cfg: init / update / view / subscriptions / onLine.
 //!
 //! # Correctness constraints (MAKE INVALID STATES UNREPRESENTABLE)
@@ -49,7 +50,7 @@ pub fn emit_console_call(
     match k {
         // ── Cli.app { init, update, view, subscriptions, onLine } ─
         //
-        // view : Model -> String
+        // view : Model -> Lines Msg
         // Runtime entry: `ipe_runtime::console_app(init, update, view, subs, on_line)`
         KernelFn::TerminalAppLines => {
             let [cfg_e] = args else {

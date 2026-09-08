@@ -79,6 +79,8 @@ const CLI_APP: &str = r#"module Main exposing (main)
 import Ipe.Tea.Cli as Cli
 import Ipe.Tea.Cli.Cmd
 import Ipe.Tea.Cli.Sub
+import Ipe.Tea.Cli.Ui as Ui
+import Ipe.Tea.Cli.Ui exposing (Lines)
 
 type Msg = Line String | NoOp
 
@@ -96,9 +98,9 @@ update msg model =
         NoOp ->
             ( model, Cmd.none )
 
-view : Model -> String
+view : Model -> Lines Msg
 view _model =
-    "ok"
+    Ui.text "ok"
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =

@@ -10,6 +10,8 @@ module Main exposing (main)
 import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Ui as Ui
+import Ipe.Tea.Cli.Ui exposing (Lines)
 import Ipe.Tea.Cli.Cmd as Cmd
 import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Browser.Clipboard as Clipboard
@@ -39,9 +41,9 @@ update msg model =
             ( model, Cmd.none )
 
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "lines: " ++ String.fromInt model.count ++ " > "
+    Ui.text ("lines: " ++ String.fromInt model.count ++ " > ")
 
 
 subscriptions : Model -> Sub Msg

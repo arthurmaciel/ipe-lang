@@ -4,6 +4,8 @@ module Main exposing (main)
 -- Expected: ipec-0 AND cargo-0 on the emitted project.
 
 import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Ui as Ui
+import Ipe.Tea.Cli.Ui exposing (Lines)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
 import Ipe.Tea.Terminal.Sub
@@ -22,9 +24,9 @@ update msg model =
         GotLine _line ->
             ( { model | lines = model.lines + 1 }, Cmd.none )
 
-view : Model -> String
+view : Model -> Lines Msg
 view model =
-    "lines: " ++ String.fromInt model.lines
+    Ui.text ("lines: " ++ String.fromInt model.lines)
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
