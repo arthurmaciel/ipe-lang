@@ -314,19 +314,14 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
 /// (SEAL — the program compiles), leaving the `as Cmd` binding untouched.
 #[test]
 fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
-    // IPE-N0035 is a canon/name-phase gate on the wrong-shape `Cmd` import, so it
-    // fires independently of the `view` body's type. The view stays a bare string
-    // literal placeholder: no `Ipe.Tea.Cli.Ui` import is needed (and none is
-    // added), keeping this bare test DB's module graph to the single `Main` file
-    // — importing the `Cli.Ui` surface here would raise IPE-N0020 (unknown module)
-    // and short-circuit canon before the N0035 gate.
     let src = "module Main exposing (main)\n\n\
         import Ipe.Tea.Cli as Cli\n\
+        import Ipe.Tea.Cli.Ui as Ui\n\
         import Ipe.Tea.Web.Cmd as Cmd\n\
         import Ipe.Tea.Terminal.Sub as Sub\n\n\
         init _u = ( { n = 0 }, Cmd.none )\n\
         update _m model = ( model, Cmd.none )\n\
-        view _m = \"ok\"\n\
+        view _m = Ui.text \"ok\"\n\
         subscriptions _m = Sub.none\n\
         onLine l = l\n\
         main =\n    \
