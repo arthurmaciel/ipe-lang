@@ -54,6 +54,7 @@ PLUMBING_WORKFLOWS = {
     "rerun-failed-once.yml",
     "nightly-full-gate.yml",
     "close-issues-on-development.yml",
+    "pr-base-guard.yml",
     "manifest-guard.yml",
     "ci-health.yml",
 }
