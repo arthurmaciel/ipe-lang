@@ -514,6 +514,10 @@ fn start_watch(
         hard_cap: Duration::from_millis(600),
     };
     opts.on_event = Some(sink.as_callback());
+    // Forward CI's warm shared target (exported ONLY as IPE_ORACLE_SHARED_TARGET)
+    // into the watch rebuild so it links against a pre-compiled dep tree; absent,
+    // the watch stays isolated exactly as before.
+    opts.target_dir = e2e_support::child_shared_target_from_env().map(PathBuf::from);
     Ok(ipe::watch::spawn(opts))
 }
 

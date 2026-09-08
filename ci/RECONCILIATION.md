@@ -11,14 +11,14 @@ against the live ruleset. Applying the delta to the live ruleset is a manual,
 human step (a ruleset edit is a security-relevant change and is intentionally not
 automated by a workflow token).
 
-## Intended required set (= manifest `gate` contexts)
+## Intended required set (= manifest `gate` + `gate-external` contexts)
 
-See `ci/required-set.json`. As of this change, 26 contexts:
+See `ci/required-set.json`. As of this change, 27 contexts:
 
 ```
 artifact-guard
-cargo-deny
 capabilities-docs-drift
+cargo-deny
 clippy
 diagnostic-tone
 doc-string example gate
@@ -28,6 +28,7 @@ explain-page example gate (ADR 0059)
 first-party check floor (ipe type-check only)
 first-party shapes (build gate)
 fmt
+guardian-sound
 linux-arm64 (seccomp socket-deny + bubblewrap)
 linux-x64 (seccomp socket-deny + bubblewrap)
 macos-arm64 (sandbox-exec / Seatbelt)
@@ -48,12 +49,13 @@ wasm-floor
 
 Measured against the ruleset's current `required_status_checks`.
 
-**Remove from the required set**
+**Keep in the required set (no change needed)**
 
-- `guardian-sound` — **orphaned**: no workflow produces a status of this name.
-  With `strict_required_status_checks_policy: false` a never-reported required
-  check does not block (a false gate satisfied by absence). Manifest disposition
-  = `delete`.
+- `guardian-sound` — **external gate**: required promotion context posted by the
+  whole-tree security-soundness guardian out-of-band, not by any CI workflow.
+  Manifest disposition = `gate-external`. Intentionally absent from every
+  workflow; `promote.yml` reads required contexts from ruleset 22326541 directly,
+  so this gate enforces the promotion invariant. Do NOT remove from the ruleset.
 
 **Add to the required set** (already produced per-change, promote to required —
 they are `gate` in the manifest but were not in the ruleset):
@@ -92,8 +94,9 @@ proofs, sanitizers, miri, seal-modset, browser-e2e, runtime-feature-combos).
 
 Reconciling the current checks against the disposition table surfaced these:
 
-- **`guardian-sound` — required-but-absent (worst class).** In the required set,
-  produced by nothing → never blocks. Disposition `delete`; remove from ruleset.
+- **`guardian-sound` — external gate (correct state).** In the required set,
+  produced out-of-band by the whole-tree security-soundness guardian. Disposition
+  `gate-external`; keep in ruleset. No CI workflow produces it by design.
 - **`windows-static`, `freebsd-cross` — reported-green-when-red.** Both set
   `continue-on-error: true`, so a red reports GREEN even to a human — worse than
   advisory. Disposition `informational`; the fix is to DROP `continue-on-error`
@@ -109,13 +112,14 @@ Reconciling the current checks against the disposition table surfaced these:
   `informational`, owner `release`; the dedup issue keeps one surface per red
   instead of an email per run.
 
-No check is left required-but-unproduced or guarantee-but-un-gated after this
-change.
+No check is left unclassified or guarantee-but-un-gated after this change.
+`guardian-sound` is correctly classified as `gate-external` (required by the
+ruleset, posted out-of-band by the guardian, legitimately CI-unproduced).
 
 ## Regenerate `ci/required-set.json`
 
 ```bash
 python3 -c "import yaml,json; d=yaml.safe_load(open('ci/check-manifest.yml')); \
-print(json.dumps(sorted(e['context'] for e in d['checks'] if e['disposition']=='gate'), indent=2))" \
+print(json.dumps(sorted(e['context'] for e in d['checks'] if e['disposition'] in ('gate','gate-external')), indent=2))" \
   > ci/required-set.json
 ```

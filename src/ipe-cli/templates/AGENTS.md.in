@@ -1132,16 +1132,21 @@ Deliberate omissions, not gaps to close.
 
 ```bash
 ipe init [name]                    # new project
-ipe build src/Main.ipe             # compile → out/app
-ipe build src/Main.ipe --target wasm   # browser-WASM project (cdylib + www/ shell)
-ipe run src/Main.ipe               # build + run
+# The dev inner loop lives under `ipe dev {build,run,watch}` (dev posture:
+# Debug.* on, unsigned, hot-reload). `build`/`run`/`watch` also work bare as
+# shortcuts for the same dev posture. `ipe release` is the distinct shipping
+# posture (optimised, Debug.* rejected, native code jailed) — there is no
+# `watch` under release, so hot-reloading a shipping build is not expressible.
+ipe dev build src/Main.ipe         # compile → out/app  (bare `ipe build` too)
+ipe dev build src/Main.ipe --target wasm   # browser-WASM project (cdylib + www/ shell)
+ipe dev run src/Main.ipe           # build + run        (bare `ipe run` too)
 ipe release src/Main.ipe           # PRODUCTION build; rejects any Debug.* use
                                    #  (IPE-L0140)
-ipe build|run … --static           # fully-static musl single binary (dlmalloc
+ipe dev build|run … --static       # fully-static musl single binary (dlmalloc
                                    #  default; --target <triple> --allocator
                                    #  <auto|system|dlmalloc|talc|mimalloc>
                                    #  --allow-slow-allocator)
-ipe watch src/Main.ipe             # file-watch rebuild + restart
+ipe dev watch src/Main.ipe         # file-watch rebuild + restart (bare `ipe watch` too)
 ipe type-check src/Main.ipe        # type-check only — no build, no run, no emit
 ipe fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.ipei)
                                    # test runner: place tests/Main.ipe in the

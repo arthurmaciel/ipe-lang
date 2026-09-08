@@ -72,6 +72,87 @@ struct Section {
     commands: &'static [&'static str],
 }
 
+/// A command group: a named node (e.g. `dev`) that owns a set of member
+/// subcommands, invoked as `ipe <group> <verb>`. The group makes a posture a
+/// namespace rather than a flag: a verb reachable only under `dev` cannot be
+/// typed under any other group, so `release`-on-save (`watch` under a shipping
+/// posture) is structurally unrepresentable — there is no group that pairs
+/// `release` with `watch`.
+///
+/// A group carries no handler of its own: invoked bare, or with an unknown next
+/// token, it renders its own subpage (progressive help). Each member is an
+/// ordinary [`Command`] in the one [`COMMANDS`] table, so a grouped verb is
+/// dispatched and described from the same source as a bare one — the two cannot
+/// drift.
+pub(crate) struct Group {
+    /// The group name (e.g. `dev`).
+    name: &'static str,
+    /// A one-line description shown on the group's subpage and the top-level
+    /// screen.
+    summary: &'static str,
+    /// The member subcommand names, in display order. Each names a [`Command`]
+    /// in [`COMMANDS`].
+    members: &'static [&'static str],
+}
+
+/// Every `ipe` command group. Today the sole axis is dev/release: `dev` groups
+/// the development-posture verbs (`Debug.*` permitted, unsigned, hot-reload
+/// allowed); `release` stays a distinct top-level command (the shipping
+/// posture). `watch` is a member of `dev` only, so hot-reloading a shipping
+/// build cannot be expressed.
+const GROUPS: &[Group] = &[Group {
+    name: "dev",
+    summary: "The development inner loop — build, run, and watch with Debug.* on and no jail.",
+    members: &["build", "run", "watch"],
+}];
+
+/// Look up a group by name.
+fn find_group(name: &str) -> Option<&'static Group> {
+    GROUPS.iter().find(|g| g.name == name)
+}
+
+/// Whether `name` is a known command group (drives group-aware dispatch and
+/// `--help` interception).
+#[must_use]
+pub fn is_group(name: &str) -> bool {
+    find_group(name).is_some()
+}
+
+/// Whether `verb` is a member subcommand of the group `group`.
+#[must_use]
+pub fn is_group_member(group: &str, verb: &str) -> bool {
+    find_group(group).is_some_and(|g| g.members.contains(&verb))
+}
+
+/// The member subcommand names of `group`, in display order, or `None` when
+/// `group` is not a known group. The candidate set for suggesting a near-miss
+/// when an unknown verb follows a group name.
+#[must_use]
+pub fn group_members(group: &str) -> Option<&'static [&'static str]> {
+    find_group(group).map(|g| g.members)
+}
+
+/// The canonical `'static` name for a known group, or `None` when `name` is not
+/// a group.
+///
+/// Lets a dispatcher carry the interned group name into a typed error
+/// without leaking a runtime `String` where a `&'static str` is required.
+#[must_use]
+pub fn group_name(name: &str) -> Option<&'static str> {
+    find_group(name).map(|g| g.name)
+}
+
+/// Whether the command `name` is a member of some group.
+///
+/// A grouped command is
+/// advertised on the top-level screen through its group's node (e.g. `ipe dev`),
+/// not as its own top-level line, so the "appears in exactly one section"
+/// invariant excuses it.
+#[must_use]
+pub fn is_grouped_command(name: &str) -> bool {
+    GROUPS.iter().any(|g| g.members.contains(&name))
+}
+
 /// A flag entry exposed to coverage surfaces: the flag synopsis and its
 /// one-line description, both taken directly from [`COMMANDS`].
 ///
@@ -160,7 +241,9 @@ const COMMANDS: &[Command] = &[
                     current project). shape is derived from `main` and, if written, only \
                     cross-checked. runtime/host apply to `web` only: `web` = served live (live is \
                     the unnamed default, never written), `web spa` = sandboxed browser client, and \
-                    a host is desktop/ios/android. With no delivery args, `build` builds the \
+                    a host is desktop/ios/android. A `desktop`/`ios`/`android` host lays out the \
+                    app bundle for that host (a fast dev bundle; `release web <host>` produces the \
+                    production distributable). With no delivery args, `build` builds the \
                     default delivery — the fast one-artifact inner loop; `release` builds every \
                     declared delivery. Delivery args select a subset or override for this \
                     invocation only and never edit package.ipe.",
@@ -192,6 +275,11 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--target <triple|wasm>]",
                 desc: "cross-compile to <triple>, or build for the browser with wasm",
+            },
+            Opt {
+                flag: "[--emit-permissions <ios|macos|android>]",
+                desc: "read-only: print the OS-permission declarations the app's accepted web \
+                       capabilities derive on the platform, and build nothing",
             },
             Opt {
                 flag: "[--allocator <auto|system|dlmalloc|talc|mimalloc>]",
@@ -241,10 +329,13 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "release",
         run: crate::run_release,
-        summary: "Build the production artifact — optimised, Debug.* gated. Native-bearing apps get a jailed bundle; pure-native apps get a plain optimised binary; `--target wasm` produces a production browser bundle.",
-        args: "[<path>]",
+        summary: "Build the production artifact — optimised, Debug.* gated. Native-bearing apps get a jailed bundle; pure-native apps get a plain optimised binary; `web desktop|ios|android` produces a production app bundle; `--target wasm` produces a production browser bundle.",
+        args: "[<path>] [<shape>] [<runtime>] [<host>]",
         args_desc: "A source file, a project directory, or a package.ipe (default: the current \
-                    project). With no delivery args, `release` builds every delivery declared in \
+                    project). shape/runtime/host are the delivery grammar shared with `build`: a \
+                    `desktop`/`ios`/`android` host lays out the production app bundle for that host \
+                    (a self-contained desktop bundle, or a native mobile system-webview shell). \
+                    With no delivery args, `release` builds every delivery declared in \
                     package.ipe (`build` builds only the default one). Signing is release-time env, \
                     never in package.ipe.",
         options: &[
@@ -255,6 +346,11 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--target wasm|<triple>]",
                 desc: "produce a browser bundle (`wasm`) or a musl-static binary for <triple> (default: x86_64-unknown-linux-musl)",
+            },
+            Opt {
+                flag: "[--emit-permissions <ios|macos|android>]",
+                desc: "read-only: print the OS-permission declarations the app's accepted web \
+                       capabilities derive on the platform, and build nothing",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -605,46 +701,6 @@ const COMMANDS: &[Command] = &[
         hidden: false,
     },
     Command {
-        name: "pack",
-        run: crate::run_pack,
-        summary: "Package a webview app into a desktop bundle or a mobile system-webview shell, \
-                  or derive its native-shell OS-permission declarations.",
-        args: "--target desktop[:<linux|macos|windows>] [<path>]  |  --target \
-               mobile:<ios|android> [<path>]  |  --emit-permissions <ios|macos|android> [<path>]",
-        args_desc: "With `--target desktop`, builds the app and lays out a self-contained \
-                    desktop bundle for the given OS (the host OS by default): a Linux tarball \
-                    (WebKitGTK runtime dep), a macOS `.app` (Info.plist permission keys derived \
-                    from the accepted web capabilities), or a Windows `.exe` + portable zip \
-                    (WebView2 runtime dep). The Linux artifact is built here; a macOS/Windows \
-                    bundle's layout is written for inspection and must be finished on that OS's \
-                    runner. With `--target mobile:<ios|android>`, builds the client-wasm `Web` \
-                    SPA and lays out a native mobile shell that hosts it offline from app assets: \
-                    an Android Gradle project (WebView + WebViewAssetLoader; AndroidManifest \
-                    `<uses-permission>` derived from the accepted web capabilities) or an iOS \
-                    Xcode project (WKWebView + WKURLSchemeHandler; Info.plist keys derived the \
-                    same way). The wasm bundle is built here; the Android app can be finished with \
-                    the Android SDK, the iOS app on a macOS + Xcode runner. With \
-                    `--emit-permissions`, prints (read-only) the derived Info.plist keys \
-                    (ios/macos) or AndroidManifest fragment (android) for the app's \
-                    `[capabilities] accepts` set. The optional path is the project directory or \
-                    package.ipe (defaults to the current project).",
-        options: &[
-            Opt {
-                flag: "--target desktop[:<linux|macos|windows>]",
-                desc: "build and lay out a desktop bundle for the given OS (host OS by default)",
-            },
-            Opt {
-                flag: "--target mobile:<ios|android>",
-                desc: "build the wasm SPA and lay out a mobile system-webview shell for the OS",
-            },
-            Opt {
-                flag: "--emit-permissions <ios|macos|android>",
-                desc: "print the OS-permission declarations required on the given platform",
-            },
-        ],
-        hidden: false,
-    },
-    Command {
         name: "login",
         run: crate::login::run_login,
         summary: "Authorize ipe with GitHub (device flow) and store a publish token.",
@@ -826,7 +882,7 @@ const COMMANDS: &[Command] = &[
 const SECTIONS: &[Section] = &[
     Section {
         title: "Development",
-        commands: &["init", "build", "run", "exec", "release", "watch"],
+        commands: &["init", "dev", "release", "exec"],
     },
     Section {
         title: "Quality",
@@ -834,7 +890,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Package authoring",
-        commands: &["login", "package", "pack"],
+        commands: &["login", "package"],
     },
     Section {
         title: "Foreign-function interface (FFI)",
@@ -897,6 +953,39 @@ pub fn command_summary(name: &str) -> Option<&'static str> {
     find(name).map(|c| c.summary)
 }
 
+/// Render a command's full help as Markdown, or `None` when `name` is unknown.
+///
+/// This is the documentation projection of [`render_command`]: it reads the same
+/// [`Command`] fields (summary, synopsis, arguments, options) from the one
+/// [`COMMANDS`] table and lays them out as Markdown, so the HTML command page and
+/// the terminal `ipe <command> --help` page describe a command from a single
+/// source and cannot drift. No ANSI colour is emitted.
+#[must_use]
+pub fn command_doc_markdown(name: &str) -> Option<String> {
+    find(name).map(render_command_markdown)
+}
+
+/// Render one command's help page as Markdown from its [`Command`] entry.
+fn render_command_markdown(cmd: &Command) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{}\n", cmd.summary);
+    let _ = write!(out, "```\nipe {}", cmd.name);
+    if !cmd.args.is_empty() {
+        let _ = write!(out, " {}", cmd.args);
+    }
+    out.push_str("\n```\n");
+    if !cmd.args_desc.is_empty() {
+        let _ = writeln!(out, "\n## Arguments\n\n{}", cmd.args_desc);
+    }
+    if !cmd.options.is_empty() {
+        out.push_str("\n## Options\n\n");
+        for opt in cmd.options {
+            let _ = writeln!(out, "- `{}` — {}", opt.flag, opt.desc);
+        }
+    }
+    out
+}
+
 /// Render the top-level help screen for the given output stream.
 #[must_use]
 pub fn top_level(stream: &impl IsTerminal) -> String {
@@ -908,6 +997,48 @@ pub fn top_level(stream: &impl IsTerminal) -> String {
 pub fn command(name: &str, stream: &impl IsTerminal) -> Option<String> {
     let p = Palette::for_stream(stream);
     find(name).map(|cmd| render_command(cmd, p))
+}
+
+/// Render a command group's subpage — its summary, then each member subcommand
+/// as a ready-to-run `ipe <group> <verb> --help` line — or `None` if `name` is
+/// not a known group.
+///
+/// This is the `ipe dev` / `ipe dev --help` screen, and the
+/// body of the misuse page shown for `ipe dev <unknown>`.
+#[must_use]
+pub fn group(name: &str, stream: &impl IsTerminal) -> Option<String> {
+    let p = Palette::for_stream(stream);
+    find_group(name).map(|g| render_group(g, p))
+}
+
+/// Render a group's subpage from its [`Group`] entry: the summary, a synopsis
+/// line, and one aligned member line per verb.
+fn render_group(g: &Group, p: &Palette) -> String {
+    let mut out = String::new();
+    out.push('\n');
+    let _ = writeln!(out, "{}{}{}", p.dim, g.summary, p.reset);
+    out.push('\n');
+    let _ = writeln!(out, "{}ipe {} <verb>{}", p.yellow, g.name, p.reset);
+    out.push('\n');
+    out.push_str("Verbs:\n");
+    let name_w = g
+        .members
+        .iter()
+        .filter_map(|n| find(n))
+        .map(|c| c.name.len())
+        .max()
+        .unwrap_or(0);
+    for &verb in g.members {
+        let Some(cmd) = find(verb) else { continue };
+        let pad = name_w - cmd.name.len();
+        let _ = writeln!(
+            out,
+            "  {}ipe {} {}{}{:pad$}  {}{}{}",
+            p.yellow, g.name, cmd.name, p.reset, "", p.dim, cmd.summary, p.reset,
+        );
+    }
+    out.push('\n');
+    gutter(&out)
 }
 
 /// The synopsis line for `cmd`: `ipe <name>` in yellow, then its arguments
@@ -942,24 +1073,30 @@ fn render_top_level(p: &Palette) -> String {
     for section in SECTIONS {
         out.push('\n');
         let _ = writeln!(out, "{}{}{}", p.bold, section.title, p.reset);
+        // A section entry names either a command or a group; both render as a
+        // ready-to-run `ipe <name> --help` line. Width is measured across every
+        // listed name so the `--help` suffix aligns into one column.
         let name_w = section
             .commands
             .iter()
-            .filter_map(|n| find(n))
-            .map(|c| c.name.len())
+            .filter(|n| find(n).is_none_or(|c| !c.hidden))
+            .map(|n| n.len())
             .max()
             .unwrap_or(0);
         for &name in section.commands {
-            let Some(cmd) = find(name) else { continue };
             // A hidden command is never listed, even if a section still names it.
-            if cmd.hidden {
+            if find(name).is_some_and(|c| c.hidden) {
                 continue;
             }
-            let pad = name_w - cmd.name.len();
+            // A group has no `Command` entry; it is still a valid `--help` node.
+            if find(name).is_none() && find_group(name).is_none() {
+                continue;
+            }
+            let pad = name_w - name.len();
             let _ = writeln!(
                 out,
                 "  {}ipe {}{}{:pad$}  {}--help{}",
-                p.yellow, cmd.name, p.reset, "", p.dim, p.reset,
+                p.yellow, name, p.reset, "", p.dim, p.reset,
             );
         }
     }
@@ -985,6 +1122,7 @@ fn render_top_level(p: &Palette) -> String {
 /// { "schema": "ipe.cli.help/1",
 ///   "version": "<cargo-pkg-version>",
 ///   "sections": [ { "title": "<name>", "commands": ["<name>",…] }, … ],
+///   "groups": [ { "name": "<name>", "summary": "<text>", "members": ["<verb>",…] }, … ],
 ///   "commands": [ { "name": "<name>", "summary": "<text>",
 ///                   "args": "<synopsis>", "args_desc": "<text>",
 ///                   "hidden": <bool>,
@@ -1042,10 +1180,27 @@ pub fn help_json() -> String {
         })
         .collect();
 
+    let groups_arr: Vec<String> = GROUPS
+        .iter()
+        .map(|g| {
+            let members = g
+                .members
+                .iter()
+                .map(|m| json::string(m))
+                .collect::<Vec<_>>();
+            json::object(&[
+                ("name", json::string(g.name)),
+                ("summary", json::string(g.summary)),
+                ("members", json::array(&members)),
+            ])
+        })
+        .collect();
+
     let obj = json::object(&[
         ("schema", json::string("ipe.cli.help/1")),
         ("version", json::string(version)),
         ("sections", json::array(&sections_arr)),
+        ("groups", json::array(&groups_arr)),
         ("commands", json::array(&commands_arr)),
     ]);
     format!("{obj}\n")
@@ -1147,10 +1302,23 @@ mod tests {
                 );
                 continue;
             }
+            // A grouped command is advertised through its group's node
+            // (e.g. `ipe dev`), not as its own top-level line.
+            if is_grouped_command(cmd.name) {
+                continue;
+            }
             assert!(
                 plain.contains(&format!("ipe {}", cmd.name)),
                 "missing command {}",
                 cmd.name
+            );
+        }
+        // Every group is advertised on the top-level screen as its own node.
+        for g in GROUPS {
+            assert!(
+                plain.contains(&format!("ipe {}", g.name)),
+                "missing group {}",
+                g.name
             );
         }
         assert!(!plain.contains('\x1b'), "plain output must carry no ANSI");
@@ -1226,30 +1394,118 @@ mod tests {
     }
 
     #[test]
-    fn sections_reference_only_known_commands() {
+    fn sections_reference_only_known_nodes() {
+        // A section entry names either a top-level command or a group node.
         for section in SECTIONS {
             for &name in section.commands {
-                assert!(is_command(name), "section lists unknown command {name}");
+                assert!(
+                    is_command(name) || is_group(name),
+                    "section lists unknown node {name}"
+                );
             }
         }
     }
 
     #[test]
-    fn every_command_appears_in_exactly_one_section() {
+    fn every_command_appears_in_exactly_one_section_or_group() {
         for cmd in COMMANDS {
-            let count = SECTIONS
+            let in_sections = SECTIONS
                 .iter()
                 .flat_map(|s| s.commands)
                 .filter(|&&n| n == cmd.name)
                 .count();
-            // A visible command sits in exactly one section; a hidden command
-            // (withheld from the top-level screen) sits in none.
-            let expected = usize::from(!cmd.hidden);
+            // A visible command is advertised exactly once — either directly in a
+            // section, or under exactly one group (which the section advertises).
+            // A hidden command is advertised nowhere. A grouped command must not
+            // ALSO sit in a section.
+            if cmd.hidden {
+                assert_eq!(
+                    in_sections, 0,
+                    "hidden command {} must not appear in a section",
+                    cmd.name
+                );
+                assert!(
+                    !is_grouped_command(cmd.name),
+                    "hidden command {} must not appear in a group",
+                    cmd.name
+                );
+                continue;
+            }
+            if is_grouped_command(cmd.name) {
+                let in_groups = GROUPS
+                    .iter()
+                    .filter(|g| g.members.contains(&cmd.name))
+                    .count();
+                assert_eq!(
+                    in_groups, 1,
+                    "grouped command {} must belong to exactly one group",
+                    cmd.name
+                );
+                assert_eq!(
+                    in_sections, 0,
+                    "grouped command {} must not also sit in a section",
+                    cmd.name
+                );
+            } else {
+                assert_eq!(
+                    in_sections, 1,
+                    "ungrouped command {} must appear in exactly one section, found {in_sections}",
+                    cmd.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_group_appears_in_exactly_one_section() {
+        for g in GROUPS {
+            let count = SECTIONS
+                .iter()
+                .flat_map(|s| s.commands)
+                .filter(|&&n| n == g.name)
+                .count();
             assert_eq!(
-                count, expected,
-                "command {} (hidden={}) must appear in {expected} section(s), found {count}",
-                cmd.name, cmd.hidden
+                count, 1,
+                "group {} must appear in exactly one section, found {count}",
+                g.name
             );
+        }
+    }
+
+    #[test]
+    fn group_members_are_known_dispatchable_commands() {
+        // The single-source invariant extended to groups: every verb a group
+        // lists is a real, dispatchable command in the one table — a group can
+        // neither advertise a phantom verb nor hide a described one.
+        for g in GROUPS {
+            for &verb in g.members {
+                assert!(
+                    is_command(verb),
+                    "group {} lists unknown verb {verb}",
+                    g.name
+                );
+                assert!(
+                    handler(verb).is_some(),
+                    "group {} verb {verb} has no dispatch handler",
+                    g.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn group_subpage_lists_every_verb() {
+        for g in GROUPS {
+            let page = render_group(g, &Palette::PLAIN);
+            assert!(page.contains(&format!("ipe {} <verb>", g.name)));
+            for &verb in g.members {
+                assert!(
+                    page.contains(&format!("ipe {} {}", g.name, verb)),
+                    "group {} subpage omits verb {verb}",
+                    g.name
+                );
+            }
+            assert!(!page.contains('\x1b'), "plain subpage must carry no ANSI");
         }
     }
 

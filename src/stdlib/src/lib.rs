@@ -2036,6 +2036,21 @@ pub fn is_compiled_source_segments(segments: &[String]) -> bool {
 ///
 /// Efficiency: the worklist is seeded only from imports that match a
 /// compiled-source module, so a build importing none does zero work.
+/// The compiled-source stdlib modules a kernel-veneer module `import` induces —
+/// compiled types named in the veneer's exposed surface that it cannot pull as
+/// source itself (its own `import`s are inert because it is kernel-resolved).
+///
+/// `Ipe.Http` exposes `withTimeout : Ipe.Duration.Duration -> …`, so importing
+/// `Ipe.Http` induces `Ipe.Duration`. Empty for every other veneer.
+fn veneer_induced_compiled_deps(import_segments: &[String]) -> &'static [&'static [&'static str]] {
+    // Normalise to the dotted form (segments may arrive split or joined),
+    // mirroring `compiled_std_source_segments`.
+    match import_segments.join(".").as_str() {
+        "Ipe.Http" => &[&["Ipe", "Duration"]],
+        _ => &[],
+    }
+}
+
 pub fn inject_compiled_std_closure(
     sources: &mut std::collections::BTreeMap<Vec<String>, (std::path::PathBuf, String)>,
     extract_imports: impl Fn(&str) -> Vec<Vec<String>>,
@@ -2051,7 +2066,18 @@ pub fn inject_compiled_std_closure(
     for (_, src) in sources.values() {
         for imp in extract_imports(src) {
             if is_compiled_source_segments(&imp) {
-                work.push_back(imp);
+                work.push_back(imp.clone());
+            }
+            // A kernel-veneer module can expose a member whose TYPE is a
+            // compiled-source stdlib type it does not itself pull as source
+            // (its own `import`s are inert — the veneer is kernel-resolved).
+            // `Ipe.Http.withTimeout : Ipe.Duration.Duration -> …` is such a
+            // member: a program that imports `Ipe.Http` and names `withTimeout`
+            // must have `Ipe.Duration`'s compiled enum in scope for the type to
+            // lower, even without an explicit `import Ipe.Duration`. Seed those
+            // induced compiled deps here so the closure pulls them.
+            for induced in veneer_induced_compiled_deps(&imp) {
+                work.push_back(induced.iter().map(|s| (*s).to_owned()).collect());
             }
         }
     }
@@ -2140,6 +2166,20 @@ mod tests {
     use super::*;
     use ipe_intern::Interner;
 
+    /// A minimal `import` extractor for the closure tests: one dotted module path
+    /// per `import <Path>` line, split into segments. Sufficient for the fixed
+    /// single-line fixtures here; the production closure uses
+    /// `ipe_db::extract_imports_from_source`.
+    fn extract_test_imports(src: &str) -> Vec<Vec<String>> {
+        src.lines()
+            .filter_map(|line| line.trim().strip_prefix("import "))
+            .map(|rest| {
+                let dotted = rest.split_whitespace().next().unwrap_or("");
+                dotted.split('.').map(str::to_owned).collect()
+            })
+            .collect()
+    }
+
     /// Every embedded `Ipe` module must PARSE with the same front end that
     /// reads user code — the proof that the compiler can read its own embedded
     /// standard library (the foundation the import resolver builds on).
@@ -2176,6 +2216,44 @@ mod tests {
     #[test]
     fn unknown_module_is_absent() {
         assert_eq!(source("Ipe.Nope"), None);
+    }
+
+    /// Importing the `Ipe.Http` kernel veneer induces the compiled-source
+    /// `Ipe.Duration` module: `Http.withTimeout : Duration -> …` names a
+    /// compiled type the veneer cannot pull as source itself, so the closure
+    /// must inject `Ipe.Duration` even without an explicit `import`. A program
+    /// that never touches `Ipe.Http` induces nothing.
+    #[test]
+    fn http_veneer_induces_duration_dep() {
+        let mut sources: std::collections::BTreeMap<Vec<String>, (std::path::PathBuf, String)> =
+            std::collections::BTreeMap::new();
+        sources.insert(
+            vec!["Main".to_owned()],
+            (
+                std::path::PathBuf::from("Main.ipe"),
+                "import Ipe.Http as M\n".to_owned(),
+            ),
+        );
+        let injected = inject_compiled_std_closure(&mut sources, extract_test_imports, |_, _| {});
+        assert!(
+            injected.contains(&vec!["Ipe".to_owned(), "Duration".to_owned()]),
+            "importing Ipe.Http must inject the compiled Ipe.Duration dep, got {injected:?}"
+        );
+
+        let mut no_http: std::collections::BTreeMap<Vec<String>, (std::path::PathBuf, String)> =
+            std::collections::BTreeMap::new();
+        no_http.insert(
+            vec!["Main".to_owned()],
+            (
+                std::path::PathBuf::from("Main.ipe"),
+                "import Ipe.Io as Io\n".to_owned(),
+            ),
+        );
+        let none = inject_compiled_std_closure(&mut no_http, extract_test_imports, |_, _| {});
+        assert!(
+            !none.contains(&vec!["Ipe".to_owned(), "Duration".to_owned()]),
+            "a program without Ipe.Http must not induce Ipe.Duration, got {none:?}"
+        );
     }
 
     /// Every compiled-source module must PARSE with the real front end — the

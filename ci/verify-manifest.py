@@ -43,7 +43,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOW_GLOB = os.path.join(REPO_ROOT, ".github", "workflows", "*.yml")
 MANIFEST = os.path.join(REPO_ROOT, "ci", "check-manifest.yml")
 
-VALID_DISPOSITIONS = {"gate", "nightly-gate", "informational", "delete"}
+VALID_DISPOSITIONS = {"gate", "gate-external", "nightly-gate", "informational", "delete"}
 # Workflows whose jobs are release/automation plumbing, never PR/promotion
 # status gates — excluded from the "produced context" set so the drift gate does
 # not demand a disposition for a release upload job.
@@ -156,6 +156,11 @@ def main() -> int:
             )
         if disp in ("gate", "nightly-gate") and not e.get("producer"):
             errors.append(f"{ctx!r}: {disp} entry has no producer workflow")
+        if disp == "gate-external" and e.get("producer"):
+            errors.append(
+                f"{ctx!r}: disposition=gate-external must have no producer — the "
+                "status is posted out-of-band, not by a CI workflow"
+            )
         if disp == "delete" and e.get("producer"):
             errors.append(
                 f"{ctx!r}: disposition=delete but a producer is set — a live "
@@ -192,9 +197,9 @@ def main() -> int:
             "ci/check-manifest.yml — every check must be classified"
         )
 
-    # A manifest gate/nightly-gate/informational that claims a live producer but
-    # is not actually produced (an orphan the OTHER way) — catches the
-    # guardian-sound class.
+    # A manifest gate/nightly-gate that claims a live producer but is not
+    # actually produced (an orphan the other way).  gate-external is excluded:
+    # its whole purpose is to be required without a CI producer.
     for ctx, e in by_context.items():
         if e.get("internal"):
             continue
@@ -206,7 +211,9 @@ def main() -> int:
             )
 
     # ---- 3. required-set reconciliation ----
-    gate_ctxs = {c for c, e in by_context.items() if e["disposition"] == "gate"}
+    # gate-external contexts are required by the ruleset even though no CI
+    # workflow produces them; include them alongside plain gate entries.
+    gate_ctxs = {c for c, e in by_context.items() if e["disposition"] in ("gate", "gate-external")}
     if args.ruleset:
         required = set(json.load(open(args.ruleset)))
         missing_from_ruleset = gate_ctxs - required
@@ -232,13 +239,15 @@ def main() -> int:
         print(file=sys.stderr)
         return 1
 
-    n_gate = len(gate_ctxs)
+    n_gate = sum(1 for e in entries if e["disposition"] == "gate")
+    n_gate_ext = sum(1 for e in entries if e["disposition"] == "gate-external")
     n_nightly = sum(1 for e in entries if e["disposition"] == "nightly-gate")
     n_info = sum(1 for e in entries if e["disposition"] == "informational")
     n_del = sum(1 for e in entries if e["disposition"] == "delete")
     print(
         f"verify-manifest: OK — {len(entries)} checks classified "
-        f"({n_gate} gate, {n_nightly} nightly-gate, {n_info} informational, {n_del} delete); "
+        f"({n_gate} gate, {n_gate_ext} gate-external, {n_nightly} nightly-gate, "
+        f"{n_info} informational, {n_del} delete); "
         f"{len(produced)} produced contexts, all covered."
     )
     return 0

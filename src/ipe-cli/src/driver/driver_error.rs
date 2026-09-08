@@ -1,4 +1,4 @@
-use super::nearest_command;
+use super::{nearest_command, nearest_group_member};
 use crate::{
     Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, delivery,
     help, publish, render, render_json, style, toolchain,
@@ -218,6 +218,17 @@ pub enum CliError {
         command: &'static str,
         /// The specific reason for the misuse (e.g. an unknown flag).
         reason: String,
+    },
+    /// A command group (e.g. `dev`) was followed by a token that is not one of
+    /// its verbs. [`fmt::Display`] renders an "unknown verb" line — with a
+    /// near-miss suggestion drawn from the group's own members — then that
+    /// group's subpage. Progressive help: the group teaches its verbs at the
+    /// point the user reached for one. `group` is always a known group name.
+    UnknownGroupSub {
+        /// The group whose subpage to show (a known group name, e.g. `dev`).
+        group: &'static str,
+        /// The token the user typed after the group name.
+        attempted: String,
     },
     /// A stage of `ipe verify` failed. Carries the stage name and the stage's
     /// own already-rendered report. Like [`Self::DocCoverage`], this is a
@@ -491,6 +502,27 @@ impl std::fmt::Display for CliError {
             Self::CommandUsage { command, reason } => {
                 writeln!(f, "{}", crate::style::gutter(reason))?;
                 let page = help::command(command, &std::io::stderr())
+                    .unwrap_or_else(|| help::top_level(&std::io::stderr()));
+                f.write_str(page.trim_end_matches('\n'))
+            }
+            // The unknown verb, an optional near-miss over the group's own
+            // members, then the group's subpage — the git-style
+            // "`git remote` shows remote help" behaviour, rendered against
+            // stderr because misuse output goes there.
+            Self::UnknownGroupSub { group, attempted } => {
+                writeln!(
+                    f,
+                    "{}",
+                    crate::style::gutter(&format!("unknown `ipe {group}` verb `{attempted}`"))
+                )?;
+                if let Some(sugg) = nearest_group_member(group, attempted) {
+                    writeln!(
+                        f,
+                        "{}",
+                        crate::style::gutter(&format!("= help: maybe `ipe {group} {sugg}`?"))
+                    )?;
+                }
+                let page = help::group(group, &std::io::stderr())
                     .unwrap_or_else(|| help::top_level(&std::io::stderr()));
                 f.write_str(page.trim_end_matches('\n'))
             }

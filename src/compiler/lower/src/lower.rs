@@ -9040,6 +9040,81 @@ fn collect_func_edges(expr: &Expr, out: &mut BTreeSet<FuncId>) {
     }
 }
 
+/// Whether `expr` contains a `Http.withTimeout` kernel call anywhere in its
+/// tree. The kernel unwraps its typed `Duration` argument through the compiled
+/// `Ipe.Duration.toMillis` accessor at emit time, a synthesised call that
+/// leaves no `Callee::Func` edge; this predicate lets the dead-function prune
+/// root that accessor so the emitted crate does not reference an absent
+/// function. The traversal mirrors [`collect_func_edges`] arm-for-arm so a new
+/// `Expr` variant that could nest a call is a compile error here too, not a
+/// silent miss.
+fn body_uses_http_with_timeout(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { callee, args, .. } => {
+            matches!(callee, Callee::Kernel(KernelFn::HttpWithTimeout))
+                || args.iter().any(body_uses_http_with_timeout)
+        }
+        Expr::FuncValue { callee, .. } => {
+            matches!(callee, Callee::Kernel(KernelFn::HttpWithTimeout))
+        }
+        Expr::Apply { func, args } => {
+            body_uses_http_with_timeout(func) || args.iter().any(body_uses_http_with_timeout)
+        }
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            body_uses_http_with_timeout(value) || body_uses_http_with_timeout(body)
+        }
+        Expr::If { cond, then_, else_ } => {
+            body_uses_http_with_timeout(cond)
+                || body_uses_http_with_timeout(then_)
+                || body_uses_http_with_timeout(else_)
+        }
+        Expr::Match(m) => {
+            body_uses_http_with_timeout(m.scrutinee())
+                || m.arms().iter().any(|arm| {
+                    arm.guard.as_ref().is_some_and(body_uses_http_with_timeout)
+                        || body_uses_http_with_timeout(&arm.body)
+                })
+        }
+        Expr::Lambda { body, .. }
+        | Expr::SharedLambda { body, .. }
+        | Expr::TailLoop { body, .. } => body_uses_http_with_timeout(body),
+        Expr::Cons { head, tail } => {
+            body_uses_http_with_timeout(head) || body_uses_http_with_timeout(tail)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            body_uses_http_with_timeout(list)
+        }
+        Expr::Tuple(elems) | Expr::List { items: elems, .. } => {
+            elems.iter().any(body_uses_http_with_timeout)
+        }
+        Expr::Record { fields, .. } => fields.iter().any(|(_, v)| body_uses_http_with_timeout(v)),
+        Expr::Access { record, .. } => body_uses_http_with_timeout(record),
+        Expr::Update { record, fields } => {
+            body_uses_http_with_timeout(record)
+                || fields.iter().any(|(_, v)| body_uses_http_with_timeout(v))
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            body_uses_http_with_timeout(lhs) || body_uses_http_with_timeout(rhs)
+        }
+        Expr::TaskSeq { effect, rest } => {
+            body_uses_http_with_timeout(effect) || body_uses_http_with_timeout(rest)
+        }
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            args.iter().any(body_uses_http_with_timeout)
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::CloneVar(_)
+        | Expr::Var(_) => false,
+    }
+}
+
 /// The set of [`FuncId`]s transitively reachable from `entry` and any
 /// `extra_roots` over the `Callee::Func`/[`Expr::FuncValue`] call graph of
 /// `funcs`. `extra_roots` are externally-invoked exports (e.g. the wasm-hydrate
@@ -14662,6 +14737,16 @@ impl<'a> Lowerer<'a> {
         // graph alone would prune it and the glue would reference an absent
         // function.
         let mut export_roots: Vec<FuncId> = Vec::new();
+        // The `Http.withTimeout` kernel emits a call to the compiled-source
+        // `Ipe.Duration.toMillis` accessor to unwrap its typed `Duration`
+        // argument into the transport DTO's raw-millisecond field. That call is
+        // synthesised in the backend, so it contributes no `Callee::Func` edge to
+        // the reachability graph; without an explicit root the accessor is pruned
+        // as dead and the emitted crate references an absent function (a SEAL
+        // breach). Capture its `FuncId` here and root it below iff `withTimeout`
+        // is actually used, so a program that never calls it keeps the accessor
+        // pruned.
+        let mut duration_to_millis_id: Option<FuncId> = None;
         for (idx, def) in self.m.defs.iter().enumerate() {
             // Positional id: `func_ids` was assigned from this very
             // enumeration order in `new()` under the unique-`(home, name)`
@@ -14694,7 +14779,25 @@ impl<'a> Lowerer<'a> {
             if self.interner.resolve(func.name) == Some(ipe_ir::HYDRATION_PROJECTION_NAME) {
                 export_roots.push(func.id);
             }
+            // Record the compiled-source `Ipe.Duration.toMillis` accessor (see the
+            // `duration_to_millis_id` declaration above). Matched on both the
+            // resolved name and the `["Ipe", "Duration"]` home so an unrelated
+            // `toMillis` in another module is never mistaken for it.
+            if self.interner.resolve(func.name) == Some("toMillis")
+                && let [seg0, seg1] = func.home.0.as_slice()
+                && self.interner.resolve(*seg0) == Some("Ipe")
+                && self.interner.resolve(*seg1) == Some("Duration")
+            {
+                duration_to_millis_id = Some(func.id);
+            }
             funcs.push(func);
+        }
+        // Root `Ipe.Duration.toMillis` iff a `Http.withTimeout` kernel call is
+        // present, keeping the backend-synthesised accessor call resolvable.
+        if let Some(to_millis) = duration_to_millis_id
+            && funcs.iter().any(|f| body_uses_http_with_timeout(&f.body))
+        {
+            export_roots.push(to_millis);
         }
 
         // Cross-call type-parameter-bound propagation. The per-function
