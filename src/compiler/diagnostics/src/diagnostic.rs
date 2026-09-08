@@ -601,15 +601,15 @@ pub enum NameError {
         limit: u32,
     },
     /// A Program — a plain-`main` module whose `main` is not a managed-update-loop
-    /// (TEA) app entry — imports a shape module under `Ipe.Tea.*`. The
-    /// `Ipe.Tea.*` namespace holds only live-loop machinery; importing any part
+    /// (TEA) app entry — imports a shape module under `Ipe.App.Tea.*`. The
+    /// `Ipe.App.Tea.*` namespace holds only live-loop machinery; importing any part
     /// of it marks a module a TEA app, so a Program that does so is a
-    /// contradiction rejected here. `module` is the offending `Ipe.Tea.*` import
+    /// contradiction rejected here. `module` is the offending `Ipe.App.Tea.*` import
     /// path. [IPE-N0033]
     ProgramImportsTeaShape { module: Box<str> },
     /// A TEA app imports another shape's `Cmd` / `Sub` re-export module. `Cmd`
     /// and `Sub` are shape-specific and reached through the app's own shape
-    /// (`Ipe.Tea.Web.Cmd` in a `Web` app, `Ipe.Tea.Terminal.Sub` in a `Terminal`
+    /// (`Ipe.App.Tea.Web.Cmd` in a `Web` app, `Ipe.App.Tea.Terminal.Sub` in a `Terminal`
     /// app, …). The app's shape is proven from its entry kernel; a `Cmd` / `Sub`
     /// import from a different shape has no denotation in this app and fails
     /// closed here. `imported` is the offending import path; `imported_shape` and
@@ -1235,13 +1235,13 @@ pub enum AppShape {
     /// `Ipe.Web` — the Model is persisted to the session store, so
     /// it must be `serde`-serialisable (as well as `Clone` + `PartialEq`).
     Web,
-    /// `Ipe.Tea.Tui` — the full-screen terminal app form. The Model is kept in
+    /// `Ipe.App.Tea.Tui` — the full-screen terminal app form. The Model is kept in
     /// memory, so it must be `Clone`. Folds onto the `Terminal` canonical shape.
     Tui,
     /// `Ipe.WebView` — the Model is kept in memory, so it must
     /// be `Clone`.
     WebView,
-    /// `Ipe.Tea.Cli` — the line-oriented terminal app form. The Model is kept in
+    /// `Ipe.App.Tea.Cli` — the line-oriented terminal app form. The Model is kept in
     /// memory, so it must be `Clone`. Folds onto the `Terminal` canonical shape.
     Cli,
 }

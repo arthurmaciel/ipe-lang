@@ -62,10 +62,10 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 /// `Ui.cells` inside a `Web.app` view — must be rejected with IPE-L0132.
 const WEB_UI_CELLS: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 
 type Msg = Tick
 
@@ -101,11 +101,11 @@ main =
 /// view is `Screen Msg`, so the grid island is built with `Cells.cells`.
 const TERMINAL_UI_CELLS: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
+import Ipe.App.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.Tea.Terminal.Cmd
-import Ipe.Tea.Terminal.Sub
+import Ipe.App.Tea.Terminal.Cmd
+import Ipe.App.Tea.Terminal.Sub
 
 type Msg = NoOp
 
@@ -171,7 +171,7 @@ fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
 /// the type-level rejection.
 const CLI_UI_CELLS: &str = r"module Main exposing (main)
 
-import Ipe.Tea.Cli as Cli
+import Ipe.App.Tea.Cli as Cli
 import Ipe.Ui as Ui
 
 type Msg = NoOp
@@ -220,7 +220,7 @@ fn cli_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
     }
 }
 
-/// A DOM attribute (`Ui.onClick`) placed in a `Screen` view. `Ipe.Tea.Tui.Ui`'s
+/// A DOM attribute (`Ui.onClick`) placed in a `Screen` view. `Ipe.Ui.Tui`'s
 /// builders take a cell-native `Attribute msg` (`TuiAttr`), a type DISTINCT from
 /// the DOM `Ipe.Ui.Attribute msg`. So naming a DOM attribute here is a type
 /// error (IPE-T0001) — the terminal author's intent is rejected at type-check,
@@ -229,11 +229,11 @@ fn cli_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
 /// this pins the attribute half.
 const SCREEN_WITH_DIM_REVERSE: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
-import Ipe.Tea.Tui.Ui as Ui
-import Ipe.Tea.Tui.Ui exposing (Screen)
-import Ipe.Tea.Tui.Cmd
-import Ipe.Tea.Tui.Sub
+import Ipe.App.Tea.Tui as Tui
+import Ipe.Ui.Tui as Ui
+import Ipe.Ui.Tui exposing (Screen)
+import Ipe.App.Tea.Tui.Cmd
+import Ipe.App.Tea.Tui.Sub
 
 type Msg = NoOp
 
@@ -280,12 +280,12 @@ fn screen_view_with_dim_and_reverse_is_accepted() -> Result<(), BoxError> {
 
 const SCREEN_WITH_DOM_ATTRIBUTE: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
-import Ipe.Tea.Tui.Ui as Ui
-import Ipe.Tea.Tui.Ui exposing (Screen)
+import Ipe.App.Tea.Tui as Tui
+import Ipe.Ui.Tui as Ui
+import Ipe.Ui.Tui exposing (Screen)
 import Ipe.Ui as Dom
-import Ipe.Tea.Tui.Cmd
-import Ipe.Tea.Tui.Sub
+import Ipe.App.Tea.Tui.Cmd
+import Ipe.App.Tea.Tui.Sub
 
 type Msg = Clicked | NoOp
 
@@ -328,17 +328,17 @@ fn screen_view_with_dom_attribute_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("screen_dom_attr", SCREEN_WITH_DOM_ATTRIBUTE, "IPE-T0001")
 }
 
-// ── Ipe.Tea.Cli.Ui structured `Lines` view surface ───────────────────────────
+// ── Ipe.Ui.Cli structured `Lines` view surface ───────────────────────────
 
 const CLI_WITH_LINES_HELPER: &str = r#"module Main exposing (main)
 
 import Ipe.String as String
-import Ipe.Tea.Cli as Cli
-import Ipe.Tea.Cli.Cmd as Cmd
-import Ipe.Tea.Cli.Sub as Sub
-import Ipe.Tea.Cli.Ui as Ui
-import Ipe.Tea.Cli.Ui exposing (Lines)
-import Ipe.Tea.Terminal.Color as Color
+import Ipe.App.Tea.Cli as Cli
+import Ipe.App.Tea.Cli.Cmd as Cmd
+import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
+import Ipe.App.Tea.Terminal.Color as Color
 
 type Msg = NoOp
 
@@ -391,11 +391,11 @@ fn cli_lines_surface_with_palette_is_accepted() -> Result<(), BoxError> {
 
 const LINES_WITH_DOM_ATTRIBUTE: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Cli as Cli
-import Ipe.Tea.Cli.Cmd as Cmd
-import Ipe.Tea.Cli.Sub as Sub
-import Ipe.Tea.Cli.Ui as Ui
-import Ipe.Tea.Cli.Ui exposing (Lines)
+import Ipe.App.Tea.Cli as Cli
+import Ipe.App.Tea.Cli.Cmd as Cmd
+import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Ui as Dom
 
 type Msg = Clicked | NoOp

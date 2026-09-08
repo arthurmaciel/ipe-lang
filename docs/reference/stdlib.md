@@ -7,6 +7,7 @@ Each module listed below links to a detail page with the full documentation and 
 ## Modules
 
 - [Analytics](#analytics)
+- [App.Tea.Terminal.Color](#appteaterminalcolor)
 - [Basics](#basics)
 - [Bitwise](#bitwise)
 - [Browser.Battery](#browserbattery)
@@ -116,9 +117,6 @@ Each module listed below links to a detail page with the full documentation and 
 - [String](#string)
 - [System](#system)
 - [Task](#task)
-- [Tea.Cli.Ui](#teacliui)
-- [Tea.Terminal.Color](#teaterminalcolor)
-- [Tea.Tui.Ui](#teatuiui)
 - [Test](#test)
 - [Time](#time)
 - [Time.Timestamp](#timetimestamp)
@@ -129,12 +127,14 @@ Each module listed below links to a detail page with the full documentation and 
 - [Ui.Animation](#uianimation)
 - [Ui.Cells](#uicells)
 - [Ui.Chart](#uichart)
+- [Ui.Cli](#uicli)
 - [Ui.Events](#uievents)
 - [Ui.Grid](#uigrid)
 - [Ui.ImageSrc](#uiimagesrc)
 - [Ui.Responsive](#uiresponsive)
 - [Ui.Transform](#uitransform)
 - [Ui.Transition](#uitransition)
+- [Ui.Tui](#uitui)
 - [Url](#url)
 - [Url.Parser](#urlparser)
 - [Uuid](#uuid)
@@ -179,6 +179,34 @@ Ipe.Analytics — typed, consent-gated product analytics.
 | `eventCounts` | `eventCounts db store` — a dictionary mapping each event name to the |
 | `recent` | `recent db store limit` — the `limit` most-recently recorded events, |
 | `encodePropValue` | Encode one `PropValue` to a JSON `Value`. `PPii` → `"[redacted]"`, |
+
+## App.Tea.Terminal.Color
+
+[Full reference](stdlib/App.Tea.Terminal.Color.md)
+
+Ipe.App.Tea.Terminal.Color — the first-class terminal colour palette.
+
+| Export | Summary |
+|--------|----------|
+| `black` | ANSI black (SGR foreground 30, background 40). |
+| `red` | ANSI red (SGR foreground 31, background 41). |
+| `green` | ANSI green (SGR foreground 32, background 42). |
+| `yellow` | ANSI yellow (SGR foreground 33, background 43). |
+| `blue` | ANSI blue (SGR foreground 34, background 44). |
+| `magenta` | ANSI magenta (SGR foreground 35, background 45). |
+| `cyan` | ANSI cyan (SGR foreground 36, background 46). |
+| `white` | ANSI white (SGR foreground 37, background 47). |
+| `brightBlack` | ANSI bright black / grey (SGR foreground 90, background 100). |
+| `brightRed` | ANSI bright red (SGR foreground 91, background 101). |
+| `brightGreen` | ANSI bright green (SGR foreground 92, background 102). |
+| `brightYellow` | ANSI bright yellow (SGR foreground 93, background 103). |
+| `brightBlue` | ANSI bright blue (SGR foreground 94, background 104). |
+| `brightMagenta` | ANSI bright magenta (SGR foreground 95, background 105). |
+| `brightCyan` | ANSI bright cyan (SGR foreground 96, background 106). |
+| `brightWhite` | ANSI bright white (SGR foreground 97, background 107). |
+| `default` | The terminal's own default colour (SGR foreground 39, background 49). |
+| `rgb` | `rgb r g b` — a 24-bit truecolour from red/green/blue channels (0-255). |
+| `rgba` | `rgba r g b a` — a 24-bit truecolour with an alpha channel (0..1). |
 
 ## Basics
 
@@ -2582,83 +2610,6 @@ Ipe.System -- process environment + args + termination
 | `withBaseMs` | `withBaseMs base policy` — set the base retry delay.  Takes a typed |
 | `retryWith` | `retryWith policy task` — run `task`, retrying according to `policy` whenever |
 
-## Tea.Cli.Ui
-
-[Full reference](stdlib/Tea.Cli.Ui.md)
-
-Ipe.Tea.Cli.Ui — the Cli shape's line-oriented view surface.
-
-| Export | Summary |
-|--------|----------|
-| `none` | An empty view — renders nothing. |
-| `text` | `text str` — render `str` verbatim as a single line, no styling. |
-| `line` | `line attrs str` — one styled line: `str` under the line-scoped `attrs`. |
-| `lines` | `lines children` — stack `children` vertically, one under the next. |
-| `bold` | Render a line's text in bold. |
-| `underline` | Render a line's text underlined. |
-| `dim` | Render a line's text dim (faint). |
-| `reverse` | Render a line's text in reverse video (swap foreground and background). |
-| `color` | `color c` — the foreground (text) colour, from the terminal palette. |
-| `bg` | `bg c` — the background colour, from the terminal palette. |
-
-## Tea.Terminal.Color
-
-[Full reference](stdlib/Tea.Terminal.Color.md)
-
-Ipe.Tea.Terminal.Color — the first-class terminal colour palette.
-
-| Export | Summary |
-|--------|----------|
-| `black` | ANSI black (SGR foreground 30, background 40). |
-| `red` | ANSI red (SGR foreground 31, background 41). |
-| `green` | ANSI green (SGR foreground 32, background 42). |
-| `yellow` | ANSI yellow (SGR foreground 33, background 43). |
-| `blue` | ANSI blue (SGR foreground 34, background 44). |
-| `magenta` | ANSI magenta (SGR foreground 35, background 45). |
-| `cyan` | ANSI cyan (SGR foreground 36, background 46). |
-| `white` | ANSI white (SGR foreground 37, background 47). |
-| `brightBlack` | ANSI bright black / grey (SGR foreground 90, background 100). |
-| `brightRed` | ANSI bright red (SGR foreground 91, background 101). |
-| `brightGreen` | ANSI bright green (SGR foreground 92, background 102). |
-| `brightYellow` | ANSI bright yellow (SGR foreground 93, background 103). |
-| `brightBlue` | ANSI bright blue (SGR foreground 94, background 104). |
-| `brightMagenta` | ANSI bright magenta (SGR foreground 95, background 105). |
-| `brightCyan` | ANSI bright cyan (SGR foreground 96, background 106). |
-| `brightWhite` | ANSI bright white (SGR foreground 97, background 107). |
-| `default` | The terminal's own default colour (SGR foreground 39, background 49). |
-| `rgb` | `rgb r g b` — a 24-bit truecolour from red/green/blue channels (0-255). |
-| `rgba` | `rgba r g b a` — a 24-bit truecolour with an alpha channel (0..1). |
-
-## Tea.Tui.Ui
-
-[Full reference](stdlib/Tea.Tui.Ui.md)
-
-Ipe.Tea.Tui.Ui — the Tui shape's view surface.
-
-| Export | Summary |
-|--------|----------|
-| `none` | An empty screen view — renders nothing. |
-| `text` | `text str` — a single line of text. |
-| `cells` | `cells grid` — a raw terminal cell grid.  Each inner list is one row of |
-| `el` | `el attrs child` — wrap a single `Screen msg` child with attributes. |
-| `row` | `row attrs children` — lay out `Screen msg` children horizontally. |
-| `column` | `column attrs children` — lay out `Screen msg` children vertically. |
-| `spacing` | `spacing n` — the gap between a container's children, in whole cells. |
-| `padding` | `padding n` — inner padding on all four sides, in whole cells. |
-| `alignLeft` | Align a node's content to the left. |
-| `alignRight` | Align a node's content to the right. |
-| `center` | Centre a node's content horizontally. |
-| `bold` | Render text in bold. |
-| `underline` | Render text underlined. |
-| `dim` | Render text dim (faint). |
-| `reverse` | Render text in reverse video (swap foreground and background). |
-| `color` | `color c` — the foreground (text) colour, from the terminal palette. |
-| `bg` | `bg c` — the background colour, from the terminal palette. |
-| `rgb` | `rgb r g b` — a terminal colour from red/green/blue channels (0-255). |
-| `rgba` | `rgba r g b a` — a terminal colour with an alpha channel (0..1). |
-| `white` | Opaque white. |
-| `black` | Opaque black. |
-
 ## Test
 
 [Full reference](stdlib/Test.md)
@@ -2960,6 +2911,25 @@ Ipe.Ui.Chart — typed chart primitives for `Ipe.Ui`.
 | `sparkline` | (no summary) |
 | `heatmap` | (no summary) |
 
+## Ui.Cli
+
+[Full reference](stdlib/Ui.Cli.md)
+
+Ipe.Ui.Cli — the Cli shape's line-oriented view surface.
+
+| Export | Summary |
+|--------|----------|
+| `none` | An empty view — renders nothing. |
+| `text` | `text str` — render `str` verbatim as a single line, no styling. |
+| `line` | `line attrs str` — one styled line: `str` under the line-scoped `attrs`. |
+| `lines` | `lines children` — stack `children` vertically, one under the next. |
+| `bold` | Render a line's text in bold. |
+| `underline` | Render a line's text underlined. |
+| `dim` | Render a line's text dim (faint). |
+| `reverse` | Render a line's text in reverse video (swap foreground and background). |
+| `color` | `color c` — the foreground (text) colour, from the terminal palette. |
+| `bg` | `bg c` — the background colour, from the terminal palette. |
+
 ## Ui.Events
 
 [Full reference](stdlib/Ui.Events.md)
@@ -3072,6 +3042,36 @@ Ipe.Ui.Transition — typed CSS transitions for `Ipe.Ui`.
 | `defaultEasing` | (no summary) |
 | `attribute` | (no summary) |
 | `attributeUnsafe` | (no summary) |
+
+## Ui.Tui
+
+[Full reference](stdlib/Ui.Tui.md)
+
+Ipe.Ui.Tui — the Tui shape's view surface.
+
+| Export | Summary |
+|--------|----------|
+| `none` | An empty screen view — renders nothing. |
+| `text` | `text str` — a single line of text. |
+| `cells` | `cells grid` — a raw terminal cell grid.  Each inner list is one row of |
+| `el` | `el attrs child` — wrap a single `Screen msg` child with attributes. |
+| `row` | `row attrs children` — lay out `Screen msg` children horizontally. |
+| `column` | `column attrs children` — lay out `Screen msg` children vertically. |
+| `spacing` | `spacing n` — the gap between a container's children, in whole cells. |
+| `padding` | `padding n` — inner padding on all four sides, in whole cells. |
+| `alignLeft` | Align a node's content to the left. |
+| `alignRight` | Align a node's content to the right. |
+| `center` | Centre a node's content horizontally. |
+| `bold` | Render text in bold. |
+| `underline` | Render text underlined. |
+| `dim` | Render text dim (faint). |
+| `reverse` | Render text in reverse video (swap foreground and background). |
+| `color` | `color c` — the foreground (text) colour, from the terminal palette. |
+| `bg` | `bg c` — the background colour, from the terminal palette. |
+| `rgb` | `rgb r g b` — a terminal colour from red/green/blue channels (0-255). |
+| `rgba` | `rgba r g b a` — a terminal colour with an alpha channel (0..1). |
+| `white` | Opaque white. |
+| `black` | Opaque black. |
 
 ## Url
 

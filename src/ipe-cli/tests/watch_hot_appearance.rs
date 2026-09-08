@@ -36,10 +36,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 fn web_fixture(padding: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -71,11 +71,11 @@ fn web_fixture(padding: u32, extra_text: &str) -> String {
 fn web_fixture_weight(weight: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ui.Font as Font\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -110,11 +110,11 @@ fn web_fixture_weight(weight: u32, extra_text: &str) -> String {
 fn web_fixture_animation(duration: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ui.Animation as Animation\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -156,10 +156,10 @@ fn web_fixture_animation(duration: u32, extra_text: &str) -> String {
 fn web_fixture_attr_text(name: &str, text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -192,11 +192,11 @@ fn web_fixture_attr_text(name: &str, text: &str) -> String {
 fn web_fixture_image(description: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ui.ImageSrc as ImageSrc\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -233,10 +233,10 @@ fn web_fixture_image(description: &str) -> String {
 fn web_fixture_css(value: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.CssSafety exposing (safeValue)\n\
          import Ipe.Maybe as Maybe\n\n\
          type alias Model = {{ count : Int }}\n\n\
@@ -273,12 +273,12 @@ fn web_fixture_css(value: &str) -> String {
 fn web_fixture_static_html(text: &str, extra_child: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Html as H\n\
          import Ipe.Html.Attributes as A\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -314,10 +314,10 @@ fn web_fixture_static_html(text: &str, extra_child: &str) -> String {
 fn web_fixture_static_ui(text: &str, extra_child: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -350,10 +350,10 @@ fn web_fixture_static_ui(text: &str, extra_child: &str) -> String {
 fn web_fixture_grid(cols: &str, rows: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -1490,10 +1490,10 @@ fn static_ui_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), B
 fn web_fixture_static_ui_wrappers(text: &str, extra_child: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -1631,10 +1631,10 @@ fn static_ui_subtree_wrapper_hot_swaps_without_rebuild() -> Result<(), BoxError>
 fn web_fixture_value_hole(label: &str, extra_child: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String as String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -1750,10 +1750,10 @@ fn value_hole_static_sibling_hot_swaps_without_rebuild() -> Result<(), BoxError>
 fn web_fixture_counter(step: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Increment\n\n\
@@ -1889,10 +1889,10 @@ fn web_fixture_msg_variants(keep_decrement: bool) -> String {
     };
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Increment{decrement_variant}\n\n\
@@ -1929,10 +1929,10 @@ fn web_fixture_msg_variants(keep_decrement: bool) -> String {
 fn web_fixture_ticker(interval: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\n\
+         import Ipe.App.Tea.Web.Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Tick\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -2123,10 +2123,10 @@ fn subscriptions_interval_edit_hot_swaps_without_rebuild() -> Result<(), BoxErro
 /// confirms the app is up.
 fn web_fixture_cmd_perform() -> String {
     "module Main exposing (main)\n\n\
-     import Ipe.Tea.Web as Web\n\
+     import Ipe.App.Tea.Web as Web\n\
      import Ipe.Ui as Ui\n\
-     import Ipe.Tea.Web.Cmd\n\
-     import Ipe.Tea.Web.Sub\n\
+     import Ipe.App.Tea.Web.Cmd\n\
+     import Ipe.App.Tea.Web.Sub\n\
      import Ipe.Time as Time\n\
      import Ipe.Time.Timestamp exposing (Timestamp)\n\
      import Ipe.Error exposing (Error)\n\n\

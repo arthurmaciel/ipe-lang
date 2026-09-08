@@ -213,10 +213,10 @@ pub struct Builtins {
     /// `"Element"` — Ipe.Ui element type constructor `Element msg`.
     pub element: Symbol,
     /// `"Screen"` — Tui-only view type constructor `Screen msg`. Distinct from
-    /// `Element msg`; produced by `Ipe.Tea.Tui.Ui.*` builders.
+    /// `Element msg`; produced by `Ipe.Ui.Tui.*` builders.
     pub cells: Symbol,
     /// `"TuiAttr"` — the cell-native attribute type constructor
-    /// `Ipe.Tea.Tui.Ui.Attribute msg`. Distinct from the DOM `Attribute msg`
+    /// `Ipe.Ui.Tui.Attribute msg`. Distinct from the DOM `Attribute msg`
     /// (`attribute`): only terminal-honorable attributes (spacing/padding/
     /// align/bold/underline/color/bg) inhabit it, so a DOM attribute
     /// (`Ui.onClick`, `Ui.scrollbars`, …) is unnameable in a `Screen` view —
@@ -224,11 +224,11 @@ pub struct Builtins {
     pub tui_attr: Symbol,
     /// `"Lines"` — the Cli-only line-oriented view type constructor `Lines msg`.
     /// Distinct from both `Element msg` and `Screen msg`; produced by
-    /// `Ipe.Tea.Cli.Ui.*` builders. Line-scoped, so 2D cell and DOM builders are
+    /// `Ipe.Ui.Cli.*` builders. Line-scoped, so 2D cell and DOM builders are
     /// unnameable in it.
     pub cli_lines: Symbol,
     /// `"CliAttr"` — the line-native attribute type constructor
-    /// `Ipe.Tea.Cli.Ui.Attribute msg`. Only line-scoped styles
+    /// `Ipe.Ui.Cli.Attribute msg`. Only line-scoped styles
     /// (bold/underline/dim/reverse/color/bg) inhabit it, so a 2D cell attribute
     /// or a DOM attribute is unnameable in a `Lines` view.
     pub cli_attr: Symbol,

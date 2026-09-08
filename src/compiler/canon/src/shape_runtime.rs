@@ -17,7 +17,7 @@
 //! DB handle, a secret) could ever be emitted into a sandboxed browser bundle.
 //!
 //! Scope: this table owns the families with no other gate — native effects and
-//! browser-host capabilities. The SHAPE-RENDER surfaces (`Ipe.Tea.*` TEA
+//! browser-host capabilities. The SHAPE-RENDER surfaces (`Ipe.App.Tea.*` TEA
 //! machinery, `Ipe.Ui.*` / `Ipe.Html` view libraries) are governed by the
 //! dedicated shape gates (IPE-N0033 / N0035 / N0045 and the lowering shape
 //! gates), which already encode the shape-fold rules (`Tui`/`Cli` share the
@@ -144,7 +144,7 @@ impl Placement {
 pub enum ModuleClass {
     /// A pure module — no effect, no render (`String`, `List`, `Dict`, `Json`,
     /// `Math`, `Result`, `Task`, …). Also the shape-render surfaces
-    /// (`Ipe.Tea.*`, `Ipe.Ui.*`, `Ipe.Html`), which the dedicated shape gates
+    /// (`Ipe.App.Tea.*`, `Ipe.Ui.*`, `Ipe.Html`), which the dedicated shape gates
     /// (IPE-N0033 / N0035 / N0045 and the lowering shape gates) govern with the
     /// shape-fold rules this table deliberately does not duplicate. Admissible in
     /// every placement here.
@@ -222,7 +222,7 @@ pub fn classify(path: &str) -> ModuleClass {
     // the segment head keeps every sub-module of a family (`Ipe.Db`,
     // `Ipe.Db.Store`, `Ipe.Db.Sql`) on the same row.
     //
-    // Division of labour: the SHAPE-RENDER surfaces — the `Ipe.Tea.*` TEA
+    // Division of labour: the SHAPE-RENDER surfaces — the `Ipe.App.Tea.*` TEA
     // app/Cmd/Sub machinery and the shape view libraries (`Ipe.Ui.*` cells,
     // `Ipe.Html`) — are governed by the dedicated shape gates that already know
     // the shape-fold rules (`Tui`/`Cli` share the terminal family, `WebView`
@@ -344,20 +344,20 @@ mod tests {
         }
     }
 
-    /// The shape-render surfaces (`Ipe.Tea.*`, `Ipe.Ui.*`, `Ipe.Html`) defer to
+    /// The shape-render surfaces (`Ipe.App.Tea.*`, `Ipe.Ui.*`, `Ipe.Html`) defer to
     /// the dedicated shape gates, so this table classifies them as `Pure` — it
     /// does not re-gate them with a second, fold-unaware rule.
     #[test]
     fn shape_render_surfaces_defer_to_the_shape_gates_as_pure() {
         for path in [
-            "Ipe.Tea.Web",
-            "Ipe.Tea.Web.Cmd",
-            "Ipe.Tea.Tui",
-            "Ipe.Tea.Cli",
-            "Ipe.Tea.Cli.Ui",
-            "Ipe.Tea.Terminal.Cmd",
-            "Ipe.Tea.Terminal.Color",
-            "Ipe.Tea.WebView",
+            "Ipe.App.Tea.Web",
+            "Ipe.App.Tea.Web.Cmd",
+            "Ipe.App.Tea.Tui",
+            "Ipe.App.Tea.Cli",
+            "Ipe.Ui.Cli",
+            "Ipe.App.Tea.Terminal.Cmd",
+            "Ipe.App.Tea.Terminal.Color",
+            "Ipe.App.Tea.WebView",
             "Ipe.Ui",
             "Ipe.Ui.Cells",
             "Ipe.Html",

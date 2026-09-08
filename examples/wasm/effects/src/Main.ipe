@@ -22,9 +22,9 @@ module Main exposing (main)
 -- M5's reachability closure, not by a per-module workaround here.
 
 import Ipe.String as String
-import Ipe.Tea.Web exposing (app)
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web exposing (app)
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Log as Log
 import Ipe.Random as Random
 import Ipe.Http as Http

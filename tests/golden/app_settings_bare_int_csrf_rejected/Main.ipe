@@ -6,11 +6,11 @@ module Main exposing (main)
 -- disabling variant — so a setting cannot express turning CSRF off, and an
 -- out-of-range tag is a compile-time type error.
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 
 type Page

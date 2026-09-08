@@ -32,10 +32,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 fn web_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\n\
          type Msg = Noop\n\n\
          type alias Model = {{ count : Int }}\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -69,11 +69,11 @@ fn web_fixture(marker: &str) -> String {
 fn ticker_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.String as String\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
          type alias Model = {{ count : Int }}\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -109,11 +109,11 @@ fn ticker_fixture(marker: &str) -> String {
 fn changed_model_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.String as String\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
          type alias Model = {{ score : Int }}\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -721,11 +721,11 @@ fn bluegreen_rebuild_resets_cleanly_on_model_type_change() -> Result<(), BoxErro
 fn additive_ticker_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.String as String\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
          type alias Model = {{ count : Int, label : String }}\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\

@@ -233,7 +233,7 @@ exactly what a full rebuild of the same source would.
 
 ### Build-status banner (dev only)
 
-For `Ipe.Tea.Web` apps, `ipe watch` surfaces build results directly in the
+For `Ipe.App.Tea.Web` apps, `ipe watch` surfaces build results directly in the
 browser via the existing status banner at the bottom of the page:
 
 - **Success** — a green "Reloaded ✓" toast appears briefly (auto-hides after

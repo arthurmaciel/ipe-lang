@@ -30,8 +30,8 @@ module Ipe.Browser.Vibration exposing
 
 import Ipe.Browser.Vibration.Internals as Internals exposing (JsMsg(..))
 import Ipe.Error as Error exposing (Error)
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 
 
 -- | `vibrate ms` — vibrate for `ms` milliseconds. Outbound `Cmd`; an absent

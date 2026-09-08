@@ -268,27 +268,27 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "RevocationMode",
     "Html",
     "Element",
-    // `Ipe.Tea.Tui.Ui`'s Tui-only view type `Screen msg`. Reserved so a user
+    // `Ipe.Ui.Tui`'s Tui-only view type `Screen msg`. Reserved so a user
     // `type Screen …` cannot shadow the builtin and defeat the shape-gate that
     // prevents Web/Cli builders from appearing in a `view : M -> Screen Msg`
-    // function. Built only through `Ipe.Tea.Tui.Ui.*` kernels. `Cells` is
+    // function. Built only through `Ipe.Ui.Tui.*` kernels. `Cells` is
     // reserved alongside it — the internal rendering-model spelling.
     "Screen",
     "Cells",
-    // `Ipe.Tea.Tui.Ui`'s cell-native attribute type `Attribute msg` (interned
+    // `Ipe.Ui.Tui`'s cell-native attribute type `Attribute msg` (interned
     // `TuiAttr`). Reserved so a user `type TuiAttr …` cannot forge a look-alike
     // that would admit a DOM attribute into a `Screen` view.
     "TuiAttr",
-    // `Ipe.Tea.Cli.Ui`'s line-oriented view type `Lines msg` and its line-native
+    // `Ipe.Ui.Cli`'s line-oriented view type `Lines msg` and its line-native
     // attribute type `Attribute msg` (interned `CliAttr`). Reserved so a user
     // `type Lines …` / `type CliAttr …` cannot shadow the builtins and defeat the
     // shape-gate that keeps DOM and 2D cell builders out of a `Lines` view. Built
-    // only through `Ipe.Tea.Cli.Ui.*` kernels.
+    // only through `Ipe.Ui.Cli.*` kernels.
     "Lines",
     "CliAttr",
-    // `Ipe.Tea.Terminal.Color`'s palette type `Color` (interned `TermColor`).
+    // `Ipe.App.Tea.Terminal.Color`'s palette type `Color` (interned `TermColor`).
     // Reserved so a user `type Color …` in a terminal module cannot forge a
-    // look-alike palette; built only through `Ipe.Tea.Terminal.Color.*` kernels.
+    // look-alike palette; built only through `Ipe.App.Tea.Terminal.Color.*` kernels.
     "TermColor",
     "Attribute",
     "Event",
@@ -1395,7 +1395,7 @@ pub fn canonicalise_module_in_project(
     }
     exports.scope_aliases = scope_aliases;
 
-    // IPE-N0033 (ADR 0048): a Program importing any `Ipe.Tea.*` shape is a
+    // IPE-N0033 (ADR 0048): a Program importing any `Ipe.App.Tea.*` shape is a
     // contradiction. Skip stdlib origins — the embedded `Ipe.Web.Head` /
     // `Ipe.Web.Console` helpers are static and never import a shape, and only
     // USER modules are subject to the Program/TEA distinction.
@@ -1727,12 +1727,12 @@ fn branch_head_reaches_tea_entry(branch: &canon::Expr, interner: &Interner) -> b
 }
 
 /// IPE-N0033: reject a Program (plain-`main` module) that imports any
-/// `Ipe.Tea.*` shape module.
+/// `Ipe.App.Tea.*` shape module.
 ///
 /// The rule is exactly ADR 0048's structural marker: importing anything under
-/// `Ipe.Tea.*` marks a module a TEA app. A module is a TEA app iff its `main`
+/// `Ipe.App.Tea.*` marks a module a TEA app. A module is a TEA app iff its `main`
 /// head-calls one of [`TEA_APP_ENTRIES`]; every other `main` is a Program. So a
-/// module that imports a `Ipe.Tea.*` shape but whose `main` is not a shape entry
+/// module that imports a `Ipe.App.Tea.*` shape but whose `main` is not a shape entry
 /// is a Program-importing-a-shape contradiction, reported at the offending
 /// import span. The `Ipe.Ui` / `Ipe.Html` / `Ipe.Css` data + static-render
 /// modules are deliberately top-level, so a Program that builds a `Ui` tree and
@@ -1740,24 +1740,30 @@ fn branch_head_reaches_tea_entry(branch: &canon::Expr, interner: &Interner) -> b
 ///
 /// # Errors
 /// [`Diagnostic::Name`] (IPE-N0033) when a plain-`main` module imports a
-/// `Ipe.Tea.*` shape.
+/// `Ipe.App.Tea.*` shape.
 fn check_program_tea_import_gate(
     m: &src::Module,
     canon_mod: &canon::Module,
     interner: &Interner,
 ) -> DResult<()> {
-    // A `Ipe.Tea.*` import: path length ≥ 3 with first two segments Ipe, Tea.
-    let Some(tea_ipe) = interner.lookup("Ipe").zip(interner.lookup("Tea")) else {
-        // Neither `Ipe` nor `Tea` interned in this build → no shape can be
+    // A `Ipe.App.Tea.*` import: path length ≥ 4 with first three segments
+    // Ipe, App, Tea.
+    let (Some(ipe_sym), Some(app_sym), Some(tea_sym)) = (
+        interner.lookup("Ipe"),
+        interner.lookup("App"),
+        interner.lookup("Tea"),
+    ) else {
+        // No `Ipe.App.Tea` segment interned in this build → no shape can be
         // imported; nothing to gate.
         return Ok(());
     };
-    let (ipe_sym, tea_sym) = tea_ipe;
     let tea_import = m.imports.iter().find(|imp| {
-        // `Ipe.Tea.<Shape>`: at least three segments whose first two are Ipe, Tea.
+        // `Ipe.App.Tea.<Shape>`: at least four segments whose first three are
+        // Ipe, App, Tea.
         matches!(
             imp.name.value.as_slice(),
-            [first, second, _, ..] if *first == ipe_sym && *second == tea_sym
+            [first, second, third, _, ..]
+                if *first == ipe_sym && *second == app_sym && *third == tea_sym
         )
     });
     let Some(tea_import) = tea_import else {
@@ -1766,7 +1772,7 @@ fn check_program_tea_import_gate(
 
     // The Program/TEA distinction only applies to an ENTRY module — one that
     // defines `main`. A helper submodule with no `main` (e.g. an `Update`
-    // module that imports `Ipe.Tea.Web.Cmd` solely to name `Cmd` in `update`'s
+    // module that imports `Ipe.App.Tea.Web.Cmd` solely to name `Cmd` in `update`'s
     // signature and build `Cmd.none` / `Cmd.batch` effects) is neither a
     // Program nor an app entry, so it is exempt from this gate.
     let main_sym = interner.lookup("main");
@@ -1789,7 +1795,7 @@ fn check_program_tea_import_gate(
     }
 
     // A declarative `Ipe.Http.Server` program (`main = Server.listen …`) may
-    // legitimately import `Ipe.Tea.Web` to build a mountable web app with
+    // legitimately import `Ipe.App.Tea.Web` to build a mountable web app with
     // `Web.embed` and mount it via `Server.mountApp` on the shared server port
     // (shape-model §9). Such a `main` head-calls `Server.listen`, not a TEA
     // shape entry, so it would otherwise trip this gate; exempt it. The embedded
@@ -1815,7 +1821,7 @@ fn check_program_tea_import_gate(
 /// `Ipe.Http.Server` entry? Same head-peeling as [`main_head_is_tea_entry`]. A
 /// Server program that embeds a web app (`Web.embed` + `Server.mountApp`) is a
 /// Program at the module level, not a TEA app, so it is exempt from the
-/// `Ipe.Tea.*`-import gate (IPE-N0033).
+/// `Ipe.App.Tea.*`-import gate (IPE-N0033).
 fn main_head_is_server_listen(body: &canon::Expr, interner: &Interner) -> bool {
     let mut node = body;
     loop {
@@ -1870,14 +1876,14 @@ fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
 }
 
 /// The CANONICAL TEA shape (rendering family) a `main` proves from its entry
-/// kernel. The value is the family a user's `Ipe.Tea.<Shape>.{Cmd,Sub}` import
+/// kernel. The value is the family a user's `Ipe.App.Tea.<Shape>.{Cmd,Sub}` import
 /// must fold onto (via [`canonical_shape`]) to be admissible. The terminal
 /// family's two drive axes (`Tui.app`, `Cli.app`) both resolve to the one
 /// `"Terminal"` family here, so a terminal app may import either surface's
 /// `Cmd` / `Sub`.
 ///
 /// Returns `None` when `main` is not a shape-entry app — the cross-shape gate
-/// then does not apply (a plain-`main` Program importing `Ipe.Tea.*` is already
+/// then does not apply (a plain-`main` Program importing `Ipe.App.Tea.*` is already
 /// rejected by IPE-N0033).
 fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static str> {
     let mut node = body;
@@ -1900,13 +1906,13 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
 /// IPE-N0035: reject a TEA app that imports another shape's `Cmd` / `Sub`.
 ///
 /// `Cmd` / `Sub` are shape-specific and re-exported per shape under
-/// `Ipe.Tea.<Shape>.{Cmd,Sub}`. The app's shape is proven from its entry kernel
+/// `Ipe.App.Tea.<Shape>.{Cmd,Sub}`. The app's shape is proven from its entry kernel
 /// (`Web.app` / `Tui.app` / `Cli.app`); an imported
-/// `Ipe.Tea.<OtherShape>.{Cmd,Sub}` has no denotation in this app and fails
+/// `Ipe.App.Tea.<OtherShape>.{Cmd,Sub}` has no denotation in this app and fails
 /// closed here, naming the correct import path for the app's own shape.
 ///
 /// Applies only to TEA apps (a proven shape entry). A plain-`main` Program that
-/// imports any `Ipe.Tea.*` path — a shape-scoped `Cmd` / `Sub` included — is
+/// imports any `Ipe.App.Tea.*` path — a shape-scoped `Cmd` / `Sub` included — is
 /// already the IPE-N0033 contradiction, so this gate never needs to fire there.
 ///
 /// # Errors
@@ -1916,10 +1922,13 @@ fn check_cross_shape_cmd_sub_gate(
     canon_mod: &canon::Module,
     interner: &Interner,
 ) -> DResult<()> {
-    let Some(tea_ipe) = interner.lookup("Ipe").zip(interner.lookup("Tea")) else {
+    let (Some(ipe_sym), Some(app_sym), Some(tea_sym)) = (
+        interner.lookup("Ipe"),
+        interner.lookup("App"),
+        interner.lookup("Tea"),
+    ) else {
         return Ok(());
     };
-    let (ipe_sym, tea_sym) = tea_ipe;
     let (Some(cmd_sym), Some(sub_sym)) = (interner.lookup("Cmd"), interner.lookup("Sub")) else {
         // Neither `Cmd` nor `Sub` interned → no shape-scoped module can be named.
         return Ok(());
@@ -1948,11 +1957,12 @@ fn check_cross_shape_cmd_sub_gate(
     // fold onto `Terminal`, so a terminal app may import either surface's `Cmd` /
     // `Sub`. `app_shape` is already canonical (proven from the entry kernel).
     for imp in &m.imports {
-        // `Ipe.Tea.<Shape>.{Cmd,Sub}`: exactly four segments, `Ipe . Tea . Shape . Cmd|Sub`.
-        let [first, second, shape, leaf] = imp.name.value.as_slice() else {
+        // `Ipe.App.Tea.<Shape>.{Cmd,Sub}`: exactly five segments,
+        // `Ipe . App . Tea . Shape . Cmd|Sub`.
+        let [first, second, third, shape, leaf] = imp.name.value.as_slice() else {
             continue;
         };
-        if *first != ipe_sym || *second != tea_sym {
+        if *first != ipe_sym || *second != app_sym || *third != tea_sym {
             continue;
         }
         if *leaf != cmd_sym && *leaf != sub_sym {
@@ -1968,10 +1978,10 @@ fn check_cross_shape_cmd_sub_gate(
         return Err(Diagnostic::Name {
             span: imp.name.span,
             msg: NameError::WrongShapeCmdSub(Box::new(CmdSubShapeMismatch {
-                imported: format!("Ipe.Tea.{imported_shape}.{leaf_name}").into_boxed_str(),
+                imported: format!("Ipe.App.Tea.{imported_shape}.{leaf_name}").into_boxed_str(),
                 imported_shape: imported_shape.into(),
                 app_shape: app_shape.into(),
-                expected: format!("Ipe.Tea.{app_shape}.{leaf_name}").into_boxed_str(),
+                expected: format!("Ipe.App.Tea.{app_shape}.{leaf_name}").into_boxed_str(),
             })),
         });
     }
@@ -3181,7 +3191,7 @@ fn canonicalise_with_env(
 /// (path length ≥ 3, e.g. `Ipe.Html.Unsafe`, `Ipe.Db.Unsafe`). A user file
 /// literally named `Ipe.Db.Unsafe` cannot be imported — it is rejected at
 /// discovery as `User` origin (IPE-N0025) — so a matching import can only name a
-/// vouched `EmbeddedStdlib` submodule. Mirrors the `Ipe.Tea.*` import-shape
+/// vouched `EmbeddedStdlib` submodule. Mirrors the `Ipe.App.Tea.*` import-shape
 /// check: a segment-slice pattern, no string allocation on the hot path.
 /// The web capabilities disclosed by a module's reserved `Ipe.Browser.<Api>`
 /// imports.

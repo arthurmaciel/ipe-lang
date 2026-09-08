@@ -18,11 +18,11 @@ type TestResult = Result<(), Box<dyn Error>>;
 /// inferred capability set must contain `custom-element`.
 const WIDGET_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.String as String
 
 type alias WidgetState = { count : Int }
@@ -258,11 +258,11 @@ fn a_widget_program_that_hides_custom_element_is_rejected() -> TestResult {
 /// served bytes is the same file the mounted-case project ships.
 const UNMOUNTED_WIDGET_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.String as String
 
 type alias WidgetState = { count : Int }
@@ -386,7 +386,7 @@ fn a_handle_constructed_in_an_imported_module_discloses_custom_element() -> Test
     // Main imports Widgets but never mounts `counter`.
     std::fs::write(
         dir.join("src/Main.ipe"),
-        "module Main exposing (main)\n\nimport Ipe.Tea.Web as Web\nimport Ipe.Ui as Ui\nimport Ipe.Tea.Web.Cmd as Cmd\nimport Ipe.Tea.Web.Sub as Sub\nimport Ipe.String as String\nimport Widgets\n\ntype Msg = Noop\n\ntype alias Model = { count : Int }\n\ninit : WebReq -> ( Model, Cmd.Cmd Msg )\ninit _req =\n    ( { count = 0 }, Cmd.none )\n\nupdate : Msg -> Model -> ( Model, Cmd.Cmd Msg )\nupdate msg model =\n    case msg of\n        Noop ->\n            ( model, Cmd.none )\n\nview : Model -> Element Msg\nview model =\n    Ui.column [] [ Ui.text (String.fromInt model.count) ]\n\nsubscriptions : Model -> Sub.Sub Msg\nsubscriptions _model =\n    Sub.none\n\nmain =\n    Web.app\n        { init = init, update = update, view = view, subscriptions = subscriptions\n        , routes = [], notFound = Noop\n        }\n",
+        "module Main exposing (main)\n\nimport Ipe.App.Tea.Web as Web\nimport Ipe.Ui as Ui\nimport Ipe.App.Tea.Web.Cmd as Cmd\nimport Ipe.App.Tea.Web.Sub as Sub\nimport Ipe.String as String\nimport Widgets\n\ntype Msg = Noop\n\ntype alias Model = { count : Int }\n\ninit : WebReq -> ( Model, Cmd.Cmd Msg )\ninit _req =\n    ( { count = 0 }, Cmd.none )\n\nupdate : Msg -> Model -> ( Model, Cmd.Cmd Msg )\nupdate msg model =\n    case msg of\n        Noop ->\n            ( model, Cmd.none )\n\nview : Model -> Element Msg\nview model =\n    Ui.column [] [ Ui.text (String.fromInt model.count) ]\n\nsubscriptions : Model -> Sub.Sub Msg\nsubscriptions _model =\n    Sub.none\n\nmain =\n    Web.app\n        { init = init, update = update, view = view, subscriptions = subscriptions\n        , routes = [], notFound = Noop\n        }\n",
     )?;
     std::fs::write(dir.join("src/js/counter.js"), COUNTER_JS)?;
 
@@ -441,9 +441,9 @@ fn a_manifest_less_single_file_handle_discloses_custom_element() -> TestResult {
 /// capabilities` reports.
 const JS_PORT_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js as Js
 import Ipe.Json.Decode as Decode
@@ -518,9 +518,9 @@ fn a_port_program_discloses_js_port() -> TestResult {
 /// top of the raw `:raw` floor `Js.send` tags.
 const CLIPBOARD_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Browser.Clipboard as Clipboard
 
@@ -608,9 +608,9 @@ fn a_transitive_browser_import_reaches_the_linked_set() -> TestResult {
     std::fs::write(
         dir.join("Main.ipe"),
         "module Main exposing (main)\n\
-         import Ipe.Tea.Web as Web\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Widget\n\
          type alias Model = { n : Int }\n\
@@ -689,9 +689,9 @@ fn a_port_program_that_hides_js_port_is_rejected() -> TestResult {
 /// floor the underlying `Js.send`/`Js.subscribe` tag.
 const GEOLOCATION_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Geolocation as Geo
@@ -767,9 +767,9 @@ fn importing_browser_geolocation_discloses_js_port_geolocation() -> TestResult {
 /// cannot be reached undisclosed.
 const GEOLOCATION_INTERNALS_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Browser.Geolocation.Internals as Geo
 
@@ -865,9 +865,9 @@ fn web_consent_refuses_ungranted_geolocation_then_admits_it() {
 /// floor the underlying `Js.send` / `Js.subscribe` tag.
 const NOTIFICATION_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Notification as Note
@@ -953,9 +953,9 @@ fn a_notification_app_without_the_grant_is_rejected() -> TestResult {
 /// that discloses the SPECIFIC `js-port:storage` axis on top of the `:raw` floor.
 const STORAGE_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Storage as Storage
@@ -1042,9 +1042,9 @@ fn a_storage_app_without_the_grant_is_rejected() -> TestResult {
 /// that discloses the SPECIFIC `js-port:vibration` axis on top of the `:raw` floor.
 const VIBRATION_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Vibration as Vib
@@ -1124,9 +1124,9 @@ fn a_vibration_app_without_the_grant_is_rejected() -> TestResult {
 /// discloses the SPECIFIC `js-port:share` axis on top of the `:raw` floor.
 const SHARE_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Share as Share
@@ -1210,9 +1210,9 @@ fn a_share_app_without_the_grant_is_rejected() -> TestResult {
 /// discloses the SPECIFIC `js-port:battery` axis on top of the `:raw` floor.
 const BATTERY_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Battery as Battery
@@ -1296,9 +1296,9 @@ fn a_battery_app_without_the_grant_is_rejected() -> TestResult {
 /// that discloses the SPECIFIC `js-port:network-info` axis on top of the `:raw` floor.
 const NETWORK_INFO_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.NetworkInfo as Net
@@ -1383,9 +1383,9 @@ fn a_network_info_app_without_the_grant_is_rejected() -> TestResult {
 /// that discloses the SPECIFIC `js-port:file` axis on top of the `:raw` floor.
 const FILE_PICKER_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.FilePicker as FilePicker
@@ -1466,9 +1466,9 @@ fn a_file_picker_app_without_the_grant_is_rejected() -> TestResult {
 /// that discloses the SPECIFIC `js-port:camera` axis on top of the `:raw` floor.
 const CAMERA_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Camera as Camera
@@ -1551,9 +1551,9 @@ fn a_camera_app_without_the_grant_is_rejected() -> TestResult {
 /// path are both exercised.
 const MICROPHONE_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Microphone as Microphone
@@ -1642,9 +1642,9 @@ fn a_microphone_app_without_the_grant_is_rejected_ipe_s0002() -> TestResult {
 /// Both the accepted-grant path and the IPE-S0002 refusal path are exercised.
 const GAMEPAD_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Browser.Gamepad as Gamepad
 

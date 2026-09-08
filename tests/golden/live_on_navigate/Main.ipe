@@ -10,11 +10,11 @@ module Main exposing (main)
 -- the implicit desugaring instead; the two fixtures pin both sides of the
 -- explicit-in-config navigation form.
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 type Page
     = CounterPage

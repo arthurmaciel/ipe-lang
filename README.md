@@ -124,9 +124,9 @@ One language, four ways to ship. Pick the entry point that matches your app.
 
 | Shape | Entry point | Use it for | TEA |
 |---|---|---|---|
-| `Ipe.Tea.Web` | `Web.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
-| `Ipe.Tea.WebView` | `WebView.app` | Native desktop apps | ✓ |
-| `Ipe.Tea.Tui` / `Ipe.Tea.Cli` | `Tui.app` / `Cli.app` | Full-screen terminal UIs (`Tui.app`) and line-oriented REPLs (`Cli.app`) | ✓ |
+| `Ipe.App.Tea.Web` | `Web.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
+| `Ipe.App.Tea.WebView` | `WebView.app` | Native desktop apps | ✓ |
+| `Ipe.App.Tea.Tui` / `Ipe.App.Tea.Cli` | `Tui.app` / `Cli.app` | Full-screen terminal UIs (`Tui.app`) and line-oriented REPLs (`Cli.app`) | ✓ |
 | `Program` | plain `main` | Scripts, one-shot tools, cron jobs, HTTP servers | |
 
 The three ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)

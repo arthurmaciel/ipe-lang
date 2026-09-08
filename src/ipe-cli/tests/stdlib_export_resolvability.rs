@@ -89,7 +89,7 @@ fn compile_main(main: &str) -> Result<(), String> {
 }
 
 /// Like [`compile_main`], but adds extra user modules to the graph. Used to route
-/// a `Ipe.Tea.*` shape module through a `main`-less helper (exempt from the
+/// a `Ipe.App.Tea.*` shape module through a `main`-less helper (exempt from the
 /// IPE-N0033 Program-imports-a-shape gate) while `Main` stays a plain Program.
 fn compile_main_with_helper(main: &str, extras: &[(Vec<String>, String)]) -> Result<(), String> {
     let mut user = UserSources::new();
@@ -141,13 +141,13 @@ fn compile_main_with_helper(main: &str, extras: &[(Vec<String>, String)]) -> Res
 fn compiled_source_modules_resolve_all_exports() {
     let mut failures: Vec<String> = Vec::new();
     for m in ipe_stdlib::COMPILED_STD_MODULES {
-        // A `Ipe.Tea.*` shape module marks any plain-`main` importer a TEA-app
+        // A `Ipe.App.Tea.*` shape module marks any plain-`main` importer a TEA-app
         // contradiction (IPE-N0033). Route it through a `main`-less helper module
         // — exempt from that gate — so the export resolution still runs while
         // `Main` stays a plain Program.
         let is_tea_shape = m
             .dotted
-            .strip_prefix("Ipe.Tea.")
+            .strip_prefix("Ipe.App.Tea.")
             .is_some_and(|rest| rest.contains('.'));
         let result = if is_tea_shape {
             let helper = format!(
