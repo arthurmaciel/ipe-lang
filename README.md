@@ -11,6 +11,13 @@
 [![Static binaries](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
 [![No-panic](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml)
 [![Docs deploy](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml)
+[![Manifest guard](https://github.com/arthurmaciel/ipe-lang/actions/workflows/manifest-guard.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/manifest-guard.yml)
+
+Every CI check has one declared disposition (`gate` / `nightly-gate` /
+`informational` / `delete`) in [`ci/check-manifest.yml`](ci/check-manifest.yml) —
+the single source of truth from which the branch-protection required set is
+derived. Non-blocking reds are surfaced by the `CI health` workflow (a dedup
+tracking issue per check + a run-summary dashboard), not by email.
 
 
 # Ipê language

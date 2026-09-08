@@ -23,13 +23,13 @@ use crate::code::{
     IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
     IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
     IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_N0045,
-    IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010,
-    IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0018,
-    IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060,
-    IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067, IPE_P0068,
-    IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010,
-    IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_T0018,
-    IPE_T0019, IPE_T0020, Severity,
+    IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_N0050, IPE_P0001, IPE_P0002, IPE_P0003,
+    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
+    IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050,
+    IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067,
+    IPE_P0068, IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
+    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
+    IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -758,6 +758,19 @@ pub enum NameError {
     /// than silently shadowing one with the other. `first` is the span of the
     /// earlier binder. [IPE-N0049]
     DuplicatePatternBinder { name: Box<str>, first: Span },
+    /// A **Script** (a `main : Task Error ()` whose head is a plain `Task`, not a
+    /// shape entry) imports a shape's view/UI module. A Script renders nothing —
+    /// it has no `view` — so the imported UI never reaches a screen. This is a
+    /// **Warning**, not a rejection: the program is a legal Script and still
+    /// compiles. The hint nudges toward the entry the author likely meant
+    /// (`main = <Shape>.app { … }`). `shape_ui_module` is the offending imported
+    /// UI path; `shape` is the shape it belongs to; `entry` is the app entry that
+    /// would render it. [IPE-N0050]
+    ScriptImportsShapeView {
+        shape_ui_module: Box<str>,
+        shape: Box<str>,
+        entry: Box<str>,
+    },
 }
 
 /// Which namespace a [`NameError::RustNameFold`] collision falls in — selects
@@ -1858,6 +1871,12 @@ impl Diagnostic {
             Self::Parse {
                 msg: ParseError::DocOnUnexported { .. } | ParseError::MissingDocString { .. },
                 ..
+            }
+            // A Script that imports a shape's UI still compiles — the hint is a
+            // Warning, never a rejection of a legal Script.
+            | Self::Name {
+                msg: NameError::ScriptImportsShapeView { .. },
+                ..
             } => Severity::Warning,
             Self::Parse { .. }
             | Self::Name { .. }
@@ -2007,6 +2026,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::ModuleNotAllowedInPlacement(..) => IPE_N0047,
         NameError::RustNameFold { .. } => IPE_N0048,
         NameError::DuplicatePatternBinder { .. } => IPE_N0049,
+        NameError::ScriptImportsShapeView { .. } => IPE_N0050,
     }
 }
 
@@ -2220,6 +2240,7 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::CustomElementCtorMalformed { .. }
         | NameError::RuntimeBranchedMain
         | NameError::ModuleNotAllowedInPlacement(..)
+        | NameError::ScriptImportsShapeView { .. }
         | NameError::WebInitPolyArg => Vec::new(), // no span-based help
     }
 }

@@ -872,6 +872,39 @@ pub fn command_summary(name: &str) -> Option<&'static str> {
     find(name).map(|c| c.summary)
 }
 
+/// Render a command's full help as Markdown, or `None` when `name` is unknown.
+///
+/// This is the documentation projection of [`render_command`]: it reads the same
+/// [`Command`] fields (summary, synopsis, arguments, options) from the one
+/// [`COMMANDS`] table and lays them out as Markdown, so the HTML command page and
+/// the terminal `ipe <command> --help` page describe a command from a single
+/// source and cannot drift. No ANSI colour is emitted.
+#[must_use]
+pub fn command_doc_markdown(name: &str) -> Option<String> {
+    find(name).map(render_command_markdown)
+}
+
+/// Render one command's help page as Markdown from its [`Command`] entry.
+fn render_command_markdown(cmd: &Command) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{}\n", cmd.summary);
+    let _ = write!(out, "```\nipe {}", cmd.name);
+    if !cmd.args.is_empty() {
+        let _ = write!(out, " {}", cmd.args);
+    }
+    out.push_str("\n```\n");
+    if !cmd.args_desc.is_empty() {
+        let _ = writeln!(out, "\n## Arguments\n\n{}", cmd.args_desc);
+    }
+    if !cmd.options.is_empty() {
+        out.push_str("\n## Options\n\n");
+        for opt in cmd.options {
+            let _ = writeln!(out, "- `{}` — {}", opt.flag, opt.desc);
+        }
+    }
+    out
+}
+
 /// Render the top-level help screen for the given output stream.
 #[must_use]
 pub fn top_level(stream: &impl IsTerminal) -> String {

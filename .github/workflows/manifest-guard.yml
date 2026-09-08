@@ -1,0 +1,57 @@
+# Drift gate for the CI check-disposition SSOT (ci/check-manifest.yml).
+#
+# Fails a PR when the manifest and the produced workflow contexts disagree — the
+# exact "a check exists with no declared disposition" state issue #2138 forbids.
+# The manifest is the single source of truth; the branch-protection required set
+# is derived from it (ci/required-set.json). This gate keeps the two honest.
+#
+# Runs on every PR (no paths: filter on the trigger) so a check-run named
+# "manifest-guard" is always produced and can be listed as a required check.
+name: Manifest guard
+
+on:
+  push:
+    branches: [main, master, development]
+    paths:
+      - '.github/workflows/**'
+      - 'ci/**'
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  manifest-guard:
+    name: manifest-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Every produced check has exactly one declared disposition
+        run: python3 ci/verify-manifest.py
+
+      - name: The derived required-set is in sync with the manifest
+        run: |
+          python3 - <<'PY'
+          import json, sys, yaml
+          man = yaml.safe_load(open("ci/check-manifest.yml"))
+          # The required set is every externally-required gate: in-CI `gate` plus
+          # `gate-external` (produced outside CI, e.g. guardian-sound). required-set.json
+          # must equal both, matching ci/verify-manifest.py.
+          required = sorted(e["context"] for e in man["checks"] if e["disposition"] in ("gate", "gate-external"))
+          on_disk = json.load(open("ci/required-set.json"))
+          if required != sorted(on_disk):
+              print("ci/required-set.json is stale — regenerate it (see ci/RECONCILIATION.md):", file=sys.stderr)
+              print("  missing:", sorted(set(required) - set(on_disk)), file=sys.stderr)
+              print("  extra:  ", sorted(set(on_disk) - set(required)), file=sys.stderr)
+              sys.exit(1)
+          print(f"ci/required-set.json matches the manifest ({len(required)} required contexts).")
+          PY

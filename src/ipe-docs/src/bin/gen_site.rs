@@ -83,10 +83,12 @@ fn parse_commands(raw: Option<&str>) -> Vec<ipe_docs::CommandInfo> {
     s.split(':')
         .filter_map(|pair| {
             let (name, summary) = pair.split_once('=')?;
-            // Leak into 'static so CommandInfo's &'static str fields are satisfied.
+            // Leak the name into 'static so `CommandInfo::name` is satisfied.
             let name: &'static str = Box::leak(name.to_owned().into_boxed_str());
-            let summary: &'static str = Box::leak(summary.to_owned().into_boxed_str());
-            Some(ipe_docs::CommandInfo { name, summary })
+            Some(ipe_docs::CommandInfo {
+                name,
+                help: summary.to_owned(),
+            })
         })
         .collect()
 }
