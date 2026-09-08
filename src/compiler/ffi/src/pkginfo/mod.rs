@@ -1,188 +1,25 @@
 //! The `PkgInfo` decode boundary — where inspector output enters the typed
 //! world.
 //!
-//! A permissive WIRE layer byte-mirrors the `ipe-ffi-inspector` JSON (every
-//! optional key defaulted, unknown keys ignored for forward compatibility).
-//! The DOMAIN layer is constructed only through the validating conversion:
-//! identifiers become [`RustIdent`]s, the accessor-flag soup collapses into
-//! the closed [`FnShape`] sum, the effect string becomes the closed
-//! [`Effect`] enum, and each parametric `generic` block's call AST passes the
-//! [`Call`] gate. A defective FUNCTION is over-dropped (recorded, package
-//! kept); a defective PACKAGE header fails the decode.
+//! The permissive WIRE layer (byte-mirroring the `ipe-ffi-inspector` JSON)
+//! lives in the [`wire`] submodule. The DOMAIN layer here is constructed only
+//! through the validating conversion: identifiers become [`RustIdent`]s, the
+//! accessor-flag soup collapses into the closed [`FnShape`] sum, the effect
+//! string becomes the closed [`Effect`] enum, and each parametric `generic`
+//! block's call AST passes the [`Call`] gate. A defective FUNCTION is
+//! over-dropped (recorded, package kept); a defective PACKAGE header fails the
+//! decode.
+
+mod wire;
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use wire::{WireFunction, WireParam, WirePkgInfo};
 
 use crate::call::Call;
 use crate::carrier::{Carrier, ClosureSig, EnumDef, StructDef};
 use crate::diag::{Diagnostic, WireDefect};
 use crate::naming::{FieldSelector, RustIdent, RustPattern, RustTypeExpr, wrapper_ref_name};
-
-// ── wire layer ──────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct WireParam {
-    #[serde(default)]
-    name: String,
-    #[serde(rename = "type")]
-    ty: String,
-    #[serde(default, rename = "ipeType")]
-    ipe_type: String,
-    #[serde(default, rename = "rustType")]
-    rust_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct WireGeneric {
-    params: Vec<String>,
-    #[serde(default)]
-    bounds: BTreeMap<String, Vec<String>>,
-    call: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(clippy::struct_excessive_bools)] // byte-mirrors the inspector's flag wire shape; the domain layer collapses them into FnShape
-struct WireFunction {
-    name: String,
-    #[serde(default)]
-    params: Vec<WireParam>,
-    #[serde(default)]
-    results: Vec<WireParam>,
-    #[serde(default)]
-    variadic: bool,
-    effect: String,
-    #[serde(default, rename = "recvType")]
-    recv_type: String,
-    #[serde(default, rename = "recvRustType")]
-    recv_rust_type: String,
-    #[serde(default, rename = "methodName")]
-    method_name: String,
-    #[serde(default, rename = "isField")]
-    is_field: bool,
-    #[serde(default, rename = "isFieldSet")]
-    is_field_set: bool,
-    #[serde(default, rename = "isPkgVar")]
-    is_pkg_var: bool,
-    #[serde(default, rename = "selfReturning")]
-    self_returning: bool,
-    #[serde(default, rename = "isEnumCtor")]
-    is_enum_ctor: bool,
-    #[serde(default, rename = "isEnumTag")]
-    is_enum_tag: bool,
-    #[serde(default, rename = "isEnumExtract")]
-    is_enum_extract: bool,
-    #[serde(default, rename = "enumVariant")]
-    enum_variant: String,
-    #[serde(default, rename = "enumKind")]
-    enum_kind: String,
-    #[serde(default, rename = "enumStructFields")]
-    enum_struct_fields: Vec<String>,
-    #[serde(default, rename = "enumFieldCount")]
-    enum_field_count: u64,
-    #[serde(default, rename = "enumArms")]
-    enum_arms: Vec<String>,
-    #[serde(default, rename = "enumWildcard")]
-    enum_wildcard: bool,
-    #[serde(default, rename = "isClosureAdapter")]
-    is_closure_adapter: bool,
-    #[serde(default, rename = "closureSig")]
-    closure_sig: String,
-    #[serde(default, rename = "isStructCtor")]
-    is_struct_ctor: bool,
-    #[serde(default, rename = "structName")]
-    struct_name: String,
-    #[serde(default, rename = "structFields")]
-    struct_ctor_fields: Vec<WireStructField>,
-    #[serde(default, rename = "structDerives")]
-    struct_derives: Vec<String>,
-    #[serde(default, rename = "isEnumDef")]
-    is_enum_def: bool,
-    #[serde(default, rename = "enumName")]
-    enum_def_name: String,
-    #[serde(default, rename = "enumVariants")]
-    enum_def_variants: Vec<WireEnumVariant>,
-    #[serde(default, rename = "enumDerives")]
-    enum_def_derives: Vec<String>,
-    #[serde(default)]
-    generic: Option<WireGeneric>,
-    #[serde(default, rename = "callPath")]
-    call_path: String,
-}
-
-/// One inspected public constant: its crate-relative path (`f64::consts::PI`)
-/// and its Rust type (`f64`). The consumer validates both at decode.
-#[derive(Debug, Deserialize)]
-struct WireConstant {
-    #[serde(default)]
-    path: String,
-    #[serde(default, rename = "type")]
-    ty: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct WirePkgInfo {
-    pkg: String,
-    name: String,
-    #[serde(default)]
-    version: String,
-    #[serde(default)]
-    functions: Vec<WireFunction>,
-    #[serde(default)]
-    constants: Vec<WireConstant>,
-    #[serde(default)]
-    modules: Vec<String>,
-    #[serde(default)]
-    errors: Vec<String>,
-    #[serde(default)]
-    notes: Vec<String>,
-    #[serde(default, rename = "transitiveDeps")]
-    transitive_deps: Vec<WireTransitiveDep>,
-    #[serde(default)]
-    features: Vec<String>,
-    #[serde(default, rename = "foreignTypeIds")]
-    foreign_type_ids: std::collections::BTreeMap<String, String>,
-    #[serde(default)]
-    types: Vec<crate::transparency::WireForeignType>,
-    /// Author-DECLARED opaque handles (`foreign X = { kind = Opaque "Type" }`):
-    /// Ipê handle nominal → the resolved absolute Rust path of a reported crate
-    /// type. Injected by the CLI's `merge_provides` from the project's `foreign`
-    /// declarations, already validated against this crate's reported types; the
-    /// decode below re-validates the path shape (the value is spliced into
-    /// emitted Rust). Empty for an ordinary inspection with no declarations.
-    #[serde(default, rename = "declaredOpaques")]
-    declared_opaques: std::collections::BTreeMap<String, String>,
-    #[serde(default, rename = "wrapperPath")]
-    wrapper_path: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct WireTransitiveDep {
-    ident: String,
-    name: String,
-    version: String,
-}
-
-/// One `[[rust.define.struct]]` field: a name and its carrier spelling. The
-/// carrier is validated at decode (`StructDef::parse`), never rendered raw.
-#[derive(Debug, Deserialize)]
-struct WireStructField {
-    #[serde(default)]
-    name: String,
-    #[serde(default, rename = "type")]
-    ty: String,
-}
-
-/// One `[[rust.define.enum]]` variant: a name and its positional payload
-/// carrier spellings (empty ⇒ a unit variant). Each spelling is validated at
-/// decode (`EnumDef::parse`), never rendered raw.
-#[derive(Debug, Deserialize)]
-struct WireEnumVariant {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    payload: Vec<String>,
-}
 
 // ── domain layer ────────────────────────────────────────────────────────────
 
