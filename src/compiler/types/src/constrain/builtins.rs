@@ -562,6 +562,21 @@ pub struct Builtins {
     /// shape. Appears only as `Setting`'s argument. Lowered to
     /// `IrType::ShapeTerminal`.
     pub shape_terminal: Symbol,
+    /// `"Program"` — the shape-carrier constructor `Program shape msg`, the
+    /// uniform result of every TEA entry (`Web.app`/`Tui.app`/`Cli.app`). Arity 2;
+    /// the phantom `shape` tag and `msg` both erase at lower, so a `Program`
+    /// lowers to the shape's existing app leaf (`WebApp`/`TuiApp`/`CliApp`).
+    pub program: Symbol,
+    /// `"Web"` — the phantom program-shape tag for the web shape. Appears only as
+    /// `Program`'s first argument; erased at lower. Shares the interned name `Web`
+    /// with [`Self::shape_web`] but is a distinct carrier tag.
+    pub program_shape_web: Symbol,
+    /// `"Tui"` — the phantom program-shape tag for the terminal-cells shape.
+    /// Appears only as `Program`'s first argument; erased at lower.
+    pub program_shape_tui: Symbol,
+    /// `"Cli"` — the phantom program-shape tag for the terminal-lines shape.
+    /// Appears only as `Program`'s first argument; erased at lower.
+    pub program_shape_cli: Symbol,
     /// `"HostMode"` — the closed host-bind ADT, the argument type of
     /// `Host.bind`. Built only by its constructor kernels; each projects to the
     /// raw `Int` host-bind tag at emit, so `HostMode` erases to `Int`.
@@ -937,6 +952,10 @@ impl Builtins {
             shape_web: interner.intern("Web")?,
             shape_webview: interner.intern("WebView")?,
             shape_terminal: interner.intern("Terminal")?,
+            program: interner.intern("Program")?,
+            program_shape_web: interner.intern("Web")?,
+            program_shape_tui: interner.intern("Tui")?,
+            program_shape_cli: interner.intern("Cli")?,
             host_mode: interner.intern("HostMode")?,
             log_level: interner.intern("LogLevel")?,
             csrf_mode: interner.intern("CsrfMode")?,

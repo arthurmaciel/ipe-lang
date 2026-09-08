@@ -252,6 +252,12 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // `type Setting …` could forge a look-alike and defeat that shape barrier.
     // Built only through the setting kernels, never an Ipê term.
     "Setting",
+    // `Program shape msg` — the TEA shape carrier, the uniform result of every
+    // `<Shape>.app` entry. Reserved so a user `type Program …` cannot forge a
+    // look-alike carrier and cross a `main`'s shape barrier; built only by the
+    // app-entry kernels, never an Ipê term. The phantom `shape` tag and `msg`
+    // both erase at lower.
+    "Program",
     // The closed config-tag ADTs — the argument types of `Host.bind` /
     // `Log.level` / `Web.csrf`. Reserved so a user `type HostMode …` cannot forge
     // a look-alike with an out-of-range or CSRF-disabling variant that the setting
@@ -505,7 +511,11 @@ pub fn is_user_type_declaration_forbidden(name: &str) -> bool {
 pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
     match name? {
         "List" | "Maybe" | "Set" | "Connection" | "Setting" => Some(1),
-        "Dict" | "Result" => Some(2),
+        // `Program shape msg` — the TEA shape carrier (arity 2); the phantom
+        // `shape` tag and `msg` both erase at lower. Widened here FIRST so a
+        // `Program`-carrier application resolves through the IPE-N0031 arity gate
+        // instead of falling into the lowerer's empty-home ICE (IPE-I0001).
+        "Dict" | "Result" | "Program" => Some(2),
         "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode"
         | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" | "TermColor" => Some(0),
         _ => None,

@@ -141,6 +141,10 @@ impl Builder<'_> {
             BuiltinTag::ShapeWeb => self.builtins.shape_web,
             BuiltinTag::ShapeWebView => self.builtins.shape_webview,
             BuiltinTag::ShapeTerminal => self.builtins.shape_terminal,
+            BuiltinTag::Program => self.builtins.program,
+            BuiltinTag::ProgramShapeWeb => self.builtins.program_shape_web,
+            BuiltinTag::ProgramShapeTui => self.builtins.program_shape_tui,
+            BuiltinTag::ProgramShapeCli => self.builtins.program_shape_cli,
             BuiltinTag::HostMode => self.builtins.host_mode,
             BuiltinTag::LogLevel => self.builtins.log_level,
             BuiltinTag::CsrfMode => self.builtins.csrf_mode,
@@ -438,15 +442,32 @@ impl Builder<'_> {
             name: self.builtins.web_app,
             args: Vec::new(),
         };
-        let tui_app_leaf = || Ty::Con {
+        // `TuiApp` / `CliApp` leaves are the IR erase targets of `Program Tui/Cli
+        // msg` (produced in the lowerer), not scheme results, so no leaf helper is
+        // built here.
+        // Program shape-carrier `Program shape msg` — the uniform result of every
+        // TEA entry. The phantom `shape` tag and `msg` both erase at lower; the
+        // carrier keeps the surfaces un-crossable at the type level while the IR
+        // stays the shape's existing app leaf.
+        let program_shape_web = || Ty::Con {
             module: Vec::new(),
-            name: self.builtins.tui_app,
+            name: self.builtins.program_shape_web,
             args: Vec::new(),
         };
-        let cli_app_leaf = || Ty::Con {
+        let program_shape_tui = || Ty::Con {
             module: Vec::new(),
-            name: self.builtins.cli_app,
+            name: self.builtins.program_shape_tui,
             args: Vec::new(),
+        };
+        let program_shape_cli = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.program_shape_cli,
+            args: Vec::new(),
+        };
+        let program = |shape: Ty, msg: Ty| Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.program,
+            args: vec![shape, msg],
         };
         let cmd = |m: Ty| Ty::Con {
             module: Vec::new(),
@@ -2700,9 +2721,17 @@ impl Builder<'_> {
                     // Open row tail — var(3) absorbs optional extra fields.
                     RowTail::Open(3),
                 );
-                fun(cfg_rec, web_app_leaf())
+                // `Web.app` returns the uniform carrier `Program Web msg`
+                // (msg = var(1)); `Web.embed` keeps the mountable `WebApp` leaf
+                // its `Server.mountApp` §9 gate names.
+                let result = if matches!(k, K::WebEmbed) {
+                    web_app_leaf()
+                } else {
+                    program(program_shape_web(), var(1))
+                };
+                fun(cfg_rec, result)
             }
-            // `Web.appWith : List (Setting Web) -> { … } -> WebApp` — the
+            // `Web.appWith : List (Setting Web) -> { … } -> Program Web msg` — the
             // additive settings-carrying web entry. Same cfg record as
             // `K::WebApp`, preceded by a shape-pinned `List (Setting Web)`: a
             // `Terminal`-only or cross-shape setting in that slot is an
@@ -2726,7 +2755,10 @@ impl Builder<'_> {
                     },
                     RowTail::Open(3),
                 );
-                fun(list(setting(shape_web())), fun(cfg_rec, web_app_leaf()))
+                fun(
+                    list(setting(shape_web())),
+                    fun(cfg_rec, program(program_shape_web(), var(1))),
+                )
             }
             // `Web.route : String -> builder -> WebRoute page`
             // with builder = var(1) DISTINCT from page = var(0).
@@ -2799,7 +2831,7 @@ impl Builder<'_> {
                     // Open row: absorbs optional fields (guard, canvasWidth, canvasHeight, …).
                     RowTail::Open(3),
                 );
-                fun(cfg_rec, tui_app_leaf())
+                fun(cfg_rec, program(program_shape_tui(), var(1)))
             }
 
             // ── Ipe.Terminal line-oriented app-entry (`Cli.app`) ───────────────
@@ -2826,7 +2858,7 @@ impl Builder<'_> {
                     // surface).
                     RowTail::Closed,
                 );
-                fun(cfg_rec, cli_app_leaf())
+                fun(cfg_rec, program(program_shape_cli(), var(1)))
             }
 
             // ══ FIRST-SCHEMED families ══

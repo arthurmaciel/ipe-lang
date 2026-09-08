@@ -17647,6 +17647,24 @@ impl<'a> Lowerer<'a> {
                 "WebApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::WebApp),
                 "TuiApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::TuiApp),
                 "CliApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::CliApp),
+                // `Program shape msg` annotation — twin of the inferred (ty) arm:
+                // the phantom shape tag (`Web`/`Tui`/`Cli`) selects the shape's
+                // opaque app leaf; the `msg` arg is dropped.
+                "Program" if home.is_empty() => match args.first() {
+                    Some(canon::Type::Con { name: tag, .. }) => match self.resolve(*tag)? {
+                        "Web" => Ok(IrType::WebApp),
+                        "Tui" => Ok(IrType::TuiApp),
+                        "Cli" => Ok(IrType::CliApp),
+                        other => Err(bug(
+                            "ipe_lower::ir_type_from_annotation",
+                            format!("Program carrier with unknown shape tag `{other}`"),
+                        )),
+                    },
+                    _ => Err(bug(
+                        "ipe_lower::ir_type_from_annotation",
+                        "Program carrier annotation without a shape tag",
+                    )),
+                },
                 // Built-in ADTs that are never in `enum_variants` at lowering time
                 // (either no synthetic EnumDef injection, or injected after functions
                 // are lowered). All map to `IrType::Enum { home: [] }` directly.
@@ -19157,6 +19175,28 @@ impl<'a> Lowerer<'a> {
                 "WebApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::WebApp),
                 "TuiApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::TuiApp),
                 "CliApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::CliApp),
+                // `Program shape msg` — the TEA shape carrier. Both type args are
+                // phantom: the first (the shape tag `Web`/`Tui`/`Cli`) selects the
+                // shape's existing opaque app leaf as the IR erase target; the
+                // `msg` arg is dropped. Home-guarded so a user `type Program = …`
+                // keyed under its own home falls through to its own enum.
+                "Program" if module.is_empty() && matches!(args.first(), Some(Ty::Con { .. })) => {
+                    match args.first() {
+                        Some(Ty::Con { name: tag, .. }) => match self.resolve(*tag)? {
+                            "Web" => Ok(IrType::WebApp),
+                            "Tui" => Ok(IrType::TuiApp),
+                            "Cli" => Ok(IrType::CliApp),
+                            other => Err(bug(
+                                "ipe_lower::ir_type_from_ty",
+                                format!("Program carrier with unknown shape tag `{other}`"),
+                            )),
+                        },
+                        _ => Err(bug(
+                            "ipe_lower::ir_type_from_ty",
+                            "Program carrier without a settled shape tag",
+                        )),
+                    }
+                }
                 // `WebRoute page` — the route descriptor produced by
                 // `Web.route`, parametric on the page type it builds.
                 // The solver's `WebRoute` Con always carries exactly one
