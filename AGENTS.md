@@ -60,3 +60,56 @@ cargo nextest run -p ipe                 # + `-p <crate>` for each crate you cha
 --squash` (merges when green + current). One PR per unit; check `gh pr list` first.
 Versions + `CHANGELOG.md` are release-please automated from Conventional Commits —
 never bump by hand.
+
+### Documentation & code standards
+
+- **No archaeology.** Docs and comments state what the rule or design IS now,
+  never how it got there: no dates, no task numbers, no phase/milestone/
+  campaign labels, no "was X, now Y", no incident stories (ADRs are the one
+  sanctioned history home). Git history already records when and why. A
+  rationale, when needed, is structural ("a target outside the prune root is
+  invisible to reclaim"), not narrative.
+- **Comments say WHAT, not HOW — and only when non-obvious.** Names are
+  self-explaining to a first-time reader; a comment restating the code, or a
+  name that needs a comment, is a smell.
+
+### Mechanical enforcement — comply by construction
+
+When a lint or gate fires, fix the code — never the lint level, never the gate.
+
+- **Clippy deny-set** — enforced by root `Cargo.toml` `[workspace.lints.clippy]`
+  (the SSOT: the broad groups + a cherry-picked `restriction` slice, with two
+  `cargo` lints allowed as workspace noise). Change the policy there, never in a
+  command — every `cargo clippy` is just `-- -D warnings`. `pedantic`
+  includes `doc_markdown`: code identifiers in doc (`///`/`//!`) and `//`
+  comments MUST be backticked (`` `CloneOk` ``, `` `Vec<T>` ``,
+  `` `--all-targets` ``). Applies to `tests/*.rs` too (the `--all-targets`
+  end-state). `runtime/src/lib.rs` additionally carries
+  `#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::panic,
+  clippy::unreachable, clippy::todo, clippy::unimplemented,
+  clippy::panic_in_result_fn))]`.
+- **Escape hatch:** per-site `#[allow(lint)] // one-line why` ONLY — never a
+  crate- or gate-wide relaxation. Every ledgered production allow carries an
+  `IPE-RUST-AUDIT:ACCEPTED` marker; `tools/panic-scan` is the single source of
+  truth for that inventory, so the set is read from the code, not restated here.
+- **`unsafe` is forbidden.** Exactly ONE sanctioned `unsafe` block exists —
+  `prctl(PR_SET_PDEATHSIG)` in `live::console_proxy` — the only reason the
+  runtime is not crate-wide `forbid(unsafe_code)`. Every other module is
+  `unsafe`-free and stays that way.
+- **Edition 2024** — workspace crates and every emitted project.
+
+### No `dyn Any` — concrete over generic
+
+The backend NEVER emits `dyn Any` / `.downcast` / type-erasure. Wildcard `any`
+is not polymorphism — it has exactly ONE concrete lowering (an opaque carrier
+type chosen per position, e.g. `Dict String String` in pub/sub payload
+position), emitted at EVERY position (enum field, pattern binder, fn/decoder
+param, Db row arg, eta lambda param, return). Only genuine named type
+variables (`a`, `msg`) become Rust generics, monomorphized by rustc. A generic
+emitted where a concrete was possible passes a mechanical gate but can ship a
+silent runtime bug (e.g. a `TypeId`-keyed broker needs publisher and
+subscriber on the same concrete `T`) — always emit concrete when concrete is
+possible. Sanctioned runtime-internal *container* exceptions (payload itself
+never erased or downcast): `runtime/src/ipe_runtime/cache.rs` and
+`runtime/src/ipe_runtime/live/pubsub.rs`.
+
