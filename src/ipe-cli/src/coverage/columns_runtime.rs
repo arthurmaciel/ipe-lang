@@ -255,12 +255,13 @@ impl AspectCheck<StdlibSymbol> for ComposesColumn {
 ///   process to run. Derived from the module path via
 ///   [`probe::browser_web_axis`].
 /// * A symbol whose point-free reference program cannot even NAME-RESOLVE (a
-///   shape-scoped module with no standalone importable home, a qualified import
-///   whose short qualifier self-collides, or a kernel-homed symbol the compiled
-///   module does not expose under that name) is a probe-FORM limitation, not a
-///   build+run gap. Derived from the name-resolution rejection code via
-///   [`probe::probe_form_unaddressable_code`], caught by the cheap pre-lower before
-///   any cargo build.
+///   shape-scoped module with no standalone importable home, or a kernel-homed
+///   symbol the compiled module does not expose under that name) is a probe-FORM
+///   limitation, not a build+run gap. Derived from the name-resolution rejection
+///   code via [`probe::probe_form_unaddressable_code`], caught by the cheap
+///   pre-lower before any cargo build. (A qualified-import qualifier collision no
+///   longer arises: the probe binds every module under a fixed reserved alias that
+///   cannot collide with a real qualifier.)
 pub struct BuildRunColumn {
     scratch: Option<crate::scratch::ScratchDir>,
 }
@@ -335,17 +336,16 @@ impl AspectCheck<StdlibSymbol> for BuildRunColumn {
             };
         }
         // A point-free reference the name resolver cannot even ADDRESS (a
-        // shape-scoped module with no standalone home, a self-colliding qualifier,
-        // or a kernel member the compiled module does not expose under that name) is
-        // a probe-form limitation, not a build+run gap — caught before any build.
+        // shape-scoped module with no standalone home, or a kernel member the
+        // compiled module does not expose under that name) is a probe-form
+        // limitation, not a build+run gap — caught before any build.
         if let Some(code) = probe::probe_form_unaddressable_code(&lowered) {
             return Cell::NotApplicable {
                 reason: format!(
                     "{}.{}: the point-free reference program does not name-resolve \
                      ({}) — the probe form cannot address this symbol (a \
-                     shape-scoped module with no standalone home, a self-colliding \
-                     import qualifier, or a kernel member not exposed under this \
-                     name), not a build+run gap",
+                     shape-scoped module with no standalone home, or a kernel member \
+                     not exposed under this name), not a build+run gap",
                     sym.module.join("."),
                     sym.name,
                     code.as_str()

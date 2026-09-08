@@ -116,9 +116,6 @@ pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
 /// * [`IPE_N0020`] / [`IPE_N0004`] — the symbol's module has no standalone
 ///   importable home on disk (a shape-scoped module reached only through an app
 ///   shape, e.g. `Ipe.Cmd` / `Ipe.Sub`), so the generated `import` finds nothing.
-/// * [`IPE_N0027`] — the qualified import's short qualifier self-collides (a
-///   deeply-nested module whose last segment the point-free import form claims
-///   twice, e.g. `Ipe.Server.Http` / `Ipe.Http.Stream`).
 /// * [`IPE_N0023`] — the module path does not match the probe module name.
 /// * [`IPE_N0005`] — the module has no member of that name (a kernel-homed symbol
 ///   the surface enumerates but the compiled-source module does not expose under
@@ -130,15 +127,20 @@ pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
 /// is the name-resolution sibling of [`is_probe_form_limitation`] (which classifies
 /// the lowering-layer point-free limitations), and it carries the offending code so
 /// the verdict names exactly why the probe form does not apply.
+///
+/// [`IPE_N0027`] — a qualified-import qualifier collision — is deliberately NOT in
+/// this set. The probe imports every module under a fixed reserved alias
+/// ([`PROBE_ALIAS`]) that cannot collide with any real module qualifier, so a
+/// genuine N0027 no longer arises from the probe form. Were it whitelisted here it
+/// would mask a real resolution defect rather than name a probe-form limitation.
 #[must_use]
 pub fn probe_form_unaddressable_code(outcome: &StageOutcome) -> Option<ipe_diagnostics::Code> {
-    use ipe_diagnostics::{IPE_N0004, IPE_N0005, IPE_N0020, IPE_N0023, IPE_N0027};
+    use ipe_diagnostics::{IPE_N0004, IPE_N0005, IPE_N0020, IPE_N0023};
     match outcome {
         StageOutcome::Failed {
             code: Some(code), ..
         } if *code == IPE_N0020
             || *code == IPE_N0004
-            || *code == IPE_N0027
             || *code == IPE_N0023
             || *code == IPE_N0005 =>
         {
@@ -163,18 +165,40 @@ pub fn is_internal_compiler_error(outcome: &StageOutcome) -> bool {
     )
 }
 
-/// The short module import header for a symbol: `import Ipe.List as List`.
+/// The fixed reserved import alias every probe qualifies its symbol under.
 ///
-/// A symbol is referenced qualified (`List.map`) under this import, so the probe
-/// resolves the exact surface member without an `exposing (..)` widening that
-/// could mask a resolution gap behind a re-export.
-fn import_header(sym: &StdlibSymbol) -> Option<(String, String)> {
+/// The probe references the symbol qualified (`Probe_q.map`) so it resolves the
+/// exact surface member without an `exposing (..)` widening that could mask a
+/// resolution gap behind a re-export. The alias must be a single fixed token that
+/// cannot collide with any real module qualifier: deriving it from the module's
+/// last dotted segment (as an earlier form did) let a deeply-nested module's short
+/// qualifier collide with a different real in-scope module and self-report a
+/// spurious [`IPE_N0027`] (e.g. `Ipe.Http.Server` → `Server`), which then masked a
+/// genuinely build+runnable symbol as inapplicable. A module qualifier must be
+/// capitalised (the resolver rejects a lowercase alias), and no real stdlib module
+/// leaf is spelled `Probe_q`, so this token addresses every module collision-free.
+const PROBE_ALIAS: &str = "Probe_q";
+
+/// A probe's qualified import: the module's dotted path and the fixed reserved
+/// alias it is bound under. A typed pair (rather than a bare `(String, &str)`)
+/// names each field at every call site, so a probe cannot transpose the dotted
+/// path and the alias.
+struct ProbeImport {
+    /// The symbol's module as a dotted path, e.g. `Ipe.Http.Server`.
+    dotted: String,
+}
+
+/// The qualified import for a symbol, or `None` when the symbol has no module
+/// path to import from.
+///
+/// The alias is always the fixed collision-proof [`PROBE_ALIAS`]; only the dotted
+/// module path varies per symbol.
+fn import_header(sym: &StdlibSymbol) -> Option<ProbeImport> {
     let dotted = sym.module.join(".");
     if dotted.is_empty() {
         return None;
     }
-    let short = dotted.split('.').next_back().unwrap_or(&dotted).to_owned();
-    Some((dotted, short))
+    Some(ProbeImport { dotted })
 }
 
 /// Generate a minimal module that binds the symbol as a first-class value,
@@ -192,13 +216,13 @@ pub fn reference_program(sym: &StdlibSymbol) -> Result<String, ProbeUnavailable>
     if sym.kind != SymbolKind::Value {
         return Err(ProbeUnavailable::NotAValue);
     }
-    let Some((dotted, short)) = import_header(sym) else {
+    let Some(ProbeImport { dotted }) = import_header(sym) else {
         return Err(ProbeUnavailable::Unaddressable);
     };
     let mut out = String::from("module Main exposing (main)\n\n");
-    let _ = writeln!(out, "import {dotted} as {short}");
+    let _ = writeln!(out, "import {dotted} as {PROBE_ALIAS}");
     out.push_str("import Ipe.Io as Io\n\n");
-    let _ = writeln!(out, "probe = {short}.{name}", name = sym.name);
+    let _ = writeln!(out, "probe = {PROBE_ALIAS}.{name}", name = sym.name);
     out.push_str("\nmain : Task Error ()\n");
     out.push_str("main = Io.println \"\"\n");
     Ok(out)
@@ -223,16 +247,16 @@ pub fn nested_program(sym: &StdlibSymbol) -> Result<String, ProbeUnavailable> {
     if sym.kind != SymbolKind::Value {
         return Err(ProbeUnavailable::NotAValue);
     }
-    let Some((dotted, short)) = import_header(sym) else {
+    let Some(ProbeImport { dotted }) = import_header(sym) else {
         return Err(ProbeUnavailable::Unaddressable);
     };
     let mut out = String::from("module Main exposing (main)\n\n");
-    let _ = writeln!(out, "import {dotted} as {short}");
+    let _ = writeln!(out, "import {dotted} as {PROBE_ALIAS}");
     out.push_str("import Ipe.List as List\n");
     out.push_str("import Ipe.Io as Io\n\n");
     let _ = writeln!(
         out,
-        "probe = List.map (\\_ -> {short}.{name}) []",
+        "probe = List.map (\\_ -> {PROBE_ALIAS}.{name}) []",
         name = sym.name
     );
     out.push_str("\nmain : Task Error ()\n");
