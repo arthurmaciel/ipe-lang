@@ -2743,6 +2743,36 @@ fn synthesize_module(body: &str, source_module: &str, module_imports: &[String])
     out
 }
 
+/// The `CARGO_TARGET_DIR` an `ipe run` child spawned by the doc-example gate
+/// should inherit so its build links against the warm shared dependency target.
+///
+/// Resolution mirrors the E2E harness's fail-safe: an absolute
+/// `IPE_ORACLE_SHARED_TARGET` (all CI's e2e/seal jobs export) wins; else an
+/// ambient `CARGO_TARGET_DIR` a local lane set; else `None` (inherit unchanged,
+/// so a bare local run stays hermetic). A non-absolute shared value fails safe
+/// to the ambient value rather than pinning a relative target.
+///
+/// This translation lives in the doc-gate test path only — production `ipe run`
+/// never reads `IPE_ORACLE_SHARED_TARGET`; it honours an inherited
+/// `CARGO_TARGET_DIR`, which is exactly what this sets on the child.
+fn child_shared_target_dir() -> Option<std::ffi::OsString> {
+    fn non_empty_absolute(value: &str) -> Option<std::ffi::OsString> {
+        let trimmed = value.trim();
+        (!trimmed.is_empty() && std::path::Path::new(trimmed).is_absolute())
+            .then(|| std::ffi::OsString::from(trimmed))
+    }
+    if let Some(shared) = std::env::var("IPE_ORACLE_SHARED_TARGET")
+        .ok()
+        .and_then(|raw| non_empty_absolute(&raw))
+    {
+        return Some(shared);
+    }
+    std::env::var("CARGO_TARGET_DIR").ok().and_then(|raw| {
+        let trimmed = raw.trim();
+        (!trimmed.is_empty()).then(|| std::ffi::OsString::from(trimmed))
+    })
+}
+
 /// Run the compiled example at `snippet_path` and assert its output matches the
 /// `-->` annotated results (one per line, in order).
 ///
@@ -2760,9 +2790,25 @@ fn run_example_and_check(
     let ipe_bin = std::env::current_exe()
         .map_err(|e| format!("{label}: could not locate ipe binary: {e}"))?;
 
-    let out = Command::new(&ipe_bin)
-        .arg("run")
-        .arg(snippet_path)
+    let mut cmd = Command::new(&ipe_bin);
+    cmd.arg("run").arg(snippet_path);
+    // Forward the warm shared target into the `ipe run` child's CARGO_TARGET_DIR.
+    // CI's e2e/seal jobs export ONLY IPE_ORACLE_SHARED_TARGET, which production
+    // `ipe run` never reads; without this translation the child cold-builds the
+    // whole runtime tree per example. Absent it (a bare local run) the child
+    // inherits the ambient env unchanged.
+    if let Some(target) = child_shared_target_dir() {
+        cmd.env("CARGO_TARGET_DIR", target);
+        // THE SEAL: every example emits under the default `ipe-app` name, so
+        // sharing ONE warm target risks cargo reusing a prior example's compiled
+        // `ipe-app` crate and greening a broken emit. Give each example a UNIQUE
+        // package name (honoured by the single-file emit) so its app crate owns
+        // its own fingerprint — a genuinely broken emit still fails to build even
+        // against the warm target. Only set alongside the shared target, so an
+        // ordinary local run keeps the plain `ipe-app` default.
+        cmd.env("IPE_EMIT_PACKAGE_NAME", format!("ipe-doc-example-{label}"));
+    }
+    let out = cmd
         .output()
         .map_err(|e| format!("{label}: ipe run failed to spawn: {e}"))?;
 

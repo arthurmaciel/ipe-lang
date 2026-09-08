@@ -554,12 +554,14 @@ fn end_to_end_static_binary_is_static_and_runs() {
     )
     .expect("static emit");
 
-    // Standalone cargo build, CWD = emitted crate dir. The target dir honours
-    // an ambient CARGO_TARGET_DIR (the repo's shared-warm-target convention,
-    // same as the examples sweep) and falls back to an isolated dir inside
-    // the crate so a bare CI runner stays hermetic.
-    let target_dir =
-        std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| out.join("target"), PathBuf::from);
+    // Standalone cargo build, CWD = emitted crate dir. The target dir forwards
+    // the warm shared target: CI exports only IPE_ORACLE_SHARED_TARGET, so a
+    // plain CARGO_TARGET_DIR read would miss it and cold-build the whole dep
+    // tree. `child_shared_target_from_env` resolves that variable (else an
+    // ambient CARGO_TARGET_DIR a local lane set), falling back to an isolated
+    // dir inside the crate so a bare runner stays hermetic.
+    let target_dir = e2e_support::child_shared_target_from_env()
+        .map_or_else(|| out.join("target"), PathBuf::from);
     let status = std::process::Command::new("cargo")
         .arg("build")
         .args(["--target", plan.triple.as_str()])
@@ -617,10 +619,11 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("static_run_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    // Reuse an ambient warm target when the caller provides one, else stay
-    // hermetic inside the scratch dir.
-    let target_dir =
-        std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| out.join("target"), PathBuf::from);
+    // Forward the warm shared target (IPE_ORACLE_SHARED_TARGET in CI, else an
+    // ambient CARGO_TARGET_DIR a local lane set), staying hermetic inside the
+    // scratch dir when neither is present.
+    let target_dir = e2e_support::child_shared_target_from_env()
+        .map_or_else(|| out.join("target"), PathBuf::from);
 
     let run = std::process::Command::new(support::ipe_bin())
         .args(["run"])
