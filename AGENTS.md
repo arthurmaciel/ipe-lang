@@ -50,13 +50,13 @@ cargo nextest run -p ipe                 # + `-p <crate>` for each crate you cha
 
 ## Tooling — use first
 
-- **`tools/scripts/ipe-index locate|parity|wakeup`** — pre-built structural index;
+- **`tools/scripts/ipe-index locate|wakeup|deps|rdeps|links|neighbors`** — pre-built structural index;
   use before `rg` for "where is X / who calls Y / kernel gaps".
 - **Backlog = GitHub issues** via `tools/scripts/github/issue-ticket.sh add|list|close`.
 
 ## PR workflow
 
-`main` is green by construction. Branch → PR → fast gate → `gh pr merge <N> --auto
+`main` is green by construction. Branch based on "development" → fast gate → fix until green → PR →`gh pr merge <N> --auto
 --squash` (merges when green + current). One PR per unit; check `gh pr list` first.
 Versions + `CHANGELOG.md` are release-please automated from Conventional Commits —
 never bump by hand.
