@@ -6,7 +6,7 @@
 
 Ipe.PubSub — Task-shaped publish, callable wherever a bus runs.
 
-A complement to `Ipe.Tea.Web.PubSub.publish` (the Cmd form, fired
+A complement to `Ipe.App.Tea.Web.PubSub.publish` (the Cmd form, fired
 from a Ipe.Web `update` return). `Ipe.PubSub.publish` returns a
 `Task Error Int` you can run from raw `Ipe.Http.Server` `api`
 handlers, post-init tasks, scheduled jobs, callbacks from
@@ -21,7 +21,7 @@ update-loop path), or `Err Unavailable` when no `Web.app` is
 running in this process (a CLI tool, an isolated unit test, a
 pure `Ipe.Http.Server` process).
 
-Scope (matches `Ipe.Tea.Web.PubSub.publish`): in-process only.
+Scope (matches `Ipe.App.Tea.Web.PubSub.publish`): in-process only.
 The same topic registry backs both APIs, so a publish from a
 raw handler reaches every subscribed Ipe.Web session in the
 same process, with identical ordering + echo semantics.

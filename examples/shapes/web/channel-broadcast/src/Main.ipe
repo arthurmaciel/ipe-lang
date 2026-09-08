@@ -14,9 +14,9 @@ module Main exposing (main)
 -- variant, never a thrown error or a silently dropped frame.
 
 
-import Ipe.Tea.Web as Web
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Browser.Channel as Channel exposing (ChannelEvent(..))
 

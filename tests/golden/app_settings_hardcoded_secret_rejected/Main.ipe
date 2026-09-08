@@ -5,11 +5,11 @@ module Main exposing (main)
 -- so it does NOT type-check here — the front door makes an in-source credential
 -- unrepresentable at the boundary (IPE-T0001, expected `Secret`, found `String`).
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 import Ipe.Db as Db
 
 

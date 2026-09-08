@@ -123,10 +123,10 @@ const BARE: &str = "module Main exposing (main)\n\
 /// always-run gate that catches that class without requiring a full `IPE_E2E`
 /// run of an actual interactive binary.
 const CLI_APP_LINES: &str = "module Main exposing (main)\n\
-    import Ipe.Tea.Cli as Cli\n\
-    import Ipe.Tea.Cli.Ui as Ui\n\
-    import Ipe.Tea.Terminal.Cmd\n\
-    import Ipe.Tea.Terminal.Sub\n\
+    import Ipe.App.Tea.Cli as Cli\n\
+    import Ipe.Ui.Cli as Ui\n\
+    import Ipe.App.Tea.Terminal.Cmd\n\
+    import Ipe.App.Tea.Terminal.Sub\n\
     type Msg = Line String\n\
     type alias Model = { count : Int }\n\
     init _unit = ( { count = 0 }, Cmd.none )\n\
@@ -144,9 +144,9 @@ const CLI_APP_LINES: &str = "module Main exposing (main)\n\
 /// (and, transitively, `tea`). A missing append surfaces as E0425 `cmd_publish`
 /// at `cargo build`.
 const CMD_PUBLISH: &str = "module Main exposing (main)\n\
-    import Ipe.Tea.Web as Web\n\
-    import Ipe.Tea.Web.Cmd as Cmd\n\
-    import Ipe.Tea.Web.Sub as Sub\n\
+    import Ipe.App.Tea.Web as Web\n\
+    import Ipe.App.Tea.Web.Cmd as Cmd\n\
+    import Ipe.App.Tea.Web.Sub as Sub\n\
     import Ipe.PubSub as PubSub\n\
     import Ipe.Ui as Ui\n\
     type Msg = Publish | Ignored\n\
@@ -166,9 +166,9 @@ const CMD_PUBLISH: &str = "module Main exposing (main)\n\
 /// `web` runtime module. A missing append surfaces as E0425 `sub_subscribe_topic`
 /// at `cargo build`.
 const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
-    import Ipe.Tea.Web as Web\n\
-    import Ipe.Tea.Web.Cmd as Cmd\n\
-    import Ipe.Tea.Web.Sub as Sub\n\
+    import Ipe.App.Tea.Web as Web\n\
+    import Ipe.App.Tea.Web.Cmd as Cmd\n\
+    import Ipe.App.Tea.Web.Sub as Sub\n\
     import Ipe.PubSub as PubSub\n\
     import Ipe.Ui as Ui\n\
     type Msg = Got String | Ignored\n\
@@ -189,7 +189,7 @@ const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
 /// `crate::tea` before the fix.
 ///
 /// `renderStatic` lives under the shape-neutral `Ipe.Html`, so this Program
-/// imports NO `Ipe.Tea.*` shape and is not misclassified as a TEA app (ADR 0048).
+/// imports NO `Ipe.App.Tea.*` shape and is not misclassified as a TEA app (ADR 0048).
 const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
     import Ipe.Html as Html\n\
     type alias Model = { title : String }\n\
@@ -431,11 +431,11 @@ fn revoke_session_arity3_builds() {
 /// the emitted crate fails with E0432 (`unresolved import crate::seal_codec`)
 /// at `cargo build` despite `ipe` exiting 0 — the SEAL breach this test gates.
 const TUI_APP: &str = "module Main exposing (main)\n\
-    import Ipe.Tea.Tui as Tui\n\
+    import Ipe.App.Tea.Tui as Tui\n\
     import Ipe.Ui.Cells as Cells\n\
     import Ipe.Ui.Cells exposing (Screen)\n\
-    import Ipe.Tea.Tui.Cmd\n\
-    import Ipe.Tea.Tui.Sub\n\
+    import Ipe.App.Tea.Tui.Cmd\n\
+    import Ipe.App.Tea.Tui.Sub\n\
     type Msg = NoOp\n\
     type alias Model = { count : Int }\n\
     type alias KeyEvent = { kind : String, value : String }\n\

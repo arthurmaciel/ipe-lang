@@ -17,11 +17,11 @@ Type:
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
-import Ipe.Tea.Cli as Cli
-import Ipe.Tea.Cli.Cmd as Cmd
-import Ipe.Tea.Cli.Sub as Sub
-import Ipe.Tea.Cli.Ui as Ui
-import Ipe.Tea.Cli.Ui exposing (Lines)
+import Ipe.App.Tea.Cli as Cli
+import Ipe.App.Tea.Cli.Cmd as Cmd
+import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 
 type Msg
     = Increment

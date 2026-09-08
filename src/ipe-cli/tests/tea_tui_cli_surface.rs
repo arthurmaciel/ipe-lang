@@ -1,7 +1,7 @@
-//! Compile-time surface tests for `Ipe.Tea.Tui` and `Ipe.Tea.Cli`.
+//! Compile-time surface tests for `Ipe.App.Tea.Tui` and `Ipe.App.Tea.Cli`.
 //!
-//! `Ipe.Tea.Tui` exposes the full-screen terminal TEA entry via `Tui.app`;
-//! `Ipe.Tea.Cli` exposes the line-oriented entry via `Cli.app`. Both `app`
+//! `Ipe.App.Tea.Tui` exposes the full-screen terminal TEA entry via `Tui.app`;
+//! `Ipe.App.Tea.Cli` exposes the line-oriented entry via `Cli.app`. Both `app`
 //! entries are registered in the `env.rs` qualifier catalog and carry
 //! `KernelClass::Terminal` (the one terminal rendering family).
 //!
@@ -31,14 +31,14 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
     }
 }
 
-/// Minimal `Tui.app` program — `import Ipe.Tea.Tui as Tui` then `Tui.app { ... }`.
+/// Minimal `Tui.app` program — `import Ipe.App.Tea.Tui as Tui` then `Tui.app { ... }`.
 const TUI_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
+import Ipe.App.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.Tea.Tui.Cmd
-import Ipe.Tea.Tui.Sub
+import Ipe.App.Tea.Tui.Cmd
+import Ipe.App.Tea.Tui.Sub
 
 type Msg = NoOp
 
@@ -73,14 +73,14 @@ main =
         }
 "#;
 
-/// Minimal `Cli.app` program — `import Ipe.Tea.Cli as Cli` then `Cli.app { ... }`.
+/// Minimal `Cli.app` program — `import Ipe.App.Tea.Cli as Cli` then `Cli.app { ... }`.
 const CLI_APP: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Cli as Cli
-import Ipe.Tea.Cli.Cmd
-import Ipe.Tea.Cli.Sub
-import Ipe.Tea.Cli.Ui as Ui
-import Ipe.Tea.Cli.Ui exposing (Lines)
+import Ipe.App.Tea.Cli as Cli
+import Ipe.App.Tea.Cli.Cmd
+import Ipe.App.Tea.Cli.Sub
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
 
 type Msg = Line String | NoOp
 
@@ -119,7 +119,7 @@ main =
 
 /// `Tui.app` is the full-screen terminal entry kernel registered in
 /// the `env.rs` qualifier catalog. A program using
-/// `import Ipe.Tea.Tui as Tui` and `Tui.app { ... }` must compile (ipe-0).
+/// `import Ipe.App.Tea.Tui as Tui` and `Tui.app { ... }` must compile (ipe-0).
 #[test]
 fn tui_app_surface_compiles() -> Result<(), BoxError> {
     assert_accepted("tui_app", TUI_APP)
@@ -127,7 +127,7 @@ fn tui_app_surface_compiles() -> Result<(), BoxError> {
 
 /// `Cli.app` is the line-oriented terminal entry kernel registered in
 /// the `env.rs` qualifier catalog. A program using
-/// `import Ipe.Tea.Cli as Cli` and `Cli.app { ... }` must compile (ipe-0).
+/// `import Ipe.App.Tea.Cli as Cli` and `Cli.app { ... }` must compile (ipe-0).
 #[test]
 fn cli_app_surface_compiles() -> Result<(), BoxError> {
     assert_accepted("cli_app", CLI_APP)

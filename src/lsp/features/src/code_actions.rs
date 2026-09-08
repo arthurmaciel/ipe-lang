@@ -13,7 +13,7 @@
 //!   import `Ipe.X`" — insert the named `import Ipe.X` line into the module's
 //!   import block, alphabetically among the existing imports.
 //! - `IPE-N0035` (a shape-scoped `Cmd` / `Sub` imported from the wrong shape):
-//!   "Change import to `Ipe.Tea.<Shape>.Cmd`" — repoint the offending import to
+//!   "Change import to `Ipe.App.Tea.<Shape>.Cmd`" — repoint the offending import to
 //!   the app's own shape, in place, leaving the `as Alias` binding untouched.
 //!
 //! The provider is deliberately conservative: it only acts on codes it can
@@ -109,8 +109,8 @@ pub fn code_actions(
             "IPE-N0035" => {
                 // A shape-scoped `Cmd` / `Sub` imported from the wrong shape —
                 // repoint the offending import to the app's own shape. The
-                // diagnostic names both the wrong (`Ipe.Tea.Web.Cmd`) and correct
-                // (`Ipe.Tea.Terminal.Cmd`) module paths.
+                // diagnostic names both the wrong (`Ipe.App.Tea.Web.Cmd`) and correct
+                // (`Ipe.App.Tea.Terminal.Cmd`) module paths.
                 if let Some(action) = repoint_shape_import_action(diag, uri, text, encoding) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
@@ -314,7 +314,7 @@ fn add_import_action(
     })
 }
 
-/// Quick-fix that repoints an offending `Ipe.Tea.<WrongShape>.{Cmd,Sub}` import
+/// Quick-fix that repoints an offending `Ipe.App.Tea.<WrongShape>.{Cmd,Sub}` import
 /// to the app's own shape, named by an IPE-N0035 diagnostic.
 ///
 /// The message backtick-quotes both the wrong module path (first quoted token)
@@ -364,9 +364,9 @@ fn repoint_shape_import_action(
     })
 }
 
-/// Lift the (wrong, correct) `Ipe.Tea.<Shape>.{Cmd,Sub}` module paths out of an
+/// Lift the (wrong, correct) `Ipe.App.Tea.<Shape>.{Cmd,Sub}` module paths out of an
 /// IPE-N0035 message. The message quotes the wrong path first and the correct
-/// path last (the one preceding `instead`); both begin `Ipe.Tea.`. Returns
+/// path last (the one preceding `instead`); both begin `Ipe.App.Tea.`. Returns
 /// `None` if the message does not carry two such quoted paths, so a reworded
 /// diagnostic simply produces no action.
 fn shape_paths_from_message(message: &str) -> Option<(String, String)> {
@@ -375,7 +375,7 @@ fn shape_paths_from_message(message: &str) -> Option<(String, String)> {
         // Every ODD-indexed split segment is the content between a backtick pair.
         .skip(1)
         .step_by(2)
-        .filter(|s| s.starts_with("Ipe.Tea.") && (s.ends_with(".Cmd") || s.ends_with(".Sub")))
+        .filter(|s| s.starts_with("Ipe.App.Tea.") && (s.ends_with(".Cmd") || s.ends_with(".Sub")))
         .collect();
     let wrong = (*quoted.first()?).to_owned();
     let correct = (*quoted.last()?).to_owned();

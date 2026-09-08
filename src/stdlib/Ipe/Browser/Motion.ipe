@@ -27,8 +27,8 @@ module Ipe.Browser.Motion exposing
     )
 
 import Ipe.Browser.Motion.Internals as Internals exposing (JsMsg(..))
-import Ipe.Tea.Web.Cmd as Cmd
-import Ipe.Tea.Web.Sub as Sub
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
 
 
 -- | A typed motion event delivered by the watch stream.

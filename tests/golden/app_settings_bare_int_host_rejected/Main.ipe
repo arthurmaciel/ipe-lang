@@ -6,11 +6,11 @@ module Main exposing (main)
 -- runtime must fall closed on. The only `HostMode` values are the constructors
 -- `Host.loopback` / `Host.allInterfaces` / `Host.envDriven`.
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 import Ipe.Host as Host
 
 

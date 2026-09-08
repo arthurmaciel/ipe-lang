@@ -166,7 +166,7 @@ fn term_bg_attr<M>(c: TermColor) -> Attribute<M> {
 
 /// Newtype wrapper: the Tui-only view type `Screen msg`.
 ///
-/// Emitted code produces a `CellsView<M>` from every `Ipe.Tea.Tui.Ui.*`
+/// Emitted code produces a `CellsView<M>` from every `Ipe.Ui.Tui.*`
 /// builder call; `tui_app_ui` unwraps the inner `Element<M>` and passes it
 /// to the ANSI-cell renderer.  The wrapper is the compile-time gate that
 /// prevents Web-only `Element`-producing constructs from appearing inside a
@@ -211,7 +211,7 @@ pub fn cells_cells_<M>(grid: Vec<Vec<char>>) -> CellsView<M> {
     CellsView::new(Element::Cells(grid))
 }
 
-/// `Ipe.Tea.Tui.Ui.el : List (Attribute msg) -> Screen msg -> Screen msg`
+/// `Ipe.Ui.Tui.el : List (Attribute msg) -> Screen msg -> Screen msg`
 #[must_use]
 pub fn cells_el_<M: Clone>(attrs: Vec<TuiAttr<M>>, child: CellsView<M>) -> CellsView<M> {
     use crate::ui::element::Description;
@@ -222,7 +222,7 @@ pub fn cells_el_<M: Clone>(attrs: Vec<TuiAttr<M>>, child: CellsView<M>) -> Cells
     ))
 }
 
-/// `Ipe.Tea.Tui.Ui.row : List (Attribute msg) -> List (Screen msg) -> Screen msg`
+/// `Ipe.Ui.Tui.row : List (Attribute msg) -> List (Screen msg) -> Screen msg`
 #[must_use]
 pub fn cells_row_<M: Clone>(attrs: Vec<TuiAttr<M>>, children: Vec<CellsView<M>>) -> CellsView<M> {
     use crate::ui::element::Description;
@@ -233,7 +233,7 @@ pub fn cells_row_<M: Clone>(attrs: Vec<TuiAttr<M>>, children: Vec<CellsView<M>>)
     CellsView::new(Element::Node(Description::NoDescription, full, elems))
 }
 
-/// `Ipe.Tea.Tui.Ui.column : List (Attribute msg) -> List (Screen msg) -> Screen msg`
+/// `Ipe.Ui.Tui.column : List (Attribute msg) -> List (Screen msg) -> Screen msg`
 #[must_use]
 pub fn cells_column_<M: Clone>(
     attrs: Vec<TuiAttr<M>>,
@@ -247,76 +247,76 @@ pub fn cells_column_<M: Clone>(
     CellsView::new(Element::Node(Description::NoDescription, full, elems))
 }
 
-// ── Cell-native attribute builders (`Ipe.Tea.Tui.Ui.Attribute`) ───────────────
+// ── Cell-native attribute builders (`Ipe.Ui.Tui.Attribute`) ───────────────
 // Each returns a `TuiAttr<M>` — the terminal-honorable attribute surface.
 
-/// `Ipe.Tea.Tui.Ui.spacing : Int -> Attribute msg` — gap between children, cells.
+/// `Ipe.Ui.Tui.spacing : Int -> Attribute msg` — gap between children, cells.
 #[must_use]
 pub fn tui_spacing_<M>(n: i64) -> TuiAttr<M> {
     TuiAttr::Spacing(n)
 }
 
-/// `Ipe.Tea.Tui.Ui.padding : Int -> Attribute msg` — inner padding, cells.
+/// `Ipe.Ui.Tui.padding : Int -> Attribute msg` — inner padding, cells.
 #[must_use]
 pub fn tui_padding_<M>(n: i64) -> TuiAttr<M> {
     TuiAttr::Padding(n)
 }
 
-/// `Ipe.Tea.Tui.Ui.alignLeft : Attribute msg`
+/// `Ipe.Ui.Tui.alignLeft : Attribute msg`
 #[must_use]
 pub fn tui_align_left_<M>() -> TuiAttr<M> {
     TuiAttr::Align(HAlign::AlignLeft)
 }
 
-/// `Ipe.Tea.Tui.Ui.alignRight : Attribute msg`
+/// `Ipe.Ui.Tui.alignRight : Attribute msg`
 #[must_use]
 pub fn tui_align_right_<M>() -> TuiAttr<M> {
     TuiAttr::Align(HAlign::AlignRight)
 }
 
-/// `Ipe.Tea.Tui.Ui.center : Attribute msg`
+/// `Ipe.Ui.Tui.center : Attribute msg`
 #[must_use]
 pub fn tui_center_<M>() -> TuiAttr<M> {
     TuiAttr::Align(HAlign::CenterX)
 }
 
-/// `Ipe.Tea.Tui.Ui.bold : Attribute msg`
+/// `Ipe.Ui.Tui.bold : Attribute msg`
 #[must_use]
 pub fn tui_bold_<M>() -> TuiAttr<M> {
     TuiAttr::Bold
 }
 
-/// `Ipe.Tea.Tui.Ui.underline : Attribute msg`
+/// `Ipe.Ui.Tui.underline : Attribute msg`
 #[must_use]
 pub fn tui_underline_<M>() -> TuiAttr<M> {
     TuiAttr::Underline
 }
 
-/// `Ipe.Tea.Tui.Ui.dim : Attribute msg` — faint text.
+/// `Ipe.Ui.Tui.dim : Attribute msg` — faint text.
 #[must_use]
 pub fn tui_dim_<M>() -> TuiAttr<M> {
     TuiAttr::Dim
 }
 
-/// `Ipe.Tea.Tui.Ui.reverse : Attribute msg` — reverse video.
+/// `Ipe.Ui.Tui.reverse : Attribute msg` — reverse video.
 #[must_use]
 pub fn tui_reverse_<M>() -> TuiAttr<M> {
     TuiAttr::Reverse
 }
 
-/// `Ipe.Tea.Tui.Ui.color : Terminal.Color -> Attribute msg` — foreground colour.
+/// `Ipe.Ui.Tui.color : Terminal.Color -> Attribute msg` — foreground colour.
 #[must_use]
 pub fn tui_color_<M>(c: TermColor) -> TuiAttr<M> {
     TuiAttr::FgColor(c)
 }
 
-/// `Ipe.Tea.Tui.Ui.bg : Terminal.Color -> Attribute msg` — background colour.
+/// `Ipe.Ui.Tui.bg : Terminal.Color -> Attribute msg` — background colour.
 #[must_use]
 pub fn tui_bg_<M>(c: TermColor) -> TuiAttr<M> {
     TuiAttr::BgColor(c)
 }
 
-// ── Ipe.Tea.Terminal.Color palette constructors ──────────────────────────────
+// ── Ipe.App.Tea.Terminal.Color palette constructors ──────────────────────────────
 
 /// `Terminal.Color.black : Color`
 #[must_use]
@@ -422,7 +422,7 @@ fn clamp_channel(v: i64) -> u8 {
     v.clamp(0, 255) as u8
 }
 
-// ── Ipe.Tea.Cli.Ui line-oriented view surface ────────────────────────────────
+// ── Ipe.Ui.Cli line-oriented view surface ────────────────────────────────
 
 /// A line-native view attribute: the ONLY styles a `Lines` view can carry.
 /// Distinct from both the DOM `ui::Attribute` and the cell-native `TuiAttr` —
@@ -487,19 +487,19 @@ impl<M> LinesView<M> {
     }
 }
 
-/// `Ipe.Tea.Cli.Ui.none : Lines msg`
+/// `Ipe.Ui.Cli.none : Lines msg`
 #[must_use]
 pub fn cli_none_<M>() -> LinesView<M> {
     LinesView::new(Element::Empty)
 }
 
-/// `Ipe.Tea.Cli.Ui.text : String -> Lines msg` — one unstyled line.
+/// `Ipe.Ui.Cli.text : String -> Lines msg` — one unstyled line.
 #[must_use]
 pub fn cli_text_<M>(s: String) -> LinesView<M> {
     LinesView::new(Element::Text(s))
 }
 
-/// `Ipe.Tea.Cli.Ui.line : List (Attribute msg) -> String -> Lines msg`
+/// `Ipe.Ui.Cli.line : List (Attribute msg) -> String -> Lines msg`
 #[must_use]
 pub fn cli_line_<M: Clone>(attrs: Vec<CliAttr<M>>, s: String) -> LinesView<M> {
     use crate::ui::element::Description;
@@ -510,7 +510,7 @@ pub fn cli_line_<M: Clone>(attrs: Vec<CliAttr<M>>, s: String) -> LinesView<M> {
     ))
 }
 
-/// `Ipe.Tea.Cli.Ui.lines : List (Lines msg) -> Lines msg` — stack vertically.
+/// `Ipe.Ui.Cli.lines : List (Lines msg) -> Lines msg` — stack vertically.
 #[must_use]
 pub fn cli_lines_<M: Clone>(children: Vec<LinesView<M>>) -> LinesView<M> {
     use crate::ui::element::Description;
@@ -519,32 +519,32 @@ pub fn cli_lines_<M: Clone>(children: Vec<LinesView<M>>) -> LinesView<M> {
     LinesView::new(Element::Node(Description::NoDescription, attrs, elems))
 }
 
-/// `Ipe.Tea.Cli.Ui.bold : Attribute msg`
+/// `Ipe.Ui.Cli.bold : Attribute msg`
 #[must_use]
 pub fn cli_bold_<M>() -> CliAttr<M> {
     CliAttr::Bold
 }
-/// `Ipe.Tea.Cli.Ui.underline : Attribute msg`
+/// `Ipe.Ui.Cli.underline : Attribute msg`
 #[must_use]
 pub fn cli_underline_<M>() -> CliAttr<M> {
     CliAttr::Underline
 }
-/// `Ipe.Tea.Cli.Ui.dim : Attribute msg` — faint text.
+/// `Ipe.Ui.Cli.dim : Attribute msg` — faint text.
 #[must_use]
 pub fn cli_dim_<M>() -> CliAttr<M> {
     CliAttr::Dim
 }
-/// `Ipe.Tea.Cli.Ui.reverse : Attribute msg` — reverse video.
+/// `Ipe.Ui.Cli.reverse : Attribute msg` — reverse video.
 #[must_use]
 pub fn cli_reverse_<M>() -> CliAttr<M> {
     CliAttr::Reverse
 }
-/// `Ipe.Tea.Cli.Ui.color : Terminal.Color -> Attribute msg` — foreground colour.
+/// `Ipe.Ui.Cli.color : Terminal.Color -> Attribute msg` — foreground colour.
 #[must_use]
 pub fn cli_color_<M>(c: TermColor) -> CliAttr<M> {
     CliAttr::FgColor(c)
 }
-/// `Ipe.Tea.Cli.Ui.bg : Terminal.Color -> Attribute msg` — background colour.
+/// `Ipe.Ui.Cli.bg : Terminal.Color -> Attribute msg` — background colour.
 #[must_use]
 pub fn cli_bg_<M>(c: TermColor) -> CliAttr<M> {
     CliAttr::BgColor(c)

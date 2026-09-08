@@ -67,11 +67,11 @@ const WIDGET_JS: &str = "export function mount(host, emit) { return {}; }\n";
 /// build, and no `Cells` denotation either).
 const TERMINAL_UI_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Tui as Tui
+import Ipe.App.Tea.Tui as Tui
 import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.Tea.Terminal.Cmd
-import Ipe.Tea.Terminal.Sub
+import Ipe.App.Tea.Terminal.Cmd
+import Ipe.App.Tea.Terminal.Sub
 
 type alias EditorState = { text : String, line : Int }
 
@@ -117,10 +117,10 @@ main =
 /// the custom-element runtime and the seal codec).
 const WEB_UI_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 
 type alias EditorState = { text : String, line : Int }
 
@@ -192,8 +192,8 @@ fn web_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
 /// inference (e.g., programmatic IR construction in tests).
 const CLI_UI_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Cli as Cli
-import Ipe.Tea.Cli.Ui exposing (Lines)
+import Ipe.App.Tea.Cli as Cli
+import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Ffi.Js.CustomElement as CustomElement
 
 type alias EditorState = { text : String, line : Int }

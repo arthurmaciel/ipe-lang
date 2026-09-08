@@ -63,9 +63,9 @@ fn pure_ui_app_emits_wasm_project() {
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
          import Ipe.String as String\n\
-         import Ipe.Tea.Web exposing (app)\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web exposing (app)\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = CounterPage\n\
@@ -153,9 +153,9 @@ fn wasm_web_app_ipe_main_return_type_is_ipe_task() {
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
          import Ipe.String as String\n\
-         import Ipe.Tea.Web exposing (app)\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web exposing (app)\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Msg = Increment\n\
@@ -221,9 +221,9 @@ fn routed_web_app_emits_wasm_app_routed() {
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
          import Ipe.String as String\n\
-         import Ipe.Tea.Web exposing (app, route)\n\
-         import Ipe.Tea.Web.Cmd as Cmd\n\
-         import Ipe.Tea.Web.Sub as Sub\n\
+         import Ipe.App.Tea.Web exposing (app, route)\n\
+         import Ipe.App.Tea.Web.Cmd as Cmd\n\
+         import Ipe.App.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = Home | About\n\

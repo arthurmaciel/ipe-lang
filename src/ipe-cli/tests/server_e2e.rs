@@ -998,10 +998,10 @@ fn csrf_cookie_secure_when_env_production_regardless_of_tls_signal() -> Result<(
 /// `Server.listen` Task (a Program, not a Web shape).
 const IPE_SERVER_MOUNTS_WEB_PROGRAM: &str = r#"module Main exposing (main)
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Sub
 import Ipe.String
 import Ipe.Http.Server as Server
 import Ipe.Maybe

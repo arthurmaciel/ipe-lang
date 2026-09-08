@@ -103,8 +103,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // `Ipe.Cmd` / `Ipe.Sub` are DELIBERATELY absent: the canonical `Cmd` / `Sub`
     // kernel qualifiers are compiler/runtime internals, not user-importable
     // modules. `Cmd` / `Sub` are shape-specific, so user code reaches them
-    // through the shape-scoped re-export modules below (`Ipe.Tea.Web.Cmd`,
-    // `Ipe.Tea.Terminal.Sub`, …). A user `import Ipe.Cmd` names no known stdlib
+    // through the shape-scoped re-export modules below (`Ipe.App.Tea.Web.Cmd`,
+    // `Ipe.App.Tea.Terminal.Sub`, …). A user `import Ipe.Cmd` names no known stdlib
     // path and fails closed with the ordinary `UnknownModule` diagnostic.
     (&["Ipe", "Db"], "Db"),
     // `Ipe.App` / `Ipe.Host` — the runtime-config front door kernel qualifiers.
@@ -131,41 +131,41 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // `Ipe.Html` / `Ipe.Html.Attributes` are compiled-source (see exclusion table
     // above); `Ipe.Html.Events` is a kernel qualifier and stays in this table.
     (&["Ipe", "Html", "Events"], "Event"),
-    // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
-    // The TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
+    // ── Ipe.App.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
+    // The TEA shapes live under `Ipe.App.Tea.*`; the canonical short qualifier
     // ("Web"/"Tui"/…) is preserved so every lower.rs kernel match arm is
-    // unchanged. Importing any `Ipe.Tea.*` module marks the module a TEA app —
+    // unchanged. Importing any `Ipe.App.Tea.*` module marks the module a TEA app —
     // a plain-`main` Program that imports one is rejected (IPE-N0033).
-    (&["Ipe", "Tea", "Web"], "Web"),
-    // `Ipe.Tea.Tui` / `Ipe.Tea.Cli` — the two app-entry surfaces over the one
+    (&["Ipe", "App", "Tea", "Web"], "Web"),
+    // `Ipe.App.Tea.Tui` / `Ipe.App.Tea.Cli` — the two app-entry surfaces over the one
     // terminal rendering family's two drive axes. `Tui.app` is the full-screen
     // entry (view=Element, `onKey`); `Cli.app` is the line-oriented entry
     // (view=String, `onLine`). Both carry `KernelClass::Terminal` internally, so
-    // every lower.rs Terminal-family arm is unchanged. `Ipe.Tea.Terminal` (the
+    // every lower.rs Terminal-family arm is unchanged. `Ipe.App.Tea.Terminal` (the
     // bare app surface) is retired: the entries are `Tui.app` / `Cli.app`.
-    (&["Ipe", "Tea", "Tui"], "Tui"),
-    (&["Ipe", "Tea", "Cli"], "Cli"),
-    // `Ipe.Tea.Web.PubSub` — the Web-shape-scoped TEA-side broadcast surface:
+    (&["Ipe", "App", "Tea", "Tui"], "Tui"),
+    (&["Ipe", "App", "Tea", "Cli"], "Cli"),
+    // `Ipe.App.Tea.Web.PubSub` — the Web-shape-scoped TEA-side broadcast surface:
     // `publish` / `publishNoEcho` (Cmd forms, fired from `update`) and
     // `subscribeTopic` (Sub form, declared in `subscriptions`). Distinct from the
     // top-level Task-shaped `Ipe.PubSub`: these return `Cmd msg` / `Sub msg`, so
     // they are TEA-loop machinery and importing this path marks the module a TEA
     // app (IPE-N0033). Its members re-export the canonical `Cmd` / `Sub` kernels.
-    (&["Ipe", "Tea", "Web", "PubSub"], "TeaWebPubSub"),
+    (&["Ipe", "App", "Tea", "Web", "PubSub"], "TeaWebPubSub"),
     // ── Shape-scoped `Cmd` / `Sub` re-export modules ─────────────────────────
     // `Cmd` / `Sub` are shape-specific: each TEA shape re-exports the canonical
-    // `Cmd` / `Sub` kernels under its own `Ipe.Tea.<Shape>.{Cmd,Sub}` path.
+    // `Cmd` / `Sub` kernels under its own `Ipe.App.Tea.<Shape>.{Cmd,Sub}` path.
     // Importing one marks the module a TEA app (IPE-N0033), and referencing a
     // shape whose `Cmd` / `Sub` does not match the app entry kernel fails closed
     // (IPE-N0035). The canonical `Cmd` / `Sub` qualifiers stay internal.
-    (&["Ipe", "Tea", "Web", "Cmd"], "TeaWebCmd"),
-    (&["Ipe", "Tea", "Web", "Sub"], "TeaWebSub"),
-    (&["Ipe", "Tea", "Terminal", "Cmd"], "TeaTerminalCmd"),
-    (&["Ipe", "Tea", "Terminal", "Sub"], "TeaTerminalSub"),
-    (&["Ipe", "Tea", "Tui", "Cmd"], "TeaTuiCmd"),
-    (&["Ipe", "Tea", "Tui", "Sub"], "TeaTuiSub"),
-    (&["Ipe", "Tea", "Cli", "Cmd"], "TeaCliCmd"),
-    (&["Ipe", "Tea", "Cli", "Sub"], "TeaCliSub"),
+    (&["Ipe", "App", "Tea", "Web", "Cmd"], "TeaWebCmd"),
+    (&["Ipe", "App", "Tea", "Web", "Sub"], "TeaWebSub"),
+    (&["Ipe", "App", "Tea", "Terminal", "Cmd"], "TeaTerminalCmd"),
+    (&["Ipe", "App", "Tea", "Terminal", "Sub"], "TeaTerminalSub"),
+    (&["Ipe", "App", "Tea", "Tui", "Cmd"], "TeaTuiCmd"),
+    (&["Ipe", "App", "Tea", "Tui", "Sub"], "TeaTuiSub"),
+    (&["Ipe", "App", "Tea", "Cli", "Cmd"], "TeaCliCmd"),
+    (&["Ipe", "App", "Tea", "Cli", "Sub"], "TeaCliSub"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
     (&["Ipe", "Auth"], "Auth"),
     // `Ipe.Auth.Revocation` — per-session and per-subject revocation gate.
@@ -1549,7 +1549,7 @@ impl Env {
         // CANONICAL module + name symbols, so the lowerer's kernel match arms
         // (`("Cmd", "publish")`, `("Sub", "subscribeTopic")`) fire unchanged; only
         // the resolution qualifier differs. Used to give the Web-shape-scoped
-        // `Ipe.Tea.Web.PubSub` (canonical `TeaWebPubSub`) its TEA-side broadcast
+        // `Ipe.App.Tea.Web.PubSub` (canonical `TeaWebPubSub`) its TEA-side broadcast
         // members, which aggregate two canonical kernel families (`Cmd` + `Sub`).
         const CROSS_QUALIFIER_MEMBERS: &[(&str, &str, &str, &str)] = &[
             // (new_qualifier, member_name, canonical_qualifier, canonical_name)
@@ -1603,13 +1603,13 @@ impl Env {
             // native serialiser via `Kernel.kernel "Ui_*"` / `"Html_*"` / `"Attr_*"`.
             // The `Ipe.Ui.*` sub-module aliases stay below.
             ("Ipe.Html.Events", "Event"),
-            // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
-            ("Ipe.Tea.Web", "Web"),
+            // ── Ipe.App.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
+            ("Ipe.App.Tea.Web", "Web"),
             // `Tui` / `Cli` carry their `app` member from the QUALIFIERS catalog.
-            // `Ipe.Tea.Terminal` (the bare app surface) is retired in favour of
+            // `Ipe.App.Tea.Terminal` (the bare app surface) is retired in favour of
             // these two; its `Cmd` / `Sub` re-exports remain (below).
-            ("Ipe.Tea.Tui", "Tui"),
-            ("Ipe.Tea.Cli", "Cli"),
+            ("Ipe.App.Tea.Tui", "Tui"),
+            ("Ipe.App.Tea.Cli", "Cli"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
             ("Ipe.Auth", "Auth"),

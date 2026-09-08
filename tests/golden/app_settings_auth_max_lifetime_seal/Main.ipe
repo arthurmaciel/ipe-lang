@@ -4,11 +4,11 @@ module Main exposing (main)
 -- The compiler must resolve it to the `WebAuthMaxLifetime` kernel (no N0005)
 -- and the emitted crate must cargo-build (THE SEAL).
 
-import Ipe.Tea.Web as Web
+import Ipe.App.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.Tea.Web.Cmd
+import Ipe.App.Tea.Web.Cmd
 import Ipe.String
-import Ipe.Tea.Web.Sub
+import Ipe.App.Tea.Web.Sub
 
 
 type Msg
