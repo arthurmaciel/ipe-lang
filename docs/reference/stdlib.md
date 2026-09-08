@@ -1985,7 +1985,7 @@ Ipe.Http — outbound HTTP client.
 | `withHeader` | (no summary) |
 | `withMethod` | (no summary) |
 | `withRedirects` | Set the redirect policy for a request.  `withRedirects NoRedirects` |
-| `withTimeout` | (no summary) |
+| `withTimeout` | `withTimeout span req` — override the request timeout. Takes a typed |
 | `withUrl` | `withUrl url req` — retarget an existing request to a typed `Url`. Like |
 
 ## Http.StatusCode

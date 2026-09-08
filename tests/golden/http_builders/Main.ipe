@@ -1,5 +1,6 @@
 module Main exposing (main)
 
+import Ipe.Duration as Duration
 import Ipe.Http as Http exposing (HttpMethod(..))
 import Ipe.Io as Io
 import Ipe.List
@@ -33,7 +34,7 @@ main =
                     (Http.withBody "hello"
                         (Http.withHeader "B" "2"
                             (Http.withHeader "A" "1"
-                                (Http.withTimeout 5000 req0)))))
+                                (Http.withTimeout (Duration.millis 5000) req0)))))
 
         Err _ ->
             Io.println "blocked"

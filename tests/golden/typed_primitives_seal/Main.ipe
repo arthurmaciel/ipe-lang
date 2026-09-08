@@ -52,6 +52,18 @@ durLine =
         ++ String.fromInt (Duration.toMillis (Duration.minutes 2))
 
 
+-- Non-negativity: a negative input to any constructor clamps to the zero span,
+-- so a "minus-five-seconds timeout" is not a representable `Duration` — it
+-- reads back as `0`, never a negative millisecond count that could disable a
+-- floor.
+negLine : String
+negLine =
+    "neg "
+        ++ String.fromInt (Duration.toMillis (Duration.millis (0 - 5)))
+        ++ " "
+        ++ String.fromInt (Duration.toMillis (Duration.seconds (0 - 100)))
+
+
 byteLine : String
 byteLine =
     "bytes "
@@ -78,6 +90,7 @@ main =
             , portRejectHigh
             , portRejectZero
             , durLine
+            , negLine
             , byteLine
             , satLine
             ]
