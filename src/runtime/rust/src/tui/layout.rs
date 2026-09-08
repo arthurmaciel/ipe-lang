@@ -2499,7 +2499,18 @@ fn ansi_sgr_codes(rgb: (u8, u8, u8), profile: crate::color::TermProfile, fg: boo
     }
 }
 
+#[cfg(test)]
 fn sgr(style: Style) -> String {
+    // Auto-detect the terminal colour capability at the single `resolve_term_profile`
+    // point; cell colours then degrade through `Color::to_ansi`. The rendering path
+    // (`emit_block`) threads an explicit profile via `sgr_with_profile` instead.
+    sgr_with_profile(style, crate::color::resolve_term_profile())
+}
+
+/// SGR body with an explicit [`crate::color::TermProfile`], so a caller can pin the
+/// colour capability (deterministic rendering). `sgr` supplies the auto-detected
+/// profile in production.
+fn sgr_with_profile(style: Style, profile: crate::color::TermProfile) -> String {
     let mut codes: Vec<String> = Vec::new();
     if style.bold {
         codes.push("1".to_string());
@@ -2522,9 +2533,6 @@ fn sgr(style: Style) -> String {
     if style.reverse {
         codes.push("7".to_string());
     }
-    // Resolve the terminal colour capability once; the truecolour cell colours
-    // degrade through the single `Color::to_ansi` point (never re-derived here).
-    let profile = crate::color::resolve_term_profile();
     if !no_color() {
         // A named-palette code takes precedence over truecolour: the portable
         // path emits its own SGR code (30-37 / 90-97 / 39), else the cell colour
@@ -2547,7 +2555,13 @@ fn sgr(style: Style) -> String {
     }
 }
 
-fn emit_block(block: &Block, cols: usize, scroll_y: usize, rows: usize) -> String {
+fn emit_block(
+    block: &Block,
+    cols: usize,
+    scroll_y: usize,
+    rows: usize,
+    profile: crate::color::TermProfile,
+) -> String {
     let mut out = String::new();
     // Lines are CRLF-separated, but the SEPARATOR goes BEFORE each line after the
     // first — NOT a trailing CRLF after the last visible row. A trailing CRLF on a
@@ -2574,7 +2588,7 @@ fn emit_block(block: &Block, cols: usize, scroll_y: usize, rows: usize) -> Strin
                 text.push(ch);
                 w += cw;
             }
-            let esc = sgr(run.style);
+            let esc = sgr_with_profile(run.style, profile);
             if esc.is_empty() {
                 out.push_str(&text);
             } else {
@@ -2599,6 +2613,31 @@ pub fn render_with_focus<M: Clone>(
     focus_idx: usize,
     inputs: &mut InputRegistry,
     scroll_y: usize,
+) -> (String, Vec<Focusable<M>>, usize) {
+    // Production: auto-detect the terminal colour capability at the single
+    // `resolve_term_profile` point.
+    render_with_focus_profiled(
+        view,
+        cols,
+        rows,
+        focus_idx,
+        inputs,
+        scroll_y,
+        crate::color::resolve_term_profile(),
+    )
+}
+
+/// `render_with_focus` with an explicit [`crate::color::TermProfile`], so a caller
+/// (e.g. a test) can pin the colour capability for a deterministic frame.
+#[allow(clippy::too_many_arguments)]
+fn render_with_focus_profiled<M: Clone>(
+    view: &Element<M>,
+    cols: usize,
+    rows: usize,
+    focus_idx: usize,
+    inputs: &mut InputRegistry,
+    scroll_y: usize,
+    profile: crate::color::TermProfile,
 ) -> (String, Vec<Focusable<M>>, usize) {
     let canvas = Canvas::new(cols, rows);
     let mut ctx = Ctx {
@@ -2635,7 +2674,7 @@ pub fn render_with_focus<M: Clone>(
             f.height = h;
         }
     }
-    let frame = emit_block(&rendered.block, cols, scroll_y, rows);
+    let frame = emit_block(&rendered.block, cols, scroll_y, rows, profile);
     (frame, ctx.focusables, content_h)
 }
 
@@ -2655,10 +2694,31 @@ pub fn element_to_cells_height<M: Clone>(view: &Element<M>, cols: usize) -> usiz
     render_with_focus(view, cols, usize::MAX, usize::MAX, &mut inputs, 0).2
 }
 
+/// Test-only [`element_to_cells`] that pins the terminal colour profile, so
+/// assertions over the raw SGR sequence are independent of the ambient `TERM`
+/// (production still auto-detects via `element_to_cells` / `render_with_focus`).
+#[cfg(test)]
+fn element_to_cells_profiled<M: Clone>(
+    view: &Element<M>,
+    cols: usize,
+    rows: usize,
+    profile: crate::color::TermProfile,
+) -> String {
+    let mut inputs = InputRegistry::new();
+    render_with_focus_profiled(view, cols, rows, usize::MAX, &mut inputs, 0, profile).0
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::super::ui::Description;
     use super::*;
+    use crate::color::TermProfile;
+
+    /// Render a view with the colour profile pinned to TrueColor, so raw
+    /// `38;2;`/`48;2;` assertions do not depend on the ambient terminal.
+    fn cells_true<M: Clone>(view: &Element<M>, cols: usize, rows: usize) -> String {
+        element_to_cells_profiled(view, cols, rows, TermProfile::TrueColor)
+    }
 
     fn rgb(r: i64, g: i64, b: i64) -> Color {
         Color::Rgba(r, g, b, 1.0)
@@ -2684,7 +2744,7 @@ mod tests {
             vec![Attribute::AttrFontColor(rgb(255, 0, 0))],
             vec![Element::Text("hi".into())],
         );
-        let frame = element_to_cells(&t, 80, 24);
+        let frame = cells_true(&t, 80, 24);
         assert!(frame.contains("38;2;255;0;0"));
         assert!(frame.contains("hi"));
     }
@@ -2845,7 +2905,7 @@ mod tests {
             vec![Attribute::AttrStyle("__row".into(), String::new())],
             vec![child(rgb(10, 0, 0)), child(rgb(0, 10, 0))],
         );
-        let frame = element_to_cells(&row, 20, 24);
+        let frame = cells_true(&row, 20, 24);
         let first = frame.split("\r\n").next().unwrap_or("");
         // Both fills present; neither claimed the whole row (would overflow pre-fix).
         assert!(
@@ -3017,7 +3077,7 @@ mod tests {
             ],
             vec![],
         );
-        let frame = element_to_cells(&inp, 80, 24);
+        let frame = cells_true(&inp, 80, 24);
         assert!(frame.contains('░'), "shaded track present: {frame:?}");
         // track fg = lighten(bg, 38) = (68, 74, 98).
         assert!(
@@ -3042,7 +3102,7 @@ mod tests {
             ],
             vec![],
         );
-        let frame = element_to_cells(&inp, 80, 24);
+        let frame = cells_true(&inp, 80, 24);
         assert!(frame.contains('░'), "track present without bg: {frame:?}");
         assert!(
             frame.contains("38;2;110;110;110"),
@@ -3119,7 +3179,7 @@ mod tests {
             vec![Attribute::AttrBgColor(rgb(18, 22, 38))],
             vec![node(vec![], vec![Element::Text("x".into())])],
         );
-        let frame = element_to_cells(&t, 20, 3);
+        let frame = cells_true(&t, 20, 3);
         let first = frame.split("\r\n").next().unwrap_or("");
         // The page bg SGR reaches the row; the glyph 'x' sits on it and the
         // remaining cells to col 20 carry the same bg (one fill run to the edge).
@@ -3140,7 +3200,7 @@ mod tests {
         // No root bg → nothing is backfilled (matches the empty cell grid); the
         // frame carries no 48;2 background SGR at all.
         let t: Element<()> = node(vec![], vec![node(vec![], vec![Element::Text("x".into())])]);
-        let frame = element_to_cells(&t, 20, 3);
+        let frame = cells_true(&t, 20, 3);
         assert!(
             !frame.contains("48;2;"),
             "no bg backfilled without a root bg: {frame:?}"
@@ -3166,7 +3226,7 @@ mod tests {
             ],
             vec![cell("G1"), cell("G2")],
         );
-        let frame = element_to_cells(&g, 60, 4);
+        let frame = cells_true(&g, 60, 4);
         let first = frame.split("\r\n").next().unwrap_or("");
         // The cell bg (60,50,80 = 3c3250) is present and fills past the 2-char
         // label toward its column width.
@@ -3187,7 +3247,7 @@ mod tests {
             ],
             vec![Element::Text("alpha beta gamma delta epsilon".into())],
         );
-        let frame = element_to_cells(&t, 20, 6);
+        let frame = cells_true(&t, 20, 6);
         // Every text row carries the paragraph bg filling to ~20 cells.
         let body: Vec<&str> = frame
             .split("\r\n")
