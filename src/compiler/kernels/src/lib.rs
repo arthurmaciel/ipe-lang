@@ -286,6 +286,28 @@ pub enum BuiltinTag {
     /// `Terminal` — the nullary phantom shape marker for the terminal shape.
     /// Appears only as [`Self::Setting`]'s argument; never a standalone value.
     ShapeTerminal,
+    /// `Program` — the shape-carrier constructor `Program shape msg`, the uniform
+    /// result type of every TEA entry (`Web.app` → `Program Web msg`, `Tui.app` →
+    /// `Program Tui msg`, `Cli.app` → `Program Cli msg`). Arity 2: the phantom
+    /// `shape` tag ([`Self::ProgramShapeWeb`] / [`Self::ProgramShapeTui`] /
+    /// [`Self::ProgramShapeCli`]) is compile-time only and erased at lower to the
+    /// existing per-shape app leaf ([`Self::WebApp`] / [`Self::TuiApp`] /
+    /// [`Self::CliApp`]); the `msg` argument is likewise erased (like `Setting
+    /// shape`), so a `Program` carries no emitted runtime state of its own.
+    Program,
+    /// `Web` — the nullary phantom program-shape tag for the web shape. Appears
+    /// only as [`Self::Program`]'s first argument; never a standalone value
+    /// (phantom, erased at lower). Distinct from [`Self::ShapeWeb`], the `Setting`
+    /// shape marker, though both interpret to the interned name `Web`.
+    ProgramShapeWeb,
+    /// `Tui` — the nullary phantom program-shape tag for the terminal-cells shape.
+    /// Appears only as [`Self::Program`]'s first argument; never a standalone
+    /// value (phantom, erased at lower).
+    ProgramShapeTui,
+    /// `Cli` — the nullary phantom program-shape tag for the terminal-lines shape.
+    /// Appears only as [`Self::Program`]'s first argument; never a standalone
+    /// value (phantom, erased at lower).
+    ProgramShapeCli,
     /// `HostMode` — the nullary closed host-bind ADT (`loopback` /
     /// `allInterfaces` / `envDriven`). The sole argument type of `Host.bind`; a
     /// value only ever comes from its three constructor kernels, each of which
@@ -8511,19 +8533,31 @@ impl StdlibKernel {
         const RETRY_WITH: TyShape = TyShape::Fun(&RETRY_POLICY_ERROR, &TASK_A_TO_TASK_A);
         // `BackoffStrategy` nullary constructors.
         const BACKOFF_STRATEGY_CON: TyShape = TyShape::Con(BuiltinTag::BackoffStrategy, &[]);
-        // App-entry whole signatures — `cfg -> <ShapeApp>`.
-        // Each entry builder returns its shape's opaque app leaf, not `Task ()`.
+        // App-entry whole signatures — `cfg -> Program <shape> msg`.
+        // Each entry builder returns the uniform shape carrier `Program shape msg`
+        // (not `Task ()`): the phantom `shape` tag distinguishes the surface at
+        // inference and erases at lower to the shape's opaque app leaf; `msg`
+        // (scheme var `B`, the cfg's message type) erases the same way.
+        const PROGRAM_SHAPE_WEB: TyShape = TyShape::Con(BuiltinTag::ProgramShapeWeb, &[]);
+        const PROGRAM_SHAPE_TUI: TyShape = TyShape::Con(BuiltinTag::ProgramShapeTui, &[]);
+        const PROGRAM_SHAPE_CLI: TyShape = TyShape::Con(BuiltinTag::ProgramShapeCli, &[]);
+        const PROGRAM_WEB: TyShape = TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_WEB, B]);
+        const PROGRAM_TUI: TyShape = TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_TUI, B]);
+        const PROGRAM_CLI: TyShape = TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_CLI, B]);
+        // The opaque per-shape app leaf still names `Server.mountApp`'s §9 gate.
         const WEB_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::WebApp, &[]);
-        const TUI_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::TuiApp, &[]);
-        const CLI_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::CliApp, &[]);
-        const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &WEB_APP_LEAF);
+        const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &PROGRAM_WEB);
+        // `Web.embed` keeps the opaque `WebApp` leaf as its result: an embedded
+        // handle is `Server.mountApp`'d, whose §9 nominal gate is `WebApp` (a
+        // `Program` carrier is not a mountable handle).
+        const WEB_EMBED: TyShape = TyShape::Fun(&WEB_APP_CFG, &WEB_APP_LEAF);
         // `Server.mountApp : String -> WebApp -> ServerRoute` — nominal `WebApp`
         // in the second slot is the §9 type gate: only a `Web.embed`/`Web.app`
         // handle mounts; a `TuiApp`/`CliApp` is rejected at unify.
         const WEB_APP_LEAF_TO_SERVER_ROUTE: TyShape = TyShape::Fun(&WEB_APP_LEAF, &SERVER_ROUTE);
         const MOUNT_APP: TyShape = TyShape::Fun(&STRING, &WEB_APP_LEAF_TO_SERVER_ROUTE);
-        const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &TUI_APP_LEAF);
-        const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &CLI_APP_LEAF);
+        const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &PROGRAM_TUI);
+        const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &PROGRAM_CLI);
         // Ui builders taking a record.
         const LAYOUT_WITH: TyShape = {
             const HTML_A_INNER: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);
@@ -9597,7 +9631,8 @@ impl StdlibKernel {
             | Self::BackoffExponential
             | Self::BackoffExponentialWithJitter => Some(&BACKOFF_STRATEGY_CON),
             // App-entry cfg records.
-            Self::WebApp | Self::WebEmbed => Some(&WEB_APP),
+            Self::WebApp => Some(&WEB_APP),
+            Self::WebEmbed => Some(&WEB_EMBED),
             Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
             Self::TerminalAppLines => Some(&TERMINAL_APP_LINES),
             // Ui / Input / Border record builders.
