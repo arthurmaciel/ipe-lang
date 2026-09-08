@@ -194,6 +194,13 @@ pub struct WatchOptions {
     /// debugger overlay. Exposed as `ipe watch --debugger`; off by default (the
     /// recorder adds runtime weight). Never compiled into a release binary.
     pub debugger: bool,
+    /// Optional cargo target directory the rebuild's `cargo build` is pinned to.
+    /// `None` (the CLI default) leaves the build to honour an inherited
+    /// `CARGO_TARGET_DIR`, exactly as before. An embedder sets it to pin the
+    /// build to a specific — typically warm — target so a rebuild links against
+    /// a pre-compiled dependency tree instead of cold-building it; the E2E watch
+    /// suite uses it to forward the CI shard's warm shared target.
+    pub target_dir: Option<PathBuf>,
 }
 
 impl WatchOptions {
@@ -212,6 +219,7 @@ impl WatchOptions {
             bluegreen: false,
             reset_state: false,
             debugger: false,
+            target_dir: None,
         }
     }
 }
@@ -1452,6 +1460,7 @@ fn run_inner(
                         match spawn_cargo_build(
                             &opts.cargo_path,
                             &opts.out_dir,
+                            opts.target_dir.as_deref(),
                             generation,
                             evt_tx.clone(),
                             opts.quiet,
@@ -2568,10 +2577,17 @@ enum BuildAccel {
     WarmIncremental,
 }
 
-/// The target directory this watch build will use: an inherited `CARGO_TARGET_DIR`
-/// wins, else cargo's default of `<out_dir>/target`.
-fn watch_target_dir(out_dir: &Path) -> PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| out_dir.join("target"), PathBuf::from)
+/// The target directory this watch build will use: an explicit
+/// [`WatchOptions::target_dir`] override wins, else an inherited
+/// `CARGO_TARGET_DIR`, else cargo's default of `<out_dir>/target`.
+fn watch_target_dir(out_dir: &Path, override_dir: Option<&Path>) -> PathBuf {
+    override_dir.map_or_else(
+        || {
+            std::env::var_os("CARGO_TARGET_DIR")
+                .map_or_else(|| out_dir.join("target"), PathBuf::from)
+        },
+        Path::to_path_buf,
+    )
 }
 
 /// Whether a resolved target directory already holds a compiled dependency
@@ -2593,8 +2609,8 @@ fn dir_has_dep_rlib(target_dir: &Path) -> bool {
 /// fresh (or pruned) target holds none. Resolves the target directory cargo will
 /// actually use (honouring an inherited `CARGO_TARGET_DIR`, exactly as the watch
 /// build will) and checks it for a dependency `.rlib`.
-fn target_is_warm(out_dir: &Path) -> bool {
-    dir_has_dep_rlib(&watch_target_dir(out_dir))
+fn target_is_warm(out_dir: &Path, override_dir: Option<&Path>) -> bool {
+    dir_has_dep_rlib(&watch_target_dir(out_dir, override_dir))
 }
 
 /// Locate an `sccache` executable on `PATH`, if the machine has one. sccache is
@@ -2615,11 +2631,11 @@ fn find_sccache() -> Option<PathBuf> {
 ///
 /// The decision is computed at the call site and passed to
 /// [`apply_build_accel_env`], keeping the env-to-`Command` mapping a pure function.
-fn choose_build_accel(out_dir: &Path, opt_out: bool) -> BuildAccel {
+fn choose_build_accel(out_dir: &Path, override_dir: Option<&Path>, opt_out: bool) -> BuildAccel {
     if opt_out {
         return BuildAccel::MachineDefault;
     }
-    match (target_is_warm(out_dir), find_sccache()) {
+    match (target_is_warm(out_dir, override_dir), find_sccache()) {
         (false, Some(sccache)) => BuildAccel::ColdSccache(sccache),
         _ => BuildAccel::WarmIncremental,
     }
@@ -2678,6 +2694,7 @@ fn env_flag_on(name: &str) -> bool {
 fn spawn_cargo_build(
     cargo_path: &Path,
     out_dir: &Path,
+    target_dir: Option<&Path>,
     generation: u64,
     evt_tx: mpsc::Sender<OrchestratorEvent>,
     quiet: bool,
@@ -2688,7 +2705,12 @@ fn spawn_cargo_build(
         .current_dir(out_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let accel = choose_build_accel(out_dir, env_flag_on(NO_INCREMENTAL_ENV));
+    // An explicit override pins the build's target dir; without one cargo honours
+    // the inherited `CARGO_TARGET_DIR` (or its `<out_dir>/target` default).
+    if let Some(target) = target_dir {
+        cmd.env("CARGO_TARGET_DIR", target);
+    }
+    let accel = choose_build_accel(out_dir, target_dir, env_flag_on(NO_INCREMENTAL_ENV));
     apply_build_accel_env(&mut cmd, &accel);
     if quiet {
         cmd.arg("-q");
@@ -2970,7 +2992,10 @@ mod tests {
     fn opt_out_chooses_machine_default() {
         let dir = std::env::temp_dir();
         assert!(
-            matches!(choose_build_accel(&dir, true), BuildAccel::MachineDefault),
+            matches!(
+                choose_build_accel(&dir, None, true),
+                BuildAccel::MachineDefault
+            ),
             "opt-out must choose MachineDefault"
         );
     }

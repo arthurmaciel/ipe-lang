@@ -23,8 +23,9 @@ at the top and follow the links; each page assumes only the ones before it.
   shared build target, and dev-profile flags; what `ipe health` configures and
   how to apply each step manually.
 - [Delivering an app](delivery.md) — shape vs delivery, then packaging a `Web`
-  app into a desktop bundle (`ipe pack --target desktop`) and a mobile
-  system-webview shell (`ipe pack --target mobile:ios|android`).
+  app into a desktop bundle (`ipe release web desktop`) and a mobile
+  system-webview shell (`ipe release web spa ios|android`) through the one
+  delivery grammar.
 
 ## Standard-library guides
 

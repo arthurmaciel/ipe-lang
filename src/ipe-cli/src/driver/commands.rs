@@ -1,9 +1,10 @@
 use super::{
-    BuildOptions, CliError, RuntimeContext, apply_fixes_cmd, attribute_canon_errors,
-    attribute_post_link_error, bluegreen_enabled, build_project_with_options,
-    build_with_sibling_discovery_with_options, collect_entry_and_siblings, create_source_root,
-    emit_pipeline_json, find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map,
-    io_err, render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
+    BuildOptions, BundleHost, BundleProfile, CliError, RuntimeContext, apply_fixes_cmd,
+    attribute_canon_errors, attribute_post_link_error, bluegreen_enabled,
+    build_project_with_options, build_with_sibling_discovery_with_options, bundle_delivery,
+    collect_entry_and_siblings, create_source_root, emit_permissions, emit_pipeline_json,
+    find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map, io_err,
+    render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
     runtime_dep_from_env, single_file_cargo_name_from_env,
 };
 use crate::{
@@ -123,6 +124,20 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     // deprecation notice rather than a hard failure.
     if cmd == "explain" {
         return with_help_on_misuse("doc", run_explain(rest));
+    }
+    // `ipe pack` has been folded into the delivery grammar: app bundling is one
+    // `ipe <verb> <shape> <host>` vocabulary, not a parallel flag language. Point
+    // the old command at its delivery-grammar equivalent rather than failing with
+    // a bare unknown-command.
+    if cmd == "pack" {
+        return Err(CliError::UsageOwned(
+            "ipe pack has been retired — app bundling is now the delivery grammar. \
+             Use `ipe build web desktop` / `ipe build web ios` / `ipe build web android` for a \
+             fast dev bundle, or `ipe release web desktop|ios|android` for a production \
+             distributable. For the OS-permission dry-run, use `ipe build --emit-permissions \
+             <ios|macos|android>`."
+                .to_owned(),
+        ));
     }
     // One registry drives both dispatch and help: a command runs exactly when it
     // is described, so the two cannot drift. The handler carries the canonical
@@ -417,6 +432,16 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     };
     let entry_path = PathBuf::from(&entry);
 
+    // `--emit-permissions <platform>` is a read-only inspection that builds
+    // nothing: print the OS-permission derivation and stop, before any compile.
+    if let Some(platform) = args.emit_permissions.as_deref() {
+        emit_permissions(platform, Some(entry.as_str()), "build")?;
+        return Ok(BuildSuccess {
+            entry,
+            out_dir: PathBuf::new(),
+        });
+    }
+
     let wants_static = matches!(
         &args.mode,
         cli_args::BuildMode::Emit { static_layer, .. }
@@ -479,6 +504,18 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     // before the entry file is read. A webview-native `web desktop` drives
     // `webview_host` below.
     let delivery = resolve_delivery(&entry_path, &args.delivery, wants_static, "build")?;
+
+    // A `desktop`/`ios`/`android` host is an application bundle, not a plain
+    // artifact: route it through the delivery-grammar bundler (a fast dev bundle
+    // for `build`). The served/default host falls through to the ordinary compile
+    // below. The delivery grammar is the one vocabulary for every bundle target.
+    if let Some(host) = BundleHost::from_delivery_host(delivery.host())? {
+        bundle_delivery(host, BundleProfile::Dev, Some(entry.as_str()))?;
+        return Ok(BuildSuccess {
+            entry,
+            out_dir: PathBuf::new(),
+        });
+    }
 
     // `--fix` carries durable authorization: apply machine-applicable fixes
     // non-interactively before the (re-run) build sees the source.
@@ -860,6 +897,22 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     if args.capabilities_only {
         let manifest = discover_manifest(&entry_path)?;
         return run_release_capabilities(&entry_path, manifest.as_deref(), args.format);
+    }
+
+    // `--emit-permissions <platform>`: the same read-only permission inspection
+    // `build` offers, on the release verb too — print the derivation and stop.
+    if let Some(platform) = args.emit_permissions.as_deref() {
+        return emit_permissions(platform, Some(entry.as_str()), "release");
+    }
+
+    // A `desktop`/`ios`/`android` host is a production distributable bundle:
+    // route it through the delivery-grammar bundler (the `release` production
+    // profile). The served/default host falls through to the ordinary release
+    // artifact below. The delivery grammar is the one vocabulary for every bundle
+    // target.
+    let bundle_delivery_resolved = resolve_delivery(&entry_path, &args.delivery, false, "release")?;
+    if let Some(host) = BundleHost::from_delivery_host(bundle_delivery_resolved.host())? {
+        return bundle_delivery(host, BundleProfile::Release, Some(entry.as_str()));
     }
 
     // Discover the manifest (same logic as build/eject).

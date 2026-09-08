@@ -98,7 +98,7 @@ pub(crate) use driver::{
     build_source_graph, capabilities_including_served_widgets, default_entry,
     find_manifest_for_ipe_file, force_cargo_terminal_ui, io_err, lower_entry_via_graph,
     read_progress_chunk, read_yes_no, read_yes_no_default, resolve_vendored_runtime_dir, run_build,
-    run_capabilities, run_eject, run_exec, run_fix, run_installer, run_pack, run_package,
-    run_release, run_run, run_test, run_type_check, run_verify, run_version, run_watch,
+    run_capabilities, run_eject, run_exec, run_fix, run_installer, run_package, run_release,
+    run_run, run_test, run_type_check, run_verify, run_version, run_watch,
     typecheck_entry_via_graph, write_atomic, write_emitted_project,
 };

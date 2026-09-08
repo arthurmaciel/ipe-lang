@@ -8,9 +8,8 @@ name: Build & test
 #   • PULL REQUEST — the FAST required gate (target: minutes). fmt, clippy,
 #     quick-check, test (nextest unit/integration), the docs-drift gates, the
 #     first-party check-floor + shapes build gate, and seal-smoke (build+run ONE
-#     emitted example, a fast proxy for THE SEAL). scripts/fast-gate.sh is the
-#     canonical runner for this set — a developer runs the same script locally
-#     that CI runs, so local == CI. The dev branch-protection ruleset lists these
+#     emitted example, a fast proxy for THE SEAL). A developer runs the same set
+#     of gates locally to match CI. The dev branch-protection ruleset lists these
 #     as the required checks.
 #   • PUSH to development + nightly SCHEDULE — the HEAVY non-blocking checks: the
 #     full 14-shard e2e (THE SEAL in full), the 8-way seal-slice, seal-modset
