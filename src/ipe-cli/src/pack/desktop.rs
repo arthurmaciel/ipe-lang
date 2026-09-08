@@ -43,8 +43,8 @@ pub enum DesktopOs {
 }
 
 impl DesktopOs {
-    /// The lowercase wire name of this OS, used in the `--target desktop:<os>`
-    /// surface and diagnostics.
+    /// The lowercase wire name of this OS — the `dist/<os>/` bundle directory and
+    /// diagnostics.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -54,8 +54,8 @@ impl DesktopOs {
         }
     }
 
-    /// The desktop OS of the host this binary runs on, used as the default target
-    /// when `--target desktop` is given without an explicit `:os` suffix.
+    /// The desktop OS of the host this binary runs on — the OS a `web desktop`
+    /// bundle targets (the grammar carries no cross-OS override).
     ///
     /// `None` on a host whose OS is not a desktop packaging target (so the caller
     /// asks the user to name one explicitly rather than guessing).
@@ -110,7 +110,7 @@ impl std::str::FromStr for DesktopOs {
     }
 }
 
-/// An unrecognised desktop-OS token from a `--target desktop:<os>` argument.
+/// An unrecognised desktop-OS token where linux/macos/windows was expected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnknownDesktopOs(pub String);
 
@@ -126,15 +126,15 @@ impl std::fmt::Display for UnknownDesktopOs {
 
 impl std::error::Error for UnknownDesktopOs {}
 
-/// Resolve the desktop OS a `--target desktop[:<os>]` request names.
+/// Resolve the desktop OS a `web desktop` bundle targets.
 ///
-/// An explicit `:os` suffix parses to that OS; a bare `desktop` targets the host
-/// OS. A host that is not a desktop packaging target is a typed refusal naming the
-/// remedy (pass `desktop:<os>` explicitly) rather than a silent wrong-OS guess.
+/// An explicit OS word parses to that OS; an absent word targets the host OS (the
+/// `web desktop` delivery carries no cross-OS override). A host whose OS is not a
+/// desktop packaging target is a typed refusal rather than a silent wrong-OS guess.
 ///
 /// # Errors
-/// [`DesktopRefusal::UnknownOs`] for an unrecognised `:os` suffix;
-/// [`DesktopRefusal::HostNotDesktop`] when a bare `desktop` runs on a non-desktop
+/// [`DesktopRefusal::UnknownOs`] for an OS word outside the closed set;
+/// [`DesktopRefusal::HostNotDesktop`] when the host OS is not a desktop
 /// host.
 pub fn resolve_os(explicit: Option<&str>) -> Result<DesktopOs, DesktopRefusal> {
     explicit.map_or_else(
@@ -206,10 +206,10 @@ pub enum DesktopRefusal {
         /// The app's actual shape (`web` / `terminal` / `program`).
         shape: &'static str,
     },
-    /// A `--target desktop:<os>` named an OS outside the closed set.
+    /// A desktop-OS word named an OS outside the closed set.
     UnknownOs(String),
-    /// A bare `--target desktop` was given on a host that is not a desktop
-    /// packaging target.
+    /// The host OS is not a desktop packaging target, so a `web desktop` bundle
+    /// has no OS to target here.
     HostNotDesktop {
         /// The host OS token (`std::env::consts::OS`).
         host: String,
@@ -221,20 +221,20 @@ impl std::fmt::Display for DesktopRefusal {
         match self {
             Self::NotWebView { shape } => write!(
                 f,
-                "error[IPE-P0010]: `ipe pack --target desktop` packages an `Ipe.WebView` app, \
+                "error[IPE-P0010]: `web desktop` packages an `Ipe.WebView` app, \
                  but this app's shape is `{shape}`\n  \
                  = a desktop bundle wraps the native webview window; a `{shape}` app has no such \
-                 window. Build a `WebView` app, or choose the matching target for a `{shape}` app."
+                 window. Build a `WebView` app, or choose the matching host for a `{shape}` app."
             ),
             Self::UnknownOs(got) => write!(
                 f,
                 "error[IPE-P0011]: unknown desktop OS {got:?} \
-                 (expected `--target desktop:<linux|macos|windows>`)"
+                 (expected linux|macos|windows)"
             ),
             Self::HostNotDesktop { host } => write!(
                 f,
                 "error[IPE-P0012]: this host ({host:?}) is not a desktop packaging target — \
-                 name one explicitly: `--target desktop:<linux|macos|windows>`"
+                 use `ipe build web desktop` (the host OS's bundle)"
             ),
         }
     }

@@ -523,6 +523,11 @@ pub struct BuildArgs {
     pub debugger: bool,
     /// The emit surface (IR dump vs project emit).
     pub mode: BuildMode,
+    /// `--emit-permissions <ios|macos|android>` — read-only inspection: print the
+    /// OS-permission declarations the app's accepted web capabilities derive on
+    /// the given platform, and build nothing. The raw platform word, validated at
+    /// execution against the closed `ios|macos|android` set.
+    pub emit_permissions: Option<String>,
     /// `--json` — emit each diagnostic as a stable JSON object instead of the
     /// human-readable, decorated layout.
     pub format: OutputFormat,
@@ -554,6 +559,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     let mut accept_risks = false;
     let mut debugger = false;
     let mut quiet = false;
+    let mut emit_permissions: Option<String> = None;
     let mut static_flags = StaticFlags::default();
     let mut format: Option<OutputFormat> = None;
     while let Some(flag) = it.next() {
@@ -574,6 +580,12 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
                 &mut runtime,
                 take_value(&mut it, "--runtime", "build")?,
                 "--runtime",
+                "build",
+            )?,
+            "--emit-permissions" => set_once(
+                &mut emit_permissions,
+                take_value(&mut it, "--emit-permissions", "build")?,
+                "--emit-permissions",
                 "build",
             )?,
             "--emit-ir" => emit_ir = true,
@@ -657,6 +669,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         accept_risks,
         debugger,
         mode,
+        emit_permissions,
         format: format.unwrap_or_default(),
         quiet,
     })
@@ -894,6 +907,10 @@ pub enum ReleaseMode {
 pub struct ReleaseArgs {
     /// The positional entry (`None` → project-aware default).
     pub entry: Option<String>,
+    /// The delivery positionals (`[shape] [runtime] [host]`) that follow the
+    /// entry — the shape cross-check and the web runtime/host selection. A
+    /// `desktop`/`ios`/`android` host produces a production distributable bundle.
+    pub delivery: DeliveryPositionals,
     /// `--out <dir>` — where to write the artifact (optional; defaults to
     /// `release/`).
     pub out: Option<String>,
@@ -908,6 +925,11 @@ pub struct ReleaseArgs {
     /// `--capabilities` / `--show-profile` — inspect the inferred capability
     /// model without building or writing anything.
     pub capabilities_only: bool,
+    /// `--emit-permissions <ios|macos|android>` — read-only inspection: print the
+    /// OS-permission declarations the app's accepted web capabilities derive on
+    /// the given platform, and build nothing. The raw platform word, validated at
+    /// execution against the closed `ios|macos|android` set.
+    pub emit_permissions: Option<String>,
     /// Output format for the `--capabilities` inspection.
     pub format: OutputFormat,
 }
@@ -922,12 +944,14 @@ pub struct ReleaseArgs {
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
 pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
     let mut it = rest.iter().peekable();
-    let entry = take_leading_entry(&mut it);
+    let entry = take_leading_entry_path(&mut it);
+    let delivery = take_delivery_positionals(&take_delivery_words(&mut it), "release")?;
 
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
     let mut target: Option<String> = None;
     let mut format: Option<OutputFormat> = None;
+    let mut emit_permissions: Option<String> = None;
     let mut saw_embed = false;
     let mut saw_bundle = false;
     let mut capabilities_only = false;
@@ -953,6 +977,12 @@ pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
                 &mut target,
                 take_value(&mut it, "--target", "release")?,
                 "--target",
+                "release",
+            )?,
+            "--emit-permissions" => set_once(
+                &mut emit_permissions,
+                take_value(&mut it, "--emit-permissions", "release")?,
+                "--emit-permissions",
                 "release",
             )?,
             "--embed" => saw_embed = true,
@@ -982,11 +1012,13 @@ pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
 
     Ok(ReleaseArgs {
         entry,
+        delivery,
         out,
         runtime,
         target,
         mode,
         capabilities_only,
+        emit_permissions,
         format: format.unwrap_or_default(),
     })
 }

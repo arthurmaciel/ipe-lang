@@ -160,7 +160,9 @@ const COMMANDS: &[Command] = &[
                     current project). shape is derived from `main` and, if written, only \
                     cross-checked. runtime/host apply to `web` only: `web` = served live (live is \
                     the unnamed default, never written), `web spa` = sandboxed browser client, and \
-                    a host is desktop/ios/android. With no delivery args, `build` builds the \
+                    a host is desktop/ios/android. A `desktop`/`ios`/`android` host lays out the \
+                    app bundle for that host (a fast dev bundle; `release web <host>` produces the \
+                    production distributable). With no delivery args, `build` builds the \
                     default delivery — the fast one-artifact inner loop; `release` builds every \
                     declared delivery. Delivery args select a subset or override for this \
                     invocation only and never edit package.ipe.",
@@ -192,6 +194,11 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--target <triple|wasm>]",
                 desc: "cross-compile to <triple>, or build for the browser with wasm",
+            },
+            Opt {
+                flag: "[--emit-permissions <ios|macos|android>]",
+                desc: "read-only: print the OS-permission declarations the app's accepted web \
+                       capabilities derive on the platform, and build nothing",
             },
             Opt {
                 flag: "[--allocator <auto|system|dlmalloc|talc|mimalloc>]",
@@ -241,10 +248,13 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "release",
         run: crate::run_release,
-        summary: "Build the production artifact — optimised, Debug.* gated. Native-bearing apps get a jailed bundle; pure-native apps get a plain optimised binary; `--target wasm` produces a production browser bundle.",
-        args: "[<path>]",
+        summary: "Build the production artifact — optimised, Debug.* gated. Native-bearing apps get a jailed bundle; pure-native apps get a plain optimised binary; `web desktop|ios|android` produces a production app bundle; `--target wasm` produces a production browser bundle.",
+        args: "[<path>] [<shape>] [<runtime>] [<host>]",
         args_desc: "A source file, a project directory, or a package.ipe (default: the current \
-                    project). With no delivery args, `release` builds every delivery declared in \
+                    project). shape/runtime/host are the delivery grammar shared with `build`: a \
+                    `desktop`/`ios`/`android` host lays out the production app bundle for that host \
+                    (a self-contained desktop bundle, or a native mobile system-webview shell). \
+                    With no delivery args, `release` builds every delivery declared in \
                     package.ipe (`build` builds only the default one). Signing is release-time env, \
                     never in package.ipe.",
         options: &[
@@ -255,6 +265,11 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--target wasm|<triple>]",
                 desc: "produce a browser bundle (`wasm`) or a musl-static binary for <triple> (default: x86_64-unknown-linux-musl)",
+            },
+            Opt {
+                flag: "[--emit-permissions <ios|macos|android>]",
+                desc: "read-only: print the OS-permission declarations the app's accepted web \
+                       capabilities derive on the platform, and build nothing",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -605,46 +620,6 @@ const COMMANDS: &[Command] = &[
         hidden: false,
     },
     Command {
-        name: "pack",
-        run: crate::run_pack,
-        summary: "Package a webview app into a desktop bundle or a mobile system-webview shell, \
-                  or derive its native-shell OS-permission declarations.",
-        args: "--target desktop[:<linux|macos|windows>] [<path>]  |  --target \
-               mobile:<ios|android> [<path>]  |  --emit-permissions <ios|macos|android> [<path>]",
-        args_desc: "With `--target desktop`, builds the app and lays out a self-contained \
-                    desktop bundle for the given OS (the host OS by default): a Linux tarball \
-                    (WebKitGTK runtime dep), a macOS `.app` (Info.plist permission keys derived \
-                    from the accepted web capabilities), or a Windows `.exe` + portable zip \
-                    (WebView2 runtime dep). The Linux artifact is built here; a macOS/Windows \
-                    bundle's layout is written for inspection and must be finished on that OS's \
-                    runner. With `--target mobile:<ios|android>`, builds the client-wasm `Web` \
-                    SPA and lays out a native mobile shell that hosts it offline from app assets: \
-                    an Android Gradle project (WebView + WebViewAssetLoader; AndroidManifest \
-                    `<uses-permission>` derived from the accepted web capabilities) or an iOS \
-                    Xcode project (WKWebView + WKURLSchemeHandler; Info.plist keys derived the \
-                    same way). The wasm bundle is built here; the Android app can be finished with \
-                    the Android SDK, the iOS app on a macOS + Xcode runner. With \
-                    `--emit-permissions`, prints (read-only) the derived Info.plist keys \
-                    (ios/macos) or AndroidManifest fragment (android) for the app's \
-                    `[capabilities] accepts` set. The optional path is the project directory or \
-                    package.ipe (defaults to the current project).",
-        options: &[
-            Opt {
-                flag: "--target desktop[:<linux|macos|windows>]",
-                desc: "build and lay out a desktop bundle for the given OS (host OS by default)",
-            },
-            Opt {
-                flag: "--target mobile:<ios|android>",
-                desc: "build the wasm SPA and lay out a mobile system-webview shell for the OS",
-            },
-            Opt {
-                flag: "--emit-permissions <ios|macos|android>",
-                desc: "print the OS-permission declarations required on the given platform",
-            },
-        ],
-        hidden: false,
-    },
-    Command {
         name: "login",
         run: crate::login::run_login,
         summary: "Authorize ipe with GitHub (device flow) and store a publish token.",
@@ -834,7 +809,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         title: "Package authoring",
-        commands: &["login", "package", "pack"],
+        commands: &["login", "package"],
     },
     Section {
         title: "Foreign-function interface (FFI)",
