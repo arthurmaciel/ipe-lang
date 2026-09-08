@@ -63,11 +63,12 @@ pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
                     None => print!("{}", help::help_json()),
                 }
             } else {
-                // `help <cmd>` / `--help <cmd>`: that command's page, else the
-                // top-level screen.
-                let named = rest_no_json
-                    .first()
-                    .and_then(|c| help::command(c.as_str(), &std::io::stdout()));
+                // `help <name>` / `--help <name>`: that command's page, a
+                // group's subpage, or the top-level screen — in that order.
+                let named = rest_no_json.first().and_then(|c| {
+                    help::command(c.as_str(), &std::io::stdout())
+                        .or_else(|| help::group(c.as_str(), &std::io::stdout()))
+                });
                 match named {
                     Some(page) => print!("{page}"),
                     None => print!("{}", help::top_level(&std::io::stdout())),
@@ -76,6 +77,43 @@ pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
             return Some(HelpRequest);
         }
         _ => {}
+    }
+
+    // `ipe <group> <verb> --help`: the member verb's own command page — the
+    // grouped form and the bare form share the one help page. Checked BEFORE the
+    // bare-group branch so a member verb's `--help` resolves to the verb, not the
+    // group subpage.
+    if let Some((group, tail)) = args.split_first()
+        && help::is_group(group)
+        && let Some((verb, rest)) = tail.split_first()
+        && help::is_group_member(group, verb)
+        && rest.iter().any(|a| is_help_flag(a))
+    {
+        if has_json(rest) {
+            if let Some(json) = help::command_json(verb) {
+                print!("{json}");
+                return Some(HelpRequest);
+            }
+        } else if let Some(page) = help::command(verb, &std::io::stdout()) {
+            print!("{page}");
+            return Some(HelpRequest);
+        }
+    }
+
+    // A command group invoked bare (`ipe dev`) or with a help flag directly on
+    // the group (`ipe dev --help`): its subpage. Progressive help — a group with
+    // no verb teaches its verbs rather than erroring. A member verb followed by
+    // `--help` was already resolved to the verb's page above; a group followed by
+    // a NON-member token falls through to `run_cli`, which reports the unknown
+    // verb over the subpage. So this fires only when the group leads and either
+    // stands alone or is immediately helped.
+    if let Some((first, rest)) = args.split_first()
+        && help::is_group(first)
+        && (rest.is_empty() || (rest.first().is_some_and(|a| is_help_flag(a))))
+        && let Some(page) = help::group(first, &std::io::stdout())
+    {
+        print!("{page}");
+        return Some(HelpRequest);
     }
 
     // `<cmd> --help [--json]`: the command's own page, when the command is known.
@@ -138,6 +176,33 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
              <ios|macos|android>`."
                 .to_owned(),
         ));
+    }
+    // A command group (`ipe dev <verb> …`) dispatches to the member verb's own
+    // handler — the grouped and bare forms run the same code, so a verb under
+    // `dev` is a dev-posture build by construction. A group followed by an
+    // unknown token is misuse: its subpage is shown with an "unknown verb" line.
+    // (A bare group or `ipe dev --help` was already handled by `intercept_help`.)
+    if let Some(group) = help::group_name(cmd.as_str()) {
+        let Some((verb, tail)) = rest.split_first() else {
+            // Unreachable in practice — a bare group is intercepted as help
+            // above — but handled totally rather than assumed away.
+            return Err(CliError::UnknownGroupSub {
+                group,
+                attempted: String::new(),
+            });
+        };
+        return match help::handler(verb.as_str()) {
+            Some((name, run)) if help::is_group_member(group, verb.as_str()) => {
+                with_help_on_misuse(name, run(tail))
+            }
+            // A known command that is not a member of this group, or an unknown
+            // token: both are an unknown verb FOR THIS GROUP. Routing a non-member
+            // command through the group is refused so the namespace stays honest.
+            _ => Err(CliError::UnknownGroupSub {
+                group,
+                attempted: verb.clone(),
+            }),
+        };
     }
     // One registry drives both dispatch and help: a command runs exactly when it
     // is described, so the two cannot drift. The handler carries the canonical
@@ -2258,6 +2323,19 @@ pub fn nearest_command(attempted: &str) -> Option<&'static str> {
         .filter(|&(dist, _)| dist <= 3)
         .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)))
         .map(|(_, name)| name)
+}
+
+/// The verb of `group` closest to `attempted` by Levenshtein distance, within a
+/// small edit threshold — the "maybe `ipe dev run`?" hint after a mistyped group
+/// verb. `None` when nothing is close enough, or when `group` is not a known
+/// group.
+pub fn nearest_group_member(group: &str, attempted: &str) -> Option<&'static str> {
+    help::group_members(group)?
+        .iter()
+        .map(|&verb| (levenshtein(attempted, verb), verb))
+        .filter(|&(dist, _)| dist <= 3)
+        .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)))
+        .map(|(_, verb)| verb)
 }
 
 /// The closest known codes to `canonical` (already upper-cased), ranked by

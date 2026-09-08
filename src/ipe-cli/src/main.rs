@@ -21,6 +21,7 @@ fn main() -> ExitCode {
         Err(
             err @ (ipe::CliError::UnknownCommand { .. }
             | ipe::CliError::CommandUsage { .. }
+            | ipe::CliError::UnknownGroupSub { .. }
             | ipe::CliError::DocCoverage(_)
             | ipe::CliError::DocExamplesFailed(_)
             | ipe::CliError::VerifyFailed { .. }

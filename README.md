@@ -80,6 +80,14 @@ ipe type-check src/Main.ipe # type-check only — no build, no run
 ipe verify                  # the whole project gate: format, type-check, build
 ```
 
+Two build postures split the CLI along a security axis. The development loop —
+`ipe dev build`, `ipe dev run`, `ipe dev watch` — leaves the `Debug.*` escape
+hatch on, ships unsigned, and allows hot-reload; `build`, `run`, and `watch`
+stay valid as bare shortcuts for the same dev posture. `ipe release` is the
+shipping posture: optimised, `Debug.*` rejected, native code jailed. Hot-reload
+belongs only to development, so there is no way to `watch` a release — it is not
+in the grammar. Run `ipe dev` (or any group with no verb) to see its verbs.
+
 Prefer building from source? 
 
 ```sh
