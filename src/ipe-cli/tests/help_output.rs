@@ -42,10 +42,12 @@ fn run(args: &[&str]) -> Run {
     }
 }
 
-/// Every command name and every section title, for coverage assertions.
-const COMMANDS: &[&str] = &[
-    "init", "build", "run", "watch", "fix", "fmt", "rust", "doc", "lsp", "version",
-];
+/// Top-level command names shown directly on the overview screen, for coverage
+/// assertions. The dev-loop verbs (`build`/`run`/`watch`) are NOT here — they
+/// are advertised under the `dev` group node, exercised separately.
+const COMMANDS: &[&str] = &["init", "fix", "fmt", "rust", "doc", "lsp", "version"];
+/// The `dev` group's verbs — advertised via `ipe dev`, not as top-level lines.
+const DEV_VERBS: &[&str] = &["build", "run", "watch"];
 const SECTIONS: &[&str] = &[
     "Development",
     "Quality",
@@ -79,6 +81,17 @@ fn top_level_help_lists_every_command_and_section() {
         assert!(
             r.stdout.contains(&format!("ipe {cmd}")),
             "top-level help missing `ipe {cmd}`"
+        );
+    }
+    // The `dev` group is advertised as its own node; its verbs are not top-level.
+    assert!(
+        r.stdout.contains("ipe dev"),
+        "top-level help must advertise the `dev` group node"
+    );
+    for verb in DEV_VERBS {
+        assert!(
+            !r.stdout.contains(&format!("ipe {verb} ")),
+            "dev verb `{verb}` must be grouped under `ipe dev`, not shown top-level"
         );
     }
 
@@ -291,4 +304,114 @@ fn help_word_alone_and_help_of_unknown_both_succeed() {
         "`ipe help <unknown>` must fall back to the top-level, exit 0"
     );
     assert!(r.stdout.contains("Ipê language"));
+}
+
+#[test]
+fn dev_group_bare_prints_its_subpage_and_succeeds() {
+    // A group invoked with no verb teaches its verbs on stdout, exit 0 — it is a
+    // help request, not an error.
+    let r = run(&["dev"]);
+    assert!(r.ok, "`ipe dev` must exit 0");
+    assert!(r.stderr.is_empty(), "`ipe dev` must not write to stderr");
+    assert!(
+        r.stdout.contains("ipe dev <verb>"),
+        "must show the synopsis"
+    );
+    for verb in DEV_VERBS {
+        assert!(
+            r.stdout.contains(&format!("ipe dev {verb}")),
+            "`ipe dev` subpage must list the `{verb}` verb"
+        );
+    }
+}
+
+#[test]
+fn dev_group_help_flag_matches_the_bare_subpage() {
+    let bare = run(&["dev"]);
+    let flagged = run(&["dev", "--help"]);
+    assert!(flagged.ok, "`ipe dev --help` must exit 0");
+    assert_eq!(
+        bare.stdout, flagged.stdout,
+        "`ipe dev` and `ipe dev --help` must render the identical subpage"
+    );
+}
+
+#[test]
+fn dev_unknown_verb_shows_the_subpage_on_stderr_and_fails() {
+    // git-style: `ipe dev <unknown>` reports the unknown verb, then the group's
+    // subpage, on stderr, and exits non-zero.
+    let r = run(&["dev", "definitely-not-a-verb"]);
+    assert!(!r.ok, "an unknown group verb must exit non-zero");
+    assert!(r.stdout.is_empty(), "misuse must not write to stdout");
+    assert!(
+        r.stderr.contains("unknown `ipe dev` verb"),
+        "the reason must lead the misuse output, got:\n{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("ipe dev <verb>"),
+        "the group subpage must follow the reason"
+    );
+}
+
+#[test]
+fn dev_mistyped_verb_suggests_the_nearest_member() {
+    let r = run(&["dev", "biuld"]);
+    assert!(!r.ok);
+    assert!(
+        r.stderr.contains("maybe `ipe dev build`?"),
+        "a near-miss verb must suggest the closest member, got:\n{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn release_is_not_a_group_so_watch_under_release_is_unrepresentable() {
+    // The dev/release posture is a namespace, not a flag: `release` is a plain
+    // command with no `watch` reachable beneath it. `ipe release watch` is
+    // therefore not a grouped hot-reload — it is `ipe release` handed a stray
+    // `watch` path argument, never the watch loop.
+    let r = run(&["dev", "release"]);
+    assert!(
+        !r.ok,
+        "`release` is not a `dev` verb — hot-reloading a shipping build is unrepresentable"
+    );
+    assert!(
+        r.stderr.contains("unknown `ipe dev` verb `release`"),
+        "routing a non-member through the group must be refused, got:\n{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn dev_verb_help_resolves_to_the_verbs_own_page_not_the_group() {
+    // `ipe dev run --help` must show the RUN command page (shared with the bare
+    // form), not the group subpage — help guides forward at each step.
+    let grouped = run(&["dev", "run", "--help"]);
+    assert!(grouped.ok, "`ipe dev run --help` must exit 0");
+    assert!(
+        grouped.stdout.contains("run the resulting binary"),
+        "must show the `run` synopsis, got:\n{}",
+        grouped.stdout
+    );
+    let bare = run(&["run", "--help"]);
+    assert_eq!(
+        grouped.stdout, bare.stdout,
+        "`ipe dev run --help` and `ipe run --help` must render the same page"
+    );
+}
+
+#[test]
+fn dev_verbs_stay_dispatchable_bare_as_dev_posture_aliases() {
+    // The bare shortcuts remain valid dev-posture entries. With nothing to build,
+    // each reports the same "nothing to build here" usage as its grouped form —
+    // proving the two share one handler.
+    for verb in ["build", "run", "watch"] {
+        let bare = run(&[verb]);
+        let grouped = run(&["dev", verb]);
+        assert_eq!(
+            bare.stderr, grouped.stderr,
+            "`ipe {verb}` and `ipe dev {verb}` must behave identically"
+        );
+    }
 }
