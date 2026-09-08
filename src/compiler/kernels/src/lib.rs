@@ -8250,7 +8250,10 @@ impl StdlibKernel {
         const VIEW_ELEM_FN: TyShape = TyShape::Fun(&A, &UI_ELEM_B);
         const CELLS_B: TyShape = TyShape::Con(BuiltinTag::Cells, &[B]);
         const VIEW_CELLS_FN: TyShape = TyShape::Fun(&A, &CELLS_B);
-        const VIEW_STRING_FN: TyShape = TyShape::Fun(&A, &STRING);
+        // `Cli.app` view: `model -> Lines msg` (the line-oriented `Lines`
+        // view, `msg` = var(1) = B), mirroring the constrain scheme.
+        const LINES_B: TyShape = TyShape::Con(BuiltinTag::CliLines, &[B]);
+        const VIEW_LINES_FN: TyShape = TyShape::Fun(&A, &LINES_B);
         const SUBS_FN: TyShape = TyShape::Fun(&A, &SUB_B);
         const LIST_WEB_ROUTE_C: TyShape = TyShape::Con(BuiltinTag::List, &[WEB_ROUTE_C]);
         // `Web.app` cfg — OPEN row (var(3) absorbs optional extra fields).
@@ -8284,13 +8287,13 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Open(3),
         };
-        // `Cli.app` — `view : model -> String`, `onLine`, CLOSED.
+        // `Cli.app` — `view : model -> Lines msg`, `onLine`, CLOSED.
         const ON_LINE_FN: TyShape = TyShape::Fun(&STRING, &B);
         const TERMINAL_LINES_CFG: TyShape = TyShape::Record {
             fields: &[
                 (FieldTag::AppInit, &UNIT_TO_TUPLE),
                 (FieldTag::AppUpdate, &UPDATE_FN),
-                (FieldTag::AppView, &VIEW_STRING_FN),
+                (FieldTag::AppView, &VIEW_LINES_FN),
                 (FieldTag::AppSubscriptions, &SUBS_FN),
                 (FieldTag::TerminalOnLine, &ON_LINE_FN),
             ],
