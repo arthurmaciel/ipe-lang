@@ -537,6 +537,12 @@ const STD_UI_CLI: &str = include_str!("../Ipe/Ui/Cli.ipe");
 /// view surfaces accept it in their `color` / `bg` builders.
 const STD_TEA_TERMINAL_COLOR: &str = include_str!("../Ipe/App/Tea/Terminal/Color.ipe");
 
+/// `Ipe.App.Script` — the Script shape's entry (`program`). Pure Ipê: `program`
+/// is the identity on its `Task Error ()`, so wrapping a task changes nothing at
+/// runtime; the wrapper's job is to name the Script shape at a `main`'s head, so
+/// every shape pins its shape by what `main` head-calls.
+const STD_APP_SCRIPT: &str = include_str!("../Ipe/App/Script.ipe");
+
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
 ///
 /// Pure Ipê source: defines the `Codec a` nominal union (an encoder plus a
@@ -1517,6 +1523,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.App.Tea.Terminal.Color",
         source: STD_TEA_TERMINAL_COLOR,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.App.Script",
+        source: STD_APP_SCRIPT,
     },
     CompiledStdModule {
         dotted: "Ipe.Codec",
