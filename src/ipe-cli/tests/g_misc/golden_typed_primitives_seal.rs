@@ -5,7 +5,10 @@
 //! builds a program that constructs each through its boundary and reads it back
 //! through its `toX` accessor, and — the load-bearing refusals — proves that an
 //! out-of-range port (`70000`) and the reserved `0` sentinel are runtime `Err`
-//! from `Net.fromInt`.
+//! from `Net.fromInt`. It also pins `Ipe.Duration`'s non-negativity invariant: a
+//! negative input to a constructor clamps to the zero span (`neg 0 0`), so a
+//! negative-millisecond duration that could disable a timeout floor has no
+//! representation.
 //!
 //! The frontend-accepts assertion runs in the default gate; the build-and-run
 //! proof is `IPE_E2E`-gated, matching every other golden in this suite.
@@ -75,6 +78,7 @@ fn typed_primitives_seal_builds_and_runs() {
                     high rejected\n\
                     zero rejected\n\
                     dur 30000 120000\n\
+                    neg 0 0\n\
                     bytes 10485760 4096\n\
                     sat 9223372036854720000 9223372036853727232";
     assert_eq!(

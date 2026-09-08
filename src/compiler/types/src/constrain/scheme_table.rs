@@ -148,6 +148,7 @@ impl Builder<'_> {
             BuiltinTag::Locale => self.builtins.locale,
             BuiltinTag::HttpMethod => self.builtins.http_method,
             BuiltinTag::RedirectPolicy => self.builtins.redirect_policy,
+            BuiltinTag::Duration => self.builtins.duration,
             BuiltinTag::CryptoKey => self.builtins.crypto_key,
             BuiltinTag::CryptoMac => self.builtins.crypto_mac,
             BuiltinTag::EmailAddress => self.builtins.email_address,
@@ -309,6 +310,11 @@ impl Builder<'_> {
             // unhomed `Con` misses the lowerer's home-keyed variant lookup and
             // drops into the unknown-builtin internal-compiler-error arm.
             BuiltinTag::EmailProvider => self.builtins.email_home.clone(),
+            // `Duration` is a compiled-source ADT (`Ipe.Duration.Duration`), not a
+            // folded builtin — its `Http.withTimeout` scheme reference must carry
+            // the real `["Ipe", "Duration"]` home so a point-free use lowers to the
+            // emitted enum, exactly as `EmailProvider` does.
+            BuiltinTag::Duration => self.builtins.duration_home.clone(),
             _ => Vec::new(),
         }
     }
@@ -1107,6 +1113,15 @@ impl Builder<'_> {
             name: self.builtins.redirect_policy,
             args: Vec::new(),
         };
+        // `Ipe.Duration.Duration` — a compiled-source opaque ADT, so (unlike the
+        // folded builtins above) it carries its real module home; the emitted
+        // point-free reference then lowers to the compiled-module enum. Consumed
+        // by `Http.withTimeout` as its typed timeout argument.
+        let duration_ty = || Ty::Con {
+            module: self.builtins.duration_home.clone(),
+            name: self.builtins.duration,
+            args: Vec::new(),
+        };
         let http_request = || {
             let mut req_fields = BTreeMap::new();
             req_fields.insert(self.builtins.http_f_body, string());
@@ -1746,7 +1761,7 @@ impl Builder<'_> {
             K::HttpWithMethod => fun(http_method_ty(), fun(http_request(), http_request())),
             K::HttpMethodFromString => fun(string(), maybe(http_method_ty())),
             K::HttpMethodToString => fun(http_method_ty(), string()),
-            K::HttpWithTimeout => fun(int(), fun(http_request(), http_request())),
+            K::HttpWithTimeout => fun(duration_ty(), fun(http_request(), http_request())),
             K::HttpWithBody => fun(string(), fun(http_request(), http_request())),
             K::HttpWithHeader => fun(string(), fun(string(), fun(http_request(), http_request()))),
             K::HttpWithUrl => fun(url(), fun(http_request(), result(error_ty(), http_request()))),
