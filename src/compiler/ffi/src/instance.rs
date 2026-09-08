@@ -876,13 +876,13 @@ mod tests {
     fn modellable_5_matches_the_inspector_declaration() {
         let inspector_src = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../tools/ipe-ffi-inspector/src/main.rs"
+            "/../../../tools/ipe-ffi-inspector/src/model.rs"
         );
         let src = std::fs::read_to_string(inspector_src)
             .expect("inspector source must exist for the drift fence");
         let decl_line = src
             .lines()
-            .find(|l| l.starts_with("const MODELLABLE_5:"))
+            .find(|l| l.contains("const MODELLABLE_5:"))
             .expect("inspector must declare MODELLABLE_5");
         let inspector_set: Vec<&str> = decl_line.split('"').skip(1).step_by(2).collect();
         assert_eq!(
