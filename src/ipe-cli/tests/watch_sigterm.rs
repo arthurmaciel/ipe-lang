@@ -120,10 +120,15 @@ fn warm_server_fixture_deps() -> Result<(), BoxError> {
     // RUSTC_WRAPPER override): cargo fingerprints include the wrapper, so a
     // warm built without sccache produces artifacts with a different fingerprint
     // than the watch's sccache-enabled build, forcing a full recompile and
-    // defeating the warm-up entirely.
-    let _cargo_status = Command::new("cargo")
-        .arg("build")
-        .current_dir(&out_dir)
+    // defeating the warm-up entirely. Pin the SAME shared target the watch's
+    // build is forwarded (IPE_ORACLE_SHARED_TARGET in CI), so the deps land where
+    // the watch links them instead of in a throwaway per-dir target.
+    let mut cargo = Command::new("cargo");
+    cargo.arg("build").current_dir(&out_dir);
+    if let Some(target) = e2e_support::child_shared_target_from_env() {
+        cargo.env("CARGO_TARGET_DIR", target);
+    }
+    let _cargo_status = cargo
         .status()
         .map_err(|e| -> BoxError { format!("warm: cargo build spawn: {e}").into() })?;
 
@@ -248,8 +253,8 @@ fn spawn_ipe_watch(
 ) -> Result<std::process::Child, BoxError> {
     let runtime_dir = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
-    std::process::Command::new(support::ipe_bin())
-        .arg("watch")
+    let mut cmd = std::process::Command::new(support::ipe_bin());
+    cmd.arg("watch")
         .arg(entry)
         .arg("--out")
         .arg(out_dir)
@@ -258,8 +263,15 @@ fn spawn_ipe_watch(
         .arg("--port")
         .arg(port.to_string())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .stderr(std::process::Stdio::null());
+    // Forward CI's warm shared target (exported ONLY as IPE_ORACLE_SHARED_TARGET)
+    // as the child `ipe watch`'s CARGO_TARGET_DIR, so its rebuild links against a
+    // pre-compiled dep tree — the SAME target `warm_server_fixture_deps` warms.
+    // Absent (a bare local run) the child stays isolated exactly as before.
+    if let Some(target) = e2e_support::child_shared_target_from_env() {
+        cmd.env("CARGO_TARGET_DIR", target);
+    }
+    cmd.spawn()
         .map_err(|e| -> BoxError { format!("ipe watch must spawn: {e}").into() })
 }
 
