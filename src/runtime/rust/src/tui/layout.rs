@@ -2467,6 +2467,38 @@ fn parse_palette_code(s: &str) -> Option<u8> {
         .and_then(|(_, code)| code.parse::<u8>().ok())
 }
 
+/// SGR codes for one truecolour cell colour, down-sampled to the resolved
+/// terminal profile through the ONE colour degradation point
+/// ([`crate::color::Color::to_ansi`]). `fg` selects the foreground escape
+/// family (`38`/`3x`/`9x`) vs the background (`48`/`4x`/`10x`).
+///
+/// A [`crate::color::AnsiColor::Default`] contributes no code (the cell keeps the
+/// terminal default), matching the previous behaviour for a fully-transparent bg.
+fn ansi_sgr_codes(rgb: (u8, u8, u8), profile: crate::color::TermProfile, fg: bool) -> Vec<String> {
+    use crate::color::AnsiColor;
+    let (r, g, b) = rgb;
+    let color = crate::color::Color::rgb(i64::from(r), i64::from(g), i64::from(b));
+    match color.to_ansi(profile) {
+        AnsiColor::Default => Vec::new(),
+        AnsiColor::Rgb(r, g, b) => {
+            let intro = if fg { 38 } else { 48 };
+            vec![format!("{intro};2;{r};{g};{b}")]
+        }
+        AnsiColor::Indexed(i) => {
+            let intro = if fg { 38 } else { 48 };
+            vec![format!("{intro};5;{i}")]
+        }
+        // The 16-colour palette maps index `0..=7` to the standard SGR base
+        // (30-37 fg / 40-47 bg) and `8..=15` to the bright base (90-97 / 100-107).
+        AnsiColor::Named(idx) => {
+            let idx = idx.clamp(0, 15);
+            let (lo, hi) = if fg { (30, 90) } else { (40, 100) };
+            let code = if idx < 8 { lo + idx } else { hi + (idx - 8) };
+            vec![code.to_string()]
+        }
+    }
+}
+
 fn sgr(style: Style) -> String {
     let mut codes: Vec<String> = Vec::new();
     if style.bold {
@@ -2490,19 +2522,22 @@ fn sgr(style: Style) -> String {
     if style.reverse {
         codes.push("7".to_string());
     }
+    // Resolve the terminal colour capability once; the truecolour cell colours
+    // degrade through the single `Color::to_ansi` point (never re-derived here).
+    let profile = crate::color::resolve_term_profile();
     if !no_color() {
         // A named-palette code takes precedence over truecolour: the portable
-        // path emits its own SGR code (30-37 / 90-97 / 39), else fall back to the
-        // 24-bit truecolour sequence.
+        // path emits its own SGR code (30-37 / 90-97 / 39), else the cell colour
+        // degrades through `Color::to_ansi`.
         if let Some(code) = style.fg_palette {
             codes.push(code.to_string());
-        } else if let Some((r, g, b)) = style.fg {
-            codes.push(format!("38;2;{r};{g};{b}"));
+        } else if let Some(rgb) = style.fg {
+            codes.extend(ansi_sgr_codes(rgb, profile, true));
         }
         if let Some(code) = style.bg_palette {
             codes.push(code.to_string());
-        } else if let Some((r, g, b)) = style.bg {
-            codes.push(format!("48;2;{r};{g};{b}"));
+        } else if let Some(rgb) = style.bg {
+            codes.extend(ansi_sgr_codes(rgb, profile, false));
         }
     }
     if codes.is_empty() {

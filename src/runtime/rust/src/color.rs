@@ -263,6 +263,25 @@ impl Color {
         }
     }
 
+    /// The always-`rgba(r,g,b,a)` CSS spelling — the exact form the `Ipe.Ui` and
+    /// `Ipe.Css` surfaces have always emitted (alpha never collapses to `rgb(…)`).
+    /// This is the shared renderer both DOM surfaces call so a single site owns
+    /// how a colour is spelled for CSS; [`Color::to_css`] is the newer
+    /// alpha-collapsing form reserved for surfaces that opt into it.
+    ///
+    /// Alpha is spelled with the default `f64` `Display` (`1.0`→`1`, `0.5`→`0.5`),
+    /// matching the pre-existing `Ui`/`Css` byte-for-byte so shared CSS goldens
+    /// stay exact.
+    #[must_use]
+    pub fn to_css_rgba(&self) -> String {
+        let (r, g, b) = (
+            unit_to_byte(self.r),
+            unit_to_byte(self.g),
+            unit_to_byte(self.b),
+        );
+        format!("rgba({r},{g},{b},{})", self.a)
+    }
+
     /// `Ipe.Color.toHex` — `#rrggbb`, or `#rrggbbaa` when alpha `< 1`.
     #[must_use]
     pub fn to_hex(&self) -> String {
@@ -613,6 +632,37 @@ fn nearest_256(r: i64, g: i64, b: i64) -> i64 {
     }
 }
 
+/// Resolve the terminal colour capability once, deterministically, from the
+/// environment — the single place `Tui`/`Cli` decide how far a truecolour must
+/// degrade (the lipgloss/termenv resolution order, made total and explicit).
+///
+/// * `NO_COLOR` set (any value, per <https://no-color.org>) → [`TermProfile::NoColor`].
+/// * `COLORTERM` = `truecolor` / `24bit` → [`TermProfile::TrueColor`].
+/// * `TERM` containing `256color` → [`TermProfile::Ansi256`].
+/// * `TERM` = `dumb` → [`TermProfile::NoColor`].
+/// * otherwise → [`TermProfile::TrueColor`] — the conservative default keeps the
+///   full-fidelity `38;2;r;g;b` path (and every existing terminal golden) intact
+///   unless the environment explicitly asks for less.
+#[must_use]
+pub fn resolve_term_profile() -> TermProfile {
+    // `NO_COLOR` present and non-empty (<https://no-color.org>) forces no colour,
+    // matching the terminal renderer's own `no_color()` gate.
+    if matches!(crate::system::read_env_var("NO_COLOR"), Ok(v) if !v.is_empty()) {
+        return TermProfile::NoColor;
+    }
+    if let Ok(ct) = crate::system::read_env_var("COLORTERM") {
+        let ct = ct.to_ascii_lowercase();
+        if ct == "truecolor" || ct == "24bit" {
+            return TermProfile::TrueColor;
+        }
+    }
+    match crate::system::read_env_var("TERM") {
+        Ok(term) if term == "dumb" => TermProfile::NoColor,
+        Ok(term) if term.contains("256color") => TermProfile::Ansi256,
+        _ => TermProfile::TrueColor,
+    }
+}
+
 /// The curated named-colour set (`fromName`). Deliberately small — the CSS
 /// Level-4 basic + common set, not all 148 names. Community palettes ship their
 /// own tables returning `Color` values.
@@ -687,6 +737,23 @@ mod tests {
         );
         // opaque alpha collapses to rgb()
         assert_eq!(Color::rgba(0, 0, 0, 1.0).to_css(), "rgb(0,0,0)");
+    }
+
+    #[test]
+    fn to_css_rgba_never_collapses_alpha() {
+        // The shared DOM spelling: alpha always present, `1.0`→`1` (byte-exact
+        // with the pre-existing `Ui`/`Css` `rgba(…)` goldens).
+        assert_eq!(Color::rgba(0, 0, 0, 1.0).to_css_rgba(), "rgba(0,0,0,1)");
+        assert_eq!(Color::rgba(255, 0, 0, 1.0).to_css_rgba(), "rgba(255,0,0,1)");
+        assert_eq!(
+            Color::rgba(0, 128, 255, 1.0).to_css_rgba(),
+            "rgba(0,128,255,1)"
+        );
+        assert_eq!(Color::rgba(0, 0, 0, 0.0).to_css_rgba(), "rgba(0,0,0,0)");
+        assert_eq!(
+            Color::rgba(255, 128, 0, 0.5).to_css_rgba(),
+            "rgba(255,128,0,0.5)"
+        );
     }
 
     #[test]
