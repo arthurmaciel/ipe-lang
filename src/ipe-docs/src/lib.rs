@@ -57,6 +57,25 @@ pub enum EntryKind {
     EnvVar,
 }
 
+impl EntryKind {
+    /// The single URL/path subdirectory segment for this kind.
+    ///
+    /// This is the SSOT for a kind's route: both the on-disk page directory
+    /// (`<out>/<subdir>/<key>/index.html`) and the index-page hyperlinks
+    /// (`/<subdir>/<source_key>/`) derive from it, so the two can never drift.
+    #[must_use]
+    pub const fn route_subdir(&self) -> &'static str {
+        match self {
+            Self::Symbol => "symbol",
+            Self::Module => "module",
+            Self::Diagnostic => "diagnostic",
+            Self::Construct => "construct",
+            Self::Command => "command",
+            Self::EnvVar => "env-var",
+        }
+    }
+}
+
 /// A resolved documentation entry.
 ///
 /// The `text` field carries the raw documentation text as it appears in the

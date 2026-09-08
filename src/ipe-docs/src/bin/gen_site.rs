@@ -149,23 +149,10 @@ fn sorted_keys<'i>(index: &'i Index) -> Vec<&'i str> {
 // ── Per-entry page emission ───────────────────────────────────────────────────
 
 fn emit_entry_page(out_dir: &Path, key: &str, entry: &Entry) -> Result<(), String> {
-    let (subdir, url_segment) = page_path(key, &entry.kind);
-    let page_dir = out_dir.join(subdir).join(url_segment);
+    let page_dir = out_dir.join(entry.kind.route_subdir()).join(key);
     create_dir_all(&page_dir)?;
     let html = render_entry(key, entry);
     write_file(&page_dir.join("index.html"), &page(key, &html))
-}
-
-/// Return the `(subdirectory, slug)` for an entry's URL.
-const fn page_path<'k>(key: &'k str, kind: &EntryKind) -> (&'static str, &'k str) {
-    match kind {
-        EntryKind::Symbol => ("symbol", key),
-        EntryKind::Module => ("module", key),
-        EntryKind::Diagnostic => ("diagnostic", key),
-        EntryKind::Construct => ("construct", key),
-        EntryKind::Command => ("command", key),
-        EntryKind::EnvVar => ("env-var", key),
-    }
 }
 
 // ── Entry renderer ────────────────────────────────────────────────────────────
@@ -260,68 +247,50 @@ fn render_index(
 ) -> String {
     let mut out = String::from("<h1>Ipê documentation</h1>\n");
 
-    if !modules.is_empty() {
-        out.push_str("<h2>Modules</h2>\n<ul class=\"index-list\">\n");
-        for e in modules {
-            let url = format!("/module/{}/", e.source_key);
-            let name = html_escape(&e.source_key);
-            let _ = writeln!(out, "<li><a href=\"{url}\">{name}</a></li>");
-        }
-        out.push_str("</ul>\n");
-    }
-
-    if !constructs.is_empty() {
-        out.push_str("<h2>Language constructs</h2>\n<ul class=\"index-list\">\n");
-        for e in constructs {
-            let url = format!("/construct/{}/", e.source_key);
-            let name = html_escape(&e.source_key);
-            let _ = writeln!(out, "<li><a href=\"{url}\">{name}</a></li>");
-        }
-        out.push_str("</ul>\n");
-    }
-
-    if !diagnostics.is_empty() {
-        out.push_str("<h2>Diagnostics</h2>\n<ul class=\"index-list\">\n");
-        for e in diagnostics {
-            let url = format!("/diagnostic/{}/", e.source_key);
-            let name = html_escape(&e.source_key);
-            let _ = writeln!(out, "<li><a href=\"{url}\">{name}</a></li>");
-        }
-        out.push_str("</ul>\n");
-    }
-
-    if !commands.is_empty() {
-        out.push_str("<h2>CLI commands</h2>\n<ul class=\"index-list\">\n");
-        for e in commands {
-            let url = format!("/command/{}/", e.source_key);
-            let name = html_escape(&e.source_key);
-            let summary = html_escape(&e.text);
-            let _ = writeln!(out, "<li><a href=\"{url}\">{name}: {summary}</a></li>");
-        }
-        out.push_str("</ul>\n");
-    }
-
-    if !env_vars.is_empty() {
-        out.push_str("<h2>Environment variables</h2>\n<ul class=\"index-list\">\n");
-        for e in env_vars {
-            let url = format!("/env-var/{}/", e.source_key);
-            let name = html_escape(&e.source_key);
-            let _ = writeln!(out, "<li><a href=\"{url}\">{name}</a></li>");
-        }
-        out.push_str("</ul>\n");
-    }
-
-    if !symbols.is_empty() {
-        out.push_str("<h2>Symbols</h2>\n<ul class=\"index-list\">\n");
-        for e in symbols {
-            let url = format!("/symbol/{}/", e.source_key);
-            let name = html_escape(&e.source_key);
-            let _ = writeln!(out, "<li><a href=\"{url}\">{name}</a></li>");
-        }
-        out.push_str("</ul>\n");
-    }
+    // Sections in fixed presentation order. Every list item links to
+    // `/<route_subdir>/<source_key>/`, so each entry's kind is the single
+    // source of its URL prefix — no hard-coded path fragment lives here.
+    render_index_section(&mut out, "Modules", modules, ListStyle::Name);
+    render_index_section(&mut out, "Language constructs", constructs, ListStyle::Name);
+    render_index_section(&mut out, "Diagnostics", diagnostics, ListStyle::Name);
+    render_index_section(&mut out, "CLI commands", commands, ListStyle::NameSummary);
+    render_index_section(&mut out, "Environment variables", env_vars, ListStyle::Name);
+    render_index_section(&mut out, "Symbols", symbols, ListStyle::Name);
 
     out
+}
+
+/// Whether an index list item shows only the name or `name: summary`.
+#[derive(Clone, Copy)]
+enum ListStyle {
+    Name,
+    NameSummary,
+}
+
+/// Emit one `<h2>` + `<ul>` index section, or nothing when `entries` is empty.
+fn render_index_section(out: &mut String, title: &str, entries: &[&Entry], style: ListStyle) {
+    if entries.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "<h2>{title}</h2>\n<ul class=\"index-list\">");
+    for e in entries {
+        let subdir = e.kind.route_subdir();
+        let key = &e.source_key;
+        let name = html_escape(key);
+        match style {
+            ListStyle::Name => {
+                let _ = writeln!(out, "<li><a href=\"/{subdir}/{key}/\">{name}</a></li>");
+            }
+            ListStyle::NameSummary => {
+                let summary = html_escape(&e.text);
+                let _ = writeln!(
+                    out,
+                    "<li><a href=\"/{subdir}/{key}/\">{name}: {summary}</a></li>"
+                );
+            }
+        }
+    }
+    out.push_str("</ul>\n");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
