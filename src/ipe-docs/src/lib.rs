@@ -22,6 +22,7 @@
 //! Entry point: [`Index::build`].
 
 pub mod env_vars;
+pub mod markdown;
 pub mod render;
 pub mod stdlib_docs;
 
