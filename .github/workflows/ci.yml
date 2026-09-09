@@ -647,12 +647,16 @@ jobs:
       # Per-test exclusions: each named test alone overruns the miri per-test
       # ceiling in its (otherwise interpretable) crate, so sharding can't help it
       # — filtered out so the crate's other tests still run under miri.
-      #   composed_full_universe_is_closed — full runtime feature-closure walk
-      #   def_is_none_inside_string        — heavy annotate string scan
+      #   composed_full_universe_is_closed    — full runtime feature-closure walk
+      #   def_is_none_inside_string           — heavy annotate string scan
       #   all_runtime_env_vars_are_documented — whole env-var doc scan
-      #   *_alias_* / unknown_stdlib_alias — whole-stdlib canonicalization
+      #   *_alias_* / unknown_stdlib_alias    — whole-stdlib canonicalization
+      #   native_vs_legacy_corpus_diff_sweep  — spawns `rustfmt`; foreign call
+      #     aborts under miri. Also carries #[cfg_attr(miri, ignore)] at source
+      #     as the SSOT; both guards are defence in depth.
       - run: >-
           cargo +nightly miri nextest run
+          --profile ci
           -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics
           -p ipe_syntax -p ipe_path_core -p ipe_parse -p ipe_lint -p ipe_stdlib
           -p ipe_backend -p ipe_kernels -p ipe_annotate -p ipe_docs
@@ -662,7 +666,8 @@ jobs:
               or test(all_runtime_env_vars_are_documented)
               or test(unknown_stdlib_alias_stays_fail_closed)
               or test(record_alias_ctor_field_order_is_declared_not_alphabetical)
-              or test(exposed_record_alias_via_list_exports_its_ctor_value))'
+              or test(exposed_record_alias_via_list_exports_its_ctor_value)
+              or test(native_vs_legacy_corpus_diff_sweep))'
           --partition count:${{ matrix.shard }}/20
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
