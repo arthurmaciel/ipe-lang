@@ -547,6 +547,8 @@ fn expr_head(expr: &Expr) -> String {
 /// the legacy `emit + run_rustfmt` path produces for that expression. Returns
 /// `None` if `rustfmt` is unavailable or rejects the wrapper.
 fn legacy_rustfmt_body(body_expr: &str) -> Option<String> {
+    // Spawns `rustfmt` via `posix_spawn`, an unsupported foreign call under miri:
+    // any test reaching this fn must carry `#[cfg_attr(miri, ignore)]`.
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -4237,6 +4239,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // spawns `rustfmt`; `posix_spawn` is an unsupported foreign call under miri
     fn native_vs_legacy_corpus_diff_sweep() {
         // The native-vs-legacy equivalence gate: render every fixture BOTH ways — the
         // native Doc path (`render(build_doc)`) and the legacy path (`emit_expr_at`
