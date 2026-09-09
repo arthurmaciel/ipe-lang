@@ -285,7 +285,13 @@ fn build_emitted_binary(golden_name: &str, emitted_dir: &Path) -> Result<String,
 
     let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
     let mut cmd = Command::new("cargo");
+    // `--offline` prevents live crates.io index updates, so resolution uses
+    // only the already-fetched registry cache — the same versions the workspace
+    // build resolved. Without this flag cargo re-queries the index on every run
+    // and may resolve newer transitive versions whose APIs break the emitted
+    // crate (a hermeticity gap, not a codegen SEAL breach).
     cmd.arg("build")
+        .arg("--offline")
         .arg("--message-format=json")
         .current_dir(emitted_dir)
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
