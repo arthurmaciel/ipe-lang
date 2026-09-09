@@ -66,6 +66,14 @@ jobs:
     outputs:
       wasm: ${{ steps.filter.outputs.wasm }}
       code: ${{ steps.filter.outputs.code }}
+      # `emit` — true when the backend, runtime, stdlib, or emitted-crate support
+      # paths changed.  Used by the e2e job on the PR path to decide whether the
+      # heavy goldens (webview/server/watch — each drives a multi-minute cold
+      # `cargo build`) are reachable by this diff; a parser-only or canon-only
+      # change cannot affect the SEAL of those goldens, so the 5 heavy shards are
+      # skipped on a PR when this is false.  On push/nightly the heavy shards
+      # always run (full SEAL); the filter is only a PR-path optimisation.
+      emit: ${{ steps.filter.outputs.emit }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
@@ -93,6 +101,29 @@ jobs:
               # and asserted by the init_subcommand test. Every other root *.md /
               # docs/** / misc/** file is prose no test reads — safe to skip.
               - 'AGENTS.md'
+            # `emit` — a conservative superset of every path that can change what
+            # the heavy e2e goldens (server/webview/watch) build or run.  Covers the
+            # backend emitter, the runtime the emitted crates link against, the stdlib
+            # veneer sources, the e2e/oracle test harness, and examples/ (fixture
+            # changes can change a golden's expected output).  When false on a PR,
+            # the diff cannot affect the heavy SEAL goldens, so those shards are
+            # safely skipped; when in doubt it runs (fail-closed).
+            emit:
+              - 'src/compiler/backend/**'
+              - 'src/compiler/lower/**'
+              - 'src/compiler/ir/**'
+              - 'src/compiler/kernels/**'
+              - 'src/runtime/**'
+              - 'src/stdlib/**'
+              - 'runtime/**'
+              - 'crates/ipe_backend_rust/**'
+              - 'tests/**'
+              - 'examples/**'
+              - 'tools/oracle/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '**/Cargo.toml'
+              - '.github/workflows/ci.yml'
 
   # Fail-closed guard against clone bloat: a commit that tracks a build artifact
   # (a target/ directory, an .rlib/.rmeta/.o/.a/.so/.dylib/.wasm blob) or any file
@@ -882,8 +913,22 @@ jobs:
         # and `count:(k-5)/9` partitions it nine ways. Heavy ∪ Light = every test,
         # partitioned exactly once, so the SEAL union is identical to the old
         # `count:k/8` scheme — no coverage dropped, just re-timed.
+        #
+        # Change-based selection (PR path only): when the `emit` paths-filter is
+        # false the diff cannot reach the backend/runtime/stdlib paths the heavy
+        # goldens exercise, so the 5 heavy shards exit 0 immediately.  The light
+        # shards (6-14) always run on a PR — they cover the compiler's non-emit
+        # surface and are cheap.  On push/nightly the full 14-shard suite runs
+        # regardless (the `emit` variable is unused outside a PR event).
         run: |
+          event="${{ github.event_name }}"
+          emit="${{ needs.changes.outputs.emit }}"
           if [ "${{ matrix.shard }}" -le 5 ]; then
+            # Heavy leg: skip on PR when no emit-relevant paths changed.
+            if [ "$event" = "pull_request" ] && [ "$emit" != "true" ]; then
+              echo "Skipping heavy SEAL shard ${{ matrix.shard }}/5: no emit-relevant paths changed on this PR."
+              exit 0
+            fi
             cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast \
               -E "$E2E_HEAVY" --partition count:${{ matrix.shard }}/5 --test-threads=2
           else
@@ -965,6 +1010,13 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      # The same heavy-golden set as the `e2e` job: the goldens whose emitted
+      # projects drive a cold multi-minute `cargo build` (webview/wry, server/axum,
+      # watch daemons, live-HTTP).  Under a plain count:k/48 partition these tend
+      # to cluster into the same sub-shards and push wall-clock past the 30 min
+      # cap.  The heavy/light split below pins them to dedicated sub-shards (1-3)
+      # so each sub-shard's wall-clock stays ≤ 30 min.
+      SEAL_HEAVY: 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(watch_cancellation) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -989,15 +1041,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev
-      # Sub-shards 1..8 of a 48-way partition cover a representative slice of the
-      # golden suite, eight runners wide (was five sub-shards of a 30-way
-      # partition). Widening the sub-shard count spreads the same class of work
-      # over more parallel runners — the union of sub-shards 1..8 of `count:k/48`
-      # is a superset of the old sub-shards 1..5 of `count:k/30`, so this drops no
-      # coverage; it only lowers each sub-shard's load and de-clusters the heavy
-      # goldens a little further. `seal_modset` (shape emit→build) is
-      # shard-independent, so it runs once, on sub-shard 1.
-      - name: SEAL slice (seal_modset on shard 1 + golden e2e sub-shard ${{ matrix.shard }}/48)
+      # Duration-balanced split — mirrors the `e2e` job's heavy/light scheme:
+      #   Sub-shards 1-3 (HEAVY leg): select only $SEAL_HEAVY and spread them
+      #     count:k/3, so each runner serializes ~1/3 of the cold-build goldens
+      #     in parallel with the others.  seal_modset runs once on sub-shard 1.
+      #   Sub-shards 4-8 (LIGHT leg): select the complement (heavy-free) and
+      #     partition count:(k-3)/5 nine ways; at full --test-threads=2 width
+      #     these are well under 30 min.
+      # Heavy ∪ Light = every test (minus build_run_column, same as before),
+      # partitioned exactly once — no SEAL coverage dropped.
+      - name: SEAL slice (seal_modset on shard 1 + golden e2e sub-shard ${{ matrix.shard }}/8)
         env:
           IPE_E2E: "1"
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -1006,11 +1059,19 @@ jobs:
         # `--test-threads=2` caps concurrent heavy emitted-project builds so the
         # sub-shard stays inside runner memory (see the e2e job for the rationale).
         run: |
-          if [ "${{ matrix.shard }}" = "1" ]; then
-            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . -E 'binary(seal_modset)' --profile ci --test-threads=2
+          if [ "${{ matrix.shard }}" -le 3 ]; then
+            # Heavy leg: cold-build goldens spread across 3 runners.
+            if [ "${{ matrix.shard }}" = "1" ]; then
+              cargo nextest run --archive-file nextest.tar.zst --workspace-remap . -E 'binary(seal_modset)' --profile ci --test-threads=2
+            fi
+            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --test-threads=2 \
+              -E "$SEAL_HEAVY" --partition count:${{ matrix.shard }}/3
+          else
+            # Light leg: heavy-free complement spread across 5 runners.
+            cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --test-threads=2 \
+              -E "not ($SEAL_HEAVY) and not test(build_run_column_over_a_representative_slice)" \
+              --partition count:$((${{ matrix.shard }} - 3))/5
           fi
-          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . --profile ci --no-fail-fast --partition count:${{ matrix.shard }}/48 --test-threads=2 \
-            -E 'not test(build_run_column_over_a_representative_slice)'
 
   # Stable aggregation status for the sharded SEAL slice. The matrix expands to
   # one sub-shard-named job per partition, so no single sub-shard name is a durable target;
