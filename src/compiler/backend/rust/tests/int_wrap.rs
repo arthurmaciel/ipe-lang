@@ -146,10 +146,11 @@ fn build_overflow_checked_and_assert(
     // Force `overflow-checks=on` regardless of the emitted crate's dev profile.
     // Under raw-infix i64 arithmetic this makes the boundary op panic on build-
     // then-run; the wrapping helpers keep it total.
+    let target_dir = seal_e2e::emitted_target_dir(&out);
     let status = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(&out)
-        .env("CARGO_TARGET_DIR", out.join("target"))
+        .env("CARGO_TARGET_DIR", &target_dir)
         .env("RUSTFLAGS", "-Coverflow-checks=on")
         .status();
     assert!(
@@ -157,7 +158,7 @@ fn build_overflow_checked_and_assert(
         "emitted int-wrap project must build under overflow-checks=on: {status:?}"
     );
 
-    let bin = out.join("target").join("debug").join("ipe-app");
+    let bin = target_dir.join("debug").join("ipe-app");
     let output = std::process::Command::new(&bin)
         .output()
         .map_err(|e| seal_e2e::io_bug(&bin, &e))?;
@@ -172,7 +173,9 @@ fn build_overflow_checked_and_assert(
          not the Cargo profile flag; got {:?}",
         output.status.code()
     );
-    let _ = std::fs::remove_dir_all(out.join("target"));
+    if target_dir == out.join("target") {
+        let _ = std::fs::remove_dir_all(&target_dir);
+    }
     Ok(())
 }
 
