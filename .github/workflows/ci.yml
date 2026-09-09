@@ -223,9 +223,12 @@ jobs:
     name: registry-admission
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    # Heavy (nextest --profile ci over the admission suite): off the cheap PR gate,
-    # runs on development push + nightly.
-    if: github.event_name != 'pull_request'
+    # Heavy (nextest --profile ci over the admission suite): off the cheap PR gate
+    # for a trusted author (heavy runs at promotion); an untrusted-author PR runs
+    # it at PR time (third-party full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -271,7 +274,10 @@ jobs:
   # `#[cfg(feature = "live")]`.
   runtime-feature-combos:
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -292,7 +298,12 @@ jobs:
     # OFF the required PR path: on a PR it runs only when wasm-relevant files
     # change (the `changes` job's filter); on push/schedule it always runs.
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.wasm == 'true'
+    # Trusted author: PR path only when wasm-relevant files change. Untrusted
+    # author: full gate at PR time regardless of paths. Always on push/schedule.
+    if: >-
+      github.event_name != 'pull_request'
+      || needs.changes.outputs.wasm == 'true'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -587,8 +598,10 @@ jobs:
     # gate, runs on development push + nightly. `full` ⊇ `live`, so this is the one
     # place feature-gated regressions (e.g. a workspace-wide serde_json flag flip
     # changing signed-token bytes) are caught — a main-required context the FF
-    # promotion waits on.
-    if: github.event_name != 'pull_request'
+    # promotion waits on. An untrusted-author PR runs it at PR time (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -632,7 +645,10 @@ jobs:
     # Fail-fast: don't start the slow miri interpretation if the workspace does
     # not even compile (quick-check is red). Only reachable off the PR path.
     needs: [changes, quick-check]
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     strategy:
       fail-fast: false
       matrix:
@@ -764,7 +780,10 @@ jobs:
     name: asan (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: github.event_name != 'pull_request'   # heavy → push/nightly only
+    # Heavy → push/nightly only for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     strategy:
       fail-fast: false
       matrix:
@@ -819,7 +838,10 @@ jobs:
     name: tsan
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: github.event_name != 'pull_request'
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     env:
       RUSTFLAGS: -Zsanitizer=thread
       RUSTDOCFLAGS: -Zsanitizer=thread
@@ -875,7 +897,11 @@ jobs:
     # and RUNS from that archive under IPE_E2E=1 (which changes only runtime
     # behaviour, not the archived binaries), so no shard recompiles the workspace.
     needs: [changes, quick-check, test-prep]
-    if: github.event_name != 'pull_request'
+    # Off the PR gate for a trusted author (seal-smoke is the PR proxy); an
+    # untrusted-author PR runs the full SEAL at PR time (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     # Wall-clock cap on the shard. Each per-test `cargo build` is already bounded
     # (nextest ci `slow-timeout` + `e2e_support`'s per-build 240s ceiling), but
     # nothing capped the SHARD as a whole, so it inherited GitHub's 360-min
@@ -1037,7 +1063,10 @@ jobs:
     # Reuse `test-prep`'s single-compile archive (see the e2e job) rather than
     # rebuilding the workspace per sub-shard.
     needs: [changes, quick-check, test-prep]
-    if: github.event_name != 'pull_request'
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     # Wall-clock cap on the sub-shard (same rationale as the `e2e` job). This
     # slice is a golden-e2e partition against the warm shared target — lighter
     # than a heavy `e2e` shard — so 30 min (≈2× the warm-cache max) fails a hung
@@ -1144,7 +1173,10 @@ jobs:
     name: seal-modset (vendored emit model)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: github.event_name != 'pull_request'
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -1183,7 +1215,10 @@ jobs:
   macos-tier2:
     name: macos-tier2 (sandbox-exec — the real macOS jail proof)
     runs-on: macos-latest
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1257,7 +1292,10 @@ jobs:
   linux-x64-tier2:
     name: linux-x64-tier2 (bwrap+seccomp — the real Linux jail proof)
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1334,7 +1372,10 @@ jobs:
   macos-run-jail:
     name: macos-run-jail (sandbox-exec — the real macOS run-jail proof)
     runs-on: macos-latest
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1395,7 +1436,10 @@ jobs:
   windows-run-jail:
     name: windows-run-jail (Job Object + AppContainer — the real Windows run-jail proof)
     runs-on: windows-2022
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1482,7 +1526,10 @@ jobs:
   windows-tier2:
     name: windows-tier2 (Job Object + AppContainer — the real Windows build-jail proof)
     runs-on: windows-2022
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1564,7 +1611,10 @@ jobs:
   freebsd-tier2:
     name: freebsd-tier2 (jail(8) inside vmactions VM — the real FreeBSD build-jail proof)
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'   # slow VM boot: push/nightly only
+    # Slow VM boot: push/nightly only for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -1631,7 +1681,10 @@ jobs:
   linux-arm64-tier2:
     name: linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)
     runs-on: ubuntu-24.04-arm
-    if: github.event_name != 'pull_request'   # off the PR gate; push/nightly
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1758,7 +1811,10 @@ jobs:
     name: browser-e2e (Ipe.Browser geo+clipboard — headless Playwright)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    if: github.event_name != 'pull_request'
+    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
