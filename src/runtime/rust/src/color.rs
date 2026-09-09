@@ -68,6 +68,36 @@ pub enum AnsiColor {
     Rgb(i64, i64, i64),
 }
 
+/// A WCAG conformance level: the pass threshold `meets_wcag` checks against.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WcagLevel {
+    /// WCAG AA — `4.5:1` normal text, `3.0:1` large text.
+    AA,
+    /// WCAG AAA — `7.0:1` normal text, `4.5:1` large text.
+    AAA,
+}
+
+/// The text size band a WCAG threshold applies to (large text tolerates a lower
+/// ratio: `>=18pt`, or `>=14pt` bold).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TextSize {
+    /// Normal-size body text.
+    NormalText,
+    /// Large text — `>=18pt`, or `>=14pt` bold.
+    LargeText,
+}
+
+/// A colour-vision deficiency (CVD) type, for `simulate` previews.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Deficiency {
+    /// Red-blind.
+    Protanopia,
+    /// Green-blind.
+    Deuteranopia,
+    /// Blue-blind.
+    Tritanopia,
+}
+
 /// Clamp an `f64` into `[0.0, 1.0]`; a `NaN` maps to `0.0` (fail-closed).
 fn clamp_unit(v: f64) -> f64 {
     if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) }
@@ -263,6 +293,25 @@ impl Color {
         }
     }
 
+    /// The always-`rgba(r,g,b,a)` CSS spelling — the exact form the `Ipe.Ui` and
+    /// `Ipe.Css` surfaces have always emitted (alpha never collapses to `rgb(…)`).
+    /// This is the shared renderer both DOM surfaces call so a single site owns
+    /// how a colour is spelled for CSS; [`Color::to_css`] is the newer
+    /// alpha-collapsing form reserved for surfaces that opt into it.
+    ///
+    /// Alpha is spelled with the default `f64` `Display` (`1.0`→`1`, `0.5`→`0.5`),
+    /// matching the pre-existing `Ui`/`Css` byte-for-byte so shared CSS goldens
+    /// stay exact.
+    #[must_use]
+    pub fn to_css_rgba(&self) -> String {
+        let (r, g, b) = (
+            unit_to_byte(self.r),
+            unit_to_byte(self.g),
+            unit_to_byte(self.b),
+        );
+        format!("rgba({r},{g},{b},{})", self.a)
+    }
+
     /// `Ipe.Color.toHex` — `#rrggbb`, or `#rrggbbaa` when alpha `< 1`.
     #[must_use]
     pub fn to_hex(&self) -> String {
@@ -440,6 +489,128 @@ impl Color {
             Self::white()
         }
     }
+
+    /// `Ipe.Color.meetsWCAG level size fg bg` — does the `fg`/`bg` pair meet the
+    /// WCAG contrast threshold for `level` at `size`? AA is `4.5`(normal)/`3.0`
+    /// (large); AAA is `7.0`/`4.5`.
+    #[must_use]
+    pub fn meets_wcag(level: WcagLevel, size: TextSize, fg: Self, bg: Self) -> bool {
+        let threshold = match (level, size) {
+            (WcagLevel::AA, TextSize::NormalText) => 4.5,
+            (WcagLevel::AA, TextSize::LargeText) => 3.0,
+            (WcagLevel::AAA, TextSize::NormalText) => 7.0,
+            (WcagLevel::AAA, TextSize::LargeText) => 4.5,
+        };
+        Self::contrast_ratio(fg, bg) >= threshold
+    }
+
+    /// `Ipe.Color.maximumContrast target candidates` — the candidate with the
+    /// greatest contrast against `target` (gleam parity). An empty candidate
+    /// list yields [`readable_text_on`](Self::readable_text_on) as the safe
+    /// fallback, so the result is always a legible colour.
+    #[must_use]
+    pub fn maximum_contrast(target: Self, candidates: &[Self]) -> Self {
+        let mut best: Option<(f64, Self)> = None;
+        for &c in candidates {
+            let ratio = Self::contrast_ratio(target, c);
+            if best.is_none_or(|(bd, _)| ratio > bd) {
+                best = Some((ratio, c));
+            }
+        }
+        best.map_or_else(|| Self::readable_text_on(target), |(_, c)| c)
+    }
+
+    /// `Ipe.Color.simulate deficiency` — simulate how a colour is perceived under
+    /// a colour-vision deficiency (for previews and tests). Uses the Brettel/
+    /// Viénot LMS-projection matrices applied in linear-light sRGB.
+    #[must_use]
+    pub fn simulate(&self, deficiency: Deficiency) -> Self {
+        // Convert to linear-light, project onto the confusion plane with the
+        // published CVD matrix, convert back. Alpha is untouched.
+        let (lr, lg, lb) = (to_linear(self.r), to_linear(self.g), to_linear(self.b));
+        // Row-major 3x3 simulation matrices (Viénot, Brettel & Mollon 1999),
+        // operating on linear-light RGB.
+        let m: [[f64; 3]; 3] = match deficiency {
+            Deficiency::Protanopia => [
+                [0.152_286, 1.052_583, -0.204_868],
+                [0.114_503, 0.786_281, 0.099_216],
+                [-0.003_882, -0.048_116, 1.051_998],
+            ],
+            Deficiency::Deuteranopia => [
+                [0.367_322, 0.860_646, -0.227_968],
+                [0.280_085, 0.672_501, 0.047_413],
+                [-0.011_820, 0.042_940, 0.968_881],
+            ],
+            Deficiency::Tritanopia => [
+                [1.255_528, -0.076_749, -0.178_779],
+                [-0.078_411, 0.930_809, 0.147_602],
+                [0.004_733, 0.691_367, 0.303_900],
+            ],
+        };
+        let apply = |row: [f64; 3]| row[0] * lr + row[1] * lg + row[2] * lb;
+        Self {
+            r: clamp_unit(to_srgb(clamp_unit(apply(m[0])))),
+            g: clamp_unit(to_srgb(clamp_unit(apply(m[1])))),
+            b: clamp_unit(to_srgb(clamp_unit(apply(m[2])))),
+            a: self.a,
+        }
+    }
+
+    /// `Ipe.Color.gradient n a b` — `n` perceptual (linear-light) steps from `a`
+    /// to `b` inclusive. `n < 2` yields just the endpoints (`[a, b]`), never an
+    /// empty or single-element list, so downstream code always has both ends.
+    #[must_use]
+    pub fn gradient(n: i64, a: Self, b: Self) -> Vec<Self> {
+        if n < 2 {
+            return vec![a, b];
+        }
+        // `n >= 2`, so `n - 1 >= 1`; the division is well-defined and the loop
+        // yields exactly `n` stops with the first `a` and the last `b`.
+        let last = n - 1;
+        (0..n)
+            .map(|i| {
+                let t = i as f64 / last as f64;
+                Self::mix(t, a, b)
+            })
+            .collect()
+    }
+
+    /// `Ipe.Color.steps n stops` — resample a stop list to exactly `n` evenly
+    /// spaced perceptual samples across the piecewise-linear path through
+    /// `stops`. An empty `stops` yields an empty list; a single stop yields that
+    /// colour repeated `n` times.
+    #[must_use]
+    pub fn steps(n: i64, stops: &[Self]) -> Vec<Self> {
+        if n <= 0 || stops.is_empty() {
+            return Vec::new();
+        }
+        let seg_count = stops.len() - 1;
+        if seg_count == 0 || n == 1 {
+            // One stop, or one requested sample: repeat / take the first stop.
+            // `stops` is non-empty, so `first()` is `Some`.
+            let head = stops.first().copied().unwrap_or_else(Self::transparent);
+            return (0..n).map(|_| head).collect();
+        }
+        // Map each output index `i` in `0..n` to a position `p` in `[0, seg_count]`
+        // along the stop path, then interpolate within the enclosing segment.
+        let last = n - 1;
+        (0..n)
+            .map(|i| {
+                let frac = i as f64 / last as f64; // 0..1 inclusive
+                let pos = frac * seg_count as f64; // 0..seg_count
+                let idx = (pos.floor() as usize).min(seg_count - 1);
+                let local = pos - idx as f64;
+                // `idx <= seg_count - 1` and `idx + 1 <= seg_count = len - 1`, so
+                // both lookups are in bounds; `get` keeps it total regardless.
+                let lo = stops.get(idx).copied().unwrap_or_else(Self::transparent);
+                let hi = stops
+                    .get(idx + 1)
+                    .copied()
+                    .unwrap_or_else(Self::transparent);
+                Self::mix(local, lo, hi)
+            })
+            .collect()
+    }
 }
 
 /// Expand a single hex nibble to a byte by digit-doubling (`f`→`0xff`).
@@ -613,6 +784,37 @@ fn nearest_256(r: i64, g: i64, b: i64) -> i64 {
     }
 }
 
+/// Resolve the terminal colour capability once, deterministically, from the
+/// environment — the single place `Tui`/`Cli` decide how far a truecolour must
+/// degrade (the lipgloss/termenv resolution order, made total and explicit).
+///
+/// * `NO_COLOR` set (any value, per <https://no-color.org>) → [`TermProfile::NoColor`].
+/// * `COLORTERM` = `truecolor` / `24bit` → [`TermProfile::TrueColor`].
+/// * `TERM` containing `256color` → [`TermProfile::Ansi256`].
+/// * `TERM` = `dumb` → [`TermProfile::NoColor`].
+/// * otherwise → [`TermProfile::TrueColor`] — the conservative default keeps the
+///   full-fidelity `38;2;r;g;b` path (and every existing terminal golden) intact
+///   unless the environment explicitly asks for less.
+#[must_use]
+pub fn resolve_term_profile() -> TermProfile {
+    // `NO_COLOR` present and non-empty (<https://no-color.org>) forces no colour,
+    // matching the terminal renderer's own `no_color()` gate.
+    if matches!(crate::system::read_env_var("NO_COLOR"), Ok(v) if !v.is_empty()) {
+        return TermProfile::NoColor;
+    }
+    if let Ok(ct) = crate::system::read_env_var("COLORTERM") {
+        let ct = ct.to_ascii_lowercase();
+        if ct == "truecolor" || ct == "24bit" {
+            return TermProfile::TrueColor;
+        }
+    }
+    match crate::system::read_env_var("TERM") {
+        Ok(term) if term == "dumb" => TermProfile::NoColor,
+        Ok(term) if term.contains("256color") => TermProfile::Ansi256,
+        _ => TermProfile::TrueColor,
+    }
+}
+
 /// The curated named-colour set (`fromName`). Deliberately small — the CSS
 /// Level-4 basic + common set, not all 148 names. Community palettes ship their
 /// own tables returning `Color` values.
@@ -669,6 +871,34 @@ impl crate::stringify::IpeStringify for AnsiColor {
     }
 }
 
+impl crate::stringify::IpeStringify for WcagLevel {
+    fn ipe_show(&self) -> String {
+        match self {
+            WcagLevel::AA => "AA".to_owned(),
+            WcagLevel::AAA => "AAA".to_owned(),
+        }
+    }
+}
+
+impl crate::stringify::IpeStringify for TextSize {
+    fn ipe_show(&self) -> String {
+        match self {
+            TextSize::NormalText => "NormalText".to_owned(),
+            TextSize::LargeText => "LargeText".to_owned(),
+        }
+    }
+}
+
+impl crate::stringify::IpeStringify for Deficiency {
+    fn ipe_show(&self) -> String {
+        match self {
+            Deficiency::Protanopia => "Protanopia".to_owned(),
+            Deficiency::Deuteranopia => "Deuteranopia".to_owned(),
+            Deficiency::Tritanopia => "Tritanopia".to_owned(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,6 +917,23 @@ mod tests {
         );
         // opaque alpha collapses to rgb()
         assert_eq!(Color::rgba(0, 0, 0, 1.0).to_css(), "rgb(0,0,0)");
+    }
+
+    #[test]
+    fn to_css_rgba_never_collapses_alpha() {
+        // The shared DOM spelling: alpha always present, `1.0`→`1` (byte-exact
+        // with the pre-existing `Ui`/`Css` `rgba(…)` goldens).
+        assert_eq!(Color::rgba(0, 0, 0, 1.0).to_css_rgba(), "rgba(0,0,0,1)");
+        assert_eq!(Color::rgba(255, 0, 0, 1.0).to_css_rgba(), "rgba(255,0,0,1)");
+        assert_eq!(
+            Color::rgba(0, 128, 255, 1.0).to_css_rgba(),
+            "rgba(0,128,255,1)"
+        );
+        assert_eq!(Color::rgba(0, 0, 0, 0.0).to_css_rgba(), "rgba(0,0,0,0)");
+        assert_eq!(
+            Color::rgba(255, 128, 0, 0.5).to_css_rgba(),
+            "rgba(255,128,0,0.5)"
+        );
     }
 
     #[test]
@@ -819,5 +1066,143 @@ mod tests {
         let comp = c.complementary();
         let (h, _, _, _) = comp.to_hsla();
         assert!((h - 180.0).abs() < 1.0, "hue {h}");
+    }
+
+    #[test]
+    fn luminance_matches_wcag_reference_vectors() {
+        // WCAG reference relative luminances (sRGB): black 0, white 1.
+        assert!(Color::black().luminance().abs() < 1e-9);
+        assert!((Color::white().luminance() - 1.0).abs() < 1e-9);
+        // Pure sRGB red relative luminance = 0.2126 (channel is fully on).
+        assert!(
+            (Color::red().luminance() - 0.2126).abs() < 1e-4,
+            "{}",
+            Color::red().luminance()
+        );
+        // #777777 mid-grey: documented ~0.184 relative luminance.
+        let grey = Color::from_hex("#777777").expect("valid hex");
+        assert!(
+            (grey.luminance() - 0.184_5).abs() < 2e-3,
+            "{}",
+            grey.luminance()
+        );
+    }
+
+    #[test]
+    fn contrast_ratio_reference_pair() {
+        // #595959 on white is the canonical 7.0:1 AAA-normal boundary pair.
+        let fg = Color::from_hex("#595959").expect("valid hex");
+        let ratio = Color::contrast_ratio(fg, Color::white());
+        assert!((ratio - 7.0).abs() < 0.05, "got {ratio}");
+    }
+
+    #[test]
+    fn meets_wcag_thresholds() {
+        let black = Color::black();
+        let white = Color::white();
+        // 21:1 clears every level.
+        assert!(Color::meets_wcag(
+            WcagLevel::AAA,
+            TextSize::NormalText,
+            black,
+            white
+        ));
+        // #767676 on white ~ 4.54:1: passes AA-normal (4.5), fails AAA-normal (7).
+        let mid = Color::from_hex("#767676").expect("valid hex");
+        assert!(Color::meets_wcag(
+            WcagLevel::AA,
+            TextSize::NormalText,
+            mid,
+            white
+        ));
+        assert!(!Color::meets_wcag(
+            WcagLevel::AAA,
+            TextSize::NormalText,
+            mid,
+            white
+        ));
+        // ~3.0:1 grey passes AA-large but not AA-normal.
+        let light = Color::from_hex("#949494").expect("valid hex");
+        assert!(Color::meets_wcag(
+            WcagLevel::AA,
+            TextSize::LargeText,
+            light,
+            white
+        ));
+        assert!(!Color::meets_wcag(
+            WcagLevel::AA,
+            TextSize::NormalText,
+            light,
+            white
+        ));
+    }
+
+    #[test]
+    fn maximum_contrast_picks_best_and_falls_back() {
+        // White target: black wins over dark-grey.
+        let best = Color::maximum_contrast(
+            Color::white(),
+            &[
+                Color::rgb(50, 50, 50),
+                Color::black(),
+                Color::rgb(200, 200, 200),
+            ],
+        );
+        assert_eq!(best, Color::black());
+        // Empty list falls back to a legible readable-text pick.
+        assert_eq!(
+            Color::maximum_contrast(Color::white(), &[]),
+            Color::readable_text_on(Color::white())
+        );
+    }
+
+    #[test]
+    fn simulate_is_deterministic_and_preserves_alpha() {
+        let c = Color::rgba(200, 30, 90, 0.4);
+        let s1 = c.simulate(Deficiency::Deuteranopia);
+        let s2 = c.simulate(Deficiency::Deuteranopia);
+        assert_eq!(s1, s2, "simulate must be deterministic");
+        let (_, _, _, a) = s1.to_rgba();
+        assert!((a - 0.4).abs() < 1e-9, "alpha preserved");
+        // Grey is on the achromatic axis: CVD simulation leaves it (near) unchanged.
+        let grey = Color::rgb(128, 128, 128);
+        let sg = grey.simulate(Deficiency::Protanopia);
+        let (gr, gg, gb, _) = sg.to_rgba();
+        assert!(
+            (gr - gg).abs() < 0.05 && (gg - gb).abs() < 0.05,
+            "grey stays grey"
+        );
+    }
+
+    #[test]
+    fn gradient_has_n_stops_with_exact_endpoints() {
+        let a = Color::rgb(255, 0, 0);
+        let b = Color::rgb(0, 0, 255);
+        let g = Color::gradient(5, a, b);
+        assert_eq!(g.len(), 5);
+        assert_eq!(g.first().copied(), Some(a));
+        assert_eq!(g.last().copied(), Some(b));
+        // n < 2 degrades to the two endpoints.
+        assert_eq!(Color::gradient(1, a, b), vec![a, b]);
+        assert_eq!(Color::gradient(0, a, b), vec![a, b]);
+    }
+
+    #[test]
+    fn steps_resamples_stop_list() {
+        let stops = [
+            Color::rgb(0, 0, 0),
+            Color::rgb(255, 0, 0),
+            Color::rgb(255, 255, 255),
+        ];
+        let s = Color::steps(3, &stops);
+        assert_eq!(s.len(), 3);
+        // Endpoints preserved, midpoint lands on the middle stop.
+        assert_eq!(s.first().copied(), Some(Color::rgb(0, 0, 0)));
+        assert_eq!(s.last().copied(), Some(Color::rgb(255, 255, 255)));
+        assert_eq!(s.get(1).copied(), Some(Color::rgb(255, 0, 0)));
+        // Degenerate inputs are total.
+        assert!(Color::steps(0, &stops).is_empty());
+        assert!(Color::steps(4, &[]).is_empty());
+        assert_eq!(Color::steps(3, &[Color::red()]).len(), 3);
     }
 }
