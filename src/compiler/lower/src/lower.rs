@@ -29463,6 +29463,11 @@ mod tests {
         KernelFn::UrlQuery,
         KernelFn::UrlFragment,
         KernelFn::UrlBuildQuery,
+        KernelFn::UrlRelativeParse,
+        KernelFn::UrlRelativePath,
+        KernelFn::UrlRelativeQuery,
+        KernelFn::UrlRelativeFragment,
+        KernelFn::UrlRelativeToString,
         // Ipe.Trace
         KernelFn::TraceSpan,
         KernelFn::TraceEvent,
