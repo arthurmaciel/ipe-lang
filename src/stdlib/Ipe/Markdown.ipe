@@ -51,8 +51,6 @@ import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Ui as Ui exposing (Element, Attribute)
 import Ipe.Ui.Font as Font
-import Ipe.Ui.ImageSrc as ImageSrc
-import Ipe.Url as Url
 
 
 -- Render a multi-line markdown document into a column of block-level
@@ -933,12 +931,13 @@ renderSpan span =
                 (Ui.text text)
 
         LinkSpan text url ->
-            -- The `url` is untrusted markdown text. Parse it once and narrow the
-            -- scheme (`Ui.linkTarget`); a relative / unparseable / unsafe-scheme
-            -- (`javascript:`) target fails closed to the plain link TEXT — the
-            -- reader still sees the label, but no `href` is emitted. No scheme
-            -- guessing: a rejected URL is degraded, never repaired.
-            case Result.andThen Ui.linkTarget (Url.fromString url) of
+            -- The `url` is untrusted markdown text. Parse it once through the
+            -- single `Ui.linkTarget` seal (absolute-or-relative dispatch); a
+            -- unparseable / unsafe-scheme (`javascript:`) / cross-origin target
+            -- fails closed to the plain link TEXT — the reader still sees the
+            -- label, but no `href` is emitted. No scheme guessing: a rejected URL
+            -- is degraded, never repaired.
+            case Ui.linkTarget url of
                 Ok target ->
                     Ui.link
                         -- Underline distinguishes the link; colour inherits the
@@ -952,11 +951,12 @@ renderSpan span =
                     Ui.text text
 
         ImageSpan alt url ->
-            -- Same untrusted boundary for an image `src`: parse + narrow to a
-            -- network scheme (`ImageSrc.url`); a `javascript:` / `file:` / raw
-            -- `data:` / unparseable src fails closed to the `alt` TEXT rather
-            -- than emitting an `<img>` with an unsafe source.
-            case Result.andThen ImageSrc.url (Url.fromString url) of
+            -- Same untrusted boundary for an image `src`: parse through the one
+            -- `Attr.link` seal (scheme-narrowed URL or same-origin path); a
+            -- `javascript:` / `file:` / cross-origin / unparseable src fails
+            -- closed to the `alt` TEXT rather than emitting an `<img>` with an
+            -- unsafe source.
+            case Attr.link url of
                 Ok source ->
                     Ui.html
                         (Html.img

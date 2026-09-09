@@ -10,7 +10,7 @@ module Ipe.Html.Attributes exposing
     ( Attribute
     , attribute, boolAttribute, noAttr
     , class, id, href, src, alt, value, name, placeholder
-    , HrefTarget, hrefTarget, hrefRelative
+    , LinkTarget, link
     , type_, for_, style, title, autocomplete
     , checked, disabled, readonly, required, multiple, selected, autofocus
     , tabindex, rows
@@ -19,10 +19,9 @@ module Ipe.Html.Attributes exposing
 
 import Ipe.Error exposing (Error)
 import Ipe.Ffi.Kernel as Kernel
-import Ipe.Result as Result exposing (Result)
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
-import Ipe.Ui.ImageSrc as ImageSrc exposing (ImageSrc)
-import Ipe.Url as Url exposing (RelativeRef, Url)
+import Ipe.Url as Url exposing (Relative, Url)
 
 
 -- | `attribute key value` — a plain `key="value"` HTML attribute. The one
@@ -56,66 +55,69 @@ id : String -> Attribute msg
 id = attribute "id"
 
 
--- | The schemes an `href` may target: `http`/`https` for web plus the two safe
+-- | The schemes a `link` may target: `http`/`https` for web plus the two safe
 -- non-web anchor schemes `mailto`/`tel`. A `javascript:` / `data:` / `file:`
--- href is rejected at `hrefTarget` — HTML-escaping neutralises a quote
--- breakout but NOT a `javascript:` scheme, so this narrowing is the boundary
--- that keeps a script-scheme out of the `href` sink.
-hrefSchemes : List String
-hrefSchemes =
+-- target is rejected at `link` — HTML-escaping neutralises a quote breakout but
+-- NOT a `javascript:` scheme, so this narrowing is the boundary that keeps a
+-- script-scheme out of the `href` / `src` sink.
+linkSchemes : List String
+linkSchemes =
     [ "http", "https", "mailto", "tel" ]
 
 
--- | An opaque, safe `href` target — EITHER a scheme-narrowed absolute `Url`
+-- | An opaque, safe link target — EITHER a scheme-narrowed absolute `Url`
 -- (`http`/`https`/`mailto`/`tel`) OR a validated same-origin relative reference
--- (`/static/x`). Both constructors (`hrefTarget` / `hrefRelative`) fail closed,
--- so a value of this type is always safe to place in an `href` — the proof
--- `href` consumes TOTALLY. A raw `String` or an unvetted URL cannot reach it.
-type HrefTarget
-    = HrefAbsolute Url
-    | HrefRelative RelativeRef
+-- (`/static/x`). The ONE constructor `link` fails closed, so a value of this
+-- type is always safe to place in an `href` / `src` — the proof both sinks
+-- consume TOTALLY. A raw `String` or an unvetted URL cannot reach it.
+type LinkTarget
+    = Absolute Url
+    | RelativeTarget Relative
 
 
--- | `hrefTarget u` — the parse-don't-validate seal for an ABSOLUTE `href`.
--- Fail-closed: `Ok` only when `u`'s scheme is one of `http`/`https`/`mailto`
--- /`tel`, otherwise a typed `Err`.
-hrefTarget : Url -> Result Error HrefTarget
-hrefTarget u =
-    Result.map HrefAbsolute (Url.checkScheme hrefSchemes u)
+-- | `link raw` — the ONE parse-don't-validate seal for a link target, dispatched
+-- exactly as a browser reads an `href`: an absolute URL if `raw` parses as one
+-- (then scheme-narrowed to `http`/`https`/`mailto`/`tel`), otherwise a validated
+-- same-origin relative reference. Fail-closed: a `javascript:` / `data:` /
+-- `file:` scheme, a protocol-relative (`//host`), or a cross-origin string is a
+-- typed `Err`, never rendered into an `href` / `src`.
+link : String -> Result Error LinkTarget
+link raw =
+    case Url.fromString raw of
+        Ok u ->
+            Result.map Absolute (Url.checkScheme linkSchemes u)
+
+        Err _ ->
+            Result.map RelativeTarget (Url.relative raw)
 
 
--- | `hrefRelative raw` — the parse-don't-validate seal for a same-origin
--- RELATIVE `href` (`/static/x.css`, `./page`, `#top`). Fail-closed via the
--- shared `Url.relativeRef` predicate: a protocol-relative (`//host`),
--- scheme-bearing, backslash, or control-char string is a typed `Err`.
-hrefRelative : String -> Result Error HrefTarget
-hrefRelative raw =
-    Result.map HrefRelative (Url.relativeRef raw)
-
-
--- | `href target` — the `href` attribute over a safe `HrefTarget` (build one
--- with `hrefTarget` for an absolute URL or `hrefRelative` for a same-origin
--- path). A bare `String` or an unvetted URL is a type error, so a
--- `javascript:` href cannot be smuggled in. The `case` is exhaustive over both
--- arms — no wildcard.
-href : HrefTarget -> Attribute msg
-href target =
+-- | `renderTarget target` — the string a safe `LinkTarget` renders to. The
+-- `case` is exhaustive over both arms — no wildcard.
+renderTarget : LinkTarget -> String
+renderTarget target =
     case target of
-        HrefAbsolute u ->
-            attribute "href" (Url.toString u)
+        Absolute u ->
+            Url.toString u
 
-        HrefRelative ref ->
-            attribute "href" (Url.relativeRefToString ref)
+        RelativeTarget ref ->
+            Url.relativeToString ref
 
 
--- | `src source` — the `src` attribute over a typed `Ipe.Ui.ImageSrc` (a
--- scheme-narrowed remote URL via `ImageSrc.url`, a same-origin relative path
--- via `ImageSrc.relative`, or an inline `data:` image via `ImageSrc.data`). A
--- bare `String` is a type error, so a non-network `src` scheme cannot be
--- smuggled in.
-src : ImageSrc -> Attribute msg
-src source =
-    attribute "src" (ImageSrc.toAttributeValue source)
+-- | `href target` — the `href` attribute over a safe `LinkTarget` (build one
+-- with `link`). A bare `String` or an unvetted URL is a type error, so a
+-- `javascript:` href cannot be smuggled in.
+href : LinkTarget -> Attribute msg
+href target =
+    attribute "href" (renderTarget target)
+
+
+-- | `src target` — the `src` attribute over a safe `LinkTarget` (an image src
+-- is a scheme-narrowed URL or a same-origin path — the same boundary as `href`;
+-- an inline data image uses `Ipe.Ui.imageData`). A bare `String` is a type
+-- error, so a non-network `src` scheme cannot be smuggled in.
+src : LinkTarget -> Attribute msg
+src target =
+    attribute "src" (renderTarget target)
 
 
 alt : String -> Attribute msg
