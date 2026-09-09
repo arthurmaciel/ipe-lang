@@ -1274,6 +1274,12 @@ fn stdlib_module_names() -> Vec<String> {
         names.insert(segments.join("."));
     }
 
+    // `Ipe.App.Tea.Terminal` is superseded by `Ipe.Color`; suppress its module
+    // pages from the doc site so the reference tree does not expose a retired
+    // namespace.  The qualifier entries still exist in the compiler (they must, for
+    // backwards import compatibility), but they carry no user-visible doc page.
+    names.retain(|n| !n.starts_with("Ipe.App.Tea.Terminal"));
+
     names.into_iter().collect()
 }
 
@@ -1293,7 +1299,13 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
     // ModuleDoc — a type-check failure degrades to a doc-comment-only entry rather
     // than being dropped, so every `--list` name is queryable (see the invariant
     // enforced by `stdlib_module_names`, reconciled below).
+    //
+    // `Ipe.App.Tea.Terminal` is superseded by `Ipe.Color`; its compiled-source
+    // modules are skipped so the doc site does not expose retired namespace pages.
     for csm in ipe_stdlib::COMPILED_STD_MODULES {
+        if csm.dotted.starts_with("Ipe.App.Tea.Terminal") {
+            continue;
+        }
         let segments: Vec<String> = csm.dotted.split('.').map(str::to_owned).collect();
         modules.insert(
             csm.dotted.to_owned(),
@@ -4694,7 +4706,11 @@ fn render_entry_page(
     if entry.body.is_empty() {
         body.push_str("<p class=\"comment\">No further documentation yet.</p>\n");
     } else {
-        body.push_str(&render_comment_html(&entry.body));
+        // Entry bodies are sourced from Markdown files (explain pages, construct
+        // docs, command help) — render via `comrak` so headings, code fences,
+        // tables, and links all work correctly.  `ipe`-tagged fenced blocks are
+        // highlighted via the shared token-classifier (no second lexer).
+        body.push_str(&ipe_docs::render::markdown_to_html(&entry.body));
     }
     html_page(&entry.title, "../style.css", &header, &body)
 }
@@ -6538,5 +6554,97 @@ withBaseMs = something
             !resp.contains("<h1>hi</h1>"),
             "an over-long line must not be served a body: {resp}"
         );
+    }
+
+    // ── Defect-1: command-page SSOT equivalence ───────────────────────────────
+
+    /// Every `ipe` subcommand's summary text (from the `COMMANDS` SSOT in
+    /// `help.rs`) must appear verbatim in the HTML rendered for that command's
+    /// doc-site page.  A drift between `ipe <cmd> --help` and the HTML site is
+    /// unrepresentable: both draw from `command_doc_markdown`.
+    #[test]
+    fn command_page_html_mirrors_help_ssot() {
+        let docs = build_stdlib_only_docs();
+        let docs_root = locate_docs_root();
+        let bundle = build_doc_bundle(&docs_root).expect("bundle");
+        let site = render_site_for_serve(&docs, &bundle);
+
+        for name in crate::help::command_names() {
+            let Some(md) = crate::help::command_doc_markdown(name) else {
+                continue;
+            };
+            // The command's page lives at `cli/<name>.html`.
+            let page_key = format!("cli/{name}.html");
+            let Some(html) = site.get(&page_key) else {
+                // No page generated for this command (hidden or not yet in bundle).
+                continue;
+            };
+            // The first line of the Markdown is the command summary; it must appear
+            // in the rendered HTML.
+            let first_line = md.lines().next().unwrap_or("").trim();
+            if !first_line.is_empty() {
+                assert!(
+                    html.contains(first_line),
+                    "command `{name}`: summary from help SSOT must appear in HTML page; \
+                     expected `{first_line}` in {page_key}"
+                );
+            }
+        }
+    }
+
+    // ── Defect-2: Tea.Terminal absent from reference tree ─────────────────────
+
+    /// The `Ipe.App.Tea.Terminal` namespace is superseded by `Ipe.Color`; the
+    /// generated site must not emit any page referencing it.
+    #[test]
+    fn tea_terminal_namespace_absent_from_site() {
+        let docs = build_stdlib_only_docs();
+        let docs_root = locate_docs_root();
+        let bundle = build_doc_bundle(&docs_root).expect("bundle");
+        let site = render_site_for_serve(&docs, &bundle);
+
+        for path in site.keys() {
+            assert!(
+                !path.contains("Tea.Terminal") && !path.contains("Tea-Terminal"),
+                "deprecated Tea.Terminal namespace must not appear as a site path; \
+                 found: {path}"
+            );
+        }
+    }
+
+    // ── Defect-5: serve == write-format html ─────────────────────────────────
+
+    /// `render_site_for_serve` and the HTML output of `render_site_split` must
+    /// produce byte-identical file maps for the same inputs.  This is the
+    /// regression gate that ensures `ipe doc serve` and `ipe doc --write-format
+    /// html` always show the same content.
+    #[test]
+    fn serve_html_equals_write_format_html() {
+        let docs = build_stdlib_only_docs();
+        let docs_root = locate_docs_root();
+        let bundle = build_doc_bundle(&docs_root).expect("bundle");
+
+        let serve = render_site_for_serve(&docs, &bundle);
+        let (_, _, write_html) = render_site_split(&docs, &bundle, WriteFormat::Html);
+
+        // Both maps must have the same keys.
+        let mut serve_keys: Vec<&str> = serve.keys().map(String::as_str).collect();
+        let mut write_keys: Vec<&str> = write_html.keys().map(String::as_str).collect();
+        serve_keys.sort_unstable();
+        write_keys.sort_unstable();
+        assert_eq!(
+            serve_keys, write_keys,
+            "serve and write-format html must generate the same file set"
+        );
+
+        // Every file must be byte-identical.
+        for key in &serve_keys {
+            let s = serve.get(*key).map_or("", String::as_str);
+            let w = write_html.get(*key).map_or("", String::as_str);
+            assert_eq!(
+                s, w,
+                "serve and write-format html must produce identical content for `{key}`"
+            );
+        }
     }
 }
