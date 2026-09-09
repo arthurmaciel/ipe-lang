@@ -26364,7 +26364,8 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "text") => Ok(Callee::Kernel(KernelFn::UiText)),
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
                     ("Ui", "cells") => Ok(Callee::Kernel(KernelFn::UiCells)),
-                    ("Ui", "widget") => Ok(Callee::Kernel(KernelFn::UiWidget)),
+                    // The custom-element view node; internal kernel id stays `UiWidget`.
+                    ("CustomElement", "node") => Ok(Callee::Kernel(KernelFn::UiWidget)),
                     // ── Ipe.Ui.Cells builders ─────────────────────────────
                     ("UiCells", "none") => Ok(Callee::Kernel(KernelFn::UiCellsNone)),
                     ("UiCells", "text") => Ok(Callee::Kernel(KernelFn::UiCellsText)),
