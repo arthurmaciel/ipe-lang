@@ -50,6 +50,10 @@ const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
     (&["Ipe", "App", "Tea", "Tui"], "app", MainShape::Tui),
     (&["Ipe", "App", "Tea", "Cli"], "app", MainShape::Cli),
     (&["Ipe", "Http", "Server"], "listen", MainShape::Server),
+    // `Script.program` — the Script shape's own entry (`Ipe.App.Script`). A
+    // `main = Script.program (…)` head pins Script explicitly, the same way the
+    // app entries pin their shapes; the wrapped task renders nothing.
+    (&["Ipe", "App", "Script"], "program", MainShape::Script),
 ];
 
 /// Classify a parsed module's `main` into its pinned [`MainShape`].
@@ -448,6 +452,31 @@ mod tests {
     }
 
     #[test]
+    fn script_program_head_is_script() {
+        // `main = Script.program (…)` pins the Script shape explicitly through
+        // the `Ipe.App.Script.program` entry — the head names the shape, rather
+        // than Script being read off the absence of a shape entry.
+        assert_eq!(
+            classify(
+                "module Main exposing (..)\n\nimport Ipe.App.Script\n\nmain = Script.program task\n"
+            ),
+            MainShape::Script
+        );
+    }
+
+    #[test]
+    fn aliased_script_program_head_is_script() {
+        // The resolve-not-spell rule (#2142) applies to `Script.program` too: an
+        // `as S` alias resolving to `Ipe.App.Script` classifies Script.
+        assert_eq!(
+            classify(
+                "module Main exposing (..)\n\nimport Ipe.App.Script as S\n\nmain = S.program task\n"
+            ),
+            MainShape::Script
+        );
+    }
+
+    #[test]
     fn aliased_server_listen_head_is_server() {
         // Issue #2142 (O2): the classifier keys on the RESOLVED module of the
         // head, not the written qualifier. `import Ipe.Http.Server as S` +
@@ -534,6 +563,10 @@ mod tests {
         assert_eq!(
             scaffold_hint("module Main exposing (main)\n\nmain = Server.listen config\n"),
             MainShape::Server
+        );
+        assert_eq!(
+            scaffold_hint("module Main exposing (main)\n\nmain = Script.program task\n"),
+            MainShape::Script
         );
         assert_eq!(
             scaffold_hint("module Main exposing (main)\n\nmain = Widget.app config\n"),
