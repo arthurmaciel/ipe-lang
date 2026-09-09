@@ -117,9 +117,6 @@ pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
 ///   importable home on disk (a shape-scoped module reached only through an app
 ///   shape, e.g. `Ipe.Cmd` / `Ipe.Sub`), so the generated `import` finds nothing.
 /// * [`IPE_N0023`] — the module path does not match the probe module name.
-/// * [`IPE_N0005`] — the module has no member of that name (a kernel-homed symbol
-///   the surface enumerates but the compiled-source module does not expose under
-///   this name, e.g. `Ipe.Ui.widget`).
 ///
 /// In each the rejection is a property of the point-free probe FORM for that
 /// symbol — the reference cannot be addressed — not a build+run gap, so the
@@ -128,21 +125,24 @@ pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
 /// the lowering-layer point-free limitations), and it carries the offending code so
 /// the verdict names exactly why the probe form does not apply.
 ///
-/// [`IPE_N0027`] — a qualified-import qualifier collision — is deliberately NOT in
-/// this set. The probe imports every module under a fixed reserved alias
-/// ([`PROBE_ALIAS`]) that cannot collide with any real module qualifier, so a
-/// genuine N0027 no longer arises from the probe form. Were it whitelisted here it
-/// would mask a real resolution defect rather than name a probe-form limitation.
+/// [`IPE_N0027`] (a qualified-import qualifier collision) and [`IPE_N0005`] (the
+/// module has no member of that name) are deliberately NOT in this set. The probe
+/// imports every module under a fixed reserved alias ([`PROBE_ALIAS`]) that cannot
+/// collide with any real module qualifier, so a genuine N0027 no longer arises from
+/// the probe form; and every kernel's canonical surface is backed by a compiled-source
+/// member, so an N0005 here signals a real phantom-surface defect (the class fixed by
+/// homing the custom-element node at `CustomElement.node`), not a probe-form
+/// limitation. Whitelisting either would mask a real resolution defect rather than
+/// name a probe-form limitation.
 #[must_use]
 pub fn probe_form_unaddressable_code(outcome: &StageOutcome) -> Option<ipe_diagnostics::Code> {
-    use ipe_diagnostics::{IPE_N0004, IPE_N0005, IPE_N0020, IPE_N0023};
+    use ipe_diagnostics::{IPE_N0004, IPE_N0020, IPE_N0023};
     match outcome {
         StageOutcome::Failed {
             code: Some(code), ..
         } if *code == IPE_N0020
             || *code == IPE_N0004
-            || *code == IPE_N0023
-            || *code == IPE_N0005 =>
+            || *code == IPE_N0023 =>
         {
             Some(*code)
         }
