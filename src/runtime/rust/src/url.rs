@@ -147,7 +147,8 @@ pub fn url_build_query(pairs: Vec<(String, String)>) -> String {
 }
 
 /// `Ipe.Url`'s opaque, validated same-origin RELATIVE reference — the
-/// `path`[`?query`][`#fragment`] projection (RFC 3986 §4.2). NOT a [`Url`]: a
+/// path plus optional query plus optional fragment projection (RFC 3986 §4.2).
+/// NOT a [`Url`]: a
 /// `Url` is always absolute, a `UrlRelative` never carries a scheme or
 /// authority. The ONLY constructor is [`url_relative`] (the seal): it re-uses
 /// the `url` crate — the SAME parser [`url_from_string`] and `ipe_runtime::ssrf`
@@ -177,7 +178,7 @@ impl super::stringify::IpeStringify for UrlRelative {
 }
 
 impl UrlRelative {
-    /// Re-serialise the `path`[`?query`][`#fragment`] triple. The single place
+    /// Re-serialise the path + optional query + optional fragment triple. The single place
     /// the reference string is assembled, so `toString` and `IpeStringify` agree.
     fn render(&self) -> String {
         let mut out = self.path.clone();
@@ -236,9 +237,7 @@ fn scheme_colon_before_slash(s: &str) -> bool {
 #[must_use]
 pub fn url_relative<E: From<String>>(raw: String) -> IpeResult<E, UrlRelative> {
     let reject = |why: &str| -> IpeResult<E, UrlRelative> {
-        IpeResult::Err(
-            format!("Ipe.Url: unsafe relative reference {raw:?} ({why})").into(),
-        )
+        IpeResult::Err(format!("Ipe.Url: unsafe relative reference {raw:?} ({why})").into())
     };
     // ── String-level guards (fail-closed on presence, never strip). ──
     if raw.is_empty() {
@@ -312,7 +311,7 @@ pub fn url_relative_fragment(r: UrlRelative) -> IpeMaybe<String> {
 }
 
 /// `Ipe.Url.Relative.toString : Relative -> String` — recover the reference
-/// string (`path`[`?query`][`#fragment`]).
+/// string (path + optional query + optional fragment).
 #[must_use]
 pub fn url_relative_to_string(r: UrlRelative) -> String {
     r.render()
@@ -472,20 +471,20 @@ mod tests {
     #[test]
     fn relative_rejects_every_adversarial_reference() {
         for bad in [
-            "",                              // empty
-            "javascript:alert(1)",           // script scheme
-            "data:text/html,x",              // data scheme
-            "file:///etc/passwd",            // file scheme
-            "//evil.com",                    // protocol-relative
-            "/\\evil.com",                   // backslash-folded protocol-relative
-            "\\\\evil.com",                  // backslash-folded protocol-relative
-            "ja\tvascript:x",                // tab-smuggled scheme (control char)
-            "java\nscript:x",                // newline-smuggled scheme (control char)
-            "\u{09}javascript:",             // leading raw tab control
-            "http://evil.com@good.com",      // userinfo host confusion
-            "https://evil.com/x",            // absolute cross-origin
-            "foo:bar",                       // bare scheme-colon before slash
-            "mailto:a@b.com",                // absolute non-web scheme
+            "",                         // empty
+            "javascript:alert(1)",      // script scheme
+            "data:text/html,x",         // data scheme
+            "file:///etc/passwd",       // file scheme
+            "//evil.com",               // protocol-relative
+            "/\\evil.com",              // backslash-folded protocol-relative
+            "\\\\evil.com",             // backslash-folded protocol-relative
+            "ja\tvascript:x",           // tab-smuggled scheme (control char)
+            "java\nscript:x",           // newline-smuggled scheme (control char)
+            "\u{09}javascript:",        // leading raw tab control
+            "http://evil.com@good.com", // userinfo host confusion
+            "https://evil.com/x",       // absolute cross-origin
+            "foo:bar",                  // bare scheme-colon before slash
+            "mailto:a@b.com",           // absolute non-web scheme
         ] {
             assert!(
                 is_err(bad),
@@ -513,7 +512,13 @@ mod tests {
     #[test]
     fn relative_accepts_and_round_trips_valid_references() {
         for good in [
-            "/", "/static/x.css", "/a/b?q=1#top", "./page", "../up", "?tab=2", "#anchor",
+            "/",
+            "/static/x.css",
+            "/a/b?q=1#top",
+            "./page",
+            "../up",
+            "?tab=2",
+            "#anchor",
         ] {
             assert!(is_ok(good), "valid relative reference {good:?} MUST be Ok");
         }
@@ -526,7 +531,10 @@ mod tests {
             IpeResult::Err(e) => panic!("expected Ok, got {e}"),
         };
         assert_eq!(url_relative_path(r.clone()), "/a/b");
-        assert_eq!(url_relative_query(r.clone()), IpeMaybe::Just("q=1".to_string()));
+        assert_eq!(
+            url_relative_query(r.clone()),
+            IpeMaybe::Just("q=1".to_string())
+        );
         assert_eq!(
             url_relative_fragment(r.clone()),
             IpeMaybe::Just("top".to_string())

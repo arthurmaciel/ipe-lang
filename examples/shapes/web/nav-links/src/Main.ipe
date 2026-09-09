@@ -1,0 +1,96 @@
+module Main exposing (main)
+
+-- | nav-links — the reference for the parse-at-boundary href idiom.
+--
+-- Navigation targets arrive as raw, untrusted strings (here a fixed table
+-- standing in for a decoded config / API response). Each is sealed ONCE at the
+-- boundary through `Ui.linkTarget` — the single dispatching parser that reads a
+-- raw href exactly as a browser does: an absolute URL (scheme-narrowed to
+-- `http`/`https`/`mailto`/`tel`) or a same-origin relative reference. A rejected
+-- target (a `javascript:` scheme, a `//evil` protocol-relative, a cross-origin
+-- string) is dropped at the boundary and never reaches an `href`.
+--
+-- The view is trivial: it maps the ALREADY-TYPED `LinkTarget` values into
+-- `Ui.link` nodes. It never unwraps a `Result` and never re-validates — the
+-- parse happened once, at the edge.
+
+
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.List as List
+import Ipe.Result exposing (Result(..))
+import Ipe.Ui as Ui
+
+
+type alias Model =
+    { links : List { label : String, target : Ui.LinkTarget } }
+
+
+type Msg
+    = NoOp
+
+
+-- | The raw, untrusted nav table. In a real app these come from a decoded
+-- config or API payload; the idiom is identical — seal each once, keep only the
+-- ones that pass.
+rawLinks : List { label : String, href : String }
+rawLinks =
+    [ { label = "Home", href = "/" }
+    , { label = "Docs", href = "/docs?section=intro#top" }
+    , { label = "Ipê", href = "https://ipe-lang.org/docs" }
+    , { label = "Contact", href = "mailto:hi@ipe-lang.org" }
+
+    -- These fail the boundary and are dropped — never rendered as an href.
+    , { label = "XSS", href = "javascript:alert(1)" }
+    , { label = "Evil", href = "//evil.com/x" }
+    ]
+
+
+-- | Seal one raw entry: a singleton typed `NavLink` when the href passes the
+-- boundary, the empty list when it is turned away.
+seal : { label : String, href : String } -> List { label : String, target : Ui.LinkTarget }
+seal entry =
+    case Ui.linkTarget entry.href of
+        Ok target ->
+            [ { label = entry.label, target = target } ]
+
+        Err _ ->
+            []
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { links = List.concatMap seal rawLinks }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+-- | The view is trivial: the links are already typed `LinkTarget`s, so it only
+-- places each in an `href`. No unwrap, no re-validation.
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        (List.map
+            (\l -> Ui.link [] { url = l.target, label = Ui.text l.label })
+            model.links
+        )
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = NoOp
+        }

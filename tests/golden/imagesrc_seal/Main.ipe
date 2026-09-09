@@ -1,41 +1,38 @@
 module Main exposing (main)
 
+import Ipe.Error exposing (Error)
+import Ipe.Html as Html
+import Ipe.Html.Attributes as Attr
 import Ipe.Io as Io
-import Ipe.Result as Result exposing (Result(..))
+import Ipe.Result exposing (Result(..))
 import Ipe.String as String
-import Ipe.Ui.ImageSrc as ImageSrc
-import Ipe.Url as Url
+import Ipe.Task as Task exposing (Task)
 
 
--- SEAL: Ipe.Ui.ImageSrc round-trips.
--- Proves the compiled-source module resolves, emits, builds, and runs.
--- The FromUrl variant embeds Url, which forces the `url` runtime feature
--- automatically through the type-driven SSOT.
+-- SEAL: the typed image-src boundary round-trips.
+-- Proves the `LinkTarget` / `Attr.link` / `Attr.src` surface resolves, emits,
+-- builds, and runs. A `LinkTarget` embeds `Url` / `Url.Relative`, which forces
+-- the `url` runtime feature automatically through the type-driven SSOT.
+--
+-- The literals are sealed ONCE at the top (parse-at-boundary); a rejected src
+-- fails LOUD via `Task.fail`, never a silently dropped attribute.
 
 
-urlLine : String
-urlLine =
-    case Result.andThen ImageSrc.url (Url.fromString "https://example.com/img.png") of
-        Ok src ->
-            ImageSrc.toAttributeValue src
-
-        Err _ ->
-            "url ERR"
-
-
-dataLine : String
-dataLine =
-    let
-        src =
-            ImageSrc.data { mime = "image/png", base64 = "abc123" }
-    in
-    ImageSrc.toAttributeValue src
-
-
+main : Task Error ()
 main =
-    Io.println
-        (String.join "\n"
-            [ urlLine
-            , dataLine
-            ]
-        )
+    case Attr.link "https://example.com/img.png" of
+        Ok remote ->
+            case Attr.link "/static/logo.png" of
+                Ok local ->
+                    Io.println
+                        (String.join "\n"
+                            [ Html.render (Html.img [ Attr.src remote, Attr.alt "x" ])
+                            , Html.render (Html.img [ Attr.src local, Attr.alt "y" ])
+                            ]
+                        )
+
+                Err e ->
+                    Task.fail e
+
+        Err e ->
+            Task.fail e

@@ -13,7 +13,6 @@ import Ipe.Io as Io
 import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Ui as Ui
-import Ipe.Ui.ImageSrc as ImageSrc
 import Ipe.Url as Url
 
 
@@ -29,20 +28,20 @@ verdict r =
             "ERR"
 
 
--- | Parse a raw string to an absolute `Url` then narrow it at each surface's
--- typed boundary. No explicit type annotations: each narrowed proof type is
--- module-local, so inference names it, and the `verdict` fold only reads the
--- `Ok`/`Err` tag.
+-- | Drive each surface's ONE dispatching seal on a raw string. `Attr.link`
+-- (href + src) and `Ui.linkTarget` read the raw string exactly as a browser
+-- reads an `href`: absolute-then-scheme-narrowed, else same-origin relative.
+-- The `verdict` fold only reads the `Ok`/`Err` tag.
 hrefOf raw =
-    Result.andThen Attr.hrefTarget (Url.fromString raw)
+    Attr.link raw
 
 
 linkOf raw =
-    Result.andThen Ui.linkTarget (Url.fromString raw)
+    Ui.linkTarget raw
 
 
 imageOf raw =
-    Result.andThen ImageSrc.url (Url.fromString raw)
+    Attr.link raw
 
 
 shareOf raw =
@@ -73,24 +72,25 @@ main =
             , line "link_mailto" (verdict (linkOf "mailto:a@b.com"))
             , line "link_javascript" (verdict (linkOf "javascript:alert(1)"))
 
-            -- image + share allow only http/https (no mailto/tel/data-as-url).
+            -- image `src` shares the href allowlist (http/https/mailto/tel); a
+            -- script scheme rejects. `share` is absolute-only (no relative).
             , line "img_https" (verdict (imageOf "https://example.com/i.png"))
             , line "img_mailto" (verdict (imageOf "mailto:a@b.com"))
             , line "img_javascript" (verdict (imageOf "javascript:alert(1)"))
             , line "share_https" (verdict (shareOf "https://example.com"))
             , line "share_mailto" (verdict (shareOf "mailto:a@b.com"))
 
-            -- relative-ref SSOT predicate: same-origin paths accept; the
+            -- relative reference seal: same-origin paths accept; the
             -- cross-origin / scheme / backslash / control / empty coercions reject.
-            , line "rel_path" (verdict (Url.relativeRef "/static/x.js"))
-            , line "rel_dot" (verdict (Url.relativeRef "./page"))
-            , line "rel_fragment" (verdict (Url.relativeRef "#top"))
-            , line "rel_query" (verdict (Url.relativeRef "?q=1"))
-            , line "rel_protocol_rel" (verdict (Url.relativeRef "//evil.com/x"))
-            , line "rel_backslash" (verdict (Url.relativeRef "/\\evil.com"))
-            , line "rel_scheme" (verdict (Url.relativeRef "javascript:alert(1)"))
-            , line "rel_empty" (verdict (Url.relativeRef ""))
-            , line "rel_control" (verdict (Url.relativeRef ("/a" ++ tab ++ "b")))
+            , line "rel_path" (verdict (Url.relative "/static/x.js"))
+            , line "rel_dot" (verdict (Url.relative "./page"))
+            , line "rel_fragment" (verdict (Url.relative "#top"))
+            , line "rel_query" (verdict (Url.relative "?q=1"))
+            , line "rel_protocol_rel" (verdict (Url.relative "//evil.com/x"))
+            , line "rel_backslash" (verdict (Url.relative "/\\evil.com"))
+            , line "rel_scheme" (verdict (Url.relative "javascript:alert(1)"))
+            , line "rel_empty" (verdict (Url.relative ""))
+            , line "rel_control" (verdict (Url.relative ("/a" ++ tab ++ "b")))
             ]
         )
 
