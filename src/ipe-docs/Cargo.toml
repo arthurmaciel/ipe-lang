@@ -27,6 +27,10 @@ ipe_kernels   = { path = "../compiler/kernels" }
 ipe_syntax    = { path = "../compiler/syntax" }
 ipe_parse     = { path = "../compiler/parse" }
 ipe_stdlib    = { path = "../stdlib" }
+# CommonMark renderer for guides, topics, and command pages.  The `ipe`
+# language tag on fenced code blocks is intercepted by `IpeSyntaxAdapter`,
+# which routes through the shared `highlight_snippet` fn (no second lexer).
+comrak        = { version = "0.29", default-features = false }
 
 [lints]
 workspace = true

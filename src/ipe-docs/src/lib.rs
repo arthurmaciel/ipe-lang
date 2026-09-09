@@ -261,6 +261,12 @@ impl IndexBuilder {
     pub fn add_compiled_stdlib(&mut self) -> Result<(), String> {
         let mut interner = Interner::new();
         for std_mod in COMPILED_STD_MODULES {
+            // `Ipe.App.Tea.Terminal` is subsumed by `Ipe.Color`; suppress its
+            // doc pages so the reference tree does not expose a deprecated namespace.
+            if std_mod.dotted.starts_with("Ipe.App.Tea.Terminal") {
+                continue;
+            }
+
             let module = parse_module(std_mod.source, &mut interner)
                 .map_err(|d| format!("parse error in {}: {d:?}", std_mod.dotted))?;
 
@@ -675,6 +681,23 @@ mod tests {
             idx.resolve("this.does.not.exist.at.all").is_none(),
             "unknown key must return None"
         );
+    }
+
+    /// `Ipe.App.Tea.Terminal` is superseded by `Ipe.Color`; the doc index must
+    /// not expose a page for it (the namespace is filtered in `add_compiled_stdlib`).
+    #[test]
+    fn tea_terminal_namespace_absent_from_index() {
+        let idx = build_index();
+        for residual in [
+            "Ipe.App.Tea.Terminal.Color",
+            "App.Tea.Terminal.Color",
+            "Tea.Terminal.Color",
+        ] {
+            assert!(
+                idx.resolve(residual).is_none(),
+                "deprecated Tea.Terminal namespace must not appear in the doc index; found: {residual}"
+            );
+        }
     }
 
     #[test]
