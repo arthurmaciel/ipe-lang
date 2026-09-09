@@ -166,8 +166,8 @@ jobs:
     name: explain-page example gate (ADR 0059)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    # Heavy (builds ipe): off the cheap PR gate, runs on development push + nightly.
-    if: github.event_name != 'pull_request'
+    # Change-gated: runs on a PR that touches src/**, plus development push + nightly.
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -192,8 +192,8 @@ jobs:
     name: doc-string example gate
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    # Heavy (builds ipe): off the cheap PR gate, runs on development push + nightly.
-    if: github.event_name != 'pull_request'
+    # Change-gated: runs on a PR that touches src/**, plus development push + nightly.
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
