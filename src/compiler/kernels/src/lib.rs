@@ -255,8 +255,8 @@ pub enum BuiltinTag {
     /// `Url` — the nullary opaque validated URL.
     Url,
     /// `Relative` — the nullary opaque validated same-origin relative reference
-    /// (`Ipe.Url`'s `path`[`?query`][`#fragment`] projection), distinct from the
-    /// always-absolute `Url`.
+    /// (`Ipe.Url`'s path + optional query + optional fragment projection),
+    /// distinct from the always-absolute `Url`.
     UrlRelative,
     /// `Dsn` — the nullary opaque validated database-connection descriptor.
     Dsn,
@@ -4828,17 +4828,13 @@ impl StdlibKernel {
             Self::UrlFragment => d("Url", "fragment", 1, Pure, "url_fragment"),
             Self::UrlBuildQuery => d("Url", "buildQuery", 1, Pure, "url_build_query"),
             Self::UrlRelativeParse => d("Url", "relative", 1, Pure, "url_relative"),
-            Self::UrlRelativePath => {
-                d("Url.Relative", "path", 1, Pure, "url_relative_path")
-            }
-            Self::UrlRelativeQuery => {
-                d("Url.Relative", "query", 1, Pure, "url_relative_query")
-            }
+            Self::UrlRelativePath => d("Url", "relativePath", 1, Pure, "url_relative_path"),
+            Self::UrlRelativeQuery => d("Url", "relativeQuery", 1, Pure, "url_relative_query"),
             Self::UrlRelativeFragment => {
-                d("Url.Relative", "fragment", 1, Pure, "url_relative_fragment")
+                d("Url", "relativeFragment", 1, Pure, "url_relative_fragment")
             }
             Self::UrlRelativeToString => {
-                d("Url.Relative", "toString", 1, Pure, "url_relative_to_string")
+                d("Url", "relativeToString", 1, Pure, "url_relative_to_string")
             }
             // ── Ipe.Locale ──────────────────────────────────────────────
             Self::LocaleFromTag => d("Locale", "fromTag", 1, Pure, "locale_from_tag"),
@@ -7373,10 +7369,8 @@ impl StdlibKernel {
         const URL_BUILD_QUERY: TyShape = TyShape::Fun(&LIST_TUPLE_STRING_STRING, &STRING);
         // Url.Relative — the opaque same-origin relative reference.
         const RELATIVE: TyShape = TyShape::Con(BuiltinTag::UrlRelative, &[]);
-        const RESULT_ERR_RELATIVE: TyShape =
-            TyShape::Con(BuiltinTag::Result, &[ERROR, RELATIVE]);
-        const STRING_TO_RESULT_ERR_RELATIVE: TyShape =
-            TyShape::Fun(&STRING, &RESULT_ERR_RELATIVE);
+        const RESULT_ERR_RELATIVE: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, RELATIVE]);
+        const STRING_TO_RESULT_ERR_RELATIVE: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_RELATIVE);
         const RELATIVE_TO_STRING: TyShape = TyShape::Fun(&RELATIVE, &STRING);
         const RELATIVE_TO_MAYBE_STRING: TyShape = TyShape::Fun(&RELATIVE, &MAYBE_STRING);
         // Dsn — the parse-don't-validate descriptor. Accessors return primitive
@@ -9159,9 +9153,7 @@ impl StdlibKernel {
             Self::UrlBuildQuery => Some(&URL_BUILD_QUERY),
             Self::UrlRelativeParse => Some(&STRING_TO_RESULT_ERR_RELATIVE),
             Self::UrlRelativePath | Self::UrlRelativeToString => Some(&RELATIVE_TO_STRING),
-            Self::UrlRelativeQuery | Self::UrlRelativeFragment => {
-                Some(&RELATIVE_TO_MAYBE_STRING)
-            }
+            Self::UrlRelativeQuery | Self::UrlRelativeFragment => Some(&RELATIVE_TO_MAYBE_STRING),
 
             // ── Ipe.Db.Dsn — parse-don't-validate descriptor. ──
             Self::DsnParse => Some(&STRING_TO_RESULT_ERR_DSN),

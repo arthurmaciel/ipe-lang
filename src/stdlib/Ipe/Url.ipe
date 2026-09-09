@@ -16,17 +16,16 @@ module Ipe.Url exposing
     , scheme, host, port, path, query, fragment
     , buildQuery
     , checkScheme
-    , RelativeRef, relativeRef, relativeRefToString
+    , Relative, relative
+    , relativePath, relativeQuery, relativeFragment, relativeToString
     )
 
 
-import Ipe.Char as Char
 import Ipe.Ffi.Kernel as Kernel
 import Ipe.Error as Error exposing (Error)
 import Ipe.List as List
-import Ipe.Maybe exposing (Maybe(..))
+import Ipe.Maybe exposing (Maybe)
 import Ipe.Result exposing (Result(..))
-import Ipe.String as String
 
 
 -- | `fromString raw` — the parse-don't-validate seal: the only `Url`
@@ -106,82 +105,44 @@ checkScheme allowed url =
             )
 
 
--- | A safe same-origin RELATIVE reference (`/static/x.js`, `./style.css`,
--- `?q=1`, `#top`). A `Url` is always ABSOLUTE (`fromString` rejects a relative
--- string), so a relative asset path has no `Url` representation — this opaque
--- companion type is the ONE typed home for a validated relative ref, distinct
--- from `Url` and never claiming to be an absolute one. The ONLY constructor is
--- `relativeRef`.
-type RelativeRef
-    = RelativeRef String
+-- | `relative raw` — THE seal for a same-origin relative reference.
+--
+-- `Relative` is a safe same-origin RELATIVE reference (`/static/x.js`,
+-- `./style.css`, `?q=1`, `#top`) — the `path`[`?query`][`#fragment`] projection
+-- (RFC 3986 §4.2). It is an opaque compiler builtin (like `Url` itself): a `Url`
+-- is always ABSOLUTE, so a relative reference is NOT a `Url` — it carries neither
+-- scheme nor authority, exactly the parts dropped for a same-origin navigation.
+-- This is the ONE typed home for a validated relative reference; the ONLY
+-- constructor is `relative`. Validated by
+-- the SAME `url` crate the absolute `Url` path uses (`Url_relative` resolves
+-- `raw` against a fixed same-origin base and REJECTS any scheme or authority),
+-- so the relative-href boundary and the absolute/SSRF boundary cannot diverge on
+-- what parses. Fail-closed: a protocol-relative (`//host`), scheme-bearing,
+-- backslash, control-char, or cross-origin string is a typed `Err`, never
+-- rendered into an `href` / `src`.
+relative : String -> Result Error Relative
+relative = Kernel.kernel "Url_relative"
 
 
--- | `isSafeRelativeRef s` — the SSOT fail-closed predicate every relative-ref
--- constructor shares (so a drifted hand-copy cannot drop a check). A reference
--- is safe ONLY when it cannot be coerced into a cross-origin or scheme-changing
--- navigation. Rejects, on PRESENCE (never strips): the empty string; any
--- control char (code `0..31` or `127`) that a browser would strip before
--- scheme detection (`ja\tvascript:`); a leading `//` (protocol-relative →
--- cross-origin); any backslash `\` (browsers fold `\` to `/`, so `/\evil.com`
--- becomes protocol-relative); and a `:` appearing before the first `/` (that is
--- an absolute-URL scheme, e.g. `javascript:x`, not a relative ref). Everything
--- else — a leading `/`, `.`/`..`, a bare segment, a leading `?` or `#` — is a
--- same-origin relative reference and is accepted.
-isSafeRelativeRef : String -> Bool
-isSafeRelativeRef s =
-    not (String.isEmpty s)
-        && not (String.any isControlChar s)
-        && not (String.startsWith "//" s)
-        && not (String.contains "\\" s)
-        && not (schemeColonBeforeSlash s)
+-- | `relativePath ref` — the path projection, always present (`/`, `/a/b`,
+-- `./x`).
+relativePath : Relative -> String
+relativePath = Kernel.kernel "Url_relativePath"
 
 
--- | `True` when `c` is an ASCII/Unicode control (code `0..31` or `127`).
-isControlChar : Char -> Bool
-isControlChar c =
-    let
-        code = Char.toCode c
-    in
-    code < 32 || code == 127
+-- | `relativeQuery ref` — the query string (without the leading `?`), or
+-- `Nothing`.
+relativeQuery : Relative -> Maybe String
+relativeQuery = Kernel.kernel "Url_relativeQuery"
 
 
--- | `True` when a `:` appears before the first `/` — the signature of an
--- absolute-URL scheme (`javascript:…`, `http:…`) rather than a relative path,
--- where a `:` may legally appear only inside a path segment (after a `/`).
-schemeColonBeforeSlash : String -> Bool
-schemeColonBeforeSlash s =
-    case List.head (String.split "/" s) of
-        Just beforeSlash ->
-            String.contains ":" beforeSlash
-
-        Nothing ->
-            False
+-- | `relativeFragment ref` — the fragment (without the leading `#`), or
+-- `Nothing`.
+relativeFragment : Relative -> Maybe String
+relativeFragment = Kernel.kernel "Url_relativeFragment"
 
 
--- | `relativeRef s` — the parse-don't-validate seal for a same-origin relative
--- reference. `Ok` only when `s` passes `isSafeRelativeRef`, otherwise a typed
--- `Err`. Fail-closed: an unsafe or absolute-looking string is turned away here,
--- never rendered into an `href` / `src`.
-relativeRef : String -> Result Error RelativeRef
-relativeRef s =
-    if isSafeRelativeRef s then
-        Ok (RelativeRef s)
-
-    else
-        Err
-            (Error.invalidInput
-                ("Ipe.Url: unsafe relative reference "
-                    ++ "\""
-                    ++ s
-                    ++ "\" (empty, control char, protocol-relative, backslash, "
-                    ++ "or scheme before first slash)"
-                )
-            )
-
-
--- | `relativeRefToString ref` — recover the validated relative reference string.
-relativeRefToString : RelativeRef -> String
-relativeRefToString ref =
-    case ref of
-        RelativeRef s ->
-            s
+-- | `relativeToString ref` — recover the validated reference string
+-- (path + optional query + optional fragment).
+relativeToString : Relative -> String
+relativeToString = Kernel.kernel "Url_relativeToString"

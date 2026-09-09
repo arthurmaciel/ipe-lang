@@ -1598,8 +1598,9 @@ pub enum IrType {
     /// (a `Url` in a `Ipe.Web` Model field is a compile-time rejection, never a
     /// silent wrong behaviour — same posture as `Path`/`Regex`).
     Url,
-    /// `Ipe.Url`'s opaque, validated same-origin RELATIVE reference — the
-    /// `path`[`?query`][`#fragment`] projection (RFC 3986 §4.2), NOT a `Url` (a
+    /// `Ipe.Url`'s opaque, validated same-origin RELATIVE reference — the path
+    /// plus optional query plus optional fragment projection (RFC 3986 §4.2),
+    /// NOT a `Url` (a
     /// `Url` is always absolute). Built only through `Url.relative : String ->
     /// Result Error Relative`, the `Url_relative` kernel that resolves the raw
     /// string against a fixed same-origin base with the `url` crate and REJECTS

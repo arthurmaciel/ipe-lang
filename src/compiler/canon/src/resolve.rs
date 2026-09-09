@@ -174,6 +174,10 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // security-tier type (the scheme/SSRF parse boundary) must not be
     // shadowable by user code defeating `Url.fromString`'s parse guarantee.
     "Url",
+    // `Ipe.Url`'s opaque same-origin relative reference — reserved for the same
+    // reason: a security-tier type (the browser-href SSRF boundary) must not be
+    // shadowable by user code defeating `Url.relative`'s parse guarantee.
+    "Relative",
     // `Ipe.Db.Dsn`'s opaque validated connection descriptor — reserved for the
     // same reason: a security-tier type (the DSN parse boundary, carrying a
     // `Secret` password and a fail-closed TLS posture) must not be shadowable by
@@ -588,6 +592,7 @@ const SEAL_SECRET_OR_SINK: &[&str] = &[
     "Regex",
     "Path",
     "Url",
+    "Relative",
     "Dsn",
     "Key",
     "Mac",
