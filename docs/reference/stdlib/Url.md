@@ -87,3 +87,48 @@ buildQuery : List ( String, String ) -> String
 value is percent-encoded, so a metacharacter in a value cannot split off a
 new parameter. Returns the encoded string without a leading `?`.
 
+## `checkScheme`
+
+```ipe
+checkScheme : List String -> Url -> Result Error Url
+```
+
+`checkScheme allowed url` — the fail-closed scheme allowlist boundary, one
+SSOT mechanism each surface calls with its own policy. `Url` is only the
+SYNTACTIC parse seal: it legally carries ANY absolute scheme (`javascript:`,
+`data:`, `file:` are valid `Url` values), so an href/link/share sink that
+accepts arbitrary schemes is an injection surface. This narrows the already
+parsed scheme against `allowed`: an `Ok url` only when `Url.scheme url` is in
+the list, otherwise a typed `Err` naming the blocked scheme. The scheme read
+is the runtime-normalised (lowercased) value, so a `JavaScript:` cannot evade
+a lowercase allowlist. Absent proof the scheme is one a caller vetted, the
+URL is rejected — never silently dropped, never passed through.
+
+## `RelativeRef`
+
+A safe same-origin RELATIVE reference (`/static/x.js`, `./style.css`,
+`?q=1`, `#top`). A `Url` is always ABSOLUTE (`fromString` rejects a relative
+string), so a relative asset path has no `Url` representation — this opaque
+companion type is the ONE typed home for a validated relative ref, distinct
+from `Url` and never claiming to be an absolute one. The ONLY constructor is
+`relativeRef`.
+
+## `relativeRef`
+
+```ipe
+relativeRef : String -> Result Error RelativeRef
+```
+
+`relativeRef s` — the parse-don't-validate seal for a same-origin relative
+reference. `Ok` only when `s` passes `isSafeRelativeRef`, otherwise a typed
+`Err`. Fail-closed: an unsafe or absolute-looking string is turned away here,
+never rendered into an `href` / `src`.
+
+## `relativeRefToString`
+
+```ipe
+relativeRefToString : RelativeRef -> String
+```
+
+`relativeRefToString ref` — recover the validated relative reference string.
+

@@ -761,8 +761,12 @@ Ipe.Browser.Share — invoke the platform share sheet over `Ipe.Ffi.Js` ports.
 
 | Export | Summary |
 |--------|----------|
-| `share` | `share payload` — invoke the platform share sheet with the given payload, as a |
+| `share` | `share p` — invoke the platform share sheet with the given typed `Payload`, |
 | `outcomes` | `outcomes toMsg` — the inbound subscription, wired in `subscriptions`. |
+| `ShareUrl` | An opaque, scheme-narrowed shared URL. The ONLY constructor is `shareUrl`, |
+| `shareUrl` | `shareUrl u` — the parse-don't-validate seal for a shared URL. Fail-closed: |
+| `Payload` | The typed share payload. `url` is an optional scheme-narrowed `ShareUrl` — |
+| `payload` | `payload rec` — lower a typed `Payload` into the raw seal DTO. The narrowed |
 
 ## Browser.Share.Internals
 
@@ -1957,12 +1961,15 @@ Ipe.Html.Attributes — HTML attribute builders.
 | `noAttr` | `noAttr` — the identity attribute (renders nothing). Makes "no attribute" a |
 | `class` | (no summary) |
 | `id` | (no summary) |
-| `href` | (no summary) |
-| `src` | (no summary) |
+| `href` | `href target` — the `href` attribute over a safe `HrefTarget` (build one |
+| `src` | `src source` — the `src` attribute over a typed `Ipe.Ui.ImageSrc` (a |
 | `alt` | (no summary) |
 | `value` | (no summary) |
 | `name` | (no summary) |
 | `placeholder` | (no summary) |
+| `HrefTarget` | An opaque, safe `href` target — EITHER a scheme-narrowed absolute `Url` |
+| `hrefTarget` | `hrefTarget u` — the parse-don't-validate seal for an ABSOLUTE `href`. |
+| `hrefRelative` | `hrefRelative raw` — the parse-don't-validate seal for a same-origin |
 | `type_` | `type_` — the `type` attribute (`type` is an Ipê keyword-adjacent spelling). |
 | `for_` | `for_` — the `for` attribute (`for` is an Ipê keyword). |
 | `style` | (no summary) |
@@ -2741,8 +2748,11 @@ Ipe.Ui — element / attribute / colour / layout surface.
 | `form` | `form attrs children` — a `<form>` container. |
 | `input` | `input attrs` — an `<input>` void element. |
 | `button` | `button attrs { onPress, label }` — a `<button>` with an optional press msg. |
-| `link` | `link attrs { url, label }` — an `<a href=…>` link. |
+| `link` | `link attrs { url, label }` — an `<a href=…>` link.  `url` is a typed, safe |
 | `image` | `image attrs { src, description }` — an `<img src=… alt=…>`.  `src` is a |
+| `LinkTarget` | An opaque, safe hyperlink target — EITHER a scheme-narrowed absolute `Url` |
+| `linkTarget` | `linkTarget u` — the parse-don't-validate seal for an ABSOLUTE hyperlink |
+| `linkRelative` | `linkRelative raw` — the parse-don't-validate seal for a same-origin |
 | `spacing` | (no summary) |
 | `padding` | (no summary) |
 | `paddingXY` | (no summary) |
@@ -2974,8 +2984,9 @@ Ipe.Ui.ImageSrc — a typed image source (Layer 3 Ipe source).
 
 | Export | Summary |
 |--------|----------|
-| `ImageSrc` | An opaque image source: either a remote URL or an inline data URI. |
-| `url` | `url u` — a remote image identified by a validated `Ipe.Url.Url`. |
+| `ImageSrc` | An opaque image source: a remote URL, a same-origin relative path, or an |
+| `url` | `url u` — a remote image from a validated `Ipe.Url.Url`. Fail-closed: the |
+| `relative` | `relative raw` — a same-origin relative image path (`/static/logo.png`, |
 | `data` | `data { mime, base64 }` — an inline image from base64-encoded bytes. |
 | `toAttributeValue` | `toAttributeValue src` — the string for an HTML `src` attribute. |
 
@@ -3089,6 +3100,10 @@ Ipe.Url — typed, validated URLs.
 | `query` | `query url` — the raw query string (without the leading `?`), or `Nothing`. |
 | `fragment` | `fragment url` — the fragment (without the leading `#`), or `Nothing`. |
 | `buildQuery` | `buildQuery pairs` — the injection-safe query-string builder. Every key and |
+| `checkScheme` | `checkScheme allowed url` — the fail-closed scheme allowlist boundary, one |
+| `RelativeRef` | A safe same-origin RELATIVE reference (`/static/x.js`, `./style.css`, |
+| `relativeRef` | `relativeRef s` — the parse-don't-validate seal for a same-origin relative |
+| `relativeRefToString` | `relativeRefToString ref` — recover the validated relative reference string. |
 
 ## Url.Parser
 

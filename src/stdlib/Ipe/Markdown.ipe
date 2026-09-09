@@ -47,9 +47,12 @@ module Ipe.Markdown exposing
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
 import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Ui as Ui exposing (Element, Attribute)
 import Ipe.Ui.Font as Font
+import Ipe.Ui.ImageSrc as ImageSrc
+import Ipe.Url as Url
 
 
 -- Render a multi-line markdown document into a column of block-level
@@ -930,22 +933,41 @@ renderSpan span =
                 (Ui.text text)
 
         LinkSpan text url ->
-            Ui.link
-                -- Underline distinguishes the link; colour inherits the theme
-                -- (the page's `Font.color`) rather than a fixed accent hex.
-                [ Ui.htmlAttribute "style" "text-decoration:underline"
-                , Ui.htmlAttribute "target" "_blank"
-                ]
-                { url = url, label = Ui.text text }
+            -- The `url` is untrusted markdown text. Parse it once and narrow the
+            -- scheme (`Ui.linkTarget`); a relative / unparseable / unsafe-scheme
+            -- (`javascript:`) target fails closed to the plain link TEXT — the
+            -- reader still sees the label, but no `href` is emitted. No scheme
+            -- guessing: a rejected URL is degraded, never repaired.
+            case Result.andThen Ui.linkTarget (Url.fromString url) of
+                Ok target ->
+                    Ui.link
+                        -- Underline distinguishes the link; colour inherits the
+                        -- theme (the page's `Font.color`) not a fixed accent hex.
+                        [ Ui.htmlAttribute "style" "text-decoration:underline"
+                        , Ui.htmlAttribute "target" "_blank"
+                        ]
+                        { url = target, label = Ui.text text }
+
+                Err _ ->
+                    Ui.text text
 
         ImageSpan alt url ->
-            Ui.html
-                (Html.img
-                    [ Attr.src url
-                    , Attr.alt alt
-                    , Attr.style "max-width:100%"
-                    ]
-                )
+            -- Same untrusted boundary for an image `src`: parse + narrow to a
+            -- network scheme (`ImageSrc.url`); a `javascript:` / `file:` / raw
+            -- `data:` / unparseable src fails closed to the `alt` TEXT rather
+            -- than emitting an `<img>` with an unsafe source.
+            case Result.andThen ImageSrc.url (Url.fromString url) of
+                Ok source ->
+                    Ui.html
+                        (Html.img
+                            [ Attr.src source
+                            , Attr.alt alt
+                            , Attr.style "max-width:100%"
+                            ]
+                        )
+
+                Err _ ->
+                    Ui.text alt
 
         HardBreakSpan ->
             Ui.html (Html.br [])

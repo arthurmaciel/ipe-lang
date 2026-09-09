@@ -1130,7 +1130,10 @@ import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Error as Error exposing (Error)
 import Ipe.Browser.Share as Share
+import Ipe.Maybe exposing (Maybe(..))
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.Task as Task
+import Ipe.Url as Url
 
 type alias Model = { n : Int }
 
@@ -1140,11 +1143,20 @@ init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _r =
     ( { n = 0 }, Cmd.none )
 
+shareCmd : Cmd.Cmd Msg
+shareCmd =
+    case Result.andThen Share.shareUrl (Url.fromString "https://e.com") of
+        Ok u ->
+            Task.attempt Sent (Share.share { title = "t", text = "x", url = Just u })
+
+        Err _ ->
+            Cmd.none
+
 update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
 update msg model =
     case msg of
         Send ->
-            ( model, Task.attempt Sent (Share.share { title = "t", text = "x", url = "https://e.com" }) )
+            ( model, shareCmd )
 
         Sent _r ->
             ( model, Cmd.none )

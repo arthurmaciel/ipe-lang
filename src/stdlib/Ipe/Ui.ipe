@@ -32,6 +32,7 @@ module Ipe.Ui exposing
     , el, row, column, wrappedRow, grid
     , paragraph, textColumn, form, input
     , button, link, image
+    , LinkTarget, linkTarget, linkRelative
     , spacing, padding, paddingXY, paddingEach, width, height
     , centerX, centerY, alignLeft, alignRight, alignTop, alignBottom
     , pointer, clip, clipX, clipY, scrollbars, scrollbarX, scrollbarY, gridColumns
@@ -50,8 +51,11 @@ module Ipe.Ui exposing
     )
 
 
+import Ipe.Error exposing (Error)
 import Ipe.Ffi.Kernel as Kernel
+import Ipe.Result as Result exposing (Result)
 import Ipe.Ui.ImageSrc as ImageSrc exposing (ImageSrc)
+import Ipe.Url as Url exposing (RelativeRef, Url)
 
 
 -- ── Retained native primitives ───────────────────────────────────────────────
@@ -119,9 +123,61 @@ button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } ->
 button = Kernel.kernel "Ui_button"
 
 
--- | `link attrs { url, label }` — an `<a href=…>` link.
-link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg
-link = Kernel.kernel "Ui_link"
+-- | The schemes a hyperlink may target: `http`/`https` for web, plus `mailto`
+-- and `tel` for the two safe non-web anchor schemes. A `javascript:` / `data:`
+-- / `file:` target is rejected at `linkTarget`, so it has no representation at
+-- the `<a href>` sink.
+linkSchemes : List String
+linkSchemes =
+    [ "http", "https", "mailto", "tel" ]
+
+
+-- | An opaque, safe hyperlink target — EITHER a scheme-narrowed absolute `Url`
+-- (`http`/`https`/`mailto`/`tel`) OR a validated same-origin relative reference
+-- (`/page`). Both constructors (`linkTarget` / `linkRelative`) fail closed, so
+-- a value of this type is always safe as an `href` — the proof `Ui.link`
+-- consumes TOTALLY. A raw `Url` (any scheme) cannot reach `link` directly.
+type LinkTarget
+    = LinkAbsolute Url
+    | LinkRelative RelativeRef
+
+
+-- | `linkTarget u` — the parse-don't-validate seal for an ABSOLUTE hyperlink
+-- target. Fail-closed: `Ok` only when `u`'s scheme is one of `http`/`https`
+-- /`mailto`/`tel`, otherwise a typed `Err`. A `javascript:` or `data:` URL is
+-- turned away here, never rendered into an `href`.
+linkTarget : Url -> Result Error LinkTarget
+linkTarget u =
+    Result.map LinkAbsolute (Url.checkScheme linkSchemes u)
+
+
+-- | `linkRelative raw` — the parse-don't-validate seal for a same-origin
+-- RELATIVE hyperlink (`/page`, `./about`, `#top`). Fail-closed via the shared
+-- `Url.relativeRef` predicate: a protocol-relative (`//host`), scheme-bearing,
+-- backslash, or control-char string is a typed `Err`.
+linkRelative : String -> Result Error LinkTarget
+linkRelative raw =
+    Result.map LinkRelative (Url.relativeRef raw)
+
+
+-- | Private kernel: takes a raw `String` href for the `<a href=…>` attribute.
+linkKernel : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg
+linkKernel = Kernel.kernel "Ui_link"
+
+
+-- | `link attrs { url, label }` — an `<a href=…>` link.  `url` is a typed, safe
+-- `LinkTarget` (build one with `Ui.linkTarget` for an absolute URL or
+-- `Ui.linkRelative` for a same-origin path); a bare `String` or an
+-- unvetted-scheme URL is a type error, so a `javascript:` href cannot be
+-- smuggled through. The `case` is exhaustive over both arms — no wildcard.
+link : List (Attribute msg) -> { url : LinkTarget, label : Element msg } -> Element msg
+link attrs rec =
+    case rec.url of
+        LinkAbsolute u ->
+            linkKernel attrs { url = Url.toString u, label = rec.label }
+
+        LinkRelative ref ->
+            linkKernel attrs { url = Url.relativeRefToString ref, label = rec.label }
 
 
 -- | Private kernel: takes a raw `String` src for the `<img src=…>` attribute.

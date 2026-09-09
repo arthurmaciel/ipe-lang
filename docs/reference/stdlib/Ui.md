@@ -180,10 +180,14 @@ button : List (Attribute msg) -> { onPress : Maybe msg, label : Element msg } ->
 ## `link`
 
 ```ipe
-link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg
+link : List (Attribute msg) -> { url : LinkTarget, label : Element msg } -> Element msg
 ```
 
-`link attrs { url, label }` — an `<a href=…>` link.
+`link attrs { url, label }` — an `<a href=…>` link.  `url` is a typed, safe
+`LinkTarget` (build one with `Ui.linkTarget` for an absolute URL or
+`Ui.linkRelative` for a same-origin path); a bare `String` or an
+unvetted-scheme URL is a type error, so a `javascript:` href cannot be
+smuggled through. The `case` is exhaustive over both arms — no wildcard.
 
 ## `image`
 
@@ -194,6 +198,36 @@ image : List (Attribute msg) -> { src : ImageSrc, description : String } -> Elem
 `image attrs { src, description }` — an `<img src=… alt=…>`.  `src` is a
 typed `ImageSrc` — either a validated URL (`ImageSrc.url`) or an inline data
 URI (`ImageSrc.data { mime, base64 }`).  A bare `String` is a type error.
+
+## `LinkTarget`
+
+An opaque, safe hyperlink target — EITHER a scheme-narrowed absolute `Url`
+(`http`/`https`/`mailto`/`tel`) OR a validated same-origin relative reference
+(`/page`). Both constructors (`linkTarget` / `linkRelative`) fail closed, so
+a value of this type is always safe as an `href` — the proof `Ui.link`
+consumes TOTALLY. A raw `Url` (any scheme) cannot reach `link` directly.
+
+## `linkTarget`
+
+```ipe
+linkTarget : Url -> Result Error LinkTarget
+```
+
+`linkTarget u` — the parse-don't-validate seal for an ABSOLUTE hyperlink
+target. Fail-closed: `Ok` only when `u`'s scheme is one of `http`/`https`
+/`mailto`/`tel`, otherwise a typed `Err`. A `javascript:` or `data:` URL is
+turned away here, never rendered into an `href`.
+
+## `linkRelative`
+
+```ipe
+linkRelative : String -> Result Error LinkTarget
+```
+
+`linkRelative raw` — the parse-don't-validate seal for a same-origin
+RELATIVE hyperlink (`/page`, `./about`, `#top`). Fail-closed via the shared
+`Url.relativeRef` predicate: a protocol-relative (`//host`), scheme-bearing,
+backslash, or control-char string is a typed `Err`.
 
 ## `spacing`
 

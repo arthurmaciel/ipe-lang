@@ -1,11 +1,13 @@
 module Main exposing (main)
 
 import Ipe.Db as Db
-import Ipe.Error as Error
+import Ipe.Error as Error exposing (Error)
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
 import Ipe.List as List
+import Ipe.Result as Result exposing (Result)
 import Ipe.String as String
+import Ipe.Url as Url
 import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.App.Tea.Web as Web
@@ -666,26 +668,35 @@ referencesRow links =
             (List.map linkEl links)
 
 
+-- | Render a link from a fail-closed `LinkTarget` result and a label. On an
+-- `Err` (an unsafe / unparseable target) the anchor degrades to the plain label
+-- text — the reader still sees it, but no `href` is emitted.
+linkOrText : Result Error Ui.LinkTarget -> String -> Ui.Element Msg
+linkOrText target labelText =
+    case target of
+        Ok t ->
+            Ui.link
+                [ Font.size 12
+                , Font.family Font.monospace
+                , Font.color (Ui.rgb 130 170 240)
+                , Ui.padding 4
+                ]
+                { url = t, label = Ui.text labelText }
+
+        Err _ ->
+            Ui.text labelText
+
+
 linkEl : Links.Link -> Ui.Element Msg
 linkEl link =
     case link of
         Internal qualified uid ->
-            Ui.link
-                [ Font.size 12
-                , Font.family Font.monospace
-                , Font.color (Ui.rgb 130 170 240)
-                , Ui.padding 4
-                ]
-                { url = "/unit/" ++ uid, label = Ui.text ("→ " ++ qualified) }
+            linkOrText (Ui.linkRelative ("/unit/" ++ uid)) ("→ " ++ qualified)
 
         External url ->
-            Ui.link
-                [ Font.size 12
-                , Font.family Font.monospace
-                , Font.color (Ui.rgb 130 170 240)
-                , Ui.padding 4
-                ]
-                { url = url, label = Ui.text ("↗ " ++ url) }
+            linkOrText
+                (Result.andThen Ui.linkTarget (Url.fromString url))
+                ("↗ " ++ url)
 
 
 decisionBadge : String -> Ui.Element Msg
