@@ -1102,23 +1102,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev
-      # The emitted crates each `cargo build --offline` (hermetic: no live index
-      # re-resolution). Offline resolution reads only the already-fetched registry
-      # index, so every dep the emitted manifest names must have its index entry
-      # cached first — including the always-declared optional allocators
-      # (`dlmalloc`/`mimalloc`), which are absent from the workspace dep tree and
-      # so never warmed by rust-cache nor carried in the prebuilt nextest archive.
-      # A single ONLINE `cargo fetch` against the emitted-crate manifest template
-      # (the SSOT dep list every emitted crate is built from) resolves that full
-      # dep set and populates the index cache, so the offline builds below find
-      # every package instead of failing "no matching package named `dlmalloc`".
-      - name: Pre-warm the registry cache for the emitted-crate manifest
-        run: |
-          set -euo pipefail
-          WARM="$(mktemp -d)"
-          cp src/compiler/backend/rust/templates/Cargo.toml "$WARM/Cargo.toml"
-          mkdir -p "$WARM/src" && echo 'fn main() {}' > "$WARM/src/main.rs"
-          ( cd "$WARM" && cargo fetch )
       # Sub-shards 1..8 of a 48-way partition cover a representative slice of the
       # golden suite, eight runners wide (was five sub-shards of a 30-way
       # partition). Widening the sub-shard count spreads the same class of work
@@ -1206,23 +1189,6 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      # The seal_modset tests build each emitted crate with `cargo build
-      # --offline` (hermetic: no live index re-resolution). Offline resolution
-      # reads only the already-fetched registry index, so every dep the emitted
-      # manifest names must have its index entry cached first — including the
-      # always-declared optional allocators (`dlmalloc`/`mimalloc`), which are
-      # absent from the workspace dep tree and so never warmed by rust-cache. A
-      # single ONLINE `cargo fetch` against the emitted-crate manifest template
-      # (the SSOT dep list the vendored emit builds from) resolves that full dep
-      # set and populates the index cache, so the offline builds below find every
-      # package instead of failing "no matching package named `dlmalloc`".
-      - name: Pre-warm the registry cache for the emitted-crate manifest
-        run: |
-          set -euo pipefail
-          WARM="$(mktemp -d)"
-          cp src/compiler/backend/rust/templates/Cargo.toml "$WARM/Cargo.toml"
-          mkdir -p "$WARM/src" && echo 'fn main() {}' > "$WARM/src/main.rs"
-          ( cd "$WARM" && cargo fetch )
       - name: Run seal_modset under the vendored emit model
         run: |
           cargo nextest run -p ipe \
