@@ -447,6 +447,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `Ipe.Url`'s opaque validated URL — fully-qualified to avoid ambiguity
         // with any user-defined `Url` type.
         IrType::Url => "ipe_runtime::url::Url".to_owned(),
+        // `Ipe.Url`'s opaque same-origin relative reference — fully-qualified.
+        IrType::UrlRelative => "ipe_runtime::url::UrlRelative".to_owned(),
         // `Ipe.Db.Dsn`'s opaque validated connection descriptor — fully-qualified
         // to avoid ambiguity with any user-defined `Dsn` type.
         IrType::Dsn => "ipe_runtime::dsn::Dsn".to_owned(),

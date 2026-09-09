@@ -1499,6 +1499,11 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::UrlQuery
         | KernelFn::UrlFragment
         | KernelFn::UrlBuildQuery
+        | KernelFn::UrlRelativeParse
+        | KernelFn::UrlRelativePath
+        | KernelFn::UrlRelativeQuery
+        | KernelFn::UrlRelativeFragment
+        | KernelFn::UrlRelativeToString
         | KernelFn::LocaleFromTag
         | KernelFn::LocaleToTag
         | KernelFn::StringToUpperIn

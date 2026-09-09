@@ -254,6 +254,10 @@ pub enum BuiltinTag {
     Regex,
     /// `Url` — the nullary opaque validated URL.
     Url,
+    /// `Relative` — the nullary opaque validated same-origin relative reference
+    /// (`Ipe.Url`'s `path`[`?query`][`#fragment`] projection), distinct from the
+    /// always-absolute `Url`.
+    UrlRelative,
     /// `Dsn` — the nullary opaque validated database-connection descriptor.
     Dsn,
     /// `Connection` — the external-database connection handle constructor
@@ -2924,6 +2928,20 @@ pub enum StdlibKernel {
     /// `Url.buildQuery : List (String, String) -> String` — the injection-safe
     /// query-string builder; every key/value is percent-encoded.
     UrlBuildQuery,
+    /// `Url.relative : String -> Result Error Relative` — THE seal for a
+    /// same-origin relative reference. Resolves `raw` against a fixed same-origin
+    /// base with the `url` crate and REJECTS any scheme/authority (the
+    /// browser-href SSRF boundary). The ONLY `Relative` constructor.
+    UrlRelativeParse,
+    /// `Url.Relative.path : Relative -> String` — the path projection (always
+    /// present: `/`, `/a/b`, `./x`).
+    UrlRelativePath,
+    /// `Url.Relative.query : Relative -> Maybe String` — the query (no `?`).
+    UrlRelativeQuery,
+    /// `Url.Relative.fragment : Relative -> Maybe String` — the fragment (no `#`).
+    UrlRelativeFragment,
+    /// `Url.Relative.toString : Relative -> String` — recover the reference.
+    UrlRelativeToString,
     // ── Ipe.Locale — opaque BCP-47 locale handle ─────────────────────────
     // Parse-don't-validate: `Locale.fromTag` is the only constructor; an invalid
     // BCP-47 tag is `Nothing`, never a silent default.  `Locale.toTag` is the
@@ -4809,6 +4827,19 @@ impl StdlibKernel {
             Self::UrlQuery => d("Url", "query", 1, Pure, "url_query"),
             Self::UrlFragment => d("Url", "fragment", 1, Pure, "url_fragment"),
             Self::UrlBuildQuery => d("Url", "buildQuery", 1, Pure, "url_build_query"),
+            Self::UrlRelativeParse => d("Url", "relative", 1, Pure, "url_relative"),
+            Self::UrlRelativePath => {
+                d("Url.Relative", "path", 1, Pure, "url_relative_path")
+            }
+            Self::UrlRelativeQuery => {
+                d("Url.Relative", "query", 1, Pure, "url_relative_query")
+            }
+            Self::UrlRelativeFragment => {
+                d("Url.Relative", "fragment", 1, Pure, "url_relative_fragment")
+            }
+            Self::UrlRelativeToString => {
+                d("Url.Relative", "toString", 1, Pure, "url_relative_to_string")
+            }
             // ── Ipe.Locale ──────────────────────────────────────────────
             Self::LocaleFromTag => d("Locale", "fromTag", 1, Pure, "locale_from_tag"),
             Self::LocaleToTag => d("Locale", "toTag", 1, Pure, "locale_to_tag"),
@@ -6017,6 +6048,11 @@ impl StdlibKernel {
         Self::UrlQuery,
         Self::UrlFragment,
         Self::UrlBuildQuery,
+        Self::UrlRelativeParse,
+        Self::UrlRelativePath,
+        Self::UrlRelativeQuery,
+        Self::UrlRelativeFragment,
+        Self::UrlRelativeToString,
         // ── Ipe.Locale ─────────────────────────────────────────────────
         Self::LocaleFromTag,
         Self::LocaleToTag,
@@ -7335,6 +7371,14 @@ impl StdlibKernel {
         const LIST_TUPLE_STRING_STRING: TyShape =
             TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_STRING]);
         const URL_BUILD_QUERY: TyShape = TyShape::Fun(&LIST_TUPLE_STRING_STRING, &STRING);
+        // Url.Relative — the opaque same-origin relative reference.
+        const RELATIVE: TyShape = TyShape::Con(BuiltinTag::UrlRelative, &[]);
+        const RESULT_ERR_RELATIVE: TyShape =
+            TyShape::Con(BuiltinTag::Result, &[ERROR, RELATIVE]);
+        const STRING_TO_RESULT_ERR_RELATIVE: TyShape =
+            TyShape::Fun(&STRING, &RESULT_ERR_RELATIVE);
+        const RELATIVE_TO_STRING: TyShape = TyShape::Fun(&RELATIVE, &STRING);
+        const RELATIVE_TO_MAYBE_STRING: TyShape = TyShape::Fun(&RELATIVE, &MAYBE_STRING);
         // Dsn — the parse-don't-validate descriptor. Accessors return primitive
         // tags (`Int`) the compiled-source wrapper re-tags into the `Driver` /
         // `TlsMode` ADTs; the descriptor itself is the opaque `DSN` leaf.
@@ -9113,6 +9157,11 @@ impl StdlibKernel {
             Self::UrlHost | Self::UrlQuery | Self::UrlFragment => Some(&URL_TO_MAYBE_STRING),
             Self::UrlPort => Some(&URL_TO_MAYBE_INT),
             Self::UrlBuildQuery => Some(&URL_BUILD_QUERY),
+            Self::UrlRelativeParse => Some(&STRING_TO_RESULT_ERR_RELATIVE),
+            Self::UrlRelativePath | Self::UrlRelativeToString => Some(&RELATIVE_TO_STRING),
+            Self::UrlRelativeQuery | Self::UrlRelativeFragment => {
+                Some(&RELATIVE_TO_MAYBE_STRING)
+            }
 
             // ── Ipe.Db.Dsn — parse-don't-validate descriptor. ──
             Self::DsnParse => Some(&STRING_TO_RESULT_ERR_DSN),
@@ -11001,6 +11050,11 @@ impl StdlibKernel {
             | Self::UrlQuery
             | Self::UrlFragment
             | Self::UrlBuildQuery
+            | Self::UrlRelativeParse
+            | Self::UrlRelativePath
+            | Self::UrlRelativeQuery
+            | Self::UrlRelativeFragment
+            | Self::UrlRelativeToString
             // ── Ipe.Locale — pure BCP-47 parse + locale-aware case mapping ──
             | Self::LocaleFromTag
             | Self::LocaleToTag
@@ -12020,6 +12074,11 @@ impl StdlibKernel {
                 | Self::UrlQuery
                 | Self::UrlFragment
                 | Self::UrlBuildQuery
+                | Self::UrlRelativeParse
+                | Self::UrlRelativePath
+                | Self::UrlRelativeQuery
+                | Self::UrlRelativeFragment
+                | Self::UrlRelativeToString
         )
     }
 
@@ -13799,6 +13858,13 @@ mod tests {
             StdlibKernel::UrlFromString,
             StdlibKernel::UrlToString,
             StdlibKernel::UrlScheme,
+            // `Attributes.link` / `href` parse a relative reference client-side
+            // (the same `url` crate wasm build) to render a Web-shape `href`.
+            StdlibKernel::UrlRelativeParse,
+            StdlibKernel::UrlRelativePath,
+            StdlibKernel::UrlRelativeQuery,
+            StdlibKernel::UrlRelativeFragment,
+            StdlibKernel::UrlRelativeToString,
             StdlibKernel::TimeNow,
             StdlibKernel::TimeSleep,
             StdlibKernel::TimeUnixMillis,
