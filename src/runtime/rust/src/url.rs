@@ -217,6 +217,31 @@ mod tests {
         assert_eq!(url_host(parse("mailto:a@b.com")), IpeMaybe::Nothing);
     }
 
+    // ── (b') the scheme is NORMALISED — the property the Ipê-side allowlist
+    // (`Ipe.Url.checkScheme`) relies on. A lowercase allowlist can only be
+    // evasion-proof if `url_scheme` lowercases and strips scheme control chars;
+    // pin that here so a `url`-crate change that stopped normalising would break
+    // the build, not silently open a `JavaScript:` / `ja\tvascript:` bypass at
+    // every href/link/share sink.
+
+    #[test]
+    fn scheme_is_lowercased() {
+        // Mixed-case schemes normalise to lowercase, so a `JavaScript:` cannot
+        // evade a lowercase allowlist by case alone.
+        assert_eq!(url_scheme(parse("HTTP://x.com")), "http");
+        assert_eq!(url_scheme(parse("hTtPs://y.com")), "https");
+        assert_eq!(url_scheme(parse("JavaScript:alert(1)")), "javascript");
+    }
+
+    #[test]
+    fn control_chars_in_scheme_are_stripped() {
+        // A tab / newline embedded in the scheme is stripped during parse, so
+        // `ja\tvascript:` normalises to `javascript` — it cannot slip past a
+        // `javascript`-denying allowlist as a distinct string.
+        assert_eq!(url_scheme(parse("ja\tvascript:x")), "javascript");
+        assert_eq!(url_scheme(parse("java\nscript:x")), "javascript");
+    }
+
     // ── (c) the builder percent-encodes metacharacters (no injection) ────────
 
     #[test]

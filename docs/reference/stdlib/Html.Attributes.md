@@ -58,14 +58,26 @@ id : String -> Attribute msg
 ## `href`
 
 ```ipe
-href : String -> Attribute msg
+href : HrefTarget -> Attribute msg
 ```
+
+`href target` — the `href` attribute over a safe `HrefTarget` (build one
+with `hrefTarget` for an absolute URL or `hrefRelative` for a same-origin
+path). A bare `String` or an unvetted URL is a type error, so a
+`javascript:` href cannot be smuggled in. The `case` is exhaustive over both
+arms — no wildcard.
 
 ## `src`
 
 ```ipe
-src : String -> Attribute msg
+src : ImageSrc -> Attribute msg
 ```
+
+`src source` — the `src` attribute over a typed `Ipe.Ui.ImageSrc` (a
+scheme-narrowed remote URL via `ImageSrc.url`, a same-origin relative path
+via `ImageSrc.relative`, or an inline `data:` image via `ImageSrc.data`). A
+bare `String` is a type error, so a non-network `src` scheme cannot be
+smuggled in.
 
 ## `alt`
 
@@ -90,6 +102,35 @@ name : String -> Attribute msg
 ```ipe
 placeholder : String -> Attribute msg
 ```
+
+## `HrefTarget`
+
+An opaque, safe `href` target — EITHER a scheme-narrowed absolute `Url`
+(`http`/`https`/`mailto`/`tel`) OR a validated same-origin relative reference
+(`/static/x`). Both constructors (`hrefTarget` / `hrefRelative`) fail closed,
+so a value of this type is always safe to place in an `href` — the proof
+`href` consumes TOTALLY. A raw `String` or an unvetted URL cannot reach it.
+
+## `hrefTarget`
+
+```ipe
+hrefTarget : Url -> Result Error HrefTarget
+```
+
+`hrefTarget u` — the parse-don't-validate seal for an ABSOLUTE `href`.
+Fail-closed: `Ok` only when `u`'s scheme is one of `http`/`https`/`mailto`
+/`tel`, otherwise a typed `Err`.
+
+## `hrefRelative`
+
+```ipe
+hrefRelative : String -> Result Error HrefTarget
+```
+
+`hrefRelative raw` — the parse-don't-validate seal for a same-origin
+RELATIVE `href` (`/static/x.css`, `./page`, `#top`). Fail-closed via the
+shared `Url.relativeRef` predicate: a protocol-relative (`//host`),
+scheme-bearing, backslash, or control-char string is a typed `Err`.
 
 ## `type_`
 

@@ -15,12 +15,8 @@ import Ipe.Url as Url
 
 urlLine : String
 urlLine =
-    case Url.fromString "https://example.com/img.png" of
-        Ok u ->
-            let
-                src =
-                    ImageSrc.url u
-            in
+    case Result.andThen ImageSrc.url (Url.fromString "https://example.com/img.png") of
+        Ok src ->
             ImageSrc.toAttributeValue src
 
         Err _ ->

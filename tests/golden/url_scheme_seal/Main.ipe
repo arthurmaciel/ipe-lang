@@ -1,0 +1,102 @@
+module Main exposing (main)
+
+-- SEAL + REFUSAL MATRIX: the typed URL boundary for the href / link / image /
+-- share sinks. Every unsafe target must fail closed at its typed constructor,
+-- and every safe one must pass. This program drives the whole matrix and prints
+-- one `OK` / `ERR` verdict per case; the pinned expected output is the proof the
+-- refusals hold (a regression that opened one flips a row and fails the golden).
+
+import Ipe.Browser.Share as Share
+import Ipe.Char as Char
+import Ipe.Html.Attributes as Attr
+import Ipe.Io as Io
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Ui as Ui
+import Ipe.Ui.ImageSrc as ImageSrc
+import Ipe.Url as Url
+
+
+-- | Collapse any `Result` to a two-state tag so the matrix output is scheme-
+-- and type-agnostic: `OK` for `Ok`, `ERR` for the fail-closed `Err`.
+verdict : Result e a -> String
+verdict r =
+    case r of
+        Ok _ ->
+            "OK"
+
+        Err _ ->
+            "ERR"
+
+
+-- | Parse a raw string to an absolute `Url` then narrow it at each surface's
+-- typed boundary. No explicit type annotations: each narrowed proof type is
+-- module-local, so inference names it, and the `verdict` fold only reads the
+-- `Ok`/`Err` tag.
+hrefOf raw =
+    Result.andThen Attr.hrefTarget (Url.fromString raw)
+
+
+linkOf raw =
+    Result.andThen Ui.linkTarget (Url.fromString raw)
+
+
+imageOf raw =
+    Result.andThen ImageSrc.url (Url.fromString raw)
+
+
+shareOf raw =
+    Result.andThen Share.shareUrl (Url.fromString raw)
+
+
+line : String -> String -> String
+line name v =
+    name ++ "=" ++ v
+
+
+main =
+    Io.println
+        (String.join "\n"
+            -- href allowlist: http/https/mailto/tel accept; script/data/file reject.
+            [ line "href_https" (verdict (hrefOf "https://example.com/a"))
+            , line "href_http" (verdict (hrefOf "http://example.com/a"))
+            , line "href_mailto" (verdict (hrefOf "mailto:a@b.com"))
+            , line "href_tel" (verdict (hrefOf "tel:+15551234"))
+            , line "href_javascript" (verdict (hrefOf "javascript:alert(1)"))
+            , line "href_data" (verdict (hrefOf "data:text/html,<x>"))
+            , line "href_file" (verdict (hrefOf "file:///etc/passwd"))
+            , line "href_vbscript" (verdict (hrefOf "vbscript:msgbox"))
+            , line "href_blob" (verdict (hrefOf "blob:https://x/y"))
+
+            -- link mirrors href (mailto/tel allowed).
+            , line "link_https" (verdict (linkOf "https://example.com"))
+            , line "link_mailto" (verdict (linkOf "mailto:a@b.com"))
+            , line "link_javascript" (verdict (linkOf "javascript:alert(1)"))
+
+            -- image + share allow only http/https (no mailto/tel/data-as-url).
+            , line "img_https" (verdict (imageOf "https://example.com/i.png"))
+            , line "img_mailto" (verdict (imageOf "mailto:a@b.com"))
+            , line "img_javascript" (verdict (imageOf "javascript:alert(1)"))
+            , line "share_https" (verdict (shareOf "https://example.com"))
+            , line "share_mailto" (verdict (shareOf "mailto:a@b.com"))
+
+            -- relative-ref SSOT predicate: same-origin paths accept; the
+            -- cross-origin / scheme / backslash / control / empty coercions reject.
+            , line "rel_path" (verdict (Url.relativeRef "/static/x.js"))
+            , line "rel_dot" (verdict (Url.relativeRef "./page"))
+            , line "rel_fragment" (verdict (Url.relativeRef "#top"))
+            , line "rel_query" (verdict (Url.relativeRef "?q=1"))
+            , line "rel_protocol_rel" (verdict (Url.relativeRef "//evil.com/x"))
+            , line "rel_backslash" (verdict (Url.relativeRef "/\\evil.com"))
+            , line "rel_scheme" (verdict (Url.relativeRef "javascript:alert(1)"))
+            , line "rel_empty" (verdict (Url.relativeRef ""))
+            , line "rel_control" (verdict (Url.relativeRef ("/a" ++ tab ++ "b")))
+            ]
+        )
+
+
+-- | A literal horizontal-tab, to prove a control byte in an otherwise
+-- path-shaped relative ref is rejected on presence.
+tab : String
+tab =
+    String.fromChar (Char.fromCode 9)
