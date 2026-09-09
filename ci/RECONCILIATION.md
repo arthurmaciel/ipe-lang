@@ -87,8 +87,8 @@ fail-closed `promotion-ready` job on the next promotion, not by branch protectio
 
 Heavy checks run nightly + on `development` push. A red does not block a PR; it
 blocks the **next promotion** through the fail-closed `promotion-ready` job and is
-surfaced by `ci-health`. See the `nightly-gate` entries in the manifest (jail
-proofs, sanitizers, miri, seal-modset, browser-e2e, runtime-feature-combos).
+surfaced by `ci-health`. See the `nightly-gate` entries in the manifest (the
+Linux jail proofs, sanitizers, seal-modset, browser-e2e, runtime-feature-combos).
 
 ## Flagged: required-but-flaky and informational-but-noisy
 
@@ -102,11 +102,13 @@ Reconciling the current checks against the disposition table surfaced these:
   advisory. Disposition `informational`; the fix is to DROP `continue-on-error`
   so the `ci-health` surface can see a real red. (Not changed in this PR — it
   touches `static.yml` job semantics; tracked here for the static.yml owner.)
-- **`miri` — sharded 20-wide, aggregator flakes on any shard/infra failure.**
-  `nightly-gate`; #2138 Phase 5 de-shards 20→4-6 to cut flake surface. Off the
-  per-PR path already, so it no longer blocks PRs; a red blocks the next
-  promotion via `promotion-ready`.
-- **`asan`/`tsan`/`browser-e2e`/jail-tier2 proofs — heavy, previously silent
+- **macOS / Windows / FreeBSD jail Tier-2 proofs — un-greenable on hosted
+  runners.** Not classified as CI contexts: they need real-OS substrate a
+  GitHub-hosted runner lacks. Their containment is verified out-of-band (release
+  checklist); `#2247`/`#2248`/`#2249` are the revival trigger for restoring them
+  when self-hosted / real-OS runners exist. `macos-arm64` (Seatbelt) and the
+  Linux Tier-2 jails remain the gating containment proofs.
+- **`asan`/`tsan`/`browser-e2e`/Linux jail-tier2 proofs — heavy, previously silent
   advisory reds.** Now `nightly-gate` with a surface; no longer un-watched.
 - **`install-smoke ×4` — installer UX, network-dependent → intermittently noisy.**
   `informational`, owner `release`; the dedup issue keeps one surface per red

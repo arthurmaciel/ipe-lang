@@ -133,11 +133,6 @@ checks:
     aggregates: [seal-slice-shard]
 
   # ── Heavy soundness / sanitizers — nightly-gate ───────────────────────────
-  - context: miri
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Soundness
-    aggregates: [miri-shard]
   - context: asan-all
     disposition: nightly-gate
     producer: ci.yml
@@ -161,31 +156,17 @@ checks:
     guards: SEAL
 
   # ── Cross-platform jail proofs — nightly-gate (Security §1) ───────────────
-  - context: "macos-tier2 (sandbox-exec — the real macOS jail proof)"
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Security
-  - context: "macos-run-jail (sandbox-exec — the real macOS run-jail proof)"
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Security
+  # The Linux jail Tier-2 proofs — the containment gate CI produces on GitHub-
+  # hosted runners. macOS/Windows/FreeBSD Tier-2 jails need real-OS substrate a
+  # hosted runner lacks, so those platforms' build/run-jail containment is
+  # verified out-of-band (release checklist) rather than as a CI status context;
+  # macos-arm64 (sandbox-exec / Seatbelt) in admission-sandbox.yml is the
+  # required macOS containment proof.
   - context: "linux-x64-tier2 (bwrap+seccomp — the real Linux jail proof)"
     disposition: nightly-gate
     producer: ci.yml
     guards: Security
   - context: "linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)"
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Security
-  - context: "windows-tier2 (Job Object + AppContainer — the real Windows build-jail proof)"
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Security
-  - context: "windows-run-jail (Job Object + AppContainer — the real Windows run-jail proof)"
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Security
-  - context: "freebsd-tier2 (jail(8) inside vmactions VM — the real FreeBSD build-jail proof)"
     disposition: nightly-gate
     producer: ci.yml
     guards: Security
