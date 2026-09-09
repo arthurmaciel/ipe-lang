@@ -242,7 +242,7 @@ pub struct Builtins {
     pub term_color: Symbol,
     /// `"CustomElement"` — the JS-widget boundary type constructor
     /// `CustomElement down up`. Empty-module opaque handle; consumed only by the
-    /// `Ui.widget` kernel scheme.
+    /// `CustomElement.node` kernel scheme.
     pub custom_element: Symbol,
     /// `"Html"` — Html type constructor `Html msg` (shared by Ipe.Html and
     /// Ipe.Ui render entry points).

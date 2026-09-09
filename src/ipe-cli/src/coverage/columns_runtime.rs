@@ -24,10 +24,38 @@ fn scratch_dir() -> Result<crate::scratch::ScratchDir, String> {
     crate::scratch::ScratchDir::new("ipe-coverage-probe").map_err(|e| e.to_string())
 }
 
+/// A filesystem-safe, per-symbol scratch subdirectory key, so each symbol's
+/// probe writes its `Main.ipe` under its own directory and a parallel sweep never
+/// clobbers a sibling's snippet. Derived from the dotted symbol path with every
+/// non-alphanumeric byte mapped to `_`, keeping distinct symbols distinct.
+fn symbol_scratch_key(sym: &StdlibSymbol) -> String {
+    let dotted = format!("{}.{}", sym.module.join("."), sym.name);
+    let mut key = String::with_capacity(dotted.len());
+    for ch in dotted.chars() {
+        if ch.is_ascii_alphanumeric() {
+            key.push(ch);
+        } else {
+            key.push('_');
+        }
+    }
+    key
+}
+
 /// Map a [`ProbeUnavailable`] to the `NotApplicable` verdict — a symbol the
-/// generator cannot express is not judged by a build column.
-const fn unavailable_cell(_reason: &ProbeUnavailable) -> Cell {
-    Cell::NotApplicable
+/// generator cannot express is not judged by a build column, carrying the reason
+/// so the pass is auditable.
+fn unavailable_cell(reason: &ProbeUnavailable) -> Cell {
+    let why = match reason {
+        ProbeUnavailable::NotAValue => {
+            "the symbol is a type or constructor, not a value — the value-reference probe does \
+             not apply"
+        }
+        ProbeUnavailable::Unaddressable => {
+            "the symbol has no compiled-source module to import it from — not reachable by a \
+             qualified reference"
+        }
+    };
+    Cell::not_applicable(why)
 }
 
 // ── lowers ────────────────────────────────────────────────────────────────────
@@ -83,7 +111,12 @@ impl AspectCheck<StdlibSymbol> for LowersColumn {
         // type-check is a point-free-reference limitation for this symbol, not a
         // lowering gap.
         if let StageOutcome::Failed { .. } = probe::typechecks(&source, &snippet) {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(format!(
+                "{}.{}: the point-free reference program does not type-check — a \
+                 probe-form limitation for this symbol, not a lowering gap",
+                sym.module.join("."),
+                sym.name
+            ));
         }
         let outcome = probe::lower(&source, &snippet);
         classify_lower_outcome(sym, outcome, "type-checks but does not lower")
@@ -105,7 +138,13 @@ fn classify_lower_outcome(sym: &StdlibSymbol, outcome: StageOutcome, seam: &str)
         return Cell::Ok;
     }
     if probe::is_probe_form_limitation(&outcome) {
-        return Cell::NotApplicable;
+        return Cell::not_applicable(format!(
+            "{}.{}: the point-free probe is refused by the language (a value that must be \
+             applied directly, or a fully-polymorphic unused binding) — a probe-form \
+             limitation, not a lowering gap",
+            sym.module.join("."),
+            sym.name
+        ));
     }
     let is_ice = probe::is_internal_compiler_error(&outcome);
     let StageOutcome::Failed { message, .. } = outcome else {
@@ -164,7 +203,7 @@ impl AspectCheck<StdlibSymbol> for ComposesColumn {
 
     fn check(&self, sym: &StdlibSymbol) -> Cell {
         if !sym.is_higher_order {
-            return Cell::NotApplicable;
+            return Cell::not_applicable("first-order symbol — composition does not apply");
         }
         let Some(scratch) = &self.scratch else {
             return Cell::Warn("no scratch dir; composes probe skipped".to_owned());
@@ -178,7 +217,12 @@ impl AspectCheck<StdlibSymbol> for ComposesColumn {
         // this symbol's shape, not a lowering gap: report it inapplicable so it
         // is not a false hole.
         if let StageOutcome::Failed { .. } = probe::typechecks(&source, &snippet) {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(format!(
+                "{}.{}: the nested reference program does not type-check — a generator \
+                 limitation for this symbol's shape, not a lowering gap",
+                sym.module.join("."),
+                sym.name
+            ));
         }
         let outcome = probe::lower(&source, &snippet);
         classify_lower_outcome(
@@ -199,6 +243,25 @@ impl AspectCheck<StdlibSymbol> for ComposesColumn {
 /// build or whose binary does not run to a zero exit is a hole. Non-value symbols
 /// are `NotApplicable`. Heavy (a full cargo build per symbol) — the caller runs
 /// this only on the E2E path.
+///
+/// A standalone single-file build+run cannot exercise every shape. Two structural
+/// classes are inapplicable to it, each judged from a real property of the symbol
+/// (never a hand-kept symbol list) and reported `NotApplicable` with the deriving
+/// property named:
+///
+/// * A symbol homed under a reserved `Ipe.Browser.<Api>` module discloses a
+///   `js-port:<axis>` web capability — client browser JS that runs in a live page,
+///   which a bare probe cannot grant (`IPE-S0002`) and, even granted, has no server
+///   process to run. Derived from the module path via
+///   [`probe::browser_web_axis`].
+/// * A symbol whose point-free reference program cannot even NAME-RESOLVE (a
+///   shape-scoped module with no standalone importable home, or a kernel-homed
+///   symbol the compiled module does not expose under that name) is a probe-FORM
+///   limitation, not a build+run gap. Derived from the name-resolution rejection
+///   code via [`probe::probe_form_unaddressable_code`], caught by the cheap
+///   pre-lower before any cargo build. (A qualified-import qualifier collision no
+///   longer arises: the probe binds every module under a fixed reserved alias that
+///   cannot collide with a real qualifier.)
 pub struct BuildRunColumn {
     scratch: Option<crate::scratch::ScratchDir>,
 }
@@ -224,6 +287,23 @@ impl AspectCheck<StdlibSymbol> for BuildRunColumn {
     }
 
     fn check(&self, sym: &StdlibSymbol) -> Cell {
+        // A `Ipe.Browser.<Api>` symbol discloses a `js-port:<axis>` web capability:
+        // client browser JS that a standalone build+run cannot exercise (the effect
+        // lives in a live page, not the emitted binary; a bare probe cannot even
+        // grant it). Judged structurally from the module path, before any build.
+        if let Some(axis) = probe::browser_web_axis(sym) {
+            return Cell::NotApplicable {
+                reason: format!(
+                    "{}.{} discloses the browser web capability `js-port:{}` — client \
+                     JavaScript that runs in a live browser page, which a standalone \
+                     build+run cannot exercise (no page to run it in, and a bare \
+                     single-file probe cannot grant the axis)",
+                    sym.module.join("."),
+                    sym.name,
+                    axis.as_str()
+                ),
+            };
+        }
         let Some(scratch) = &self.scratch else {
             return Cell::Warn("no scratch dir; build+run probe skipped".to_owned());
         };
@@ -231,7 +311,12 @@ impl AspectCheck<StdlibSymbol> for BuildRunColumn {
             Ok(s) => s,
             Err(reason) => return unavailable_cell(&reason),
         };
-        let snippet = scratch.child("Main.ipe");
+        // Each symbol writes its `Main.ipe` under its OWN subdirectory of the
+        // shared scratch, keyed on the dotted path, so a parallel sweep (distinct
+        // symbols on distinct threads) never clobbers a sibling's snippet. The
+        // module is `Main`, so the file must be named `Main.ipe`; the per-symbol
+        // parent is what keeps it unique.
+        let snippet = scratch.child(&symbol_scratch_key(sym)).join("Main.ipe");
         // The point-free reference program can fail to compile for a reason that
         // is a property of the probe FORM, not a build gap: a value the language
         // refuses point-free, a fully-polymorphic unused binding, or a lowerer ICE
@@ -240,11 +325,36 @@ impl AspectCheck<StdlibSymbol> for BuildRunColumn {
         // pay a full cargo build to reach a false hole.
         let lowered = probe::lower(&source, &snippet);
         if probe::is_probe_form_limitation(&lowered) {
-            return Cell::NotApplicable;
+            return Cell::NotApplicable {
+                reason: format!(
+                    "{}.{}: the point-free reference program does not lower — a probe-form \
+                     limitation (a value the language refuses point-free, or a \
+                     fully-polymorphic unused binding), not a build+run gap",
+                    sym.module.join("."),
+                    sym.name
+                ),
+            };
+        }
+        // A point-free reference the name resolver cannot even ADDRESS (a
+        // shape-scoped module with no standalone home, or a kernel member the
+        // compiled module does not expose under that name) is a probe-form
+        // limitation, not a build+run gap — caught before any build.
+        if let Some(code) = probe::probe_form_unaddressable_code(&lowered) {
+            return Cell::NotApplicable {
+                reason: format!(
+                    "{}.{}: the point-free reference program does not name-resolve \
+                     ({}) — the probe form cannot address this symbol (a \
+                     shape-scoped module with no standalone home, or a kernel member \
+                     not exposed under this name), not a build+run gap",
+                    sym.module.join("."),
+                    sym.name,
+                    code.as_str()
+                ),
+            };
         }
         if probe::is_internal_compiler_error(&lowered) {
             let StageOutcome::Failed { message, .. } = lowered else {
-                return Cell::NotApplicable;
+                return Cell::not_applicable("internal-compiler-error outcome carried no message");
             };
             return Cell::Warn(format!(
                 "{}.{} triggers an internal compiler error before build+run: {message}",
@@ -345,7 +455,7 @@ impl AspectCheck<StdlibSymbol> for RuntimeFnExistsColumn {
 
     fn check(&self, sym: &StdlibSymbol) -> Cell {
         let Some(kernel) = kernel_for(sym) else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable("not a kernel symbol — no runtime function to resolve");
         };
         let runtime_fn = kernel.def().runtime_fn;
         // An emit token that is not a bare identifier is an inline/operator
@@ -355,7 +465,10 @@ impl AspectCheck<StdlibSymbol> for RuntimeFnExistsColumn {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_')
         {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "the kernel's emit token is not a bare identifier — an inline/operator/\
+                 constructor emission, not a free runtime function",
+            );
         }
         if self.runtime_symbols.is_empty() {
             return Cell::Warn(
@@ -525,7 +638,7 @@ impl AspectCheck<StdlibSymbol> for WasmColumn {
 
     fn check(&self, sym: &StdlibSymbol) -> Cell {
         let Some(kernel) = kernel_for(sym) else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable("not a kernel symbol — no wasm denotation to check");
         };
         if kernel.available_on(Target::WasmClient) {
             Cell::Ok
@@ -533,7 +646,12 @@ impl AspectCheck<StdlibSymbol> for WasmColumn {
             // Denied by the default-deny WasmClient allowlist: this kernel has no
             // client denotation by design (a server effect), so wasm does not
             // apply to it.
-            Cell::NotApplicable
+            Cell::not_applicable(format!(
+                "{}.{}: a server-effect kernel with no WasmClient denotation — denied by the \
+                 default-deny wasm allowlist by design (a security property, not a gap)",
+                sym.module.join("."),
+                sym.name
+            ))
         }
     }
 }

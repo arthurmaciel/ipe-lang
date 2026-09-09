@@ -1309,7 +1309,7 @@ pub fn compile_prepared(
     // renders) and the author hook file's verbatim content (WP5 serves it
     // content-addressed + SRI). Populated as the containment/existence gate
     // proves each file; deduplicated by tag so two views of one widget register
-    // once. Empty for a program that uses no `Ui.widget`.
+    // once. Empty for a program that uses no `CustomElement.node`.
     let mut widget_manifest: BTreeMap<String, String> = BTreeMap::new();
     // The cleaned path that first minted each tag. The tag is a 64-bit FNV-1a
     // digest, so two DISTINCT hook paths can collide onto one tag; keying the
@@ -1539,7 +1539,7 @@ pub fn compile_prepared(
     Ok(emitted)
 }
 
-/// Inject the process-start `Ui.widget` asset registration into the emitted
+/// Inject the process-start `CustomElement.node` asset registration into the emitted
 /// `main.rs`, so the served app registers its widget assets before the web
 /// server binds.
 ///

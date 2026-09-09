@@ -650,8 +650,8 @@ const IPE_CORE_JS: &str = include_str!("../Ipe/Ffi/Js.ipe");
 /// source).
 ///
 /// Exposes `node : CustomElement down up -> down -> (up -> msg) -> Element msg`,
-/// routed through the `Kernel.kernel "Ui_widget"` alias to the registered
-/// `UiWidget` kernel, and the reserved literal-only `fromFile "<js-path>"`
+/// routed through the `Kernel.kernel "CustomElement_node"` alias to the
+/// registered custom-element view-node kernel, and the reserved literal-only `fromFile "<js-path>"`
 /// constructor (recognised structurally by the resolver, not a value binding).
 /// The crossing seals its down-state / up-event on the CONCRETE type
 /// (IPE-N0039). The widget transport is shipped; the binding lowers to the

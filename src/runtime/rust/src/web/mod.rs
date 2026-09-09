@@ -19,7 +19,7 @@ pub use route::*;
 pub mod console;
 pub mod csrf;
 pub mod style_inject;
-// Custom-element (`Ui.widget`) registration glue + SRI-pinned author-JS serving.
+// Custom-element (`CustomElement.node`) registration glue + SRI-pinned author-JS serving.
 // The generator lives at the crate top level (`crate::widget_assets`) so the
 // build-time static/wasm bundler can reach it without the server surface; `web`
 // re-exports it here so the server's `ipe_runtime::web::widget_assets::*` path
@@ -4347,7 +4347,7 @@ where
     // allows, so a web app without an outbound HTTP kernel still gets
     // `/_ipe/console`.
 
-    // Custom-element (`Ui.widget`) assets: one content-addressed route per
+    // Custom-element (`CustomElement.node`) assets: one content-addressed route per
     // registered author module + one for the generated registration glue.
     // Each serves a `&'static str` (the bytes interned in the process-global
     // registry at startup) with the same `immutable` discipline as the client

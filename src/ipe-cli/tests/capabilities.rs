@@ -13,7 +13,7 @@ mod support;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-/// A minimal Web-shape TEA app whose view mounts one `Ui.widget` over a
+/// A minimal Web-shape TEA app whose view mounts one `CustomElement.node` over a
 /// `customElement` handle — the smallest program that ships browser JS, so its
 /// inferred capability set must contain `custom-element`.
 const WIDGET_APP: &str = r#"module Main exposing (main)
@@ -206,7 +206,7 @@ fn acceptance_http_and_clock_example_infers_network_and_clock() -> TestResult {
 
 // ── the `custom-element` disclosure axis ────────────────────────────────────
 
-/// A program that mounts a `Ui.widget` ships browser JS, so its inferred
+/// A program that mounts a `CustomElement.node` ships browser JS, so its inferred
 /// capability set must contain `custom-element`. Proven through the same
 /// `verify_capabilities` inference `ipe capabilities` reports, over a real
 /// Web-shape widget app.
@@ -251,7 +251,7 @@ fn a_widget_program_that_hides_custom_element_is_rejected() -> TestResult {
 /// A Web-shape app that CONSTRUCTS a `customElement` handle at top level but never
 /// mounts it in `view`. The emitter still serves the author JS (the handle is a
 /// served asset the moment it is constructed), so disclosure must follow serving:
-/// the inferred set contains `custom-element` even though no `Ui.widget` is
+/// the inferred set contains `custom-element` even though no `CustomElement.node` is
 /// reachable and the handle DCEs out of the lowered program. The prior kernel-only
 /// inference reported nothing here while the emitter served the JS — a
 /// served-but-undisclosed browser-JS hole. The `js/counter.js` marker in the
@@ -325,7 +325,7 @@ fn unmounted_widget_project(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
 /// An unmounted `customElement` handle still ships browser JS, so its inferred
 /// capability set contains `custom-element`: declaring exactly `{custom-element}`
 /// verifies. Disclosure derives from the served-asset walk, not from a reachable
-/// `Ui.widget` kernel.
+/// `CustomElement.node` kernel.
 #[test]
 fn an_unmounted_handle_still_discloses_custom_element() -> TestResult {
     let dir = unmounted_widget_project("infer")?;

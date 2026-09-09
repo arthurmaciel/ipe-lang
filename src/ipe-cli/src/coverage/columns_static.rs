@@ -155,13 +155,16 @@ impl AspectCheck<StdlibSymbol> for ResolvesColumn {
 
     fn check(&self, sym: &StdlibSymbol) -> Cell {
         if !sym.exported {
-            return Cell::NotApplicable;
+            return Cell::not_applicable("not exported — resolvability applies to exports only");
         }
         let Some(outcome) = self.projections.for_module(&sym.module) else {
             // Exported but homed in a kernel-qualifier module: its resolvability
             // is not projected here (no compiled-source interface). The home
             // column owns that surface.
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "exported but homed in a kernel-qualifier module with no compiled-source \
+                 interface — the home column owns its resolvability",
+            );
         };
         match outcome {
             Ok(_) => Cell::Ok,
@@ -218,7 +221,10 @@ impl AspectCheck<StdlibSymbol> for ClosedSchemeColumn {
 
     fn check(&self, sym: &StdlibSymbol) -> Cell {
         let Some(outcome) = self.projections.for_module(&sym.module) else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "no compiled-source interface projected for this module — scheme openness \
+                 does not apply here",
+            );
         };
         match outcome {
             Ok(_) => Cell::Ok,
@@ -230,7 +236,10 @@ impl AspectCheck<StdlibSymbol> for ClosedSchemeColumn {
             )),
             // A typecheck failure is the resolves column's hole, not a scheme
             // openness hole.
-            Err(ProjectionFailure::Other(_)) => Cell::NotApplicable,
+            Err(ProjectionFailure::Other(_)) => Cell::not_applicable(
+                "the module failed to typecheck — the resolves column owns that hole, not a \
+                 scheme-openness gap",
+            ),
         }
     }
 }
@@ -333,7 +342,10 @@ impl AspectCheck<StdlibSymbol> for LayerAgreementColumn {
 
     fn check(&self, sym: &StdlibSymbol) -> Cell {
         if sym.kind != SymbolKind::Ctor {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not a constructor — payload-arity agreement applies to \
+                                         union constructors only",
+            );
         }
         // Only a constructor the typed interface actually declares under a
         // builtin-union type is judged: this pins the surface ctor to its union,
@@ -342,7 +354,10 @@ impl AspectCheck<StdlibSymbol> for LayerAgreementColumn {
         let Some((type_name, projected_arity)) =
             self.projected.get(&(sym.module.clone(), sym.name.clone()))
         else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not a builtin-union constructor in the typed interface — a user/opaque ctor \
+                 that merely shares a name, not a layer-agreement subject",
+            );
         };
         match self
             .canon_arities

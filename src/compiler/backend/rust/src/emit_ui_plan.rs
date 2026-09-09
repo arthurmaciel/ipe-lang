@@ -121,7 +121,7 @@ pub enum NativeUiEmit {
     LazyLazy5,
     /// `PubSub.publish` / `PubSub.publishNoEcho` — turbofished Task kernel.
     PubSubPublish,
-    /// `Ui.widget` — the server-driven custom-element node. Bespoke because its
+    /// `CustomElement.node` — the server-driven custom-element node. Bespoke because its
     /// handler argument must be re-wrapped to satisfy the runtime fn's
     /// `Send + Sync` bound (a boxed fn-value trait object is not `Sync`).
     Widget,
@@ -149,7 +149,7 @@ pub enum Guard {
     /// denotation; reject them in a Web / `WebView` build (fail-closed) rather
     /// than let the runtime helper degrade to plain text and render wrong.
     RejectInWebShape,
-    /// `Ui.widget` is the server-driven custom element: its up-event handler is
+    /// `CustomElement.node` is the server-driven custom element: its up-event handler is
     /// carried over the seal codec, which exists only in a browser shape (`web`
     /// implies the `json` feature; `Terminal` / `Program` do not). Outside a
     /// browser shape the widget has NO transport — the node would be inert, a
@@ -1637,7 +1637,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::TermColorDefault => pos("ipe_runtime::tui::term_color_default_", 0),
         KernelFn::TermColorRgb => pos("ipe_runtime::tui::term_color_rgb_", 3),
         KernelFn::TermColorRgba => pos("ipe_runtime::tui::term_color_rgba_", 4),
-        // `Ui.widget ce state on_up` — the server-driven custom-element node.
+        // `CustomElement.node ce state on_up` — the server-driven custom-element node.
         // A bespoke arm, not a plain positional call: `ui_widget_`'s handler
         // parameter carries `F: Fn(Up) -> M + Send + Sync + 'static`, which the
         // codegen's default `Box<dyn Fn + Send>` fn-value rendering does NOT
@@ -2044,7 +2044,7 @@ mod tests {
     }
 
     /// The non-web-shape guard set covers kernels that have no denotation
-    /// outside a browser shape: `Ui.widget` (no up-event transport) and
+    /// outside a browser shape: `CustomElement.node` (no up-event transport) and
     /// `Debug.explain` (no DOM to outline).  A new browser-only kernel that
     /// omits the guard fails here rather than silently emitting dead code.
     #[test]

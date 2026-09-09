@@ -1138,6 +1138,7 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_ANYTHING",    // used only in a denylist assertion string
     "IPE_BLESS",
     "IPE_CAPABILITY_FLOOR", // a linker-retained static symbol, not an env var
+    "IPE_COVERAGE_BUILD_JOBS", // coverage test harness: parallel build+run job count
     "IPE_DEBUG_TODO_SUBPROCESS",
     "IPE_DEFINITELY_NOT_REGISTERED_PROBE", // synthetic orphan-read fixture for the env-var coverage matrix
     "IPE_E2E",                             // CI gate for enabling e2e test suites

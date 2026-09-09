@@ -59,7 +59,7 @@ pub enum Event<M> {
         String,
         std::sync::Arc<dyn Fn(FormData) -> Option<M> + Send + Sync>,
     ),
-    /// Typed custom-element up-event handler (`Ui.widget`). The browser posts
+    /// Typed custom-element up-event handler (`CustomElement.node`). The browser posts
     /// the encoded `up` value as `args[0]` through the same `/_ipe/event` wire a
     /// click uses; the closure runs the generated fail-closed seal decode over
     /// that string and dispatches the typed `msg` on success. It returns

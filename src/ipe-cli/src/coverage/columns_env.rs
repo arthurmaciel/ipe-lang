@@ -79,7 +79,9 @@ impl AspectCheck<EnvItem> for ReadInCodeColumn {
 
     fn check(&self, item: &EnvItem) -> Cell {
         let Some(var) = as_registered(item) else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not a registered environment variable — this column judges registered vars only",
+            );
         };
         if self.reads.all_reads().contains(var.name) {
             Cell::Ok
@@ -128,7 +130,9 @@ impl AspectCheck<EnvItem> for DocumentedColumn {
 
     fn check(&self, item: &EnvItem) -> Cell {
         let Some(var) = as_registered(item) else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not a registered environment variable — this column judges registered vars only",
+            );
         };
         let Some(reference) = &self.reference else {
             return Cell::Hole(format!(
@@ -198,10 +202,15 @@ impl AspectCheck<EnvItem> for TruthyParseColumn {
 
     fn check(&self, item: &EnvItem) -> Cell {
         let Some(var) = as_registered(item) else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not a registered environment variable — this column judges registered vars only",
+            );
         };
         if !is_boolean_style(var) {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not a boolean-style variable — truthy-parse consistency applies to on/off \
+                 toggles only",
+            );
         }
         if self.hand_rolled {
             Cell::Warn(format!(
@@ -251,7 +260,9 @@ impl AspectCheck<EnvItem> for ProdSafetyColumn {
 
     fn check(&self, item: &EnvItem) -> Cell {
         let Some(var) = as_registered(item) else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not a registered environment variable — this column judges registered vars only",
+            );
         };
         if is_dev_only(var) {
             Cell::Warn(format!(
@@ -260,7 +271,9 @@ impl AspectCheck<EnvItem> for ProdSafetyColumn {
                 var.name
             ))
         } else {
-            Cell::NotApplicable
+            Cell::not_applicable(
+                "not a dev-only variable — prod-safety gating applies to dev-only vars only",
+            )
         }
     }
 }
