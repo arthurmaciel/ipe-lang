@@ -2828,6 +2828,7 @@ dependencies = [
 name = "ipe_backend_rust"
 version = "0.1.78"
 dependencies = [
+ "e2e-support",
  "ipe-runtime-rust",
  "ipe_backend",
  "ipe_diagnostics",

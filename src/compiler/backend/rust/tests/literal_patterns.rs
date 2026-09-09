@@ -485,17 +485,18 @@ fn build_and_assert(
         std::fs::write(&path, contents).map_err(|e| seal_e2e::io_bug(&path, &e))?;
     }
 
+    let target_dir = seal_e2e::emitted_target_dir(&out);
     let status = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(&out)
-        .env("CARGO_TARGET_DIR", out.join("target"))
+        .env("CARGO_TARGET_DIR", &target_dir)
         .status();
     assert!(
         matches!(&status, Ok(s) if s.success()),
         "emitted alias-pattern project must build: {status:?}"
     );
 
-    let bin = out.join("target").join("debug").join("ipe-app");
+    let bin = target_dir.join("debug").join("ipe-app");
     let output = std::process::Command::new(&bin)
         .output()
         .map_err(|e| seal_e2e::io_bug(&bin, &e))?;
@@ -505,6 +506,8 @@ fn build_and_assert(
         "alias-pattern program output must match golden"
     );
     assert!(output.status.success(), "exit 0");
-    let _ = std::fs::remove_dir_all(out.join("target"));
+    if target_dir == out.join("target") {
+        let _ = std::fs::remove_dir_all(&target_dir);
+    }
     Ok(())
 }
