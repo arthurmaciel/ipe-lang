@@ -11,6 +11,7 @@ module Ipe.Html.Attributes exposing
     , attribute, boolAttribute, noAttr
     , class, id, href, src, alt, value, name, placeholder
     , LinkTarget, link
+    , MediaTarget, imageSrc
     , type_, for_, style, title, autocomplete
     , checked, disabled, readonly, required, multiple, selected, autofocus
     , tabindex, rows
@@ -111,13 +112,64 @@ href target =
     attribute "href" (renderTarget target)
 
 
--- | `src target` — the `src` attribute over a safe `LinkTarget` (an image src
--- is a scheme-narrowed URL or a same-origin path — the same boundary as `href`;
--- an inline data image uses `Ipe.Ui.imageData`). A bare `String` is a type
--- error, so a non-network `src` scheme cannot be smuggled in.
-src : LinkTarget -> Attribute msg
+-- | The schemes a media `src` (an `<img>` / `<script>` fetch sink) may target:
+-- `http`/`https` ONLY. A `src` is a resource the browser FETCHES, a distinct
+-- role from a navigation `href` — so it does NOT admit the anchor schemes
+-- `mailto`/`tel` that `linkSchemes` allows. Narrower than `linkSchemes` on
+-- purpose: a fetch sink and a navigation sink fail closed against different
+-- allowlists.
+mediaSchemes : List String
+mediaSchemes =
+    [ "http", "https" ]
+
+
+-- | An opaque, safe media target for a `src` sink — EITHER a scheme-narrowed
+-- absolute `Url` (`http`/`https` only) OR a validated same-origin relative
+-- reference (`/static/logo.png`). The ONE constructor `imageSrc` fails closed,
+-- so a value of this type is always safe to place in a `src`. Distinct from
+-- `LinkTarget`: a `mailto:` / `tel:` string parses to a `LinkTarget` but has NO
+-- `MediaTarget` representation, so it cannot reach a fetch sink.
+type MediaTarget
+    = MediaAbsolute Url
+    | MediaRelative Relative
+
+
+-- | `imageSrc raw` — the ONE parse-don't-validate seal for a media `src` target:
+-- an absolute URL if `raw` parses as one (then scheme-narrowed to `http`/`https`
+-- via `mediaSchemes`), otherwise a validated same-origin relative reference.
+-- Fail-closed: a `mailto:` / `tel:` / `javascript:` / `data:` / `file:` scheme,
+-- a protocol-relative (`//host`), or a cross-origin string is a typed `Err`,
+-- never rendered into a `src`.
+imageSrc : String -> Result Error MediaTarget
+imageSrc raw =
+    case Url.fromString raw of
+        Ok u ->
+            Result.map MediaAbsolute (Url.checkScheme mediaSchemes u)
+
+        Err _ ->
+            Result.map MediaRelative (Url.relative raw)
+
+
+-- | `renderMediaTarget target` — the string a safe `MediaTarget` renders to.
+-- The `case` is exhaustive over both arms — no wildcard.
+renderMediaTarget : MediaTarget -> String
+renderMediaTarget target =
+    case target of
+        MediaAbsolute u ->
+            Url.toString u
+
+        MediaRelative ref ->
+            Url.relativeToString ref
+
+
+-- | `src target` — the `src` attribute over a safe `MediaTarget` (build one with
+-- `imageSrc`). A media `src` is scheme-narrowed to `http`/`https` only (NOT the
+-- `mailto`/`tel` a `href` `LinkTarget` allows); an inline data image uses
+-- `Ipe.Ui.imageData`. A bare `String` or a `LinkTarget` is a type error, so a
+-- non-network `src` scheme cannot be smuggled in.
+src : MediaTarget -> Attribute msg
 src target =
-    attribute "src" (renderTarget target)
+    attribute "src" (renderMediaTarget target)
 
 
 alt : String -> Attribute msg

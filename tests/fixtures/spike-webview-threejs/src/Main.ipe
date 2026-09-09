@@ -77,11 +77,12 @@ hrefRel path =
             Attr.noAttr
 
 
--- | A same-origin relative `src` for a static asset, same fail-closed `link`
--- seal as `hrefRel`.
+-- | A same-origin relative `src` for a static asset, fail-closed through the
+-- media `imageSrc` seal (a `src` is a fetch sink, narrowed to `http`/`https` or
+-- a same-origin path — distinct from the navigation `link` seal `hrefRel` uses).
 srcRel : String -> Attr.Attribute msg
 srcRel path =
-    case Attr.link path of
+    case Attr.imageSrc path of
         Ok source ->
             Attr.src source
 

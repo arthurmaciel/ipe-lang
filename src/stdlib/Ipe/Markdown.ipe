@@ -951,12 +951,13 @@ renderSpan span =
                     Ui.text text
 
         ImageSpan alt url ->
-            -- Same untrusted boundary for an image `src`: parse through the one
-            -- `Attr.link` seal (scheme-narrowed URL or same-origin path); a
-            -- `javascript:` / `file:` / cross-origin / unparseable src fails
-            -- closed to the `alt` TEXT rather than emitting an `<img>` with an
-            -- unsafe source.
-            case Attr.link url of
+            -- An image `src` is a FETCH sink, a distinct role from a navigation
+            -- `href`: parse the untrusted markdown target through the media
+            -- `Attr.imageSrc` seal (narrowed to `http`/`https` or a same-origin
+            -- path — NOT `mailto:`/`tel:`); a `javascript:` / `file:` /
+            -- cross-origin / unparseable / non-network src fails closed to the
+            -- `alt` TEXT rather than emitting an `<img>` with an unsafe source.
+            case Attr.imageSrc url of
                 Ok source ->
                     Ui.html
                         (Html.img

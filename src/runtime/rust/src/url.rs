@@ -388,6 +388,37 @@ mod tests {
         assert_eq!(url_host(parse("mailto:a@b.com")), IpeMaybe::Nothing);
     }
 
+    #[test]
+    fn media_src_allowlist_rejects_anchor_schemes() {
+        // A media `src` (`Ipe.Html.Attributes.imageSrc` / `Ipe.Ui.imageSrc`) is a
+        // FETCH sink narrowed to `http`/`https` ONLY — a strictly tighter policy
+        // than the navigation `href` allowlist, which also admits `mailto`/`tel`.
+        // The `url` crate emits distinct normalised schemes for those anchor
+        // targets, so the Ipê-side `mediaSchemes = ["http","https"]` membership
+        // check has a concrete `"mailto"` / `"tel"` to turn away. Pin that the
+        // scheme strings the media allowlist tests against are exactly these, so a
+        // parser change that folded `tel:` into a network scheme would break the
+        // build rather than silently open a media sink.
+        let media_schemes = ["http", "https"];
+        for good in ["http://example.com/i.png", "https://example.com/i.png"] {
+            let s = url_scheme(parse(good));
+            assert!(
+                media_schemes.contains(&s.as_str()),
+                "{good:?} scheme {s:?} must be in the media allowlist"
+            );
+        }
+        for anchor in ["mailto:a@b.com", "tel:+15551234"] {
+            let s = url_scheme(parse(anchor));
+            assert!(
+                !media_schemes.contains(&s.as_str()),
+                "{anchor:?} scheme {s:?} is an anchor scheme and must NOT reach a media src"
+            );
+        }
+        // The exact scheme strings, pinned so a normalisation regression is caught.
+        assert_eq!(url_scheme(parse("mailto:a@b.com")), "mailto");
+        assert_eq!(url_scheme(parse("tel:+15551234")), "tel");
+    }
+
     // ── (b') the scheme is NORMALISED — the property the Ipê-side allowlist
     // (`Ipe.Url.checkScheme`) relies on. A lowercase allowlist can only be
     // evasion-proof if `url_scheme` lowercases and strips scheme control chars;

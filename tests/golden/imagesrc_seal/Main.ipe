@@ -9,10 +9,12 @@ import Ipe.String as String
 import Ipe.Task as Task exposing (Task)
 
 
--- SEAL: the typed image-src boundary round-trips.
--- Proves the `LinkTarget` / `Attr.link` / `Attr.src` surface resolves, emits,
--- builds, and runs. A `LinkTarget` embeds `Url` / `Url.Relative`, which forces
--- the `url` runtime feature automatically through the type-driven SSOT.
+-- SEAL: the typed media-src boundary round-trips.
+-- Proves the `MediaTarget` / `Attr.imageSrc` / `Attr.src` surface resolves,
+-- emits, builds, and runs. A `MediaTarget` embeds `Url` / `Url.Relative`, which
+-- forces the `url` runtime feature automatically through the type-driven SSOT.
+-- A media `src` is a FETCH sink narrowed to `http`/`https` or a same-origin
+-- path — distinct from a navigation `href` (`Attr.link`).
 --
 -- The literals are sealed ONCE at the top (parse-at-boundary); a rejected src
 -- fails LOUD via `Task.fail`, never a silently dropped attribute.
@@ -20,9 +22,9 @@ import Ipe.Task as Task exposing (Task)
 
 main : Task Error ()
 main =
-    case Attr.link "https://example.com/img.png" of
+    case Attr.imageSrc "https://example.com/img.png" of
         Ok remote ->
-            case Attr.link "/static/logo.png" of
+            case Attr.imageSrc "/static/logo.png" of
                 Ok local ->
                     Io.println
                         (String.join "\n"

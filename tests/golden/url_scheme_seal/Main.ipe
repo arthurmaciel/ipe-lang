@@ -29,9 +29,11 @@ verdict r =
 
 
 -- | Drive each surface's ONE dispatching seal on a raw string. `Attr.link`
--- (href + src) and `Ui.linkTarget` read the raw string exactly as a browser
--- reads an `href`: absolute-then-scheme-narrowed, else same-origin relative.
--- The `verdict` fold only reads the `Ok`/`Err` tag.
+-- (href) and `Ui.linkTarget` narrow through the anchor allowlist
+-- (http/https/mailto/tel); `Attr.imageSrc` (the media `src` fetch sink) narrows
+-- through its own tighter allowlist (http/https only). Each reads the raw string
+-- absolute-then-scheme-narrowed, else same-origin relative. The `verdict` fold
+-- only reads the `Ok`/`Err` tag.
 hrefOf raw =
     Attr.link raw
 
@@ -41,7 +43,7 @@ linkOf raw =
 
 
 imageOf raw =
-    Attr.link raw
+    Attr.imageSrc raw
 
 
 shareOf raw =
@@ -72,10 +74,14 @@ main =
             , line "link_mailto" (verdict (linkOf "mailto:a@b.com"))
             , line "link_javascript" (verdict (linkOf "javascript:alert(1)"))
 
-            -- image `src` shares the href allowlist (http/https/mailto/tel); a
-            -- script scheme rejects. `share` is absolute-only (no relative).
+            -- image `src` is a FETCH sink with its OWN narrower allowlist
+            -- (http/https ONLY): a same-origin path accepts, but the mailto/tel
+            -- anchor schemes an `href` allows REJECT here, as does a script
+            -- scheme. `share` is absolute-only (no relative).
             , line "img_https" (verdict (imageOf "https://example.com/i.png"))
+            , line "img_relative" (verdict (imageOf "/static/logo.png"))
             , line "img_mailto" (verdict (imageOf "mailto:a@b.com"))
+            , line "img_tel" (verdict (imageOf "tel:+15551234"))
             , line "img_javascript" (verdict (imageOf "javascript:alert(1)"))
             , line "share_https" (verdict (shareOf "https://example.com"))
             , line "share_mailto" (verdict (shareOf "mailto:a@b.com"))

@@ -11,10 +11,11 @@
 -- sub-modules (Background / Border / Font / Region / Input / Lazy / Keyed) are
 -- separate native qualifiers, untouched here.
 --
--- `image` takes an `ImageValue` — either a typed `LinkTarget` (a
--- scheme-narrowed URL or a same-origin path, built with `linkTarget`) via
+-- `image` takes an `ImageValue` — either a typed `MediaTarget` (a URL narrowed
+-- to `http`/`https` only, or a same-origin path, built with `imageSrc`) via
 -- `imageUrl`, or an inline `data:` image via `imageData { mime, base64 }` —
--- never a raw `String`.
+-- never a raw `String`. A media `src` fetches a resource, so it rejects the
+-- `mailto:`/`tel:` anchor schemes a navigation `LinkTarget` allows.
 --
 -- Gradients: `Background.linearGradient deg [(pos, color)]` is Ipê's gradient —
 -- you give a CSS angle in degrees and an explicit list of `(position, colour)`
@@ -34,6 +35,7 @@ module Ipe.Ui exposing
     , paragraph, textColumn, form, input
     , button, link, image
     , LinkTarget, linkTarget
+    , MediaTarget, imageSrc
     , ImageValue, imageUrl, imageData
     , spacing, padding, paddingXY, paddingEach, width, height
     , centerX, centerY, alignLeft, alignRight, alignTop, alignBottom
@@ -159,6 +161,41 @@ linkTarget raw =
             Result.map LinkRelative (Url.relative raw)
 
 
+-- | The schemes a media `src` (an `<img src>` fetch sink) may target:
+-- `http`/`https` ONLY. A `src` is a resource the browser FETCHES, a distinct
+-- role from a navigation `href` — so it does NOT admit the anchor schemes
+-- `mailto`/`tel` that `linkSchemes` allows.
+mediaSchemes : List String
+mediaSchemes =
+    [ "http", "https" ]
+
+
+-- | An opaque, safe media target for the `<img src>` sink — EITHER a
+-- scheme-narrowed absolute `Url` (`http`/`https` only) OR a validated
+-- same-origin relative reference (`/logo.png`). The ONE constructor `imageSrc`
+-- fails closed. Distinct from `LinkTarget`: a `mailto:` / `tel:` string parses
+-- to a `LinkTarget` but has NO `MediaTarget` representation, so it cannot reach
+-- the `<img src>` sink.
+type MediaTarget
+    = MediaAbsolute Url
+    | MediaRelative Relative
+
+
+-- | `imageSrc raw` — the ONE parse-don't-validate seal for a media `src` target:
+-- an absolute URL if `raw` parses as one (then scheme-narrowed to `http`/`https`
+-- via `mediaSchemes`), otherwise a validated same-origin relative reference.
+-- Fail-closed: a `mailto:` / `tel:` / `javascript:` / `data:` / `file:` scheme,
+-- a protocol-relative (`//host`), or a cross-origin string is a typed `Err`.
+imageSrc : String -> Result Error MediaTarget
+imageSrc raw =
+    case Url.fromString raw of
+        Ok u ->
+            Result.map MediaAbsolute (Url.checkScheme mediaSchemes u)
+
+        Err _ ->
+            Result.map MediaRelative (Url.relative raw)
+
+
 -- | Private kernel: takes a raw `String` href for the `<a href=…>` attribute.
 linkKernel : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg
 linkKernel = Kernel.kernel "Ui_link"
@@ -183,17 +220,19 @@ imageKernel : List (Attribute msg) -> { src : String, description : String } -> 
 imageKernel = Kernel.kernel "Ui_image"
 
 
--- | An opaque image source: EITHER a safe `LinkTarget` (a scheme-narrowed URL or
--- a same-origin path, built with `linkTarget`) via `imageUrl`, OR an inline
--- `data:` image via `imageData`. The constructors fail closed, so a raw
--- `String` or a non-network scheme cannot reach the `<img src>` sink.
+-- | An opaque image source: EITHER a safe `MediaTarget` (a scheme-narrowed URL
+-- restricted to `http`/`https`, or a same-origin path, built with `imageSrc`)
+-- via `imageUrl`, OR an inline `data:` image via `imageData`. The constructors
+-- fail closed, so a raw `String`, a `mailto:`/`tel:`, or a non-network scheme
+-- cannot reach the `<img src>` sink.
 type ImageValue
-    = ImageFromTarget LinkTarget
+    = ImageFromTarget MediaTarget
     | ImageFromData { mime : String, base64 : String }
 
 
--- | `imageUrl target` — a remote or same-origin image from a safe `LinkTarget`.
-imageUrl : LinkTarget -> ImageValue
+-- | `imageUrl target` — a remote or same-origin image from a safe `MediaTarget`
+-- (build one with `imageSrc`).
+imageUrl : MediaTarget -> ImageValue
 imageUrl target =
     ImageFromTarget target
 
@@ -213,10 +252,10 @@ imageValueToString value =
     case value of
         ImageFromTarget target ->
             case target of
-                LinkAbsolute u ->
+                MediaAbsolute u ->
                     Url.toString u
 
-                LinkRelative ref ->
+                MediaRelative ref ->
                     Url.relativeToString ref
 
         ImageFromData rec ->
@@ -224,8 +263,9 @@ imageValueToString value =
 
 
 -- | `image attrs { src, description }` — an `<img src=… alt=…>`.  `src` is a
--- typed `ImageValue` — either a validated `LinkTarget` (`imageUrl`) or an inline
--- data image (`imageData { mime, base64 }`).  A bare `String` is a type error.
+-- typed `ImageValue` — either a validated `MediaTarget` (`imageUrl`, narrowed to
+-- `http`/`https` or a same-origin path) or an inline data image
+-- (`imageData { mime, base64 }`).  A bare `String` is a type error.
 image : List (Attribute msg) -> { src : ImageValue, description : String } -> Element msg
 image attrs rec =
     imageKernel attrs { src = imageValueToString rec.src, description = rec.description }
