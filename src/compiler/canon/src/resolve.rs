@@ -290,6 +290,20 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // Reserved so a user `type Color …` in a terminal module cannot forge a
     // look-alike palette; built only through `Ipe.App.Tea.Terminal.Color.*` kernels.
     "TermColor",
+    // `Ipe.Color`'s opaque support types. The unified colour value type `Color`
+    // is already reserved via the empty-home `Ui.Color` name; these are its
+    // companion opaque types — the typed parse-error channel (`ColorError`), the
+    // terminal capability profile and down-sampled result (`TermProfile` /
+    // `AnsiColor`), and the accessibility bands (`WcagLevel` / `TextSize` /
+    // `Deficiency`). Reserved so a user type of the same name cannot forge a
+    // look-alike; each is built only through `Ipe.Color.*` kernels and carries the
+    // matching `ipe_runtime::color::*` runtime type.
+    "ColorError",
+    "TermProfile",
+    "AnsiColor",
+    "WcagLevel",
+    "TextSize",
+    "Deficiency",
     "Attribute",
     "Event",
     "Length",
@@ -507,7 +521,8 @@ pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
         "List" | "Maybe" | "Set" | "Connection" | "Setting" => Some(1),
         "Dict" | "Result" => Some(2),
         "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode"
-        | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" | "TermColor" => Some(0),
+        | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" | "TermColor" | "ColorError"
+        | "TermProfile" | "AnsiColor" | "WcagLevel" | "TextSize" | "Deficiency" => Some(0),
         _ => None,
     }
 }
