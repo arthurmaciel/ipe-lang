@@ -1,7 +1,7 @@
-//! Browser-WASM `Ui.widget` custom-element adapter — the client-target seam.
+//! Browser-WASM `CustomElement.node` custom-element adapter — the client-target seam.
 //!
 //! The wasm sink runs the SAME `view → Html<M> → diff → Vec<Patch>` path the
-//! server-driven wire runs, so a `Ui.widget` node reaches the DOM as a
+//! server-driven wire runs, so a `CustomElement.node` node reaches the DOM as a
 //! `ipe-ce-<hex>` element carrying a `state` value and an `OnWidget` up-handler.
 //! What this module swaps is the two seam edges, matching the wasm-client glue
 //! (`web::widget_assets`, transport `WasmClient`):

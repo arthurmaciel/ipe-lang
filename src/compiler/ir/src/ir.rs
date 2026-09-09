@@ -1250,7 +1250,7 @@ pub enum IrType {
     /// (an empty `routes = []` literal's `Vec::<…>::new()` turbofish, or a
     /// let-bound route table's fn signature).
     WebRoute(Box<Self>),
-    /// `CustomElement down up` — the opaque handle placed by `Ui.widget` for a
+    /// `CustomElement down up` — the opaque handle placed by `CustomElement.node` for a
     /// typed JS custom-element widget. Rendered as
     /// `ipe_runtime::ui::widget::IpeCustomElement`, a plain data handle carrying
     /// the generated content-addressed element tag. `down` / `up` are the
@@ -2649,7 +2649,7 @@ pub enum Expr {
     /// serving stage (WP5). The backend renders this as
     /// `ipe_runtime::ui::widget::custom_element_(tag)`. The value's type is
     /// [`IrType::CustomElement`]; it is produced only as the whole body of a
-    /// `CustomElement`-annotated binding and consumed only as `Ui.widget`'s
+    /// `CustomElement`-annotated binding and consumed only as `CustomElement.node`'s
     /// first argument.
     CustomElementRef {
         tag: String,

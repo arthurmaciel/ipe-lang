@@ -1906,7 +1906,7 @@ pub enum StdlibKernel {
     TermColorRgb,
     /// `TermColor.rgba : Int -> Int -> Int -> Float -> Color` — truecolour + alpha.
     TermColorRgba,
-    /// `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg` —
+    /// `CustomElement.node : CustomElement down up -> down -> (up -> msg) -> Element msg` —
     /// the one view node that places a typed JS custom-element widget. The
     /// `CustomElement` handle is opaque; it lowers to the shipped widget handle
     /// type and is placed in the view tree by the widget transport.
@@ -3995,7 +3995,7 @@ impl StdlibKernel {
             Self::TermColorDefault => d("TermColor", "default", 0, Pure, "term_color_default_"),
             Self::TermColorRgb => d("TermColor", "rgb", 3, Pure, "term_color_rgb_"),
             Self::TermColorRgba => d("TermColor", "rgba", 4, Pure, "term_color_rgba_"),
-            Self::UiWidget => d("Ui", "widget", 3, Ui, "ui_widget_"),
+            Self::UiWidget => d("CustomElement", "node", 3, Ui, "ui_widget_"),
             Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
             Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
             Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
@@ -13075,7 +13075,7 @@ mod tests {
         // row must project. Notes on the non-obvious rows:
         //   - `Env.public` reads the live process environment on native, so it
         //     discloses the env axis like `System.getenv` (wasm32 over-reports).
-        //   - `Ui.widget` ships browser JS → the `custom-element` axis.
+        //   - `CustomElement.node` ships browser JS → the `custom-element` axis.
         //   - the `Js.*` / session-stream ops exchange typed data with page JS →
         //     the `js-port:raw` uncharacterised-floor axis (the kernel cannot see
         //     the hand-written JS's target Web API).

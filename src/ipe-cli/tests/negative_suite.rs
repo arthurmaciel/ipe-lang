@@ -1090,7 +1090,7 @@ fn custom_element_ctor_path_traversal_rejected() {
 /// (e) A well-formed `customElement "js/x.js"` with the file PRESENT type-checks
 /// (the shape + path + existence gates all pass) and — with the WP4 transport
 /// shipped — now LOWERS to the opaque widget handle rather than being refused at
-/// emission. Here the binding is unused (a bare `main = 1`, no `Ui.widget`), so
+/// emission. Here the binding is unused (a bare `main = 1`, no `CustomElement.node`), so
 /// it is DCE'd and the program compiles cleanly. A real Web-shape program that
 /// PLACES the widget is the WP4 SEAL golden (`custom_element_widget` fixture).
 #[test]
@@ -1284,7 +1284,7 @@ fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
 }
 
 /// WP4 SEAL golden (ipe-accept half): a real Web-shape program that PLACES a
-/// widget with `Ui.widget`. `codeEditor : CustomElement {a record} {a closed
+/// widget with `CustomElement.node`. `codeEditor : CustomElement {a record} {a closed
 /// ADT}` — a record down-state and a closed-ADT up-event — with a present
 /// in-project `js/x.js` hook. The full seam lowers: the down-state renders as an
 /// entity-escaped `state` attribute, the up-event decodes fail-closed over

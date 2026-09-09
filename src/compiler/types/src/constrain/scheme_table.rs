@@ -979,7 +979,7 @@ impl Builder<'_> {
             args: Vec::new(),
         };
         // `custom_element(down, up)` — the empty-home JS-widget boundary handle
-        // `CustomElement down up`, the argument type of `Ui.widget`.
+        // `CustomElement down up`, the argument type of `CustomElement.node`.
         let custom_element = |down: Ty, up: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.custom_element,

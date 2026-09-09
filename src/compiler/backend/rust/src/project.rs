@@ -1981,7 +1981,7 @@ fn dep_model_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
     // on `ipe_runtime`, whose `serde` is a private dependency not re-exported — so
     // the app must declare its own `serde`. Pin + feature match the vendored
     // `templates/Cargo.toml`. This covers BOTH browser shapes: Ipe.Web derives
-    // serde on its Model, and Ipe.WebView derives it on a `Ui.widget`'s down/up
+    // serde on its Model, and Ipe.WebView derives it on a `CustomElement.node`'s down/up
     // seal types (its Model bound is only `Clone + Send`, but the widget seam
     // still routes through `ui_widget_`'s serde bounds). Gating solely on
     // `uses_web` leaves a WebView-widget manifest serde-free while its `main.rs`

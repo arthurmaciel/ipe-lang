@@ -19221,7 +19221,7 @@ impl<'a> Lowerer<'a> {
                 // `CustomElement down up` — the JS-widget boundary handle. The
                 // solver-side twin of the `ir_type_from_canon` arm: lower both
                 // seal types (they drive the down-encode / up-decode codegen at
-                // the `Ui.widget` call site) into the opaque handle type.
+                // the `CustomElement.node` call site) into the opaque handle type.
                 "CustomElement" if args.len() == 2 => {
                     let down = self.ir_type_from_ty(
                         args.first().ok_or_else(|| {
@@ -25078,7 +25078,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlNode
                 // `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
                 | KernelFn::UiNode
-                // `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
+                // `CustomElement.node : CustomElement down up -> down -> (up -> msg) -> Element msg`
                 // Registered so the surface type-checks; arity is consulted
                 // after the type lowers to the shipped opaque widget handle.
                 | KernelFn::UiWidget

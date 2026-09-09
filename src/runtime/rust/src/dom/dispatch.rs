@@ -21,7 +21,7 @@ impl<M: Clone> HandlerIndex<M> {
     /// - `OnString`— calls the closure with `args[0]` (or `""` if absent).
     /// - `OnBool`  — calls the closure with `args[0] == "true"` (or `false`).
     /// - `OnForm`  — dispatched via [`Self::resolve_form`]; returns `None` here.
-    /// - `OnWidget`— a `Ui.widget` up-event: runs the generated fail-closed seal
+    /// - `OnWidget`— a `CustomElement.node` up-event: runs the generated fail-closed seal
     ///   decode over `args[0]` (the posted encoded `up` value) and returns the
     ///   typed msg, or `None` when the payload does not decode to the declared
     ///   `up` type (the seal boundary's fail-closed drop — no partial value).
@@ -239,7 +239,7 @@ mod tests {
         );
     }
 
-    // The `Ui.widget` up-event: an `OnWidget` handler composes the fail-closed
+    // The `CustomElement.node` up-event: an `OnWidget` handler composes the fail-closed
     // seal decode over the posted string. A payload that decodes to the declared
     // `up` type dispatches the typed msg; one that does NOT is dropped whole
     // (`None`) — no partial value, no panic. This is the runtime proof of the
