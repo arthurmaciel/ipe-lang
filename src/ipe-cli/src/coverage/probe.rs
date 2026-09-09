@@ -140,12 +140,7 @@ pub fn probe_form_unaddressable_code(outcome: &StageOutcome) -> Option<ipe_diagn
     match outcome {
         StageOutcome::Failed {
             code: Some(code), ..
-        } if *code == IPE_N0020
-            || *code == IPE_N0004
-            || *code == IPE_N0023 =>
-        {
-            Some(*code)
-        }
+        } if *code == IPE_N0020 || *code == IPE_N0004 || *code == IPE_N0023 => Some(*code),
         _ => None,
     }
 }
