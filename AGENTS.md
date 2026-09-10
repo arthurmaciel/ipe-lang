@@ -58,8 +58,14 @@ cargo nextest run -p ipe                 # + `-p <crate>` for each crate you cha
 
 ## PR workflow
 
-`main` is green by construction. Branch based on "development" → fast gate → fix until green → PR →`gh pr merge <N> --auto
---squash` (merges when green + current). One PR per unit; check `gh pr list` first.
+`main` is green by construction; everyday work integrates through `development`.
+Branch based on "development" → fast gate → fix until green → PR **into
+`development`** (`gh pr create --base development`) → `gh pr merge <N> --auto
+--squash` (merges when green + current). The repo default branch is `main`, so a
+PR opened without an explicit `--base development` silently targets `main` —
+always pass `--base development`. `development` promotes to `main` only via a
+deliberate promotion PR (`--base main --head development`). One PR per unit;
+check `gh pr list` first.
 Versions + `CHANGELOG.md` are release-please automated from Conventional Commits —
 never bump by hand.
 

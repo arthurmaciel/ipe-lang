@@ -1269,7 +1269,7 @@ mod registry_phase_c_tests {
             // ── Ipe.Email.EmailAddress (2) ──────────────────────────────
             K::EmailAddressParse,
             K::EmailAddressToString,
-            // ── Ipe.Url (9) ─────────────────────────────────────────
+            // ── Ipe.Url (14) ────────────────────────────────────────
             K::UrlFromString,
             K::UrlToString,
             K::UrlScheme,
@@ -1279,6 +1279,11 @@ mod registry_phase_c_tests {
             K::UrlQuery,
             K::UrlFragment,
             K::UrlBuildQuery,
+            K::UrlRelativeParse,
+            K::UrlRelativePath,
+            K::UrlRelativeQuery,
+            K::UrlRelativeFragment,
+            K::UrlRelativeToString,
             // ── Ipe.Locale (4) ──────────────────────────────────────────
             K::LocaleFromTag,
             K::LocaleToTag,

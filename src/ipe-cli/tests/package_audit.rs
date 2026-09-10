@@ -101,7 +101,7 @@ const NETWORK_MAIN: &str = "module Main exposing (main)\n\
                             \x20       Err e ->\n\
                             \x20           Task.fail e\n";
 
-/// A Web-shape TEA app that mounts one `Ui.widget` — its inferred capability
+/// A Web-shape TEA app that mounts one `CustomElement.node` — its inferred capability
 /// set is `{custom-element}` because it ships author browser JS.
 const WIDGET_MAIN: &str = r#"module Main exposing (main)
 
@@ -792,7 +792,7 @@ fn normal_cache_dir_is_deleted_before_regen() {
 // ── index admission fail-closed on the `custom-element` axis ─────────────────
 
 /// Admission (the same gate index-admission CI runs) is FAIL-CLOSED for a widget
-/// package that hides the disclosure: a package shipping a `Ui.widget` but
+/// package that hides the disclosure: a package shipping a `CustomElement.node` but
 /// declaring NOTHING is rejected — a shipped-JS surface can never be admitted
 /// without disclosing `custom-element`.
 #[test]
@@ -824,7 +824,7 @@ fn a_widget_package_that_hides_custom_element_is_rejected() {
 /// Fail-closed on the unmounted-handle case: a package that CONSTRUCTS a
 /// `customElement` handle but never mounts it still ships browser JS, so declaring
 /// NOTHING is rejected with a `custom-element`-naming mismatch. Admission derives
-/// the axis from the served-asset walk, not from a reachable `Ui.widget` kernel —
+/// the axis from the served-asset walk, not from a reachable `CustomElement.node` kernel —
 /// so a served-but-unmounted widget can never be admitted undisclosed.
 #[test]
 fn an_unmounted_widget_package_that_hides_custom_element_is_rejected() {

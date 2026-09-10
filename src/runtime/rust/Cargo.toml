@@ -253,7 +253,7 @@ web-sys = { version = "0.3", optional = true, features = [
     "CssStyleDeclaration",
     "Location",
     "HtmlDocument",
-    # `Ui.widget` wasm-client up-event: the glue dispatches a typed `CustomEvent`
+    # `CustomElement.node` wasm-client up-event: the glue dispatches a typed `CustomEvent`
     # whose `detail` carries the encoded `up`; the sink reads it via checked
     # `dyn_ref::<CustomEvent>` and folds the fail-closed-decoded msg into `update`.
     "CustomEvent",
@@ -464,7 +464,7 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # through `reaches_http_client()` in the backend — reqwest never enters a plain
 # web app.
 web = ["widget-assets", "server", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core", "bincode"]
-# The `Ui.widget` custom-element glue generator + SRI-pinned asset addressing
+# The `CustomElement.node` custom-element glue generator + SRI-pinned asset addressing
 # (`widget_assets.rs`) as a STANDALONE surface, decoupled from the heavy `web`
 # server. `sha2` (content digest) rides `crypto-core`; `base64` (the SRI value)
 # rides `encoding`. The native CLI's static/wasm bundler compiles the runtime

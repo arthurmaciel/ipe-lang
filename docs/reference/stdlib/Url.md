@@ -6,16 +6,16 @@
 
 Ipe.Url — typed, validated URLs.
 
-`Url` is opaque: the ONLY way to build one is `fromString`, which parses the
-raw string (the SAME parser the runtime SSRF guard uses) and REJECTS a
-scheme-less / relative / unparseable string. Because a `Url` is validated at
-construction, the accessors (`scheme` / `host` / `port` / `path` / `query` /
-`fragment`) take a `Url`, not a raw `String` — a scheme-confused or
-unparseable URL can never reach an outbound request.
+Two opaque homes, each with a single fail-closed constructor: an absolute
+`Url` (`fromString` parses it, then `checkScheme` narrows the scheme against a
+per-surface allowlist before a sink) and a same-origin `Relative` reference
+(`relative`). `buildQuery` is the injection-safe query-string builder — every
+key and value percent-encoded, so a metacharacter cannot split off a new
+parameter.
 
-`Url.buildQuery` is the injection-safe query-string builder: it
-percent-encodes every key and value, so a caller cannot forget to encode a
-metacharacter (`&` / `=` / space / `#`) and split off a new parameter.
+The mental model, a worked example, and the rationale live in the URLs guide
+(`docs/guide/url.md`); this module doc is the reference intro its per-symbol
+comments back.
 
 ## `fromString`
 
@@ -86,4 +86,79 @@ buildQuery : List ( String, String ) -> String
 `buildQuery pairs` — the injection-safe query-string builder. Every key and
 value is percent-encoded, so a metacharacter in a value cannot split off a
 new parameter. Returns the encoded string without a leading `?`.
+
+## `checkScheme`
+
+```ipe
+checkScheme : List String -> Url -> Result Error Url
+```
+
+`checkScheme allowed url` — the fail-closed scheme allowlist boundary, one
+SSOT mechanism each surface calls with its own policy. `Url` is only the
+SYNTACTIC parse seal: it legally carries ANY absolute scheme (`javascript:`,
+`data:`, `file:` are valid `Url` values), so an href/link/share sink that
+accepts arbitrary schemes is an injection surface. This narrows the already
+parsed scheme against `allowed`: an `Ok url` only when `Url.scheme url` is in
+the list, otherwise a typed `Err` naming the blocked scheme. The scheme read
+is the runtime-normalised (lowercased) value, so a `JavaScript:` cannot evade
+a lowercase allowlist. Absent proof the scheme is one a caller vetted, the
+URL is rejected — never silently dropped, never passed through.
+
+## `relative`
+
+```ipe
+relative : String -> Result Error Relative
+```
+
+`relative raw` — THE seal for a same-origin relative reference.
+
+`Relative` is a safe same-origin RELATIVE reference (`/static/x.js`,
+`./style.css`, `?q=1`, `#top`) — the `path`[`?query`][`#fragment`] projection
+(RFC 3986 §4.2). It is an opaque compiler builtin (like `Url` itself): a `Url`
+is always ABSOLUTE, so a relative reference is NOT a `Url` — it carries neither
+scheme nor authority, exactly the parts dropped for a same-origin navigation.
+This is the ONE typed home for a validated relative reference; the ONLY
+constructor is `relative`. Validated by
+the SAME `url` crate the absolute `Url` path uses (`Url_relative` resolves
+`raw` against a fixed same-origin base and REJECTS any scheme or authority),
+so the relative-href boundary and the absolute/SSRF boundary cannot diverge on
+what parses. Fail-closed: a protocol-relative (`//host`), scheme-bearing,
+backslash, control-char, or cross-origin string is a typed `Err`, never
+rendered into an `href` / `src`.
+
+## `relativePath`
+
+```ipe
+relativePath : Relative -> String
+```
+
+`relativePath ref` — the path projection, always present (`/`, `/a/b`,
+`./x`).
+
+## `relativeQuery`
+
+```ipe
+relativeQuery : Relative -> Maybe String
+```
+
+`relativeQuery ref` — the query string (without the leading `?`), or
+`Nothing`.
+
+## `relativeFragment`
+
+```ipe
+relativeFragment : Relative -> Maybe String
+```
+
+`relativeFragment ref` — the fragment (without the leading `#`), or
+`Nothing`.
+
+## `relativeToString`
+
+```ipe
+relativeToString : Relative -> String
+```
+
+`relativeToString ref` — recover the validated reference string
+(path + optional query + optional fragment).
 

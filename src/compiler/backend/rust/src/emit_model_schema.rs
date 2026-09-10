@@ -194,6 +194,9 @@ const TAG_WEBSOCKET_CLIENT_CFG: u8 = 84;
 // (the session-registry key), which IS serde, so it may be a Model field; it gets
 // its own structural tag so a Model shape carrying it hashes distinctly.
 const TAG_SESSION_HANDLE: u8 = 85;
+// `Url.Relative` — non-serde opaque same-origin reference, never a Model field;
+// present for exhaustiveness.
+const TAG_URL_RELATIVE: u8 = 86;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -262,6 +265,8 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::CryptoMac => h.update([TAG_CRYPTO_MAC]),
         IrType::EmailAddress => h.update([TAG_EMAIL_ADDRESS]),
         IrType::Url => h.update([TAG_URL]),
+        // `Url.Relative` — non-serde opaque reference; present for exhaustiveness.
+        IrType::UrlRelative => h.update([TAG_URL_RELATIVE]),
         // `Dsn` — non-serde opaque descriptor; present for exhaustiveness.
         IrType::Dsn => h.update([TAG_DSN]),
         // External `Connection` + phantom access-mode markers — non-serde opaque
@@ -864,8 +869,8 @@ mod tests {
             TAG_SERVER_REQUEST, TAG_SERVER_RESPONSE, TAG_SERVER_ROUTE, TAG_SET, TAG_SETTING,
             TAG_SHAPE_TERMINAL, TAG_SHAPE_WEB, TAG_SHAPE_WEBVIEW, TAG_SHARED_FUN, TAG_SQL_FRAGMENT,
             TAG_STR, TAG_STREAM_WRITER, TAG_SUB, TAG_TASK, TAG_TOKEN_SOURCE, TAG_TUI_APP,
-            TAG_TUPLE, TAG_TYPE_INFO, TAG_UI, TAG_UI_PLAIN, TAG_UNIT, TAG_URL, TAG_WEB_APP,
-            TAG_WEBSOCKET_CLIENT_CFG, TAG_WEBSOCKET_SERVER, TAG_WEBSOCKET_SERVER_CFG,
+            TAG_TUPLE, TAG_TYPE_INFO, TAG_UI, TAG_UI_PLAIN, TAG_UNIT, TAG_URL, TAG_URL_RELATIVE,
+            TAG_WEB_APP, TAG_WEBSOCKET_CLIENT_CFG, TAG_WEBSOCKET_SERVER, TAG_WEBSOCKET_SERVER_CFG,
         };
 
         let tags: &[(&str, u8)] = &[
@@ -931,6 +936,7 @@ mod tests {
             ("TAG_CRYPTO_MAC", TAG_CRYPTO_MAC),
             ("TAG_EMAIL_ADDRESS", TAG_EMAIL_ADDRESS),
             ("TAG_URL", TAG_URL),
+            ("TAG_URL_RELATIVE", TAG_URL_RELATIVE),
             ("TAG_LOCALE", TAG_LOCALE),
             ("TAG_ROW_GENERIC", TAG_ROW_GENERIC),
             ("TAG_DSN", TAG_DSN),

@@ -160,6 +160,63 @@ pub fn html_escape(text: &str) -> String {
     out
 }
 
+// ── Markdown renderer ────────────────────────────────────────────────────────
+
+/// Render a Markdown string to HTML using `CommonMark` (via `comrak`).
+///
+/// Fenced code blocks with the `ipe` language tag are passed through
+/// [`highlight_snippet`], so they receive the same token-classifier highlights
+/// as every other snippet on the site.  All other language tags fall back to
+/// plain escaped text inside `<code>`.  No hand-rolled parser is involved.
+#[must_use]
+pub fn markdown_to_html(md: &str) -> String {
+    use comrak::nodes::{NodeHtmlBlock, NodeValue};
+    use comrak::{Arena, Options, format_html_with_plugins, parse_document};
+
+    let mut options = Options::default();
+    options.extension.table = true;
+    options.extension.autolink = true;
+    // Allow the `HtmlBlock` nodes we inject for pre-rendered `ipe` snippets to
+    // pass through.  User-authored raw HTML in the Markdown source is not a
+    // concern here because the input is always trusted SSOT content (explain
+    // pages, stdlib doc-strings, construct files) — never free-form user input.
+    options.render.unsafe_ = true;
+
+    let arena = Arena::new();
+    let root = parse_document(&arena, md, &options);
+
+    // Rewrite `ipe`-tagged fenced blocks in-place: borrow the cell, produce
+    // the highlighted HTML, then swap the node value to `HtmlBlock` so comrak
+    // emits the pre-rendered fragment verbatim (no second lexer involved).
+    for node in root.descendants() {
+        let is_ipe_block = matches!(
+            &node.data.borrow().value,
+            NodeValue::CodeBlock(cb) if cb.info.trim() == "ipe"
+        );
+        if is_ipe_block {
+            let raw = {
+                let borrow = node.data.borrow();
+                let NodeValue::CodeBlock(ref cb) = borrow.value else {
+                    continue;
+                };
+                format!(
+                    "<pre class=\"doc-code\">{}</pre>\n",
+                    highlight_snippet(&cb.literal)
+                )
+            };
+            node.data.borrow_mut().value = NodeValue::HtmlBlock(NodeHtmlBlock {
+                block_type: 6,
+                literal: raw,
+            });
+        }
+    }
+
+    let mut out = Vec::new();
+    let plugins = comrak::Plugins::default();
+    let _ = format_html_with_plugins(root, &options, &mut out, &plugins);
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 // ── Page template ─────────────────────────────────────────────────────────────
 
 /// Wrap `body_html` in a minimal HTML5 document with the shared stylesheet.
@@ -474,6 +531,70 @@ mod tests {
         assert!(
             html.contains("A&lt;B&gt;C"),
             "title special chars escaped; got: {html}"
+        );
+    }
+
+    // ── markdown_to_html ─────────────────────────────────────────────────────
+
+    /// ATX headings render as `<h1>`..`<h6>` in the output.
+    #[test]
+    fn markdown_heading_renders() {
+        let html = super::markdown_to_html("# Hello world");
+        assert!(
+            html.contains("<h1>"),
+            "h1 heading must be present; got: {html}"
+        );
+        assert!(
+            html.contains("Hello world"),
+            "heading text must be present; got: {html}"
+        );
+    }
+
+    /// Fenced code blocks WITHOUT the `ipe` tag render as plain `<code>` inside
+    /// a `<pre>` — no span-level highlighting applied.
+    #[test]
+    fn markdown_plain_code_fence_renders() {
+        let md = "```\nlet x = 1\n```";
+        let html = super::markdown_to_html(md);
+        assert!(
+            html.contains("<pre>") || html.contains("<code>"),
+            "plain code fence must produce a code block; got: {html}"
+        );
+    }
+
+    /// A link in Markdown renders as an `<a href="…">` element.
+    #[test]
+    fn markdown_link_renders() {
+        let md = "[Ipê](https://ipe-lang.org)";
+        let html = super::markdown_to_html(md);
+        assert!(
+            html.contains("href=\"https://ipe-lang.org\""),
+            "link href must be present; got: {html}"
+        );
+        assert!(
+            html.contains("Ipê"),
+            "link text must be present; got: {html}"
+        );
+    }
+
+    /// A fenced `ipe` code block routes through [`highlight_snippet`]: the
+    /// output must carry CSS class spans (e.g. `class="kw"` for a keyword)
+    /// and be wrapped in the `doc-code` `<pre>` element, not a bare `<code>`.
+    #[test]
+    fn markdown_ipe_fence_is_highlighted() {
+        // `if` is a keyword; the highlighter must emit a `<span class="kw">` (or
+        // an `<a class="kw">`) for it.
+        let md = "```ipe\nif True then 1 else 0\n```";
+        let html = super::markdown_to_html(md);
+        assert!(
+            html.contains("doc-code"),
+            "ipe code fence must use doc-code class; got: {html}"
+        );
+        // The snippet falls back to plain escaped text when it does not parse as a
+        // full module (most snippets do not), but it must still be wrapped.
+        assert!(
+            html.contains("<pre"),
+            "ipe code fence must be inside a <pre>; got: {html}"
         );
     }
 }

@@ -1,0 +1,97 @@
+module Main exposing (main)
+
+-- | nav-links — the reference for the parse-at-render href idiom on the web.
+--
+-- Navigation targets arrive as raw, untrusted strings (here a fixed table
+-- standing in for a decoded config / API response). They are kept raw in the
+-- Model and sealed in the VIEW through `Ui.linkTarget` — the single dispatching
+-- parser that reads a raw href exactly as a browser does: an absolute URL
+-- (scheme-narrowed to `http`/`https`/`mailto`/`tel`) or a same-origin relative
+-- reference. A rejected target (a `javascript:` scheme, a `//evil`
+-- protocol-relative, a cross-origin string) is dropped at render and never
+-- reaches an `href`.
+--
+-- A web Model is client-reachable — it is serialized and hydrated on the client,
+-- so a validated `LinkTarget` stored there could be swapped for a forged one,
+-- bypassing the seal. A request-boundary type (`Url`, `Relative`, and so the
+-- `LinkTarget` over them) is therefore not an admissible Model field: the Model
+-- holds the raw strings and the seal runs in the view, on every render, where
+-- the parse cannot be tampered with.
+
+
+import Ipe.App.Tea.Web as Web
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.List as List
+import Ipe.Result exposing (Result(..))
+import Ipe.Ui as Ui
+
+
+type alias Model =
+    { links : List { label : String, href : String } }
+
+
+type Msg
+    = NoOp
+
+
+-- | The raw, untrusted nav table. In a real app these come from a decoded
+-- config or API payload; the idiom is identical — keep the raw strings, seal
+-- each at render, keep only the ones that pass.
+rawLinks : List { label : String, href : String }
+rawLinks =
+    [ { label = "Home", href = "/" }
+    , { label = "Docs", href = "/docs?section=intro#top" }
+    , { label = "Ipê", href = "https://ipe-lang.org/docs" }
+    , { label = "Contact", href = "mailto:hi@ipe-lang.org" }
+
+    -- These fail the boundary and are dropped — never rendered as an href.
+    , { label = "XSS", href = "javascript:alert(1)" }
+    , { label = "Evil", href = "//evil.com/x" }
+    ]
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { links = rawLinks }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+-- | Seal one raw entry at render: a singleton `Ui.link` node when the href
+-- passes the boundary, the empty list when it is turned away.
+navLink : { label : String, href : String } -> List (Element Msg)
+navLink entry =
+    case Ui.linkTarget entry.href of
+        Ok target ->
+            [ Ui.link [] { url = target, label = Ui.text entry.label } ]
+
+        Err _ ->
+            []
+
+
+-- | The view seals each raw href once, here, and places only the ones that pass
+-- into an `href`. The rejected targets simply have no node.
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        (List.concatMap navLink model.links)
+
+
+main =
+    Web.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = NoOp
+        }

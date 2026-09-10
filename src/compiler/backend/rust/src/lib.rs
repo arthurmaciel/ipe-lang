@@ -2028,7 +2028,7 @@ impl<'a> EmitCtx<'a> {
         // builders. Type/row parameters are not a disqualifier — `msg` is
         // type-level and erased in the IR body, so value-level substitution is
         // unaffected. This excludes `Ui.button` / `Ui.link` / `Ui.image` /
-        // `Ui.html` / `Ui.widget` / `Ui.cells` (handlers, raw markup, record
+        // `Ui.html` / `CustomElement.node` / `Ui.cells` (handlers, raw markup, record
         // config). The body may contain `Var`/`CloneVar` references to value
         // parameters, `Cons` prepend (the marker-attr pattern), and nested
         // kernel calls.
@@ -3466,6 +3466,7 @@ fn collect_type_feature_requirements(ty: &IrType, out: &mut BTreeSet<ipe_ir::Run
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::UrlRelative
         | IrType::Dsn
         | IrType::Connection
         | IrType::ConnReadOnly
@@ -3768,6 +3769,7 @@ fn collect_record_shapes(
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::UrlRelative
         // `Dsn` + the external `Connection`/markers + the runtime-config
         // `Setting`/markers are opaque wrappers — no shape.
         | IrType::Dsn | IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite
@@ -3945,6 +3947,7 @@ fn type_reaches_enum(
         | IrType::Path
         // `Url` is a monomorphic opaque wrapper — no reachable enum edge.
         | IrType::Url
+        | IrType::UrlRelative
         // `Dsn` is a monomorphic opaque wrapper — no reachable enum edge.
         | IrType::Dsn
         | IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite
@@ -4059,6 +4062,7 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Path
         // `Url` is a monomorphic opaque wrapper — no generic parameters.
         | IrType::Url
+        | IrType::UrlRelative
         // `Dsn` is a monomorphic opaque wrapper — no generic parameters.
         | IrType::Dsn
         | IrType::Connection
@@ -4206,6 +4210,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Path
         // `Url` is a monomorphic opaque wrapper — no generics to collect.
         | IrType::Url
+        | IrType::UrlRelative
         // `Dsn` is a monomorphic opaque wrapper — no generics to collect.
         | IrType::Dsn
         | IrType::Connection
@@ -4566,6 +4571,7 @@ fn match_template(
         | IrType::Path
         // `Url` is a monomorphic opaque leaf — must equal exactly.
         | IrType::Url
+        | IrType::UrlRelative
         // `Dsn` is a monomorphic opaque leaf — must equal exactly.
         | IrType::Dsn
         | IrType::Connection
@@ -4888,7 +4894,7 @@ fn disambiguated_rust_name(
 /// wrapper that carries a message type, which is all of them.
 ///
 /// This excludes `Ui.button` / `Ui.link` / `Ui.image` / `Ui.html` /
-/// `Ui.widget` / `Ui.cells` (handlers, raw markup, record config). The body
+/// `CustomElement.node` / `Ui.cells` (handlers, raw markup, record config). The body
 /// may contain `Var`/`CloneVar` references to value parameters, `Cons`
 /// prepend (the marker-attr pattern that `row` / `column` / `wrappedRow` /
 /// `grid` / `paragraph` / `textColumn` lower to), and nested kernel calls.

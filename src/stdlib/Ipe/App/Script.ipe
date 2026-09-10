@@ -1,0 +1,32 @@
+-- | Ipe.App.Script — the Script shape's entry.
+--
+-- A Script is a program whose `main` runs a `Task` and renders nothing: a
+-- build step, a one-shot command, a batch job. Every other shape has a named
+-- entry (`Web.app`, `Tui.app`, `Cli.app`, `Server.listen`); `Script.program`
+-- is the Script shape's, so a program's `main` always names its shape at the
+-- head rather than a shape being inferred from the absence of one.
+--
+-- Wrap the task a Script runs:
+--
+-- ```ipe
+-- import Ipe.App.Script as Script
+--
+-- main =
+--     Script.program (Io.println "hello")
+-- ```
+--
+-- `program` is the identity on its task — the wrapper is what pins the shape,
+-- not a change in behaviour. The task runs exactly as it would unwrapped.
+
+module Ipe.App.Script exposing
+    ( program
+    )
+
+
+{-| Pin a `main` as the Script shape by wrapping the task it runs.
+
+    Script.program (Io.println "hello") --> runs the task, renders nothing
+-}
+program : Task Error () -> Task Error ()
+program task =
+    task

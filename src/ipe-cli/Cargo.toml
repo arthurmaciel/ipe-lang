@@ -48,7 +48,7 @@ ipe_lsp_server = { path = "../lsp/server" }
 # `notify` for the raw filesystem watch (Task 21). Same salsa pin as
 # `ipe_db` (`crates/ipe_db/Cargo.toml`) — one version across the workspace.
 ipe_watch = { path = "../compiler/watch" }
-# The `Ui.widget` custom-element glue generator, as a build-time library: the
+# The `CustomElement.node` custom-element glue generator, as a build-time library: the
 # static/wasm bundler drives the SAME `widget_assets` glue the server runtime
 # serves (one glue, no drift) over the widget manifest. Only the lean
 # `widget-assets` feature (sha2 + base64 + the shared wire constants) — NOT the

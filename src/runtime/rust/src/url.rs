@@ -146,6 +146,190 @@ pub fn url_build_query(pairs: Vec<(String, String)>) -> String {
     ser.finish()
 }
 
+/// `Ipe.Url`'s opaque, validated same-origin RELATIVE reference — the
+/// path plus optional query plus optional fragment projection (RFC 3986 §4.2).
+/// NOT a [`Url`]: a
+/// `Url` is always absolute, a `UrlRelative` never carries a scheme or
+/// authority. The ONLY constructor is [`url_relative`] (the seal): it re-uses
+/// the `url` crate — the SAME parser [`url_from_string`] and `ipe_runtime::ssrf`
+/// use — via `base.join`, so the relative-href boundary and the absolute-URL /
+/// SSRF boundary cannot diverge on what parses.
+///
+/// The three components are stored already-extracted from the parsed result, so
+/// the accessors are total field reads. `Clone` / `Debug` / `PartialEq` / `Eq`
+/// are safe (a same-origin path is not a secret).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UrlRelative {
+    /// The path component — always present (`/`, `/a/b`, `./x` normalised).
+    path: String,
+    /// The raw query without the leading `?`, or `None`.
+    query: Option<String>,
+    /// The fragment without the leading `#`, or `None`.
+    fragment: Option<String>,
+}
+
+impl super::stringify::IpeStringify for UrlRelative {
+    /// Backs Ipê's `toString` / interpolation on a `Relative`: the reference
+    /// string (`path` + `?query` + `#fragment`). Identical to
+    /// [`url_relative_to_string`].
+    fn ipe_show(&self) -> String {
+        self.render()
+    }
+}
+
+impl UrlRelative {
+    /// Re-serialise the path + optional query + optional fragment triple. The single place
+    /// the reference string is assembled, so `toString` and `IpeStringify` agree.
+    fn render(&self) -> String {
+        let mut out = self.path.clone();
+        if let Some(q) = &self.query {
+            out.push('?');
+            out.push_str(q);
+        }
+        if let Some(f) = &self.fragment {
+            out.push('#');
+            out.push_str(f);
+        }
+        out
+    }
+}
+
+/// The fixed same-origin base every relative reference is resolved against. Its
+/// host is the reserved `.invalid` TLD (RFC 6761 §6.4 — guaranteed never to
+/// resolve), so a bug that let an absolute or protocol-relative reference
+/// through would point at a non-routable name, not a real attacker host. Only
+/// the ORIGIN of a join result is compared against this, never fetched.
+const RELATIVE_BASE: &str = "https://ipe-relative.invalid/";
+
+/// `True` when `c` is an ASCII/Unicode control (code `0..=31` or `127`) — a
+/// character a browser strips BEFORE scheme detection, so `ja\tvascript:` would
+/// fold to `javascript:`. Rejecting on presence (never stripping) keeps the
+/// smuggle unrepresentable rather than silently rewritten.
+fn is_control(c: char) -> bool {
+    let code = c as u32;
+    code < 32 || code == 127
+}
+
+/// `True` when a `:` appears before the first `/` — the signature of an
+/// absolute-URL scheme (`javascript:…`, `http:…`), where in a genuine relative
+/// path a `:` may appear only inside a segment (after a `/`).
+fn scheme_colon_before_slash(s: &str) -> bool {
+    match s.split('/').next() {
+        Some(before) => before.contains(':'),
+        None => false,
+    }
+}
+
+/// `Ipe.Url.relative : String -> Result Error Relative` — THE seal for a
+/// same-origin relative reference. The ONLY [`UrlRelative`] constructor.
+///
+/// DEFENSE IN DEPTH, fail-closed. First the string-level guards (retained from
+/// the predicate this kernel subsumes) reject, on PRESENCE, every shape a
+/// browser could fold into a cross-origin or scheme-changing navigation: the
+/// empty string, any control char, a leading protocol-relative `//`, any
+/// backslash `\` (browsers fold `\`→`/`), and a `:` before the first `/` (an
+/// absolute scheme). THEN the `url` crate resolves the survivor against a fixed
+/// same-origin base and the result is accepted ONLY when it introduced no
+/// scheme change and no authority — `joined.origin() == base.origin()`. Either
+/// gate alone would reject the adversarial set; requiring both is the margin
+/// that survives a single mistake. On success the parsed `path`/`query`/
+/// `fragment` are extracted and stored.
+#[must_use]
+pub fn url_relative<E: From<String>>(raw: String) -> IpeResult<E, UrlRelative> {
+    let reject = |why: &str| -> IpeResult<E, UrlRelative> {
+        IpeResult::Err(format!("Ipe.Url: unsafe relative reference {raw:?} ({why})").into())
+    };
+    // ── String-level guards (fail-closed on presence, never strip). ──
+    if raw.is_empty() {
+        return reject("empty");
+    }
+    if raw.chars().any(is_control) {
+        return reject("control character");
+    }
+    if raw.starts_with("//") {
+        return reject("protocol-relative (leading //)");
+    }
+    if raw.contains('\\') {
+        return reject("backslash (browsers fold \\ to /)");
+    }
+    if scheme_colon_before_slash(&raw) {
+        return reject("scheme before first slash");
+    }
+    // ── url-crate resolution: same base, same origin, no scheme/authority. ──
+    let base = match UrlCrate::parse(RELATIVE_BASE) {
+        Ok(b) => b,
+        // The base is a fixed valid literal; a parse failure is impossible, but
+        // fail closed rather than unwrap.
+        Err(_) => return reject("internal base parse"),
+    };
+    let joined = match base.join(&raw) {
+        Ok(j) => j,
+        Err(e) => return reject(&format!("does not resolve to a relative reference: {e}")),
+    };
+    // Any scheme change or authority introduction shows up as a different
+    // origin; an equal origin proves the reference stayed same-origin.
+    if joined.origin() != base.origin() || joined.scheme() != base.scheme() {
+        return reject("resolves cross-origin or scheme-changing");
+    }
+    // A same-origin join can still differ in host only via userinfo/host the
+    // origin check already caught; assert no host/userinfo survived for depth.
+    if joined.username() != base.username() || joined.host_str() != base.host_str() {
+        return reject("carries userinfo or host");
+    }
+    // Guard the OUTPUT projection, not just the input and the resolved origin.
+    // `..`-normalisation can pop past root and leave the PATH beginning `//`
+    // (`/..//evil.com` → path `//evil.com`): the resolved absolute URL's origin
+    // is unchanged (the `//evil.com` is a path there, not an authority), so the
+    // origin gate passes — but the reference this projects to (scheme + authority
+    // stripped) is `//evil.com`, which a browser reads as PROTOCOL-RELATIVE in an
+    // `href`/`src`. Reject on the rendered path's leading `//`, closing the gap
+    // between the representation the gate checks and the one the sink emits. A
+    // legitimate path with an INTERNAL `//` (`/a//b`) is unaffected.
+    let path = joined.path().to_string();
+    if path.starts_with("//") {
+        return reject("projects to a protocol-relative reference (leading //)");
+    }
+    IpeResult::Ok(UrlRelative {
+        path,
+        query: joined.query().map(str::to_string),
+        fragment: joined.fragment().map(str::to_string),
+    })
+}
+
+/// `Ipe.Url.Relative.path : Relative -> String` — the path projection (always
+/// present).
+#[must_use]
+pub fn url_relative_path(r: UrlRelative) -> String {
+    r.path
+}
+
+/// `Ipe.Url.Relative.query : Relative -> Maybe String` — the query (no `?`), or
+/// `Nothing`.
+#[must_use]
+pub fn url_relative_query(r: UrlRelative) -> IpeMaybe<String> {
+    match r.query {
+        Some(q) => IpeMaybe::Just(q),
+        None => IpeMaybe::Nothing,
+    }
+}
+
+/// `Ipe.Url.Relative.fragment : Relative -> Maybe String` — the fragment (no
+/// `#`), or `Nothing`.
+#[must_use]
+pub fn url_relative_fragment(r: UrlRelative) -> IpeMaybe<String> {
+    match r.fragment {
+        Some(f) => IpeMaybe::Just(f),
+        None => IpeMaybe::Nothing,
+    }
+}
+
+/// `Ipe.Url.Relative.toString : Relative -> String` — recover the reference
+/// string (path + optional query + optional fragment).
+#[must_use]
+pub fn url_relative_to_string(r: UrlRelative) -> String {
+    r.render()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +401,62 @@ mod tests {
         assert_eq!(url_host(parse("mailto:a@b.com")), IpeMaybe::Nothing);
     }
 
+    #[test]
+    fn media_src_allowlist_rejects_anchor_schemes() {
+        // A media `src` (`Ipe.Html.Attributes.imageSrc` / `Ipe.Ui.imageSrc`) is a
+        // FETCH sink narrowed to `http`/`https` ONLY — a strictly tighter policy
+        // than the navigation `href` allowlist, which also admits `mailto`/`tel`.
+        // The `url` crate emits distinct normalised schemes for those anchor
+        // targets, so the Ipê-side `mediaSchemes = ["http","https"]` membership
+        // check has a concrete `"mailto"` / `"tel"` to turn away. Pin that the
+        // scheme strings the media allowlist tests against are exactly these, so a
+        // parser change that folded `tel:` into a network scheme would break the
+        // build rather than silently open a media sink.
+        let media_schemes = ["http", "https"];
+        for good in ["http://example.com/i.png", "https://example.com/i.png"] {
+            let s = url_scheme(parse(good));
+            assert!(
+                media_schemes.contains(&s.as_str()),
+                "{good:?} scheme {s:?} must be in the media allowlist"
+            );
+        }
+        for anchor in ["mailto:a@b.com", "tel:+15551234"] {
+            let s = url_scheme(parse(anchor));
+            assert!(
+                !media_schemes.contains(&s.as_str()),
+                "{anchor:?} scheme {s:?} is an anchor scheme and must NOT reach a media src"
+            );
+        }
+        // The exact scheme strings, pinned so a normalisation regression is caught.
+        assert_eq!(url_scheme(parse("mailto:a@b.com")), "mailto");
+        assert_eq!(url_scheme(parse("tel:+15551234")), "tel");
+    }
+
+    // ── (b') the scheme is NORMALISED — the property the Ipê-side allowlist
+    // (`Ipe.Url.checkScheme`) relies on. A lowercase allowlist can only be
+    // evasion-proof if `url_scheme` lowercases and strips scheme control chars;
+    // pin that here so a `url`-crate change that stopped normalising would break
+    // the build, not silently open a `JavaScript:` / `ja\tvascript:` bypass at
+    // every href/link/share sink.
+
+    #[test]
+    fn scheme_is_lowercased() {
+        // Mixed-case schemes normalise to lowercase, so a `JavaScript:` cannot
+        // evade a lowercase allowlist by case alone.
+        assert_eq!(url_scheme(parse("HTTP://x.com")), "http");
+        assert_eq!(url_scheme(parse("hTtPs://y.com")), "https");
+        assert_eq!(url_scheme(parse("JavaScript:alert(1)")), "javascript");
+    }
+
+    #[test]
+    fn control_chars_in_scheme_are_stripped() {
+        // A tab / newline embedded in the scheme is stripped during parse, so
+        // `ja\tvascript:` normalises to `javascript` — it cannot slip past a
+        // `javascript`-denying allowlist as a distinct string.
+        assert_eq!(url_scheme(parse("ja\tvascript:x")), "javascript");
+        assert_eq!(url_scheme(parse("java\nscript:x")), "javascript");
+    }
+
     // ── (c) the builder percent-encodes metacharacters (no injection) ────────
 
     #[test]
@@ -255,5 +495,154 @@ mod tests {
         let q = url_build_query(vec![("name".to_string(), "a b&c".to_string())]);
         let u = parse(&format!("https://example.com/search?{q}"));
         assert_eq!(url_query(u), IpeMaybe::Just(q));
+    }
+
+    // ── Url.relative — prove the refusals (the SSRF boundary) ────────────────
+
+    fn rel(s: &str) -> IpeResult<String, UrlRelative> {
+        url_relative(s.to_string())
+    }
+    fn is_err(s: &str) -> bool {
+        matches!(rel(s), IpeResult::Err(_))
+    }
+    fn is_ok(s: &str) -> bool {
+        matches!(rel(s), IpeResult::Ok(_))
+    }
+
+    /// Every adversarial reference — the exact set the deleted `isSafeRelativeRef`
+    /// predicate turned away, plus the `join`-specific smuggles the crate move
+    /// could otherwise wave through — is a typed `Err`, never a `Relative`.
+    #[test]
+    fn relative_rejects_every_adversarial_reference() {
+        for bad in [
+            "",                         // empty
+            "javascript:alert(1)",      // script scheme
+            "data:text/html,x",         // data scheme
+            "file:///etc/passwd",       // file scheme
+            "//evil.com",               // protocol-relative
+            "/\\evil.com",              // backslash-folded protocol-relative
+            "\\\\evil.com",             // backslash-folded protocol-relative
+            "ja\tvascript:x",           // tab-smuggled scheme (control char)
+            "java\nscript:x",           // newline-smuggled scheme (control char)
+            "\u{09}javascript:",        // leading raw tab control
+            "http://evil.com@good.com", // userinfo host confusion
+            "https://evil.com/x",       // absolute cross-origin
+            "foo:bar",                  // bare scheme-colon before slash
+            "mailto:a@b.com",           // absolute non-web scheme
+        ] {
+            assert!(
+                is_err(bad),
+                "adversarial relative reference {bad:?} MUST be a typed Err"
+            );
+        }
+    }
+
+    /// The percent-encoded control-char smuggle stays same-origin. A leading
+    /// `/%09javascript:x` resolves to an opaque same-origin path (no scheme
+    /// introduced), so if accepted it renders back as that same path — it can
+    /// never become a `javascript:` navigation. The bare `%09javascript:`
+    /// (colon before slash) is rejected outright.
+    #[test]
+    fn percent_encoded_control_never_cross_origin() {
+        if let IpeResult::Ok(r) = rel("/%09javascript:x") {
+            // Whatever survives is a same-origin path, never a scheme.
+            assert!(url_relative_path(r).starts_with('/'));
+        }
+        assert!(is_err("%09javascript:"));
+    }
+
+    /// Every valid same-origin reference is accepted and round-trips through
+    /// `toString`.
+    #[test]
+    fn relative_accepts_and_round_trips_valid_references() {
+        for good in [
+            "/",
+            "/static/x.css",
+            "/a/b?q=1#top",
+            "./page",
+            "../up",
+            "?tab=2",
+            "#anchor",
+        ] {
+            assert!(is_ok(good), "valid relative reference {good:?} MUST be Ok");
+        }
+    }
+
+    #[test]
+    fn relative_extracts_path_query_fragment() {
+        let r = match rel("/a/b?q=1#top") {
+            IpeResult::Ok(r) => r,
+            IpeResult::Err(e) => panic!("expected Ok, got {e}"),
+        };
+        assert_eq!(url_relative_path(r.clone()), "/a/b");
+        assert_eq!(
+            url_relative_query(r.clone()),
+            IpeMaybe::Just("q=1".to_string())
+        );
+        assert_eq!(
+            url_relative_fragment(r.clone()),
+            IpeMaybe::Just("top".to_string())
+        );
+        assert_eq!(url_relative_to_string(r), "/a/b?q=1#top");
+    }
+
+    /// A `..`-traversal that pops past root MUST NOT project to a
+    /// protocol-relative reference. `/..//evil.com` normalises to the PATH
+    /// `//evil.com`; the resolved absolute URL's origin is unchanged (there the
+    /// `//evil.com` is a path, not an authority), so the origin gate alone would
+    /// wave it through — but the projected reference (`path` + optional query +
+    /// fragment, scheme/authority stripped) is `//evil.com`, which a browser reads
+    /// as a protocol-relative cross-origin navigation in an `href`/`src`. The
+    /// output-projection guard rejects every shape that pops to a leading `//`.
+    #[test]
+    fn relative_traversal_to_protocol_relative_is_rejected() {
+        for bad in [
+            "/..//evil.com",
+            "/../..//evil.com",
+            "/x/..//evil.com",
+            "/./..//evil.com",
+            "/a/../..//evil.com",
+            "/%2e%2e//evil.com",
+            "/..//..//evil.com",
+            "foo/..//evil.com",
+            "/..//..//..//evil.com",
+        ] {
+            assert!(
+                is_err(bad),
+                "traversal-to-protocol-relative {bad:?} MUST be a typed Err, \
+                 not a `//evil.com` reference"
+            );
+            // And no accepted reference ever renders with a leading `//`.
+            if let IpeResult::Ok(r) = rel(bad) {
+                assert!(
+                    !url_relative_to_string(r).starts_with("//"),
+                    "{bad:?} projected to a protocol-relative reference"
+                );
+            }
+        }
+        // A LEGITIMATE internal double-slash path stays accepted (not over-rejected).
+        for good in ["/normal//double/seg", "/path//to//x", "/a/b?q=//y"] {
+            assert!(
+                is_ok(good),
+                "legit internal `//` path {good:?} MUST stay Ok"
+            );
+            if let IpeResult::Ok(r) = rel(good) {
+                assert!(!url_relative_to_string(r).starts_with("//"));
+            }
+        }
+    }
+
+    #[test]
+    fn relative_query_and_fragment_only_round_trip() {
+        let q = match rel("?tab=2") {
+            IpeResult::Ok(r) => r,
+            IpeResult::Err(e) => panic!("expected Ok, got {e}"),
+        };
+        assert_eq!(url_relative_to_string(q), "/?tab=2");
+        let f = match rel("#anchor") {
+            IpeResult::Ok(r) => r,
+            IpeResult::Err(e) => panic!("expected Ok, got {e}"),
+        };
+        assert_eq!(url_relative_to_string(f), "/#anchor");
     }
 }

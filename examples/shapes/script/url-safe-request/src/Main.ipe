@@ -8,54 +8,90 @@ import Ipe.List as List
 import Ipe.Io as Io
 
 
--- Validate outbound URLs and build a safe query string, exercising the three
--- ideas most `Ipe.Url` code turns on:
---   • `Url` is OPAQUE — the only constructor is `Url.fromString`, which parses and
---     REJECTS a scheme-less, relative, or malformed string. So a value of type
---     `Url` is PROOF it was validated; a bad URL cannot even be built.
---   • The accessors (`scheme`, `host`, `port`, ...) take a `Url`, never a raw
---     `String`. A scheme-confused or unparseable address can therefore never reach
---     an outbound request — the type stops it at construction.
+-- Parse, narrow, and build with `Ipe.Url`, exercising the three ideas the module
+-- turns on:
+--   • `Url.fromString` is only the SYNTACTIC seal: a `Url` is proof a string
+--     parsed as an ABSOLUTE url — it still carries ANY scheme (`ftp:`,
+--     `javascript:` parse fine). `Url.checkScheme` is the SEPARATE fail-closed
+--     gate that narrows the scheme against a per-surface allowlist. Parse is not
+--     authorise.
+--   • A `Url` is always ABSOLUTE; a same-origin RELATIVE reference (`/static/x`)
+--     is a different type built by `Url.relative` — fail-closed against a
+--     protocol-relative `//host` or a `..`-traversal that escapes the origin.
 --   • `Url.buildQuery` percent-encodes every key AND value, so a metacharacter in
---     a value (`&`, `=`, space, `#`) cannot split off a new parameter. Injection
---     safety is the default, not something a caller must remember.
+--     a value (`&`, `=`, space, `#`) cannot split off a new parameter.
 
 
--- A mix of good and bad candidate URLs. `fromString` turns each into a
--- `Result Error Url`: the valid ones become opaque `Url`s, the rest are rejected
--- with a typed error — none of them can be used as a URL without passing here.
+-- The schemes THIS surface admits. The allowlist is the SSOT the surface owns —
+-- `checkScheme` is called with it, never a scatter of inline scheme comparisons.
+allowedSchemes : List String
+allowedSchemes =
+    [ "http", "https" ]
+
+
+-- A mix of candidates. The first two are safe; `ftp:` and `javascript:` PARSE
+-- (they are valid absolute URLs) but are not schemes this surface allows; the
+-- last two are not absolute URLs at all.
 candidates : List String
 candidates =
     [ "https://api.example.com:8443/v1/users"
     , "http://example.com/search"
+    , "ftp://files.example.com/data"
+    , "javascript:alert(1)"
     , "/relative/path"
     , "not a url at all"
-    , "ftp://files.example.com/data"
     ]
 
 
--- Describe one candidate: either its parsed parts, or the rejection. `fromString`
--- is the single gate; downstream code only ever sees a validated `Url`.
-describe : String -> String
-describe raw =
+-- PARSE then NARROW. `fromString` accepts any absolute scheme, so `checkScheme`
+-- is the gate that turns `ftp:`/`javascript:` away; only a vetted `Url` reaches
+-- the accessors.
+vet : String -> String
+vet raw =
     case Url.fromString raw of
-
         Ok url ->
-            raw
-                ++ "  ->  scheme="
-                ++ Url.scheme url
-                ++ " host="
-                ++ Maybe.withDefault "?" (Url.host url)
-                ++ " port="
-                ++ Maybe.withDefault "-" (Maybe.map String.fromInt (Url.port url))
+            case Url.checkScheme allowedSchemes url of
+                Ok safe ->
+                    raw
+                        ++ "  ->  ok scheme="
+                        ++ Url.scheme safe
+                        ++ " host="
+                        ++ Maybe.withDefault "?" (Url.host safe)
+                        ++ " port="
+                        ++ Maybe.withDefault "-" (Maybe.map String.fromInt (Url.port safe))
+
+                Err _ ->
+                    raw ++ "  ->  BLOCKED scheme (" ++ Url.scheme url ++ ")"
+
+        Err _ ->
+            raw ++ "  ->  not an absolute URL"
+
+
+-- Relative references live in their OWN type. `relative` validates a same-origin
+-- reference, fail-closed: a protocol-relative `//host` or a `..`-traversal that
+-- pops past root to a leading `//` is rejected, never rendered into a link.
+refs : List String
+refs =
+    [ "/static/app.js"
+    , "./style.css?v=2"
+    , "//evil.example.com"
+    , "/..//evil.example.com"
+    ]
+
+
+triageRef : String -> String
+triageRef raw =
+    case Url.relative raw of
+        Ok ref ->
+            raw ++ "  ->  ok " ++ Url.relativeToString ref
 
         Err _ ->
             raw ++ "  ->  REJECTED"
 
 
--- A query string built from raw, attacker-controlled values. `buildQuery`
--- percent-encodes each one, so the `&`-and-`=` in the second value stay INSIDE
--- that value instead of forging an `admin=true` parameter.
+-- A query built from raw, attacker-controlled values. `buildQuery` percent-encodes
+-- each one, so the `&`-and-`=` in the second value stay INSIDE that value instead
+-- of forging an `admin=true` parameter.
 searchQuery : String
 searchQuery =
     Url.buildQuery
@@ -66,8 +102,11 @@ searchQuery =
 
 main =
     do
-        Io.println "URL validation:"
-        List.map (\c -> Io.println ("  " ++ describe c)) candidates
+        Io.println "parse + narrow (checkScheme):"
+        List.map (\c -> Io.println ("  " ++ vet c)) candidates
+            |> printAll
+        Io.println "relative references:"
+        List.map (\c -> Io.println ("  " ++ triageRef c)) refs
             |> printAll
         Io.println ("safe query: " ++ searchQuery)
 

@@ -22,16 +22,31 @@ the `url` cargo feature).  The type-driven SSOT
 
 ## `ImageSrc`
 
-An opaque image source: either a remote URL or an inline data URI.
-The constructor is NOT exported; build via `url` or `data`.
+An opaque image source: a remote URL, a same-origin relative path, or an
+inline data URI. The constructors are NOT exported; build via `url`,
+`relative`, or `data`.
 
 ## `url`
 
 ```ipe
-url : Url -> ImageSrc
+url : Url -> Result Error ImageSrc
 ```
 
-`url u` — a remote image identified by a validated `Ipe.Url.Url`.
+`url u` — a remote image from a validated `Ipe.Url.Url`. Fail-closed: the
+scheme is narrowed to `http`/`https` (a `file:` / `javascript:` / raw `data:`
+URL is a typed `Err`), so a non-network scheme has no representation at the
+`<img src>` sink. Returns `Ok` only for a network image URL.
+
+## `relative`
+
+```ipe
+relative : String -> Result Error ImageSrc
+```
+
+`relative raw` — a same-origin relative image path (`/static/logo.png`,
+`./avatar.jpg`). Fail-closed via the shared `Url.relativeRef` predicate: a
+protocol-relative (`//host`), scheme-bearing, backslash, or control-char
+string is a typed `Err`.
 
 ## `data`
 

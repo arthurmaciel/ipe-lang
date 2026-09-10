@@ -164,7 +164,7 @@ fn ui_html_wiring_batch_compiles_builds_and_renders_correctly() {
         ui.contains("<img"),
         "Ui.image must render <img>\n--- ui ---\n{ui}"
     );
-    // `Ui.image`'s `src` is a typed `ImageSrc`; an `ImageSrc.data { mime,
+    // `Ui.image`'s `src` is a typed `ImageValue`; a `Ui.imageData { mime,
     // base64 }` renders the `data:<mime>;base64,<payload>` URI.
     assert!(
         ui.contains("src=\"data:image/png;base64,AAAA\"") && ui.contains("alt=\"alt text\""),

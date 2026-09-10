@@ -76,6 +76,21 @@ pub struct Advisory {
     pub message: String,
 }
 
+/// One justified `NotApplicable` verdict, at a named `(symbol, aspect)`
+/// coordinate.
+///
+/// The aspect does not apply, with the deriving reason recorded so the pass is
+/// auditable and never a silent [`Cell::Hole`]→pass.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct NotApplicableEntry {
+    /// The dotted symbol path.
+    pub symbol: String,
+    /// The aspect column that judged the symbol inapplicable.
+    pub aspect: &'static str,
+    /// Why the aspect does not apply, derived from a real property of the symbol.
+    pub reason: String,
+}
+
 /// The outcome of a matrix run: every hole and every advisory, in the
 /// deterministic order the surface enumerates its symbols and the columns are
 /// registered.
@@ -85,6 +100,8 @@ pub struct MatrixReport {
     pub holes: Vec<Hole>,
     /// Every advisory coordinate.
     pub advisories: Vec<Advisory>,
+    /// Every justified `NotApplicable` coordinate, with its deriving reason.
+    pub not_applicable: Vec<NotApplicableEntry>,
     /// The number of symbols enumerated.
     pub symbols: usize,
     /// The number of aspect columns applied.
@@ -119,6 +136,9 @@ impl MatrixReport {
         for a in &self.advisories {
             let _ = writeln!(out, "  WARN [{}] {}: {}", a.aspect, a.symbol, a.message);
         }
+        for n in &self.not_applicable {
+            let _ = writeln!(out, "  N/A  [{}] {}: {}", n.aspect, n.symbol, n.reason);
+        }
         out
     }
 }
@@ -139,7 +159,14 @@ where
         let path = S::label(item);
         for column in columns {
             match column.check(item) {
-                Cell::Ok | Cell::NotApplicable => {}
+                Cell::Ok => {}
+                Cell::NotApplicable { reason } => {
+                    report.not_applicable.push(NotApplicableEntry {
+                        symbol: path.clone(),
+                        aspect: column.name(),
+                        reason,
+                    });
+                }
                 Cell::Hole(message) => report.holes.push(Hole {
                     symbol: path.clone(),
                     aspect: column.name(),

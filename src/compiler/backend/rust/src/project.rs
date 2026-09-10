@@ -226,6 +226,7 @@ pub mod bitwise;
 pub mod bytes;
 pub mod char_kernel;
 pub mod char_category;
+pub mod color;
 pub mod config;
 pub mod core;
 pub mod crypto;
@@ -275,6 +276,7 @@ pub use bitwise::*;
 pub use bytes::*;
 pub use char_kernel::*;
 pub use char_category::*;
+pub use color::*;
 pub use config::*;
 pub use core::*;
 pub use crypto::*;
@@ -1243,7 +1245,21 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 /// The `route` sub-module is referenced by path (`ipe_runtime::web::route::Route`)
 /// not via `pub use web::*;` (to avoid surfacing the internal `store` / `req`
 /// internals in the top-level namespace).
-const RUNTIME_MOD_RS_WEB_APPEND: &str = "#[cfg(feature = \"web\")]\npub mod web;\n\
+///
+/// `web/mod.rs` reaches three crate-root modules by absolute path —
+/// `crate::widget_assets` (`pub use crate::widget_assets;`), `crate::js_port_glue`
+/// (SRI-pinned Ffi.Js port asset), and `crate::js_port` (the port session/sink) —
+/// so this append declares all three under the same `web` feature gate, BEFORE
+/// `pub mod web;`. In the real runtime crate the `web` feature lists
+/// `widget-assets` (whose `#[cfg]` also carries `js_port_glue`) and `web` reaches
+/// `js_port` transitively; the vendored trimmed `mod.rs` must declare the same
+/// closure or `web/mod.rs` fails E0432/E0433 (`crate::widget_assets` /
+/// `crate::js_port` not found) — the module-set SEAL breach class. Declared by
+/// path only (no glob re-export) because `web/mod.rs` names each fully.
+const RUNTIME_MOD_RS_WEB_APPEND: &str = "#[cfg(feature = \"web\")]\npub mod widget_assets;\n\
+     #[cfg(feature = \"web\")]\npub mod js_port_glue;\n\
+     #[cfg(feature = \"web\")]\npub mod js_port;\n\
+     #[cfg(feature = \"web\")]\npub mod web;\n\
      #[cfg(feature = \"web\")]\npub use web::{web_app, web_app_routed, web_render_static, sub_subscribe_topic, cmd_publish, cmd_publish_no_echo, pubsub_publish, pubsub_publish_no_echo, WebReq};\n";
 
 /// The `IpeCmd<M>` and `IpeSub<M>` project-level type aliases emitted when the
@@ -1965,7 +1981,7 @@ fn dep_model_cargo_toml(ctx: &EmitCtx) -> DResult<String> {
     // on `ipe_runtime`, whose `serde` is a private dependency not re-exported — so
     // the app must declare its own `serde`. Pin + feature match the vendored
     // `templates/Cargo.toml`. This covers BOTH browser shapes: Ipe.Web derives
-    // serde on its Model, and Ipe.WebView derives it on a `Ui.widget`'s down/up
+    // serde on its Model, and Ipe.WebView derives it on a `CustomElement.node`'s down/up
     // seal types (its Model bound is only `Clone + Send`, but the widget seam
     // still routes through `ui_widget_`'s serde bounds). Gating solely on
     // `uses_web` leaves a WebView-widget manifest serde-free while its `main.rs`
@@ -2900,18 +2916,33 @@ fn assemble_project_files(
         if ctx.uses_auth || ctx.reaches_jwt() {
             mod_rs.push_str(RUNTIME_MOD_RS_AUTH_APPEND);
         }
-        // Ipe.Auth.Principal — append the principal module when `Auth.subject`
-        // (or another Principal-touching kernel) is used.
-        if ctx.uses_principal {
+        // Ipe.Auth.Principal — append the `principal` module when `Auth.subject`
+        // (or another Principal-touching kernel) is used, OR when any surface whose
+        // runtime module references `crate::principal::Principal` is compiled in.
+        // `server.rs`'s `authed_route` builder names `crate::principal::Principal`
+        // at the module level, and `db.rs`/`jwt.rs` reach it too — the real crate
+        // gates `principal` on `any(server, db, jwt)`. The emitter must mirror that
+        // exact closure (server = `uses_server || uses_web || uses_webview`) or a
+        // server/db/jwt program with no direct `Principal` kernel fails E0433
+        // (`crate::principal` not found) — the module-set SEAL breach pinned by
+        // `seal_modset::revoke_session_arity3_builds`.
+        if ctx.uses_principal
+            || ctx.uses_server
+            || ctx.uses_web
+            || ctx.uses_webview
+            || ctx.uses_db
+            || ctx.reaches_jwt()
+        {
             mod_rs.push_str(RUNTIME_MOD_RS_PRINCIPAL_APPEND);
         }
         // Ipe.Auth.Revocation — append the revocation store when the authed-route
         // surface is active. `server.rs`'s `authed_route` middleware calls
-        // `crate::revocation::is_revoked` unconditionally at the module level,
-        // so the module must be declared whenever `principal` is in scope.
-        // `principal` is already appended above under the same gate, satisfying
-        // `revocation.rs`'s `crate::principal` import.
-        if ctx.uses_principal {
+        // `crate::revocation::is_revoked` unconditionally at the module level, and
+        // the real crate gates `revocation` on `feature = "jwt"`, so the module
+        // must be declared whenever the jwt-authed surface is reachable (or a
+        // direct `Principal` kernel is used). `principal` is appended above under a
+        // superset gate, satisfying `revocation.rs`'s `crate::principal` import.
+        if ctx.uses_principal || ctx.reaches_jwt() {
             mod_rs.push_str(RUNTIME_MOD_RS_REVOCATION_APPEND);
         }
         // Ipe.Email — append email module when any email kernel or type is used.
@@ -2971,8 +3002,16 @@ fn assemble_project_files(
         if ctx.uses_web || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_WEB_APPEND);
         }
-        // Ipe.Tui / Ipe.Tui app-entry kernels.
-        if ctx.uses_tui {
+        // Ipe.Tui / Ipe.Tui app-entry kernels, AND the `Cli.app` lines-view path:
+        // its emitted `tea.rs` (Cli event loop) and `main.rs` (view fn) reach
+        // `crate::tui::{LinesView, render_lines_view, cli_text_}`, and a `Cli.app`
+        // sets `uses_console` (not `uses_tui`). The `tui` Cargo feature is already
+        // selected for `uses_console` (see `runtime_features`) and the manifest
+        // augmenter gates on `uses_tui || uses_console`; the `mod.rs` declaration
+        // MUST use the same predicate or a `Cli.app` program fails E0433
+        // (`crate::tui` not found) — the module-set SEAL breach `seal_modset::
+        // cli_app_lines_builds` pins.
+        if ctx.uses_tui || ctx.uses_console {
             mod_rs.push_str(RUNTIME_MOD_RS_TUI_APPEND);
         }
         // Ipe.WebView / Ipe.WebView app-entry kernel.
@@ -3122,6 +3161,9 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         // `Url` is a non-serde request-boundary value (like `Path`) — a `Url` in
         // a HydrationState record is rejected.
         | IrType::Url
+        // `Relative` is a non-serde same-origin href projection (like `Url`) — a
+        // `Relative` in a HydrationState record is rejected.
+        | IrType::UrlRelative
         // `Dsn` carries a `Secret` and is non-serde — a `Dsn` in a HydrationState
         // record is rejected (same posture as `Url`/`Secret`).
         | IrType::Dsn
@@ -5867,6 +5909,38 @@ mod tests {
             "RUNTIME_MOD_RS_WEB_APPEND must re-export WebReq from the web module (E0412 fix): \
              {RUNTIME_MOD_RS_WEB_APPEND}"
         );
+    }
+
+    /// `RUNTIME_MOD_RS_WEB_APPEND` must declare the crate-root modules that
+    /// `web/mod.rs` reaches by absolute path — `widget_assets` (`pub use
+    /// crate::widget_assets;`), `js_port_glue` (`crate::js_port_glue::…`), and
+    /// `js_port` (`crate::js_port::…`).  In the real crate the `web` feature pulls
+    /// `widget-assets` (which also carries `js_port_glue`) and reaches `js_port`;
+    /// the vendored trimmed `mod.rs` must declare the same closure or `web/mod.rs`
+    /// fails E0432/E0433 (the module-set SEAL breach class caught by
+    /// `seal_modset::cmd_publish_no_live_builds`).  Each is declared BEFORE `pub
+    /// mod web;` so the references resolve.
+    #[test]
+    fn web_mod_rs_declares_widget_assets_and_js_port_closure() {
+        for module in ["widget_assets", "js_port_glue", "js_port"] {
+            let decl = format!("pub mod {module};");
+            assert!(
+                RUNTIME_MOD_RS_WEB_APPEND.contains(&decl),
+                "RUNTIME_MOD_RS_WEB_APPEND must declare `{decl}` — web/mod.rs names \
+                 `crate::{module}` by path (E0432/E0433 fix): {RUNTIME_MOD_RS_WEB_APPEND}"
+            );
+            let web_decl_at = RUNTIME_MOD_RS_WEB_APPEND
+                .find("pub mod web;")
+                .expect("WEB_APPEND declares `pub mod web;`");
+            let module_decl_at = RUNTIME_MOD_RS_WEB_APPEND
+                .find(&decl)
+                .expect("checked present above");
+            assert!(
+                module_decl_at < web_decl_at,
+                "`{decl}` must be declared BEFORE `pub mod web;` so web's path \
+                 references resolve: {RUNTIME_MOD_RS_WEB_APPEND}"
+            );
+        }
     }
 
     /// `RUNTIME_MOD_RS_WEB_APPEND` must re-export `cmd_publish`,

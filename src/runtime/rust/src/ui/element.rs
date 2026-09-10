@@ -34,10 +34,15 @@ impl Color {
     /// The shared CSS spelling mirrors `Ipe.Css.colorToString`; byte-for-byte
     /// equivalence for the shared `Rgba` shape is enforced by the
     /// `css_length_color_ssot` equivalence test.
+    ///
+    /// The bytes are produced by the one colour SSOT
+    /// ([`crate::color::Color::to_css_rgba`]): `Ipe.Ui`'s `Color` is a
+    /// surface-level `Rgba` carrier that funnels into `ipe_runtime::color` for
+    /// rendering, so no surface re-derives how a colour is spelled.
     #[must_use]
     pub(crate) fn css(&self) -> String {
         match self {
-            Self::Rgba(r, g, b, a) => format!("rgba({r},{g},{b},{a})"),
+            Self::Rgba(r, g, b, a) => crate::color::Color::rgba(*r, *g, *b, *a).to_css_rgba(),
         }
     }
 }

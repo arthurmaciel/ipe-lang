@@ -245,7 +245,10 @@ impl AspectCheck<ForeignItem> for BoundaryDisciplineWiredColumn {
             BoundaryClass::Disclosure => {
                 // Disclosure axes have no OS isolation surface; the discipline IS
                 // the declared-and-documented presence, verified by other columns.
-                Cell::NotApplicable
+                Cell::not_applicable(
+                    "a disclosure axis has no OS-resource isolation surface — its discipline \
+                     is declared-and-documented presence, verified by other columns",
+                )
             }
         }
     }
@@ -339,7 +342,10 @@ impl AspectCheck<ForeignItem> for WithinGrantColumn {
                     ))
                 }
             }
-            BoundaryClass::Disclosure => Cell::NotApplicable,
+            BoundaryClass::Disclosure => Cell::not_applicable(
+                "a disclosure axis has no consent-gate grant path to wire — its enforcement is \
+                 disclosure itself, not an OS grant gate",
+            ),
         }
     }
 }
@@ -517,7 +523,10 @@ impl AspectCheck<ForeignItem> for RefusalTestedColumn {
             BoundaryClass::Disclosure => {
                 // Disclosure axes have no rejection path to test at the OS
                 // boundary; the vocabulary round-trip test covers the parser.
-                Cell::NotApplicable
+                Cell::not_applicable(
+                    "a disclosure axis has no OS-boundary rejection path to test — the \
+                     vocabulary round-trip test covers its parser",
+                )
             }
         }
     }
