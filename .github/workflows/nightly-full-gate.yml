@@ -34,4 +34,4 @@ jobs:
         run: |
           set -euo pipefail
           echo "Dispatching 'Build & test' (ci.yml) on development for the nightly heavy sweep."
-          gh workflow run "Build & test" --repo "$REPO" --ref development
+          gh workflow run "Build & test" --repo "$REPO" --ref main
