@@ -276,8 +276,21 @@ pub fn url_relative<E: From<String>>(raw: String) -> IpeResult<E, UrlRelative> {
     if joined.username() != base.username() || joined.host_str() != base.host_str() {
         return reject("carries userinfo or host");
     }
+    // Guard the OUTPUT projection, not just the input and the resolved origin.
+    // `..`-normalisation can pop past root and leave the PATH beginning `//`
+    // (`/..//evil.com` → path `//evil.com`): the resolved absolute URL's origin
+    // is unchanged (the `//evil.com` is a path there, not an authority), so the
+    // origin gate passes — but the reference this projects to (scheme + authority
+    // stripped) is `//evil.com`, which a browser reads as PROTOCOL-RELATIVE in an
+    // `href`/`src`. Reject on the rendered path's leading `//`, closing the gap
+    // between the representation the gate checks and the one the sink emits. A
+    // legitimate path with an INTERNAL `//` (`/a//b`) is unaffected.
+    let path = joined.path().to_string();
+    if path.starts_with("//") {
+        return reject("projects to a protocol-relative reference (leading //)");
+    }
     IpeResult::Ok(UrlRelative {
-        path: joined.path().to_string(),
+        path,
         query: joined.query().map(str::to_string),
         fragment: joined.fragment().map(str::to_string),
     })
@@ -571,6 +584,49 @@ mod tests {
             IpeMaybe::Just("top".to_string())
         );
         assert_eq!(url_relative_to_string(r), "/a/b?q=1#top");
+    }
+
+    /// A `..`-traversal that pops past root MUST NOT project to a
+    /// protocol-relative reference. `/..//evil.com` normalises to the PATH
+    /// `//evil.com`; the resolved absolute URL's origin is unchanged (there the
+    /// `//evil.com` is a path, not an authority), so the origin gate alone would
+    /// wave it through — but the projected reference (`path` + optional query +
+    /// fragment, scheme/authority stripped) is `//evil.com`, which a browser reads
+    /// as a protocol-relative cross-origin navigation in an `href`/`src`. The
+    /// output-projection guard rejects every shape that pops to a leading `//`.
+    #[test]
+    fn relative_traversal_to_protocol_relative_is_rejected() {
+        for bad in [
+            "/..//evil.com",
+            "/../..//evil.com",
+            "/x/..//evil.com",
+            "/./..//evil.com",
+            "/a/../..//evil.com",
+            "/%2e%2e//evil.com",
+            "/..//..//evil.com",
+            "foo/..//evil.com",
+            "/..//..//..//evil.com",
+        ] {
+            assert!(
+                is_err(bad),
+                "traversal-to-protocol-relative {bad:?} MUST be a typed Err, \
+                 not a `//evil.com` reference"
+            );
+            // And no accepted reference ever renders with a leading `//`.
+            if let IpeResult::Ok(r) = rel(bad) {
+                assert!(
+                    !url_relative_to_string(r).starts_with("//"),
+                    "{bad:?} projected to a protocol-relative reference"
+                );
+            }
+        }
+        // A LEGITIMATE internal double-slash path stays accepted (not over-rejected).
+        for good in ["/normal//double/seg", "/path//to//x", "/a/b?q=//y"] {
+            assert!(is_ok(good), "legit internal `//` path {good:?} MUST stay Ok");
+            if let IpeResult::Ok(r) = rel(good) {
+                assert!(!url_relative_to_string(r).starts_with("//"));
+            }
+        }
     }
 
     #[test]
