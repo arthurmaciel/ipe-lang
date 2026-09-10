@@ -53,7 +53,6 @@ PLUMBING_WORKFLOWS = {
     "promote.yml",
     "rerun-failed-once.yml",
     "nightly-full-gate.yml",
-    "close-issues-on-development.yml",
     "manifest-guard.yml",
     "ci-health.yml",
 }
