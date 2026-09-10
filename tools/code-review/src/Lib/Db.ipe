@@ -1,12 +1,15 @@
 module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, findLatestForUid, insertDecision, migrate, open, openAt, recordDrain)
 
+import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
+import Ipe.Config as Config
 import Ipe.Db as Db
-import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
-import Ipe.Dict as Dict
+import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
+import Ipe.Json.Encode as Encode
 import Ipe.List as List
 import Ipe.Maybe as Maybe
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
@@ -19,8 +22,7 @@ type Decision
     | Refused String
 
 
--- One row of the review table, as stored: the raw decision string and an
--- optional reason. The History page enriches it with the unit name.
+-- One row of the review table. `reviewedAt` carries unix milliseconds.
 type alias ReviewRow =
     { uid : String
     , bodyHash : String
@@ -28,6 +30,66 @@ type alias ReviewRow =
     , reason : Maybe String
     , reviewedAt : Int
     }
+
+
+-- Codec for ReviewRow. Keys in `SRecord` and JSON object match the DB column
+-- names so `Store.fromCodec` derives the correct column list from the shape.
+reviewCodec : Codec ReviewRow
+reviewCodec =
+    Codec
+        { enc =
+            \row ->
+                Encode.object
+                    [ ( "uid", Encode.string row.uid )
+                    , ( "body_hash", Encode.string row.bodyHash )
+                    , ( "decision", Encode.string row.decision )
+                    , ( "reason"
+                      , case row.reason of
+                            Just r ->
+                                Encode.string r
+
+                            Nothing ->
+                                Encode.null
+                      )
+                    , ( "reviewed_at", Encode.int row.reviewedAt )
+                    ]
+        , mkDec =
+            \_ ->
+                Config.map5 makeRow
+                    (Config.field "uid" Config.string)
+                    (Config.field "body_hash" Config.string)
+                    (Config.field "decision" Config.string)
+                    (Config.field "reason" (Config.nullable Config.string))
+                    (Config.field "reviewed_at" Config.int)
+        , shp =
+            SRecord
+                [ ( "uid", CText )
+                , ( "body_hash", CText )
+                , ( "decision", CText )
+                , ( "reason", CNull CText )
+                , ( "reviewed_at", CInt )
+                ]
+        }
+
+
+makeRow : String -> String -> String -> Maybe String -> Int -> ReviewRow
+makeRow uid bodyHash decision reason reviewedAt =
+    { uid = uid
+    , bodyHash = bodyHash
+    , decision = decision
+    , reason = reason
+    , reviewedAt = reviewedAt
+    }
+
+
+-- The typed store for the review table. `fromCodec` validates every column
+-- identifier; `public` classifies it as world-readable/writable. No
+-- `primaryKey` spec: the composite `PRIMARY KEY (uid, body_hash)` lives only
+-- in the hand-written DDL migration, which Store cannot express.
+reviewStore : Result Error (Store ReviewRow)
+reviewStore =
+    Store.fromCodec "review" reviewCodec
+        |> Result.map Store.public
 
 
 open : Task.Task Error Db
@@ -59,11 +121,8 @@ insertDecision db uid bodyHash decision =
             insertIfAbsent db uid bodyHash decision
 
 
--- Fail fast with a typed error; the SQL CHECK remains the
--- backstop for other callers.
 -- A duplicate (uid, body_hash) pair is a no-op: the first review wins and
--- re-reviewing the same pair never overwrites it. The pre-check keeps the
--- DB layer strict — a real constraint violation still fails loudly.
+-- re-reviewing the same pair never overwrites it.
 insertIfAbsent : Db -> String -> String -> Decision -> Task.Task Error Int
 insertIfAbsent db uid bodyHash decision =
     findDecision db uid bodyHash
@@ -80,102 +139,108 @@ insertIfAbsent db uid bodyHash decision =
 
 insertNew : Db -> String -> String -> Decision -> Task.Task Error Int
 insertNew db uid bodyHash decision =
-    Time.unixMillis ()
-        |> Task.andThen
-            (\now ->
-                let
-                    ( decisionText, reason ) =
-                        case decision of
-                            Approved ->
-                                ( "approve", Nothing )
+    case reviewStore of
+        Err e ->
+            Task.fail e
 
-                            Refused r ->
-                                ( "refuse", Just r )
-                in
-                Db.insertFields db
-                    "review"
-                    [ ( "uid", SetField (SqlString uid) )
-                    , ( "body_hash", SetField (SqlString bodyHash) )
-                    , ( "decision", SetField (SqlString decisionText) )
-                    , ( "reason"
-                    , case reason of
-                        Just r ->
-                            SetField (SqlString r)
+        Ok store ->
+            Time.unixMillis ()
+                |> Task.andThen
+                    (\now ->
+                        let
+                            ( decisionText, reason ) =
+                                case decision of
+                                    Approved ->
+                                        ( "approve", Nothing )
 
-                        Nothing ->
-                            SetField (SqlNull (SqlString ""))
+                                    Refused r ->
+                                        ( "refuse", Just r )
+
+                            row =
+                                { uid = uid
+                                , bodyHash = bodyHash
+                                , decision = decisionText
+                                , reason = reason
+                                , reviewedAt = Time.toMillis now
+                                }
+                        in
+                        Store.insert db store row
                     )
-                    , ( "reviewed_at", SetField (SqlTime now) )
-                    ]
-            )
 
 
+-- Filter by both `uid` and `body_hash` using `Store.findWhere` with an
+-- injection-safe `SqlFragment` (Sql.column + Sql.param). The codec decodes
+-- each returned row; a mismatch is a typed error.
 findDecision : Db -> String -> String -> Task.Task Error (Maybe Decision)
 findDecision db uid bodyHash =
-    Db.findWhere db
-        "review"
-        (Sql.and
-            (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
-            (Sql.eq (Sql.column "body_hash") (Sql.param (SqlString bodyHash)))
-        )
-        |> Task.map List.head
-        |> Task.andThen
-            (\mb ->
-                case mb of
-                    Nothing ->
-                        Task.succeed Nothing
+    case reviewStore of
+        Err e ->
+            Task.fail e
 
-                    Just row ->
-                        case decodeDecision row of
-                            Ok d ->
-                                Task.succeed (Just d)
+        Ok store ->
+            Store.findWhere db
+                store
+                (Sql.and
+                    (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
+                    (Sql.eq (Sql.column "body_hash") (Sql.param (SqlString bodyHash)))
+                )
+                |> Task.map List.head
+                |> Task.andThen
+                    (\mb ->
+                        case mb of
+                            Nothing ->
+                                Task.succeed Nothing
 
-                            Err e ->
-                                Task.fail e
-            )
+                            Just row ->
+                                case decodeDecision row of
+                                    Ok d ->
+                                        Task.succeed (Just d)
+
+                                    Err e ->
+                                        Task.fail e
+                    )
 
 
-decodeDecision : Dict.Dict String String -> Result Error Decision
+decodeDecision : ReviewRow -> Result Error Decision
 decodeDecision row =
-    case Dict.get "decision" row of
-        Just d ->
-            case d of
-                "approve" ->
-                    Ok Approved
+    case row.decision of
+        "approve" ->
+            Ok Approved
 
-                "refuse" ->
-                    case Dict.get "reason" row of
-                        Just r ->
-                            Ok (Refused r)
+        "refuse" ->
+            case row.reason of
+                Just r ->
+                    Ok (Refused r)
 
-                        Nothing ->
-                            Err (Error.unexpected "review row is refused but has no reason")
+                Nothing ->
+                    Err (Error.unexpected "review row is refused but has no reason")
 
-                other ->
-                    Err (Error.unexpected ("malformed review decision: " ++ other))
-
-        Nothing ->
-            Err (Error.unexpected "review row has no decision column")
+        other ->
+            Err (Error.unexpected ("malformed review decision: " ++ other))
 
 
--- The most recent review row for a uid across all hashes, if any. The change
--- re-enqueue path (B8) uses it to tell "decided on this exact content" apart
--- from "decided on an OLDER version of this unit": when the current
--- (uid, body_hash) pair has no decision but an older hash does, the unit was
--- edited after its review and must be reviewed again.
+-- The most recent review row for a uid across all hashes, if any. Filter uses
+-- `Store.eq .uid` (field name "uid" matches SRecord key "uid"); ordering uses
+-- the snake_case column names the store knows ("reviewed_at", "body_hash");
+-- in-Ipê sort + limit-1 via the query builder.
 findLatestForUid : Db -> String -> Task.Task Error (Maybe ReviewRow)
 findLatestForUid db uid =
-    Db.queryDecode db
-        "SELECT uid, body_hash, decision, reason, reviewed_at FROM review WHERE uid = ? ORDER BY reviewed_at DESC, body_hash LIMIT 1"
-        [ SqlString uid ]
-        reviewRowDecoder
-        |> Task.map List.head
+    case reviewStore of
+        Err e ->
+            Task.fail e
+
+        Ok store ->
+            Store.query store
+                |> Store.where (Store.eq .uid uid)
+                |> Store.orderDesc "reviewed_at"
+                |> Store.orderAsc "body_hash"
+                |> Store.limit 1
+                |> Store.toMaybe db
 
 
--- Bookkeeping for the drain loop: the (uid, body_hash) pair the review app
--- has consumed from the index queue, and when. Re-draining the same pair is
--- a no-op (INSERT OR REPLACE), so a re-queued unit that gets reviewed twice
--- keeps a single cursor row.
+-- Bookkeeping for the drain loop. Re-draining the same pair is a no-op
+-- (INSERT OR REPLACE), so a re-queued unit that gets reviewed twice keeps
+-- a single cursor row.
 recordDrain : Db -> String -> String -> Task.Task Error Int
 recordDrain db uid bodyHash =
     Time.unixMillis ()
@@ -183,33 +248,20 @@ recordDrain db uid bodyHash =
             (\now ->
                 Db.exec db
                     "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
-                    [ SqlString uid, SqlString bodyHash, SqlTime now ]
+                    [ SqlString uid, SqlString bodyHash, SqlInt (Time.toMillis now) ]
             )
 
 
--- Every review row, newest first. The History page builds its list from this.
+-- Every review row, newest first. `Store.all` fetches all rows; the query
+-- builder sorts them in Ipê by reviewed_at DESC then uid ASC.
 findDecisions : Db -> Task.Task Error (List ReviewRow)
 findDecisions db =
-    Db.queryDecode db
-        "SELECT uid, body_hash, decision, reason, reviewed_at FROM review ORDER BY reviewed_at DESC, uid"
-        []
-        reviewRowDecoder
+    case reviewStore of
+        Err e ->
+            Task.fail e
 
-
-reviewRowDecoder =
-    Db.Decode.succeed makeRow
-        |> Db.Decode.required "uid" (Db.Decode.string "uid")
-        |> Db.Decode.required "body_hash" (Db.Decode.string "body_hash")
-        |> Db.Decode.required "decision" (Db.Decode.string "decision")
-        |> Db.Decode.required "reason" (Db.Decode.nullable (Db.Decode.string "reason"))
-        |> Db.Decode.required "reviewed_at" (Db.Decode.int "reviewed_at")
-
-
-makeRow : String -> String -> String -> Maybe String -> Int -> ReviewRow
-makeRow uid bodyHash decision reason reviewedAt =
-    { uid = uid
-    , bodyHash = bodyHash
-    , decision = decision
-    , reason = reason
-    , reviewedAt = reviewedAt
-    }
+        Ok store ->
+            Store.query store
+                |> Store.orderDesc "reviewed_at"
+                |> Store.orderAsc "uid"
+                |> Store.toList db
