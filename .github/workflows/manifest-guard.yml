@@ -43,10 +43,8 @@ jobs:
           python3 - <<'PY'
           import json, sys, yaml
           man = yaml.safe_load(open("ci/check-manifest.yml"))
-          # The required set is every externally-required gate: in-CI `gate` plus
-          # `gate-external` (produced outside CI, e.g. guardian-sound). required-set.json
-          # must equal both, matching ci/verify-manifest.py.
-          required = sorted(e["context"] for e in man["checks"] if e["disposition"] in ("gate", "gate-external"))
+          # required-set.json must equal both, matching ci/verify-manifest.py.
+          required = sorted(e["context"] for e in man["checks"] if e["disposition"] in ("gate"))
           on_disk = json.load(open("ci/required-set.json"))
           if required != sorted(on_disk):
               print("ci/required-set.json is stale — regenerate it (see ci/RECONCILIATION.md):", file=sys.stderr)

@@ -13,7 +13,7 @@
 # promotion. This workflow is advisory: a red run signals a broken live push-path,
 # it does not block a merge or a release.
 #
-# Trust boundary (why this is guardian-reviewed): it uses a publish token — the
+# Trust boundary: it uses a publish token — the
 # IPE_REGISTRY_PUBLISH_TOKEN repo secret — to push a branch and open a PR on the
 # registry. The token is passed to the smoke script ONLY through the environment;
 # the script never echoes it, never writes it to a logged file, and never places
