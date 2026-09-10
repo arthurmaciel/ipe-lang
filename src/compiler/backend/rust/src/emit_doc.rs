@@ -1083,9 +1083,7 @@ fn build_generic_call(
         && matches!(
             callee,
             Callee::Kernel(
-                KernelFn::CsvParse
-                    | KernelFn::CsvParseWithDelimiter
-                    | KernelFn::UrlRelativeParse
+                KernelFn::CsvParse | KernelFn::CsvParseWithDelimiter | KernelFn::UrlRelativeParse
             )
         ) {
         "::<IpeError>"

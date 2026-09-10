@@ -622,7 +622,10 @@ mod tests {
         }
         // A LEGITIMATE internal double-slash path stays accepted (not over-rejected).
         for good in ["/normal//double/seg", "/path//to//x", "/a/b?q=//y"] {
-            assert!(is_ok(good), "legit internal `//` path {good:?} MUST stay Ok");
+            assert!(
+                is_ok(good),
+                "legit internal `//` path {good:?} MUST stay Ok"
+            );
             if let IpeResult::Ok(r) = rel(good) {
                 assert!(!url_relative_to_string(r).starts_with("//"));
             }
