@@ -1074,13 +1074,19 @@ fn build_generic_call(
     generics: GenericScope,
 ) -> DResult<Doc> {
     let name = callee_name(ctx, callee)?;
-    // The pin's turbofish, with the CsvParse error-channel anchor the string
-    // emitter substitutes when the pin is empty (`csv_parse::<IpeError>(…)`).
+    // The pin's turbofish, with the error-channel anchor the string emitter
+    // substitutes when the pin is empty (`csv_parse::<IpeError>(…)`). Every
+    // kernel here returns `IpeResult<E, _>` generic over the error channel, so a
+    // call whose result flows into a polymorphic context needs `E` pinned.
     let pin_turbofish = pin.turbofish();
     let turbofish: &str = if pin_turbofish.is_empty()
         && matches!(
             callee,
-            Callee::Kernel(KernelFn::CsvParse | KernelFn::CsvParseWithDelimiter)
+            Callee::Kernel(
+                KernelFn::CsvParse
+                    | KernelFn::CsvParseWithDelimiter
+                    | KernelFn::UrlRelativeParse
+            )
         ) {
         "::<IpeError>"
     } else {
