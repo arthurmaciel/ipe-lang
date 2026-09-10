@@ -998,7 +998,6 @@ subscriptions model =
     Sub.none
 
 
-main : Task Error ()
 main =
     Web.app
         { init = init
