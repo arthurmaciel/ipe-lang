@@ -642,14 +642,6 @@ jobs:
       - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
 
   # ── Sanitizers (the UB net) ─────────────────────────────────────────────────
-  # Miri is a forward-guard for the SAFE, `#![forbid(unsafe_code)]` compiler
-  # crates (it catches UB reached indirectly through a dependency's own `unsafe`
-  # + aliasing violations). It CANNOT be the UB net for the project's genuine
-  # first-party `unsafe`: the sandbox's libc-syscall glue (`memfd_create`,
-  # `fcntl`/`F_ADD_SEALS`, `lseek`, `OwnedFd::from_raw_fd`, the seccomp memfd) and
-  # the FFI boundary — Miri cannot interpret those foreign calls at all. ASAN and
-  # TSAN compile+RUN the real code, so they are the net that covers it.
-  #
   # ASAN (AddressSanitizer + LeakSanitizer): memory-safety UB — out-of-bounds,
   # use-after-free, double-free, leaks — in the real crates and, crucially, in
   # any `unsafe` reached through their DEPENDENCY tree. `-Zbuild-std` rebuilds
@@ -662,8 +654,7 @@ jobs:
   # job never selects them). The selected crates are the ones carrying (or
   # depending on) real `unsafe`: `ipe_sandbox` (the syscall jail glue),
   # `ipe_ffi` (the FFI boundary), `ipe-runtime-rust` (the emitted-into runtime),
-  # plus the interning/IR/types/lower/diagnostics libs whose dependency unsafe
-  # Miri already watches — here re-checked at RUNTIME.
+  # plus the interning/IR/types/lower/diagnostics libs here re-checked at RUNTIME.
   #
   # EXCLUSIONS (`-E`): two binary classes inside the selected crates are dropped.
   #   - `run_jail_e2e` / `build_jail_e2e`: REAL bwrap+seccomp jail runs. ASAN is
@@ -783,7 +774,7 @@ jobs:
   # MSAN (MemorySanitizer — reads of uninitialized memory) is deliberately NOT
   # wired: it demands EVERY dependency AND std be instrumented, and any
   # un-instrumented FFI/syscall boundary (exactly this project's sandbox/ffi
-  # surface) produces false positives — not worth it here; ASAN+TSAN+Miri cover
+  # surface) produces false positives — not worth it here; ASAN+TSAN cover
   # the real risk.
 
   # E2E builds+runs the emitted Rust per golden (THE SEAL — the soundness floor:
