@@ -399,6 +399,7 @@ pub fn emit_expr_at(
                             | KernelFn::CsvParseWithDelimiter
                             | KernelFn::DsnParse
                             | KernelFn::DsnBuild
+                            | KernelFn::UrlRelativeParse
                     )
                 ) {
                 "::<IpeError>"

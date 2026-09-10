@@ -131,7 +131,6 @@ Each module listed below links to a detail page with the full documentation and 
 - [Ui.Cli](#uicli)
 - [Ui.Events](#uievents)
 - [Ui.Grid](#uigrid)
-- [Ui.ImageSrc](#uiimagesrc)
 - [Ui.Responsive](#uiresponsive)
 - [Ui.Transform](#uitransform)
 - [Ui.Transition](#uitransition)
@@ -1970,15 +1969,16 @@ Ipe.Html.Attributes — HTML attribute builders.
 | `noAttr` | `noAttr` — the identity attribute (renders nothing). Makes "no attribute" a |
 | `class` | (no summary) |
 | `id` | (no summary) |
-| `href` | `href target` — the `href` attribute over a safe `HrefTarget` (build one |
-| `src` | `src source` — the `src` attribute over a typed `Ipe.Ui.ImageSrc` (a |
+| `href` | `href target` — the `href` attribute over a safe `LinkTarget` (build one |
+| `src` | `src target` — the `src` attribute over a safe `MediaTarget` (build one with |
 | `alt` | (no summary) |
 | `value` | (no summary) |
 | `name` | (no summary) |
 | `placeholder` | (no summary) |
-| `HrefTarget` | An opaque, safe `href` target — EITHER a scheme-narrowed absolute `Url` |
-| `hrefTarget` | `hrefTarget u` — the parse-don't-validate seal for an ABSOLUTE `href`. |
-| `hrefRelative` | `hrefRelative raw` — the parse-don't-validate seal for a same-origin |
+| `LinkTarget` | An opaque, safe link target — EITHER a scheme-narrowed absolute `Url` |
+| `linkTarget` | `linkTarget raw` — the ONE parse-don't-validate seal for a link target, dispatched |
+| `MediaTarget` | An opaque, safe media target for a `src` sink — EITHER a scheme-narrowed |
+| `imageSrc` | `imageSrc raw` — the ONE parse-don't-validate seal for a media `src` target: |
 | `type_` | `type_` — the `type` attribute (`type` is an Ipê keyword-adjacent spelling). |
 | `for_` | `for_` — the `for` attribute (`for` is an Ipê keyword). |
 | `style` | (no summary) |
@@ -2760,8 +2760,12 @@ Ipe.Ui — element / attribute / colour / layout surface.
 | `link` | `link attrs { url, label }` — an `<a href=…>` link.  `url` is a typed, safe |
 | `image` | `image attrs { src, description }` — an `<img src=… alt=…>`.  `src` is a |
 | `LinkTarget` | An opaque, safe hyperlink target — EITHER a scheme-narrowed absolute `Url` |
-| `linkTarget` | `linkTarget u` — the parse-don't-validate seal for an ABSOLUTE hyperlink |
-| `linkRelative` | `linkRelative raw` — the parse-don't-validate seal for a same-origin |
+| `linkTarget` | `linkTarget raw` — the ONE parse-don't-validate seal for a hyperlink target, |
+| `MediaTarget` | An opaque, safe media target for the `<img src>` sink — EITHER a |
+| `imageSrc` | `imageSrc raw` — the ONE parse-don't-validate seal for a media `src` target: |
+| `ImageValue` | An opaque image source: EITHER a safe `MediaTarget` (a scheme-narrowed URL |
+| `imageUrl` | `imageUrl target` — a remote or same-origin image from a safe `MediaTarget` |
+| `imageData` | `imageData { mime, base64 }` — an inline image from base64-encoded bytes. |
 | `spacing` | (no summary) |
 | `padding` | (no summary) |
 | `paddingXY` | (no summary) |
@@ -2985,20 +2989,6 @@ Ipe.Ui.Grid — explicit CSS-grid track lists for `Ipe.Ui`.
 | `columns` | (no summary) |
 | `rows` | (no summary) |
 
-## Ui.ImageSrc
-
-[Full reference](stdlib/Ui.ImageSrc.md)
-
-Ipe.Ui.ImageSrc — a typed image source (Layer 3 Ipe source).
-
-| Export | Summary |
-|--------|----------|
-| `ImageSrc` | An opaque image source: a remote URL, a same-origin relative path, or an |
-| `url` | `url u` — a remote image from a validated `Ipe.Url.Url`. Fail-closed: the |
-| `relative` | `relative raw` — a same-origin relative image path (`/static/logo.png`, |
-| `data` | `data { mime, base64 }` — an inline image from base64-encoded bytes. |
-| `toAttributeValue` | `toAttributeValue src` — the string for an HTML `src` attribute. |
-
 ## Ui.Responsive
 
 [Full reference](stdlib/Ui.Responsive.md)
@@ -3110,9 +3100,11 @@ Ipe.Url — typed, validated URLs.
 | `fragment` | `fragment url` — the fragment (without the leading `#`), or `Nothing`. |
 | `buildQuery` | `buildQuery pairs` — the injection-safe query-string builder. Every key and |
 | `checkScheme` | `checkScheme allowed url` — the fail-closed scheme allowlist boundary, one |
-| `RelativeRef` | A safe same-origin RELATIVE reference (`/static/x.js`, `./style.css`, |
-| `relativeRef` | `relativeRef s` — the parse-don't-validate seal for a same-origin relative |
-| `relativeRefToString` | `relativeRefToString ref` — recover the validated relative reference string. |
+| `relative` | `relative raw` — THE seal for a same-origin relative reference. |
+| `relativePath` | `relativePath ref` — the path projection, always present (`/`, `/a/b`, |
+| `relativeQuery` | `relativeQuery ref` — the query string (without the leading `?`), or |
+| `relativeFragment` | `relativeFragment ref` — the fragment (without the leading `#`), or |
+| `relativeToString` | `relativeToString ref` — recover the validated reference string |
 
 ## Url.Parser
 

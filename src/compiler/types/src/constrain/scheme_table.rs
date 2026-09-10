@@ -133,6 +133,7 @@ impl Builder<'_> {
             BuiltinTag::Path => self.builtins.path,
             BuiltinTag::Regex => self.builtins.regex,
             BuiltinTag::Url => self.builtins.url,
+            BuiltinTag::UrlRelative => self.builtins.url_relative,
             BuiltinTag::Dsn => self.builtins.dsn,
             BuiltinTag::Connection => self.builtins.connection,
             BuiltinTag::ConnReadOnly => self.builtins.conn_read_only,
@@ -819,6 +820,14 @@ impl Builder<'_> {
         let url = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.url,
+            args: Vec::new(),
+        };
+        // `Relative` — opaque validated same-origin relative reference
+        // (`ipe_runtime::url::UrlRelative`). The ONLY constructor is
+        // `Url.relative`; lowered to `IrType::UrlRelative`.
+        let relative = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.url_relative,
             args: Vec::new(),
         };
         // `Dsn` — opaque validated connection descriptor
@@ -4348,6 +4357,17 @@ impl Builder<'_> {
             K::UrlQuery => fun(url(), maybe(string())),
             K::UrlFragment => fun(url(), maybe(string())),
             K::UrlBuildQuery => fun(list(tuple2(string(), string())), string()),
+            // Url.Relative — the same-origin relative reference:
+            //   relative : String -> Result Error Relative  (THE seal)
+            //   path     : Relative -> String
+            //   query    : Relative -> Maybe String
+            //   fragment : Relative -> Maybe String
+            //   toString : Relative -> String
+            K::UrlRelativeParse => fun(string(), result(error_ty(), relative())),
+            K::UrlRelativePath => fun(relative(), string()),
+            K::UrlRelativeQuery => fun(relative(), maybe(string())),
+            K::UrlRelativeFragment => fun(relative(), maybe(string())),
+            K::UrlRelativeToString => fun(relative(), string()),
 
             // ── Ui.link ──────────────────────────────────────────────────────────
             // link : List (Attribute msg) -> { url : String, label : Element msg }

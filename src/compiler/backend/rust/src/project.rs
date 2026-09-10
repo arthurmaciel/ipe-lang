@@ -3161,6 +3161,9 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         // `Url` is a non-serde request-boundary value (like `Path`) — a `Url` in
         // a HydrationState record is rejected.
         | IrType::Url
+        // `Relative` is a non-serde same-origin href projection (like `Url`) — a
+        // `Relative` in a HydrationState record is rejected.
+        | IrType::UrlRelative
         // `Dsn` carries a `Secret` and is non-serde — a `Dsn` in a HydrationState
         // record is rejected (same posture as `Url`/`Secret`).
         | IrType::Dsn

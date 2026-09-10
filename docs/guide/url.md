@@ -1,63 +1,95 @@
 # URLs
 
-`Ipe.Url` is a *typed, validated* URL. It exists so that a URL in your program is
-always a real one — parsed, scheme-checked, and safe to hand to an outbound
-request — and so that building a query string cannot accidentally become an
-injection.
+`Ipe.Url` turns an untrusted URL string into a typed value with two homes — an
+absolute `Url` and a same-origin `Relative` reference — plus one injection-safe
+query builder. Each home is opaque with a single fail-closed constructor, so a
+value in hand is proof the string parsed, not a hope that it will.
 
 ## The mental model
 
 Three knots.
 
-- **`Url` is opaque — `fromString` is the only door, and it rejects.** You cannot
-  construct a `Url` from a raw string except through `Url.fromString`, which parses
-  the string (the *same* parser the runtime's SSRF guard uses) and returns
-  `Err` for anything scheme-less, relative, or malformed. So a value of type `Url`
-  is *proof* it was validated — a bad URL is not a `Url` you have to remember to
-  check, it is a value that could never be built.
-- **Accessors take a `Url`, not a `String`.** `scheme`, `host`, `port`, `path`,
-  `query`, `fragment` all require a `Url`. There is no way to read the host of an
-  unvalidated string, which is exactly why a scheme-confused or unparseable address
-  can never reach an outbound request — the type stops it at construction, upstream
-  of any network call.
-- **`buildQuery` encodes every key and value.** `Url.buildQuery` percent-encodes
-  both sides of every pair, so a metacharacter in a value (`&`, `=`, space, `#`)
-  stays *inside* that value rather than forging a new parameter. Injection safety
-  is the default, not a discipline you must remember.
+- **`fromString` is the syntactic seal; `checkScheme` is the separate semantic
+  gate.** `fromString` proves only that a string is a well-formed *absolute* URL —
+  and an absolute URL legally carries *any* scheme, so `javascript:alert(1)`,
+  `data:…`, and `ftp:…` are all valid `Url` values. A `Url` alone is therefore not
+  safe to drop into an `href` or an outbound request. `checkScheme allowed`
+  narrows an already-parsed `Url` against a per-surface allowlist, returning `Ok`
+  only when the scheme is one you vetted. Parsing is not authorising; they are two
+  steps because they answer two questions.
+- **A `Url` is always absolute; a relative reference is a different type.** A
+  same-origin reference like `/static/app.js` carries no scheme and no authority —
+  exactly the parts a browser drops for a same-origin navigation — so it is *not*
+  a `Url`. It is a `Relative`, built by `relative`, validated by the same parser
+  the absolute path uses so the two boundaries cannot disagree on what parses.
+  Fail-closed: a protocol-relative `//host`, a scheme-bearing or backslash or
+  control-char string, a cross-origin resolution, or a `..`-traversal that pops
+  past root to a leading `//` is a typed `Err`, never a rendered link.
+- **`buildQuery` percent-encodes so you cannot forget.** Assembling a query by
+  hand invites a `&`, `=`, space, or `#` in an untrusted value to split off an
+  extra parameter. `buildQuery` encodes every key and value, so a metacharacter
+  stays *inside* its value rather than forging a new parameter.
 
-## A worked example: validating requests and building a safe query
+## A worked example: parse, narrow, and build
 
 The example under
 [`examples/shapes/script/url-safe-request`](../../examples/shapes/script/url-safe-request/src/Main.ipe)
-runs a mix of good and bad candidate URLs through the single gate, then builds a
-query string from attacker-controlled values.
+runs a mix of candidates through `fromString` then `checkScheme`, triages a set
+of relative references through `relative`, and builds one injection-safe query
+from attacker-controlled values.
 
-`fromString` is the one gate: each candidate becomes a `Result Error Url`, and
-downstream code only ever sees a validated `Url`, whose parts it reads through the
-typed accessors:
+`fromString` accepts any absolute scheme, so `checkScheme` is the gate that turns
+`ftp:` / `javascript:` away — only a vetted `Url` reaches the accessors:
 
 ```ipe
-describe raw =
+vet : String -> String
+vet raw =
     case Url.fromString raw of
-
         Ok url ->
-            raw
-                ++ "  ->  scheme="
-                ++ Url.scheme url
-                ++ " host="
-                ++ Maybe.withDefault "?" (Url.host url)
-                ++ " port="
-                ++ Maybe.withDefault "-" (Maybe.map String.fromInt (Url.port url))
+            case Url.checkScheme allowedSchemes url of
+                Ok safe ->
+                    raw
+                        ++ "  ->  ok scheme="
+                        ++ Url.scheme safe
+                        ++ " host="
+                        ++ Maybe.withDefault "?" (Url.host safe)
+                        ++ " port="
+                        ++ Maybe.withDefault "-" (Maybe.map String.fromInt (Url.port safe))
+
+                Err _ ->
+                    raw ++ "  ->  BLOCKED scheme (" ++ Url.scheme url ++ ")"
+
+        Err _ ->
+            raw ++ "  ->  not an absolute URL"
+```
+
+The allowlist is a single value the surface owns, not a check scattered across
+call sites:
+
+```ipe
+allowedSchemes : List String
+allowedSchemes =
+    [ "http", "https" ]
+```
+
+A relative reference lives in its own type; `relative` validates it and rejects
+anything that would escape the origin:
+
+```ipe
+triageRef : String -> String
+triageRef raw =
+    case Url.relative raw of
+        Ok ref ->
+            raw ++ "  ->  ok " ++ Url.relativeToString ref
 
         Err _ ->
             raw ++ "  ->  REJECTED"
 ```
 
-The query is built from raw values, one of which is a deliberate injection
-attempt. `buildQuery` encodes it so the `&admin=true` stays trapped inside the
-`note` value:
+And `buildQuery` is the only assembly of a query from untrusted parts:
 
 ```ipe
+searchQuery : String
 searchQuery =
     Url.buildQuery
         [ ( "q", "red shoes" )
@@ -65,45 +97,70 @@ searchQuery =
         ]
 ```
 
-Running it (`ipe run`) parses the valid URLs (filling default ports), rejects the
-relative and garbage ones, and encodes the injection safely:
+Running it (`ipe run`) prints:
 
 ```
-URL validation:
-  https://api.example.com:8443/v1/users  ->  scheme=https host=api.example.com port=8443
-  http://example.com/search  ->  scheme=http host=example.com port=80
-  /relative/path  ->  REJECTED
-  not a url at all  ->  REJECTED
-  ftp://files.example.com/data  ->  scheme=ftp host=files.example.com port=21
+parse + narrow (checkScheme):
+  https://api.example.com:8443/v1/users  ->  ok scheme=https host=api.example.com port=8443
+  http://example.com/search  ->  ok scheme=http host=example.com port=80
+  ftp://files.example.com/data  ->  BLOCKED scheme (ftp)
+  javascript:alert(1)  ->  BLOCKED scheme (javascript)
+  /relative/path  ->  not an absolute URL
+  not a url at all  ->  not an absolute URL
+relative references:
+  /static/app.js  ->  ok /static/app.js
+  ./style.css?v=2  ->  ok /style.css?v=2
+  //evil.example.com  ->  REJECTED
+  /..//evil.example.com  ->  REJECTED
 safe query: q=red+shoes&note=a%26admin%3Dtrue
 ```
 
+Every rejection is the point. `ftp://…` and `javascript:alert(1)` *parse* — they
+are valid absolute `Url` values — and are turned away by `checkScheme`, not by
+`fromString`, which is exactly why the scheme gate is a separate step.
+`//evil.example.com` is a protocol-relative reference to another origin, and
+`/..//evil.example.com` resolves to the path `//evil.example.com`, which a browser
+would read as protocol-relative too — both are rejected by `relative`, which
+guards the *rendered* reference and not merely the input. The final line shows
+`buildQuery` encoding `&`→`%26`, `=`→`%3D`, and the space→`+`, so the value
+`a&admin=true` stays one parameter instead of forging an `admin=true`.
+
 ## The why
 
-The opaque `Url` is [parse, don't validate][principles] and [make invalid states
-unrepresentable][principles] at once: parsing happens exactly once, at
-construction, and the result is a type that *cannot* hold an invalid URL — so no
-function downstream re-checks or forgets to check. A `Bool`-returning validator
-that let the raw string flow onward would reintroduce precisely the
-check-or-forget gap this design removes.
-
-Routing every URL through the same parser the SSRF guard uses is
-[deny-by-default][principles]: an address that the security boundary would reject
-also fails to become a `Url`, so the two can never disagree. And `buildQuery`
-encoding by construction is [correctness][principles] — the safe path is the only
-path, so a query-string injection is not a mistake a caller can make.
+Splitting `fromString` from `checkScheme` is [parse, don't
+validate][principles] with the two questions kept honest: the syntactic parse and
+the scheme authorisation are different boundaries, and collapsing them is how a
+`javascript:` URL reaches an `href`. Giving a relative reference its own
+`Relative` type — rather than pretending it is a `Url` or leaving it a bare
+`String` — is [make invalid states unrepresentable][principles]: a scheme or an
+authority has no place to live in a value whose whole job is to be same-origin and
+scheme-less, so the open-redirect string cannot be constructed, only rejected.
+Validating `Relative` through the same `url` crate the absolute/SSRF path uses is
+[defend in depth][principles] at the level of *agreement* — the relative-href
+boundary and the outbound-request boundary cannot drift on what counts as a valid
+same-origin reference. And `buildQuery` encoding by construction removes the
+query-injection sink instead of documenting it: [security][principles]'s
+fail-closed rule made structural, so the safe encoding is the only encoding a
+caller can reach.
 
 [principles]: ../../PRINCIPLES.md
 
 ## References
 
-- **Per-symbol reference:** `ipe doc Ipe.Url` — `fromString`, the accessors, and
-  `buildQuery` with verified examples.
-- **Sibling guides:** [Url routing](url-parser.md) — matching a parsed `Url` into
-  typed routes with `Ipe.Url.Parser`. [Net](net.md) — host/IP classification, the
-  other half of deny-by-default addressing. [Results](result.md) — what
-  `fromString` returns. [Strings](string.md) — raw URL text before it is parsed.
+- **Per-symbol reference:** `ipe doc Ipe.Url` — `fromString` / `toString`, the
+  accessors (`scheme` / `host` / `port` / `path` / `query` / `fragment`),
+  `buildQuery`, `checkScheme`, and the relative family (`relative` /
+  `relativePath` / `relativeQuery` / `relativeFragment` / `relativeToString`).
+- **Consumers:** [HTML attributes](html-attributes.md) — `linkTarget` / `imageSrc`
+  build an `href` / `src` from a scheme-narrowed `Url` or a validated `Relative`,
+  so a bare string cannot reach a link or fetch sink. [Url routing](url-parser.md)
+  — matching a parsed `Url` into typed routes with `Ipe.Url.Parser`.
+  [Net](net.md) — host/IP classification, the other half of deny-by-default
+  addressing.
+- **Sibling guides:** [Results](result.md) — what every seal returns.
+  [Strings](string.md) — raw URL text before it is parsed.
 - **Concepts:** [The parse-don't-validate idiom](../idioms/parse-dont-validate.md)
-  — the discipline the opaque `Url` embodies. The
-  [live/HTTP security invariants ADR](../adr/0004-live-http-web-security-invariants.md)
-  — where URL validation sits in the request path.
+  — a `Url` is the boundary where an untyped string becomes a typed, scheme-vetted
+  value no downstream code re-checks. The [live/HTTP security invariants
+  ADR](../adr/0004-live-http-web-security-invariants.md) — where URL validation
+  sits in the request path.

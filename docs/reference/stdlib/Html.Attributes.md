@@ -58,26 +58,24 @@ id : String -> Attribute msg
 ## `href`
 
 ```ipe
-href : HrefTarget -> Attribute msg
+href : LinkTarget -> Attribute msg
 ```
 
-`href target` — the `href` attribute over a safe `HrefTarget` (build one
-with `hrefTarget` for an absolute URL or `hrefRelative` for a same-origin
-path). A bare `String` or an unvetted URL is a type error, so a
-`javascript:` href cannot be smuggled in. The `case` is exhaustive over both
-arms — no wildcard.
+`href target` — the `href` attribute over a safe `LinkTarget` (build one
+with `linkTarget`). A bare `String` or an unvetted URL is a type error, so a
+`javascript:` href cannot be smuggled in.
 
 ## `src`
 
 ```ipe
-src : ImageSrc -> Attribute msg
+src : MediaTarget -> Attribute msg
 ```
 
-`src source` — the `src` attribute over a typed `Ipe.Ui.ImageSrc` (a
-scheme-narrowed remote URL via `ImageSrc.url`, a same-origin relative path
-via `ImageSrc.relative`, or an inline `data:` image via `ImageSrc.data`). A
-bare `String` is a type error, so a non-network `src` scheme cannot be
-smuggled in.
+`src target` — the `src` attribute over a safe `MediaTarget` (build one with
+`imageSrc`). A media `src` is scheme-narrowed to `http`/`https` only (NOT the
+`mailto`/`tel` a `href` `LinkTarget` allows); an inline data image uses
+`Ipe.Ui.imageData`. A bare `String` or a `LinkTarget` is a type error, so a
+non-network `src` scheme cannot be smuggled in.
 
 ## `alt`
 
@@ -103,34 +101,48 @@ name : String -> Attribute msg
 placeholder : String -> Attribute msg
 ```
 
-## `HrefTarget`
+## `LinkTarget`
 
-An opaque, safe `href` target — EITHER a scheme-narrowed absolute `Url`
+An opaque, safe link target — EITHER a scheme-narrowed absolute `Url`
 (`http`/`https`/`mailto`/`tel`) OR a validated same-origin relative reference
-(`/static/x`). Both constructors (`hrefTarget` / `hrefRelative`) fail closed,
-so a value of this type is always safe to place in an `href` — the proof
-`href` consumes TOTALLY. A raw `String` or an unvetted URL cannot reach it.
+(`/static/x`). The ONE constructor `linkTarget` fails closed, so a value of this
+type is always safe to place in an `href` / `src` — the proof both sinks
+consume TOTALLY. A raw `String` or an unvetted URL cannot reach it.
 
-## `hrefTarget`
-
-```ipe
-hrefTarget : Url -> Result Error HrefTarget
-```
-
-`hrefTarget u` — the parse-don't-validate seal for an ABSOLUTE `href`.
-Fail-closed: `Ok` only when `u`'s scheme is one of `http`/`https`/`mailto`
-/`tel`, otherwise a typed `Err`.
-
-## `hrefRelative`
+## `linkTarget`
 
 ```ipe
-hrefRelative : String -> Result Error HrefTarget
+linkTarget : String -> Result Error LinkTarget
 ```
 
-`hrefRelative raw` — the parse-don't-validate seal for a same-origin
-RELATIVE `href` (`/static/x.css`, `./page`, `#top`). Fail-closed via the
-shared `Url.relativeRef` predicate: a protocol-relative (`//host`),
-scheme-bearing, backslash, or control-char string is a typed `Err`.
+`linkTarget raw` — the ONE parse-don't-validate seal for a link target, dispatched
+exactly as a browser reads an `href`: an absolute URL if `raw` parses as one
+(then scheme-narrowed to `http`/`https`/`mailto`/`tel`), otherwise a validated
+same-origin relative reference. Fail-closed: a `javascript:` / `data:` /
+`file:` scheme, a protocol-relative (`//host`), or a cross-origin string is a
+typed `Err`, never rendered into an `href` / `src`.
+
+## `MediaTarget`
+
+An opaque, safe media target for a `src` sink — EITHER a scheme-narrowed
+absolute `Url` (`http`/`https` only) OR a validated same-origin relative
+reference (`/static/logo.png`). The ONE constructor `imageSrc` fails closed,
+so a value of this type is always safe to place in a `src`. Distinct from
+`LinkTarget`: a `mailto:` / `tel:` string parses to a `LinkTarget` but has NO
+`MediaTarget` representation, so it cannot reach a fetch sink.
+
+## `imageSrc`
+
+```ipe
+imageSrc : String -> Result Error MediaTarget
+```
+
+`imageSrc raw` — the ONE parse-don't-validate seal for a media `src` target:
+an absolute URL if `raw` parses as one (then scheme-narrowed to `http`/`https`
+via `mediaSchemes`), otherwise a validated same-origin relative reference.
+Fail-closed: a `mailto:` / `tel:` / `javascript:` / `data:` / `file:` scheme,
+a protocol-relative (`//host`), or a cross-origin string is a typed `Err`,
+never rendered into a `src`.
 
 ## `type_`
 

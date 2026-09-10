@@ -1,12 +1,17 @@
 //! REFUSAL SEAL for the typed URL sinks (`Ipe.Html.Attributes.href`,
-//! `Ipe.Ui.link`, `Ipe.Ui.ImageSrc.url`, `Ipe.Browser.Share.shareUrl`) and the
-//! shared same-origin relative-reference predicate (`Ipe.Url.relativeRef`).
+//! `Ipe.Html.Attributes.src` / `imageSrc`, `Ipe.Ui.link`,
+//! `Ipe.Browser.Share.shareUrl`) and the shared same-origin relative-reference
+//! predicate (`Ipe.Url.relative`).
 //!
-//! Every unsafe target — a `javascript:` / `data:` / `file:` / `vbscript:` /
-//! `blob:` scheme, a protocol-relative `//host`, a backslash-folded path, a
-//! scheme-before-slash, a control char, an empty string — must fail closed at
-//! its typed constructor; every safe one must pass. The pinned matrix output is
-//! the standing proof of the refusals (a regression that opens one flips a row).
+//! A navigation `href` narrows through the anchor allowlist
+//! (`http`/`https`/`mailto`/`tel`); a media `src` is a distinct FETCH role with
+//! its own tighter allowlist (`http`/`https` only), so a `mailto:` / `tel:`
+//! target accepted at `href` must fail closed at `imageSrc`. Every unsafe target
+//! — a `javascript:` / `data:` / `file:` / `vbscript:` / `blob:` scheme, a
+//! protocol-relative `//host`, a backslash-folded path, a scheme-before-slash, a
+//! control char, an empty string — must fail closed at its typed constructor;
+//! every safe one must pass. The pinned matrix output is the standing proof of
+//! the refusals (a regression that opens one flips a row).
 //!
 //! The frontend-accepts assertion runs in the default gate; the build-and-run
 //! proof is `IPE_E2E`-gated, matching every other seal in this suite.
@@ -82,7 +87,9 @@ fn url_scheme_seal_builds_and_runs() {
                     link_mailto=OK\n\
                     link_javascript=ERR\n\
                     img_https=OK\n\
+                    img_relative=OK\n\
                     img_mailto=ERR\n\
+                    img_tel=ERR\n\
                     img_javascript=ERR\n\
                     share_https=OK\n\
                     share_mailto=ERR\n\

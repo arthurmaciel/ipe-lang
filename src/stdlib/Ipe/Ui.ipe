@@ -11,9 +11,11 @@
 -- sub-modules (Background / Border / Font / Region / Input / Lazy / Keyed) are
 -- separate native qualifiers, untouched here.
 --
--- `image` takes a typed `ImageSrc` (either `ImageSrc.url` for a remote image
--- or `ImageSrc.data` for an inline data URI) rather than a raw `String`.
--- Build an `ImageSrc` via `Ipe.Ui.ImageSrc.url` or `Ipe.Ui.ImageSrc.data`.
+-- `image` takes an `ImageValue` — either a typed `MediaTarget` (a URL narrowed
+-- to `http`/`https` only, or a same-origin path, built with `imageSrc`) via
+-- `imageUrl`, or an inline `data:` image via `imageData { mime, base64 }` —
+-- never a raw `String`. A media `src` fetches a resource, so it rejects the
+-- `mailto:`/`tel:` anchor schemes a navigation `LinkTarget` allows.
 --
 -- Gradients: `Background.linearGradient deg [(pos, color)]` is Ipê's gradient —
 -- you give a CSS angle in degrees and an explicit list of `(position, colour)`
@@ -32,7 +34,9 @@ module Ipe.Ui exposing
     , el, row, column, wrappedRow, grid
     , paragraph, textColumn, form, input
     , button, link, image
-    , LinkTarget, linkTarget, linkRelative
+    , LinkTarget, linkTarget
+    , MediaTarget, imageSrc
+    , ImageValue, imageUrl, imageData
     , spacing, padding, paddingXY, paddingEach, width, height
     , centerX, centerY, alignLeft, alignRight, alignTop, alignBottom
     , pointer, clip, clipX, clipY, scrollbars, scrollbarX, scrollbarY, gridColumns
@@ -53,9 +57,8 @@ module Ipe.Ui exposing
 
 import Ipe.Error exposing (Error)
 import Ipe.Ffi.Kernel as Kernel
-import Ipe.Result as Result exposing (Result)
-import Ipe.Ui.ImageSrc as ImageSrc exposing (ImageSrc)
-import Ipe.Url as Url exposing (RelativeRef, Url)
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Url as Url exposing (Relative, Url)
 
 
 -- ── Retained native primitives ───────────────────────────────────────────────
@@ -134,30 +137,63 @@ linkSchemes =
 
 -- | An opaque, safe hyperlink target — EITHER a scheme-narrowed absolute `Url`
 -- (`http`/`https`/`mailto`/`tel`) OR a validated same-origin relative reference
--- (`/page`). Both constructors (`linkTarget` / `linkRelative`) fail closed, so
--- a value of this type is always safe as an `href` — the proof `Ui.link`
--- consumes TOTALLY. A raw `Url` (any scheme) cannot reach `link` directly.
+-- (`/page`). The ONE constructor `linkTarget` fails closed, so a value of this
+-- type is always safe as an `href` — the proof `Ui.link` consumes TOTALLY. A
+-- raw `String` cannot reach `link` directly.
 type LinkTarget
     = LinkAbsolute Url
-    | LinkRelative RelativeRef
+    | LinkRelative Relative
 
 
--- | `linkTarget u` — the parse-don't-validate seal for an ABSOLUTE hyperlink
--- target. Fail-closed: `Ok` only when `u`'s scheme is one of `http`/`https`
--- /`mailto`/`tel`, otherwise a typed `Err`. A `javascript:` or `data:` URL is
--- turned away here, never rendered into an `href`.
-linkTarget : Url -> Result Error LinkTarget
-linkTarget u =
-    Result.map LinkAbsolute (Url.checkScheme linkSchemes u)
+-- | `linkTarget raw` — the ONE parse-don't-validate seal for a hyperlink target,
+-- dispatched exactly as a browser reads an `href`: an absolute URL if `raw`
+-- parses as one (then scheme-narrowed to `http`/`https`/`mailto`/`tel`),
+-- otherwise a validated same-origin relative reference. Fail-closed: a
+-- `javascript:` / `data:` / `file:` scheme, a protocol-relative (`//host`), or a
+-- cross-origin string is a typed `Err`, never rendered into an `href`.
+linkTarget : String -> Result Error LinkTarget
+linkTarget raw =
+    case Url.fromString raw of
+        Ok u ->
+            Result.map LinkAbsolute (Url.checkScheme linkSchemes u)
+
+        Err _ ->
+            Result.map LinkRelative (Url.relative raw)
 
 
--- | `linkRelative raw` — the parse-don't-validate seal for a same-origin
--- RELATIVE hyperlink (`/page`, `./about`, `#top`). Fail-closed via the shared
--- `Url.relativeRef` predicate: a protocol-relative (`//host`), scheme-bearing,
--- backslash, or control-char string is a typed `Err`.
-linkRelative : String -> Result Error LinkTarget
-linkRelative raw =
-    Result.map LinkRelative (Url.relativeRef raw)
+-- | The schemes a media `src` (an `<img src>` fetch sink) may target:
+-- `http`/`https` ONLY. A `src` is a resource the browser FETCHES, a distinct
+-- role from a navigation `href` — so it does NOT admit the anchor schemes
+-- `mailto`/`tel` that `linkSchemes` allows.
+mediaSchemes : List String
+mediaSchemes =
+    [ "http", "https" ]
+
+
+-- | An opaque, safe media target for the `<img src>` sink — EITHER a
+-- scheme-narrowed absolute `Url` (`http`/`https` only) OR a validated
+-- same-origin relative reference (`/logo.png`). The ONE constructor `imageSrc`
+-- fails closed. Distinct from `LinkTarget`: a `mailto:` / `tel:` string parses
+-- to a `LinkTarget` but has NO `MediaTarget` representation, so it cannot reach
+-- the `<img src>` sink.
+type MediaTarget
+    = MediaAbsolute Url
+    | MediaRelative Relative
+
+
+-- | `imageSrc raw` — the ONE parse-don't-validate seal for a media `src` target:
+-- an absolute URL if `raw` parses as one (then scheme-narrowed to `http`/`https`
+-- via `mediaSchemes`), otherwise a validated same-origin relative reference.
+-- Fail-closed: a `mailto:` / `tel:` / `javascript:` / `data:` / `file:` scheme,
+-- a protocol-relative (`//host`), or a cross-origin string is a typed `Err`.
+imageSrc : String -> Result Error MediaTarget
+imageSrc raw =
+    case Url.fromString raw of
+        Ok u ->
+            Result.map MediaAbsolute (Url.checkScheme mediaSchemes u)
+
+        Err _ ->
+            Result.map MediaRelative (Url.relative raw)
 
 
 -- | Private kernel: takes a raw `String` href for the `<a href=…>` attribute.
@@ -166,8 +202,7 @@ linkKernel = Kernel.kernel "Ui_link"
 
 
 -- | `link attrs { url, label }` — an `<a href=…>` link.  `url` is a typed, safe
--- `LinkTarget` (build one with `Ui.linkTarget` for an absolute URL or
--- `Ui.linkRelative` for a same-origin path); a bare `String` or an
+-- `LinkTarget` (build one with `Ui.linkTarget`); a bare `String` or an
 -- unvetted-scheme URL is a type error, so a `javascript:` href cannot be
 -- smuggled through. The `case` is exhaustive over both arms — no wildcard.
 link : List (Attribute msg) -> { url : LinkTarget, label : Element msg } -> Element msg
@@ -177,7 +212,7 @@ link attrs rec =
             linkKernel attrs { url = Url.toString u, label = rec.label }
 
         LinkRelative ref ->
-            linkKernel attrs { url = Url.relativeRefToString ref, label = rec.label }
+            linkKernel attrs { url = Url.relativeToString ref, label = rec.label }
 
 
 -- | Private kernel: takes a raw `String` src for the `<img src=…>` attribute.
@@ -185,12 +220,55 @@ imageKernel : List (Attribute msg) -> { src : String, description : String } -> 
 imageKernel = Kernel.kernel "Ui_image"
 
 
+-- | An opaque image source: EITHER a safe `MediaTarget` (a scheme-narrowed URL
+-- restricted to `http`/`https`, or a same-origin path, built with `imageSrc`)
+-- via `imageUrl`, OR an inline `data:` image via `imageData`. The constructors
+-- fail closed, so a raw `String`, a `mailto:`/`tel:`, or a non-network scheme
+-- cannot reach the `<img src>` sink.
+type ImageValue
+    = ImageFromTarget MediaTarget
+    | ImageFromData { mime : String, base64 : String }
+
+
+-- | `imageUrl target` — a remote or same-origin image from a safe `MediaTarget`
+-- (build one with `imageSrc`).
+imageUrl : MediaTarget -> ImageValue
+imageUrl target =
+    ImageFromTarget target
+
+
+-- | `imageData { mime, base64 }` — an inline image from base64-encoded bytes.
+-- `mime` is the MIME type (e.g. `"image/png"`); `base64` is the payload without
+-- the `data:` prefix. The ONE thing that is not a URL.
+imageData : { mime : String, base64 : String } -> ImageValue
+imageData rec =
+    ImageFromData rec
+
+
+-- | `imageValueToString value` — the string an HTML `src` attribute accepts:
+-- the target's rendered form, or `data:<mime>;base64,<base64>` for inline data.
+imageValueToString : ImageValue -> String
+imageValueToString value =
+    case value of
+        ImageFromTarget target ->
+            case target of
+                MediaAbsolute u ->
+                    Url.toString u
+
+                MediaRelative ref ->
+                    Url.relativeToString ref
+
+        ImageFromData rec ->
+            "data:" ++ rec.mime ++ ";base64," ++ rec.base64
+
+
 -- | `image attrs { src, description }` — an `<img src=… alt=…>`.  `src` is a
--- typed `ImageSrc` — either a validated URL (`ImageSrc.url`) or an inline data
--- URI (`ImageSrc.data { mime, base64 }`).  A bare `String` is a type error.
-image : List (Attribute msg) -> { src : ImageSrc, description : String } -> Element msg
+-- typed `ImageValue` — either a validated `MediaTarget` (`imageUrl`, narrowed to
+-- `http`/`https` or a same-origin path) or an inline data image
+-- (`imageData { mime, base64 }`).  A bare `String` is a type error.
+image : List (Attribute msg) -> { src : ImageValue, description : String } -> Element msg
 image attrs rec =
-    imageKernel attrs { src = ImageSrc.toAttributeValue rec.src, description = rec.description }
+    imageKernel attrs { src = imageValueToString rec.src, description = rec.description }
 
 
 -- ── Attribute builders. ──

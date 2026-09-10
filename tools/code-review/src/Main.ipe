@@ -7,7 +7,6 @@ import Ipe.Html.Attributes as Attr
 import Ipe.List as List
 import Ipe.Result as Result exposing (Result)
 import Ipe.String as String
-import Ipe.Url as Url
 import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.App.Tea.Web as Web
@@ -691,12 +690,10 @@ linkEl : Links.Link -> Ui.Element Msg
 linkEl link =
     case link of
         Internal qualified uid ->
-            linkOrText (Ui.linkRelative ("/unit/" ++ uid)) ("→ " ++ qualified)
+            linkOrText (Ui.linkTarget ("/unit/" ++ uid)) ("→ " ++ qualified)
 
         External url ->
-            linkOrText
-                (Result.andThen Ui.linkTarget (Url.fromString url))
-                ("↗ " ++ url)
+            linkOrText (Ui.linkTarget url) ("↗ " ++ url)
 
 
 decisionBadge : String -> Ui.Element Msg

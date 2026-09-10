@@ -522,6 +522,11 @@ pub struct Builtins {
     /// extracted via `Url.toString`. Zero type arguments. Lowered to
     /// `IrType::Url`.
     pub url: Symbol,
+    /// `"Relative"` — `Ipe.Url`'s opaque validated same-origin relative
+    /// reference (`ipe_runtime::url::UrlRelative`). The ONLY constructor is
+    /// `Url.relative : String -> Result Error Relative`; zero type arguments.
+    /// Lowered to `IrType::UrlRelative`.
+    pub url_relative: Symbol,
     // ── Ipe.Db.Dsn ──────────────────────────────────────────────────────────
     /// `"Dsn"` — `Ipe.Db.Dsn`'s opaque validated connection descriptor
     /// (`ipe_runtime::dsn::Dsn`). Constructed only by `Db.Dsn.parse` /
@@ -943,6 +948,7 @@ impl Builtins {
             principal: interner.intern("Principal")?,
             // ── Ipe.Url ───────────────────────────────────────────────────────────
             url: interner.intern("Url")?,
+            url_relative: interner.intern("Relative")?,
             // ── Ipe.Db.Dsn ────────────────────────────────────────────────────────
             dsn: interner.intern("Dsn")?,
             connection: interner.intern("Connection")?,
