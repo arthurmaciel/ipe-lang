@@ -50,11 +50,8 @@ VALID_DISPOSITIONS = {"gate", "gate-external", "nightly-gate", "informational", 
 PLUMBING_WORKFLOWS = {
     "release.yml",
     "release-please.yml",
-    "promote.yml",
     "rerun-failed-once.yml",
     "nightly-full-gate.yml",
-    "close-issues-on-development.yml",
-    "pr-base-guard.yml",
     "manifest-guard.yml",
     "ci-health.yml",
 }

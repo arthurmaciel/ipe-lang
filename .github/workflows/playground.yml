@@ -18,7 +18,7 @@ name: Playground jail
 
 on:
   push:
-    branches: [main, master, development]
+    branches: [main]
   pull_request:
   merge_group:
   schedule:

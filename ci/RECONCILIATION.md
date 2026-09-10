@@ -63,7 +63,7 @@ they are `gate` in the manifest but were not in the ruleset):
 - `no-reference-impl-leak` — cheap `git`+`rg` reference-impl-leak scan (Security).
 - `env-docs-drift` — deterministic env-docs diff (parity with `stdlib-docs-drift`).
 - `capabilities-docs-drift` — deterministic capabilities-docs diff.
-- `panic-scan` — panic-pattern scan (Soundness). Already required on `development`.
+- `panic-scan` — panic-pattern scan (Soundness). Already required on `main`.
 - `registry-admission` — registry admission gate.
 
 No other changes: every other live required context is a manifest `gate` and stays.
@@ -82,13 +82,6 @@ gh api -X PUT repos/arthurmaciel/ipe-lang/rulesets/22326541 --input /tmp/rs.json
 `strict_required_status_checks_policy` should stay `false` (heavy `nightly-gate`
 contexts must not be forced onto every PR); nightly-gate reds are enforced by the
 fail-closed `promotion-ready` job on the next promotion, not by branch protection.
-
-## Nightly-gate contexts (NOT branch-protection required)
-
-Heavy checks run nightly + on `development` push. A red does not block a PR; it
-blocks the **next promotion** through the fail-closed `promotion-ready` job and is
-surfaced by `ci-health`. See the `nightly-gate` entries in the manifest (the
-Linux jail proofs, sanitizers, seal-modset, browser-e2e, runtime-feature-combos).
 
 ## Flagged: required-but-flaky and informational-but-noisy
 

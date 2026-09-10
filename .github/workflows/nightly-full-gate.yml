@@ -1,7 +1,7 @@
 name: nightly-full-gate
 
 # The single scheduled entry point for the nightly HEAVY sweep. It fires the
-# "Build & test" workflow (ci.yml) against development HEAD via workflow_dispatch;
+# "Build & test" workflow (ci.yml) against main HEAD via workflow_dispatch;
 # ci.yml's heavy jobs (the full 8-shard e2e, seal-slice, seal-modset, the
 # runtime full-feature builds, the explain/doc gates, browser-e2e, the Linux
 # Tier-2 jails) all key on `github.event_name != 'pull_request'`, so a dispatch runs the
@@ -27,11 +27,11 @@ jobs:
   dispatch-full-gate:
     runs-on: ubuntu-latest
     steps:
-      - name: Dispatch the heavy gate (Build & test) on development HEAD
+      - name: Dispatch the heavy gate (Build & test) on main HEAD
         env:
           GH_TOKEN: ${{ secrets.PROMOTE_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          echo "Dispatching 'Build & test' (ci.yml) on development for the nightly heavy sweep."
-          gh workflow run "Build & test" --repo "$REPO" --ref development
+          echo "Dispatching 'Build & test' (ci.yml) on main for the nightly heavy sweep."
+          gh workflow run "Build & test" --repo "$REPO" --ref main
