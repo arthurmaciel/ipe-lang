@@ -31,11 +31,13 @@ The two layers:
 ## `share`
 
 ```ipe
-share : Internals.Payload -> Task Error ()
+share : Payload -> Task Error ()
 ```
 
-`share payload` — invoke the platform share sheet with the given payload, as a
-`Task Error ()`.
+`share p` — invoke the platform share sheet with the given typed `Payload`,
+as a `Task Error ()`. The payload is lowered through `payload` (the single
+serialization point for its scheme-narrowed `url`), so a raw-`String` /
+unvetted-scheme URL cannot reach the share sheet.
 
 Uses the correlated port→Task bridge (`Js.request`). The served JS handler calls
 `navigator.share`; a completion resolves the `Task` with `()`, and a user
@@ -57,4 +59,33 @@ bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
 dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
 `Result Error ()` — a `Shared` becomes `Ok`, a cancellation / unavailability a
 typed `Err`.
+
+## `ShareUrl`
+
+An opaque, scheme-narrowed shared URL. The ONLY constructor is `shareUrl`,
+so a value of this type always carries a vetted `http`/`https` scheme.
+
+## `shareUrl`
+
+```ipe
+shareUrl : Url -> Result Error ShareUrl
+```
+
+`shareUrl u` — the parse-don't-validate seal for a shared URL. Fail-closed:
+`Ok` only when `u`'s scheme is `http`/`https`, otherwise a typed `Err`.
+
+## `Payload`
+
+The typed share payload. `url` is an optional scheme-narrowed `ShareUrl` —
+a raw `String` URL cannot reach the share sheet. Build with `payload`.
+
+## `payload`
+
+```ipe
+payload : Payload -> Internals.Payload
+```
+
+`payload rec` — lower a typed `Payload` into the raw seal DTO. The narrowed
+`url` is serialized once here (`Url.toString`); a `Nothing` URL leaves the
+transport field blank, which the seal omits before the Web API call.
 

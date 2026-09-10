@@ -156,7 +156,7 @@ fn refusal_tested_column_marks_disclosure_axes_not_applicable() {
     for item in ForeignSurface.all() {
         if item.boundary_class == BoundaryClass::Disclosure {
             assert!(
-                matches!(col.check(&item), Cell::NotApplicable),
+                matches!(col.check(&item), Cell::NotApplicable { .. }),
                 "refusal-tested must be NotApplicable for disclosure axis {:?}",
                 item.capability
             );
@@ -171,7 +171,7 @@ fn within_grant_column_marks_disclosure_axes_not_applicable() {
     for item in ForeignSurface.all() {
         if item.boundary_class == BoundaryClass::Disclosure {
             assert!(
-                matches!(col.check(&item), Cell::NotApplicable),
+                matches!(col.check(&item), Cell::NotApplicable { .. }),
                 "within-grant must be NotApplicable for disclosure axis {:?} \
                  (no OS isolation surface exists for this class)",
                 item.capability
@@ -187,7 +187,7 @@ fn boundary_discipline_column_marks_disclosure_axes_not_applicable() {
     for item in ForeignSurface.all() {
         if item.boundary_class == BoundaryClass::Disclosure {
             assert!(
-                matches!(col.check(&item), Cell::NotApplicable),
+                matches!(col.check(&item), Cell::NotApplicable { .. }),
                 "boundary-discipline-wired must be NotApplicable for disclosure \
                  axis {:?}",
                 item.capability

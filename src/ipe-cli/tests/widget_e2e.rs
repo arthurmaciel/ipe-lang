@@ -1,10 +1,10 @@
-//! End-to-end proof that an emitted `Ui.widget` is LIVE in the browser (WP5).
+//! End-to-end proof that an emitted `CustomElement.node` is LIVE in the browser (WP5).
 //!
 //! WP4 renders a `<ipe-ce-… state="…">` node; WP5 serves the author widget JS
 //! content-addressed + SRI, generates the registration glue, and wires up-events
 //! back through `/_ipe/event`. This test proves the whole loop at the HTTP layer
 //! against a REAL build (no loud-skip): it compiles a `Web.app` with a
-//! `Ui.widget`, spawns the emitted binary, and drives it over raw sockets.
+//! `CustomElement.node`, spawns the emitted binary, and drives it over raw sockets.
 //!
 //! What it proves:
 //!
@@ -48,7 +48,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 // ── The Ipê program + author widget JS ──────────────────────────────────────
 
-/// A `Web.app` whose view mounts one `Ui.widget`. The down-state is the current
+/// A `Web.app` whose view mounts one `CustomElement.node`. The down-state is the current
 /// count (so a model change re-renders the `state` attribute); the up-event
 /// `Bumped n` folds `n` into the count, so a valid up-event is observable as a
 /// count change and a malformed one leaves the count untouched (the fail-closed

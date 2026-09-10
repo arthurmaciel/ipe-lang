@@ -254,6 +254,10 @@ pub enum BuiltinTag {
     Regex,
     /// `Url` — the nullary opaque validated URL.
     Url,
+    /// `Relative` — the nullary opaque validated same-origin relative reference
+    /// (`Ipe.Url`'s path + optional query + optional fragment projection),
+    /// distinct from the always-absolute `Url`.
+    UrlRelative,
     /// `Dsn` — the nullary opaque validated database-connection descriptor.
     Dsn,
     /// `Connection` — the external-database connection handle constructor
@@ -1906,7 +1910,7 @@ pub enum StdlibKernel {
     TermColorRgb,
     /// `TermColor.rgba : Int -> Int -> Int -> Float -> Color` — truecolour + alpha.
     TermColorRgba,
-    /// `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg` —
+    /// `CustomElement.node : CustomElement down up -> down -> (up -> msg) -> Element msg` —
     /// the one view node that places a typed JS custom-element widget. The
     /// `CustomElement` handle is opaque; it lowers to the shipped widget handle
     /// type and is placed in the view tree by the widget transport.
@@ -2924,6 +2928,20 @@ pub enum StdlibKernel {
     /// `Url.buildQuery : List (String, String) -> String` — the injection-safe
     /// query-string builder; every key/value is percent-encoded.
     UrlBuildQuery,
+    /// `Url.relative : String -> Result Error Relative` — THE seal for a
+    /// same-origin relative reference. Resolves `raw` against a fixed same-origin
+    /// base with the `url` crate and REJECTS any scheme/authority (the
+    /// browser-href SSRF boundary). The ONLY `Relative` constructor.
+    UrlRelativeParse,
+    /// `Url.Relative.path : Relative -> String` — the path projection (always
+    /// present: `/`, `/a/b`, `./x`).
+    UrlRelativePath,
+    /// `Url.Relative.query : Relative -> Maybe String` — the query (no `?`).
+    UrlRelativeQuery,
+    /// `Url.Relative.fragment : Relative -> Maybe String` — the fragment (no `#`).
+    UrlRelativeFragment,
+    /// `Url.Relative.toString : Relative -> String` — recover the reference.
+    UrlRelativeToString,
     // ── Ipe.Locale — opaque BCP-47 locale handle ─────────────────────────
     // Parse-don't-validate: `Locale.fromTag` is the only constructor; an invalid
     // BCP-47 tag is `Nothing`, never a silent default.  `Locale.toTag` is the
@@ -3995,7 +4013,7 @@ impl StdlibKernel {
             Self::TermColorDefault => d("TermColor", "default", 0, Pure, "term_color_default_"),
             Self::TermColorRgb => d("TermColor", "rgb", 3, Pure, "term_color_rgb_"),
             Self::TermColorRgba => d("TermColor", "rgba", 4, Pure, "term_color_rgba_"),
-            Self::UiWidget => d("Ui", "widget", 3, Ui, "ui_widget_"),
+            Self::UiWidget => d("CustomElement", "node", 3, Ui, "ui_widget_"),
             Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
             Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
             Self::UiButton => d("Ui", "button", 2, Ui, "ui_button_"),
@@ -4809,6 +4827,15 @@ impl StdlibKernel {
             Self::UrlQuery => d("Url", "query", 1, Pure, "url_query"),
             Self::UrlFragment => d("Url", "fragment", 1, Pure, "url_fragment"),
             Self::UrlBuildQuery => d("Url", "buildQuery", 1, Pure, "url_build_query"),
+            Self::UrlRelativeParse => d("Url", "relative", 1, Pure, "url_relative"),
+            Self::UrlRelativePath => d("Url", "relativePath", 1, Pure, "url_relative_path"),
+            Self::UrlRelativeQuery => d("Url", "relativeQuery", 1, Pure, "url_relative_query"),
+            Self::UrlRelativeFragment => {
+                d("Url", "relativeFragment", 1, Pure, "url_relative_fragment")
+            }
+            Self::UrlRelativeToString => {
+                d("Url", "relativeToString", 1, Pure, "url_relative_to_string")
+            }
             // ── Ipe.Locale ──────────────────────────────────────────────
             Self::LocaleFromTag => d("Locale", "fromTag", 1, Pure, "locale_from_tag"),
             Self::LocaleToTag => d("Locale", "toTag", 1, Pure, "locale_to_tag"),
@@ -6017,6 +6044,11 @@ impl StdlibKernel {
         Self::UrlQuery,
         Self::UrlFragment,
         Self::UrlBuildQuery,
+        Self::UrlRelativeParse,
+        Self::UrlRelativePath,
+        Self::UrlRelativeQuery,
+        Self::UrlRelativeFragment,
+        Self::UrlRelativeToString,
         // ── Ipe.Locale ─────────────────────────────────────────────────
         Self::LocaleFromTag,
         Self::LocaleToTag,
@@ -7335,6 +7367,12 @@ impl StdlibKernel {
         const LIST_TUPLE_STRING_STRING: TyShape =
             TyShape::Con(BuiltinTag::List, &[TUPLE_STRING_STRING]);
         const URL_BUILD_QUERY: TyShape = TyShape::Fun(&LIST_TUPLE_STRING_STRING, &STRING);
+        // Url.Relative — the opaque same-origin relative reference.
+        const RELATIVE: TyShape = TyShape::Con(BuiltinTag::UrlRelative, &[]);
+        const RESULT_ERR_RELATIVE: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, RELATIVE]);
+        const STRING_TO_RESULT_ERR_RELATIVE: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_RELATIVE);
+        const RELATIVE_TO_STRING: TyShape = TyShape::Fun(&RELATIVE, &STRING);
+        const RELATIVE_TO_MAYBE_STRING: TyShape = TyShape::Fun(&RELATIVE, &MAYBE_STRING);
         // Dsn — the parse-don't-validate descriptor. Accessors return primitive
         // tags (`Int`) the compiled-source wrapper re-tags into the `Driver` /
         // `TlsMode` ADTs; the descriptor itself is the opaque `DSN` leaf.
@@ -9113,6 +9151,9 @@ impl StdlibKernel {
             Self::UrlHost | Self::UrlQuery | Self::UrlFragment => Some(&URL_TO_MAYBE_STRING),
             Self::UrlPort => Some(&URL_TO_MAYBE_INT),
             Self::UrlBuildQuery => Some(&URL_BUILD_QUERY),
+            Self::UrlRelativeParse => Some(&STRING_TO_RESULT_ERR_RELATIVE),
+            Self::UrlRelativePath | Self::UrlRelativeToString => Some(&RELATIVE_TO_STRING),
+            Self::UrlRelativeQuery | Self::UrlRelativeFragment => Some(&RELATIVE_TO_MAYBE_STRING),
 
             // ── Ipe.Db.Dsn — parse-don't-validate descriptor. ──
             Self::DsnParse => Some(&STRING_TO_RESULT_ERR_DSN),
@@ -11001,6 +11042,11 @@ impl StdlibKernel {
             | Self::UrlQuery
             | Self::UrlFragment
             | Self::UrlBuildQuery
+            | Self::UrlRelativeParse
+            | Self::UrlRelativePath
+            | Self::UrlRelativeQuery
+            | Self::UrlRelativeFragment
+            | Self::UrlRelativeToString
             // ── Ipe.Locale — pure BCP-47 parse + locale-aware case mapping ──
             | Self::LocaleFromTag
             | Self::LocaleToTag
@@ -12020,6 +12066,11 @@ impl StdlibKernel {
                 | Self::UrlQuery
                 | Self::UrlFragment
                 | Self::UrlBuildQuery
+                | Self::UrlRelativeParse
+                | Self::UrlRelativePath
+                | Self::UrlRelativeQuery
+                | Self::UrlRelativeFragment
+                | Self::UrlRelativeToString
         )
     }
 
@@ -13075,7 +13126,7 @@ mod tests {
         // row must project. Notes on the non-obvious rows:
         //   - `Env.public` reads the live process environment on native, so it
         //     discloses the env axis like `System.getenv` (wasm32 over-reports).
-        //   - `Ui.widget` ships browser JS → the `custom-element` axis.
+        //   - `CustomElement.node` ships browser JS → the `custom-element` axis.
         //   - the `Js.*` / session-stream ops exchange typed data with page JS →
         //     the `js-port:raw` uncharacterised-floor axis (the kernel cannot see
         //     the hand-written JS's target Web API).
@@ -13799,6 +13850,13 @@ mod tests {
             StdlibKernel::UrlFromString,
             StdlibKernel::UrlToString,
             StdlibKernel::UrlScheme,
+            // `Attributes.linkTarget` / `href` parse a relative reference client-side
+            // (the same `url` crate wasm build) to render a Web-shape `href`.
+            StdlibKernel::UrlRelativeParse,
+            StdlibKernel::UrlRelativePath,
+            StdlibKernel::UrlRelativeQuery,
+            StdlibKernel::UrlRelativeFragment,
+            StdlibKernel::UrlRelativeToString,
             StdlibKernel::TimeNow,
             StdlibKernel::TimeSleep,
             StdlibKernel::TimeUnixMillis,

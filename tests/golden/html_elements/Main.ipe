@@ -1,8 +1,11 @@
 module Main exposing (main)
 
+import Ipe.Error exposing (Error)
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Io as Io
+import Ipe.Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
 
 
 -- #76 batch 2: Ipe.Html ELEMENT family end-to-end golden. Proves the tag-as-data
@@ -10,34 +13,59 @@ import Ipe.Io as Io
 -- render fold (nav→<p>, h1→<p>, br→<img>, header→<div>, link→<a>). Containers
 -- (nav/h1/table/tr/td/th/thead/tbody/ul/li/section/header/footer/a) open+close
 -- their own tag; void elements (img/br/hr/link) self-close with no children.
+-- The href / src targets are sealed ONCE at the boundary; an `Err` fails loud.
 -- oracle_divergence = true: pure Rust-backend HTML; asserted by substring.
 
 
+main : Task Error ()
 main =
-    Io.println
-        (render
-            (section
-                [ class "wrap" ]
-                [ nav
-                    []
-                    [ a [ href "/" ] [ text "Home" ]
-                    , a [ href "/about" ] [ text "About" ]
-                    ]
-                , h1 [] [ text "Title" ]
-                , table
-                    []
-                    [ thead [] [ tr [] [ th [] [ text "H" ] ] ]
-                    , tbody [] [ tr [] [ td [] [ text "C" ] ] ]
-                    ]
-                , ul
-                    []
-                    [ li [] [ text "one" ]
-                    , li [] [ text "two" ]
-                    ]
-                , header [] [ text "hdr" ]
-                , footer [] [ text "ftr" ]
-                , img [ src "/a.png", alt "pic" ]
-                , br []
-                , hr []
-                , link [ href "/s.css" ]
-                ]))
+    case linkTarget "/" of
+        Ok home ->
+            case linkTarget "/about" of
+                Ok about ->
+                    case linkTarget "/s.css" of
+                        Ok sheet ->
+                            case imageSrc "/a.png" of
+                                Ok pic ->
+                                    Io.println (render (page home about sheet pic))
+
+                                Err e ->
+                                    Task.fail e
+
+                        Err e ->
+                            Task.fail e
+
+                Err e ->
+                    Task.fail e
+
+        Err e ->
+            Task.fail e
+
+
+page : LinkTarget -> LinkTarget -> LinkTarget -> MediaTarget -> Html msg
+page home about sheet pic =
+    section
+        [ class "wrap" ]
+        [ nav
+            []
+            [ a [ href home ] [ text "Home" ]
+            , a [ href about ] [ text "About" ]
+            ]
+        , h1 [] [ text "Title" ]
+        , table
+            []
+            [ thead [] [ tr [] [ th [] [ text "H" ] ] ]
+            , tbody [] [ tr [] [ td [] [ text "C" ] ] ]
+            ]
+        , ul
+            []
+            [ li [] [ text "one" ]
+            , li [] [ text "two" ]
+            ]
+        , header [] [ text "hdr" ]
+        , footer [] [ text "ftr" ]
+        , img [ src pic, alt "pic" ]
+        , br []
+        , hr []
+        , link [ href sheet ]
+        ]

@@ -59,6 +59,7 @@ pub(super) fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> 
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::UrlRelative
         | IrType::Dsn
         | IrType::Connection
         | IrType::ConnReadOnly
@@ -766,6 +767,7 @@ pub(super) fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::UrlRelative
         | IrType::Dsn
         | IrType::Connection
         | IrType::ConnReadOnly

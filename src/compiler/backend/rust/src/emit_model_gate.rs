@@ -266,7 +266,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::WebSocketServerCfg
         | IrType::WebReq
         | IrType::WebRoute(_)
-        // The `Ui.widget` custom-element handle is an opaque, non-serde value —
+        // The `CustomElement.node` custom-element handle is an opaque, non-serde value —
         // it must never live in a Model (session state), exactly like a function
         // value. `admissible()` (via `ir_type_is_serde` = `false`) rejects a
         // Model field of this type; this arm names it in the resulting IPE-L0120.
@@ -322,6 +322,10 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // (via `ir_type_is_serde` = `false`) and this arm names it in the
         // resulting IPE-L0120.
         | IrType::Url
+        // `Relative` is a same-origin href projection, not serde — same
+        // classification as `Url`: a Web Model field of type `Relative` is
+        // rejected by `admissible()` and named in the resulting IPE-L0120.
+        | IrType::UrlRelative
         // `Dsn` is a connection-descriptor value carrying a `Secret`, not serde —
         // same classification as `Url`/`Secret`: a Web Model field of type `Dsn`
         // is rejected by `admissible()` and this arm names it in the IPE-L0120.

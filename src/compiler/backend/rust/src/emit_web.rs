@@ -1038,6 +1038,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::CryptoMac => "Mac",
         IrType::EmailAddress => "EmailAddress",
         IrType::Url => "Url",
+        IrType::UrlRelative => "Url.Relative",
         IrType::Dsn => "Dsn",
         IrType::Connection => "Connection",
         IrType::ConnReadOnly => "ReadOnly",

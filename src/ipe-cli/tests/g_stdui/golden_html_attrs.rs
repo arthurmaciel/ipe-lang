@@ -86,9 +86,16 @@ fn html_attributes_family_renders_and_escapes() {
         !html.contains("a<b\"c"),
         "html_attrs: raw unescaped value must NOT appear\n--- actual ---\n{html}"
     );
+    // SECURITY: a single-quote in the relative-ref query is percent-encoded at
+    // the typed URL boundary (`Url.relative`), so it cannot break out of the
+    // double-quoted `href` — neutralised at parse time, not only at the sink.
     assert!(
-        html.contains("href=\"/x?q=&#39;z\""),
-        "html_attrs: href single-quote must be escaped\n--- actual ---\n{html}"
+        html.contains("href=\"/x?q=%27z\""),
+        "html_attrs: href single-quote must be percent-encoded\n--- actual ---\n{html}"
+    );
+    assert!(
+        !html.contains("q='z"),
+        "html_attrs: raw single-quote must NOT reach the href\n--- actual ---\n{html}"
     );
 
     // SECURITY: the hostile event-attribute name must be DROPPED at the sink.

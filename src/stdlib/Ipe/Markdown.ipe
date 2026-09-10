@@ -47,6 +47,7 @@ module Ipe.Markdown exposing
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
 import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Ui as Ui exposing (Element, Attribute)
 import Ipe.Ui.Font as Font
@@ -930,22 +931,44 @@ renderSpan span =
                 (Ui.text text)
 
         LinkSpan text url ->
-            Ui.link
-                -- Underline distinguishes the link; colour inherits the theme
-                -- (the page's `Font.color`) rather than a fixed accent hex.
-                [ Ui.htmlAttribute "style" "text-decoration:underline"
-                , Ui.htmlAttribute "target" "_blank"
-                ]
-                { url = url, label = Ui.text text }
+            -- The `url` is untrusted markdown text. Parse it once through the
+            -- single `Ui.linkTarget` seal (absolute-or-relative dispatch); a
+            -- unparseable / unsafe-scheme (`javascript:`) / cross-origin target
+            -- fails closed to the plain link TEXT — the reader still sees the
+            -- label, but no `href` is emitted. No scheme guessing: a rejected URL
+            -- is degraded, never repaired.
+            case Ui.linkTarget url of
+                Ok target ->
+                    Ui.link
+                        -- Underline distinguishes the link; colour inherits the
+                        -- theme (the page's `Font.color`) not a fixed accent hex.
+                        [ Ui.htmlAttribute "style" "text-decoration:underline"
+                        , Ui.htmlAttribute "target" "_blank"
+                        ]
+                        { url = target, label = Ui.text text }
+
+                Err _ ->
+                    Ui.text text
 
         ImageSpan alt url ->
-            Ui.html
-                (Html.img
-                    [ Attr.src url
-                    , Attr.alt alt
-                    , Attr.style "max-width:100%"
-                    ]
-                )
+            -- An image `src` is a FETCH sink, a distinct role from a navigation
+            -- `href`: parse the untrusted markdown target through the media
+            -- `Attr.imageSrc` seal (narrowed to `http`/`https` or a same-origin
+            -- path — NOT `mailto:`/`tel:`); a `javascript:` / `file:` /
+            -- cross-origin / unparseable / non-network src fails closed to the
+            -- `alt` TEXT rather than emitting an `<img>` with an unsafe source.
+            case Attr.imageSrc url of
+                Ok source ->
+                    Ui.html
+                        (Html.img
+                            [ Attr.src source
+                            , Attr.alt alt
+                            , Attr.style "max-width:100%"
+                            ]
+                        )
+
+                Err _ ->
+                    Ui.text alt
 
         HardBreakSpan ->
             Ui.html (Html.br [])

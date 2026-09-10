@@ -59,7 +59,7 @@ pub fn custom_element_(tag: String) -> IpeCustomElement {
     IpeCustomElement { tag }
 }
 
-/// The wire event name a `Ui.widget` up-event posts under. A fixed compiler
+/// The wire event name a `CustomElement.node` up-event posts under. A fixed compiler
 /// constant, never user-derived; the client posts the encoded `up` value as
 /// `args[0]` under this name through `/_ipe/event`, the same path a click uses.
 pub const WIDGET_UP_EVENT: &str = "ipe-widget";
@@ -79,7 +79,7 @@ pub const WIDGET_UP_CUSTOM_EVENT: &str = "ipe-widget-up";
 /// ordinary element for a widget, nor miss a real one.
 pub const CUSTOM_ELEMENT_TAG_PREFIX: &str = "ipe-ce-";
 
-/// `Ui.widget ce state on_up` — render the widget node.
+/// `CustomElement.node ce state on_up` — render the widget node.
 ///
 /// Emits `<ipe-ce-… state="{escaped json}" …>` (an empty-child `TaggedNode`):
 ///
@@ -138,7 +138,7 @@ where
 
 /// Non-`json` builds have no seal-codec substrate, so the widget seam has no
 /// transport. The node degrades to an empty-child tagged element with no state
-/// attribute and no up-handler — inert, never a wrong render. A `Ui.widget`
+/// attribute and no up-handler — inert, never a wrong render. A `CustomElement.node`
 /// program is a Web-shape program (`web` implies `json`), so this fallback is
 /// not reached by a real widget build; it exists to keep the runtime library
 /// buildable under every feature set (the `symbol_resolution` tripwire walks
@@ -183,7 +183,7 @@ mod tests {
         let el: Element<Msg> = ui_widget_(ce, hostile, |UpEvent::Changed(s)| Msg::Edited(s));
 
         let Element::TaggedNode(tag, _desc, attrs, kids) = el else {
-            panic!("Ui.widget must render a TaggedNode");
+            panic!("CustomElement.node must render a TaggedNode");
         };
         assert_eq!(tag, "ipe-ce-cafef00d");
         assert!(kids.is_empty(), "the widget node has no children in WP4");

@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use e2e_support::child_shared_target_from_env;
 use ipe_backend::EmittedProject;
 use ipe_diagnostics::{DResult, Diagnostic};
 
@@ -90,13 +91,41 @@ pub fn vendor_and_run(
         std::fs::write(&path, contents).map_err(|e| io_bug(&path, &e))?;
     }
 
+    // Forward the warm shared target when CI exports `IPE_ORACLE_SHARED_TARGET`,
+    // else fall back to an isolated per-slot target so a bare local run stays
+    // hermetic. The shared target lets heavy dep crates (tokio, axum, runtime)
+    // reuse already-compiled artifacts rather than cold-building per test.
+    let shared = child_shared_target_from_env();
+    let target_dir = shared
+        .as_deref()
+        .map_or_else(|| out.join("target"), PathBuf::from);
     let status = Command::new("cargo")
         .arg(subcmd)
         .current_dir(&out)
-        .env("CARGO_TARGET_DIR", out.join("target"))
+        .env("CARGO_TARGET_DIR", &target_dir)
         .status();
-    let _ = std::fs::remove_dir_all(out.join("target"));
+    // Only prune an isolated per-slot target; the shared warm target is owned
+    // by the harness and must not be removed here.
+    if shared.is_none() {
+        let _ = std::fs::remove_dir_all(&target_dir);
+    }
     Ok(status)
+}
+
+/// Resolve the `CARGO_TARGET_DIR` for a hand-rolled emitted-crate build.
+///
+/// When CI exports `IPE_ORACLE_SHARED_TARGET` (an absolute path), returns that
+/// path so the emitted crate's deps link against the warm shared tree rather than
+/// cold-building. Falls back to an ambient `CARGO_TARGET_DIR` a local lane set,
+/// then to `out_dir.join("target")` for a bare local run (hermetic, isolated).
+///
+/// Callers that prune the target after the build must check whether the returned
+/// path equals `out_dir.join("target")` before removing it — the shared warm
+/// target must never be pruned here.
+#[must_use]
+#[allow(dead_code)]
+pub fn emitted_target_dir(out_dir: &Path) -> PathBuf {
+    child_shared_target_from_env().map_or_else(|| out_dir.join("target"), PathBuf::from)
 }
 
 /// Wrap a filesystem error as a `CompilerBug` diagnostic.

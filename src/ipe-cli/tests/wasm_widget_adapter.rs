@@ -1,4 +1,4 @@
-//! The browser-WASM `Ui.widget` adapter: down-state as a decoded PROPERTY, up
+//! The browser-WASM `CustomElement.node` adapter: down-state as a decoded PROPERTY, up
 //! events as a typed `CustomEvent`, over the ONE shared glue and ONE seal codec.
 //!
 //! These are COMPILE-ONLY (they run the `ipe` pipeline + write the project for
@@ -24,7 +24,7 @@ use ipe::BuildOptions;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// A `Web.app` whose view mounts one `Ui.widget`. Compiled for `--target wasm`,
+/// A `Web.app` whose view mounts one `CustomElement.node`. Compiled for `--target wasm`,
 /// the down/up seam takes the wasm-client adapter (property / `CustomEvent`).
 const WIDGET_APP: &str = r#"module Main exposing (main)
 

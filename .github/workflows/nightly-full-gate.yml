@@ -2,9 +2,9 @@ name: nightly-full-gate
 
 # The single scheduled entry point for the nightly HEAVY sweep. It fires the
 # "Build & test" workflow (ci.yml) against development HEAD via workflow_dispatch;
-# ci.yml's heavy jobs (the full 8-shard e2e, seal-slice, seal-modset, miri, the
-# runtime full-feature builds, the explain/doc gates, browser-e2e, the Tier-2
-# jails) all key on `github.event_name != 'pull_request'`, so a dispatch runs the
+# ci.yml's heavy jobs (the full 8-shard e2e, seal-slice, seal-modset, the
+# runtime full-feature builds, the explain/doc gates, browser-e2e, the Linux
+# Tier-2 jails) all key on `github.event_name != 'pull_request'`, so a dispatch runs the
 # whole heavy gate on the branch the FF promotion advances from. Keeping the cron
 # HERE (not on ci.yml) gives the rerun-failed-once orchestration one named
 # workflow to watch, and keeps the nightly trigger in one obvious place.

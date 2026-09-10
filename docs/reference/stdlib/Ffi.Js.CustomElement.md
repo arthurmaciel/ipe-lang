@@ -30,8 +30,8 @@ Two members, one per role:
   * `node handle state onEvent` — place a typed custom-element widget in the
     view. `handle` is a `CustomElement down up` produced by `fromFile`; `state`
     is the sealed down-state; `onEvent` maps a decoded typed up-event into the
-    app's `msg`. Routed through the `Kernel.kernel "Ui_widget"` alias to the
-    registered `UiWidget` kernel.
+    app's `msg`. Routed through the `Kernel.kernel "CustomElement_node"` alias
+    to the registered custom-element view-node kernel.
 
 The typed transport is shipped: a binding annotated `CustomElement down up`
 lowers to the opaque widget handle. Reachable use discloses the `js-port`

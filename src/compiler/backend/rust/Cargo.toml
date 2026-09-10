@@ -33,6 +33,10 @@ ipe-runtime-rust = { path = "../../../runtime/rust", features = ["web"] }
 # codec agree byte-for-byte, and derives serde on a small fixture Model.
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+# Shared target resolution for SEAL e2e tests: `child_shared_target_from_env`
+# translates `IPE_ORACLE_SHARED_TARGET` → child `CARGO_TARGET_DIR` so the emitted
+# crate links against the warm shared dependency tree rather than cold-building.
+e2e-support = { path = "../../../../tools/e2e-support" }
 
 [lints]
 workspace = true

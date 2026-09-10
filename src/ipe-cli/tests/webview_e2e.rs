@@ -89,7 +89,7 @@ main =
         }
 "#;
 
-/// A minimal `Web.app` mounting a `Ui.widget` whose DOWN state is a user record
+/// A minimal `Web.app` mounting a `CustomElement.node` whose DOWN state is a user record
 /// (`EditorState`) and whose UP event is a user ADT (`EditorEvent`).
 ///
 /// The serde-derive gate on a widget's seal types keys on the browser SHAPE
@@ -258,7 +258,7 @@ fn webview_counter_build_only() -> Result<(), BoxError> {
     }
 }
 
-/// SEAL golden: a `Ui.widget` whose down is a user record and up is a user ADT
+/// SEAL golden: a `CustomElement.node` whose down is a user record and up is a user ADT
 /// must ipe-accept AND cargo-build in a webview-hosted `Web.app`.
 ///
 /// A serde-legal widget seal type derives serde in a webview build exactly as in

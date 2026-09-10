@@ -175,7 +175,7 @@ pub fn seal_decode<T>(
 }
 
 /// Decode a raw JS-boundary input into a serde-derived seal type, totally and
-/// fail-closed — the entry the generated `Ui.widget` up-decoder composes.
+/// fail-closed — the entry the generated `CustomElement.node` up-decoder composes.
 ///
 /// A seal-legal type in a Web program is emitted with
 /// `#[derive(serde::Serialize, serde::Deserialize)]` (the same derive the

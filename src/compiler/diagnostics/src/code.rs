@@ -467,10 +467,10 @@ code! {
     /// `.field` accessor and have no runtime function, so they must be applied
     /// directly with their accessor and value
     IPE_L0146 = "IPE-L0146", "a Store accessor query/spec builder was applied point-free", "IPE-L0146";
-    /// `Ui.widget` (a server-driven custom element) is used outside a Web/WebView
-    /// shape — its up-event handler rides the seal codec, present only in a
-    /// browser build, so it has no transport under `Terminal` / `Program`
-    IPE_L0147 = "IPE-L0147", "`Ui.widget` is browser-only and cannot be used outside a Web/WebView shape", "IPE-L0147";
+    /// `CustomElement.node` (a server-driven custom element) is used outside a
+    /// Web/WebView shape — its up-event handler rides the seal codec, present
+    /// only in a browser build, so it has no transport under `Terminal` / `Program`
+    IPE_L0147 = "IPE-L0147", "`CustomElement.node` is browser-only and cannot be used outside a Web/WebView shape", "IPE-L0147";
     /// a `Js.send`/`Js.subscribe` port value crossed the Ipê↔JS seam with a
     /// non-seal-legal type (a `Secret`/reserved-sink, an untyped `Value`, a
     /// function, or another non-plain value)

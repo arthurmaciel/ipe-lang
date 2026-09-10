@@ -164,7 +164,7 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "refusal-tested",
         "IPE-L0147",
-        "Ui.widget browser-only gate not yet reached by any constant assertion or wire literal",
+        "CustomElement.node browser-only gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",

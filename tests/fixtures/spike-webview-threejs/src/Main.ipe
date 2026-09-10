@@ -25,6 +25,7 @@ import Ipe.App.Tea.Web.Cmd as Cmd
 import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
+import Ipe.Result as Result exposing (Result(..))
 
 -- ═══════════════════════════════════════════════════════════════════
 -- TEA shape — minimal: nothing in Model the WebGL scene cares about,
@@ -63,6 +64,32 @@ subscriptions _ =
 -- because the Three.js scene paints into a plain <div id="canvas-wrap">
 -- that the loaded JS bundle takes over — no Ipe.Ui layout machinery
 -- needed.
+-- | A same-origin relative `href` for a static asset. The path is a known-safe
+-- literal, so the fail-closed `linkTarget` seal always succeeds; an `Err`
+-- (unreachable here) degrades to `noAttr` rather than emitting a broken href.
+hrefRel : String -> Attr.Attribute msg
+hrefRel path =
+    case Attr.linkTarget path of
+        Ok target ->
+            Attr.href target
+
+        Err _ ->
+            Attr.noAttr
+
+
+-- | A same-origin relative `src` for a static asset, fail-closed through the
+-- media `imageSrc` seal (a `src` is a fetch sink, narrowed to `http`/`https` or
+-- a same-origin path — distinct from the navigation `link` seal `hrefRel` uses).
+srcRel : String -> Attr.Attribute msg
+srcRel path =
+    case Attr.imageSrc path of
+        Ok source ->
+            Attr.src source
+
+        Err _ ->
+            Attr.noAttr
+
+
 view : Model -> any
 view _ =
     Html.node
@@ -71,7 +98,7 @@ view _ =
         [ Html.node
               "link"
               [ Attr.attribute "rel" "stylesheet"
-              , Attr.href "/static/style.css"
+              , hrefRel "/static/style.css"
               ]
               []
         , Html.node
@@ -119,8 +146,8 @@ view _ =
                     [Html.text "toggle wireframe"]
               ]
         , Html.node "div" [Attr.id "canvas-wrap"] []
-        , Html.script [Attr.src "/static/three.min.js"] []
-        , Html.script [Attr.src "/static/scene.js"] []
+        , Html.script [srcRel "/static/three.min.js"] []
+        , Html.script [srcRel "/static/scene.js"] []
         ]
 
 
