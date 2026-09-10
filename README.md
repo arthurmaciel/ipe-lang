@@ -70,8 +70,7 @@ module Main exposing (main)
 import Ipe.Io as Io
 
 main =
-    do
-      Io.println "Hello from Ipê!"
+    Io.println "Hello from Ipê!"
 ```
 
 ```sh
@@ -91,7 +90,7 @@ in the grammar. Run `ipe dev` (or any group with no verb) to see its verbs.
 Prefer building from source? 
 
 ```sh
-git clone https://github.com/arthurmaciel/ipe-lang
+git clone --branch v<VERSION_NUMBER> --single-branch https://github.com/arthurmaciel/ipe-lang
 cd ipe-lang
 cargo build --release
 
