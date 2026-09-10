@@ -28,14 +28,14 @@ verdict r =
             "ERR"
 
 
--- | Drive each surface's ONE dispatching seal on a raw string. `Attr.link`
+-- | Drive each surface's ONE dispatching seal on a raw string. `Attr.linkTarget`
 -- (href) and `Ui.linkTarget` narrow through the anchor allowlist
 -- (http/https/mailto/tel); `Attr.imageSrc` (the media `src` fetch sink) narrows
 -- through its own tighter allowlist (http/https only). Each reads the raw string
 -- absolute-then-scheme-narrowed, else same-origin relative. The `verdict` fold
 -- only reads the `Ok`/`Err` tag.
 hrefOf raw =
-    Attr.link raw
+    Attr.linkTarget raw
 
 
 linkOf raw =

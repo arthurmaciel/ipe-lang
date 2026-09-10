@@ -14,7 +14,7 @@ import Ipe.Task as Task exposing (Task)
 -- emits, builds, and runs. A `MediaTarget` embeds `Url` / `Url.Relative`, which
 -- forces the `url` runtime feature automatically through the type-driven SSOT.
 -- A media `src` is a FETCH sink narrowed to `http`/`https` or a same-origin
--- path — distinct from a navigation `href` (`Attr.link`).
+-- path — distinct from a navigation `href` (`Attr.linkTarget`).
 --
 -- The literals are sealed ONCE at the top (parse-at-boundary); a rejected src
 -- fails LOUD via `Task.fail`, never a silently dropped attribute.

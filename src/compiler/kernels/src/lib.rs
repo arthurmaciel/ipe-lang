@@ -13850,7 +13850,7 @@ mod tests {
             StdlibKernel::UrlFromString,
             StdlibKernel::UrlToString,
             StdlibKernel::UrlScheme,
-            // `Attributes.link` / `href` parse a relative reference client-side
+            // `Attributes.linkTarget` / `href` parse a relative reference client-side
             // (the same `url` crate wasm build) to render a Web-shape `href`.
             StdlibKernel::UrlRelativeParse,
             StdlibKernel::UrlRelativePath,

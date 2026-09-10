@@ -10,7 +10,7 @@ module Ipe.Html.Attributes exposing
     ( Attribute
     , attribute, boolAttribute, noAttr
     , class, id, href, src, alt, value, name, placeholder
-    , LinkTarget, link
+    , LinkTarget, linkTarget
     , MediaTarget, imageSrc
     , type_, for_, style, title, autocomplete
     , checked, disabled, readonly, required, multiple, selected, autofocus
@@ -58,7 +58,7 @@ id = attribute "id"
 
 -- | The schemes a `link` may target: `http`/`https` for web plus the two safe
 -- non-web anchor schemes `mailto`/`tel`. A `javascript:` / `data:` / `file:`
--- target is rejected at `link` — HTML-escaping neutralises a quote breakout but
+-- target is rejected at `linkTarget` — HTML-escaping neutralises a quote breakout but
 -- NOT a `javascript:` scheme, so this narrowing is the boundary that keeps a
 -- script-scheme out of the `href` / `src` sink.
 linkSchemes : List String
@@ -68,7 +68,7 @@ linkSchemes =
 
 -- | An opaque, safe link target — EITHER a scheme-narrowed absolute `Url`
 -- (`http`/`https`/`mailto`/`tel`) OR a validated same-origin relative reference
--- (`/static/x`). The ONE constructor `link` fails closed, so a value of this
+-- (`/static/x`). The ONE constructor `linkTarget` fails closed, so a value of this
 -- type is always safe to place in an `href` / `src` — the proof both sinks
 -- consume TOTALLY. A raw `String` or an unvetted URL cannot reach it.
 type LinkTarget
@@ -76,14 +76,14 @@ type LinkTarget
     | RelativeTarget Relative
 
 
--- | `link raw` — the ONE parse-don't-validate seal for a link target, dispatched
+-- | `linkTarget raw` — the ONE parse-don't-validate seal for a link target, dispatched
 -- exactly as a browser reads an `href`: an absolute URL if `raw` parses as one
 -- (then scheme-narrowed to `http`/`https`/`mailto`/`tel`), otherwise a validated
 -- same-origin relative reference. Fail-closed: a `javascript:` / `data:` /
 -- `file:` scheme, a protocol-relative (`//host`), or a cross-origin string is a
 -- typed `Err`, never rendered into an `href` / `src`.
-link : String -> Result Error LinkTarget
-link raw =
+linkTarget : String -> Result Error LinkTarget
+linkTarget raw =
     case Url.fromString raw of
         Ok u ->
             Result.map Absolute (Url.checkScheme linkSchemes u)
@@ -105,7 +105,7 @@ renderTarget target =
 
 
 -- | `href target` — the `href` attribute over a safe `LinkTarget` (build one
--- with `link`). A bare `String` or an unvetted URL is a type error, so a
+-- with `linkTarget`). A bare `String` or an unvetted URL is a type error, so a
 -- `javascript:` href cannot be smuggled in.
 href : LinkTarget -> Attribute msg
 href target =

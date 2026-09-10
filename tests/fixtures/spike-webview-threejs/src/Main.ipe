@@ -65,11 +65,11 @@ subscriptions _ =
 -- that the loaded JS bundle takes over — no Ipe.Ui layout machinery
 -- needed.
 -- | A same-origin relative `href` for a static asset. The path is a known-safe
--- literal, so the fail-closed `link` seal always succeeds; an `Err`
+-- literal, so the fail-closed `linkTarget` seal always succeeds; an `Err`
 -- (unreachable here) degrades to `noAttr` rather than emitting a broken href.
 hrefRel : String -> Attr.Attribute msg
 hrefRel path =
-    case Attr.link path of
+    case Attr.linkTarget path of
         Ok target ->
             Attr.href target
 
