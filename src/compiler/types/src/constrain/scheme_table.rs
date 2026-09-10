@@ -179,10 +179,16 @@ impl Builder<'_> {
             BuiltinTag::CliLines => self.builtins.cli_lines,
             BuiltinTag::CliAttr => self.builtins.cli_attr,
             BuiltinTag::TermColor => self.builtins.term_color,
+            // The unified `Color` and the legacy `Ui.Color` share the interned
+            // `"Color"` name; they collapse into one carrier as the migration removes
+            // `UiColor`.
+            BuiltinTag::Color | BuiltinTag::UiColor => self.builtins.color,
+            BuiltinTag::ColorError => self.builtins.color_error,
+            BuiltinTag::TermProfile => self.builtins.term_profile,
+            BuiltinTag::AnsiColor => self.builtins.ansi_color,
             BuiltinTag::CustomElement => self.builtins.custom_element,
             BuiltinTag::Html => self.builtins.html_con,
             BuiltinTag::UiLength => self.builtins.length,
-            BuiltinTag::UiColor => self.builtins.color,
             BuiltinTag::UiDescription => self.builtins.description,
             BuiltinTag::UiPseudoClass => self.builtins.pseudo_class,
             BuiltinTag::InputLabel => self.builtins.input_label_con,

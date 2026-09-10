@@ -240,6 +240,15 @@ pub struct Builtins {
     /// `"TermColor"` (spelled `Terminal.Color`) — the closed terminal colour
     /// palette. The argument type of the Tui and Cli `color` / `bg` builders.
     pub term_color: Symbol,
+    /// `"ColorError"` — the typed parse-error channel of the string-input colour
+    /// constructors (`fromHex` / `fromName`). Backs `ipe_runtime::color::ColorError`.
+    pub color_error: Symbol,
+    /// `"TermProfile"` — the terminal capability profile `Color.toAnsi` targets.
+    /// Backs `ipe_runtime::color::TermProfile`.
+    pub term_profile: Symbol,
+    /// `"AnsiColor"` — the down-sampled terminal colour `Color.toAnsi` yields.
+    /// Backs `ipe_runtime::color::AnsiColor`.
+    pub ansi_color: Symbol,
     /// `"CustomElement"` — the JS-widget boundary type constructor
     /// `CustomElement down up`. Empty-module opaque handle; consumed only by the
     /// `CustomElement.node` kernel scheme.
@@ -816,6 +825,9 @@ impl Builtins {
             cli_lines: interner.intern("Lines")?,
             cli_attr: interner.intern("CliAttr")?,
             term_color: interner.intern("TermColor")?,
+            color_error: interner.intern("ColorError")?,
+            term_profile: interner.intern("TermProfile")?,
+            ansi_color: interner.intern("AnsiColor")?,
             custom_element: interner.intern("CustomElement")?,
             html_con: interner.intern("Html")?,
             length: interner.intern("Length")?,

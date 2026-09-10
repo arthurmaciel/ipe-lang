@@ -418,6 +418,19 @@ pub enum BuiltinTag {
     /// sixteen named ANSI colours plus `default`, plus a truecolour path. The
     /// argument type of the Tui and Cli `color` / `bg` builders.
     TermColor,
+    /// `Color` — the unified opaque colour value type, `ipe_runtime::color::Color`.
+    /// The single carrier shared by every surface (`Ui`/`Html`/`Css`/`Tui`/`Cli`);
+    /// produced by the `Ipe.Color` constructor/manipulation kernels.
+    Color,
+    /// `ColorError` — the typed parse-error channel of the string-input colour
+    /// constructors (`fromHex` / `fromName`), `ipe_runtime::color::ColorError`.
+    ColorError,
+    /// `TermProfile` — the terminal capability profile `Color.toAnsi` targets,
+    /// `ipe_runtime::color::TermProfile`. Nullary.
+    TermProfile,
+    /// `AnsiColor` — the down-sampled terminal colour `Color.toAnsi` yields,
+    /// `ipe_runtime::color::AnsiColor`. Nullary.
+    AnsiColor,
     /// `CustomElement` — the JS-widget boundary constructor `CustomElement down up`,
     /// applied to its sealed down-state and up-event types. Empty-module
     /// (unqualified); an opaque handle produced only by the reserved `CustomElement.fromFile`

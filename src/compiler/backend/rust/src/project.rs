@@ -224,6 +224,7 @@ pub mod web {
 pub mod basics;
 pub mod bitwise;
 pub mod bytes;
+pub mod color;
 pub mod char_kernel;
 pub mod char_category;
 pub mod color;
@@ -274,6 +275,7 @@ pub mod ws_client;
 pub use basics::*;
 pub use bitwise::*;
 pub use bytes::*;
+pub use color::*;
 pub use char_kernel::*;
 pub use char_category::*;
 pub use color::*;
