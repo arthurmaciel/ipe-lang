@@ -20,6 +20,26 @@ use std::path::Path;
 
 use crate::coverage::contract::StdlibSymbol;
 
+/// The browser web axis a symbol's module discloses, when it lives under a
+/// reserved `Ipe.Browser.<Api>` module — the structural property that makes a
+/// standalone build+run inapplicable to it.
+///
+/// A symbol homed under `Ipe.Browser.*` binds client-side browser JavaScript
+/// (a `js-port:<axis>` capability): its emitted crate serves JS that runs in a
+/// live browser page, and merely referencing it discloses the axis to the
+/// app-boundary consent gate (`IPE-S0002`), which a bare single-file probe with
+/// no `package.ipe` grant cannot satisfy. Even granted, the axis has no server
+/// process to exercise — the effect lives in the page, not in the emitted binary —
+/// so a standalone build+run cannot RUN it. The web axis is read from the module
+/// path through the compiler-owned reserved-namespace SSOT
+/// ([`ipe_kernels::WebCapability::for_browser_module`]), never a hand-kept symbol
+/// list, so it derives from a real structural property of the symbol.
+#[must_use]
+pub fn browser_web_axis(sym: &StdlibSymbol) -> Option<ipe_kernels::WebCapability> {
+    let segments: Vec<&str> = sym.module.iter().map(String::as_str).collect();
+    ipe_kernels::WebCapability::for_browser_module(&segments)
+}
+
 /// Why a probe could not be formed for a symbol — distinct from a stage failure,
 /// so a symbol the generator cannot express is reported as inapplicable rather
 /// than as a false hole.
@@ -85,6 +105,46 @@ pub fn is_probe_form_limitation(outcome: &StageOutcome) -> bool {
     )
 }
 
+/// The name-resolution rejection code, when a probe fails to even NAME-RESOLVE
+/// because the point-free reference form cannot address the symbol — distinct
+/// from a lowering gap.
+///
+/// A value-reference probe imports the symbol's module qualified and binds it
+/// point-free. For a class of symbols that reference form cannot be formed at the
+/// name-resolution layer at all:
+///
+/// * [`IPE_N0020`] / [`IPE_N0004`] — the symbol's module has no standalone
+///   importable home on disk (a shape-scoped module reached only through an app
+///   shape, e.g. `Ipe.Cmd` / `Ipe.Sub`), so the generated `import` finds nothing.
+/// * [`IPE_N0023`] — the module path does not match the probe module name.
+///
+/// In each the rejection is a property of the point-free probe FORM for that
+/// symbol — the reference cannot be addressed — not a build+run gap, so the
+/// build+run column reports the symbol inapplicable rather than a false hole. This
+/// is the name-resolution sibling of [`is_probe_form_limitation`] (which classifies
+/// the lowering-layer point-free limitations), and it carries the offending code so
+/// the verdict names exactly why the probe form does not apply.
+///
+/// [`IPE_N0027`] (a qualified-import qualifier collision) and [`IPE_N0005`] (the
+/// module has no member of that name) are deliberately NOT in this set. The probe
+/// imports every module under a fixed reserved alias ([`PROBE_ALIAS`]) that cannot
+/// collide with any real module qualifier, so a genuine N0027 no longer arises from
+/// the probe form; and every kernel's canonical surface is backed by a compiled-source
+/// member, so an N0005 here signals a real phantom-surface defect (the class fixed by
+/// homing the custom-element node at `CustomElement.node`), not a probe-form
+/// limitation. Whitelisting either would mask a real resolution defect rather than
+/// name a probe-form limitation.
+#[must_use]
+pub fn probe_form_unaddressable_code(outcome: &StageOutcome) -> Option<ipe_diagnostics::Code> {
+    use ipe_diagnostics::{IPE_N0004, IPE_N0020, IPE_N0023};
+    match outcome {
+        StageOutcome::Failed {
+            code: Some(code), ..
+        } if *code == IPE_N0020 || *code == IPE_N0004 || *code == IPE_N0023 => Some(*code),
+        _ => None,
+    }
+}
+
 /// Whether a lowering rejection is an internal compiler error ([`IPE_I0001`]).
 ///
 /// An ICE is a compiler bug the probe surfaced, distinct both from a clean stage
@@ -100,18 +160,40 @@ pub fn is_internal_compiler_error(outcome: &StageOutcome) -> bool {
     )
 }
 
-/// The short module import header for a symbol: `import Ipe.List as List`.
+/// The fixed reserved import alias every probe qualifies its symbol under.
 ///
-/// A symbol is referenced qualified (`List.map`) under this import, so the probe
-/// resolves the exact surface member without an `exposing (..)` widening that
-/// could mask a resolution gap behind a re-export.
-fn import_header(sym: &StdlibSymbol) -> Option<(String, String)> {
+/// The probe references the symbol qualified (`Probe_q.map`) so it resolves the
+/// exact surface member without an `exposing (..)` widening that could mask a
+/// resolution gap behind a re-export. The alias must be a single fixed token that
+/// cannot collide with any real module qualifier: deriving it from the module's
+/// last dotted segment (as an earlier form did) let a deeply-nested module's short
+/// qualifier collide with a different real in-scope module and self-report a
+/// spurious [`IPE_N0027`] (e.g. `Ipe.Http.Server` → `Server`), which then masked a
+/// genuinely build+runnable symbol as inapplicable. A module qualifier must be
+/// capitalised (the resolver rejects a lowercase alias), and no real stdlib module
+/// leaf is spelled `Probe_q`, so this token addresses every module collision-free.
+const PROBE_ALIAS: &str = "Probe_q";
+
+/// A probe's qualified import: the module's dotted path and the fixed reserved
+/// alias it is bound under. A typed pair (rather than a bare `(String, &str)`)
+/// names each field at every call site, so a probe cannot transpose the dotted
+/// path and the alias.
+struct ProbeImport {
+    /// The symbol's module as a dotted path, e.g. `Ipe.Http.Server`.
+    dotted: String,
+}
+
+/// The qualified import for a symbol, or `None` when the symbol has no module
+/// path to import from.
+///
+/// The alias is always the fixed collision-proof [`PROBE_ALIAS`]; only the dotted
+/// module path varies per symbol.
+fn import_header(sym: &StdlibSymbol) -> Option<ProbeImport> {
     let dotted = sym.module.join(".");
     if dotted.is_empty() {
         return None;
     }
-    let short = dotted.split('.').next_back().unwrap_or(&dotted).to_owned();
-    Some((dotted, short))
+    Some(ProbeImport { dotted })
 }
 
 /// Generate a minimal module that binds the symbol as a first-class value,
@@ -129,13 +211,13 @@ pub fn reference_program(sym: &StdlibSymbol) -> Result<String, ProbeUnavailable>
     if sym.kind != SymbolKind::Value {
         return Err(ProbeUnavailable::NotAValue);
     }
-    let Some((dotted, short)) = import_header(sym) else {
+    let Some(ProbeImport { dotted }) = import_header(sym) else {
         return Err(ProbeUnavailable::Unaddressable);
     };
     let mut out = String::from("module Main exposing (main)\n\n");
-    let _ = writeln!(out, "import {dotted} as {short}");
+    let _ = writeln!(out, "import {dotted} as {PROBE_ALIAS}");
     out.push_str("import Ipe.Io as Io\n\n");
-    let _ = writeln!(out, "probe = {short}.{name}", name = sym.name);
+    let _ = writeln!(out, "probe = {PROBE_ALIAS}.{name}", name = sym.name);
     out.push_str("\nmain : Task Error ()\n");
     out.push_str("main = Io.println \"\"\n");
     Ok(out)
@@ -160,16 +242,16 @@ pub fn nested_program(sym: &StdlibSymbol) -> Result<String, ProbeUnavailable> {
     if sym.kind != SymbolKind::Value {
         return Err(ProbeUnavailable::NotAValue);
     }
-    let Some((dotted, short)) = import_header(sym) else {
+    let Some(ProbeImport { dotted }) = import_header(sym) else {
         return Err(ProbeUnavailable::Unaddressable);
     };
     let mut out = String::from("module Main exposing (main)\n\n");
-    let _ = writeln!(out, "import {dotted} as {short}");
+    let _ = writeln!(out, "import {dotted} as {PROBE_ALIAS}");
     out.push_str("import Ipe.List as List\n");
     out.push_str("import Ipe.Io as Io\n\n");
     let _ = writeln!(
         out,
-        "probe = List.map (\\_ -> {short}.{name}) []",
+        "probe = List.map (\\_ -> {PROBE_ALIAS}.{name}) []",
         name = sym.name
     );
     out.push_str("\nmain : Task Error ()\n");

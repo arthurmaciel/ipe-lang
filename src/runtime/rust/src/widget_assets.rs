@@ -1,6 +1,6 @@
-//! `Ui.widget` custom-element glue generation + SRI-pinned asset addressing.
+//! `CustomElement.node` custom-element glue generation + SRI-pinned asset addressing.
 //!
-//! One glue generator, two transports (§ [`WidgetTransport`]). A `Ui.widget` node
+//! One glue generator, two transports (§ [`WidgetTransport`]). A `CustomElement.node` node
 //! renders as a `<ipe-ce-<hex>>` element carrying a `state` value and an
 //! `OnWidget` up-handler in both targets; what varies is only the seam wiring the
 //! generated glue applies:
@@ -115,7 +115,7 @@ fn content_hashes(content: &str) -> (String, String) {
 
 /// The process-global widget registry, populated ONCE at process start by the
 /// generated `main` (before the server binds) via [`register`]. Empty for a
-/// program that uses no `Ui.widget`, in which case every helper below is inert
+/// program that uses no `CustomElement.node`, in which case every helper below is inert
 /// and no widget route is mounted.
 ///
 /// A `OnceLock` (not a mutable global) is used deliberately: the set of widgets

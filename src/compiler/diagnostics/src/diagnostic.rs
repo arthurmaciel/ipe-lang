@@ -1376,7 +1376,7 @@ pub enum LowerError {
     /// so a `Cells` grid has no string denotation. Rejected at ipe time.
     /// [IPE-L0153]
     UiCellsInCliShape(AppShape),
-    /// `Ui.widget` (a server-driven custom element) appears outside a browser
+    /// `CustomElement.node` (a server-driven custom element) appears outside a browser
     /// shape. Its up-event handler is carried over the seal codec, which is
     /// present only when the `json` runtime feature is on — and only the browser
     /// shape (`Web.app`) forces it. Under `Terminal` / `Program`
@@ -2476,7 +2476,7 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
                 .into(),
         )],
         LowerError::UiWidgetInNonWebShape => vec![HelpLine::Note(
-            "`Ui.widget` mounts a server-driven custom element whose up-events ride the \
+            "`CustomElement.node` mounts a server-driven custom element whose up-events ride the \
              seal codec, which exists only in a browser build. Use it only under \
              `Web.app`. In a `Terminal` app, build the view from native \
              `Ipe.Ui` elements (`Ui.text`, `Ui.column`, inputs) instead."

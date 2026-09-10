@@ -394,7 +394,7 @@ where
     attach_delegated_listeners(&body, &app)?;
     attach_widget_up_listener(&body, &app)?;
     // The first paint went through `set_inner_html`, not the attribute-patch
-    // path, so deliver each `Ui.widget`'s decoded down-state PROPERTY once here.
+    // path, so deliver each `CustomElement.node`'s decoded down-state PROPERTY once here.
     widget::sync_widget_properties(&document, &app.tree.borrow());
     // Wire the `Ipe.Ffi.Js` port inbound seam before the first `resync` spawns any
     // `Js.subscribe` drain, so no early page-JS frame is lost.
@@ -749,7 +749,7 @@ where
     Ok(())
 }
 
-/// Attach the single delegated `Ui.widget` up-event listener on `<body>`.
+/// Attach the single delegated `CustomElement.node` up-event listener on `<body>`.
 ///
 /// The wasm-client widget glue dispatches a bubbling `CustomEvent` named
 /// [`widget::up_event_name`] carrying the encoded `up` value in `detail`. This
@@ -1173,7 +1173,7 @@ fn apply_patches(patches: &[Patch]) {
             el.set_inner_html(html);
         }
         for (k, v) in &p.attrs {
-            // `Ui.widget` down-state: on a compiler-generated `ipe-ce-*` node the
+            // `CustomElement.node` down-state: on a compiler-generated `ipe-ce-*` node the
             // `state` value crosses as a DECODED PROPERTY (the wasm-client
             // adapter), never the escaped attribute the server path writes. The
             // glue's `set state(v)` setter forwards the decoded object to the

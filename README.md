@@ -168,7 +168,7 @@ a new effectful kernel gains the matching capability automatically.
 `native-ffi`
 appears whenever the program crosses into `Rust.` code, which is opaque to the
 inference and the one place effects can escape the model. `custom-element` appears
-whenever the program ships a browser widget (`Ui.widget`): the served JavaScript is
+whenever the program ships a browser widget (`CustomElement.node`): the served JavaScript is
 SRI-pinned and CSP-constrained, but the sandbox protects the server, not
 third-party browser JS — a widget is declared trust in the package author.
 

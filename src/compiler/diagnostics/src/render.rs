@@ -694,7 +694,7 @@ fn lower_prose(msg: &LowerError) -> String {
                 .to_string()
         }
         LowerError::UiWidgetInNonWebShape => {
-            "`Ui.widget` mounts a browser custom element, so it has no meaning in a terminal app."
+            "`CustomElement.node` mounts a browser custom element, so it has no meaning in a terminal app."
                 .to_string()
         }
         LowerError::LawlessEffectDiscard => {
@@ -1810,7 +1810,7 @@ fn lower_label(msg: &LowerError) -> String {
                 .to_string()
         }
         LowerError::UiWidgetInNonWebShape => {
-            "`Ui.widget` is browser-only; not available outside a Web shape — its \
+            "`CustomElement.node` is browser-only; not available outside a Web shape — its \
              up-event handler is carried over the seal codec, which exists only in a \
              browser build. Use it only under `Web.app`"
                 .to_string()

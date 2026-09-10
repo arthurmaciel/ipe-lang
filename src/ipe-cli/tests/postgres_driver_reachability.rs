@@ -132,9 +132,17 @@ fn postgres_driver_project_cargo_builds() {
         built.err()
     );
 
-    let target = std::env::temp_dir()
-        .join("r_class7")
-        .join("postgres_driver_cargo_build");
+    // Forward the warm shared target (IPE_ORACLE_SHARED_TARGET in CI, else an
+    // ambient CARGO_TARGET_DIR a local lane set); fall back to an isolated
+    // scratch dir so a bare local run stays hermetic.
+    let target = e2e_support::child_shared_target_from_env().map_or_else(
+        || {
+            std::env::temp_dir()
+                .join("r_class7")
+                .join("postgres_driver_cargo_build")
+        },
+        PathBuf::from,
+    );
     #[allow(clippy::expect_used)]
     let check_output = std::process::Command::new("cargo")
         .arg("check")

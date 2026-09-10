@@ -1,0 +1,14 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "nav-links"
+    , version = "0.1.0"
+    , capabilities =
+        { declares = []
+        , accepts = []
+        }
+    }

@@ -99,7 +99,7 @@ fn pinned_and_hashed_is_not_applicable_for_path_dep() {
         rust_dep: None,
     };
     assert!(
-        matches!(col.check(&path_item), Cell::NotApplicable),
+        matches!(col.check(&path_item), Cell::NotApplicable { .. }),
         "a path-escape dep has no lockfile pin — must be NotApplicable"
     );
 }
@@ -117,7 +117,7 @@ fn pinned_and_hashed_is_not_applicable_for_native_dep() {
         }),
     };
     assert!(
-        matches!(col.check(&native_item), Cell::NotApplicable),
+        matches!(col.check(&native_item), Cell::NotApplicable { .. }),
         "a native Rust dep is pinned by cargo — must be NotApplicable"
     );
 }
@@ -150,7 +150,7 @@ fn semver_satisfied_is_not_applicable_for_path_dep() {
         rust_dep: None,
     };
     assert!(
-        matches!(col.check(&path_item), Cell::NotApplicable),
+        matches!(col.check(&path_item), Cell::NotApplicable { .. }),
         "a path-escape dep has no version req — must be NotApplicable"
     );
 }
@@ -168,7 +168,7 @@ fn semver_satisfied_is_not_applicable_for_git_dep() {
         rust_dep: None,
     };
     assert!(
-        matches!(col.check(&git_item), Cell::NotApplicable),
+        matches!(col.check(&git_item), Cell::NotApplicable { .. }),
         "a git-escape dep has a rev pin, not a version req — must be NotApplicable"
     );
 }
@@ -186,7 +186,7 @@ fn semver_satisfied_is_not_applicable_for_native_dep() {
         }),
     };
     assert!(
-        matches!(col.check(&native_item), Cell::NotApplicable),
+        matches!(col.check(&native_item), Cell::NotApplicable { .. }),
         "a native dep's version req goes to cargo — must be NotApplicable"
     );
 }
@@ -203,7 +203,7 @@ fn capability_declared_is_not_applicable_for_ipe_dep() {
         rust_dep: None,
     };
     assert!(
-        matches!(col.check(&ipe_item), Cell::NotApplicable),
+        matches!(col.check(&ipe_item), Cell::NotApplicable { .. }),
         "capability is compiler-inferred for Ipê deps — must be NotApplicable"
     );
 }
@@ -239,7 +239,7 @@ fn provenance_scanned_is_not_applicable_for_path_dep() {
         rust_dep: None,
     };
     assert!(
-        matches!(col.check(&path_item), Cell::NotApplicable),
+        matches!(col.check(&path_item), Cell::NotApplicable { .. }),
         "a path-escape dep has no lockfile hash — must be NotApplicable"
     );
 }
@@ -257,7 +257,7 @@ fn provenance_scanned_is_not_applicable_for_native_dep() {
         }),
     };
     assert!(
-        matches!(col.check(&native_item), Cell::NotApplicable),
+        matches!(col.check(&native_item), Cell::NotApplicable { .. }),
         "a native dep's integrity is cargo's concern — must be NotApplicable"
     );
 }
@@ -274,7 +274,7 @@ fn provenance_scanned_is_not_applicable_when_dep_not_in_lockfile() {
         rust_dep: None,
     };
     assert!(
-        matches!(col.check(&http_item), Cell::NotApplicable),
+        matches!(col.check(&http_item), Cell::NotApplicable { .. }),
         "a dep absent from the lockfile has no hash to assert — must be NotApplicable"
     );
 }

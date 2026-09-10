@@ -2731,7 +2731,7 @@ pub fn emit_ui_plan(
         });
     }
 
-    // The inverse seal: `Ui.widget`'s up-event handler rides the seal codec,
+    // The inverse seal: `CustomElement.node`'s up-event handler rides the seal codec,
     // which lives only in a browser build (`web` / `webview` force the `json`
     // runtime feature — `Terminal` / `Program` never do). Emitting it in a
     // non-browser shape would produce an inert node (a widget with no transport)
@@ -3711,12 +3711,15 @@ pub fn emit_ui_plan(
             Ok(call)
         }
 
-        // `Ui.widget ce state on_up` — the server-driven custom-element node.
+        // `CustomElement.node ce state on_up` — the server-driven custom-element node.
         NativeUiEmit::Widget => {
             let [ce_expr, state_expr, handler_expr] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_ui_call::UiWidget",
-                    detail: format!("Ui.widget requires 3 arguments, got {}", args.len()),
+                    detail: format!(
+                        "CustomElement.node requires 3 arguments, got {}",
+                        args.len()
+                    ),
                 });
             };
             let ce_src = emit_expr_at(ctx, ce_expr, indent, child, generics)?;

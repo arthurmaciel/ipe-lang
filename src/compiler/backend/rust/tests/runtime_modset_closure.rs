@@ -1151,7 +1151,7 @@ fn wasm_vendored_modset_declares_app_config() {
 ///
 /// The structural `wasm_vendored_modset_is_closed` scanner excludes the
 /// `#[cfg(...)]`-gated import line, so a named witness pins the specific edge
-/// that the `Ui.widget` up-decode path relies on.
+/// that the `CustomElement.node` up-decode path relies on.
 #[test]
 fn wasm_vendored_modset_declares_seal_codec() {
     let mut interner = Interner::new();

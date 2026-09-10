@@ -285,6 +285,14 @@ fn build_emitted_binary(golden_name: &str, emitted_dir: &Path) -> Result<String,
 
     let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
     let mut cmd = Command::new("cargo");
+    // Online resolution: the emitted crate carries no lockfile, so cargo resolves
+    // its dep graph fresh against the live index. That graph is the only one that
+    // honours the runtime's exact `wasm-bindgen = "=0.2.126"` pin against every
+    // transitive `^0.2` requirer — an offline resolve restricted to a partially
+    // warmed cache can miss the pinned point version and force an incompatible
+    // one, breaking the build (a cache-completeness gap, not a codegen SEAL
+    // breach). Determinism of the resolved versions is a separate concern owned
+    // by a committed lockfile, not by starving the resolver of the index.
     cmd.arg("build")
         .arg("--message-format=json")
         .current_dir(emitted_dir)

@@ -447,6 +447,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `Ipe.Url`'s opaque validated URL — fully-qualified to avoid ambiguity
         // with any user-defined `Url` type.
         IrType::Url => "ipe_runtime::url::Url".to_owned(),
+        // `Ipe.Url`'s opaque same-origin relative reference — fully-qualified.
+        IrType::UrlRelative => "ipe_runtime::url::UrlRelative".to_owned(),
         // `Ipe.Db.Dsn`'s opaque validated connection descriptor — fully-qualified
         // to avoid ambiguity with any user-defined `Dsn` type.
         IrType::Dsn => "ipe_runtime::dsn::Dsn".to_owned(),
@@ -535,7 +537,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         ),
         // The widget handle carries only its generated tag string; the seal
         // types are phantom (they drive the down-encode / up-decode codegen at
-        // the `Ui.widget` call site, not the handle's own representation), so
+        // the `CustomElement.node` call site, not the handle's own representation), so
         // the rendered type takes no parameters.
         IrType::CustomElement { .. } => "ipe_runtime::ui::widget::IpeCustomElement".to_owned(),
         IrType::Tuple(elems) => {
@@ -840,7 +842,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // Both browser shapes force the runtime `json` feature and route seal types
     // through serde: Ipe.Web serialises the Model in its session store
     // (`Model: serde::Serialize + serde::de::DeserializeOwned`), and BOTH Web and
-    // Ipe.WebView carry a `Ui.widget`'s down/up seal types through `ui_widget_`
+    // Ipe.WebView carry a `CustomElement.node`'s down/up seal types through `ui_widget_`
     // (`Down: Serialize`, `Up: DeserializeOwned`). WebView's own Model bound is
     // only `Clone + Send`, so without unioning `uses_webview` here a serde-legal
     // widget seal type in a WebView program ipe-accepts but cargo-fails E0277 —
@@ -1179,7 +1181,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     // Web/Tui/WebView Model; this gate covers every OTHER (non-Model) record.
     //
     // Both browser shapes force serde on seal types: WebView (like Web) carries a
-    // `Ui.widget`'s down/up records through `ui_widget_` (`Down: Serialize`,
+    // `CustomElement.node`'s down/up records through `ui_widget_` (`Down: Serialize`,
     // `Up: DeserializeOwned`), yet its Model bound is only `Clone + Send`. Gating
     // solely on `uses_web` therefore ipe-accepts a serde-legal down record in a
     // WebView program but cargo-fails E0277 — the SEAL breach. `is_serde`

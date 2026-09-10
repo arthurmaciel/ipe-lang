@@ -1250,7 +1250,7 @@ pub enum IrType {
     /// (an empty `routes = []` literal's `Vec::<…>::new()` turbofish, or a
     /// let-bound route table's fn signature).
     WebRoute(Box<Self>),
-    /// `CustomElement down up` — the opaque handle placed by `Ui.widget` for a
+    /// `CustomElement down up` — the opaque handle placed by `CustomElement.node` for a
     /// typed JS custom-element widget. Rendered as
     /// `ipe_runtime::ui::widget::IpeCustomElement`, a plain data handle carrying
     /// the generated content-addressed element tag. `down` / `up` are the
@@ -1598,6 +1598,17 @@ pub enum IrType {
     /// (a `Url` in a `Ipe.Web` Model field is a compile-time rejection, never a
     /// silent wrong behaviour — same posture as `Path`/`Regex`).
     Url,
+    /// `Ipe.Url`'s opaque, validated same-origin RELATIVE reference — the path
+    /// plus optional query plus optional fragment projection (RFC 3986 §4.2),
+    /// NOT a `Url` (a
+    /// `Url` is always absolute). Built only through `Url.relative : String ->
+    /// Result Error Relative`, the `Url_relative` kernel that resolves the raw
+    /// string against a fixed same-origin base with the `url` crate and REJECTS
+    /// any scheme/authority (the browser-href SSRF boundary), so a
+    /// `javascript:` / `//evil` / cross-origin string can never reach an `href`
+    /// / `src` sink. Renders as `ipe_runtime::url::UrlRelative`. `Clone` +
+    /// `Debug` + `PartialEq` + `Eq` are safe; non-serde (same posture as `Url`).
+    UrlRelative,
     // ── Ipe.Db.Dsn ─────────────────────────────────────────────────────────
     /// Opaque validated database-connection descriptor
     /// (`ipe_runtime::dsn::Dsn`).
@@ -1834,6 +1845,8 @@ pub fn ir_type_is_derivable(
         | IrType::Path
         // `Url` derives Clone+Debug+PartialEq+Eq (a newtype over `url::Url`).
         | IrType::Url
+        // `Relative` derives Clone+Debug+PartialEq+Eq (validated String fields).
+        | IrType::UrlRelative
         // `Dsn` derives Clone; `Debug` is hand-written (redacting) — fully
         // derivable, not serde (carries a `Secret`).
         | IrType::Dsn
@@ -2104,6 +2117,9 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // compile-time IPE-L0120 rather than a mismatch at emit, same posture
         // as `Path`.
         | IrType::Url
+        // `Relative` is a same-origin href projection, never a serialisable
+        // Model field — derivable but NOT serde, same posture as `Url`.
+        | IrType::UrlRelative
         // `Dsn` is a connection-descriptor value carrying a `Secret`, never a
         // serialisable Model field — derivable but NOT serde (the runtime
         // `ipe_runtime::dsn::Dsn` has no serde impl), so a Model field of type
@@ -2296,7 +2312,7 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
         // is gated); its inner type is visited by the transitive walk, not here.
         IrType::Json | IrType::Decoder(_) => Some(RuntimeFeatureId::Json),
         // ── `url` — the opaque validated URL newtype (the breach this closes) ──
-        IrType::Url => Some(RuntimeFeatureId::Url),
+        IrType::Url | IrType::UrlRelative => Some(RuntimeFeatureId::Url),
         // ── `secret` — the opaque secret-string module ───────────────────────
         IrType::Secret => Some(RuntimeFeatureId::Secret),
         // ── `decimal` — `rust_decimal` newtype (Money carries it) ────────────
@@ -2480,6 +2496,8 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::Path
         // `Url` is a newtype over `url::Url` — clone is a String clone.
         | IrType::Url
+        // `Relative` clones its validated String projection fields.
+        | IrType::UrlRelative
         // `Dsn` clones its String fields + `Secret` (a String clone).
         | IrType::Dsn
         | IrType::Db
@@ -2649,7 +2667,7 @@ pub enum Expr {
     /// serving stage (WP5). The backend renders this as
     /// `ipe_runtime::ui::widget::custom_element_(tag)`. The value's type is
     /// [`IrType::CustomElement`]; it is produced only as the whole body of a
-    /// `CustomElement`-annotated binding and consumed only as `Ui.widget`'s
+    /// `CustomElement`-annotated binding and consumed only as `CustomElement.node`'s
     /// first argument.
     CustomElementRef {
         tag: String,
@@ -3824,6 +3842,7 @@ mod tests {
     fn gated_leaves_declare_their_feature() {
         let cases: &[(IrType, RuntimeFeatureId)] = &[
             (IrType::Url, RuntimeFeatureId::Url),
+            (IrType::UrlRelative, RuntimeFeatureId::Url),
             (IrType::Secret, RuntimeFeatureId::Secret),
             (IrType::Decimal, RuntimeFeatureId::Decimal),
             (IrType::Regex, RuntimeFeatureId::Regex),

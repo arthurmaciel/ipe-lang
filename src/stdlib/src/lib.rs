@@ -537,6 +537,12 @@ const STD_UI_CLI: &str = include_str!("../Ipe/Ui/Cli.ipe");
 /// view surfaces accept it in their `color` / `bg` builders.
 const STD_TEA_TERMINAL_COLOR: &str = include_str!("../Ipe/App/Tea/Terminal/Color.ipe");
 
+/// `Ipe.App.Script` — the Script shape's entry (`program`). Pure Ipê: `program`
+/// is the identity on its `Task Error ()`, so wrapping a task changes nothing at
+/// runtime; the wrapper's job is to name the Script shape at a `main`'s head, so
+/// every shape pins its shape by what `main` head-calls.
+const STD_APP_SCRIPT: &str = include_str!("../Ipe/App/Script.ipe");
+
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
 ///
 /// Pure Ipê source: defines the `Codec a` nominal union (an encoder plus a
@@ -644,8 +650,8 @@ const IPE_CORE_JS: &str = include_str!("../Ipe/Ffi/Js.ipe");
 /// source).
 ///
 /// Exposes `node : CustomElement down up -> down -> (up -> msg) -> Element msg`,
-/// routed through the `Kernel.kernel "Ui_widget"` alias to the registered
-/// `UiWidget` kernel, and the reserved literal-only `fromFile "<js-path>"`
+/// routed through the `Kernel.kernel "CustomElement_node"` alias to the
+/// registered custom-element view-node kernel, and the reserved literal-only `fromFile "<js-path>"`
 /// constructor (recognised structurally by the resolver, not a value binding).
 /// The crossing seals its down-state / up-event on the CONCRETE type
 /// (IPE-N0039). The widget transport is shipped; the binding lowers to the
@@ -1269,17 +1275,6 @@ const STD_TIME_TIMESTAMP: &str = include_str!("../Ipe/Time/Timestamp.ipe");
 /// disjointness invariant holds.
 const STD_BYTESIZE: &str = include_str!("../Ipe/ByteSize.ipe");
 
-/// `Ipe.Ui.ImageSrc` — typed image source closed-sum (compiled source).
-///
-/// Pure Ipê: defines `type ImageSrc = FromUrl Url | FromData { mime, base64 }`
-/// and the two constructors (`url`, `data`) plus `toAttributeValue`.  Because
-/// `FromUrl` embeds `Ipe.Url.Url` (a `url`-feature-gated `IrType::Url`), any
-/// program that names `ImageSrc` in a value position has the `url` runtime
-/// feature forced automatically by the type-driven SSOT
-/// (`ir_type_feature_requirement`).  Not in `STDLIB_MODULE_QUALIFIERS`, so the
-/// disjointness invariant holds.
-const STD_UI_IMAGE_SRC: &str = include_str!("../Ipe/Ui/ImageSrc.ipe");
-
 /// `Ipe.Http.StatusCode` — typed HTTP response status code (compiled source).
 ///
 /// Pure Ipê: defines `type StatusCode = StatusCode Int` (unexported ctor) with
@@ -1517,6 +1512,10 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.App.Tea.Terminal.Color",
         source: STD_TEA_TERMINAL_COLOR,
+    },
+    CompiledStdModule {
+        dotted: "Ipe.App.Script",
+        source: STD_APP_SCRIPT,
     },
     CompiledStdModule {
         dotted: "Ipe.Codec",
@@ -1810,13 +1809,6 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Ui.Events",
         source: STD_UI_EVENTS,
-    },
-    // Ipe.Ui.ImageSrc — typed image source closed-sum; `FromUrl` embeds
-    // `Ipe.Url.Url`, so any program naming `ImageSrc` forces the `url` feature
-    // automatically through the type-driven SSOT.
-    CompiledStdModule {
-        dotted: "Ipe.Ui.ImageSrc",
-        source: STD_UI_IMAGE_SRC,
     },
     // Ipe.Http.StatusCode — typed HTTP status code over Int (opaque ctor,
     // `fromInt` / `code` / `isSuccess` / `isRedirect` / `isClientError` /

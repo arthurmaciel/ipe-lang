@@ -110,3 +110,5 @@ mod golden_unit_pattern;
 mod golden_unit_pattern_match;
 #[path = "g_misc/golden_update_base_after_move.rs"]
 mod golden_update_base_after_move;
+#[path = "g_misc/golden_url_scheme_seal.rs"]
+mod golden_url_scheme_seal;

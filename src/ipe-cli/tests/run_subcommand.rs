@@ -110,10 +110,15 @@ fn run_subcommand_builds_and_executes_hello_program() {
     let built = ipe::build(&entry, &out_dir, &runtime_dir);
     assert!(built.is_ok(), "ipe build step must succeed: {built:?}");
 
+    // Forward the warm shared target (IPE_ORACLE_SHARED_TARGET in CI, else an
+    // ambient CARGO_TARGET_DIR a local lane set); fall back to an isolated
+    // dir inside out_dir so a bare local run stays hermetic.
+    let target_dir = e2e_support::child_shared_target_from_env()
+        .map_or_else(|| out_dir.join("target"), PathBuf::from);
     let cargo_status = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(&out_dir)
-        .env("CARGO_TARGET_DIR", out_dir.join("target"))
+        .env("CARGO_TARGET_DIR", &target_dir)
         .status();
     assert!(
         matches!(&cargo_status, Ok(s) if s.success()),
@@ -121,7 +126,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
     );
 
     // --- Step 3: run the binary, capture stdout ---
-    let bin: PathBuf = out_dir.join("target").join("debug").join("ipe-app");
+    let bin: PathBuf = target_dir.join("debug").join("ipe-app");
     let run = std::process::Command::new(&bin).output();
     let Ok(run) = run else {
         assert!(false_marker(), "failed to run emitted binary: {run:?}");
@@ -134,8 +139,11 @@ fn run_subcommand_builds_and_executes_hello_program() {
         "ipec run e2e: stdout mismatch"
     );
 
-    // Cleanup heavy cargo artifacts; leave src for post-mortem if needed.
-    let _ = fs::remove_dir_all(out_dir.join("target"));
+    // Prune only an isolated per-test target; a shared warm target is owned by
+    // the harness and must not be removed here.
+    if e2e_support::child_shared_target_from_env().is_none() {
+        let _ = fs::remove_dir_all(&target_dir);
+    }
 }
 
 /// After `ipe build` on a single-file program (no manifest) the emitted

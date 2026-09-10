@@ -188,13 +188,13 @@ fn web_fixture_attr_text(name: &str, text: &str) -> String {
 /// `description` (alt text) is a hoistable record-native appearance field. A
 /// marker text confirms the app is up. `description` is a direct string
 /// literal, so it hoists into the per-view `LiteralTable`; `src` is a typed
-/// `ImageSrc` (a data URI) since `Ui.image` no longer accepts a raw string.
+/// `ImageValue` (a data URI via `Ui.imageData`) since `Ui.image` no longer
+/// accepts a raw string.
 fn web_fixture_image(description: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
          import Ipe.App.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.Ui.ImageSrc as ImageSrc\n\
          import Ipe.App.Tea.Web.Cmd\n\
          import Ipe.App.Tea.Web.Sub\n\
          import Ipe.String\n\n\
@@ -210,7 +210,7 @@ fn web_fixture_image(description: &str) -> String {
          view _model =\n    \
              Ui.column []\n        \
                  [ Ui.text \"marker\"\n        \
-                 , Ui.image [] {{ src = ImageSrc.data {{ mime = \"image/png\", base64 = \"AAAA\" }}, description = \"{description}\" }}\n        \
+                 , Ui.image [] {{ src = Ui.imageData {{ mime = \"image/png\", base64 = \"AAAA\" }}, description = \"{description}\" }}\n        \
                  ]\n\n\
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model =\n    \

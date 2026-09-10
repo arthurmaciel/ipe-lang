@@ -1,12 +1,15 @@
-//! SEAL for `Ipe.Http.StatusCode` and `Ipe.Ui.ImageSrc`.
+//! SEAL for `Ipe.Http.StatusCode` and the media `src` boundary
+//! (`Ipe.Html.Attributes.imageSrc` / `MediaTarget`).
 //!
 //! `Ipe.Http.StatusCode` is a compiled-source opaque newtype over `Int`.
 //! `fromInt` is total; `code` recovers the integer; the four `is*` predicates
 //! classify 2xx/3xx/4xx/5xx ranges.  Pure Ipê, no feature gate.
 //!
-//! `Ipe.Ui.ImageSrc` is a compiled-source closed sum: `FromUrl Url | FromData {
-//! mime, base64 }`.  Because `FromUrl` embeds `Ipe.Url.Url`, any program that
-//! imports this module forces the `url` runtime feature via the type-driven SSOT
+//! `Ipe.Html.Attributes.MediaTarget` is a compiled-source closed sum:
+//! `MediaAbsolute Url | MediaRelative Relative`, narrowed to `http`/`https` only
+//! (a media `src` is a FETCH sink, distinct from a navigation `href`).  Because
+//! `MediaAbsolute` embeds `Ipe.Url.Url`, any program that constructs one forces
+//! the `url` runtime feature via the type-driven SSOT
 //! (`ir_type_feature_requirement`) — without a single `Ffi.kernel` call.
 //!
 //! The frontend-accepts assertions run in the default gate.  Build-and-run proofs
@@ -94,10 +97,11 @@ fn statuscode_seal_builds_and_runs() {
     );
 }
 
-// ── Ipe.Ui.ImageSrc ─────────────────────────────────────────────────────────
+// ── Ipe.Html.Attributes media src (`imageSrc` / `MediaTarget`) ───────────────
 
 /// Emit assertion: the frontend must accept a program that constructs both
-/// `ImageSrc` variants and recovers the attribute-value string.
+/// `MediaTarget` arms (absolute + same-origin relative) and recovers the
+/// `src` attribute-value string.
 #[test]
 fn imagesrc_seal_emits() {
     let root = repo_root();
@@ -113,7 +117,8 @@ fn imagesrc_seal_emits() {
 
 /// Load-bearing SEAL: under `IPE_E2E=1` the emitted crate must `cargo build`
 /// (proving the `url` feature is forced by the `Url`-embedding type), run, and
-/// produce the pinned output for both `FromUrl` and `FromData` variants.
+/// produce the pinned `<img src>` output for both `MediaAbsolute` and
+/// `MediaRelative` variants.
 #[test]
 fn imagesrc_seal_builds_and_runs() {
     let root = repo_root();
@@ -136,11 +141,11 @@ fn imagesrc_seal_builds_and_runs() {
         "imagesrc_seal: emitted crate must build and exit 0; stdout:\n{}",
         outcome.stdout
     );
-    let expected = "https://example.com/img.png\n\
-                    data:image/png;base64,abc123";
+    let expected = "<img alt=\"x\" src=\"https://example.com/img.png\" />\n\
+                    <img alt=\"y\" src=\"/static/logo.png\" />";
     assert_eq!(
         outcome.stdout.trim(),
         expected,
-        "imagesrc_seal: FromUrl and FromData attribute-values produced wrong output"
+        "imagesrc_seal: MediaAbsolute and MediaRelative src attribute-values produced wrong output"
     );
 }

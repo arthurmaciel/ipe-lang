@@ -257,7 +257,10 @@ impl AspectCheck<CliItem> for NotAdvertisedUnimplementedColumn {
                     Cell::Ok
                 }
             }
-            CliItem::Flag { .. } => Cell::NotApplicable,
+            CliItem::Flag { .. } => Cell::not_applicable(
+                "a flag, not a subcommand — the not-advertised-unimplemented check applies \
+                 to subcommand handlers",
+            ),
         }
     }
 }

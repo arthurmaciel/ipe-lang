@@ -206,11 +206,15 @@ impl AspectCheck<PackageItem> for PinnedAndHashedColumn {
     fn check(&self, item: &PackageItem) -> Cell {
         // Path-escape Ipê deps have no lockfile entry by design.
         if item.is_path_escape() {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "a path-escape Ipê dep has no ipe.lock entry by design — no pin to assert",
+            );
         }
         // Native Rust crates are locked by cargo, not ipe.lock.
         if item.kind == DepKindLabel::Native {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "a native Rust crate is locked by cargo, not ipe.lock — cargo owns its pin",
+            );
         }
 
         let lf = load_lockfile(&self.project_root);
@@ -267,7 +271,10 @@ impl AspectCheck<PackageItem> for SemverSatisfiedColumn {
 
     fn check(&self, item: &PackageItem) -> Cell {
         let Some(IpeDep::Index(req)) = &item.ipe_dep else {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not an index Ipê dep — a git/path-escape dep or native crate carries no \
+                 semver requirement to satisfy",
+            );
         };
 
         let lf = load_lockfile(&self.project_root);
@@ -275,7 +282,9 @@ impl AspectCheck<PackageItem> for SemverSatisfiedColumn {
 
         let Some(locked) = index.get(item.name.as_str()) else {
             // Not in the lockfile yet — pinned-and-hashed already flags this.
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not yet in the lockfile — the pinned-and-hashed column already flags this",
+            );
         };
 
         if req.matches(&locked.version) {
@@ -319,7 +328,10 @@ impl AspectCheck<PackageItem> for CapabilityDeclaredColumn {
 
     fn check(&self, item: &PackageItem) -> Cell {
         if item.kind != DepKindLabel::Native {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "a pure Ipê dep has its capability set inferred by the compiler — no manual \
+                 declaration to check",
+            );
         }
 
         let Ok(manifest) = load_manifest(&self.project_root) else {
@@ -389,11 +401,13 @@ impl AspectCheck<PackageItem> for ProvenanceScannedColumn {
     fn check(&self, item: &PackageItem) -> Cell {
         // Path-escape deps have no ipe.lock hash to re-assert.
         if item.is_path_escape() {
-            return Cell::NotApplicable;
+            return Cell::not_applicable("a path-escape dep has no ipe.lock hash to re-assert");
         }
         // Native crates are owned by cargo's own integrity chain.
         if item.kind == DepKindLabel::Native {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "a native crate is owned by cargo's own integrity chain, not ipe.lock",
+            );
         }
 
         let lf = load_lockfile(&self.project_root);
@@ -401,7 +415,9 @@ impl AspectCheck<PackageItem> for ProvenanceScannedColumn {
 
         // A dep not yet in the lockfile is flagged by pinned-and-hashed; skip here.
         if !index.contains_key(item.name.as_str()) {
-            return Cell::NotApplicable;
+            return Cell::not_applicable(
+                "not yet in the lockfile — the pinned-and-hashed column already flags this",
+            );
         }
 
         match self.verdict() {

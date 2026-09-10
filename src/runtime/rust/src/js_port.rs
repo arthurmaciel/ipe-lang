@@ -14,7 +14,7 @@
 //!   the SAME bounded seal decoder every crossing uses
 //!   ([`crate::seal_codec::seal_decode`]); a clean decode emits `to_msg(a)`, a
 //!   rejected payload is DROPPED whole — no panic, no partial value. This is the
-//!   same discipline as the `Ui.widget` up-event decode.
+//!   same discipline as the `CustomElement.node` up-event decode.
 //!
 //! The transport is process-/tab-local and cfg-split, mirroring `ws_client.rs`
 //! and the pub/sub broker:

@@ -1,2 +1,0 @@
-https://example.com/img.png
-data:image/png;base64,abc123

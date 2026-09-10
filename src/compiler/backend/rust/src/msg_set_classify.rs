@@ -267,6 +267,7 @@ const fn aggregate_discriminant(ty: &IrType) -> &'static str {
         IrType::CryptoMac => "CryptoMac",
         IrType::EmailAddress => "EmailAddress",
         IrType::Url => "Url",
+        IrType::UrlRelative => "UrlRelative",
         IrType::Dsn => "Dsn",
         IrType::Connection => "Connection",
         IrType::ConnReadOnly => "ConnReadOnly",

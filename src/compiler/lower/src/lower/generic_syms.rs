@@ -107,6 +107,8 @@ pub(super) fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::Path
         // `Url` is non-parametric — no generic syms.
         | IrType::Url
+        // `Relative` is non-parametric — no generic syms.
+        | IrType::UrlRelative
         // `Dsn` is non-parametric — no generic syms.
         | IrType::Dsn
         | IrType::Connection | IrType::ConnReadOnly | IrType::ConnReadWrite

@@ -1179,6 +1179,8 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // `Url` is `#[derive(Clone)]` (no Copy — a newtype over `url::Url`,
         // itself a heap-`String`-backed type; `PartialEq`/`Eq` derived).
         | IrType::Url
+        // `Relative` is `#[derive(Clone)]` (validated `String` projection fields).
+        | IrType::UrlRelative
         | IrType::Dsn
         | IrType::Connection
         | IrType::ConnReadOnly
@@ -4292,6 +4294,8 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Path
         // `Url` is non-parametric — mentions no type var.
         | IrType::Url
+        // `Relative` is non-parametric — mentions no type var.
+        | IrType::UrlRelative
         // `Dsn` is non-parametric — mentions no type var.
         | IrType::Dsn
         | IrType::Connection
@@ -4416,6 +4420,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::UrlRelative
         | IrType::Dsn
         | IrType::Connection
         | IrType::ConnReadOnly
@@ -4533,6 +4538,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::Secret
         | IrType::Path
         | IrType::Url
+        | IrType::UrlRelative
         | IrType::Dsn
         | IrType::Connection
         | IrType::ConnReadOnly
@@ -10254,6 +10260,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::CryptoMac => "Mac",
         IrType::EmailAddress => "EmailAddress",
         IrType::Url => "Url",
+        IrType::UrlRelative => "Url.Relative",
         IrType::Dsn => "Dsn",
         IrType::Connection => "Connection",
         IrType::ConnReadOnly => "ReadOnly",
@@ -12918,6 +12925,7 @@ impl<'a> Lowerer<'a> {
             | IrType::Secret
             | IrType::Path
             | IrType::Url
+            | IrType::UrlRelative
             | IrType::Dsn
             | IrType::Connection
             | IrType::ConnReadOnly
@@ -17305,6 +17313,9 @@ impl<'a> Lowerer<'a> {
                 // `Url` is `Ipe.Url`'s opaque validated URL type.
                 // Backed by `ipe_runtime::url::Url`.
                 "Url" => Ok(IrType::Url),
+                // `Relative` is `Ipe.Url`'s opaque same-origin relative reference.
+                // Backed by `ipe_runtime::url::UrlRelative`.
+                "Relative" => Ok(IrType::UrlRelative),
                 // `Dsn` is `Ipe.Db.Dsn`'s opaque validated connection descriptor.
                 // Backed by `ipe_runtime::dsn::Dsn`.
                 "Dsn" => Ok(IrType::Dsn),
@@ -18644,6 +18655,9 @@ impl<'a> Lowerer<'a> {
                 // `Url` is `Ipe.Url`'s opaque validated URL type.
                 // Backed by `ipe_runtime::url::Url`.
                 "Url" => Ok(IrType::Url),
+                // `Relative` is `Ipe.Url`'s opaque same-origin relative reference.
+                // Backed by `ipe_runtime::url::UrlRelative`.
+                "Relative" => Ok(IrType::UrlRelative),
                 // `Dsn` is `Ipe.Db.Dsn`'s opaque validated connection descriptor.
                 // Backed by `ipe_runtime::dsn::Dsn`.
                 "Dsn" => Ok(IrType::Dsn),
@@ -19221,7 +19235,7 @@ impl<'a> Lowerer<'a> {
                 // `CustomElement down up` — the JS-widget boundary handle. The
                 // solver-side twin of the `ir_type_from_canon` arm: lower both
                 // seal types (they drive the down-encode / up-decode codegen at
-                // the `Ui.widget` call site) into the opaque handle type.
+                // the `CustomElement.node` call site) into the opaque handle type.
                 "CustomElement" if args.len() == 2 => {
                     let down = self.ir_type_from_ty(
                         args.first().ok_or_else(|| {
@@ -25078,7 +25092,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlNode
                 // `Ui.node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg`
                 | KernelFn::UiNode
-                // `Ui.widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
+                // `CustomElement.node : CustomElement down up -> down -> (up -> msg) -> Element msg`
                 // Registered so the surface type-checks; arity is consulted
                 // after the type lowers to the shipped opaque widget handle.
                 | KernelFn::UiWidget
@@ -25332,8 +25346,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::PathExt
                 | KernelFn::PathIsAbsolute,
             ) => Ok(1),
-            // ── Ipe.Url — all nine are unary (arity 1): `fromString`/`toString`
-            // + the six `Url -> _` accessors + `buildQuery : List _ -> String`.
+            // ── Ipe.Url — all unary (arity 1): `fromString`/`toString` + the six
+            // `Url -> _` accessors + `buildQuery : List _ -> String`, plus the
+            // `relative` seal and the four `Relative -> _` accessors.
             Callee::Kernel(
                 KernelFn::UrlFromString
                 | KernelFn::UrlToString
@@ -25343,7 +25358,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UrlPath
                 | KernelFn::UrlQuery
                 | KernelFn::UrlFragment
-                | KernelFn::UrlBuildQuery,
+                | KernelFn::UrlBuildQuery
+                | KernelFn::UrlRelativeParse
+                | KernelFn::UrlRelativePath
+                | KernelFn::UrlRelativeQuery
+                | KernelFn::UrlRelativeFragment
+                | KernelFn::UrlRelativeToString,
             ) => Ok(1),
             // ── Ipe.Trace — `span : String -> Task -> Task` (arity 2);
             // `event : String -> Task ()` (1); `attr : String -> String -> Task ()` (2).
@@ -26364,7 +26384,8 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "text") => Ok(Callee::Kernel(KernelFn::UiText)),
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
                     ("Ui", "cells") => Ok(Callee::Kernel(KernelFn::UiCells)),
-                    ("Ui", "widget") => Ok(Callee::Kernel(KernelFn::UiWidget)),
+                    // The custom-element view node; internal kernel id stays `UiWidget`.
+                    ("CustomElement", "node") => Ok(Callee::Kernel(KernelFn::UiWidget)),
                     // ── Ipe.Ui.Cells builders ─────────────────────────────
                     ("UiCells", "none") => Ok(Callee::Kernel(KernelFn::UiCellsNone)),
                     ("UiCells", "text") => Ok(Callee::Kernel(KernelFn::UiCellsText)),
@@ -29442,6 +29463,11 @@ mod tests {
         KernelFn::UrlQuery,
         KernelFn::UrlFragment,
         KernelFn::UrlBuildQuery,
+        KernelFn::UrlRelativeParse,
+        KernelFn::UrlRelativePath,
+        KernelFn::UrlRelativeQuery,
+        KernelFn::UrlRelativeFragment,
+        KernelFn::UrlRelativeToString,
         // Ipe.Trace
         KernelFn::TraceSpan,
         KernelFn::TraceEvent,
@@ -31740,6 +31766,7 @@ mod tests {
             | ipe_ir::IrType::Secret
             | ipe_ir::IrType::Path
             | ipe_ir::IrType::Url
+            | ipe_ir::IrType::UrlRelative
             | ipe_ir::IrType::Dsn
             | ipe_ir::IrType::Connection
             | ipe_ir::IrType::ConnReadOnly
