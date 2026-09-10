@@ -59,7 +59,7 @@ impl super::stringify::IpeStringify for Url {
 /// or otherwise unparseable input all surface as a typed `Err`, never a silent
 /// accept. Succeeds with the parsed, normalised URL otherwise.
 #[must_use]
-pub fn url_from_string<E: From<String>>(s: String) -> IpeResult<E, Url> {
+pub fn url_from_string(s: String) -> IpeResult<crate::error::IpeError, Url> {
     match UrlCrate::parse(&s) {
         Ok(u) => IpeResult::Ok(Url(u)),
         Err(e) => IpeResult::Err(format!("Ipe.Url: not a valid absolute URL: {s:?} ({e})").into()),
@@ -235,8 +235,8 @@ fn scheme_colon_before_slash(s: &str) -> bool {
 /// that survives a single mistake. On success the parsed `path`/`query`/
 /// `fragment` are extracted and stored.
 #[must_use]
-pub fn url_relative<E: From<String>>(raw: String) -> IpeResult<E, UrlRelative> {
-    let reject = |why: &str| -> IpeResult<E, UrlRelative> {
+pub fn url_relative(raw: String) -> IpeResult<crate::error::IpeError, UrlRelative> {
+    let reject = |why: &str| -> IpeResult<crate::error::IpeError, UrlRelative> {
         IpeResult::Err(format!("Ipe.Url: unsafe relative reference {raw:?} ({why})").into())
     };
     // ── String-level guards (fail-closed on presence, never strip). ──
