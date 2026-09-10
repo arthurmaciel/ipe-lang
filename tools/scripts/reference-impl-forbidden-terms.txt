@@ -6,7 +6,7 @@
 #
 # SCOPE: applied to src/stdlib/**/*.ipe, src/stdlib/src/**/*.rs,
 #        src/runtime/rust/src/**/*.rs, src/compiler/**/src/**/*.rs, README.md,
-#        docs/**/*.md — with carve-outs enumerated in no-reference-impl-leak.sh.
+#        docs/**/*.md.
 #
 # The Go-specific phrases below apply to ALL scanned roots.
 # The Sky/Std terms (last two) apply only to src/ roots (not docs/).

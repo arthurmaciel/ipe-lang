@@ -2439,12 +2439,9 @@ mod tests {
         assert!(!is_compiled_source_segments(&nope));
     }
 
-    /// Pins the no-reference-impl-leak guarantee at the `include_str!` boundary.
-    ///
     /// The forbidden-term list is read from the same shared file the shell gate
-    /// uses (`tools/scripts/reference-impl-forbidden-terms.txt`), so the two
-    /// enforcers cannot drift out of agreement.  The test asserts that none of
-    /// the embedded `.ipe` sources match any forbidden term, covering both
+    /// uses (`tools/scripts/reference-impl-forbidden-terms.txt`). The test asserts
+    /// that none of the embedded `.ipe` sources match any forbidden term, covering both
     /// `MODULES` (parse-fixture modules) and `COMPILED_STD_MODULES`.
     #[test]
     fn no_reference_impl_leak_in_embedded_stdlib() {
