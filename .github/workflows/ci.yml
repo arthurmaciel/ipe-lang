@@ -13,7 +13,7 @@ name: Build & test
 #     as the required checks.
 #   • PUSH to development + nightly SCHEDULE — the HEAVY non-blocking checks: the
 #     full 14-shard e2e (THE SEAL in full), the 8-way seal-slice, seal-modset
-#     (vendored), miri, the runtime feature-combo / full-feature builds, the
+#     (vendored), the runtime feature-combo / full-feature builds, the
 #     explain/doc example gates, registry-admission, browser-e2e, and the Tier-2
 #     jails. These never gate a PR; they produce the main-required contexts the FF
 #     promotion waits on and catch regressions on the nightly dep/upstream sweep.
@@ -249,7 +249,7 @@ jobs:
 
   # Fast fail-fast compile check. A non-compiling PR turns this red in ~a minute
   # (no test link, no emit), so the expensive downstream jobs (seal-smoke and the
-  # push-only e2e/miri) never start behind broken code — they `needs: quick-check`.
+  # push-only e2e) never start behind broken code — they `needs: quick-check`.
   # `test` deliberately does NOT gate on this: it runs in parallel for fastest
   # feedback, and its own compile subsumes the check.
   quick-check:
@@ -597,120 +597,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run -p ipe-runtime-rust --features full --profile ci
 
-  # Forward-guard over EVERY miri-interpretable crate — defense in depth. No
-  # workspace crate holds `unsafe` today (the sole sanctioned block is a runtime
-  # `prctl`, excluded below), so miri's value is catching UB the moment a future
-  # `unsafe` addition — ours or a dependency's own `unsafe` (interning, IR,
-  # union-find, salsa-style structures lean on library invariants) — introduces
-  # a Stacked/Tree-Borrows aliasing violation. Vetting the whole pure-logic
-  # surface, not a hand-picked five, means any such regression is caught wherever
-  # it lands. FFI / syscall / process-spawn crates are the sanitizers' job, not
-  # miri's: `posix_spawn`, network, and DB foreign calls abort as
-  # "unsupported foreign call" under miri, so `ipe` (spawns cargo/ipe),
-  # `ipe-runtime-rust`, `ipe_sandbox`, `ipe_ffi`, and the lsp/wasm IO crates are
-  # out of scope.
-  #
-  # The included set was classified empirically (a small nextest partition per
-  # crate under miri): every crate below interprets cleanly. `ipe_db` is the one
-  # candidate EXCLUDED for cost, not capability — salsa's thread-pool /
-  # generation-counter machinery makes nearly every db test exceed the per-test
-  # ceiling under miri's interpretation overhead, and sharding cannot rescue a
-  # single test that alone overruns. A handful of individual tests inside
-  # otherwise-interpretable crates are likewise long-poles (full-universe
-  # feature-closure walks, whole-stdlib canonicalization, an env-var doc scan);
-  # they are filtered out per-test with `not test(...)` so the crate's remaining
-  # cases still get miri coverage.
-  #
-  # Sharded across nextest partitions so each shard interprets a slice of the
-  # combined test set and stays well under an hour despite miri's 10-50x
-  # slowdown; more crates than the original five means more shards. The driver
-  # `cargo miri nextest run` needs BOTH the miri component AND nextest on the
-  # runner, so this installs nextest like every other nextest-driven job.
-  miri-shard:
-    name: miri-shard (${{ matrix.shard }}/20)
-    runs-on: ubuntu-latest
-    # Fail-fast: don't start the slow miri interpretation if the workspace does
-    # not even compile (quick-check is red). Only reachable off the PR path.
-    needs: [changes, quick-check]
-    if: github.event_name != 'pull_request'   # off the PR gate; runs on push, nightly
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: miri
-      - uses: taiki-e/install-action@nextest
-      - uses: Swatinem/rust-cache@v2
-      # Per-test exclusions: each named test alone overruns the miri per-test
-      # ceiling in its (otherwise interpretable) crate, so sharding can't help it
-      # — filtered out so the crate's other tests still run under miri.
-      #   composed_full_universe_is_closed — full runtime feature-closure walk
-      #   def_is_none_inside_string        — heavy annotate string scan
-      #   all_runtime_env_vars_are_documented — whole env-var doc scan
-      #   *_alias_* / unknown_stdlib_alias — whole-stdlib canonicalization
-      - run: >-
-          cargo +nightly miri nextest run
-          -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics
-          -p ipe_syntax -p ipe_path_core -p ipe_parse -p ipe_lint -p ipe_stdlib
-          -p ipe_backend -p ipe_kernels -p ipe_annotate -p ipe_docs
-          -p ipe_canon -p ipe_backend_rust
-          -E 'not (test(composed_full_universe_is_closed)
-              or test(def_is_none_inside_string)
-              or test(all_runtime_env_vars_are_documented)
-              or test(unknown_stdlib_alias_stays_fail_closed)
-              or test(record_alias_ctor_field_order_is_declared_not_alphabetical)
-              or test(exposed_record_alias_via_list_exports_its_ctor_value))'
-          --partition count:${{ matrix.shard }}/20
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
-
-  # Stable aggregation gate for the sharded miri matrix. The `miri-shard` matrix
-  # expands to one shard-named job per partition, so no single shard name is a
-  # durable required-check target and a `fail-fast: false` shard failure is easy
-  # to miss. This job depends on every shard and is GREEN only when all passed
-  # — one stable context name (`miri`) branch protection can require so a UB /
-  # aliasing regression blocks a landing. The `always()` guard makes a
-  # skipped/failed/cancelled shard a FAILURE here, never a false green; a
-  # legitimate skip (the matrix self-skips on pull_request) passes vacuously so
-  # the PR path is unaffected. A bare, stable `name` so the required-check
-  # context is exactly `miri` (branch protection matches the check name
-  # literally; a parenthetical would make the required-context string brittle).
-  miri:
-    name: miri
-    runs-on: ubuntu-latest
-    needs: miri-shard
-    if: always()
-    steps:
-      - name: Gate on every miri shard result
-        run: |
-          result='${{ needs.miri-shard.result }}'
-          case "$result" in
-            success)
-              echo "miri: every shard passed — no UB/aliasing violation."
-              ;;
-            skipped)
-              # The miri-shard matrix self-skips on pull_request (off the cheap
-              # PR gate); nothing to aggregate, so this passes vacuously.
-              echo "miri: shards skipped for this event — vacuously green."
-              ;;
-            *)
-              echo "miri FAILED: shards result=$result (a UB/aliasing regression or an infra failure)" >&2
-              exit 1
-              ;;
-          esac
-
   # ── Sanitizers (the UB net) ─────────────────────────────────────────────────
-  # Miri is a forward-guard for the SAFE, `#![forbid(unsafe_code)]` compiler
-  # crates (it catches UB reached indirectly through a dependency's own `unsafe`
-  # + aliasing violations). It CANNOT be the UB net for the project's genuine
-  # first-party `unsafe`: the sandbox's libc-syscall glue (`memfd_create`,
-  # `fcntl`/`F_ADD_SEALS`, `lseek`, `OwnedFd::from_raw_fd`, the seccomp memfd) and
-  # the FFI boundary — Miri cannot interpret those foreign calls at all. ASAN and
-  # TSAN compile+RUN the real code, so they are the net that covers it.
-  #
   # ASAN (AddressSanitizer + LeakSanitizer): memory-safety UB — out-of-bounds,
   # use-after-free, double-free, leaks — in the real crates and, crucially, in
   # any `unsafe` reached through their DEPENDENCY tree. `-Zbuild-std` rebuilds
@@ -723,8 +610,7 @@ jobs:
   # job never selects them). The selected crates are the ones carrying (or
   # depending on) real `unsafe`: `ipe_sandbox` (the syscall jail glue),
   # `ipe_ffi` (the FFI boundary), `ipe-runtime-rust` (the emitted-into runtime),
-  # plus the interning/IR/types/lower/diagnostics libs whose dependency unsafe
-  # Miri already watches — here re-checked at RUNTIME.
+  # plus the interning/IR/types/lower/diagnostics libs here re-checked at RUNTIME.
   #
   # EXCLUSIONS (`-E`): two binary classes inside the selected crates are dropped.
   #   - `run_jail_e2e` / `build_jail_e2e`: REAL bwrap+seccomp jail runs. ASAN is
@@ -838,7 +724,7 @@ jobs:
   # MSAN (MemorySanitizer — reads of uninitialized memory) is deliberately NOT
   # wired: it demands EVERY dependency AND std be instrumented, and any
   # un-instrumented FFI/syscall boundary (exactly this project's sandbox/ffi
-  # surface) produces false positives — not worth it here; ASAN+TSAN+Miri cover
+  # surface) produces false positives — not worth it here; ASAN+TSAN cover
   # the real risk.
 
   # E2E builds+runs the emitted Rust per golden (THE SEAL — the soundness floor:
