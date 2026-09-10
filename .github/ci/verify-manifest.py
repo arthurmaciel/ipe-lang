@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - CI always has PyYAML
     sys.exit(2)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WORKFLOW_GLOB = os.path.join(REPO_ROOT, ".github", "workflows", "*.yml")
+WORKFLOW_GLOB = os.path.join(REPO_ROOT, "workflows", "*.yml")
 MANIFEST = os.path.join(REPO_ROOT, "ci", "check-manifest.yml")
 
 VALID_DISPOSITIONS = {"gate", "gate-external", "nightly-gate", "informational", "delete"}
@@ -54,7 +54,6 @@ PLUMBING_WORKFLOWS = {
     "rerun-failed-once.yml",
     "nightly-full-gate.yml",
     "close-issues-on-development.yml",
-    "pr-base-guard.yml",
     "manifest-guard.yml",
     "ci-health.yml",
 }
