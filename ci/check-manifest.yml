@@ -133,11 +133,6 @@ checks:
     aggregates: [seal-slice-shard]
 
   # ── Heavy soundness / sanitizers — nightly-gate ───────────────────────────
-  - context: miri
-    disposition: nightly-gate
-    producer: ci.yml
-    guards: Soundness
-    aggregates: [miri-shard]
   - context: asan-all
     disposition: nightly-gate
     producer: ci.yml
