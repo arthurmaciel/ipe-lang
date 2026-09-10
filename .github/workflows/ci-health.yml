@@ -57,4 +57,4 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         # GITHUB_STEP_SUMMARY is injected into the step env by the runner; the
         # script reads it directly to write the CI-health dashboard table.
-        run: python3 ci/ci_health_surface.py
+        run: python3 .github/ci/ci_health_surface.py
