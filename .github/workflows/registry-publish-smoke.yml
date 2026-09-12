@@ -77,6 +77,15 @@ jobs:
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: cargo build -p ipe --bin ipe
 
+      # `ipe package publish` previews the Tier-1 supply-chain scan (RUSTSEC
+      # advisories + bans over the Rust dependency graph) via cargo-deny; absent
+      # it that scan is skipped with a warning. Install it so the smoke's publish
+      # preview is byte-faithful to the authoritative gate, which also runs it.
+      - name: Install cargo-deny (supply-chain advisory + bans enforcement)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
       # Fail closed BEFORE running the smoke when the publish token is absent, so
       # the reason is an obvious job-summary line, not an opaque mid-run error.
       - name: Verify the publish token is present (fail-closed)
