@@ -1,6 +1,15 @@
 // Ipe Runtime — all modules (for standalone crate compilation).
 // In generated projects, this file is overridden by the compiler.
 
+// The recursion guard's remaining-stack probe reads a real-stack address so the
+// red-zone backstop stays sound under AddressSanitizer, whose stack-use-after-
+// return "fake stack" would otherwise relocate a probed local off the real
+// stack and defeat the comparison. Excluding the probe from instrumentation
+// (`#[sanitize(address = "off")]`) needs a nightly feature; `ipe_asan` (set by
+// `build.rs` only when `CARGO_CFG_SANITIZE` contains `address`) gates it, so a
+// stable build of the emitted runtime never enables an unstable feature — an
+// ASAN build is always nightly, where the feature is available.
+#![cfg_attr(ipe_asan, feature(sanitize))]
 // ── Pedantic-lint policy for the public emitter API ──────────────────────────
 //
 // `needless_pass_by_value`: Every `pub fn` in this crate is emitter-facing API

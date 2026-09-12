@@ -21,21 +21,19 @@ use super::helpers::{ui_column_, ui_row_};
 /// `Text`/`Empty`/`Raw` have no attribute slot, so they are wrapped in a keyed
 /// `el` (`Node` with one child) — the wrapper carries the key and the child
 /// retains its own identity inside it.  This matches the /// keyed-wrapper behaviour.
-fn attach_key<M: Clone>(key: String, child: Element<M>) -> Element<M> {
+fn attach_key<M: Clone>(key: String, mut child: Element<M>) -> Element<M> {
     let key_attr = Attribute::AttrAttribute("ipe-key".to_owned(), key.clone());
-    match child {
-        Element::Node(desc, mut attrs, kids) => {
+    // `Element` owns an iterative destructor, so an attributed node's list is
+    // reached through a mutable borrow rather than moved out and rebuilt.
+    match &mut child {
+        Element::Node(_, attrs, _) | Element::TaggedNode(_, _, attrs, _) => {
             attrs.insert(0, key_attr);
-            Element::Node(desc, attrs, kids)
+            child
         }
-        Element::TaggedNode(tag, desc, mut attrs, kids) => {
-            attrs.insert(0, key_attr);
-            Element::TaggedNode(tag, desc, attrs, kids)
-        }
-        other => {
+        Element::Empty | Element::Text(_) | Element::Raw(_) | Element::Cells(_) => {
             // Wrap Text/Empty/Raw in a plain el so the key has a DOM node to
             // live on — identical to how `Ui.el [] child` renders.
-            Element::Node(Description::NoDescription, vec![key_attr], vec![other])
+            Element::Node(Description::NoDescription, vec![key_attr], vec![child])
         }
     }
 }
@@ -110,9 +108,9 @@ mod tests {
                 ),
             ),
         ];
-        let col = keyed_column_(vec![], children);
-        let kids = match col {
-            Element::Node(_, _, kids) => kids,
+        let mut col = keyed_column_(vec![], children);
+        let kids = match &mut col {
+            Element::Node(_, _, kids) => std::mem::take(kids),
             other => panic!("expected Node, got {other:?}"),
         };
         assert_eq!(kids.len(), 2);
@@ -133,9 +131,9 @@ mod tests {
     #[test]
     fn keyed_column_wraps_text_child_with_ipe_key() {
         let children = vec![("wrap-me".to_string(), Element::Text("hello".to_string()))];
-        let col = keyed_column_(vec![], children);
-        let kids = match col {
-            Element::Node(_, _, kids) => kids,
+        let mut col = keyed_column_(vec![], children);
+        let kids = match &mut col {
+            Element::Node(_, _, kids) => std::mem::take(kids),
             other => panic!("expected Node, got {other:?}"),
         };
         assert_eq!(kids.len(), 1);
@@ -166,10 +164,10 @@ mod tests {
                 vec![],
             ),
         )];
-        let row = keyed_row_(vec![], children);
+        let mut row = keyed_row_(vec![], children);
         // The outer row Node has the `__row` style marker; its children carry keys.
-        let kids = match row {
-            Element::Node(_, _, kids) => kids,
+        let kids = match &mut row {
+            Element::Node(_, _, kids) => std::mem::take(kids),
             other => panic!("expected Node, got {other:?}"),
         };
         assert_eq!(kids.len(), 1);
