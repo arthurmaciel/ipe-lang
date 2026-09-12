@@ -18,6 +18,27 @@ pub enum Html<M> {
     HRaw(String),
 }
 
+impl<M> Drop for Html<M> {
+    /// Dismantle the node tree iteratively so dropping a deeply nested `Html`
+    /// can never overflow the native stack. An `Html` tree's depth is
+    /// data-influenced (a rendered view whose nesting tracks model or decoded
+    /// input, up to `MAX_HTML_DEPTH`), so the derived recursive destructor would
+    /// abort the process on a deep tree. Draining each node's children onto an
+    /// explicit heap worklist keeps teardown O(depth) heap and O(1) stack.
+    fn drop(&mut self) {
+        let mut pending: Vec<Html<M>> = match self {
+            Html::HElement(_, _, children) => std::mem::take(children),
+            Html::HText(_) | Html::HRaw(_) => return,
+        };
+        while let Some(mut node) = pending.pop() {
+            if let Html::HElement(_, _, children) = &mut node {
+                pending.append(&mut std::mem::take(children));
+            }
+            // `node` (now child-free) drops here without recursion.
+        }
+    }
+}
+
 /// Variant names mirror the Ipê stdlib `Ipe.Html.Attributes.Attribute` ADT
 /// (`Attr | BoolAttr | EventAttr (Event msg) | NoAttr`) so the Rust codegen's
 /// bridge (`StdHtmlAttributesAttribute<msg> = ipe_runtime::Attribute<msg>`)
@@ -1396,7 +1417,7 @@ mod tests {
             vec![Attribute::EventAttr(Event::OnMsg("click".into(), Msg::Inc))],
             vec![Html::HText("+".into())],
         );
-        match t {
+        match &t {
             Html::HElement(tag, attrs, kids) => {
                 assert_eq!(tag, "button");
                 assert_eq!(attrs.len(), 1);

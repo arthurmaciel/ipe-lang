@@ -236,6 +236,53 @@ pub enum Element<M> {
     Cells(Vec<Vec<char>>),
 }
 
+/// Move every `Element` nested inside a node's attributes (an `AttrNearby`
+/// overlay is the one attribute variant that carries an `Element`) onto the
+/// worklist, so an overlay chain is dismantled iteratively alongside the child
+/// chain rather than recursing. The attributes themselves are consumed here;
+/// what remains after this call holds no further `Element`.
+fn drain_nearby_overlays<M>(attrs: &mut Vec<Attribute<M>>, pending: &mut Vec<Element<M>>) {
+    for attr in std::mem::take(attrs) {
+        if let Attribute::AttrNearby(_, overlay) = attr {
+            pending.push(overlay);
+        }
+        // Every other attribute (including `AttrEvent`, whose `Html` self-drops
+        // iteratively) drops here without descending into an `Element`.
+    }
+}
+
+impl<M> Drop for Element<M> {
+    /// Dismantle the layout tree iteratively so dropping a deeply nested
+    /// `Element` can never overflow the native stack. An `Element` tree's depth
+    /// is data-influenced (a materialized view or decoded template whose nesting
+    /// tracks model or untrusted input), so the derived recursive destructor
+    /// would abort the process on a deep tree. Draining each node's children —
+    /// and the `Element` an `AttrNearby` overlay carries — onto an explicit heap
+    /// worklist keeps teardown O(depth) heap and O(1) stack. A nested `Raw(Html)`
+    /// carries its own iterative destructor, so it too drops without recursion
+    /// once this node's fields fall.
+    fn drop(&mut self) {
+        let mut pending: Vec<Element<M>> = Vec::new();
+        match self {
+            Element::Node(_, attrs, children) | Element::TaggedNode(_, _, attrs, children) => {
+                pending.append(&mut std::mem::take(children));
+                drain_nearby_overlays(attrs, &mut pending);
+            }
+            Element::Empty | Element::Text(_) | Element::Raw(_) | Element::Cells(_) => return,
+        }
+        while let Some(mut node) = pending.pop() {
+            match &mut node {
+                Element::Node(_, attrs, children) | Element::TaggedNode(_, _, attrs, children) => {
+                    pending.append(&mut std::mem::take(children));
+                    drain_nearby_overlays(attrs, &mut pending);
+                }
+                Element::Empty | Element::Text(_) | Element::Raw(_) | Element::Cells(_) => {}
+            }
+            // `node` (now child- and overlay-free) drops here without recursion.
+        }
+    }
+}
+
 // ─── IpeStringify for the Ipe.Ui runtime types ──────────────────────────────
 // errorToString / Ipe.Test.debugShow can reach these when a generated Ipe.Ui
 // type (e.g. an Input config record) or an app Model carries them as a field:

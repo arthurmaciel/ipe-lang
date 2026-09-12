@@ -533,21 +533,34 @@ fn render_element_depth_in<M: Clone>(
     if depth >= crate::html::MAX_HTML_DEPTH {
         return Html::HText(String::new());
     }
-    match elem {
+    // `Element` owns an iterative destructor (bounded teardown of a deep tree),
+    // so its fields cannot be moved out by a by-value match. Take each field with
+    // `mem::take` / `mem::replace` from a mutable binding instead; the emptied
+    // `Element` then drops trivially at end of scope.
+    let mut elem = elem;
+    match &mut elem {
         Element::Empty => Html::HText(String::new()),
-        Element::Text(s) => Html::HText(s),
-        Element::Raw(html) => html,
+        Element::Text(s) => Html::HText(std::mem::take(s)),
+        Element::Raw(html) => std::mem::replace(html, Html::HText(String::new())),
         // Compile-time shape gates (IPE-L0132 / IPE-L0153) prevent `Cells` from
         // reaching a Web or Cli render, so this arm is unreachable through the
         // normal pipeline. If a direct Rust construction routes cells here, drop
         // to empty text rather than abort — a missing subtree beats a panic.
         Element::Cells(_grid) => Html::HText(String::new()),
-        Element::Node(desc, attrs, kids) => {
-            render_node_as(tag_for_description(&desc), &attrs, kids, depth, parent_axis)
-        }
-        Element::TaggedNode(tag, _desc, attrs, kids) => {
-            render_node_as(&tag, &attrs, kids, depth, parent_axis)
-        }
+        Element::Node(desc, attrs, kids) => render_node_as(
+            tag_for_description(desc),
+            &std::mem::take(attrs),
+            std::mem::take(kids),
+            depth,
+            parent_axis,
+        ),
+        Element::TaggedNode(tag, _desc, attrs, kids) => render_node_as(
+            &std::mem::take(tag),
+            &std::mem::take(attrs),
+            std::mem::take(kids),
+            depth,
+            parent_axis,
+        ),
     }
 }
 
@@ -593,8 +606,13 @@ fn has_paragraph_marker<M>(attrs: &[Attribute<M>]) -> bool {
 /// Every other child kind (text, `Ui.link`, `TaggedNode`, raw HTML) renders
 /// unchanged via the normal path — they are already inline-compatible.
 fn render_paragraph_child<M: Clone>(child: Element<M>, depth: usize) -> Html<M> {
-    match child {
-        Element::Node(Description::NoDescription, mut attrs, kids) => {
+    // `Element` owns an iterative destructor, so its fields cannot be moved out
+    // by a by-value match; take them from a mutable binding and let the emptied
+    // node drop trivially.
+    let mut child = child;
+    match &mut child {
+        Element::Node(Description::NoDescription, attrs, kids) => {
+            let (mut attrs, kids) = (std::mem::take(attrs), std::mem::take(kids));
             // Replace any flex-direction marker with its inline-flex equivalent.
             // A node carries at most one direction marker, always at position 0
             // (inserted by `ui_row_` / `ui_column_`). Mutating in place is safe
@@ -629,25 +647,23 @@ fn render_paragraph_child<M: Clone>(child: Element<M>, depth: usize) -> Html<M> 
             // parent axis (no auto-margins, no align-self).
             render_node_as("span", &attrs, kids, depth, FlexAxis::El)
         }
-        other => render_element_depth(other, depth),
+        _ => render_element_depth(std::mem::replace(&mut child, Element::Empty), depth),
     }
 }
 
 /// Prepend `AttrExplain` to an element's attribute list so that the outline
 /// propagates depth-first to all descendants.  Only `Node` and `TaggedNode`
 /// carry attributes; `Empty`, `Text`, `Raw`, and `Cells` are left unchanged.
-fn inject_explain<M: Clone>(elem: Element<M>) -> Element<M> {
-    match elem {
-        Element::Node(desc, mut attrs, kids) => {
+fn inject_explain<M: Clone>(mut elem: Element<M>) -> Element<M> {
+    // Prepend in place: `Element` owns an iterative destructor, so its attribute
+    // list is reached through a mutable borrow rather than moved out and rebuilt.
+    match &mut elem {
+        Element::Node(_, attrs, _) | Element::TaggedNode(_, _, attrs, _) => {
             attrs.insert(0, Attribute::AttrExplain);
-            Element::Node(desc, attrs, kids)
         }
-        Element::TaggedNode(tag, desc, mut attrs, kids) => {
-            attrs.insert(0, Attribute::AttrExplain);
-            Element::TaggedNode(tag, desc, attrs, kids)
-        }
-        other => other,
+        Element::Empty | Element::Text(_) | Element::Raw(_) | Element::Cells(_) => {}
     }
+    elem
 }
 
 /// The flex direction a layout node imposes on ITS OWN children, decoded from
@@ -2488,13 +2504,14 @@ mod tests {
                 // This call must return, not recurse forever. The depth cap at 1024
                 // truncates the remaining 176 levels and returns an empty text node.
                 let html = render_element(elem);
-                let valid = matches!(
+                // The rendered tree drops normally at end of scope: both
+                // `Element` and `Html` carry an iterative destructor, so tearing
+                // down a tree at this depth is bounded by the heap, never the
+                // native stack — no leak, no overflow.
+                matches!(
                     &html,
                     crate::html::Html::HElement(_, _, _) | crate::html::Html::HText(_)
-                );
-                // Leak to avoid recursive drop overflow at this depth.
-                std::mem::forget(html);
-                valid
+                )
             })
             .expect("spawn thread")
             .join()

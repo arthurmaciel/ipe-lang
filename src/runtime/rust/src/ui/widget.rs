@@ -182,10 +182,10 @@ mod tests {
         };
         let el: Element<Msg> = ui_widget_(ce, hostile, |UpEvent::Changed(s)| Msg::Edited(s));
 
-        let Element::TaggedNode(tag, _desc, attrs, kids) = el else {
+        let Element::TaggedNode(tag, _desc, attrs, kids) = &el else {
             panic!("CustomElement.node must render a TaggedNode");
         };
-        assert_eq!(tag, "ipe-ce-cafef00d");
+        assert_eq!(tag.as_str(), "ipe-ce-cafef00d");
         assert!(kids.is_empty(), "the widget node has no children in WP4");
 
         // The state rides an AttrAttribute — the escaped-attribute carrier — and

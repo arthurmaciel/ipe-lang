@@ -1512,20 +1512,23 @@ pub fn ui_media_query_<M: Clone>(
 /// marker-carrying wrapper `Node` (the media rule then targets the wrapper,
 /// which is the best available anchor for a non-attributed leaf). An empty
 /// `markers` (gate failure) leaves the child untouched.
-fn attach_markers_to_child<M: Clone>(child: Element<M>, markers: Vec<Attribute<M>>) -> Element<M> {
+fn attach_markers_to_child<M: Clone>(
+    mut child: Element<M>,
+    markers: Vec<Attribute<M>>,
+) -> Element<M> {
     if markers.is_empty() {
         return child;
     }
-    match child {
-        Element::Node(desc, mut attrs, kids) => {
+    // `Element` owns an iterative destructor, so an attributed node's list is
+    // reached through a mutable borrow rather than moved out and rebuilt.
+    match &mut child {
+        Element::Node(_, attrs, _) | Element::TaggedNode(_, _, attrs, _) => {
             attrs.extend(markers);
-            Element::Node(desc, attrs, kids)
+            child
         }
-        Element::TaggedNode(tag, desc, mut attrs, kids) => {
-            attrs.extend(markers);
-            Element::TaggedNode(tag, desc, attrs, kids)
+        Element::Empty | Element::Text(_) | Element::Raw(_) | Element::Cells(_) => {
+            Element::Node(Description::NoDescription, markers, vec![child])
         }
-        leaf => Element::Node(Description::NoDescription, markers, vec![leaf]),
     }
 }
 

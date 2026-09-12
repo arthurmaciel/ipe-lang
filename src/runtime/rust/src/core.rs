@@ -944,8 +944,22 @@ fn parse_recursion_limit(raw: Option<String>) -> usize {
 /// Stacks grow downward on every supported native target, so a deeper call
 /// yields a smaller address. Reading the address of a local — never
 /// dereferencing a dangling pointer — is safe.
+///
+/// The floor recorded from this address and every later probe against it must
+/// live on the SAME stack, or the descent comparison is meaningless. Under
+/// AddressSanitizer's stack-use-after-return instrumentation, an ordinary
+/// local is spilled to a per-frame heap "fake frame" whose address bears no
+/// monotonic relation to real-stack depth — recording the floor there and
+/// probing there would leave the red-zone backstop inert and let a runaway
+/// recursion reach a native overflow. Excluding this one function from
+/// instrumentation keeps `anchor` on the real stack, so the floor and every
+/// probe share the real, downward-growing address space the guard reasons
+/// about. `#[inline(never)]` is required with the exclusion: an inlined body
+/// would take its caller's (instrumented) frame and the local would move back
+/// onto the fake stack.
 #[cfg(not(target_arch = "wasm32"))]
-#[inline]
+#[cfg_attr(ipe_asan, sanitize(address = "off"), inline(never))]
+#[cfg_attr(not(ipe_asan), inline)]
 fn approx_stack_pointer() -> usize {
     let anchor: u8 = 0;
     std::ptr::from_ref(&anchor) as usize
