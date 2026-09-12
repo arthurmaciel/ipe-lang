@@ -29,3 +29,6 @@ plugins/
 
 # Local-only dev tooling (fast-gate + git hooks) lives under misc/, not tracked.
 /scripts
+.ignore
+.mcp.json
+graft
