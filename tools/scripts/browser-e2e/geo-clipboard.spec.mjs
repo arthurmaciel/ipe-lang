@@ -43,6 +43,22 @@ function shot(name) {
   return path.join(ARTIFACTS, `${name}.png`);
 }
 
+/**
+ * Block until the app is interactive — <html data-ipe-live="1">.
+ *
+ * The runtime sets this marker exactly when the SSE handshake lands, which is
+ * when the server binds THIS session's outbound Ipe.Ffi.Js port sink to the
+ * connection. Geo.current / Clipboard.read ride that port; a Cmd dispatched
+ * before the sink is bound has its outbound frame dropped fire-and-forget and
+ * never round-trips. `page.goto` resolves on `load`, before the async
+ * handshake, so clicking without this wait races the sink binding — the exact
+ * startup race that flaked all three specs together. Waiting on a real
+ * readiness event (not a fixed sleep) makes the gate deterministic.
+ */
+async function waitReady(page) {
+  await page.waitForSelector('html[data-ipe-live="1"]', { timeout: 15000 });
+}
+
 // ── flow 1: Geolocation GRANT ─────────────────────────────────────────────────
 
 test("geo grant: Locate renders Ok Coords path", async ({ browser }) => {
@@ -53,6 +69,7 @@ test("geo grant: Locate renders Ok Coords path", async ({ browser }) => {
   });
   const page = await ctx.newPage();
   await page.goto(BASE);
+  await waitReady(page);
 
   // Initial state — "location: unknown", four buttons present.
   await expect(page.getByText("location: unknown")).toBeVisible();
@@ -85,6 +102,7 @@ test("geo deny: Locate renders typed Err path (not blank/crash)", async ({
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
   await page.goto(BASE);
+  await waitReady(page);
 
   await page.getByRole("button", { name: "Locate" }).click();
 
@@ -113,6 +131,7 @@ test("clipboard: write then read round-trip renders the copied text", async ({
   });
   const page = await ctx.newPage();
   await page.goto(BASE);
+  await waitReady(page);
 
   // Populate a location first so "Copy location" has something to write.
   await page.getByRole("button", { name: "Locate" }).click();

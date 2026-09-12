@@ -1504,7 +1504,19 @@ var __ipeHelloOk = false;     // server sent its handshake this connection
 var __ipeWatchdogTimer = null;
 var __ipeSseReopenTimer = null;
 var __ipeForcedClose = false; // true while we're tearing down to reopen
+// data-ipe-live on <html> is the app's deterministic readiness signal: "1"
+// exactly while the SSE handshake is live, "0" otherwise. The server binds
+// this session's outbound Ipe.Ffi.Js port sink to the SSE connection (an
+// unbound sink drops frames fire-and-forget), so a Cmd that rides the port —
+// Geo.current, Clipboard.read — only round-trips once the handshake has
+// landed. A driver (test, health check) that waits for data-ipe-live="1"
+// before dispatching such a Cmd observes a bound sink, never a dropped frame.
+function __ipeSetLive(on) {
+  try { document.documentElement.setAttribute("data-ipe-live", on ? "1" : "0"); } catch (_) {}
+}
+__ipeSetLive(false);
 function __ipeOpenSSE() {
+  __ipeSetLive(false);
   __ipeForcedClose = false;
   __ipeHelloOk = false;
   __ipeOpenAt = 0;
@@ -1524,6 +1536,7 @@ function __ipeOpenSSE() {
     // wedge-detection threshold to the fast 8s hello timeout.
     __ipeServerSpeaksV2 = true;
     __ipeHelloOk = true;
+    __ipeSetLive(true);
     __ipeLastSseAt = Date.now();
     if (__ipeStatusGraceTimer !== null) {
       clearTimeout(__ipeStatusGraceTimer);
@@ -1557,6 +1570,7 @@ function __ipeOpenSSE() {
     // itself when a rolling deploy puts it in front of an old server.
     if (!__ipeHelloOk) {
       __ipeHelloOk = true;
+      __ipeSetLive(true);
       if (__ipeStatusGraceTimer !== null) {
         clearTimeout(__ipeStatusGraceTimer);
         __ipeStatusGraceTimer = null;
@@ -1624,6 +1638,7 @@ function __ipeOpenSSE() {
     // got eaten by a misbehaving proxy.
     if (!__ipeHelloOk) {
       __ipeHelloOk = true;
+      __ipeSetLive(true);
       if (__ipeStatusGraceTimer !== null) {
         clearTimeout(__ipeStatusGraceTimer);
         __ipeStatusGraceTimer = null;
@@ -1750,6 +1765,7 @@ function __ipeOpenSSE() {
 // independent timers.
 function __ipeForceReopenSSE() {
   __ipeForcedClose = true;
+  __ipeSetLive(false);
   try { if (__ipeSSE) __ipeSSE.close(); } catch (_) {}
   __ipeSSE = null;
   if (__ipeStatus === "connected") {
