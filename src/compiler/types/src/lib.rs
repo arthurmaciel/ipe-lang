@@ -5499,4 +5499,125 @@ mod tests {
              var so the lowerer emits a Rust generic instead of IPE-L0102; got: {quantified:?}"
         );
     }
+
+    /// A cross-module type mismatch — module `Lib` exports a value of a user
+    /// type `Stamp`, module `Main` feeds it to an `Int`-field constructor
+    /// (`Wrap stamp`) while also holding an UNRELATED `case` that shares the
+    /// `Int` type variable — must be blamed:
+    ///
+    /// 1. at the ACTUAL mismatching sub-term (`stamp` in `Wrap stamp`), never
+    ///    at the unrelated `case` arm, and
+    /// 2. in the module that OWNS that sub-term (`Main`), via the constraint's
+    ///    carried `home` — not the byte-offset heuristic that can pick a
+    ///    numerically-closer def in a different file when two linked modules
+    ///    share a span range, and
+    /// 3. IDENTICALLY on every run — the blamed `(span, home)` is a pure
+    ///    function of the source, with no dependence on hash-map iteration
+    ///    order in the solve/attribution path (principle 2, Correctness: same
+    ///    program + same input yields the same diagnostic, every run).
+    ///
+    /// The wrong-file / wrong-line / run-to-run-moving-caret failure this pins
+    /// made a real localised type error effectively undebuggable.
+    #[test]
+    fn cross_module_mismatch_blames_the_real_subterm_deterministically() {
+        let lib = (
+            "Lib",
+            "module Lib exposing (stamp, Stamp)\n\n\
+             type Stamp =\n    Stamp\n\n\
+             stamp : Stamp\n\
+             stamp =\n    Stamp\n",
+        );
+        // `Main` imports `stamp : Stamp` and feeds it to `Wrap`'s `Int` field
+        // (`Wrap stamp`), the genuine mismatch. `classify`'s `case` arm is
+        // unrelated but shares the `Int` type variable through `Maybe Int`;
+        // the blame must NOT drift onto it.
+        let main_src = "module Main exposing (result, classify)\n\n\
+             import Lib exposing (stamp)\n\n\
+             type Wrap =\n    Wrap Int\n\n\
+             classify : Maybe Int -> Int\n\
+             classify m =\n    case m of\n        \
+             Just uid ->\n            uid\n\n        \
+             Nothing ->\n            0\n\n\
+             result : Wrap\n\
+             result =\n    Wrap stamp\n";
+        let main = ("Main", main_src);
+
+        let Some((m, mut i)) = link_modules(&[lib, main]) else {
+            return;
+        };
+
+        // The mismatching sub-term is the `stamp` in the FINAL `Wrap stamp`;
+        // the caret must land inside this byte range, never on `Just uid`.
+        let culprit = "Wrap stamp";
+        let culprit_off = main_src
+            .rfind(culprit)
+            .expect("main source must contain `Wrap stamp`");
+        let stamp_lo = culprit_off + "Wrap ".len();
+        let stamp_hi = stamp_lo + "stamp".len();
+        let case_arm_off = main_src
+            .find("Just uid")
+            .expect("main source must contain the unrelated `Just uid` arm");
+
+        let main_home = vec![i.intern("Main").expect("intern Main")];
+
+        // First run establishes the blamed span + home; every subsequent run
+        // must reproduce them byte-for-byte.
+        let mut settled: Option<(Span, Vec<Symbol>)> = None;
+        for run in 0..50 {
+            let mut budget = Budget::from_env();
+            let (diag, home) = infer_with_budget_attributed(&m, &mut i, &mut budget)
+                .expect_err("Wrap stamp (Int vs Stamp) must be a type error");
+
+            assert!(
+                matches!(
+                    &diag,
+                    Diagnostic::Type {
+                        msg: TypeError::TypeMismatch { .. },
+                        ..
+                    }
+                ),
+                "expected IPE-T0001 TypeMismatch, got {diag:?}"
+            );
+            let Diagnostic::Type { span, .. } = &diag else {
+                continue; // unreachable given the assertion above; keeps the bind total
+            };
+
+            // Defect 1 (wrong sub-term): the caret sits on `stamp`, never on
+            // the unrelated `case` arm.
+            let (lo, hi) = (span.lo as usize, span.hi as usize);
+            assert!(
+                lo >= stamp_lo && hi <= stamp_hi,
+                "run {run}: the mismatch must be blamed on the `stamp` argument \
+                 (bytes {stamp_lo}..{stamp_hi}), got {lo}..{hi}"
+            );
+            assert!(
+                !(lo >= case_arm_off && lo < case_arm_off + "Just uid".len()),
+                "run {run}: the mismatch must NOT be blamed on the unrelated \
+                 `Just uid` case arm at byte {case_arm_off}"
+            );
+
+            // Defect 1 (wrong file): the carried home is Main, the module that
+            // owns `Wrap stamp` — resolved directly, not guessed from the span.
+            assert_eq!(
+                home, main_home,
+                "run {run}: the mismatch must be attributed to its owning \
+                 module `Main`, not another file"
+            );
+
+            // Defect 2 (non-determinism): the blamed (span, home) is identical
+            // on every run.
+            match &settled {
+                None => settled = Some((*span, home)),
+                Some((prev_span, prev_home)) => {
+                    assert_eq!(
+                        (*span, &home),
+                        (*prev_span, prev_home),
+                        "run {run}: the blamed (span, home) must be byte-identical \
+                         across runs — a moving caret is a Correctness (principle 2) \
+                         violation"
+                    );
+                }
+            }
+        }
+    }
 }
