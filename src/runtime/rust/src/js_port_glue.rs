@@ -21,14 +21,20 @@
 
 use sha2::{Digest, Sha256};
 
-/// The browser port glue. A fixed ES module — no user input is ever interpolated,
-/// so its bytes (and therefore its address and SRI) are constant per build.
-///
-/// `window.ipeOnReceive` is the single slot the runtime's outbound delivery
-/// calls; `window.ipe.send` funnels an inbound value to `window.__ipePortSend`,
-/// the seam the host page/runtime installs. Values cross only as JSON strings,
-/// parsed as data (`JSON.parse` / `JSON.stringify`), never `eval`.
-const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross as JSON strings only.
+/// Schemes a shared URL may carry — the Rust SSOT mirroring `Ipe.Browser.Share.shareSchemes`.
+/// The JS `shareSink` scheme check is generated from this slice; adding a scheme here
+/// automatically tightens both the typed Ipê layer and the JS defence-in-depth guard.
+pub const SHARE_SCHEMES: &[&str] = &["http", "https"];
+
+// --- port glue JS assembly ---
+//
+// The ES module is assembled from two raw-string halves; the scheme-check snippet
+// between them is generated from `SHARE_SCHEMES` so the JS transport guard is
+// always consistent with the Ipê typed layer.  The `LazyLock` builds the string
+// once per process; `digest()`/`port_glue_path()`/`port_glue_integrity()` all
+// derive from the assembled bytes.
+
+const PORT_GLUE_JS_HEAD: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross as JSON strings only.
 (function () {
   var onReceive = null;
   // Return an inbound typed frame to the Ipê program: a decoded intent, never a
@@ -290,8 +296,11 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
     var data = {};
     if (typeof p.title === "string" && p.title !== "") data.title = p.title;
     if (typeof p.text === "string" && p.text !== "") data.text = p.text;
-    if (typeof p.url === "string" && p.url !== "") data.url = p.url;
-    try {
+"#;
+
+// The tail of the share sink + rest of the module — spliced in after the
+// generated scheme check.
+const PORT_GLUE_JS_TAIL: &str = r#"    try {
       navigator.share(data).then(
         function () { reply({ tag: "share", ok: true }, corId); },
         function (err) {
@@ -1425,6 +1434,24 @@ const PORT_GLUE_JS: &str = r#"// Ipe.Ffi.Js browser port surface. Values cross a
 })();
 "#;
 
+/// Assembled ES module: HEAD + generated scheme check + TAIL.
+///
+/// The URL scheme check inside `shareSink` is generated from `SHARE_SCHEMES`
+/// so the JS transport guard is always consistent with the Ipê typed layer.
+static PORT_GLUE_JS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    // Build a JS array literal from SHARE_SCHEMES, e.g. `["http","https"]`.
+    let schemes_js: String = {
+        let quoted: Vec<String> = SHARE_SCHEMES.iter().map(|s| format!("\"{s}\"")).collect();
+        format!("[{}]", quoted.join(","))
+    };
+    // The generated snippet replaces the bare `data.url = p.url` assignment with
+    // a fail-closed scheme guard: only http/https URLs reach the share sheet.
+    let url_check = format!(
+        "    if (typeof p.url === \"string\" && p.url !== \"\") {{\n      var _s = p.url.split(\":\")[0].toLowerCase();\n      if ({schemes_js}.indexOf(_s) !== -1) {{ data.url = p.url; }}\n    }}"
+    );
+    format!("{PORT_GLUE_JS_HEAD}{url_check}\n{PORT_GLUE_JS_TAIL}")
+});
+
 /// The full 32-byte SHA-256 digest of the glue bytes.
 fn digest() -> [u8; 32] {
     Sha256::digest(PORT_GLUE_JS.as_bytes()).into()
@@ -1433,7 +1460,7 @@ fn digest() -> [u8; 32] {
 /// The glue module's source bytes.
 #[must_use]
 pub fn port_glue_js() -> &'static str {
-    PORT_GLUE_JS
+    &PORT_GLUE_JS
 }
 
 /// The content-addressed URL PATH (no base prefix) for the port glue asset,
@@ -1619,6 +1646,43 @@ mod tests {
         assert!(js.contains("\"cancelled\""));
         assert!(js.contains("\"unavailable\""));
         assert!(!js.contains("eval("));
+    }
+
+    /// Pin that the JS `shareSink` URL scheme guard is generated from `SHARE_SCHEMES`
+    /// and that every scheme in `SHARE_SCHEMES` appears in the assembled JS.
+    /// Drift — adding a scheme to `SHARE_SCHEMES` without it reaching the JS — fails
+    /// this test, not a silent desync.
+    #[test]
+    fn share_sink_url_scheme_check_matches_share_schemes() {
+        let js = port_glue_js();
+        // The assembled JS must contain the generated scheme array literal.
+        let schemes_js: String = {
+            let quoted: Vec<String> = SHARE_SCHEMES.iter().map(|s| format!("\"{s}\"")).collect();
+            format!("[{}]", quoted.join(","))
+        };
+        assert!(
+            js.contains(&schemes_js),
+            "JS share sink scheme guard is missing or desynced; expected array {schemes_js:?} in glue"
+        );
+        // Every individual scheme from the SSOT must appear in the JS guard.
+        for scheme in SHARE_SCHEMES {
+            assert!(
+                js.contains(scheme),
+                "SHARE_SCHEMES scheme {scheme:?} missing from assembled JS — SSOT drift"
+            );
+        }
+        // Fail-closed: `data.url = p.url` appears ONLY inside the scheme-checked
+        // branch — the guard is generated AND there is no bare/duplicate assignment
+        // escaping it.
+        assert!(
+            js.contains("indexOf(_s) !== -1) { data.url = p.url; }"),
+            "the scheme-guarded url assignment is missing — guard not generated"
+        );
+        assert_eq!(
+            js.matches("data.url = p.url").count(),
+            1,
+            "expected exactly one (guarded) `data.url = p.url`; a bare or duplicate assignment escapes the scheme check"
+        );
     }
 
     #[test]
