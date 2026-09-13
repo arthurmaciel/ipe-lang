@@ -45,10 +45,12 @@ subscriptions _model =
 
 -- The per-page head. Titles are HTML-escaped by the runtime; the Open Graph and
 -- theme-color tags are ordinary typed helpers. `Head.canonical` requires a
--- validated `Ipe.Url.Url` — a bare String could silently produce a relative or
--- `javascript:` href — so it is emitted only when the URL parses. `Url.fromString`
--- is the one constructor, and it is the boundary where an unparseable URL is
--- turned away rather than carried into a tag.
+-- validated `Ipe.Url.Url` AND narrows its scheme to `http`/`https`, returning a
+-- `Result Error (Html msg)` — a bare String could silently produce a relative or
+-- `javascript:` href, and even a parsed `Url` may carry a non-web scheme, so the
+-- tag is emitted only when the URL both parses (`Url.fromString`) and passes the
+-- scheme allowlist (`Ok`). A malformed or non-web-scheme URL is turned away
+-- rather than carried into a tag.
 head : Model -> List (Html Msg)
 head model =
     let
@@ -62,7 +64,12 @@ head model =
     in
     case Url.fromString "https://example.com/" of
         Ok url ->
-            base ++ [ Head.canonical url ]
+            case Head.canonical url of
+                Ok tag ->
+                    base ++ [ tag ]
+
+                Err _ ->
+                    base
 
         Err _ ->
             base

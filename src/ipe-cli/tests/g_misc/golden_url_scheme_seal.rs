@@ -1,7 +1,8 @@
 //! REFUSAL SEAL for the typed URL sinks (`Ipe.Html.Attributes.href`,
 //! `Ipe.Html.Attributes.src` / `imageSrc`, `Ipe.Ui.link`,
-//! `Ipe.Browser.Share.shareUrl`) and the shared same-origin relative-reference
-//! predicate (`Ipe.Url.relative`).
+//! `Ipe.Browser.Share.shareUrl`, the `<head>` `href` sinks
+//! `Ipe.Web.Head.canonical` / `Ipe.Web.Head.rss`) and the shared same-origin
+//! relative-reference predicate (`Ipe.Url.relative`).
 //!
 //! A navigation `href` narrows through the anchor allowlist
 //! (`http`/`https`/`mailto`/`tel`); a media `src` is a distinct FETCH role with
@@ -93,6 +94,11 @@ fn url_scheme_seal_builds_and_runs() {
                     img_javascript=ERR\n\
                     share_https=OK\n\
                     share_mailto=ERR\n\
+                    canonical_https=OK\n\
+                    canonical_javascript=ERR\n\
+                    canonical_file=ERR\n\
+                    rss_https=OK\n\
+                    rss_javascript=ERR\n\
                     rel_path=OK\n\
                     rel_dot=OK\n\
                     rel_fragment=OK\n\
