@@ -208,7 +208,7 @@ checks:
       surface sees a red.
 
   # ── Registry publish smoke — informational (advisory live push-path proof) ──
-  - context: "publish → admission → resolve → cleanup"
+  - context: "publish → admit clean + reject bad → cleanup"
     disposition: informational
     producer: registry-publish-smoke.yml
     owner: release
