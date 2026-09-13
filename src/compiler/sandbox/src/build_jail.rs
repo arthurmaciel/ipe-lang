@@ -744,6 +744,62 @@ fn spawn_and_decode(
 /// variables, so the run/build launcher clears the environment down to the
 /// profile's `env_allowlist` (mirroring the Linux jail's `--clearenv`) BEFORE
 /// handing control to `sandbox-exec`. See [`macos_scrubbed_env`].
+/// The fixed hardware/kernel sysctls the C library reads during process
+/// bring-up (thread-pool sizing, allocator page geometry, OS-version probes).
+/// Re-allowed by EXACT name after the blanket `sysctl-read` deny so a
+/// dynamically-linked child can start, while bulk sysctl enumeration — the
+/// fingerprinting surface — stays denied. Each is a read-only scalar; none
+/// exposes a per-process secret or a mutable/authority operation.
+#[cfg(any(target_os = "macos", test))]
+const BRING_UP_SYSCTL_NAMES: &[&str] = &[
+    "hw.ncpu",
+    "hw.activecpu",
+    "hw.physicalcpu",
+    "hw.logicalcpu",
+    "hw.memsize",
+    "hw.pagesize",
+    "hw.cachelinesize",
+    "hw.cpufamily",
+    "hw.busfrequency",
+    "hw.cpufrequency",
+    "kern.osversion",
+    "kern.osproductversion",
+    "kern.osrelease",
+    "kern.ostype",
+    "kern.version",
+    "kern.hv_vmm_present",
+    "kern.secure_kernel",
+    "machdep.cpu.brand_string",
+];
+
+/// The fixed bootstrap Mach services a dynamically-linked process must reach to
+/// load and initialise: the dyld/XPC bootstrap surface, the libinfo/
+/// opendirectory lookups a shell's user/group resolution performs, and the
+/// unified-log/diagnostics endpoints libSystem opens at init. Re-allowed by
+/// EXACT `global-name` after the blanket `mach-lookup` deny (last-match-wins),
+/// so each named service overrides the deny for that one service while every
+/// other Mach service — the cross-process IPC and escape surface — stays
+/// denied. None of these grants network, arbitrary file, task-for-pid, or
+/// dynamic-code capability.
+#[cfg(any(target_os = "macos", test))]
+const BRING_UP_MACH_SERVICES: &[&str] = &[
+    "com.apple.system.notification_center",
+    "com.apple.system.logger",
+    "com.apple.system.opendirectoryd.libinfo",
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.system.DirectoryService.libinfo_v1",
+    "com.apple.system.DirectoryService.membership_v1",
+    "com.apple.logd",
+    "com.apple.diagnosticd",
+    "com.apple.xpc.activity.unmanaged",
+    "com.apple.CoreServices.coreservicesd",
+    "com.apple.coreservices.launchservicesd",
+    "com.apple.SecurityServer",
+    "com.apple.SystemConfiguration.configd",
+    "com.apple.trustd.agent",
+    "com.apple.trustd",
+];
+
 #[cfg(any(target_os = "macos", test))]
 #[must_use]
 pub fn sbpl_from_profile(
@@ -802,27 +858,9 @@ pub fn sbpl_from_profile(
     // ordering: this narrow allow overrides the blanket `sysctl-read` deny above
     // for exactly these names, leaving every other sysctl — the fingerprinting
     // surface — denied. Named individually so a new name cannot slip in under a
-    // wildcard; a genuinely-needed addition is a one-line, reviewed entry.
-    for name in [
-        "hw.ncpu",
-        "hw.activecpu",
-        "hw.physicalcpu",
-        "hw.logicalcpu",
-        "hw.memsize",
-        "hw.pagesize",
-        "hw.cachelinesize",
-        "hw.cpufamily",
-        "hw.busfrequency",
-        "hw.cpufrequency",
-        "kern.osversion",
-        "kern.osproductversion",
-        "kern.osrelease",
-        "kern.ostype",
-        "kern.version",
-        "kern.hv_vmm_present",
-        "kern.secure_kernel",
-        "machdep.cpu.brand_string",
-    ] {
+    // wildcard; a genuinely-needed addition is a one-line, reviewed entry in
+    // `BRING_UP_SYSCTL_NAMES`.
+    for name in BRING_UP_SYSCTL_NAMES {
         let _ = writeln!(s, "(allow sysctl-read (sysctl-name \"{name}\"))");
     }
     // Deny the macOS Seatbelt equivalents of the Linux seccomp baseline
@@ -852,24 +890,8 @@ pub fn sbpl_from_profile(
     // one service while every other Mach service — the cross-process IPC and
     // escape surface — stays denied. Named individually (never a prefix wildcard)
     // so no unlisted service is reachable; a new bring-up dependency is a
-    // one-line, reviewed entry.
-    for service in [
-        "com.apple.system.notification_center",
-        "com.apple.system.logger",
-        "com.apple.system.opendirectoryd.libinfo",
-        "com.apple.system.opendirectoryd.membership",
-        "com.apple.system.DirectoryService.libinfo_v1",
-        "com.apple.system.DirectoryService.membership_v1",
-        "com.apple.logd",
-        "com.apple.diagnosticd",
-        "com.apple.xpc.activity.unmanaged",
-        "com.apple.CoreServices.coreservicesd",
-        "com.apple.coreservices.launchservicesd",
-        "com.apple.SecurityServer",
-        "com.apple.SystemConfiguration.configd",
-        "com.apple.trustd.agent",
-        "com.apple.trustd",
-    ] {
+    // one-line, reviewed entry in `BRING_UP_MACH_SERVICES`.
+    for service in BRING_UP_MACH_SERVICES {
         let _ = writeln!(s, "(allow mach-lookup (global-name \"{service}\"))");
     }
     s.push_str("(deny iokit-open)\n");
@@ -2945,7 +2967,7 @@ mod tests {
             let rule = format!("(allow mach-lookup (global-name \"{service}\"))");
             let allow_at = sbpl
                 .find(&rule)
-                .unwrap_or_else(|| panic!("bring-up service {service} re-allowed: {sbpl}"));
+                .expect("bring-up service must be re-allowed by exact global-name");
             assert!(
                 allow_at > deny_at,
                 "the {service} allow must come AFTER the blanket deny (last-match-wins): {sbpl}"
@@ -2981,7 +3003,7 @@ mod tests {
             let rule = format!("(allow sysctl-read (sysctl-name \"{name}\"))");
             let allow_at = sbpl
                 .find(&rule)
-                .unwrap_or_else(|| panic!("bring-up sysctl {name} re-allowed: {sbpl}"));
+                .expect("bring-up sysctl must be re-allowed by exact sysctl-name");
             assert!(
                 allow_at > deny_at,
                 "the {name} allow must come AFTER the blanket deny (last-match-wins): {sbpl}"
