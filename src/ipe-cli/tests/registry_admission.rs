@@ -11,7 +11,12 @@
 //!    source, insert an entry whose sha256 is the source tree's real hash, run the
 //!    resolver → success; then tamper (an entry whose sha256 no longer matches) →
 //!    the resolver rejects with `HashMismatch` and writes nothing.
-//! 3. **`ipe package publish --dry-run`** (IPE_E2E-gated subprocess) — computes a
+//! 3. **Full `audit-entry` receiving gate** — the same call `admission.yml` runs
+//!    (schema + fetch + integrity-verify + the Tier-1 audit) REJECTS a fetched
+//!    package whose schema and integrity are sound but whose Tier-1 audit fails,
+//!    naming the offending version and writing nothing to the index — the
+//!    fail-closed proof that the deployed gate's audit leg actually fires.
+//! 4. **`ipe package publish --dry-run`** (IPE_E2E-gated subprocess) — computes a
 //!    correct entry (name, version, 40-hex rev, 64-hex sha256) touching no network.
 //!
 //! Everything lives in a temp dir and is torn down; no deletes against the real
@@ -387,6 +392,121 @@ fn ephemeral_index_rejects_a_tampered_tree() {
     let _ = std::fs::remove_dir_all(&source);
     let _ = std::fs::remove_dir_all(&index);
     let _ = std::fs::remove_dir_all(&proj);
+}
+
+// ── full audit-entry gate: a fetched package that fails the Tier-1 audit ─────
+
+/// A fixture package source git repo whose `Main` uses the `network` capability
+/// but whose `package.ipe` declares NOTHING — a hidden effect the Tier-1
+/// capability-consistency check must reject. Returns `(repo_path, tree_sha256)`;
+/// the sha256 is the real content hash of the committed tree, so the
+/// fetch+integrity leg of `audit-entry` passes and the REJECT lands on the
+/// audit, not on schema or a hash mismatch.
+fn fixture_undeclared_network_package(tag: &str) -> (PathBuf, String) {
+    let repo = temp_dir(&format!("audit-src-{tag}"));
+    std::fs::create_dir_all(repo.join("src")).expect("src dir");
+    std::fs::write(
+        repo.join("package.ipe"),
+        "module Package exposing (package)\n\n\n\
+         package =\n    { name = \"leaky-entry-pkg\", version = \"1.0.0\" }\n",
+    )
+    .expect("write package.ipe");
+    // A program that makes a network request — inferred capability set `{network}`,
+    // declared capability set empty: a hidden effect.
+    std::fs::write(
+        repo.join("src").join("Main.ipe"),
+        "module Main exposing (main)\n\n\
+         import Ipe.Http as Http\n\
+         import Ipe.Task as Task\n\
+         import Ipe.Io as Io\n\
+         import Ipe.Url as Url\n\n\
+         main : Task ()\n\
+         main =\n\
+         \x20   case Url.fromString \"http://example.com\" of\n\
+         \x20       Ok url ->\n\
+         \x20           Http.get url\n\
+         \x20               |> Task.andThen (\\_ -> Io.println \"done\")\n\n\
+         \x20       Err e ->\n\
+         \x20           Task.fail e\n",
+    )
+    .expect("write Main.ipe");
+    git(&repo, &["init", "--quiet"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "--quiet", "-m", "seed"]);
+    let sha = hash_source_tree(&repo).expect("hash package tree");
+    (repo, sha)
+}
+
+#[test]
+fn audit_entry_rejects_a_package_that_fails_the_tier1_audit() {
+    // The full receiving gate — `ipe package audit-entry`, the same call the
+    // deployed `admission.yml` runs (schema + fetch + integrity-verify + the
+    // Tier-1 audit) — must REJECT a fetched package whose SCHEMA is well-formed
+    // and whose INTEGRITY verifies, but whose AUDIT fails. This is the every-PR,
+    // network-free proof that the gate's fail-closed path actually fires: a
+    // silently-disabled audit leg would still admit this package.
+    let (source, sha) = fixture_undeclared_network_package("tier1");
+    // A well-formed entry whose sha256 is the source tree's real hash and whose
+    // rev is the committed HEAD: schema + fetch + integrity all pass, so the ONLY
+    // reachable rejection is the Tier-1 audit.
+    let index = fixture_index("audit-tier1", "leaky-entry-pkg", "1.0.0", &source, &sha);
+    let entry_path = index.join("packages").join("leaky-entry-pkg.toml");
+
+    let out = Command::new(ipe_bin())
+        .args(["package", "audit-entry"])
+        .arg(&entry_path)
+        // No `--index`: an isolated (empty) baseline, so the version is "new" and
+        // fully audited, and the enforced-semver check has no predecessor to fetch.
+        .env("IPE_REGISTRY_URL", "")
+        .output()
+        .expect("ipe runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // Fail-closed: the gate must exit non-zero (the typed CliError::PackageAudit
+    // reaches the process boundary as a non-zero status).
+    assert!(
+        !out.status.success(),
+        "audit-entry must REJECT a Tier-1-failing package; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // The reject is the Tier-1 audit, not schema or a hash mismatch: it names the
+    // capability check and the offending version.
+    assert!(
+        stderr.contains("capability consistency"),
+        "the reject names the Tier-1 capability check; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("network") && stderr.contains("used but NOT declared"),
+        "the diagnostic names the hidden `network` effect; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("1.0.0"),
+        "the reject names the offending version; got:\n{stderr}"
+    );
+    // The certified-summary line is printed only on a full pass — it must be
+    // absent when the audit rejects.
+    assert!(
+        !stdout.contains("new version(s) certified"),
+        "a rejected entry must NOT print the certified summary; got:\n{stdout}"
+    );
+
+    // Defence in depth: a rejected entry writes nothing to the index. The gate
+    // never mutates the index (it only reads the baseline), so the baseline
+    // directory must be exactly the single entry file we seeded — no admission
+    // artifact, no rewritten entry.
+    let packages = index.join("packages");
+    let written: Vec<String> = std::fs::read_dir(&packages)
+        .expect("read packages dir")
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+        .collect();
+    assert_eq!(
+        written,
+        vec!["leaky-entry-pkg.toml".to_owned()],
+        "a rejected entry must leave the index untouched; found: {written:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&source);
+    let _ = std::fs::remove_dir_all(&index);
 }
 
 // ── publish --dry-run (IPE_E2E-gated subprocess) ────────────────────────────

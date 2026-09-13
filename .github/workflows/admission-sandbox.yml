@@ -103,7 +103,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [changes]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.code == 'true'
+      || github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
 
     steps:
       - uses: actions/checkout@v5
@@ -139,7 +142,10 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     needs: [changes]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.code == 'true'
+      || github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
 
     steps:
       - uses: actions/checkout@v5
@@ -174,7 +180,10 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 15
     needs: [changes]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.code == 'true'
+      || github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
 
     steps:
       - uses: actions/checkout@v5
@@ -212,7 +221,10 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     needs: [changes]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.code == 'true'
+      || github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
 
     steps:
       - uses: actions/checkout@v5
@@ -308,7 +320,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
-    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    if: >-
+      needs.changes.outputs.code == 'true'
+      || github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
 
     steps:
       - uses: actions/checkout@v5

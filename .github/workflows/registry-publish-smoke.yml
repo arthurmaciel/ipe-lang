@@ -2,11 +2,14 @@
 # push-path end-to-end against the live (or a staging) registry.
 #
 # The `registry-admission` CI job (ci.yml) proves the publish *logic* over a
-# LOCAL fixture index — no real registry. This workflow closes that gap: it drives
-# the actual network push-path — `ipe package publish` opens a PR on the registry,
-# the registry's admission workflow accepts it, and the entry resolves back
-# through the Pages read API — then cleans up idempotently so the real index is
-# never polluted. See tools/scripts/registry/publish-smoke.sh for the mechanism.
+# LOCAL fixture index — no real registry. This workflow closes that gap by driving
+# the actual network push-path in BOTH directions: a clean probe `ipe package
+# publish`es, the registry's admission workflow ACCEPTS it, and the entry resolves
+# back through the Pages read API; then a deliberately-bad probe (a hidden
+# `network` capability) is published the same way and the same admission workflow
+# REJECTS it (its PR check goes RED / the PR is closed, never merged). Both legs
+# then clean up idempotently so the real index is never polluted. See
+# tools/scripts/registry/publish-smoke.sh for the mechanism.
 #
 # Cadence: NIGHTLY (cron) + manual `workflow_dispatch` ONLY. Never per-PR, never a
 # promotion-required check — pushing to a real registry must not gate every PR or
@@ -24,9 +27,11 @@
 # Staging vs production: PREFER a staging registry (a throwaway repo mirroring the
 # ipe-registry layout) so a failed run can never corrupt the real index. Configure
 # it with the IPE_SMOKE_INDEX_REPO / IPE_SMOKE_REGISTRY_URL repo variables. With no
-# staging repo configured, the run falls back to the production registry using a
-# RESERVED disposable package name (`ipe-registry-smoke-probe`, a `0.0.0-smoke.*`
-# prerelease no real consumer depends on) plus guaranteed idempotent cleanup.
+# staging repo configured, the run falls back to the production registry using
+# RESERVED disposable package names (`ipe-registry-smoke-probe` for the clean
+# probe, `ipe-registry-smoke-probe-bad` for the negative leg — both `0.0.0-smoke*`
+# prereleases no real consumer depends on) plus guaranteed idempotent cleanup. The
+# bad probe is rejected by admission, so its PR never merges.
 #
 # Required infra for a live run (absent → the job fails-closed with a clear note):
 #   secret  IPE_REGISTRY_PUBLISH_TOKEN  publish token with push + open-PR rights on
@@ -39,6 +44,9 @@
 #                                       (default https://arthurmaciel.github.io/ipe-registry).
 #   var     IPE_SMOKE_SOURCE_REPO       disposable repo whose HEAD the entry pins
 #                                       (default: <fork>/ipe-registry-smoke-probe).
+#   var     IPE_SMOKE_BAD_SOURCE_REPO   disposable repo for the negative leg's bad
+#                                       probe source (default:
+#                                       <fork>/ipe-registry-smoke-probe-bad).
 name: Registry publish smoke
 
 on:
@@ -62,7 +70,7 @@ concurrency:
 
 jobs:
   publish-smoke:
-    name: publish → admission → resolve → cleanup
+    name: publish → admit clean + reject bad → cleanup
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -116,6 +124,9 @@ jobs:
           IPE_SMOKE_FORK: ${{ vars.IPE_SMOKE_FORK }}
           IPE_REGISTRY_URL: ${{ vars.IPE_SMOKE_REGISTRY_URL }}
           IPE_SMOKE_SOURCE_REPO: ${{ vars.IPE_SMOKE_SOURCE_REPO }}
+          # The negative leg's bad-probe source repo (optional; the script defaults
+          # to <fork>/ipe-registry-smoke-probe-bad when unset).
+          IPE_SMOKE_BAD_SOURCE_REPO: ${{ vars.IPE_SMOKE_BAD_SOURCE_REPO }}
           IPE_BIN: ${{ github.workspace }}/target/debug/ipe
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: bash tools/scripts/registry/publish-smoke.sh
