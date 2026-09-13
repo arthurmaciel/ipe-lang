@@ -26,6 +26,10 @@ permissions:
 jobs:
   panic-scan:
     runs-on: ubuntu-latest
+    # No author gate: the job always starts and its internal paths-filter is the
+    # relevance gate for EVERY author, so an untrusted-author PR that touches
+    # panic-scan-relevant paths is already scanned. (A job-level author gate would
+    # wrongly skip a trusted-author PR that changed runtime code.)
     steps:
       - uses: actions/checkout@v7
 
