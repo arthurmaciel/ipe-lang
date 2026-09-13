@@ -1150,13 +1150,32 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             .join(triple.as_str())
             .join("release")
             .join(&bin_name);
+        if !bin_path.is_file() {
+            return Err(CliError::UsageOwned(format!(
+                "ipe release: expected binary at {} — cargo build succeeded but binary is missing",
+                bin_path.display()
+            )));
+        }
+        // Copy the binary from the cargo target dir into the resolved out dir so
+        // the artifact lands at a predictable path regardless of CARGO_TARGET_DIR.
+        std::fs::create_dir_all(&out_dir).map_err(|e| CliError::Io {
+            path: out_dir.clone(),
+            source: e,
+        })?;
+        let dest = out_dir.join(&bin_name);
+        std::fs::copy(&bin_path, &dest).map_err(|e| CliError::Io {
+            path: dest.clone(),
+            source: e,
+        })?;
+        #[cfg(unix)]
+        set_executable(&dest)?;
         if show_progress {
             eprintln!(
                 "{}",
                 style::gutter(&format!(
                     "{} released → {}",
                     style::glyph::OK,
-                    bin_path.display()
+                    dest.display()
                 ))
             );
         }
