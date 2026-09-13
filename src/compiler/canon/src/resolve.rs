@@ -2725,8 +2725,15 @@ fn inject_stdlib_exposed_type_homes(
 /// the HM constrainer and the lowerer's `is_html` check both expect. Forcing
 /// `["Html"]` here (over the just-inserted `["Ipe","Html","Attributes"]` dep
 /// path) is the qualified-type counterpart of the `["Html"]` builtin home
-/// recorded in `build_module_exports`; the value members are unaffected (they
-/// resolve through the compiled-source module, not `qualifier_paths`).
+/// recorded in `build_module_exports`.
+///
+/// The force-home is a per-qualifier sentinel, but its authority is name-scoped
+/// at the `TType` consumer: it homes only the reserved builtin view-type NAMES
+/// (`Attribute`/`Html`). A compiled-source ADT declared in `Ipe.Html.Attributes`
+/// (e.g. `Attr.LinkTarget`) is not a reserved builtin, so the consumer keeps its
+/// real `["Ipe","Html","Attributes"]` home from `type_home_map` rather than this
+/// `["Html"]` sentinel. Value members are likewise unaffected — they resolve
+/// through the compiled-source module, not `qualifier_paths`.
 ///
 /// # Errors
 /// [`Diagnostic::CompilerBug`] if interning `Html` exhausts the interner.
@@ -2749,20 +2756,27 @@ fn fold_html_stdlib_qualifier_homes(
         let qualifier = import
             .alias
             .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
-        // A stdlib `Ipe.Html*` import forces `["Html"]` even over the
-        // compiled-source `Ipe.Html.Attributes` dep path already inserted by the
-        // user-dep loop (so `Attr.Attribute` lowers to `html::Attribute`). A
-        // non-stdlib Html-family user dep keeps its own path (`or_insert`).
+        // Register the qualifier's REAL dep path (or the bare `["Html"]` builtin
+        // home for a builtin-only module such as `Ipe.Html` that carries no
+        // compiled source). The `TType` consumer force-homes the builtin
+        // view-type NAMES (`Attribute`/`Html`) to `["Html"]` when the qualifier
+        // is Html-family, so `Attr.Attribute` lowers to `html::Attribute` while a
+        // compiled-source ADT (`Attr.LinkTarget`) keeps this real module home. A
+        // stdlib kernel import carries no user-dep `qualifier_paths` entry, so
+        // this fill is what makes an Html-family qualifier resolvable at all.
         let is_stdlib_html = matches!(
             dep_path.first().and_then(|s| interner.resolve(*s)),
             Some("Ipe")
         );
-        if is_stdlib_html {
-            qualifier_paths.insert(qualifier, vec![html_sym]);
+        let home = if dep_path.len() > 1 {
+            dep_path.clone()
         } else {
-            qualifier_paths
-                .entry(qualifier)
-                .or_insert_with(|| vec![html_sym]);
+            vec![html_sym]
+        };
+        if is_stdlib_html {
+            qualifier_paths.insert(qualifier, home);
+        } else {
+            qualifier_paths.entry(qualifier).or_insert(home);
         }
     }
     Ok(())
@@ -6510,20 +6524,49 @@ fn canonicalise_type(
                 return Ok(expanded);
             }
             // Qualified reference (e.g. `Counter.Msg`): use `qualifier_paths`
-            // for the dep module's full home path. It ALSO carries (folded in by
-            // `fold_html_stdlib_qualifier_homes`) the canonical `["Html"]` home
-            // for a Html-family STDLIB qualifier, so `Attr.Attribute` →
-            // `html::Attribute` while `Ui.Attribute` (not folded) falls through to
-            // the empty Ui sentinel. Unqualified: delegate to
-            // `resolve_unqualified_type_home` which fails closed with IPE-N0002
-            // for unknown names (builtins get the empty-home sentinel).
+            // for the dep module's full home path, falling back to the bare-name
+            // `type_home_map` for a stdlib type the qualifier map does not carry.
+            // Unqualified: delegate to `resolve_unqualified_type_home`, which
+            // fails closed with IPE-N0002 for unknown names (builtins get the
+            // empty-home sentinel).
+            //
+            // Html-family builtin force-home: `fold_html_stdlib_qualifier_homes`
+            // registers an Html-family stdlib qualifier's real dep path, but the
+            // reserved builtin VIEW-TYPE names (`Attribute`/`Html`) must lower to
+            // the `["Html"]` carrier the HM constrainer and the lowerer's `is_html`
+            // check both expect. So a reserved-builtin name under an Html-family
+            // qualifier force-homes to `["Html"]`. A compiled-source ADT declared
+            // in `Ipe.Html.Attributes` (e.g. `Attr.LinkTarget`) is NOT a reserved
+            // builtin, so it keeps its real module home; homing it to `["Html"]`
+            // would mint a phantom `html::LinkTarget` the runtime has no type for.
+            // `Ui.Attribute` (a non-Html qualifier) is untouched — it falls
+            // through to the empty Ui sentinel.
             let home = if qualifier_str.is_empty() {
                 resolve_unqualified_type_home(name, ctx)?
             } else {
-                ctx.qualifier_paths
+                let qualifier_home = ctx
+                    .qualifier_paths
                     .get(qualifier)
                     .cloned()
-                    .unwrap_or_else(|| ctx.type_home_map.get(&name).cloned().unwrap_or_default())
+                    .or_else(|| ctx.type_home_map.get(&name).cloned())
+                    .unwrap_or_default();
+                let qualifier_is_html_family = qualifier_home
+                    .iter()
+                    .any(|s| ctx.interner.resolve(*s) == Some("Html"));
+                let name_is_reserved_builtin = ctx
+                    .interner
+                    .resolve(name)
+                    .is_some_and(is_reserved_builtin_type_name);
+                if qualifier_is_html_family && name_is_reserved_builtin {
+                    // `Html` is interned by `fold_html_stdlib_qualifier_homes`
+                    // whenever any Html-family import exists, so a hit here is the
+                    // norm; the qualifier's own home is the fail-closed fallback.
+                    ctx.interner
+                        .lookup("Html")
+                        .map_or(qualifier_home, |html| vec![html])
+                } else {
+                    qualifier_home
+                }
             };
             // A fixed-arity built-in that resolves to the empty-home sentinel
             // (a closed container, or `Ipe.Db`'s `Connection mode` handle and
@@ -8523,6 +8566,143 @@ mod unary_minus_hygiene_tests {
             panic!("v body must be a Let");
         };
         assert_negate_kernel_callee(in_body, &i);
+    }
+}
+
+#[cfg(test)]
+mod html_qualifier_type_home_tests {
+    //! An Html-family stdlib qualifier (`import Ipe.Html.Attributes as Attr`)
+    //! force-homes the reserved builtin VIEW-TYPE names (`Attribute`/`Html`) to
+    //! `["Html"]`, so `Attr.Attribute` lowers to `html::Attribute`. A
+    //! compiled-source ADT declared in the same module (`Attr.LinkTarget`) is NOT
+    //! a reserved builtin, so it keeps its real `["Ipe","Html","Attributes"]`
+    //! home — not the builtin `["Html"]`.
+    #![allow(clippy::panic, clippy::expect_used)] // test setup: a failed parse/canon IS the failure
+
+    use super::*;
+
+    fn sym(i: &mut Interner, s: &str) -> Symbol {
+        i.intern(s).expect("intern must succeed")
+    }
+
+    /// A hand-built `Ipe.Html.Attributes` export view: the compiled-source ADT
+    /// `LinkTarget` (home = the module's own path) plus the re-exported builtin
+    /// `Attribute` (home = `["Html"]`, matching `reexported_builtin_type_home`).
+    /// Built directly rather than by canonicalising a `module Ipe.Html.Attributes`
+    /// source, which the resolver rejects as a reserved namespace.
+    fn html_attributes_exports(i: &mut Interner, dep_path: &[Symbol]) -> crate::ModuleExports {
+        let link_target = sym(i, "LinkTarget");
+        let absolute = sym(i, "Absolute");
+        let attribute = sym(i, "Attribute");
+        let html_home = vec![sym(i, "Html")];
+
+        let mut types: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+        types.insert(link_target, dep_path.to_vec());
+        types.insert(attribute, html_home);
+
+        let mut ctors: BTreeMap<Symbol, CtorHome> = BTreeMap::new();
+        ctors.insert(
+            absolute,
+            CtorHome {
+                home: dep_path.to_vec(),
+                type_name: link_target,
+                name: absolute,
+                index: 0,
+                arity: 0,
+            },
+        );
+
+        crate::ModuleExports {
+            path: dep_path.to_vec(),
+            types: types.clone(),
+            ctors,
+            scope_types: types,
+            ..crate::ModuleExports::default()
+        }
+    }
+
+    /// Canonicalise an importer against the hand-built `Ipe.Html.Attributes`
+    /// export view, returning the importer's canonical module.
+    fn import_against_html_attributes(importer_src: &str) -> (canon::Module, Interner) {
+        let mut i = Interner::new();
+        let dep_path = vec![
+            sym(&mut i, "Ipe"),
+            sym(&mut i, "Html"),
+            sym(&mut i, "Attributes"),
+        ];
+        let main_path = vec![sym(&mut i, "Main")];
+        let mut deps: BTreeMap<Vec<Symbol>, crate::ModuleExports> = BTreeMap::new();
+        let exports = html_attributes_exports(&mut i, &dep_path);
+        deps.insert(dep_path, exports);
+
+        let Ok(parsed_main) = ipe_parse::parse_module(importer_src, &mut i) else {
+            panic!("importer parse failed");
+        };
+        let (module, _) = canonicalise_module(&parsed_main, &main_path, &deps, &mut i)
+            .expect("importer must canonicalise");
+        (module, i)
+    }
+
+    /// The declared home of the named typed def's annotation, which must be a
+    /// nullary `Con`.
+    fn annotation_con_home<'m>(
+        module: &'m canon::Module,
+        i: &Interner,
+        def_name: &str,
+    ) -> &'m [Symbol] {
+        let ty = module
+            .defs
+            .iter()
+            .find(|d| i.resolve(d.name().value) == Some(def_name))
+            .and_then(|d| match d {
+                canon::Def::Typed { ty, .. } => Some(ty),
+                canon::Def::Untyped { .. } => None,
+            })
+            .expect("named typed def must exist");
+        match ty {
+            canon::Type::Con { home, .. } => home,
+            other => panic!("annotation must be a Con, got {other:?}"),
+        }
+    }
+
+    /// `Attr.LinkTarget` — a compiled-source ADT — homes at its REAL module
+    /// `["Ipe","Html","Attributes"]`, NOT the builtin `["Html"]`. This is the
+    /// annotation-resolution bug: the force-home must not swallow a source ADT.
+    #[test]
+    fn compiled_source_html_adt_keeps_real_module_home() {
+        let (module, i) = import_against_html_attributes(
+            "module Main exposing (x)\n\n\
+             import Ipe.Html.Attributes as Attr\n\n\
+             x : Attr.LinkTarget\n\
+             x =\n    Attr.Absolute\n",
+        );
+        let home = annotation_con_home(&module, &i, "x");
+        let dotted: Vec<_> = home.iter().map(|s| i.resolve(*s)).collect();
+        assert_eq!(
+            dotted,
+            vec![Some("Ipe"), Some("Html"), Some("Attributes")],
+            "Attr.LinkTarget (a compiled-source ADT) must home at its real module, \
+             not the builtin [\"Html\"]"
+        );
+    }
+
+    /// The builtin view type `Attr.Attribute` still force-homes to `["Html"]` so
+    /// it lowers to `html::Attribute` — the behaviour the fold exists to give.
+    #[test]
+    fn builtin_view_type_still_force_homes_to_html() {
+        let (module, i) = import_against_html_attributes(
+            "module Main exposing (x)\n\n\
+             import Ipe.Html.Attributes as Attr\n\n\
+             x : Attr.Attribute msg\n\
+             x =\n    Attr.Absolute\n",
+        );
+        let home = annotation_con_home(&module, &i, "x");
+        let dotted: Vec<_> = home.iter().map(|s| i.resolve(*s)).collect();
+        assert_eq!(
+            dotted,
+            vec![Some("Html")],
+            "the reserved builtin Attr.Attribute must keep the [\"Html\"] force-home"
+        );
     }
 }
 
