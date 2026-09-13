@@ -744,6 +744,62 @@ fn spawn_and_decode(
 /// variables, so the run/build launcher clears the environment down to the
 /// profile's `env_allowlist` (mirroring the Linux jail's `--clearenv`) BEFORE
 /// handing control to `sandbox-exec`. See [`macos_scrubbed_env`].
+/// The fixed hardware/kernel sysctls the C library reads during process
+/// bring-up (thread-pool sizing, allocator page geometry, OS-version probes).
+/// Re-allowed by EXACT name after the blanket `sysctl-read` deny so a
+/// dynamically-linked child can start, while bulk sysctl enumeration — the
+/// fingerprinting surface — stays denied. Each is a read-only scalar; none
+/// exposes a per-process secret or a mutable/authority operation.
+#[cfg(any(target_os = "macos", test))]
+const BRING_UP_SYSCTL_NAMES: &[&str] = &[
+    "hw.ncpu",
+    "hw.activecpu",
+    "hw.physicalcpu",
+    "hw.logicalcpu",
+    "hw.memsize",
+    "hw.pagesize",
+    "hw.cachelinesize",
+    "hw.cpufamily",
+    "hw.busfrequency",
+    "hw.cpufrequency",
+    "kern.osversion",
+    "kern.osproductversion",
+    "kern.osrelease",
+    "kern.ostype",
+    "kern.version",
+    "kern.hv_vmm_present",
+    "kern.secure_kernel",
+    "machdep.cpu.brand_string",
+];
+
+/// The fixed bootstrap Mach services a dynamically-linked process must reach to
+/// load and initialise: the dyld/XPC bootstrap surface, the libinfo/
+/// opendirectory lookups a shell's user/group resolution performs, and the
+/// unified-log/diagnostics endpoints libSystem opens at init. Re-allowed by
+/// EXACT `global-name` after the blanket `mach-lookup` deny (last-match-wins),
+/// so each named service overrides the deny for that one service while every
+/// other Mach service — the cross-process IPC and escape surface — stays
+/// denied. None of these grants network, arbitrary file, task-for-pid, or
+/// dynamic-code capability.
+#[cfg(any(target_os = "macos", test))]
+const BRING_UP_MACH_SERVICES: &[&str] = &[
+    "com.apple.system.notification_center",
+    "com.apple.system.logger",
+    "com.apple.system.opendirectoryd.libinfo",
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.system.DirectoryService.libinfo_v1",
+    "com.apple.system.DirectoryService.membership_v1",
+    "com.apple.logd",
+    "com.apple.diagnosticd",
+    "com.apple.xpc.activity.unmanaged",
+    "com.apple.CoreServices.coreservicesd",
+    "com.apple.coreservices.launchservicesd",
+    "com.apple.SecurityServer",
+    "com.apple.SystemConfiguration.configd",
+    "com.apple.trustd.agent",
+    "com.apple.trustd",
+];
+
 #[cfg(any(target_os = "macos", test))]
 #[must_use]
 pub fn sbpl_from_profile(
@@ -790,21 +846,34 @@ pub fn sbpl_from_profile(
     //
     // - `sysctl-read`: blocks bulk sysctl reads that leak host topology, hardware
     //   identifiers, and other fingerprinting surfaces. Legitimate tool use (shell,
-    //   compiler) does not require broad sysctl enumeration. Where a specific sysctl
-    //   is genuinely needed (e.g. hw.ncpu for thread sizing), Seatbelt allows the
-    //   narrowest matching rule to override this deny via specificity ordering.
+    //   compiler) does not require broad sysctl enumeration. The narrow set of
+    //   fixed hardware/kernel sysctls the C library reads during process bring-up
+    //   (CPU count, page size, physical memory) is re-allowed by name below, so a
+    //   dynamically-linked child can start while bulk enumeration stays denied.
     s.push_str("(deny process-info*)\n");
     s.push_str("(deny mach-task-name)\n");
     s.push_str("(deny sysctl-read)\n");
+    // Re-allow ONLY the specific bring-up sysctls the C library reads while it
+    // initialises (thread pool sizing, allocator page geometry). Last-match-wins
+    // ordering: this narrow allow overrides the blanket `sysctl-read` deny above
+    // for exactly these names, leaving every other sysctl — the fingerprinting
+    // surface — denied. Named individually so a new name cannot slip in under a
+    // wildcard; a genuinely-needed addition is a one-line, reviewed entry in
+    // `BRING_UP_SYSCTL_NAMES`.
+    for name in BRING_UP_SYSCTL_NAMES {
+        let _ = writeln!(s, "(allow sysctl-read (sysctl-name \"{name}\"))");
+    }
     // Deny the macOS Seatbelt equivalents of the Linux seccomp baseline
     // primitives that the run jail (seccomp.rs) blocks unconditionally:
     //
     // - `mach-lookup`: arbitrary bootstrap/system Mach service reach — the
     //   macOS mechanism for cross-process IPC. Mirrors the Linux denial of
     //   `bpf`/`perf_event_open` and the broader kernel-authority surface.
-    //   A specific service legitimately needed can be granted above this deny
-    //   with the narrowest `(allow mach-lookup (global-name "…"))` rule;
-    //   Seatbelt specificity ordering ensures that allow wins.
+    //   The fixed set of system bootstrap services the dynamic loader, the C
+    //   library, and the unified-log/allocator init reach while a process starts
+    //   is re-allowed by exact `global-name` below (last-match-wins), so a
+    //   dynamically-linked child can bring up while arbitrary service reach stays
+    //   denied.
     //
     // - `iokit-open` family: direct driver/hardware access path. Mirrors the
     //   Linux denial of `iopl`/`ioperm` and raw device access primitives.
@@ -813,6 +882,18 @@ pub fn sbpl_from_profile(
     //   between jailed and host processes. Mirrors the Linux denial of
     //   `shmget`/`shmat` and related IPC primitives.
     s.push_str("(deny mach-lookup)\n");
+    // Re-allow ONLY the fixed bootstrap services a dynamically-linked process
+    // must reach to load and initialise: the dyld/XPC bootstrap surface, the
+    // libinfo/opendirectory lookups a shell's user/group resolution performs, and
+    // the unified-log/diagnostics endpoints libSystem opens at init. Last-match
+    // wins, so each exact `global-name` overrides the blanket deny above for that
+    // one service while every other Mach service — the cross-process IPC and
+    // escape surface — stays denied. Named individually (never a prefix wildcard)
+    // so no unlisted service is reachable; a new bring-up dependency is a
+    // one-line, reviewed entry in `BRING_UP_MACH_SERVICES`.
+    for service in BRING_UP_MACH_SERVICES {
+        let _ = writeln!(s, "(allow mach-lookup (global-name \"{service}\"))");
+    }
     s.push_str("(deny iokit-open)\n");
     s.push_str("(deny iokit-open-user-client)\n");
     s.push_str("(deny iokit-open-service)\n");
@@ -2946,6 +3027,83 @@ mod tests {
         assert!(
             sbpl_no_net.contains("(deny mach-lookup)"),
             "mach-lookup must be denied when network is withheld: {sbpl_no_net}"
+        );
+    }
+
+    #[test]
+    fn sbpl_reallows_only_named_bring_up_mach_services_after_the_blanket_deny() {
+        // The child (a dynamically-linked binary) must reach the fixed bootstrap
+        // services the loader/libSystem need to start — otherwise the sandbox
+        // signal-kills it before any allowed operation runs. The carve-out is by
+        // EXACT global-name and ordered AFTER the blanket deny (last-match-wins),
+        // so bring-up succeeds while arbitrary Mach-service reach stays denied.
+        let sbpl = sbpl_from_profile(
+            &scoped(false, FilesystemScope::Isolated),
+            Path::new("/tmp/scratch"),
+            Path::new("/work/tree"),
+        );
+        let deny_at = sbpl
+            .find("(deny mach-lookup)")
+            .expect("blanket mach-lookup deny present");
+        for service in [
+            "com.apple.system.notification_center",
+            "com.apple.system.opendirectoryd.libinfo",
+            "com.apple.logd",
+        ] {
+            let rule = format!("(allow mach-lookup (global-name \"{service}\"))");
+            let allow_at = sbpl
+                .find(&rule)
+                .expect("bring-up service must be re-allowed by exact global-name");
+            assert!(
+                allow_at > deny_at,
+                "the {service} allow must come AFTER the blanket deny (last-match-wins): {sbpl}"
+            );
+        }
+        // Fail-closed: the re-allow is never a blanket `(allow mach-lookup)` and
+        // never a name-prefix wildcard — an unlisted service stays denied.
+        assert!(
+            !sbpl.contains("(allow mach-lookup)\n"),
+            "mach-lookup must never be blanket-allowed: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(allow mach-lookup (global-name-prefix"),
+            "mach-lookup must not be re-allowed by a name-prefix wildcard: {sbpl}"
+        );
+    }
+
+    #[test]
+    fn sbpl_reallows_only_named_bring_up_sysctls_after_the_blanket_deny() {
+        // Same shape as the mach-lookup carve-out: the C library reads a fixed set
+        // of hardware/kernel sysctls while it initialises. They are re-allowed by
+        // EXACT name after the blanket `sysctl-read` deny so the child starts,
+        // while bulk sysctl enumeration — the fingerprinting surface — stays denied.
+        let sbpl = sbpl_from_profile(
+            &scoped(false, FilesystemScope::Isolated),
+            Path::new("/tmp/scratch"),
+            Path::new("/work/tree"),
+        );
+        let deny_at = sbpl
+            .find("(deny sysctl-read)")
+            .expect("blanket sysctl-read deny present");
+        for name in ["hw.ncpu", "hw.pagesize", "hw.memsize"] {
+            let rule = format!("(allow sysctl-read (sysctl-name \"{name}\"))");
+            let allow_at = sbpl
+                .find(&rule)
+                .expect("bring-up sysctl must be re-allowed by exact sysctl-name");
+            assert!(
+                allow_at > deny_at,
+                "the {name} allow must come AFTER the blanket deny (last-match-wins): {sbpl}"
+            );
+        }
+        // Fail-closed: never a blanket `(allow sysctl-read)` and never a
+        // name-prefix wildcard — an unlisted sysctl stays denied.
+        assert!(
+            !sbpl.contains("(allow sysctl-read)\n"),
+            "sysctl-read must never be blanket-allowed: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(allow sysctl-read (sysctl-name-prefix"),
+            "sysctl-read must not be re-allowed by a name-prefix wildcard: {sbpl}"
         );
     }
 
