@@ -238,7 +238,15 @@ pub struct Builder<'a> {
     /// during solving must be one the operation truly supports — an equality
     /// obligation rejects a type containing a function, which Rust cannot
     /// compare, with IPE-T0014 rather than emitting code `cargo` rejects).
-    pub super_vars: Vec<(VarId, TyBounds, Span)>,
+    ///
+    /// The `home` is the module path of the def the operator lives in
+    /// (`current_home` at mint time). A post-solve obligation failure
+    /// (`super_unsatisfied`) attributes to this home DIRECTLY, so a
+    /// kernel/operator-synthesized obligation error frames against its own
+    /// source file rather than falling into the byte-offset heuristic — which
+    /// can pick a wrong, order-unstable file for a cross-module program (the
+    /// IPE-T0014/T0001 span-collision class).
+    pub super_vars: Vec<(VarId, TyBounds, Span, Vec<Symbol>)>,
     /// One entry per *cross-module* reference to an untyped top-level binding
     /// (`Builder::current_home != source.0`). A same-module reference keeps
     /// sharing `untyped[key]` directly (unchanged monomorphic-within-module
@@ -468,7 +476,7 @@ pub struct Generated {
     pub route_witness_checks: Vec<RouteWitnessCheck>,
     pub typed_rigids: Vec<PolyVarEntry>,
     pub scheme_apps: Vec<SchemeApp>,
-    pub super_vars: Vec<(VarId, TyBounds, Span)>,
+    pub super_vars: Vec<(VarId, TyBounds, Span, Vec<Symbol>)>,
     /// Every cross-module untyped-binding reference recorded during
     /// constraint generation. See [`PendingInstantiation`].
     pub pending_instantiations: Vec<PendingInstantiation>,

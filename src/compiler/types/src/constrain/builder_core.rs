@@ -370,7 +370,8 @@ impl<'a> Builder<'a> {
             rigid: false,
             bounds,
         })?;
-        self.super_vars.push((v, bounds, span));
+        self.super_vars
+            .push((v, bounds, span, self.current_home.clone()));
         Ok(v)
     }
 
