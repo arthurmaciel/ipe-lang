@@ -353,6 +353,37 @@ fn emit_web_route(
     )))
 }
 
+/// The one-time registration statement a NATIVE served web app emits so the
+/// runtime's `Permissions-Policy` opens exactly the GRANTED `Ipe.Browser.*`
+/// axes' directives (`geolocation` / `camera` / `microphone`) to `(self)` and
+/// denies every other. The wire suffixes are the compiler's PROVEN grant
+/// (`ctx.web_capabilities`, disclosed by the reserved browser-module imports),
+/// so the served policy matches the capability set exactly — never widened.
+///
+/// Empty string when the program discloses no browser axis: the runtime's
+/// unset-registry default is the fully-denied policy, so no statement is
+/// needed and the served header stays fail-closed.
+///
+/// Not emitted for the wasm-client target: the served `Permissions-Policy` is a
+/// response header on the SERVING host, which a client-side wasm app does not
+/// build.
+fn granted_web_features_register_stmt(ctx: &EmitCtx) -> String {
+    if ctx.web_capabilities.is_empty() {
+        return String::new();
+    }
+    // Deterministic order (BTreeSet iteration is sorted); `{:?}` renders each
+    // `&'static str` suffix as a valid Rust string literal.
+    let suffixes: Vec<String> = ctx
+        .web_capabilities
+        .iter()
+        .map(|c| format!("{:?}", c.as_str()))
+        .collect();
+    format!(
+        "ipe_runtime::telemetry::register_granted_web_features(&[{}]); ",
+        suffixes.join(", ")
+    )
+}
+
 // ── Non-routed `web_app` ──────────────────────────────────────────────────────
 
 /// Emit `ipe_runtime::web::web_app(init, update, view, subs, store, path)`.
@@ -573,8 +604,9 @@ fn emit_routed_web_leaf(
                 .into(),
         });
     }
+    let register = granted_web_features_register_stmt(ctx);
     Ok(Some(format!(
-        "{{ {tag_const} \
+        "{{ {register}{tag_const} \
          ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Standalone(\
          ipe_runtime::web::web_app_routed(\
          {init_s}, \
@@ -627,6 +659,7 @@ fn emit_single_page_web_leaf(
     // emit change) unless the `hot_appearance` dev gate is on, so a release emit is
     // byte-identical.
     let msg_set_item = msg_set_descriptor_item(ctx, update_e);
+    let register = granted_web_features_register_stmt(ctx);
     if mountable {
         let init_s2 = emit_web_fn(ctx, init_e, indent, child, generics)?;
         let update_s2 = emit_web_fn(ctx, update_e, indent, child, generics)?;
@@ -637,13 +670,13 @@ fn emit_single_page_web_leaf(
             "ipe_runtime::web::web_embed_router({init_s2}, {update_s2}, {view_s2}, {subs_s2}, {store_args})"
         );
         return Ok(Some(format!(
-            "{{ {tag_const} {msg_set_item}\
+            "{{ {register}{tag_const} {msg_set_item}\
              ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Mountable {{ \
              serve: {serve_call}, router: {router_call} }}) }}"
         )));
     }
     Ok(Some(format!(
-        "{{ {tag_const} {msg_set_item}\
+        "{{ {register}{tag_const} {msg_set_item}\
          ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Standalone({serve_call})) }}"
     )))
 }
