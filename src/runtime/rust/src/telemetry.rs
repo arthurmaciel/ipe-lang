@@ -297,6 +297,104 @@ pub fn frame_ancestors() -> Option<&'static str> {
     if v.is_empty() { None } else { Some(v.as_str()) }
 }
 
+/// The closed, ordered `Permissions-Policy` directive vocabulary Ipê emits an
+/// allowlist for — every powerful feature denied by default. `payment` is a
+/// permanent deny (no capability opens it). A granted axis flips its mapped
+/// directive from the empty `()` deny to `(self)`.
+///
+/// SSOT note: the runtime cannot import the compiler's `ipe_kernels`
+/// (a native-only DEV dependency — the emitted runtime must not link the
+/// compiler), so this vocabulary is mirrored here as plain data and tied to the
+/// compiler's `WebCapability::POLICY_DIRECTIVES` by an equality test
+/// (`policy_directive_vocabulary_matches_kernels`, native-only where
+/// `ipe_kernels` is in scope). The instant either drifts, that test breaks.
+const POLICY_DIRECTIVES: &[&str] = &["geolocation", "microphone", "camera", "payment"];
+
+/// The `Permissions-Policy` directive(s) a GRANTED web-capability wire suffix
+/// (`WebCapability::as_str`, e.g. `"geolocation"`) opens to `(self)`. Empty for
+/// a suffix whose Web API needs no allowance (same-origin clipboard is
+/// default-allow; storage / notification / … are not `Permissions-Policy`
+/// features) AND for an unrecognised suffix — fail-closed, an unknown grant can
+/// only fail to open a feature, never open an unintended one.
+///
+/// SSOT note: mirrors the compiler's
+/// `WebCapability::permissions_policy_directives`, tied by
+/// `policy_directive_map_matches_kernels` (native-only). `recorder` reaches
+/// both camera and microphone via `getUserMedia`.
+fn directives_for_suffix(suffix: &str) -> &'static [&'static str] {
+    match suffix {
+        "geolocation" => &["geolocation"],
+        "camera" => &["camera"],
+        "microphone" => &["microphone"],
+        "recorder" => &["camera", "microphone"],
+        _ => &[],
+    }
+}
+
+/// The web-capability wire suffixes the compiled app was GRANTED, registered
+/// ONCE at startup by the emitted web-app entry
+/// ([`register_granted_web_features`]). The served `Permissions-Policy` is
+/// derived from this set: a granted axis opens its mapped directive to
+/// `(self)`; every other directive stays the empty `()` deny. Snapshotted into
+/// a `OnceLock` so the header is stable for the process and cannot be widened
+/// after the server binds.
+///
+/// Unset (never registered) → the empty set → fully denied policy. This is the
+/// fail-closed default: absent a proven grant, no powerful feature is allowed.
+static GRANTED_WEB_FEATURES: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+    std::sync::OnceLock::new();
+
+/// Register the app's GRANTED web-capability set from its wire-suffix names,
+/// emitted from the compiler's proven grant. Idempotent: the first registration
+/// wins (a `OnceLock`), so a later call can never widen the served
+/// `Permissions-Policy`.
+///
+/// Called once at web-app startup before the server binds.
+pub fn register_granted_web_features(suffixes: &[&str]) {
+    let set: std::collections::BTreeSet<String> =
+        suffixes.iter().map(|s| (*s).to_string()).collect();
+    // First registration wins; a redundant later call is a no-op (never widens).
+    let _ = GRANTED_WEB_FEATURES.set(set);
+}
+
+/// Render the `Permissions-Policy` header value from the registered granted
+/// set. Every directive in [`POLICY_DIRECTIVES`] is emitted; a directive opened
+/// by a granted axis (via [`directives_for_suffix`]) gets the `(self)`
+/// allowlist, all others the empty `()` deny.
+///
+/// Defence-in-depth: this header is one of TWO independent gates — the
+/// `js_port` capability layer denies an ungranted port regardless of what a
+/// document's policy permits — so an ungranted feature stays denied even if
+/// this derivation were bypassed.
+#[must_use]
+fn permissions_policy_value() -> String {
+    permissions_policy_from(GRANTED_WEB_FEATURES.get())
+}
+
+/// Pure derivation of the `Permissions-Policy` value from a granted suffix set
+/// (or `None` = never registered). Split out from [`permissions_policy_value`]
+/// so the grant / no-grant / partial-grant derivations are unit-testable
+/// without touching the process-global registry.
+#[must_use]
+fn permissions_policy_from(granted: Option<&std::collections::BTreeSet<String>>) -> String {
+    let allowed: std::collections::BTreeSet<&'static str> = granted
+        .map(|set| {
+            set.iter()
+                .flat_map(|s| directives_for_suffix(s).iter().copied())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut parts: Vec<String> = Vec::with_capacity(POLICY_DIRECTIVES.len());
+    for &dir in POLICY_DIRECTIVES {
+        if allowed.contains(dir) {
+            parts.push(format!("{dir}=(self)"));
+        } else {
+            parts.push(format!("{dir}=()"));
+        }
+    }
+    parts.join(", ")
+}
+
 /// Safe-by-default security response headers, applied on both the Ipe.Web
 /// page path and the Ipe.Http.Server response path. Returned as owned
 /// `(name, value)` pairs so each
@@ -311,11 +409,12 @@ pub fn security_headers() -> Vec<(&'static str, String)> {
             "referrer-policy",
             "strict-origin-when-cross-origin".to_string(),
         ),
-        // Deny powerful features by default for a server-rendered app.
-        (
-            "permissions-policy",
-            "geolocation=(), microphone=(), camera=(), payment=()".to_string(),
-        ),
+        // Powerful features are denied by default; a directive opens to `(self)`
+        // only when the app was GRANTED the capability that maps to it. Derived
+        // from the registered grant so the served policy matches the proven
+        // capability set — never a blanket deny that also kills legitimate
+        // granted use, never a widened allow.
+        ("permissions-policy", permissions_policy_value()),
     ];
     // Framing: CSP frame-ancestors when an embed origin is configured, else
     // X-Frame-Options: SAMEORIGIN (mutually exclusive
@@ -749,6 +848,128 @@ pub fn entries_json(entries: &[LogEntry]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::collections::BTreeSet;
+
+    /// Build a granted suffix set from wire suffixes for the derivation tests.
+    fn granted(suffixes: &[&str]) -> BTreeSet<String> {
+        suffixes.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn ungranted_geolocation_stays_denied() {
+        // SECURITY-CRITICAL refusal: with NO grant (an app that discloses no
+        // browser axis, and the process-global registry unset → `None`), every
+        // powerful directive keeps its empty `()` deny — the fail-closed
+        // default. A regression that widened this to `*` or dropped a directive
+        // would silently permit a feature no capability granted.
+        let denied = permissions_policy_from(None);
+        assert_eq!(
+            denied,
+            "geolocation=(), microphone=(), camera=(), payment=()"
+        );
+        assert!(
+            !denied.contains("(self)"),
+            "no directive is opened absent a grant"
+        );
+
+        // An explicit empty grant is identical to the unset default.
+        assert_eq!(permissions_policy_from(Some(&granted(&[]))), denied);
+    }
+
+    #[test]
+    fn granted_geolocation_opens_only_geolocation() {
+        // The grant path: a geolocation grant opens ONLY `geolocation=(self)`;
+        // every other powerful directive stays denied (least privilege — the
+        // grant does not leak into camera / microphone / payment).
+        assert_eq!(
+            permissions_policy_from(Some(&granted(&["geolocation"]))),
+            "geolocation=(self), microphone=(), camera=(), payment=()"
+        );
+    }
+
+    #[test]
+    fn recorder_grant_opens_both_camera_and_microphone() {
+        // Recorder reaches both camera and microphone via getUserMedia, so a
+        // single grant opens BOTH directives — but never geolocation/payment.
+        assert_eq!(
+            permissions_policy_from(Some(&granted(&["recorder"]))),
+            "geolocation=(), microphone=(self), camera=(self), payment=()"
+        );
+    }
+
+    #[test]
+    fn clipboard_grant_opens_no_directive() {
+        // Same-origin clipboard is default-allow, so the clipboard axis maps to
+        // NO Permissions-Policy directive — a grant of it must not open any of
+        // the header's directives (fail-closed: only mapped axes open).
+        assert_eq!(
+            permissions_policy_from(Some(&granted(&["clipboard"]))),
+            "geolocation=(), microphone=(), camera=(), payment=()"
+        );
+    }
+
+    #[test]
+    fn payment_is_never_opened_by_any_grant() {
+        // `payment` is in the header vocabulary as a PERMANENT deny — no wire
+        // suffix maps to it, so no grant can open it. Even a `"payment"` suffix
+        // (which no capability produces) opens nothing, since it is not a mapped
+        // axis. Proves the directive stays `()` under any registered set.
+        let policy = permissions_policy_from(Some(&granted(&[
+            "geolocation",
+            "camera",
+            "microphone",
+            "recorder",
+            "payment",
+        ])));
+        assert!(
+            policy.contains("payment=()"),
+            "payment must stay denied under any grant: {policy}"
+        );
+        assert!(!policy.contains("payment=(self)"));
+    }
+
+    #[test]
+    fn unknown_suffix_opens_no_directive() {
+        // Fail-closed parse: an unrecognised suffix contributes nothing (it can
+        // only fail to open a feature, never open an unintended one).
+        assert_eq!(directives_for_suffix("not-a-real-axis"), &[] as &[&str]);
+        assert_eq!(
+            permissions_policy_from(Some(&granted(&["not-a-real-axis"]))),
+            "geolocation=(), microphone=(), camera=(), payment=()"
+        );
+    }
+
+    // SSOT tie: the runtime cannot import `ipe_kernels` in production (it is a
+    // native-only DEV dependency), so the directive vocabulary and the
+    // suffix→directive map are mirrored as plain data here. These native-only
+    // tests bind the runtime mirror to the compiler's `WebCapability` SSOT so
+    // the two cannot drift — the instant the compiler map changes, they break.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn policy_directive_vocabulary_matches_kernels() {
+        assert_eq!(
+            POLICY_DIRECTIVES,
+            ipe_kernels::WebCapability::POLICY_DIRECTIVES,
+            "runtime Permissions-Policy vocabulary drifted from the compiler SSOT"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn policy_directive_map_matches_kernels() {
+        // For every web axis, the runtime's suffix→directives table must equal
+        // the compiler's `permissions_policy_directives` for the same axis.
+        for &cap in ipe_kernels::WebCapability::ALL {
+            assert_eq!(
+                directives_for_suffix(cap.as_str()),
+                cap.permissions_policy_directives(),
+                "runtime directive map for {:?} ({:?}) drifted from the compiler SSOT",
+                cap,
+                cap.as_str()
+            );
+        }
+    }
 
     #[test]
     fn json_escape_neutralises_js_line_terminators_and_controls() {

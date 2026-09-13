@@ -358,6 +358,71 @@ impl WebCapability {
         }
     }
 
+    /// The HTTP `Permissions-Policy` directive names a GRANTED axis must open to
+    /// `(self)` so the served document may exercise the underlying powerful
+    /// browser feature. Empty for an axis whose Web API needs no
+    /// `Permissions-Policy` allowance (same-origin clipboard is default-allow;
+    /// storage / notification / vibration / share / battery / … are not
+    /// `Permissions-Policy`-gated features).
+    ///
+    /// This is the closed SSOT for the capability → response-header mapping: the
+    /// runtime derives the served `Permissions-Policy` from the granted set
+    /// through this table, and the exhaustive `match` (no wildcard) forces a
+    /// deliberate directive decision for every new axis. Fail-closed by
+    /// construction — an axis defaults to NO allowance (the header keeps the
+    /// empty `()` deny), never a widened one; a feature is opened only where an
+    /// explicit grant maps to its directive.
+    ///
+    /// `Recorder` reaches BOTH the camera and the microphone through
+    /// `getUserMedia`, so a grant of it opens both directives (mirroring the
+    /// native-permission derivation in `ipe-cli`'s `pack::permissions`).
+    #[must_use]
+    pub const fn permissions_policy_directives(self) -> &'static [&'static str] {
+        match self {
+            Self::Geolocation => &["geolocation"],
+            Self::Camera => &["camera"],
+            Self::Microphone => &["microphone"],
+            Self::Recorder => &["camera", "microphone"],
+            // The remaining axes exercise Web APIs that are not gated by a
+            // `Permissions-Policy` directive (or, for clipboard, are
+            // same-origin default-allow), so a grant opens no header allowance.
+            Self::Clipboard
+            | Self::Notification
+            | Self::Storage
+            | Self::Vibration
+            | Self::Share
+            | Self::Battery
+            | Self::NetworkInfo
+            | Self::File
+            | Self::Gamepad
+            | Self::Visibility
+            | Self::MediaQuery
+            | Self::Connectivity
+            | Self::Speech
+            | Self::Permission
+            | Self::Orientation
+            | Self::Motion
+            | Self::Channel
+            | Self::Fullscreen
+            | Self::ScreenOrientation
+            | Self::WakeLock
+            | Self::WebAuthn
+            | Self::Raw => &[],
+        }
+    }
+
+    /// The closed, ordered set of `Permissions-Policy` directive names Ipê
+    /// emits an allowlist for. Every powerful feature the runtime denies by
+    /// default appears here; a granted axis flips its mapped directive from the
+    /// empty `()` deny to `(self)`. `payment` is present as a permanent deny —
+    /// no Ipê capability opens it, so it is always `()`.
+    ///
+    /// This is the SSOT for the header's directive vocabulary: the runtime
+    /// renders exactly these keys, in this order, so the emitted header is
+    /// deterministic and the drift test can round-trip the derivation.
+    pub const POLICY_DIRECTIVES: &'static [&'static str] =
+        &["geolocation", "microphone", "camera", "payment"];
+
     /// One-line description of what granting this web capability permits.
     ///
     /// Used by [`Capability::grants`] for the `JsPort(_)` case.
@@ -866,6 +931,57 @@ mod tests {
                 "ALL is missing js-port sub-axis {w:?}"
             );
         }
+    }
+
+    #[test]
+    fn permissions_policy_directives_are_a_subset_of_the_header_vocabulary() {
+        // SEAL / drift guard: every directive any axis opens MUST be one the
+        // runtime actually renders in the served `Permissions-Policy` (the
+        // closed `POLICY_DIRECTIVES` vocabulary). A directive an axis opens but
+        // the header never emits would be a grant the served policy silently
+        // ignores — an `ipe`-accepts-then-runtime-vetoes gap. The exhaustive
+        // per-axis `match` forces a directive decision for every new axis; this
+        // ties that decision to the header vocabulary so the two cannot drift.
+        let vocab: std::collections::BTreeSet<&str> =
+            WebCapability::POLICY_DIRECTIVES.iter().copied().collect();
+        for &w in WebCapability::ALL {
+            for &dir in w.permissions_policy_directives() {
+                assert!(
+                    vocab.contains(dir),
+                    "{w:?} opens {dir:?}, absent from POLICY_DIRECTIVES {vocab:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn media_axes_open_their_getusermedia_directives() {
+        // The powerful media axes open exactly their underlying feature's
+        // directive; Recorder reaches both camera and microphone via
+        // getUserMedia, so it opens both. Pins the specific mapping the runtime
+        // header derivation depends on.
+        assert_eq!(
+            WebCapability::Geolocation.permissions_policy_directives(),
+            &["geolocation"]
+        );
+        assert_eq!(
+            WebCapability::Camera.permissions_policy_directives(),
+            &["camera"]
+        );
+        assert_eq!(
+            WebCapability::Microphone.permissions_policy_directives(),
+            &["microphone"]
+        );
+        assert_eq!(
+            WebCapability::Recorder.permissions_policy_directives(),
+            &["camera", "microphone"]
+        );
+        // Same-origin clipboard is default-allow → no directive.
+        assert!(
+            WebCapability::Clipboard
+                .permissions_policy_directives()
+                .is_empty()
+        );
     }
 
     #[test]

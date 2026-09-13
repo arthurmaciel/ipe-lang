@@ -959,7 +959,13 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         #[cfg(feature = "debugger")]
         let msg_for_history = msg.clone();
         let msg_started = std::time::Instant::now();
-        let (next, cmd) = update(msg, model);
+        // Run `update` inside the session-sid scope: a `Task` it returns (e.g.
+        // `Geo.current`, `Clipboard.read`) captures the owning session's sid at
+        // construction time via `scope_sid()`, so its outbound `Ipe.Ffi.Js` port
+        // frame addresses THIS session's SSE sink. Without the scope the sid is
+        // unset and a port-using Task's outbound frame reaches no sink — the
+        // request never leaves the server and the awaited reply never arrives.
+        let (next, cmd) = pubsub::with_session_sid(sid.clone(), || update(msg, model));
         crate::telemetry::metric_observe(
             "ipe_web_msg_seconds",
             &[("name", &msg_name)],
@@ -1029,7 +1035,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         // before the next select! park — never held across the await loop.
         store.set(&sid, strong.clone()).await;
 
-        run_cmd(cmd, &msg_tx, &sid);
+        pubsub::with_session_sid(sid.clone(), || run_cmd(cmd, &msg_tx, &sid));
         pubsub::with_session_sid(sid.clone(), || {
             spawn_subs(subs(next.clone()), &msg_tx, &mut sub_handles)
         });

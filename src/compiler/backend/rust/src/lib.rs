@@ -1317,6 +1317,14 @@ pub(crate) struct EmitCtx<'a> {
     /// arming threads through the shared `&EmitCtx`, exactly as
     /// [`Self::transition_model_param`] does for the transition rewrite.
     subs_hot_active: RefCell<bool>,
+    /// The `Ipe.Browser.*` web capabilities the program was GRANTED (disclosed
+    /// by importing the reserved browser modules; the resolver derives the set
+    /// and the linker unions it onto the [`Program`]). A served web app emits a
+    /// one-time `register_granted_web_features(&[…])` call from its web-app
+    /// entry so the runtime's `Permissions-Policy` opens exactly these axes'
+    /// directives to `(self)` and denies every other. Empty for a non-browser
+    /// program, whose served policy then stays fully denied (fail-closed).
+    web_capabilities: BTreeSet<ipe_kernels::WebCapability>,
 }
 
 /// Is an enum variant payload field type `Clone`, consulting the whole-program
@@ -2109,6 +2117,7 @@ impl<'a> EmitCtx<'a> {
             lit_accum: RefCell::new(LiteralAccum::default()),
             transition_model_param: RefCell::new(None),
             subs_hot_active: RefCell::new(false),
+            web_capabilities: program.imported_web_capabilities.clone(),
         };
         // Resolve the `HydrationState` type name through the same renderer the
         // emitted `main_from_hydration_state` signature uses, so the wasm-hydrate

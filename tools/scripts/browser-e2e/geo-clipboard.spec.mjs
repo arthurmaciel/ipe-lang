@@ -139,13 +139,27 @@ test("clipboard: write then read round-trip renders the copied text", async ({
     timeout: 5000,
   });
 
-  const locText = await page.getByText(/location: /).textContent();
-  // Extract the coords string after "location: ".
-  const coords = locText.replace(/^location: /, "").trim();
-  expect(coords.length).toBeGreaterThan(0);
+  // Extract JUST the coordinate string. The whole view renders as one flat
+  // text container, so `getByText(/location: /)` would return the entire
+  // body; match the specific `location: <coords>` shape on the body text and
+  // capture the coords group instead.
+  const bodyText = await page.locator("body").textContent();
+  const locMatch = bodyText.match(/location: (-?\d+\.\d+, -?\d+\.\d+ \(±\d+m\))/);
+  expect(locMatch, `body must contain a rendered location: ${bodyText}`).not.toBeNull();
+  const coords = locMatch[1];
 
   // Copy the location text to the clipboard.
   await page.getByRole("button", { name: "Copy location" }).click();
+
+  // `Clipboard.write` is async (navigator.clipboard.writeText returns a
+  // Promise): wait for the OS clipboard to actually hold the coords before
+  // pasting, so the read cannot race an unfinished write. A deterministic
+  // settle signal (the real clipboard state), not a fixed sleep.
+  await expect
+    .poll(async () => page.evaluate(() => navigator.clipboard.readText()), {
+      timeout: 5000,
+    })
+    .toBe(coords);
 
   // Paste — triggers Clipboard.read outbound Cmd; the read result arrives on
   // the contents Sub and update sets model.clipboard = the text.
