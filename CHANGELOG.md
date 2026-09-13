@@ -10,6 +10,22 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.80](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.79...ipe-v0.1.80) (2026-09-13)
+
+
+### Features
+
+* **url,html,ui:** typed LinkTarget/MediaTarget SSOT over Url + Relative ([#2335](https://github.com/arthurmaciel/ipe-lang/issues/2335)) ([570c5d5](https://github.com/arthurmaciel/ipe-lang/commit/570c5d588987023936d5e6a4e6f447d7db2489d1))
+
+
+### Bug Fixes
+
+* **browser-e2e:** deterministic app-readiness gate ([#2407](https://github.com/arthurmaciel/ipe-lang/issues/2407)) ([#2418](https://github.com/arthurmaciel/ipe-lang/issues/2418)) ([cc9f4d5](https://github.com/arthurmaciel/ipe-lang/commit/cc9f4d5c48f9fed85d1c452d35fce4196a774feb))
+* **cli:** version-adaptive cargo-deny --config placement in package audit ([#2426](https://github.com/arthurmaciel/ipe-lang/issues/2426)) ([59ac2a9](https://github.com/arthurmaciel/ipe-lang/commit/59ac2a9fd275a440857ba8b278cd24e683e61cc8))
+* **runtime:** bound recursive-tree teardown and keep the red-zone probe sound under ASAN ([#2413](https://github.com/arthurmaciel/ipe-lang/issues/2413)) ([29e3526](https://github.com/arthurmaciel/ipe-lang/commit/29e35269762f2dcb0b594b6de0473974274706f9))
+* **runtime:** derive Permissions-Policy from granted Ipe.Browser capabilities ([#2422](https://github.com/arthurmaciel/ipe-lang/issues/2422), [#2407](https://github.com/arthurmaciel/ipe-lang/issues/2407)) ([#2424](https://github.com/arthurmaciel/ipe-lang/issues/2424)) ([90d82c4](https://github.com/arthurmaciel/ipe-lang/commit/90d82c470be2a1a20d56b32ed5ae47f47e6ce656))
+* unnecessary workflows prunning ([#2401](https://github.com/arthurmaciel/ipe-lang/issues/2401)) ([107223a](https://github.com/arthurmaciel/ipe-lang/commit/107223a4ce0b8d0bb50a88baafbe23a6cba33099))
+
 ## [0.1.79](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.78...ipe-v0.1.79) (2026-09-08)
 
 
