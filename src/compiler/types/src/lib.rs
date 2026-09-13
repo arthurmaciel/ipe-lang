@@ -581,7 +581,7 @@ fn infer_core(
     // generated `Into<SqlParam>` impl (`ipe_backend_rust::project`), so an
     // empty params list becomes a concretely-typed empty `Vec<SqlValue>`.
     let sqlvalue_sym = lift!(interner.intern("SqlValue"));
-    for (v, orig_bounds, span) in &generated.super_vars {
+    for (v, orig_bounds, span, home) in &generated.super_vars {
         let root = lift!(uf.find(*v));
         match lift!(uf.content(root)) {
             // An unpinned `Number` flex defaults to `Int` — an untyped
@@ -600,7 +600,7 @@ fn infer_core(
                 if !concrete_super_ok(interner, bounds, &int_ty, &enum_embeds_fn) {
                     return Err((
                         super_unsatisfied(interner, bounds, &int_ty, *span),
-                        Vec::new(),
+                        home.clone(),
                     ));
                 }
                 lift!(uf.set_content(
@@ -626,7 +626,7 @@ fn infer_core(
                 if !concrete_super_ok(interner, bounds, &sqlvalue_ty, &enum_embeds_fn) {
                     return Err((
                         super_unsatisfied(interner, bounds, &sqlvalue_ty, *span),
-                        Vec::new(),
+                        home.clone(),
                     ));
                 }
                 lift!(uf.set_content(
@@ -656,7 +656,7 @@ fn infer_core(
                 if !concrete_super_ok(interner, *orig_bounds, &ty, &enum_embeds_fn) {
                     return Err((
                         super_unsatisfied(interner, *orig_bounds, &ty, *span),
-                        Vec::new(),
+                        home.clone(),
                     ));
                 }
             }

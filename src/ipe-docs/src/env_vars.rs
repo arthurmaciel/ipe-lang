@@ -214,6 +214,17 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_PUBLISH_SIGNING_KEY",
+        default: "unset",
+        purpose: "Path to the SSH private key used to sign a package before publishing. \
+                  When set, `ipe publish` signs the package archive and attaches the \
+                  signature; when unset, publish is refused for registries that require \
+                  signed submissions. Provide via your secret manager; never commit the \
+                  key file path alongside the key itself.",
+        subsystem: Subsystem::Build,
+        class: Class::Secret,
+    },
+    EnvVar {
         name: "IPE_REGISTRY_URL",
         default: "https://arthurmaciel.github.io/ipe-registry",
         purpose: "Base URL of the registry's static Pages read API (per-package JSON \
