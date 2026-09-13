@@ -46,13 +46,20 @@ SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
 
 echo "==> Waiting for server readiness..."
-for i in $(seq 1 20); do
+READY=""
+for i in $(seq 1 40); do
   if curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
     echo "   server ready (attempt $i)"
+    READY=1
     break
   fi
   sleep 0.5
 done
+# Fail closed: an unready server means Playwright runs against a dead port.
+if [ -z "$READY" ]; then
+  echo "   server never became ready on port $PORT" >&2
+  exit 1
+fi
 
 echo "==> Installing Playwright + Chromium (if not cached)..."
 cd "$SPEC_DIR"

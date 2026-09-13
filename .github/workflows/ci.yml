@@ -1415,12 +1415,20 @@ jobs:
           IPE_CONSOLE_EMBED=off \
           "$GEO_CLIPBOARD_BIN" &
           echo "GEO_SERVER_PID=$!" >> "$GITHUB_ENV"
-          for i in $(seq 1 20); do
+          ready=""
+          for i in $(seq 1 40); do
             if curl -sf "http://127.0.0.1:$IPE_GEO_CLIPBOARD_PORT/" >/dev/null 2>&1; then
-              echo "server ready (attempt $i)"; break
+              echo "server ready (attempt $i)"; ready=1; break
             fi
             sleep 0.5
           done
+          # Fail closed: a server that never answered means Playwright would run
+          # against a dead port. Turning the step red here surfaces the real
+          # fault instead of a downstream "element not found" timeout.
+          if [ -z "$ready" ]; then
+            echo "geo-clipboard server never became ready on port $IPE_GEO_CLIPBOARD_PORT" >&2
+            exit 1
+          fi
       - name: Run Playwright spec (geo + clipboard)
         working-directory: tools/scripts/browser-e2e
         run: npx playwright test --config playwright.config.mjs

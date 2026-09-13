@@ -161,6 +161,18 @@ pub(crate) const SESSION_FRAME_BUDGET: u64 = 100_000;
 /// indefinitely. Generous — a long recording session stays well under it.
 const SESSION_DEADLINE_MS: u64 = 3_600_000;
 
+/// Hard ceiling on outbound port frames buffered for a session whose browser
+/// out-sink is not yet bound (the window between session creation and the SSE
+/// connection that installs the sink). An outbound `Cmd` — `Geo.current`,
+/// `Clipboard.read` — dispatched in that window is queued here and flushed in
+/// FIFO order the instant the sink binds, so a fast action taken before the
+/// handshake lands is delivered, never dropped fire-and-forget. Bounded by
+/// construction: the queue is drop-oldest at the ceiling (the same fail-closed
+/// shape as [`MAX_OUTSTANDING`]), so a remote party cannot grow it without
+/// limit. The pre-bind window is sub-second, so a small ceiling covers every
+/// legitimate burst.
+pub(crate) const MAX_OUT_PENDING: usize = 64;
+
 // ─── Native (server) transport ─────────────────────────────────────────────
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -213,6 +225,13 @@ mod native {
         /// fail-closed. Bounded by [`MAX_OPEN_SESSIONS`]: a new `openSession` is
         /// refused when the map is full.
         pub(crate) streams: HashMap<u64, SessionStream>,
+        /// Outbound port frames produced before `out_sink` was bound (the window
+        /// between session creation and the SSE connection that installs the
+        /// sink). Flushed in FIFO order the instant the sink binds, so a `Cmd`
+        /// dispatched pre-handshake — `Geo.current`, `Clipboard.read` — is
+        /// delivered rather than dropped. Bounded by [`MAX_OUT_PENDING`]:
+        /// drop-oldest at the ceiling, so a pre-bind flood cannot grow heap.
+        pub(crate) out_pending: std::collections::VecDeque<String>,
     }
 
     /// One open session's state: the bounded frame channel a `sessionFrames`
@@ -242,6 +261,7 @@ mod native {
                 out_sink: None,
                 pending: HashMap::new(),
                 streams: HashMap::new(),
+                out_pending: std::collections::VecDeque::new(),
             }
         }
     }
@@ -298,10 +318,49 @@ mod native {
     /// `sid` is delivered to `sink`. Creates the session entry if the sink is
     /// wired before `session_open` (idempotent).
     pub fn register_out_sink_for(sid: &SessionId, sink: OutSink) {
-        let mut g = lock_sessions();
-        g.entry(sid.0.clone())
-            .or_insert_with(SessionPorts::new)
-            .out_sink = Some(sink);
+        // Take the sink and drain the pre-bind buffer under one lock acquisition,
+        // then deliver the drained frames after the guard drops — the sink is a
+        // synchronous callback and must never run while the registry mutex is
+        // held (it re-enters no lock here, but keeping delivery outside the guard
+        // preserves that invariant for every sink shape).
+        let buffered = {
+            let mut g = lock_sessions();
+            let ports = g.entry(sid.0.clone()).or_insert_with(SessionPorts::new);
+            ports.out_sink = Some(sink.clone());
+            std::mem::take(&mut ports.out_pending)
+        };
+        for encoded in buffered {
+            sink(&encoded);
+        }
+    }
+
+    /// Deliver one encoded outbound frame to `sid`'s browser out-sink, or buffer
+    /// it fail-closed when no sink is bound yet. This is the single outbound
+    /// delivery point: every `js_send`/`js_request`/`js_open_session`/
+    /// `js_send_to_session` routes its frame through here, so the drop-vs-buffer
+    /// policy lives in exactly one place. A frame produced before the SSE
+    /// connection installs the sink is queued in the session's bounded
+    /// [`SessionPorts::out_pending`] and flushed on [`register_out_sink_for`];
+    /// past the [`MAX_OUT_PENDING`] ceiling the OLDEST buffered frame is dropped
+    /// so a pre-bind flood cannot grow heap without limit.
+    pub(crate) fn deliver_or_buffer(sid: &SessionId, encoded: &str) {
+        let sink = {
+            let mut g = lock_sessions();
+            let ports = g.entry(sid.0.clone()).or_insert_with(SessionPorts::new);
+            match &ports.out_sink {
+                Some(sink) => Some(sink.clone()),
+                None => {
+                    if ports.out_pending.len() >= MAX_OUT_PENDING {
+                        ports.out_pending.pop_front();
+                    }
+                    ports.out_pending.push_back(encoded.to_string());
+                    None
+                }
+            }
+        };
+        if let Some(sink) = sink {
+            sink(encoded);
+        }
     }
 
     /// Feed one raw inbound string to `sid`'s port. Called by the server's inbound
@@ -447,9 +506,8 @@ mod native {
             match serde_json::to_value(&payload) {
                 Ok(value) => {
                     let encoded = seal_encode(&value);
-                    let sink = lock_sessions().get(origin).and_then(|p| p.out_sink.clone());
-                    if let Some(sink) = sink {
-                        sink(&encoded);
+                    if let Some(sid) = SessionId::parse(origin) {
+                        deliver_or_buffer(&sid, &encoded);
                     }
                 }
                 Err(e) => {
@@ -587,12 +645,10 @@ mod native {
                     .pending
                     .insert(cor_id, tx);
             }
-            // Deliver outbound to the origin session's sink.
+            // Deliver outbound to the origin session's sink, or buffer it
+            // fail-closed until the SSE connection binds the sink.
             if let Some(sid) = &owner_sid {
-                let sink = lock_sessions().get(&sid.0).and_then(|p| p.out_sink.clone());
-                if let Some(sink) = sink {
-                    sink(&encoded);
-                }
+                deliver_or_buffer(sid, &encoded);
             }
 
             // Await reply with deadline.
@@ -702,10 +758,7 @@ mod native {
                 "payload": outbound_json,
             });
             let encoded = seal_encode(&envelope);
-            let sink = lock_sessions().get(&sid.0).and_then(|p| p.out_sink.clone());
-            if let Some(sink) = sink {
-                sink(&encoded);
-            }
+            deliver_or_buffer(&sid, &encoded);
             crate::core::IpeResult::Ok(session_id as i64)
         })
     }
@@ -779,9 +832,8 @@ mod native {
                         "payload": value,
                     });
                     let encoded = seal_encode(&envelope);
-                    let sink = lock_sessions().get(origin).and_then(|p| p.out_sink.clone());
-                    if let Some(sink) = sink {
-                        sink(&encoded);
+                    if let Some(sid) = SessionId::parse(origin) {
+                        deliver_or_buffer(&sid, &encoded);
                     }
                 }
                 Err(e) => {
@@ -1588,6 +1640,105 @@ mod tests {
                     .last()
                     .map(String::as_str),
                 Some("42")
+            );
+            session_close(&sid);
+        }
+
+        // A `Cmd` dispatched BEFORE the SSE connection binds the out-sink — the
+        // window a fast user click lands in — must be buffered and delivered on
+        // bind, never dropped fire-and-forget. This is the geo/clipboard startup
+        // race root cause: Geo.current fired pre-handshake would otherwise vanish.
+        #[tokio::test]
+        async fn outbound_before_sink_bind_is_buffered_then_flushed_on_bind() {
+            let sid = test_sid("a0b1c2d3e4f5a0b1c2d3e4f5a0b1c2d3");
+            session_open(&sid); // session exists, but NO out-sink bound yet
+
+            // Two outbound frames produced while the sink is unbound.
+            for payload in [1_i64, 2_i64] {
+                match js_send::<i64, i64>(payload) {
+                    IpeCmd::Publish(thunk) => assert_eq!(thunk(sid.as_str()), 0),
+                    _ => unreachable!("js_send builds a Publish cmd"),
+                }
+            }
+
+            // Nothing delivered yet — the sink is not bound.
+            let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let seen2 = seen.clone();
+            // Binding the sink must flush the buffered frames in FIFO order.
+            register_out_sink_for(
+                &sid,
+                Arc::new(move |s: &str| {
+                    seen2
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(s.to_string());
+                }),
+            );
+
+            assert_eq!(
+                seen.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
+                ["1".to_string(), "2".to_string()],
+                "pre-bind frames must flush in FIFO order on sink bind, not drop"
+            );
+
+            // A frame produced AFTER the sink is bound goes straight through.
+            match js_send::<i64, i64>(3_i64) {
+                IpeCmd::Publish(thunk) => assert_eq!(thunk(sid.as_str()), 0),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                seen.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .last()
+                    .map(String::as_str),
+                Some("3")
+            );
+            session_close(&sid);
+        }
+
+        // The pre-bind buffer is bounded by construction: past MAX_OUT_PENDING the
+        // OLDEST frame is dropped so a flood before the sink binds cannot grow heap
+        // without limit (soundness "bounded by construction"; §1 exhaustion). The
+        // surviving frames are the newest MAX_OUT_PENDING, in order.
+        #[tokio::test]
+        async fn pre_bind_buffer_is_bounded_drop_oldest() {
+            let sid = test_sid("b1c2d3e4f5a0b1c2d3e4f5a0b1c2d3e4");
+            session_open(&sid);
+
+            // Overflow the ceiling by pushing MAX_OUT_PENDING + overflow frames.
+            let overflow = 5_usize;
+            let total = MAX_OUT_PENDING + overflow;
+            for i in 0..total {
+                match js_send::<i64, i64>(i as i64) {
+                    IpeCmd::Publish(thunk) => assert_eq!(thunk(sid.as_str()), 0),
+                    _ => unreachable!(),
+                }
+            }
+
+            let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let seen2 = seen.clone();
+            register_out_sink_for(
+                &sid,
+                Arc::new(move |s: &str| {
+                    seen2
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(s.to_string());
+                }),
+            );
+
+            let flushed = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            assert_eq!(
+                flushed.len(),
+                MAX_OUT_PENDING,
+                "buffer must cap at MAX_OUT_PENDING, never grow unbounded"
+            );
+            // Drop-oldest: the earliest `overflow` frames were evicted, so the
+            // survivors are payloads `overflow..total`, in order.
+            let expected: Vec<String> = (overflow..total).map(|i| i.to_string()).collect();
+            assert_eq!(
+                flushed, expected,
+                "drop-oldest keeps the newest MAX_OUT_PENDING frames in FIFO order"
             );
             session_close(&sid);
         }
