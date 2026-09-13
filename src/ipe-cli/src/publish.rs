@@ -12,6 +12,13 @@
 //! re-verifies cannot be mistyped. Publish refuses anything that would pin a
 //! non-reproducible source — a dirty working tree or an unpushed HEAD — so a
 //! merged entry always names an immutable, fetchable revision.
+//!
+//! The curated index enforces `required_signatures`, so the publish commit must
+//! be signed or it can never merge. Set `IPE_PUBLISH_SIGNING_KEY` to the path of
+//! an SSH signing key (the private-key file; its `.pub` must be registered as a
+//! *signing* key on the GitHub account that owns the fork) — publish signs the
+//! commit with it. Absent a usable key publish fails closed with a typed refusal
+//! rather than push an unsigned commit that would be rejected at merge.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -43,6 +50,11 @@ pub enum Refusal {
     DuplicateVersion { name: String, version: String },
     /// The source URL could not be determined (no `--source` and no git remote).
     NoSource,
+    /// No usable commit-signing key is configured, so the publish commit could
+    /// only be pushed unsigned. The curated index enforces `required_signatures`
+    /// and would refuse to merge an unsigned commit, so publish fails closed
+    /// rather than push a commit that can never land.
+    UnsignedCommit,
 }
 
 impl std::fmt::Display for Refusal {
@@ -71,6 +83,13 @@ impl std::fmt::Display for Refusal {
                 "could not determine the package's source URL — the index needs a public git \
                  URL the resolver can fetch. Pass `--source <url>`, or set an `origin` remote \
                  on the package's git repository.",
+            ),
+            Self::UnsignedCommit => f.write_str(
+                "no commit-signing key is configured, so the publish commit could only be \
+                 pushed unsigned — the curated index requires signed commits and would never \
+                 merge it, so nothing was published. Set `IPE_PUBLISH_SIGNING_KEY` to the path \
+                 of an SSH signing key (the private key file; its `.pub` must be registered as \
+                 a signing key on your GitHub account) and publish again.",
             ),
         }
     }
@@ -486,6 +505,71 @@ fn print_dry_run(entry_toml: &str, plan: &PrPlan) {
     print!("{}", crate::style::frame(&crate::style::gutter(&body)));
 }
 
+/// The SSH key used to sign the publish commit, parsed once at the boundary
+/// into a value that only holds a path to a readable, regular key file.
+///
+/// `parse, don't validate` at the signing boundary: the raw
+/// `IPE_PUBLISH_SIGNING_KEY` string is turned into a `SigningKey` exactly once,
+/// and only a value that names an existing regular file reaches the commit step
+/// — an unset, empty, or unreadable configuration can never be mistaken for a
+/// usable key downstream, so the only reachable outcome without a real key is a
+/// typed refusal, never an unsigned push. The key material itself stays in the
+/// file: only its path is handed to `git -c user.signingkey=<path>`, so no
+/// private-key bytes ever reach an argv or a log line.
+struct SigningKey(PathBuf);
+
+impl SigningKey {
+    /// The environment variable naming the SSH signing key's private-key file.
+    const ENV: &'static str = "IPE_PUBLISH_SIGNING_KEY";
+
+    /// Resolve the configured signing key, if one is usable.
+    ///
+    /// Returns `Some` only when `IPE_PUBLISH_SIGNING_KEY` names an existing
+    /// regular file; an unset variable, an empty value, or a path that is not a
+    /// readable regular file all yield `None`, which the caller turns into a
+    /// fail-closed [`Refusal::UnsignedCommit`].
+    fn from_env() -> Option<Self> {
+        Self::from_raw(std::env::var(Self::ENV).ok().as_deref())
+    }
+
+    /// The pure core of [`Self::from_env`]: turn a raw configuration value into a
+    /// usable key, or `None`. An absent value (`None`), an empty/whitespace
+    /// value, or a path that is not a readable regular file all fail closed.
+    fn from_raw(raw: Option<&str>) -> Option<Self> {
+        let trimmed = raw?.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let path = PathBuf::from(trimmed);
+        // A regular file the process can stat is the proof the key exists; git
+        // reads the bytes itself, so absent that proof publish refuses rather
+        // than hand git a path that would make signing fail or silently skip.
+        if std::fs::metadata(&path).is_ok_and(|m| m.is_file()) {
+            Some(Self(path))
+        } else {
+            None
+        }
+    }
+
+    /// The `-c` overrides that make `git commit` produce an SSH-signed commit
+    /// with this key, followed by the `-S` flag on the commit itself.
+    ///
+    /// `commit.gpgsign=true` plus an explicit `-S` is belt-and-braces: the
+    /// commit is signed even if the throwaway clone inherited no `gpgsign`
+    /// config, and the key/format overrides pin SSH signing regardless of the
+    /// ambient git configuration.
+    fn commit_prefix(&self) -> Vec<String> {
+        vec![
+            "-c".to_owned(),
+            "gpg.format=ssh".to_owned(),
+            "-c".to_owned(),
+            format!("user.signingkey={}", self.0.display()),
+            "-c".to_owned(),
+            "commit.gpgsign=true".to_owned(),
+        ]
+    }
+}
+
 /// Open the index PR the spec's default way: push the entry to the author's fork
 /// of the index over `git`, then open a browser at GitHub's pre-filled "create
 /// pull request" page.
@@ -501,6 +585,12 @@ fn print_dry_run(entry_toml: &str, plan: &PrPlan) {
 /// message carries the fork URL and the pre-filled PR URL as the manual
 /// fallback.
 fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliError> {
+    // Resolve the signing key BEFORE any network work: the curated index
+    // requires signed commits, so publish refuses up front when it could only
+    // produce an unsigned commit, rather than clone, commit, and push a branch
+    // that can never merge.
+    let signing_key = SigningKey::from_env().ok_or_else(|| refuse(Refusal::UnsignedCommit))?;
+
     let index_name = index_repo_name(&plan.index_repo);
     let fork_url = format!("https://github.com/{fork_owner}/{index_name}.git");
 
@@ -517,29 +607,18 @@ fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliE
     }
 
     // Write the entry on a fresh branch and commit it. `-c user.*` supplies an
-    // identity so the commit succeeds even where git has none configured.
+    // identity so the commit succeeds even where git has none configured, and
+    // the signing-key overrides make the commit SSH-signed so a
+    // `required_signatures` index will merge it.
     let entry_path = clone.join(&plan.entry_file);
     if let Some(parent) = entry_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| scratch_io(&e))?;
     }
     std::fs::write(&entry_path, entry_toml).map_err(|e| scratch_io(&e))?;
 
-    for step in [
-        vec!["checkout", "--quiet", "-b", &plan.branch],
-        vec!["add", "--", &plan.entry_file],
-        vec![
-            "-c",
-            "user.name=ipe",
-            "-c",
-            "user.email=ipe@localhost",
-            "commit",
-            "--quiet",
-            "-m",
-            &plan.title,
-        ],
-        vec!["push", "--quiet", "-u", "origin", &plan.branch],
-    ] {
-        if let Err(git) = run_git_step(&clone, &step) {
+    for step in commit_and_push_steps(plan, &signing_key) {
+        let refs: Vec<&str> = step.iter().map(String::as_str).collect();
+        if let Err(git) = run_git_step(&clone, &refs) {
             return Err(push_failed(&fork_url, plan, fork_owner, &git));
         }
     }
@@ -562,6 +641,40 @@ fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliE
         |token| submit_pr_via_api(plan, fork_owner, &token),
     );
     Ok(())
+}
+
+/// The ordered `git` invocations that put the entry on a fresh branch, commit
+/// it SSH-signed, and push it to the fork.
+///
+/// The commit step carries the signing-key `-c` overrides and `-S`, so a merged
+/// entry always descends from a signed commit — the shape a `required_signatures`
+/// index admits. Extracted from [`open_pr`] so the signed-commit invariant is
+/// checkable without a network: a caller can assert `-S` and the key overrides
+/// appear on the commit step.
+fn commit_and_push_steps(plan: &PrPlan, signing_key: &SigningKey) -> Vec<Vec<String>> {
+    let owned = |args: &[&str]| {
+        args.iter()
+            .map(|s| (*s).to_owned())
+            .collect::<Vec<String>>()
+    };
+
+    let mut commit = signing_key.commit_prefix();
+    commit.extend(owned(&[
+        "-c",
+        "user.name=ipe",
+        "-c",
+        "user.email=ipe@localhost",
+        "commit",
+    ]));
+    commit.push("-S".to_owned());
+    commit.extend(owned(&["--quiet", "-m", &plan.title]));
+
+    vec![
+        owned(&["checkout", "--quiet", "-b", &plan.branch]),
+        owned(&["add", "--", &plan.entry_file]),
+        commit,
+        owned(&["push", "--quiet", "-u", "origin", &plan.branch]),
+    ]
 }
 
 /// The token for the headless PR-open path: `GITHUB_TOKEN` (CI) wins, else the
@@ -1508,5 +1621,118 @@ mod tests {
             "round-tripped rev is lowercase hex"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn sample_plan() -> PrPlan {
+        PrPlan {
+            index_repo: "arthurmaciel/ipe-registry".to_owned(),
+            entry_file: "packages/http-extras.toml".to_owned(),
+            branch: "publish/http-extras-1.2.0".to_owned(),
+            title: "Publish http-extras 1.2.0".to_owned(),
+        }
+    }
+
+    /// Fail-closed: with signing required but no usable key configured, the
+    /// signing-key boundary yields nothing — the value `open_pr` turns into a
+    /// typed [`Refusal::UnsignedCommit`] BEFORE any clone/commit/push. This is
+    /// the security-critical rejection: absent proof the commit can be signed,
+    /// publish must never push an unsigned commit the require-signed index would
+    /// reject at merge. Every non-usable configuration is pinned here.
+    #[test]
+    fn no_signing_key_is_a_fail_closed_refusal() {
+        // An unset variable, an empty/whitespace value, and a path to no real
+        // file are each unusable — the boundary rejects all of them.
+        assert!(
+            SigningKey::from_raw(None).is_none(),
+            "unset key is unusable"
+        );
+        assert!(
+            SigningKey::from_raw(Some("")).is_none(),
+            "empty key is unusable"
+        );
+        assert!(
+            SigningKey::from_raw(Some("   ")).is_none(),
+            "whitespace-only key is unusable"
+        );
+        assert!(
+            SigningKey::from_raw(Some("/nonexistent/ipe-publish/no-such-key")).is_none(),
+            "a path to no real file is unusable"
+        );
+
+        // The refusal `open_pr` builds from that `None` is the typed, closed
+        // variant, and its message tells the author how to configure a key.
+        let refusal = refuse(Refusal::UnsignedCommit);
+        assert!(matches!(
+            refusal,
+            CliError::Publish(Refusal::UnsignedCommit)
+        ));
+        let rendered = Refusal::UnsignedCommit.to_string();
+        assert!(
+            rendered.contains("IPE_PUBLISH_SIGNING_KEY"),
+            "the refusal names the signing-key variable so the fix is discoverable"
+        );
+        assert!(
+            rendered.contains("nothing was published"),
+            "the refusal states no unsigned commit was pushed"
+        );
+    }
+
+    /// A directory is not a signing key: the boundary accepts only a regular
+    /// file, so a path that resolves to a directory fails closed like an absent
+    /// key.
+    #[test]
+    fn a_directory_is_not_a_usable_signing_key() {
+        let dir = temp_dir("signing-key-dir");
+        assert!(
+            SigningKey::from_raw(Some(&dir.display().to_string())).is_none(),
+            "a directory path is not a usable signing key"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The signed-commit path: given a usable key, the commit `git` step carries
+    /// the SSH signing overrides AND `-S`, so the pushed commit is signed — the
+    /// shape a `required_signatures` index admits. Pins that the signing
+    /// invocation is actually taken (not merely that a key parsed).
+    #[test]
+    fn a_configured_key_signs_the_publish_commit() {
+        let dir = temp_dir("signing-key-file");
+        let key_path = dir.join("id_ed25519");
+        std::fs::write(&key_path, b"fake-ssh-private-key").expect("write key file");
+
+        let key = SigningKey::from_raw(Some(&key_path.display().to_string()))
+            .expect("an existing regular file is a usable key");
+
+        let steps = commit_and_push_steps(&sample_plan(), &key);
+        let commit = steps
+            .iter()
+            .find(|s| s.iter().any(|a| a == "commit"))
+            .expect("a commit step exists");
+
+        assert!(
+            commit.iter().any(|a| a == "-S"),
+            "the commit step signs the commit (-S): {commit:?}"
+        );
+        assert!(
+            commit.iter().any(|a| a == "gpg.format=ssh"),
+            "the commit step selects SSH signing: {commit:?}"
+        );
+        assert!(
+            commit
+                .iter()
+                .any(|a| a == &format!("user.signingkey={}", key_path.display())),
+            "the commit step pins the configured signing key by path: {commit:?}"
+        );
+        assert!(
+            commit.iter().any(|a| a == "commit.gpgsign=true"),
+            "the commit step forces signing regardless of ambient config: {commit:?}"
+        );
+        // The key's private bytes never travel on argv — only its path does.
+        assert!(
+            !commit.iter().any(|a| a.contains("fake-ssh-private-key")),
+            "no private-key bytes appear on the git argv: {commit:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
