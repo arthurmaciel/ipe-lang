@@ -1441,6 +1441,33 @@ mod freebsd_jail {
         }
     }
 
+    /// Mount a FRESH writable `tmpfs` at `target`, refusing (fail-closed) on any
+    /// non-success. A read-write nullfs source needs an existing, writable
+    /// mountpoint, but the target's parent is an empty stub of the read-only host
+    /// view (`EROFS`), so a writable tmpfs is layered over it to hold the leaf the
+    /// nullfs then mounts over. `mount(8)` — the stable base-system primitive, the
+    /// same binary used for devfs — carries the tmpfs type on every supported
+    /// FreeBSD release.
+    fn mount_tmpfs(mount_bin: &Path, target: &Path) -> Result<(), RunJailDefect> {
+        let status = std::process::Command::new(mount_bin)
+            .arg("-t")
+            .arg("tmpfs")
+            .arg("tmpfs")
+            .arg(target)
+            .status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: format!("mount -t tmpfs tmpfs failed ({s})"),
+            }),
+            Err(e) => Err(RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: format!("could not run mount -t tmpfs: {e}"),
+            }),
+        }
+    }
+
     /// Create an empty directory named `name` under `parent`, used as the read-only
     /// nullfs source that masks the jail's `/proc` with an EMPTY tree. A creation
     /// failure refuses (fail-closed) — a `/proc` that cannot be masked would leave
@@ -1476,8 +1503,11 @@ mod freebsd_jail {
     /// `jail path=<root>` chroots the payload here, so an out-of-scratch write targets
     /// the read-only mount and is denied by the mount flag — never reliant on host
     /// file permissions — and the fresh `/dev`/empty `/proc` deny the host
-    /// device/process metadata the ro-root would otherwise expose read-only. Every
-    /// mount and the root dir are torn down on drop, in reverse mount order.
+    /// device/process metadata the ro-root would otherwise expose read-only. Each
+    /// read-write nullfs source needs an existing, writable mountpoint; the
+    /// read-only host view supplies only an `EROFS` stub, so a fresh writable tmpfs
+    /// is layered over the target's parent to hold the leaf the source mounts over.
+    /// Every mount and the root dir are torn down on drop, in reverse mount order.
     struct RoRootMount {
         umount_bin: PathBuf,
         root: PathBuf,
@@ -1489,6 +1519,12 @@ mod freebsd_jail {
         proc_mask_source: PathBuf,
         /// Every mounted target, in mount order; unmounted in reverse on drop.
         mounted: Vec<PathBuf>,
+        /// In-root parent stubs a fresh writable tmpfs has been layered over, so a
+        /// read-write nullfs target's leaf can be created (the read-only host view
+        /// is `EROFS`). Deduplicated: two targets sharing a parent are provisioned
+        /// by a single tmpfs. Each is also recorded in `mounted` so it is unmounted
+        /// on drop.
+        tmpfs_parents: Vec<PathBuf>,
     }
 
     impl RoRootMount {
@@ -1541,6 +1577,7 @@ mod freebsd_jail {
                 root,
                 proc_mask_source,
                 mounted: Vec::new(),
+                tmpfs_parents: Vec::new(),
             };
 
             // 1. The whole host `/`, READ-ONLY, as the jail root. Everything the
@@ -1586,9 +1623,20 @@ mod freebsd_jail {
             )?;
             mount.mounted.push(proc_target);
 
-            // 4. The scratch, READ-WRITE, at its original absolute path inside the
-            //    chroot — the ONE writable location the payload has.
+            // A `mount_nullfs` target must ALREADY exist — the tool never creates
+            // its mountpoint (a missing target is `ENOENT`, exit 64). The read-only
+            // nullfs of `/` (step 1) supplies the empty stub dirs of the ROOT
+            // filesystem only; a nullfs of `/` does NOT cross into filesystems
+            // mounted UNDER it (a tmpfs `/tmp`, a separate `/home`), so a re-rooted
+            // scratch/working-tree LEAF under such a submount is invisible in the
+            // read-only view, and the read-only view cannot be `mkdir`'d into
+            // (`EROFS`). Layer a FRESH writable tmpfs
+            // over the target's in-root parent stub, then create the leaf on THAT
+            // tmpfs, so the read-write nullfs source has a real mountpoint to land
+            // on — the FreeBSD counterpart of the Linux arm's bwrap `--bind`, which
+            // materialises its mount target inside the namespace automatically.
             let scratch_target = under_root(&mount.root, scoped_tmp);
+            mount.provision_rw_mountpoint(&mount_devfs_bin, &scratch_target)?;
             mount_nullfs(
                 &mount_nullfs_bin,
                 false,
@@ -1601,6 +1649,7 @@ mod freebsd_jail {
             //    granted, so a granted effect is not false-denied.
             if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
                 let tree_target = under_root(&mount.root, working_tree);
+                mount.provision_rw_mountpoint(&mount_devfs_bin, &tree_target)?;
                 mount_nullfs(
                     &mount_nullfs_bin,
                     false,
@@ -1611,6 +1660,43 @@ mod freebsd_jail {
             }
 
             Ok(mount)
+        }
+
+        /// Make `target` a real, writable mountpoint for a read-write nullfs source.
+        ///
+        /// `target` is `<root>/<abs>` — its parent is an empty stub directory that
+        /// the read-only nullfs of `/` exposes, but the read-only view is `EROFS`
+        /// so the leaf cannot be `mkdir`'d there, and a nullfs of `/` does not cross
+        /// a submounted filesystem (a tmpfs `/tmp`), so a re-rooted leaf under such
+        /// a submount is `ENOENT`. Layer a FRESH writable tmpfs over the parent stub
+        /// (once per distinct parent), then create the leaf on that tmpfs.
+        ///
+        /// # Errors
+        ///
+        /// [`RunJailDefect::MountFailed`] when the target has no parent, when the
+        /// tmpfs mount fails, or when the leaf cannot be created — fail-closed: the
+        /// payload never runs against a half-built root with a missing mountpoint.
+        fn provision_rw_mountpoint(
+            &mut self,
+            mount_bin: &Path,
+            target: &Path,
+        ) -> Result<(), RunJailDefect> {
+            let parent = target.parent().ok_or_else(|| RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: "read-write mount target has no parent to provision".to_owned(),
+            })?;
+            // A single tmpfs per distinct parent: mounting a second over the same
+            // stub would mask the first, hiding the leaf already created on it.
+            if !self.tmpfs_parents.iter().any(|p| p == parent) {
+                mount_tmpfs(mount_bin, parent)?;
+                self.tmpfs_parents.push(parent.to_path_buf());
+                // Unmounted in reverse mount order on drop with the rest.
+                self.mounted.push(parent.to_path_buf());
+            }
+            std::fs::create_dir_all(target).map_err(|e| RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: format!("could not create the read-write nullfs mountpoint: {e}"),
+            })
         }
 
         fn root(&self) -> &Path {
