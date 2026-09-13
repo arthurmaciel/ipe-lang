@@ -2406,3 +2406,153 @@ fn upgrade_plain_is_flush_and_terse() {
     );
     assert_eq!(s, "feed unreachable\n");
 }
+
+/// A genuinely home-less post-link diagnostic (empty `Constraint`/obligation
+/// `home`) must resolve to a byte-STABLE file through `source_for_span_in_linked`,
+/// independent of the order the linked def list happens to carry — Correctness
+/// (principle 2): the same program + input yields the same diagnostic every run.
+///
+/// Two defs in DIFFERENT modules enclose the same span with an identical
+/// `(lo_dist, width)` — the case the pre-fix `lo_dist < prev || (== && width <
+/// prev_w)` comparator could not disambiguate, so whichever def appeared first in
+/// `linked.defs` won. This builds that ambiguity, then resolves the span against
+/// both def orders and asserts the SAME file both times (the `home` tie-break),
+/// and that it is the lexicographically-smaller home's file (`Alpha`, not
+/// `Beta`) — a total order, not first-seen.
+#[test]
+fn homeless_span_resolves_byte_stably_regardless_of_def_order() {
+    use ipe_canon::ast::{Def, Module};
+    use ipe_diagnostics::Located;
+    use ipe_intern::Interner;
+
+    let mut i = Interner::new();
+    let alpha = vec![i.intern("Alpha").expect("intern Alpha")];
+    let beta = vec![i.intern("Beta").expect("intern Beta")];
+    let name_a = i.intern("a").expect("intern a");
+    let name_b = i.intern("b").expect("intern b");
+
+    // Both bodies occupy the IDENTICAL byte range [10, 20]: same `lo_dist` and
+    // same `width` for any span inside, so only the `home` tie-break can decide.
+    let body_span = Span::new(10, 20);
+    let def_alpha = Def::Untyped {
+        home: alpha.clone(),
+        name: Located::new(Span::new(0, 1), name_a),
+        patterns: Vec::new(),
+        body: Located::new(body_span, ipe_canon::ast::Expr_::Unit),
+    };
+    let def_beta = Def::Untyped {
+        home: beta.clone(),
+        name: Located::new(Span::new(0, 1), name_b),
+        patterns: Vec::new(),
+        body: Located::new(body_span, ipe_canon::ast::Expr_::Unit),
+    };
+
+    let mk_module = |defs: Vec<Def>| Module {
+        name: alpha.clone(),
+        unions: Vec::new(),
+        defs,
+        imports_unsafe_submodule: false,
+        imported_web_capabilities: std::collections::BTreeSet::new(),
+    };
+
+    let mut home_to_source: BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)> = BTreeMap::new();
+    home_to_source.insert(
+        alpha.clone(),
+        (PathBuf::from("Alpha.ipe"), "alpha".to_string()),
+    );
+    home_to_source.insert(
+        beta.clone(),
+        (PathBuf::from("Beta.ipe"), "beta".to_string()),
+    );
+    let entry = (PathBuf::from("Entry.ipe"), "entry".to_string());
+    let span = Span::new(12, 15); // inside [10, 20] for both defs
+
+    let forward = mk_module(vec![def_alpha.clone(), def_beta.clone()]);
+    let reversed = mk_module(vec![def_beta, def_alpha]);
+
+    let (file_fwd, _) = super::source_for_span_in_linked(&forward, &home_to_source, &entry, span);
+    let (file_rev, _) = super::source_for_span_in_linked(&reversed, &home_to_source, &entry, span);
+
+    assert_eq!(
+        file_fwd, file_rev,
+        "a home-less span must resolve to the same file regardless of def order; \
+         got {file_fwd:?} forward vs {file_rev:?} reversed"
+    );
+    assert_eq!(
+        file_fwd,
+        PathBuf::from("Alpha.ipe"),
+        "the stable tie-break must pick the lexicographically-smaller home (Alpha), \
+         not the first-seen def; got {file_fwd:?}"
+    );
+}
+
+/// An operator-synthesized `super_var` obligation error (empty pre-fix `home`)
+/// must be blamed on its OWNING source file, not a numerically-overlapping
+/// sibling. `==` mints an `Equatable` obligation; over a `List (a -> a)` it fails
+/// the post-solve concrete-pin gate (`super_unsatisfied`, IPE-T0014). Before this
+/// fix that obligation error carried an EMPTY home and fell into the byte-offset
+/// heuristic; the home threaded onto the `super_var` now attributes it directly.
+///
+/// `Pad.ipe` is crafted to WIN that heuristic pre-fix: its def body starts at the
+/// same byte offset as `Lib.ipe`'s failing expression (identical header length)
+/// and is NARROWER than `Lib`'s enclosing def body, so a home-blind resolver
+/// picks `Pad` (verified: pre-fix this fixture blames `Pad.ipe`). The threaded
+/// home is the only signal that recovers `Lib.ipe`.
+#[test]
+fn obligation_error_blames_owning_module_not_narrower_padded_sibling() {
+    let tmp = std::env::temp_dir().join("ipec_obligation_home_test");
+    let _ = fs::remove_dir_all(&tmp);
+    let src = tmp.join("src");
+    fs::create_dir_all(&src).expect("create src/");
+
+    // `Lib.bad`'s body `[(\a -> a)] == [(\a -> a)]` starts at byte 32 (a 26-byte
+    // header + `bad = `). The IPE-T0014 error span is the 11-byte left operand
+    // `[(\a -> a)]` at [32, 43]; the whole def body spans [32, 57] (width 25).
+    fs::write(
+        src.join("Lib.ipe"),
+        "module Lib exposing (bad)\nbad = [(\\a -> a)] == [(\\a -> a)]\n",
+    )
+    .expect("write Lib.ipe");
+
+    // `Pad.pad`'s body `123456789012` also starts at byte 32 (`Pad` header is the
+    // same 26 bytes as `Lib`), spanning [32, 44] (width 12). It ENCLOSES the
+    // [32, 43] error span and is narrower than Lib's [32, 57] body, so the
+    // heuristic's `(lo_dist=0, width)` order prefers Pad — the wrong file.
+    fs::write(
+        src.join("Pad.ipe"),
+        "module Pad exposing (pad)\npad = 123456789012\n",
+    )
+    .expect("write Pad.ipe");
+
+    // `bad : Bool`; `main` uses it so both siblings link into one program.
+    fs::write(
+        src.join("Main.ipe"),
+        "module Main exposing (main)\nimport Lib\nimport Pad\nimport Ipe.Io\nmain = if Lib.bad then Io.println \"y\" else Io.println \"n\"\n",
+    )
+    .expect("write Main.ipe");
+
+    let dummy_runtime = std::env::temp_dir();
+    let out = tmp.join("out");
+    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
+
+    assert!(
+        result.is_err(),
+        "the obligation fixture must fail (Equatable obligation on a function list); got Ok"
+    );
+    let Err(CliError::Pipeline { file, .. }) = result else {
+        let _ = fs::remove_dir_all(&tmp);
+        panic!("expected a CliError::Pipeline, got a different error");
+    };
+
+    let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    assert_eq!(
+        file_name,
+        "Lib.ipe",
+        "an obligation error must blame its owning module `Lib.ipe`, not the \
+         narrower padded sibling `Pad.ipe` the byte-offset heuristic would pick; \
+         got `{file_name}` (path: {})",
+        file.display()
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
