@@ -2007,4 +2007,35 @@ mod tests {
         assert!(parse_release(&s(&["--optimize"])).is_err());
         assert!(parse_release(&s(&["--bogus"])).is_err());
     }
+
+    #[test]
+    fn release_out_default_is_none() {
+        // No `--out` → `args.out` is None; `run_release` maps None to "release/".
+        let a = parse_release(&[]).expect("empty release");
+        assert!(a.out.is_none());
+    }
+
+    #[test]
+    fn release_out_flag_accepted() {
+        let a = parse_release(&s(&["--out", "dist"])).expect("--out dist");
+        assert_eq!(a.out.as_deref(), Some("dist"));
+    }
+
+    #[test]
+    fn release_out_flag_accepts_absolute_path() {
+        let a = parse_release(&s(&["--out", "/tmp/my-release"])).expect("--out /tmp/…");
+        assert_eq!(a.out.as_deref(), Some("/tmp/my-release"));
+    }
+
+    #[test]
+    fn release_out_flag_missing_value_rejected() {
+        assert!(parse_release(&s(&["--out"])).is_err());
+    }
+
+    #[test]
+    fn release_out_flag_combined_with_target() {
+        let a = parse_release(&s(&["--out", "dist", "--target", "wasm"])).expect("--out + wasm");
+        assert_eq!(a.out.as_deref(), Some("dist"));
+        assert_eq!(a.target, ReleaseTarget::Wasm);
+    }
 }
