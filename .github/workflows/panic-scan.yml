@@ -26,6 +26,11 @@ permissions:
 jobs:
   panic-scan:
     runs-on: ubuntu-latest
+    # Run on all non-PR events (push/schedule/dispatch) and on untrusted-author
+    # PRs; trusted-author PRs skip (ci.yml behavior — same allowlist, SSOT).
+    if: >-
+      github.event_name != 'pull_request'
+      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     steps:
       - uses: actions/checkout@v7
 
