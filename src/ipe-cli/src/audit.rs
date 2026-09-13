@@ -50,6 +50,7 @@
 //! `cfg`-gate promotion. Also deferred: run-time sandbox isolation hardening.
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1078,6 +1079,58 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
 /// [`CliError::PackageAudit`] when `cargo-deny` reports a violation, fails to run
 /// for any reason other than not being installed, or a locked dependency's hash
 /// no longer verifies.
+/// Detect the installed cargo-deny minor version by parsing `cargo-deny --version`.
+///
+/// Returns the minor component of the version (e.g. `20` for `cargo-deny 0.20.2`).
+/// On any parse failure defaults to `20` — the current "latest" release — so
+/// absent or unreadable version output uses the newer global-flag placement.
+fn detect_cargo_deny_minor() -> u32 {
+    let Ok(out) = Command::new("cargo-deny").arg("--version").output() else {
+        return 20;
+    };
+    // Output is `cargo-deny X.Y.Z\n`; split on whitespace, take last token.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout
+        .split_whitespace()
+        .last()
+        .and_then(|v| v.split('.').nth(1))
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(20)
+}
+
+/// Build the cargo-deny argument vector for `advisories bans sources`.
+///
+/// cargo-deny 0.20 moved `--config` from the `check` subcommand to the global
+/// (top-level) position. Placement rule:
+///   - minor >= 20: `[--manifest-path <m>] [--config <cfg>] check advisories bans sources`
+///   - minor < 20:  `[--manifest-path <m>] check advisories bans sources [--config <cfg>]`
+///
+/// `--manifest-path` is a global option accepted in both series.
+fn deny_args(cargo_deny_minor: u32, manifest: &Path, config: Option<&Path>) -> Vec<OsString> {
+    let mut args: Vec<OsString> = Vec::new();
+    args.push("--manifest-path".into());
+    args.push(manifest.into());
+    if cargo_deny_minor >= 20
+        && let Some(cfg) = config
+    {
+        args.push("--config".into());
+        args.push(cfg.into());
+    }
+    args.push("check".into());
+    // Advisories + bans + sources are the supply-chain axes; licenses are a
+    // project-policy axis the workspace's own gate owns, not the package gate.
+    args.push("advisories".into());
+    args.push("bans".into());
+    args.push("sources".into());
+    if cargo_deny_minor < 20
+        && let Some(cfg) = config
+    {
+        args.push("--config".into());
+        args.push(cfg.into());
+    }
+    args
+}
+
 fn supply_chain(prepared: &Prepared) -> Result<(), CliError> {
     let manifest = prepared.emitted_dir.join("Cargo.toml");
     if !manifest.is_file() {
@@ -1090,28 +1143,20 @@ fn supply_chain(prepared: &Prepared) -> Result<(), CliError> {
     // that a machine without cargo-deny yields a `NotFound` spawn error (handled
     // as a skip below) instead of `cargo` running and reporting "no such
     // subcommand", which would masquerade as a supply-chain violation.
-    let mut command = Command::new("cargo-deny");
-    command
-        .arg("--manifest-path")
-        .arg(&manifest)
-        .arg("check")
-        // Advisories + bans + sources are the supply-chain axes; licenses are a
-        // project-policy axis the workspace's own gate owns, not the package gate.
-        .arg("advisories")
-        .arg("bans")
-        .arg("sources");
-    // Apply the SAME advisory/bans/sources posture the workspace uses (plan
-    // §1d) — its `deny.toml` ledgers the advisories the vendored runtime's
-    // dependency tree legitimately carries (e.g. the `rsa` timing advisory the
-    // runtime pins behind an optional feature). Without it the check would
-    // default-reject every emitted package for a runtime dependency the
-    // workspace has already vetted. `--config` is a `check` argument, so it
-    // follows the subcommand. Absent a resolvable config, cargo-deny falls back
-    // to its defaults.
+    //
+    // Apply the SAME advisory/bans/sources posture the workspace uses — its
+    // `deny.toml` ledgers advisories the vendored runtime's dependency tree
+    // legitimately carries. Without it the check would default-reject every
+    // emitted package for a runtime dependency the workspace has already vetted.
+    // Absent a resolvable config, cargo-deny falls back to its defaults.
+    //
+    // `--config` placement is version-dependent: global (before `check`) for
+    // cargo-deny >= 0.20, on the `check` subcommand for < 0.20.
     let derived_config = derive_deny_config(&prepared.emitted_dir)?;
-    if let Some(config) = &derived_config {
-        command.arg("--config").arg(config);
-    }
+    let minor = detect_cargo_deny_minor();
+    let args = deny_args(minor, &manifest, derived_config.as_deref());
+    let mut command = Command::new("cargo-deny");
+    command.args(&args);
     let output = command.output();
 
     match output {
@@ -2049,5 +2094,69 @@ mod tests {
             PathBuf::new(),
             "the dep-model path returns the empty sentinel; the build materializes the runtime"
         );
+    }
+
+    // --- deny_args placement tests ---
+
+    /// cargo-deny >= 0.20: `--config` must appear BEFORE `check`, as a global option.
+    #[test]
+    fn deny_args_modern_places_config_before_check() {
+        let manifest = Path::new("/tmp/proj/Cargo.toml");
+        let config = Path::new("/ws/deny.toml");
+        let args = deny_args(20, manifest, Some(config));
+        let strs: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        let check_pos = strs
+            .iter()
+            .position(|&a| a == "check")
+            .expect("check present");
+        let config_pos = strs
+            .iter()
+            .position(|&a| a == "--config")
+            .expect("--config present");
+        assert!(
+            config_pos < check_pos,
+            "cargo-deny >= 0.20: --config ({config_pos}) must precede check ({check_pos})"
+        );
+        // All three scan axes present.
+        assert!(strs.contains(&"advisories"), "advisories present");
+        assert!(strs.contains(&"bans"), "bans present");
+        assert!(strs.contains(&"sources"), "sources present");
+    }
+
+    /// cargo-deny < 0.20: `--config` must appear AFTER `check`, as a subcommand option.
+    #[test]
+    fn deny_args_legacy_places_config_after_check() {
+        let manifest = Path::new("/tmp/proj/Cargo.toml");
+        let config = Path::new("/ws/deny.toml");
+        let args = deny_args(19, manifest, Some(config));
+        let strs: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        let check_pos = strs
+            .iter()
+            .position(|&a| a == "check")
+            .expect("check present");
+        let config_pos = strs
+            .iter()
+            .position(|&a| a == "--config")
+            .expect("--config present");
+        assert!(
+            config_pos > check_pos,
+            "cargo-deny < 0.20: --config ({config_pos}) must follow check ({check_pos})"
+        );
+        assert!(strs.contains(&"advisories"), "advisories present");
+        assert!(strs.contains(&"bans"), "bans present");
+        assert!(strs.contains(&"sources"), "sources present");
+    }
+
+    /// No config: neither version emits `--config` at all.
+    #[test]
+    fn deny_args_no_config_omits_flag() {
+        let manifest = Path::new("/tmp/proj/Cargo.toml");
+        for minor in [19_u32, 20] {
+            let args = deny_args(minor, manifest, None);
+            assert!(
+                !args.iter().any(|a| a.to_str() == Some("--config")),
+                "minor {minor}: --config must not appear when config is None"
+            );
+        }
     }
 }
