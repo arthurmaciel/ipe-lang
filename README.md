@@ -127,19 +127,21 @@ cargo build --release
 
 ## Code shapes
 
-One language, four ways to ship. Pick the entry point that matches your app.
+One language, five shapes. The shape is pinned by the head of `main` — never by config.
 
 | Shape | Entry point | Use it for | TEA |
 |---|---|---|---|
 | `Ipe.App.Tea.Web` | `Web.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
-| `Ipe.App.Tea.WebView` | `WebView.app` | Native desktop apps | ✓ |
-| `Ipe.App.Tea.Tui` / `Ipe.App.Tea.Cli` | `Tui.app` / `Cli.app` | Full-screen terminal UIs (`Tui.app`) and line-oriented REPLs (`Cli.app`) | ✓ |
-| `Program` | plain `main` | Scripts, one-shot tools, cron jobs, HTTP servers | |
+| `Ipe.App.Tea.Tui` | `Tui.app` | Full-screen terminal UIs | ✓ |
+| `Ipe.App.Tea.Cli` | `Cli.app` | Line-oriented CLIs and REPLs | ✓ |
+| `Ipe.Http.Server` | `Server.listen` | HTTP servers | |
+| `Ipe.App.Script` | `Script.program` | Scripts, one-shot tools, cron jobs | |
 
-The three ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
-(`init` / `update` / `view` / `subscriptions`) — and Web, WebView, and
-`Tui.app` share the **same `Ipe.Ui` view code**, so one
-`view : Model -> Element Msg` renders on web, desktop, and terminal.
+The four ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
+(`init` / `update` / `view` / `subscriptions`) — and Web, Tui, and Cli share the
+**same `Ipe.Ui` view code**, so one `view : Model -> Element Msg` renders on web
+and terminal alike. Desktop-webview delivery (`web desktop`) is a host of the Web
+shape, not a distinct shape.
 See [`examples/`](examples/) for runnable programs.
 
 Views are built from two vocabularies — the portable `Ipe.Ui` layout language
