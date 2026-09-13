@@ -43,15 +43,25 @@ module Ipe.Web.Head exposing
 --
 --     headFor : Model -> List (Html Msg)
 --     headFor model =
---         [ Head.title (titleFor model.page)
---         , Head.meta "description" (descriptionFor model.page)
---         , Head.canonical (canonicalUrlFor model.page)  -- canonicalUrlFor : Page -> Url
---         , Head.metaProperty "og:title" (titleFor model.page)
---         , Head.metaProperty "og:image" "https://example.com/og.png"
---         , Head.metaProperty "og:type" "website"
---         , Head.themeColor "#1a1a2e"
---         , Head.rss feedUrl "Site Blog"  -- feedUrl : Url
---         ]
+--         let
+--             base =
+--                 [ Head.title (titleFor model.page)
+--                 , Head.meta "description" (descriptionFor model.page)
+--                 , Head.metaProperty "og:title" (titleFor model.page)
+--                 , Head.metaProperty "og:image" "https://example.com/og.png"
+--                 , Head.metaProperty "og:type" "website"
+--                 , Head.themeColor "#1a1a2e"
+--                 ]
+--         in
+--         -- `canonical` / `rss` scheme-narrow the `Url` and return a
+--         -- `Result Error (Html msg)`: a `javascript:`/`data:`/`file:` `Url` is a
+--         -- typed `Err`, so the tag is emitted only on `Ok`.
+--         case Head.canonical (canonicalUrlFor model.page) of
+--             Ok tag ->
+--                 base ++ [ tag ]
+--
+--             Err _ ->
+--                 base
 --
 -- The verbatim JSON-LD `<script>` hatch lives in `Ipe.Web.Head.Unsafe`
 -- (`import Ipe.Web.Head.Unsafe exposing (unsafeJsonLd)`), which discloses the
@@ -68,6 +78,8 @@ import Ipe.List as List
 import Ipe.Html as Html exposing (Html)
 import Ipe.Html.Attributes as Attr exposing (Attribute)
 import Ipe.Url as Url exposing (Url)
+import Ipe.Error as Error exposing (Error)
+import Ipe.Result as Result exposing (Result)
 
 
 -- ─── Title ──────────────────────────────────────────────────────
@@ -129,19 +141,33 @@ pairToAttr pair =
 -- ─── Convenience shortcuts ──────────────────────────────────────
 
 
+-- | The schemes a head `href` (`<link rel="canonical">` /
+-- `<link rel="alternate">`) may carry: `http`/`https` ONLY. A `Url` is only the
+-- SYNTACTIC parse seal — it legally carries `javascript:` / `data:` / `file:` —
+-- so this narrowing is the boundary that keeps a non-web scheme out of the head
+-- `href` sink, the same allowlist `Ipe.Browser.Share` and a media `src` use.
+headSchemes : List String
+headSchemes =
+    [ "http", "https" ]
+
+
 -- canonical url — emits `<link rel="canonical" href="…">`. Tell
 -- search engines which URL is authoritative for this page (when
 -- the same content is reachable via multiple URLs).
 --
--- Takes a validated `Ipe.Url.Url` so the href is guaranteed to be an
--- absolute, scheme-valid URL — a bare `String` could silently produce a
--- `javascript:` or relative href in the canonical tag.
-canonical : Url -> Html msg
+-- Fail-closed: `Ok` only when `url` carries an `http`/`https` scheme
+-- (`headSchemes`), otherwise a typed `Err` — a `javascript:` / `data:` / `file:`
+-- `Url` is turned away, never rendered into the canonical `href`.
+canonical : Url -> Result Error (Html msg)
 canonical url =
-    Html.link
-        [ Attr.attribute "rel" "canonical"
-        , Attr.attribute "href" (Url.toString url)
-        ]
+    Result.map
+        (\safe ->
+            Html.link
+                [ Attr.attribute "rel" "canonical"
+                , Attr.attribute "href" (Url.toString safe)
+                ]
+        )
+        (Url.checkScheme headSchemes url)
 
 
 -- themeColor color — emits `<meta name="theme-color" content="…">`.
@@ -157,13 +183,18 @@ themeColor color =
 -- discover a site's RSS feed via this link. Pair with an actual feed
 -- endpoint (Ipe.Http.Server `Server.get "/rss.xml" rssHandler`).
 --
--- Takes a validated `Ipe.Url.Url` for the feed href — ensures the link
--- points at a real absolute URL, not a relative path or arbitrary string.
-rss : Url -> String -> Html msg
+-- Fail-closed: `Ok` only when `feedUrl` carries an `http`/`https` scheme
+-- (`headSchemes`), otherwise a typed `Err` — a `javascript:` / `data:` / `file:`
+-- `Url` is turned away, never rendered into the feed `href`.
+rss : Url -> String -> Result Error (Html msg)
 rss feedUrl feedTitle =
-    Html.link
-        [ Attr.attribute "rel" "alternate"
-        , Attr.attribute "type" "application/rss+xml"
-        , Attr.attribute "href" (Url.toString feedUrl)
-        , Attr.attribute "title" feedTitle
-        ]
+    Result.map
+        (\safe ->
+            Html.link
+                [ Attr.attribute "rel" "alternate"
+                , Attr.attribute "type" "application/rss+xml"
+                , Attr.attribute "href" (Url.toString safe)
+                , Attr.attribute "title" feedTitle
+                ]
+        )
+        (Url.checkScheme headSchemes feedUrl)
