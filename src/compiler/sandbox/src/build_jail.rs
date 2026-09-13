@@ -744,6 +744,62 @@ fn spawn_and_decode(
 /// variables, so the run/build launcher clears the environment down to the
 /// profile's `env_allowlist` (mirroring the Linux jail's `--clearenv`) BEFORE
 /// handing control to `sandbox-exec`. See [`macos_scrubbed_env`].
+/// The fixed hardware/kernel sysctls the C library reads during process
+/// bring-up (thread-pool sizing, allocator page geometry, OS-version probes).
+/// Re-allowed by EXACT name after the blanket `sysctl-read` deny so a
+/// dynamically-linked child can start, while bulk sysctl enumeration — the
+/// fingerprinting surface — stays denied. Each is a read-only scalar; none
+/// exposes a per-process secret or a mutable/authority operation.
+#[cfg(any(target_os = "macos", test))]
+const BRING_UP_SYSCTL_NAMES: &[&str] = &[
+    "hw.ncpu",
+    "hw.activecpu",
+    "hw.physicalcpu",
+    "hw.logicalcpu",
+    "hw.memsize",
+    "hw.pagesize",
+    "hw.cachelinesize",
+    "hw.cpufamily",
+    "hw.busfrequency",
+    "hw.cpufrequency",
+    "kern.osversion",
+    "kern.osproductversion",
+    "kern.osrelease",
+    "kern.ostype",
+    "kern.version",
+    "kern.hv_vmm_present",
+    "kern.secure_kernel",
+    "machdep.cpu.brand_string",
+];
+
+/// The fixed bootstrap Mach services a dynamically-linked process must reach to
+/// load and initialise: the dyld/XPC bootstrap surface, the libinfo/
+/// opendirectory lookups a shell's user/group resolution performs, and the
+/// unified-log/diagnostics endpoints libSystem opens at init. Re-allowed by
+/// EXACT `global-name` after the blanket `mach-lookup` deny (last-match-wins),
+/// so each named service overrides the deny for that one service while every
+/// other Mach service — the cross-process IPC and escape surface — stays
+/// denied. None of these grants network, arbitrary file, task-for-pid, or
+/// dynamic-code capability.
+#[cfg(any(target_os = "macos", test))]
+const BRING_UP_MACH_SERVICES: &[&str] = &[
+    "com.apple.system.notification_center",
+    "com.apple.system.logger",
+    "com.apple.system.opendirectoryd.libinfo",
+    "com.apple.system.opendirectoryd.membership",
+    "com.apple.system.DirectoryService.libinfo_v1",
+    "com.apple.system.DirectoryService.membership_v1",
+    "com.apple.logd",
+    "com.apple.diagnosticd",
+    "com.apple.xpc.activity.unmanaged",
+    "com.apple.CoreServices.coreservicesd",
+    "com.apple.coreservices.launchservicesd",
+    "com.apple.SecurityServer",
+    "com.apple.SystemConfiguration.configd",
+    "com.apple.trustd.agent",
+    "com.apple.trustd",
+];
+
 #[cfg(any(target_os = "macos", test))]
 #[must_use]
 pub fn sbpl_from_profile(
@@ -790,21 +846,34 @@ pub fn sbpl_from_profile(
     //
     // - `sysctl-read`: blocks bulk sysctl reads that leak host topology, hardware
     //   identifiers, and other fingerprinting surfaces. Legitimate tool use (shell,
-    //   compiler) does not require broad sysctl enumeration. Where a specific sysctl
-    //   is genuinely needed (e.g. hw.ncpu for thread sizing), Seatbelt allows the
-    //   narrowest matching rule to override this deny via specificity ordering.
+    //   compiler) does not require broad sysctl enumeration. The narrow set of
+    //   fixed hardware/kernel sysctls the C library reads during process bring-up
+    //   (CPU count, page size, physical memory) is re-allowed by name below, so a
+    //   dynamically-linked child can start while bulk enumeration stays denied.
     s.push_str("(deny process-info*)\n");
     s.push_str("(deny mach-task-name)\n");
     s.push_str("(deny sysctl-read)\n");
+    // Re-allow ONLY the specific bring-up sysctls the C library reads while it
+    // initialises (thread pool sizing, allocator page geometry). Last-match-wins
+    // ordering: this narrow allow overrides the blanket `sysctl-read` deny above
+    // for exactly these names, leaving every other sysctl — the fingerprinting
+    // surface — denied. Named individually so a new name cannot slip in under a
+    // wildcard; a genuinely-needed addition is a one-line, reviewed entry in
+    // `BRING_UP_SYSCTL_NAMES`.
+    for name in BRING_UP_SYSCTL_NAMES {
+        let _ = writeln!(s, "(allow sysctl-read (sysctl-name \"{name}\"))");
+    }
     // Deny the macOS Seatbelt equivalents of the Linux seccomp baseline
     // primitives that the run jail (seccomp.rs) blocks unconditionally:
     //
     // - `mach-lookup`: arbitrary bootstrap/system Mach service reach — the
     //   macOS mechanism for cross-process IPC. Mirrors the Linux denial of
     //   `bpf`/`perf_event_open` and the broader kernel-authority surface.
-    //   A specific service legitimately needed can be granted above this deny
-    //   with the narrowest `(allow mach-lookup (global-name "…"))` rule;
-    //   Seatbelt specificity ordering ensures that allow wins.
+    //   The fixed set of system bootstrap services the dynamic loader, the C
+    //   library, and the unified-log/allocator init reach while a process starts
+    //   is re-allowed by exact `global-name` below (last-match-wins), so a
+    //   dynamically-linked child can bring up while arbitrary service reach stays
+    //   denied.
     //
     // - `iokit-open` family: direct driver/hardware access path. Mirrors the
     //   Linux denial of `iopl`/`ioperm` and raw device access primitives.
@@ -813,6 +882,18 @@ pub fn sbpl_from_profile(
     //   between jailed and host processes. Mirrors the Linux denial of
     //   `shmget`/`shmat` and related IPC primitives.
     s.push_str("(deny mach-lookup)\n");
+    // Re-allow ONLY the fixed bootstrap services a dynamically-linked process
+    // must reach to load and initialise: the dyld/XPC bootstrap surface, the
+    // libinfo/opendirectory lookups a shell's user/group resolution performs, and
+    // the unified-log/diagnostics endpoints libSystem opens at init. Last-match
+    // wins, so each exact `global-name` overrides the blanket deny above for that
+    // one service while every other Mach service — the cross-process IPC and
+    // escape surface — stays denied. Named individually (never a prefix wildcard)
+    // so no unlisted service is reachable; a new bring-up dependency is a
+    // one-line, reviewed entry in `BRING_UP_MACH_SERVICES`.
+    for service in BRING_UP_MACH_SERVICES {
+        let _ = writeln!(s, "(allow mach-lookup (global-name \"{service}\"))");
+    }
     s.push_str("(deny iokit-open)\n");
     s.push_str("(deny iokit-open-user-client)\n");
     s.push_str("(deny iokit-open-service)\n");
@@ -1441,6 +1522,33 @@ mod freebsd_jail {
         }
     }
 
+    /// Mount a FRESH writable `tmpfs` at `target`, refusing (fail-closed) on any
+    /// non-success. A read-write nullfs source needs an existing, writable
+    /// mountpoint, but the target's parent is an empty stub of the read-only host
+    /// view (`EROFS`), so a writable tmpfs is layered over it to hold the leaf the
+    /// nullfs then mounts over. `mount(8)` — the stable base-system primitive, the
+    /// same binary used for devfs — carries the tmpfs type on every supported
+    /// FreeBSD release.
+    fn mount_tmpfs(mount_bin: &Path, target: &Path) -> Result<(), RunJailDefect> {
+        let status = std::process::Command::new(mount_bin)
+            .arg("-t")
+            .arg("tmpfs")
+            .arg("tmpfs")
+            .arg(target)
+            .status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: format!("mount -t tmpfs tmpfs failed ({s})"),
+            }),
+            Err(e) => Err(RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: format!("could not run mount -t tmpfs: {e}"),
+            }),
+        }
+    }
+
     /// Create an empty directory named `name` under `parent`, used as the read-only
     /// nullfs source that masks the jail's `/proc` with an EMPTY tree. A creation
     /// failure refuses (fail-closed) — a `/proc` that cannot be masked would leave
@@ -1476,8 +1584,11 @@ mod freebsd_jail {
     /// `jail path=<root>` chroots the payload here, so an out-of-scratch write targets
     /// the read-only mount and is denied by the mount flag — never reliant on host
     /// file permissions — and the fresh `/dev`/empty `/proc` deny the host
-    /// device/process metadata the ro-root would otherwise expose read-only. Every
-    /// mount and the root dir are torn down on drop, in reverse mount order.
+    /// device/process metadata the ro-root would otherwise expose read-only. Each
+    /// read-write nullfs source needs an existing, writable mountpoint; the
+    /// read-only host view supplies only an `EROFS` stub, so a fresh writable tmpfs
+    /// is layered over the target's parent to hold the leaf the source mounts over.
+    /// Every mount and the root dir are torn down on drop, in reverse mount order.
     struct RoRootMount {
         umount_bin: PathBuf,
         root: PathBuf,
@@ -1489,6 +1600,12 @@ mod freebsd_jail {
         proc_mask_source: PathBuf,
         /// Every mounted target, in mount order; unmounted in reverse on drop.
         mounted: Vec<PathBuf>,
+        /// In-root parent stubs a fresh writable tmpfs has been layered over, so a
+        /// read-write nullfs target's leaf can be created (the read-only host view
+        /// is `EROFS`). Deduplicated: two targets sharing a parent are provisioned
+        /// by a single tmpfs. Each is also recorded in `mounted` so it is unmounted
+        /// on drop.
+        tmpfs_parents: Vec<PathBuf>,
     }
 
     impl RoRootMount {
@@ -1541,6 +1658,7 @@ mod freebsd_jail {
                 root,
                 proc_mask_source,
                 mounted: Vec::new(),
+                tmpfs_parents: Vec::new(),
             };
 
             // 1. The whole host `/`, READ-ONLY, as the jail root. Everything the
@@ -1586,9 +1704,20 @@ mod freebsd_jail {
             )?;
             mount.mounted.push(proc_target);
 
-            // 4. The scratch, READ-WRITE, at its original absolute path inside the
-            //    chroot — the ONE writable location the payload has.
+            // A `mount_nullfs` target must ALREADY exist — the tool never creates
+            // its mountpoint (a missing target is `ENOENT`, exit 64). The read-only
+            // nullfs of `/` (step 1) supplies the empty stub dirs of the ROOT
+            // filesystem only; a nullfs of `/` does NOT cross into filesystems
+            // mounted UNDER it (a tmpfs `/tmp`, a separate `/home`), so a re-rooted
+            // scratch/working-tree LEAF under such a submount is invisible in the
+            // read-only view, and the read-only view cannot be `mkdir`'d into
+            // (`EROFS`). Layer a FRESH writable tmpfs
+            // over the target's in-root parent stub, then create the leaf on THAT
+            // tmpfs, so the read-write nullfs source has a real mountpoint to land
+            // on — the FreeBSD counterpart of the Linux arm's bwrap `--bind`, which
+            // materialises its mount target inside the namespace automatically.
             let scratch_target = under_root(&mount.root, scoped_tmp);
+            mount.provision_rw_mountpoint(&mount_devfs_bin, &scratch_target)?;
             mount_nullfs(
                 &mount_nullfs_bin,
                 false,
@@ -1601,6 +1730,7 @@ mod freebsd_jail {
             //    granted, so a granted effect is not false-denied.
             if profile.filesystem == FilesystemScope::WorkingTreeReadWrite {
                 let tree_target = under_root(&mount.root, working_tree);
+                mount.provision_rw_mountpoint(&mount_devfs_bin, &tree_target)?;
                 mount_nullfs(
                     &mount_nullfs_bin,
                     false,
@@ -1611,6 +1741,43 @@ mod freebsd_jail {
             }
 
             Ok(mount)
+        }
+
+        /// Make `target` a real, writable mountpoint for a read-write nullfs source.
+        ///
+        /// `target` is `<root>/<abs>` — its parent is an empty stub directory that
+        /// the read-only nullfs of `/` exposes, but the read-only view is `EROFS`
+        /// so the leaf cannot be `mkdir`'d there, and a nullfs of `/` does not cross
+        /// a submounted filesystem (a tmpfs `/tmp`), so a re-rooted leaf under such
+        /// a submount is `ENOENT`. Layer a FRESH writable tmpfs over the parent stub
+        /// (once per distinct parent), then create the leaf on that tmpfs.
+        ///
+        /// # Errors
+        ///
+        /// [`RunJailDefect::MountFailed`] when the target has no parent, when the
+        /// tmpfs mount fails, or when the leaf cannot be created — fail-closed: the
+        /// payload never runs against a half-built root with a missing mountpoint.
+        fn provision_rw_mountpoint(
+            &mut self,
+            mount_bin: &Path,
+            target: &Path,
+        ) -> Result<(), RunJailDefect> {
+            let parent = target.parent().ok_or_else(|| RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: "read-write mount target has no parent to provision".to_owned(),
+            })?;
+            // A single tmpfs per distinct parent: mounting a second over the same
+            // stub would mask the first, hiding the leaf already created on it.
+            if !self.tmpfs_parents.iter().any(|p| p == parent) {
+                mount_tmpfs(mount_bin, parent)?;
+                self.tmpfs_parents.push(parent.to_path_buf());
+                // Unmounted in reverse mount order on drop with the rest.
+                self.mounted.push(parent.to_path_buf());
+            }
+            std::fs::create_dir_all(target).map_err(|e| RunJailDefect::MountFailed {
+                target: target.to_path_buf(),
+                detail: format!("could not create the read-write nullfs mountpoint: {e}"),
+            })
         }
 
         fn root(&self) -> &Path {
@@ -2860,6 +3027,83 @@ mod tests {
         assert!(
             sbpl_no_net.contains("(deny mach-lookup)"),
             "mach-lookup must be denied when network is withheld: {sbpl_no_net}"
+        );
+    }
+
+    #[test]
+    fn sbpl_reallows_only_named_bring_up_mach_services_after_the_blanket_deny() {
+        // The child (a dynamically-linked binary) must reach the fixed bootstrap
+        // services the loader/libSystem need to start — otherwise the sandbox
+        // signal-kills it before any allowed operation runs. The carve-out is by
+        // EXACT global-name and ordered AFTER the blanket deny (last-match-wins),
+        // so bring-up succeeds while arbitrary Mach-service reach stays denied.
+        let sbpl = sbpl_from_profile(
+            &scoped(false, FilesystemScope::Isolated),
+            Path::new("/tmp/scratch"),
+            Path::new("/work/tree"),
+        );
+        let deny_at = sbpl
+            .find("(deny mach-lookup)")
+            .expect("blanket mach-lookup deny present");
+        for service in [
+            "com.apple.system.notification_center",
+            "com.apple.system.opendirectoryd.libinfo",
+            "com.apple.logd",
+        ] {
+            let rule = format!("(allow mach-lookup (global-name \"{service}\"))");
+            let allow_at = sbpl
+                .find(&rule)
+                .expect("bring-up service must be re-allowed by exact global-name");
+            assert!(
+                allow_at > deny_at,
+                "the {service} allow must come AFTER the blanket deny (last-match-wins): {sbpl}"
+            );
+        }
+        // Fail-closed: the re-allow is never a blanket `(allow mach-lookup)` and
+        // never a name-prefix wildcard — an unlisted service stays denied.
+        assert!(
+            !sbpl.contains("(allow mach-lookup)\n"),
+            "mach-lookup must never be blanket-allowed: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(allow mach-lookup (global-name-prefix"),
+            "mach-lookup must not be re-allowed by a name-prefix wildcard: {sbpl}"
+        );
+    }
+
+    #[test]
+    fn sbpl_reallows_only_named_bring_up_sysctls_after_the_blanket_deny() {
+        // Same shape as the mach-lookup carve-out: the C library reads a fixed set
+        // of hardware/kernel sysctls while it initialises. They are re-allowed by
+        // EXACT name after the blanket `sysctl-read` deny so the child starts,
+        // while bulk sysctl enumeration — the fingerprinting surface — stays denied.
+        let sbpl = sbpl_from_profile(
+            &scoped(false, FilesystemScope::Isolated),
+            Path::new("/tmp/scratch"),
+            Path::new("/work/tree"),
+        );
+        let deny_at = sbpl
+            .find("(deny sysctl-read)")
+            .expect("blanket sysctl-read deny present");
+        for name in ["hw.ncpu", "hw.pagesize", "hw.memsize"] {
+            let rule = format!("(allow sysctl-read (sysctl-name \"{name}\"))");
+            let allow_at = sbpl
+                .find(&rule)
+                .expect("bring-up sysctl must be re-allowed by exact sysctl-name");
+            assert!(
+                allow_at > deny_at,
+                "the {name} allow must come AFTER the blanket deny (last-match-wins): {sbpl}"
+            );
+        }
+        // Fail-closed: never a blanket `(allow sysctl-read)` and never a
+        // name-prefix wildcard — an unlisted sysctl stays denied.
+        assert!(
+            !sbpl.contains("(allow sysctl-read)\n"),
+            "sysctl-read must never be blanket-allowed: {sbpl}"
+        );
+        assert!(
+            !sbpl.contains("(allow sysctl-read (sysctl-name-prefix"),
+            "sysctl-read must not be re-allowed by a name-prefix wildcard: {sbpl}"
         );
     }
 
