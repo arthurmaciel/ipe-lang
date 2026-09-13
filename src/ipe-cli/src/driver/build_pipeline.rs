@@ -999,6 +999,14 @@ pub fn home_to_source_map(
 /// defs share a byte namespace, so the intended def almost always has the
 /// smaller distance from its own `lo`. Falls back to `entry` when no def or
 /// constructor encloses the span (e.g. a `CompilerBug` with `Span::DUMMY`).
+///
+/// Determinism: both loops walk ORDERED structures (`linked.defs` and
+/// `linked.unions` are `Vec`s in dependency-first link order), and the winner is
+/// chosen by a total order — `(lo_dist, width, home)` — whose final `home` key
+/// breaks a `(lo_dist, width)` tie so two enclosers in different modules always
+/// resolve to the same file, byte-stably across runs. Without the `home`
+/// tie-break the first-seen encloser would win, making attribution depend on
+/// `defs` order for a genuinely homeless (`home.is_empty()`) diagnostic.
 pub fn source_for_span_in_linked(
     linked: &ipe_canon::ast::Module,
     home_to_source: &BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)>,
@@ -1019,10 +1027,11 @@ pub fn source_for_span_in_linked(
         if body_span.lo <= span.lo && span.hi <= body_span.hi {
             let lo_dist = span.lo.saturating_sub(body_span.lo);
             let width = body_span.hi.saturating_sub(body_span.lo);
-            if best.is_none_or(|(prev_dist, prev_w, _)| {
-                lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
+            let home = def.home();
+            if best.is_none_or(|(prev_dist, prev_w, prev_home)| {
+                (lo_dist, width, home) < (prev_dist, prev_w, prev_home)
             }) {
-                best = Some((lo_dist, width, def.home()));
+                best = Some((lo_dist, width, home));
             }
         }
     }
@@ -1031,10 +1040,11 @@ pub fn source_for_span_in_linked(
             if ctor.span.lo <= span.lo && span.hi <= ctor.span.hi {
                 let lo_dist = span.lo.saturating_sub(ctor.span.lo);
                 let width = ctor.span.hi.saturating_sub(ctor.span.lo);
-                if best.is_none_or(|(prev_dist, prev_w, _)| {
-                    lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_w)
+                let home = union.home.as_slice();
+                if best.is_none_or(|(prev_dist, prev_w, prev_home)| {
+                    (lo_dist, width, home) < (prev_dist, prev_w, prev_home)
                 }) {
-                    best = Some((lo_dist, width, union.home.as_slice()));
+                    best = Some((lo_dist, width, home));
                 }
             }
         }
