@@ -899,10 +899,12 @@ mod native {
                         "payload": v,
                     });
                     let encoded = seal_encode(&envelope);
-                    let sink = lock_sessions().get(&sid.0).and_then(|p| p.out_sink.clone());
-                    if let Some(sink) = sink {
-                        sink(&encoded);
-                    }
+                    // Route through the single delivery chokepoint so a close
+                    // Cmd fired during an SSE reopen window (sink not yet
+                    // rebound) is buffered in the session's bounded
+                    // `out_pending` and flushed on rebind, rather than dropped
+                    // fire-and-forget.
+                    deliver_or_buffer(&sid, &encoded);
                 }
                 Err(e) => {
                     lock_sessions()
@@ -1693,6 +1695,72 @@ mod tests {
                     .map(String::as_str),
                 Some("3")
             );
+            session_close(&sid);
+        }
+
+        // A `closeSession` Cmd fired during an SSE reopen window — after the old
+        // connection's out-sink dropped, before the new one rebinds — must be
+        // buffered and flushed on rebind, never dropped fire-and-forget. This is
+        // the 5th outbound site; before the fix `js_close_session` sent through a
+        // raw `if let Some(sink)` with no else, so a close in this window vanished
+        // and the caller hung until the deadline instead of the host emitting a
+        // terminal. Routing it through `deliver_or_buffer` closes the drop.
+        #[tokio::test]
+        async fn close_during_reopen_window_is_buffered_then_flushed_on_rebind() {
+            let sid = test_sid("c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8");
+            session_open(&sid);
+
+            // Open a session INSIDE the sid scope so `js_close_session` finds a
+            // live stream to install its terminal waiter on.
+            let handle = match with_session_sid(sid.to_string(), || {
+                js_open_session::<i64, i64>(0_i64, int_decoder())
+            })
+            .await
+            {
+                IpeResult::Ok(h) => h,
+                IpeResult::Err(e) => unreachable!("open must succeed: {e}"),
+            };
+
+            // Reopen window: no out-sink bound. Fire the close Cmd — its future
+            // awaits the terminal, so drive it on a spawned task; we only need it
+            // to reach the outbound-delivery step, then observe the buffered frame.
+            let close_fut = with_session_sid(sid.to_string(), || {
+                js_close_session::<i64, i64>(handle, 1_i64, int_decoder())
+            });
+            let task = tokio::spawn(close_fut);
+            // Yield so the close future runs up to (and past) the outbound send.
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+            // The close frame must be sitting in the bounded pre-bind buffer, not
+            // dropped. Binding the sink now must flush it (FIFO).
+            let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let seen2 = seen.clone();
+            register_out_sink_for(
+                &sid,
+                Arc::new(move |s: &str| {
+                    seen2
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(s.to_string());
+                }),
+            );
+
+            // Both the open frame (payload 0) and the close frame (payload 1)
+            // were produced with no sink bound, so both must be buffered and
+            // flushed on rebind. The close frame's presence is the regression
+            // proof: before routing through `deliver_or_buffer`, a close fired
+            // in the reopen window was dropped fire-and-forget.
+            let flushed = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let close_frame = format!("{{\"{SESSION_ID_FIELD}\":{handle},\"payload\":1}}");
+            assert!(
+                flushed.contains(&close_frame),
+                "the close frame fired during the reopen window must be buffered \
+                 and flushed on rebind, not dropped: {flushed:?}"
+            );
+
+            // The close future is still awaiting its terminal (never arrives in
+            // this unit test) — abort it rather than block on the deadline.
+            task.abort();
             session_close(&sid);
         }
 
