@@ -3,71 +3,69 @@
 Every enforced rule of the Rust-backend project lives here, stated once. The
 other governance docs — the root `AGENTS.md` (contributor onboarding),
 `src/ipe-cli/templates/AGENTS.md.in` (Ipê language authoring reference), and
-`docs/internals/dev-ops.md` (deep operational procedure) — reference this file
-rather than restate it.
+`docs/internals/dev-ops.md` (operational procedure) — reference this file rather
+than restate it.
 
 ## The main values
 
 Ipê is meant to be:
 
-1. explicitly principled: the values, principles, rules and declarations
-   stated in this document are entrenched/eternity clauses. They and their
-   priority order cannot be changed, even by decisions taken by the majority
-   of the community. If there is a need to change them (eg. favor exclusivity
-   over community-openess or favor efficiency over security or correctness), it
-   is better to fork the project and start a new one with different principles.
+1. **Explicitly principled:** the values, principles, rules, and declarations in
+   this document are entrenched eternity clauses. They and their priority order
+   cannot be changed, even by a majority of the community. To change them (e.g.
+   favor exclusivity over community-openness, or efficiency over security or
+   correctness), fork the project and start a new one with different principles.
 
-2. community-centered: diversity is not only welcomed, but it is the foundation of
-   the Ipê project. Respecting diversity in its many forms (related to age, gender,
-   sexual orientation, ethnicity, race, culture, physical and cognitive ability,
-   experience and socio-economic levels, etc) is MANDATORY. While respecting the
-   values, principles and rules, the community has full autonomy to modify and
-   extend the language, always trying to reach consensus. If after 3
-   attempts of discussions and votes no consensus is reached, a fourth round of
-   discussion and vote should elect the majority's decision.
+2. **Community-centered:** diversity is the foundation of the Ipê project.
+   Respecting it in all its forms (age, gender, sexual orientation, ethnicity,
+   race, culture, physical and cognitive ability, experience, socio-economic
+   level, etc.) is MANDATORY. While respecting the values, principles, and rules,
+   the community has full autonomy to modify and extend the language, always
+   seeking consensus. If no consensus is reached after 3 rounds of discussion and
+   votes, a fourth round elects the majority's decision.
 
-   The core language and standard library are kept deliberately small and
-   principled. Breadth — new capabilities, platform and device integrations,
-   domain libraries — is meant to grow as community packages built on these
-   principles, so developers and users extend the language together rather than
-   waiting on the core to cover every need.
+   The core language and standard library stay deliberately small and principled.
+   Breadth — new capabilities, platform and device integrations, domain libraries
+   — grows as community packages built on these principles, so developers and
+   users extend the language together rather than waiting on the core to cover
+   every need.
 
 ## The six technical principles (strict order)
 
-Ipê users must find a language that embraces all the below principles and
-rules during development and use.
+Ipê must embrace all the principles and rules below throughout development and
+use.
 
 1. **Security** — generated code and runtime give an attacker no foothold: no
    injection (SQL, shell, path, header, log), no secret leakage into logs or
    errors, no auth/CSRF bypass, no timing oracle on a secret comparison, no
    unbounded resource a remote party can exhaust. On untrusted input the safe
-   outcome is the only reachable outcome — fail closed: absent proof the input
-   is safe, take the conservative, secure branch, never the permissive one.
+   outcome is the only reachable one — fail closed: absent proof the input is
+   safe, take the conservative, secure branch, never the permissive one.
 2. **Correctness** — the same well-typed Ipê program with the same input yields
    the same deterministic output, every run. Behaviour is defined by the
-   language's own semantics, not by any external oracle; a deliberate divergence
-   is documented, never silent.
+   language's own semantics, not any external oracle; a deliberate divergence is
+   documented, never silent.
 3. **Soundness** — a well-typed Ipê program can never trigger a runtime failure
    in the generated Rust: no panic, no `.unwrap()`/`.expect()` blowup, no
-   out-of-bounds index, no integer-overflow abort, no unchecked downcast, no
-   UB. Correctness is "the result is right"; soundness is the stronger
-   structural guarantee that no input can make the program fall over.
-   **Bounded by construction:** the compiler and the emitted runtime alike
-   refuse work whose size an input dictates without a ceiling — every loop,
-   recursion, and growable buffer has a declared limit. Source nested tens of
-   thousands deep, or a decode of an absurd length, is turned back with a typed
-   limit error before it can exhaust the stack or the heap; a process that
-   instead dies on such input has broken soundness (and, when the input arrives
-   over the network, principle 1's exhaustion clause too).
-4. **Efficiency** — within the bounds of 1–3: no needless allocation or
-   cloning, no hot-path recomputation, no O(n²) where O(n) is trivial, small
-   binary and memory footprint. Never bought by trading a higher principle.
-5. **Ease of use** — the language stays out of the developer's way: a small and
+   out-of-bounds index, no integer-overflow abort, no unchecked downcast, no UB.
+   Correctness is "the result is right"; soundness is the stronger structural
+   guarantee that no input can make the program fall over. **Bounded by
+   construction:** the compiler and the emitted runtime alike refuse work whose
+   size an input dictates without a ceiling — every loop, recursion, and growable
+   buffer has a declared limit. Source nested tens of thousands deep, or a decode
+   of an absurd length, is turned back with a typed limit error before it can
+   exhaust the stack or the heap; a process that instead dies on such input has
+   broken soundness (and, when the input arrives over the network, principle 1's
+   exhaustion clause too).
+4. **Efficiency** — within the bounds of 1–3: no needless allocation or cloning,
+   no hot-path recomputation, no O(n²) where O(n) is trivial, small binary and
+   memory footprint. Never bought by trading a higher principle.
+5. **Ease of use** — the language stays out of the developer's way: a small,
    predictable surface, sensible defaults, little ceremony, and diagnostics that
    explain both the problem and the fix rather than only naming it. A feature
-   that is present but hard to use correctly is not yet finished.
+   present but hard to use correctly is not yet finished.
 6. **Readability** — codegen and generated Rust are clear, well-named,
-   maintainable. Everything else equal, the clearer form wins.
+   maintainable. All else equal, the clearer form wins.
 
 **The ordering is a strict tie-breaker, not a weighting:** at any conflicting
 decision the higher-numbered principle yields — a faster path that opens a
@@ -78,64 +76,62 @@ rejected. A lower principle can never justify compromising a higher one.
 
 Beneath the ranked principles, every design and code pass obeys:
 
-- **Parse, don't validate.** Convert untrusted/untyped input into a precise
-  typed value ONCE at the boundary, so downstream code never re-encounters the
+- **Parse, don't validate.** Convert untrusted/untyped input into a precise typed
+  value ONCE at the boundary, so downstream code never re-encounters the
   unvalidated form. Foreign/JSON/config values enter through a typed decode
   point; error channels are typed (`Diagnostic`/`Error`), never `String`.
-- **Make invalid states unrepresentable.** Encode invariants in types: a sum
-  type over a bool-pair admitting impossible combinations; an exhaustive
-  `match` (no wildcard that silently swallows a new variant); a smart
-  constructor over an open field. A kernel the resolver recognises but the
-  type-scheme table does not cover MUST be a compile-time error — never a
-  silent flexible type variable that defers failure to the downstream Rust
-  build. This is fail-closed by construction: with no proof the state is
-  valid, the representable outcome is rejection, not a deferred blowup. A
-  value's *role* lives in its type, never in a bare primitive another value of
-  the same shape could stand in for: a message and a key are separate types so
-  neither is passable for the other (as the runtime's crypto roles already
-  are), and a position, a length, and a byte count are kept apart rather than
-  shared as one integer. The swap that would otherwise compile — a secret where
-  a plaintext belongs, a length used as an index — has no representation to
-  begin with.
+- **Make invalid states unrepresentable.** Encode invariants in types: a sum type
+  over a bool-pair admitting impossible combinations; an exhaustive `match` (no
+  wildcard that silently swallows a new variant); a smart constructor over an open
+  field. A kernel the resolver recognises but the type-scheme table does not cover
+  MUST be a compile-time error — never a silent flexible type variable that defers
+  failure to the downstream Rust build. This is fail-closed by construction: with
+  no proof the state is valid, the representable outcome is rejection, not a
+  deferred blowup. A value's *role* lives in its type, never in a bare primitive
+  another value of the same shape could stand in for: a message and a key are
+  separate types so neither is passable for the other (as the runtime's crypto
+  roles already are), and a position, a length, and a byte count are kept apart
+  rather than shared as one integer. The swap that would otherwise compile — a
+  secret where a plaintext belongs, a length used as an index — has no
+  representation to begin with.
 - **Fix the structure, not the symptom.** Repair the generative cause — the
-  missing invariant, the drifting table, the untyped boundary, the
-  special-case that should be a general rule — so the whole defect class
-  cannot recur. Before writing a fix, ask "what structural property, if it
-  held, would make this class of failure impossible?" and establish it. An
-  ad-hoc patch that silences the visible symptom resurfaces one shape over
-  (the next `match` arm, the next kernel, another call site). Example:
-  coercing only inline-lambda sibling branches to the `Arc` carrier is ad-hoc
-  — the identical `E0308` returns when the sibling is a top-level function
-  reference; the structural fix eta-expands every function-typed leaf over the
-  group's arrow type, closing the class.
-- **Single source of truth.** Every fact — a colour, a version, a capability
-  name, a kernel signature, a user-facing phrase — is defined in exactly one
-  place. Where it must appear in a second form that cannot import the first (a
-  shell script mirroring a Rust palette), generate one from the other or assert
-  their equality in a test; never hand-sync. SSOT serves the precedence order: a
-  one-line duplication caught by a test beats a leaky shared abstraction that
-  hurts Correctness or Readability.
-- **Defend in depth.** A security- or soundness-critical invariant is enforced
-  at more than one independent boundary, so no single missed or bypassed check
-  opens the hole. The safe surface never rests its guarantee on one gate: an
-  identifier is validated where it is built AND again where it reaches SQL; the
-  SEAL is re-checked at scheme, lowering, and emit; a row policy filters in the
-  query AND in the database. Enforcing a critical invariant twice is not
-  redundant waste — it is the margin that survives a single mistake.
+  missing invariant, the drifting table, the untyped boundary, the special-case
+  that should be a general rule — so the whole defect class cannot recur. Before
+  writing a fix, ask "what structural property, if it held, would make this class
+  of failure impossible?" and establish it. An ad-hoc patch that silences the
+  visible symptom resurfaces one shape over (the next `match` arm, the next
+  kernel, another call site). Example: coercing only inline-lambda sibling
+  branches to the `Arc` carrier is ad-hoc — the identical `E0308` returns when the
+  sibling is a top-level function reference; the structural fix eta-expands every
+  function-typed leaf over the group's arrow type, closing the class.
+- **Single source of truth.** Every fact — a colour, a version, a capability name,
+  a kernel signature, a user-facing phrase — is defined in exactly one place.
+  Where it must appear in a second form that cannot import the first (a shell
+  script mirroring a Rust palette), generate one from the other or assert their
+  equality in a test; never hand-sync. SSOT serves the precedence order: a
+  one-line duplication caught by a test beats a leaky shared abstraction that hurts
+  Correctness or Readability.
+- **Defend in depth.** A security- or soundness-critical invariant is enforced at
+  more than one independent boundary, so no single missed or bypassed check opens
+  the hole. The safe surface never rests its guarantee on one gate: an identifier
+  is validated where it is built AND again where it reaches SQL; the SEAL is
+  re-checked at scheme, lowering, and emit; a row policy filters in the query AND
+  in the database. Enforcing a critical invariant twice is not redundant waste —
+  it is the margin that survives a single mistake.
 
-The ordering says what wins in a conflict; these rules say how to build code
-that doesn't create the conflict.
+The ordering says what wins in a conflict; these rules say how to build code that
+doesn't create the conflict.
 
 ### The mandatory technical SEAL — no ipe-exit-0-then-cargo-fail
 
-**If `ipe` accepts a program (exit 0), the emitted Rust MUST `cargo build`.
-Never emit codegen that type-checks in ipe but fails cargo.** This is
+**If `ipe` accepts a program (exit 0), the emitted Rust MUST `cargo build`. Never
+emit codegen that type-checks in ipe but fails cargo.** This is
 make-invalid-states-unrepresentable applied to the pipeline itself: an
 unschemed-but-resolved kernel, an arity table drifted from its callee table, a
 generic where a concrete was required — each is a representable-but-illegal
-pipeline state whose symptom is exit-0-then-cargo-fail. Every new acceptance
-path (kernel, scheme, lowering arm, emitter case) fails closed at ipe time,
-never open at cargo time.
+pipeline state whose symptom is exit-0-then-cargo-fail. Every new acceptance path
+(kernel, scheme, lowering arm, emitter case) fails closed at ipe time, never open
+at cargo time.
 
 Where two constants or two parallel tables must agree — an arity table with its
 callee table, a diagnostic's code family with its prefix letter — assert that
@@ -148,26 +144,25 @@ refuses to compile cannot.
 
 Removing or skipping the file, example, test, fixture, golden, or line that
 *triggers* a bug is NOT a fix — it hides it. NEVER edit a reference example,
-fixture, or golden to dodge a compiler gap; never weaken a gate; never
-`#[allow]` a real violation; never fake a seal. Exactly two acceptable
-outcomes for any defect: **root-cause it**, or **report it honestly as a
-tracked blocker**. A green obtained by deleting the red is a FAILURE.
+fixture, or golden to dodge a compiler gap; never weaken a gate; never `#[allow]`
+a real violation; never fake a seal. Exactly two acceptable outcomes for any
+defect: **root-cause it**, or **report it honestly as a tracked blocker**. A
+green obtained by deleting the red is a FAILURE.
 
 - **Root causes only.** Never suppress a type error or warning; a defensive
   cover-up that hides a contract violation IS a violation.
-- **Outcome ladder** (governs every change): clean → proceed; a principle is
-  hurt → rethink and reimplement within the boundary; no adequate in-boundary
-  fix exists → revert, log why, signal the user. Never ship a silent
-  workaround.
-- **No deferral.** "Pre-existing" / "known edge case" is never a shipping
-  excuse: any bug surfacing during dev/sweep/CI/testing — introduced or
-  pre-existing — enters the task pipeline on the spot. Only an explicit user
-  override ("ship without fixing X") permits shipping a known unfixed issue.
-- Every task is a means to the larger goal — making Ipê a better language for
-  its developers and users. "Make the sweep green" means make the programs
-  actually compile and run correctly, not make red rows disappear. When a
-  shortcut would satisfy the literal ask but betray that goal, do the harder
-  correct thing or surface the tradeoff — never take the shortcut silently.
+- **Outcome ladder** (governs every change): clean → proceed; a principle is hurt
+  → rethink and reimplement within the boundary; no adequate in-boundary fix
+  exists → revert, log why, signal the user. Never ship a silent workaround.
+- **No deferral.** "Pre-existing" / "known edge case" is never a shipping excuse:
+  any bug surfacing during dev/sweep/CI/testing — introduced or pre-existing —
+  enters the task pipeline on the spot. Only an explicit user override ("ship
+  without fixing X") permits shipping a known unfixed issue.
+- Every task is a means to the larger goal — making Ipê a better language for its
+  developers and users. "Make the sweep green" means make the programs actually
+  compile and run correctly, not make red rows disappear. When a shortcut would
+  satisfy the literal ask but betray that goal, do the harder correct thing or
+  surface the tradeoff — never take the shortcut silently.
 
 ### Prove the refusals
 
