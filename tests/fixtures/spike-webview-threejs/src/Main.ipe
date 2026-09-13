@@ -25,7 +25,7 @@ import Ipe.App.Tea.Web.Cmd as Cmd
 import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
-import Ipe.Result as Result exposing (Result(..))
+import Ipe.Ui as Ui
 
 -- ═══════════════════════════════════════════════════════════════════
 -- TEA shape — minimal: nothing in Model the WebGL scene cares about,
@@ -64,35 +64,23 @@ subscriptions _ =
 -- because the Three.js scene paints into a plain <div id="canvas-wrap">
 -- that the loaded JS bundle takes over — no Ipe.Ui layout machinery
 -- needed.
--- | A same-origin relative `href` for a static asset. The path is a known-safe
--- literal, so the fail-closed `linkTarget` seal always succeeds; an `Err`
--- (unreachable here) degrades to `noAttr` rather than emitting a broken href.
+-- | A same-origin relative `href` for a static asset. All callers pass
+-- known-safe `/static/...` literals, so the path is used directly.
 hrefRel : String -> Attr.Attribute msg
 hrefRel path =
-    case Attr.linkTarget path of
-        Ok target ->
-            Attr.href target
-
-        Err _ ->
-            Attr.noAttr
+    Attr.href path
 
 
--- | A same-origin relative `src` for a static asset, fail-closed through the
--- media `imageSrc` seal (a `src` is a fetch sink, narrowed to `http`/`https` or
--- a same-origin path — distinct from the navigation `link` seal `hrefRel` uses).
+-- | A same-origin relative `src` for a static asset. All callers pass
+-- known-safe `/static/...` literals, so the path is used directly.
 srcRel : String -> Attr.Attribute msg
 srcRel path =
-    case Attr.imageSrc path of
-        Ok source ->
-            Attr.src source
-
-        Err _ ->
-            Attr.noAttr
+    Attr.src path
 
 
-view : Model -> any
+view : Model -> Element Msg
 view _ =
-    Html.node
+    Ui.html (Html.node
         "div"
         [Attr.id "scene-root"]
         [ Html.node
@@ -148,7 +136,7 @@ view _ =
         , Html.node "div" [Attr.id "canvas-wrap"] []
         , Html.script [srcRel "/static/three.min.js"] []
         , Html.script [srcRel "/static/scene.js"] []
-        ]
+        ])
 
 
 -- ═══════════════════════════════════════════════════════════════════
