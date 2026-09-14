@@ -561,14 +561,16 @@ mod tests {
             &["tui", "screen", "cli", "lines", "web"],
         )
         .expect("all view annotations must canonicalise");
-        assert_eq!(tys[0], tys[1], "`View Tui msg` must be `Screen msg`");
-        assert_eq!(tys[2], tys[3], "`View Cli msg` must be `Lines msg`");
+        let tui = tys.first().expect("tui view annotation");
+        let screen = tys.get(1).expect("screen annotation");
+        let cli = tys.get(2).expect("cli view annotation");
+        let lines = tys.get(3).expect("lines annotation");
+        let web = tys.get(4).expect("web view annotation");
+        assert_eq!(tui, screen, "`View Tui msg` must be `Screen msg`");
+        assert_eq!(cli, lines, "`View Cli msg` must be `Lines msg`");
+        assert_ne!(tui, cli, "distinct engines must give distinct view types");
         assert_ne!(
-            tys[0], tys[2],
-            "distinct engines must give distinct view types"
-        );
-        assert_ne!(
-            tys[4], tys[0],
+            web, tui,
             "`View Web msg` (Element) and `View Tui msg` (Screen) must differ, \
              so a cross-engine view node fails unification"
         );
