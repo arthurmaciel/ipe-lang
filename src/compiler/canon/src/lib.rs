@@ -3371,6 +3371,28 @@ mod tests {
     }
 
     #[test]
+    fn generic_tea_app_surface_is_no_longer_a_known_module() {
+        // A Direct program's `main` is a `Task Error ()`; the generic
+        // `Ipe.App.Tea` view-ful entry (surface `Tea.app`) is retired in favour
+        // of the per-engine `Web.app`. So `import Ipe.App.Tea` no longer names a
+        // known module — the shape-scoped `Ipe.App.Tea.Web` / `.Tui` / `.Cli` /
+        // `.Worker` surfaces remain, but the bare generic one is gone.
+        let err = canon_module_err("module Main exposing (main)\nimport Ipe.App.Tea\n\nmain = 0\n");
+        let Some(Diagnostic::Name {
+            msg: NameError::ModuleNotFound { name, .. },
+            ..
+        }) = err
+        else {
+            assert!(
+                false_marker(),
+                "expected ModuleNotFound for the retired `Ipe.App.Tea`, got {err:?}"
+            );
+            return;
+        };
+        assert_eq!(&*name, "Ipe.App.Tea");
+    }
+
+    #[test]
     fn stdlib_exposing_member_resolves_unqualified() {
         // `import Ipe.System exposing (exit)` → bare `exit` resolves via the
         // exposing path to `VarKernel { module: System, name: exit }`.

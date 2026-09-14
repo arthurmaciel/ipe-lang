@@ -2709,34 +2709,6 @@ impl Builder<'_> {
             // `Web.embed` shares `Web.app`'s exact six-field cfg scheme — both
             // produce the `WebApp` leaf from the same record. `embed`'s handle
             // is destined for `Server.mountApp`; `app`'s binds its own listener.
-            // `Ipe.Tea.app` — the generic minimal TEA entry, parametric over the
-            // view engine. Its CLOSED four-field cfg (`init`/`update`/`view`/
-            // `subscriptions`) and its `Program e msg` result share the engine
-            // variable `e` = var(2) between `view : model -> View e msg` and the
-            // result, so `e` unifies from the user's view type and is never a
-            // per-shape default. Engine-specific fields stay in the per-engine
-            // entries (`Web.app`'s route-ful cfg below), so this is NOT `Web.app`.
-            K::TeaApp => {
-                let init_ret = tuple2(var(0), cmd(var(1)));
-                let cfg_rec = Ty::Record(
-                    {
-                        let mut m = BTreeMap::new();
-                        m.insert(self.builtins.live_f_init, fun(web_req(), init_ret.clone()));
-                        m.insert(
-                            self.builtins.live_f_update,
-                            fun(var(1), fun(var(0), init_ret)),
-                        );
-                        m.insert(
-                            self.builtins.live_f_view,
-                            fun(var(0), view_t(var(2), var(1))),
-                        );
-                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                        m
-                    },
-                    RowTail::Closed,
-                );
-                fun(cfg_rec, program(var(2), var(1)))
-            }
             // `Web.app` / `Web.embed` share the route-ful six-field cfg. `Web.app`
             // returns the uniform `Program Web msg` carrier; `Web.embed` keeps the
             // mountable `WebApp` leaf its `Server.mountApp` §9 gate names. The

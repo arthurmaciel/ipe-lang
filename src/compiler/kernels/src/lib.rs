@@ -2068,17 +2068,6 @@ pub enum StdlibKernel {
     HtmlNoAttr,        // `noAttr : Attribute msg`
     // ── Ipe.Web app-entry kernels ───────────────────────────────────────
     WebApp,
-    /// `Ipe.Tea.app` — the generic minimal view-ful TEA app-entry, parametric
-    /// over the view engine: `{ init, update, view : model -> View e msg,
-    /// subscriptions } -> Program e msg`. The engine `e` is SHARED between the
-    /// `view` field and the result, so it unifies from the user's view type
-    /// (`View Web msg` → `Program Web msg`) rather than a per-shape default; an
-    /// unconstrained `e` is rejected as ambiguous. The cfg is the CLOSED minimal
-    /// common surface — engine-specific features (`Web.app`'s `routes`,
-    /// `Cli.app`'s `onLine`, …) stay in the richer per-engine entries. Once `e`
-    /// is solved, the `Program e msg` result erases through the same per-shape
-    /// lower and emit path the per-engine entry uses.
-    TeaApp,
     WebAppRouted,
     /// `Web.embed : { … } -> WebApp` — produce a mountable web-app handle from
     /// the same six-field cfg as `Web.app`. The result is the opaque `WebApp`
@@ -4143,11 +4132,6 @@ impl StdlibKernel {
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
             // ── Ipe.Web app-entry kernels ───────────────────────────────
             Self::WebApp => d("Web", "app", 1, Web, "web_app"),
-            // `Ipe.Tea.app` — generic over the view engine. When `e` solves to
-            // Web (the only engine wired here), it shares `Web.app`'s emit
-            // intercept (`web_app`), so the emitted Rust is unchanged; the
-            // engine tag is recovered at type inference, not defaulted.
-            Self::TeaApp => d("Tea", "app", 1, Web, "web_app"),
             Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
             // `Web.embed` shares `Web.app`'s emit path (both build the `WebApp`
             // leaf from the same cfg); the runtime symbol is the same builder.
@@ -5695,7 +5679,6 @@ impl StdlibKernel {
         Self::HtmlScriptNode,
         // Web
         Self::WebApp,
-        Self::TeaApp,
         Self::WebAppRouted,
         Self::WebEmbed,
         Self::WebRoute,
@@ -8663,34 +8646,6 @@ impl StdlibKernel {
             tail: RowTailShape::Closed,
         };
         const WORKER_APP: TyShape = TyShape::Fun(&WORKER_CFG, &PROGRAM_WORKER);
-        // `Ipe.Tea.app` — the generic minimal TEA entry, parametric over the view
-        // engine. var(0)=model, var(1)=msg, var(2)=engine `e`. The engine var is
-        // SHARED between the `view` field's result (`View e msg`) and the app
-        // result (`Program e msg`), so `e` unifies from the user's view type
-        // (`View Web msg` → `e = Web` → `Program Web msg`) and never a
-        // per-shape default. An unconstrained `e` (a view that pins no engine)
-        // is left unsolved and rejected as ambiguous, never silently Web. The
-        // cfg is the CLOSED minimal common surface — engine-specific fields
-        // (`Web.app`'s `routes`, `Cli.app`'s `onLine`, …) stay in the per-engine
-        // entries, which keep their own richer cfg records.
-        const PROGRAM_E: TyShape = TyShape::Con(BuiltinTag::Program, &[C, B]);
-        const VIEW_ENGINE_A: TyShape = TyShape::Con(BuiltinTag::View, &[C, B]);
-        const VIEW_ENGINE_FN: TyShape = TyShape::Fun(&A, &VIEW_ENGINE_A);
-        // `init : WebReq -> (model, Cmd msg)` — the view engine's entry boundary.
-        // Only the Web engine is wired, so `init` takes the Web request boundary
-        // and the app emits through `web_app`; the tag itself stays generic via
-        // the shared `e`. When Tui/Cli are wired their `()`-boundary init joins
-        // here behind the same engine variable.
-        const TEA_APP_CFG: TyShape = TyShape::Record {
-            fields: &[
-                (FieldTag::AppInit, &WEB_REQ_TO_TUPLE),
-                (FieldTag::AppUpdate, &UPDATE_FN),
-                (FieldTag::AppView, &VIEW_ENGINE_FN),
-                (FieldTag::AppSubscriptions, &SUBS_FN),
-            ],
-            tail: RowTailShape::Closed,
-        };
-        const TEA_APP: TyShape = TyShape::Fun(&TEA_APP_CFG, &PROGRAM_E);
         // Ui builders taking a record.
         const LAYOUT_WITH: TyShape = {
             const HTML_A_INNER: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);
@@ -9768,12 +9723,6 @@ impl StdlibKernel {
             | Self::BackoffExponentialWithJitter => Some(&BACKOFF_STRATEGY_CON),
             // App-entry cfg records.
             Self::WebApp => Some(&WEB_APP),
-            // `Ipe.Tea.app` — the generic minimal TEA entry, parametric over the
-            // view engine `e` (shared between `view : model -> View e msg` and
-            // the `Program e msg` result). `e` is recovered from the user's view
-            // type, never per-shape-defaulted. `Web.app` keeps its own richer
-            // route-ful `WEB_APP` scheme.
-            Self::TeaApp => Some(&TEA_APP),
             Self::WebEmbed => Some(&WEB_EMBED),
             Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
             Self::TerminalAppLines => Some(&TERMINAL_APP_LINES),
@@ -10801,10 +10750,6 @@ impl StdlibKernel {
             | Self::HtmlBoolAttribute
             | Self::HtmlNoAttr
             | Self::WebApp
-            // `Ipe.Tea.app` (engine = Web) carries no capability of its own —
-            // its effects come from the cfg's `init`/`update` `Cmd` closures,
-            // gated by the linked-module capability scan (like `Web.app`).
-            | Self::TeaApp
             | Self::WebEmbed
             | Self::WebAppRouted
             | Self::WebRoute
@@ -12706,10 +12651,6 @@ impl StdlibKernel {
         matches!(
             self,
             Self::WebApp
-                // `Ipe.Tea.app` (engine = Web) is a `class=Web` residency kernel
-                // like `Web.app` — it lowers to the same `WebApp` emit path, so a
-                // program using it needs the `web`/`live` runtime module in scope.
-                | Self::TeaApp
                 | Self::WebEmbed
                 | Self::WebAppRouted
                 | Self::WebAppWith
