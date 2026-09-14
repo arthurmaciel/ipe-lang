@@ -79,10 +79,7 @@ pub fn emit_web_call(
         // the handle kind: `Web.app` → `WebAppKind::Standalone` (binds its own
         // listener); `Web.embed` → `WebAppKind::Mountable` (carries a router
         // builder for `Server.mountApp` to nest on the shared port).
-        // `Ipe.Tea.app` (engine = Web) emits identically to `Web.app` — same
-        // six-field cfg, same standalone `WebApp` handle (`mountable = false`),
-        // same `web_app` runtime sink — so the emitted Rust is byte-identical.
-        KernelFn::WebApp | KernelFn::TeaApp | KernelFn::WebEmbed => {
+        KernelFn::WebApp | KernelFn::WebEmbed => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_web_call::WebApp",

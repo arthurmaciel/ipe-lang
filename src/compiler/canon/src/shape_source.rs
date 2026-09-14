@@ -61,17 +61,6 @@ const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
         "worker",
         MainShape::Script,
     ),
-    // `Ipe.Tea.app` (engine = Web) — the generic view-ful TEA app-entry over the
-    // closed Web renderer, imported as `Ipe.App.Tea` (surface `Tea.app`). It
-    // classifies `MainShape::Web` exactly like `Web.app` (same cfg, same `Program
-    // Web msg` result, same emit path), so it shares the full Web delivery
-    // posture (live/spa, SSR+SSE/CSRF). `Web.app` is a thin surface synonym over
-    // this generic entry.
-    (&["Ipe", "App", "Tea"], "app", MainShape::Web),
-    // `Script.program` — the Script shape's own entry (`Ipe.App.Script`). A
-    // `main = Script.program (…)` head pins Script explicitly, the same way the
-    // app entries pin their shapes; the wrapped task renders nothing.
-    (&["Ipe", "App", "Script"], "program", MainShape::Script),
 ];
 
 /// Classify a parsed module's `main` into its pinned [`MainShape`].
@@ -482,18 +471,6 @@ mod tests {
     }
 
     #[test]
-    fn tea_app_head_is_web() {
-        // `Ipe.Tea.app` (engine = Web) is the generic view-ful entry over the
-        // closed Web renderer; it classifies `MainShape::Web` exactly like
-        // `Web.app`, so it inherits the full Web delivery posture and its own
-        // admissible `Cmd`/`Sub` family is `Ipe.App.Tea.Web.*`.
-        assert_eq!(
-            classify("module Main exposing (..)\n\nimport Ipe.App.Tea\n\nmain = Tea.app cfg\n"),
-            MainShape::Web
-        );
-    }
-
-    #[test]
     fn tui_and_cli_heads() {
         assert_eq!(
             classify("module Main exposing (..)\n\nimport Ipe.App.Tea.Tui\n\nmain = Tui.app cfg\n"),
@@ -516,26 +493,25 @@ mod tests {
     }
 
     #[test]
-    fn script_program_head_is_script() {
-        // `main = Script.program (…)` pins the Script shape explicitly through
-        // the `Ipe.App.Script.program` entry — the head names the shape, rather
-        // than Script being read off the absence of a shape entry.
+    fn bare_task_main_is_script() {
+        // A Direct program's `main` is a bare `Task Error ()` — it names no shape
+        // entry at its head, so it classifies Script. This is the Direct posture:
+        // a script, server body, or batch job that renders nothing needs no
+        // wrapper to pin its shape; the absence of a shape entry IS the pin.
         assert_eq!(
             classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Script\n\nmain = Script.program task\n"
+                "module Main exposing (..)\n\nimport Ipe.Io as Io\n\nmain = Io.println \"hi\"\n"
             ),
             MainShape::Script
         );
     }
 
     #[test]
-    fn aliased_script_program_head_is_script() {
-        // The resolve-not-spell rule (#2142) applies to `Script.program` too: an
-        // `as S` alias resolving to `Ipe.App.Script` classifies Script.
+    fn non_shape_qualified_head_is_script() {
+        // A qualified head whose resolved module is not a shape entry stays
+        // Script — the least-capability posture, never a guessed shape.
         assert_eq!(
-            classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Script as S\n\nmain = S.program task\n"
-            ),
+            classify("module Main exposing (..)\n\nimport Acme.Batch\n\nmain = Batch.run cfg\n"),
             MainShape::Script
         );
     }
@@ -627,10 +603,6 @@ mod tests {
         assert_eq!(
             scaffold_hint("module Main exposing (main)\n\nmain = Server.listen config\n"),
             MainShape::Server
-        );
-        assert_eq!(
-            scaffold_hint("module Main exposing (main)\n\nmain = Script.program task\n"),
-            MainShape::Script
         );
         assert_eq!(
             scaffold_hint("module Main exposing (main)\n\nmain = Widget.app config\n"),
