@@ -284,21 +284,25 @@ fn build_emitted_binary(golden_name: &str, emitted_dir: &Path) -> Result<String,
     let unique_pkg = rewrite_package_name(emitted_dir, golden_name)?;
 
     let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
+    let target = resolve_emitted_target(shared.as_deref());
+
+    // Hermetic resolve: pin the emitted crate's whole dependency graph into a
+    // per-emit `Cargo.lock` ONCE, then build against exactly that lock with
+    // `--locked`. Without the lock the build resolves "latest-compatible" live on
+    // every run, so a transitive point-release (e.g. a chrono patch pulling a
+    // wasm-bindgen bump against the runtime's exact pin) can red the SEAL with no
+    // source change. `--locked` makes the build refuse to re-resolve: any
+    // lock↔manifest drift fails closed here, never as a silent divergence.
+    lock_emitted_dependencies(emitted_dir, target.as_deref(), golden_name)?;
+
     let mut cmd = Command::new("cargo");
-    // Online resolution: the emitted crate carries no lockfile, so cargo resolves
-    // its dep graph fresh against the live index. That graph is the only one that
-    // honours the runtime's exact `wasm-bindgen = "=0.2.126"` pin against every
-    // transitive `^0.2` requirer — an offline resolve restricted to a partially
-    // warmed cache can miss the pinned point version and force an incompatible
-    // one, breaking the build (a cache-completeness gap, not a codegen SEAL
-    // breach). Determinism of the resolved versions is a separate concern owned
-    // by a committed lockfile, not by starving the resolver of the index.
     cmd.arg("build")
+        .arg("--locked")
         .arg("--message-format=json")
         .current_dir(emitted_dir)
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WRAPPER", "");
-    if let Some(p) = resolve_emitted_target(shared.as_deref()) {
+    if let Some(p) = &target {
         cmd.env("CARGO_TARGET_DIR", p);
     }
     let build = run_bounded_build(cmd, golden_name, emitted_build_timeout())?;
@@ -313,6 +317,35 @@ fn build_emitted_binary(golden_name: &str, emitted_dir: &Path) -> Result<String,
     find_executable(&json_stdout, &unique_pkg).ok_or_else(|| {
         format!("{golden_name}: no `executable` artifact for package `{unique_pkg}` in cargo JSON")
     })
+}
+
+/// Resolve the emitted crate's dependency graph ONCE into a per-emit
+/// `Cargo.lock` under `emitted_dir`, so the subsequent `--locked` build replays
+/// exactly that resolution instead of resolving "latest-compatible" afresh. The
+/// environment mirrors the build below (cleared `RUSTC_WRAPPER`, the shared
+/// `CARGO_TARGET_DIR` when set) so the same toolchain that consumes the lock
+/// produces it.
+fn lock_emitted_dependencies(
+    emitted_dir: &Path,
+    target: Option<&str>,
+    golden_name: &str,
+) -> Result<(), String> {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("generate-lockfile")
+        .current_dir(emitted_dir)
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
+        .env("RUSTC_WRAPPER", "");
+    if let Some(p) = target {
+        cmd.env("CARGO_TARGET_DIR", p);
+    }
+    let out = run_bounded_build(cmd, golden_name, emitted_build_timeout())?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "{golden_name}: emitted project must resolve a Cargo.lock\n--- cargo stderr ---\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    ))
 }
 
 /// The captured result of a bounded `cargo build`: its exit status and the
