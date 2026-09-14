@@ -1625,6 +1625,11 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     // app (its `main` head-calls the entry), but folds onto its own `"Worker"`
     // shape family for `Cmd` / `Sub` scoping (see `canonical_shape`).
     ("Tea", "worker"),
+    // `Tea.app` — the generic view-ful TEA app-entry over the closed Web
+    // renderer. A TEA app whose rendering family is `"Web"` (see
+    // `tea_entry_shape`), so its admissible `Cmd` / `Sub` imports are
+    // `Ipe.App.Tea.Web.*` and it classifies `MainShape::Web`.
+    ("Tea", "app"),
 ];
 
 /// The canonical shape (rendering family) name for a TEA surface segment. Most
@@ -1639,6 +1644,21 @@ fn canonical_shape(surface: &str) -> &str {
         // scope is `Ipe.App.Tea.Worker.{Cmd,Sub}`, folding onto `"Worker"`.
         "Tea" => "Worker",
         other => other,
+    }
+}
+
+/// The canonical TEA shape (rendering family) for a `(qualifier, member)` entry.
+///
+/// The `Tea` qualifier hosts TWO entries with DIFFERENT rendering families, so
+/// the qualifier alone (what [`canonical_shape`] keys on) cannot decide: the
+/// view-less `Tea.worker` folds onto `"Worker"`, while the view-ful `Tea.app`
+/// (engine = Web) renders through the closed Web renderer and folds onto
+/// `"Web"`, so its admissible `Cmd` / `Sub` imports are `Ipe.App.Tea.Web.*`.
+/// Every other surface is decided by its qualifier alone.
+fn tea_entry_shape(qualifier: &'static str, member: &str) -> &'static str {
+    match (qualifier, member) {
+        ("Tea", "app") => "Web",
+        _ => canonical_shape(qualifier),
     }
 }
 
@@ -1918,7 +1938,7 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
                 return TEA_APP_ENTRIES
                     .iter()
                     .find(|(em, en)| *em == m && *en == n)
-                    .map(|(shape, _)| canonical_shape(shape));
+                    .map(|(shape, member)| tea_entry_shape(shape, member));
             }
             _ => return None,
         }
@@ -6416,6 +6436,78 @@ fn canonicalise_type(
                         },
                     });
                 }
+            }
+            // `View e msg` — the engine-parametric view carrier. It has exactly
+            // ONE denotation per engine tag: `View Web msg` IS `Element msg` (the
+            // DOM view), `View Tui msg` IS `Screen msg`, `View Cli msg` IS
+            // `Lines msg`. There is no independent `View` runtime type — it
+            // rewrites at canon to the engine's existing per-engine view
+            // constructor, so downstream inference, lowering, and emit are
+            // byte-identical to writing the per-engine name directly, and a
+            // cross-engine node (`View Tui msg` where `View Web msg` is expected)
+            // fails unification against the distinct per-engine constructor. The
+            // engine tag `e` is not a standalone type: it is read syntactically
+            // here (never routed through type-home resolution), drawn from the
+            // CLOSED `{Web, Tui, Cli}` set; any other tag has no view denotation
+            // and is rejected fail-closed. Only the `msg` argument is a real type
+            // and is canonicalised under the current substitution.
+            if qualifier_str.is_empty()
+                && ctx.interner.resolve(name) == Some("View")
+                && args.len() == 2
+                && let Some(src::TypeAnnotation::TType(engine_qual, engine_segs, engine_args)) =
+                    args.first()
+                && let Some(msg_ann) = args.get(1)
+                && engine_args.is_empty()
+                && ctx
+                    .interner
+                    .resolve(*engine_qual)
+                    .is_some_and(str::is_empty)
+                && let Some(engine) = engine_segs.last().copied()
+            {
+                let view_ctor = match ctx.interner.resolve(engine) {
+                    Some("Web") => "Element",
+                    Some("Tui") => "Screen",
+                    Some("Cli") => "Lines",
+                    // Fail closed: the engine tag is not one of the closed view
+                    // engines `{Web, Tui, Cli}`, so `View <tag> msg` has no
+                    // rendering denotation. Reported as an unresolved type name
+                    // (the tag is not a known view engine).
+                    _ => {
+                        return Err(Diagnostic::Name {
+                            span: ctx.ann_span,
+                            msg: NameError::TypeNotFound {
+                                name: name_str(ctx.interner, engine)?,
+                                suggestions: Box::new([]),
+                            },
+                        });
+                    }
+                };
+                // `Element` / `Screen` / `Lines` are reserved builtins interned
+                // at env init, so a miss here is a compiler bug, never user input.
+                let ctor_sym =
+                    ctx.interner
+                        .lookup(view_ctor)
+                        .ok_or_else(|| Diagnostic::CompilerBug {
+                            where_: "ipe_canon::canonicalise_type::view_ctor",
+                            detail: "per-engine view constructor name is not interned".into(),
+                        })?;
+                // Keep only the message argument (the per-engine view
+                // constructor is arity 1, `Element msg`), canonicalised under the
+                // current substitution exactly as any use-site argument.
+                let msg = canonicalise_type(
+                    msg_ann,
+                    ctx,
+                    subst,
+                    free_vars,
+                    visited,
+                    budget,
+                    depth.saturating_add(1),
+                )?;
+                return Ok(canon::Type::Con {
+                    home: Vec::new(),
+                    name: ctor_sym,
+                    args: vec![msg],
+                });
             }
             // Type arguments are canonicalised under the current substitution
             // (they appear at the use site) regardless of whether `name` is an

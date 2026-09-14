@@ -2707,7 +2707,13 @@ impl Builder<'_> {
             // `Web.embed` shares `Web.app`'s exact six-field cfg scheme — both
             // produce the `WebApp` leaf from the same record. `embed`'s handle
             // is destined for `Server.mountApp`; `app`'s binds its own listener.
-            K::WebApp | K::WebEmbed => {
+            // `Ipe.Tea.app` (engine = Web) shares `Web.app`'s exact six-field cfg
+            // and its `Program Web msg` result — the generic view-ful entry over
+            // the closed Web renderer. `View Web msg` in `view` IS `Element msg`,
+            // so the legacy reference `Ty` is byte-identical to `K::WebApp`'s
+            // (the `WebEmbed` branch below routes only the mountable leaf; `TeaApp`
+            // takes the `program(...)` carrier like `K::WebApp`).
+            K::WebApp | K::WebEmbed | K::TeaApp => {
                 // `view : Model -> Element Msg`; the framework applies
                 // `Ui.layout` internally, unifying the graphical shapes on
                 // `Element`. Raw HTML is reached through the `Ui.html` node

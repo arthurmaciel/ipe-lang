@@ -150,6 +150,13 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // Importing it marks the module a TEA app (IPE-N0033). A worker classifies to
     // the co-located Script placement and can never reach the Spa/wasm sandbox.
     (&["Ipe", "App", "Tea", "Worker"], "Tea"),
+    // `Ipe.App.Tea` — the generic view-ful TEA app-entry surface (imported as
+    // `Ipe.App.Tea`, surface `Tea.app`): `Tea.app { init, update, view : model
+    // -> View Web msg, subscriptions, routes }`. Engine = Web: it shares
+    // `Web.app`'s scheme and emit path, so it classifies `MainShape::Web` and
+    // folds onto the `"Web"` Cmd/Sub family. Importing it marks the module a TEA
+    // app (IPE-N0033).
+    (&["Ipe", "App", "Tea"], "Tea"),
     // `Ipe.App.Tea.Web.PubSub` — the Web-shape-scoped TEA-side broadcast surface:
     // `publish` / `publishNoEcho` (Cmd forms, fired from `update`) and
     // `subscribeTopic` (Sub form, declared in `subscriptions`). Distinct from the
@@ -1026,7 +1033,11 @@ pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
         ("Cli", &["app"]),
         // `Ipe.Tea.worker` — view-less co-located worker app-entry
         // (`{ init, update, subscriptions } -> Program Worker msg`). No render.
-        ("Tea", &["worker"]),
+        // `Ipe.Tea.app` — the generic view-ful TEA app-entry over the closed Web
+        // renderer (`{ init, update, view : model -> View Web msg,
+        // subscriptions, routes } -> Program Web msg`). Shares `Web.app`'s scheme
+        // and emit path.
+        ("Tea", &["worker", "app"]),
         // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
         // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
         (
@@ -1228,6 +1239,15 @@ impl Env {
             home,
             ..Self::default()
         };
+        // Pre-intern the per-engine view constructor names so the `View e msg`
+        // carrier rewrite in `canonicalise_type` can always look them up: `View
+        // Web msg` rewrites to `Element msg`, `View Tui msg` to `Screen msg`,
+        // `View Cli msg` to `Lines msg`. A source that mentions only `View <e>`
+        // (never the per-engine name directly) would otherwise leave the target
+        // name uninterned.
+        interner.intern("Element")?;
+        interner.intern("Screen")?;
+        interner.intern("Lines")?;
         // install_prelude_qualifiers MUST run first — it populates
         // stdlib_index, which install_builtin_vars consults for the fast-path id.
         env.install_prelude_qualifiers(interner)?;
@@ -1625,6 +1645,10 @@ impl Env {
             // `Tea` carries its `worker` member from the QUALIFIERS catalog; the
             // view-less worker app-entry surface.
             ("Ipe.App.Tea.Worker", "Tea"),
+            // `Tea` also carries its `app` member — the generic view-ful entry
+            // over the closed Web renderer (engine = Web), imported as
+            // `Ipe.App.Tea`.
+            ("Ipe.App.Tea", "Tea"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
             ("Ipe.Auth", "Auth"),

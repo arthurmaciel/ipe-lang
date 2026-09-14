@@ -497,6 +497,102 @@ mod tests {
         canonicalise_module(&src, &expected, &deps, &mut i).err()
     }
 
+    /// Parse + canonicalise `src_text` in ONE interner, returning the canonical
+    /// annotation type of each named typed binding in `wants` (same order).
+    /// Symbol ids are per-interner, so bindings compared for equality MUST be
+    /// canonicalised together here. `None` if parse/canon fails.
+    fn canon_binding_tys(src_text: &str, wants: &[&str]) -> Option<Vec<ast::Type>> {
+        let mut i = Interner::new();
+        let src = ipe_parse::parse_module(src_text, &mut i).ok()?;
+        let module = canonicalise(&src, &mut i).ok()?;
+        wants
+            .iter()
+            .map(|w| {
+                let want_sym = i.lookup(w)?;
+                module.defs.iter().find_map(|d| match d {
+                    ast::Def::Typed { name, ty, .. } if name.value == want_sym => Some(ty.clone()),
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn view_web_is_the_dom_element_type() {
+        // `View Web msg` and `Element msg` are the SAME canonical type: the
+        // `View` carrier rewrites to the engine's per-engine view constructor at
+        // canon, so downstream inference / lowering / emit are byte-identical to
+        // writing `Element msg` directly. This is what lets `Ipe.Tea.app`'s
+        // `view : model -> View Web msg` field accept the existing DOM view
+        // combinators with no parallel surface.
+        let tys = canon_binding_tys(
+            "module Main exposing (v, w)\n\n\
+             v : View Web msg\nv = v\n\n\
+             w : Element msg\nw = w\n",
+            &["v", "w"],
+        );
+        assert!(
+            tys.is_some(),
+            "`View Web msg` and `Element msg` must both canonicalise"
+        );
+        let tys = tys.unwrap();
+        assert_eq!(
+            tys.first(),
+            tys.get(1),
+            "`View Web msg` must canonicalise to the identical type as `Element msg`"
+        );
+    }
+
+    #[test]
+    fn view_tui_and_view_cli_are_the_screen_and_lines_types() {
+        // The `View` carrier is genuinely engine-parametric over the CLOSED set:
+        // `View Tui msg` IS `Screen msg`, `View Cli msg` IS `Lines msg`. Because
+        // each maps to a DISTINCT per-engine constructor, a cross-engine node
+        // (`View Tui msg` where a `View Web msg` is wanted) fails unification —
+        // the make-invalid-states-unrepresentable guarantee, proven structurally
+        // by the three carriers resolving to three distinct types.
+        let tys = canon_binding_tys(
+            "module Main exposing (tui, screen, cli, lines, web)\n\n\
+             tui : View Tui msg\ntui = tui\n\n\
+             screen : Screen msg\nscreen = screen\n\n\
+             cli : View Cli msg\ncli = cli\n\n\
+             lines : Lines msg\nlines = lines\n\n\
+             web : View Web msg\nweb = web\n",
+            &["tui", "screen", "cli", "lines", "web"],
+        )
+        .expect("all view annotations must canonicalise");
+        assert_eq!(tys[0], tys[1], "`View Tui msg` must be `Screen msg`");
+        assert_eq!(tys[2], tys[3], "`View Cli msg` must be `Lines msg`");
+        assert_ne!(
+            tys[0], tys[2],
+            "distinct engines must give distinct view types"
+        );
+        assert_ne!(
+            tys[4], tys[0],
+            "`View Web msg` (Element) and `View Tui msg` (Screen) must differ, \
+             so a cross-engine view node fails unification"
+        );
+    }
+
+    #[test]
+    fn view_over_a_non_engine_tag_is_rejected() {
+        // Fail closed: the engine tag is drawn from the CLOSED `{Web, Tui, Cli}`
+        // set. `View Foo msg` names no view engine and has no rendering
+        // denotation, so it is rejected at canon rather than silently accepted.
+        let err = canon_err("module Main exposing (v)\n\nv : View Foo msg\nv = v\n");
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::TypeNotFound { ref name, .. },
+                    ..
+                }) if name.as_ref() == "Foo"
+            ),
+            "`View Foo msg` must be rejected fail-closed as an unknown view \
+             engine, got {err:?}"
+        );
+    }
+
     #[test]
     fn unknown_name_is_a_value_not_found() {
         let err = canon_err("module Main exposing (main)\n\nmain = nope\n");
