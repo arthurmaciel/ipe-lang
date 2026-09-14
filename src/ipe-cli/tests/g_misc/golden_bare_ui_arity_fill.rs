@@ -78,8 +78,8 @@ main =
     Task.succeed ()
 "#;
 
-fn html_app_out_dir() -> PathBuf {
-    std::env::temp_dir().join("bare_ui_html_app_out")
+fn html_app_out_dir(tag: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("bare_ui_{tag}_app_out"))
 }
 
 /// Compile a fixture into its own out dir; `None` (skip) when the runtime
@@ -132,13 +132,14 @@ fn emitted_program_sources(out: &Path) -> String {
 /// `rawView : Model -> Html` (bare) reached via `Ui.html` under `Web.app`
 /// must be ipe-0 and
 /// emit the CONCRETE `Html<MainMsg>` return — the arity-fill's message parameter
-/// resolved from the body's solved type, never `Html<()>` or `Html<T1>`.
-#[test]
-fn bare_html_view_emits_concrete_msg() {
-    let out = html_app_out_dir();
-    let Some(result) = compile(BARE_HTML_VIEW_APP, "html_app", &out) else {
-        return;
-    };
+/// resolved from the body's solved type, never `Html<()>` or `Html<T1>`. Each
+/// caller passes a distinct `tag` so concurrent tests never share — and thus
+/// never race on — an emit/out dir; a shared dir lets one test's re-emit
+/// (which wipes and rewrites the dir) invalidate another's `--locked` lockfile
+/// mid-build. Returns the out dir, or `None` when the runtime cannot resolve.
+fn emit_and_assert_bare_html_view(tag: &str) -> Option<PathBuf> {
+    let out = html_app_out_dir(tag);
+    let result = compile(BARE_HTML_VIEW_APP, tag, &out)?;
     assert!(
         result.is_ok(),
         "a bare `view : Model -> Html` must arity-fill and be ipe-0, got: {:?}",
@@ -155,6 +156,12 @@ fn bare_html_view_emits_concrete_msg() {
         "the pinned view must not emit `Html<()>` — that would mismatch the \
          app consumer's `Fn(Model) -> Html<Msg>` bound at cargo time",
     );
+    Some(out)
+}
+
+#[test]
+fn bare_html_view_emits_concrete_msg() {
+    emit_and_assert_bare_html_view("html_view_emit");
 }
 
 /// Bare `Attribute` and `Element` annotations arity-fill their message
@@ -183,9 +190,9 @@ fn bare_html_view_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {
         return;
     }
-    bare_html_view_emits_concrete_msg();
-
-    let out = html_app_out_dir();
+    let Some(out) = emit_and_assert_bare_html_view("html_view_build") else {
+        return;
+    };
     let built = e2e_support::build_rust_binary("bare_html_view", &out);
     assert!(
         built.is_ok(),

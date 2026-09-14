@@ -1530,6 +1530,16 @@ pub fn build_emitted_project(
         source: e,
     };
 
+    // Hermetic resolve: pin the emitted crate's whole dependency graph into a
+    // per-emit `Cargo.lock` ONCE, then build against exactly that lock. Without
+    // this the build resolves "latest-compatible" live on every run, so a
+    // transitive point-release can red the SEAL with no source change. The
+    // `--locked` flag below makes the build refuse to touch the network or
+    // re-resolve: any lock↔manifest drift fails closed as a build error at `ipe`
+    // time, never a silent divergence.
+    lock_emitted_dependencies(cargo, io_path)?;
+    cargo.arg("--locked");
+
     // Pipe stderr so we can both forward it live AND capture it for the typed
     // error; leave stdout inherited (a `cargo build` writes only to stderr).
     let mut child = cargo
@@ -1570,6 +1580,46 @@ pub fn build_emitted_project(
         code: status.code().unwrap_or(1),
         stderr: captured,
         runtime,
+    })
+}
+
+/// Resolve the emitted crate's dependency graph ONCE into a per-emit
+/// `Cargo.lock` under `out_dir`, so the subsequent `--locked` build is a
+/// byte-reproducible, network-free replay of that single resolution rather than
+/// a fresh "latest-compatible" resolve on every run. The `generate-lockfile`
+/// invocation mirrors the build command's program, cwd, and environment (the
+/// same `cargo` binary, `out_dir`, and any cleared `RUSTC_WRAPPER` or pinned
+/// `CARGO_TARGET_DIR`) so the lock is produced by the toolchain that consumes it.
+///
+/// # Errors
+/// - [`CliError::Io`] if `cargo generate-lockfile` cannot be spawned or waited on.
+/// - [`CliError::EmittedBuildFailed`] if resolution exits non-zero (e.g. the
+///   registry is unreachable) — surfaced through the same typed channel as the
+///   build failure it precedes.
+fn lock_emitted_dependencies(
+    build_cmd: &std::process::Command,
+    out_dir: &Path,
+) -> Result<(), CliError> {
+    let mut lock = std::process::Command::new(build_cmd.get_program());
+    lock.arg("generate-lockfile").current_dir(out_dir);
+    for (key, val) in build_cmd.get_envs() {
+        match val {
+            Some(v) => lock.env(key, v),
+            None => lock.env_remove(key),
+        };
+    }
+    let output = lock.output().map_err(|e| CliError::Io {
+        path: out_dir.to_path_buf(),
+        source: e,
+    })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(CliError::EmittedBuildFailed {
+        what: "the emitted crate's dependency lockfile",
+        code: output.status.code().unwrap_or(1),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        runtime: None,
     })
 }
 
