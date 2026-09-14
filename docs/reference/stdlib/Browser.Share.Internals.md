@@ -20,7 +20,11 @@ API call so the platform sheet only shows populated fields.
 
   * `title` — the shared title.
   * `text` — the shared body text.
-  * `url` — the shared URL.
+  * `url` — the shared URL. The raw transport is untyped, so the served JS
+    `share` sink allowlists its scheme to `http`/`https` before
+    `navigator.share`: a `data:`/`file:`/`javascript:`/relative URL reaching
+    this raw field is dropped fail-closed, independent of the high-level
+    `ShareUrl` seal (defence in depth).
 
 Crossing the seal as a single record keeps the outbound variant single-payload:
 `Share payload` externally tags as `{ Share: { title, text, url } }`.
