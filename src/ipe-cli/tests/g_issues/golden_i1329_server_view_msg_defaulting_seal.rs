@@ -9,9 +9,10 @@
 //!     and `Html.render` renders it.
 //!
 //! A server has no TEA `update` to pin `msg`, so each view's `msg` stays free and
-//! must default to `()`. `Server.listen` returns `Task ()` whether or not an
-//! `Ipe.Html`- or `Ipe.Ui`-bearing module is in the closure -- its return type
-//! resolves deterministically, so the program must not ICE (IPE-I0001) or leave a
+//! must default to `()`. `Server.listen` returns the `Program Direct ()` carrier
+//! (erasing to the listener's `Task ()` IR) whether or not an `Ipe.Html`- or
+//! `Ipe.Ui`-bearing module is in the closure -- its return type resolves
+//! deterministically, so the program must not ICE (IPE-I0001) or leave a
 //! residual polymorphic value (IPE-L0102).
 //!
 //! Before the message-defaulting fix, the free variable lowered to a Rust generic

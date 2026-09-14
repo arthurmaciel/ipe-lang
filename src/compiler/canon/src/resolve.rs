@@ -1635,11 +1635,6 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     // app (its `main` head-calls the entry), but folds onto its own `"Worker"`
     // shape family for `Cmd` / `Sub` scoping (see `canonical_shape`).
     ("Tea", "worker"),
-    // `Tea.app` — the generic view-ful TEA app-entry over the closed Web
-    // renderer. A TEA app whose rendering family is `"Web"` (see
-    // `tea_entry_shape`), so its admissible `Cmd` / `Sub` imports are
-    // `Ipe.App.Tea.Web.*` and it classifies `MainShape::Web`.
-    ("Tea", "app"),
 ];
 
 /// The canonical shape (rendering family) name for a TEA surface segment. Most
@@ -1657,19 +1652,13 @@ fn canonical_shape(surface: &str) -> &str {
     }
 }
 
-/// The canonical TEA shape (rendering family) for a `(qualifier, member)` entry.
+/// The canonical TEA shape (rendering family) for an entry qualifier.
 ///
-/// The `Tea` qualifier hosts TWO entries with DIFFERENT rendering families, so
-/// the qualifier alone (what [`canonical_shape`] keys on) cannot decide: the
-/// view-less `Tea.worker` folds onto `"Worker"`, while the view-ful `Tea.app`
-/// (engine = Web) renders through the closed Web renderer and folds onto
-/// `"Web"`, so its admissible `Cmd` / `Sub` imports are `Ipe.App.Tea.Web.*`.
-/// Every other surface is decided by its qualifier alone.
-fn tea_entry_shape(qualifier: &'static str, member: &str) -> &'static str {
-    match (qualifier, member) {
-        ("Tea", "app") => "Web",
-        _ => canonical_shape(qualifier),
-    }
+/// The `Tea` qualifier hosts only the view-less `Tea.worker`, which folds onto
+/// `"Worker"`; every other surface is decided by its qualifier alone. This is a
+/// thin wrapper over [`canonical_shape`], kept as its own name for the call site.
+fn tea_entry_shape(qualifier: &'static str) -> &'static str {
+    canonical_shape(qualifier)
 }
 
 /// IPE-N0045: reject a `main` that selects its shape at run time.
@@ -1948,7 +1937,7 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
                 return TEA_APP_ENTRIES
                     .iter()
                     .find(|(em, en)| *em == m && *en == n)
-                    .map(|(shape, member)| tea_entry_shape(shape, member));
+                    .map(|(shape, _member)| tea_entry_shape(shape));
             }
             _ => return None,
         }

@@ -166,7 +166,7 @@ main =
 /// unification — a cross-engine view is unrepresentable, not a silent render.
 const CROSS_ENGINE_VIEW: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea as Tea
+import Ipe.App.Tea.Web as Web
 import Ipe.App.Tea.Web.Cmd as Cmd
 import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
@@ -195,9 +195,9 @@ view _model =
     Ui.column [] [ Cells.text "nope" ]
 
 main =
-    Tea.app
+    Web.app
         { init = init, update = update, view = view
-        , subscriptions = subscriptions
+        , subscriptions = subscriptions, routes = [], notFound = NoOp
         }
 "#;
 
@@ -210,18 +210,17 @@ v : View Foo Msg
 v = v
 ";
 
-/// A `Tea.app` whose view engine is left under-determined: the `view` field is
-/// annotated `View e Msg` with a free `e` and its body is the diverging
-/// `Debug.todo`, so nothing pins the engine. The shared engine variable in
-/// `Tea.app`'s scheme (`view : model -> View e msg`, result `Program e msg`)
-/// therefore stays unsolved. It MUST be rejected — never silently defaulted to
-/// the Web renderer (the one closed sandbox surface).
-const AMBIGUOUS_ENGINE_VIEW: &str = r#"module Main exposing (main)
+/// The deleted generic `Ipe.Tea.app` entry: a `main = Tea.app { … }` over an
+/// `import Ipe.App.Tea` must be REJECTED at name resolution. `Program Web msg`
+/// comes only from the per-engine `Web.app`; the generic entry (with its
+/// under-determined-engine footgun) no longer exists, so `Tea.app` names no
+/// kernel and there is no representable path to the Web sandbox through it.
+const DELETED_TEA_APP: &str = r#"module Main exposing (main)
 
 import Ipe.App.Tea as Tea
 import Ipe.App.Tea.Web.Cmd as Cmd
 import Ipe.App.Tea.Web.Sub as Sub
-import Ipe.Debug as Debug
+import Ipe.Ui as Ui
 
 type Msg = NoOp
 
@@ -239,9 +238,9 @@ subscriptions : Model -> Sub.Sub Msg
 subscriptions _model =
     Sub.none
 
-view : Model -> View e Msg
+view : Model -> View Web Msg
 view _model =
-    Debug.todo "unconstrained engine"
+    Ui.text "counter"
 
 main =
     Tea.app
@@ -275,12 +274,13 @@ fn non_engine_view_tag_is_rejected() -> Result<(), BoxError> {
     assert_rejected_code("non_engine_view", NON_ENGINE_VIEW, "IPE-N0002")
 }
 
-/// The single most security-critical property: a `Tea.app` whose view engine
-/// is under-determined leaves the shared engine variable unsolved and is
-/// REJECTED — never silently defaulted to Web, the one closed sandbox renderer.
+/// The generic `Ipe.Tea.app` entry is DELETED: `main = Tea.app { … }` must be
+/// rejected at name resolution (the surface names no kernel), so no program can
+/// reach the Web sandbox through the deleted generic entry — prove-the-refusal
+/// for the collapse. Only the per-engine `Web.app` yields `Program Web msg`.
 #[test]
-fn ambiguous_view_engine_is_rejected_never_defaulted() -> Result<(), BoxError> {
-    assert_rejected_any("ambiguous_view_engine", AMBIGUOUS_ENGINE_VIEW)
+fn deleted_generic_tea_app_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_any("deleted_tea_app", DELETED_TEA_APP)
 }
 
 /// `Cli.app` is the line-oriented terminal entry kernel registered in
@@ -289,4 +289,40 @@ fn ambiguous_view_engine_is_rejected_never_defaulted() -> Result<(), BoxError> {
 #[test]
 fn cli_app_surface_compiles() -> Result<(), BoxError> {
     assert_accepted("cli_app", CLI_APP)
+}
+
+/// `main = Server.listen …` yields the uniform `Program Direct ()` carrier and
+/// the whole pipeline accepts (ipe-0). Acceptance is the SEAL witness: the
+/// `Program Direct ()` scheme + its erase-only lower to the listener's `Task ()`
+/// IR must both succeed, so a carrier that failed to erase would fail here.
+const SERVER_LISTEN_DIRECT: &str = r#"module Main exposing (main)
+
+import Ipe.Http.Server as Server
+import Ipe.Task as Task
+
+main =
+    Server.listen 8080
+        [ Server.get "/" (\_req -> Task.succeed (Server.text "hello")) ]
+"#;
+
+#[test]
+fn server_listen_infers_program_direct() -> Result<(), BoxError> {
+    assert_accepted("server_listen_direct", SERVER_LISTEN_DIRECT)
+}
+
+/// `main = Script.program (…)` yields the uniform `Program Direct ()` carrier
+/// and the whole pipeline accepts (ipe-0). The erase-only wrapper lowers to the
+/// wrapped task's `Task ()` IR, so a script's emit is unchanged.
+const SCRIPT_PROGRAM_DIRECT: &str = r#"module Main exposing (main)
+
+import Ipe.App.Script as Script
+import Ipe.Io as Io
+
+main =
+    Script.program (Io.println "hello")
+"#;
+
+#[test]
+fn script_program_infers_program_direct() -> Result<(), BoxError> {
+    assert_accepted("script_program_direct", SCRIPT_PROGRAM_DIRECT)
 }

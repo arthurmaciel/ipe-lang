@@ -335,6 +335,13 @@ pub const MODULES: &[StdModule] = &[
         name: "Ipe.Process",
         source: PROCESS,
     },
+    // `Ipe.App.Script` — the non-TEA direct Script entry. Kernel-qualifier
+    // (`program` resolves to `StdlibKernel::ScriptProgram`); the `.ipe` source is
+    // the doc veneer, never compiled (disjoint from `COMPILED_STD_MODULES`).
+    StdModule {
+        name: "Ipe.App.Script",
+        source: STD_APP_SCRIPT,
+    },
 ];
 
 /// The embedded Ipê source for a dotted `Ipe` module name, or `None` when
@@ -537,10 +544,13 @@ const STD_UI_CLI: &str = include_str!("../Ipe/Ui/Cli.ipe");
 /// view surfaces accept it in their `color` / `bg` builders.
 const STD_TEA_TERMINAL_COLOR: &str = include_str!("../Ipe/App/Tea/Terminal/Color.ipe");
 
-/// `Ipe.App.Script` — the Script shape's entry (`program`). Pure Ipê: `program`
-/// is the identity on its `Task Error ()`, so wrapping a task changes nothing at
-/// runtime; the wrapper's job is to name the Script shape at a `main`'s head, so
-/// every shape pins its shape by what `main` head-calls.
+/// `Ipe.App.Script` — the non-TEA direct Script entry (`program`). Kernel-backed
+/// (`StdlibKernel::ScriptProgram`, `Task Error () -> Program Direct ()`): the
+/// `.ipe` source is the doc veneer (a kernel-qualifier module in [`MODULES`], not
+/// compiled), and the erase-only wrapper lowers to the wrapped task's `Task ()`
+/// IR, so wrapping a task changes nothing at runtime. Its job is to name the
+/// Script shape at a `main`'s head, so every shape pins its shape by what `main`
+/// head-calls.
 const STD_APP_SCRIPT: &str = include_str!("../Ipe/App/Script.ipe");
 
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
@@ -1512,10 +1522,6 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.App.Tea.Terminal.Color",
         source: STD_TEA_TERMINAL_COLOR,
-    },
-    CompiledStdModule {
-        dotted: "Ipe.App.Script",
-        source: STD_APP_SCRIPT,
     },
     CompiledStdModule {
         dotted: "Ipe.Codec",

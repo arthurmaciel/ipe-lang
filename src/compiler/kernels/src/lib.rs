@@ -318,6 +318,15 @@ pub enum BuiltinTag {
     /// (phantom, erased at lower to the opaque worker leaf). A worker renders no
     /// view and can never reach the sandboxed Spa/wasm bundle.
     ProgramShapeWorker,
+    /// `Direct` — the nullary phantom program-shape tag for the non-TEA direct
+    /// kind (`Server.listen` → `Program Direct ()`, `Script.program` → `Program
+    /// Direct ()`). Appears only as [`Self::Program`]'s first argument; never a
+    /// standalone value. A `Direct` program drives no managed loop and renders no
+    /// view: it erases at lower to the `Task ()` its entry kernel already lowers
+    /// to (the emit is driven by the ENTRY — a socket listener or a batch task —
+    /// not by the tag), so it carries no opaque app leaf of its own. Co-located
+    /// only, never sandbox-capable.
+    ProgramShapeDirect,
     /// `HostMode` — the nullary closed host-bind ADT (`loopback` /
     /// `allInterfaces` / `envDriven`). The sole argument type of `Host.bind`; a
     /// value only ever comes from its three constructor kernels, each of which
@@ -2068,17 +2077,6 @@ pub enum StdlibKernel {
     HtmlNoAttr,        // `noAttr : Attribute msg`
     // ── Ipe.Web app-entry kernels ───────────────────────────────────────
     WebApp,
-    /// `Ipe.Tea.app` — the generic minimal view-ful TEA app-entry, parametric
-    /// over the view engine: `{ init, update, view : model -> View e msg,
-    /// subscriptions } -> Program e msg`. The engine `e` is SHARED between the
-    /// `view` field and the result, so it unifies from the user's view type
-    /// (`View Web msg` → `Program Web msg`) rather than a per-shape default; an
-    /// unconstrained `e` is rejected as ambiguous. The cfg is the CLOSED minimal
-    /// common surface — engine-specific features (`Web.app`'s `routes`,
-    /// `Cli.app`'s `onLine`, …) stay in the richer per-engine entries. Once `e`
-    /// is solved, the `Program e msg` result erases through the same per-shape
-    /// lower and emit path the per-engine entry uses.
-    TeaApp,
     WebAppRouted,
     /// `Web.embed : { … } -> WebApp` — produce a mountable web-app handle from
     /// the same six-field cfg as `Web.app`. The result is the opaque `WebApp`
@@ -2324,6 +2322,13 @@ pub enum StdlibKernel {
     // is `Cmd msg` (effects) and input is `Sub msg`. Co-located and
     // capability-gated; never reaches the sandbox.
     TeaWorker,
+    // `Ipe.App.Script.program` — the non-TEA Script entry: `Task Error () ->
+    // Program Direct ()`. Pins the direct Script shape at a `main`'s head. The
+    // wrapped task runs unchanged; the wrapper is erase-only (the `Program Direct
+    // ()` result lowers to the inner `Task ()` IR). Discloses no capability of
+    // its own (effects come from the wrapped task); co-located, never
+    // sandbox-capable.
+    ScriptProgram,
     // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower arm
     // yet → IPE-L0108 at lower time; qualified registration removes N0004).
     AuthHashPassword,
@@ -4143,11 +4148,6 @@ impl StdlibKernel {
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
             // ── Ipe.Web app-entry kernels ───────────────────────────────
             Self::WebApp => d("Web", "app", 1, Web, "web_app"),
-            // `Ipe.Tea.app` — generic over the view engine. When `e` solves to
-            // Web (the only engine wired here), it shares `Web.app`'s emit
-            // intercept (`web_app`), so the emitted Rust is unchanged; the
-            // engine tag is recovered at type inference, not defaulted.
-            Self::TeaApp => d("Tea", "app", 1, Web, "web_app"),
             Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
             // `Web.embed` shares `Web.app`'s emit path (both build the `WebApp`
             // leaf from the same cfg); the runtime symbol is the same builder.
@@ -4406,6 +4406,11 @@ impl StdlibKernel {
             // Ipe.Tea view-less worker app-entry. Surface `Tea.worker`; the
             // internal family is `Tea` (TEA-loop wiring, no render).
             Self::TeaWorker => d("Tea", "worker", 1, Tea, "ipe_worker_app_"),
+            // `Ipe.App.Script.program` — the non-TEA Script entry. Surface
+            // `Script.program`. Erase-only: the call is elided at lower to its
+            // wrapped `Task ()` argument, so the emit symbol is never used;
+            // `class = Pure` pulls in no feature-module.
+            Self::ScriptProgram => d("Script", "program", 1, Pure, "script_program_"),
             // Ipe.Auth / Ipe.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
             Self::AuthHashPasswordCost => d(
@@ -5695,7 +5700,6 @@ impl StdlibKernel {
         Self::HtmlScriptNode,
         // Web
         Self::WebApp,
-        Self::TeaApp,
         Self::WebAppRouted,
         Self::WebEmbed,
         Self::WebRoute,
@@ -5819,6 +5823,7 @@ impl StdlibKernel {
         // ── Effect stdlib modules ────────────────────────────────────────
         Self::TerminalAppLines,
         Self::TeaWorker,
+        Self::ScriptProgram,
         Self::AuthHashPassword,
         Self::AuthHashPasswordCost,
         Self::AuthVerifyPassword,
@@ -8181,11 +8186,22 @@ impl StdlibKernel {
         const UI_RGBA: TyShape = TyShape::Fun(&INT, &INT_TO_INT_TO_FLOAT_TO_COLOR);
         const COLOR_TO_STRING: TyShape = TyShape::Fun(&COLOR, &STRING);
 
-        // ── ServerListen : Int -> List ServerRoute -> Task (). ──
+        // ── ServerListen : Int -> List ServerRoute -> Program Direct (). ──
+        // The result is the uniform `Program Direct ()` carrier (not `Task ()`):
+        // a listening server is the direct non-TEA kind. It erases at lower to
+        // the exact `Task ()` IR the listener runtime already lowers to, so the
+        // emitted code is unchanged. Server's untrusted-input bounds live on this
+        // kernel + the Network capability, never the shape tag, so the carrier
+        // collapse leaves the network trust boundary untouched.
         const LIST_SERVER_ROUTE: TyShape = TyShape::Con(BuiltinTag::List, &[SERVER_ROUTE]);
-        const LIST_SERVER_ROUTE_TO_TASK_UNIT: TyShape =
-            TyShape::Fun(&LIST_SERVER_ROUTE, &TASK_UNIT);
-        const SERVER_LISTEN: TyShape = TyShape::Fun(&INT, &LIST_SERVER_ROUTE_TO_TASK_UNIT);
+        const LIST_SERVER_ROUTE_TO_PROGRAM_DIRECT: TyShape =
+            TyShape::Fun(&LIST_SERVER_ROUTE, &PROGRAM_DIRECT);
+        const SERVER_LISTEN: TyShape = TyShape::Fun(&INT, &LIST_SERVER_ROUTE_TO_PROGRAM_DIRECT);
+        // `Script.program : Task Error () -> Program Direct ()` — pins the direct
+        // Script shape at a `main`'s head. The wrapped task runs unchanged; the
+        // wrapper is erase-only (the `Program Direct ()` result lowers to the
+        // inner `Task ()` IR), so a script's emitted code is unchanged.
+        const SCRIPT_PROGRAM: TyShape = TyShape::Fun(&TASK_UNIT, &PROGRAM_DIRECT);
 
         // ── Record field-value shapes + the record nodes themselves. ──
         // Each record mirrors its `stdlib_scheme` arm's `Ty::Record` field-for-
@@ -8631,11 +8647,17 @@ impl StdlibKernel {
         const PROGRAM_SHAPE_TUI: TyShape = TyShape::Con(BuiltinTag::ProgramShapeTui, &[]);
         const PROGRAM_SHAPE_CLI: TyShape = TyShape::Con(BuiltinTag::ProgramShapeCli, &[]);
         const PROGRAM_SHAPE_WORKER: TyShape = TyShape::Con(BuiltinTag::ProgramShapeWorker, &[]);
+        const PROGRAM_SHAPE_DIRECT: TyShape = TyShape::Con(BuiltinTag::ProgramShapeDirect, &[]);
         const PROGRAM_WEB: TyShape = TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_WEB, B]);
         const PROGRAM_TUI: TyShape = TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_TUI, B]);
         const PROGRAM_CLI: TyShape = TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_CLI, B]);
         const PROGRAM_WORKER: TyShape =
             TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_WORKER, B]);
+        // `Program Direct ()` — the non-TEA direct carrier. `msg` is always `()`
+        // (a Direct program carries no message type); erases at lower to the
+        // `Task ()` its entry kernel already lowers to.
+        const PROGRAM_DIRECT: TyShape =
+            TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_DIRECT, UNIT]);
         // The opaque per-shape app leaf still names `Server.mountApp`'s §9 gate.
         const WEB_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::WebApp, &[]);
         const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &PROGRAM_WEB);
@@ -8663,34 +8685,6 @@ impl StdlibKernel {
             tail: RowTailShape::Closed,
         };
         const WORKER_APP: TyShape = TyShape::Fun(&WORKER_CFG, &PROGRAM_WORKER);
-        // `Ipe.Tea.app` — the generic minimal TEA entry, parametric over the view
-        // engine. var(0)=model, var(1)=msg, var(2)=engine `e`. The engine var is
-        // SHARED between the `view` field's result (`View e msg`) and the app
-        // result (`Program e msg`), so `e` unifies from the user's view type
-        // (`View Web msg` → `e = Web` → `Program Web msg`) and never a
-        // per-shape default. An unconstrained `e` (a view that pins no engine)
-        // is left unsolved and rejected as ambiguous, never silently Web. The
-        // cfg is the CLOSED minimal common surface — engine-specific fields
-        // (`Web.app`'s `routes`, `Cli.app`'s `onLine`, …) stay in the per-engine
-        // entries, which keep their own richer cfg records.
-        const PROGRAM_E: TyShape = TyShape::Con(BuiltinTag::Program, &[C, B]);
-        const VIEW_ENGINE_A: TyShape = TyShape::Con(BuiltinTag::View, &[C, B]);
-        const VIEW_ENGINE_FN: TyShape = TyShape::Fun(&A, &VIEW_ENGINE_A);
-        // `init : WebReq -> (model, Cmd msg)` — the view engine's entry boundary.
-        // Only the Web engine is wired, so `init` takes the Web request boundary
-        // and the app emits through `web_app`; the tag itself stays generic via
-        // the shared `e`. When Tui/Cli are wired their `()`-boundary init joins
-        // here behind the same engine variable.
-        const TEA_APP_CFG: TyShape = TyShape::Record {
-            fields: &[
-                (FieldTag::AppInit, &WEB_REQ_TO_TUPLE),
-                (FieldTag::AppUpdate, &UPDATE_FN),
-                (FieldTag::AppView, &VIEW_ENGINE_FN),
-                (FieldTag::AppSubscriptions, &SUBS_FN),
-            ],
-            tail: RowTailShape::Closed,
-        };
-        const TEA_APP: TyShape = TyShape::Fun(&TEA_APP_CFG, &PROGRAM_E);
         // Ui builders taking a record.
         const LAYOUT_WITH: TyShape = {
             const HTML_A_INNER: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);
@@ -9768,16 +9762,12 @@ impl StdlibKernel {
             | Self::BackoffExponentialWithJitter => Some(&BACKOFF_STRATEGY_CON),
             // App-entry cfg records.
             Self::WebApp => Some(&WEB_APP),
-            // `Ipe.Tea.app` — the generic minimal TEA entry, parametric over the
-            // view engine `e` (shared between `view : model -> View e msg` and
-            // the `Program e msg` result). `e` is recovered from the user's view
-            // type, never per-shape-defaulted. `Web.app` keeps its own richer
-            // route-ful `WEB_APP` scheme.
-            Self::TeaApp => Some(&TEA_APP),
             Self::WebEmbed => Some(&WEB_EMBED),
             Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
             Self::TerminalAppLines => Some(&TERMINAL_APP_LINES),
             Self::TeaWorker => Some(&WORKER_APP),
+            // `Ipe.App.Script.program : Task Error () -> Program Direct ()`.
+            Self::ScriptProgram => Some(&SCRIPT_PROGRAM),
             // Ui / Input / Border record builders.
             Self::UiLayoutWith => Some(&LAYOUT_WITH),
             Self::UiButton => Some(&BUTTON),
@@ -10801,10 +10791,6 @@ impl StdlibKernel {
             | Self::HtmlBoolAttribute
             | Self::HtmlNoAttr
             | Self::WebApp
-            // `Ipe.Tea.app` (engine = Web) carries no capability of its own —
-            // its effects come from the cfg's `init`/`update` `Cmd` closures,
-            // gated by the linked-module capability scan (like `Web.app`).
-            | Self::TeaApp
             | Self::WebEmbed
             | Self::WebAppRouted
             | Self::WebRoute
@@ -10898,6 +10884,9 @@ impl StdlibKernel {
             // The worker app-entry itself has no capability: its effects come
             // from the `Cmd` closure, gated by the linked-module capability scan.
             | Self::TeaWorker
+            // The Script entry discloses no capability of its own — the wrapped
+            // task's effects are what the linked-module capability scan sees.
+            | Self::ScriptProgram
             | Self::AuthHashPassword
             | Self::AuthHashPasswordCost
             | Self::AuthVerifyPassword
@@ -12706,10 +12695,6 @@ impl StdlibKernel {
         matches!(
             self,
             Self::WebApp
-                // `Ipe.Tea.app` (engine = Web) is a `class=Web` residency kernel
-                // like `Web.app` — it lowers to the same `WebApp` emit path, so a
-                // program using it needs the `web`/`live` runtime module in scope.
-                | Self::TeaApp
                 | Self::WebEmbed
                 | Self::WebAppRouted
                 | Self::WebAppWith
@@ -13266,6 +13251,9 @@ mod tests {
             (StdlibKernel::LogInfo, None),
             (StdlibKernel::IoPrintln, None),
             (StdlibKernel::DebugLog, None),
+            // The Script entry discloses nothing of its own — the wrapped task's
+            // effects are what the capability scan sees.
+            (StdlibKernel::ScriptProgram, None),
             (StdlibKernel::EnvPublic, Some(Capability::Env)),
             (StdlibKernel::UiWidget, Some(Capability::CustomElement)),
             (StdlibKernel::JsSend, js_raw),
@@ -13930,6 +13918,10 @@ mod tests {
             // only `Web.app` gains a browser denotation.
             StdlibKernel::TerminalAppLines,
             StdlibKernel::TerminalAppScreen,
+            // The direct Script entry is co-located, never sandbox-capable:
+            // absent from every wasm allowlist, a `Program Direct ()` can never
+            // link into a Spa/wasm bundle (guard 9, mirroring the worker).
+            StdlibKernel::ScriptProgram,
             // Crypto: only the entropy pair (`randomBytes`/`randomToken`) has
             // a wasm substitute; hashing/AEAD/RSA stay denied (M4 scope cut,
             // NOT a qualifier-wide allow — see `wasm_client_available`).

@@ -17709,14 +17709,17 @@ impl<'a> Lowerer<'a> {
                 "TuiApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::TuiApp),
                 "CliApp" if self.is_shape_app_leaf_con(home, *name) => Ok(IrType::CliApp),
                 // `Program shape msg` annotation — twin of the inferred (ty) arm:
-                // the phantom shape tag (`Web`/`Tui`/`Cli`) selects the shape's
-                // opaque app leaf; the `msg` arg is dropped.
+                // the phantom shape tag (`Web`/`Tui`/`Cli`/`Worker`) selects the
+                // shape's opaque app leaf; the `msg` arg is dropped. `Direct`
+                // carries no app leaf — it erases to the `Task ()` its entry
+                // kernel already lowers to, so the emit is driven by the entry.
                 "Program" if home.is_empty() => match args.first() {
                     Some(canon::Type::Con { name: tag, .. }) => match self.resolve(*tag)? {
                         "Web" => Ok(IrType::WebApp),
                         "Tui" => Ok(IrType::TuiApp),
                         "Cli" => Ok(IrType::CliApp),
                         "Worker" => Ok(IrType::WorkerApp),
+                        "Direct" => Ok(IrType::Task(Box::new(IrType::Unit))),
                         other => Err(bug(
                             "ipe_lower::ir_type_from_annotation",
                             format!("Program carrier with unknown shape tag `{other}`"),
@@ -19279,11 +19282,14 @@ impl<'a> Lowerer<'a> {
                 "WebApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::WebApp),
                 "TuiApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::TuiApp),
                 "CliApp" if self.is_shape_app_leaf_con(module, *name) => Ok(IrType::CliApp),
-                // `Program shape msg` — the TEA shape carrier. Both type args are
-                // phantom: the first (the shape tag `Web`/`Tui`/`Cli`) selects the
-                // shape's existing opaque app leaf as the IR erase target; the
-                // `msg` arg is dropped. Home-guarded so a user `type Program = …`
-                // keyed under its own home falls through to its own enum.
+                // `Program shape msg` — the shape carrier. Both type args are
+                // phantom: the first (the shape tag `Web`/`Tui`/`Cli`/`Worker`)
+                // selects the shape's existing opaque app leaf as the IR erase
+                // target; the `msg` arg is dropped. `Direct` carries no app leaf —
+                // it erases to the `Task ()` its entry kernel already lowers to,
+                // so the emit is driven by the entry, not the tag. Home-guarded so
+                // a user `type Program = …` keyed under its own home falls through
+                // to its own enum.
                 "Program" if module.is_empty() && matches!(args.first(), Some(Ty::Con { .. })) => {
                     match args.first() {
                         Some(Ty::Con { name: tag, .. }) => match self.resolve(*tag)? {
@@ -19291,6 +19297,7 @@ impl<'a> Lowerer<'a> {
                             "Tui" => Ok(IrType::TuiApp),
                             "Cli" => Ok(IrType::CliApp),
                             "Worker" => Ok(IrType::WorkerApp),
+                            "Direct" => Ok(IrType::Task(Box::new(IrType::Unit))),
                             other => Err(bug(
                                 "ipe_lower::ir_type_from_ty",
                                 format!("Program carrier with unknown shape tag `{other}`"),
@@ -21060,9 +21067,7 @@ impl<'a> Lowerer<'a> {
         };
         if matches!(
             peek,
-            Callee::Kernel(
-                KernelFn::WebApp | KernelFn::TeaApp | KernelFn::WebEmbed | KernelFn::WebAppWith
-            )
+            Callee::Kernel(KernelFn::WebApp | KernelFn::WebEmbed | KernelFn::WebAppWith)
         ) {
             self.reject_web_app_poly_init(fields)?;
         }
@@ -21314,14 +21319,24 @@ impl<'a> Lowerer<'a> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
+                // ── Script.program — erase-only identity ──
+                //
+                // `Script.program : Task Error () -> Program Direct ()` is the
+                // identity on its wrapped task; the wrapper only pins the Script
+                // shape at a `main`'s head. It carries no runtime call, so it is
+                // elided to the lowered wrapped task — the emitted code is exactly
+                // what the bare `Task ()` would emit, keeping the SEAL byte-exact.
+                Callee::Kernel(KernelFn::ScriptProgram) if args.len() == 1 => {
+                    if let Some(task_arg) = args.first() {
+                        return Ok(Intercepted::Done(self.lower_expr(task_arg)?));
+                    }
+                }
                 // ── Web.app / Web.embed cfg literal (L0107 exemption) ──
                 //
                 // `Web.embed` takes the same six-field cfg record as `Web.app`
                 // and follows the same inline-literal gate — a let-bound / piped
                 // cfg is IPE-L0119, never an ICE.
-                Callee::Kernel(KernelFn::WebApp | KernelFn::TeaApp | KernelFn::WebEmbed)
-                    if args.len() == 1 =>
-                {
+                Callee::Kernel(KernelFn::WebApp | KernelFn::WebEmbed) if args.len() == 1 => {
                     // `args.len() == 1` is the match guard above; `first()` is
                     // always `Some` here.  Using `first()` instead of `args[0]`
                     // keeps `clippy::indexing_slicing` clean.
@@ -25009,13 +25024,6 @@ impl<'a> Lowerer<'a> {
                 // ── app-entry stubs — arity 1 ────────────────────────────
                 // `Web.app : WebAppCfg model msg -> WebApp`
                 | KernelFn::WebApp
-                // `Ipe.Tea.app : WebAppCfg model msg -> Program Web msg` — arity 1
-                // like `Web.app`; the surface `Tea.app` is re-resolved to
-                // `KernelFn::WebApp` at callee lowering, so this arm is reached
-                // only through the exhaustive kernel-arity table, never a real
-                // lowered call, but is listed explicitly so the count can never
-                // silently drift.
-                | KernelFn::TeaApp
                 // `Web.embed : WebAppCfg model msg -> WebApp` (mountable handle)
                 | KernelFn::WebEmbed
                 // `Web.appRouted : WebAppCfg model msg -> WebApp`
@@ -25026,6 +25034,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TerminalAppLines
                 // `Ipe.Tea.worker : WorkerCfg model msg -> WorkerApp`
                 | KernelFn::TeaWorker
+                // `Ipe.App.Script.program : Task Error () -> Program Direct ()` —
+                // erase-only: the call is elided to its wrapped `Task ()` argument
+                // (see `lower_call`), so this arm is reached only through the
+                // exhaustive kernel-arity table, never a real lowered call.
+                | KernelFn::ScriptProgram
                 // ── runtime-config front door — arity 1 ──────────────────
                 // `App.fromEnv : String -> Secret`
                 | KernelFn::AppFromEnv
@@ -26432,6 +26445,8 @@ impl<'a> Lowerer<'a> {
                     ("Server", "static") => Ok(Callee::Kernel(KernelFn::ServerStatic)),
                     ("Server", "mountApp") => Ok(Callee::Kernel(KernelFn::ServerMountApp)),
                     ("Server", "listen") => Ok(Callee::Kernel(KernelFn::ServerListen)),
+                    // `Ipe.App.Script.program` — the non-TEA Script entry.
+                    ("Script", "program") => Ok(Callee::Kernel(KernelFn::ScriptProgram)),
                     ("Server", "text") => Ok(Callee::Kernel(KernelFn::ServerText)),
                     ("Server", "json") => Ok(Callee::Kernel(KernelFn::ServerJson)),
                     ("Server", "html") => Ok(Callee::Kernel(KernelFn::ServerHtml)),
@@ -26841,13 +26856,6 @@ impl<'a> Lowerer<'a> {
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
                     ("Cli", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
                     ("Tea", "worker") => Ok(Callee::Kernel(KernelFn::TeaWorker)),
-                    // `Ipe.Tea.app` (engine = Web) — the generic view-ful entry
-                    // over the closed Web renderer. It resolves to its own
-                    // `TeaApp` variant (the callee-decl SSOT tripwire requires
-                    // each surface to map to the variant whose `decl()` names it);
-                    // every downstream emit site treats `TeaApp` identically to
-                    // `WebApp`, so the emitted Rust stays byte-identical.
-                    ("Tea", "app") => Ok(Callee::Kernel(KernelFn::TeaApp)),
                     // ── Ipe.Web settings-carrying entry + runtime-config ──
                     ("Web", "appWith") => Ok(Callee::Kernel(KernelFn::WebAppWith)),
                     ("Web", "csrf") => Ok(Callee::Kernel(KernelFn::WebCsrf)),

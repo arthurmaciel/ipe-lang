@@ -61,16 +61,10 @@ const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
         "worker",
         MainShape::Script,
     ),
-    // `Ipe.Tea.app` (engine = Web) — the generic view-ful TEA app-entry over the
-    // closed Web renderer, imported as `Ipe.App.Tea` (surface `Tea.app`). It
-    // classifies `MainShape::Web` exactly like `Web.app` (same cfg, same `Program
-    // Web msg` result, same emit path), so it shares the full Web delivery
-    // posture (live/spa, SSR+SSE/CSRF). `Web.app` is a thin surface synonym over
-    // this generic entry.
-    (&["Ipe", "App", "Tea"], "app", MainShape::Web),
     // `Script.program` — the Script shape's own entry (`Ipe.App.Script`). A
     // `main = Script.program (…)` head pins Script explicitly, the same way the
-    // app entries pin their shapes; the wrapped task renders nothing.
+    // app entries pin their shapes; the wrapped task renders nothing. Its
+    // `Program Direct ()` carrier is co-located, never sandbox-capable.
     (&["Ipe", "App", "Script"], "program", MainShape::Script),
 ];
 
@@ -482,14 +476,16 @@ mod tests {
     }
 
     #[test]
-    fn tea_app_head_is_web() {
-        // `Ipe.Tea.app` (engine = Web) is the generic view-ful entry over the
-        // closed Web renderer; it classifies `MainShape::Web` exactly like
-        // `Web.app`, so it inherits the full Web delivery posture and its own
-        // admissible `Cmd`/`Sub` family is `Ipe.App.Tea.Web.*`.
+    fn deleted_generic_tea_app_head_is_not_web() {
+        // The generic `Ipe.Tea.app` entry is deleted — `Program Web msg` comes
+        // only from the per-engine `Web.app`. A `main = Tea.app cfg` head no
+        // longer matches any `SHAPE_ENTRIES` row, so it classifies `Script`
+        // (co-located, never the Web sandbox posture) rather than `Web`. Name
+        // resolution rejects the `Tea.app` reference upstream; this pins that the
+        // classifier itself never treats the deleted head as Web.
         assert_eq!(
             classify("module Main exposing (..)\n\nimport Ipe.App.Tea\n\nmain = Tea.app cfg\n"),
-            MainShape::Web
+            MainShape::Script
         );
     }
 

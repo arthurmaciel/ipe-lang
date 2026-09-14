@@ -150,13 +150,12 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // Importing it marks the module a TEA app (IPE-N0033). A worker classifies to
     // the co-located Script placement and can never reach the Spa/wasm sandbox.
     (&["Ipe", "App", "Tea", "Worker"], "Tea"),
-    // `Ipe.App.Tea` — the generic view-ful TEA app-entry surface (imported as
-    // `Ipe.App.Tea`, surface `Tea.app`): `Tea.app { init, update, view : model
-    // -> View Web msg, subscriptions, routes }`. Engine = Web: it shares
-    // `Web.app`'s scheme and emit path, so it classifies `MainShape::Web` and
-    // folds onto the `"Web"` Cmd/Sub family. Importing it marks the module a TEA
-    // app (IPE-N0033).
-    (&["Ipe", "App", "Tea"], "Tea"),
+    // `Ipe.App.Script` — the non-TEA direct Script entry surface (`Script.program
+    // : Task Error () -> Program Direct ()`). NOT a TEA import (not under
+    // `Ipe.App.Tea.*`), so importing it never trips IPE-N0033: a plain `main`
+    // that wraps its task with `Script.program` is a direct program, not a TEA
+    // app. Co-located, never sandbox-capable.
+    (&["Ipe", "App", "Script"], "Script"),
     // `Ipe.App.Tea.Web.PubSub` — the Web-shape-scoped TEA-side broadcast surface:
     // `publish` / `publishNoEcho` (Cmd forms, fired from `update`) and
     // `subscribeTopic` (Sub form, declared in `subscriptions`). Distinct from the
@@ -1033,11 +1032,11 @@ pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
         ("Cli", &["app"]),
         // `Ipe.Tea.worker` — view-less co-located worker app-entry
         // (`{ init, update, subscriptions } -> Program Worker msg`). No render.
-        // `Ipe.Tea.app` — the generic view-ful TEA app-entry over the closed Web
-        // renderer (`{ init, update, view : model -> View Web msg,
-        // subscriptions, routes } -> Program Web msg`). Shares `Web.app`'s scheme
-        // and emit path.
-        ("Tea", &["worker", "app"]),
+        ("Tea", &["worker"]),
+        // `Ipe.App.Script.program` — the non-TEA Script entry
+        // (`Task Error () -> Program Direct ()`). Kernel-backed; the erase-only
+        // wrapper pins the direct Script shape at a `main`'s head.
+        ("Script", &["program"]),
         // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
         // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
         (
@@ -1648,10 +1647,9 @@ impl Env {
             // `Tea` carries its `worker` member from the QUALIFIERS catalog; the
             // view-less worker app-entry surface.
             ("Ipe.App.Tea.Worker", "Tea"),
-            // `Tea` also carries its `app` member — the generic view-ful entry
-            // over the closed Web renderer (engine = Web), imported as
-            // `Ipe.App.Tea`.
-            ("Ipe.App.Tea", "Tea"),
+            // `Script` carries its `program` member — the non-TEA direct Script
+            // entry, imported as `Ipe.App.Script`.
+            ("Ipe.App.Script", "Script"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
             ("Ipe.Auth", "Auth"),

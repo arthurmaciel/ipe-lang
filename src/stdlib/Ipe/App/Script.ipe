@@ -15,18 +15,23 @@
 --     Script.program (Io.println "hello")
 -- ```
 --
--- `program` is the identity on its task — the wrapper is what pins the shape,
--- not a change in behaviour. The task runs exactly as it would unwrapped.
+-- `program` erases to the identity on its task — the wrapper is what pins the
+-- shape, not a change in behaviour. The task runs exactly as it would unwrapped;
+-- its `Program Direct ()` result carries no runtime state of its own.
+--
+-- `program` is kernel-backed (`StdlibKernel::ScriptProgram`): the body below is
+-- the doc veneer, and the kernel scheme (`Task Error () -> Program Direct ()`) is
+-- what the compiler resolves and lowers.
 
 module Ipe.App.Script exposing
     ( program
     )
 
 
-{-| Pin a `main` as the Script shape by wrapping the task it runs.
+{-| Pin a `main` as the direct Script shape by wrapping the task it runs.
 
     Script.program (Io.println "hello") --> runs the task, renders nothing
 -}
-program : Task Error () -> Task Error ()
+program : Task Error () -> Program Direct ()
 program task =
     task

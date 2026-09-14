@@ -147,6 +147,7 @@ impl Builder<'_> {
             BuiltinTag::ProgramShapeTui => self.builtins.program_shape_tui,
             BuiltinTag::ProgramShapeCli => self.builtins.program_shape_cli,
             BuiltinTag::ProgramShapeWorker => self.builtins.program_shape_worker,
+            BuiltinTag::ProgramShapeDirect => self.builtins.program_shape_direct,
             BuiltinTag::HostMode => self.builtins.host_mode,
             BuiltinTag::LogLevel => self.builtins.log_level,
             BuiltinTag::CsrfMode => self.builtins.csrf_mode,
@@ -472,6 +473,14 @@ impl Builder<'_> {
         let program_shape_worker = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.program_shape_worker,
+            args: Vec::new(),
+        };
+        // `Direct` — the non-TEA direct program-shape tag (`Server.listen` /
+        // `Script.program` → `Program Direct ()`). Erases at lower to the entry's
+        // `Task ()` IR.
+        let program_shape_direct = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.program_shape_direct,
             args: Vec::new(),
         };
         let program = |shape: Ty, msg: Ty| Ty::Con {
@@ -1861,7 +1870,14 @@ impl Builder<'_> {
             // non-`WebApp`) fails to unify here (IPE-T0001) — an app of the
             // wrong shape is unrepresentable in a mount.
             K::ServerMountApp => fun(string(), fun(web_app_leaf(), route())),
-            K::ServerListen => fun(int(), fun(list(route()), task_unit())),
+            // `Server.listen : Int -> List ServerRoute -> Program Direct ()` —
+            // the uniform direct carrier (not `Task ()`). Erases at lower to the
+            // listener's `Task ()` IR, so emit is unchanged. Byte-identity with
+            // the `SERVER_LISTEN` `TyShape` is proven by the parity oracle.
+            K::ServerListen => fun(
+                int(),
+                fun(list(route()), program(program_shape_direct(), Ty::Unit)),
+            ),
             K::ServerText | K::ServerJson | K::ServerHtml | K::ServerRedirect => {
                 fun(string(), resp())
             }
@@ -2709,34 +2725,6 @@ impl Builder<'_> {
             // `Web.embed` shares `Web.app`'s exact six-field cfg scheme — both
             // produce the `WebApp` leaf from the same record. `embed`'s handle
             // is destined for `Server.mountApp`; `app`'s binds its own listener.
-            // `Ipe.Tea.app` — the generic minimal TEA entry, parametric over the
-            // view engine. Its CLOSED four-field cfg (`init`/`update`/`view`/
-            // `subscriptions`) and its `Program e msg` result share the engine
-            // variable `e` = var(2) between `view : model -> View e msg` and the
-            // result, so `e` unifies from the user's view type and is never a
-            // per-shape default. Engine-specific fields stay in the per-engine
-            // entries (`Web.app`'s route-ful cfg below), so this is NOT `Web.app`.
-            K::TeaApp => {
-                let init_ret = tuple2(var(0), cmd(var(1)));
-                let cfg_rec = Ty::Record(
-                    {
-                        let mut m = BTreeMap::new();
-                        m.insert(self.builtins.live_f_init, fun(web_req(), init_ret.clone()));
-                        m.insert(
-                            self.builtins.live_f_update,
-                            fun(var(1), fun(var(0), init_ret)),
-                        );
-                        m.insert(
-                            self.builtins.live_f_view,
-                            fun(var(0), view_t(var(2), var(1))),
-                        );
-                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
-                        m
-                    },
-                    RowTail::Closed,
-                );
-                fun(cfg_rec, program(var(2), var(1)))
-            }
             // `Web.app` / `Web.embed` share the route-ful six-field cfg. `Web.app`
             // returns the uniform `Program Web msg` carrier; `Web.embed` keeps the
             // mountable `WebApp` leaf its `Server.mountApp` §9 gate names. The
@@ -4039,6 +4027,10 @@ impl Builder<'_> {
                     program(program_shape_worker(), var(1)),
                 )
             }
+            // `Script.program : Task Error () -> Program Direct ()` — pins the
+            // direct Script shape at a `main`'s head. Erase-only: the result
+            // lowers to the inner `Task ()` IR, so a script's emit is unchanged.
+            K::ScriptProgram => fun(task_unit(), program(program_shape_direct(), Ty::Unit)),
 
             // ── Ipe.Auth (9 kernels) ──────────────────────────────────────
             // hashPassword : String -> Result Error String
