@@ -1239,15 +1239,18 @@ impl Env {
             home,
             ..Self::default()
         };
-        // Pre-intern the per-engine view constructor names so the `View e msg`
-        // carrier rewrite in `canonicalise_type` can always look them up: `View
-        // Web msg` rewrites to `Element msg`, `View Tui msg` to `Screen msg`,
-        // `View Cli msg` to `Lines msg`. A source that mentions only `View <e>`
-        // (never the per-engine name directly) would otherwise leave the target
-        // name uninterned.
+        // Pre-intern the view type names so both the engine-tagged carrier
+        // (`View`) and its per-engine aliases (`Element` / `Screen` / `Lines`)
+        // are resolvable even in a source that names only one of them, along
+        // with the closed engine tags `Web` / `Tui` / `Cli` an alias rewrites
+        // into so the alias arm can look them up without a mutable interner.
+        interner.intern("View")?;
         interner.intern("Element")?;
         interner.intern("Screen")?;
         interner.intern("Lines")?;
+        interner.intern("Web")?;
+        interner.intern("Tui")?;
+        interner.intern("Cli")?;
         // install_prelude_qualifiers MUST run first — it populates
         // stdlib_index, which install_builtin_vars consults for the fast-path id.
         env.install_prelude_qualifiers(interner)?;

@@ -1,14 +1,16 @@
 module Main exposing (main)
 
--- | tea-app-counter — the generic view-ful `Ipe.Tea.app` entry (engine = Web).
+-- | tea-app-counter — the generic view-ful `Ipe.Tea.app` entry, engine
+-- recovered from the view.
 --
--- Proves the toolbox-model view-ful path end-to-end for the Web engine: the
--- `view` field is annotated `Model -> View Web Msg` (the engine-parametric view
--- carrier), and `Ipe.Tea.app` produces a `Program Web Msg`. `View Web msg` IS
--- the DOM `Element msg`, so every existing `Ipe.Ui` combinator produces it with
--- no parallel surface, and the emitted Rust is byte-identical to a `Web.app`
--- with the same cfg — `Web.app` is a thin surface synonym over this generic
--- entry.
+-- Proves the toolbox-model view-ful path end-to-end: the `view` field is
+-- annotated `Model -> View Web Msg`, so the shared engine variable `e` in
+-- `Ipe.Tea.app`'s scheme (`view : model -> View e msg`, result `Program e
+-- msg`) unifies to `Web`, and the app produces a `Program Web Msg` — never a
+-- per-shape default. `View Web msg` IS the DOM `Element msg`, so every existing
+-- `Ipe.Ui` combinator populates it with no parallel surface. The cfg is the
+-- minimal common TEA surface (`init` / `update` / `view` / `subscriptions`);
+-- engine-specific features (Web routes) live on the richer `Web.app` entry.
 --
 -- Co-located, no capabilities, no JS ports: a pure counter over the closed Web
 -- renderer.
@@ -68,6 +70,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , routes = []
-        , notFound = Increment
         }

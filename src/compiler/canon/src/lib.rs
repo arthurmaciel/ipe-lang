@@ -519,12 +519,12 @@ mod tests {
 
     #[test]
     fn view_web_is_the_dom_element_type() {
-        // `View Web msg` and `Element msg` are the SAME canonical type: the
-        // `View` carrier rewrites to the engine's per-engine view constructor at
-        // canon, so downstream inference / lowering / emit are byte-identical to
-        // writing `Element msg` directly. This is what lets `Ipe.Tea.app`'s
-        // `view : model -> View Web msg` field accept the existing DOM view
-        // combinators with no parallel surface.
+        // `View Web msg` and `Element msg` are the SAME canonical type: `View`
+        // is the real engine-tagged carrier `Con(View, [Web, msg])`, and
+        // `Element` is its per-engine alias canonicalising to the identical con.
+        // This is what lets `Ipe.Tea.app`'s `view : model -> View e msg` field
+        // accept the existing DOM view combinators (which yield `View Web msg`)
+        // with no parallel surface.
         let tys = canon_binding_tys(
             "module Main exposing (v, w)\n\n\
              v : View Web msg\nv = v\n\n\
@@ -546,11 +546,12 @@ mod tests {
     #[test]
     fn view_tui_and_view_cli_are_the_screen_and_lines_types() {
         // The `View` carrier is genuinely engine-parametric over the CLOSED set:
-        // `View Tui msg` IS `Screen msg`, `View Cli msg` IS `Lines msg`. Because
-        // each maps to a DISTINCT per-engine constructor, a cross-engine node
-        // (`View Tui msg` where a `View Web msg` is wanted) fails unification —
-        // the make-invalid-states-unrepresentable guarantee, proven structurally
-        // by the three carriers resolving to three distinct types.
+        // `View Tui msg` IS `Screen msg`, `View Cli msg` IS `Lines msg` (each an
+        // alias of the same `Con(View, [engine, msg])`). Because the engine tag
+        // is a distinct nullary con, the three carriers resolve to three
+        // distinct types, so a cross-engine node (`View Tui msg` where a `View
+        // Web msg` is wanted) fails unification — the
+        // make-invalid-states-unrepresentable guarantee, proven structurally.
         let tys = canon_binding_tys(
             "module Main exposing (tui, screen, cli, lines, web)\n\n\
              tui : View Tui msg\ntui = tui\n\n\

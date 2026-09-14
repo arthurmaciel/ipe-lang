@@ -277,6 +277,11 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // `Web.revocationStore` constructor kernels.
     "RevocationMode",
     "Html",
+    // `View engine msg` — the engine-tagged view carrier and SSOT surface.
+    // Reserved so a user `type View …` cannot shadow the builtin and forge a
+    // view over an out-of-set engine tag, defeating the closed `{Web, Tui, Cli}`
+    // engine gate.
+    "View",
     "Element",
     // `Ipe.Ui.Tui`'s Tui-only view type `Screen msg`. Reserved so a user
     // `type Screen …` cannot shadow the builtin and defeat the shape-gate that
@@ -519,7 +524,11 @@ pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
         // `shape` tag and `msg` both erase at lower. Widened here FIRST so a
         // `Program`-carrier application resolves through the IPE-N0031 arity gate
         // instead of falling into the lowerer's empty-home ICE (IPE-I0001).
-        "Dict" | "Result" | "Program" => Some(2),
+        // `View engine msg` — the engine-tagged view carrier (arity 2); the
+        // phantom `engine` tag erases at lower to the per-engine `IrType::Ui`
+        // ctor. Gated here so a mis-arity `View` application resolves through
+        // IPE-N0031 rather than the lowerer's empty-home ICE.
+        "Dict" | "Result" | "Program" | "View" => Some(2),
         "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode"
         | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" | "TermColor" => Some(0),
         _ => None,
@@ -565,6 +574,7 @@ const SEAL_EFFECT_CARRIERS: &[&str] = &["Cmd", "Sub", "Task"];
 /// serialisable data value.
 const SEAL_VIEW_TYPES: &[&str] = &[
     "Html",
+    "View",
     "Element",
     "Attribute",
     "Event",
@@ -6437,20 +6447,21 @@ fn canonicalise_type(
                     });
                 }
             }
-            // `View e msg` — the engine-parametric view carrier. It has exactly
-            // ONE denotation per engine tag: `View Web msg` IS `Element msg` (the
-            // DOM view), `View Tui msg` IS `Screen msg`, `View Cli msg` IS
-            // `Lines msg`. There is no independent `View` runtime type — it
-            // rewrites at canon to the engine's existing per-engine view
-            // constructor, so downstream inference, lowering, and emit are
-            // byte-identical to writing the per-engine name directly, and a
-            // cross-engine node (`View Tui msg` where `View Web msg` is expected)
-            // fails unification against the distinct per-engine constructor. The
-            // engine tag `e` is not a standalone type: it is read syntactically
-            // here (never routed through type-home resolution), drawn from the
-            // CLOSED `{Web, Tui, Cli}` set; any other tag has no view denotation
-            // and is rejected fail-closed. Only the `msg` argument is a real type
-            // and is canonicalised under the current substitution.
+            // `View engine msg` — the engine-tagged view carrier and SSOT view
+            // surface. It canonicalises to a real 2-argument `Con(View, [engine
+            // tag, msg])` that survives into inference: the engine tag is a
+            // nullary `Con` drawn from the CLOSED `{Web, Tui, Cli}` set, and the
+            // whole carrier is what every DOM/Tui/Cli combinator's scheme now
+            // yields (`View Web msg` IS `Element msg`, `View Tui msg` IS `Screen
+            // msg`, `View Cli msg` IS `Lines msg`). Because the tag is a distinct
+            // nullary constructor, a cross-engine node (`View Tui msg` where
+            // `View Web msg` is expected) fails unification, and an unconstrained
+            // engine variable is left unsolved and rejected — never defaulted.
+            // The engine tag is read syntactically here (never routed through
+            // type-home resolution); any tag outside the closed set has no view
+            // denotation and is rejected fail-closed as an unresolved type name.
+            // Only the `msg` argument is a real type, canonicalised under the
+            // current substitution.
             if qualifier_str.is_empty()
                 && ctx.interner.resolve(name) == Some("View")
                 && args.len() == 2
@@ -6464,14 +6475,12 @@ fn canonicalise_type(
                     .is_some_and(str::is_empty)
                 && let Some(engine) = engine_segs.last().copied()
             {
-                let view_ctor = match ctx.interner.resolve(engine) {
-                    Some("Web") => "Element",
-                    Some("Tui") => "Screen",
-                    Some("Cli") => "Lines",
-                    // Fail closed: the engine tag is not one of the closed view
-                    // engines `{Web, Tui, Cli}`, so `View <tag> msg` has no
-                    // rendering denotation. Reported as an unresolved type name
-                    // (the tag is not a known view engine).
+                // Fail closed: the engine tag MUST be one of the closed view
+                // engines `{Web, Tui, Cli}`. Any other tag (a flexible variable
+                // included) has no view denotation and is rejected as an
+                // unresolved type name, never left as a deferred flexible var.
+                match ctx.interner.resolve(engine) {
+                    Some("Web" | "Tui" | "Cli") => {}
                     _ => {
                         return Err(Diagnostic::Name {
                             span: ctx.ann_span,
@@ -6481,19 +6490,10 @@ fn canonicalise_type(
                             },
                         });
                     }
-                };
-                // `Element` / `Screen` / `Lines` are reserved builtins interned
-                // at env init, so a miss here is a compiler bug, never user input.
-                let ctor_sym =
-                    ctx.interner
-                        .lookup(view_ctor)
-                        .ok_or_else(|| Diagnostic::CompilerBug {
-                            where_: "ipe_canon::canonicalise_type::view_ctor",
-                            detail: "per-engine view constructor name is not interned".into(),
-                        })?;
-                // Keep only the message argument (the per-engine view
-                // constructor is arity 1, `Element msg`), canonicalised under the
-                // current substitution exactly as any use-site argument.
+                }
+                // The message argument is canonicalised under the current
+                // substitution exactly as any use-site argument; the engine tag
+                // becomes a nullary `Con` carrying the interned engine name.
                 let msg = canonicalise_type(
                     msg_ann,
                     ctx,
@@ -6505,8 +6505,72 @@ fn canonicalise_type(
                 )?;
                 return Ok(canon::Type::Con {
                     home: Vec::new(),
-                    name: ctor_sym,
-                    args: vec![msg],
+                    name,
+                    args: vec![
+                        canon::Type::Con {
+                            home: Vec::new(),
+                            name: engine,
+                            args: Vec::new(),
+                        },
+                        msg,
+                    ],
+                });
+            }
+            // `Element` / `Screen` / `Lines` — the per-engine aliases of the
+            // engine-tagged view carrier. Each is exactly `View <engine> msg`
+            // (`Element` = `View Web`, `Screen` = `View Tui`, `Lines` = `View
+            // Cli`), so it canonicalises to the SAME `Con(View, [engine, msg])`
+            // as the carrier. This keeps every existing `: Element msg`
+            // annotation and DOM combinator unifying with the SSOT view type the
+            // combinator schemes yield, with no parallel surface: the alias and
+            // the carrier are one canonical type. Only the empty-qualifier arity-1
+            // form is an alias; a qualified or mis-arity use falls through.
+            if qualifier_str.is_empty()
+                && args.len() == 1
+                && let Some(engine_name) = match ctx.interner.resolve(name) {
+                    Some("Element") => Some("Web"),
+                    Some("Screen") => Some("Tui"),
+                    Some("Lines") => Some("Cli"),
+                    _ => None,
+                }
+                && let Some(msg_ann) = args.first()
+            {
+                // `View` and the engine tags are pre-interned at env init, so a
+                // miss here is a compiler bug, never user input.
+                let view_sym =
+                    ctx.interner
+                        .lookup("View")
+                        .ok_or_else(|| Diagnostic::CompilerBug {
+                            where_: "ipe_canon::canonicalise_type::view_alias",
+                            detail: "the `View` carrier name is not interned".into(),
+                        })?;
+                let engine_sym =
+                    ctx.interner
+                        .lookup(engine_name)
+                        .ok_or_else(|| Diagnostic::CompilerBug {
+                            where_: "ipe_canon::canonicalise_type::view_alias",
+                            detail: "a view-engine tag name is not interned".into(),
+                        })?;
+                let msg = canonicalise_type(
+                    msg_ann,
+                    ctx,
+                    subst,
+                    free_vars,
+                    visited,
+                    budget,
+                    depth.saturating_add(1),
+                )?;
+                return Ok(canon::Type::Con {
+                    home: Vec::new(),
+                    name: view_sym,
+                    args: vec![
+                        canon::Type::Con {
+                            home: Vec::new(),
+                            name: engine_sym,
+                            args: Vec::new(),
+                        },
+                        msg,
+                    ],
                 });
             }
             // Type arguments are canonicalised under the current substitution
