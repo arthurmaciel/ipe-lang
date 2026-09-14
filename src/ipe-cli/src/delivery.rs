@@ -295,6 +295,31 @@ impl Delivery {
         }
         Ok(delivery)
     }
+
+    /// Enforce the biconditional that couples the delivery runtime to the compile
+    /// target: a `spa` delivery compiles to wasm, and a wasm target carries only a
+    /// `spa` delivery — `runtime() == Some(Runtime::Spa)` IFF `wasm_target`.
+    ///
+    /// The runtime and the target are derived from independent sources (the
+    /// delivery grammar vs the `--target`/`IPE_TARGET`/`[wasm].mode` chain); this
+    /// is the single point that refuses their disagreement. It is load-bearing for
+    /// security: the native-deny backstops that keep native effects out of a
+    /// sandboxed client are keyed to the wasm target, so a `spa` delivery that
+    /// slipped through as a native build would ship those effects into the
+    /// sandbox. Absent proof the two agree, the build is refused.
+    ///
+    /// # Errors
+    /// [`DeliveryError::SpaRequiresWasmTarget`] for a `spa` delivery with a native
+    /// target; [`DeliveryError::WasmTargetRequiresSpa`] for a wasm target without a
+    /// `spa` delivery.
+    pub const fn reconcile_wasm_target(self, wasm_target: bool) -> Result<(), DeliveryError> {
+        let is_spa = matches!(self.runtime, Some(Runtime::Spa));
+        match (is_spa, wasm_target) {
+            (true, false) => Err(DeliveryError::SpaRequiresWasmTarget),
+            (false, true) => Err(DeliveryError::WasmTargetRequiresSpa),
+            (true, true) | (false, false) => Ok(()),
+        }
+    }
 }
 
 impl fmt::Display for Delivery {
@@ -358,6 +383,15 @@ pub enum DeliveryError {
         /// The offending token.
         got: String,
     },
+    /// A `spa` delivery resolved to a native compile target. A sandboxed client
+    /// must compile to wasm — the native-deny backstops that keep native effects
+    /// out of the sandbox are keyed to the wasm target, so a native `spa` build
+    /// would ship those effects into a sandboxed client.
+    SpaRequiresWasmTarget,
+    /// A wasm compile target resolved without a `spa` delivery. The wasm client
+    /// target exists only to carry a sandboxed `spa` app; a non-`spa` shape has
+    /// no wasm form, so the two were derived from disagreeing sources.
+    WasmTargetRequiresSpa,
 }
 
 /// The runtime/host/target tokens parsed out of a delivery positional tail,
@@ -483,6 +517,23 @@ impl fmt::Display for DeliveryError {
                 "`{got}` is not a runtime, host, or target. The web runtime word is \
                  `spa` (live is the default). Hosts are `desktop`, `ios`, `android`. \
                  Targets are a Rust triple (or `--static` for musl).",
+            ),
+            Self::SpaRequiresWasmTarget => write!(
+                f,
+                "a `spa` delivery is a sandboxed client that must compile to wasm, but \
+                 the target resolved to native. The sandbox's native-deny guards are \
+                 keyed to the wasm target, so a native `spa` build would ship native \
+                 effects into the sandbox. Build for wasm — pass `--target wasm`, set \
+                 `IPE_TARGET=wasm`, or set `[wasm] mode` in `package.ipe` — or drop \
+                 `spa` for a co-located live delivery.",
+            ),
+            Self::WasmTargetRequiresSpa => write!(
+                f,
+                "a wasm compile target was requested, but the delivery is not `spa`. \
+                 The wasm client target exists only to carry a sandboxed `spa` app; \
+                 every other shape has no wasm form. Deliver `web spa` to build for \
+                 wasm, or drop the wasm target (`--target`/`IPE_TARGET`/`[wasm] mode`) \
+                 for a native build.",
             ),
         }
     }
@@ -626,9 +677,59 @@ mod tests {
             DeliveryError::StaticNotAllowed {
                 delivery: Delivery::resolve(Shape::Web, None, Host::Desktop).unwrap(),
             },
+            DeliveryError::SpaRequiresWasmTarget,
+            DeliveryError::WasmTargetRequiresSpa,
         ];
         for c in &cases {
             assert!(c.to_string().len() > 40, "a refusal is a lesson: {c}");
         }
+    }
+
+    #[test]
+    fn spa_delivery_refuses_native_target() {
+        // The verified fail-open: a `web spa` app whose target resolved to native
+        // would silently skip the wasm-keyed sandbox backstops. Refuse it.
+        let spa = Delivery::resolve(Shape::Web, Some(Runtime::Spa), Host::Default).unwrap();
+        assert_eq!(
+            spa.reconcile_wasm_target(false),
+            Err(DeliveryError::SpaRequiresWasmTarget),
+        );
+        // The legal pairing (spa ⇒ wasm) is admitted.
+        assert_eq!(spa.reconcile_wasm_target(true), Ok(()));
+    }
+
+    #[test]
+    fn wasm_target_refuses_non_spa_delivery() {
+        // The symmetric half: a wasm target must carry a `spa` delivery. Every
+        // non-`spa` shape has no wasm form, so the two disagreed at their sources.
+        let live = Delivery::resolve(Shape::Web, Some(Runtime::Live), Host::Default).unwrap();
+        assert_eq!(
+            live.reconcile_wasm_target(true),
+            Err(DeliveryError::WasmTargetRequiresSpa),
+        );
+        assert_eq!(live.reconcile_wasm_target(false), Ok(()));
+
+        // A non-web shape has no runtime axis at all: native-only, wasm refused.
+        for shape in [Shape::Script, Shape::Cli, Shape::Server, Shape::Tui] {
+            let d = Delivery::resolve(shape, None, Host::Default).unwrap();
+            assert_eq!(
+                d.reconcile_wasm_target(true),
+                Err(DeliveryError::WasmTargetRequiresSpa),
+                "a non-web {shape:?} shape has no wasm form",
+            );
+            assert_eq!(d.reconcile_wasm_target(false), Ok(()));
+        }
+    }
+
+    #[test]
+    fn spa_wasm_biconditional_is_exhaustive() {
+        // Both agreeing corners pass; both disagreeing corners are refused —
+        // the invariant is `spa` IFF wasm, with no admitted middle.
+        let spa = Delivery::resolve(Shape::Web, Some(Runtime::Spa), Host::Default).unwrap();
+        let live = Delivery::resolve(Shape::Web, Some(Runtime::Live), Host::Default).unwrap();
+        assert!(spa.reconcile_wasm_target(true).is_ok());
+        assert!(live.reconcile_wasm_target(false).is_ok());
+        assert!(spa.reconcile_wasm_target(false).is_err());
+        assert!(live.reconcile_wasm_target(true).is_err());
     }
 }

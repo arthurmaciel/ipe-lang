@@ -613,6 +613,14 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     // Precedence: CLI --target wasm > IPE_TARGET=wasm > [wasm].mode != "off".
     let wasm_target = resolve_wasm_target(wasm_target, manifest_wasm.as_ref());
 
+    // The delivery runtime and the compile target are derived independently; fail
+    // closed unless they agree — a `spa` delivery MUST compile to wasm, and a wasm
+    // target MUST carry a `spa` delivery. This keeps the wasm-keyed native-deny
+    // backstops reachable for every sandboxed client.
+    delivery
+        .reconcile_wasm_target(wasm_target)
+        .map_err(|e| CliError::UsageOwned(format!("ipe build: {e}")))?;
+
     // The dependency model (native OR wasm) needs no vendored tree — the runtime
     // is a path dependency. Only a dep-model-OFF build vendors the source subtree.
     let runtime_dep = runtime_dep_from_env();
@@ -996,6 +1004,14 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         args.target == cli_args::ReleaseTarget::Wasm,
         manifest_wasm.as_ref(),
     );
+
+    // Fail closed unless the delivery runtime and the compile target agree — a
+    // `spa` delivery MUST compile to wasm, and a wasm target MUST carry a `spa`
+    // delivery — so a sandboxed client is never released as a native binary with
+    // the wasm-keyed native-deny backstops skipped.
+    bundle_delivery_resolved
+        .reconcile_wasm_target(wasm_target)
+        .map_err(|e| CliError::UsageOwned(format!("ipe release: {e}")))?;
 
     if wasm_target {
         // Browser/wasm production path.
@@ -1845,6 +1861,14 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     // set, treat `ipe run` as a wasm build-and-bundle (no native binary to
     // exec). A plain `ipe run` in a non-wasm project stays native.
     let wasm_target = resolve_wasm_target(false, manifest_wasm.as_ref());
+
+    // Fail closed unless the delivery runtime and the compile target agree — a
+    // `spa` delivery MUST compile to wasm, and a wasm target MUST carry a `spa`
+    // delivery — so the wasm-keyed native-deny backstops are never skipped for a
+    // sandboxed client that slipped through as a native run.
+    delivery
+        .reconcile_wasm_target(wasm_target)
+        .map_err(|e| CliError::UsageOwned(format!("ipe run: {e}")))?;
 
     // The dependency model (native OR wasm) needs no vendored tree — the runtime
     // is a path dependency. Only a dep-model-OFF build vendors the source subtree.

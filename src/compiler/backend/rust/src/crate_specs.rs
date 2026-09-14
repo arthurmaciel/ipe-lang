@@ -153,10 +153,12 @@ pub const FUTURES_UTIL: CrateSpec = CrateSpec {
 // Base `chrono` is not surgery-emitted (the dep-model manifest names only the
 // `ipe_runtime` path dep; its version lives in the runtime crate). This spec is
 // consulted only by the drift guard, which walks `ALL` under `cfg(test)`.
+// Pinned exact to the one version the whole workspace graph reconciles to, so a
+// newer patch cannot climb its transitive `wasm-bindgen` floor past the runtime.
 #[cfg(test)]
 pub const CHRONO: CrateSpec = CrateSpec {
     name: "chrono",
-    version: "0.4",
+    version: "=0.4.45",
 };
 pub const CHRONO_TZ: CrateSpec = CrateSpec {
     name: "chrono-tz",
