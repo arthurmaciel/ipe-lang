@@ -1,0 +1,69 @@
+module Main exposing (main)
+
+{-|
+A headless, view-less TEA worker over the `Ipe.Tea.worker` surface.
+
+`Tea.worker` is the view-less TEA loop (Elm `Platform.worker` shape): it has an
+`init`, an `update`, and `subscriptions`, but NO `view` — its output is `Cmd msg`
+(effects) and its input is `Sub msg`. A worker is co-located and
+capability-gated; it can never reach the sandboxed Spa/wasm bundle.
+
+This one ticks three times. Each tick logs a line via an existing `Io.println`
+`Task` (turned into a `Cmd` with `Task.attempt`), and counts the tick. After the
+third tick `subscriptions` becomes `Sub.none`, so the loop settles and the worker
+completes — no new socket or network capability, existing effects only.
+-}
+
+import Ipe.String as String
+import Ipe.Io as Io
+import Ipe.Task as Task
+import Ipe.App.Tea.Worker as Tea
+import Ipe.App.Tea.Worker.Cmd as Cmd
+import Ipe.App.Tea.Worker.Sub as Sub
+
+
+type Msg
+    = Tick
+    | Logged
+
+
+type alias Model =
+    { ticks : Int }
+
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { ticks = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            let
+                next =
+                    model.ticks + 1
+            in
+            ( { ticks = next }
+            , Task.attempt (\_result -> Logged) (Io.println ("tick " ++ String.fromInt next))
+            )
+
+        Logged ->
+            ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    if model.ticks >= 3 then
+        Sub.none
+
+    else
+        Sub.every 50 Tick
+
+
+main =
+    Tea.worker
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }

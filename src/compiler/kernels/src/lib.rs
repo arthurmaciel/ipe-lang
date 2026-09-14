@@ -312,6 +312,12 @@ pub enum BuiltinTag {
     /// Appears only as [`Self::Program`]'s first argument; never a standalone
     /// value (phantom, erased at lower).
     ProgramShapeCli,
+    /// `Worker` — the nullary phantom program-shape tag for the view-less
+    /// co-located worker shape (`Ipe.Tea.worker` → `Program Worker msg`). Appears
+    /// only as [`Self::Program`]'s first argument; never a standalone value
+    /// (phantom, erased at lower to the opaque worker leaf). A worker renders no
+    /// view and can never reach the sandboxed Spa/wasm bundle.
+    ProgramShapeWorker,
     /// `HostMode` — the nullary closed host-bind ADT (`loopback` /
     /// `allInterfaces` / `envDriven`). The sole argument type of `Host.bind`; a
     /// value only ever comes from its three constructor kernels, each of which
@@ -2287,6 +2293,11 @@ pub enum StdlibKernel {
     // `Cli.app` — line-oriented TEA app-entry, `view : Model ->
     // String`, driven by `onLine`.
     TerminalAppLines,
+    // `Ipe.Tea.worker` — view-less co-located TEA app-entry:
+    // `{ init, update, subscriptions } -> Program Worker msg`. No `view`; output
+    // is `Cmd msg` (effects) and input is `Sub msg`. Co-located and
+    // capability-gated; never reaches the sandbox.
+    TeaWorker,
     // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower arm
     // yet → IPE-L0108 at lower time; qualified registration removes N0004).
     AuthHashPassword,
@@ -4361,6 +4372,9 @@ impl StdlibKernel {
             // Ipe.Cli line-oriented app-entry. Surface `Cli.app`; the internal
             // rendering family is `Terminal`.
             Self::TerminalAppLines => d("Cli", "app", 1, Terminal, "ipe_console_app_"),
+            // Ipe.Tea view-less worker app-entry. Surface `Tea.worker`; the
+            // internal family is `Tea` (TEA-loop wiring, no render).
+            Self::TeaWorker => d("Tea", "worker", 1, Tea, "ipe_worker_app_"),
             // Ipe.Auth / Ipe.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
             Self::AuthHashPasswordCost => d(
@@ -5772,6 +5786,7 @@ impl StdlibKernel {
         Self::FontHoverSize,
         // ── Effect stdlib modules ────────────────────────────────────────
         Self::TerminalAppLines,
+        Self::TeaWorker,
         Self::AuthHashPassword,
         Self::AuthHashPasswordCost,
         Self::AuthVerifyPassword,
@@ -8580,9 +8595,12 @@ impl StdlibKernel {
         const PROGRAM_SHAPE_WEB: TyShape = TyShape::Con(BuiltinTag::ProgramShapeWeb, &[]);
         const PROGRAM_SHAPE_TUI: TyShape = TyShape::Con(BuiltinTag::ProgramShapeTui, &[]);
         const PROGRAM_SHAPE_CLI: TyShape = TyShape::Con(BuiltinTag::ProgramShapeCli, &[]);
+        const PROGRAM_SHAPE_WORKER: TyShape = TyShape::Con(BuiltinTag::ProgramShapeWorker, &[]);
         const PROGRAM_WEB: TyShape = TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_WEB, B]);
         const PROGRAM_TUI: TyShape = TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_TUI, B]);
         const PROGRAM_CLI: TyShape = TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_CLI, B]);
+        const PROGRAM_WORKER: TyShape =
+            TyShape::Con(BuiltinTag::Program, &[PROGRAM_SHAPE_WORKER, B]);
         // The opaque per-shape app leaf still names `Server.mountApp`'s §9 gate.
         const WEB_APP_LEAF: TyShape = TyShape::Con(BuiltinTag::WebApp, &[]);
         const WEB_APP: TyShape = TyShape::Fun(&WEB_APP_CFG, &PROGRAM_WEB);
@@ -8597,6 +8615,19 @@ impl StdlibKernel {
         const MOUNT_APP: TyShape = TyShape::Fun(&STRING, &WEB_APP_LEAF_TO_SERVER_ROUTE);
         const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &PROGRAM_TUI);
         const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &PROGRAM_CLI);
+        // `Ipe.Tea.worker` — view-less cfg, CLOSED. `init : () -> (model, Cmd msg)`,
+        // `update : msg -> model -> (model, Cmd msg)`, `subscriptions : model ->
+        // Sub msg`. No `view`, no input handler; reuses the app-entry field shapes
+        // (`UNIT_TO_TUPLE`/`UPDATE_FN`/`SUBS_FN`), var(0)=model, var(1)=msg.
+        const WORKER_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::AppInit, &UNIT_TO_TUPLE),
+                (FieldTag::AppUpdate, &UPDATE_FN),
+                (FieldTag::AppSubscriptions, &SUBS_FN),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        const WORKER_APP: TyShape = TyShape::Fun(&WORKER_CFG, &PROGRAM_WORKER);
         // Ui builders taking a record.
         const LAYOUT_WITH: TyShape = {
             const HTML_A_INNER: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);
@@ -9677,6 +9708,7 @@ impl StdlibKernel {
             Self::WebEmbed => Some(&WEB_EMBED),
             Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
             Self::TerminalAppLines => Some(&TERMINAL_APP_LINES),
+            Self::TeaWorker => Some(&WORKER_APP),
             // Ui / Input / Border record builders.
             Self::UiLayoutWith => Some(&LAYOUT_WITH),
             Self::UiButton => Some(&BUTTON),
@@ -10790,6 +10822,9 @@ impl StdlibKernel {
             | Self::FontDisabledColor
             | Self::FontHoverSize
             | Self::TerminalAppLines
+            // The worker app-entry itself has no capability: its effects come
+            // from the `Cmd` closure, gated by the linked-module capability scan.
+            | Self::TeaWorker
             | Self::AuthHashPassword
             | Self::AuthHashPasswordCost
             | Self::AuthVerifyPassword
@@ -12626,6 +12661,12 @@ impl StdlibKernel {
         matches!(self, Self::TerminalAppLines)
     }
 
+    /// `true` when this variant is the view-less `Ipe.Tea.worker` app-entry.
+    #[must_use]
+    pub const fn is_worker(self) -> bool {
+        matches!(self, Self::TeaWorker)
+    }
+
     /// `true` when this variant belongs to the `Ipe.CssSafety` leaf
     /// security-kernel family (the `Ipe.Css` backing): `safe_value` /
     /// `safe_prop_name` / `safe_selector` / `strip_style_close_kernel`.
@@ -13804,6 +13845,14 @@ mod tests {
             StdlibKernel::IoReadLine,
             StdlibKernel::TaskPerform,
             StdlibKernel::WebRenderStatic,
+            // The view-less worker app-entry is co-located, never sandbox-capable
+            // (guard 5): it is absent from the `KernelClass::Tea` wasm allowlist,
+            // so a worker can never link into a Spa/wasm bundle even by mistake.
+            StdlibKernel::TeaWorker,
+            // The other co-located app-entries stay denied for the same reason —
+            // only `Web.app` gains a browser denotation.
+            StdlibKernel::TerminalAppLines,
+            StdlibKernel::TerminalAppScreen,
             // Crypto: only the entropy pair (`randomBytes`/`randomToken`) has
             // a wasm substitute; hashing/AEAD/RSA stay denied (M4 scope cut,
             // NOT a qualifier-wide allow — see `wasm_client_available`).

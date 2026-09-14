@@ -50,6 +50,17 @@ const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
     (&["Ipe", "App", "Tea", "Tui"], "app", MainShape::Tui),
     (&["Ipe", "App", "Tea", "Cli"], "app", MainShape::Cli),
     (&["Ipe", "Http", "Server"], "listen", MainShape::Server),
+    // `Ipe.Tea.worker` — the view-less worker app-entry. A worker renders no view
+    // and is co-located + capability-gated, so it classifies as `Script`: the
+    // co-located delivery posture whose runtime is fixed to `CoLocated`, never the
+    // sandboxed `Spa`. This is guard 9 — an OPEN `Ipe.Tea` program is `Script` and
+    // can never reach the Spa/wasm bundle path (which is behind the closed
+    // `Ipe.App.Tea.Web` shape entry).
+    (
+        &["Ipe", "App", "Tea", "Worker"],
+        "worker",
+        MainShape::Script,
+    ),
     // `Script.program` — the Script shape's own entry (`Ipe.App.Script`). A
     // `main = Script.program (…)` head pins Script explicitly, the same way the
     // app entries pin their shapes; the wrapped task renders nothing.
@@ -403,6 +414,40 @@ mod tests {
         let mut interner = Interner::new();
         let module = ipe_parse::parse_module(src, &mut interner).expect("parse");
         script_view_hole_hint(&module, &interner)
+    }
+
+    #[test]
+    fn worker_head_classifies_script_never_web() {
+        // A `Tea.worker { … }` head classifies `Script` — the co-located,
+        // capability-gated posture. This is guard 9: a view-less worker is never
+        // Web, so it can never reach the Spa/wasm sandbox path (which is gated
+        // behind the closed `Ipe.App.Tea.Web` shape entry). The refusal is
+        // structural: NO `SHAPE_ENTRIES` row maps a worker to `MainShape::Web`.
+        let shape = classify(
+            "module Main exposing (..)\n\nimport Ipe.App.Tea.Worker\n\nmain = Tea.worker cfg\n",
+        );
+        assert_eq!(shape, MainShape::Script);
+        assert_ne!(shape, MainShape::Web);
+        // The co-located placement is the ONLY one a Script (worker) can hold:
+        // `sole_for` fixes its runtime to `CoLocated`, so `Runtime::Spa` — the
+        // sandbox — is unrepresentable for a worker (guard 8).
+        use crate::shape_runtime::{Placement, Runtime, Shape};
+        let placement = Placement::sole_for(Shape::from_main(shape))
+            .expect("a worker (Script) has a sole co-located placement");
+        assert_eq!(placement.runtime, Runtime::CoLocated);
+        assert_ne!(placement.runtime, Runtime::Spa);
+    }
+
+    #[test]
+    fn aliased_worker_head_classifies_script() {
+        // Resolve-not-spell (#2142) applies to the worker entry too: an `as W`
+        // alias resolving to `Ipe.App.Tea.Worker` classifies Script.
+        assert_eq!(
+            classify(
+                "module Main exposing (..)\n\nimport Ipe.App.Tea.Worker as W\n\nmain = W.worker cfg\n"
+            ),
+            MainShape::Script
+        );
     }
 
     #[test]

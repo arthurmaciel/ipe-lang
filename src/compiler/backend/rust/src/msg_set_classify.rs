@@ -280,6 +280,7 @@ const fn aggregate_discriminant(ty: &IrType) -> &'static str {
         IrType::WebApp => "WebApp",
         IrType::TuiApp => "TuiApp",
         IrType::CliApp => "CliApp",
+        IrType::WorkerApp => "WorkerApp",
     }
 }
 

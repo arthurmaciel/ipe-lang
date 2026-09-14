@@ -582,6 +582,9 @@ pub struct Builtins {
     /// `"Cli"` — the phantom program-shape tag for the terminal-lines shape.
     /// Appears only as `Program`'s first argument; erased at lower.
     pub program_shape_cli: Symbol,
+    /// `"Worker"` — the phantom program-shape tag for the view-less co-located
+    /// worker shape. Appears only as `Program`'s first argument; erased at lower.
+    pub program_shape_worker: Symbol,
     /// `"HostMode"` — the closed host-bind ADT, the argument type of
     /// `Host.bind`. Built only by its constructor kernels; each projects to the
     /// raw `Int` host-bind tag at emit, so `HostMode` erases to `Int`.
@@ -962,6 +965,7 @@ impl Builtins {
             program_shape_web: interner.intern("Web")?,
             program_shape_tui: interner.intern("Tui")?,
             program_shape_cli: interner.intern("Cli")?,
+            program_shape_worker: interner.intern("Worker")?,
             host_mode: interner.intern("HostMode")?,
             log_level: interner.intern("LogLevel")?,
             csrf_mode: interner.intern("CsrfMode")?,

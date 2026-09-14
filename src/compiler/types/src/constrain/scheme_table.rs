@@ -146,6 +146,7 @@ impl Builder<'_> {
             BuiltinTag::ProgramShapeWeb => self.builtins.program_shape_web,
             BuiltinTag::ProgramShapeTui => self.builtins.program_shape_tui,
             BuiltinTag::ProgramShapeCli => self.builtins.program_shape_cli,
+            BuiltinTag::ProgramShapeWorker => self.builtins.program_shape_worker,
             BuiltinTag::HostMode => self.builtins.host_mode,
             BuiltinTag::LogLevel => self.builtins.log_level,
             BuiltinTag::CsrfMode => self.builtins.csrf_mode,
@@ -463,6 +464,11 @@ impl Builder<'_> {
         let program_shape_cli = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.program_shape_cli,
+            args: Vec::new(),
+        };
+        let program_shape_worker = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.program_shape_worker,
             args: Vec::new(),
         };
         let program = |shape: Ty, msg: Ty| Ty::Con {
@@ -3971,6 +3977,32 @@ impl Builder<'_> {
             K::UiLightMode | K::UiMobile | K::UiReducedMotion | K::UiTablet => return None,
 
             K::WebAppRouted => return None,
+
+            // `Ipe.Tea.worker { init, update, subscriptions } -> Program Worker msg`.
+            // A const-schemed app entry (its authoritative scheme is `WORKER_APP`
+            // in the kernel `scheme_shape` table); this arm is the reference `Ty`
+            // the `interpreted_shape_matches_legacy` parity oracle proves the
+            // interpreted `WORKER_APP` byte-identical to. View-less: the closed cfg
+            // is `{ init : () -> (model, Cmd msg), update : msg -> model ->
+            // (model, Cmd msg), subscriptions : model -> Sub msg }`, var(0)=model,
+            // var(1)=msg.
+            K::TeaWorker => {
+                let tup = tuple2(var(0), cmd(var(1)));
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.live_f_init, fun(Ty::Unit, tup.clone()));
+                        m.insert(self.builtins.live_f_update, fun(var(1), fun(var(0), tup)));
+                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                fun(
+                    cfg_rec,
+                    program(program_shape_worker(), var(1)),
+                )
+            }
 
             // ── Ipe.Auth (9 kernels) ──────────────────────────────────────
             // hashPassword : String -> Result Error String

@@ -4089,6 +4089,23 @@ pub fn emit_ui_plan(
                     })?;
             Ok(s)
         }
+
+        // ── View-less worker app-entry ────────────────────────────────────────
+        // Delegate to `emit_worker::emit_worker_call`; it returns `Some(s)` for
+        // the `Ipe.Tea.worker` variant and `None` for anything else. A `None`
+        // here is an internal error (the `k.is_worker()` guard above already
+        // filtered), so promote it to a `CompilerBug`.
+        NativeUiEmit::Delegate(UiDelegate::Worker) => {
+            let s =
+                crate::emit_worker::emit_worker_call(ctx, callee, args, indent, child, generics)?
+                    .ok_or_else(|| Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::emit_ui_call",
+                    detail: format!(
+                        "emit_worker returned None for Worker kernel {k:?} — missing arm"
+                    ),
+                })?;
+            Ok(s)
+        }
     }
 }
 

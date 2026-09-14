@@ -1248,7 +1248,8 @@ fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
         // Opaque shape-app handles wrap active event loops — not Clone.
         | IrType::WebApp
         | IrType::TuiApp
-        | IrType::CliApp => CloneClass::NonClone,
+        | IrType::CliApp
+        | IrType::WorkerApp => CloneClass::NonClone,
         // Composite: CloneOk iff all components CloneOk (no NonClone part).
         // `Maybe`, `List`, `Set`, `Result`, `Dict` are NAMED Rust types
         // (`IpeMaybe<T>`, `Vec<T>`, `BTreeSet<T>`, `IpeResult<E,A>`,
@@ -4334,6 +4335,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
+        | IrType::WorkerApp
         // A row variable is a distinct row generic (`R{n}`), never the ordinary
         // `T{n}` type variable this predicate tracks.
         | IrType::RowGeneric(_) => false,
@@ -4450,6 +4452,7 @@ fn ir_type_generic_in_decoder(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
+        | IrType::WorkerApp
         | IrType::RowGeneric(_) => false,
     }
 }
@@ -4568,6 +4571,7 @@ fn ir_type_generic_reaches_bare(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
+        | IrType::WorkerApp
         | IrType::RowGeneric(_) => false,
     }
 }
@@ -10157,7 +10161,12 @@ fn main_ret_is_runnable_entry(ret: &IrType) -> bool {
         // Opaque shape-app leaves: each has a `run_blocking` entry the emitted
         // `fn main` calls; accepting them here keeps the SEAL closed (a program
         // whose `main` returns a shape handle still compiles and runs).
-        IrType::Task(_) | IrType::Unit | IrType::WebApp | IrType::TuiApp | IrType::CliApp => true,
+        IrType::Task(_)
+        | IrType::Unit
+        | IrType::WebApp
+        | IrType::TuiApp
+        | IrType::CliApp
+        | IrType::WorkerApp => true,
         IrType::Result(err, _) => matches!(**err, IrType::Error),
         _ => false,
     }
@@ -10279,6 +10288,7 @@ const fn ir_type_label(ty: &IrType) -> &'static str {
         IrType::WebApp => "WebApp",
         IrType::TuiApp => "TuiApp",
         IrType::CliApp => "CliApp",
+        IrType::WorkerApp => "WorkerApp",
     }
 }
 
@@ -12954,7 +12964,8 @@ impl<'a> Lowerer<'a> {
             | IrType::TokenSource
             | IrType::WebApp
             | IrType::TuiApp
-            | IrType::CliApp => Ok(ty),
+            | IrType::CliApp
+            | IrType::WorkerApp => Ok(ty),
         }
     }
 
@@ -17666,6 +17677,7 @@ impl<'a> Lowerer<'a> {
                         "Web" => Ok(IrType::WebApp),
                         "Tui" => Ok(IrType::TuiApp),
                         "Cli" => Ok(IrType::CliApp),
+                        "Worker" => Ok(IrType::WorkerApp),
                         other => Err(bug(
                             "ipe_lower::ir_type_from_annotation",
                             format!("Program carrier with unknown shape tag `{other}`"),
@@ -19200,6 +19212,7 @@ impl<'a> Lowerer<'a> {
                             "Web" => Ok(IrType::WebApp),
                             "Tui" => Ok(IrType::TuiApp),
                             "Cli" => Ok(IrType::CliApp),
+                            "Worker" => Ok(IrType::WorkerApp),
                             other => Err(bug(
                                 "ipe_lower::ir_type_from_ty",
                                 format!("Program carrier with unknown shape tag `{other}`"),
@@ -21275,9 +21288,9 @@ impl<'a> Lowerer<'a> {
                 //   emit_console path could never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
-                Callee::Kernel(KernelFn::TerminalAppScreen | KernelFn::TerminalAppLines)
-                    if args.len() == 1 =>
-                {
+                Callee::Kernel(
+                    KernelFn::TerminalAppScreen | KernelFn::TerminalAppLines | KernelFn::TeaWorker,
+                ) if args.len() == 1 => {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it below.
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
@@ -24922,6 +24935,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TerminalAppScreen
                 // `Cli.app : TerminalCfg model msg -> CliApp`
                 | KernelFn::TerminalAppLines
+                // `Ipe.Tea.worker : WorkerCfg model msg -> WorkerApp`
+                | KernelFn::TeaWorker
                 // ── runtime-config front door — arity 1 ──────────────────
                 // `App.fromEnv : String -> Secret`
                 | KernelFn::AppFromEnv
@@ -26736,6 +26751,7 @@ impl<'a> Lowerer<'a> {
                     // ── Ipe.Tui / Ipe.Cli app-entry kernels ───────────────
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
                     ("Cli", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
+                    ("Tea", "worker") => Ok(Callee::Kernel(KernelFn::TeaWorker)),
                     // ── Ipe.Web settings-carrying entry + runtime-config ──
                     ("Web", "appWith") => Ok(Callee::Kernel(KernelFn::WebAppWith)),
                     ("Web", "csrf") => Ok(Callee::Kernel(KernelFn::WebCsrf)),
@@ -31795,7 +31811,8 @@ mod tests {
             | ipe_ir::IrType::TokenSource
             | ipe_ir::IrType::WebApp
             | ipe_ir::IrType::TuiApp
-            | ipe_ir::IrType::CliApp => {}
+            | ipe_ir::IrType::CliApp
+            | ipe_ir::IrType::WorkerApp => {}
         }
 
         // One representative per container variant: the shallowest tree

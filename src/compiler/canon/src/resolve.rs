@@ -1621,6 +1621,10 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Web", "appWith"),
     ("Tui", "app"),
     ("Cli", "app"),
+    // `Tea.worker` — the view-less co-located worker app-entry. A worker is a TEA
+    // app (its `main` head-calls the entry), but folds onto its own `"Worker"`
+    // shape family for `Cmd` / `Sub` scoping (see `canonical_shape`).
+    ("Tea", "worker"),
 ];
 
 /// The canonical shape (rendering family) name for a TEA surface segment. Most
@@ -1631,6 +1635,9 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
 fn canonical_shape(surface: &str) -> &str {
     match surface {
         "Tui" | "Cli" => "Terminal",
+        // The view-less worker's entry qualifier is `Tea`; its own `Cmd` / `Sub`
+        // scope is `Ipe.App.Tea.Worker.{Cmd,Sub}`, folding onto `"Worker"`.
+        "Tea" => "Worker",
         other => other,
     }
 }

@@ -145,6 +145,11 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // bare app surface) is retired: the entries are `Tui.app` / `Cli.app`.
     (&["Ipe", "App", "Tea", "Tui"], "Tui"),
     (&["Ipe", "App", "Tea", "Cli"], "Cli"),
+    // `Ipe.App.Tea.Worker` — the view-less co-located worker app-entry surface:
+    // `Tea.worker { init, update, subscriptions }`. No render; output is `Cmd`.
+    // Importing it marks the module a TEA app (IPE-N0033). A worker classifies to
+    // the co-located Script placement and can never reach the Spa/wasm sandbox.
+    (&["Ipe", "App", "Tea", "Worker"], "Tea"),
     // `Ipe.App.Tea.Web.PubSub` — the Web-shape-scoped TEA-side broadcast surface:
     // `publish` / `publishNoEcho` (Cmd forms, fired from `update`) and
     // `subscribeTopic` (Sub form, declared in `subscriptions`). Distinct from the
@@ -166,6 +171,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "App", "Tea", "Tui", "Sub"], "TeaTuiSub"),
     (&["Ipe", "App", "Tea", "Cli", "Cmd"], "TeaCliCmd"),
     (&["Ipe", "App", "Tea", "Cli", "Sub"], "TeaCliSub"),
+    (&["Ipe", "App", "Tea", "Worker", "Cmd"], "TeaWorkerCmd"),
+    (&["Ipe", "App", "Tea", "Worker", "Sub"], "TeaWorkerSub"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
     (&["Ipe", "Auth"], "Auth"),
     // `Ipe.Auth.Revocation` — per-session and per-subject revocation gate.
@@ -1017,6 +1024,9 @@ pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
         // carry `KernelClass::Terminal` internally.
         ("Tui", &["app"]),
         ("Cli", &["app"]),
+        // `Ipe.Tea.worker` — view-less co-located worker app-entry
+        // (`{ init, update, subscriptions } -> Program Worker msg`). No render.
+        ("Tea", &["worker"]),
         // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
         // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
         (
@@ -1583,6 +1593,8 @@ impl Env {
             ("TeaTuiSub", "Sub"),
             ("TeaCliCmd", "Cmd"),
             ("TeaCliSub", "Sub"),
+            ("TeaWorkerCmd", "Cmd"),
+            ("TeaWorkerSub", "Sub"),
         ];
 
         // ── Qualifier module aliases (Ipe.X / Ipê.X → short canonical) ────────
@@ -1610,6 +1622,9 @@ impl Env {
             // these two; its `Cmd` / `Sub` re-exports remain (below).
             ("Ipe.App.Tea.Tui", "Tui"),
             ("Ipe.App.Tea.Cli", "Cli"),
+            // `Tea` carries its `worker` member from the QUALIFIERS catalog; the
+            // view-less worker app-entry surface.
+            ("Ipe.App.Tea.Worker", "Tea"),
             ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
             ("Ipe.Auth", "Auth"),

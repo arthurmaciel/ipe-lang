@@ -187,6 +187,9 @@ const TAG_WEB_APP: u8 = 79;
 // so there is no distinct webview-app leaf to tag.
 const TAG_TUI_APP: u8 = 81;
 const TAG_CLI_APP: u8 = 82;
+// The view-less worker app leaf — non-serde, never a Model field; present for
+// exhaustiveness. Tag 87 is the next free structural tag.
+const TAG_WORKER_APP: u8 = 87;
 // `ProcessRunInPtyCfg` — kernel-boundary non-serde input record for `Ipe.Process.runInPty`.
 const TAG_PROCESS_RUN_IN_PTY_CFG: u8 = 83;
 const TAG_WEBSOCKET_CLIENT_CFG: u8 = 84;
@@ -292,6 +295,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::WebApp => h.update([TAG_WEB_APP]),
         IrType::TuiApp => h.update([TAG_TUI_APP]),
         IrType::CliApp => h.update([TAG_CLI_APP]),
+        IrType::WorkerApp => h.update([TAG_WORKER_APP]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);

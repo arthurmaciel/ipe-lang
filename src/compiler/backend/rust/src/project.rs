@@ -847,6 +847,7 @@ const SHAPE_APP_RETURN_TYPES: &[&str] = &[
     "fn ipe_main() -> ipe_runtime::tea::WebApp",
     "fn ipe_main() -> ipe_runtime::tea::TuiApp",
     "fn ipe_main() -> ipe_runtime::tea::CliApp",
+    "fn ipe_main() -> ipe_runtime::tea::WorkerApp",
 ];
 
 // ── Ipe.Encoding / Ipe.Bytes — base64 / hex / percent codecs ─────────────────
@@ -3208,7 +3209,8 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
         // Shape opaque app leaves — not serde; rejected in a HydrationState record.
         | IrType::WebApp
         | IrType::TuiApp
-        | IrType::CliApp => true,
+        | IrType::CliApp
+        | IrType::WorkerApp => true,
     }
 }
 
