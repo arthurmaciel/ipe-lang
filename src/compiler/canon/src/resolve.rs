@@ -6528,16 +6528,20 @@ fn canonicalise_type(
             // `Lines` equivalents) alias identically: each name is a RESERVED
             // builtin no user module can declare, so the qualifier cannot name a
             // different type, and an unknown qualifier is already turned away by
-            // the qualifier gate above. Only the arity-1 form is an alias; a
-            // mis-arity use falls through.
-            if args.len() == 1
+            // the qualifier gate above. The bare arity-0 form (`view : Element`)
+            // is an alias too: its implicit message parameter arity-fills with
+            // the `any` wildcard right here, so it canonicalises to the same
+            // `View <engine> any` carrier the arity-1 form yields — never a
+            // stray `Element any` con that no longer unifies with the View the
+            // combinators produce. Only the arity-0 and arity-1 forms are
+            // aliases; a mis-arity use falls through.
+            if args.len() <= 1
                 && let Some(engine_name) = match ctx.interner.resolve(name) {
                     Some("Element") => Some("Web"),
                     Some("Screen") => Some("Tui"),
                     Some("Lines") => Some("Cli"),
                     _ => None,
                 }
-                && let Some(msg_ann) = args.first()
             {
                 // `View` and the engine tags are pre-interned at env init, so a
                 // miss here is a compiler bug, never user input.
@@ -6555,15 +6559,18 @@ fn canonicalise_type(
                             where_: "ipe_canon::canonicalise_type::view_alias",
                             detail: "a view-engine tag name is not interned".into(),
                         })?;
-                let msg = canonicalise_type(
-                    msg_ann,
-                    ctx,
-                    subst,
-                    free_vars,
-                    visited,
-                    budget,
-                    depth.saturating_add(1),
-                )?;
+                let msg = match args.first() {
+                    Some(msg_ann) => canonicalise_type(
+                        msg_ann,
+                        ctx,
+                        subst,
+                        free_vars,
+                        visited,
+                        budget,
+                        depth.saturating_add(1),
+                    )?,
+                    None => canon::Type::Var(ctx.ui_wildcard_msg),
+                };
                 return Ok(canon::Type::Con {
                     home: Vec::new(),
                     name: view_sym,
@@ -6807,8 +6814,8 @@ fn canonicalise_type(
                     args: can_args,
                 });
             }
-            // A bare builtin parametric UI constructor (`Html` / `Element` /
-            // `Attribute`) carries one implicit message parameter — `view : Html`
+            // A bare builtin parametric UI constructor (`Html` / `Attribute`)
+            // carries one implicit message parameter — `view : Html`
             // means `view : Html any`, with the message type inferred from the
             // body's `Ui.layout …`. Arity-fill the missing parameter here, at the
             // single canon source of truth, so BOTH the type checker (via
@@ -6819,12 +6826,13 @@ fn canonicalise_type(
             // `type Html a` (real home) is never touched; the synthetic `any` var
             // is NOT collected into `free_vars`, keeping it a per-occurrence
             // wildcard the solver resolves rather than a quantified type parameter.
+            // The view aliases (`Element` / `Screen` / `Lines`) are NOT filled
+            // here — their bare form already canonicalised to the `View <engine>
+            // any` carrier above, so a fill here would forge a stray `Element any`.
             let can_args = if home.is_empty()
                 && can_args.is_empty()
-                && matches!(
-                    ctx.interner.resolve(name),
-                    Some("Html" | "Element" | "Attribute")
-                ) {
+                && matches!(ctx.interner.resolve(name), Some("Html" | "Attribute"))
+            {
                 vec![canon::Type::Var(ctx.ui_wildcard_msg)]
             } else {
                 can_args

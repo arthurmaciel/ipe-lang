@@ -822,20 +822,37 @@ fn mismatch(
     }
 }
 
-/// Whether the two diverging types are the `Element` / `Html` pair (in either
-/// order) — a managed-loop `view` returning `Html` where an `Element` is
-/// required (or the symmetric case). Both are unqualified nominal cons
-/// (`self.builtins.element` / `html_con` carry no module for the emitted type),
-/// so a name-string match is exact and cannot collide with a user type.
+/// Whether the two diverging types are the Web view / `Html` pair (in either
+/// order) — a managed-loop `view` returning `Html` where the shape requires the
+/// Web view carrier (or the symmetric case). The Web view is the engine-tagged
+/// carrier `View Web msg` (`Element msg` canonicalises to the same con); its
+/// bare per-engine alias `Element` can also survive a read-back. Both view
+/// spellings and `html_con` are unqualified nominal cons carrying no module for
+/// the emitted type, so a name-string match is exact and cannot collide with a
+/// user type.
 fn is_element_html_clash(interner: &Interner, a: &Ty, b: &Ty) -> bool {
-    let con_name = |t: &Ty| match t {
-        Ty::Con { name, .. } => interner.resolve(*name),
-        _ => None,
-    };
-    matches!(
-        (con_name(a), con_name(b)),
-        (Some("Element"), Some("Html")) | (Some("Html"), Some("Element"))
-    )
+    let is_html =
+        |t: &Ty| matches!(t, Ty::Con { name, .. } if interner.resolve(*name) == Some("Html"));
+    (is_web_view(interner, a) && is_html(b)) || (is_html(a) && is_web_view(interner, b))
+}
+
+/// Whether the type is the Web view carrier — the engine-tagged `View Web msg`
+/// (first argument the `Web` engine tag) or its bare per-engine alias `Element`.
+/// Only the Web engine turns its `Element` body into `Html`, so the tailored
+/// hint is scoped to it; a `View Tui msg` / `View Cli msg` clash falls through
+/// to the generic mismatch.
+fn is_web_view(interner: &Interner, t: &Ty) -> bool {
+    match t {
+        Ty::Con { name, args, .. } => match interner.resolve(*name) {
+            Some("Element") => true,
+            Some("View") => matches!(
+                args.first(),
+                Some(Ty::Con { name: tag, .. }) if interner.resolve(*tag) == Some("Web")
+            ),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// Build an owned [`TypeError::InfiniteType`] naming the offending variable and
