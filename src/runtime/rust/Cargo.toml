@@ -141,7 +141,13 @@ percent-encoding = { version = "2", optional = true }
 # `time.rs` (the `Ipe.Time` calendar surface) — are each feature-gated, and the
 # db/web/webview surfaces render `chrono` timestamps too. A program that reaches
 # no Log/Time kernel and no Db/Web/WebView surface drops `chrono` entirely.
-chrono = { version = "0.4", optional = true }
+# Pinned exact: a loose `0.4` caret lets an emitted crate (which resolves its own
+# dep graph) drift `chrono` to a newer patch whose transitive `wasm-bindgen`
+# floor climbs past the exact `wasm-bindgen = "=0.2.126"` pin below, breaking the
+# resolve. Freezing `chrono` to the one version the whole graph reconciles to
+# makes every emitted resolve deterministic and keeps `wasm-bindgen = 0.2.126`
+# the unifiable point version.
+chrono = { version = "=0.4.45", optional = true }
 # `chrono-tz` (the embedded IANA zone DB) is optional: only the `time` runtime
 # module's IANA-zone helpers use it, and they are gated behind the `time`
 # feature (which implies `time-core`, since the zones build on base `chrono`). A

@@ -286,6 +286,16 @@ const PORT_GLUE_JS_HEAD: &str = r#"// Ipe.Ffi.Js browser port surface. Values cr
   // completion replies `shared`; a user dismissal (AbortError) traps to
   // `cancelled`, an absent API to `unavailable` — never a throw. Empty payload
   // fields are omitted so the platform sheet only shows populated fields.
+  //
+  // The URL scheme is allowlisted here to `http`/`https` before it reaches
+  // `navigator.share`, mirroring the `Ipe.Browser.Share.shareSchemes` seal. This
+  // is a second, transport-level boundary independent of the ipe-level `ShareUrl`
+  // type: the raw JS transport is not ipe-typed, so a `data:`/`file:` URL that
+  // slips past the type (or is injected at the JS layer) is turned back here.
+  // Absent proof the scheme is `http`/`https`, the URL is dropped from the
+  // payload — never passed through — so no exfiltrating scheme reaches the sheet.
+  // The scheme check itself is generated from the `SHARE_SCHEMES` SSOT and spliced
+  // in after this half, so the JS allowlist can never drift from the Ipê layer.
   function shareSink(value, corId) {
     if (!(value && typeof value === "object" && value.Share !== undefined)) return false;
     if (!navigator || typeof navigator.share !== "function") {
@@ -1683,6 +1693,52 @@ mod tests {
             1,
             "expected exactly one (guarded) `data.url = p.url`; a bare or duplicate assignment escapes the scheme check"
         );
+    }
+
+    /// The static JS harness cannot execute the emitted glue, so this test drives
+    /// the scheme predicate directly against the same fail-closed rule the emitted
+    /// generated `SHARE_SCHEMES` guard implements, pinning that a `data:`/`file:`/
+    /// `javascript:`/relative URL is refused and only `http`/`https` (any case)
+    /// is admitted before the URL can reach `navigator.share`.
+    #[test]
+    fn share_url_scheme_predicate_refuses_non_web_schemes() {
+        fn share_scheme_allowed(u: &str) -> bool {
+            let scheme = match u.split_once(':') {
+                Some((s, _)) if !s.is_empty() => s,
+                _ => return false,
+            };
+            let Some(&head) = scheme.as_bytes().first() else {
+                return false;
+            };
+            if !head.is_ascii_alphabetic() {
+                return false;
+            }
+            if !scheme
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'.' | b'-'))
+            {
+                return false;
+            }
+            let lowered = scheme.to_ascii_lowercase();
+            lowered == "http" || lowered == "https"
+        }
+
+        // Refused — the exfiltration / injection schemes the issue flags…
+        assert!(!share_scheme_allowed(
+            "data:text/html,<script>steal()</script>"
+        ));
+        assert!(!share_scheme_allowed("file:///etc/passwd"));
+        assert!(!share_scheme_allowed("javascript:alert(1)"));
+        assert!(!share_scheme_allowed("blob:https://x/y"));
+        assert!(!share_scheme_allowed("ftp://host/f"));
+        // …and a relative / schemeless URL (no vetted absolute scheme).
+        assert!(!share_scheme_allowed("/relative/path"));
+        assert!(!share_scheme_allowed("example.com"));
+        assert!(!share_scheme_allowed(""));
+        // Admitted — only the vetted web schemes, case-insensitively.
+        assert!(share_scheme_allowed("http://example.com"));
+        assert!(share_scheme_allowed("https://example.com/path?q=1#f"));
+        assert!(share_scheme_allowed("HTTPS://EXAMPLE.COM"));
     }
 
     #[test]

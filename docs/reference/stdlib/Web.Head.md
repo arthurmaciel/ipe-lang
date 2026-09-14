@@ -33,7 +33,7 @@ link : List (String, String) -> Html msg
 ## `canonical`
 
 ```ipe
-canonical : Url -> Html msg
+canonical : Url -> Result Error (Html msg)
 ```
 
 ## `themeColor`
@@ -45,6 +45,6 @@ themeColor : String -> Html msg
 ## `rss`
 
 ```ipe
-rss : Url -> String -> Html msg
+rss : Url -> String -> Result Error (Html msg)
 ```
 

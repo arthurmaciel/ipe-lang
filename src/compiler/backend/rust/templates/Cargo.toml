@@ -83,7 +83,7 @@ unicode-general-category = "1"
 base64 = "0.22"
 hex = "0.4"
 percent-encoding = "2"
-chrono = "0.4"
+chrono = "=0.4.45"
 rust_decimal = { version = "1", features = ["serde"] }
 hmac = "0.12"
 subtle = "2"

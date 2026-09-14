@@ -155,7 +155,7 @@ percent-encoding = "2"
 # `crate::url::Url`, so the `url` crate is always in this closed template's
 # dependency closure — non-optional here, like the other closed-set crates.
 url = "2"
-chrono = "0.4"
+chrono = "=0.4.45"
 rust_decimal = { version = "1", features = ["serde"] }
 hmac = "0.12"
 sha1 = "0.10"
@@ -2657,7 +2657,7 @@ fn assemble_project_files(
     // crate. `chrono` core is gated separately by `time-core`/`log` (the
     // log/db/web timestamp surfaces reach it), so it is never touched here.
     // Anchors on `default = [` /
-    // `chrono = "0.4"`, not the tokio line, so it composes with the sync base.
+    // `chrono = "=0.4.45"`, not the tokio line, so it composes with the sync base.
     let cargo_toml = if ctx.uses_time {
         chrono_tz_cargo_toml(&cargo_toml)?
     } else {
@@ -4286,7 +4286,7 @@ fn http_client_cargo_toml(base: &str) -> DResult<String> {
 /// by `time-core`/`log` and untouched here.
 ///
 /// The dep is re-inserted exactly where the base template declared it (after
-/// `chrono = "0.4"`) so a Time-using manifest is byte-identical to the
+/// `chrono = "=0.4.45"`) so a Time-using manifest is byte-identical to the
 /// pre-gating output. Composes with any prior default-list surgery (`["json"]`,
 /// `["tokio", "json"]`, or the wasm `["wasm-client"]`): the `"time"` element is
 /// appended before the closing `]` regardless of the list's contents. The
@@ -4295,12 +4295,12 @@ fn http_client_cargo_toml(base: &str) -> DResult<String> {
 ///
 /// # Errors
 ///
-/// Returns [`Diagnostic::CompilerBug`] if the `default = [` / `chrono = "0.4"`
+/// Returns [`Diagnostic::CompilerBug`] if the `default = [` / `chrono = "=0.4.45"`
 /// anchors are absent — a golden-drift invariant violation (fail-loud, never a
 /// silent no-op).
 fn chrono_tz_cargo_toml(base: &str) -> DResult<String> {
     const DEFAULT_PREFIX: &str = "default = [";
-    const CHRONO_ANCHOR: &str = "chrono = \"0.4\"\n";
+    const CHRONO_ANCHOR: &str = "chrono = \"=0.4.45\"\n";
 
     // Step 1 — promote `time` into the default feature list.
     let pfx = base
