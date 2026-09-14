@@ -400,8 +400,23 @@ pub enum BuiltinTag {
     /// `Ipe.Html` node kernel takes. Its interpreted `Con` carries a non-empty
     /// module path (see `builtin_con_module`).
     HtmlAttribute,
+    /// `View` — the engine-tagged view carrier `View engine msg`. Arity 2: the
+    /// first argument is an engine tag drawn from the CLOSED `{Web, Tui, Cli}`
+    /// set (the same phantom shape tags [`Self::ProgramShapeWeb`] /
+    /// [`Self::ProgramShapeTui`] / [`Self::ProgramShapeCli`] `Program` carries),
+    /// the second is the message type. It is the SSOT surface for every
+    /// engine's view: `View Web msg` IS the DOM view (`Element msg`), `View Tui
+    /// msg` the terminal-cells view (`Screen msg`), `View Cli msg` the
+    /// line-oriented view (`Lines msg`). The engine tag is phantom and erases at
+    /// lower — a `View <tag> msg` lowers to the tag's existing `IrType::Ui`
+    /// ctor ([`ipe_ir::UiCtor::Element`] / `Cells` / `CliLines`) — so its IR is
+    /// byte-identical to the per-engine name. A cross-engine view (`View Tui
+    /// msg` where `View Web msg` is expected) fails unification on the distinct
+    /// engine tag; an unconstrained engine leaves the tag variable unsolved and
+    /// is rejected, never defaulted.
+    View,
     /// `Element` — the `Ipe.Ui` element constructor `Element msg`, applied to the
-    /// message type.
+    /// message type. Retained as the canon alias `View Web msg`.
     UiElement,
     /// `Cells` — the Tui-only view type constructor `Screen msg` (exposed name).
     /// Distinct from `Element msg`; produced exclusively by `Ipe.Ui.Tui.*`
@@ -2053,14 +2068,16 @@ pub enum StdlibKernel {
     HtmlNoAttr,        // `noAttr : Attribute msg`
     // ── Ipe.Web app-entry kernels ───────────────────────────────────────
     WebApp,
-    /// `Ipe.Tea.app` (engine = Web) — the generic view-ful TEA app-entry over
-    /// the closed Web renderer: `{ init, update, view : model -> View Web msg,
-    /// subscriptions, routes } -> Program Web msg`. Its cfg record and result
-    /// are byte-identical to `Web.app`'s (the `View Web msg` view field IS the
-    /// DOM `Element msg`), and it shares `Web.app`'s `WEB_APP` scheme and
-    /// `web_app` emit path, so `Web.app` is a thin surface synonym over this
-    /// generic entry. Only the Web engine is wired here; Tui/Cli follow the
-    /// same pattern.
+    /// `Ipe.Tea.app` — the generic minimal view-ful TEA app-entry, parametric
+    /// over the view engine: `{ init, update, view : model -> View e msg,
+    /// subscriptions } -> Program e msg`. The engine `e` is SHARED between the
+    /// `view` field and the result, so it unifies from the user's view type
+    /// (`View Web msg` → `Program Web msg`) rather than a per-shape default; an
+    /// unconstrained `e` is rejected as ambiguous. The cfg is the CLOSED minimal
+    /// common surface — engine-specific features (`Web.app`'s `routes`,
+    /// `Cli.app`'s `onLine`, …) stay in the richer per-engine entries. Once `e`
+    /// is solved, the `Program e msg` result erases through the same per-shape
+    /// lower and emit path the per-engine entry uses.
     TeaApp,
     WebAppRouted,
     /// `Web.embed : { … } -> WebApp` — produce a mountable web-app handle from
@@ -4126,9 +4143,10 @@ impl StdlibKernel {
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
             // ── Ipe.Web app-entry kernels ───────────────────────────────
             Self::WebApp => d("Web", "app", 1, Web, "web_app"),
-            // `Ipe.Tea.app` (engine = Web) shares `Web.app`'s emit intercept
-            // (`web_app`) and scheme (`WEB_APP`) — a thin generic surface over
-            // the same closed Web renderer, so the emitted Rust is unchanged.
+            // `Ipe.Tea.app` — generic over the view engine. When `e` solves to
+            // Web (the only engine wired here), it shares `Web.app`'s emit
+            // intercept (`web_app`), so the emitted Rust is unchanged; the
+            // engine tag is recovered at type inference, not defaulted.
             Self::TeaApp => d("Tea", "app", 1, Web, "web_app"),
             Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
             // `Web.embed` shares `Web.app`'s emit path (both build the `WebApp`
@@ -7888,7 +7906,10 @@ impl StdlibKernel {
         // `PSEUDO_CLASS` are nullary value types.
         const UI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::UiAttribute, &[A]);
         const HTML_ATTR_A: TyShape = TyShape::Con(BuiltinTag::HtmlAttribute, &[A]);
-        const UI_ELEM_A: TyShape = TyShape::Con(BuiltinTag::UiElement, &[A]);
+        // Every DOM combinator yields `View Web msg` (SSOT): the engine tag
+        // reuses `Program`'s Web shape tag, so `Element msg` and `View Web msg`
+        // are one type. `A` = `Var(0)` = msg.
+        const UI_ELEM_A: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_WEB, A]);
         const HTML_A: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);
         const LENGTH: TyShape = TyShape::Con(BuiltinTag::UiLength, &[]);
         const COLOR: TyShape = TyShape::Con(BuiltinTag::UiColor, &[]);
@@ -7905,7 +7926,7 @@ impl StdlibKernel {
         const LIST_HTML_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[HTML_ATTR_A]);
         // `Screen msg` (var(0) = msg), and derived forms for `Ipe.Ui.Tui`
         // builders. The internal `Cells` tag is the exposed `Screen` type.
-        const CELLS_A: TyShape = TyShape::Con(BuiltinTag::Cells, &[A]);
+        const CELLS_A: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_TUI, A]);
         const LIST_CELLS_A: TyShape = TyShape::Con(BuiltinTag::List, &[CELLS_A]);
         // The cell-native attribute type `Ipe.Ui.Tui.Attribute msg` and its
         // list slot — DISTINCT from the DOM `UI_ATTR_A`, so a `Screen` builder
@@ -7930,7 +7951,7 @@ impl StdlibKernel {
         const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&TERM_COLOR, &TUI_ATTR_A);
         // `Lines msg` (var(0) = msg) and the Cli line-native attribute type and
         // list slots — DISTINCT from both DOM `UI_ATTR_A` and cell `TUI_ATTR_A`.
-        const LINES_A: TyShape = TyShape::Con(BuiltinTag::CliLines, &[A]);
+        const LINES_A: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_CLI, A]);
         const LIST_LINES_A: TyShape = TyShape::Con(BuiltinTag::List, &[LINES_A]);
         const CLI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::CliAttr, &[A]);
         const LIST_CLI_ATTR_A: TyShape = TyShape::Con(BuiltinTag::List, &[CLI_ATTR_A]);
@@ -8110,22 +8131,22 @@ impl StdlibKernel {
         // ── Ipe.Ui.Lazy (function reuse, arity 1..5). ──
         // `lazy : (a -> Element msg) -> a -> Element msg`, msg var `B`.
         const A_TO_UI_ELEM_B: TyShape =
-            TyShape::Fun(&A, &TyShape::Con(BuiltinTag::UiElement, &[B]));
+            TyShape::Fun(&A, &TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_WEB, B]));
         const LAZY_LAZY: TyShape = TyShape::Fun(&A_TO_UI_ELEM_B, &A_TO_UI_ELEM_B);
         // `lazy2 : (a -> b -> Element msg) -> a -> b -> Element msg`, msg var `C`.
-        const UI_ELEM_C: TyShape = TyShape::Con(BuiltinTag::UiElement, &[C]);
+        const UI_ELEM_C: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_WEB, C]);
         const B_TO_UI_ELEM_C: TyShape = TyShape::Fun(&B, &UI_ELEM_C);
         const A_TO_B_TO_UI_ELEM_C: TyShape = TyShape::Fun(&A, &B_TO_UI_ELEM_C);
         const LAZY_LAZY2: TyShape = TyShape::Fun(&A_TO_B_TO_UI_ELEM_C, &A_TO_B_TO_UI_ELEM_C);
         // `lazy3`, msg var `D`.
-        const UI_ELEM_D: TyShape = TyShape::Con(BuiltinTag::UiElement, &[D]);
+        const UI_ELEM_D: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_WEB, D]);
         const C_TO_UI_ELEM_D: TyShape = TyShape::Fun(&C, &UI_ELEM_D);
         const B_TO_C_TO_UI_ELEM_D: TyShape = TyShape::Fun(&B, &C_TO_UI_ELEM_D);
         const A_TO_B_TO_C_TO_UI_ELEM_D: TyShape = TyShape::Fun(&A, &B_TO_C_TO_UI_ELEM_D);
         const LAZY_LAZY3: TyShape =
             TyShape::Fun(&A_TO_B_TO_C_TO_UI_ELEM_D, &A_TO_B_TO_C_TO_UI_ELEM_D);
         // `lazy4`, msg var `E`.
-        const UI_ELEM_E: TyShape = TyShape::Con(BuiltinTag::UiElement, &[E]);
+        const UI_ELEM_E: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_WEB, E]);
         const D_TO_UI_ELEM_E: TyShape = TyShape::Fun(&D, &UI_ELEM_E);
         const C_TO_D_TO_UI_ELEM_E: TyShape = TyShape::Fun(&C, &D_TO_UI_ELEM_E);
         const B_TO_C_TO_D_TO_UI_ELEM_E: TyShape = TyShape::Fun(&B, &C_TO_D_TO_UI_ELEM_E);
@@ -8135,7 +8156,7 @@ impl StdlibKernel {
             &A_TO_B_TO_C_TO_D_TO_UI_ELEM_E,
         );
         // `lazy5`, msg var `F`.
-        const UI_ELEM_F: TyShape = TyShape::Con(BuiltinTag::UiElement, &[F]);
+        const UI_ELEM_F: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_WEB, F]);
         const E_TO_UI_ELEM_F: TyShape = TyShape::Fun(&E, &UI_ELEM_F);
         const D_TO_E_TO_UI_ELEM_F: TyShape = TyShape::Fun(&D, &E_TO_UI_ELEM_F);
         const C_TO_D_TO_E_TO_UI_ELEM_F: TyShape = TyShape::Fun(&C, &D_TO_E_TO_UI_ELEM_F);
@@ -8174,7 +8195,7 @@ impl StdlibKernel {
         // `Ui.button` / `Ui.link` / `Input` records via `FieldTag::Label`.
         const WEB_REQ: TyShape = TyShape::Con(BuiltinTag::WebReq, &[]);
         const WEB_ROUTE_C: TyShape = TyShape::Con(BuiltinTag::WebRoute, &[C]);
-        const UI_ELEM_B: TyShape = TyShape::Con(BuiltinTag::UiElement, &[B]);
+        const UI_ELEM_B: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_WEB, B]);
         const LIST_LIST_STRING: TyShape = TyShape::Con(BuiltinTag::List, &[LIST_STRING]);
         const MAYBE_PLACEHOLDER_A: TyShape = TyShape::Con(BuiltinTag::Maybe, &[PLACEHOLDER_A]);
         const LIST_RADIO_OPTION_A: TyShape = TyShape::Con(BuiltinTag::List, &[RADIO_OPTION_A]);
@@ -8337,7 +8358,7 @@ impl StdlibKernel {
         const A_TO_TUPLE: TyShape = TyShape::Fun(&A, &TUPLE_A_CMD_B);
         const UPDATE_FN: TyShape = TyShape::Fun(&B, &A_TO_TUPLE);
         const VIEW_ELEM_FN: TyShape = TyShape::Fun(&A, &UI_ELEM_B);
-        const CELLS_B: TyShape = TyShape::Con(BuiltinTag::Cells, &[B]);
+        const CELLS_B: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_TUI, B]);
         const VIEW_CELLS_FN: TyShape = TyShape::Fun(&A, &CELLS_B);
         const SUBS_FN: TyShape = TyShape::Fun(&A, &SUB_B);
         const LIST_WEB_ROUTE_C: TyShape = TyShape::Con(BuiltinTag::List, &[WEB_ROUTE_C]);
@@ -8374,7 +8395,7 @@ impl StdlibKernel {
         };
         // `Cli.app` — `view : model -> Lines msg`, `onLine`, CLOSED.
         const ON_LINE_FN: TyShape = TyShape::Fun(&STRING, &B);
-        const LINES_B: TyShape = TyShape::Con(BuiltinTag::CliLines, &[B]);
+        const LINES_B: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_CLI, B]);
         const VIEW_LINES_FN: TyShape = TyShape::Fun(&A, &LINES_B);
         const TERMINAL_LINES_CFG: TyShape = TyShape::Record {
             fields: &[
@@ -8642,6 +8663,34 @@ impl StdlibKernel {
             tail: RowTailShape::Closed,
         };
         const WORKER_APP: TyShape = TyShape::Fun(&WORKER_CFG, &PROGRAM_WORKER);
+        // `Ipe.Tea.app` — the generic minimal TEA entry, parametric over the view
+        // engine. var(0)=model, var(1)=msg, var(2)=engine `e`. The engine var is
+        // SHARED between the `view` field's result (`View e msg`) and the app
+        // result (`Program e msg`), so `e` unifies from the user's view type
+        // (`View Web msg` → `e = Web` → `Program Web msg`) and never a
+        // per-shape default. An unconstrained `e` (a view that pins no engine)
+        // is left unsolved and rejected as ambiguous, never silently Web. The
+        // cfg is the CLOSED minimal common surface — engine-specific fields
+        // (`Web.app`'s `routes`, `Cli.app`'s `onLine`, …) stay in the per-engine
+        // entries, which keep their own richer cfg records.
+        const PROGRAM_E: TyShape = TyShape::Con(BuiltinTag::Program, &[C, B]);
+        const VIEW_ENGINE_A: TyShape = TyShape::Con(BuiltinTag::View, &[C, B]);
+        const VIEW_ENGINE_FN: TyShape = TyShape::Fun(&A, &VIEW_ENGINE_A);
+        // `init : WebReq -> (model, Cmd msg)` — the view engine's entry boundary.
+        // Only the Web engine is wired, so `init` takes the Web request boundary
+        // and the app emits through `web_app`; the tag itself stays generic via
+        // the shared `e`. When Tui/Cli are wired their `()`-boundary init joins
+        // here behind the same engine variable.
+        const TEA_APP_CFG: TyShape = TyShape::Record {
+            fields: &[
+                (FieldTag::AppInit, &WEB_REQ_TO_TUPLE),
+                (FieldTag::AppUpdate, &UPDATE_FN),
+                (FieldTag::AppView, &VIEW_ENGINE_FN),
+                (FieldTag::AppSubscriptions, &SUBS_FN),
+            ],
+            tail: RowTailShape::Closed,
+        };
+        const TEA_APP: TyShape = TyShape::Fun(&TEA_APP_CFG, &PROGRAM_E);
         // Ui builders taking a record.
         const LAYOUT_WITH: TyShape = {
             const HTML_A_INNER: TyShape = TyShape::Con(BuiltinTag::Html, &[A]);
@@ -9719,11 +9768,12 @@ impl StdlibKernel {
             | Self::BackoffExponentialWithJitter => Some(&BACKOFF_STRATEGY_CON),
             // App-entry cfg records.
             Self::WebApp => Some(&WEB_APP),
-            // `Ipe.Tea.app` (engine = Web) IS `Web.app`'s scheme: same cfg
-            // record, same `Program Web msg` result. `View Web msg` in the cfg's
-            // `view` field is the DOM `Element msg`, so the scheme is shared
-            // verbatim.
-            Self::TeaApp => Some(&WEB_APP),
+            // `Ipe.Tea.app` — the generic minimal TEA entry, parametric over the
+            // view engine `e` (shared between `view : model -> View e msg` and
+            // the `Program e msg` result). `e` is recovered from the user's view
+            // type, never per-shape-defaulted. `Web.app` keeps its own richer
+            // route-ful `WEB_APP` scheme.
+            Self::TeaApp => Some(&TEA_APP),
             Self::WebEmbed => Some(&WEB_EMBED),
             Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
             Self::TerminalAppLines => Some(&TERMINAL_APP_LINES),

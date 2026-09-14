@@ -17526,7 +17526,46 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Element msg` — a Ipe.Ui layout element.
+                // `View engine msg` — the engine-tagged view carrier. The first
+                // argument is the closed engine tag (`Web`/`Tui`/`Cli`), which
+                // selects the per-engine `IrType::Ui` ctor and then erases; the
+                // second is the message type. Byte-identical IR to the per-engine
+                // alias (`View Web msg` == `Element msg`, etc.).
+                "View" if args.len() == 2 => {
+                    let ctor = match args.first() {
+                        Some(canon::Type::Con { name: tag, .. }) => match self.resolve(*tag)? {
+                            "Web" => UiCtor::Element,
+                            "Tui" => UiCtor::Cells,
+                            "Cli" => UiCtor::CliLines,
+                            other => {
+                                return Err(bug(
+                                    "ipe_lower::ir_type_from_canon",
+                                    format!("View carrier with unknown engine tag `{other}`"),
+                                ));
+                            }
+                        },
+                        _ => {
+                            return Err(bug(
+                                "ipe_lower::ir_type_from_canon",
+                                "View carrier without an engine tag",
+                            ));
+                        }
+                    };
+                    let msg = self.ir_ui_msg_from_canon(
+                        args.get(1).ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_canon",
+                                "View applied without its message type",
+                            )
+                        })?,
+                        generics,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `Element msg` — a Ipe.Ui layout element (the `View Web msg` alias).
                 "Element" if args.len() == 1 => {
                     let msg = self.ir_ui_msg_from_canon(
                         args.first().ok_or_else(|| {
@@ -18917,6 +18956,45 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Ui {
                         ctor: UiCtor::Html,
+                        msg: Box::new(msg),
+                    })
+                }
+                // `View engine msg` — the engine-tagged view carrier (twin of
+                // the `ir_type_from_canon` arm). The solved engine tag
+                // (`Ty::Con` `Web`/`Tui`/`Cli`) selects the per-engine
+                // `IrType::Ui` ctor and erases; the `msg` arg is threaded.
+                // Byte-identical IR to the per-engine alias.
+                "View" if args.len() == 2 => {
+                    let ctor = match args.first() {
+                        Some(Ty::Con { name: tag, .. }) => match self.resolve(*tag)? {
+                            "Web" => UiCtor::Element,
+                            "Tui" => UiCtor::Cells,
+                            "Cli" => UiCtor::CliLines,
+                            other => {
+                                return Err(bug(
+                                    "ipe_lower::ir_type_from_ty",
+                                    format!("View carrier with unknown engine tag `{other}`"),
+                                ));
+                            }
+                        },
+                        _ => {
+                            return Err(bug(
+                                "ipe_lower::ir_type_from_ty",
+                                "View carrier without a settled engine tag",
+                            ));
+                        }
+                    };
+                    let msg = self.ir_type_from_ty_ui_msg(
+                        args.get(1).ok_or_else(|| {
+                            bug(
+                                "ipe_lower::ir_type_from_ty",
+                                "View applied without its message type",
+                            )
+                        })?,
+                        span,
+                    )?;
+                    Ok(IrType::Ui {
+                        ctor,
                         msg: Box::new(msg),
                     })
                 }

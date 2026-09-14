@@ -215,7 +215,12 @@ pub struct Builtins {
     /// bare `Vec::new()` that Rust rejects with E0283 when M cannot be inferred
     /// from elsewhere in the expression.
     pub attribute: Symbol,
-    /// `"Element"` — Ipe.Ui element type constructor `Element msg`.
+    /// `"View"` — the engine-tagged view carrier `View engine msg`. The SSOT
+    /// surface every engine's view collapses into: `View Web msg` IS `Element
+    /// msg`, `View Tui msg` IS `Screen msg`, `View Cli msg` IS `Lines msg`.
+    pub view: Symbol,
+    /// `"Element"` — Ipe.Ui element type constructor `Element msg`. Retained as
+    /// the canon alias `View Web msg`.
     pub element: Symbol,
     /// `"Screen"` — Tui-only view type constructor `Screen msg`. Distinct from
     /// `Element msg`; produced by `Ipe.Ui.Tui.*` builders.
@@ -818,6 +823,7 @@ impl Builtins {
             ws_server_cfg: interner.intern("WebSocketServerCfg")?,
             // Ipe.Ui / Ipe.Html parametric type constructor symbols.
             attribute: interner.intern("Attribute")?,
+            view: interner.intern("View")?,
             element: interner.intern("Element")?,
             cells: interner.intern("Screen")?,
             tui_attr: interner.intern("TuiAttr")?,

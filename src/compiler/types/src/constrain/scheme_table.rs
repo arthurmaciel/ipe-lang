@@ -175,6 +175,7 @@ impl Builder<'_> {
             // `Attribute` name; they differ only in the module path
             // (`builtin_con_module`).
             BuiltinTag::UiAttribute | BuiltinTag::HtmlAttribute => self.builtins.attribute,
+            BuiltinTag::View => self.builtins.view,
             BuiltinTag::UiElement => self.builtins.element,
             BuiltinTag::Cells => self.builtins.cells,
             BuiltinTag::TuiAttr => self.builtins.tui_attr,
@@ -956,16 +957,21 @@ impl Builder<'_> {
             name: self.builtins.attribute,
             args: vec![m],
         };
-        let elem_t = |m: Ty| Ty::Con {
+        // The three per-engine views are the ONE engine-tagged carrier `View
+        // engine msg`: `View Web msg` (DOM), `View Tui msg` (cells), `View Cli
+        // msg` (lines). The engine tag reuses `Program`'s shape tag, so the
+        // legacy reference `Ty` here is byte-identical to the interpreted shape
+        // (`UI_ELEM_A`/`CELLS_A`/`LINES_A`), which is what the SSOT combinator
+        // schemes now yield. `elem_t`/`cells_t`/`lines_t` are the SSOT the
+        // legacy table routes every view-producing arm through, so retyping them
+        // here retypes every arm at once.
+        let view_t = |engine: Ty, m: Ty| Ty::Con {
             module: Vec::new(),
-            name: self.builtins.element,
-            args: vec![m],
+            name: self.builtins.view,
+            args: vec![engine, m],
         };
-        let cells_t = |m: Ty| Ty::Con {
-            module: Vec::new(),
-            name: self.builtins.cells,
-            args: vec![m],
-        };
+        let elem_t = |m: Ty| view_t(program_shape_web(), m);
+        let cells_t = |m: Ty| view_t(program_shape_tui(), m);
         // `tui_attr(msg)` — the cell-native attribute type `Ipe.Ui.Tui.Attribute msg`.
         // Distinct from the DOM `attr` above, so `Screen`-view builders never
         // admit a DOM attribute.
@@ -976,11 +982,7 @@ impl Builder<'_> {
         };
         // `lines_t(msg)` — the Cli line-oriented view type `Lines msg`. Distinct
         // from both `Element msg` and `Screen msg`.
-        let lines_t = |m: Ty| Ty::Con {
-            module: Vec::new(),
-            name: self.builtins.cli_lines,
-            args: vec![m],
-        };
+        let lines_t = |m: Ty| view_t(program_shape_cli(), m);
         // `cli_attr(msg)` — the line-native attribute type
         // `Ipe.Ui.Cli.Attribute msg`. Distinct from the DOM `attr` and the
         // cell-native `tui_attr`, so a `Lines`-view builder admits neither.
@@ -2707,13 +2709,39 @@ impl Builder<'_> {
             // `Web.embed` shares `Web.app`'s exact six-field cfg scheme — both
             // produce the `WebApp` leaf from the same record. `embed`'s handle
             // is destined for `Server.mountApp`; `app`'s binds its own listener.
-            // `Ipe.Tea.app` (engine = Web) shares `Web.app`'s exact six-field cfg
-            // and its `Program Web msg` result — the generic view-ful entry over
-            // the closed Web renderer. `View Web msg` in `view` IS `Element msg`,
-            // so the legacy reference `Ty` is byte-identical to `K::WebApp`'s
-            // (the `WebEmbed` branch below routes only the mountable leaf; `TeaApp`
-            // takes the `program(...)` carrier like `K::WebApp`).
-            K::WebApp | K::WebEmbed | K::TeaApp => {
+            // `Ipe.Tea.app` — the generic minimal TEA entry, parametric over the
+            // view engine. Its CLOSED four-field cfg (`init`/`update`/`view`/
+            // `subscriptions`) and its `Program e msg` result share the engine
+            // variable `e` = var(2) between `view : model -> View e msg` and the
+            // result, so `e` unifies from the user's view type and is never a
+            // per-shape default. Engine-specific fields stay in the per-engine
+            // entries (`Web.app`'s route-ful cfg below), so this is NOT `Web.app`.
+            K::TeaApp => {
+                let init_ret = tuple2(var(0), cmd(var(1)));
+                let cfg_rec = Ty::Record(
+                    {
+                        let mut m = BTreeMap::new();
+                        m.insert(self.builtins.live_f_init, fun(web_req(), init_ret.clone()));
+                        m.insert(
+                            self.builtins.live_f_update,
+                            fun(var(1), fun(var(0), init_ret)),
+                        );
+                        m.insert(
+                            self.builtins.live_f_view,
+                            fun(var(0), view_t(var(2), var(1))),
+                        );
+                        m.insert(self.builtins.live_f_subscriptions, fun(var(0), sub(var(1))));
+                        m
+                    },
+                    RowTail::Closed,
+                );
+                fun(cfg_rec, program(var(2), var(1)))
+            }
+            // `Web.app` / `Web.embed` share the route-ful six-field cfg. `Web.app`
+            // returns the uniform `Program Web msg` carrier; `Web.embed` keeps the
+            // mountable `WebApp` leaf its `Server.mountApp` §9 gate names. The
+            // `view` field is `Model -> View Web msg` (= `Element msg`).
+            K::WebApp | K::WebEmbed => {
                 // `view : Model -> Element Msg`; the framework applies
                 // `Ui.layout` internally, unifying the graphical shapes on
                 // `Element`. Raw HTML is reached through the `Ui.html` node

@@ -31,6 +31,49 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
     }
 }
 
+/// Assert `source` is REJECTED by the pipeline with exactly `expected` wire
+/// code (never exit-0 — a wrong code or an accept both fail). Pins the SPECIFIC
+/// rejection reason so a right-outcome-wrong-reason regression is caught.
+fn assert_rejected_code(test_name: &str, source: &str, expected: &str) -> Result<(), BoxError> {
+    match compile(test_name, source)? {
+        Ok(()) => {
+            Err(format!("{test_name}: expected rejection {expected}, but ipe accepted").into())
+        }
+        Err(ipe::CliError::Pipeline { diag, .. }) => {
+            let got = diag.code().as_str();
+            if got == expected {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{test_name}: expected {expected}, got {got} — rejected for the WRONG reason"
+                )
+                .into())
+            }
+        }
+        Err(other) => {
+            Err(format!("{test_name}: expected pipeline rejection, got {other:?}").into())
+        }
+    }
+}
+
+/// Assert `source` is REJECTED (any pipeline diagnostic — never exit-0). Used
+/// for the fail-closed ambiguity property, where the load-bearing guarantee is
+/// that an under-determined view engine is turned away rather than silently
+/// defaulted; the exact stage that turns it away is not the property under test.
+fn assert_rejected_any(test_name: &str, source: &str) -> Result<(), BoxError> {
+    match compile(test_name, source)? {
+        Ok(()) => Err(format!(
+            "{test_name}: an unconstrained view engine was ACCEPTED — it must be \
+             rejected fail-closed, never silently defaulted to Web"
+        )
+        .into()),
+        Err(ipe::CliError::Pipeline { .. }) => Ok(()),
+        Err(other) => {
+            Err(format!("{test_name}: expected pipeline rejection, got {other:?}").into())
+        }
+    }
+}
+
 /// Minimal `Tui.app` program — `import Ipe.App.Tea.Tui as Tui` then `Tui.app { ... }`.
 const TUI_APP: &str = r#"module Main exposing (main)
 
@@ -117,12 +160,127 @@ main =
         }
 "#;
 
+/// A DOM view (`View Web msg`) whose container holds a terminal-cells node
+/// (`View Tui msg`). The two engines are distinct nullary tags on the one
+/// `View engine msg` carrier, so mixing them in one view tree fails
+/// unification — a cross-engine view is unrepresentable, not a silent render.
+const CROSS_ENGINE_VIEW: &str = r#"module Main exposing (main)
+
+import Ipe.App.Tea as Tea
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui.Cells as Cells
+
+type Msg = NoOp
+
+type alias Model = { count : Int }
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+-- A DOM column (`View Web Msg`) whose child is a terminal-cells node
+-- (`View Tui Msg`): the engines differ, so this cannot unify.
+view : Model -> View Web Msg
+view _model =
+    Ui.column [] [ Cells.text "nope" ]
+
+main =
+    Tea.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions
+        }
+"#;
+
+/// A `View` over a tag outside the closed `{Web, Tui, Cli}` engine set. The
+/// tag names no view engine, so it is rejected fail-closed at canon — never a
+/// flexible variable that defers the failure downstream.
+const NON_ENGINE_VIEW: &str = r"module Main exposing (v)
+
+v : View Foo Msg
+v = v
+";
+
+/// A `Tea.app` whose view engine is left under-determined: the `view` field is
+/// annotated `View e Msg` with a free `e` and its body is the diverging
+/// `Debug.todo`, so nothing pins the engine. The shared engine variable in
+/// `Tea.app`'s scheme (`view : model -> View e msg`, result `Program e msg`)
+/// therefore stays unsolved. It MUST be rejected — never silently defaulted to
+/// the Web renderer (the one closed sandbox surface).
+const AMBIGUOUS_ENGINE_VIEW: &str = r#"module Main exposing (main)
+
+import Ipe.App.Tea as Tea
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Debug as Debug
+
+type Msg = NoOp
+
+type alias Model = { count : Int }
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update _msg model =
+    ( model, Cmd.none )
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+view : Model -> View e Msg
+view _model =
+    Debug.todo "unconstrained engine"
+
+main =
+    Tea.app
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions
+        }
+"#;
+
 /// `Tui.app` is the full-screen terminal entry kernel registered in
 /// the `env.rs` qualifier catalog. A program using
 /// `import Ipe.App.Tea.Tui as Tui` and `Tui.app { ... }` must compile (ipe-0).
 #[test]
 fn tui_app_surface_compiles() -> Result<(), BoxError> {
     assert_accepted("tui_app", TUI_APP)
+}
+
+/// A cross-engine view (a `View Tui Msg` node inside a `View Web Msg` tree)
+/// fails unification: the engine tags are distinct, so
+/// make-invalid-states-unrepresentable turns the mix into an IPE-T0001 type
+/// mismatch rather than a silent wrong-engine render.
+#[test]
+fn cross_engine_view_fails_unification() -> Result<(), BoxError> {
+    assert_rejected_code("cross_engine_view", CROSS_ENGINE_VIEW, "IPE-T0001")
+}
+
+/// A `View` over a non-engine tag (`View Foo Msg`) is rejected fail-closed as
+/// an unknown type name (IPE-N0002) — the engine set is CLOSED, so an
+/// unrecognised tag has no view denotation and never becomes a flexible var.
+#[test]
+fn non_engine_view_tag_is_rejected() -> Result<(), BoxError> {
+    assert_rejected_code("non_engine_view", NON_ENGINE_VIEW, "IPE-N0002")
+}
+
+/// The single most security-critical property: a `Tea.app` whose view engine
+/// is under-determined leaves the shared engine variable unsolved and is
+/// REJECTED — never silently defaulted to Web, the one closed sandbox renderer.
+#[test]
+fn ambiguous_view_engine_is_rejected_never_defaulted() -> Result<(), BoxError> {
+    assert_rejected_any("ambiguous_view_engine", AMBIGUOUS_ENGINE_VIEW)
 }
 
 /// `Cli.app` is the line-oriented terminal entry kernel registered in
