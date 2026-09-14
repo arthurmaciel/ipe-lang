@@ -20982,7 +20982,9 @@ impl<'a> Lowerer<'a> {
         };
         if matches!(
             peek,
-            Callee::Kernel(KernelFn::WebApp | KernelFn::WebEmbed | KernelFn::WebAppWith)
+            Callee::Kernel(
+                KernelFn::WebApp | KernelFn::TeaApp | KernelFn::WebEmbed | KernelFn::WebAppWith
+            )
         ) {
             self.reject_web_app_poly_init(fields)?;
         }
@@ -21239,7 +21241,9 @@ impl<'a> Lowerer<'a> {
                 // `Web.embed` takes the same six-field cfg record as `Web.app`
                 // and follows the same inline-literal gate — a let-bound / piped
                 // cfg is IPE-L0119, never an ICE.
-                Callee::Kernel(KernelFn::WebApp | KernelFn::WebEmbed) if args.len() == 1 => {
+                Callee::Kernel(KernelFn::WebApp | KernelFn::TeaApp | KernelFn::WebEmbed)
+                    if args.len() == 1 =>
+                {
                     // `args.len() == 1` is the match guard above; `first()` is
                     // always `Some` here.  Using `first()` instead of `args[0]`
                     // keeps `clippy::indexing_slicing` clean.
@@ -24927,6 +24931,13 @@ impl<'a> Lowerer<'a> {
                 // ── app-entry stubs — arity 1 ────────────────────────────
                 // `Web.app : WebAppCfg model msg -> WebApp`
                 | KernelFn::WebApp
+                // `Ipe.Tea.app : WebAppCfg model msg -> Program Web msg` — arity 1
+                // like `Web.app`; the surface `Tea.app` is re-resolved to
+                // `KernelFn::WebApp` at callee lowering, so this arm is reached
+                // only through the exhaustive kernel-arity table, never a real
+                // lowered call, but is listed explicitly so the count can never
+                // silently drift.
+                | KernelFn::TeaApp
                 // `Web.embed : WebAppCfg model msg -> WebApp` (mountable handle)
                 | KernelFn::WebEmbed
                 // `Web.appRouted : WebAppCfg model msg -> WebApp`
@@ -26752,6 +26763,13 @@ impl<'a> Lowerer<'a> {
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
                     ("Cli", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
                     ("Tea", "worker") => Ok(Callee::Kernel(KernelFn::TeaWorker)),
+                    // `Ipe.Tea.app` (engine = Web) — the generic view-ful entry
+                    // over the closed Web renderer. It resolves to its own
+                    // `TeaApp` variant (the callee-decl SSOT tripwire requires
+                    // each surface to map to the variant whose `decl()` names it);
+                    // every downstream emit site treats `TeaApp` identically to
+                    // `WebApp`, so the emitted Rust stays byte-identical.
+                    ("Tea", "app") => Ok(Callee::Kernel(KernelFn::TeaApp)),
                     // ── Ipe.Web settings-carrying entry + runtime-config ──
                     ("Web", "appWith") => Ok(Callee::Kernel(KernelFn::WebAppWith)),
                     ("Web", "csrf") => Ok(Callee::Kernel(KernelFn::WebCsrf)),

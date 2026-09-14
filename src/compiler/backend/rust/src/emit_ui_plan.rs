@@ -1511,7 +1511,10 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::StringToUpperIn
         | KernelFn::StringToLowerIn
         // The worker app-entry carries no appearance-hoist literal position.
-        | KernelFn::TeaWorker => &[],
+        | KernelFn::TeaWorker
+        // `Ipe.Tea.app` (engine = Web) carries no appearance-hoist literal
+        // position (its cfg is a record, threaded like `Web.app`'s).
+        | KernelFn::TeaApp => &[],
     }
 }
 
@@ -1899,6 +1902,9 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
 
         // ── Shape-router delegations ──────────────────────────────────────
         KernelFn::WebApp
+        // `Ipe.Tea.app` (engine = Web) delegates to the Web UI emitter exactly
+        // like `Web.app`.
+        | KernelFn::TeaApp
         | KernelFn::WebAppRouted
         | KernelFn::WebEmbed
         | KernelFn::WebAppWith
@@ -1994,6 +2000,9 @@ mod tests {
             (KernelFn::LazyLazy, NativeUiEmit::LazyLazy),
             (KernelFn::PubSubPublish, NativeUiEmit::PubSubPublish),
             (KernelFn::WebApp, NativeUiEmit::Delegate(UiDelegate::Web)),
+            // `Ipe.Tea.app` (engine = Web) classifies to the Web UI delegate
+            // exactly like `Web.app` — its byte-identical emit path.
+            (KernelFn::TeaApp, NativeUiEmit::Delegate(UiDelegate::Web)),
             (
                 KernelFn::TerminalAppScreen,
                 NativeUiEmit::Delegate(UiDelegate::Tui),

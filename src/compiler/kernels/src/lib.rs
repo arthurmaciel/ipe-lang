@@ -2053,6 +2053,15 @@ pub enum StdlibKernel {
     HtmlNoAttr,        // `noAttr : Attribute msg`
     // ── Ipe.Web app-entry kernels ───────────────────────────────────────
     WebApp,
+    /// `Ipe.Tea.app` (engine = Web) — the generic view-ful TEA app-entry over
+    /// the closed Web renderer: `{ init, update, view : model -> View Web msg,
+    /// subscriptions, routes } -> Program Web msg`. Its cfg record and result
+    /// are byte-identical to `Web.app`'s (the `View Web msg` view field IS the
+    /// DOM `Element msg`), and it shares `Web.app`'s `WEB_APP` scheme and
+    /// `web_app` emit path, so `Web.app` is a thin surface synonym over this
+    /// generic entry. Only the Web engine is wired here; Tui/Cli follow the
+    /// same pattern.
+    TeaApp,
     WebAppRouted,
     /// `Web.embed : { … } -> WebApp` — produce a mountable web-app handle from
     /// the same six-field cfg as `Web.app`. The result is the opaque `WebApp`
@@ -4117,6 +4126,10 @@ impl StdlibKernel {
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
             // ── Ipe.Web app-entry kernels ───────────────────────────────
             Self::WebApp => d("Web", "app", 1, Web, "web_app"),
+            // `Ipe.Tea.app` (engine = Web) shares `Web.app`'s emit intercept
+            // (`web_app`) and scheme (`WEB_APP`) — a thin generic surface over
+            // the same closed Web renderer, so the emitted Rust is unchanged.
+            Self::TeaApp => d("Tea", "app", 1, Web, "web_app"),
             Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
             // `Web.embed` shares `Web.app`'s emit path (both build the `WebApp`
             // leaf from the same cfg); the runtime symbol is the same builder.
@@ -5664,6 +5677,7 @@ impl StdlibKernel {
         Self::HtmlScriptNode,
         // Web
         Self::WebApp,
+        Self::TeaApp,
         Self::WebAppRouted,
         Self::WebEmbed,
         Self::WebRoute,
@@ -9705,6 +9719,11 @@ impl StdlibKernel {
             | Self::BackoffExponentialWithJitter => Some(&BACKOFF_STRATEGY_CON),
             // App-entry cfg records.
             Self::WebApp => Some(&WEB_APP),
+            // `Ipe.Tea.app` (engine = Web) IS `Web.app`'s scheme: same cfg
+            // record, same `Program Web msg` result. `View Web msg` in the cfg's
+            // `view` field is the DOM `Element msg`, so the scheme is shared
+            // verbatim.
+            Self::TeaApp => Some(&WEB_APP),
             Self::WebEmbed => Some(&WEB_EMBED),
             Self::TerminalAppScreen => Some(&TERMINAL_APP_SCREEN),
             Self::TerminalAppLines => Some(&TERMINAL_APP_LINES),
@@ -10732,6 +10751,10 @@ impl StdlibKernel {
             | Self::HtmlBoolAttribute
             | Self::HtmlNoAttr
             | Self::WebApp
+            // `Ipe.Tea.app` (engine = Web) carries no capability of its own —
+            // its effects come from the cfg's `init`/`update` `Cmd` closures,
+            // gated by the linked-module capability scan (like `Web.app`).
+            | Self::TeaApp
             | Self::WebEmbed
             | Self::WebAppRouted
             | Self::WebRoute
@@ -12633,6 +12656,10 @@ impl StdlibKernel {
         matches!(
             self,
             Self::WebApp
+                // `Ipe.Tea.app` (engine = Web) is a `class=Web` residency kernel
+                // like `Web.app` — it lowers to the same `WebApp` emit path, so a
+                // program using it needs the `web`/`live` runtime module in scope.
+                | Self::TeaApp
                 | Self::WebEmbed
                 | Self::WebAppRouted
                 | Self::WebAppWith

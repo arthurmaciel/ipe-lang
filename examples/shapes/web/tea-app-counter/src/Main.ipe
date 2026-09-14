@@ -1,0 +1,73 @@
+module Main exposing (main)
+
+-- | tea-app-counter — the generic view-ful `Ipe.Tea.app` entry (engine = Web).
+--
+-- Proves the toolbox-model view-ful path end-to-end for the Web engine: the
+-- `view` field is annotated `Model -> View Web Msg` (the engine-parametric view
+-- carrier), and `Ipe.Tea.app` produces a `Program Web Msg`. `View Web msg` IS
+-- the DOM `Element msg`, so every existing `Ipe.Ui` combinator produces it with
+-- no parallel surface, and the emitted Rust is byte-identical to a `Web.app`
+-- with the same cfg — `Web.app` is a thin surface synonym over this generic
+-- entry.
+--
+-- Co-located, no capabilities, no JS ports: a pure counter over the closed Web
+-- renderer.
+
+
+import Ipe.App.Tea as Tea
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.String as String
+import Ipe.Ui as Ui
+
+
+type alias Model =
+    { count : Int }
+
+
+type Msg
+    = Increment
+    | Decrement
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+-- The `View Web msg` annotation is the whole point: the engine-parametric view
+-- carrier resolves to the DOM `Element msg`, so the ordinary `Ipe.Ui` builders
+-- populate it unchanged.
+view : Model -> View Web Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just Increment, label = Ui.text "+" }
+        , Ui.text (String.fromInt model.count)
+        , Ui.button [] { onPress = Just Decrement, label = Ui.text "-" }
+        ]
+
+
+main =
+    Tea.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = Increment
+        }
