@@ -24,21 +24,26 @@ fn scratch_dir() -> Result<crate::scratch::ScratchDir, String> {
     crate::scratch::ScratchDir::new("ipe-coverage-probe").map_err(|e| e.to_string())
 }
 
-/// A filesystem-safe, per-symbol scratch subdirectory key, so each symbol's
-/// probe writes its `Main.ipe` under its own directory and a parallel sweep never
-/// clobbers a sibling's snippet. Derived from the dotted symbol path with every
-/// non-alphanumeric byte mapped to `_`, keeping distinct symbols distinct.
+/// A filesystem-safe, per-symbol scratch subdirectory key — injective by
+/// construction: distinct symbols always produce distinct keys.
+///
+/// The dotted symbol path (`Module.Sub.name`) uses only ASCII alphanumerics,
+/// `.`, and `_`. Keeping `.` and `_` verbatim (both are valid path-component
+/// characters) makes the mapping a bijection over the stdlib symbol surface.
+/// Any other character (not expected for stdlib symbols) is replaced by `-` so
+/// the key stays filesystem-safe without colliding with `.` or `_`.
 fn symbol_scratch_key(sym: &StdlibSymbol) -> String {
     let dotted = format!("{}.{}", sym.module.join("."), sym.name);
-    let mut key = String::with_capacity(dotted.len());
-    for ch in dotted.chars() {
-        if ch.is_ascii_alphanumeric() {
-            key.push(ch);
-        } else {
-            key.push('_');
-        }
-    }
-    key
+    dotted
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 /// Map a [`ProbeUnavailable`] to the `NotApplicable` verdict — a symbol the
@@ -653,5 +658,45 @@ impl AspectCheck<StdlibSymbol> for WasmColumn {
                 sym.name
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coverage::contract::SymbolKind;
+
+    fn sym(module: &[&str], name: &str) -> StdlibSymbol {
+        StdlibSymbol {
+            module: module.iter().map(|s| (*s).to_owned()).collect(),
+            name: name.to_owned(),
+            kind: SymbolKind::Value,
+            has_kernel: false,
+            has_compiled_source: false,
+            exported: true,
+            scheme: None,
+            is_higher_order: false,
+        }
+    }
+
+    /// Previously `A.b_c` and `A_b.c` both mapped to `A_b_c` — the same key.
+    /// After the fix they map to `A.b_c` and `A_b.c` respectively — distinct.
+    #[test]
+    fn scratch_key_is_injective_for_dot_underscore_ambiguity() {
+        // A.b_c  (module=["A"], name="b_c")
+        let key1 = symbol_scratch_key(&sym(&["A"], "b_c"));
+        // A_b.c  (module=["A_b"], name="c")
+        let key2 = symbol_scratch_key(&sym(&["A_b"], "c"));
+        assert_ne!(
+            key1, key2,
+            "A.b_c and A_b.c must map to distinct scratch keys; both produced {key1:?}"
+        );
+    }
+
+    /// Key is deterministic: same symbol, two calls, identical result.
+    #[test]
+    fn scratch_key_is_deterministic() {
+        let s = sym(&["Ipe", "List"], "map");
+        assert_eq!(symbol_scratch_key(&s), symbol_scratch_key(&s));
     }
 }
