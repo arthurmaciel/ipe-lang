@@ -14,6 +14,7 @@ import Ipe.Result as Result exposing (Result(..))
 import Ipe.String as String
 import Ipe.Ui as Ui
 import Ipe.Url as Url
+import Ipe.Web.Head as Head
 
 
 -- | Collapse any `Result` to a two-state tag so the matrix output is scheme-
@@ -48,6 +49,17 @@ imageOf raw =
 
 shareOf raw =
     Result.andThen Share.shareUrl (Url.fromString raw)
+
+
+-- | The `<head>` `href` sinks (`Head.canonical` / `Head.rss`) narrow the parsed
+-- absolute `Url` through the head allowlist (http/https ONLY), so a non-web
+-- scheme never reaches an emitted canonical / feed `href`.
+canonicalOf raw =
+    Result.andThen Head.canonical (Url.fromString raw)
+
+
+rssOf raw =
+    Result.andThen (\u -> Head.rss u "Feed") (Url.fromString raw)
 
 
 line : String -> String -> String
@@ -85,6 +97,14 @@ main =
             , line "img_javascript" (verdict (imageOf "javascript:alert(1)"))
             , line "share_https" (verdict (shareOf "https://example.com"))
             , line "share_mailto" (verdict (shareOf "mailto:a@b.com"))
+
+            -- `<head>` href sinks: http/https accept; a non-web scheme rejects
+            -- so it never reaches an emitted canonical / RSS-feed `href`.
+            , line "canonical_https" (verdict (canonicalOf "https://example.com/"))
+            , line "canonical_javascript" (verdict (canonicalOf "javascript:alert(1)"))
+            , line "canonical_file" (verdict (canonicalOf "file:///etc/passwd"))
+            , line "rss_https" (verdict (rssOf "https://example.com/feed.xml"))
+            , line "rss_javascript" (verdict (rssOf "javascript:alert(1)"))
 
             -- relative reference seal: same-origin paths accept; the
             -- cross-origin / scheme / backslash / control / empty coercions reject.
