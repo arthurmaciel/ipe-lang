@@ -151,8 +151,8 @@ sqlToCell v =
         SqlTime t ->
             String.fromInt t
 
-        SqlDecimal s ->
-            s
+        SqlDecimal d ->
+            Dec.toString d
 
         SqlMoney s ->
             s

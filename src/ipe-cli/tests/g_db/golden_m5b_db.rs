@@ -525,7 +525,7 @@ fn dsn_parse() {
 /// table, `constrain.rs` type schemes, `lower.rs` `enum_variants` + `ctor_arity`,
 /// and `project.rs` `into_sql_param`. `SqlDecimal` carries a native `Decimal`
 /// bound as a lossless TEXT param via `decimal_to_string`; `SqlMoney` carries an
-/// "ISO_CODE AMOUNT" string.
+/// `ISO_CODE AMOUNT` string.
 ///
 /// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]

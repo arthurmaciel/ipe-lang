@@ -39,7 +39,7 @@ pub enum MainSqlValue {
     SqlBool(bool),
     SqlBytes(Vec<u8>),
     SqlTime(i64),
-    SqlDecimal(String),
+    SqlDecimal(ipe_runtime::decimal::Decimal),
     SqlMoney(String),
     SqlNull(Box<MainSqlValue>),
 }
@@ -221,7 +221,9 @@ impl MainSqlValue {
             Self::SqlBool(v) => ipe_runtime::db::SqlParam::Bool(v),
             Self::SqlBytes(v) => ipe_runtime::db::SqlParam::Bytes(v),
             Self::SqlTime(v) => ipe_runtime::db::SqlParam::Int(v),
-            Self::SqlDecimal(v) => ipe_runtime::db::SqlParam::Text(v),
+            Self::SqlDecimal(v) => {
+                ipe_runtime::db::SqlParam::Text(ipe_runtime::decimal::decimal_to_string(v))
+            }
             Self::SqlMoney(v) => ipe_runtime::db::SqlParam::Text(v),
             Self::SqlNull(inner) => {
                 ipe_runtime::db::SqlParam::Null(Box::new(inner.into_sql_param()))
