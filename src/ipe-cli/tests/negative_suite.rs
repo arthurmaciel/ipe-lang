@@ -1128,7 +1128,7 @@ fn custom_element_ctor_present_file_lowers_and_compiles() {
 /// With the transport shipped, the handle type lowers; enforcement is the
 /// plain-Model gate:
 /// `IrType::CustomElement` is non-serde, so a Web Model carrying one is rejected
-/// with IPE-L0120. That end-to-end proof — a real `Web.app` whose Model has a
+/// with IPE-L0120. That end-to-end proof — a real `Web.tea` whose Model has a
 /// `CustomElement` field — lives in `model_admissibility.rs`
 /// (`live_model_with_custom_element_field_is_rejected`). Here, in a bare
 /// `main = 1` script with no app entry, no Model gate runs; the unused Model
@@ -1294,10 +1294,10 @@ fn custom_element_ctor_symlink_escape_rejected_at_build_gate() {
 #[test]
 fn custom_element_widget_program_ipe_accepts() {
     let src = format!(
-        "{HEAD}import Ipe.App.Tea.Web as Web\n\
+        "{HEAD}import Ipe.Tea.Web as Web\n\
          import Ipe.Ffi.Js.CustomElement as CustomElement\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          type alias EditorState = {{ text : String, line : Int }}\n\
          type EditorEvent = Changed String | Saved\n\
          type Msg = Edited EditorEvent\n\
@@ -1317,7 +1317,7 @@ fn custom_element_widget_program_ipe_accepts() {
          subscriptions _model =\n\
          \x20   Sub.none\n\
          main =\n\
-         \x20   Web.app\n\
+         \x20   Web.tea\n\
          \x20       {{ init = init, update = update, view = view, subscriptions = subscriptions\n\
          \x20       , routes = [], notFound = Edited Saved\n\
          \x20       }}\n"
@@ -1406,9 +1406,9 @@ fn canon_user_kernel_alias_is_rejected() {
 fn js_port_app(decoder_expr: &str) -> String {
     format!(
         "module Main exposing (main)\n\
-         import Ipe.App.Tea.Web as Web\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Json.Decode as Decode\n\
@@ -1431,7 +1431,7 @@ fn js_port_app(decoder_expr: &str) -> String {
          subscriptions _model =\n\
          \x20   Js.subscribe {decoder_expr} Got\n\
          main =\n\
-         \x20   Web.app\n\
+         \x20   Web.tea\n\
          \x20       {{ init = init, update = update, view = view, subscriptions = subscriptions\n\
          \x20       , routes = [], notFound = Tick\n\
          \x20       }}\n"
@@ -1460,9 +1460,9 @@ fn js_port_seal_legal_lowers_and_builds() {
 #[test]
 fn js_port_subscribe_value_decoder_rejected() {
     let src = "module Main exposing (main)\n\
-         import Ipe.App.Tea.Web as Web\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Json.Decode as Decode\n\
@@ -1481,7 +1481,7 @@ fn js_port_subscribe_value_decoder_rejected() {
          subscriptions _model =\n\
          \x20   Js.subscribe Decode.value GotV\n\
          main =\n\
-         \x20   Web.app\n\
+         \x20   Web.tea\n\
          \x20       { init = init, update = update, view = view, subscriptions = subscriptions\n\
          \x20       , routes = [], notFound = Tick\n\
          \x20       }\n";
@@ -1495,9 +1495,9 @@ fn js_port_subscribe_value_decoder_rejected() {
 #[test]
 fn js_port_send_secret_rejected() {
     let src = "module Main exposing (main)\n\
-         import Ipe.App.Tea.Web as Web\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
@@ -1517,7 +1517,7 @@ fn js_port_send_secret_rejected() {
          subscriptions _model =\n\
          \x20   Sub.none\n\
          main =\n\
-         \x20   Web.app\n\
+         \x20   Web.tea\n\
          \x20       { init = init, update = update, view = view, subscriptions = subscriptions\n\
          \x20       , routes = [], notFound = Tick\n\
          \x20       }\n";
@@ -1533,9 +1533,9 @@ fn js_port_send_secret_rejected() {
 #[test]
 fn js_port_send_nested_secret_in_adt_rejected() {
     let src = "module Main exposing (main)\n\
-         import Ipe.App.Tea.Web as Web\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
@@ -1556,7 +1556,7 @@ fn js_port_send_nested_secret_in_adt_rejected() {
          subscriptions _model =\n\
          \x20   Sub.none\n\
          main =\n\
-         \x20   Web.app\n\
+         \x20   Web.tea\n\
          \x20       { init = init, update = update, view = view, subscriptions = subscriptions\n\
          \x20       , routes = [], notFound = Tick\n\
          \x20       }\n";
@@ -1571,9 +1571,9 @@ fn js_port_send_nested_secret_in_adt_rejected() {
 #[test]
 fn js_port_send_polymorphic_wrapper_secret_rejected() {
     let src = "module Main exposing (main)\n\
-         import Ipe.App.Tea.Web as Web\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web as Web\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ffi.Js as Js\n\
          import Ipe.Secret as Secret\n\
@@ -1594,7 +1594,7 @@ fn js_port_send_polymorphic_wrapper_secret_rejected() {
          subscriptions _model =\n\
          \x20   Sub.none\n\
          main =\n\
-         \x20   Web.app\n\
+         \x20   Web.tea\n\
          \x20       { init = init, update = update, view = view, subscriptions = subscriptions\n\
          \x20       , routes = [], notFound = Tick\n\
          \x20       }\n";
@@ -1908,9 +1908,9 @@ fn effect_secret_in_live_model() {
     let src = "module Main exposing (main)\n\
          import Ipe.Secret as Secret\n\
          import Ipe.System as System\n\
-         import Ipe.App.Tea.Web exposing (app)\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web exposing (tea)\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = HomePage\n\
@@ -1927,7 +1927,7 @@ fn effect_secret_in_live_model() {
          view _model = Ui.text \"hi\"\n\
          \n\
          main =\n\
-         \x20   app\n\
+         \x20   tea\n\
          \x20       { init = init\n\
          \x20       , update = update\n\
          \x20       , view = view\n\
@@ -2158,8 +2158,8 @@ fn lower_dict_function_value_get_and_apply_compiles() {
 }
 
 // A program's `main` is the single effect it runs, so it must be a `Task Error ()`
-// — written directly (a script) or produced by an app entry (`Web.app` /
-// `Tui.app` / `Cli.app`, each of which is itself a `Task Error ()`).
+// — written directly (a script) or produced by an app entry (`Web.tea` /
+// `Tui.tea` / `Cli.tea`, each of which is itself a `Task Error ()`).
 // A `main` of any other type (an `Int`, a `String`, a function) has no effect to
 // run: the emitted entry wraps `main` in the runtime's single run site, which needs
 // a `Task`, so a non-`Task` `main` would ship a crate that cannot build. That must
@@ -2363,7 +2363,7 @@ fn release_rejects_debug_todo() {
 
 /// `ipe release` (production flag) must reject `Debug.explain` with IPE-L0140 —
 /// module membership alone gates it, independent of `Debug.todo`. The attribute
-/// is reachable from `main` through the rendered `Web.app` view, so the
+/// is reachable from `main` through the rendered `Web.tea` view, so the
 /// kernel-usage scan sees it and sets `uses_debug`. Dev build accepts it (a
 /// dev-only construct is permitted by `build` / `run`); production blocks it.
 #[test]
@@ -2410,15 +2410,15 @@ fn release_accepts_dead_debug_explain() {
     }
 }
 
-/// A rendered `Web.app` view carrying `Debug.explain` on an element — the
+/// A rendered `Web.tea` view carrying `Debug.explain` on an element — the
 /// attribute is reachable from `main` through the app config record's `view`
 /// field. Shared by the reject/accept companions above.
 fn explain_reachable_src() -> String {
     format!(
-        "{HEAD}import Ipe.App.Tea.Web as Web\n\
+        "{HEAD}import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Debug as Debug\n\
          type Msg = Noop\n\
          type alias Model = {{}}\n\
@@ -2431,7 +2431,7 @@ fn explain_reachable_src() -> String {
          subscriptions : Model -> Sub Msg\n\
          subscriptions _model = Sub.none\n\
          main =\n    \
-         Web.app {{ init = init, update = update, view = view, subscriptions = subscriptions, routes = [], notFound = Noop }}\n"
+         Web.tea {{ init = init, update = update, view = view, subscriptions = subscriptions, routes = [], notFound = Noop }}\n"
     )
 }
 
@@ -2569,9 +2569,9 @@ fn lower_pipeline_curried_constructor_compiles() {
 #[test]
 fn lower_let_bound_app_cfg() {
     let src = "module Main exposing (main)\n\
-         import Ipe.App.Tea.Web exposing (app)\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web exposing (tea)\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = HomePage\n\
@@ -2597,20 +2597,20 @@ fn lower_let_bound_app_cfg() {
          \x20           , notFound = HomePage\n\
          \x20           }\n\
          \x20   in\n\
-         \x20   app cfg\n";
+         \x20   tea cfg\n";
     assert_rejected("lower_let_bound_cfg", src, "IPE-L0119");
 }
 
-/// A `Web.app` `init` annotated with a free type variable (`init : a -> …`)
+/// A `Web.tea` `init` annotated with a free type variable (`init : a -> …`)
 /// is a false promise — the runtime always passes `WebReq` — so it must be
 /// rejected with IPE-N0046.
 #[test]
 fn name_web_init_poly_var() {
     let src = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page }
@@ -2623,7 +2623,7 @@ view _model = Ui.text "hi"
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions
         , routes = [ Web.route "/" HomePage ]

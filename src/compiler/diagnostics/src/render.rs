@@ -542,7 +542,7 @@ fn name_prose(msg: &NameError) -> String {
         }
         NameError::WebInitPolyArg => {
             "The `init` annotation uses a free type variable for the request argument, \
-             but `Web.app` always passes a `WebReq` — write `init : WebReq -> …` \
+             but `Web.tea` always passes a `WebReq` — write `init : WebReq -> …` \
              or remove the annotation and let inference fill it in."
                 .to_string()
         }
@@ -1462,17 +1462,17 @@ fn name_label(msg: &NameError) -> Option<String> {
         }
         NameError::ProgramImportsTeaShape { module } => Some(format!(
             "this module has a plain `main` (a Program) but imports `{module}`; \
-             a module that imports any `Ipe.App.Tea.*` shape is a TEA app, so give \
-             `main` a shape entry (`Web.app` / `Tui.app` / \
-             `Cli.app`), or drop the `{module}` import \
+             a module that imports any `Ipe.Tea.*` shape is a TEA app, so give \
+             `main` a shape entry (`Web.tea` / `Tui.tea` / \
+             `Cli.tea`), or drop the `{module}` import \
              if this is a Program"
         )),
         NameError::RuntimeBranchedMain => Some(
             "`main`'s head is an `if` / `case` whose branches are different app \
              entries, so which shape this program is would be decided at run time; \
              a program's shape is pinned by the entry head at compile time, not \
-             chosen from a value. Commit `main` to one shape entry (`Web.app` / \
-             `Tui.app` / `Cli.app`), and put \
+             chosen from a value. Commit `main` to one shape entry (`Web.tea` / \
+             `Tui.tea` / `Cli.tea`), and put \
              any run-time choice inside that shape (in its `init` / `update`), or \
              — for a plain program — make `main` a `Task Error ()`"
                 .to_string(),
@@ -1485,7 +1485,7 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::DiscardedConfig => Some(
             "this module declares a top-level `config` binding but never threads it into an \
              app entry, so every setting it lists is silently dropped; give the module a Web \
-             app entry (`main = Web.app { … }`, which threads a sibling `config` binding \
+             app entry (`main = Web.tea { … }`, which threads a sibling `config` binding \
              automatically — or pass it explicitly with `Web.appWith config { … }`), or \
              delete the `config` binding if it is unused"
                 .to_string(),
@@ -1799,20 +1799,20 @@ fn lower_label(msg: &LowerError) -> String {
         LowerError::UiCellsInWebShape(app) => format!(
             "`Ui.cells` is terminal-only; not available in the {} shape — it paints a \
              raw character grid directly to the terminal and has no browser rendering. \
-             Use it only under `Tui.app`",
+             Use it only under `Tui.tea`",
             web_shape_label(*app)
         ),
         LowerError::UiCellsInCliShape(_) => {
             "`Ui.cells` is terminal-screen-only; not available in the Cli shape — a \
              Cli view returns `String` (line output) and has no character-grid surface. \
-             Use `Tui.app` for a full-screen cell-grid app, or format the \
+             Use `Tui.tea` for a full-screen cell-grid app, or format the \
              content as a `String` for line output"
                 .to_string()
         }
         LowerError::UiWidgetInNonWebShape => {
             "`CustomElement.node` is browser-only; not available outside a Web shape — its \
              up-event handler is carried over the seal codec, which exists only in a \
-             browser build. Use it only under `Web.app`"
+             browser build. Use it only under `Web.tea`"
                 .to_string()
         }
         LowerError::LawlessEffectDiscard => {
@@ -2136,7 +2136,7 @@ const fn feature_label(f: Feature) -> &'static str {
              lowerer [feature: nested-payload-patterns]"
         }
         Feature::WasmRoutedApp => {
-            "a routed Web.app (Model with a `page` field + `routes`) has no \
+            "a routed Web.tea (Model with a `page` field + `routes`) has no \
              browser client router yet — under `--target wasm` use a \
              single-page Model (no `page` field) for now \
              [feature: wasm-routed-app]"
@@ -2183,13 +2183,13 @@ const fn feature_label(f: Feature) -> &'static str {
         }
         Feature::RoutedWebApp => {
             "`Web.appRouted` is not yet wired on the Rust backend — \
-             use the non-routed `Web.app` \
+             use the non-routed `Web.tea` \
              { init, update, view, subscriptions } form for now \
              [feature: routed-live-app]"
         }
         Feature::LetBoundAppCfg => {
-            "the cfg for an app entry point (`Web.app` / `Tui.app` / \
-             `Cli.app`) must be written inline as a record literal, \
+            "the cfg for an app entry point (`Web.tea` / `Tui.tea` / \
+             `Cli.tea`) must be written inline as a record literal, \
              not a let-bound variable [feature: let-bound-app-cfg]"
         }
         Feature::NonCloneCapture => {

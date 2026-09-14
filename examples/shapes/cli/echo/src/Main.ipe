@@ -1,9 +1,9 @@
 module Main exposing (main)
 
 {-|
-A line-oriented TEA echo over the canonical `Cli.app` surface.
+A line-oriented TEA echo over the canonical `Cli.tea` surface.
 
-`Cli.app` re-exports the terminal `appLines` entry: the `view` renders a
+`Cli.tea` re-exports the terminal `appLines` entry: the `view` renders a
 `Lines Msg` prompt, and the `onLine` callback maps each stdin line to a `Msg`.
 Each non-empty line is echoed back and counted.
 
@@ -13,9 +13,9 @@ Type a line and press Enter to echo it; `q` (or Ctrl-D) quits.
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
-import Ipe.App.Tea.Cli as Cli
-import Ipe.App.Tea.Cli.Cmd as Cmd
-import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 
@@ -80,7 +80,7 @@ onLine line =
 
 
 main =
-    Cli.app
+    Cli.tea
         { init = init
         , update = update
         , view = view

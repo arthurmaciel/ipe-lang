@@ -3,7 +3,7 @@
 `Ipe.Web.Head` gives typed helpers for the `<head>` of a web page — the title,
 SEO meta tags, Open Graph properties, the canonical link, the theme colour, an
 RSS discovery link. A web app supplies them through the optional
-`head : Model -> List (Html msg)` field on its `Web.app` config; the runtime calls
+`head : Model -> List (Html msg)` field on its `Web.tea` config; the runtime calls
 it once per full page load and splices the rendered tags into `<head>`, after the
 required charset/viewport tags and before the style reset.
 
@@ -32,7 +32,7 @@ Three knots.
 
 The example under
 [`examples/shapes/web/head-seo`](../../examples/shapes/web/head-seo/src/Main.ipe)
-is a minimal `Web.app` that supplies a `head` callback with title, description,
+is a minimal `Web.tea` that supplies a `head` callback with title, description,
 Open Graph, theme-colour, and a canonical link.
 
 The canonical URL is emitted only when it parses — `Url.fromString` is the one
@@ -58,11 +58,11 @@ head model =
             base
 ```
 
-The callback is wired through the optional `head` field on `Web.app`:
+The callback is wired through the optional `head` field on `Web.tea`:
 
 ```ipe
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions
         , routes = [], notFound = Ignored

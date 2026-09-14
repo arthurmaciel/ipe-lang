@@ -128,7 +128,7 @@ expected_red_reason() {
 
 # ── is_web_example <dir>: Ipe.Web OR Ipe.Http.Server (browser-drivable) ─────
 is_web_example() {
-  _shape_match "$1/src" 'Ipe\.Web|Web\.app|Server\.listen|Ipe\.Http\.Server'
+  _shape_match "$1/src" 'Ipe\.Tea\.Web|Web\.tea|Server\.listen|Ipe\.Http\.Server'
 }
 
 # ── example_manifest <dir>: the project manifest path, or empty ──────────────
@@ -143,7 +143,7 @@ example_manifest() {
 
 # ── is_wasm_example <dir>: declares wasm in its project manifest ─────────────
 # The wasm shape is the only one detected from the project manifest rather than
-# from source imports, because `Web.app` also appears in wasm examples (the
+# from source imports, because `Web.tea` also appears in wasm examples (the
 # same function emits `wasm_app` under --target wasm). The manifest's wasm
 # declaration (`Package.wasm` in package.ipe, or a `[wasm]` section in the legacy
 # ipe.toml) is the authoritative build-time signal.
@@ -184,13 +184,13 @@ _shape_match() { # $1=src dir  $2=regex
 example_shape() {
   local d="$1" s="$1/src"
   # wasm: detected from the manifest's wasm declaration, not from source imports,
-  # because Web.app also appears in wasm sources (it emits wasm_app under
+  # because Web.tea also appears in wasm sources (it emits wasm_app under
   # --target wasm). Check this BEFORE the web/program shape match.
   if   is_wasm_example "$d";                                then echo wasm
-  elif _shape_match "$s" 'Ipe\.Tui|Tui\.app';               then echo tui
+  elif _shape_match "$s" 'Ipe\.Tea\.Tui|Tui\.tea';          then echo tui
   elif _shape_match "$s" 'Ipe\.WebView|WebView\.app';        then echo webview
   elif _shape_match "$s" 'Fyne';                             then echo fyne
-  elif _shape_match "$s" 'Ipe\.Web|Web\.app';                then echo web
+  elif _shape_match "$s" 'Ipe\.Tea\.Web|Web\.tea';          then echo web
   elif _shape_match "$s" 'Server\.listen|Ipe\.Http\.Server'; then echo program
   else echo program; fi
 }

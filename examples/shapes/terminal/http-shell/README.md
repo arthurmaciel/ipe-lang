@@ -1,6 +1,6 @@
-# http-shell — an HTTP query shell over `Cli.app`
+# http-shell — an HTTP query shell over `Cli.tea`
 
-A line-driven REPL. `Cli.app` reads one line of standard input at a
+A line-driven REPL. `Cli.tea` reads one line of standard input at a
 time, turns it into a command, and re-renders `view : Model -> String`.
 
 - `get <url>` performs a real `Http.get`, then prints the response status and

@@ -1,14 +1,14 @@
 module Main exposing (main)
 
--- #111 reconciler fixture: Cli.app is FULLY WIRED.
+-- #111 reconciler fixture: Cli.tea is FULLY WIRED.
 -- Expected: ipec-0 AND cargo-0 on the emitted project.
 
-import Ipe.App.Tea.Cli as Cli
+import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
-import Ipe.App.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.App.Tea.Terminal.Sub
+import Ipe.Tea.Terminal.Sub
 
 type Msg = GotLine String
 
@@ -37,7 +37,7 @@ onLine line =
     GotLine line
 
 main =
-    Cli.app
+    Cli.tea
         { init = init
         , update = update
         , view = view

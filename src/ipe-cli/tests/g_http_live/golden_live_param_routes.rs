@@ -78,11 +78,11 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
 /// Both must witness the same page type (`Page`) — pre-round-4 this was the
 /// false-IPE-T0001 shape.
 const MIXED_NULLARY_AND_PARAM: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 type Page = CounterPage | UserPage String
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -97,7 +97,7 @@ view model = Ui.text (String.fromInt model.count)
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ Web.route "/" CounterPage, Web.route "/u/:id" UserPage ]
         , notFound = CounterPage
@@ -109,11 +109,11 @@ main =
 /// `Other ≟ Page` → IPE-T0001. Pins that the witness peel does not blanket-
 /// accept every function-shaped builder.
 const WRONG_ADT_PARAM_CTOR: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 type Page = CounterPage
 type Other = WrongCtor String
 type Msg = Increment
@@ -129,7 +129,7 @@ view model = Ui.text (String.fromInt model.count)
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ Web.route "/u/:id" WrongCtor ]
         , notFound = CounterPage

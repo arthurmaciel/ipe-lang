@@ -1,4 +1,4 @@
-//! Routed `Web.app` with an explicit `onNavigate : page -> msg` cfg field:
+//! Routed `Web.tea` with an explicit `onNavigate : page -> msg` cfg field:
 //! every URL-driven route change is turned into a `Msg` and dispatched through
 //! `update`, so the app owns navigation instead of the runtime mutating the
 //! model's `page` field.

@@ -1274,11 +1274,11 @@ fn stdlib_module_names() -> Vec<String> {
         names.insert(segments.join("."));
     }
 
-    // `Ipe.App.Tea.Terminal` is superseded by `Ipe.Color`; suppress its module
+    // `Ipe.Tea.Terminal` is superseded by `Ipe.Color`; suppress its module
     // pages from the doc site so the reference tree does not expose a retired
     // namespace.  The qualifier entries still exist in the compiler (they must, for
     // backwards import compatibility), but they carry no user-visible doc page.
-    names.retain(|n| !n.starts_with("Ipe.App.Tea.Terminal"));
+    names.retain(|n| !n.starts_with("Ipe.Tea.Terminal"));
 
     names.into_iter().collect()
 }
@@ -1300,10 +1300,10 @@ fn build_stdlib_docs() -> Vec<ModuleDoc> {
     // than being dropped, so every `--list` name is queryable (see the invariant
     // enforced by `stdlib_module_names`, reconciled below).
     //
-    // `Ipe.App.Tea.Terminal` is superseded by `Ipe.Color`; its compiled-source
+    // `Ipe.Tea.Terminal` is superseded by `Ipe.Color`; its compiled-source
     // modules are skipped so the doc site does not expose retired namespace pages.
     for csm in ipe_stdlib::COMPILED_STD_MODULES {
-        if csm.dotted.starts_with("Ipe.App.Tea.Terminal") {
+        if csm.dotted.starts_with("Ipe.Tea.Terminal") {
             continue;
         }
         let segments: Vec<String> = csm.dotted.split('.').map(str::to_owned).collect();
@@ -6594,7 +6594,7 @@ withBaseMs = something
 
     // ── Defect-2: Tea.Terminal absent from reference tree ─────────────────────
 
-    /// The `Ipe.App.Tea.Terminal` namespace is superseded by `Ipe.Color`; the
+    /// The `Ipe.Tea.Terminal` namespace is superseded by `Ipe.Color`; the
     /// generated site must not emit any page referencing it.
     #[test]
     fn tea_terminal_namespace_absent_from_site() {

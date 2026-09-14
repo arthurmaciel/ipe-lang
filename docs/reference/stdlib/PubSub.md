@@ -6,22 +6,22 @@
 
 Ipe.PubSub — Task-shaped publish, callable wherever a bus runs.
 
-A complement to `Ipe.App.Tea.Web.PubSub.publish` (the Cmd form, fired
+A complement to `Ipe.Tea.Web.PubSub.publish` (the Cmd form, fired
 from a Ipe.Web `update` return). `Ipe.PubSub.publish` returns a
 `Task Error Int` you can run from raw `Ipe.Http.Server` `api`
 handlers, post-init tasks, scheduled jobs, callbacks from
 external systems — anywhere you hold a `Task` and would otherwise
 have no `Cmd msg` channel to use. The broadcast bus lives in the
-running Web/live runtime, so the Task succeeds while a `Web.app`
+running Web/live runtime, so the Task succeeds while a `Web.tea`
 is serving in this process and resolves to `Err` otherwise.
 
 The Task resolves with the count of subscribers that received
 the broadcast (the same `Int` `app.Publish` returns inside the
-update-loop path), or `Err Unavailable` when no `Web.app` is
+update-loop path), or `Err Unavailable` when no `Web.tea` is
 running in this process (a CLI tool, an isolated unit test, a
 pure `Ipe.Http.Server` process).
 
-Scope (matches `Ipe.App.Tea.Web.PubSub.publish`): in-process only.
+Scope (matches `Ipe.Tea.Web.PubSub.publish`): in-process only.
 The same topic registry backs both APIs, so a publish from a
 raw handler reaches every subscribed Ipe.Web session in the
 same process, with identical ordering + echo semantics.
@@ -85,9 +85,9 @@ delivery guarantee beyond the in-process broker's invariant
 (one bump per publish, before fan-out). Pair with a durable
 write (DB row, append-only log) when persistence matters.
 
-Errors with `Unavailable` when no `Web.app` is registered in
+Errors with `Unavailable` when no `Web.tea` is registered in
 this process. CLI tools / pure HTTP servers / unit tests that
-never start a `Web.app` see this; production deploys never
+never start a `Web.tea` see this; production deploys never
 should.
 
 ## `publishNoEcho`
@@ -105,6 +105,6 @@ subscriber's own-sid matches it and nothing is suppressed.  It differs from
 `publish` only when the caller shares an origin with one of the
 subscriptions.
 
-Same `Err` semantics as `publish` when no `Web.app` is running in this
+Same `Err` semantics as `publish` when no `Web.tea` is running in this
 process.
 

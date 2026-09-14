@@ -285,7 +285,7 @@ pub struct Builtins {
     /// `"rootAttrs"` — the second field in the `Ui.layoutWith` config record.
     pub lw_root_attrs: Symbol,
     // ── Ipe.Web / Ipe.Web opaque type constructor symbols ───────────────────
-    /// `"WebReq"` — opaque request threaded through `Web.app`'s `init`.
+    /// `"WebReq"` — opaque request threaded through `Web.tea`'s `init`.
     pub web_req: Symbol,
     /// `"SessionHandle"` — the opaque `Ipe.Ffi.Js` session-stream handle,
     /// obtained only from `Js.openSession`. Backed by the runtime session id.
@@ -293,13 +293,13 @@ pub struct Builtins {
     /// `"WebRoute"` — opaque route descriptor returned by `Web.route`.
     pub live_route_con: Symbol,
     // ── Web cfg record field name symbols ───────────────────────────────────────
-    /// `"init"` — the init field of the `Web.app` config record.
+    /// `"init"` — the init field of the `Web.tea` config record.
     pub live_f_init: Symbol,
-    /// `"update"` — the update field of the `Web.app` config record.
+    /// `"update"` — the update field of the `Web.tea` config record.
     pub live_f_update: Symbol,
-    /// `"view"` — the view field of the `Web.app` config record.
+    /// `"view"` — the view field of the `Web.tea` config record.
     pub live_f_view: Symbol,
-    /// `"subscriptions"` — the subscriptions field of the `Web.app` config record.
+    /// `"subscriptions"` — the subscriptions field of the `Web.tea` config record.
     pub live_f_subscriptions: Symbol,
     /// `"routes"` — the routes field of the `Web.appRouted` config record.
     /// Reserved for a future split scheme between `app` and `appRouted`.
@@ -310,7 +310,7 @@ pub struct Builtins {
     #[allow(dead_code)]
     pub live_f_not_found: Symbol,
     // ── Tui cfg record field name symbols ─────────────────────────────────────
-    /// `"onKey"` — the onKey field of the `Tui.app` config record.
+    /// `"onKey"` — the onKey field of the `Tui.tea` config record.
     /// Typed `{ kind : String, value : String } -> msg`; the backend bridges the
     /// record handler onto the runtime bound `FOnKey: Fn(String, String) -> Msg`.
     pub tui_f_on_key: Symbol,
@@ -319,7 +319,7 @@ pub struct Builtins {
     /// `"value"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
     pub tui_f_key_value: Symbol,
     // ── Cli cfg record field name symbols ──────────────────────────────
-    /// `"onLine"` — the onLine field of the `Cli.app` config record.
+    /// `"onLine"` — the onLine field of the `Cli.tea` config record.
     /// Typed as `String -> Msg` — called once per stdin line.
     pub cli_f_on_line: Symbol,
     // ── Ui.button cfg record field name symbols ───────────────────────────────
@@ -573,7 +573,7 @@ pub struct Builtins {
     /// `IrType::ShapeTerminal`.
     pub shape_terminal: Symbol,
     /// `"Program"` — the shape-carrier constructor `Program shape msg`, the
-    /// uniform result of every TEA entry (`Web.app`/`Tui.app`/`Cli.app`). Arity 2;
+    /// uniform result of every TEA entry (`Web.tea`/`Tui.tea`/`Cli.tea`). Arity 2;
     /// the phantom `shape` tag and `msg` both erase at lower, so a `Program`
     /// lowers to the shape's existing app leaf (`WebApp`/`TuiApp`/`CliApp`).
     pub program: Symbol,
@@ -690,13 +690,13 @@ pub struct Builtins {
     /// (a `?` literal placeholder).
     pub operand_literal: Symbol,
     // ── Shape opaque app-leaf type constructor symbols ────────────────────────
-    /// `"WebApp"` — opaque app handle returned by `Web.app` / `Web.appRouted` /
+    /// `"WebApp"` — opaque app handle returned by `Web.tea` / `Web.appRouted` /
     /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp`.
     pub web_app: Symbol,
-    /// `"TuiApp"` — opaque app handle returned by `Tui.app`. Nullary;
+    /// `"TuiApp"` — opaque app handle returned by `Tui.tea`. Nullary;
     /// backed by `ipe_runtime::tea::TuiApp`.
     pub tui_app: Symbol,
-    /// `"CliApp"` — opaque app handle returned by `Cli.app`. Nullary;
+    /// `"CliApp"` — opaque app handle returned by `Cli.tea`. Nullary;
     /// backed by `ipe_runtime::tea::CliApp`.
     pub cli_app: Symbol,
     /// The interned module segments `["Ipe", "Db", "Store"]` — the real home of

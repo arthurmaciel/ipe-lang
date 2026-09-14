@@ -271,7 +271,7 @@ pub fn server_static(path: String, dir: String) -> ServerRoute {
 /// system (`mountApp : String -> WebApp -> Route`) guarantees only a `WebApp`
 /// reaches here, so a wrong-shape app is already a compile error.
 ///
-/// A `Web.app` (standalone) handle would carry no mount builder (`None`); that
+/// A `Web.tea` (standalone) handle would carry no mount builder (`None`); that
 /// is unreachable for well-typed source that reached `mountApp` via `Web.embed`,
 /// but is handled fail-closed anyway (the route becomes inert — it nests
 /// nothing — never a panic).

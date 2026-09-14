@@ -8758,9 +8758,9 @@ struct KernelUsage {
     principal: bool,
     /// Any Ipe.Web kernel.
     web: bool,
-    /// Any Ipe.Tui kernel (`Tui.app`).
+    /// Any Ipe.Tui kernel (`Tui.tea`).
     tui: bool,
-    /// Any Ipe.Console kernel (`Cli.app`).
+    /// Any Ipe.Console kernel (`Cli.tea`).
     console: bool,
     /// Any outbound `Ipe.WebSocket` client kernel — gates the
     /// `websocket_client` Cargo feature + `ws_client` runtime module.
@@ -15832,8 +15832,8 @@ impl<'a> Lowerer<'a> {
     /// is `(home, name)` a shape app-leaf opaque —
     /// `WebApp` / `TuiApp` / `CliApp`?
     ///
-    /// Each leaf is produced only by a shape kernel (`Web.app`,
-    /// `Tui.app`, …) with the empty home, so the runtime-`IrType`
+    /// Each leaf is produced only by a shape kernel (`Web.tea`,
+    /// `Tui.tea`, …) with the empty home, so the runtime-`IrType`
     /// mapping keys on the empty home alone. These names are NOT reserved, so a
     /// user `type WebApp = …` is legal and is keyed in `enum_variants` under its
     /// own home; the empty-home guard lets that user union fall through and win,
@@ -16029,7 +16029,7 @@ impl<'a> Lowerer<'a> {
                 if !ty_contains_var(ty) {
                     let ir = self.ir_type_from_ty(ty, Span::DUMMY)?;
                     // G-b gate: skip records whose IR carries a function type.
-                    // The `Web.app` cfg record has function-typed fields
+                    // The `Web.tea` cfg record has function-typed fields
                     // (init/update/view/subscriptions); emitting a Rust struct
                     // for it would need `Box<dyn Fn>` fields, which cannot
                     // derive `Clone`/`Debug`/`PartialEq`.  The cfg record is
@@ -20580,7 +20580,7 @@ impl<'a> Lowerer<'a> {
                 // type are likewise exempt: the backend will register them from the
                 // function signature.
                 //
-                // App-entry cfg records (Web.app / Tui.app / …) are
+                // App-entry cfg records (Web.tea / Tui.tea / …) are
                 // exempt by construction: they are lowered through
                 // `lower_app_cfg_record`, which intentionally bypasses this arm.
                 if let Some(rec_ty) = self.region_ty(e.span)
@@ -21010,7 +21010,7 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    /// Lower the `Web.app` cfg record literal, intentionally omitting the
+    /// Lower the `Web.tea` cfg record literal, intentionally omitting the
     /// per-field [`Self::reject_function_valued_field`] gate (the L0107 exemption).
     ///
     /// Only a *direct* record literal in the single-argument position of a
@@ -21067,7 +21067,7 @@ impl<'a> Lowerer<'a> {
         self.lower_app_cfg_record(fields)
     }
 
-    /// Reject a `Web.app` / `Web.embed` / `Web.appWith` cfg whose `init` field
+    /// Reject a `Web.tea` / `Web.embed` / `Web.appWith` cfg whose `init` field
     /// references a binding annotated with a free type variable in the request
     /// argument position (`init : a -> …`). The request type is always `WebReq`;
     /// a polymorphic annotation hides that fact and causes the emitted Rust
@@ -21312,9 +21312,9 @@ impl<'a> Lowerer<'a> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
-                // ── Web.app / Web.embed cfg literal (L0107 exemption) ──
+                // ── Web.tea / Web.embed cfg literal (L0107 exemption) ──
                 //
-                // `Web.embed` takes the same six-field cfg record as `Web.app`
+                // `Web.embed` takes the same six-field cfg record as `Web.tea`
                 // and follows the same inline-literal gate — a let-bound / piped
                 // cfg is IPE-L0119, never an ICE.
                 Callee::Kernel(KernelFn::WebApp | KernelFn::WebEmbed) if args.len() == 1 => {
@@ -21338,7 +21338,7 @@ impl<'a> Lowerer<'a> {
                 // ── Web.appWith settings + cfg literal (L0107 exemption) ──
                 //
                 // `Web.appWith : List (Setting Web) -> cfg -> Task ()`. The
-                // second argument is the same cfg record as `Web.app` (its
+                // second argument is the same cfg record as `Web.tea` (its
                 // function-typed fields need the `lower_app_entry_cfg`
                 // exemption); the first is the settings list, lowered by the
                 // uniform path. A non-literal cfg is rejected with IPE-L0119 at
@@ -21355,14 +21355,14 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // ── Tui.app / Cli.app cfg literal (L0107 exemption) ──
+                // ── Tui.tea / Cli.tea cfg literal (L0107 exemption) ──
                 //
-                // Same pattern as `Web.app`: intercept the single cfg-record arg
+                // Same pattern as `Web.tea`: intercept the single cfg-record arg
                 // BEFORE the uniform `lower_expr` path so function-typed fields
                 // (init/update/view/subscriptions/onKey) do not trip IPE-L0107.
-                // Cli.app — 5-field cfg (init/update/view/
+                // Cli.tea — 5-field cfg (init/update/view/
                 //   subscriptions/onLine), all function-typed; without this arm
-                //   every real `Cli.app` call would trip IPE-L0107 and the
+                //   every real `Cli.tea` call would trip IPE-L0107 and the
                 //   emit_console path could never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
@@ -21483,9 +21483,9 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 // T4: `Web.appRouted` is a vestigial alias — the
-                // reference has ONE `Web.app` that branches at emit time
+                // reference has ONE `Web.tea` that branches at emit time
                 // (emit_web.rs T5).  Route it through the same
-                // `lower_app_entry_cfg` path as `Web.app` so any code that
+                // `lower_app_entry_cfg` path as `Web.tea` so any code that
                 // still calls the deprecated form compiles rather than hitting
                 // IPE-L0118.  The emit branch (T5) will select `web_app` vs
                 // `live_app_routed` based on whether the Model has a `page` field.
@@ -24758,7 +24758,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CliUiUnderline
                 | KernelFn::CliUiDim
                 | KernelFn::CliUiReverse
-                // `Ipe.App.Tea.Terminal.Color` nullary palette constructors.
+                // `Ipe.Tea.Terminal.Color` nullary palette constructors.
                 | KernelFn::TermColorBlack
                 | KernelFn::TermColorRed
                 | KernelFn::TermColorGreen
@@ -25003,17 +25003,17 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlOnKeyUp
                 | KernelFn::HtmlOnBool
                 // ── app-entry stubs — arity 1 ────────────────────────────
-                // `Web.app : WebAppCfg model msg -> WebApp`
+                // `Web.tea : WebAppCfg model msg -> WebApp`
                 | KernelFn::WebApp
                 // `Web.embed : WebAppCfg model msg -> WebApp` (mountable handle)
                 | KernelFn::WebEmbed
                 // `Web.appRouted : WebAppCfg model msg -> WebApp`
                 | KernelFn::WebAppRouted
-                // `Tui.app : TerminalCfg model msg -> TuiApp`
+                // `Tui.tea : TerminalCfg model msg -> TuiApp`
                 | KernelFn::TerminalAppScreen
-                // `Cli.app : TerminalCfg model msg -> CliApp`
+                // `Cli.tea : TerminalCfg model msg -> CliApp`
                 | KernelFn::TerminalAppLines
-                // `Ipe.Tea.worker : WorkerCfg model msg -> WorkerApp`
+                // `Ipe.Tea.Worker.tea : WorkerCfg model msg -> WorkerApp`
                 | KernelFn::TeaWorker
                 // ── runtime-config front door — arity 1 ──────────────────
                 // `App.fromEnv : String -> Secret`
@@ -26509,7 +26509,7 @@ impl<'a> Lowerer<'a> {
                     ("CliUi", "reverse") => Ok(Callee::Kernel(KernelFn::CliUiReverse)),
                     ("CliUi", "color") => Ok(Callee::Kernel(KernelFn::CliUiColor)),
                     ("CliUi", "bg") => Ok(Callee::Kernel(KernelFn::CliUiBg)),
-                    // ── Ipe.App.Tea.Terminal.Color palette constructors ──
+                    // ── Ipe.Tea.Terminal.Color palette constructors ──
                     ("TermColor", "black") => Ok(Callee::Kernel(KernelFn::TermColorBlack)),
                     ("TermColor", "red") => Ok(Callee::Kernel(KernelFn::TermColorRed)),
                     ("TermColor", "green") => Ok(Callee::Kernel(KernelFn::TermColorGreen)),
@@ -26820,16 +26820,16 @@ impl<'a> Lowerer<'a> {
                     ("Keyed", "column") => Ok(Callee::Kernel(KernelFn::KeyedColumn)),
                     ("Keyed", "row") => Ok(Callee::Kernel(KernelFn::KeyedRow)),
                     // ── Ipe.Web app-entry kernels ─────────────────────────
-                    ("Web", "app") => Ok(Callee::Kernel(KernelFn::WebApp)),
+                    ("Web", "tea") => Ok(Callee::Kernel(KernelFn::WebApp)),
                     ("Web", "embed") => Ok(Callee::Kernel(KernelFn::WebEmbed)),
                     ("Web", "appRouted") => Ok(Callee::Kernel(KernelFn::WebAppRouted)),
                     ("Web", "route") => Ok(Callee::Kernel(KernelFn::WebRoute)),
                     // `Ipe.Html.renderStatic` — shape-neutral static-render bridge.
                     ("Html", "renderStatic") => Ok(Callee::Kernel(KernelFn::WebRenderStatic)),
                     // ── Ipe.Tui / Ipe.Cli app-entry kernels ───────────────
-                    ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
-                    ("Cli", "app") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
-                    ("Tea", "worker") => Ok(Callee::Kernel(KernelFn::TeaWorker)),
+                    ("Tui", "tea") => Ok(Callee::Kernel(KernelFn::TerminalAppScreen)),
+                    ("Cli", "tea") => Ok(Callee::Kernel(KernelFn::TerminalAppLines)),
+                    ("Worker", "tea") => Ok(Callee::Kernel(KernelFn::TeaWorker)),
                     // ── Ipe.Web settings-carrying entry + runtime-config ──
                     ("Web", "appWith") => Ok(Callee::Kernel(KernelFn::WebAppWith)),
                     ("Web", "csrf") => Ok(Callee::Kernel(KernelFn::WebCsrf)),

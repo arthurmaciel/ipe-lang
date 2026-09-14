@@ -1,16 +1,16 @@
 module Main exposing (main)
 
 -- Named `config` binding: the app's cross-cutting wiring lives in one top-level
--- `config : List (Setting Web)` binding, and a plain `Web.app { … }` entry with
+-- `config : List (Setting Web)` binding, and a plain `Web.tea { … }` entry with
 -- no inline settings picks it up automatically (canon threads it into
 -- `Web.appWith config { … }`). ipe MUST exit 0 AND the emitted project MUST
 -- cargo-build (THE SEAL for item 1's recognition site).
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 import Ipe.App as App
 import Ipe.Host as Host
 import Ipe.Db as Db
@@ -64,7 +64,7 @@ subscriptions _model =
 
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view

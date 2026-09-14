@@ -248,7 +248,7 @@ mod imp {
 
             // A native window has no incoming HTTP request; the app opens at its
             // root, so `init` receives the same initial-load `WebReq` a fresh
-            // browser `GET /` reports. This is the ONE Web.app init shape across
+            // browser `GET /` reports. This is the ONE Web.tea init shape across
             // the served, WASM, and webview hosts — never a divergent `()`.
             let (mut model, _cmd0) = init(crate::dom::req::WebReq::local_root());
             warn_dropped_cmd_if_real(&_cmd0);

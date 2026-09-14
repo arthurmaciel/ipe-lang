@@ -513,12 +513,12 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::WebReq => "ipe_runtime::dom::req::WebReq".to_owned(),
         // (`SessionHandle` renders to `i64` — see the `Int | SessionHandle` arm above.)
         // Shape opaque app leaves — render to qualified runtime paths.
-        // On the browser target `Web.app` lowers to `wasm::wasm_app(...)` (see
+        // On the browser target `Web.tea` lowers to `wasm::wasm_app(...)` (see
         // `emit_web`), which returns an `IpeTask` the wasm epilogue drives via
         // `run_start(ipe_main())` — so the leaf renders as that task type, not the
         // native-only `WebApp` handle (absent on wasm32).
         IrType::WebApp if ctx.target == ipe_ir::Target::WasmClient => "IpeTask<()>".to_owned(),
-        // A `Web.app` handle renders to the served `WebApp` unless the delivery
+        // A `Web.tea` handle renders to the served `WebApp` unless the delivery
         // host is webview-native (`web desktop`): then the same DOM app is driven
         // by `WebViewApp`, whose `run_blocking` runs the event loop on the process
         // main thread (tao/Cocoa requirement). One shape, two host executors.

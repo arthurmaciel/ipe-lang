@@ -171,10 +171,10 @@ pub struct Builder<'a> {
     pub field_accesses: Vec<FieldAccess>,
     /// Deferred record-update obligations, resolved after the main solve.
     pub record_updates: Vec<RecordUpdate>,
-    /// Deferred routed-Web.app type checks, resolved after the main solve.
+    /// Deferred routed-Web.tea type checks, resolved after the main solve.
     pub routed_web_checks: Vec<RoutedWebCheck>,
     /// Deferred per-route page-witness checks (one per `Web.route` reference),
-    /// resolved after the main solve, BEFORE the routed-Web.app checks.
+    /// resolved after the main solve, BEFORE the routed-Web.tea checks.
     pub route_witness_checks: Vec<RouteWitnessCheck>,
     /// Body result var of every typed top-level binding whose RETURN annotation
     /// is the bare wildcard `any`. Keyed by `(home_module_path, bare_name)`.
@@ -384,15 +384,15 @@ pub struct RecordUpdate {
     pub home: Vec<Symbol>,
 }
 
-/// A deferred post-solve check for routed `Web.app` configurations.
+/// A deferred post-solve check for routed `Web.tea` configurations.
 ///
-/// `Web.app`'s cfg row accepts both routed apps (Model has a `page : Page`
+/// `Web.tea`'s cfg row accepts both routed apps (Model has a `page : Page`
 /// field) and non-routed apps (Model has no `page` field) through the same
 /// open-record scheme.  The distinction cannot be expressed as a plain HM
 /// constraint at build time (a conditional `{ page : var(2) | ρ }` projection
 /// would break every non-routed app whose Model has no `page` field).
 ///
-/// Instead, the constrain pass pushes one `RoutedWebCheck` per `Web.app`
+/// Instead, the constrain pass pushes one `RoutedWebCheck` per `Web.tea`
 /// call site and defers the gate to [`crate::resolve_routed_web_checks`],
 /// which runs after the main solve when the Model type has settled:
 ///
@@ -406,7 +406,7 @@ pub struct RoutedWebCheck {
     pub model_var: VarId,
     /// `var(2)` from the `K::WebApp` scheme instantiation — the `notFound` type.
     pub not_found_var: VarId,
-    /// The `Web.app { … }` call span; used to blame a type mismatch.
+    /// The `Web.tea { … }` call span; used to blame a type mismatch.
     pub span: Span,
 }
 
@@ -469,7 +469,7 @@ pub struct Generated {
     pub untyped: BTreeMap<(Vec<Symbol>, Symbol), VarId>,
     pub field_accesses: Vec<FieldAccess>,
     pub record_updates: Vec<RecordUpdate>,
-    /// Deferred routed-Web.app checks, resolved after the main solve.
+    /// Deferred routed-Web.tea checks, resolved after the main solve.
     pub routed_web_checks: Vec<RoutedWebCheck>,
     /// Deferred per-route page-witness checks, resolved after the main solve
     /// (before `routed_web_checks`).

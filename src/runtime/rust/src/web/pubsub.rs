@@ -156,7 +156,7 @@ where
     Box::pin(async move {
         if !web_running() {
             return IpeResult::Err(E::from(
-                "PubSub.publish: no Web.app running in this process".to_string(),
+                "PubSub.publish: no Web.tea running in this process".to_string(),
             ));
         }
         ok_res(broker::<T>().publish(&topic, payload, "", false))
@@ -172,7 +172,7 @@ where
     Box::pin(async move {
         if !web_running() {
             return IpeResult::Err(E::from(
-                "PubSub.publishNoEcho: no Web.app running in this process".to_string(),
+                "PubSub.publishNoEcho: no Web.tea running in this process".to_string(),
             ));
         }
         ok_res(broker::<T>().publish(&topic, payload, "", true))
@@ -351,7 +351,7 @@ mod tests {
         // WEB_RUNNING starts false; no serve_web runs in a unit test.
         let t: IpeTask<String, i64> = pubsub_publish::<u8, String>("t".to_string(), 1);
         match t.await {
-            IpeResult::Err(e) => assert!(e.contains("no Web.app")),
+            IpeResult::Err(e) => assert!(e.contains("no Web.tea")),
             IpeResult::Ok(_) => panic!("expected Err Unavailable"),
         }
     }
@@ -360,7 +360,7 @@ mod tests {
     async fn pubsub_publish_no_echo_errs_without_web_app() {
         let t: IpeTask<String, i64> = pubsub_publish_no_echo::<u8, String>("t".to_string(), 1);
         match t.await {
-            IpeResult::Err(e) => assert!(e.contains("no Web.app")),
+            IpeResult::Err(e) => assert!(e.contains("no Web.tea")),
             IpeResult::Ok(_) => panic!("expected Err Unavailable"),
         }
     }

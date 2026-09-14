@@ -59,13 +59,13 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
     }
 }
 
-/// `Ui.cells` inside a `Web.app` view — must be rejected with IPE-L0132.
+/// `Ui.cells` inside a `Web.tea` view — must be rejected with IPE-L0132.
 const WEB_UI_CELLS: &str = r"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type Msg = Tick
 
@@ -90,22 +90,22 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
 ";
 
-/// `Cells.cells` inside a `Tui.app` view — must be ACCEPTED (the raw
+/// `Cells.cells` inside a `Tui.tea` view — must be ACCEPTED (the raw
 /// cell grid is a terminal primitive; this is the shape it belongs to). A Tui
 /// view is `Screen Msg`, so the grid island is built with `Cells.cells`.
 const TERMINAL_UI_CELLS: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.App.Tea.Terminal.Cmd
-import Ipe.App.Tea.Terminal.Sub
+import Ipe.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Sub
 
 type Msg = NoOp
 
@@ -139,29 +139,29 @@ onKey _event =
     NoOp
 
 main =
-    Tui.app
+    Tui.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
 "#;
 
-/// A `Web.app` view painting `Ui.cells` is a terminal-only node in a web-family
+/// A `Web.tea` view painting `Ui.cells` is a terminal-only node in a web-family
 /// build: rejected fail-closed with IPE-L0132, not a cargo failure or a panic.
 #[test]
 fn web_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("web_ui_cells", WEB_UI_CELLS, "IPE-L0132")
 }
 
-/// Non-regression control: `Cells.cells` under `Tui.app` is the
+/// Non-regression control: `Cells.cells` under `Tui.tea` is the
 /// shape it belongs to and must compile cleanly (ipe-0).
 #[test]
 fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
     assert_accepted("terminal_ui_cells", TERMINAL_UI_CELLS)
 }
 
-/// `Ui.cells` in a `Cli.app` (Cli shape) view.
+/// `Ui.cells` in a `Cli.tea` (Cli shape) view.
 ///
-/// `Cli.app` requires `view : Model -> Lines msg`. `Ui.cells` returns
+/// `Cli.tea` requires `view : Model -> Lines msg`. `Ui.cells` returns
 /// `Element msg` (a 2D cell grid), which is incompatible with `Lines msg`. The
 /// type checker rejects the program with IPE-T0001 (type mismatch) before the
 /// backend shape gate (IPE-L0153) is reached. The shape gate is defense-in-depth:
@@ -171,7 +171,7 @@ fn terminal_view_with_ui_cells_is_accepted() -> Result<(), BoxError> {
 /// the type-level rejection.
 const CLI_UI_CELLS: &str = r"module Main exposing (main)
 
-import Ipe.App.Tea.Cli as Cli
+import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Ui as Ui
 
@@ -202,13 +202,13 @@ onLine _line =
     NoOp
 
 main =
-    Cli.app
+    Cli.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onLine = onLine
         }
 ";
 
-/// `Ui.cells` in a `Cli.app` view is rejected because the type checker
+/// `Ui.cells` in a `Cli.tea` view is rejected because the type checker
 /// rejects `Element msg` where `Lines msg` is required (IPE-T0001). The backend
 /// shape gate (IPE-L0153) is defense-in-depth for paths that bypass type
 /// inference.
@@ -230,11 +230,11 @@ fn cli_view_with_ui_cells_is_rejected() -> Result<(), BoxError> {
 /// this pins the attribute half.
 const SCREEN_WITH_DIM_REVERSE: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Tui as Ui
 import Ipe.Ui.Tui exposing (Screen)
-import Ipe.App.Tea.Tui.Cmd
-import Ipe.App.Tea.Tui.Sub
+import Ipe.Tea.Tui.Cmd
+import Ipe.Tea.Tui.Sub
 
 type Msg = NoOp
 
@@ -266,7 +266,7 @@ onKey _event =
     NoOp
 
 main =
-    Tui.app
+    Tui.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
@@ -281,12 +281,12 @@ fn screen_view_with_dim_and_reverse_is_accepted() -> Result<(), BoxError> {
 
 const SCREEN_WITH_DOM_ATTRIBUTE: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Tui as Ui
 import Ipe.Ui.Tui exposing (Screen)
 import Ipe.Ui as Dom
-import Ipe.App.Tea.Tui.Cmd
-import Ipe.App.Tea.Tui.Sub
+import Ipe.Tea.Tui.Cmd
+import Ipe.Tea.Tui.Sub
 
 type Msg = Clicked | NoOp
 
@@ -315,7 +315,7 @@ onKey _event =
     NoOp
 
 main =
-    Tui.app
+    Tui.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
@@ -334,12 +334,12 @@ fn screen_view_with_dom_attribute_is_rejected() -> Result<(), BoxError> {
 const CLI_WITH_LINES_HELPER: &str = r#"module Main exposing (main)
 
 import Ipe.String as String
-import Ipe.App.Tea.Cli as Cli
-import Ipe.App.Tea.Cli.Cmd as Cmd
-import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
-import Ipe.App.Tea.Terminal.Color as Color
+import Ipe.Tea.Terminal.Color as Color
 
 type Msg = NoOp
 
@@ -375,7 +375,7 @@ onLine _line =
     NoOp
 
 main =
-    Cli.app
+    Cli.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onLine = onLine
         }
@@ -383,7 +383,7 @@ main =
 
 /// The structured `Lines` view surface, its line-native `Attribute` builders,
 /// and the first-class `Terminal.Color` palette type-check + lower + emit under
-/// the Cli shape (ipe-0). The `Cli.app` `view` returns a `Lines msg` value built
+/// the Cli shape (ipe-0). The `Cli.tea` `view` returns a `Lines msg` value built
 /// from those builders.
 #[test]
 fn cli_lines_surface_with_palette_is_accepted() -> Result<(), BoxError> {
@@ -392,9 +392,9 @@ fn cli_lines_surface_with_palette_is_accepted() -> Result<(), BoxError> {
 
 const LINES_WITH_DOM_ATTRIBUTE: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Cli as Cli
-import Ipe.App.Tea.Cli.Cmd as Cmd
-import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Ui as Dom
@@ -428,7 +428,7 @@ onLine _line =
     NoOp
 
 main =
-    Cli.app
+    Cli.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onLine = onLine
         }

@@ -46,7 +46,7 @@ pub enum KernelClass {
     Ui,
     /// `Ipe.Web` app-entry kernels.
     Web,
-    /// Terminal rendering family — the `Tui.app` / `Cli.app` app-entry kernels
+    /// Terminal rendering family — the `Tui.tea` / `Cli.tea` app-entry kernels
     /// and their `onKey` / `onLine` companions.
     Terminal,
     /// Reserved for the FFI kernel tier.
@@ -291,8 +291,8 @@ pub enum BuiltinTag {
     /// Appears only as [`Self::Setting`]'s argument; never a standalone value.
     ShapeTerminal,
     /// `Program` — the shape-carrier constructor `Program shape msg`, the uniform
-    /// result type of every TEA entry (`Web.app` → `Program Web msg`, `Tui.app` →
-    /// `Program Tui msg`, `Cli.app` → `Program Cli msg`). Arity 2: the phantom
+    /// result type of every TEA entry (`Web.tea` → `Program Web msg`, `Tui.tea` →
+    /// `Program Tui msg`, `Cli.tea` → `Program Cli msg`). Arity 2: the phantom
     /// `shape` tag ([`Self::ProgramShapeWeb`] / [`Self::ProgramShapeTui`] /
     /// [`Self::ProgramShapeCli`]) is compile-time only and erased at lower to the
     /// existing per-shape app leaf ([`Self::WebApp`] / [`Self::TuiApp`] /
@@ -313,7 +313,7 @@ pub enum BuiltinTag {
     /// value (phantom, erased at lower).
     ProgramShapeCli,
     /// `Worker` — the nullary phantom program-shape tag for the view-less
-    /// co-located worker shape (`Ipe.Tea.worker` → `Program Worker msg`). Appears
+    /// co-located worker shape (`Ipe.Tea.Worker.tea` → `Program Worker msg`). Appears
     /// only as [`Self::Program`]'s first argument; never a standalone value
     /// (phantom, erased at lower to the opaque worker leaf). A worker renders no
     /// view and can never reach the sandboxed Spa/wasm bundle.
@@ -420,7 +420,7 @@ pub enum BuiltinTag {
     UiElement,
     /// `Cells` — the Tui-only view type constructor `Screen msg` (exposed name).
     /// Distinct from `Element msg`; produced exclusively by `Ipe.Ui.Tui.*`
-    /// builders and consumed only by `Tui.app`'s view field. The internal tag
+    /// builders and consumed only by `Tui.tea`'s view field. The internal tag
     /// keeps the `Cells` spelling (the rendering model); the user-facing type is
     /// `Screen`.
     Cells,
@@ -469,7 +469,7 @@ pub enum BuiltinTag {
     /// `RadioOption` — the `Ipe.Ui.Input` radio-option constructor `RadioOption
     /// msg`, applied to the message type.
     InputRadioOption,
-    /// `WebReq` — the opaque request handle threaded through `Web.app`'s `init`
+    /// `WebReq` — the opaque request handle threaded through `Web.tea`'s `init`
     /// field. Nullary.
     WebReq,
     /// `SessionHandle` — the opaque handle addressing one bounded `Ipe.Ffi.Js`
@@ -478,7 +478,7 @@ pub enum BuiltinTag {
     /// runtime session id (`i64`).
     SessionHandle,
     /// `WebRoute` — the route descriptor `WebRoute page`, applied to the page
-    /// type. Carried by the `routes` field of the `Web.app` cfg record.
+    /// type. Carried by the `routes` field of the `Web.tea` cfg record.
     WebRoute,
     /// `EmailProvider` — the provider handle `Email.send` takes before the
     /// `EmailMessage`. Nullary, and module-qualified with its `Ipe.Email` home
@@ -486,14 +486,14 @@ pub enum BuiltinTag {
     /// runtime-backed enum instead of an unhomed unknown-builtin `Con`.
     EmailProvider,
     // ── Shape opaque app-leaf type constructors ──────────────────────────────
-    /// `WebApp` — opaque app handle returned by `Web.app` / `Web.appRouted` /
+    /// `WebApp` — opaque app handle returned by `Web.tea` / `Web.appRouted` /
     /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp` (served) or
     /// `ipe_runtime::tea::WebViewApp` (webview-native `web desktop` host).
     WebApp,
-    /// `TuiApp` — opaque app handle returned by `Tui.app`. Nullary;
+    /// `TuiApp` — opaque app handle returned by `Tui.tea`. Nullary;
     /// backed by `ipe_runtime::tea::TuiApp`.
     TuiApp,
-    /// `CliApp` — opaque app handle returned by `Cli.app`. Nullary;
+    /// `CliApp` — opaque app handle returned by `Cli.tea`. Nullary;
     /// backed by `ipe_runtime::tea::CliApp`.
     CliApp,
 }
@@ -691,17 +691,17 @@ pub enum FieldTag {
     AppView,
     /// `"subscriptions"`.
     AppSubscriptions,
-    /// `"routes"` — `Web.app` only.
+    /// `"routes"` — `Web.tea` only.
     AppRoutes,
-    /// `"notFound"` — `Web.app` only.
+    /// `"notFound"` — `Web.tea` only.
     AppNotFound,
-    /// `"onKey"` — `Tui.app` only.
+    /// `"onKey"` — `Tui.tea` only.
     TerminalOnKey,
     /// `"kind"` — the `KeyEvent` record field.
     TerminalKeyKind,
     /// `"value"` — the `KeyEvent` record field.
     TerminalKeyValue,
-    /// `"onLine"` — `Cli.app` only.
+    /// `"onLine"` — `Cli.tea` only.
     TerminalOnLine,
     // ── Edge record (Ui.paddingEach / Border.widthEach) ──
     /// `"top"`.
@@ -1829,7 +1829,7 @@ pub enum StdlibKernel {
     UiText,
     UiHtml,
     /// `Ui.cells : List (List Char) -> Element msg` — a raw terminal cell grid
-    /// embedded as an island inside an `Ipe.Ui` view under `Tui.app`.
+    /// embedded as an island inside an `Ipe.Ui` view under `Tui.tea`.
     UiCells,
     /// `UiCells.none : Cells msg` — empty cell, matching `Ui.none` but returns
     /// `Cells msg`.
@@ -1892,7 +1892,7 @@ pub enum StdlibKernel {
     CliUiColor,
     /// `CliUi.bg : Color -> Attribute msg` — background colour.
     CliUiBg,
-    // ── Ipe.App.Tea.Terminal.Color palette constructors (nullary closed sum) ───────
+    // ── Ipe.Tea.Terminal.Color palette constructors (nullary closed sum) ───────
     /// `TermColor.black : Color`
     TermColorBlack,
     /// `TermColor.red : Color`
@@ -2070,20 +2070,20 @@ pub enum StdlibKernel {
     WebApp,
     WebAppRouted,
     /// `Web.embed : { … } -> WebApp` — produce a mountable web-app handle from
-    /// the same six-field cfg as `Web.app`. The result is the opaque `WebApp`
-    /// leaf; unlike `Web.app` (a top-level entry that binds its own listener),
+    /// the same six-field cfg as `Web.tea`. The result is the opaque `WebApp`
+    /// leaf; unlike `Web.tea` (a top-level entry that binds its own listener),
     /// an `embed`'d `WebApp` is meant to be `Server.mountApp`'d into a shared
-    /// server router on one port. Shares `Web.app`'s emit path.
+    /// server router on one port. Shares `Web.tea`'s emit path.
     WebEmbed,
     WebRoute,
     WebRenderStatic,
     // ── Ipe.Terminal app-entry kernels ───────────────────────────────────
-    /// `Tui.app` — full-screen TEA entry, `view : Model -> Element
+    /// `Tui.tea` — full-screen TEA entry, `view : Model -> Element
     /// Msg`, driven by `onKey`.
     TerminalAppScreen,
     // ── Ipe.Web app-entry with runtime settings ──────────────────────────
     /// `Web.appWith : List (Setting Web) -> { … } -> app` — the additive
-    /// settings-carrying web entry. Same cfg record as `Web.app`, preceded by a
+    /// settings-carrying web entry. Same cfg record as `Web.tea`, preceded by a
     /// shape-checked `List (Setting Web)` (a `Terminal`-only or cross-shape
     /// setting is a type error in this slot).
     WebAppWith,
@@ -2305,10 +2305,10 @@ pub enum StdlibKernel {
     FontDisabledColor,
     FontHoverSize, // Int → Attr pseudo
     // ── Effect stdlib modules ────────────────────────────────────────
-    // `Cli.app` — line-oriented TEA app-entry, `view : Model ->
+    // `Cli.tea` — line-oriented TEA app-entry, `view : Model ->
     // String`, driven by `onLine`.
     TerminalAppLines,
-    // `Ipe.Tea.worker` — view-less co-located TEA app-entry:
+    // `Ipe.Tea.Worker.tea` — view-less co-located TEA app-entry:
     // `{ init, update, subscriptions } -> Program Worker msg`. No `view`; output
     // is `Cmd msg` (effects) and input is `Sub msg`. Co-located and
     // capability-gated; never reaches the sandbox.
@@ -3975,7 +3975,7 @@ impl StdlibKernel {
             Self::CliUiReverse => d("CliUi", "reverse", 0, Ui, "cli_reverse_"),
             Self::CliUiColor => d("CliUi", "color", 1, Ui, "cli_color_"),
             Self::CliUiBg => d("CliUi", "bg", 1, Ui, "cli_bg_"),
-            // ── Ipe.App.Tea.Terminal.Color palette constructors ──────────────
+            // ── Ipe.Tea.Terminal.Color palette constructors ──────────────
             Self::TermColorBlack => d("TermColor", "black", 0, Pure, "term_color_black_"),
             Self::TermColorRed => d("TermColor", "red", 0, Pure, "term_color_red_"),
             Self::TermColorGreen => d("TermColor", "green", 0, Pure, "term_color_green_"),
@@ -4131,9 +4131,9 @@ impl StdlibKernel {
             Self::HtmlBoolAttribute => d("Attr", "boolAttribute", 2, Ui, "html_bool_named_attr_"),
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
             // ── Ipe.Web app-entry kernels ───────────────────────────────
-            Self::WebApp => d("Web", "app", 1, Web, "web_app"),
+            Self::WebApp => d("Web", "tea", 1, Web, "web_app"),
             Self::WebAppRouted => d("Web", "appRouted", 1, Web, "web_app_routed"),
-            // `Web.embed` shares `Web.app`'s emit path (both build the `WebApp`
+            // `Web.embed` shares `Web.tea`'s emit path (both build the `WebApp`
             // leaf from the same cfg); the runtime symbol is the same builder.
             Self::WebEmbed => d("Web", "embed", 1, Web, "web_app"),
             Self::WebRoute => d("Web", "route", 2, Web, "web_route"),
@@ -4145,8 +4145,8 @@ impl StdlibKernel {
             // `Cmd`/`Sub` loop aliases.
             Self::WebRenderStatic => d("Html", "renderStatic", 2, Web, "web_render_static"),
             // ── Ipe.Tui app-entry kernel ─────────────────────────────────
-            // Surface `Tui.app`; the internal rendering family is `Terminal`.
-            Self::TerminalAppScreen => d("Tui", "app", 1, Terminal, "tui_app_ui"),
+            // Surface `Tui.tea`; the internal rendering family is `Terminal`.
+            Self::TerminalAppScreen => d("Tui", "tea", 1, Terminal, "tui_app_ui"),
             // ── Ipe.Web settings-carrying app entry + runtime-config kernels ──
             Self::WebAppWith => d("Web", "appWith", 2, Web, "web_app_with"),
             Self::AppFromEnv => d("App", "fromEnv", 1, Pure, "ipe_app_from_env"),
@@ -4384,12 +4384,12 @@ impl StdlibKernel {
             Self::FontDisabledColor => d("Font", "disabledColor", 1, Ui, "ui_font_disabled_color_"),
             Self::FontHoverSize => d("Font", "hoverSize", 1, Ui, "ui_font_hover_size_"),
             // ── Effect stdlib modules ────────────────────────────────────
-            // Ipe.Cli line-oriented app-entry. Surface `Cli.app`; the internal
+            // Ipe.Cli line-oriented app-entry. Surface `Cli.tea`; the internal
             // rendering family is `Terminal`.
-            Self::TerminalAppLines => d("Cli", "app", 1, Terminal, "ipe_console_app_"),
-            // Ipe.Tea view-less worker app-entry. Surface `Tea.worker`; the
+            Self::TerminalAppLines => d("Cli", "tea", 1, Terminal, "ipe_console_app_"),
+            // Ipe.Tea.Worker view-less worker app-entry. Surface `Worker.tea`; the
             // internal family is `Tea` (TEA-loop wiring, no render).
-            Self::TeaWorker => d("Tea", "worker", 1, Tea, "ipe_worker_app_"),
+            Self::TeaWorker => d("Worker", "tea", 1, Tea, "ipe_worker_app_"),
             // Ipe.Auth / Ipe.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
             Self::AuthHashPasswordCost => d(
@@ -5568,7 +5568,7 @@ impl StdlibKernel {
         Self::CliUiReverse,
         Self::CliUiColor,
         Self::CliUiBg,
-        // Ipe.App.Tea.Terminal.Color palette constructors
+        // Ipe.Tea.Terminal.Color palette constructors
         Self::TermColorBlack,
         Self::TermColorRed,
         Self::TermColorGreen,
@@ -8334,7 +8334,7 @@ impl StdlibKernel {
             tail: RowTailShape::Closed,
         };
         // ── App-entry cfg records. var(0)=model, var(1)=msg, var(2)=page,
-        // var(3)=appExt (open-row tail on Web / Tui.app). ──
+        // var(3)=appExt (open-row tail on Web / Tui.tea). ──
         const TUPLE_A_CMD_B: TyShape = TyShape::Tuple(&[A, CMD_B]);
         const WEB_REQ_TO_TUPLE: TyShape = TyShape::Fun(&WEB_REQ, &TUPLE_A_CMD_B);
         const UNIT_TO_TUPLE: TyShape = TyShape::Fun(&UNIT, &TUPLE_A_CMD_B);
@@ -8345,7 +8345,7 @@ impl StdlibKernel {
         const VIEW_CELLS_FN: TyShape = TyShape::Fun(&A, &CELLS_B);
         const SUBS_FN: TyShape = TyShape::Fun(&A, &SUB_B);
         const LIST_WEB_ROUTE_C: TyShape = TyShape::Con(BuiltinTag::List, &[WEB_ROUTE_C]);
-        // `Web.app` cfg — OPEN row (var(3) absorbs optional extra fields).
+        // `Web.tea` cfg — OPEN row (var(3) absorbs optional extra fields).
         const WEB_APP_CFG: TyShape = TyShape::Record {
             fields: &[
                 (FieldTag::AppInit, &WEB_REQ_TO_TUPLE),
@@ -8357,7 +8357,7 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Open(3),
         };
-        // `Tui.app` — pinned `onKey : KeyEvent -> msg`, OPEN row.
+        // `Tui.tea` — pinned `onKey : KeyEvent -> msg`, OPEN row.
         const KEY_EVENT: TyShape = TyShape::Record {
             fields: &[
                 (FieldTag::TerminalKeyKind, &STRING),
@@ -8376,7 +8376,7 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Open(3),
         };
-        // `Cli.app` — `view : model -> Lines msg`, `onLine`, CLOSED.
+        // `Cli.tea` — `view : model -> Lines msg`, `onLine`, CLOSED.
         const ON_LINE_FN: TyShape = TyShape::Fun(&STRING, &B);
         const LINES_B: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_CLI, B]);
         const VIEW_LINES_FN: TyShape = TyShape::Fun(&A, &LINES_B);
@@ -8627,13 +8627,13 @@ impl StdlibKernel {
         // `Program` carrier is not a mountable handle).
         const WEB_EMBED: TyShape = TyShape::Fun(&WEB_APP_CFG, &WEB_APP_LEAF);
         // `Server.mountApp : String -> WebApp -> ServerRoute` — nominal `WebApp`
-        // in the second slot is the §9 type gate: only a `Web.embed`/`Web.app`
+        // in the second slot is the §9 type gate: only a `Web.embed`/`Web.tea`
         // handle mounts; a `TuiApp`/`CliApp` is rejected at unify.
         const WEB_APP_LEAF_TO_SERVER_ROUTE: TyShape = TyShape::Fun(&WEB_APP_LEAF, &SERVER_ROUTE);
         const MOUNT_APP: TyShape = TyShape::Fun(&STRING, &WEB_APP_LEAF_TO_SERVER_ROUTE);
         const TERMINAL_APP_SCREEN: TyShape = TyShape::Fun(&TERMINAL_SCREEN_CFG, &PROGRAM_TUI);
         const TERMINAL_APP_LINES: TyShape = TyShape::Fun(&TERMINAL_LINES_CFG, &PROGRAM_CLI);
-        // `Ipe.Tea.worker` — view-less cfg, CLOSED. `init : () -> (model, Cmd msg)`,
+        // `Ipe.Tea.Worker.tea` — view-less cfg, CLOSED. `init : () -> (model, Cmd msg)`,
         // `update : msg -> model -> (model, Cmd msg)`, `subscriptions : model ->
         // Sub msg`. No `view`, no input handler; reuses the app-entry field shapes
         // (`UNIT_TO_TUPLE`/`UPDATE_FN`/`SUBS_FN`), var(0)=model, var(1)=msg.
@@ -9488,7 +9488,7 @@ impl StdlibKernel {
                 Some(&CLI_ATTR_A)
             }
             Self::CliUiColor | Self::CliUiBg => Some(&COLOR_TO_CLI_ATTR_A),
-            // ── Ipe.App.Tea.Terminal.Color palette constructors. ──
+            // ── Ipe.Tea.Terminal.Color palette constructors. ──
             Self::TermColorBlack
             | Self::TermColorRed
             | Self::TermColorGreen
@@ -12660,7 +12660,7 @@ impl StdlibKernel {
                 // app-entry kernels, but they share the `web` module: their
                 // symbols live in `ipe_runtime::web::pubsub` (gated by the `web`
                 // Cargo feature). A program that uses either — even without a
-                // Web.app — must have the `live` feature enabled so
+                // Web.tea — must have the `live` feature enabled so
                 // `pubsub_publish` / `pubsub_publish_no_echo` are in scope.
                 | Self::PubSubPublish
                 | Self::PubSubPublishNoEcho
@@ -12679,7 +12679,7 @@ impl StdlibKernel {
         matches!(self, Self::TerminalAppLines)
     }
 
-    /// `true` when this variant is the view-less `Ipe.Tea.worker` app-entry.
+    /// `true` when this variant is the view-less `Ipe.Tea.Worker.tea` app-entry.
     #[must_use]
     pub const fn is_worker(self) -> bool {
         matches!(self, Self::TeaWorker)
@@ -12787,7 +12787,7 @@ impl StdlibKernel {
             // Background/Input/Region/Lazy/Keyed) — probe-verified to
             // compile to wasm32 as part of the runtime floor.
             KernelClass::Ui => true,
-            // `Web.app` gains a browser denotation via the runtime `wasm`
+            // `Web.tea` gains a browser denotation via the runtime `wasm`
             // sink (`wasm_app` / `wasm_app_routed`). `Web.route` constructs a
             // `Route<Page>` via `ipe_runtime::web::route::Route::new` — the
             // `web::route` module is pure (no tokio/axum) and is vendored into
@@ -13868,7 +13868,7 @@ mod tests {
             // so a worker can never link into a Spa/wasm bundle even by mistake.
             StdlibKernel::TeaWorker,
             // The other co-located app-entries stay denied for the same reason —
-            // only `Web.app` gains a browser denotation.
+            // only `Web.tea` gains a browser denotation.
             StdlibKernel::TerminalAppLines,
             StdlibKernel::TerminalAppScreen,
             // Crypto: only the entropy pair (`randomBytes`/`randomToken`) has

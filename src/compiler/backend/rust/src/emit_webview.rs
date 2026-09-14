@@ -1,7 +1,7 @@
-//! Emission of the webview-native executor for a `Web.app` under a `web desktop`
+//! Emission of the webview-native executor for a `Web.tea` under a `web desktop`
 //! delivery host.
 //!
-//! A `Web.app` is a DOM `Web`-shape entry. When the resolved delivery host is
+//! A `Web.tea` is a DOM `Web`-shape entry. When the resolved delivery host is
 //! webview-native (`web desktop`), the same DOM app is driven by
 //! `ipe_runtime::tea::WebViewApp` instead of the served `ipe_runtime::tea::WebApp`:
 //!
@@ -28,7 +28,7 @@ const FALLBACK_WIDTH: i64 = 1024;
 const FALLBACK_HEIGHT: i64 = 768;
 
 /// Wrap already-emitted `init` / `update` / `view` / `subs` callback strings into
-/// the webview executor for a `Web.app` under a webview-native delivery host.
+/// the webview executor for a `Web.tea` under a webview-native delivery host.
 ///
 /// The `view` string must already be wrapped by [`crate::emit_web::wrap_view`]
 /// (the same `Ui.layout` framework wrap the served web path applies), so the raw

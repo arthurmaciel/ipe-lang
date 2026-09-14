@@ -5,15 +5,15 @@ module Main exposing (main)
 -- A child sub-component speaks its own `ChildMsg`; the parent folds it in with
 -- `Cmd.map` (its init command) and `Sub.map` (its subscriptions), retagging the
 -- child's effects into the parent's `Msg`. Proves the full pipeline compiles,
--- the emitted crate builds, and the program runs: `Cli.app` renders the
+-- the emitted crate builds, and the program runs: `Cli.tea` renders the
 -- initial view once at stdin EOF and exits 0.
 
-import Ipe.App.Tea.Cli as Cli
+import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
-import Ipe.App.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.App.Tea.Terminal.Sub
+import Ipe.Tea.Terminal.Sub
 
 type ChildMsg
     = ChildTick
@@ -60,7 +60,7 @@ onLine line =
     GotLine line
 
 main =
-    Cli.app
+    Cli.tea
         { init = init
         , update = update
         , view = view

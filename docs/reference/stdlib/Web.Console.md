@@ -5,7 +5,7 @@
 [Back to stdlib index](../stdlib.md)
 
 Ipe.Web.Console — types exposed for the optional `consoleAuth`
-field on `Web.app` cfg.
+field on `Web.tea` cfg.
 
 The `consoleAuth` callback is row-polymorphic, optional, and has
 shape `Request -> Task Error (Maybe Identity)`.  When the framework

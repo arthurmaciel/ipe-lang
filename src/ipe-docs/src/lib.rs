@@ -280,9 +280,9 @@ impl IndexBuilder {
     pub fn add_compiled_stdlib(&mut self) -> Result<(), String> {
         let mut interner = Interner::new();
         for std_mod in COMPILED_STD_MODULES {
-            // `Ipe.App.Tea.Terminal` is subsumed by `Ipe.Color`; suppress its
+            // `Ipe.Tea.Terminal` is subsumed by `Ipe.Color`; suppress its
             // doc pages so the reference tree does not expose a deprecated namespace.
-            if std_mod.dotted.starts_with("Ipe.App.Tea.Terminal") {
+            if std_mod.dotted.starts_with("Ipe.Tea.Terminal") {
                 continue;
             }
 
@@ -702,13 +702,13 @@ mod tests {
         );
     }
 
-    /// `Ipe.App.Tea.Terminal` is superseded by `Ipe.Color`; the doc index must
+    /// `Ipe.Tea.Terminal` is superseded by `Ipe.Color`; the doc index must
     /// not expose a page for it (the namespace is filtered in `add_compiled_stdlib`).
     #[test]
     fn tea_terminal_namespace_absent_from_index() {
         let idx = build_index();
         for residual in [
-            "Ipe.App.Tea.Terminal.Color",
+            "Ipe.Tea.Terminal.Color",
             "App.Tea.Terminal.Color",
             "Tea.Terminal.Color",
         ] {

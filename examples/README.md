@@ -12,7 +12,7 @@ that builds with `ipe build` and targets the Rust backend.
 | `wasm/effects` | wasm/live | `Sub.every` timer and `Cmd.perform` side-effects exercised end-to-end in a browser via the Cmd/Sub bridge (gloo-timers). |
 | `wasm/websocket` | wasm/live | `Ipe.WebSocket` client substitute: connect / onOpen / send / onMessage / close / onClose against a real WebSocket server in-browser. |
 | `wasm/env-public` | wasm/live | `Ipe.Env.public` build-time config embedding: an allowlisted `API_BASE_URL` variable injected at compile time and readable in WASM at run time. |
-| `wasm/spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Web.app` which emits `wasm_app` under `--target wasm`. |
+| `wasm/spa` | wasm | SPA target: a pure-client single-page application with full TEA loop running in the browser. Uses `Web.tea` which emits `wasm_app` under `--target wasm`. |
 | `wasm/hydration` | wasm | SSR hydration: server-side initial render (paint) followed by WASM client takeover. |
 | `wasm/language-playground` | n/a (`ipe-wasm`) | The Ipê compiler frontend (parse → typecheck → lower → emit) compiled to WebAssembly: an ACE editor whose contents are compiled to Rust in the browser as you type, showing the emitted Rust or the diagnostics. A companion `Ipe.Http.Server` app (`server/`) plus a bwrap-jailed `jail-runner` workspace member add a sandboxed `POST /run` that builds and executes the emitted Rust. Built via the Ipê build program under `build/` (`cd build && ipe run`). See its `README.md`. |
 
@@ -23,9 +23,9 @@ The per-shape demos linked from [`docs/shapes/`](../docs/shapes/) live under
 
 | Shape | Directory | What it demonstrates |
 |-------|-----------|----------------------|
-| terminal | `shapes/terminal/file-browser` | A keyboard-driven directory browser over `Tui.app`: `File.readDir` lists the working directory, arrow keys navigate, and the selected file's first bytes render as a raw `Ui.cells` hexdump island inside the `Ipe.Ui` view. |
-| terminal | `shapes/terminal/http-shell` | An HTTP query shell over `Cli.app`: each stdin line like `get <url>` performs a real `Http.get` and prints the response status + body. |
-| web | `shapes/web/task-publish` | The top-level, Task-shaped `Ipe.PubSub.publish` (`String -> any -> Task Error Int`) fired from a `Ipe.App.Tea.Web` app's `update` via `Cmd.perform`, with the subscriber count routed back into the model. Shows the Task form composing where a broadcast bus runs. |
+| terminal | `shapes/terminal/file-browser` | A keyboard-driven directory browser over `Tui.tea`: `File.readDir` lists the working directory, arrow keys navigate, and the selected file's first bytes render as a raw `Ui.cells` hexdump island inside the `Ipe.Ui` view. |
+| terminal | `shapes/terminal/http-shell` | An HTTP query shell over `Cli.tea`: each stdin line like `get <url>` performs a real `Http.get` and prints the response status + body. |
+| web | `shapes/web/task-publish` | The top-level, Task-shaped `Ipe.PubSub.publish` (`String -> any -> Task Error Int`) fired from a `Ipe.Tea.Web` app's `update` via `Cmd.perform`, with the subscriber count routed back into the model. Shows the Task form composing where a broadcast bus runs. |
 | script | `shapes/script/release-preflight` | A plain-`main` batch program (no TEA loop): a release-preflight check run to completion. The worked example for the `Ipe.Task` guide and the `do`-notation idiom. |
 | script | `shapes/script/word-frequency` | A plain-`main` batch program: a paragraph reduced to its three most common words via one `List` pipeline (tokenize, tally, rank, take). The worked example for the `Ipe.List` and `Ipe.String` guides and the pipe idiom. |
 | script | `shapes/script/parse-port` | A plain-`main` batch program demonstrating parse-don't-validate: a `String -> Maybe Port` boundary parser so no downstream code re-checks the range. The worked example for the parse-don't-validate idiom. |

@@ -1,7 +1,7 @@
-//! Compile-time surface tests for `Ipe.App.Tea.Tui` and `Ipe.App.Tea.Cli`.
+//! Compile-time surface tests for `Ipe.Tea.Tui` and `Ipe.Tea.Cli`.
 //!
-//! `Ipe.App.Tea.Tui` exposes the full-screen terminal TEA entry via `Tui.app`;
-//! `Ipe.App.Tea.Cli` exposes the line-oriented entry via `Cli.app`. Both `app`
+//! `Ipe.Tea.Tui` exposes the full-screen terminal TEA entry via `Tui.tea`;
+//! `Ipe.Tea.Cli` exposes the line-oriented entry via `Cli.tea`. Both `app`
 //! entries are registered in the `env.rs` qualifier catalog and carry
 //! `KernelClass::Terminal` (the one terminal rendering family).
 //!
@@ -56,14 +56,14 @@ fn assert_rejected_code(test_name: &str, source: &str, expected: &str) -> Result
     }
 }
 
-/// Minimal `Tui.app` program — `import Ipe.App.Tea.Tui as Tui` then `Tui.app { ... }`.
+/// Minimal `Tui.tea` program — `import Ipe.Tea.Tui as Tui` then `Tui.tea { ... }`.
 const TUI_APP: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.App.Tea.Tui.Cmd
-import Ipe.App.Tea.Tui.Sub
+import Ipe.Tea.Tui.Cmd
+import Ipe.Tea.Tui.Sub
 
 type Msg = NoOp
 
@@ -92,18 +92,18 @@ onKey _event =
     NoOp
 
 main =
-    Tui.app
+    Tui.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
 "#;
 
-/// Minimal `Cli.app` program — `import Ipe.App.Tea.Cli as Cli` then `Cli.app { ... }`.
+/// Minimal `Cli.tea` program — `import Ipe.Tea.Cli as Cli` then `Cli.tea { ... }`.
 const CLI_APP: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Cli as Cli
-import Ipe.App.Tea.Cli.Cmd
-import Ipe.App.Tea.Cli.Sub
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd
+import Ipe.Tea.Cli.Sub
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 
@@ -136,7 +136,7 @@ onLine s =
     Line s
 
 main =
-    Cli.app
+    Cli.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onLine = onLine
         }
@@ -148,9 +148,9 @@ main =
 /// unification — a cross-engine view is unrepresentable, not a silent render.
 const CROSS_ENGINE_VIEW: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ui.Cells as Cells
 
@@ -177,7 +177,7 @@ view _model =
     Ui.column [] [ Cells.text "nope" ]
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions
         , routes = [], notFound = NoOp
@@ -193,9 +193,9 @@ v : View Foo Msg
 v = v
 ";
 
-/// `Tui.app` is the full-screen terminal entry kernel registered in
+/// `Tui.tea` is the full-screen terminal entry kernel registered in
 /// the `env.rs` qualifier catalog. A program using
-/// `import Ipe.App.Tea.Tui as Tui` and `Tui.app { ... }` must compile (ipe-0).
+/// `import Ipe.Tea.Tui as Tui` and `Tui.tea { ... }` must compile (ipe-0).
 #[test]
 fn tui_app_surface_compiles() -> Result<(), BoxError> {
     assert_accepted("tui_app", TUI_APP)
@@ -218,9 +218,9 @@ fn non_engine_view_tag_is_rejected() -> Result<(), BoxError> {
     assert_rejected_code("non_engine_view", NON_ENGINE_VIEW, "IPE-N0002")
 }
 
-/// `Cli.app` is the line-oriented terminal entry kernel registered in
+/// `Cli.tea` is the line-oriented terminal entry kernel registered in
 /// the `env.rs` qualifier catalog. A program using
-/// `import Ipe.App.Tea.Cli as Cli` and `Cli.app { ... }` must compile (ipe-0).
+/// `import Ipe.Tea.Cli as Cli` and `Cli.tea { ... }` must compile (ipe-0).
 #[test]
 fn cli_app_surface_compiles() -> Result<(), BoxError> {
     assert_accepted("cli_app", CLI_APP)

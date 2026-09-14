@@ -134,11 +134,11 @@ pub enum NativeUiEmit {
 pub enum UiDelegate {
     /// `emit_web::emit_web_call` — the Web app-entry kernels.
     Web,
-    /// `emit_tui::emit_tui_call` — `Tui.app`.
+    /// `emit_tui::emit_tui_call` — `Tui.tea`.
     Tui,
-    /// `emit_console::emit_console_call` — `Cli.app`.
+    /// `emit_console::emit_console_call` — `Cli.tea`.
     Console,
-    /// `emit_worker::emit_worker_call` — `Ipe.Tea.worker` (view-less).
+    /// `emit_worker::emit_worker_call` — `Ipe.Tea.Worker.tea` (view-less).
     Worker,
 }
 
@@ -157,7 +157,7 @@ pub enum Guard {
     /// browser shape the widget has NO transport — the node would be inert, a
     /// widget with no seam. Reject it fail-closed rather than emit a dead
     /// element (or trip the non-`json` runtime fallback's unconstrained type
-    /// parameter). Admissible only under `Web.app`.
+    /// parameter). Admissible only under `Web.tea`.
     RejectInNonWebShape,
 }
 
@@ -1626,7 +1626,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::CliUiReverse => pos("ipe_runtime::tui::cli_reverse_", 0),
         KernelFn::CliUiColor => pos("ipe_runtime::tui::cli_color_", 1),
         KernelFn::CliUiBg => pos("ipe_runtime::tui::cli_bg_", 1),
-        // ── Ipe.App.Tea.Terminal.Color palette constructors ──
+        // ── Ipe.Tea.Terminal.Color palette constructors ──
         KernelFn::TermColorBlack => pos("ipe_runtime::tui::term_color_black_", 0),
         KernelFn::TermColorRed => pos("ipe_runtime::tui::term_color_red_", 0),
         KernelFn::TermColorGreen => pos("ipe_runtime::tui::term_color_green_", 0),

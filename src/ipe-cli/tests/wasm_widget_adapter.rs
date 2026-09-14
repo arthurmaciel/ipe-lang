@@ -24,14 +24,14 @@ use ipe::BuildOptions;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// A `Web.app` whose view mounts one `CustomElement.node`. Compiled for `--target wasm`,
+/// A `Web.tea` whose view mounts one `CustomElement.node`. Compiled for `--target wasm`,
 /// the down/up seam takes the wasm-client adapter (property / `CustomEvent`).
 const WIDGET_APP: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type alias EditorState = { text : String, line : Int }
 
@@ -61,7 +61,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Edited Saved
         }

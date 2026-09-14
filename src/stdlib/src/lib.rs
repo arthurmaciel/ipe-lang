@@ -511,7 +511,7 @@ const STD_UI_ANIMATION: &str = include_str!("../Ipe/Ui/Animation.ipe");
 ///
 /// The Tui view type is `Screen msg` (a newtype distinct from `Element msg`),
 /// produced exclusively by the builders here (`none` / `text` / `cells` /
-/// `el` / `row` / `column`) and consumed only by `Tui.app`'s `view` field.
+/// `el` / `row` / `column`) and consumed only by `Tui.tea`'s `view` field.
 /// Using these builders inside a Web/Cli shape is a compile-time type error
 /// because the type checker sees `Screen msg` where `Element msg` is expected.
 ///
@@ -532,10 +532,10 @@ const STD_UI_TUI: &str = include_str!("../Ipe/Ui/Tui.ipe");
 /// unnameable in a `Lines` view (a type error, never a silent render-time drop).
 const STD_UI_CLI: &str = include_str!("../Ipe/Ui/Cli.ipe");
 
-/// `Ipe.App.Tea.Terminal.Color` — the first-class terminal colour palette: a closed
+/// `Ipe.Tea.Terminal.Color` — the first-class terminal colour palette: a closed
 /// sum over the sixteen named ANSI colours plus `default`. Both the Tui and Cli
 /// view surfaces accept it in their `color` / `bg` builders.
-const STD_TEA_TERMINAL_COLOR: &str = include_str!("../Ipe/App/Tea/Terminal/Color.ipe");
+const STD_TEA_TERMINAL_COLOR: &str = include_str!("../Ipe/Tea/Terminal/Color.ipe");
 
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
 ///
@@ -1504,7 +1504,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: STD_UI_CLI,
     },
     CompiledStdModule {
-        dotted: "Ipe.App.Tea.Terminal.Color",
+        dotted: "Ipe.Tea.Terminal.Color",
         source: STD_TEA_TERMINAL_COLOR,
     },
     CompiledStdModule {

@@ -56,7 +56,7 @@ The same SEAL governs four transport shapes, chosen by the interaction:
 
 The example under
 [`examples/shapes/web/js-ports`](../../examples/shapes/web/js-ports/src/Main.ipe)
-is a `Web.app` that sends a closed `JsCmd` outbound and subscribes to a guarded
+is a `Web.tea` that sends a closed `JsCmd` outbound and subscribes to a guarded
 `Int` inbound stream.
 
 The outbound surface is one closed ADT — the whole attack surface as a single

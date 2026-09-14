@@ -2706,10 +2706,10 @@ impl Builder<'_> {
             // (emit_web.rs T5) — not at type time.
             //
             // Removes #[allow(dead_code)] from `live_f_routes` / `live_f_not_found`.
-            // `Web.embed` shares `Web.app`'s exact six-field cfg scheme — both
+            // `Web.embed` shares `Web.tea`'s exact six-field cfg scheme — both
             // produce the `WebApp` leaf from the same record. `embed`'s handle
             // is destined for `Server.mountApp`; `app`'s binds its own listener.
-            // `Web.app` / `Web.embed` share the route-ful six-field cfg. `Web.app`
+            // `Web.tea` / `Web.embed` share the route-ful six-field cfg. `Web.tea`
             // returns the uniform `Program Web msg` carrier; `Web.embed` keeps the
             // mountable `WebApp` leaf its `Server.mountApp` §9 gate names. The
             // `view` field is `Model -> View Web msg` (= `Element msg`).
@@ -2744,7 +2744,7 @@ impl Builder<'_> {
                     // Open row tail — var(3) absorbs optional extra fields.
                     RowTail::Open(3),
                 );
-                // `Web.app` returns the uniform carrier `Program Web msg`
+                // `Web.tea` returns the uniform carrier `Program Web msg`
                 // (msg = var(1)); `Web.embed` keeps the mountable `WebApp` leaf
                 // its `Server.mountApp` §9 gate names.
                 let result = if matches!(k, K::WebEmbed) {
@@ -2812,7 +2812,7 @@ impl Builder<'_> {
             K::WebRoute => fun(string(), fun(var(1), live_route(var(0)))),
             K::WebRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
 
-            // ── Ipe.Terminal full-screen app-entry (`Tui.app`) ────────────────
+            // ── Ipe.Terminal full-screen app-entry (`Tui.tea`) ────────────────
             //
             // `view : Model -> Cells Msg`, driven by `onKey`. `onKey` is
             // REQUIRED because the runtime's `tui_app_ui` entry takes a concrete
@@ -2857,8 +2857,8 @@ impl Builder<'_> {
                 fun(cfg_rec, program(program_shape_tui(), var(1)))
             }
 
-            // ── Ipe.Terminal line-oriented app-entry (`Cli.app`) ───────────────
-            // `Cli.app : { init : () -> (model, Cmd msg)
+            // ── Ipe.Terminal line-oriented app-entry (`Cli.tea`) ───────────────
+            // `Cli.tea : { init : () -> (model, Cmd msg)
             //                      , update : msg -> model -> (model, Cmd msg)
             //                      , view : model -> Lines msg
             //                      , subscriptions : model -> Sub msg
@@ -2882,8 +2882,8 @@ impl Builder<'_> {
                         m.insert(self.builtins.cli_f_on_line, fun(string(), var(1)));
                         m
                     },
-                    // Closed cfg record — like `Tui.app`, the line cfg takes
-                    // exactly its named fields (the open row is a `Web.app`-only
+                    // Closed cfg record — like `Tui.tea`, the line cfg takes
+                    // exactly its named fields (the open row is a `Web.tea`-only
                     // surface).
                     RowTail::Closed,
                 );
@@ -3047,7 +3047,7 @@ impl Builder<'_> {
                 cli_attr(var(0))
             }
             K::CliUiColor | K::CliUiBg => fun(term_color(), cli_attr(var(0))),
-            // ── Ipe.App.Tea.Terminal.Color palette constructors ──
+            // ── Ipe.Tea.Terminal.Color palette constructors ──
             K::TermColorBlack
             | K::TermColorRed
             | K::TermColorGreen
@@ -3986,7 +3986,7 @@ impl Builder<'_> {
 
             K::WebAppRouted => return None,
 
-            // `Ipe.Tea.worker { init, update, subscriptions } -> Program Worker msg`.
+            // `Ipe.Tea.Worker.tea { init, update, subscriptions } -> Program Worker msg`.
             // A const-schemed app entry (its authoritative scheme is `WORKER_APP`
             // in the kernel `scheme_shape` table); this arm is the reference `Ty`
             // the `interpreted_shape_matches_legacy` parity oracle proves the

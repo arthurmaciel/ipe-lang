@@ -301,9 +301,9 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // only through `Ipe.Ui.Cli.*` kernels.
     "Lines",
     "CliAttr",
-    // `Ipe.App.Tea.Terminal.Color`'s palette type `Color` (interned `TermColor`).
+    // `Ipe.Tea.Terminal.Color`'s palette type `Color` (interned `TermColor`).
     // Reserved so a user `type Color …` in a terminal module cannot forge a
-    // look-alike palette; built only through `Ipe.App.Tea.Terminal.Color.*` kernels.
+    // look-alike palette; built only through `Ipe.Tea.Terminal.Color.*` kernels.
     "TermColor",
     "Attribute",
     "Event",
@@ -1420,7 +1420,7 @@ pub fn canonicalise_module_in_project(
     }
     exports.scope_aliases = scope_aliases;
 
-    // IPE-N0033 (ADR 0048): a Program importing any `Ipe.App.Tea.*` shape is a
+    // IPE-N0033 (ADR 0048): a Program importing any `Ipe.Tea.*` shape is a
     // contradiction. Skip stdlib origins — the embedded `Ipe.Web.Head` /
     // `Ipe.Web.Console` helpers are static and never import a shape, and only
     // USER modules are subject to the Program/TEA distinction.
@@ -1430,7 +1430,7 @@ pub fn canonicalise_module_in_project(
         check_cross_shape_cmd_sub_gate(m, &canon_mod, interner)?;
         check_library_ssot_import_gate(m, interner)?;
         // Thread a sibling top-level `config` binding into the app entry
-        // (`main = Web.app { … }` becomes `Web.appWith config { … }`), or reject
+        // (`main = Web.tea { … }` becomes `Web.appWith config { … }`), or reject
         // a `config` binding that no app entry consumes (IPE-N0043).
         thread_config_binding(&mut canon_mod, interner)?;
     }
@@ -1448,7 +1448,7 @@ const CONFIG_BINDING: &str = "config";
 /// and reject a `config` binding no entry consumes (IPE-N0043).
 ///
 /// When a module declares both a top-level `config` binding and a `main` whose
-/// head is a settings-less `Web` entry (`Web.app` / `Web.appRouted`), rewrite the
+/// head is a settings-less `Web` entry (`Web.tea` / `Web.appRouted`), rewrite the
 /// entry to `Web.appWith config <cfg>`: the `config` value becomes the settings
 /// argument the runtime installs.
 ///
@@ -1487,10 +1487,10 @@ fn thread_config_binding(canon_mod: &mut canon::Module, interner: &mut Interner)
     // for a module that already names `Web` / `appWith`.
     let web_sym = interner.intern("Web").ok();
     let app_with_sym = interner.intern("appWith").ok();
-    let app_sym = interner.intern("app").ok();
+    let tea_sym = interner.intern("tea").ok();
     let app_routed_sym = interner.intern("appRouted").ok();
-    let (Some(web_sym), Some(app_with_sym), Some(app_sym), Some(app_routed_sym)) =
-        (web_sym, app_with_sym, app_sym, app_routed_sym)
+    let (Some(web_sym), Some(app_with_sym), Some(tea_sym), Some(app_routed_sym)) =
+        (web_sym, app_with_sym, tea_sym, app_routed_sym)
     else {
         // Interner exhausted (unreachable in practice) → fail closed rather than
         // silently drop the config.
@@ -1513,7 +1513,7 @@ fn thread_config_binding(canon_mod: &mut canon::Module, interner: &mut Interner)
         config: config_sym,
         web: web_sym,
         app_with: app_with_sym,
-        app: app_sym,
+        tea: tea_sym,
         app_routed: app_routed_sym,
     };
     if thread_config_into_entry(body, &names, &home) {
@@ -1534,8 +1534,8 @@ struct ConfigThreadNames {
     web: Symbol,
     /// The settings-carrying `appWith` entry name symbol.
     app_with: Symbol,
-    /// The settings-less `Web.app` entry name symbol.
-    app: Symbol,
+    /// The settings-less `Web.tea` entry name symbol.
+    tea: Symbol,
     /// The settings-less `Web.appRouted` entry name symbol.
     app_routed: Symbol,
 }
@@ -1551,7 +1551,7 @@ const fn discarded_config(span: Span) -> Diagnostic {
 /// Rewrite a settings-less `Web` entry at the head of `body` to thread `config`,
 /// returning whether the `config` binding was threaded into an app entry.
 ///
-/// Returns `true` when the head is `Web.app` / `Web.appRouted` applied to its
+/// Returns `true` when the head is `Web.tea` / `Web.appRouted` applied to its
 /// single cfg record — rewritten in place to `Web.appWith config <cfg>`.
 ///
 /// Returns `false` when:
@@ -1588,7 +1588,7 @@ fn thread_config_into_entry(
             }
             // Settings-less `Web` entry with exactly its cfg record: rewrite the
             // callee to `Web.appWith` and prepend the `config` reference.
-            if (*name == names.app || *name == names.app_routed) && args.len() == 1 {
+            if (*name == names.tea || *name == names.app_routed) && args.len() == 1 {
                 let module = *module;
                 // Re-target the kernel to `Web.appWith`. Both the type-checker
                 // (`resolve_scheme(SchemeKey(id))`) and the emit path key off the
@@ -1619,22 +1619,22 @@ fn thread_config_into_entry(
 /// The TEA app-entry kernels, keyed `(qualifier, entry name)`. A module whose
 /// `main` head-calls one of these is a TEA app; any other `main` (a plain
 /// `Task`) is a Program. Kept in lockstep with the app-entry rows of
-/// `env::QUALIFIERS` (`Web.app`/`appRouted`, `Tui.app`, `Cli.app`).
+/// `env::QUALIFIERS` (`Web.tea`/`appRouted`, `Tui.tea`, `Cli.tea`).
 ///
-/// Keyed on the kernel `(module, name)` a resolved `VarKernel` carries. `Tui.app`
-/// and `Cli.app` are the two terminal drive-axis entries; each maps to the one
+/// Keyed on the kernel `(module, name)` a resolved `VarKernel` carries. `Tui.tea`
+/// and `Cli.tea` are the two terminal drive-axis entries; each maps to the one
 /// `"Terminal"` rendering family via [`canonical_shape`] where the shape gate
 /// needs a family name.
 const TEA_APP_ENTRIES: &[(&str, &str)] = &[
-    ("Web", "app"),
+    ("Web", "tea"),
     ("Web", "appRouted"),
     ("Web", "appWith"),
-    ("Tui", "app"),
-    ("Cli", "app"),
-    // `Tea.worker` — the view-less co-located worker app-entry. A worker is a TEA
+    ("Tui", "tea"),
+    ("Cli", "tea"),
+    // `Worker.tea` — the view-less co-located worker app-entry. A worker is a TEA
     // app (its `main` head-calls the entry), but folds onto its own `"Worker"`
     // shape family for `Cmd` / `Sub` scoping (see `canonical_shape`).
-    ("Tea", "worker"),
+    ("Worker", "tea"),
 ];
 
 /// The canonical shape (rendering family) name for a TEA surface segment. Most
@@ -1645,9 +1645,8 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
 fn canonical_shape(surface: &str) -> &str {
     match surface {
         "Tui" | "Cli" => "Terminal",
-        // The view-less worker's entry qualifier is `Tea`; its own `Cmd` / `Sub`
-        // scope is `Ipe.App.Tea.Worker.{Cmd,Sub}`, folding onto `"Worker"`.
-        "Tea" => "Worker",
+        // The view-less worker's entry qualifier `Worker` names its own `Cmd` /
+        // `Sub` scope (`Ipe.Tea.Worker.{Cmd,Sub}`) directly via `other => other`.
         other => other,
     }
 }
@@ -1655,7 +1654,7 @@ fn canonical_shape(surface: &str) -> &str {
 /// IPE-N0045: reject a `main` that selects its shape at run time.
 ///
 /// A program's shape is pinned by the head of `main` at compile time (§ static
-/// pinning): `main = Web.app …` is a web app, `main = Tui.app …` a
+/// pinning): `main = Web.tea …` is a web app, `main = Tui.tea …` a
 /// terminal app, a `Task Error ()` `main` a script. It is never chosen from a
 /// value, so a `main` whose head — after peeling application / `let` / `\… ->`,
 /// exactly as the shape classifier peels it — is an `if` or `case` with a branch
@@ -1725,7 +1724,7 @@ fn check_main_not_runtime_branched(canon_mod: &canon::Module, interner: &Interne
 ///
 /// Peels the same forms as the shape classifier (application / `let` / `\… ->`)
 /// and, for a nested `if` / `case`, recurses into every sub-branch — so
-/// `if a then Web.app c else if b then Cli … else …` is caught at any depth. A
+/// `if a then Web.tea c else if b then Cli … else …` is caught at any depth. A
 /// branch whose head is a plain expression (a `Task`, a value) reaches no entry
 /// and does not, on its own, mark the `main` a shape choice.
 fn branch_head_reaches_tea_entry(branch: &canon::Expr, interner: &Interner) -> bool {
@@ -1759,12 +1758,12 @@ fn branch_head_reaches_tea_entry(branch: &canon::Expr, interner: &Interner) -> b
 }
 
 /// IPE-N0033: reject a Program (plain-`main` module) that imports any
-/// `Ipe.App.Tea.*` shape module.
+/// `Ipe.Tea.*` shape module.
 ///
 /// The rule is exactly ADR 0048's structural marker: importing anything under
-/// `Ipe.App.Tea.*` marks a module a TEA app. A module is a TEA app iff its `main`
+/// `Ipe.Tea.*` marks a module a TEA app. A module is a TEA app iff its `main`
 /// head-calls one of [`TEA_APP_ENTRIES`]; every other `main` is a Program. So a
-/// module that imports a `Ipe.App.Tea.*` shape but whose `main` is not a shape entry
+/// module that imports a `Ipe.Tea.*` shape but whose `main` is not a shape entry
 /// is a Program-importing-a-shape contradiction, reported at the offending
 /// import span. The `Ipe.Ui` / `Ipe.Html` / `Ipe.Css` data + static-render
 /// modules are deliberately top-level, so a Program that builds a `Ui` tree and
@@ -1772,30 +1771,24 @@ fn branch_head_reaches_tea_entry(branch: &canon::Expr, interner: &Interner) -> b
 ///
 /// # Errors
 /// [`Diagnostic::Name`] (IPE-N0033) when a plain-`main` module imports a
-/// `Ipe.App.Tea.*` shape.
+/// `Ipe.Tea.*` shape.
 fn check_program_tea_import_gate(
     m: &src::Module,
     canon_mod: &canon::Module,
     interner: &Interner,
 ) -> DResult<()> {
-    // A `Ipe.App.Tea.*` import: path length ≥ 4 with first three segments
-    // Ipe, App, Tea.
-    let (Some(ipe_sym), Some(app_sym), Some(tea_sym)) = (
-        interner.lookup("Ipe"),
-        interner.lookup("App"),
-        interner.lookup("Tea"),
-    ) else {
-        // No `Ipe.App.Tea` segment interned in this build → no shape can be
+    // A `Ipe.Tea.*` import: path length ≥ 3 with first two segments Ipe, Tea.
+    let (Some(ipe_sym), Some(tea_sym)) = (interner.lookup("Ipe"), interner.lookup("Tea")) else {
+        // No `Ipe.Tea` segment interned in this build → no shape can be
         // imported; nothing to gate.
         return Ok(());
     };
     let tea_import = m.imports.iter().find(|imp| {
-        // `Ipe.App.Tea.<Shape>`: at least four segments whose first three are
-        // Ipe, App, Tea.
+        // `Ipe.Tea.<Shape>`: at least three segments whose first two are Ipe, Tea.
         matches!(
             imp.name.value.as_slice(),
-            [first, second, third, _, ..]
-                if *first == ipe_sym && *second == app_sym && *third == tea_sym
+            [first, second, _, ..]
+                if *first == ipe_sym && *second == tea_sym
         )
     });
     let Some(tea_import) = tea_import else {
@@ -1804,7 +1797,7 @@ fn check_program_tea_import_gate(
 
     // The Program/TEA distinction only applies to an ENTRY module — one that
     // defines `main`. A helper submodule with no `main` (e.g. an `Update`
-    // module that imports `Ipe.App.Tea.Web.Cmd` solely to name `Cmd` in `update`'s
+    // module that imports `Ipe.Tea.Web.Cmd` solely to name `Cmd` in `update`'s
     // signature and build `Cmd.none` / `Cmd.batch` effects) is neither a
     // Program nor an app entry, so it is exempt from this gate.
     let main_sym = interner.lookup("main");
@@ -1827,7 +1820,7 @@ fn check_program_tea_import_gate(
     }
 
     // A declarative `Ipe.Http.Server` program (`main = Server.listen …`) may
-    // legitimately import `Ipe.App.Tea.Web` to build a mountable web app with
+    // legitimately import `Ipe.Tea.Web` to build a mountable web app with
     // `Web.embed` and mount it via `Server.mountApp` on the shared server port
     // (shape-model §9). Such a `main` head-calls `Server.listen`, not a TEA
     // shape entry, so it would otherwise trip this gate; exempt it. The embedded
@@ -1853,7 +1846,7 @@ fn check_program_tea_import_gate(
 /// `Ipe.Http.Server` entry? Same head-peeling as [`main_head_is_tea_entry`]. A
 /// Server program that embeds a web app (`Web.embed` + `Server.mountApp`) is a
 /// Program at the module level, not a TEA app, so it is exempt from the
-/// `Ipe.App.Tea.*`-import gate (IPE-N0033).
+/// `Ipe.Tea.*`-import gate (IPE-N0033).
 fn main_head_is_server_listen(body: &canon::Expr, interner: &Interner) -> bool {
     let mut node = body;
     loop {
@@ -1908,14 +1901,14 @@ fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
 }
 
 /// The CANONICAL TEA shape (rendering family) a `main` proves from its entry
-/// kernel. The value is the family a user's `Ipe.App.Tea.<Shape>.{Cmd,Sub}` import
+/// kernel. The value is the family a user's `Ipe.Tea.<Shape>.{Cmd,Sub}` import
 /// must fold onto (via [`canonical_shape`]) to be admissible. The terminal
-/// family's two drive axes (`Tui.app`, `Cli.app`) both resolve to the one
+/// family's two drive axes (`Tui.tea`, `Cli.tea`) both resolve to the one
 /// `"Terminal"` family here, so a terminal app may import either surface's
 /// `Cmd` / `Sub`.
 ///
 /// Returns `None` when `main` is not a shape-entry app — the cross-shape gate
-/// then does not apply (a plain-`main` Program importing `Ipe.App.Tea.*` is already
+/// then does not apply (a plain-`main` Program importing `Ipe.Tea.*` is already
 /// rejected by IPE-N0033).
 fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static str> {
     let mut node = body;
@@ -1938,13 +1931,13 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
 /// IPE-N0035: reject a TEA app that imports another shape's `Cmd` / `Sub`.
 ///
 /// `Cmd` / `Sub` are shape-specific and re-exported per shape under
-/// `Ipe.App.Tea.<Shape>.{Cmd,Sub}`. The app's shape is proven from its entry kernel
-/// (`Web.app` / `Tui.app` / `Cli.app`); an imported
-/// `Ipe.App.Tea.<OtherShape>.{Cmd,Sub}` has no denotation in this app and fails
+/// `Ipe.Tea.<Shape>.{Cmd,Sub}`. The app's shape is proven from its entry kernel
+/// (`Web.tea` / `Tui.tea` / `Cli.tea`); an imported
+/// `Ipe.Tea.<OtherShape>.{Cmd,Sub}` has no denotation in this app and fails
 /// closed here, naming the correct import path for the app's own shape.
 ///
 /// Applies only to TEA apps (a proven shape entry). A plain-`main` Program that
-/// imports any `Ipe.App.Tea.*` path — a shape-scoped `Cmd` / `Sub` included — is
+/// imports any `Ipe.Tea.*` path — a shape-scoped `Cmd` / `Sub` included — is
 /// already the IPE-N0033 contradiction, so this gate never needs to fire there.
 ///
 /// # Errors
@@ -1954,11 +1947,7 @@ fn check_cross_shape_cmd_sub_gate(
     canon_mod: &canon::Module,
     interner: &Interner,
 ) -> DResult<()> {
-    let (Some(ipe_sym), Some(app_sym), Some(tea_sym)) = (
-        interner.lookup("Ipe"),
-        interner.lookup("App"),
-        interner.lookup("Tea"),
-    ) else {
+    let (Some(ipe_sym), Some(tea_sym)) = (interner.lookup("Ipe"), interner.lookup("Tea")) else {
         return Ok(());
     };
     let (Some(cmd_sym), Some(sub_sym)) = (interner.lookup("Cmd"), interner.lookup("Sub")) else {
@@ -1989,12 +1978,12 @@ fn check_cross_shape_cmd_sub_gate(
     // fold onto `Terminal`, so a terminal app may import either surface's `Cmd` /
     // `Sub`. `app_shape` is already canonical (proven from the entry kernel).
     for imp in &m.imports {
-        // `Ipe.App.Tea.<Shape>.{Cmd,Sub}`: exactly five segments,
-        // `Ipe . App . Tea . Shape . Cmd|Sub`.
-        let [first, second, third, shape, leaf] = imp.name.value.as_slice() else {
+        // `Ipe.Tea.<Shape>.{Cmd,Sub}`: exactly four segments,
+        // `Ipe . Tea . Shape . Cmd|Sub`.
+        let [first, second, shape, leaf] = imp.name.value.as_slice() else {
             continue;
         };
-        if *first != ipe_sym || *second != app_sym || *third != tea_sym {
+        if *first != ipe_sym || *second != tea_sym {
             continue;
         }
         if *leaf != cmd_sym && *leaf != sub_sym {
@@ -2010,10 +1999,10 @@ fn check_cross_shape_cmd_sub_gate(
         return Err(Diagnostic::Name {
             span: imp.name.span,
             msg: NameError::WrongShapeCmdSub(Box::new(CmdSubShapeMismatch {
-                imported: format!("Ipe.App.Tea.{imported_shape}.{leaf_name}").into_boxed_str(),
+                imported: format!("Ipe.Tea.{imported_shape}.{leaf_name}").into_boxed_str(),
                 imported_shape: imported_shape.into(),
                 app_shape: app_shape.into(),
-                expected: format!("Ipe.App.Tea.{app_shape}.{leaf_name}").into_boxed_str(),
+                expected: format!("Ipe.Tea.{app_shape}.{leaf_name}").into_boxed_str(),
             })),
         });
     }
@@ -3237,7 +3226,7 @@ fn canonicalise_with_env(
 /// (path length ≥ 3, e.g. `Ipe.Html.Unsafe`, `Ipe.Db.Unsafe`). A user file
 /// literally named `Ipe.Db.Unsafe` cannot be imported — it is rejected at
 /// discovery as `User` origin (IPE-N0025) — so a matching import can only name a
-/// vouched `EmbeddedStdlib` submodule. Mirrors the `Ipe.App.Tea.*` import-shape
+/// vouched `EmbeddedStdlib` submodule. Mirrors the `Ipe.Tea.*` import-shape
 /// check: a segment-slice pattern, no string allocation on the hot path.
 /// The web capabilities disclosed by a module's reserved `Ipe.Browser.<Api>`
 /// imports.
@@ -4197,7 +4186,7 @@ fn synthesize_record_alias_ctors(
         // the emitted Rust fail to build. Two disjoint non-derivable shapes:
         //
         //   * a raw function — directly (`{ handler : Int -> Msg }`, config-record
-        //     aliases like `Web.app`'s cfg) OR nested inside a derive carrier
+        //     aliases like `Web.tea`'s cfg) OR nested inside a derive carrier
         //     (`{ xs : List (Int -> Int) }`, `{ f : Maybe (Int -> Int) }`,
         //     `{ p : (Int -> Int, Bool) }`, `{ g : Result e (Int -> Int) }`, a
         //     nested record). For a DIRECT arrow the lowerer's own
@@ -8364,7 +8353,7 @@ mod config_threading_tests {
         i.intern(s).expect("intern must succeed")
     }
 
-    /// A `VarKernel` head for `Web.<name>` (e.g. `Web.app`).
+    /// A `VarKernel` head for `Web.<name>` (e.g. `Web.tea`).
     fn web_entry(i: &mut Interner, name: &str) -> canon::Expr {
         let module = sym(i, "Web");
         let name = sym(i, name);
@@ -8426,9 +8415,9 @@ mod config_threading_tests {
     #[test]
     fn config_is_threaded_into_web_app_entry() {
         let mut i = Interner::new();
-        let main_body_expr = entry_call(web_entry(&mut i, "app"));
+        let main_body_expr = entry_call(web_entry(&mut i, "tea"));
         let mut m = module_with(&mut i, main_body_expr, true);
-        thread_config_binding(&mut m, &mut i).expect("config must thread into Web.app");
+        thread_config_binding(&mut m, &mut i).expect("config must thread into Web.tea");
 
         // `main` is now `Web.appWith config <cfg>`: callee re-targeted to
         // `appWith`, `config` prepended as the settings argument.
@@ -8505,7 +8494,7 @@ mod config_threading_tests {
     fn no_config_binding_is_a_noop() {
         // A module with no `config` binding is untouched (no rewrite, no error).
         let mut i = Interner::new();
-        let main_body_expr = entry_call(web_entry(&mut i, "app"));
+        let main_body_expr = entry_call(web_entry(&mut i, "tea"));
         let mut m = module_with(&mut i, main_body_expr, false);
         thread_config_binding(&mut m, &mut i).expect("no config → no-op");
         let untouched = main_body(&m, &i).is_some_and(

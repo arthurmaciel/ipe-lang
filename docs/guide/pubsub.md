@@ -32,7 +32,7 @@ Three knots.
 
 The example under
 [`examples/shapes/web/task-publish`](../../examples/shapes/web/task-publish/src/Main.ipe)
-is a `Web.app` that broadcasts on a shared topic and shows the subscriber count.
+is a `Web.tea` that broadcasts on a shared topic and shows the subscriber count.
 
 The topic is one shared handle — its `String` payload type is what any publish
 and any subscription on the same value must agree on:

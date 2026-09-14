@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 {-|
-A line-oriented TEA counter using `Cli.app`.
+A line-oriented TEA counter using `Cli.tea`.
 
 The `onLine : String -> Msg` callback maps each stdin line to a `Msg`,
 giving the same `init / update / view / subscriptions` shape as other
@@ -17,9 +17,9 @@ Type:
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
-import Ipe.App.Tea.Cli as Cli
-import Ipe.App.Tea.Cli.Cmd as Cmd
-import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 
@@ -90,7 +90,7 @@ onLine line =
 
 
 main =
-    Cli.app
+    Cli.tea
         { init = init
         , update = update
         , view = view

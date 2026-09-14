@@ -1,6 +1,6 @@
 module Main exposing (main)
 
--- Routed Web.app that OWNS navigation in `update` via the optional
+-- Routed Web.tea that OWNS navigation in `update` via the optional
 -- `onNavigate : page -> msg` cfg field.  Every URL-driven route change becomes
 -- the `Navigate p` Msg, which the runtime dispatches through `update` — the new
 -- page reaches the model only through the author's own `update` arm, never a
@@ -10,11 +10,11 @@ module Main exposing (main)
 -- the implicit desugaring instead; the two fixtures pin both sides of the
 -- explicit-in-config navigation form.
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Page
     = CounterPage
@@ -58,7 +58,7 @@ routeTable =
     ]
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 -- Library-SSOT placement gate (IPE-N0047): this is a `cli` app (its `main`
--- calls `Cli.app`, so it renders terminal lines). It imports
+-- calls `Cli.tea`, so it renders terminal lines). It imports
 -- `Ipe.Browser.Clipboard` — a browser host capability that needs a JS host. A
 -- terminal app has no browser and never will, so the import has no denotation
 -- here; it fails closed at resolve, before any Rust is generated. The fix is a
@@ -9,11 +9,11 @@ module Main exposing (main)
 
 import Ipe.String as String
 import Ipe.Task as Task
-import Ipe.App.Tea.Cli as Cli
+import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
-import Ipe.App.Tea.Cli.Cmd as Cmd
-import Ipe.App.Tea.Cli.Sub as Sub
+import Ipe.Tea.Cli.Cmd as Cmd
+import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Browser.Clipboard as Clipboard
 
 
@@ -62,7 +62,7 @@ onLine line =
 
 
 main =
-    Cli.app
+    Cli.tea
         { init = init
         , update = update
         , view = view

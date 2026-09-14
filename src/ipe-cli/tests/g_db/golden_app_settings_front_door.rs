@@ -275,8 +275,8 @@ fn bare_int_log_level_is_rejected() {
 }
 
 /// THE SEAL (item 1): a named top-level `config : List (Setting Web)` binding
-/// threaded into a settings-less `Web.app { … }` entry is accepted (exit 0) AND
-/// the emitted crate `cargo build`s. Proves canon rewrites `Web.app` to
+/// threaded into a settings-less `Web.tea { … }` entry is accepted (exit 0) AND
+/// the emitted crate `cargo build`s. Proves canon rewrites `Web.tea` to
 /// `Web.appWith config` — the ergonomic one-`config`-binding surface.
 #[test]
 fn config_binding_threads_into_web_app_and_builds() {
@@ -292,7 +292,7 @@ fn config_binding_threads_into_web_app_and_builds() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "a named `config` binding threaded into a `Web.app` entry must be accepted \
+        "a named `config` binding threaded into a `Web.tea` entry must be accepted \
          and emit a buildable crate, got: {built:?}"
     );
 

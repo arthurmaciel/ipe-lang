@@ -988,7 +988,7 @@ fn run_inner(
     let mut cargo_child: Option<Arc<std::sync::Mutex<Child>>> = None;
     // Set at `CompileDone` (Green), consumed at `CargoDone` (Green) — the
     // readiness strategy is a property of the SOURCE (does it call
-    // `Web.app`?), decided once per generation right after emit, not
+    // `Web.tea`?), decided once per generation right after emit, not
     // re-derived from the built executable (which carries no such marker).
     let mut current_is_web = false;
     // The prominent "open this URL" line is printed once, after the first web
@@ -1768,7 +1768,7 @@ fn child_env(
         env.push(("IPE_WATCH_HOT_APPEARANCE".to_owned(), "1".to_owned()));
     }
     if std::env::var("IPE_WEB_STORE").is_err() {
-        // `file`, not `sqlite`: a plain `Web.app` reaches no DB kernel, so the
+        // `file`, not `sqlite`: a plain `Web.tea` reaches no DB kernel, so the
         // emitted crate carries no `db` feature and the sqlite store compiles
         // out (it would silently degrade to an in-memory store that does NOT
         // survive a rebuild — no Model handoff). The `file` store rides the

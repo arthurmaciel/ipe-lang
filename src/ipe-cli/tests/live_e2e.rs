@@ -1,4 +1,4 @@
-//! Honest end-to-end tests for `Ipe.Web` / `Ipe.Web` — `Web.app`, `Ui.layout`,
+//! Honest end-to-end tests for `Ipe.Web` / `Ipe.Web` — `Web.tea`, `Ui.layout`,
 //! `Ui.column`, `Ui.el`, `Ui.onClick`, `Ui.text`, and `String.fromInt`.
 //!
 //! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
@@ -58,7 +58,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// A minimal Ipe.Web counter app.
 ///
 /// Kernels exercised:
-/// - `Web.app`     — constrain scheme + serde derives
+/// - `Web.tea`     — constrain scheme + serde derives
 /// - `Ui.layout`    — converts Element tree to HTML
 /// - `Ui.column`    — vertical layout
 /// - `Ui.el`        — generic element container with onClick attribute
@@ -72,10 +72,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// function is not a raw kernel — it is defined in ipe-stdlib as a Ipê function.
 const IPE_LIVE_COUNTER: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 import Ipe.String
 
 type Msg = Increment | Decrement
@@ -112,7 +112,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -137,10 +137,10 @@ main =
 /// tripped because the non-serde record is a view helper, not the Model.
 const IPE_LIVE_HTML_HELPER: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 import Ipe.String
 
 type Msg = Increment | Decrement
@@ -179,7 +179,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -214,10 +214,10 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 const IPE_LIVE_LAMBDA_SUBS: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 import Ipe.String
 
 type Msg = Increment | Decrement
@@ -251,7 +251,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -266,7 +266,7 @@ main =
 /// the T5 routed branch and emits `web_app_routed` instead of `web_app`.
 ///
 /// Exercises the full T5 emit path through the compiler:
-/// - open-record unification of the 6-field `Web.app` cfg (T2/T3)
+/// - open-record unification of the 6-field `Web.tea` cfg (T2/T3)
 /// - `routed_page_field` detection in `emit_web_app_inner` (T5)
 /// - `set_page` closure generation (T5)
 /// - `web_app_routed` runtime entry (already ported in `runtime/`)
@@ -274,10 +274,10 @@ main =
 /// This is the same structure as `examples/09-live-counter/src/Main.ipe`.
 const IPE_LIVE_ROUTED: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 import Ipe.String
 
 type Page
@@ -322,7 +322,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -715,7 +715,7 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
 }
 
 /// Inline-lambda subscriptions seal — BUILD-ONLY: an inline-lambda
-/// `subscriptions` cfg field on a routed `Web.app` must compile end-to-end.
+/// `subscriptions` cfg field on a routed `Web.tea` must compile end-to-end.
 /// See `IPE_LIVE_LAMBDA_SUBS` for the full rationale — a lambda pinned to
 /// `Box<dyn Fn + Send>` (no `Sync`) instead of emitted unboxed into the generic
 /// `FSubs` slot makes this `ipe` exit 0 then `cargo build` E0277
@@ -952,7 +952,7 @@ fn live_sse_resync_body_carries_event_hids() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// T5 seal — BUILD-ONLY: a routed `Web.app` with a `page` field in the Model
+/// T5 seal — BUILD-ONLY: a routed `Web.tea` with a `page` field in the Model
 /// must compile and produce a Cargo project that links against
 /// `web_app_routed` rather than `web_app`.
 ///
@@ -1003,10 +1003,10 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 const IPE_PUBSUB_LIVE: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 import Ipe.String
 import Ipe.List
 import Ipe.Dict
@@ -1069,7 +1069,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -1103,10 +1103,10 @@ fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), Bo
 /// present; without it the emitted project would fail with E0425 (seal violation).
 const IPE_PUBSUB_RECORD_PAYLOAD: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 import Ipe.String
 import Ipe.List
 import Ipe.PubSub as PubSub exposing (Topic)
@@ -1162,7 +1162,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -1202,10 +1202,10 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
 /// forwarding the box itself — see that arm's comment for the full mechanism.
 const IPE_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type alias Creds =
     { username : String
@@ -1251,7 +1251,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -1403,13 +1403,13 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// (`ipe_backend_rust::emit_expr`'s `is_definitely_not_callable` gate).
 const IPE_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type Msg
     = UpdateName String
@@ -1459,7 +1459,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -1614,13 +1614,13 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// `onSubmit` payload is a RECORD literal, `Msg` is a record alias.
 const IPE_ONSUBMIT_RECORD_LITERAL: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type alias Msg =
     { action : String }
@@ -1654,7 +1654,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -1667,13 +1667,13 @@ main =
 /// `onSubmit` payload is a TUPLE literal, `Msg` is a tuple alias.
 const IPE_ONSUBMIT_TUPLE_LITERAL: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type alias Msg =
     ( String, Int )
@@ -1711,7 +1711,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -1724,13 +1724,13 @@ main =
 /// `onSubmit` payload is a LIST literal, `Msg` is a list alias.
 const IPE_ONSUBMIT_LIST_LITERAL: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit)
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 import Ipe.String
 import Ipe.List
 
@@ -1766,7 +1766,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -1860,13 +1860,13 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
 /// classifier would misroute to the decoder path.
 const IPE_ONSUBMIT_VAR_BOUND_MSG: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Html exposing (..)
 import Ipe.Html.Attributes exposing (..)
 import Ipe.Html.Events exposing (onSubmit, onInput)
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type Msg
     = UpdateName String
@@ -1920,7 +1920,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -2051,10 +2051,10 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// let-bound closure to `Arc<dyn Fn + Send + Sync>` at its declaration.
 const IPE_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type alias Creds =
     { username : String
@@ -2103,7 +2103,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -2124,10 +2124,10 @@ main =
 /// `flows_into_sync_kernel_call` must be alias-transparent to reach the root.
 const IPE_ONSUBMIT_LET_ALIAS_CHAIN: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type alias Creds =
     { username : String
@@ -2177,7 +2177,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -2236,10 +2236,10 @@ fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
 /// `examples/12-ipevote`: form at `/auth/signup`, `notFound` = board).
 const IPE_ONSUBMIT_ROUTED_FORM: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type Page
     = FormPage
@@ -2295,7 +2295,7 @@ view model =
     Ui.html (htmlView model)
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view

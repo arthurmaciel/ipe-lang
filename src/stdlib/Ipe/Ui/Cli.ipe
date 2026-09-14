@@ -13,7 +13,7 @@
 -- attributes are simply absent from the type rather than quietly discarded.
 --
 -- `text` is the plain-string escape hatch: `Cli.text s` renders `s` as one
--- line. `Cli.app`'s `view` field returns `Lines msg`, so `text` is the bridge
+-- line. `Cli.tea`'s `view` field returns `Lines msg`, so `text` is the bridge
 -- for a view that only wants to emit a plain string.
 module Ipe.Ui.Cli exposing
     ( Lines
@@ -25,7 +25,7 @@ module Ipe.Ui.Cli exposing
 
 
 import Ipe.Ffi.Kernel as Kernel
-import Ipe.App.Tea.Terminal.Color exposing (Color)
+import Ipe.Tea.Terminal.Color exposing (Color)
 
 
 -- | An empty view — renders nothing.

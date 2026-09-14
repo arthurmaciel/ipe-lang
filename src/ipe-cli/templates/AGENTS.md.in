@@ -98,13 +98,13 @@ Production-grade code no survive guesswork.
 
 ### The six decisions to confirm
 
-1. **App shape** — match matrix. The TEA shapes live under `Ipe.App.Tea.*`:
-   `Ipe.App.Tea.Web`=web UI, `Ipe.App.Tea.Tui`=terminal UI (`Tui.app`) and
-   `Ipe.App.Tea.Cli`=line-oriented REPL (`Cli.app`), `Ipe.App.Tea.WebView`=desktop.
+1. **App shape** — match matrix. The TEA shapes live under `Ipe.Tea.*`:
+   `Ipe.Tea.Web`=web UI, `Ipe.Tea.Tui`=terminal UI (`Tui.tea`) and
+   `Ipe.Tea.Cli`=line-oriented REPL (`Cli.tea`), `Ipe.Tea.WebView`=desktop.
    `Ipe.Http.Server`=headless API and a plain `main` (one-shot/cron) are both
    the non-TEA **Program** shape.
-   Importing anything under `Ipe.App.Tea.*` marks a module a TEA app; a plain-`main`
-   Program that imports a `Ipe.App.Tea.*` shape is rejected (IPE-N0033).
+   Importing anything under `Ipe.Tea.*` marks a module a TEA app; a plain-`main`
+   Program that imports a `Ipe.Tea.*` shape is rejected (IPE-N0033).
 2. **Persistence** — SQLite (single-file, embeds) / PostgreSQL / Firestore /
    Redis / none.
 3. **Auth** — none / `Ipe.Auth` (cookies+JWT, you own users) / OAuth
@@ -121,11 +121,11 @@ Ask one focused question per ambiguity; no guess heroically.
 
 | User wants…                              | Use                | Entry point shape                  | Notes |
 |------------------------------------------|--------------------|------------------------------------|-------|
-| Web app (forms, real-time, UI state)     | **Ipe.App.Tea.Web**        | `Web.app cfg`                      | HTTP-first; SSE patches; sessions + cookies + routing built in. |
-| Multi-tenant SaaS / dashboard            | **Ipe.App.Tea.Web + auth-app gate** | `Web.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
-| Desktop app                              | **Ipe.App.Tea.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
-| Line-oriented interactive tool           | **Ipe.App.Tea.Cli**        | `Cli.app cfg`                      | Managed stdin-driven TEA loop (init/update/view/onLine). |
-| Terminal UI (TUI)                        | **Ipe.App.Tea.Tui**        | `Tui.app cfg`                      | `Screen` view (`Ipe.Ui.Tui`), a terminal-only view type. |
+| Web app (forms, real-time, UI state)     | **Ipe.Tea.Web**        | `Web.tea cfg`                      | HTTP-first; SSE patches; sessions + cookies + routing built in. |
+| Multi-tenant SaaS / dashboard            | **Ipe.Tea.Web + auth-app gate** | `Web.tea { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
+| Desktop app                              | **Ipe.Tea.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
+| Line-oriented interactive tool           | **Ipe.Tea.Cli**        | `Cli.tea cfg`                      | Managed stdin-driven TEA loop (init/update/view/onLine). |
+| Terminal UI (TUI)                        | **Ipe.Tea.Tui**        | `Tui.tea cfg`                      | `Screen` view (`Ipe.Ui.Tui`), a terminal-only view type. |
 | HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
 | WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
 | Server-sent stream (LLM tokens, SSE)     | **Ipe.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Ipe.Http.Stream`. |
@@ -281,7 +281,7 @@ entry boundary (CLI `main`, `Cmd.perform`, HTTP handler return) executes them.
 
 Per app shape: CLI → `… |> Task.onError reportError` (return the Task directly from `main`);
 Ipe.Http.Server → `Task.onError` recovers to 4xx/5xx Response;
-Ipe.App.Tea.Web → `Cmd.perform task ResultMsg`, dispatch updates
+Ipe.Tea.Web → `Cmd.perform task ResultMsg`, dispatch updates
 `notification` / `historyError` in Model.
 
 ## Writing idiomatic Ipê
@@ -381,10 +381,10 @@ app code.
 | Module | Path | Key functions |
 |---|---|---|
 | `Task` | `Ipe.Task` | succeed, fail, map, andThen, perform, sequence, parallel, lazy, run, fromResult, andThenResult, mapError, onError; **retryWith** + `RetryPolicy e` + `BackoffStrategy` ADT (Linear \| LinearWithJitter \| Exponential \| ExponentialWithJitter). Build via linearBackoff/exponentialBackoff/defaultRetryPolicy; decorate via withJitter/withMaxAttempts/withBaseMs (`Ipe.Duration`)/withRetryOn. |
-| `Cmd` | `Ipe.App.Tea.<Shape>.Cmd` | Shape-scoped (`Ipe.App.Tea.Web.Cmd` / `Ipe.App.Tea.WebView.Cmd` / `Ipe.App.Tea.Terminal.Cmd`); importing another shape's `Cmd` in an app is rejected (IPE-N0035). none, batch, perform, map, publish (echo-by-default pub/sub from update return), publishNoEcho (opt-out echo) |
-| `Sub` | `Ipe.App.Tea.<Shape>.Sub` | Shape-scoped (`Ipe.App.Tea.Web.Sub` / `Ipe.App.Tea.WebView.Sub` / `Ipe.App.Tea.Terminal.Sub`); wrong-shape import rejected (IPE-N0035). none, every, batch, map, subscribeTopic (pub/sub receive) |
-| `PubSub` | `Ipe.PubSub` | publish (Task-shaped, callable wherever a broadcast bus runs — a Web-app process, or `Err` in a plain CLI; complements `Ipe.App.Tea.Web.PubSub.publish`), publishNoEcho (Task-shaped no-echo) |
-| `Tea.Web.PubSub` | `Ipe.App.Tea.Web.PubSub` | publish, publishNoEcho (Cmd-shaped, returned from a Web `update`), subscribeTopic (Sub-shaped, declared in `subscriptions`) — the TEA-loop broadcast surface (importing it marks the module a TEA app) |
+| `Cmd` | `Ipe.Tea.<Shape>.Cmd` | Shape-scoped (`Ipe.Tea.Web.Cmd` / `Ipe.Tea.WebView.Cmd` / `Ipe.Tea.Terminal.Cmd`); importing another shape's `Cmd` in an app is rejected (IPE-N0035). none, batch, perform, map, publish (echo-by-default pub/sub from update return), publishNoEcho (opt-out echo) |
+| `Sub` | `Ipe.Tea.<Shape>.Sub` | Shape-scoped (`Ipe.Tea.Web.Sub` / `Ipe.Tea.WebView.Sub` / `Ipe.Tea.Terminal.Sub`); wrong-shape import rejected (IPE-N0035). none, every, batch, map, subscribeTopic (pub/sub receive) |
+| `PubSub` | `Ipe.PubSub` | publish (Task-shaped, callable wherever a broadcast bus runs — a Web-app process, or `Err` in a plain CLI; complements `Ipe.Tea.Web.PubSub.publish`), publishNoEcho (Task-shaped no-echo) |
+| `Tea.Web.PubSub` | `Ipe.Tea.Web.PubSub` | publish, publishNoEcho (Cmd-shaped, returned from a Web `update`), subscribeTopic (Sub-shaped, declared in `subscriptions`) — the TEA-loop broadcast surface (importing it marks the module a TEA app) |
 | `Time` | `Ipe.Time` | now, sleep (`Ipe.Duration`), every (`Ipe.Duration`), unixMillis, format/formatISO8601/formatRFC3339/formatHTTP, addMillis, diffMillis, timeString |
 | `Ipe.Time` | `Ipe.Time` | IANA zones, addMonths/Years (month-end CLAMPED), dayOfWeek (ISO Mon=1..Sun=7), weekOfYear (ISO 8601), startOfDay/Week/Month/Year, diffDays/Hours/Minutes/Seconds; `*Utc` infallible companions (`dayOfWeekUtc`/`startOfDayUtc`/`yearUtc`/etc — `Int -> Int`, plug "UTC" at call site). |
 | `Random` | `Ipe.Random` | int, float, range, choice, shuffle, weighted (entropy-backed); seed, seededInt, seededFloat, seededChoice (deterministic) |
@@ -401,8 +401,8 @@ app code.
 | `Server` | `Ipe.Http.Server` | param, queryParam, header, getCookie, static (Layer 3 surface); higher-level `get/post/listen/text/json/html` are kernel-only |
 | `Stream` | `Ipe.Http.Server.Stream` | stream, emit, finish, withContentType — server-side streaming HTTP responses (SSE/LLM token forwarding/chunked downloads). Mirror of `Ipe.Core.Http.Stream`. Sync bridge: `Ipe.Core.Http.Stream.forEachChunk hdl body` drains an upstream stream from inside a plain Ipe.Http.Server handler (relay shape). |
 | `Middleware` | `Ipe.Http.Middleware` | withCors, withLogging, withBasicAuth, withRateLimit |
-| `Head` | `Ipe.Web.Head` | Per-page `<head>` injection — `title`/`meta`/`metaProperty` (OG)/`link`/`canonical`/`themeColor`/`rss`. Opt in via optional `head : Model -> List (Html msg)` field on `Web.app` cfg. The verbatim JSON-LD `<script>` hatch `unsafeJsonLd` lives in `Ipe.Web.Head.Unsafe` (discloses the `unsafe` capability). |
-| `Console` | `Ipe.Web.Console` | `Identity` type alias (`{ subject, email, claims : Dict String String }`) for optional row-poly `consoleAuth : Request -> Task Error (Maybe Identity)` field on `Web.app` cfg. |
+| `Head` | `Ipe.Web.Head` | Per-page `<head>` injection — `title`/`meta`/`metaProperty` (OG)/`link`/`canonical`/`themeColor`/`rss`. Opt in via optional `head : Model -> List (Html msg)` field on `Web.tea` cfg. The verbatim JSON-LD `<script>` hatch `unsafeJsonLd` lives in `Ipe.Web.Head.Unsafe` (discloses the `unsafe` capability). |
+| `Console` | `Ipe.Web.Console` | `Identity` type alias (`{ subject, email, claims : Dict String String }`) for optional row-poly `consoleAuth : Request -> Task Error (Maybe Identity)` field on `Web.tea` cfg. |
 | `RateLimit` | `Ipe.Http.RateLimit` | allow |
 | `WebSocket` | `Ipe.WebSocket` (client) + `Ipe.Http.Server.WebSocket` (server) | Bidirectional sockets. Client: `connect`/`connectWith`/`send`/`sendBinary`/`close`/`closeWithCode` (Task-tier) + `onOpen`/`onMessage`/`onClose`/`onError` (Sub-tier). Server: `upgrade` (returns from a Ipe.Http.Server handler) + `sendToClient`/`sendBinaryToClient`/`broadcast`/`closeClient`. Server production gate: empty `originPatterns` returns 403 when `ENV=production`. |
 | `Cache` | `Ipe.Cache` | LRU+TTL in-memory cache, `Cache k v` parametric on key+value. `CacheCfg` w/ `defaultCfg` + `withMaxEntries` (Int) / `withTTL` (`Ipe.Duration`; `Duration.zero` disables) / `withMaxBytes` (`Ipe.ByteSize`; `ByteSize.zero` disables). `new`/`get`/`put`/`remove`/`clear`/`size`/`stats`. |
@@ -420,13 +420,13 @@ app code.
 `default*` ctor + `with*` builder per field — always compose via builders
 so future field additions no break call sites.
 
-## Ipe.App.Tea.Web + Ipe.Http.Server
+## Ipe.Tea.Web + Ipe.Http.Server
 
-### Web.app shape
+### Web.tea shape
 
 ```elm
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ route "/" HomePage, route "/about" AboutPage ]
         , notFound = HomePage
@@ -435,8 +435,8 @@ main =
 
 HTTP-first (full HTML on load, patches on events), SSE subscriptions,
 session stores (memory/sqlite/redis/postgres/firestore), type-safe events,
-VNode diffing. `Web.app` takes `view : Model -> Element Msg` — the portable
-`Ipe.Ui` view shared with `Ipe.App.Tea.WebView`/`Ipe.App.Tea.Terminal` (the framework
+VNode diffing. `Web.tea` takes `view : Model -> Element Msg` — the portable
+`Ipe.Ui` view shared with `Ipe.Tea.WebView`/`Ipe.Tea.Terminal` (the framework
 applies `Ui.layout` internally). For direct DOM control, drop raw `Ipe.Html` into
 the view through the `Ui.html : Html msg -> Element msg` node.
 
@@ -472,7 +472,7 @@ Apps ignoring `req` build unchanged (row-poly extension).
 
 ### Per-page `<head>` injection
 
-Optional `head : Model -> List (Html msg)` field on `Web.app` cfg.
+Optional `head : Model -> List (Html msg)` field on `Web.tea` cfg.
 Runtime calls once per full GET (initial load + ipe-nav navigation),
 splices returned list into `<head>` after required `<meta charset>`/
 `<meta viewport>`/`<meta ipe-base>` tags. HM sig row-open — apps omitting
@@ -482,7 +482,7 @@ field type-check and build unchanged.
 import Ipe.Web.Head as Head
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ route "/" HomePage, route "/blog/:slug" BlogPostPage ]
         , notFound = HomePage
@@ -593,7 +593,7 @@ use `data-ipe-path` for URL updates.
 
 **Auth gates around routes.** For public-vs-authenticated apps:
 
-- Let Ipe.App.Tea.Web route URL to page as usual.
+- Let Ipe.Tea.Web route URL to page as usual.
 - In `pageBody`/view, outer-case on `model.session`: signed-out always
   renders sign-in surface regardless of page.
 - Use single `currentPath : Model -> String` (not per-page `pathForPage`)
@@ -697,7 +697,7 @@ Bottom-pinned, three states:
   retrying in background so healed proxy recovers w/o refresh.
 
 Localise via `status = { reconnecting = "Reconnexion…", offline =
-"Connexion perdue" }` on `Web.app` cfg record. Partial overrides fall
+"Connexion perdue" }` on `Web.tea` cfg record. Partial overrides fall
 back to English defaults. Strings rendered via `textContent` (never
 `innerHTML`).
 
@@ -744,7 +744,7 @@ Response` still works. Same pattern works for any function-typed alias:
 
 ### Dev console
 
-Every Ipe.App.Tea.Web/Ipe.Http.Server app auto-mounts `Ipe.Ui` dev console at
+Every Ipe.Tea.Web/Ipe.Http.Server app auto-mounts `Ipe.Ui` dev console at
 `/_ipe/console` in dev mode, alongside structured logging, Prometheus
 `/_ipe/metrics` endpoint, distributed tracing. In production (`ENV`≠dev)
 console + banner removed and metrics require auth.
@@ -778,7 +778,7 @@ view model =
 
 1. **Forms with sensitive inputs use `Ui.form` + `onSubmit DoSignIn`, NOT
    `onInput` per keystroke on password fields.** See password pattern in
-   Ipe.App.Tea.Web section.
+   Ipe.Tea.Web section.
 
 2. **Real `<input>` elements use `Ui.input`, NOT `Ui.el [htmlAttribute
    "type" "text"]`.** `Ui.el` builds Node rendering as `<div>` — browsers
@@ -878,8 +878,8 @@ cascade, page background image).
   `DarkMode`, `LightMode`, `ReducedMotion`, `TouchDevice`, `Portrait`,
   `Landscape`, `Custom Int Int` (minPx maxPx; 0=unset). `Ui.mediaQuery
   query [attrs] child` = escape hatch for raw CSS media-query string.
-  Ipe.App.Tea.Terminal ignores `<style>`; Ipe.App.Tea.WebView honours media queries
-  identically to Ipe.App.Tea.Web. Pick `Ui.breakpoint` when transition needs no typed Msg;
+  Ipe.Tea.Terminal ignores `<style>`; Ipe.Tea.WebView honours media queries
+  identically to Ipe.Tea.Web. Pick `Ui.breakpoint` when transition needs no typed Msg;
   pick `Ipe.Ui.Responsive` when it does.
 - **Transitions + animations** (`Ipe.Ui.Transition`/`Ipe.Ui.Animation`/
   `Ipe.Ui.Transform`) — typed CSS transitions + keyframe animations on
@@ -945,15 +945,15 @@ Ui.input
 Callback receives data URL. Decode w/ `Ipe.Encoding.base64Decode` → upload
 via `Http.post`. Ensure `[live] maxBodyBytes` ≥ your `fileMaxSize`.
 
-## Ipe.App.Tea.Tui / Ipe.App.Tea.Cli
+## Ipe.Tea.Tui / Ipe.Tea.Cli
 
-TEA backends for the terminal, one entry per drive axis. `Tui.app`
-(`import Ipe.App.Tea.Tui as Tui`) renders a `Screen` tree to ANSI cells with
+TEA backends for the terminal, one entry per drive axis. `Tui.tea`
+(`import Ipe.Tea.Tui as Tui`) renders a `Screen` tree to ANSI cells with
 `view : Model -> Screen Msg` (built with `Ipe.Ui.Tui` — a Tui-only view
 type distinct from `Element`, so a Web-only node cannot appear in a terminal
-view; keystroke-driven via `onKey`). `Cli.app` (`import Ipe.App.Tea.Cli as Cli`) is
+view; keystroke-driven via `onKey`). `Cli.tea` (`import Ipe.Tea.Cli as Cli`) is
 the line-oriented REPL with `view : Model -> String` and `onLine : String -> Msg`.
-Both share the `init`/`update`/`subscriptions` shape of Ipe.App.Tea.Web.
+Both share the `init`/`update`/`subscriptions` shape of Ipe.Tea.Web.
 
 ```elm
 type alias Cfg model msg =
@@ -962,12 +962,12 @@ type alias Cfg model msg =
     , view          : model -> Screen msg
     , subscriptions : model -> Sub msg
     , onKey         : KeyEvent -> msg                  -- optional
-    , guard         : msg -> model -> Result Error ()  -- optional; same as Web.app's guard
+    , guard         : msg -> model -> Result Error ()  -- optional; same as Web.tea's guard
     , canvasWidth   : Int                              -- default 1280 logical px
     , canvasHeight  : Int                              -- default 720
     }
 
-main = Tui.app cfg
+main = Tui.tea cfg
 ```
 
 **Cell-native attributes** — `Ipe.Ui.Tui` carries its OWN `Attribute msg`,
@@ -977,13 +977,13 @@ palette `color`/`bg`. DOM attributes (`onClick`, `scrollbars`, `inFront`, …) a
 not in this type, so naming one in a `Screen` view is a type error (IPE-T0001),
 never a silently dropped attribute. Wide chars (CJK+emoji+ZWJ) supported.
 
-## Ipe.App.Tea.WebView (desktop)
+## Ipe.Tea.WebView (desktop)
 
-Cross-backend mirror of `Web.app`+`Tui.app` — same TEA shape, native
+Cross-backend mirror of `Web.tea`+`Tui.tea` — same TEA shape, native
 desktop window via system webview. No HTTP server, no SSE, no session store.
 
 ```elm
-import Ipe.App.Tea.WebView as WebView
+import Ipe.Tea.WebView as WebView
 
 main =
     WebView.app
@@ -995,10 +995,10 @@ main =
         }
 ```
 
-`view : Model -> Element Msg` paints identically across `Ipe.App.Tea.Web` (web)
-and `Ipe.App.Tea.WebView` (desktop) — the framework applies `Ui.layout` internally,
-so the view returns the raw `Element` with no wrap. `Ipe.App.Tea.Tui`
-(`Tui.app`) uses the distinct `view : Model -> Screen Msg` built from
+`view : Model -> Element Msg` paints identically across `Ipe.Tea.Web` (web)
+and `Ipe.Tea.WebView` (desktop) — the framework applies `Ui.layout` internally,
+so the view returns the raw `Element` with no wrap. `Ipe.Tea.Tui`
+(`Tui.tea`) uses the distinct `view : Model -> Screen Msg` built from
 `Ipe.Ui.Tui`, so a browser-only node cannot leak into a terminal view.
 `WindowCfg` is closed (`{ title : String, size : (Int, Int) }`) today; macOS
 supported first. For direct DOM control, drop raw `Ipe.Html` into the view
@@ -1006,7 +1006,7 @@ through the `Ui.html : Html msg -> Element msg` node.
 
 ## Browser-WASM target (`--target wasm`)
 
-`ipe build --target wasm` compiles single-page `Web.app` program to
+`ipe build --target wasm` compiles single-page `Web.tea` program to
 browser bundle: emitted project = `cdylib` crate (wasm-bindgen glue, no
 tokio/axum/sqlx) plus static `www/` shell (CSP `script-src 'self'
 'wasm-unsafe-eval'` — no JS eval). Bundle w/
@@ -1159,7 +1159,7 @@ ipe doc list                       # list every documented module
 ipe doc serve [--port <n>]         # build the HTML site + preview it on loopback
 ipe doc check                      # gate: fail if an exposed binding lacks a doc-comment
 ipe health [--fix] [--verbose]     # project / environment health checks
-ipe console [--port 8025]          # standalone Ipe.Ui console (--tui for the Ipe.App.Tea.Terminal backend)
+ipe console [--port 8025]          # standalone Ipe.Ui console (--tui for the Ipe.Tea.Terminal backend)
 ipe add <package>                  # add an FFI binding
 ipe remove <package>
 ipe install                        # regen missing FFI + deps

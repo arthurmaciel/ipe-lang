@@ -266,7 +266,7 @@ const fn compiled_symbol(
 /// invented `Ipe.<qualifier>` path.
 ///
 /// `Cmd` / `Sub` are intentionally absent — they are shape-scoped and have no
-/// canonical standalone module (reached via `Ipe.App.Tea.<Shape>.Cmd` / `.Sub`).
+/// canonical standalone module (reached via `Ipe.Tea.<Shape>.Cmd` / `.Sub`).
 const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
     // `Attr` kernels (`attribute`, `boolAttribute`, `noAttr`) are the three
     // primitive `Kernel.kernel "Attr_*"` aliases that `Ipe.Html.Attributes` wraps.
@@ -290,8 +290,8 @@ const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
     // `Ipe.Ui.Cli`.
     ("CliUi", &["Ipe", "Ui", "Cli"]),
     // `TermColor` palette constructors (`black` … `brightWhite`, `default`) live
-    // in `Ipe.App.Tea.Terminal.Color`.
-    ("TermColor", &["Ipe", "App", "Tea", "Terminal", "Color"]),
+    // in `Ipe.Tea.Terminal.Color`.
+    ("TermColor", &["Ipe", "Tea", "Terminal", "Color"]),
 ];
 
 /// The dotted module path a kernel qualifier lives under.
@@ -299,7 +299,7 @@ const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
 /// Resolution order (first match wins):
 ///
 /// 1. [`ipe_canon::STDLIB_MODULE_QUALIFIERS`] — the authoritative
-///    qualifier→path registry (`"Web"` → `Ipe.App.Tea.Web`).
+///    qualifier→path registry (`"Web"` → `Ipe.Tea.Web`).
 /// 2. The compiled-source module whose dotted name is `Ipe.<qualifier>`
 ///    (`"List"` → `Ipe.List`; `"Db.Dsn"` → `Ipe.Db.Dsn`).
 /// 3. The compiled-source module whose final segment equals the qualifier

@@ -2,8 +2,8 @@ module Main exposing (main)
 
 -- | console-auth — gating the embedded console with the app's own auth.
 --
--- A `Ipe.App.Tea.Web` app can supply an optional
--- `consoleAuth : Request -> Task Error (Maybe Identity)` field on its `Web.app`
+-- A `Ipe.Tea.Web` app can supply an optional
+-- `consoleAuth : Request -> Task Error (Maybe Identity)` field on its `Web.tea`
 -- cfg. When the framework gates the embedded console in app-mode, it runs the
 -- callback per request BEFORE mounting console routes: `Nothing` → 403 plus a
 -- structured audit log; `Just identity` → the request continues and the identity
@@ -15,11 +15,11 @@ module Main exposing (main)
 -- record stays source-compatible as future fields are added.
 
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Web.Console as Console exposing (Identity)
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Task as Task
 import Ipe.Maybe exposing (Maybe(..))
 
@@ -68,7 +68,7 @@ view _model =
 
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view

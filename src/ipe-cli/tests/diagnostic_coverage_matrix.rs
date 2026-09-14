@@ -139,7 +139,7 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
     (
         "refusal-tested",
         "IPE-L0124",
-        "Web.app no-page field gate not yet reached by any constant assertion or wire literal",
+        "Web.tea no-page field gate not yet reached by any constant assertion or wire literal",
     ),
     (
         "refusal-tested",

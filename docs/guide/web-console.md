@@ -1,7 +1,7 @@
 # Console authentication
 
 `Ipe.Web.Console` provides the `Identity` type and its builders for the optional
-`consoleAuth` field on a `Web.app` config. When the framework gates the embedded
+`consoleAuth` field on a `Web.tea` config. When the framework gates the embedded
 console in app-mode, it runs your callback per request *before* mounting console
 routes, so the console inherits the app's own auth surface — no second token to
 provision.
@@ -33,7 +33,7 @@ Three knots.
 
 The example under
 [`examples/shapes/web/console-auth`](../../examples/shapes/web/console-auth/src/Main.ipe)
-is a `Web.app` that supplies a `consoleAuth` callback building an identity with
+is a `Web.tea` that supplies a `consoleAuth` callback building an identity with
 the `Ipe.Web.Console` builders.
 
 The callback is a `Task` returning `Maybe Identity` — a real app reads a session
@@ -51,11 +51,11 @@ identify _req =
         )
 ```
 
-It is wired through the optional `consoleAuth` field on `Web.app`:
+It is wired through the optional `consoleAuth` field on `Web.tea`:
 
 ```ipe
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions
         , routes = [], notFound = Ignored
@@ -102,5 +102,5 @@ environment variable reference.
 - **Sibling guides:** [Tasks](task.md) — the effect the `consoleAuth` callback
   returns. [Maybe](maybe.md) — the `Just`/`Nothing` allow/deny result.
   [Dictionaries](dict.md) — the `claims` map an RBAC layer consults.
-- **Concepts:** [The Elm Architecture](the-elm-architecture.md) — the `Web.app`
+- **Concepts:** [The Elm Architecture](the-elm-architecture.md) — the `Web.tea`
   config `consoleAuth` extends.

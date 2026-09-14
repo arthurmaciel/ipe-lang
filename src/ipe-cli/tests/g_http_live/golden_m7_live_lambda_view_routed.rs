@@ -29,11 +29,11 @@ use std::path::{Path, PathBuf};
 /// LAMBDA `view`. Plain-data Model, so the admissibility gate passes —
 /// isolating the routed-detection behaviour.
 const LIVE_LAMBDA_VIEW_ROUTED: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -46,7 +46,7 @@ update msg model =
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update
         , view = \model -> Ui.text (String.fromInt model.count)
         , subscriptions = subscriptions

@@ -30,16 +30,16 @@ use ipe::watch::{WatchEvent, WatchHandle, WatchOptions};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// A minimal `Web.app` whose view carries a hoistable `Ui.padding` style value
+/// A minimal `Web.tea` whose view carries a hoistable `Ui.padding` style value
 /// and a marker text so an HTTP read can confirm the app is up. `padding` is the
 /// dominant appearance edit and hoists to a `LiteralTable` default under the flag.
 fn web_fixture(padding: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -57,25 +57,25 @@ fn web_fixture(padding: u32, extra_text: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
     )
 }
 
-/// A `Web.app` whose view carries a hoistable **numeric appearance scalar**
+/// A `Web.tea` whose view carries a hoistable **numeric appearance scalar**
 /// (`Font.weight : Int`) — a direct `Int` style value read back through the
 /// `parse::<i64>().unwrap_or(<literal>)` path. A marker text confirms the app is
 /// up. The weight hoists into the per-view `LiteralTable` default under the flag.
 fn web_fixture_weight(weight: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ui.Font as Font\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -93,14 +93,14 @@ fn web_fixture_weight(weight: u32, extra_text: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
     )
 }
 
-/// A `Web.app` whose view attaches an animation built from a fully literal
+/// A `Web.tea` whose view attaches an animation built from a fully literal
 /// `Ipe.Ui.Animation` pipeline — every knob a compile-time constant. The
 /// Phase-2 const-fold reduces `Animation.attribute { …, duration, … }` to a
 /// direct `Ui.animate <name> "<shorthand tail>" …` whose shorthand-tail string
@@ -110,11 +110,11 @@ fn web_fixture_weight(weight: u32, extra_text: &str) -> String {
 fn web_fixture_animation(duration: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Ui.Animation as Animation\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -143,23 +143,23 @@ fn web_fixture_animation(duration: u32, extra_text: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
     )
 }
 
-/// A `Web.app` whose view carries a hoistable **attribute value** (`Ui.name`)
+/// A `Web.tea` whose view carries a hoistable **attribute value** (`Ui.name`)
 /// and a **static text** node whose content is `text` — both widened
 /// appearance-literal kinds (Step 5). A marker text confirms the app is up.
 fn web_fixture_attr_text(name: &str, text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -177,14 +177,14 @@ fn web_fixture_attr_text(name: &str, text: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
     )
 }
 
-/// A `Web.app` whose view carries a `Ui.image { src, description }` whose
+/// A `Web.tea` whose view carries a `Ui.image { src, description }` whose
 /// `description` (alt text) is a hoistable record-native appearance field. A
 /// marker text confirms the app is up. `description` is a direct string
 /// literal, so it hoists into the per-view `LiteralTable`; `src` is a typed
@@ -193,10 +193,10 @@ fn web_fixture_attr_text(name: &str, text: &str) -> String {
 fn web_fixture_image(description: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -216,14 +216,14 @@ fn web_fixture_image(description: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
     )
 }
 
-/// A `Web.app` whose view carries a direct `Ipe.Css` value literal reaching the
+/// A `Web.tea` whose view carries a direct `Ipe.Css` value literal reaching the
 /// `CssSafety.safeValue` sanitizer — the one `Ipe.Css` value sink that lowers to
 /// Rust. `safeValue "<value>"` is a direct literal, so under the flag it hoists
 /// into the view's `LiteralTable` while the runtime `safe_value` wrapper is kept
@@ -233,10 +233,10 @@ fn web_fixture_image(description: &str) -> String {
 fn web_fixture_css(value: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.CssSafety exposing (safeValue)\n\
          import Ipe.Maybe as Maybe\n\n\
          type alias Model = {{ count : Int }}\n\n\
@@ -255,14 +255,14 @@ fn web_fixture_css(value: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
     )
 }
 
-/// A `Web.app` whose `view` returns a fully-static `Ipe.Html` subtree (built
+/// A `Web.tea` whose `view` returns a fully-static `Ipe.Html` subtree (built
 /// from the raw `Html.node` / `Html.text` / `Attributes.attribute` kernels, no
 /// `Model` read / control flow / handler), wrapped by `Ui.html`. Under the flag
 /// the WHOLE subtree hoists as ONE serialized template into the per-view
@@ -273,12 +273,12 @@ fn web_fixture_css(value: &str) -> String {
 fn web_fixture_static_html(text: &str, extra_child: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.Html as H\n\
          import Ipe.Html.Attributes as A\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -296,14 +296,14 @@ fn web_fixture_static_html(text: &str, extra_child: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
     )
 }
 
-/// A `Web.app` whose view is a fully-static `Ipe.Ui` subtree built from the
+/// A `Web.tea` whose view is a fully-static `Ipe.Ui` subtree built from the
 /// `Ui.node` element kernel over inert `Ui.padding` / `Ui.spacing` attributes and
 /// static `Ui.text` children — no `Model` read, no handler. Under the flag the
 /// WHOLE subtree hoists as ONE serialized `UiTemplate` into the per-view
@@ -314,10 +314,10 @@ fn web_fixture_static_html(text: &str, extra_child: &str) -> String {
 fn web_fixture_static_ui(text: &str, extra_child: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -334,14 +334,14 @@ fn web_fixture_static_ui(text: &str, extra_child: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
     )
 }
 
-/// A `Web.app` whose view carries a `Ui.gridTracks cols rows` — two direct raw
+/// A `Web.tea` whose view carries a `Ui.gridTracks cols rows` — two direct raw
 /// CSS String literals (`grid-template-columns` / `-rows` values) that each hoist
 /// into the per-view `LiteralTable` under the flag. The raw-CSS value sink
 /// (`SafeCssValue` on each axis) is a pure function of the String, so a hoisted
@@ -350,10 +350,10 @@ fn web_fixture_static_ui(text: &str, extra_child: &str) -> String {
 fn web_fixture_grid(cols: &str, rows: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -371,7 +371,7 @@ fn web_fixture_grid(cols: &str, rows: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
@@ -1485,7 +1485,7 @@ fn static_ui_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), B
     stop_and_join(&handle, join)
 }
 
-/// A `Web.app` whose view is built entirely with `Ipe.Ui` structural wrappers
+/// A `Web.tea` whose view is built entirely with `Ipe.Ui` structural wrappers
 /// (`Ui.column`, `Ui.row`) over literal attrs and static text, with no raw
 /// `Ui.node` / `Ui.taggedNode` call at the call site. Under the
 /// `IPE_WATCH_HOT_APPEARANCE` flag the compiler inlines each wrapper body and
@@ -1494,10 +1494,10 @@ fn static_ui_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), B
 fn web_fixture_static_ui_wrappers(text: &str, extra_child: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -1514,7 +1514,7 @@ fn web_fixture_static_ui_wrappers(text: &str, extra_child: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
@@ -1625,7 +1625,7 @@ fn static_ui_subtree_wrapper_hot_swaps_without_rebuild() -> Result<(), BoxError>
     stop_and_join(&handle, join)
 }
 
-/// A `Web.app` whose `view` is a MOSTLY-static `Ipe.Ui` subtree carrying a
+/// A `Web.tea` whose `view` is a MOSTLY-static `Ipe.Ui` subtree carrying a
 /// `Model`-derived **value hole** (`Ui.text (String.fromInt model.count)`)
 /// and a static sibling text. Under the flag the subtree partitions into a
 /// hoisted template (the static skeleton + a `Hole` marker) plus the compiled
@@ -1635,10 +1635,10 @@ fn static_ui_subtree_wrapper_hot_swaps_without_rebuild() -> Result<(), BoxError>
 fn web_fixture_value_hole(label: &str, extra_child: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.String as String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Noop\n\n\
@@ -1659,7 +1659,7 @@ fn web_fixture_value_hole(label: &str, extra_child: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Noop\n        \
                  }}\n",
@@ -1746,7 +1746,7 @@ fn value_hole_static_sibling_hot_swaps_without_rebuild() -> Result<(), BoxError>
     stop_and_join(&handle, join)
 }
 
-/// A `Web.app` counter whose `update` is a data-describable transition arm
+/// A `Web.tea` counter whose `update` is a data-describable transition arm
 /// (`Increment -> ( { m | count = m.count + step }, Cmd.none )`). Under the flag
 /// the arm compiles to `apply_transition_hot("<baked datum>", model)`, so editing
 /// the `step` literal changes ONLY the baked datum json — a transition hot-swap
@@ -1754,10 +1754,10 @@ fn value_hole_static_sibling_hot_swaps_without_rebuild() -> Result<(), BoxError>
 fn web_fixture_counter(step: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Increment\n\n\
@@ -1777,7 +1777,7 @@ fn web_fixture_counter(step: u32, extra_text: &str) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Increment\n        \
                  }}\n",
@@ -1878,7 +1878,7 @@ fn update_arm_step_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     stop_and_join(&handle, join)
 }
 
-/// A `Web.app` counter with a two-variant `Msg` (`Increment | Decrement`), each a
+/// A `Web.tea` counter with a two-variant `Msg` (`Increment | Decrement`), each a
 /// data-describable arm. Under the hot flag the emitter bakes a
 /// `const IPE_WEB_MSG_SET` descriptor of the variant surface, which the watch
 /// classifier diffs across emits. `keep_decrement` drops `Decrement` (a
@@ -1893,10 +1893,10 @@ fn web_fixture_msg_variants(keep_decrement: bool) -> String {
     };
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub\n\
          import Ipe.String\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Increment{decrement_variant}\n\n\
@@ -1917,7 +1917,7 @@ fn web_fixture_msg_variants(keep_decrement: bool) -> String {
          subscriptions _model =\n    \
              Sub.none\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Increment\n        \
                  }}\n",
@@ -1933,10 +1933,10 @@ fn web_fixture_msg_variants(keep_decrement: bool) -> String {
 fn web_fixture_ticker(interval: u32, extra_text: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\n\
+         import Ipe.Tea.Web.Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\n\
          type alias Model = {{ count : Int }}\n\n\
          type Msg = Tick\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -1955,7 +1955,7 @@ fn web_fixture_ticker(interval: u32, extra_text: &str) -> String {
          subscriptions _model =\n    \
              Sub.every {interval} Tick\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init, update = update, view = view, subscriptions = subscriptions\n        \
                  , routes = [], notFound = Tick\n        \
                  }}\n",
@@ -2119,7 +2119,7 @@ fn subscriptions_interval_edit_hot_swaps_without_rebuild() -> Result<(), BoxErro
     stop_and_join(&handle, join)
 }
 
-/// A `Web.app` whose `update` arm fires a single literal `Cmd.perform`
+/// A `Web.tea` whose `update` arm fires a single literal `Cmd.perform`
 /// (`Fetch -> ( model, Cmd.perform (Time.now ()) GotTime )`). Under the hot flag
 /// that arm's Cmd position composes to `fire_cmd_wiring("<baked wiring>", vec![…])`
 /// over the arm's OWN compiled effect table (the `Cmd.perform` stays compiled,
@@ -2127,10 +2127,10 @@ fn subscriptions_interval_edit_hot_swaps_without_rebuild() -> Result<(), BoxErro
 /// confirms the app is up.
 fn web_fixture_cmd_perform() -> String {
     "module Main exposing (main)\n\n\
-     import Ipe.App.Tea.Web as Web\n\
+     import Ipe.Tea.Web as Web\n\
      import Ipe.Ui as Ui\n\
-     import Ipe.App.Tea.Web.Cmd\n\
-     import Ipe.App.Tea.Web.Sub\n\
+     import Ipe.Tea.Web.Cmd\n\
+     import Ipe.Tea.Web.Sub\n\
      import Ipe.Time as Time\n\
      import Ipe.Time.Timestamp exposing (Timestamp)\n\
      import Ipe.Error exposing (Error)\n\n\
@@ -2154,7 +2154,7 @@ fn web_fixture_cmd_perform() -> String {
      subscriptions _model =\n    \
          Sub.none\n\n\
      main =\n    \
-         Web.app\n        \
+         Web.tea\n        \
              { init = init, update = update, view = view, subscriptions = subscriptions\n        \
              , routes = [], notFound = Fetch\n        \
              }\n"

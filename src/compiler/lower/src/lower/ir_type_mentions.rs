@@ -550,7 +550,7 @@ pub(super) fn program_type_mentions(
 /// alpha-reconcile) the generic struct.
 ///
 /// A record whose IR embeds a function type is NOT surfaced — the same G-b gate
-/// [`Lowerer::collect_records_in_ty`] applies: the `Web.app` cfg record's
+/// [`Lowerer::collect_records_in_ty`] applies: the `Web.tea` cfg record's
 /// `Box<dyn Fn>` fields cannot back a derivable struct, and it is consumed
 /// structurally rather than materialised.
 ///

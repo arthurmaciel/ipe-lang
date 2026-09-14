@@ -3,8 +3,8 @@
 //! cross-checks against (spec § 0, § 1).
 //!
 //! A program's shape is pinned by what `main` head-calls, never by config: a
-//! `main = Web.app …` is a DOM app, `main = Tui.app …` a terminal-cells app,
-//! `main = Cli.app …` a terminal-lines app, `main = Server.listen …` a server,
+//! `main = Web.tea …` is a DOM app, `main = Tui.tea …` a terminal-cells app,
+//! `main = Cli.tea …` a terminal-lines app, `main = Server.listen …` a server,
 //! and any other `main` (a plain `Task`) a script. This peels the same
 //! head-forms the resolver's shape gate peels — application, lambda, and `let` —
 //! so the CLI cross-check and the compiler agree on one classification.
@@ -21,13 +21,13 @@ use ipe_syntax::{Exposed, Exposing, Expr, Expr_, Import, Module};
 pub enum MainShape {
     /// A plain `main : Task Error ()` — renders nothing.
     Script,
-    /// `main = Tui.app …` — terminal cells.
+    /// `main = Tui.tea …` — terminal cells.
     Tui,
-    /// `main = Cli.app …` — terminal lines.
+    /// `main = Cli.tea …` — terminal lines.
     Cli,
     /// `main = Server.listen …` — an HTTP server.
     Server,
-    /// `main = Web.app …` / `appRouted` / `appWith` — the DOM shape. A webview is
+    /// `main = Web.tea …` / `appRouted` / `appWith` — the DOM shape. A webview is
     /// a delivery *host* of this shape (`web desktop`), not a distinct shape
     /// (spec § 1).
     Web,
@@ -36,7 +36,7 @@ pub enum MainShape {
 /// A `main` head that head-calls one of these `(canonical-module-path, name)`
 /// pairs pins the paired shape. The first element is the head's *canonical
 /// module* — the full dotted stdlib path the written qualifier resolves to
-/// through the import table (`Ipe.App.Tea.Web` for a `Web`/aliased head,
+/// through the import table (`Ipe.Tea.Web` for a `Web`/aliased head,
 /// `Ipe.Http.Server` for `Server.listen`), NEVER the written qualifier token,
 /// which may be an alias (`import … as S`) or accidentally collide with a
 /// user module's leaf (`Acme.Server`). Matching the resolved canonical path — not
@@ -44,23 +44,19 @@ pub enum MainShape {
 /// (issue #2142). Kept in lockstep with the resolver's `TEA_APP_ENTRIES` and
 /// `Server.listen` entry.
 const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
-    (&["Ipe", "App", "Tea", "Web"], "app", MainShape::Web),
-    (&["Ipe", "App", "Tea", "Web"], "appRouted", MainShape::Web),
-    (&["Ipe", "App", "Tea", "Web"], "appWith", MainShape::Web),
-    (&["Ipe", "App", "Tea", "Tui"], "app", MainShape::Tui),
-    (&["Ipe", "App", "Tea", "Cli"], "app", MainShape::Cli),
+    (&["Ipe", "Tea", "Web"], "tea", MainShape::Web),
+    (&["Ipe", "Tea", "Web"], "appRouted", MainShape::Web),
+    (&["Ipe", "Tea", "Web"], "appWith", MainShape::Web),
+    (&["Ipe", "Tea", "Tui"], "tea", MainShape::Tui),
+    (&["Ipe", "Tea", "Cli"], "tea", MainShape::Cli),
     (&["Ipe", "Http", "Server"], "listen", MainShape::Server),
-    // `Ipe.Tea.worker` — the view-less worker app-entry. A worker renders no view
-    // and is co-located + capability-gated, so it classifies as `Script`: the
+    // `Ipe.Tea.Worker.tea` — the view-less worker app-entry. A worker renders no
+    // view and is co-located + capability-gated, so it classifies as `Script`: the
     // co-located delivery posture whose runtime is fixed to `CoLocated`, never the
     // sandboxed `Spa`. This is guard 9 — an OPEN `Ipe.Tea` program is `Script` and
     // can never reach the Spa/wasm bundle path (which is behind the closed
-    // `Ipe.App.Tea.Web` shape entry).
-    (
-        &["Ipe", "App", "Tea", "Worker"],
-        "worker",
-        MainShape::Script,
-    ),
+    // `Ipe.Tea.Web` shape entry).
+    (&["Ipe", "Tea", "Worker"], "tea", MainShape::Script),
 ];
 
 /// Classify a parsed module's `main` into its pinned [`MainShape`].
@@ -71,8 +67,8 @@ const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
 ///
 /// The head is found by peeling the same forms the resolver's shape gate peels:
 /// `entry cfg` (the callee is the head), `\arg -> entry cfg` (the lambda body),
-/// and `let … in entry cfg` (the `in` body). A qualified head (`Web.app`) and a
-/// bare head brought into scope by `import Ipe.App.Tea.Web exposing (app)` classify
+/// and `let … in entry cfg` (the `in` body). A qualified head (`Web.tea`) and a
+/// bare head brought into scope by `import Ipe.Tea.Web exposing (tea)` classify
 /// identically. Any other head is a script.
 #[must_use]
 pub fn classify_main_shape(module: &Module, interner: &Interner) -> MainShape {
@@ -93,15 +89,15 @@ pub fn classify_main_shape(module: &Module, interner: &Interner) -> MainShape {
 
 /// A top-level shape view/UI library and the shape whose app entry renders it.
 /// These are the shape-agnostic-*looking* but shape-render surfaces a Script may
-/// legally import (they are NOT under `Ipe.App.Tea.*`, so IPE-N0033 does not fire),
+/// legally import (they are NOT under `Ipe.Tea.*`, so IPE-N0033 does not fire),
 /// yet a Script has no `view` to hand them to. Each row names the shape and the
 /// app entry that WOULD render this UI.
 const SHAPE_VIEW_LIBRARIES: &[(&[&str], &str, &str)] = &[
-    // `Ipe.Ui` / `Ipe.Html` build the DOM view a `Web.app` renders.
-    (&["Ipe", "Ui"], "web", "Web.app"),
-    (&["Ipe", "Html"], "web", "Web.app"),
-    // `Ipe.Ui.Cells` builds the terminal-cells view a `Tui.app` renders.
-    (&["Ipe", "Ui", "Cells"], "terminal", "Tui.app"),
+    // `Ipe.Ui` / `Ipe.Html` build the DOM view a `Web.tea` renders.
+    (&["Ipe", "Ui"], "web", "Web.tea"),
+    (&["Ipe", "Html"], "web", "Web.tea"),
+    // `Ipe.Ui.Cells` builds the terminal-cells view a `Tui.tea` renders.
+    (&["Ipe", "Ui", "Cells"], "terminal", "Tui.tea"),
 ];
 
 /// The Script-hole hint (IPE-N0050): a **Warning** for a Script that imports a
@@ -111,12 +107,12 @@ const SHAPE_VIEW_LIBRARIES: &[(&[&str], &str, &str)] = &[
 /// Returns `None` for any non-Script `main` (an app renders its view; no hole),
 /// or a Script that imports no shape view library (nothing built to drop). When
 /// it does fire, the returned [`Diagnostic`] is `Severity::Warning`: a Script is
-/// a legal program, so this HINTS the likely-intended `<Shape>.app` entry rather
+/// a legal program, so this HINTS the likely-intended `<Shape>.tea` entry rather
 /// than rejecting. Emit it into the compiler's warning channel; it must never
 /// fail the build.
 ///
 /// This is deliberately distinct from IPE-N0033: that gate is a hard error for a
-/// Script importing the live-loop machinery under `Ipe.App.Tea.*`; this hint is for a
+/// Script importing the live-loop machinery under `Ipe.Tea.*`; this hint is for a
 /// Script importing a top-level *view* library (`Ipe.Ui` / `Ipe.Html` /
 /// `Ipe.Ui.Cells`), which is legal but almost certainly a mistake.
 #[must_use]
@@ -154,9 +150,9 @@ pub fn script_view_hole_hint(module: &Module, interner: &Interner) -> Option<Dia
 /// Peel a `main` body to its head reference and match it against the shape
 /// entries. `None` when the head is not a shape-entry reference.
 ///
-/// A head is a shape entry either qualified — `Web.app`, `Server.listen`, or an
+/// A head is a shape entry either qualified — `Web.tea`, `Server.listen`, or an
 /// aliased `S.listen` from `import Ipe.Http.Server as S` — or unqualified through
-/// an `import Ipe.App.Tea.Web exposing (app)` that brings the entry into scope under
+/// an `import Ipe.Tea.Web exposing (tea)` that brings the entry into scope under
 /// its bare name. A qualified head's written qualifier is resolved through the
 /// import table to the *canonical module* it names, then matched — never the
 /// written token — so an alias or rename classifies identically to the
@@ -171,7 +167,7 @@ fn head_shape(body: &Expr, module: &Module, interner: &Interner) -> Option<MainS
             // `\arg -> entry cfg` (lambda body) and `let … in entry cfg` (the
             // `in` body) both peel to the inner expression.
             Expr_::Lambda(_, inner) | Expr_::Let(_, inner) => node = inner,
-            // `Server.listen` / `S.listen` (alias) / `Web.app` at the head pins
+            // `Server.listen` / `S.listen` (alias) / `Web.tea` at the head pins
             // its shape — but only after the written qualifier is resolved to the
             // canonical module it imports; a spelling match would break on rename.
             Expr_::VarQual(qual, name) => {
@@ -341,12 +337,12 @@ fn import_exposes_value(import: &Import, name: &str, interner: &Interner) -> boo
 /// table (the strict rule the capability gate keys on: an alias must not smuggle a
 /// shape). That strictness is right for gating but wrong for `ipe init`'s
 /// scaffold-detection, which runs against a *partially written* `src/Main.ipe`
-/// that may spell `main = Tui.app config` before its `import Ipe.App.Tea.Tui` line is
+/// that may spell `main = Tui.tea config` before its `import Ipe.Tea.Tui` line is
 /// typed. There the strict classifier reads Script (no import to resolve), and the
 /// re-run guard would stop recognising the project's shape.
 ///
 /// So this reads the shape by the *written* head qualifier's leaf spelling
-/// (`Tui.app`/`Web.app`/`Cli.app`/`Server.listen`), matching the shape entries by
+/// (`Tui.tea`/`Web.tea`/`Cli.tea`/`Server.listen`), matching the shape entries by
 /// their module leaf and entry name, without requiring the import to resolve. It
 /// exists purely to pick a scaffold template / detect a re-run conflict — a wrong
 /// read scaffolds the wrong thing or misses a conflict, it can NEVER escalate a
@@ -415,13 +411,13 @@ mod tests {
     #[test]
     fn worker_head_classifies_script_never_web() {
         use crate::shape_runtime::{Placement, Runtime, Shape};
-        // A `Tea.worker { … }` head classifies `Script` — the co-located,
+        // A `Worker.tea { … }` head classifies `Script` — the co-located,
         // capability-gated posture. This is guard 9: a view-less worker is never
         // Web, so it can never reach the Spa/wasm sandbox path (which is gated
-        // behind the closed `Ipe.App.Tea.Web` shape entry). The refusal is
+        // behind the closed `Ipe.Tea.Web` shape entry). The refusal is
         // structural: NO `SHAPE_ENTRIES` row maps a worker to `MainShape::Web`.
         let shape = classify(
-            "module Main exposing (..)\n\nimport Ipe.App.Tea.Worker\n\nmain = Tea.worker cfg\n",
+            "module Main exposing (..)\n\nimport Ipe.Tea.Worker\n\nmain = Worker.tea cfg\n",
         );
         assert_eq!(shape, MainShape::Script);
         assert_ne!(shape, MainShape::Web);
@@ -437,10 +433,10 @@ mod tests {
     #[test]
     fn aliased_worker_head_classifies_script() {
         // Resolve-not-spell (#2142) applies to the worker entry too: an `as W`
-        // alias resolving to `Ipe.App.Tea.Worker` classifies Script.
+        // alias resolving to `Ipe.Tea.Worker` classifies Script.
         assert_eq!(
             classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Tea.Worker as W\n\nmain = W.worker cfg\n"
+                "module Main exposing (..)\n\nimport Ipe.Tea.Worker as W\n\nmain = W.tea cfg\n"
             ),
             MainShape::Script
         );
@@ -465,7 +461,7 @@ mod tests {
     #[test]
     fn web_app_head_is_web() {
         assert_eq!(
-            classify("module Main exposing (..)\n\nimport Ipe.App.Tea.Web\n\nmain = Web.app cfg\n"),
+            classify("module Main exposing (..)\n\nimport Ipe.Tea.Web\n\nmain = Web.tea cfg\n"),
             MainShape::Web
         );
     }
@@ -473,11 +469,11 @@ mod tests {
     #[test]
     fn tui_and_cli_heads() {
         assert_eq!(
-            classify("module Main exposing (..)\n\nimport Ipe.App.Tea.Tui\n\nmain = Tui.app cfg\n"),
+            classify("module Main exposing (..)\n\nimport Ipe.Tea.Tui\n\nmain = Tui.tea cfg\n"),
             MainShape::Tui
         );
         assert_eq!(
-            classify("module Main exposing (..)\n\nimport Ipe.App.Tea.Cli\n\nmain = Cli.app cfg\n"),
+            classify("module Main exposing (..)\n\nimport Ipe.Tea.Cli\n\nmain = Cli.tea cfg\n"),
             MainShape::Cli
         );
     }
@@ -534,11 +530,9 @@ mod tests {
     #[test]
     fn aliased_web_app_head_is_web() {
         // The same resolve-not-spell rule for a renamed Web import: `as W` +
-        // `main = W.app …` classifies Web because `W` resolves to `Ipe.App.Tea.Web`.
+        // `main = W.tea …` classifies Web because `W` resolves to `Ipe.Tea.Web`.
         assert_eq!(
-            classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Tea.Web as W\n\nmain = W.app cfg\n"
-            ),
+            classify("module Main exposing (..)\n\nimport Ipe.Tea.Web as W\n\nmain = W.tea cfg\n"),
             MainShape::Web
         );
     }
@@ -566,11 +560,11 @@ mod tests {
 
     #[test]
     fn scaffold_hint_reads_a_written_head_without_its_import() {
-        // A partially written entry — `Tui.app` before its `import Ipe.App.Tea.Tui`
+        // A partially written entry — `Tui.tea` before its `import Ipe.Tea.Tui`
         // line is typed — reads its shape leniently for scaffold detection, where
         // the strict gate classifier correctly fails safe to Script. The two must
         // disagree here: the gate stays strict, the UX read is lenient.
-        let src = "module Main exposing (main)\n\nmain =\n    Tui.app config\n";
+        let src = "module Main exposing (main)\n\nmain =\n    Tui.tea config\n";
         assert_eq!(scaffold_hint(src), MainShape::Tui);
         assert_eq!(classify(src), MainShape::Script);
     }
@@ -593,11 +587,11 @@ mod tests {
     fn scaffold_hint_does_not_confuse_a_like_spelled_leaf_across_shapes() {
         // Every shape leaf reads its own shape; a non-shape head stays Script.
         assert_eq!(
-            scaffold_hint("module Main exposing (main)\n\nmain = Web.app config\n"),
+            scaffold_hint("module Main exposing (main)\n\nmain = Web.tea config\n"),
             MainShape::Web
         );
         assert_eq!(
-            scaffold_hint("module Main exposing (main)\n\nmain = Cli.app config\n"),
+            scaffold_hint("module Main exposing (main)\n\nmain = Cli.tea config\n"),
             MainShape::Cli
         );
         assert_eq!(
@@ -614,7 +608,7 @@ mod tests {
     fn let_bound_config_still_classifies() {
         assert_eq!(
             classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Tea.Web\n\nmain =\n    let cfg = { init = () }\n    in Web.app cfg\n"
+                "module Main exposing (..)\n\nimport Ipe.Tea.Web\n\nmain =\n    let cfg = { init = () }\n    in Web.tea cfg\n"
             ),
             MainShape::Web
         );
@@ -623,9 +617,7 @@ mod tests {
     #[test]
     fn app_with_head_classifies_web() {
         assert_eq!(
-            classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Tea.Web\n\nmain = Web.appWith cfg\n"
-            ),
+            classify("module Main exposing (..)\n\nimport Ipe.Tea.Web\n\nmain = Web.appWith cfg\n"),
             MainShape::Web
         );
     }
@@ -634,7 +626,7 @@ mod tests {
     fn exposed_bare_app_head_classifies_web() {
         assert_eq!(
             classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Tea.Web exposing (app)\n\nmain = app cfg\n"
+                "module Main exposing (..)\n\nimport Ipe.Tea.Web exposing (tea)\n\nmain = tea cfg\n"
             ),
             MainShape::Web
         );
@@ -644,7 +636,7 @@ mod tests {
     fn exposed_bare_app_head_from_tui_classifies_tui() {
         assert_eq!(
             classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Tea.Tui exposing (app)\n\nmain = app cfg\n"
+                "module Main exposing (..)\n\nimport Ipe.Tea.Tui exposing (tea)\n\nmain = tea cfg\n"
             ),
             MainShape::Tui
         );
@@ -654,7 +646,7 @@ mod tests {
     fn exposed_bare_app_through_let_classifies_web() {
         assert_eq!(
             classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Tea.Web exposing (app)\n\nmain =\n    let cfg = { init = () }\n    in app cfg\n"
+                "module Main exposing (..)\n\nimport Ipe.Tea.Web exposing (tea)\n\nmain =\n    let cfg = { init = () }\n    in tea cfg\n"
             ),
             MainShape::Web
         );
@@ -686,7 +678,7 @@ mod tests {
         // bare name here either — the head stays a script.
         assert_eq!(
             classify(
-                "module Main exposing (..)\n\nimport Ipe.App.Tea.Web exposing (..)\n\nmain = app cfg\n"
+                "module Main exposing (..)\n\nimport Ipe.Tea.Web exposing (..)\n\nmain = app cfg\n"
             ),
             MainShape::Script
         );
@@ -706,7 +698,7 @@ mod tests {
                 Diagnostic::Name {
                     msg: NameError::ScriptImportsShapeView { shape_ui_module, shape, entry },
                     ..
-                } if &**shape_ui_module == "Ipe.Ui" && &**shape == "web" && &**entry == "Web.app"
+                } if &**shape_ui_module == "Ipe.Ui" && &**shape == "web" && &**entry == "Web.tea"
             ),
             "wrong diagnostic: {hint:?}"
         );
@@ -728,7 +720,7 @@ mod tests {
                 Diagnostic::Name {
                     msg: NameError::ScriptImportsShapeView { shape, entry, .. },
                     ..
-                } if &**shape == "terminal" && &**entry == "Tui.app"
+                } if &**shape == "terminal" && &**entry == "Tui.tea"
             ),
             "wrong diagnostic: {hint:?}"
         );
@@ -739,7 +731,7 @@ mod tests {
         // A real Web app renders its `Ipe.Ui` view — no hole, no hint.
         assert!(
             script_hole(
-                "module Main exposing (..)\n\nimport Ipe.App.Tea.Web\nimport Ipe.Ui as Ui\n\nmain = Web.app cfg\n"
+                "module Main exposing (..)\n\nimport Ipe.Tea.Web\nimport Ipe.Ui as Ui\n\nmain = Web.tea cfg\n"
             )
             .is_none()
         );

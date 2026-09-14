@@ -3,7 +3,7 @@
 //! Cmd/Sub are generic over the message type M (NOT `any`): the intermediate
 //! value `a` in `Cmd.perform` is erased inside a boxed M-producing future, but M
 //! stays concrete. Step 1 (this file) ships the types, the simple kernels, and a
-//! blocking Cli.app loop (stdin -> onLine -> update -> view). Sub.every
+//! blocking Cli.tea loop (stdin -> onLine -> update -> view). Sub.every
 //! tickers + async Cmd.perform delivery land in steps 2-3 (a subManager + an
 //! mpsc msg channel + tokio::select over stdin and the channel).
 
@@ -474,7 +474,7 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
 
 // ─── Ipe.Terminal — line-oriented TEA loop ─────────────────────────────────────
 
-/// Cli.app { init, update, view, subscriptions, onLine } : Task Error ().
+/// Cli.tea { init, update, view, subscriptions, onLine } : Task Error ().
 ///
 /// init -> fire cmd -> subs -> view; then fold each event (stdin line via
 /// onLine, ticker/Cmd.perform Msg) through update -> re-fire cmd -> re-subs ->
@@ -483,7 +483,7 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
 ///
 /// Gated on `feature = "tui"`: the `Lines msg` view rasterizes through
 /// `crate::tui::render_lines_view`, which shares the terminal runtime module
-/// with `tui_app`. A `Cli.app` program selects the `tui` feature, so a plain
+/// with `tui_app`. A `Cli.tea` program selects the `tui` feature, so a plain
 /// `tokio` program (web/server, no terminal shape) never compiles this entry.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub fn console_app<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnLine>(
@@ -613,7 +613,7 @@ where
 
 // ─── Shape opaque app-leaf types ──────────────────────────────────────────
 //
-// Each entry builder (`Web.app`, `Tui.app`, `Cli.app`) returns one of these
+// Each entry builder (`Web.tea`, `Tui.tea`, `Cli.tea`) returns one of these
 // opaque handles instead of
 // `IpeTask<E, ()>`. The handle wraps the underlying task and exposes a single
 // `run_blocking` method consumed by the emitted `fn main()`. This erases the
@@ -632,7 +632,7 @@ pub type MountBuilder = Box<
         + Send,
 >;
 
-/// Opaque app handle returned by `Web.app` / `Web.appRouted` / `Web.appWith`
+/// Opaque app handle returned by `Web.tea` / `Web.appRouted` / `Web.appWith`
 /// (standalone) or `Web.embed` (mountable). The `WebApp(...)` tuple form is the
 /// leaf-constructor the backend's shape-app entry switch detects; the inner
 /// [`WebAppKind`] selects the run mode.
@@ -641,7 +641,7 @@ pub struct WebApp(pub WebAppKind);
 
 /// The two run modes a `WebApp` leaf can carry.
 ///
-/// * `Standalone` — from `Web.app`: a fully-built server task that binds its
+/// * `Standalone` — from `Web.tea`: a fully-built server task that binds its
 ///   own listener. `run_blocking` drives it.
 /// * `Mountable` — from `Web.embed`: carries BOTH a standalone `serve` task (so
 ///   a top-level `main = Web.embed { … }` still runs on its own port) AND a
@@ -671,10 +671,10 @@ impl WebApp {
     }
 
     /// Take the mount router-builder, if this is an embedded (mountable) handle.
-    /// `Server.mountApp` calls this; a `Web.app` (standalone) handle yields
+    /// `Server.mountApp` calls this; a `Web.tea` (standalone) handle yields
     /// `None`, which the mount path turns into a fail-closed diagnostic route
     /// (unreachable for well-typed source: `mountApp` only accepts `Web.embed`
-    /// / `Web.app` handles, and `Web.app` handles are still mountable-capable
+    /// / `Web.tea` handles, and `Web.tea` handles are still mountable-capable
     /// only via `embed`).
     #[cfg(feature = "web")]
     pub fn into_mount_builder(self) -> Option<MountBuilder> {
@@ -685,7 +685,7 @@ impl WebApp {
     }
 }
 
-/// Opaque app handle for the webview-native host of a `Web.app` (a `web desktop`
+/// Opaque app handle for the webview-native host of a `Web.tea` (a `web desktop`
 /// delivery). Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking` on
 /// the current thread (tao/Cocoa mandates the process main thread on macOS).
 #[cfg(not(target_arch = "wasm32"))]
@@ -699,7 +699,7 @@ impl WebViewApp {
     }
 }
 
-/// Opaque app handle returned by `Tui.app`.
+/// Opaque app handle returned by `Tui.tea`.
 /// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct TuiApp(pub IpeTask<crate::error::IpeError, ()>);
@@ -712,7 +712,7 @@ impl TuiApp {
     }
 }
 
-/// Opaque app handle returned by `Cli.app`.
+/// Opaque app handle returned by `Cli.tea`.
 /// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct CliApp(pub IpeTask<crate::error::IpeError, ()>);
@@ -725,7 +725,7 @@ impl CliApp {
     }
 }
 
-// ─── Ipe.Tea.worker — view-less co-located TEA loop ────────────────────────────
+// ─── Ipe.Tea.Worker.tea — view-less co-located TEA loop ────────────────────────────
 
 /// The event a view-less worker's run loop folds. A worker has no input stream
 /// (no stdin, no keys): its only events are the messages its own `Cmd`s and
@@ -828,7 +828,7 @@ fn worker_spawn_subs<M: Clone + Send + 'static>(
     }
 }
 
-/// `Ipe.Tea.worker { init, update, subscriptions } : Task Error ()`.
+/// `Ipe.Tea.Worker.tea { init, update, subscriptions } : Task Error ()`.
 ///
 /// A view-less TEA loop (Elm `Platform.worker` shape): `init` yields the first
 /// model and `Cmd`; each `Sub` message and each `Cmd.perform` result folds
@@ -900,7 +900,7 @@ where
     })
 }
 
-/// Opaque app handle returned by `Ipe.Tea.worker`.
+/// Opaque app handle returned by `Ipe.Tea.Worker.tea`.
 /// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct WorkerApp(pub IpeTask<crate::error::IpeError, ()>);

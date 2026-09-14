@@ -33,16 +33,16 @@ type, regardless of which shape you use:
 ```ipe
 main : Task Error ()
 main =
-    Web.app { init = init, update = update, view = view, subscriptions = subscriptions }
+    Web.tea { init = init, update = update, view = view, subscriptions = subscriptions }
 ```
 
 ```ipe
 main : Task Error ()
 main =
-    Tui.app { init = init, update = update, view = view }
+    Tui.tea { init = init, update = update, view = view }
 ```
 
-The shape entry function (`Web.app`, `Tui.app`, etc.) returns a
+The shape entry function (`Web.tea`, `Tui.tea`, etc.) returns a
 `Task Error ()` — the runtime runs it the same way a plain script runs.
 
 ## Idiom: main must be `Task Error ()`

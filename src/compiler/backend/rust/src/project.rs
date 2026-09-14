@@ -825,7 +825,7 @@ const RUNTIME_MOD_RS_CSV_APPEND: &str = "pub mod csv;\npub use csv::*;\n";
 // ── Shape-app entry-switch anchors ────────────────────────────────────────────
 //
 // When `ipe_main` returns a shape-app leaf (WebApp / TuiApp / CliApp — and a
-// `Web.app` under a webview-native host renders `WebViewApp`), `emit_func`
+// `Web.tea` under a webview-native host renders `WebViewApp`), `emit_func`
 // emits the correct return type from the IR — no return-type rewrite is needed.
 // Only the epilogue `fn main` body needs updating:
 // `block_on(ipe_main())` → `ipe_main().run_blocking()`. Hoisted to module
@@ -1842,7 +1842,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // Shape-app entry switch (Native only).
         //
         // When `ipe_main` returns a shape app leaf (`WebApp` / `TuiApp` /
-        // `CliApp`; a `Web.app` under a webview host renders `WebViewApp`) its
+        // `CliApp`; a `Web.tea` under a webview host renders `WebViewApp`) its
         // emitted body contains the corresponding
         // `ipe_runtime::tea::<Leaf>(...)` constructor. The template declares
         // `ipe_main() -> IpeTask<()>` and `match block_on(ipe_main()) { ... }` —
@@ -1858,7 +1858,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // Shape-app epilogue switch (Native only).
         //
         // When `ipe_main` returns a shape-app leaf (WebApp / TuiApp / CliApp; a
-        // `Web.app` under a webview host renders WebViewApp), `emit_func` already
+        // `Web.tea` under a webview host renders WebViewApp), `emit_func` already
         // emits the correct return type from the IR — no return-type rewrite is
         // needed. Only the epilogue `fn main` body
         // needs updating: `block_on(ipe_main())` → `ipe_main().run_blocking()`.
@@ -2543,10 +2543,10 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // When the program uses the terminal shape — either `Tui.app` (full-screen)
-    // or `Cli.app` (line-oriented) — add "tui" to the default features and
+    // When the program uses the terminal shape — either `Tui.tea` (full-screen)
+    // or `Cli.tea` (line-oriented) — add "tui" to the default features and
     // inject the crossterm + unicode-width deps required by the terminal
-    // runtime. Both drive axes share the one `tui` Cargo feature: a `Cli.app`
+    // runtime. Both drive axes share the one `tui` Cargo feature: a `Cli.tea`
     // view returns `Lines msg`, rendered by `ipe_runtime::tui::render_lines_view`
     // (behind `feature = "tui"`). The base manifest declares `tui = []` as a
     // non-default feature; we promote it and add the deps so the compiled binary
@@ -3003,13 +3003,13 @@ fn assemble_project_files(
         if ctx.uses_web || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_WEB_APPEND);
         }
-        // Ipe.Tui / Ipe.Tui app-entry kernels, AND the `Cli.app` lines-view path:
+        // Ipe.Tui / Ipe.Tui app-entry kernels, AND the `Cli.tea` lines-view path:
         // its emitted `tea.rs` (Cli event loop) and `main.rs` (view fn) reach
-        // `crate::tui::{LinesView, render_lines_view, cli_text_}`, and a `Cli.app`
+        // `crate::tui::{LinesView, render_lines_view, cli_text_}`, and a `Cli.tea`
         // sets `uses_console` (not `uses_tui`). The `tui` Cargo feature is already
         // selected for `uses_console` (see `runtime_features`) and the manifest
         // augmenter gates on `uses_tui || uses_console`; the `mod.rs` declaration
-        // MUST use the same predicate or a `Cli.app` program fails E0433
+        // MUST use the same predicate or a `Cli.tea` program fails E0433
         // (`crate::tui` not found) — the module-set SEAL breach `seal_modset::
         // cli_app_lines_builds` pins.
         if ctx.uses_tui || ctx.uses_console {
