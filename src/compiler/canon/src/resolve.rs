@@ -6523,10 +6523,14 @@ fn canonicalise_type(
             // as the carrier. This keeps every existing `: Element msg`
             // annotation and DOM combinator unifying with the SSOT view type the
             // combinator schemes yield, with no parallel surface: the alias and
-            // the carrier are one canonical type. Only the empty-qualifier arity-1
-            // form is an alias; a qualified or mis-arity use falls through.
-            if qualifier_str.is_empty()
-                && args.len() == 1
+            // the carrier are one canonical type. The public module-qualified
+            // spellings a user writes (`Ui.Element`, the terminal `Screen` /
+            // `Lines` equivalents) alias identically: each name is a RESERVED
+            // builtin no user module can declare, so the qualifier cannot name a
+            // different type, and an unknown qualifier is already turned away by
+            // the qualifier gate above. Only the arity-1 form is an alias; a
+            // mis-arity use falls through.
+            if args.len() == 1
                 && let Some(engine_name) = match ctx.interner.resolve(name) {
                     Some("Element") => Some("Web"),
                     Some("Screen") => Some("Tui"),
