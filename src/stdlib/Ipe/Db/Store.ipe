@@ -3681,8 +3681,8 @@ compareNumeric x y =
 
 
 -- Map a store column type to the `CellType` a raw-row sort compares by:
--- `CInt` / `CReal` (and a nullable wrapper over either) compare numerically;
--- every other column type compares as text.
+-- `CInt` / `CReal` / `CTime` (and a nullable wrapper over any) compare
+-- numerically; every other column type compares as text.
 cellTypeOf : ColType -> CellType
 cellTypeOf colType =
     case colType of
@@ -3690,6 +3690,9 @@ cellTypeOf colType =
             NumericCell
 
         CReal ->
+            NumericCell
+
+        CTime ->
             NumericCell
 
         CNull inner ->
@@ -3959,6 +3962,9 @@ sqlType colType =
             "REAL"
 
         CBool ->
+            "INTEGER"
+
+        CTime ->
             "INTEGER"
 
         CBlob ->
