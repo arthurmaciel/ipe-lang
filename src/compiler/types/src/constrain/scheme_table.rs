@@ -336,7 +336,9 @@ impl Builder<'_> {
     /// `stdlib_scheme_matches_legacy` parity tripwire, and the covered set is
     /// pinned by `migrated_set_burndown`.
     #[allow(clippy::too_many_lines)] // declarative scheme table — mirrors kernel_ty
-    #[allow(clippy::match_same_arms)] // family-grouped declarative type table; merging cross-family arms with coincidentally-equal schemes would obscure the per-family structure
+    #[allow(clippy::match_same_arms)]
+    // family-grouped declarative type table; merging cross-family arms with coincidentally-equal schemes would obscure the per-family structure
+    #[allow(clippy::large_stack_frames)] // one-shot declarative table; the per-kernel `Ty` temporaries never recurse — the frame pops on return, no stack-overflow path
     pub fn stdlib_scheme(&self, k: StdlibKernel) -> Option<Ty> {
         use StdlibKernel as K;
         // Constructors mirror `kernel_ty`'s so the two tables stay byte-faithful

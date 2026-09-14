@@ -418,6 +418,7 @@ mod tests {
 
     #[test]
     fn worker_head_classifies_script_never_web() {
+        use crate::shape_runtime::{Placement, Runtime, Shape};
         // A `Tea.worker { … }` head classifies `Script` — the co-located,
         // capability-gated posture. This is guard 9: a view-less worker is never
         // Web, so it can never reach the Spa/wasm sandbox path (which is gated
@@ -431,7 +432,6 @@ mod tests {
         // The co-located placement is the ONLY one a Script (worker) can hold:
         // `sole_for` fixes its runtime to `CoLocated`, so `Runtime::Spa` — the
         // sandbox — is unrepresentable for a worker (guard 8).
-        use crate::shape_runtime::{Placement, Runtime, Shape};
         let placement = Placement::sole_for(Shape::from_main(shape))
             .expect("a worker (Script) has a sole co-located placement");
         assert_eq!(placement.runtime, Runtime::CoLocated);
