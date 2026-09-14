@@ -34,6 +34,13 @@ on:
     - cron: '13 5 * * *'       # nightly, offset from ci.yml's 04:00 UTC sweep
   workflow_dispatch: {}
 
+# Least-privilege GITHUB_TOKEN, capped at the top so a fork PR run cannot inherit
+# a broader default. The one job here only reads Cargo.lock/metadata and runs
+# `cargo-deny` — no API write, no checkout of PR-head code beyond the standard
+# read — so read-only `contents` is the whole need and the only scope reachable.
+permissions:
+  contents: read
+
 concurrency:
   group: security-${{ github.ref }}
   cancel-in-progress: true
