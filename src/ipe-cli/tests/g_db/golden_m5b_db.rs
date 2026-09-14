@@ -517,18 +517,71 @@ fn dsn_parse() {
 
 // ── SqlDecimal + SqlMoney ctors ───────────────────────────────────────────────
 
-/// `Db.exec [SqlString "pi", SqlDecimal "3.14159", SqlMoney "USD 9.99"]` →
-/// INSERT one row → `Db.query [] SELECT *` → read back all three columns →
-/// print `"pi:3.14159:USD 9.99"`.
+/// `Db.exec [SqlString "pi", SqlDecimal (Decimal.fromMinor 5 314159),
+/// SqlMoney "USD 9.99"]` → INSERT one row → `Db.query [] SELECT *` → read back
+/// all three columns → print `"pi:3.14159:USD 9.99"`.
 ///
-/// Proves `SqlDecimal` (index 6) and `SqlMoney` (index 7) are reachable end-to-end:
-/// canon ctor table, constrain.rs type schemes, lower.rs `enum_variants` + `ctor_arity`,
-/// and project.rs `into_sql_param` (both map to `SqlParam::Text`).
+/// Proves `SqlDecimal` and `SqlMoney` are reachable end-to-end: canon ctor
+/// table, `constrain.rs` type schemes, `lower.rs` `enum_variants` + `ctor_arity`,
+/// and `project.rs` `into_sql_param`. `SqlDecimal` carries a native `Decimal`
+/// bound as a lossless TEXT param via `decimal_to_string`; `SqlMoney` carries an
+/// "ISO_CODE AMOUNT" string.
 ///
 /// Sanctioned divergence: Ipê emits Rust+sqlx; oracle is Ipê's own output.
 #[test]
 fn db_sql_decimal_money() {
     assert_runs_and_matches_oracle("db_sql_decimal_money");
+}
+
+/// Acceptance (ipe-time, ungated by `IPE_E2E`): `SqlDecimal` applied to a native
+/// `Decimal` type-checks and emits. The SEAL (ipe-accepts ⇒ cargo-builds) is
+/// re-proven under `IPE_E2E` by [`db_sql_decimal_money`], which builds and runs
+/// the emitted project.
+#[test]
+fn db_sql_decimal_accepts_decimal() {
+    let root = repo_root();
+    let dir = golden_dir(&root, "db_sql_decimal_money");
+    let entry = dir.join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("db_sql_decimal_accepts");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = ipe::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
+    let Ok(runtime) = runtime else { return };
+
+    let built = ipe::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "`SqlDecimal (Decimal.fromMinor 5 314159)` must type-check and emit; got: {:?}",
+        built.err()
+    );
+}
+
+/// prove-the-refusals: `SqlDecimal` now carries a native `Decimal`, so a raw
+/// `String` argument (`SqlDecimal "1.5"`) is a fail-closed type mismatch —
+/// never a silently accepted stringly value. Guards the retype's rejecting
+/// edge so it cannot regress to a `String`-typed constructor.
+#[test]
+fn db_sql_decimal_rejects_raw_string() {
+    let root = repo_root();
+    let dir = golden_dir(&root, "db_sql_decimal_rejects_string");
+    let entry = dir.join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("db_sql_decimal_rejects");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let runtime = ipe::resolve_runtime();
+    assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
+    let Ok(runtime) = runtime else { return };
+
+    let err = ipe::build(&entry, &out, &runtime)
+        .map_err(|e| e.to_string())
+        .expect_err(
+            "`SqlDecimal \"1.5\"` must be rejected: the ctor takes a native `Decimal`, not a `String`",
+        );
+    assert!(
+        err.contains("IPE-T0001"),
+        "expected a type-mismatch diagnostic (IPE-T0001) at the raw-String argument, got:\n{err}"
+    );
 }
 
 // ── Polymorphic params — T0001 regression ────────────────────────────────────

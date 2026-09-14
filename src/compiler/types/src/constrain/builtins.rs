@@ -150,7 +150,7 @@ pub struct Builtins {
     pub sql_bool: Symbol,
     pub sql_bytes: Symbol,
     pub sql_time: Symbol,
-    /// `"SqlDecimal"` — wraps a `String` decimal representation (lossless TEXT).
+    /// `"SqlDecimal"` — carries a native `Decimal`, bound as lossless TEXT.
     pub sql_decimal: Symbol,
     /// `"SqlMoney"` — wraps a `String` in `"ISO_CODE AMOUNT"` format (TEXT).
     pub sql_money: Symbol,
@@ -1075,6 +1075,11 @@ impl Builtins {
             name: self.bytes,
             args: Vec::new(),
         };
+        let decimal_ty = Ty::Con {
+            module: Vec::new(),
+            name: self.decimal,
+            args: Vec::new(),
+        };
         // Monomorphic `Error` / `ErrorKind` — no type params.
         let error_ty = Ty::Con {
             module: Vec::new(),
@@ -1354,14 +1359,13 @@ impl Builtins {
                     result: sqlvalue_ty.clone(),
                 },
             ),
-            // SqlDecimal wraps a String decimal representation (lossless TEXT
-            // serialisation matching the shopspring.Decimal.String()).
-            // Minimal wiring: Ipê users write `SqlDecimal "1234.56"` rather than
-            // a native Decimal value (native Decimal is not yet an IrType).
+            // SqlDecimal carries a native `Decimal` value, bound as a lossless
+            // TEXT param (its `decimal_to_string` render is the inverse of
+            // `db_decode_decimal`'s `RD::from_str` read).
             (
                 self.sql_decimal,
                 CtorScheme {
-                    arg_tys: vec![string_ty.clone()],
+                    arg_tys: vec![decimal_ty],
                     result: sqlvalue_ty.clone(),
                 },
             ),
