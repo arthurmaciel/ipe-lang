@@ -354,6 +354,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
+        | IrType::WorkerApp
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload

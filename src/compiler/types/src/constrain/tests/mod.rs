@@ -905,6 +905,8 @@ mod registry_phase_c_tests {
             K::FontHoverSize,
             // Ipe.Terminal line-oriented app-entry.
             K::TerminalAppLines,
+            // Ipe.Tea view-less worker app-entry (const-schemed via `WORKER_APP`).
+            K::TeaWorker,
             // ── Ipe.Auth (10 kernels) — schemed + lowered ──
             K::AuthHashPassword,
             K::AuthHashPasswordCost,

@@ -138,6 +138,8 @@ pub enum UiDelegate {
     Tui,
     /// `emit_console::emit_console_call` — `Cli.app`.
     Console,
+    /// `emit_worker::emit_worker_call` — `Ipe.Tea.worker` (view-less).
+    Worker,
 }
 
 /// A fail-closed guard the interpreter checks before emission.
@@ -1507,7 +1509,9 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::LocaleFromTag
         | KernelFn::LocaleToTag
         | KernelFn::StringToUpperIn
-        | KernelFn::StringToLowerIn => &[],
+        | KernelFn::StringToLowerIn
+        // The worker app-entry carries no appearance-hoist literal position.
+        | KernelFn::TeaWorker => &[],
     }
 }
 
@@ -1902,6 +1906,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         | KernelFn::WebRenderStatic => delegate(UiDelegate::Web),
         KernelFn::TerminalAppScreen => delegate(UiDelegate::Tui),
         KernelFn::TerminalAppLines => delegate(UiDelegate::Console),
+        KernelFn::TeaWorker => delegate(UiDelegate::Worker),
 
         // ── Debug.explain — dev-only, Web/WebView only ────────────────────
         // `Debug.explain : Attribute msg` draws visible outlines on the element
@@ -1931,7 +1936,7 @@ mod tests {
     /// Every kernel `ui_call_shape` classifies as UI-family. Mirrors the
     /// `is_ui() || …` guard that fronts the emitter.
     fn is_ui_family(k: KernelFn) -> bool {
-        k.is_ui() || k.is_web() || k.is_tui() || k.is_console()
+        k.is_ui() || k.is_web() || k.is_tui() || k.is_console() || k.is_worker()
     }
 
     /// A widget's plan is the positional shape the emitter renders as
@@ -1996,6 +2001,10 @@ mod tests {
             (
                 KernelFn::TerminalAppLines,
                 NativeUiEmit::Delegate(UiDelegate::Console),
+            ),
+            (
+                KernelFn::TeaWorker,
+                NativeUiEmit::Delegate(UiDelegate::Worker),
             ),
         ];
         for (k, kind) in cases {

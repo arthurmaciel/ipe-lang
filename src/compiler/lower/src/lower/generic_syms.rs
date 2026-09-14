@@ -141,6 +141,7 @@ pub(super) fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
+        | IrType::WorkerApp
         // A row variable is tracked in `Func::row_params`, NOT in the ordinary
         // `T{n}` generic scope. Collecting it here would double-count it as both
         // a `T`-generic and an `R`-generic, so this arm is a deliberate no-op.

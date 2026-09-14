@@ -100,6 +100,7 @@ pub(super) fn ir_type_mentions(ty: &IrType, leaf: &impl Fn(&IrType) -> bool) -> 
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
+        | IrType::WorkerApp
         | IrType::UiPlain(_) => false,
         // Single-payload carriers.
         IrType::Task(inner)
@@ -804,7 +805,8 @@ pub(super) fn ir_contains_fun(ty: &IrType) -> bool {
         // no embedded Ipê function.
         | IrType::WebApp
         | IrType::TuiApp
-        | IrType::CliApp => false,
+        | IrType::CliApp
+        | IrType::WorkerApp => false,
         // `WebRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Ipê `Fn`).
         IrType::WebRoute(page) => ir_contains_fun(page),

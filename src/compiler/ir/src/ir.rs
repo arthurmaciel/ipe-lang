@@ -1682,6 +1682,12 @@ pub enum IrType {
     ///
     /// Rendered as `ipe_runtime::tea::CliApp`.
     CliApp,
+    /// The msg-erased result of `Ipe.Tea.worker` — a live view-less,
+    /// co-located worker app handle.
+    ///
+    /// Rendered as `ipe_runtime::tea::WorkerApp`. Opaque, non-derivable,
+    /// non-serde: the handle wraps a live runtime event loop.
+    WorkerApp,
 }
 
 /// Tag enum for the message-parametric `Ipe.Ui` / `Ipe.Html` types.
@@ -1952,7 +1958,8 @@ pub fn ir_type_is_derivable(
         // handles) that cannot be cloned, compared, or serialised.
         | IrType::WebApp
         | IrType::TuiApp
-        | IrType::CliApp => false,
+        | IrType::CliApp
+        | IrType::WorkerApp => false,
         // Transparent carriers: derivable iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => {
             ir_type_is_derivable(e, enum_derivable)
@@ -2180,7 +2187,8 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // a compile-time IPE-L0120 rejection.
         | IrType::WebApp
         | IrType::TuiApp
-        | IrType::CliApp => false,
+        | IrType::CliApp
+        | IrType::WorkerApp => false,
         // Transparent carriers: serde-OK iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => ir_type_is_serde(e, enum_serde),
         IrType::Result(a, b) | IrType::Dict(a, b) => {
@@ -2401,6 +2409,7 @@ pub const fn ir_type_feature_requirement(ty: &IrType) -> Option<RuntimeFeatureId
         | IrType::WebApp
         | IrType::TuiApp
         | IrType::CliApp
+        | IrType::WorkerApp
         // The `Ipe.Ui` / `Ipe.Html` carriers render to the always-compiled
         // `ui` / `html` modules; their message parameter is visited by the walk.
         | IrType::Ui { .. }
@@ -2576,7 +2585,8 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         // not `Clone`.
         | IrType::WebApp
         | IrType::TuiApp
-        | IrType::CliApp => false,
+        | IrType::CliApp
+        | IrType::WorkerApp => false,
         // Transparent carriers: `Clone` iff every carried element is.
         IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => carrier_is_clone(e),
         IrType::Result(a, b) | IrType::Dict(a, b) => carrier_is_clone(a) && carrier_is_clone(b),

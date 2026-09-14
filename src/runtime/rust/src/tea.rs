@@ -725,6 +725,194 @@ impl CliApp {
     }
 }
 
+// ─── Ipe.Tea.worker — view-less co-located TEA loop ────────────────────────────
+
+/// The event a view-less worker's run loop folds. A worker has no input stream
+/// (no stdin, no keys): its only events are the messages its own `Cmd`s and
+/// `Sub`s produce, so the enum is exactly those two shapes.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+enum WorkerEvent<M> {
+    /// A message from a `Sub` (a ticker or a source).
+    Msg(M),
+    /// A one-shot `Cmd.perform` effect delivered its result.
+    PerformDone(M),
+}
+
+/// Fire a worker `Cmd`: None/Batch recurse; Perform spawns the composed
+/// task→toMsg thunk and delivers a `PerformDone`. Every spawned `Perform` is
+/// counted as outstanding so an effect-only worker (empty `Sub`) still folds its
+/// results before the loop terminates. `Publish` has no Web session here, so it
+/// fires with an empty origin (no subscriber matches → no-op), matching the Cli
+/// loop's co-located behaviour.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+fn worker_run_cmd<M: Send + 'static>(
+    cmd: IpeCmd<M>,
+    tx: &tokio::sync::mpsc::UnboundedSender<WorkerEvent<M>>,
+    outstanding: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    match cmd {
+        IpeCmd::None => {}
+        IpeCmd::Batch(items) => {
+            for c in items {
+                worker_run_cmd(c, tx, outstanding);
+            }
+        }
+        IpeCmd::Perform(thunk) => {
+            let tx = tx.clone();
+            let counter = outstanding.clone();
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::spawn(async move {
+                // Decrement on any exit (normal or panic-unwind) so a faulting
+                // effect can never wedge the drain invariant — the same
+                // Task-boundary recover contract the Cli loop uses.
+                struct OutstandingGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+                impl Drop for OutstandingGuard {
+                    fn drop(&mut self) {
+                        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                let guard = OutstandingGuard(counter);
+                let msg = thunk().await;
+                std::mem::forget(guard); // delivered → loop owns the decrement
+                let _ = tx.send(WorkerEvent::PerformDone(msg));
+            });
+        }
+        IpeCmd::Publish(thunk) => {
+            let _ = thunk("");
+        }
+    }
+}
+
+/// Spawn the ticker / source tasks for a worker's active `Sub`s, funnelling each
+/// produced message into the loop channel. Mirrors the terminal `SubManager` but
+/// view-less; pushes the spawned handles so a re-subscribe can abort them.
+/// Returns the number of live source tasks spawned, so the loop knows whether
+/// any subscription can still deliver a message.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+fn worker_spawn_subs<M: Clone + Send + 'static>(
+    sub: IpeSub<M>,
+    tx: &tokio::sync::mpsc::UnboundedSender<WorkerEvent<M>>,
+    handles: &mut Vec<tokio::task::JoinHandle<()>>,
+) -> usize {
+    match sub {
+        IpeSub::None => 0,
+        IpeSub::Batch(items) => items
+            .into_iter()
+            .map(|it| worker_spawn_subs(it, tx, handles))
+            .sum(),
+        IpeSub::Every { ms, msg } => {
+            if ms <= 0 {
+                return 0;
+            }
+            let tx = tx.clone();
+            let dur = std::time::Duration::from_millis(ms as u64);
+            let h = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(dur).await;
+                    if tx.send(WorkerEvent::Msg(msg.clone())).is_err() {
+                        break;
+                    }
+                }
+            });
+            handles.push(h);
+            1
+        }
+        IpeSub::Source(spawn) => {
+            let tx = tx.clone();
+            let emit: std::sync::Arc<dyn Fn(M) + Send + Sync> = std::sync::Arc::new(move |m| {
+                let _ = tx.send(WorkerEvent::Msg(m));
+            });
+            handles.push(spawn(emit));
+            1
+        }
+    }
+}
+
+/// `Ipe.Tea.worker { init, update, subscriptions } : Task Error ()`.
+///
+/// A view-less TEA loop (Elm `Platform.worker` shape): `init` yields the first
+/// model and `Cmd`; each `Sub` message and each `Cmd.perform` result folds
+/// through `update`, re-firing its `Cmd` and re-evaluating `subscriptions`. No
+/// view is rendered and no input stream is read — a worker's only inputs are its
+/// own effects and subscriptions.
+///
+/// The loop holds the single sender the whole time, so it never wedges: it
+/// terminates deterministically once the model has settled with NO active
+/// subscription (no ticker / source can deliver again) AND no outstanding
+/// one-shot effect. An effect-only worker runs until its effects drain; a
+/// subscription worker runs until its subscriptions become `Sub.none`. A worker
+/// whose `init` issues neither an effect nor a subscription completes at once.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+pub fn worker_app<Model, Msg, E, FInit, FUpdate, FSubs>(
+    init: FInit,
+    update: FUpdate,
+    subscriptions: FSubs,
+) -> IpeTask<E, ()>
+where
+    E: Send + 'static,
+    Model: Clone + Send + 'static,
+    Msg: Clone + Send + 'static,
+    FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
+{
+    Box::pin(async move {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WorkerEvent<Msg>>();
+        let outstanding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let (mut model, cmd0) = init(());
+        worker_run_cmd(cmd0, &tx, &outstanding);
+        let mut sub_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        let mut live_subs = worker_spawn_subs(subscriptions(model.clone()), &tx, &mut sub_handles);
+
+        // Settled at start: `init` issued no effect and no subscription, so no
+        // event can ever arrive — terminate rather than block forever on `recv`.
+        if live_subs == 0 && outstanding.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            return ok_res(());
+        }
+
+        while let Some(ev) = rx.recv().await {
+            let msg = match ev {
+                WorkerEvent::Msg(m) => m,
+                WorkerEvent::PerformDone(m) => {
+                    outstanding.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    m
+                }
+            };
+            let (next, cmd) = update(msg, model);
+            model = next;
+            worker_run_cmd(cmd, &tx, &outstanding);
+            for h in sub_handles.drain(..) {
+                h.abort();
+            }
+            live_subs = worker_spawn_subs(subscriptions(model.clone()), &tx, &mut sub_handles);
+            // The model has settled: no live subscription can deliver again and no
+            // one-shot effect is in flight, so no further event will arrive.
+            // Terminate rather than block on a channel only this loop still holds.
+            if live_subs == 0 && outstanding.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                break;
+            }
+        }
+        for h in sub_handles.drain(..) {
+            h.abort();
+        }
+        ok_res(())
+    })
+}
+
+/// Opaque app handle returned by `Ipe.Tea.worker`.
+/// Backed by a boxed `IpeTask<IpeError, ()>`; run via `run_blocking`.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct WorkerApp(pub IpeTask<crate::error::IpeError, ()>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl WorkerApp {
+    /// Blocking entry: drives the underlying task to completion.
+    pub fn run_blocking(self) -> crate::IpeResult<crate::error::IpeError, ()> {
+        crate::task::block_on(self.0)
+    }
+}
+
 // ─── Cmd.map / Sub.map unit tests ──────────────────────────────────────────
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
