@@ -75,6 +75,8 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "web_app_with",
     // ── Dead: emit_console_call synthesises the CLI entry-point block inline. ───
     "ipe_console_app_",
+    // ── Dead: emit_worker_call synthesises the worker entry-point block inline. ─
+    "ipe_worker_app_",
     // ── Dead: emit_ui_call emits ipe_runtime_rust::ui::render::ui_layout_with_vecs
     //         for UiLayoutWith; the bare "ui_layout_with" name is not used.
     //         Note: ui_layout_with_vecs IS in the runtime; this entry is for
