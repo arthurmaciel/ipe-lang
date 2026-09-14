@@ -204,11 +204,11 @@ main =
 /// A `View` over a tag outside the closed `{Web, Tui, Cli}` engine set. The
 /// tag names no view engine, so it is rejected fail-closed at canon — never a
 /// flexible variable that defers the failure downstream.
-const NON_ENGINE_VIEW: &str = r#"module Main exposing (v)
+const NON_ENGINE_VIEW: &str = r"module Main exposing (v)
 
 v : View Foo Msg
 v = v
-"#;
+";
 
 /// A `Tea.app` whose view engine is left under-determined: the `view` field is
 /// annotated `View e Msg` with a free `e` and its body is the diverging
