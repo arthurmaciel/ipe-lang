@@ -12528,7 +12528,7 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.sql_bool), 1);
         ctor_arity.insert((prelude_home.clone(), builtins.sql_bytes), 1);
         ctor_arity.insert((prelude_home.clone(), builtins.sql_time), 1);
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_decimal), 1); // SqlDecimal(String)
+        ctor_arity.insert((prelude_home.clone(), builtins.sql_decimal), 1); // SqlDecimal(Decimal)
         ctor_arity.insert((prelude_home.clone(), builtins.sql_money), 1); // SqlMoney(String) — "ISO_CODE AMOUNT"
         ctor_arity.insert((prelude_home.clone(), builtins.sql_null), 1); // SqlNull(SqlValue)
         ctor_arity.insert((prelude_home.clone(), builtins.set_field), 1); // SetField(SqlValue)
@@ -15419,14 +15419,12 @@ impl<'a> Lowerer<'a> {
                     name: b.sql_time,
                     fields: vec![IrType::Int],
                 },
-                // SqlDecimal and SqlMoney carry their value as a lossless String
-                // representation — decimal digits for SqlDecimal,
-                // "ISO_CODE AMOUNT" for SqlMoney.  Using IrType::Str is the
-                // minimal wiring until a native IrType::Decimal is added.
                 Variant {
                     name: b.sql_decimal,
-                    fields: vec![IrType::Str],
+                    fields: vec![IrType::Decimal],
                 },
+                // SqlMoney carries its value as a lossless "ISO_CODE AMOUNT"
+                // String.
                 Variant {
                     name: b.sql_money,
                     fields: vec![IrType::Str],
