@@ -67,19 +67,23 @@ impl Length {
     /// that divides free space is emitted at the width/height attribute arms,
     /// not here.
     ///
-    /// The shared CSS spelling for `Px`/`Vh`/`Vw` mirrors `Ipe.Css.lengthToString`;
-    /// byte-for-byte equivalence for those shapes is enforced by the
-    /// `css_length_color_ssot` equivalence test.
+    /// The shared `Px`/`Vh`/`Vw` units are spelled by the one runtime renderer
+    /// ([`crate::length::CssUnit`]); `Ipe.Ui`'s `Length` is a surface carrier
+    /// that funnels those shared shapes into `ipe_runtime::length` rather than
+    /// re-deriving the spelling. Byte-for-byte equivalence with the pure-Ipê
+    /// `Ipe.Css.lengthToString` is enforced by the `css_length_color_ssot`
+    /// equivalence test.
     #[must_use]
     pub(crate) fn css(&self) -> String {
+        use crate::length::CssUnit;
         match self {
-            Self::Px(n) => format!("{n}px"),
+            Self::Px(n) => CssUnit::Px.css(*n),
             Self::Content => "auto".to_owned(),
             Self::Fill(_) => "100%".to_owned(),
-            Self::Min(n, inner) => format!("min({}px,{})", n, inner.css()),
-            Self::Max(n, inner) => format!("max({}px,{})", n, inner.css()),
-            Self::Vh(n) => format!("{n}vh"),
-            Self::Vw(n) => format!("{n}vw"),
+            Self::Min(n, inner) => format!("min({},{})", CssUnit::Px.css(*n), inner.css()),
+            Self::Max(n, inner) => format!("max({},{})", CssUnit::Px.css(*n), inner.css()),
+            Self::Vh(n) => CssUnit::Vh.css(*n),
+            Self::Vw(n) => CssUnit::Vw.css(*n),
         }
     }
 }
