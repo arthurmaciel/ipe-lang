@@ -108,7 +108,9 @@ defaultCfg : WsUrl -> WebSocketCfg
 ```
 
 Default WebSocketCfg.  All-defaults values.  Override fields
-with the `with*` builder helpers.
+with the `with*` builder helpers.  The time-span defaults come from the typed
+`defaultTimeout`, unwrapped to milliseconds only here at the DTO boundary, so
+no bare `30000` literal survives in the surface.
 
 ## `withHeaders`
 

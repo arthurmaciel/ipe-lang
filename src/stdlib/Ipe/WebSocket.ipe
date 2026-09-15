@@ -146,14 +146,26 @@ type alias WebSocketCfg =
     }
 
 
+-- | The default handshake timeout and ping cadence applied by `defaultCfg`: 30
+-- seconds each, spelled as a typed `Ipe.Duration` rather than a bare
+-- millisecond literal so the unit is explicit and a negative floor is
+-- unrepresentable.  The raw milliseconds are recovered once, here, for the
+-- transport DTO the runtime `WsClientCfg` fold consumes.
+defaultTimeout : Duration
+defaultTimeout =
+    Duration.seconds 30
+
+
 -- | Default WebSocketCfg.  All-defaults values.  Override fields
--- with the `with*` builder helpers.
+-- with the `with*` builder helpers.  The time-span defaults come from the typed
+-- `defaultTimeout`, unwrapped to milliseconds only here at the DTO boundary, so
+-- no bare `30000` literal survives in the surface.
 defaultCfg : WsUrl -> WebSocketCfg
 defaultCfg w =
     { url = Url.toString (toUrl w)
     , headers = []
-    , timeout = 30000
-    , pingInterval = 30000
+    , timeout = Duration.toMillis defaultTimeout
+    , pingInterval = Duration.toMillis defaultTimeout
     }
 
 
