@@ -139,12 +139,12 @@ pub(crate) fn user_ipe_css_float_str(n: f64) -> String {
 pub(crate) fn user_ipe_css_length_to_string(lengthVal: IpeCssLength) -> String {
     let _ipe_recursion_guard = crate::recursion_guard();
     match lengthVal {
-        IpeCssLength::Px(n) => format!("{}{}", string_from_int(n), "px".to_string()),
+        IpeCssLength::Px(n) => crate::user_ipe_length_to_css(n, IpeLengthUnit::Px),
         IpeCssLength::Rem(n) => format!("{}{}", crate::user_ipe_css_float_str(n), "rem".to_string()),
         IpeCssLength::Em(n) => format!("{}{}", crate::user_ipe_css_float_str(n), "em".to_string()),
         IpeCssLength::Pct(n) => format!("{}{}", crate::user_ipe_css_float_str(n), "%".to_string()),
-        IpeCssLength::Vh(n) => format!("{}{}", string_from_int(n), "vh".to_string()),
-        IpeCssLength::Vw(n) => format!("{}{}", string_from_int(n), "vw".to_string()),
+        IpeCssLength::Vh(n) => crate::user_ipe_length_to_css(n, IpeLengthUnit::Vh),
+        IpeCssLength::Vw(n) => crate::user_ipe_length_to_css(n, IpeLengthUnit::Vw),
         IpeCssLength::Ch(n) => format!("{}{}", crate::user_ipe_css_float_str(n), "ch".to_string()),
         IpeCssLength::Fr(n) => format!("{}{}", string_from_int(n), "fr".to_string()),
         IpeCssLength::Num(n) => crate::user_ipe_css_float_str(n),
