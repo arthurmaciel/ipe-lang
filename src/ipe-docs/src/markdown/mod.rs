@@ -18,6 +18,7 @@
 pub mod parity;
 pub mod parse;
 pub mod sexpr;
+pub mod walker;
 
 /// The six Markdown heading levels. Mirrors `Ipe.Markdown.HeadingLevel`: a
 /// `HeaderBlock` carries exactly one, so levels 0, 7, and negatives are not
