@@ -20,6 +20,7 @@ use ipe_diagnostics::{DResult, Diagnostic};
 /// Returns `None` when the runtime cannot be found. Callers that require the
 /// runtime should skip gracefully on `None` rather than hard-erroring, so a
 /// bare dev environment without a runtime checkout does not break the test suite.
+#[allow(dead_code)]
 pub fn resolve_runtime() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
@@ -122,10 +123,35 @@ pub fn vendor_and_run(
 /// Callers that prune the target after the build must check whether the returned
 /// path equals `out_dir.join("target")` before removing it — the shared warm
 /// target must never be pruned here.
+///
+/// This is the BUILD-ONLY target: use it only for a SEAL test that builds an
+/// emitted crate and never executes the resulting binary. A test that RUNS
+/// `debug/ipe-app` and asserts its output must instead use
+/// [`emitted_run_target_dir`] — the shared target holds a single, fixed-name
+/// `debug/ipe-app`, so under parallel nextest one run-output test would execute
+/// a binary a concurrent sibling just overwrote.
 #[must_use]
 #[allow(dead_code)]
 pub fn emitted_target_dir(out_dir: &Path) -> PathBuf {
     child_shared_target_from_env().map_or_else(|| out_dir.join("target"), PathBuf::from)
+}
+
+/// Resolve the `CARGO_TARGET_DIR` for a SEAL test that RUNS the emitted binary
+/// and asserts its stdout/exit.
+///
+/// ALWAYS an isolated per-slot `out_dir/target`, never the shared warm target:
+/// every emitted crate builds a fixed-name `ipe-app`, so the shared target's
+/// `debug/ipe-app` is a single file that concurrent tests clobber. A run-output
+/// test must execute ITS OWN binary — a path no sibling can write — or it can
+/// read a clobbered binary's output (a false red, or the worse false green where
+/// the wrong binary happens to print the expected value, masking an emit bug).
+/// The shared warm target's dep-cache speedup is reserved for build-only tests
+/// (see [`emitted_target_dir`]); a run-output test cold-builds its deps, which is
+/// the price of an un-clobberable binary path.
+#[must_use]
+#[allow(dead_code)]
+pub fn emitted_run_target_dir(out_dir: &Path) -> PathBuf {
+    out_dir.join("target")
 }
 
 /// Wrap a filesystem error as a `CompilerBug` diagnostic.
