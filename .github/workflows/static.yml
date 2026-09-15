@@ -65,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: x86_64-unknown-linux-musl
 
@@ -171,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: aarch64-unknown-linux-musl
 
@@ -251,7 +251,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
 
       - name: Cache cargo target
         uses: actions/cache@v6
@@ -320,7 +320,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: x86_64-pc-windows-msvc
 
@@ -395,7 +395,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: x86_64-unknown-freebsd
 

@@ -81,7 +81,7 @@ jobs:
           ref: ${{ needs.release-please.outputs.pr_branch }}
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
 
       - name: Sync Cargo.lock to bumped workspace version
         run: cargo update --workspace
