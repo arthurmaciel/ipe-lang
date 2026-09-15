@@ -41,9 +41,16 @@ pub enum MainShape {
 /// which may be an alias (`import … as S`) or accidentally collide with a
 /// user module's leaf (`Acme.Server`). Matching the resolved canonical path — not
 /// the spelling — is what closes the alias/rename gap and the leaf-collision gap
-/// (issue #2142). Kept in lockstep with the resolver's `TEA_APP_ENTRIES` and
-/// `Server.listen` entry.
-const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
+/// (issue #2142).
+///
+/// This table and the resolver's `TEA_APP_ENTRIES` are held in agreement by a
+/// build-time relation (a `const` bijection assertion in `resolve`), not by
+/// prose: the `Ipe.Tea.*` rows here — keyed by canonical path — must be exactly the
+/// `TEA_APP_ENTRIES` rows keyed by `(last-path-segment, name)`. A one-sided edit
+/// fails compilation. The `Ipe.Http.Server` `listen` row is the sole non-TEA
+/// entry (an HTTP server, not a TEA app), so it deliberately has no
+/// `TEA_APP_ENTRIES` counterpart.
+pub(crate) const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
     (&["Ipe", "Tea", "Web"], "tea", MainShape::Web),
     (&["Ipe", "Tea", "Web"], "appRouted", MainShape::Web),
     (&["Ipe", "Tea", "Web"], "appWith", MainShape::Web),

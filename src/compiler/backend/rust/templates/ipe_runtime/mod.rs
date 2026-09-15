@@ -2,6 +2,7 @@
 pub mod basics;
 pub mod cache;
 pub mod color;
+pub mod length;
 pub mod char_kernel;
 pub mod char_category;
 pub mod config;
@@ -37,6 +38,7 @@ pub mod trace;
 pub use basics::*;
 pub use cache::*;
 pub use color::*;
+pub use length::*;
 pub use char_kernel::*;
 pub use char_category::*;
 pub use config::*;

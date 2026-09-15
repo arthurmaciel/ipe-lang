@@ -227,6 +227,7 @@ pub mod bytes;
 pub mod char_kernel;
 pub mod char_category;
 pub mod color;
+pub mod length;
 pub mod config;
 pub mod core;
 pub mod crypto;
