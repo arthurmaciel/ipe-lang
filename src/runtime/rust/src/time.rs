@@ -7,14 +7,19 @@ use super::IpeResult;
 // `IpeTask`/`ok_res` back every native time kernel (the reactor-free clock reads
 // AND the `Time.sleep` timer), so they are available on any native build,
 // `tokio` or not; the wasm arm re-imports them under its own cfg.
-#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-client"))]
+#[cfg(any(
+    not(all(target_arch = "wasm32", feature = "wasm-client")),
+    feature = "wasm-client"
+))]
 use super::{IpeTask, ok_res};
 
 // `Time.now` / `Time.unixMillis` read the system clock synchronously
 // (`SystemTime::now`) — no reactor, no timer — so they are on the pure-kernel
-// whitelist and MUST resolve in a `tokio`-less crate. Available on any native
-// build; the always-emitted prelude wrapper references them unconditionally.
-#[cfg(not(target_arch = "wasm32"))]
+// whitelist and MUST resolve in a `tokio`-less crate. The native-ish path (host
+// native AND WASI) reads the real host clock; only the browser-`wasm-client`
+// build substitutes `Date.now()`, since `SystemTime::now()` traps on
+// `wasm32-unknown-unknown` but runs on `wasm32-wasip1` (WASI has a clock).
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
 pub fn time_now<E: Send + 'static>(_: ()) -> IpeTask<E, i64> {
     Box::pin(async move {
         let ms = std::time::SystemTime::now()
@@ -42,7 +47,15 @@ pub fn time_sleep<E: Send + 'static>(ms: i64) -> IpeTask<E, ()> {
     })
 }
 
-#[cfg(all(not(feature = "tokio"), not(target_arch = "wasm32")))]
+// The tokio-less native-ish sleep parks the thread. Covers a `tokio`-less host
+// build AND WASI (`wasm32-wasip1` has no tokio *crate* — it is native-only in
+// the manifest — so even when a co-located WASI build sets the `tokio` feature
+// flag via `async`, the tokio timer is absent and `std::thread::sleep` runs);
+// only browser-`wasm-client` substitutes `gloo-timers`.
+#[cfg(all(
+    any(not(feature = "tokio"), target_arch = "wasm32"),
+    not(all(target_arch = "wasm32", feature = "wasm-client"))
+))]
 pub fn time_sleep<E: Send + 'static>(ms: i64) -> IpeTask<E, ()> {
     Box::pin(async move {
         std::thread::sleep(std::time::Duration::from_millis(ms.max(0) as u64));
@@ -50,7 +63,7 @@ pub fn time_sleep<E: Send + 'static>(ms: i64) -> IpeTask<E, ()> {
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
 pub fn time_unix_millis<E: Send + 'static>(_: ()) -> IpeTask<E, i64> {
     time_now(())
 }

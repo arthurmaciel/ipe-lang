@@ -964,8 +964,12 @@ pub use native::{
 pub(crate) use native::{SessionPorts, lock_sessions};
 
 // ─── Wasm (browser) transport ──────────────────────────────────────────────
-
-#[cfg(target_arch = "wasm32")]
+//
+// The `Ffi.Js` port transport reaches a JS host — a browser tab (`wasm-client`)
+// or the native SSE server. WASI (`wasm32-wasip1`) has neither, so this browser
+// arm is gated on `wasm-client`, never bare `wasm32`; the module itself is not
+// compiled for a co-located WASI build (see the `js_port` gate in `mod.rs`).
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 mod wasm {
     use super::*;
     use crate::error::IpeError;
@@ -1473,7 +1477,7 @@ mod wasm {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 pub use wasm::{
     js_close_session, js_open_session, js_request, js_send, js_send_to_session, js_session_frames,
     js_subscribe, push_inbound,
