@@ -2857,6 +2857,15 @@ impl<'a> Parser<'a> {
                 if text == "False" {
                     return Ok(Located::new(tok.span, Pattern_::PBool(false)));
                 }
+                // `Debug._` — the development-only catch-all. A reserved literal
+                // spelling (the conventional `import Ipe.Debug as Debug` alias),
+                // parsed here because pattern position has no qualifier-resolution
+                // phase. Matches every value like `_`, but is exempt from the
+                // closed-union catch-all error and is rejected at `ipe release`
+                // (IPE-L0140), exactly like the other `Ipe.Debug` members.
+                if text == "Debug._" {
+                    return Ok(Located::new(tok.span, Pattern_::PDebugAnything));
+                }
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
                     // Qualified constructors (`Module.Ctor`) are not modelled in

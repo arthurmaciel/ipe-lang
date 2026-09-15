@@ -802,7 +802,7 @@ pub fn compile_modules_observed(
                 let diag = Diagnostic::Lower {
                     span: ipe_diagnostics::Span::DUMMY,
                     msg: ipe_diagnostics::LowerError::DevOnlyKernelInProduction {
-                        kernel: "Debug.log".into(),
+                        kernel: "Debug.*".into(),
                     },
                 };
                 let src = std::fs::read_to_string(blame_path).unwrap_or_default();

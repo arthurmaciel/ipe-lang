@@ -1415,7 +1415,9 @@ impl Builder<'_> {
         scrut_var: VarId,
     ) -> DResult<()> {
         match &pat.value {
-            canon::Pattern_::PAnything => Ok(()),
+            // `_` and the dev-only `Debug._` both match any value and bind
+            // nothing, so neither constrains the scrutinee's type.
+            canon::Pattern_::PAnything | canon::Pattern_::PDebugAnything => Ok(()),
             // The unit pattern `()` pins the scrutinee to the unit type and binds
             // nothing — the pattern-position counterpart of the unit expression.
             canon::Pattern_::PUnit => {

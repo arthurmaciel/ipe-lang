@@ -2380,6 +2380,63 @@ fn dev_build_accepts_reachable_debug_explain() {
     assert_compiles("dev_build_accepts_reachable_debug_explain", &src);
 }
 
+/// A `Debug._` catch-all arm over a closed union COMPILES in a development
+/// build: it satisfies exhaustiveness like `_` and is exempt from the
+/// closed-union catch-all error (IPE-T0018), letting a developer defer some
+/// variants. It needs no `import Ipe.Debug` — the pattern is a reserved
+/// spelling. Companion to [`release_rejects_debug_wildcard_pattern`].
+#[test]
+fn dev_build_accepts_debug_wildcard_pattern() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         type Color = Red | Green | Blue\n\
+         name : Color -> String\n\
+         name c =\n    case c of\n        Red ->\n            \"red\"\n\n        Debug._ ->\n            \"todo\"\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (name Green)\n"
+    );
+    assert_compiles("dev_build_accepts_debug_wildcard_pattern", &src);
+}
+
+/// `ipe release` (production flag) must reject a reachable `Debug._` catch-all
+/// with IPE-L0140 — the pattern lowers to a plain wildcard, but the canon scan
+/// marks the module `uses_debug`, so the SAME production gate that turns back
+/// `Debug.log` / `Debug.todo` / `Debug.explain` turns this back too. The
+/// dev-only escape must never ship in a release binary.
+#[test]
+fn release_rejects_debug_wildcard_pattern() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         type Color = Red | Green | Blue\n\
+         name : Color -> String\n\
+         name c =\n    case c of\n        Red ->\n            \"red\"\n\n        Debug._ ->\n            \"todo\"\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (name Green)\n"
+    );
+    assert_rejected_production("release_rejects_debug_wildcard_pattern", &src, "IPE-L0140");
+}
+
+/// A bare `_ ->`-only catch-all over a closed union is rejected in BOTH build
+/// postures (it is IPE-T0018, an ordinary type error, not a build-posture
+/// gate). Pinning it at the CLI level proves the error is not swallowed by the
+/// warning channel — a developer sees the failure at `ipe build` / `type-check`.
+#[test]
+fn bare_wildcard_over_closed_union_is_rejected_at_cli() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         type Color = Red | Green | Blue\n\
+         name : Color -> String\n\
+         name c =\n    case c of\n        _ ->\n            \"other\"\n\
+         main : Task Error ()\n\
+         main =\n    Io.println (name Green)\n"
+    );
+    assert_rejected(
+        "bare_wildcard_over_closed_union_is_rejected_at_cli",
+        &src,
+        "IPE-T0018",
+    );
+}
+
 /// A `Debug.explain` in genuinely DEAD code (a top-level binding never reachable
 /// from `main`) ships nothing — it is DCE'd — so even a production build accepts
 /// it. Only a REACHABLE dev-only construct is rejected, mirroring `Debug.todo`.
