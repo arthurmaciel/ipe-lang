@@ -314,7 +314,9 @@ jobs:
   # `#[cfg(feature = "live")]`.
   runtime-feature-combos:
     runs-on: ubuntu-latest
-    needs: changes
+    # + quick-check so a compile error fails fast before this heavy build. quick-check
+    # is unconditional (no `if`) and required, so what gates a merge is unchanged.
+    needs: [changes, quick-check]
     # Code-build correctness gate on the PR boundary: runs on any PR that touches
     # an emit-relevant path (backend/runtime/stdlib), and always on push/nightly.
     # Path-scoping means a docs/CI-only PR skips it.
@@ -336,7 +338,9 @@ jobs:
   # of the browser target (docs/architecture/wasm-target.md).
   wasm-floor:
     runs-on: ubuntu-latest
-    needs: changes
+    # + quick-check so a compile error fails fast before this heavy build. quick-check
+    # is unconditional (no `if`) and required, so what gates a merge is unchanged.
+    needs: [changes, quick-check]
     # Code-build correctness gate on the PR boundary: runs on any PR that touches
     # a wasm-relevant path, and always on push/schedule. Path-scoping keeps it off
     # a non-wasm PR.
@@ -641,7 +645,9 @@ jobs:
   # this job is the one place those regression tests run in CI.
   runtime-full-features:
     runs-on: ubuntu-latest
-    needs: changes
+    # + quick-check so a compile error fails fast before this heavy build. quick-check
+    # is unconditional (no `if`) and required, so what gates a merge is unchanged.
+    needs: [changes, quick-check]
     # Code-build correctness gate on the PR boundary (nextest --profile ci over the
     # full-feature graph). `full` ⊇ `live`, so this is the one place feature-gated
     # regressions (e.g. a workspace-wide serde_json flag flip changing signed-token
@@ -1269,7 +1275,9 @@ jobs:
   linux-arm64-tier2:
     name: linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)
     runs-on: ubuntu-24.04-arm
-    needs: changes
+    # + quick-check so a compile error fails fast before this heavy build. quick-check
+    # is unconditional (no `if`) and required, so what gates a merge is unchanged.
+    needs: [changes, quick-check]
     # On the PR gate for ANY code change (all authors). The sandbox/reconciler
     # refuse-to-certify path this proves spans canon + cli (not just emit), so a
     # codegen change to it must redden a PR here, not only post-merge — keyed on
