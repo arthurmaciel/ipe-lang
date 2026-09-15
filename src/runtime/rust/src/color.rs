@@ -913,6 +913,162 @@ impl crate::stringify::IpeStringify for Deficiency {
     }
 }
 
+// ── Ipe.Color kernel shims ──────────────────────────────────────────────────
+//
+// The backend emits a free-function call per `Ipe.Color` kernel (the emit symbol
+// in `ipe_kernels::StdlibKernel::def().runtime_fn`). Each shim is a thin
+// passthrough to the corresponding `Color` associated function or method — the
+// algorithm lives ONLY on `Color`, so no colour maths is duplicated at the emit
+// boundary. Data-last argument order (colour last) matches the Ipê pipe idiom.
+
+/// `Color.rgb : Int -> Int -> Int -> Color`
+#[must_use]
+pub fn color_rgb(r: i64, g: i64, b: i64) -> Color {
+    Color::rgb(r, g, b)
+}
+
+/// `Color.rgba : Int -> Int -> Int -> Float -> Color`
+#[must_use]
+pub fn color_rgba(r: i64, g: i64, b: i64, a: f64) -> Color {
+    Color::rgba(r, g, b, a)
+}
+
+/// `Color.hsl : Float -> Float -> Float -> Color`
+#[must_use]
+pub fn color_hsl(h: f64, s: f64, l: f64) -> Color {
+    Color::hsl(h, s, l)
+}
+
+/// `Color.hsla : Float -> Float -> Float -> Float -> Color`
+#[must_use]
+pub fn color_hsla(h: f64, s: f64, l: f64, a: f64) -> Color {
+    Color::hsla(h, s, l, a)
+}
+
+/// `Color.white : Color`
+#[must_use]
+pub fn color_white() -> Color {
+    Color::white()
+}
+
+/// `Color.black : Color`
+#[must_use]
+pub fn color_black() -> Color {
+    Color::black()
+}
+
+/// `Color.red : Color`
+#[must_use]
+pub fn color_red() -> Color {
+    Color::red()
+}
+
+/// `Color.green : Color`
+#[must_use]
+pub fn color_green() -> Color {
+    Color::green()
+}
+
+/// `Color.blue : Color`
+#[must_use]
+pub fn color_blue() -> Color {
+    Color::blue()
+}
+
+/// `Color.transparent : Color`
+#[must_use]
+pub fn color_transparent() -> Color {
+    Color::transparent()
+}
+
+// ── Ipe.Color accessors ─────────────────────────────────────────────────────
+
+/// `Color.toCss : Color -> String`
+#[must_use]
+pub fn color_to_css(c: Color) -> String {
+    c.to_css()
+}
+
+/// `Color.toCssRgba : Color -> String`
+#[must_use]
+pub fn color_to_css_rgba(c: Color) -> String {
+    c.to_css_rgba()
+}
+
+/// `Color.toHex : Color -> String`
+#[must_use]
+pub fn color_to_hex(c: Color) -> String {
+    c.to_hex()
+}
+
+/// `Color.luminance : Color -> Float`
+#[must_use]
+pub fn color_luminance(c: Color) -> f64 {
+    c.luminance()
+}
+
+// ── Ipe.Color manipulation (data-last: the subject colour is the final arg) ──
+
+/// `Color.withAlpha : Float -> Color -> Color`
+#[must_use]
+pub fn color_with_alpha(a: f64, c: Color) -> Color {
+    c.with_alpha(a)
+}
+
+/// `Color.mix : Float -> Color -> Color -> Color`
+#[must_use]
+pub fn color_mix(t: f64, a: Color, b: Color) -> Color {
+    Color::mix(t, a, b)
+}
+
+/// `Color.blend : Color -> Color -> Color` (source-over)
+#[must_use]
+pub fn color_blend(src: Color, dst: Color) -> Color {
+    Color::blend(src, dst)
+}
+
+/// `Color.lighten : Float -> Color -> Color`
+#[must_use]
+pub fn color_lighten(amount: f64, c: Color) -> Color {
+    c.lighten(amount)
+}
+
+/// `Color.darken : Float -> Color -> Color`
+#[must_use]
+pub fn color_darken(amount: f64, c: Color) -> Color {
+    c.darken(amount)
+}
+
+/// `Color.saturate : Float -> Color -> Color`
+#[must_use]
+pub fn color_saturate(amount: f64, c: Color) -> Color {
+    c.saturate(amount)
+}
+
+/// `Color.desaturate : Float -> Color -> Color`
+#[must_use]
+pub fn color_desaturate(amount: f64, c: Color) -> Color {
+    c.desaturate(amount)
+}
+
+/// `Color.rotateHue : Float -> Color -> Color`
+#[must_use]
+pub fn color_rotate_hue(degrees: f64, c: Color) -> Color {
+    c.rotate_hue(degrees)
+}
+
+/// `Color.complementary : Color -> Color`
+#[must_use]
+pub fn color_complementary(c: Color) -> Color {
+    c.complementary()
+}
+
+/// `Color.grayscale : Color -> Color`
+#[must_use]
+pub fn color_grayscale(c: Color) -> Color {
+    c.grayscale()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

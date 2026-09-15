@@ -25217,6 +25217,36 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 KernelFn::CryptoHmacSha256WithKey | KernelFn::CryptoHmacSha512WithKey,
             ) => Ok(2),
+            // ── Ipe.Color constructor kernels ──
+            Callee::Kernel(
+                KernelFn::ColorWhite
+                | KernelFn::ColorBlack
+                | KernelFn::ColorRed
+                | KernelFn::ColorGreen
+                | KernelFn::ColorBlue
+                | KernelFn::ColorTransparent,
+            ) => Ok(0),
+            Callee::Kernel(KernelFn::ColorRgb | KernelFn::ColorHsl) => Ok(3),
+            Callee::Kernel(KernelFn::ColorRgba | KernelFn::ColorHsla) => Ok(4),
+            // Ipe.Color accessors + manipulation
+            Callee::Kernel(
+                KernelFn::ColorToCss
+                | KernelFn::ColorToCssRgba
+                | KernelFn::ColorToHex
+                | KernelFn::ColorLuminance
+                | KernelFn::ColorComplementary
+                | KernelFn::ColorGrayscale,
+            ) => Ok(1),
+            Callee::Kernel(
+                KernelFn::ColorWithAlpha
+                | KernelFn::ColorBlend
+                | KernelFn::ColorLighten
+                | KernelFn::ColorDarken
+                | KernelFn::ColorSaturate
+                | KernelFn::ColorDesaturate
+                | KernelFn::ColorRotateHue,
+            ) => Ok(2),
+            Callee::Kernel(KernelFn::ColorMix) => Ok(3),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -29361,6 +29391,34 @@ mod tests {
         KernelFn::LevelInfo,
         KernelFn::LevelWarn,
         KernelFn::LevelError,
+        // Ipe.Color — compiled-source module; every colour kernel is reached
+        // exclusively through the `Kernel.kernel "Color_*"` alias fast-path (the
+        // `Color` qualifier is a compiled-source module name, not a legacy
+        // `QUALIFIERS` entry), so no legacy `lower_callee` string-match arm exists.
+        KernelFn::ColorRgb,
+        KernelFn::ColorRgba,
+        KernelFn::ColorHsl,
+        KernelFn::ColorHsla,
+        KernelFn::ColorWhite,
+        KernelFn::ColorBlack,
+        KernelFn::ColorRed,
+        KernelFn::ColorGreen,
+        KernelFn::ColorBlue,
+        KernelFn::ColorTransparent,
+        KernelFn::ColorToCss,
+        KernelFn::ColorToCssRgba,
+        KernelFn::ColorToHex,
+        KernelFn::ColorLuminance,
+        KernelFn::ColorWithAlpha,
+        KernelFn::ColorMix,
+        KernelFn::ColorBlend,
+        KernelFn::ColorLighten,
+        KernelFn::ColorDarken,
+        KernelFn::ColorSaturate,
+        KernelFn::ColorDesaturate,
+        KernelFn::ColorRotateHue,
+        KernelFn::ColorComplementary,
+        KernelFn::ColorGrayscale,
     ];
 
     /// Verifies that for every non-excluded variant in `KernelFn::ALL`, the

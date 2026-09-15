@@ -1510,6 +1510,34 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::LocaleToTag
         | KernelFn::StringToUpperIn
         | KernelFn::StringToLowerIn
+        // `Ipe.Color` constructors build an opaque `Color` value consumed by a
+        // downstream attribute kernel; their literal channels are hoisted via the
+        // inner-call rule at that consuming position, so no direct appearance arg
+        // is marked here (conservative: a false appearance would be a correctness bug).
+        | KernelFn::ColorRgb
+        | KernelFn::ColorRgba
+        | KernelFn::ColorHsl
+        | KernelFn::ColorHsla
+        | KernelFn::ColorWhite
+        | KernelFn::ColorBlack
+        | KernelFn::ColorRed
+        | KernelFn::ColorGreen
+        | KernelFn::ColorBlue
+        | KernelFn::ColorTransparent
+        | KernelFn::ColorToCss
+        | KernelFn::ColorToCssRgba
+        | KernelFn::ColorToHex
+        | KernelFn::ColorLuminance
+        | KernelFn::ColorWithAlpha
+        | KernelFn::ColorMix
+        | KernelFn::ColorBlend
+        | KernelFn::ColorLighten
+        | KernelFn::ColorDarken
+        | KernelFn::ColorSaturate
+        | KernelFn::ColorDesaturate
+        | KernelFn::ColorRotateHue
+        | KernelFn::ColorComplementary
+        | KernelFn::ColorGrayscale
         // The worker app-entry carries no appearance-hoist literal position.
         | KernelFn::TeaWorker => &[],
     }
