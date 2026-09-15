@@ -746,7 +746,7 @@ pub const fn is_tea_subs_function(func: &ipe_ir::Func) -> bool {
 /// ([`crate::transition_classify::init_datum_of_body`]) then refuses an `update`
 /// body (a `msg` match, never a bare record-literal tuple) and every non-`init`
 /// helper, so the arming is only a cheap pre-filter, never the correctness gate.
-pub fn func_returns_cmd_tuple(func: &ipe_ir::Func) -> bool {
+pub const fn func_returns_cmd_tuple(func: &ipe_ir::Func) -> bool {
     let IrType::Tuple(elems) = &func.ret else {
         return false;
     };
