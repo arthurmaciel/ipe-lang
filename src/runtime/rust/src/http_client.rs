@@ -661,7 +661,13 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 /// `http_body_cap` (same env var, same default) — `fetch`'s `.text()` buffers
 /// the whole body itself, so this is a post-hoc size guard rather than a
 /// streamed one, but it keeps the same DoS floor on both targets.
-#[cfg(target_arch = "wasm32")]
+// The browser `fetch` substitute is gated on `all(wasm32, wasm-client)`, never a
+// bare `wasm32`: the co-located WASI target (`wasm32-wasip1`, `wasm-client` off)
+// is a native-ish wasm build that has no `web-sys`/`wasm-bindgen` in its graph,
+// so a bare-`wasm32` arm would compile these browser bindings into a WASI build
+// and fail cargo. `http_client` is not WASI-viable (reqwest is native-only), so
+// on WASI this whole substitute stays absent and no kernel references it.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 fn wasm_http_body_cap() -> usize {
     crate::system::read_env_var("IPE_HTTP_MAX_BODY_BYTES")
         .ok()
@@ -670,7 +676,7 @@ fn wasm_http_body_cap() -> usize {
         .unwrap_or(100 * 1024 * 1024)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, HttpResponse> {
     use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
@@ -791,7 +797,7 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
 }
 
 /// Http.get : Url -> Task Error HttpResponse (browser substitute)
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 pub fn http_get<E: From<String> + 'static>(url: crate::url::Url) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(HttpRequest {
         body: String::new(),
@@ -804,7 +810,7 @@ pub fn http_get<E: From<String> + 'static>(url: crate::url::Url) -> IpeTask<E, H
 }
 
 /// Http.post : Url -> String -> Task Error HttpResponse (browser substitute)
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 pub fn http_post<E: From<String> + 'static>(
     url: crate::url::Url,
     body: String,
@@ -820,7 +826,7 @@ pub fn http_post<E: From<String> + 'static>(
 }
 
 /// Http.request : HttpRequest -> Task Error HttpResponse (browser substitute)
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 pub fn http_request<E: From<String> + 'static>(req: HttpRequest) -> IpeTask<E, HttpResponse> {
     Box::pin(do_fetch(req))
 }
