@@ -2,18 +2,21 @@
 //! component of the Markdown SSOT path.
 //!
 //! Escape-by-default is the §1-critical invariant. Every text byte is
-//! HTML-escaped, no raw HTML is ever passed through, and every link `href` /
-//! image `src` is gated by the shared [`super::is_safe_href`] allowlist at emit
-//! (defence-in-depth beside the parse-boundary gate in [`super::parse`]). On a
-//! rejected URL the walker emits the visible text as escaped plain text — never
-//! a live `href`/`src`.
+//! HTML-escaped and no raw HTML is ever passed through. A link `href` / image
+//! `src` can only be a [`super::SafeHref`] — the scheme allowlist is enforced
+//! at the parse boundary ([`super::parse`]) and the proof rides the type, so an
+//! unsafe scheme has no representation that reaches this emitter. The proven
+//! target is still HTML-escaped into its attribute (defence in depth: an
+//! escaped attribute cannot break out).
 //!
 //! The walk is exhaustive and wildcard-free: an explicit arm per `Block` (8),
 //! `Span` (7), and `HeadingLevel` (6) constructor, so a new `Ipe.Markdown`
 //! constructor forces a compile error here rather than a silent gap.
 //!
-//! Blockquote nesting is bounded by construction ([`MAX_BLOCKQUOTE_DEPTH`]) so
-//! deeply-nested `>>>>…` input cannot exhaust the stack.
+//! Blockquote nesting is bounded by construction ([`super::MAX_BLOCKQUOTE_DEPTH`]):
+//! the parser refuses to build a tree deeper than the ceiling, so neither the
+//! parse recursion, this walk, nor the tree's recursive `Drop` can exhaust the
+//! stack on deeply-nested `>>>>…` input.
 //!
 //! Two caller concerns stay OUT of this leaf module so it needs no highlighter
 //! or theme dependency: the ATX heading level-shift (a caller offset) and code
@@ -21,16 +24,10 @@
 //! [`WalkOptions`].
 
 use super::parse::parse_spans;
-use super::{Block, HeadingLevel, Span, is_safe_href};
+use super::{Block, HeadingLevel, Span};
 use std::fmt::Write as _;
 
-/// Maximum blockquote nesting depth the walker will render.
-///
-/// Input nested deeper is rendered up to the ceiling and the remainder is
-/// dropped, so a pathological `>>>>…` document cannot deep-recurse (bounded by
-/// construction, principle 3). The ceiling is far above any real document's
-/// nesting.
-pub const MAX_BLOCKQUOTE_DEPTH: usize = 32;
+use super::MAX_BLOCKQUOTE_DEPTH;
 
 /// Caller-supplied rendering concerns kept out of the leaf module.
 #[derive(Default)]
@@ -172,32 +169,27 @@ fn render_span(out: &mut String, span: &Span, opts: &WalkOptions) {
             out.push_str("</code>");
         }
         Span::Link(text, url) => {
-            // Emit-boundary href gate (defence-in-depth beside the parse gate):
-            // an unsafe scheme degrades to the escaped visible text, no anchor.
-            if is_safe_href(url) {
-                let _ = write!(
-                    out,
-                    "<a href=\"{}\">{}</a>",
-                    html_escape(url),
-                    html_escape(text)
-                );
-            } else {
-                out.push_str(&html_escape(text));
-            }
+            // The href is a `SafeHref`: the scheme allowlist was enforced at the
+            // parse boundary and the proof lives in the type, so no unsafe
+            // scheme can reach here. The normalised target is HTML-escaped into
+            // the attribute (defence-in-depth: an escaped attribute cannot break
+            // out even if a future refactor loosened the parse gate).
+            let _ = write!(
+                out,
+                "<a href=\"{}\">{}</a>",
+                html_escape(url.as_str()),
+                html_escape(text)
+            );
         }
         Span::Image(alt, url) => {
-            // An image `src` is a fetch sink: same allowlist, fail closed to the
-            // escaped alt text rather than an `<img>` with an unsafe source.
-            if is_safe_href(url) {
-                let _ = write!(
-                    out,
-                    "<img src=\"{}\" alt=\"{}\">",
-                    html_escape(url),
-                    html_escape(alt)
-                );
-            } else {
-                out.push_str(&html_escape(alt));
-            }
+            // An image `src` is a fetch sink; the same `SafeHref` proof gates it
+            // at parse time. Emit the escaped, proven-safe source.
+            let _ = write!(
+                out,
+                "<img src=\"{}\" alt=\"{}\">",
+                html_escape(url.as_str()),
+                html_escape(alt)
+            );
         }
         Span::HardBreak => out.push_str("<br>"),
     }
@@ -333,6 +325,49 @@ mod tests {
     }
 
     #[test]
+    fn control_char_scheme_bypass_rejected_at_emit() {
+        // The exact fail-open inputs, driven end-to-end (parse + walk). Each
+        // must render with NO live `javascript:` in an href: the scheme is
+        // refused at parse, so no anchor carries it. A browser strips
+        // tab/LF/CR before scheme detection, so these are the dangerous forms.
+        for src in [
+            "[x](java\tscript:alert(1))",
+            "[x](java\nscript:alert(1))",
+            "[x](java\rscript:alert(1))",
+            "[x](javascript\t:alert(1))",
+            "[x](java\0script:alert(1))",
+            "[x](java script:alert(1))",
+            "[x](\njavascript:alert(1))",
+        ] {
+            let out = inline(src);
+            assert!(!out.contains("<a "), "no anchor for {src:?}: {out}");
+            assert!(!out.contains("href="), "no href for {src:?}: {out}");
+        }
+    }
+
+    #[test]
+    fn entity_encoded_scheme_never_reaches_a_live_href() {
+        // `java&#09;script:` — a browser decodes `&#09;` (tab) inside an href
+        // and could re-form `javascript:`. Here the `#` makes the parser treat
+        // the target as scheme-less inert text; whatever anchor is emitted has
+        // the `&` HTML-escaped to `&amp;`, so the attribute value is the LITERAL
+        // `java&#09;script:…` — a single browser decode yields the inert literal
+        // `java&#09;script:` (no tab, no `javascript:` scheme). The security
+        // property — no live `javascript:` scheme in any href — holds.
+        let out = inline("[x](java&#09;script:alert(1))");
+        assert!(
+            !out.contains("href=\"javascript"),
+            "no live javascript scheme in href: {out}"
+        );
+        // The raw entity ampersand is escaped, so no browser-side re-decode can
+        // strip a character out of the scheme region.
+        assert!(
+            !out.contains("&#09;script:") || out.contains("&amp;#09;script:"),
+            "the entity ampersand must be escaped in the attribute: {out}"
+        );
+    }
+
+    #[test]
     fn unsafe_image_src_rejected_to_alt_text() {
         let out = inline("![alt](javascript:alert(1))");
         assert!(!out.contains("<img"), "no img for unsafe src: {out}");
@@ -411,10 +446,11 @@ mod tests {
     #[test]
     fn blockquote_depth_is_bounded() {
         // Genuinely nested blockquotes far past the ceiling: `> > > … x`. The
-        // parser nests one level per `> ` prefix; the walker must cap recursion
-        // at MAX_BLOCKQUOTE_DEPTH rather than emit an unbounded stack of tags
-        // (bounded by construction, principle 3). Reaching the assertion at all
-        // proves no stack blow-up / panic.
+        // parser caps the nesting it builds at MAX_BLOCKQUOTE_DEPTH (bounded by
+        // construction, principle 3), so the tree the walker receives — and thus
+        // the emitted `<blockquote>` stack — never exceeds the ceiling. The
+        // walker's own depth guard is a second, independent bound. Reaching the
+        // assertion at all proves no stack blow-up / panic in parse or walk.
         let markers = "> ".repeat(MAX_BLOCKQUOTE_DEPTH + 50);
         let src = format!("{markers}x");
         let out = html(&src, 0);

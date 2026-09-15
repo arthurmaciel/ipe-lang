@@ -76,6 +76,9 @@ checks:
   - context: capabilities-docs-drift
     disposition: gate
     producer: ci.yml
+  - context: markdown-parity
+    disposition: gate
+    producer: ci.yml
   - context: runtime-full-features
     disposition: gate
     producer: ci.yml

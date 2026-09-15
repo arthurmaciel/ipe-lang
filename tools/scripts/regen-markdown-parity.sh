@@ -23,7 +23,7 @@ if [[ $# -ge 1 ]]; then
   ipe_bin="$1"
 else
   echo "regen-markdown-parity: building the ipe binary…" >&2
-  cargo build -p ipe-cli --bin ipe >&2
+  cargo build -p ipe --bin ipe >&2
   ipe_bin="$(cargo metadata --format-version 1 --no-deps \
     | grep -o '"target_directory":"[^"]*"' | head -1 | cut -d'"' -f4)/debug/ipe"
 fi

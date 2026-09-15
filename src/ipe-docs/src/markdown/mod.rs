@@ -20,6 +20,17 @@ pub mod parse;
 pub mod sexpr;
 pub mod walker;
 
+/// Maximum blockquote nesting depth the doc path will build and render.
+///
+/// The single SSOT ceiling shared by the parser and the walker (principle 3,
+/// bounded by construction). The parser refuses to descend into a blockquote
+/// tree deeper than this, so a pathological `>>>>…` document (e.g. a 200 KB
+/// README of `> ` markers) can neither overflow the parse recursion nor build a
+/// tree whose recursive `Drop` overflows the stack. The walker caps its
+/// rendering recursion at the same ceiling as a second, independent boundary.
+/// Far above any real document's nesting.
+pub const MAX_BLOCKQUOTE_DEPTH: usize = 32;
+
 /// The six Markdown heading levels. Mirrors `Ipe.Markdown.HeadingLevel`: a
 /// `HeaderBlock` carries exactly one, so levels 0, 7, and negatives are not
 /// representable.
@@ -56,34 +67,103 @@ pub enum Span {
     Bold(String),
     Italic(String),
     Code(String),
-    /// Link text, then URL.
-    Link(String, String),
-    /// Image alt text, then URL.
-    Image(String, String),
+    /// Link text, then a proven-safe target.
+    Link(String, SafeHref),
+    /// Image alt text, then a proven-safe source.
+    Image(String, SafeHref),
     HardBreak,
 }
 
-/// The single URL-scheme allowlist SSOT for the doc path.
+/// A URL target that has passed the doc-path scheme allowlist.
 ///
-/// A link target is safe when it is scheme-less (relative / fragment) or an
-/// `http` / `https` / `mailto` absolute — never `javascript:`, `vbscript:`, or
-/// a `data:` scheme. A `:` that follows a valid scheme name (before any `/`,
-/// `?`, or `#`) marks an absolute URL; only the safe schemes are admitted, and
-/// every unrecognised scheme is refused (fail-closed).
-#[must_use]
-pub fn is_safe_href(url: &str) -> bool {
-    let lower = url.trim().to_ascii_lowercase();
-    if let Some(scheme) = lower.split(':').next()
-        && scheme != lower
-        && !scheme.is_empty()
-        && !scheme.contains(['/', '?', '#'])
-        && scheme
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
-    {
-        return matches!(scheme, "http" | "https" | "mailto");
+/// This is the parse-don't-validate boundary for the single injection surface
+/// of the Markdown path: an untrusted URL is normalised and vetted ONCE, at
+/// construction, and the proof of safety lives in the type. A `Span::Link` /
+/// `Span::Image` can only carry a `SafeHref`, so no downstream site can emit an
+/// `href` / `src` that skipped the gate — the unsafe scheme has no
+/// representation to reach the emitter with.
+///
+/// The wrapped string is the *normalised* target (the exact bytes safe to place
+/// in an attribute after HTML-escaping), never the raw source. Construction is
+/// the only way in; there is no public constructor that bypasses [`parse`].
+///
+/// [`parse`]: SafeHref::parse
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SafeHref(String);
+
+impl SafeHref {
+    /// The scheme allowlist SSOT for the doc path. A target is admitted only
+    /// when it is scheme-less (relative / fragment) or carries one of these
+    /// absolute schemes — never `javascript:`, `vbscript:`, or a `data:`
+    /// scheme.
+    const ALLOWED_SCHEMES: [&'static str; 3] = ["http", "https", "mailto"];
+
+    /// Parse an untrusted URL into a proven-safe target, or refuse (`None`).
+    ///
+    /// Fail-closed by construction: the safe outcome is the only one a caller
+    /// can obtain, and absent proof the target is safe the answer is refusal.
+    ///
+    /// A browser strips ASCII tab (`\t`), line feed (`\n`), and carriage return
+    /// (`\r`) from a URL *before* it detects the scheme, so `java&#9;script:`
+    /// re-forms `javascript:` in the browser. We strip the same three
+    /// characters from the whole URL first, so the scheme we test is the scheme
+    /// the browser will act on (no scheme-splitting oracle). Then, over the
+    /// cleaned URL:
+    ///
+    /// * a `:` that precedes any `/`, `?`, or `#` marks an absolute scheme; the
+    ///   scheme region MUST be non-empty and contain only `[a-z0-9+-.]` (any
+    ///   other byte — control, whitespace, NUL — means it is not a valid scheme
+    ///   name, so it is refused, never waved through), and the lowercased
+    ///   scheme MUST be in [`ALLOWED_SCHEMES`];
+    /// * no such `:` means a scheme-less relative / fragment target, which is
+    ///   admitted.
+    ///
+    /// [`ALLOWED_SCHEMES`]: SafeHref::ALLOWED_SCHEMES
+    #[must_use]
+    pub fn parse(url: &str) -> Option<Self> {
+        // Strip the exact characters a browser removes before scheme detection,
+        // then trim surrounding ASCII whitespace. The result is what the
+        // browser would act on and what we store.
+        let cleaned: String = url
+            .chars()
+            .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+            .collect();
+        let cleaned = cleaned.trim();
+
+        // Find the scheme delimiter: the first `:` that is not preceded by a
+        // path/query/fragment separator (those mark a scheme-less target).
+        let scheme_end = cleaned.char_indices().find_map(|(i, c)| match c {
+            ':' => Some(Some(i)),
+            '/' | '?' | '#' => Some(None),
+            _ => None,
+        });
+
+        match scheme_end {
+            // A `:` before any `/`, `?`, `#`: an absolute URL — the scheme must
+            // be a valid name AND in the allowlist, else refuse (fail-closed).
+            Some(Some(colon)) => {
+                let scheme = cleaned.get(..colon)?;
+                let valid_name = !scheme.is_empty()
+                    && scheme
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'));
+                let lower = scheme.to_ascii_lowercase();
+                if valid_name && Self::ALLOWED_SCHEMES.contains(&lower.as_str()) {
+                    Some(Self(cleaned.to_owned()))
+                } else {
+                    None
+                }
+            }
+            // Scheme-less (relative / fragment) or no `:` at all: admitted.
+            _ => Some(Self(cleaned.to_owned())),
+        }
     }
-    true
+
+    /// The normalised, proven-safe target.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 // ── Codepoint-string helpers ────────────────────────────────────────────────
@@ -148,27 +228,62 @@ pub(crate) fn starts_with(prefix: &str, s: &[char]) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn is_safe_href_allows_safe_schemes_and_relative() {
-        assert!(is_safe_href("http://example.com"));
-        assert!(is_safe_href("https://example.com"));
-        assert!(is_safe_href("mailto:a@b.com"));
-        assert!(is_safe_href("guide.html"));
-        assert!(is_safe_href("../rel/path"));
-        assert!(is_safe_href("#fragment"));
-        assert!(is_safe_href("/absolute/path"));
-        assert!(is_safe_href(""));
+    fn accepts(url: &str) -> bool {
+        SafeHref::parse(url).is_some()
     }
 
     #[test]
-    fn is_safe_href_rejects_script_schemes() {
-        assert!(!is_safe_href("javascript:alert(1)"));
-        assert!(!is_safe_href("JavaScript:alert(1)"));
-        assert!(!is_safe_href("  javascript:alert(1)"));
-        assert!(!is_safe_href("vbscript:msgbox(1)"));
-        assert!(!is_safe_href("data:text/html,<script>"));
-        assert!(!is_safe_href("data:image/png;base64,AAAA"));
-        assert!(!is_safe_href("file:///etc/passwd"));
+    fn safe_href_allows_safe_schemes_and_relative() {
+        assert!(accepts("http://example.com"));
+        assert!(accepts("https://example.com"));
+        assert!(accepts("mailto:a@b.com"));
+        assert!(accepts("guide.html"));
+        assert!(accepts("../rel/path"));
+        assert!(accepts("#fragment"));
+        assert!(accepts("/absolute/path"));
+        assert!(accepts(""));
+    }
+
+    #[test]
+    fn safe_href_rejects_script_schemes() {
+        assert!(!accepts("javascript:alert(1)"));
+        assert!(!accepts("JavaScript:alert(1)"));
+        assert!(!accepts("  javascript:alert(1)"));
+        assert!(!accepts("vbscript:msgbox(1)"));
+        assert!(!accepts("data:text/html,<script>"));
+        assert!(!accepts("data:image/png;base64,AAAA"));
+        assert!(!accepts("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn safe_href_rejects_scheme_with_interior_control_or_space() {
+        // A browser strips tab/LF/CR from a URL before it detects the scheme,
+        // so each of these re-forms a live `javascript:` scheme. The fail-open
+        // predicate waved these through on the "scheme has a non-scheme char →
+        // skip the allowlist → return true" path; the smart constructor strips
+        // exactly what the browser strips and then refuses the reconstructed
+        // unsafe scheme.
+        assert!(!accepts("java\tscript:alert(1)"));
+        assert!(!accepts("java\nscript:alert(1)"));
+        assert!(!accepts("java\rscript:alert(1)"));
+        assert!(!accepts("javascript\t:alert(1)"));
+        assert!(!accepts("javascript\n:alert(1)"));
+        // A NUL or interior space is NOT stripped by the browser, so the scheme
+        // name is simply invalid — refused, never waved through.
+        assert!(!accepts("java\0script:alert(1)"));
+        assert!(!accepts("java script:alert(1)"));
+        // Leading newline/CR/tab before the scheme.
+        assert!(!accepts("\njavascript:alert(1)"));
+        assert!(!accepts("\r\tjavascript:alert(1)"));
+    }
+
+    #[test]
+    fn safe_href_stores_the_normalised_target() {
+        // Stored value is what the browser would act on: interior tab/LF/CR are
+        // gone, surrounding whitespace trimmed. (Uses a safe scheme so the
+        // normalisation, not the refusal, is observed.)
+        let h = SafeHref::parse("  https://ex\tam\nple.com/x  ").expect("safe");
+        assert_eq!(h.as_str(), "https://example.com/x");
     }
 
     #[test]

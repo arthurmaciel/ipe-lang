@@ -9,7 +9,10 @@
 //! No indexing, `unwrap`, or `panic`: `&[char]` slices are accessed through
 //! `slice` / `index_of_first` / `.get`, iterators, and pattern matching.
 
-use super::{Block, HeadingLevel, Span, index_of_first, is_safe_href, len_i, slice, starts_with};
+use super::{
+    Block, HeadingLevel, MAX_BLOCKQUOTE_DEPTH, SafeHref, Span, index_of_first, len_i, slice,
+    starts_with,
+};
 
 // ── Block parsing ───────────────────────────────────────────────────────────
 
@@ -19,12 +22,23 @@ use super::{Block, HeadingLevel, Span, index_of_first, is_safe_href, len_i, slic
 pub fn parse_blocks(src: &str) -> Vec<Block> {
     // `Ipe.Markdown` calls `String.lines` once, then recurses over the list.
     let lines: Vec<&str> = src.lines().collect();
-    blocks_from_lines(&lines)
+    blocks_from_lines(&lines, 0)
 }
 
 /// Mirrors `blocksFromLines`. Rewritten as a loop over the line slice (the Ipê
 /// source recurses on the tail) so a long document cannot deep-recurse.
-fn blocks_from_lines<'a>(mut lines: &'a [&'a str]) -> Vec<Block> {
+///
+/// `depth` is the current blockquote nesting level. The ONLY input-driven
+/// recursion here is the blockquote arm (`blocks_from_lines` on the stripped
+/// inner lines); every other block former consumes lines iteratively. Bounding
+/// that one arm at [`MAX_BLOCKQUOTE_DEPTH`] makes the whole parse bounded by
+/// construction (principle 3): a `>>>>…` document deeper than the ceiling can
+/// neither overflow the parse recursion nor build a `Block::Blockquote` tree
+/// whose recursive `Drop` overflows the stack, because the tree is never built
+/// past the ceiling. At the ceiling the innermost blockquote's content is kept
+/// as its parsed inner blocks WITHOUT a further blockquote wrapper — the
+/// nesting is truncated, never silently discarded and never recursed.
+fn blocks_from_lines<'a>(mut lines: &'a [&'a str], depth: usize) -> Vec<Block> {
     let mut out: Vec<Block> = Vec::new();
     while let Some((&l, rest)) = lines.split_first() {
         let t = l.trim();
@@ -54,9 +68,23 @@ fn blocks_from_lines<'a>(mut lines: &'a [&'a str]) -> Vec<Block> {
             lines = after;
         } else if is_blockquote_line(l) {
             let (inner_lines, after) = take_blockquote_group(lines);
-            let inner_refs: Vec<&str> = inner_lines.iter().map(String::as_str).collect();
-            out.push(Block::Blockquote(blocks_from_lines(&inner_refs)));
             lines = after;
+            if depth >= MAX_BLOCKQUOTE_DEPTH {
+                // Bounded by construction: at the ceiling we neither recurse nor
+                // wrap further. The already-stripped inner lines are folded into
+                // a single paragraph so their text is preserved as inert content
+                // without adding another `Blockquote` level — the deep nesting
+                // is truncated, never recursed and never silently dropped.
+                let joined = inner_lines.join("\n");
+                let flattened = joined.replace(['\n'], " ");
+                let text = flattened.trim();
+                if !text.is_empty() {
+                    out.push(Block::Para(text.to_owned()));
+                }
+                continue;
+            }
+            let inner_refs: Vec<&str> = inner_lines.iter().map(String::as_str).collect();
+            out.push(Block::Blockquote(blocks_from_lines(&inner_refs, depth + 1)));
         } else {
             let (body, after) = take_paragraph(lines);
             out.push(Block::Para(body));
@@ -437,10 +465,11 @@ fn take_between<'a>(delim: &str, s: &'a [char]) -> (String, &'a [char]) {
 }
 
 /// Parse `[text](url)` at the current position. `None` if the syntax does not
-/// match or the URL fails `is_safe_href` (defend-in-depth: the parsed
-/// `LinkSpan` already carries a vetted href). Mirrors `takeLink`, with the
-/// `is_safe_href` gate added at the parse boundary.
-fn take_link(s: &[char]) -> Option<(String, String, &[char])> {
+/// match or the URL fails [`SafeHref::parse`]. The parsed span carries a
+/// proven-safe href by type, so the unsafe scheme is turned away at the parse
+/// boundary and cannot reach the emitter (defend-in-depth beside the emit
+/// gate). Mirrors `takeLink`, with the scheme gate at the parse boundary.
+fn take_link(s: &[char]) -> Option<(String, SafeHref, &[char])> {
     let close = index_of_first(&[']'], s)?;
     let after_close = s.get(close + 1..).unwrap_or(&[]);
     if !starts_with("(", after_close) {
@@ -458,16 +487,14 @@ fn take_link(s: &[char]) -> Option<(String, String, &[char])> {
         .unwrap_or_default();
     // Parse boundary of the two-boundary href gate: an unsafe scheme degrades
     // to literal text (the caller pushes `[` and continues), never a link.
-    if !is_safe_href(&link_url) {
-        return None;
-    }
+    let href = SafeHref::parse(&link_url)?;
     let after_link = url_and_after.get(close_paren + 1..).unwrap_or(&[]);
-    Some((link_text, link_url, after_link))
+    Some((link_text, href, after_link))
 }
 
 /// Parse `![alt](url)`; `s` must start with `![`. Mirrors `takeImage` (slice
 /// past `!`, then reuse `takeLink`).
-fn take_image(s: &[char]) -> Option<(String, String, &[char])> {
+fn take_image(s: &[char]) -> Option<(String, SafeHref, &[char])> {
     let without_bang = s.get(1..).unwrap_or(&[]);
     take_link(without_bang)
 }
@@ -479,8 +506,12 @@ fn strip_trailing_spaces(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{Block, HeadingLevel, Span};
+    use super::super::{Block, HeadingLevel, SafeHref, Span};
     use super::{parse_blocks, parse_spans};
+
+    fn href(url: &str) -> SafeHref {
+        SafeHref::parse(url).expect("test href must be safe")
+    }
 
     #[test]
     fn headers_all_six_levels() {
@@ -560,6 +591,55 @@ mod tests {
     }
 
     #[test]
+    fn blockquote_parse_depth_is_bounded_far_past_ceiling() {
+        // A ~200 KB README of `> ` markers on a single line: 100_000 nesting
+        // markers, ~3000x the ceiling. The pre-fix parser recursed once per
+        // marker and overflowed the stack (an uncatchable abort). Bounded by
+        // construction, the parser caps the Blockquote tree it builds at
+        // MAX_BLOCKQUOTE_DEPTH, so this returns without deep recursion and the
+        // resulting tree's recursive Drop cannot overflow either. Reaching the
+        // assertions at all is the proof there was no stack blow-up.
+        use super::super::MAX_BLOCKQUOTE_DEPTH;
+
+        // Nesting depth of the built tree.
+        fn depth(bs: &[Block]) -> usize {
+            bs.iter()
+                .map(|b| match b {
+                    Block::Blockquote(inner) => 1 + depth(inner),
+                    _ => 0,
+                })
+                .max()
+                .unwrap_or(0)
+        }
+
+        let src = format!("{}x", "> ".repeat(100_000));
+        let blocks = parse_blocks(&src);
+        let built = depth(&blocks);
+        assert!(
+            built <= MAX_BLOCKQUOTE_DEPTH,
+            "parse nesting must cap at the ceiling, built {built} deep"
+        );
+        assert_eq!(
+            built, MAX_BLOCKQUOTE_DEPTH,
+            "deep input should reach exactly the ceiling: {built}"
+        );
+    }
+
+    #[test]
+    fn blockquote_many_lines_stay_shallow() {
+        // 100_000 SEPARATE blockquote lines nest only ONE level (all collected
+        // at the same group), so this is bounded regardless of the ceiling — a
+        // second input-shape proof that the only depth driver is markers-per-
+        // line, which the ceiling caps.
+        let mut src = String::new();
+        for _ in 0..100_000 {
+            src.push_str("> a\n");
+        }
+        let blocks = parse_blocks(&src);
+        assert!(matches!(blocks.as_slice(), [Block::Blockquote(_)]));
+    }
+
+    #[test]
     fn spans_emphasis_code_and_plain() {
         assert_eq!(
             parse_spans("a **b** c"),
@@ -577,7 +657,7 @@ mod tests {
     fn spans_safe_link_parsed() {
         assert_eq!(
             parse_spans("[text](guide.html)"),
-            vec![Span::Link("text".to_owned(), "guide.html".to_owned())]
+            vec![Span::Link("text".to_owned(), href("guide.html"))]
         );
     }
 
@@ -608,10 +688,46 @@ mod tests {
     }
 
     #[test]
+    fn spans_reject_control_char_bypass_at_parse() {
+        // The exact inputs the fail-open predicate waved through: a tab/LF/CR or
+        // interior space/NUL inside the scheme region. A browser strips
+        // tab/LF/CR before scheme detection, so each re-forms `javascript:`. All
+        // must degrade to literal text — no Link span present.
+        let cases = [
+            "[x](java\tscript:alert(1))",
+            "[x](java\nscript:alert(1))",
+            "[x](java\rscript:alert(1))",
+            "[x](javascript\t:alert(1))",
+            "[x](java\0script:alert(1))",
+            "[x](java script:alert(1))",
+            "[x](\njavascript:alert(1))",
+        ];
+        for src in cases {
+            let spans = parse_spans(src);
+            assert!(
+                !spans.iter().any(|s| matches!(s, Span::Link(..))),
+                "control-char scheme bypass must not parse as a link ({src:?}): {spans:?}"
+            );
+        }
+        // The literal `&#09;` entity form is inert text at the Markdown layer
+        // (no HTML-entity decode happens in the parser), so the target is the
+        // scheme-less string `java&#09;script:...` — not a `javascript:` scheme.
+        // It never reaches an href unescaped; the HTML-escape at emit renders
+        // `&` as `&amp;`. It parses as a link with a scheme-less (safe) target,
+        // which is fine — the danger is only a live `javascript:` scheme, and
+        // there is none here.
+        let entity = parse_spans("[x](java&#09;script:alert(1))");
+        assert!(
+            entity.iter().any(|s| matches!(s, Span::Link(..))),
+            "entity form is scheme-less inert text, a safe relative target: {entity:?}"
+        );
+    }
+
+    #[test]
     fn spans_image_alt_and_url() {
         assert_eq!(
             parse_spans("![alt](img.png)"),
-            vec![Span::Image("alt".to_owned(), "img.png".to_owned())]
+            vec![Span::Image("alt".to_owned(), href("img.png"))]
         );
     }
 
