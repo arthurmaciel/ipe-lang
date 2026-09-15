@@ -49,6 +49,34 @@ fn hover_reports_the_solved_type_of_the_innermost_region() {
     let info =
         ipe_lsp_features::hover::hover(&db, root, entry, helper, byte).expect("hover hit in dep");
     assert_eq!(info.ty, "Int");
+    // A non-`main` hover discloses no control model — the disclosure is a `main`
+    // fact only, never attached to an arbitrary expression.
+    assert_eq!(info.control_model, None);
+}
+
+#[test]
+fn hover_on_main_discloses_the_derived_control_model() {
+    let db = IpeDatabase::new();
+    let helper = file(&db, &["Helper"], HELPER);
+    let entry = file(&db, &["Main"], MAIN);
+    let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
+
+    // A hover inside the `main` binding (`main = double three`) discloses its
+    // control model. This `main` is a plain `Task`, so it is `direct` — the same
+    // word `ipe audit`/`ipe doc` disclose, read from the one SSOT projection,
+    // never re-derived here. The cursor is on `three` in `main = double three`, a
+    // type-solved region that also falls inside the `main` binding.
+    let byte = u32::try_from(MAIN.rfind("three").expect("occurrence")).expect("fits");
+    let info = ipe_lsp_features::hover::hover(&db, root, entry, entry, byte).expect("hover hit");
+    assert_eq!(info.ty, "Int");
+    assert_eq!(info.control_model, Some("direct"));
+
+    // A hover in the `double` binding body (`n + n`) is a solved region OUTSIDE
+    // `main`, so it discloses no control model — the disclosure is a `main`-only
+    // fact, never attached to an arbitrary binding.
+    let byte = u32::try_from(MAIN.rfind("n + n").expect("double body")).expect("fits");
+    let info = ipe_lsp_features::hover::hover(&db, root, entry, entry, byte).expect("hover hit");
+    assert_eq!(info.control_model, None);
 }
 
 #[test]

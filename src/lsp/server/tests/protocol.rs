@@ -197,6 +197,9 @@ fn did_open_publishes_compiler_diagnostics_and_did_change_clears_them() {
     assert!(cleared.is_empty());
 
     // Hover over the `1` in `String.fromInt 1` (line 7, character 31) → `Int`.
+    // That `1` sits inside the `main` binding, so the hover also discloses `main`'s
+    // compiler-derived control model beneath the type: a plain-`Task` `main` is the
+    // `direct` model, the same word `ipe audit`/`ipe doc` disclose.
     client
         .sender
         .send(Message::Request(Request::new(
@@ -210,9 +213,14 @@ fn did_open_publishes_compiler_diagnostics_and_did_change_clears_them() {
         .expect("send hover");
     let hover = recv_response(&client, 3);
     assert_eq!(
-        hover.pointer("/contents/value").and_then(|v| v.as_str()),
+        hover.pointer("/contents/0/value").and_then(|v| v.as_str()),
         Some("Int"),
-        "{hover}"
+        "the type is disclosed first: {hover}"
+    );
+    assert_eq!(
+        hover.pointer("/contents/1").and_then(|v| v.as_str()),
+        Some("control model: direct"),
+        "the control model rides the hover on `main`: {hover}"
     );
 
     // Document symbols → the one top-level binding `main`.

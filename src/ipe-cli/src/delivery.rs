@@ -84,10 +84,21 @@ impl Shape {
     /// runs directly to completion ([`ControlModel::Direct`]).
     #[must_use]
     pub const fn control_model(self) -> ControlModel {
+        ControlModel::from_shape(self.to_main())
+    }
+
+    /// The compiler [`MainShape`] this delivery [`Shape`] mirrors — the inverse of
+    /// [`Self::from_main`]. Lets the control-model projection stay defined once,
+    /// in the compiler, keyed on the shape the compiler pins.
+    #[must_use]
+    const fn to_main(self) -> ipe_canon::shape_source::MainShape {
+        use ipe_canon::shape_source::MainShape;
         match self {
-            Self::Web | Self::Tui | Self::Cli => ControlModel::Tea,
-            Self::Server => ControlModel::Server,
-            Self::Script => ControlModel::Direct,
+            Self::Script => MainShape::Script,
+            Self::Tui => MainShape::Tui,
+            Self::Cli => MainShape::Cli,
+            Self::Server => MainShape::Server,
+            Self::Web => MainShape::Web,
         }
     }
 
@@ -110,56 +121,12 @@ impl Shape {
 
 /// How a program drives itself, projected from its compiler-pinned [`Shape`].
 ///
-/// A closed set: every shape maps to exactly one control model, so a disclosure
-/// surface can name the model without a second derivation that could disagree
-/// with the shape the compiler already pinned. This is the SSOT the `ipe audit`
-/// disclosure reads — it never re-inspects `main` on its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ControlModel {
-    /// The Elm-style model/update/view loop — a `Web`/`Tui`/`Cli` shape.
-    Tea,
-    /// The declarative request/response model — a `Server` shape.
-    Server,
-    /// A plain `main : Task Error ()` that runs directly to completion — a
-    /// `Script` shape.
-    Direct,
-}
-
-impl ControlModel {
-    /// The canonical word for this control model — the one vocabulary shared by
-    /// the audit disclosure, its JSON verdict, the consent gate, and docs.
-    #[must_use]
-    pub const fn word(self) -> &'static str {
-        match self {
-            Self::Tea => "tea",
-            Self::Server => "server",
-            Self::Direct => "direct",
-        }
-    }
-
-    /// Parse a control-model word (the inverse of [`Self::word`]). `None` for any
-    /// token outside the closed set — a consumer's `acceptsControl` entry that is
-    /// not a known model must be rejected, never read as a permissive default.
-    #[must_use]
-    pub fn from_word(word: &str) -> Option<Self> {
-        Some(match word {
-            "tea" => Self::Tea,
-            "server" => Self::Server,
-            "direct" => Self::Direct,
-            _ => return None,
-        })
-    }
-
-    /// Whether this control model is a *managed* one — the runtime drives the
-    /// loop and every effect flows through a capability axis already gated. The
-    /// managed models (`Tea`/`Server`) are the safe, implicitly-admitted default;
-    /// only the elevated [`Self::Direct`] model (a self-driving `Task Error ()`
-    /// program outside the managed loop) requires a consumer's explicit consent.
-    #[must_use]
-    pub const fn is_managed(self) -> bool {
-        matches!(self, Self::Tea | Self::Server)
-    }
-}
+/// The definition lives in the compiler ([`ipe_canon::shape_source::ControlModel`])
+/// so `ipe audit`, `ipe doc`, and LSP hover all read one control-model vocabulary
+/// and one shape→model projection — never a second derivation that could disagree
+/// with the shape the compiler already pinned. Re-exported here as the delivery
+/// grammar's own name for it.
+pub use ipe_canon::shape_source::ControlModel;
 
 /// The Web-shape runtime (spec § 2). Only `web` has a runtime choice; every
 /// other shape has exactly one, so this axis is absent for them.

@@ -81,7 +81,7 @@ fn generate_writes_docs_json_and_markdown() -> io::Result<()> {
     // The versioned schema and the exposed surface (module, union, value) with
     // its checker-provided signature and its scanned doc-comment.
     assert!(
-        json.contains("\"version\": 1"),
+        json.contains("\"version\": 2"),
         "schema is versioned:\n{json}"
     );
     assert!(json.contains("\"name\": \"Shapes\""));

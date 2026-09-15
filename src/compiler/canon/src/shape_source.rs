@@ -33,6 +33,75 @@ pub enum MainShape {
     Web,
 }
 
+/// How a program drives itself, projected from its compiler-pinned [`MainShape`].
+///
+/// A closed set: every shape maps to exactly one control model, so a disclosure
+/// surface (`ipe audit`, `ipe doc`, LSP hover) can name the model without a
+/// second derivation that could disagree with the shape the compiler already
+/// pinned. This is the single source of truth every such surface reads — none
+/// re-inspects `main` on its own; each projects this from [`classify_main_shape`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ControlModel {
+    /// The Elm-style model/update/view loop — a `Web`/`Tui`/`Cli` shape.
+    Tea,
+    /// The declarative request/response model — a `Server` shape.
+    Server,
+    /// A plain `main : Task Error ()` that runs directly to completion — a
+    /// `Script` shape.
+    Direct,
+}
+
+impl ControlModel {
+    /// The control model a compiler-pinned [`MainShape`] runs under. A projection
+    /// of the shape the compiler already pinned, never a second derivation: a
+    /// view-ful shape (`Web`/`Tui`/`Cli`) runs the Elm-style model/update/view
+    /// loop; a `Server` runs the declarative request/response model; a `Script`
+    /// (a plain `Task Error ()`) runs directly to completion.
+    #[must_use]
+    pub const fn from_shape(shape: MainShape) -> Self {
+        match shape {
+            MainShape::Web | MainShape::Tui | MainShape::Cli => Self::Tea,
+            MainShape::Server => Self::Server,
+            MainShape::Script => Self::Direct,
+        }
+    }
+
+    /// The canonical word for this control model — the one vocabulary shared by
+    /// the audit disclosure, its JSON verdict, the consent gate, `ipe doc`, LSP
+    /// hover, and docs.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Tea => "tea",
+            Self::Server => "server",
+            Self::Direct => "direct",
+        }
+    }
+
+    /// Parse a control-model word (the inverse of [`Self::word`]). `None` for any
+    /// token outside the closed set — a consumer's `acceptsControl` entry that is
+    /// not a known model must be rejected, never read as a permissive default.
+    #[must_use]
+    pub fn from_word(word: &str) -> Option<Self> {
+        Some(match word {
+            "tea" => Self::Tea,
+            "server" => Self::Server,
+            "direct" => Self::Direct,
+            _ => return None,
+        })
+    }
+
+    /// Whether this control model is a *managed* one — the runtime drives the
+    /// loop and every effect flows through a capability axis already gated. The
+    /// managed models (`Tea`/`Server`) are the safe, implicitly-admitted default;
+    /// only the elevated [`Self::Direct`] model (a self-driving `Task Error ()`
+    /// program outside the managed loop) requires a consumer's explicit consent.
+    #[must_use]
+    pub const fn is_managed(self) -> bool {
+        matches!(self, Self::Tea | Self::Server)
+    }
+}
+
 /// A `main` head that head-calls one of these `(canonical-module-path, name)`
 /// pairs pins the paired shape. The first element is the head's *canonical
 /// module* — the full dotted stdlib path the written qualifier resolves to
@@ -596,6 +665,43 @@ mod tests {
         let mut interner = Interner::new();
         let module = ipe_parse::parse_module(src, &mut interner).expect("parse");
         script_view_hole_hint(&module, &interner)
+    }
+
+    #[test]
+    fn control_model_is_the_projection_of_the_pinned_shape() {
+        // The disclosure vocabulary and the shape→model projection are one
+        // definition here; audit/doc/LSP read it, never re-derive it.
+        assert_eq!(ControlModel::from_shape(MainShape::Web), ControlModel::Tea);
+        assert_eq!(ControlModel::from_shape(MainShape::Tui), ControlModel::Tea);
+        assert_eq!(ControlModel::from_shape(MainShape::Cli), ControlModel::Tea);
+        assert_eq!(
+            ControlModel::from_shape(MainShape::Server),
+            ControlModel::Server
+        );
+        assert_eq!(
+            ControlModel::from_shape(MainShape::Script),
+            ControlModel::Direct
+        );
+
+        assert_eq!(ControlModel::Tea.word(), "tea");
+        assert_eq!(ControlModel::Server.word(), "server");
+        assert_eq!(ControlModel::Direct.word(), "direct");
+
+        // `word` and `from_word` are exact inverses over the closed set, and no
+        // out-of-set token parses (fail-closed — never a permissive default).
+        for m in [
+            ControlModel::Tea,
+            ControlModel::Server,
+            ControlModel::Direct,
+        ] {
+            assert_eq!(ControlModel::from_word(m.word()), Some(m));
+        }
+        assert_eq!(ControlModel::from_word("library"), None);
+        assert_eq!(ControlModel::from_word(""), None);
+
+        assert!(ControlModel::Tea.is_managed());
+        assert!(ControlModel::Server.is_managed());
+        assert!(!ControlModel::Direct.is_managed());
     }
 
     #[test]
