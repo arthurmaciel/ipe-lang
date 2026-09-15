@@ -33,6 +33,16 @@ on:
   # jobs run under it.
   workflow_dispatch: {}
 
+# Least-privilege GITHUB_TOKEN, set at the top so it also caps the token a fork
+# PR run receives. This workflow only builds and tests — it makes no API write,
+# opens no issue/PR, pushes nothing — so a read-only `contents` scope is all any
+# job here needs (artifact upload/download uses the runner's own backend, not a
+# contents-write token). Stating the floor explicitly means an untrusted fork PR
+# can never inherit a broader default token: the safe scope is the only reachable
+# one, and any future job that needs more must ask for it per-job in the open.
+permissions:
+  contents: read
+
 concurrency:
   # On pull requests, cancel the previous run for the same ref so devs get fast
   # feedback without wasting runner minutes. On on tags, never cancel: the heavy 
