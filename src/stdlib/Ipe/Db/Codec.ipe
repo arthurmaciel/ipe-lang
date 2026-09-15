@@ -123,6 +123,7 @@ bindColumn value name colType =
 --   * `CInt`   → JSON integer → `SqlInt`
 --   * `CReal`  → JSON number  → `SqlFloat`
 --   * `CBool`  → JSON boolean → `SqlInt` 0/1 (bound as an integer flag)
+--   * `CTime`  → JSON integer → `SqlTime` (Unix millis, bound as the time role)
 --   * `CBlob`  → any JSON node → its compact serialisation as `SqlString` TEXT
 --   * `CNull inner` → JSON null → `SqlNull <inner witness>`; any other value is
 --     coerced as `inner`, so a nullable column binds a real NULL or the inner
@@ -130,7 +131,8 @@ bindColumn value name colType =
 --
 -- An exact-decimal / money column's codec declares `CText` (it encodes to a JSON
 -- string), so it flows through the `CText` arm as TEXT — never `CReal`, never a
--- lossy `Float`.
+-- lossy `Float`. A `CTime` column's millis bind as `SqlTime`, never `SqlInt`, so
+-- an instant keeps its role in the parameter it is bound as.
 sqlValueDecoder : ColType -> Decoder SqlValue
 sqlValueDecoder colType =
     case colType of
@@ -145,6 +147,9 @@ sqlValueDecoder colType =
 
         CBool ->
             Decode.map (\b -> SqlInt (boolToInt b)) Decode.bool
+
+        CTime ->
+            Decode.map (\ms -> SqlTime ms) Decode.int
 
         CBlob ->
             Decode.map (\node -> SqlString (Encode.encode 0 node)) Decode.value
@@ -195,6 +200,9 @@ nullWitness colType =
 
         CBool ->
             SqlInt 0
+
+        CTime ->
+            SqlTime 0
 
         CBlob ->
             SqlString ""
@@ -312,6 +320,7 @@ consField row col acc =
 --   * `CInt`   → the cell parsed as an integer JSON number (non-integral → Err)
 --   * `CReal`  → the cell parsed as a JSON number
 --   * `CBool`  → `"0"`/`"1"` (or `"true"`/`"false"`) as a JSON boolean
+--   * `CTime`  → the cell parsed as an integer JSON number of Unix millis
 --   * `CBlob`  → the cell parsed as JSON TEXT back into its node
 --   * `CNull inner` → JSON null when the cell is absent/`NULL`, else parse as
 --     `inner`
@@ -342,6 +351,9 @@ cellToValue name colType maybeCell =
             requirePresent name maybeCell (scalarCellToValue name colType)
 
         CBool ->
+            requirePresent name maybeCell (scalarCellToValue name colType)
+
+        CTime ->
             requirePresent name maybeCell (scalarCellToValue name colType)
 
         CBlob ->
@@ -386,6 +398,14 @@ scalarCellToValue name colType cell =
             case boolFromCell cell of
                 Just b ->
                     Ok (Encode.bool b)
+
+                Nothing ->
+                    Err (badCellError name colType cell)
+
+        CTime ->
+            case String.toInt cell of
+                Just ms ->
+                    Ok (Encode.int ms)
 
                 Nothing ->
                     Err (badCellError name colType cell)
@@ -467,6 +487,9 @@ colTypeName colType =
 
         CBool ->
             "boolean"
+
+        CTime ->
+            "integer timestamp"
 
         CBlob ->
             "JSON value"

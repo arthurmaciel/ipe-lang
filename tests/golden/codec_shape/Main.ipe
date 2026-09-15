@@ -23,6 +23,7 @@ import Ipe.Config as Config
 import Ipe.List as List
 import Ipe.Decimal as Decimal exposing (Decimal)
 import Ipe.Money as Money exposing (Money)
+import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
 import Ipe.Task as Task exposing (Task)
 import Ipe.Error exposing (Error)
 
@@ -151,6 +152,21 @@ moneyRoundTrips =
             False
 
 
+timestampRoundTrips : Bool
+timestampRoundTrips =
+    let
+        t =
+            Timestamp.fromUnixMillis 1700000000000
+    in
+    case Codec.fromJson Codec.timestamp (Codec.toJson Codec.timestamp t) of
+        Ok back ->
+            (Timestamp.toUnixMillis back == Timestamp.toUnixMillis t)
+                && (Codec.shape Codec.timestamp == SScalar CTime)
+
+        Err _ ->
+            False
+
+
 main : Task Error ()
 main =
     Io.println
@@ -160,6 +176,7 @@ main =
                 && recordRoundTrips
                 && decimalRoundTrips
                 && moneyRoundTrips
+                && timestampRoundTrips
          then
             "codec-shape-ok"
 

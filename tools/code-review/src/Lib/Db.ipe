@@ -3,6 +3,7 @@ module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, fi
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Config as Config
 import Ipe.Db as Db
+import Ipe.Db.Codec as DbCodec
 import Ipe.Db.Sql as Sql
 import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
@@ -14,6 +15,7 @@ import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
 import Ipe.Time as Time
+import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
 import Migrations exposing (all)
 
 
@@ -22,13 +24,15 @@ type Decision
     | Refused String
 
 
--- One row of the review table. `reviewedAt` carries unix milliseconds.
+-- One row of the review table. `reviewedAt` is a typed instant — a moment in
+-- time, not a bare count — so it can only be built from and read as a
+-- `Timestamp`, never swapped for a plain `Int`.
 type alias ReviewRow =
     { uid : String
     , bodyHash : String
     , decision : String
     , reason : Maybe String
-    , reviewedAt : Int
+    , reviewedAt : Timestamp
     }
 
 
@@ -51,7 +55,7 @@ reviewCodec =
                             Nothing ->
                                 Encode.null
                       )
-                    , ( "reviewed_at", Encode.int row.reviewedAt )
+                    , ( "reviewed_at", Codec.toValue Codec.timestamp row.reviewedAt )
                     ]
         , mkDec =
             \_ ->
@@ -60,19 +64,19 @@ reviewCodec =
                     (Config.field "body_hash" Config.string)
                     (Config.field "decision" Config.string)
                     (Config.field "reason" (Config.nullable Config.string))
-                    (Config.field "reviewed_at" Config.int)
+                    (Config.field "reviewed_at" (Config.map Timestamp.fromUnixMillis Config.int))
         , shp =
             SRecord
                 [ ( "uid", CText )
                 , ( "body_hash", CText )
                 , ( "decision", CText )
                 , ( "reason", CNull CText )
-                , ( "reviewed_at", CInt )
+                , ( "reviewed_at", CTime )
                 ]
         }
 
 
-makeRow : String -> String -> String -> Maybe String -> Int -> ReviewRow
+makeRow : String -> String -> String -> Maybe String -> Timestamp -> ReviewRow
 makeRow uid bodyHash decision reason reviewedAt =
     { uid = uid
     , bodyHash = bodyHash
@@ -161,7 +165,7 @@ insertNew db uid bodyHash decision =
                                 , bodyHash = bodyHash
                                 , decision = decisionText
                                 , reason = reason
-                                , reviewedAt = Time.toMillis now
+                                , reviewedAt = now
                                 }
                         in
                         Store.insert db store row
@@ -238,18 +242,79 @@ findLatestForUid db uid =
                 |> Store.toMaybe db
 
 
+-- One row of the drain cursor. `updatedAt` is a typed instant, bound as the
+-- `SqlTime` role through `drainCodec`, never a bare `Int`.
+type alias DrainCursor =
+    { uid : String
+    , bodyHash : String
+    , updatedAt : Timestamp
+    }
+
+
+makeCursor : String -> String -> Timestamp -> DrainCursor
+makeCursor uid bodyHash updatedAt =
+    { uid = uid
+    , bodyHash = bodyHash
+    , updatedAt = updatedAt
+    }
+
+
+-- Codec for the drain cursor. `updated_at` flows through `Codec.timestamp`, so
+-- its shape is `CTime` and the projected bind is `SqlTime` (Unix millis in the
+-- time role), never `SqlInt`. Column keys match the `drain_cursor` DDL order,
+-- which is also the `VALUES (?, ?, ?)` order the projected binds fill.
+drainCodec : Codec DrainCursor
+drainCodec =
+    Codec
+        { enc =
+            \row ->
+                Encode.object
+                    [ ( "uid", Encode.string row.uid )
+                    , ( "body_hash", Encode.string row.bodyHash )
+                    , ( "updated_at", Codec.toValue Codec.timestamp row.updatedAt )
+                    ]
+        , mkDec =
+            \_ ->
+                Config.map3 makeCursor
+                    (Config.field "uid" Config.string)
+                    (Config.field "body_hash" Config.string)
+                    (Config.field "updated_at" (Config.map Timestamp.fromUnixMillis Config.int))
+        , shp =
+            SRecord
+                [ ( "uid", CText )
+                , ( "body_hash", CText )
+                , ( "updated_at", CTime )
+                ]
+        }
+
+
 -- Bookkeeping for the drain loop. Re-draining the same pair is a no-op
 -- (INSERT OR REPLACE), so a re-queued unit that gets reviewed twice keeps
--- a single cursor row.
+-- a single cursor row. The row's values are projected through `drainCodec` to
+-- typed binds — the timestamp binds as `SqlTime`, not a raw `SqlInt` — then
+-- filled positionally into the parameterised statement; no value is
+-- interpolated into SQL text.
 recordDrain : Db -> String -> String -> Task.Task Error Int
 recordDrain db uid bodyHash =
     Time.unixMillis ()
         |> Task.andThen
             (\now ->
-                Db.exec db
-                    "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
-                    [ SqlString uid, SqlString bodyHash, SqlInt (Time.toMillis now) ]
+                case DbCodec.codecToBinds drainCodec (makeCursor uid bodyHash now) of
+                    Err e ->
+                        Task.fail e
+
+                    Ok binds ->
+                        Db.exec db
+                            "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
+                            (List.map bindValue binds)
             )
+
+
+bindValue : ( String, SqlValue ) -> SqlValue
+bindValue pair =
+    case pair of
+        ( _, value ) ->
+            value
 
 
 -- Every review row, newest first. `Store.all` fetches all rows; the query

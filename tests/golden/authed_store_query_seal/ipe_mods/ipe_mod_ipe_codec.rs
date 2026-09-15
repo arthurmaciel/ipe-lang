@@ -7,6 +7,7 @@ pub(crate) enum IpeCodecColType {
     CReal,
     CBool,
     CBlob,
+    CTime,
     CNull(Box<IpeCodecColType>),
 }
 impl IpeStringify for IpeCodecColType {
@@ -17,6 +18,7 @@ impl IpeStringify for IpeCodecColType {
             IpeCodecColType::CReal => "CReal".to_string(),
             IpeCodecColType::CBool => "CBool".to_string(),
             IpeCodecColType::CBlob => "CBlob".to_string(),
+            IpeCodecColType::CTime => "CTime".to_string(),
             IpeCodecColType::CNull(p0) => {
                 format!("CNull {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
             }
