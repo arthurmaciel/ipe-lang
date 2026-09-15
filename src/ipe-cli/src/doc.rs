@@ -4047,31 +4047,12 @@ fn parse_link(s: &str) -> Option<(String, String, usize)> {
     let after_paren = after_label.strip_prefix('(')?;
     let close_paren = after_paren.find(')')?;
     let url = after_paren.get(..close_paren)?;
-    // Reject a scheme that could execute script; allow only safe URL forms.
-    if !is_safe_href(url) {
-        return None;
-    }
+    // Reject a scheme that could execute script through the one doc-path
+    // href-safety SSOT (`ipe_docs::markdown::SafeHref`); a link the SSOT refuses
+    // is left literal rather than unwrapped (`?` early-returns on refusal).
+    ipe_docs::markdown::SafeHref::parse(url)?;
     let consumed = 1 + close + 1 + 1 + close_paren + 1;
     Some((label.to_owned(), url.to_owned(), consumed))
-}
-
-/// A link target is safe when it is relative, a fragment, or an
-/// `http`/`https`/`mailto` absolute — never `javascript:` or `data:`.
-fn is_safe_href(url: &str) -> bool {
-    let lower = url.trim().to_ascii_lowercase();
-    if let Some(scheme) = lower.split(':').next()
-        && scheme != lower
-        && !scheme.is_empty()
-        && !scheme.contains(['/', '?', '#'])
-        && scheme
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
-    {
-        // A `:` after a valid scheme name (before any `/`, `?`, `#`) is an
-        // absolute URL; only the safe schemes are admitted.
-        return matches!(scheme, "http" | "https" | "mailto");
-    }
-    true
 }
 
 /// Render a doc-comment / Markdown body to HTML through the one doc-side
