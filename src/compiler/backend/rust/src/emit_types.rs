@@ -22,6 +22,21 @@ use crate::naming::{
 use crate::render::{RenderConfig, render_seeded};
 use crate::{EmitCtx, RecordStruct};
 
+/// SSOT tripwire pinning every unified-colour carrier string this module emits
+/// (`ipe_runtime::color::{Color, ColorError, TermProfile, AnsiColor}`) to a live
+/// type in the runtime colour module: a rename or removal in `ipe_runtime::color`
+/// makes the test target fail to compile, so the emitted carrier can never point
+/// at a missing type (the SEAL). The runtime crate is a `dev-dependency` of the
+/// backend, so the pin lives in the test target — matching the existing
+/// registry-parity tripwires (`canon_equals_registry`).
+#[cfg(test)]
+const _COLOR_CARRIER_SSOT: fn() = || {
+    let _: Option<ipe_runtime_rust::color::Color> = None;
+    let _: Option<ipe_runtime_rust::color::ColorError> = None;
+    let _: Option<ipe_runtime_rust::color::TermProfile> = None;
+    let _: Option<ipe_runtime_rust::color::AnsiColor> = None;
+};
+
 /// Render a `format!(<fmt>, <arg>, …)` `IpeStringify` body natively, laid out
 /// exactly as `rustfmt --edition 2024 --style-edition 2024` would — the record
 /// `ipe_show` body and the payload-variant enum arm.
