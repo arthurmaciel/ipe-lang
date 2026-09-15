@@ -10,6 +10,53 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.80](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.79...ipe-v0.1.80) (2026-09-15)
+
+
+### Features
+
+* **audit:** control-model consumer consent + fail-closed drift gate (IPE-S0004) ([#2490](https://github.com/arthurmaciel/ipe-lang/issues/2490)) ([dc8d2f1](https://github.com/arthurmaciel/ipe-lang/commit/dc8d2f15278d4ccdbfb1a03457b44b8f9df4d2c5))
+* **audit:** disclose compiler-derived control model + capability set, fail-closed ([#2484](https://github.com/arthurmaciel/ipe-lang/issues/2484)) ([785a3a5](https://github.com/arthurmaciel/ipe-lang/commit/785a3a5d7b3a0daa1b96970b637089600ac49bd2))
+* **backend,types:** add unified colour BuiltinTag carriers + curate color runtime module ([#2477](https://github.com/arthurmaciel/ipe-lang/issues/2477)) ([20f1013](https://github.com/arthurmaciel/ipe-lang/commit/20f1013769397d4033669160c2df6d34ff1a939c))
+* **canon:** reserve Ipe.Color companion opaque type names (S1) ([#2489](https://github.com/arthurmaciel/ipe-lang/issues/2489)) ([aa34205](https://github.com/arthurmaciel/ipe-lang/commit/aa34205e4015e7c33e2c3666ba8b1e3497cef072))
+* **codec:** CDecimal/CMoney ColTypes → SqlDecimal/SqlMoney ([#2483](https://github.com/arthurmaciel/ipe-lang/issues/2483)) ([a181f62](https://github.com/arthurmaciel/ipe-lang/commit/a181f626cdc12c486dde67a353865f307b214607))
+* **codec:** route Ipe.Time.Timestamp through CTime to SqlTime ([#2476](https://github.com/arthurmaciel/ipe-lang/issues/2476)) ([3d927ca](https://github.com/arthurmaciel/ipe-lang/commit/3d927caf0a7a7e04119eeac5b8341c73c14dac53))
+* **delivery:** typed engine×host×triple validity matrix, fail-closed ([#2461](https://github.com/arthurmaciel/ipe-lang/issues/2461)) ([#2488](https://github.com/arthurmaciel/ipe-lang/issues/2488)) ([f56038f](https://github.com/arthurmaciel/ipe-lang/commit/f56038f3d01c2892efc5edd224435d207093707f))
+* **disclose:** surface control model + capabilities in LSP hover and ipe doc ([#2460](https://github.com/arthurmaciel/ipe-lang/issues/2460)) ([#2498](https://github.com/arthurmaciel/ipe-lang/issues/2498)) ([e29ca5d](https://github.com/arthurmaciel/ipe-lang/commit/e29ca5dee7b67e61ef70fa36da1061739bd0fc48))
+* **docs:** drop comrak, unify doc Markdown onto the Ipe.Markdown port ([#2235](https://github.com/arthurmaciel/ipe-lang/issues/2235)) ([#2499](https://github.com/arthurmaciel/ipe-lang/issues/2499)) ([4cacf0a](https://github.com/arthurmaciel/ipe-lang/commit/4cacf0a2834aeeba43cf07a7fafbb6a17f69e901))
+* **docs:** Ipe.Markdown SSOT — hand-ported std-only parser + escape-by-default HTML walker (Stages 0–3) ([#2487](https://github.com/arthurmaciel/ipe-lang/issues/2487)) ([1e3d523](https://github.com/arthurmaciel/ipe-lang/commit/1e3d52303a25ee98d36fdcbf2a25fb3993ab6394))
+* **platform:** open the WASI accept-path for the sealed co-located floor ([#2461](https://github.com/arthurmaciel/ipe-lang/issues/2461) incr 2) ([#2507](https://github.com/arthurmaciel/ipe-lang/issues/2507)) ([b2c8804](https://github.com/arthurmaciel/ipe-lang/commit/b2c88049f4a8f6f6c6f61f217b3e78d15a499356))
+* **shapes:** Direct = Task; drop generic TeaApp and Script.program ([#2455](https://github.com/arthurmaciel/ipe-lang/issues/2455)) ([#2470](https://github.com/arthurmaciel/ipe-lang/issues/2470)) ([2d570ef](https://github.com/arthurmaciel/ipe-lang/commit/2d570ef91dd7817d7b99950c498d7a0de42fc81f))
+* **stdlib:** Ipe.Length language-level SSOT for shared CSS length units ([#2497](https://github.com/arthurmaciel/ipe-lang/issues/2497)) ([180f6dc](https://github.com/arthurmaciel/ipe-lang/commit/180f6dce7836f46726af6ead8e0dfcf07a9dbc4d))
+* **tea:** add Ipe.Tea.worker — view-less, co-located, capability-gated program ([#2457](https://github.com/arthurmaciel/ipe-lang/issues/2457)) ([4e992e9](https://github.com/arthurmaciel/ipe-lang/commit/4e992e944ebf28bbfcf06e1edfcbe99a77f9796e))
+* **tea:** retype Element/Screen/Lines to the real View &lt;engine&gt; type; generic Ipe.Tea.app ([#2459](https://github.com/arthurmaciel/ipe-lang/issues/2459)) ([3a6840a](https://github.com/arthurmaciel/ipe-lang/commit/3a6840ad88025ba1a4629c3c82ec060e0cebcb0f))
+* **tea:** View e msg carrier + generic Ipe.Tea.app (engine=Web), additive ([#2458](https://github.com/arthurmaciel/ipe-lang/issues/2458)) ([48ba3d1](https://github.com/arthurmaciel/ipe-lang/commit/48ba3d15f8837af33747364f61c5d82a454a8285))
+* **types:** forbid bare `_` over closed unions; add dev-only `Debug._` ([#2478](https://github.com/arthurmaciel/ipe-lang/issues/2478)) ([0918874](https://github.com/arthurmaciel/ipe-lang/commit/0918874aa7e43c51dca29ce41e50a420803b6475))
+* **url,html,ui:** typed LinkTarget/MediaTarget SSOT over Url + Relative ([#2335](https://github.com/arthurmaciel/ipe-lang/issues/2335)) ([570c5d5](https://github.com/arthurmaciel/ipe-lang/commit/570c5d588987023936d5e6a4e6f447d7db2489d1))
+
+
+### Bug Fixes
+
+* **browser-e2e:** deterministic app-readiness gate ([#2407](https://github.com/arthurmaciel/ipe-lang/issues/2407)) ([#2418](https://github.com/arthurmaciel/ipe-lang/issues/2418)) ([cc9f4d5](https://github.com/arthurmaciel/ipe-lang/commit/cc9f4d5c48f9fed85d1c452d35fce4196a774feb))
+* **canon:** home compiled-source Html-family ADTs at their real module ([#2437](https://github.com/arthurmaciel/ipe-lang/issues/2437)) ([f148b0f](https://github.com/arthurmaciel/ipe-lang/commit/f148b0f65864fd3ec6e3eca7645974e5a3f8b8e2)), closes [#2328](https://github.com/arthurmaciel/ipe-lang/issues/2328)
+* **canon:** scope IPE-N0050 so static-site scripts are not warned ([#2485](https://github.com/arthurmaciel/ipe-lang/issues/2485)) ([5fd0d61](https://github.com/arthurmaciel/ipe-lang/commit/5fd0d61985b9e0ad02d56fc74b97863fabb12d43))
+* **cli:** version-adaptive cargo-deny --config placement in package audit ([#2426](https://github.com/arthurmaciel/ipe-lang/issues/2426)) ([59ac2a9](https://github.com/arthurmaciel/ipe-lang/commit/59ac2a9fd275a440857ba8b278cd24e683e61cc8))
+* couple spa delivery to wasm target, fail closed on disagreement ([#2451](https://github.com/arthurmaciel/ipe-lang/issues/2451)) ([f72ac2b](https://github.com/arthurmaciel/ipe-lang/commit/f72ac2bbe2aa9e089158df29dc0678b7d06c84e9))
+* **coverage:** make symbol_scratch_key injective ([#2322](https://github.com/arthurmaciel/ipe-lang/issues/2322)) ([#2438](https://github.com/arthurmaciel/ipe-lang/issues/2438)) ([fa26354](https://github.com/arthurmaciel/ipe-lang/commit/fa263548f78679bf9203e056a603134f691069e9))
+* **db:** SqlValue.SqlDecimal takes a native Decimal (role-in-type) ([#2479](https://github.com/arthurmaciel/ipe-lang/issues/2479)) ([93eeb69](https://github.com/arthurmaciel/ipe-lang/commit/93eeb692ad0fed05e48e381f2de43f5a069e3319))
+* **deps:** bump rustls to 0.23.45 (RUSTSEC-2026-0285) ([#2469](https://github.com/arthurmaciel/ipe-lang/issues/2469)) ([6132db0](https://github.com/arthurmaciel/ipe-lang/commit/6132db0e87c887488f8c20bce0d554de7f598471))
+* **fixture:** spike-webview-threejs view returns Element Msg ([#2253](https://github.com/arthurmaciel/ipe-lang/issues/2253)) ([#2434](https://github.com/arthurmaciel/ipe-lang/issues/2434)) ([23687fa](https://github.com/arthurmaciel/ipe-lang/commit/23687fa2106b8349ef10cfae905a38cb4251190b))
+* **publish:** sign the package-publish commit, fail closed without a key ([#2428](https://github.com/arthurmaciel/ipe-lang/issues/2428)) ([#2444](https://github.com/arthurmaciel/ipe-lang/issues/2444)) ([6238008](https://github.com/arthurmaciel/ipe-lang/commit/6238008d3d489a4e0295cb4e5a95315656e3fbe5))
+* **release:** copy native binary into out dir; fail-closed if missing ([#2433](https://github.com/arthurmaciel/ipe-lang/issues/2433)) ([f63b3b8](https://github.com/arthurmaciel/ipe-lang/commit/f63b3b8bbda4dfb3ada354618adf0e0d56e9aba9))
+* **runtime:** bound recursive-tree teardown and keep the red-zone probe sound under ASAN ([#2413](https://github.com/arthurmaciel/ipe-lang/issues/2413)) ([29e3526](https://github.com/arthurmaciel/ipe-lang/commit/29e35269762f2dcb0b594b6de0473974274706f9))
+* **runtime:** derive Permissions-Policy from granted Ipe.Browser capabilities ([#2422](https://github.com/arthurmaciel/ipe-lang/issues/2422), [#2407](https://github.com/arthurmaciel/ipe-lang/issues/2407)) ([#2424](https://github.com/arthurmaciel/ipe-lang/issues/2424)) ([90d82c4](https://github.com/arthurmaciel/ipe-lang/commit/90d82c470be2a1a20d56b32ed5ae47f47e6ce656))
+* **sandbox:** create FreeBSD jail rw nullfs mountpoints before mount ([#2446](https://github.com/arthurmaciel/ipe-lang/issues/2446)) ([f75545b](https://github.com/arthurmaciel/ipe-lang/commit/f75545b42c807117385c33827dd316820b46eaad))
+* **sandbox:** re-permit macOS child bring-up services under the run-jail SBPL ([#2247](https://github.com/arthurmaciel/ipe-lang/issues/2247)) ([#2445](https://github.com/arthurmaciel/ipe-lang/issues/2445)) ([60a061c](https://github.com/arthurmaciel/ipe-lang/commit/60a061cd01abbe6cc51f0d09eddb3decbb22f7ff))
+* **seal:** exact-pin chrono=0.4.45 to make the emitted-crate dep resolve deterministic (Part of [#2278](https://github.com/arthurmaciel/ipe-lang/issues/2278)) ([#2440](https://github.com/arthurmaciel/ipe-lang/issues/2440)) ([31897b8](https://github.com/arthurmaciel/ipe-lang/commit/31897b8511512e458859f695d4624bca448cf5f3))
+* **seal:** per-emit Cargo.lock + --locked hermetic emitted build ([#2467](https://github.com/arthurmaciel/ipe-lang/issues/2467)) ([2f51463](https://github.com/arthurmaciel/ipe-lang/commit/2f5146349fde168a26f8b9cdc54fade0c8f55fef))
+* **types:** thread home onto obligation constraints + deterministic diagnostic fallback ([#2412](https://github.com/arthurmaciel/ipe-lang/issues/2412)) ([#2442](https://github.com/arthurmaciel/ipe-lang/issues/2442)) ([2da10f2](https://github.com/arthurmaciel/ipe-lang/commit/2da10f27ec1d135c4678954face63e0a9941b4e4))
+* unnecessary workflows prunning ([#2401](https://github.com/arthurmaciel/ipe-lang/issues/2401)) ([107223a](https://github.com/arthurmaciel/ipe-lang/commit/107223a4ce0b8d0bb50a88baafbe23a6cba33099))
+
 ## [0.1.79](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.78...ipe-v0.1.79) (2026-09-08)
 
 
