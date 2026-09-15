@@ -283,20 +283,26 @@ fn hover_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     ipe_lsp_features::hover::hover(&state.db, root, entry_file, file, byte).map_or(
         FeatureOutcome::NoResult,
         |info| {
-            let hover = lsp_types::Hover {
-                contents: lsp_types::HoverContents::Scalar(
-                    lsp_types::MarkedString::LanguageString(lsp_types::LanguageString {
-                        language: "ipe".to_owned(),
-                        value: info.ty,
-                    }),
-                ),
-                range: Some(ipe_lsp_features::offset::span_to_range(
-                    text,
-                    info.span,
-                    state.encoding,
-                )),
+            let range = Some(ipe_lsp_features::offset::span_to_range(
+                text,
+                info.span,
+                state.encoding,
+            ));
+            let ty_marked = lsp_types::MarkedString::LanguageString(lsp_types::LanguageString {
+                language: "ipe".to_owned(),
+                value: info.ty,
+            });
+            // On `main`, disclose the compiler-derived control model beneath the
+            // type — the same signal `ipe audit`/`ipe doc` surface, so the editor
+            // reads one derivation.
+            let contents = match info.control_model {
+                Some(model) => lsp_types::HoverContents::Array(vec![
+                    ty_marked,
+                    lsp_types::MarkedString::String(format!("control model: {model}")),
+                ]),
+                None => lsp_types::HoverContents::Scalar(ty_marked),
             };
-            FeatureOutcome::payload(hover)
+            FeatureOutcome::payload(lsp_types::Hover { contents, range })
         },
     )
 }

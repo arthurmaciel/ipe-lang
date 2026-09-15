@@ -156,12 +156,27 @@ impl std::fmt::Display for Rejection {
 /// a fail-closed rejection before a [`Disclosure`] is ever built, so no permissive
 /// default can be disclosed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Disclosure {
+pub(crate) struct Disclosure {
     /// The entry program's control model, or the library marker.
     control_model: ControlModelDisclosure,
     /// The capability axes the whole package can exercise — the same inferred
     /// union the capability-consistency check reconciles against the manifest.
     capabilities: BTreeSet<Capability>,
+}
+
+impl Disclosure {
+    /// The disclosed control-model word — a closed-set model's own word, or
+    /// `"library"` for a package with no runnable entry. The exact vocabulary the
+    /// `ipe audit` JSON verdict discloses, so `ipe doc` speaks the same words.
+    pub(crate) const fn control_model_word(&self) -> &'static str {
+        self.control_model.word()
+    }
+
+    /// The disclosed capability axes, in the audit's canonical order — the same
+    /// inferred union `ipe audit` discloses.
+    pub(crate) const fn capabilities(&self) -> &BTreeSet<Capability> {
+        &self.capabilities
+    }
 }
 
 /// The control model disclosed for a package: the entry program's model, or the
@@ -1156,6 +1171,38 @@ fn derive_disclosure(
         control_model: ControlModelDisclosure::Entry(shape.control_model()),
         capabilities: inferred,
     })
+}
+
+/// The package disclosure a non-audit surface (`ipe doc`) reads — the SAME
+/// compiler-derived control model and whole-tree capability union `ipe audit`
+/// discloses, reusing [`derive_disclosure`] and
+/// [`crate::infer_package_capabilities`] rather than a second derivation that
+/// could disagree with the audit's answer.
+///
+/// Fail-closed identically to the audit: a runnable entry whose source cannot be
+/// read or parsed is a hard rejection ([`Check::Capability`]), never a permissive
+/// default; a package with no runnable `main` discloses an honest
+/// [`ControlModelDisclosure::NotApplicable`] ("library").
+///
+/// This does NOT build the package (no emit): the disclosure needs only the
+/// manifest (for the capability union) and the entry source (for the control
+/// model), so `ipe doc` stays a read-only documentation surface.
+///
+/// # Errors
+/// [`CliError`] when the manifest cannot be located or parsed, the capability
+/// inference fails, or the entry source cannot be read or parsed (fail-closed).
+pub(crate) fn disclose_package(path: &Path) -> Result<Disclosure, CliError> {
+    let manifest_path = locate_manifest(path)?;
+    let manifest = project::parse_manifest(&manifest_path)?;
+    let inferred = crate::infer_package_capabilities(&manifest_path)?;
+    let prepared = Prepared {
+        manifest,
+        manifest_path,
+        // The disclosure never reads the emitted directory (only the native
+        // Tier-2 check does), so no build is performed for a doc-side disclosure.
+        emitted_dir: PathBuf::new(),
+    };
+    derive_disclosure(&prepared, inferred)
 }
 
 /// Render the disclosure as a human-readable frame — the control model and the

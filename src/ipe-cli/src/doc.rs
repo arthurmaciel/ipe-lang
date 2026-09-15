@@ -121,7 +121,7 @@ use crate::doc_bundle::{BundleSource, DocBundle, fuzzy_rank, is_qualified};
 /// The `docs.json` schema version. Bumped only on an incompatible shape change,
 /// so a consumer can refuse a document it does not understand rather than
 /// mis-reading it.
-pub const DOCS_JSON_VERSION: u32 = 1;
+pub const DOCS_JSON_VERSION: u32 = 2;
 
 /// Which renderings `ipe doc` writes — a closed set, so an unknown `--write-format`
 /// value is rejected at the CLI boundary rather than carried downstream.
@@ -1087,6 +1087,27 @@ pub struct DocsJson {
     pub version: u32,
     /// One record per exposed module, in module-path order.
     pub modules: Vec<ModuleDoc>,
+    /// The package's compiler-derived control model + capability set — the SAME
+    /// disclosure `ipe audit` surfaces, reused here so a reader sees what a
+    /// dependency actually does before adopting it. `None` for a stdlib-only
+    /// render outside any project (no package to disclose).
+    pub disclosure: Option<PackageDisclosure>,
+}
+
+/// The package's compiler-derived control model and capability set, as disclosed
+/// to a documentation reader.
+///
+/// A pure view over the audit's own [`crate::audit::Disclosure`] — the control
+/// model is the word `ipe audit` discloses (a closed control model or `"library"`
+/// for a package with no runnable entry), and the capabilities are the same
+/// inferred whole-tree union. `ipe doc` never re-derives either; it reads the one
+/// disclosure the audit does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageDisclosure {
+    /// The disclosed control-model word (`tea` / `server` / `direct` / `library`).
+    pub control_model: String,
+    /// The disclosed capability axes' canonical words, in the audit's order.
+    pub capabilities: Vec<String>,
 }
 
 /// Which group a documented module belongs to.
@@ -1225,7 +1246,40 @@ fn build_docs(path: &Path) -> Result<DocsJson, CliError> {
     Ok(DocsJson {
         version: DOCS_JSON_VERSION,
         modules,
+        disclosure: package_disclosure(path)?,
     })
+}
+
+/// The package's compiler-derived disclosure (control model + capability set),
+/// reusing the SAME [`crate::audit::disclose_package`] the `ipe audit` gate reads
+/// — never a second derivation that could disagree with the audit's answer.
+///
+/// `Ok(None)` only when the project directory carries no `package.ipe`: a bare
+/// source tree has no manifest to infer a whole-tree capability set from, so there
+/// is genuinely no package to disclose — the honest absence, not a permissive
+/// default. Whenever a manifest IS present, the disclosure is derived and any
+/// failure propagates, fail-closed exactly as the audit does (a runnable entry
+/// whose source cannot be read or parsed is a hard rejection, never `None`).
+///
+/// # Errors
+/// Any [`crate::audit::disclose_package`] failure when a manifest is present —
+/// an unreadable/unparseable entry, or a capability-inference error.
+fn package_disclosure(path: &Path) -> Result<Option<PackageDisclosure>, CliError> {
+    // Distinguish a genuinely manifest-less tree (no package to disclose) from a
+    // manifest-bearing package whose disclosure must be derived fail-closed. Only
+    // the former is a silent `None`; a present-but-failing manifest propagates.
+    if !path.is_dir() || crate::project::manifest_in_dir(path).is_none() {
+        return Ok(None);
+    }
+    let disclosure = crate::audit::disclose_package(path)?;
+    Ok(Some(PackageDisclosure {
+        control_model: disclosure.control_model_word().to_owned(),
+        capabilities: disclosure
+            .capabilities()
+            .iter()
+            .map(|c| c.as_str().to_owned())
+            .collect(),
+    }))
 }
 
 /// Build the in-memory [`DocsJson`] for the package at `path`, project modules only.
@@ -1248,9 +1302,13 @@ fn build_project_docs(path: &Path) -> Result<DocsJson, CliError> {
             ModuleKind::Local,
         ));
     }
+    // The coverage gate (`ipe doc --check`) reasons over documentation coverage
+    // only; the package disclosure is a `generate`/`query` surface, not part of
+    // the coverage contract.
     Ok(DocsJson {
         version: DOCS_JSON_VERSION,
         modules,
+        disclosure: None,
     })
 }
 
@@ -1694,6 +1752,7 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
     let docs = DocsJson {
         version: DOCS_JSON_VERSION,
         modules: vec![module.clone()],
+        disclosure: None,
     };
     let index = AnchorIndex::build(&docs);
 
@@ -2451,6 +2510,27 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
         write_format_dir(out, "html", &html_files)?;
     }
 
+    // Disclose the package's compiler-derived control model + capability set — the
+    // same signal `ipe audit` surfaces, so a reader sees what the package does.
+    if let Some(disclosure) = &docs.disclosure {
+        let caps = if disclosure.capabilities.is_empty() {
+            "none".to_owned()
+        } else {
+            disclosure.capabilities.join(", ")
+        };
+        print!(
+            "{}",
+            crate::style::status_line(
+                true,
+                &crate::style::TerminalSafe::sanitize(&format!(
+                    "control model: {}; capabilities: {caps}",
+                    disclosure.control_model,
+                )),
+                crate::style::use_color(&std::io::stdout()),
+            )
+        );
+    }
+
     print!(
         "{}",
         crate::style::status_line(
@@ -2523,6 +2603,9 @@ fn build_stdlib_only_docs() -> DocsJson {
     DocsJson {
         version: DOCS_JSON_VERSION,
         modules: stdlib,
+        // No project on disk to disclose — a stdlib-only render carries no
+        // package control model or capability set.
+        disclosure: None,
     }
 }
 
@@ -3078,8 +3161,35 @@ fn render_json(docs: &DocsJson) -> String {
             "\n"
         });
     }
-    out.push_str("  ]\n}\n");
+    out.push_str("  ]");
+    if let Some(disclosure) = &docs.disclosure {
+        out.push_str(",\n");
+        render_disclosure_json(&mut out, disclosure);
+    } else {
+        out.push('\n');
+    }
+    out.push_str("}\n");
     out
+}
+
+/// Render the package disclosure object — the SAME control-model word and
+/// capability vocabulary the `ipe audit` verdict emits, so a consumer reads one
+/// disclosure across both surfaces.
+fn render_disclosure_json(out: &mut String, disclosure: &PackageDisclosure) {
+    out.push_str("  \"disclosure\": {\n");
+    let _ = writeln!(
+        out,
+        "    \"controlModel\": {},",
+        json_string(&disclosure.control_model)
+    );
+    let caps = disclosure
+        .capabilities
+        .iter()
+        .map(|c| json_string(c))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let _ = writeln!(out, "    \"capabilities\": [{caps}]");
+    out.push_str("  }\n");
 }
 
 /// Render one module object into the JSON buffer at a fixed two-space indent.
@@ -5390,6 +5500,7 @@ mod tests {
         DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![module],
+            disclosure: None,
         }
     }
 
@@ -5522,6 +5633,7 @@ mod tests {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![local_module("App"), stdlib_module("Ipe.List")],
+            disclosure: None,
         };
         let bundle = crate::doc_bundle::DocBundle::empty();
         let search_script = build_site_search_script(&docs, &bundle, "../");
@@ -5564,6 +5676,7 @@ mod tests {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![local_module("App"), stdlib_module("Ipe.List")],
+            disclosure: None,
         };
         let json = render_json(&docs);
         assert!(json.contains("\"kind\": \"local\""), "{json}");
@@ -5572,6 +5685,50 @@ mod tests {
         let l = json.find("\"kind\": \"local\"").expect("local kind");
         let s = json.find("\"kind\": \"stdlib\"").expect("stdlib kind");
         assert!(l < s, "the model is serialized local-first: {json}");
+    }
+
+    #[test]
+    fn json_render_with_disclosure_emits_the_audit_vocabulary() {
+        // The `ipe doc` JSON surfaces the SAME control-model word + capability
+        // vocabulary `ipe audit` discloses. A `direct` entry that reaches the
+        // network discloses exactly that.
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![local_module("App")],
+            disclosure: Some(PackageDisclosure {
+                control_model: "direct".to_owned(),
+                capabilities: vec!["network".to_owned(), "filesystem".to_owned()],
+            }),
+        };
+        let json = render_json(&docs);
+        assert!(
+            json.contains("\"disclosure\": {"),
+            "the disclosure object is present: {json}"
+        );
+        assert!(
+            json.contains("\"controlModel\": \"direct\""),
+            "the control model uses the audit's word: {json}"
+        );
+        assert!(
+            json.contains("\"capabilities\": [\"network\", \"filesystem\"]"),
+            "the capability axes are the audit's words in order: {json}"
+        );
+    }
+
+    #[test]
+    fn json_render_without_disclosure_omits_the_object() {
+        // A stdlib-only render (no project) discloses nothing — the object is
+        // absent, never a permissive placeholder.
+        let docs = DocsJson {
+            version: DOCS_JSON_VERSION,
+            modules: vec![stdlib_module("Ipe.List")],
+            disclosure: None,
+        };
+        let json = render_json(&docs);
+        assert!(
+            !json.contains("\"disclosure\""),
+            "no project ⇒ no disclosure object: {json}"
+        );
     }
 
     #[test]
@@ -5742,6 +5899,7 @@ mod tests {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![local_module("App"), stdlib_module("Ipe.List")],
+            disclosure: None,
         };
         let bundle = crate::doc_bundle::DocBundle::empty();
         let (json, markdown, html) = render_site_split(&docs, &bundle, WriteFormat::All);
@@ -5921,6 +6079,7 @@ mod tests {
                 stdlib_module("Ipe.Db.Store"),
                 stdlib_module("Ipe.List"),
             ],
+            disclosure: None,
         };
         let idx = render_markdown_index(&docs);
         // Ipe.Db.Codec must appear indented under Ipe.Db — two extra spaces.
@@ -5964,6 +6123,7 @@ mod tests {
                 stdlib_module("Ipe.Db.Codec"),
                 stdlib_module("Ipe.List"),
             ],
+            disclosure: None,
         };
         let bundle = crate::doc_bundle::DocBundle::empty();
         let search_script = build_site_search_script(&docs, &bundle, "../");
@@ -5988,6 +6148,7 @@ mod tests {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![stdlib_module("Ipe.List"), stdlib_module("Ipe.String")],
+            disclosure: None,
         };
         let bundle = crate::doc_bundle::DocBundle::empty();
         let search_script = build_site_search_script(&docs, &bundle, "../");
@@ -6008,6 +6169,7 @@ mod tests {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![stdlib_module("Ipe.List"), stdlib_module("Ipe.String")],
+            disclosure: None,
         };
         let idx = render_markdown_index(&docs);
         // "Ipe" prefix has no module → bold non-link header.
@@ -6167,6 +6329,7 @@ mod tests {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![stdlib_module("Ipe.List")],
+            disclosure: None,
         };
         let bundle = nav_test_bundle();
         let ref_search = build_site_search_script(&docs, &bundle, "../");
@@ -6189,6 +6352,7 @@ mod tests {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: Vec::new(),
+            disclosure: None,
         };
         let ref_search = build_site_search_script(&docs, &bundle, "../");
         let page = render_diagnostic_index(&bundle, &ref_search);
@@ -6209,6 +6373,7 @@ mod tests {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: Vec::new(),
+            disclosure: None,
         };
         let ref_search = build_site_search_script(&docs, &bundle, "../");
         let page = render_cli_index(&bundle, &ref_search);
@@ -6231,6 +6396,7 @@ mod tests {
         let docs = DocsJson {
             version: DOCS_JSON_VERSION,
             modules: vec![stdlib_module("Ipe.List")],
+            disclosure: None,
         };
         let script = build_site_search_script(&docs, &bundle, "");
 
