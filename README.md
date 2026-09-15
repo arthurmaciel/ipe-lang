@@ -135,7 +135,7 @@ One language, five shapes. The shape is pinned by the head of `main` — never b
 | `Ipe.App.Tea.Tui` | `Tui.app` | Full-screen terminal UIs | ✓ |
 | `Ipe.App.Tea.Cli` | `Cli.app` | Line-oriented CLIs and REPLs | ✓ |
 | `Ipe.Http.Server` | `Server.listen` | HTTP servers | |
-| `Ipe.App.Script` | `Script.program` | Scripts, one-shot tools, cron jobs | |
+| Direct | a bare `main : Task Error ()` | Scripts, one-shot tools, cron jobs, batch jobs | |
 
 The four ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
 (`init` / `update` / `view` / `subscriptions`) — and Web, Tui, and Cli share the

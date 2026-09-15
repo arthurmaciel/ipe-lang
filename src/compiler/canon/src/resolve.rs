@@ -1635,11 +1635,6 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     // app (its `main` head-calls the entry), but folds onto its own `"Worker"`
     // shape family for `Cmd` / `Sub` scoping (see `canonical_shape`).
     ("Tea", "worker"),
-    // `Tea.app` — the generic view-ful TEA app-entry over the closed Web
-    // renderer. A TEA app whose rendering family is `"Web"` (see
-    // `tea_entry_shape`), so its admissible `Cmd` / `Sub` imports are
-    // `Ipe.App.Tea.Web.*` and it classifies `MainShape::Web`.
-    ("Tea", "app"),
 ];
 
 /// The canonical shape (rendering family) name for a TEA surface segment. Most
@@ -1654,21 +1649,6 @@ fn canonical_shape(surface: &str) -> &str {
         // scope is `Ipe.App.Tea.Worker.{Cmd,Sub}`, folding onto `"Worker"`.
         "Tea" => "Worker",
         other => other,
-    }
-}
-
-/// The canonical TEA shape (rendering family) for a `(qualifier, member)` entry.
-///
-/// The `Tea` qualifier hosts TWO entries with DIFFERENT rendering families, so
-/// the qualifier alone (what [`canonical_shape`] keys on) cannot decide: the
-/// view-less `Tea.worker` folds onto `"Worker"`, while the view-ful `Tea.app`
-/// (engine = Web) renders through the closed Web renderer and folds onto
-/// `"Web"`, so its admissible `Cmd` / `Sub` imports are `Ipe.App.Tea.Web.*`.
-/// Every other surface is decided by its qualifier alone.
-fn tea_entry_shape(qualifier: &'static str, member: &str) -> &'static str {
-    match (qualifier, member) {
-        ("Tea", "app") => "Web",
-        _ => canonical_shape(qualifier),
     }
 }
 
@@ -1948,7 +1928,7 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
                 return TEA_APP_ENTRIES
                     .iter()
                     .find(|(em, en)| *em == m && *en == n)
-                    .map(|(shape, member)| tea_entry_shape(shape, member));
+                    .map(|(shape, _member)| canonical_shape(shape));
             }
             _ => return None,
         }

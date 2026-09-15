@@ -1,0 +1,33 @@
+module Main exposing (main)
+
+-- Prove-the-refusal for the `CTime`/`Timestamp` role: a field typed as a
+-- `Timestamp` (a moment in time) can NOT be filled with a raw `Int` (a bare
+-- count). The two are distinct types, so the swap has no representation — this
+-- program must be rejected at type-check with a type mismatch (IPE-T0001), and
+-- no Rust may be emitted. If a raw `Int` ever satisfied `Timestamp`, the time
+-- role would be a lie and `Codec.timestamp`'s `SqlTime` guarantee hollow.
+
+import Ipe.Io as Io
+import Ipe.Time.Timestamp exposing (Timestamp)
+import Ipe.Task as Task exposing (Task)
+import Ipe.Error exposing (Error)
+
+
+type alias Review =
+    { uid : String
+    , reviewedAt : Timestamp
+    }
+
+
+-- The role violation: `reviewedAt` demands a `Timestamp`, but a raw `Int`
+-- millis is passed. No `fromUnixMillis` at the boundary — so it must not typecheck.
+badReview : Review
+badReview =
+    { uid = "u-1"
+    , reviewedAt = 1700000000000
+    }
+
+
+main : Task Error ()
+main =
+    Io.println badReview.uid

@@ -82,3 +82,37 @@ fn codec_shape_accepts_and_emits() {
 fn codec_shape() {
     assert_runs_and_matches_oracle("codec_shape");
 }
+
+/// Prove-the-refusal for the `Timestamp` role behind `CTime`: a field typed
+/// `reviewedAt : Timestamp` filled with a raw `Int` millis is a type mismatch
+/// (`IPE_T0001`), rejected at type-check with no Rust emitted. The role lives in
+/// the type — a bare count is not a moment in time — so the swap `Codec.timestamp`
+/// / `SqlTime` would otherwise silently accept has no representation.
+#[test]
+fn codec_timestamp_role_rejects_raw_int() {
+    let root = repo_root();
+    let entry = golden_dir(&root, "codec_timestamp_role_reject").join("Main.ipe");
+    let out = std::env::temp_dir().join("ipec_codec_timestamp_role_reject_emit");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return; // resolver unavailable — skip, matches the sibling goldens
+    };
+    let built = ipe::build(&entry, &out, &runtime);
+    let got = match &built {
+        Err(ipe::CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(ipe_diagnostics::IPE_T0001),
+        "a raw Int where a Timestamp is expected must be IPE_T0001, got: {built:?}"
+    );
+
+    let emitted = out.join("src").join("main.rs");
+    assert!(
+        !emitted.exists(),
+        "no Rust must be emitted on a type-check failure, but {} exists",
+        emitted.display()
+    );
+}

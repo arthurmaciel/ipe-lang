@@ -21,6 +21,7 @@ import Ipe.Decimal as Dec exposing (Decimal)
 import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.String as String
+import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
 import Ipe.Maybe exposing (Maybe(..))
 import Ipe.Result exposing (Result(..))
 
@@ -266,12 +267,113 @@ missingColumnRejected =
             True
 
 
+-- A one-field record codec whose only column is `CTime`, built from the
+-- `Codec.timestamp` scalar so the field carries the time role end-to-end.
+type alias Stamped =
+    { at : Timestamp }
+
+
+makeStamped : Timestamp -> Stamped
+makeStamped at =
+    { at = at }
+
+
+stampedCodec : Codec Stamped
+stampedCodec =
+    Codec
+        { enc =
+            \s ->
+                Encode.object
+                    [ ( "at", Codec.toValue Codec.timestamp s.at ) ]
+        , mkDec =
+            \_ ->
+                Decode.succeed makeStamped
+                    |> Pipeline.required "at" (Decode.map Timestamp.fromUnixMillis Decode.int)
+        , shp =
+            SRecord
+                [ ( "at", Codec.columnOf (Codec.shape Codec.timestamp) ) ]
+        }
+
+
+-- A `CTime` column binds as `SqlTime` (the time role), NEVER `SqlInt`, even
+-- though the payload is the same millis integer. This is the whole point of the
+-- variant: the role lives in the tag, so a moment cannot be swapped for a count.
+timestampBindsAsSqlTime : Bool
+timestampBindsAsSqlTime =
+    case DbCodec.codecToBinds stampedCodec { at = Timestamp.fromUnixMillis 1700000000000 } of
+        Ok binds ->
+            case binds of
+                [ ( key, bound ) ] ->
+                    key == "at" && boundIsSqlTime bound
+
+                _ ->
+                    False
+
+        Err _ ->
+            False
+
+
+-- The bound value is `SqlTime` (millis in the time role), NEVER `SqlInt`.
+boundIsSqlTime : SqlValue -> Bool
+boundIsSqlTime bound =
+    case bound of
+        SqlTime ms ->
+            ms == 1700000000000
+
+        SqlString _ ->
+            False
+
+        SqlInt _ ->
+            False
+
+        SqlFloat _ ->
+            False
+
+        SqlBool _ ->
+            False
+
+        SqlBytes _ ->
+            False
+
+        SqlDecimal _ ->
+            False
+
+        SqlMoney _ ->
+            False
+
+        SqlNull _ ->
+            False
+
+
+-- The bound `SqlTime` cell rebuilds the original `Timestamp` through the same
+-- codec — a lossless row round-trip.
+timestampRowRoundTrips : Bool
+timestampRowRoundTrips =
+    let
+        original =
+            { at = Timestamp.fromUnixMillis 1700000000000 }
+    in
+    case DbCodec.codecToBinds stampedCodec original of
+        Ok binds ->
+            case DbCodec.codecFromRow stampedCodec (rowFromBinds binds) of
+                Ok back ->
+                    Timestamp.toUnixMillis back.at == Timestamp.toUnixMillis original.at
+
+                Err _ ->
+                    False
+
+        Err _ ->
+            False
+
+
 main =
     if
         bridgeRoundTrips sample1
             && bridgeRoundTrips sample2
             && scalarRejected
             && missingColumnRejected
+            && timestampBindsAsSqlTime
+            && timestampRowRoundTrips
     then
         Io.println "db-codec-bridge-ok"
 

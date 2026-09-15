@@ -907,9 +907,6 @@ mod registry_phase_c_tests {
             K::TerminalAppLines,
             // Ipe.Tea view-less worker app-entry (const-schemed via `WORKER_APP`).
             K::TeaWorker,
-            // Ipe.Tea generic view-ful app-entry (engine = Web); const-schemed via
-            // `WEB_APP` — Ipê-new, shares `Web.app`'s scheme with no legacy oracle.
-            K::TeaApp,
             // ── Ipe.Auth (10 kernels) — schemed + lowered ──
             K::AuthHashPassword,
             K::AuthHashPasswordCost,

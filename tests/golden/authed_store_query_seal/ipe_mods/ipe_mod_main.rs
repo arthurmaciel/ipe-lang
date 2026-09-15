@@ -23,7 +23,7 @@ pub(crate) fn main_doc_codec() -> IpeCodecCodec<RecAuthorBody> {
         mkDec: {
             let __ipe_fn: ::std::sync::Arc<
                 dyn Fn(Rec_) -> Decoder<RecAuthorBody> + Send + Sync + 'static,
-            > = ::std::sync::Arc::new(move |arg_13: Rec_| -> Decoder<RecAuthorBody> {
+            > = ::std::sync::Arc::new(move |arg_14: Rec_| -> Decoder<RecAuthorBody> {
                 ({
                     let cap_0 = "body".to_string();
                     ({
@@ -103,7 +103,7 @@ pub(crate) fn main_handle_my_docs(
                     + Send
                     + Sync
                     + 'static,
-            > = Box::new(move |arg_14: ipe_runtime::error::IpeError| -> IpeTask<ServerResponse> {
+            > = Box::new(move |arg_15: ipe_runtime::error::IpeError| -> IpeTask<ServerResponse> {
                 task_succeed(server_text("none".to_string()))
             });
             __ipe_fn
@@ -160,7 +160,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
         {
             let __ipe_fn: Box<
                 dyn Fn(ipe_runtime::error::IpeError) -> IpeTask<()> + Send + Sync + 'static,
-            > = Box::new(move |arg_15: ipe_runtime::error::IpeError| -> IpeTask<()> {
+            > = Box::new(move |arg_16: ipe_runtime::error::IpeError| -> IpeTask<()> {
                 io_println("authed-store-query-seal".to_string())
             });
             __ipe_fn
@@ -182,7 +182,7 @@ pub(crate) fn ipe_main() -> IpeTask<()> {
                     },
                 )],
             ),
-            Box::new(move |arg_16: ()| -> IpeTask<()> {
+            Box::new(move |arg_17: ()| -> IpeTask<()> {
                 io_println("authed-store-query-seal".to_string())
             }),
         ),

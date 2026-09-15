@@ -204,6 +204,97 @@ fn acceptance_http_and_clock_example_infers_network_and_clock() -> TestResult {
     Ok(())
 }
 
+// ── Web-app-mounted-into-a-server invariant ─────────────────────────────────
+
+/// A Direct program whose `main` is a `Server.listen` Task that mounts a
+/// `Web.embed`'d web app on a route via `Server.mountApp`. This is the
+/// maintainer-mandated invariant: a Web app must stay mountable into a server —
+/// `Web.embed -> WebApp -> Server.mountApp "/app" webApp` type-checks, and the
+/// whole program's `main` is a composable `Task` (Direct), not a shape carrier.
+const SERVER_MOUNTS_WEB_APP: &str = r#"module Main exposing (main)
+
+import Ipe.App.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.App.Tea.Web.Cmd as Cmd
+import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.String as String
+import Ipe.Http.Server as Server
+import Ipe.Task as Task
+
+type Msg = Increment
+
+type alias Model = { count : Int }
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+main : Task Error ()
+main =
+    Server.listen 8000
+        [ Server.mountApp "/app"
+            (Web.embed
+                { init = init
+                , update = update
+                , view = view
+                , subscriptions = subscriptions
+                , routes = []
+                , notFound = Increment
+                }
+            )
+        , Server.get "/api" (\_req -> Task.succeed (Server.json "{\"ok\":true}"))
+        ]
+"#;
+
+/// Materialise a server-mounts-web project under a unique temp dir.
+fn server_mount_project(tag: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let dir = std::env::temp_dir().join(format!(
+        "ipe-mount-{tag}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src"))?;
+    std::fs::write(
+        dir.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"mountpkg\", version = \"0.1.0\" }\n",
+    )?;
+    std::fs::write(dir.join("src/Main.ipe"), SERVER_MOUNTS_WEB_APP)?;
+    Ok(dir)
+}
+
+/// A Web app mounted into a server must type-check: `Server.listen 8000
+/// [ Server.mountApp "/app" (Web.embed cfg) ]` is the maintainer-mandated
+/// invariant. Dropping the generic `TeaApp` / `Script.program` entries must NOT
+/// disturb the `Web.embed` -> `WebApp` -> `Server.mountApp` mount surface.
+#[test]
+fn a_web_app_mounts_into_a_server() -> TestResult {
+    let dir = server_mount_project("typecheck")?;
+    let entry = dir.join("src/Main.ipe");
+    let (ok, stdout) = run_ipe(&["type-check", &entry.to_string_lossy()])?;
+    assert!(
+        ok,
+        "a Web app mounted via Server.mountApp (Web.embed …) inside Server.listen \
+         must type-check, got stdout:\n{stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
 // ── the `custom-element` disclosure axis ────────────────────────────────────
 
 /// A program that mounts a `CustomElement.node` ships browser JS, so its inferred

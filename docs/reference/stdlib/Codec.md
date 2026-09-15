@@ -138,6 +138,9 @@ step with them.
 The dialect-neutral column type a codec maps to. The `Ipe.Db` layer maps
 these to concrete SQLite/Postgres types (`TEXT`/`VARCHAR`, `INTEGER`/`BOOLEAN`,
 …), so one codec works on every backend. `CNull t` is a nullable column of `t`.
+`CTime` is an instant stored as Unix milliseconds — INTEGER affinity like
+`CInt`, but it binds as the `SqlTime` role so a moment in time is never
+confused with a plain count.
 
 ## `Shape`
 
@@ -273,6 +276,21 @@ round), and the currency survives verbatim, so the round-trip preserves the
 exact stored quantity a `Float` cents field would corrupt. One `CText` column.
 
     -- Codec.fromJson Codec.money (Codec.toJson Codec.money m) == Ok m
+
+## `timestamp`
+
+```ipe
+timestamp : Codec Timestamp
+```
+
+An instant ⇄ a JSON integer of Unix milliseconds. Encodes through
+`Timestamp.toUnixMillis` and decodes through `Timestamp.fromUnixMillis`
+(total: every `Int` is a valid instant), so the moment survives a round-trip
+exactly. One `CTime` column — stored with INTEGER affinity, but bound as the
+`SqlTime` role so a moment is never interchangeable with a plain count.
+
+    -- Codec.fromJson Codec.timestamp (Codec.toJson Codec.timestamp t) == Ok t
+    -- Codec.shape Codec.timestamp == SScalar CTime
 
 ## `map`
 

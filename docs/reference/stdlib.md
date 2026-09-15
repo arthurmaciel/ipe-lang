@@ -7,7 +7,6 @@ Each module listed below links to a detail page with the full documentation and 
 ## Modules
 
 - [Analytics](#analytics)
-- [App.Script](#appscript)
 - [App.Tea.Terminal.Color](#appteaterminalcolor)
 - [Basics](#basics)
 - [Bitwise](#bitwise)
@@ -179,14 +178,6 @@ Ipe.Analytics — typed, consent-gated product analytics.
 | `eventCounts` | `eventCounts db store` — a dictionary mapping each event name to the |
 | `recent` | `recent db store limit` — the `limit` most-recently recorded events, |
 | `encodePropValue` | Encode one `PropValue` to a JSON `Value`. `PPii` → `"[redacted]"`, |
-
-## App.Script
-
-[Full reference](stdlib/App.Script.md)
-
-| Export | Summary |
-|--------|----------|
-| `program` | Pin a `main` as the Script shape by wrapping the task it runs. |
 
 ## App.Tea.Terminal.Color
 
@@ -1072,6 +1063,7 @@ Ipe.Codec — one invariant codec that drives BOTH the JSON direction and the
 | `float` | JSON number ⇄ `Float`. One `CReal` column. Prefer `decimal`/`money` for |
 | `decimal` | Exact decimal ⇄ a JSON STRING, LOSSLESS. The value encodes through |
 | `money` | Exact money ⇄ a JSON STRING carrying both the amount and the ISO currency |
+| `timestamp` | An instant ⇄ a JSON integer of Unix milliseconds. Encodes through |
 | `map` | Adapt a `Codec a` to a `Codec b` given a BIJECTION `a <-> b`. Both |
 | `list` | `list elem` — a JSON array of `elem`s ⇄ `List a`. The element encoder is |
 | `maybe` | `maybe elem` — JSON `null` ⇄ `Nothing`, any other value ⇄ `Just`. On |

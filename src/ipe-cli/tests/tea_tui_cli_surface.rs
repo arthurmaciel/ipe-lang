@@ -56,24 +56,6 @@ fn assert_rejected_code(test_name: &str, source: &str, expected: &str) -> Result
     }
 }
 
-/// Assert `source` is REJECTED (any pipeline diagnostic — never exit-0). Used
-/// for the fail-closed ambiguity property, where the load-bearing guarantee is
-/// that an under-determined view engine is turned away rather than silently
-/// defaulted; the exact stage that turns it away is not the property under test.
-fn assert_rejected_any(test_name: &str, source: &str) -> Result<(), BoxError> {
-    match compile(test_name, source)? {
-        Ok(()) => Err(format!(
-            "{test_name}: an unconstrained view engine was ACCEPTED — it must be \
-             rejected fail-closed, never silently defaulted to Web"
-        )
-        .into()),
-        Err(ipe::CliError::Pipeline { .. }) => Ok(()),
-        Err(other) => {
-            Err(format!("{test_name}: expected pipeline rejection, got {other:?}").into())
-        }
-    }
-}
-
 /// Minimal `Tui.app` program — `import Ipe.App.Tea.Tui as Tui` then `Tui.app { ... }`.
 const TUI_APP: &str = r#"module Main exposing (main)
 
@@ -166,7 +148,7 @@ main =
 /// unification — a cross-engine view is unrepresentable, not a silent render.
 const CROSS_ENGINE_VIEW: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea as Tea
+import Ipe.App.Tea.Web as Web
 import Ipe.App.Tea.Web.Cmd as Cmd
 import Ipe.App.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
@@ -190,14 +172,15 @@ subscriptions _model =
 
 -- A DOM column (`View Web Msg`) whose child is a terminal-cells node
 -- (`View Tui Msg`): the engines differ, so this cannot unify.
-view : Model -> View Web Msg
+view : Model -> Element Msg
 view _model =
     Ui.column [] [ Cells.text "nope" ]
 
 main =
-    Tea.app
+    Web.app
         { init = init, update = update, view = view
         , subscriptions = subscriptions
+        , routes = [], notFound = NoOp
         }
 "#;
 
@@ -209,46 +192,6 @@ const NON_ENGINE_VIEW: &str = r"module Main exposing (v)
 v : View Foo Msg
 v = v
 ";
-
-/// A `Tea.app` whose view engine is left under-determined: the `view` field is
-/// annotated `View e Msg` with a free `e` and its body is the diverging
-/// `Debug.todo`, so nothing pins the engine. The shared engine variable in
-/// `Tea.app`'s scheme (`view : model -> View e msg`, result `Program e msg`)
-/// therefore stays unsolved. It MUST be rejected — never silently defaulted to
-/// the Web renderer (the one closed sandbox surface).
-const AMBIGUOUS_ENGINE_VIEW: &str = r#"module Main exposing (main)
-
-import Ipe.App.Tea as Tea
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
-import Ipe.Debug as Debug
-
-type Msg = NoOp
-
-type alias Model = { count : Int }
-
-init : WebReq -> ( Model, Cmd.Cmd Msg )
-init _req =
-    ( { count = 0 }, Cmd.none )
-
-update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
-update _msg model =
-    ( model, Cmd.none )
-
-subscriptions : Model -> Sub.Sub Msg
-subscriptions _model =
-    Sub.none
-
-view : Model -> View e Msg
-view _model =
-    Debug.todo "unconstrained engine"
-
-main =
-    Tea.app
-        { init = init, update = update, view = view
-        , subscriptions = subscriptions
-        }
-"#;
 
 /// `Tui.app` is the full-screen terminal entry kernel registered in
 /// the `env.rs` qualifier catalog. A program using
@@ -273,14 +216,6 @@ fn cross_engine_view_fails_unification() -> Result<(), BoxError> {
 #[test]
 fn non_engine_view_tag_is_rejected() -> Result<(), BoxError> {
     assert_rejected_code("non_engine_view", NON_ENGINE_VIEW, "IPE-N0002")
-}
-
-/// The single most security-critical property: a `Tea.app` whose view engine
-/// is under-determined leaves the shared engine variable unsolved and is
-/// REJECTED — never silently defaulted to Web, the one closed sandbox renderer.
-#[test]
-fn ambiguous_view_engine_is_rejected_never_defaulted() -> Result<(), BoxError> {
-    assert_rejected_any("ambiguous_view_engine", AMBIGUOUS_ENGINE_VIEW)
 }
 
 /// `Cli.app` is the line-oriented terminal entry kernel registered in

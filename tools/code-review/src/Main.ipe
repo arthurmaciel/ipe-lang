@@ -17,6 +17,7 @@ import Ipe.Ui.Background as Background
 import Ipe.Ui.Border as Border
 import Ipe.Ui.Font as Font
 import Ipe.Ui.Input as Input
+import Ipe.Time.Timestamp exposing (Timestamp)
 import Lib.Db as LibDb exposing (Decision(..))
 import Lib.Format as Format
 import Lib.Highlight as Highlight exposing (Token(..))
@@ -40,7 +41,7 @@ type alias HistoryRow =
     , bodyHash : String
     , decision : String
     , reason : Maybe String
-    , reviewedAt : Int
+    , reviewedAt : Timestamp
     , name : Maybe String
     }
 

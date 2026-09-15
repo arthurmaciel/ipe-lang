@@ -2,15 +2,19 @@ module Lib.Format exposing (formatReviewedAt, numberedLines, percent)
 
 import Ipe.List as List
 import Ipe.String
+import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
 
 
--- Renders a Unix millisecond timestamp as UTC "YYYY-MM-DD HH:MM:SS" via the
--- civil-from-days algorithm (Hinnant). The stdlib's Time.timeString only
--- renders the time-of-day, which is useless across days in a review history.
--- Pure: no kernel calls, so it is testable and stable across platforms.
-formatReviewedAt : Int -> String
-formatReviewedAt ms =
+-- Renders an instant as UTC "YYYY-MM-DD HH:MM:SS" via the civil-from-days
+-- algorithm (Hinnant). The stdlib's Time.timeString only renders the
+-- time-of-day, which is useless across days in a review history. Pure: no
+-- kernel calls, so it is testable and stable across platforms.
+formatReviewedAt : Timestamp -> String
+formatReviewedAt t =
     let
+        ms =
+            Timestamp.toUnixMillis t
+
         seconds =
             ms // 1000
 
