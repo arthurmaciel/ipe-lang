@@ -305,6 +305,21 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // Reserved so a user `type Color …` in a terminal module cannot forge a
     // look-alike palette; built only through `Ipe.Tea.Terminal.Color.*` kernels.
     "TermColor",
+    // `Ipe.Color`'s opaque companion types. The unified colour value type `Color`
+    // is user-shadowable via the empty-home `Ui.Color` name (its lowerer arm sits
+    // below the `enum_variants` guard); these companions instead carry a fixed
+    // `ipe_runtime::color::*` identity and are built ONLY through `Ipe.Color`
+    // kernels — the typed parse-error channel (`ColorError`), the terminal
+    // capability profile and down-sampled result (`TermProfile` / `AnsiColor`),
+    // and the accessibility bands (`WcagLevel` / `TextSize` / `Deficiency`).
+    // Reserved so a user type of the same name cannot forge a look-alike over the
+    // opaque runtime carrier.
+    "ColorError",
+    "TermProfile",
+    "AnsiColor",
+    "WcagLevel",
+    "TextSize",
+    "Deficiency",
     "Attribute",
     "Event",
     "Length",
@@ -513,6 +528,9 @@ pub fn is_user_type_declaration_forbidden(name: &str) -> bool {
 /// * `ReadOnly`/`ReadWrite` — nullary phantom access-mode markers;
 /// * `HostMode`/`LogLevel`/`CsrfMode`/`RevocationMode` — nullary closed config-tag ADTs (the
 ///   argument types of `Host.bind`/`Log.level`/`Web.csrf`/`Web.withRevocation`).
+/// * `ColorError`/`TermProfile`/`AnsiColor`/`WcagLevel`/`TextSize`/`Deficiency` —
+///   the nullary opaque `Ipe.Color` companion types, each carrying an
+///   `ipe_runtime::color::*` identity.
 ///
 /// `Task`/`Cmd`/`Sub` are absent (their gate is in `ipe_types::constrain`).
 /// `CustomElement` is absent (name-based gate, fused with its boundary SEAL).
@@ -530,7 +548,8 @@ pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
         // IPE-N0031 rather than the lowerer's empty-home ICE.
         "Dict" | "Result" | "Program" | "View" => Some(2),
         "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode"
-        | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" | "TermColor" => Some(0),
+        | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" | "TermColor" | "ColorError"
+        | "TermProfile" | "AnsiColor" | "WcagLevel" | "TextSize" | "Deficiency" => Some(0),
         _ => None,
     }
 }
