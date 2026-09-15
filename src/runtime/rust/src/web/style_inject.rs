@@ -819,8 +819,8 @@ mod tests {
     /// pipeline, not just each half in isolation.
     #[test]
     fn end_to_end_ui_hover_color_renders_scoped_style_and_leaves_no_marker() {
-        use crate::html::{assign_ipe_ids, render_html};
         use crate::color::Color;
+        use crate::html::{assign_ipe_ids, render_html};
         use crate::ui::element::Element;
         use crate::ui::helpers::ui_bg_hover_color_;
         use crate::ui::render::ui_layout;
@@ -944,8 +944,8 @@ mod tests {
     /// on one page cannot cross-contaminate.
     #[test]
     fn end_to_end_ui_media_query_renders_scoped_style_and_leaves_no_marker() {
-        use crate::html::{assign_ipe_ids, render_html};
         use crate::color::Color;
+        use crate::html::{assign_ipe_ids, render_html};
         use crate::ui::element::{Attribute, Element};
         use crate::ui::helpers::ui_media_query_;
         use crate::ui::render::ui_layout;
@@ -1055,8 +1055,8 @@ mod tests {
     /// `</style` breakout, and NO `<script>`, while the child still renders.
     #[test]
     fn end_to_end_ui_media_query_breakout_is_neutralised() {
-        use crate::html::{assign_ipe_ids, render_html};
         use crate::color::Color;
+        use crate::html::{assign_ipe_ids, render_html};
         use crate::ui::element::{Attribute, Element};
         use crate::ui::helpers::ui_media_query_;
         use crate::ui::render::ui_layout;

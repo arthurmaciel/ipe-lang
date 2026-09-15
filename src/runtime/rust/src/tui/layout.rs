@@ -18,9 +18,9 @@
 
 use super::super::html::Html;
 use super::super::ui::{Attribute, Description, Element, HAlign, Length, Location, VAlign};
-use crate::color::Color;
 use super::cell::sanitize_rune;
 use super::focus::{Focusable, InputRegistry};
+use crate::color::Color;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const CANVAS_W: usize = 1280;
