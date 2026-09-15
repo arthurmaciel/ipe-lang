@@ -1,6 +1,6 @@
 module Main exposing (main)
 
--- | tea-app-counter — the `Web.app` entry over the closed Web renderer.
+-- | tea-app-counter — the `Web.tea` entry over the closed Web renderer.
 --
 -- Proves the toolbox-model view-ful path end-to-end: the `view` field is
 -- `Model -> Element Msg`, the DOM view carrier, so every existing `Ipe.Ui`
@@ -12,9 +12,9 @@ module Main exposing (main)
 -- renderer.
 
 
-import Ipe.App.Tea.Web as Web
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.String as String
 import Ipe.Ui as Ui
 
@@ -62,7 +62,7 @@ view model =
 
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view

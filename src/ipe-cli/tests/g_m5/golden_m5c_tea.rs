@@ -12,7 +12,7 @@
 //! * A plain-`main` Program reaching for a shape-scoped `Cmd` / `Sub` is the
 //!   IPE-N0033 Program-importing-a-shape contradiction, rejected before emit.
 //!
-//! The positive fixtures are minimal `Cli.app` apps: `Cmd` / `Sub`
+//! The positive fixtures are minimal `Cli.tea` apps: `Cmd` / `Sub`
 //! are shape-scoped, so they are exercised inside the shape's own managed loop.
 //! Each renders its `view` (`"ok"`) once at stdin EOF and exits 0.
 //!
@@ -33,7 +33,7 @@
 //! * `sub_ctors` — `subscriptions` `Sub.batch [Sub.none, Sub.every 500 Tick]`;
 //!   proves `sub_none` infers `msg` from a sibling.
 //! * `gate_undetermined_msg` — a plain-`main` Program reaching for
-//!   `Ipe.App.Tea.Terminal.Cmd.none` must surface IPE-N0033, never emit any Rust.
+//!   `Ipe.Tea.Terminal.Cmd.none` must surface IPE-N0033, never emit any Rust.
 //!
 //! Run:
 //!

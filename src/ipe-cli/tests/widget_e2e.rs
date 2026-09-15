@@ -3,7 +3,7 @@
 //! WP4 renders a `<ipe-ce-… state="…">` node; WP5 serves the author widget JS
 //! content-addressed + SRI, generates the registration glue, and wires up-events
 //! back through `/_ipe/event`. This test proves the whole loop at the HTTP layer
-//! against a REAL build (no loud-skip): it compiles a `Web.app` with a
+//! against a REAL build (no loud-skip): it compiles a `Web.tea` with a
 //! `CustomElement.node`, spawns the emitted binary, and drives it over raw sockets.
 //!
 //! What it proves:
@@ -48,7 +48,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 // ── The Ipê program + author widget JS ──────────────────────────────────────
 
-/// A `Web.app` whose view mounts one `CustomElement.node`. The down-state is the current
+/// A `Web.tea` whose view mounts one `CustomElement.node`. The down-state is the current
 /// count (so a model change re-renders the `state` attribute); the up-event
 /// `Bumped n` folds `n` into the count, so a valid up-event is observable as a
 /// count change and a malformed one leaves the count untouched (the fail-closed
@@ -56,11 +56,11 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// assertions can read the model without parsing the widget attribute.
 const WIDGET_APP: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 import Ipe.String
 
 type alias WidgetState = { count : Int }
@@ -96,7 +96,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = FromWidget (Bumped 0)
         }
@@ -590,14 +590,14 @@ fn ui_widget_serves_sri_glue_and_round_trips_up_event() -> Result<(), BoxError> 
     Ok(())
 }
 
-/// A `Web.app` that reaches a `Js.send` outbound port (an `Int` payload, through
+/// A `Web.tea` that reaches a `Js.send` outbound port (an `Int` payload, through
 /// `update`) and a `Js.subscribe` inbound port (an `Int` decoder feeding `Got`,
 /// through `subscriptions`) — the minimal seal-legal port program.
 const JS_PORT_APP: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js as Js
 import Ipe.Json.Decode as Decode
@@ -628,7 +628,7 @@ subscriptions _model =
     Js.subscribe Decode.int Got
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }

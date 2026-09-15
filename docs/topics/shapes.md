@@ -19,21 +19,21 @@ pick the matching entry function. These are called **shapes**.
 
 | Shape | Entry function | Output |
 |-------|---------------|--------|
-| Web | `Web.app` | Browser HTML/CSS app |
+| Web | `Web.tea` | Browser HTML/CSS app |
 | WebView | `WebView.app` | Desktop window running a web view |
-| Tui | `Tui.app` | Full-screen terminal UI |
-| Cli | `Cli.app` | Line-by-line terminal app (REPL) |
+| Tui | `Tui.tea` | Full-screen terminal UI |
+| Cli | `Cli.tea` | Line-by-line terminal app (REPL) |
 | Program | direct `Task Error ()` | Command-line script, no UI |
 
 ## Web
 
-A `Web.app` is a browser application driven by the TEA update loop. It renders
+A `Web.tea` is a browser application driven by the TEA update loop. It renders
 HTML, handles user events, and can communicate with a server:
 
 ```ipe
 main : Task Error ()
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -57,12 +57,12 @@ main =
 
 ## Tui
 
-`Tui.app` renders a full-screen TUI that redraws on each model change:
+`Tui.tea` renders a full-screen TUI that redraws on each model change:
 
 ```ipe
 main : Task Error ()
 main =
-    Tui.app
+    Tui.tea
         { init = init
         , update = update
         , view = view
@@ -71,12 +71,12 @@ main =
 
 ## Cli
 
-`Cli.app` is line-by-line (stdout-style) with event handling:
+`Cli.tea` is line-by-line (stdout-style) with event handling:
 
 ```ipe
 main : Task Error ()
 main =
-    Cli.app
+    Cli.tea
         { init = init
         , update = update
         , view = view
@@ -112,7 +112,7 @@ entry gives IPE-N0035.
 ## Glossary
 
 - **shape** — one of the five `main` entry patterns: Web, WebView, Tui, Cli, Program.
-- **`Web.app`** — browser TEA entry point.
-- **`Tui.app`** — full-screen terminal TUI entry point.
-- **`Cli.app`** — line-by-line terminal entry point.
+- **`Web.tea`** — browser TEA entry point.
+- **`Tui.tea`** — full-screen terminal TUI entry point.
+- **`Cli.tea`** — line-by-line terminal entry point.
 - **`WebView.app`** — desktop webview entry point.

@@ -1,9 +1,9 @@
 module Main exposing (main)
 
 {-|
-A headless, view-less TEA worker over the `Ipe.Tea.worker` surface.
+A headless, view-less TEA worker over the `Ipe.Tea.Worker.tea` surface.
 
-`Tea.worker` is the view-less TEA loop (Elm `Platform.worker` shape): it has an
+`Worker.tea` is the view-less TEA loop (Elm `Platform.worker` shape): it has an
 `init`, an `update`, and `subscriptions`, but NO `view` — its output is `Cmd msg`
 (effects) and its input is `Sub msg`. A worker is co-located and
 capability-gated; it can never reach the sandboxed Spa/wasm bundle.
@@ -17,9 +17,9 @@ completes — no new socket or network capability, existing effects only.
 import Ipe.String as String
 import Ipe.Io as Io
 import Ipe.Task as Task
-import Ipe.App.Tea.Worker as Tea
-import Ipe.App.Tea.Worker.Cmd as Cmd
-import Ipe.App.Tea.Worker.Sub as Sub
+import Ipe.Tea.Worker
+import Ipe.Tea.Worker.Cmd as Cmd
+import Ipe.Tea.Worker.Sub as Sub
 
 
 type Msg
@@ -62,7 +62,7 @@ subscriptions model =
 
 
 main =
-    Tea.worker
+    Worker.tea
         { init = init
         , update = update
         , subscriptions = subscriptions

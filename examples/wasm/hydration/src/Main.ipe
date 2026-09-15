@@ -20,12 +20,12 @@ module Main exposing (main)
 -- sweep until that codegen defect is fixed; the source below is already on the
 -- current Web shape. Its `htmlView : Model -> Html Msg` authors the DOM directly
 -- with `Ipe.Html`, reached through the `Ui.html` node inside the single
--- `Element` view that `Web.app` takes.
+-- `Element` view that `Web.tea` takes.
 
 import Ipe.String as String
-import Ipe.App.Tea.Web exposing (app)
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web exposing (tea)
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Ui exposing (Element)
 import Ipe.Html as Html
@@ -111,7 +111,7 @@ view model =
 
 
 main =
-    app
+    tea
         { init = init
         , update = update
         , view = view

@@ -1,4 +1,4 @@
--- | Ipe.App.Tea.Terminal.Color — the first-class terminal colour palette.
+-- | Ipe.Tea.Terminal.Color — the first-class terminal colour palette.
 --
 -- `Color` (spelled `Terminal.Color` in a view) is a closed sum over the
 -- sixteen named ANSI colours plus `default` (the terminal's own foreground or
@@ -9,7 +9,7 @@
 -- surface (`Ipe.Ui.Cli.color` / `bg`) accept this palette. Truecolour
 -- (`Ipe.Ui.Tui.rgb` / `rgba`) remains available as a separate path for
 -- terminals that support it; the palette is the portable, first-class surface.
-module Ipe.App.Tea.Terminal.Color exposing
+module Ipe.Tea.Terminal.Color exposing
     ( Color
     , black, red, green, yellow, blue, magenta, cyan, white
     , brightBlack, brightRed, brightGreen, brightYellow

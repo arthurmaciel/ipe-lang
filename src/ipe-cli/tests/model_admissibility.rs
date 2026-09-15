@@ -104,11 +104,11 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 
 const LIVE_GOOD: &str = r"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Msg = Increment
 
@@ -133,7 +133,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Increment
         }
@@ -141,11 +141,11 @@ main =
 
 const LIVE_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Msg = Tick
 
@@ -170,7 +170,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
@@ -178,11 +178,11 @@ main =
 
 const LIVE_HTML_MODEL: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Msg = Tick
 
@@ -207,7 +207,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
@@ -219,13 +219,13 @@ main =
 // SAME mechanism as `LIVE_CMD_MODEL` / `LIVE_HTML_MODEL` above, not a new gate.
 const LIVE_SECRET_MODEL: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.Secret
 import Ipe.String
 import Ipe.System as System
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Msg = Tick
 
@@ -250,7 +250,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
@@ -262,12 +262,12 @@ main =
 // plain-Model gate's IPE-L0120 on the `widget` field.
 const LIVE_CUSTOM_ELEMENT_MODEL: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Msg = Tick
 
@@ -295,7 +295,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Tick
         }
@@ -303,12 +303,12 @@ main =
 
 const TUI_GOOD: &str = r"module Main exposing (main)
 
-import Ipe.App.Tea.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.App.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.App.Tea.Terminal.Sub
+import Ipe.Tea.Terminal.Sub
 
 type Msg = Increment | NoOp
 
@@ -341,7 +341,7 @@ onKey _event =
     NoOp
 
 main =
-    Tui.app
+    Tui.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
@@ -349,12 +349,12 @@ main =
 
 const TUI_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Ipe.App.Tea.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.App.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.App.Tea.Terminal.Sub
+import Ipe.Tea.Terminal.Sub
 
 type Msg = Increment | NoOp
 
@@ -387,7 +387,7 @@ onKey _event =
     NoOp
 
 main =
-    Tui.app
+    Tui.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
@@ -462,11 +462,11 @@ fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
 /// it with IPE-L0120.
 const LIVE_LAMBDA_VIEW_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Msg = Tick
 
@@ -487,7 +487,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update
         , view = \model -> Ui.text (String.fromInt model.count)
         , subscriptions = subscriptions
@@ -499,11 +499,11 @@ main =
 /// ACCEPTED — proves the Lambda arm recovers the Model without false-rejecting.
 const LIVE_LAMBDA_VIEW_GOOD: &str = r"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Msg = Increment
 
@@ -524,7 +524,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update
         , view = \model -> Ui.text (String.fromInt model.count)
         , subscriptions = subscriptions

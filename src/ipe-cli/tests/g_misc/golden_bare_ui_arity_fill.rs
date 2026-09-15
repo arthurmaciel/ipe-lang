@@ -25,9 +25,9 @@ use std::path::{Path, PathBuf};
 /// type to the concrete `Msg`, so the arity-filled inner `Html` return must
 /// solve to `Html<MainMsg>`.
 const BARE_HTML_VIEW_APP: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Ui as Ui
 import Ipe.Html as Html
 type alias Model = { n : Int }
@@ -49,7 +49,7 @@ view : Model -> Element Msg
 view model =
     Ui.html (rawView model)
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -129,7 +129,7 @@ fn emitted_program_sources(out: &Path) -> String {
     acc
 }
 
-/// `rawView : Model -> Html` (bare) reached via `Ui.html` under `Web.app`
+/// `rawView : Model -> Html` (bare) reached via `Ui.html` under `Web.tea`
 /// must be ipe-0 and
 /// emit the CONCRETE `Html<MainMsg>` return — the arity-fill's message parameter
 /// resolved from the body's solved type, never `Html<()>` or `Html<T1>`. Each

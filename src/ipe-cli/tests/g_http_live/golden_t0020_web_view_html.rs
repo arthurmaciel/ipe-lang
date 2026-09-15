@@ -1,11 +1,11 @@
-//! A `Web.app` `view` whose body settles to `Html` (it called `Ui.layout` /
+//! A `Web.tea` `view` whose body settles to `Html` (it called `Ui.layout` /
 //! `Ui.layoutWith` itself) must be rejected by ipe with IPE-T0020 — never
 //! accepted at ipe time only to fail the emitted `cargo build` with E0308
 //! (`Element` vs `Html`).
 //!
 //! ## Background
 //!
-//! `Web.app` requires `view : Model -> Element Msg`; the shape applies
+//! `Web.tea` requires `view : Model -> Element Msg`; the shape applies
 //! `Ui.layout` internally to turn that `Element` into `Html`. A `view`
 //! annotated `Model -> any` severs the body's settled type from the reference
 //! the shape consumes — each wildcard `any` occurrence instantiates its own
@@ -27,10 +27,10 @@ use ipe::CliError;
 /// `view : Model -> any` whose body is `Ui.layout [] (...)` (returns `Html`).
 /// Must be rejected with IPE-T0020.
 const ANY_VIEW_RETURNS_HTML: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -43,7 +43,7 @@ view : Model -> any
 view model =
     Ui.layout [] (Ui.column [] [ Ui.text "hi" ])
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -52,10 +52,10 @@ main =
 /// Legal: `view : Model -> any` whose body is a plain `Element` (`Ui.column`).
 /// The wildcard return does NOT make this an error — only an `Html` body does.
 const ANY_VIEW_RETURNS_ELEMENT: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -68,7 +68,7 @@ view : Model -> any
 view model =
     Ui.column [] [ Ui.text "hi" ]
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -77,10 +77,10 @@ main =
 /// Legal: `view : Model -> any` whose body wraps raw `Html` back into an
 /// `Element` with `Ui.html (...)`. The documented escape hatch — must compile.
 const ANY_VIEW_WRAPS_WITH_UI_HTML: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -93,7 +93,7 @@ view : Model -> any
 view model =
     Ui.html (Ui.layout [] (Ui.column [] [ Ui.text "hi" ]))
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -102,10 +102,10 @@ main =
 /// Positive control: the canonical `view : Model -> Element Msg` form must
 /// compile — confirming the gate never false-rejects the correct shape.
 const ELEMENT_VIEW_OK: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -118,7 +118,7 @@ view : Model -> Element Msg
 view model =
     Ui.column [] [ Ui.text "hi" ]
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -129,10 +129,10 @@ main =
 /// check must still fire (resolution is deferred until all defs are
 /// constrained), or the Html view slips to a cargo E0308.
 const ANY_VIEW_HTML_MAIN_FIRST: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -142,7 +142,7 @@ update msg model =
         Ignored -> ( model, Cmd.none )
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -155,10 +155,10 @@ view model =
 /// The field value is a `VarLocal`; resolving the alias back to the top-level
 /// binding must still catch the Html body, or it slips to a cargo E0271.
 const ANY_VIEW_HTML_LET_ALIAS: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -172,7 +172,7 @@ view model =
     Ui.layout [] (Ui.column [] [ Ui.text "hi" ])
 main =
     let v = view
-    in Web.app
+    in Web.tea
         { init = init, update = update, view = v, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -183,10 +183,10 @@ main =
 /// indirection-proof, so this is still caught (a syntactic reference walk would
 /// miss it and slip to a cargo E0271).
 const ANY_VIEW_HTML_CHAINED_ALIAS: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -201,7 +201,7 @@ view model =
 main =
     let v = view
         w = v
-    in Web.app
+    in Web.tea
         { init = init, update = update, view = w, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -211,10 +211,10 @@ main =
 /// is a `Lambda`, not a reference, but its body applies the wildcard-`any`
 /// binding, so the propagated `Html` still reaches the `Element` requirement.
 const ANY_VIEW_HTML_ETA_LAMBDA: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -227,7 +227,7 @@ view : Model -> any
 view model =
     Ui.layout [] (Ui.column [] [ Ui.text "hi" ])
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = \m -> view m, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -237,10 +237,10 @@ main =
 /// `Element` / `Html` clash renders as the tailored IPE-T0020, not a bare
 /// type-mismatch — the wrap-in-`Ui.html` hint applies here too.
 const ELEMENT_VIEW_HTML_BODY: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -253,7 +253,7 @@ view : Model -> Element Msg
 view model =
     Ui.layout [] (Ui.column [] [ Ui.text "hi" ])
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -264,10 +264,10 @@ main =
 /// parameter list, so its recorded body is the whole `Model -> Html` arrow;
 /// peeling both the use and the body to their results still catches it.
 const ANY_VIEW_HTML_POINT_FREE: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -282,7 +282,7 @@ htmlBody model =
 view : Model -> any
 view = htmlBody
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }
@@ -293,10 +293,10 @@ main =
 /// alias's own annotation return is a bare wildcard `any`, so it too collects a
 /// use tie back to `view`'s body.
 const ANY_VIEW_HTML_POINT_FREE_ALIAS: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Msg = Bump | Ignored
 type alias Model = { count : Int }
 init _req = ( { count = 0 }, Cmd.none )
@@ -311,7 +311,7 @@ view model =
 alias : Model -> any
 alias = view
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = alias, subscriptions = subscriptions
         , routes = [], notFound = Ignored
         }

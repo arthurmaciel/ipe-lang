@@ -601,15 +601,15 @@ pub enum NameError {
         limit: u32,
     },
     /// A Program — a plain-`main` module whose `main` is not a managed-update-loop
-    /// (TEA) app entry — imports a shape module under `Ipe.App.Tea.*`. The
-    /// `Ipe.App.Tea.*` namespace holds only live-loop machinery; importing any part
+    /// (TEA) app entry — imports a shape module under `Ipe.Tea.*`. The
+    /// `Ipe.Tea.*` namespace holds only live-loop machinery; importing any part
     /// of it marks a module a TEA app, so a Program that does so is a
-    /// contradiction rejected here. `module` is the offending `Ipe.App.Tea.*` import
+    /// contradiction rejected here. `module` is the offending `Ipe.Tea.*` import
     /// path. [IPE-N0033]
     ProgramImportsTeaShape { module: Box<str> },
     /// A TEA app imports another shape's `Cmd` / `Sub` re-export module. `Cmd`
     /// and `Sub` are shape-specific and reached through the app's own shape
-    /// (`Ipe.App.Tea.Web.Cmd` in a `Web` app, `Ipe.App.Tea.Terminal.Sub` in a `Terminal`
+    /// (`Ipe.Tea.Web.Cmd` in a `Web` app, `Ipe.Tea.Terminal.Sub` in a `Terminal`
     /// app, …). The app's shape is proven from its entry kernel; a `Cmd` / `Sub`
     /// import from a different shape has no denotation in this app and fails
     /// closed here. `imported` is the offending import path; `imported_shape` and
@@ -683,7 +683,7 @@ pub enum NameError {
     /// data the runtime never installs. Mirrors the discarded-`Task` lint
     /// posture (IPE-L0141): a value whose whole purpose is a runtime effect must
     /// reach the site that consumes it. A `config` binding is consumed only by
-    /// being passed to a shape app entry (`Web.app` / `Web.appWith`); one left
+    /// being passed to a shape app entry (`Web.tea` / `Web.appWith`); one left
     /// unthreaded silently drops every setting it lists (a missed host bind, an
     /// un-enforced CSRF posture, an unset secret), so it is rejected here rather
     /// than compiled into an app that ignores it. [IPE-N0043]
@@ -703,13 +703,13 @@ pub enum NameError {
     CustomElementCtorMalformed { detail: Box<str> },
     /// `main` selects its shape at runtime: after peeling application, `let`, and
     /// `\… ->` the head of `main`'s body is an `if` / `case` whose branches reach
-    /// app entries (`Web.app` / `Tui.app` / `Cli.app`). A program's shape is
+    /// app entries (`Web.tea` / `Tui.tea` / `Cli.tea`). A program's shape is
     /// pinned by the entry head at compile
     /// time, not chosen from a runtime value — so a shape-branching `main` fails
     /// closed here (static pinning, Correctness #2). The carrying
     /// [`Diagnostic::Name`] span points at the branching head. [IPE-N0045]
     RuntimeBranchedMain,
-    /// `Web.app`'s `init` field has an annotation whose first argument is a free
+    /// `Web.tea`'s `init` field has an annotation whose first argument is a free
     /// type variable (`a`, `req`, etc.) rather than the concrete `WebReq` type.
     /// The request type is always `WebReq` — the SSR/request-context shape is
     /// not user-choosable. Writing `init : a -> …` hides the concrete type and
@@ -1015,7 +1015,7 @@ pub enum TypeError {
     /// message names the actual type the user mis-applied, not always `Task`.
     TaskArity { carrier: &'static str, found: usize },
     /// An `Html` value is used where an `Element` is required — most often a
-    /// managed-update-loop (`Web.app`) `view` whose body called
+    /// managed-update-loop (`Web.tea`) `view` whose body called
     /// `Ui.layout` / `Ui.layoutWith` (which turn an `Element` into `Html`) when
     /// the shape wanted the inner `Element` and applies the layout itself. The
     /// remedy is the same wherever it arises: wrap the `Html` with `Ui.html`, or
@@ -1098,7 +1098,7 @@ pub enum Feature {
     /// and honoring it by reference would require matching the
     /// whole arm by reference — a materially larger redesign. [IPE-L0128]
     AliasOverRefutablePayload,
-    /// A routed `Web.app` (Model with a `page` field + `routes`) compiled
+    /// A routed `Web.tea` (Model with a `page` field + `routes`) compiled
     /// with `--target wasm`. The browser client runs the single-page loop
     /// today; the client-side router is a staged follow-up. [IPE-L0129]
     WasmRoutedApp,
@@ -1146,12 +1146,12 @@ pub enum Feature {
     /// [IPE-L0117]
     FloatKeyedCollection,
     /// `Web.appRouted` (the URL-routing variant of the `Ipe.Web` entry point)
-    /// is not yet wired on the Rust backend. Use the non-routed `Web.app` with
+    /// is not yet wired on the Rust backend. Use the non-routed `Web.tea` with
     /// `init`/`update`/`view`/`subscriptions` until routing support lands.
     /// [IPE-L0118]
     RoutedWebApp,
-    /// The cfg record for an app entry point (`Web.app` / `Tui.app`
-    /// / `Cli.app`) was written as a let-bound
+    /// The cfg record for an app entry point (`Web.tea` / `Tui.tea`
+    /// / `Cli.tea`) was written as a let-bound
     /// variable (or any non-record expression) rather than an inline record
     /// literal. The Rust backend reads the cfg's field expressions directly at
     /// the call site to emit the runtime entry call, so a non-literal cfg has no
@@ -1235,13 +1235,13 @@ pub enum AppShape {
     /// `Ipe.Web` — the Model is persisted to the session store, so
     /// it must be `serde`-serialisable (as well as `Clone` + `PartialEq`).
     Web,
-    /// `Ipe.App.Tea.Tui` — the full-screen terminal app form. The Model is kept in
+    /// `Ipe.Tea.Tui` — the full-screen terminal app form. The Model is kept in
     /// memory, so it must be `Clone`. Folds onto the `Terminal` canonical shape.
     Tui,
     /// `Ipe.WebView` — the Model is kept in memory, so it must
     /// be `Clone`.
     WebView,
-    /// `Ipe.App.Tea.Cli` — the line-oriented terminal app form. The Model is kept in
+    /// `Ipe.Tea.Cli` — the line-oriented terminal app form. The Model is kept in
     /// memory, so it must be `Clone`. Folds onto the `Terminal` canonical shape.
     Cli,
 }
@@ -1369,19 +1369,19 @@ pub enum LowerError {
     /// `Ui.cells` (a raw terminal cell grid) appears in a `Web`/`WebView`
     /// program. It paints directly to the terminal and has no denotation in a
     /// browser view, so it is admissible only under the `Terminal` shape
-    /// (`Tui.app` / `Cli.app`). The carried [`AppShape`] is
+    /// (`Tui.tea` / `Cli.tea`). The carried [`AppShape`] is
     /// the web-family shape that rejected it — the SECURITY-tier fail-closed
     /// gate converts a would-be wrong-render into an ipe-time error. [IPE-L0132]
     UiCellsInWebShape(AppShape),
     /// `Ui.cells` (a raw terminal cell grid) appears in a `Cli`
-    /// (`Cli.app`) program. A Cli view returns `String` (line I/O),
+    /// (`Cli.tea`) program. A Cli view returns `String` (line I/O),
     /// so a `Cells` grid has no string denotation. Rejected at ipe time.
     /// [IPE-L0153]
     UiCellsInCliShape(AppShape),
     /// `CustomElement.node` (a server-driven custom element) appears outside a browser
     /// shape. Its up-event handler is carried over the seal codec, which is
     /// present only when the `json` runtime feature is on — and only the browser
-    /// shape (`Web.app`) forces it. Under `Terminal` / `Program`
+    /// shape (`Web.tea`) forces it. Under `Terminal` / `Program`
     /// the widget has no transport for its handler, so the node would be inert
     /// (a widget with no seam). The SECURITY-tier fail-closed gate converts that
     /// would-be dead element into an ipe-time refusal rather than emit a crate
@@ -1397,7 +1397,7 @@ pub enum LowerError {
     /// other effect obeys. A `Task` runs only through `Task.run`, or by being
     /// sequenced inside a `Task`-returning function. [IPE-L0141]
     LawlessEffectDiscard,
-    /// `Web.app` carries a non-empty `routes` list but the Model type has no
+    /// `Web.tea` carries a non-empty `routes` list but the Model type has no
     /// `page` field, so the routes are forwarded to the non-routed path and
     /// never update the Model (warning — the program still compiles, matching
     /// the reference's silent no-op). Usually a mis-named routed-page field.
@@ -1409,7 +1409,7 @@ pub enum LowerError {
     /// The program's `main` is not an entry a runnable program can have. A
     /// `main` is the one effect a program runs, so it must be a `Task Error ()`
     /// — either written directly (a script, `main = Io.println "…"`) or produced
-    /// by an app entry (`Web.app`, `Tui.app`, `Cli.app`, whose
+    /// by an app entry (`Web.tea`, `Tui.tea`, `Cli.tea`, whose
     /// result is itself a `Task Error ()`). A `main` of any other type (an
     /// `Int`, a `String`, a function, …) has no effect to run. `found` is a
     /// short, plain-English name for what this `main`'s type is. Fails closed at
@@ -2287,7 +2287,7 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
             .collect(),
         TypeError::WebViewReturnsHtml => vec![HelpLine::Note(
             "wrap the `Html` with `Ui.html (…)` to get an `Element`. In a \
-             `Web.app` `view`, prefer returning the inner \
+             `Web.tea` `view`, prefer returning the inner \
              `Element` directly (annotate `view : Model -> Element Msg`) and let \
              the shape apply `Ui.layout` for you."
                 .into(),
@@ -2465,7 +2465,7 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         )],
         LowerError::UiCellsInWebShape(_) => vec![HelpLine::Note(
             "`Ui.cells` paints a raw character grid onto the terminal, which a browser \
-             cannot render. Use it only under `Tui.app`; \
+             cannot render. Use it only under `Tui.tea`; \
              for the same content in a Web/WebView view, render it with `Ui.text` (or a \
              `Ui.column` of rows) instead."
                 .into(),
@@ -2473,14 +2473,14 @@ fn lower_help(msg: &LowerError) -> Vec<HelpLine> {
         LowerError::UiCellsInCliShape(_) => vec![HelpLine::Note(
             "`Ui.cells` paints a terminal character grid — a Cli (line-oriented) view \
              returns `String`, so there is no character-grid surface to paint on. \
-             Use it only under `Tui.app`; for line output, \
+             Use it only under `Tui.tea`; for line output, \
              format the content as a `String` instead."
                 .into(),
         )],
         LowerError::UiWidgetInNonWebShape => vec![HelpLine::Note(
             "`CustomElement.node` mounts a server-driven custom element whose up-events ride the \
              seal codec, which exists only in a browser build. Use it only under \
-             `Web.app`. In a `Terminal` app, build the view from native \
+             `Web.tea`. In a `Terminal` app, build the view from native \
              `Ipe.Ui` elements (`Ui.text`, `Ui.column`, inputs) instead."
                 .into(),
         )],
@@ -2644,7 +2644,7 @@ fn non_entry_main_help() -> Vec<HelpLine> {
             "`main` is the one effect your whole program runs, so it has to be a \
              `Task Error ()`. Write it directly — `main = Io.println \"hello\"` prints a \
              line, `main = someTask` runs any task you built — or start an app with \
-             `Web.app { … }`, `Tui.app { … }`, or `Cli.app { … }`, each \
+             `Web.tea { … }`, `Tui.tea { … }`, or `Cli.tea { … }`, each \
              of which is itself a `Task Error ()`. To turn a plain value into an effect, \
              do something with it: `main = Io.println (String.fromInt 42)`."
                 .into(),

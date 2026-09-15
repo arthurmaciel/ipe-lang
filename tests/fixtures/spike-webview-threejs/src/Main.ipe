@@ -3,7 +3,7 @@ module Main exposing (main)
 -- Web shape hosted as a native webview — Three.js + WebGL2.
 --
 -- Proves WebGL2 + Three.js work end-to-end through the system webview
--- engine. Built as `web desktop`, the same `Web.app` a served web page
+-- engine. Built as `web desktop`, the same `Web.tea` a served web page
 -- uses is driven by the native webview host: a native window opens
 -- pointing at the scene. The runtime serves the `static/` assets over
 -- loopback so the embedded browser resolves relative paths like
@@ -20,16 +20,16 @@ module Main exposing (main)
 --
 --   3. `<script>` tags in the rendered view bootstrap correctly after
 --      the initial HTML lands in the document.
-import Ipe.App.Tea.Web as Web
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
 import Ipe.Ui as Ui
 
 -- ═══════════════════════════════════════════════════════════════════
 -- TEA shape — minimal: nothing in Model the WebGL scene cares about,
--- but the Web.app contract requires init/update/view/subs.
+-- but the Web.tea contract requires init/update/view/subs.
 -- ═══════════════════════════════════════════════════════════════════
 type alias Model =
     {  }
@@ -143,7 +143,7 @@ view _ =
 -- Main
 -- ═══════════════════════════════════════════════════════════════════
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view

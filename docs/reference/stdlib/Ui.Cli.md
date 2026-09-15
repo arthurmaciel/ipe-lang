@@ -19,7 +19,7 @@ grid alignment — because a line-oriented surface cannot honour them; those
 attributes are simply absent from the type rather than quietly discarded.
 
 `text` is the plain-string escape hatch: `Cli.text s` renders `s` as one
-line. `Cli.app`'s `view` field returns `Lines msg`, so `text` is the bridge
+line. `Cli.tea`'s `view` field returns `Lines msg`, so `text` is the bridge
 for a view that only wants to emit a plain string.
 
 ## `none`

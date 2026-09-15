@@ -12,11 +12,11 @@ module Main exposing (main)
 --
 -- ipec MUST exit 0 AND the emitted project MUST cargo-build.
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Page
     = CounterPage
@@ -49,7 +49,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = CounterPage
         }

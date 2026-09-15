@@ -4,18 +4,18 @@ module Main exposing (main)
 --
 -- Exercises the P2 combinator surface — `map2`, `oneOf`, `index` — decoding a
 -- JSON document into a record, then rendering it. Proves the combinators lower,
--- the emitted crate builds, and the program runs: `Cli.app` renders once at
+-- the emitted crate builds, and the program runs: `Cli.tea` renders once at
 -- stdin EOF and exits 0.
 
-import Ipe.App.Tea.Cli as Cli
+import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Config as Config
 import Ipe.Dict as Dict
-import Ipe.App.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Cmd
 import Ipe.List
 import Ipe.String
-import Ipe.App.Tea.Terminal.Sub
+import Ipe.Tea.Terminal.Sub
 
 type Msg
     = GotLine String
@@ -121,7 +121,7 @@ onLine line =
     GotLine line
 
 main =
-    Cli.app
+    Cli.tea
         { init = init
         , update = update
         , view = view

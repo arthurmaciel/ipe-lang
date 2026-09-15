@@ -1,14 +1,14 @@
-//! End-to-end tests for `Ipe.Terminal` `Tui.app` — `Cells.column`,
+//! End-to-end tests for `Ipe.Terminal` `Tui.tea` — `Cells.column`,
 //! `Cells.el`, `Cells.text`, and `String.fromInt`.
 //!
 //! Non-E2E tests (no `IPE_E2E` required):
 //! - `tui_onkey_record_typechecks` — ipe-level regression for the `onKey :
-//!   KeyEvent -> Msg` record scheme fix (T0001); verifies `Tui.app`
+//!   KeyEvent -> Msg` record scheme fix (T0001); verifies `Tui.tea`
 //!   accepts a single-argument record-typed key handler and that the emitter
 //!   generates the bridging wrapper closure.
 //!
 //! E2E tests (gated on `IPE_E2E=1`):
-//! - `tui_counter_build_only` — full ipe + cargo build with `Tui.app`
+//! - `tui_counter_build_only` — full ipe + cargo build with `Tui.tea`
 //!   and a `KeyEvent -> Msg` handler (a `String -> String -> Msg` curried shape
 //!   is not valid under the scheme).
 //!
@@ -25,7 +25,7 @@
 //! proof that the full pipeline works:
 //!
 //! ```text
-//! Tui.app cfg → constrain → lower → emit_tui_call →
+//! Tui.tea cfg → constrain → lower → emit_tui_call →
 //!     ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)
 //! ```
 //!
@@ -40,7 +40,7 @@
 //! IPE_E2E=1 cargo test tui_e2e
 //! ```
 
-/// A minimal `Tui.app` counter exercising the `Tui.app` scheme.
+/// A minimal `Tui.tea` counter exercising the `Tui.tea` scheme.
 ///
 /// `onKey` is a SINGLE-argument record handler — `KeyEvent -> Msg` — matching
 /// the reference compiler scheme (`any -> msg`).  The emitter generates the
@@ -60,12 +60,12 @@
 /// cells; there is no HTML step.
 const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
-import Ipe.App.Tea.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.App.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.App.Tea.Terminal.Sub
+import Ipe.Tea.Terminal.Sub
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -101,7 +101,7 @@ onKey _ =
     NoOp
 
 main =
-    Tui.app
+    Tui.tea
         { init = init
         , update = update
         , view = view
@@ -141,12 +141,12 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     Ok(std::path::PathBuf::from(exe))
 }
 
-/// **Regression for T0001**: `Tui.app` must accept
+/// **Regression for T0001**: `Tui.tea` must accept
 /// `onKey : KeyEvent -> Msg` where `KeyEvent = { kind : String,
 /// value : String }` (a SINGLE-argument record handler).
 ///
 /// Typing `onKey` as `String -> String -> Msg` (two curried String arguments)
-/// would cause `IPE-T0001` at the `Tui.app` call site, since example
+/// would cause `IPE-T0001` at the `Tui.tea` call site, since example
 /// code uses the record-alias shape.
 ///
 /// After the fix, the scheme PINS the key-event argument to the closed
@@ -165,7 +165,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
 /// that constructs `RecKindValue { kind, value }` from BOTH parameters in ONE
 /// expression, so both key fields provably flow from the runtime's
 /// `Fn(String, String)` call site into the record and on into the record-typed
-/// handler. It does NOT run the emitted binary (a `Tui.app` needs a real TTY;
+/// handler. It does NOT run the emitted binary (a `Tui.tea` needs a real TTY;
 /// the sibling `tui_e2e::tui_app_vendored` build-only test carries the
 /// `cargo build` seal for the same wrapper, and the runtime `tui` module tests
 /// exercise the dispatch call). This test runs WITHOUT `IPE_E2E` (ipe-level
@@ -223,7 +223,7 @@ fn tui_onkey_record_typechecks() {
         combined
     }
 
-    // ── Tui.app with `onKey : KeyEvent -> Msg` ────────────────────
+    // ── Tui.tea with `onKey : KeyEvent -> Msg` ────────────────────
     let app_rs = compile_ok("terminal_app_screen", IPE_TUI_COUNTER);
     if app_rs.is_empty() {
         return; // runtime unavailable — structural assertions skipped
@@ -240,14 +240,14 @@ fn tui_onkey_record_typechecks() {
     let normalized: String = app_rs.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
         normalized.contains("|kind: String, value: String|"),
-        "Tui.app emitted Rust must contain the `|kind: String, value: String|` \
+        "Tui.tea emitted Rust must contain the `|kind: String, value: String|` \
          wrapper closure (onKey record bridge); got:\n{app_rs}"
     );
     // The closure body must build the closed record from both parameters and hand
     // it to the handler — not merely mention `RecKindValue` somewhere.
     assert!(
         normalized.contains("(RecKindValue { kind, value })"),
-        "Tui.app emitted Rust must pass `RecKindValue {{ kind, value }}` (both key \
+        "Tui.tea emitted Rust must pass `RecKindValue {{ kind, value }}` (both key \
          fields, from the closure parameters) into the record-typed onKey handler; \
          got:\n{app_rs}"
     );
@@ -272,10 +272,10 @@ fn tui_onkey_record_typechecks() {
 /// This is a BUILD-ONLY test — it does not spawn the binary (Tui requires a
 /// real TTY).  A successful `cargo build` is the assertion:
 ///
-/// * constrain: `Tui.app` correctly types the 5-field cfg with a
+/// * constrain: `Tui.tea` correctly types the 5-field cfg with a
 ///   record-typed `onKey : KeyEvent -> Msg` handler.
 /// * lower: the cfg record literal bypasses IPE-L0107 (same exemption
-///   as `Web.app`).
+///   as `Web.tea`).
 /// * emit: `emit_tui_call` delegates to `tui_app_ui(…)` with the five
 ///   handler arguments correctly emitted, including the `|kind, value|` wrapper.
 /// * manifest: `tui_cargo_toml` adds `"tui"` to default features,

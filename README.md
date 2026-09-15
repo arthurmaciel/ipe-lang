@@ -131,9 +131,9 @@ One language, five shapes. The shape is pinned by the head of `main` — never b
 
 | Shape | Entry point | Use it for | TEA |
 |---|---|---|---|
-| `Ipe.App.Tea.Web` | `Web.app` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
-| `Ipe.App.Tea.Tui` | `Tui.app` | Full-screen terminal UIs | ✓ |
-| `Ipe.App.Tea.Cli` | `Cli.app` | Line-oriented CLIs and REPLs | ✓ |
+| `Ipe.Tea.Web` | `Web.tea` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
+| `Ipe.Tea.Tui` | `Tui.tea` | Full-screen terminal UIs | ✓ |
+| `Ipe.Tea.Cli` | `Cli.tea` | Line-oriented CLIs and REPLs | ✓ |
 | `Ipe.Http.Server` | `Server.listen` | HTTP servers | |
 | Direct | a bare `main : Task Error ()` | Scripts, one-shot tools, cron jobs, batch jobs | |
 

@@ -275,11 +275,11 @@ pub struct Program {
 /// than a runtime rejection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryShape {
-    /// A `Web` server app (`Web.app` / `Web.appRouted` / `Web.appWith`).
+    /// A `Web` server app (`Web.tea` / `Web.appRouted` / `Web.appWith`).
     Web,
     /// A `WebView` desktop app.
     WebView,
-    /// A `Terminal` app (`Tui.app` / `Console.app`).
+    /// A `Terminal` app (`Tui.tea` / `Console.app`).
     Terminal,
     /// A plain `Program` (a non-shape `main`).
     Program,

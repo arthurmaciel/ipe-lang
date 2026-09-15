@@ -54,7 +54,7 @@ view model =
 
 main : Task Error ()
 main =
-    Cli.app
+    Cli.tea
         { init = init
         , update = update
         , view = view

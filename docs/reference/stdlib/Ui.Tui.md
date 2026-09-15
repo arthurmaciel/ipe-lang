@@ -16,7 +16,7 @@ horizontal alignment, bold/underline text style, and terminal-palette
 colours). DOM-only attributes (`Ui.onClick`, `Ui.scrollbars`, `Ui.inFront`,
 …) are simply not in this type, so naming one in a `Screen` view is a type
 error rather than an attribute the renderer quietly discards. Terminal input
-(keys) arrives through subscriptions (`Ipe.App.Tea.Tui.Sub`), not view attributes.
+(keys) arrives through subscriptions (`Ipe.Tea.Tui.Sub`), not view attributes.
 
 ## `none`
 

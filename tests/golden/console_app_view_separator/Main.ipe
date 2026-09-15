@@ -5,12 +5,12 @@ module Main exposing (main)
 -- ("lines: 0lines: 1lines: 2") with exactly one trailing newline at exit. An
 -- app that wants each render on its own line appends "\n" itself.
 
-import Ipe.App.Tea.Cli as Cli
+import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
-import Ipe.App.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.App.Tea.Terminal.Sub
+import Ipe.Tea.Terminal.Sub
 
 type Msg
     = LineReceived String
@@ -41,7 +41,7 @@ onLine l =
     LineReceived l
 
 main =
-    Cli.app
+    Cli.tea
         { init = init
         , update = update
         , view = view

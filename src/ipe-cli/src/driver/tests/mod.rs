@@ -784,10 +784,10 @@ fn hot_appearance_defaults_on_and_honours_overrides() {
 /// "bold"`). Used to prove the build-vs-watch emit difference.
 const WEB_APP_WITH_STYLE: &str = "\
 module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 
 type Msg = Noop
 type alias Model = { count : Int }
@@ -806,7 +806,7 @@ view _model =
 Ui.el [ Ui.style \"font-weight\" \"bold\" ] (Ui.text \"Counter\")
 
 main =
-Web.app
+Web.tea
     { init = init
     , update = update
     , view = view

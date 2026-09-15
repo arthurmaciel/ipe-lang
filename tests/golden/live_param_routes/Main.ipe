@@ -14,11 +14,11 @@ module Main exposing (main)
 -- into one routes list, ipec exits 0, the emitted project cargo-builds, and
 -- a GET on `/u/:id` delivers the captured param to the page constructor.
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 
 type Page
     = CounterPage
@@ -56,7 +56,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ Web.route "/" CounterPage, Web.route "/u/:id" UserPage ]
         , notFound = CounterPage

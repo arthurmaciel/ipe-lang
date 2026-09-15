@@ -336,7 +336,7 @@ pub use cache::*;
 pub mod tui;
 // NB: no `pub use tui::*` — its `diff` module name collides with web's `diff`.
 // Re-export only the kernels generated code calls unqualified: `tui_app_ui`
-// (Element view, `Tui.app`). `tui_app` is the String-view driver
+// (Element view, `Tui.tea`). `tui_app` is the String-view driver
 // reused by the `Ui.cells` raw-cell escape.
 #[cfg(feature = "tui")]
 pub use tui::{tui_app, tui_app_ui};

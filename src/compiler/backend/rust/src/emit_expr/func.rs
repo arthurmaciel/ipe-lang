@@ -811,8 +811,8 @@ pub fn emit_func_vis(ctx: &EmitCtx, func: &Func, vis_prefix: &str) -> DResult<St
     //
     // This is not always a FLAT `Call(TaskRun, …)` body — the Ipe.Terminal /
     // Ipe.Web `argv`-dispatch idiom branches on `System.args` before picking which
-    // app to run, e.g. `main = case List.head argsList of Just "live" -> Web.app
-    // cfg |> Task.run; _ -> Tui.app cfg |> Task.run`. Every arm still
+    // app to run, e.g. `main = case List.head argsList of Just "live" -> Web.tea
+    // cfg |> Task.run; _ -> Tui.tea cfg |> Task.run`. Every arm still
     // tail-calls
     // `Task.run`, so the SAME elision must apply — otherwise `ipe_main` keeps
     // its `IpeResult<E, A>` return type and `block_on(ipe_main())` mismatches

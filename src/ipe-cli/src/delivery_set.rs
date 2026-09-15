@@ -323,7 +323,7 @@ fn web_entry_on_non_web(pinned: Shape, entry: ShipEntry) -> CliError {
     CliError::UsageOwned(format!(
         "package.ipe declares `{words}`, but `main` is a `{shape}` app. The web hosts \
          (desktop, spa, spa ios, …) carry a sandboxed web client; a `{shape}` app ships \
-         as a binary. Remove the entry, or change `main` to a `Web.app` entry.",
+         as a binary. Remove the entry, or change `main` to a `Web.tea` entry.",
         shape = pinned.word(),
     ))
 }
@@ -411,7 +411,7 @@ mod tests {
                 panic!("expected a named rejection, got {err:?}");
             };
             assert!(msg.contains(shape.word()), "names the shape: {msg}");
-            assert!(msg.contains("Web.app"), "offers the fix: {msg}");
+            assert!(msg.contains("Web.tea"), "offers the fix: {msg}");
         }
     }
 

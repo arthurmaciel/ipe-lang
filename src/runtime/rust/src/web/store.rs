@@ -275,7 +275,7 @@ impl<Model: Send + 'static, Msg: Send + 'static> SessionStore<Model, Msg>
 /// process, owns the driver) PLUS a single on-disk JSON map (`sid → framed
 /// checkpoint blob`) so a checkpoint survives a process swap WITHOUT pulling in
 /// sqlx/redis. This is what makes `ipe watch`'s blue-green Model handoff work
-/// for a plain `Web.app` — such an app reaches no DB kernel, so the emitted
+/// for a plain `Web.tea` — such an app reaches no DB kernel, so the emitted
 /// crate carries no `db` feature and the sqlite store compiles out; this store
 /// rides the `web` feature every web build already has (`base64` + `bincode` +
 /// `serde`), reusing the SAME `encode_checkpoint`/`decode_checkpoint` codec and

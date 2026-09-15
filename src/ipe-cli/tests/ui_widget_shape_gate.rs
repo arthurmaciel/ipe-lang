@@ -61,17 +61,17 @@ fn assert_accepted(test_name: &str, source: &str, extra: &[(&str, &str)]) -> Res
 /// at — its mere presence satisfies the build-time file-existence gate.
 const WIDGET_JS: &str = "export function mount(host, emit) { return {}; }\n";
 
-/// `CustomElement.node` inside a `Tui.app` view — must be rejected. A Tui
+/// `CustomElement.node` inside a `Tui.tea` view — must be rejected. A Tui
 /// view is `Screen Msg`; `CustomElement.node` returns `Element msg`, so the type checker
 /// rejects the program (a browser custom element has no seam in a terminal
 /// build, and no `Cells` denotation either).
 const TERMINAL_UI_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Tui as Tui
+import Ipe.Tea.Tui as Tui
 import Ipe.Ffi.Js.CustomElement as CustomElement
 import Ipe.Ui.Cells exposing (Screen)
-import Ipe.App.Tea.Terminal.Cmd
-import Ipe.App.Tea.Terminal.Sub
+import Ipe.Tea.Terminal.Cmd
+import Ipe.Tea.Terminal.Sub
 
 type alias EditorState = { text : String, line : Int }
 
@@ -107,20 +107,20 @@ onKey _event =
     Edited Saved
 
 main =
-    Tui.app
+    Tui.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onKey = onKey
         }
 "#;
 
-/// `CustomElement.node` inside a `Web.app` view — must be ACCEPTED (the browser shape has
+/// `CustomElement.node` inside a `Web.tea` view — must be ACCEPTED (the browser shape has
 /// the custom-element runtime and the seal codec).
 const WEB_UI_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 
 type alias EditorState = { text : String, line : Int }
 
@@ -150,13 +150,13 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Edited Saved
         }
 "#;
 
-/// A `Tui.app` view mounting `CustomElement.node` is a browser-only node in a
+/// A `Tui.tea` view mounting `CustomElement.node` is a browser-only node in a
 /// terminal build: rejected fail-closed at ipe time (not a cargo failure or a
 /// panic). A Tui view is `Screen Msg` and `CustomElement.node` returns `Element msg`, so
 /// the type checker rejects it (IPE-T0001); the `RejectInNonWebShape` shape gate
@@ -176,21 +176,21 @@ fn terminal_view_with_ui_widget_is_rejected() -> Result<(), BoxError> {
     }
 }
 
-/// Non-regression control: `CustomElement.node` under `Web.app` is the shape it belongs
+/// Non-regression control: `CustomElement.node` under `Web.tea` is the shape it belongs
 /// to and must compile cleanly (ipe-0).
 #[test]
 fn web_view_with_ui_widget_is_accepted() -> Result<(), BoxError> {
     assert_accepted("web_ui_widget", WEB_UI_WIDGET, &[("js/x.js", WIDGET_JS)])
 }
 
-/// `Ui.widget` under a `Web.app` view. The custom-element node's sole
+/// `Ui.widget` under a `Web.tea` view. The custom-element node's sole
 /// user-facing surface is `CustomElement.node`; `Ipe.Ui` exposes no `widget`
 /// member, so a program spelling `Ui.widget` fails to resolve (IPE-N0005)
 /// rather than dispatching to the kernel behind a name the module never
 /// exposes.
 const WEB_OLD_UI_WIDGET_SURFACE: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui exposing (Element)
 import Ipe.Ffi.Js.CustomElement as CustomElement
 
@@ -222,7 +222,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions
         , routes = [], notFound = Edited Saved
@@ -253,7 +253,7 @@ fn web_view_with_old_ui_widget_surface_is_rejected() -> Result<(), BoxError> {
     }
 }
 
-/// `CustomElement.node` inside a `Cli.app` (Cli shape) view.
+/// `CustomElement.node` inside a `Cli.tea` (Cli shape) view.
 ///
 /// A Cli view has type `Model -> Lines msg`. `CustomElement.node` returns `Element msg`,
 /// so the type checker rejects the program before the `RejectInNonWebShape`
@@ -262,7 +262,7 @@ fn web_view_with_old_ui_widget_surface_is_rejected() -> Result<(), BoxError> {
 /// inference (e.g., programmatic IR construction in tests).
 const CLI_UI_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Cli as Cli
+import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Ffi.Js.CustomElement as CustomElement
 
@@ -298,13 +298,13 @@ onLine _line =
     Edited Saved
 
 main =
-    Cli.app
+    Cli.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions, onLine = onLine
         }
 "#;
 
-/// `CustomElement.node` in a `Cli.app` view is rejected because `CustomElement.node`
+/// `CustomElement.node` in a `Cli.tea` view is rejected because `CustomElement.node`
 /// returns `Element msg` but the Cli view expects `Lines msg`. The type checker
 /// rejects it (IPE-T0001) before the `RejectInNonWebShape` shape gate fires.
 /// The gate is defense-in-depth for any IR path that bypasses type inference.

@@ -2,7 +2,7 @@
 //!
 //! Wires three of the four Web kernels:
 //!
-//! * [`KernelFn::WebApp`] — `Web.app cfg` → `ipe_runtime::web::web_app(…)`
+//! * [`KernelFn::WebApp`] — `Web.tea cfg` → `ipe_runtime::web::web_app(…)`
 //!   for single-page apps, or `web_app_routed(…)` when the Model carries a
 //!   `page` field (the six-field cfg scheme with `routes` / `notFound`).
 //! * [`KernelFn::WebRoute`] — `Web.route pattern ctor` →
@@ -19,7 +19,7 @@
 //!   rather than silently substituting a zero-value default (§B-route-param).
 //! * Store kind / path are read from process env at call time, not compiled in.
 //! * `Web.appRouted` is a vestigial alias routed through the same
-//!   `lower_app_entry_cfg` path as `Web.app`; its arm here is a
+//!   `lower_app_entry_cfg` path as `Web.tea`; its arm here is a
 //!   defensive invariant check.
 
 use ipe_diagnostics::{DResult, Diagnostic, LowerError, Span};
@@ -69,21 +69,21 @@ pub fn emit_web_call(
     };
 
     match k {
-        // ── Web.app { init, update, view, subscriptions, routes, notFound } ──
+        // ── Web.tea { init, update, view, subscriptions, routes, notFound } ──
         //
         // The six-field cfg scheme. `emit_web_app_inner` branches
         // on the Model's `page` field: routed apps take `web_app_routed`
         // (routes + notFound + set_page); single-page apps take `web_app`.
         // `Web.embed` builds the same `WebApp` leaf from the same six-field cfg
-        // as `Web.app` — it shares this emit path exactly. The only difference is
-        // the handle kind: `Web.app` → `WebAppKind::Standalone` (binds its own
+        // as `Web.tea` — it shares this emit path exactly. The only difference is
+        // the handle kind: `Web.tea` → `WebAppKind::Standalone` (binds its own
         // listener); `Web.embed` → `WebAppKind::Mountable` (carries a router
         // builder for `Server.mountApp` to nest on the shared port).
         KernelFn::WebApp | KernelFn::WebEmbed => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_web_call::WebApp",
-                    detail: format!("Web.app requires 1 argument, got {}", args.len()),
+                    detail: format!("Web.tea requires 1 argument, got {}", args.len()),
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
@@ -92,7 +92,7 @@ pub fn emit_web_call(
             let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_web_call::WebApp",
-                    detail: "Web.app cfg must be an inline record literal; \
+                    detail: "Web.tea cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
@@ -101,13 +101,13 @@ pub fn emit_web_call(
             emit_web_app_inner(ctx, fields, indent, child, generics, mountable)
         }
 
-        // ── Web.appRouted — vestigial alias of `Web.app` ─────────────────
+        // ── Web.appRouted — vestigial alias of `Web.tea` ─────────────────
         //
         // The lower stage routes `Web.appRouted` through the same
-        // `lower_app_entry_cfg` path as `Web.app` (the reference has ONE
-        // `Web.app` that branches at emit time), so the alias takes the same
+        // `lower_app_entry_cfg` path as `Web.tea` (the reference has ONE
+        // `Web.tea` that branches at emit time), so the alias takes the same
         // `emit_web_app_inner` branch here.  A non-literal cfg is rejected at
-        // lower with IPE-L0119 exactly as for `Web.app`; the guard below is
+        // lower with IPE-L0119 exactly as for `Web.tea`; the guard below is
         // the same defensive invariant.
         KernelFn::WebAppRouted => {
             let [cfg_e] = args else {
@@ -132,10 +132,10 @@ pub fn emit_web_call(
         // `Web.appWith : List (Setting Web) -> cfg -> Task ()`. The settings
         // list is resolved into the process-wide runtime config (one
         // precedence: env > settings-in-code > built-in fallback) BEFORE the
-        // same `emit_web_app_inner` task the plain `Web.app` produces runs — so
-        // the host-bind / log-level / db-url a `Web.app` cannot set are in place
+        // same `emit_web_app_inner` task the plain `Web.tea` produces runs — so
+        // the host-bind / log-level / db-url a `Web.tea` cannot set are in place
         // when the server binds. A non-literal cfg is rejected at lower with
-        // IPE-L0119 exactly as for `Web.app`.
+        // IPE-L0119 exactly as for `Web.tea`.
         KernelFn::WebAppWith => {
             let [settings_e, cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -419,7 +419,7 @@ fn emit_web_app_inner(
     generics: GenericScope,
     // `true` for `Web.embed` — build a `WebAppKind::Mountable` handle carrying
     // BOTH the standalone `serve` task AND a router-builder for `Server.mountApp`
-    // to nest. `false` for `Web.app` — a `WebAppKind::Standalone` bind-your-own-
+    // to nest. `false` for `Web.tea` — a `WebAppKind::Standalone` bind-your-own-
     // listener handle.
     mountable: bool,
 ) -> DResult<Option<String>> {
@@ -454,7 +454,7 @@ fn emit_web_app_inner(
     let init_s = emit_web_fn(ctx, init_e, indent, child, generics)?;
     let update_s = emit_web_fn(ctx, update_e, indent, child, generics)?;
     let view_raw_s = emit_web_fn(ctx, view_e, indent, child, generics)?;
-    // `Web.app`'s `view : Model -> Element Msg` — the framework applies
+    // `Web.tea`'s `view : Model -> Element Msg` — the framework applies
     // `Ui.layout` internally, turning the portable `Element` into the `Html`
     // the runtime sink mounts. The wrap closes over the emitted view (a named
     // `fn` item or the fall-through expr), so it inherits the same
@@ -462,7 +462,7 @@ fn emit_web_app_inner(
     let view_s = wrap_view(&view_raw_s);
     let subs_s = emit_web_fn(ctx, subs_e, indent, child, generics)?;
 
-    // Webview-native delivery host (`web desktop`): the same DOM `Web.app` is
+    // Webview-native delivery host (`web desktop`): the same DOM `Web.tea` is
     // driven by the native `WebViewApp` executor rather than the served
     // `web_app`. The window is a delivery-host decision (threaded from the CLI's
     // `delivery.desktop`), never a source `main` field. Native only — a webview
@@ -470,13 +470,13 @@ fn emit_web_app_inner(
     // handle with no webview host.
     if ctx.uses_webview && ctx.target != ipe_ir::Target::WasmClient && !mountable {
         // The webview executor takes init/update/view/subs only — it has no
-        // client-side router. A routed `Web.app` (a `page` field in the Model)
+        // client-side router. A routed `Web.tea` (a `page` field in the Model)
         // under a webview host has no honoured routing, so reject it fail-closed
         // rather than silently drop the routes.
         if routed_page_field(ctx, view_e).is_some() {
             return Err(ipe_diagnostics::Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_web_app_inner::webview_routed",
-                detail: "a routed `Web.app` (a `page` field in the Model) has no \
+                detail: "a routed `Web.tea` (a `page` field in the Model) has no \
                          client-side router under a webview-native `web desktop` \
                          delivery; drop the routing or serve it as `web`"
                     .into(),
@@ -600,7 +600,7 @@ fn emit_routed_web_leaf(
             where_: "ipe_backend_rust::emit_web_call::WebEmbed",
             detail: "Web.embed of a routed app (Model with a `page` field) is \
                      not yet supported for Server.mountApp; embed a single-page \
-                     Web app, or serve the routed app standalone with Web.app"
+                     Web app, or serve the routed app standalone with Web.tea"
                 .into(),
         });
     }
@@ -624,7 +624,7 @@ fn emit_routed_web_leaf(
 }
 
 /// Emit the single-page (non-routed) `WebApp` leaf: a `Standalone` handle for
-/// `Web.app`, or a `Mountable` handle (standalone `serve` task + a
+/// `Web.tea`, or a `Mountable` handle (standalone `serve` task + a
 /// `web_embed_router` router builder) for `Web.embed`.
 ///
 /// The store kind/path come from env at call time so one binary can switch
@@ -960,7 +960,7 @@ fn lookup_field<'f>(
     Err(Diagnostic::CompilerBug {
         where_: "ipe_backend_rust::emit_web_call",
         detail: format!(
-            "required Web.app cfg field `{name}` not found; \
+            "required Web.tea cfg field `{name}` not found; \
              available fields: [{}]",
             fields
                 .iter()

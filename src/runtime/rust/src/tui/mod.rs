@@ -1,6 +1,6 @@
 //! Ipe.Terminal — terminal (ANSI cell) backend for the Rust target.
 //!
-//! TEA-shaped (`Tui.app cfg`): `view : Model -> Cells msg` lowered
+//! TEA-shaped (`Tui.tea cfg`): `view : Model -> Cells msg` lowered
 //! to ANSI cells via the structured `Element<Msg>` tree inside `CellsView<M>`.
 
 pub mod app;
@@ -316,7 +316,7 @@ pub fn tui_bg_<M>(c: TermColor) -> TuiAttr<M> {
     TuiAttr::BgColor(c)
 }
 
-// ── Ipe.App.Tea.Terminal.Color palette constructors ──────────────────────────────
+// ── Ipe.Tea.Terminal.Color palette constructors ──────────────────────────────
 
 /// `Terminal.Color.black : Color`
 #[must_use]
@@ -550,7 +550,7 @@ pub fn cli_bg_<M>(c: TermColor) -> CliAttr<M> {
     CliAttr::BgColor(c)
 }
 
-/// Render a `Lines` view to the styled terminal string a line-oriented `Cli.app`
+/// Render a `Lines` view to the styled terminal string a line-oriented `Cli.tea`
 /// writes to stdout.
 ///
 /// A line-oriented surface occupies exactly the height of its own stacked lines,
@@ -653,7 +653,7 @@ mod tests {
 
     // A single unstyled `text` line renders to exactly its own bytes — no
     // width-padding, no trailing newline, no SGR. This is the byte-for-byte
-    // parity that lets a `Cli.app` view migrate from `model -> String` to
+    // parity that lets a `Cli.tea` view migrate from `model -> String` to
     // `model -> Lines msg` (via `Cli.Ui.text`) with identical stdout.
     #[test]
     fn render_lines_view_text_is_byte_exact() {

@@ -943,7 +943,7 @@ impl Builder<'_> {
                 }
                 return Ok(var);
             }
-            // `Web.app` — post-solve routed-Web check.
+            // `Web.tea` — post-solve routed-Web check.
             //
             // The open-record cfg scheme for K::WebApp is shared by both routed
             // apps (Model has a `page : Page` field) and non-routed apps (Model

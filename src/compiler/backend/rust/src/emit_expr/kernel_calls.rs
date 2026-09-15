@@ -4059,7 +4059,7 @@ pub fn emit_ui_plan(
 
         // ── Terminal full-screen app-entry ───────────────────────────────────
         // Delegate to `emit_tui::emit_tui_call`; it returns `Some(s)` for the
-        // `Tui.app` variant and `None` for anything else. A `None` here is an
+        // `Tui.tea` variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_tui()` guard already filtered), so promote
         // it to a `CompilerBug`.
         NativeUiEmit::Delegate(UiDelegate::Tui) => {
@@ -4075,7 +4075,7 @@ pub fn emit_ui_plan(
 
         // ── Terminal line-oriented app-entry ─────────────────────────────────
         // Delegate to `emit_console::emit_console_call`; it returns `Some(s)` for
-        // the `Cli.app` variant and `None` for anything else. A `None` here is
+        // the `Cli.tea` variant and `None` for anything else. A `None` here is
         // an internal error (the `k.is_console()` guard above already filtered),
         // so promote it to a `CompilerBug`.
         NativeUiEmit::Delegate(UiDelegate::Console) => {
@@ -4092,7 +4092,7 @@ pub fn emit_ui_plan(
 
         // ── View-less worker app-entry ────────────────────────────────────────
         // Delegate to `emit_worker::emit_worker_call`; it returns `Some(s)` for
-        // the `Ipe.Tea.worker` variant and `None` for anything else. A `None`
+        // the `Ipe.Tea.Worker.tea` variant and `None` for anything else. A `None`
         // here is an internal error (the `k.is_worker()` guard above already
         // filtered), so promote it to a `CompilerBug`.
         NativeUiEmit::Delegate(UiDelegate::Worker) => {

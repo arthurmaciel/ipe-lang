@@ -8,8 +8,8 @@ command here has been run as written.
 
 Two independent questions decide how a program ships:
 
-- **Shape** — what `view` renders. The head of `main` fixes it: `Web.app` is a
-  DOM app, `Tui.app` terminal cells, `Cli.app` terminal lines, `Server.listen`
+- **Shape** — what `view` renders. The head of `main` fixes it: `Web.tea` is a
+  DOM app, `Tui.tea` terminal cells, `Cli.tea` terminal lines, `Server.listen`
   an HTTP server, and a bare `main : Task Error ()` renders nothing. The shape is
   never written in `package.ipe`; it is read from `main`.
 - **Delivery** — for a `Web` app only, *how* the DOM app runs and *where* it is
@@ -57,7 +57,7 @@ Run `ipe doc Ipe.Package` for every field.
 
 A desktop app is the `Web` shape run `live` inside a native window (a system
 webview over a local bridge, not a browser tab). It needs no extra manifest —
-the `main` head `Web.app` is enough.
+the `main` head `Web.tea` is enough.
 
 Package it:
 

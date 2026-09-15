@@ -19,9 +19,9 @@ module Main exposing (main)
 -- the parse cannot be tampered with.
 
 
-import Ipe.App.Tea.Web as Web
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.List as List
 import Ipe.Result exposing (Result(..))
 import Ipe.Ui as Ui
@@ -87,7 +87,7 @@ view model =
 
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view

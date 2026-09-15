@@ -305,20 +305,20 @@ pub struct Module {
     /// whether to add `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
     pub uses_ui: bool,
     /// `true` when the lowerer detected at least one `Ipe.Web` / `Ipe.Web`
-    /// kernel call (`Web.app`, `Web.appRouted`, `Web.route`, etc.) in the
+    /// kernel call (`Web.tea`, `Web.appRouted`, `Web.route`, etc.) in the
     /// module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_web()` variant.
     pub uses_web: bool,
     /// `true` when the lowerer detected the `Ipe.Terminal` full-screen
-    /// app-entry (`Tui.app`) in the module's function bodies.
+    /// app-entry (`Tui.tea`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_tui()` variant.
     pub uses_tui: bool,
     /// `true` when the lowerer detected the `Ipe.Terminal` line-oriented
-    /// app-entry (`Cli.app`) in the module's function bodies.
+    /// app-entry (`Cli.tea`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_console()` variant.
@@ -1229,7 +1229,7 @@ pub enum IrType {
     /// | `Description`     | `ipe_runtime::ui::element::Description`           |
     /// | `LayoutContext`   | `ipe_runtime::ui::element::LayoutContext`          |
     UiPlain(UiPlain),
-    /// `WebReq` — opaque request type threaded through `Web.app`'s `init`
+    /// `WebReq` — opaque request type threaded through `Web.tea`'s `init`
     /// callback.  Rendered as `ipe_runtime::dom::req::WebReq` (the canonical,
     /// target-neutral definition; compiles on every target including `wasm32`).
     WebReq,
@@ -1663,26 +1663,26 @@ pub enum IrType {
     /// datum).  Model-schema tag: 62.
     Locale,
     // ── Shape opaque app leaves ─────────────────────────────────────────────
-    /// The msg-erased result of `Ipe.App.Tea.Web.app` — an opaque handle carrying
+    /// The msg-erased result of `Ipe.Tea.Web.tea` — an opaque handle carrying
     /// a fully-initialised web app whose `msg` type was erased at the
     /// `app`-call boundary.
     ///
     /// Rendered as `ipe_runtime::tea::WebApp`. The handle is opaque (no public
-    /// constructor in Ipê; produced only by `Web.app`/`Web.appRouted`/`Web.appWith`)
+    /// constructor in Ipê; produced only by `Web.tea`/`Web.appRouted`/`Web.appWith`)
     /// so `mountApp : WebApp -> Route` can reject a `TuiApp` at compile time.
     /// Non-derivable, non-serde: the handle wraps live runtime state.
     WebApp,
-    /// The msg-erased result of `Ipe.App.Tea.Tui.app` — a live TUI
+    /// The msg-erased result of `Ipe.Tea.Tui.tea` — a live TUI
     /// (terminal full-screen) app handle.
     ///
     /// Rendered as `ipe_runtime::tea::TuiApp`.
     TuiApp,
-    /// The msg-erased result of `Ipe.App.Tea.Cli.app` — a live
+    /// The msg-erased result of `Ipe.Tea.Cli.tea` — a live
     /// line-oriented CLI app handle.
     ///
     /// Rendered as `ipe_runtime::tea::CliApp`.
     CliApp,
-    /// The msg-erased result of `Ipe.Tea.worker` — a live view-less,
+    /// The msg-erased result of `Ipe.Tea.Worker.tea` — a live view-less,
     /// co-located worker app handle.
     ///
     /// Rendered as `ipe_runtime::tea::WorkerApp`. Opaque, non-derivable,

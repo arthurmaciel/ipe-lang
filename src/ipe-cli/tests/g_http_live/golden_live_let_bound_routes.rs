@@ -5,7 +5,7 @@
 //! `Web.route` is typed `String -> page -> WebRoute` (opaque).  A top-level
 //! `routeTable` binding whose elements are `Web.route …` calls therefore has
 //! inferred type `List WebRoute`.  The `routes = routeTable` field of the
-//! `Web.app` cfg must accept that type (T3 open-record scheme), and the emitter
+//! `Web.tea` cfg must accept that type (T3 open-record scheme), and the emitter
 //! must lower the `routes` expression as a normal Expr ref — NOT assume it is an
 //! inline `[Expr::Ctor, …]` literal.
 //!
@@ -51,7 +51,7 @@ fn compile_out() -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_emit")
 }
 
-/// IPE-I0001 regression: a `Web.app` whose `routes` field references a
+/// IPE-I0001 regression: a `Web.tea` whose `routes` field references a
 /// top-level `routeTable` binding (type `List WebRoute`) MUST compile
 /// through the full ipe pipeline without an ICE.
 ///

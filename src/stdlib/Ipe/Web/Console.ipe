@@ -1,5 +1,5 @@
 -- | Ipe.Web.Console — types exposed for the optional `consoleAuth`
--- field on `Web.app` cfg.
+-- field on `Web.tea` cfg.
 --
 -- The `consoleAuth` callback is row-polymorphic, optional, and has
 -- shape `Request -> Task Error (Maybe Identity)`.  When the framework
@@ -20,7 +20,7 @@ module Ipe.Web.Console exposing
     )
 
 -- | Ipe.Web.Console — types exposed for the optional `consoleAuth`
--- field on `Web.app` cfg.
+-- field on `Web.tea` cfg.
 --
 -- The `consoleAuth` callback is row-polymorphic, optional, and has
 -- shape:
@@ -60,7 +60,7 @@ module Ipe.Web.Console exposing
 --                     Task.succeed Nothing
 --
 --     main =
---         Web.app
+--         Web.tea
 --             { init = init, update = update, view = view
 --             , subscriptions = subscriptions
 --             , routes = routes, notFound = HomePage

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 -- Runtime-config front door: `Web.appWith` carries a shape-checked
--- `List (Setting Web)` alongside the same cfg record as `Web.app`. The
+-- `List (Setting Web)` alongside the same cfg record as `Web.tea`. The
 -- settings mix cross-cutting `Host.bind` / `Log.level` / `Db.url` (a `Setting a`)
 -- with the web-pinned `Web.csrf` / `Web.sessionTtl` (a `Setting Web`). Each
 -- setting is resolved into its runtime subsystem at startup. The database URL
@@ -9,11 +9,11 @@ module Main exposing (main)
 --
 -- ipe MUST exit 0 AND the emitted project MUST cargo-build (THE SEAL).
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 import Ipe.App as App
 import Ipe.Host as Host
 import Ipe.Db as Db

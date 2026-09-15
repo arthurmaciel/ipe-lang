@@ -415,7 +415,7 @@ fn cache_builds_and_runs() {
 }
 
 // ── Ipe.PubSub ─────────────────────────────────────────────────────────
-// PubSub.publish : Topic a -> a -> Task Error Int.  No Web.app runs in this
+// PubSub.publish : Topic a -> a -> Task Error Int.  No Web.tea runs in this
 // probe so publish resolves to Err(Unavailable) — Task.onError swallows it and
 // the program prints the marker.  The test asserts ipe-0 ⇒ cargo-0 ⇒ exit-0.
 
@@ -450,10 +450,10 @@ fn pubsub_builds_and_runs() {
 // Must be rejected as IPE-T0001.
 
 const PUBSUB_TYPED_SHARED_TOPIC: &str = "module Main exposing (main)\n\
-    import Ipe.App.Tea.Web.Cmd as Cmd\n\
-    import Ipe.App.Tea.Web.Sub as Sub\n\
+    import Ipe.Tea.Web.Cmd as Cmd\n\
+    import Ipe.Tea.Web.Sub as Sub\n\
     import Ipe.PubSub as PubSub exposing (Topic)\n\
-    import Ipe.App.Tea.Web as Web\n\
+    import Ipe.Tea.Web as Web\n\
     import Ipe.Ui as Ui\n\
     import Ipe.Io as Io\n\
     type Msg = Got Int | Send\n\
@@ -466,7 +466,7 @@ const PUBSUB_TYPED_SHARED_TOPIC: &str = "module Main exposing (main)\n\
     \x20   Send -> ( model, Cmd.publish scoreTopic 42 )\n\
     subscriptions _m = Sub.subscribeTopic scoreTopic Got\n\
     view _m = Ui.html (Ui.layout [] (Ui.text \"ok\"))\n\
-    main = Web.app { init = init, update = update, view = view\n\
+    main = Web.tea { init = init, update = update, view = view\n\
     \x20            , subscriptions = subscriptions, routes = [], notFound = Send }\n";
 
 /// Positive: publisher and subscriber both use `scoreTopic : Topic Int`.
@@ -491,10 +491,10 @@ fn pubsub_typed_shared_topic_builds() {
 // the payload type on both sides, so `Int` (publish) and `String` (handler)
 // cannot unify → IPE-T0001.
 const PUBSUB_TOPIC_MISMATCH: &str = "module Main exposing (main)\n\
-    import Ipe.App.Tea.Web.Cmd as Cmd\n\
-    import Ipe.App.Tea.Web.Sub as Sub\n\
+    import Ipe.Tea.Web.Cmd as Cmd\n\
+    import Ipe.Tea.Web.Sub as Sub\n\
     import Ipe.PubSub as PubSub exposing (Topic)\n\
-    import Ipe.App.Tea.Web as Web\n\
+    import Ipe.Tea.Web as Web\n\
     import Ipe.Ui as Ui\n\
     type Msg = GotStr String | SendInt\n\
     type alias Model = { x : Int }\n\
@@ -506,7 +506,7 @@ const PUBSUB_TOPIC_MISMATCH: &str = "module Main exposing (main)\n\
     \x20   SendInt  -> ( model, Cmd.publish t 1 )\n\
     subscriptions _m = Sub.subscribeTopic t GotStr\n\
     view _m = Ui.html (Ui.layout [] (Ui.text \"bad\"))\n\
-    main = Web.app { init = init, update = update, view = view\n\
+    main = Web.tea { init = init, update = update, view = view\n\
     \x20            , subscriptions = subscriptions, routes = [], notFound = SendInt }\n";
 
 /// Negative: `Cmd.publish intTopic 1` with `intTopic : Topic Int` and

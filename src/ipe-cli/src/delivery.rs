@@ -28,13 +28,13 @@ use core::fmt;
 pub enum Shape {
     /// `main : Task Error ()` — renders nothing; a native binary.
     Script,
-    /// `main = Tui.app …` — full-screen terminal cells.
+    /// `main = Tui.tea …` — full-screen terminal cells.
     Tui,
-    /// `main = Cli.app …` — line-oriented terminal output.
+    /// `main = Cli.tea …` — line-oriented terminal output.
     Cli,
     /// `main = Server.listen …` — an HTTP server.
     Server,
-    /// `main = Web.app …` — a DOM app, the only shape with a runtime choice.
+    /// `main = Web.tea …` — a DOM app, the only shape with a runtime choice.
     Web,
 }
 

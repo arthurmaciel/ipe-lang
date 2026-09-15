@@ -243,7 +243,7 @@ code! {
     /// type alias expansion exceeded the depth or node-count budget (cyclic or
     /// exponentially-fanning alias chain)
     IPE_N0032 = "IPE-N0032", "type alias expansion too deep or too large", "IPE-N0032";
-    /// a plain-`main` Program imports a managed-update-loop shape under `Ipe.App.Tea.*`
+    /// a plain-`main` Program imports a managed-update-loop shape under `Ipe.Tea.*`
     IPE_N0033 = "IPE-N0033", "a Program may not import a managed-update-loop shape", "IPE-N0033";
     /// a known standard-library module is used qualified without importing it
     IPE_N0034 = "IPE-N0034", "standard-library module used without importing it", "IPE-N0034";
@@ -282,9 +282,9 @@ code! {
     /// whose branches reach app entries — but a program's shape is a
     /// compile-time choice, pinned by the entry head, not a runtime value
     IPE_N0045 = "IPE-N0045", "main selects its shape at runtime, but a shape is a compile-time choice", "IPE-N0045";
-    /// `Web.app`'s `init` annotation uses a free type variable for its request
+    /// `Web.tea`'s `init` annotation uses a free type variable for its request
     /// argument — the request type is `WebReq`, not an unconstrained `a`
-    IPE_N0046 = "IPE-N0046", "Web.app init annotation uses a type variable where WebReq is required", "IPE-N0046";
+    IPE_N0046 = "IPE-N0046", "Web.tea init annotation uses a type variable where WebReq is required", "IPE-N0046";
     /// a standard-library module is imported in a shape × runtime placement the
     /// library single-source-of-truth table does not admit
     IPE_N0047 = "IPE-N0047", "this standard-library module is not available in this shape × runtime placement", "IPE-N0047";
@@ -372,8 +372,8 @@ code! {
     IPE_L0116 = "IPE-L0116", "refutable pattern-discrimination shape not supported yet", "IPE-L0116";
     /// `Float` is not a valid `Set` element or `Dict` key on the Rust backend
     IPE_L0117 = "IPE-L0117", "Float is not a valid Set element or Dict key on the Rust backend", "IPE-L0117";
-    /// `Web.appRouted` is not yet supported — use `Web.app` (non-routed) for now
-    IPE_L0118 = "IPE-L0118", "`Web.appRouted` is not yet supported — use `Web.app` (non-routed) for now", "IPE-L0118";
+    /// `Web.appRouted` is not yet supported — use `Web.tea` (non-routed) for now
+    IPE_L0118 = "IPE-L0118", "`Web.appRouted` is not yet supported — use `Web.tea` (non-routed) for now", "IPE-L0118";
     /// an app-entry cfg must be an inline record literal, not a let-bound variable
     IPE_L0119 = "IPE-L0119", "app entry cfg must be an inline record literal", "IPE-L0119";
     /// a Web/Terminal/WebView app Model is not admissible for that app shape's
@@ -388,12 +388,12 @@ code! {
     /// `Web.route` page builder is neither a page constructor, an inline lambda,
     /// nor a named function — the Rust backend cannot emit a type-directed closure
     IPE_L0123 = "IPE-L0123", "`Web.route` page builder is not a constructor, lambda, or named function", "IPE-L0123";
-    /// `Web.app` routes list is non-empty but Model has no `page` field.
+    /// `Web.tea` routes list is non-empty but Model has no `page` field.
     ///
     /// The routes are forwarded to the non-routed runtime path and never update the
     /// Model. Emitted as a **warning** (`applyRoute` silently no-ops the same
     /// shape, so this compiles) to flag the likely mis-named routed-page field.
-    IPE_L0124 = "IPE-L0124", "`Web.app` routes list is non-empty but Model has no `page` field", "IPE-L0124";
+    IPE_L0124 = "IPE-L0124", "`Web.tea` routes list is non-empty but Model has no `page` field", "IPE-L0124";
     /// inadmissible Msg type in a Web/Terminal/WebView app.
     ///
     /// The Msg type's Rust rendering would not satisfy the runtime's
@@ -408,8 +408,8 @@ code! {
     /// an `as`-alias in a refutable match-arm position whose inner pattern needs
     /// Rust-level runtime dispatch (a nested constructor / literal / list pattern)
     IPE_L0128 = "IPE-L0128", "alias over a dispatch-needing nested pattern not supported yet", "IPE-L0128";
-    /// A routed `Web.app` under `--target wasm` (client router not yet built).
-    IPE_L0129 = "IPE-L0129", "routed Web.app not supported under --target wasm yet", "IPE-L0129";
+    /// A routed `Web.tea` under `--target wasm` (client router not yet built).
+    IPE_L0129 = "IPE-L0129", "routed Web.tea not supported under --target wasm yet", "IPE-L0129";
     /// a foreign opaque FFI handle (possibly non-`Clone`) is used more than once
     IPE_L0130 = "IPE-L0130", "a foreign opaque FFI handle is used more than once", "IPE-L0130";
     /// a row-polymorphic record annotation `{ r | f : T }` reached the backend
@@ -433,7 +433,7 @@ code! {
     ///
     /// A program's `main` is the single effect it runs, so it must be a
     /// `Task Error ()` — written directly (a script), or produced by an app
-    /// entry (`Web.app` / `Tui.app` / `Cli.app`, each of which
+    /// entry (`Web.tea` / `Tui.tea` / `Cli.tea`, each of which
     /// returns a `Task Error ()`). A `main` of any other type (an `Int`, a
     /// `String`, a function, …) carries no effect to run; the runtime's single
     /// run site needs a `Task`, so this fails closed at `ipe` time rather than
@@ -487,8 +487,8 @@ code! {
     /// call so every argument passes the committed-literal seal gate
     IPE_L0151 = "IPE-L0151", "`Secret.fromString` must be applied directly to its argument", "IPE-L0151";
     /// `Ui.cells` (a terminal character-grid builder) was used in a Cli
-    /// (`Cli.app`) program. A Cli view returns `String` (line output),
-    /// so a character grid has no denotation there. Use `Tui.app` for
+    /// (`Cli.tea`) program. A Cli view returns `String` (line output),
+    /// so a character grid has no denotation there. Use `Tui.tea` for
     /// a full-screen cell-grid app.
     IPE_L0153 = "IPE-L0153", "Ui.cells is terminal-screen-only and not available in the Cli shape", "IPE-L0153";
     /// expression nests too deeply for the backend

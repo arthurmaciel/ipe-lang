@@ -1705,7 +1705,7 @@ async fn wait_for_term_or_int() {
     }
 }
 
-/// `Ipe.Web.app { init, update, view, subscriptions }` — serve via axum.
+/// `Ipe.Web.tea { init, update, view, subscriptions }` — serve via axum.
 ///
 /// HTTP-first: a GET renders the full page with the embedded client, opens a
 /// per-session TEA loop, and serves an SSE patch channel + a POST event
@@ -1902,7 +1902,7 @@ fn fail_closed_router(message: String) -> axum::Router {
     })
 }
 
-/// `Ipe.Web.app { …, routes, notFound }` with URL routing — serve via axum.
+/// `Ipe.Web.tea { …, routes, notFound }` with URL routing — serve via axum.
 ///
 /// Identical to `web_app` except a `route_resolver` is built from the route
 /// table + page-setter: on each GET it matches the path to a `Page` value
@@ -4030,7 +4030,7 @@ where
                 .into(),
             );
         }
-        Err(e) => return IpeResult::Err(format!("Web.app: bind {addr}: {e}").into()),
+        Err(e) => return IpeResult::Err(format!("Web.tea: bind {addr}: {e}").into()),
     };
     // Bind-address line (stderr) — carries the resolved host:port.
     eprintln!("[ipe.web] listening on http://{addr}");
@@ -4045,7 +4045,7 @@ where
         .await
     {
         Ok(()) => ok_res(()),
-        Err(e) => IpeResult::Err(format!("Web.app: serve: {e}").into()),
+        Err(e) => IpeResult::Err(format!("Web.tea: serve: {e}").into()),
     }
 }
 

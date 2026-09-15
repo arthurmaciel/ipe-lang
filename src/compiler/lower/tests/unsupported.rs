@@ -2281,20 +2281,20 @@ fn over_application_with_partial_surplus_eta_expands() -> DResult<()> {
 
 #[test]
 fn let_bound_live_app_cfg_is_unsupported() -> DResult<()> {
-    // `Web.app cfg` where `cfg` is a plain local var (not a record literal)
+    // `Web.tea cfg` where `cfg` is a plain local var (not a record literal)
     // must lower to IPE-L0119 at the argument span — never an ICE, never the
     // misleading IPE-L0107 first-class-function message.
     let mut i = Interner::new();
     let main = i.intern("main")?;
     let live = i.intern("Web")?;
-    let app = i.intern("app")?;
+    let tea = i.intern("tea")?;
     let cfg = i.intern("cfg")?;
     let callee = Located::new(
         Span::new(10, 18),
         canon::Expr_::VarKernel {
             id: None,
             module: live,
-            name: app,
+            name: tea,
         },
     );
     let arg_span = Span::new(19, 22);

@@ -183,7 +183,7 @@ const TAG_PROCESS_RUN_WITH_CFG: u8 = 77;
 const TAG_BACKOFF_STRATEGY: u8 = 78;
 // Shape opaque app leaves — non-serde, never a Model field; present for exhaustiveness.
 const TAG_WEB_APP: u8 = 79;
-// Tag 80 is unassigned: a webview build renders a `Web.app` (`WebApp`) handle,
+// Tag 80 is unassigned: a webview build renders a `Web.tea` (`WebApp`) handle,
 // so there is no distinct webview-app leaf to tag.
 const TAG_TUI_APP: u8 = 81;
 const TAG_CLI_APP: u8 = 82;

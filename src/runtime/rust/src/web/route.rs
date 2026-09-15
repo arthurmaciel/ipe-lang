@@ -1,4 +1,4 @@
-//! URL routing for `Web.app` — `Route<Page>` + matching.
+//! URL routing for `Web.tea` — `Route<Page>` + matching.
 //!
 //! Each `Web.route pattern ctor` lowers (codegen peephole) to a `Route` whose
 //! `build` closure applies the captured `:param` strings to the page
@@ -91,7 +91,7 @@ pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path:
 }
 
 /// Does `path` match ANY declared route? With no
-/// routes only `/` is a page URL (the single-page `Web.app` shape). The page
+/// routes only `/` is a page URL (the single-page `Web.tea` shape). The page
 /// handler uses this to keep unrouted GETs (browser noise like
 /// `/favicon.ico`, asset probes, unknown paths) from re-routing a live
 /// session's model — an unrouted re-route would rebuild the handler index
@@ -199,7 +199,7 @@ mod tests {
         assert!(!matches_any(&rs, "/favicon.ico"));
         assert!(!matches_any(&rs, "/nope"));
 
-        // Empty route table (single-page `Web.app`): only `/` is a page URL.
+        // Empty route table (single-page `Web.tea`): only `/` is a page URL.
         let none: Vec<Route<Page>> = Vec::new();
         assert!(matches_any(&none, "/"));
         assert!(!matches_any(&none, "/favicon.ico"));

@@ -63,9 +63,9 @@ fn pure_ui_app_emits_wasm_project() {
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
          import Ipe.String as String\n\
-         import Ipe.App.Tea.Web exposing (app)\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web exposing (tea)\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = CounterPage\n\
@@ -88,7 +88,7 @@ fn pure_ui_app_emits_wasm_project() {
          \x20   Ui.button [] { onPress = Just Increment, label = Ui.text (String.fromInt model.count) }\n\
          \n\
          main =\n\
-         \x20   app\n\
+         \x20   tea\n\
          \x20       { init = init\n\
          \x20       , update = update\n\
          \x20       , view = view\n\
@@ -153,9 +153,9 @@ fn wasm_web_app_ipe_main_return_type_is_ipe_task() {
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
          import Ipe.String as String\n\
-         import Ipe.App.Tea.Web exposing (app)\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web exposing (tea)\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Msg = Increment\n\
@@ -177,7 +177,7 @@ fn wasm_web_app_ipe_main_return_type_is_ipe_task() {
          \x20   Ui.button [] { onPress = Just Increment, label = Ui.text (String.fromInt model.count) }\n\
          \n\
          main =\n\
-         \x20   app\n\
+         \x20   tea\n\
          \x20       { init = init\n\
          \x20       , update = update\n\
          \x20       , view = view\n\
@@ -187,7 +187,7 @@ fn wasm_web_app_ipe_main_return_type_is_ipe_task() {
          \x20       }\n",
     );
     let out = dir.join("out");
-    build_wasm(&entry, &out).expect("Web.app must emit under --target wasm");
+    build_wasm(&entry, &out).expect("Web.tea must emit under --target wasm");
 
     let main_rs = std::fs::read_to_string(out.join("src/main.rs")).expect("emitted main.rs");
 
@@ -210,7 +210,7 @@ fn wasm_web_app_ipe_main_return_type_is_ipe_task() {
     );
 }
 
-/// A routed `Web.app` (Model has a `page` field, `routes` non-empty) emits
+/// A routed `Web.tea` (Model has a `page` field, `routes` non-empty) emits
 /// `wasm_app_routed` under `--target wasm`. The emitted manifest must have the
 /// same closed cdylib shape as the non-routed app, and the emitted `main.rs`
 /// must call `wasm_app_routed`, not `wasm_app`.
@@ -221,9 +221,9 @@ fn routed_web_app_emits_wasm_app_routed() {
         &dir.join("srcdir"),
         "module Main exposing (main)\n\
          import Ipe.String as String\n\
-         import Ipe.App.Tea.Web exposing (app, route)\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\
+         import Ipe.Tea.Web exposing (tea, route)\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\
          import Ipe.Ui as Ui\n\
          \n\
          type Page = Home | About\n\
@@ -245,7 +245,7 @@ fn routed_web_app_emits_wasm_app_routed() {
          view _model = Ui.text \"hello\"\n\
          \n\
          main =\n\
-         \x20   app\n\
+         \x20   tea\n\
          \x20       { init = init\n\
          \x20       , update = update\n\
          \x20       , view = view\n\
@@ -255,7 +255,7 @@ fn routed_web_app_emits_wasm_app_routed() {
          \x20       }\n",
     );
     let out = dir.join("out");
-    build_wasm(&entry, &out).expect("routed Web.app must build under --target wasm");
+    build_wasm(&entry, &out).expect("routed Web.tea must build under --target wasm");
 
     let manifest = std::fs::read_to_string(out.join("Cargo.toml")).expect("emitted manifest");
     assert!(manifest.contains("crate-type = [\"cdylib\"]"), "{manifest}");

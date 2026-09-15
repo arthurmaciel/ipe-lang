@@ -1,6 +1,6 @@
-//! Emission for the view-less `Ipe.Tea.worker` app-entry.
+//! Emission for the view-less `Ipe.Tea.Worker.tea` app-entry.
 //!
-//! * [`KernelFn::TeaWorker`] — `Ipe.Tea.worker cfg` →
+//! * [`KernelFn::TeaWorker`] — `Ipe.Tea.Worker.tea cfg` →
 //!   `ipe_runtime::tea::WorkerApp(ipe_runtime::worker_app(init, update, subscriptions))`.
 //!   A view-less TEA loop (Elm `Platform.worker` shape): no `view`, no input
 //!   handler — output is `Cmd msg` (effects) and input is `Sub msg`. 3-field
@@ -25,7 +25,7 @@ use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
 
-/// Dispatch an `Ipe.Tea.worker` kernel call.
+/// Dispatch an `Ipe.Tea.Worker.tea` kernel call.
 ///
 /// Returns `Some(emitted)` for `TeaWorker`; `None` for any other variant
 /// (defensive — the caller already guards on `k.is_worker()`).
@@ -44,14 +44,14 @@ pub fn emit_worker_call(
     };
 
     match k {
-        // ── Ipe.Tea.worker { init, update, subscriptions } ─
+        // ── Ipe.Tea.Worker.tea { init, update, subscriptions } ─
         //
         // Runtime entry: `ipe_runtime::worker_app(init, update, subs)`
         KernelFn::TeaWorker => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_worker_call::TeaWorker",
-                    detail: format!("Ipe.Tea.worker requires 1 argument, got {}", args.len()),
+                    detail: format!("Ipe.Tea.Worker.tea requires 1 argument, got {}", args.len()),
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
@@ -60,7 +60,7 @@ pub fn emit_worker_call(
             let Expr::Record { fields, .. } = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_worker_call::TeaWorker",
-                    detail: "Ipe.Tea.worker cfg must be an inline record literal; \
+                    detail: "Ipe.Tea.Worker.tea cfg must be an inline record literal; \
                              a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });

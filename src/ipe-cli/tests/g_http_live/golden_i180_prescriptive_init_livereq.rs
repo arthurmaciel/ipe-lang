@@ -2,11 +2,11 @@
 //!
 //! ## Background
 //!
-//! Ipê pins `Web.app`'s `init` to `WebReq -> (Model, Cmd Msg)` (mandatory)
+//! Ipê pins `Web.tea`'s `init` to `WebReq -> (Model, Cmd Msg)` (mandatory)
 //! rather than the reference's permissive free `req` type var. Two properties
 //! are pinned here:
 //!
-//! 1. **Prescription is enforced.** A `Web.app` whose `init` declares `{}` (or
+//! 1. **Prescription is enforced.** A `Web.tea` whose `init` declares `{}` (or
 //!    any non-`WebReq` shape) is a clear compile-time IPE-T0001 at the `init`
 //!    cfg field (`expected WebReq, found {}`) — not a raw unification failure
 //!    and not a deferred `cargo` break.
@@ -30,14 +30,14 @@
 
 use std::path::PathBuf;
 
-/// A `Web.app` whose `init : WebReq -> …` READS `req.path` into the Model.
+/// A `Web.tea` whose `init : WebReq -> …` READS `req.path` into the Model.
 /// Non-routed for brevity; plain-data Model so the admissibility gate
 /// passes, isolating the init-field + field-access behaviour.
 const LIVE_INIT_READS_REQ_PATH: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page, path : String }
@@ -50,7 +50,7 @@ view model = Ui.text model.path
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions
         , routes = [ Web.route "/" HomePage ]
@@ -61,10 +61,10 @@ main =
 /// The SAME app but with `init : a -> …` — a free type variable the
 /// prescriptive scheme must reject with IPE-N0046.
 const LIVE_INIT_POLY_REJECTED: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page }
@@ -77,7 +77,7 @@ view _model = Ui.text "hi"
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions
         , routes = [ Web.route "/" HomePage ]
@@ -88,10 +88,10 @@ main =
 /// The SAME app but with `init : {} -> …` — the non-`WebReq` shape the
 /// prescriptive scheme must reject with a clear IPE-T0001.
 const LIVE_INIT_UNIT_REJECTED: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page }
@@ -104,7 +104,7 @@ view _model = Ui.text "hi"
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view
         , subscriptions = subscriptions
         , routes = [ Web.route "/" HomePage ]
@@ -167,7 +167,7 @@ fn live_init_unit_is_rejected() {
         return;
     };
     let err = result.expect_err(
-        "#180: `init : {} -> …` on a Web.app must be a compile error under the \
+        "#180: `init : {} -> …` on a Web.tea must be a compile error under the \
          prescriptive WebReq scheme",
     );
     let rendered = format!("{err:?}");
@@ -177,7 +177,7 @@ fn live_init_unit_is_rejected() {
     );
 }
 
-/// `init : a -> …` (free type variable) on a `Web.app` must be rejected with
+/// `init : a -> …` (free type variable) on a `Web.tea` must be rejected with
 /// IPE-N0046 — the annotation promises this works for *any* request shape,
 /// which is false; the runtime always passes `WebReq`.
 #[test]
@@ -187,7 +187,7 @@ fn live_init_poly_var_is_rejected() {
         return;
     };
     let err = result.expect_err(
-        "#180: `init : a -> …` on a Web.app must be a compile error (IPE-N0046) \
+        "#180: `init : a -> …` on a Web.tea must be a compile error (IPE-N0046) \
          under the prescriptive WebReq scheme",
     );
     let rendered = format!("{err:?}");

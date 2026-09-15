@@ -1,4 +1,4 @@
-//! Routed `Web.app` with `routes = []` and a wrong `notFound` type must be
+//! Routed `Web.tea` with `routes = []` and a wrong `notFound` type must be
 //! rejected by ipe with IPE-T0001.
 //!
 //! ## Background
@@ -37,11 +37,11 @@ use ipe::CliError;
 /// Part A's `WebRoute page` parametric fix pins `var(2)` via route ctors to
 /// `Page`; `notFound = Increment` (Msg) then fails unification → IPE-T0001.
 const T4D_NONEMPTY_ROUTES_WRONG_NOTFOUND: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -52,7 +52,7 @@ update msg model =
 view model = Ui.text (String.fromInt model.count)
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ Web.route "/" CounterPage, Web.route "/about" AboutPage ]
         , notFound = Increment
@@ -63,11 +63,11 @@ main =
 /// The route ctor forces `var(2) = Msg`; `notFound = CounterPage` (Page) then
 /// fails unification → IPE-T0001.
 const T4F_WRONG_ROUTE_CTOR_CORRECT_NOTFOUND: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -78,7 +78,7 @@ update msg model =
 view model = Ui.text (String.fromInt model.count)
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ Web.route "/" Increment ]
         , notFound = CounterPage
@@ -88,11 +88,11 @@ main =
 /// MIX: non-empty routes with mixed types — one correct route ctor, one wrong
 /// route ctor. All route ctors share `var(2)`; the wrong ctor forces a mismatch.
 const MIX_MIXED_ROUTE_CTORS: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -103,25 +103,25 @@ update msg model =
 view model = Ui.text (String.fromInt model.count)
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ Web.route "/" CounterPage, Web.route "/inc" Increment ]
         , notFound = CounterPage
         }
 "#;
 
-/// Non-routed regression: a plain Web.app with Model = `{ count : Int }` (no
+/// Non-routed regression: a plain Web.tea with Model = `{ count : Int }` (no
 /// `page` field) and `notFound = Increment` (Msg).  Part B's hook MUST NOT fire
 /// here — the Model has no `page` field, so we skip the check.
 ///
 /// Type annotations are required to pass the lowerer (mirrors `LIVE_GOOD` in
 /// `model_admissibility.rs`).
 const NON_ROUTED_LIVE: &str = r"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 type Msg = Increment
 type alias Model = { count : Int }
 init : WebReq -> ( Model, Cmd Msg )
@@ -135,24 +135,24 @@ view model = Ui.text (String.fromInt model.count)
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [], notFound = Increment
         }
 ";
 
-/// `Web.app` with a NON-EMPTY `routes` list but a Model with no `page` field.
+/// `Web.tea` with a NON-EMPTY `routes` list but a Model with no `page` field.
 /// A routed update against such a Model is a silent no-op, so this shape must
 /// still compile on the non-routed path.
 ///
 /// Shape mirrors `examples/24-tui-kitchen-sink` (single nullary route, no
 /// `page` field in Model).
 const NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES: &str = r#"module Main exposing (main)
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd
+import Ipe.Tea.Web.Cmd
 import Ipe.String
-import Ipe.App.Tea.Web.Sub
+import Ipe.Tea.Web.Sub
 type Page = MainPage
 type Msg = Increment
 type alias Model = { count : Int }
@@ -167,7 +167,7 @@ view model = Ui.text (String.fromInt model.count)
 subscriptions : Model -> Sub Msg
 subscriptions _model = Sub.none
 main =
-    Web.app
+    Web.tea
         { init = init, update = update, view = view, subscriptions = subscriptions
         , routes = [ Web.route "/" MainPage ]
         , notFound = MainPage
@@ -233,7 +233,7 @@ fn routed_empty_routes_int_notfound_is_ipe_t0001() {
     assert_eq!(
         got,
         Some(ipe_diagnostics::IPE_T0001),
-        "#108 R1: routed Web.app with empty routes and Int notFound \
+        "#108 R1: routed Web.tea with empty routes and Int notFound \
          must be rejected with IPE-T0001, got: {result:?}",
     );
 }
@@ -259,7 +259,7 @@ fn routed_empty_routes_wrong_ctor_notfound_is_ipe_t0001() {
     assert_eq!(
         got,
         Some(ipe_diagnostics::IPE_T0001),
-        "#108 R2: routed Web.app with empty routes and wrong-ADT notFound \
+        "#108 R2: routed Web.tea with empty routes and wrong-ADT notFound \
          must be rejected with IPE-T0001, got: {result:?}",
     );
 }
@@ -279,7 +279,7 @@ fn routed_correct_app_compiles() {
     };
     assert!(
         result.is_ok(),
-        "#108 positive control: well-typed routed Web.app must compile, got: {:?}",
+        "#108 positive control: well-typed routed Web.tea must compile, got: {:?}",
         result.err(),
     );
 }
@@ -349,7 +349,7 @@ fn mix_mixed_route_ctors_is_ipe_t0001() {
     );
 }
 
-/// Non-routed regression: plain `Web.app` with Model = `{ count : Int }` (no
+/// Non-routed regression: plain `Web.tea` with Model = `{ count : Int }` (no
 /// `page` field) and `notFound = Increment` (Msg) must compile cleanly.
 ///
 /// Part B's post-solve hook MUST NOT fire here: the Model has no `page` field,
@@ -361,7 +361,7 @@ fn non_routed_live_app_compiles() {
     };
     assert!(
         result.is_ok(),
-        "NON-ROUTED regression: plain Web.app (no `page` field) must compile, got: {:?}",
+        "NON-ROUTED regression: plain Web.tea (no `page` field) must compile, got: {:?}",
         result.err(),
     );
 }
@@ -455,13 +455,13 @@ fn routed_empty_routes_well_typed_cargo_builds() {
 
 // ── Non-empty routes, no `page` field → non-routed path ──────────────────────
 //
-// The golden oracle compiles a `Web.app` with non-empty `routes` but no `page`
+// The golden oracle compiles a `Web.tea` with non-empty `routes` but no `page`
 // field in Model — `applyRoute` calls `RecordUpdate(model, {"Page": page})`
 // which silently no-ops when `Page` is absent.  This shape must not be gated
 // stricter than the reference; the non-routed path (`web_app`) is emitted
 // instead.
 
-/// `Web.app` with a non-empty `routes` list but Model has no `page`
+/// `Web.tea` with a non-empty `routes` list but Model has no `page`
 /// field must compile on the non-routed path (mirrors `examples/24-tui-
 /// kitchen-sink` and `examples/25-ipe-console`).
 ///
@@ -475,7 +475,7 @@ fn non_routed_with_nonempty_routes_compiles() {
     };
     assert!(
         result.is_ok(),
-        "#153 regression: Web.app with non-empty routes but no `page` field \
+        "#153 regression: Web.tea with non-empty routes but no `page` field \
          must compile on the non-routed path (accepted shape), \
          got: {:?}",
         result.err(),

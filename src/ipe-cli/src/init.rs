@@ -11,10 +11,10 @@
 //! `web`) runtime. The scaffold is the matching entry for that shape:
 //!
 //! - `script` — a `Task Error ()` main
-//! - `tui`    — a `Tui.app` main
-//! - `cli`    — a `Cli.app` main
+//! - `tui`    — a `Tui.tea` main
+//! - `cli`    — a `Cli.tea` main
 //! - `server` — a `Server.listen` main
-//! - `web`    — a `Web.app` counter (the default)
+//! - `web`    — a `Web.tea` counter (the default)
 //!
 //! Fully supplied (or a non-TTY run) skips every prompt and defaults each missing
 //! positional (`web` / `live`). Templates are embedded at build time via
@@ -67,12 +67,12 @@ const AGENTS_MD: &str = include_str!("../templates/AGENTS.md.in");
 /// sections provide per-host build configuration for each resolved target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum InitShape {
-    /// `main = Web.app …` — DOM rendering, live or SPA.
+    /// `main = Web.tea …` — DOM rendering, live or SPA.
     #[default]
     Web,
-    /// `main = Tui.app …` — terminal cells rendering.
+    /// `main = Tui.tea …` — terminal cells rendering.
     Tui,
-    /// `main = Cli.app …` — terminal lines rendering.
+    /// `main = Cli.tea …` — terminal lines rendering.
     Cli,
     /// `main = Server.listen …` — HTTP server.
     Server,
@@ -410,7 +410,7 @@ fn guard_rerun_conflict(
 /// when the entry is absent, unparseable, or not confidently classifiable.
 ///
 /// The four rendering shapes (`web`/`tui`/`cli`/`server`) are recognised by a
-/// qualified entry head (`Web.app`/`Tui.app`/…) via the lenient scaffold-detection
+/// qualified entry head (`Web.tea`/`Tui.tea`/…) via the lenient scaffold-detection
 /// classifier ([`ipe_canon::shape_source::scaffold_shape_hint`]) — deliberately
 /// NOT the strict capability-gate classifier, so a partially written entry still
 /// reads its shape. Both a genuine `Task Error ()` script and an un-spellable head
@@ -441,8 +441,8 @@ fn existing_project_shape(target_dir: &Path) -> Result<Option<InitShape>, CliErr
     // Scaffold detection is a UX read, never a capability gate: it picks which
     // template a re-run reconciles against. It uses the LENIENT written-qualifier
     // classifier (not the strict `classify_main_shape` the capability gate keys
-    // on) so a partially written `src/Main.ipe` — `main = Tui.app config` before
-    // its `import Ipe.App.Tea.Tui` line is typed — is still recognised as its shape. A
+    // on) so a partially written `src/Main.ipe` — `main = Tui.tea config` before
+    // its `import Ipe.Tea.Tui` line is typed — is still recognised as its shape. A
     // wrong read only mis-scaffolds or misses a re-run conflict; it cannot escalate
     // a capability.
     let shape = ipe_canon::shape_source::scaffold_shape_hint(&module, &interner);
@@ -1135,16 +1135,16 @@ mod tests {
 
         // Each shape uses a different entry point.
         assert!(
-            web_main.contains("Web.app") || web_main.contains("app"),
-            "web uses Web.app"
+            web_main.contains("Web.tea") || web_main.contains("Web"),
+            "web uses Web.tea"
         );
         assert!(
-            tui_main.contains("Tui.app") || tui_main.contains("Tui"),
-            "tui uses Tui.app"
+            tui_main.contains("Tui.tea") || tui_main.contains("Tui"),
+            "tui uses Tui.tea"
         );
         assert!(
-            cli_main.contains("Cli.app") || cli_main.contains("Cli"),
-            "cli uses Cli.app"
+            cli_main.contains("Cli.tea") || cli_main.contains("Cli"),
+            "cli uses Cli.tea"
         );
         assert!(
             server_main.contains("Server.listen"),
@@ -1233,10 +1233,10 @@ mod tests {
         let root = std::env::temp_dir().join("ipe_init_existing_shape");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).expect("mkdir src");
-        // A qualified `Tui.app` head pins the tui shape confidently.
+        // A qualified `Tui.tea` head pins the tui shape confidently.
         std::fs::write(
             root.join("src").join("Main.ipe"),
-            "module Main exposing (main)\n\nmain =\n    Tui.app config\n",
+            "module Main exposing (main)\n\nmain =\n    Tui.tea config\n",
         )
         .expect("write tui Main.ipe");
         assert_eq!(
@@ -1270,7 +1270,7 @@ mod tests {
         // The project confidently pins `tui`; asking to re-init as `web` conflicts.
         std::fs::write(
             root.join("src").join("Main.ipe"),
-            "module Main exposing (main)\n\nmain =\n    Tui.app config\n",
+            "module Main exposing (main)\n\nmain =\n    Tui.tea config\n",
         )
         .expect("write tui Main.ipe");
         let err = guard_rerun_conflict(&root, InitShape::Web, Some(InitShape::Web), None)

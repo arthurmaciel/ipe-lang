@@ -81,11 +81,11 @@ pub fn run_start<E: std::fmt::Debug + 'static>(task: IpeTask<E, ()>) {
     });
 }
 
-/// `Web.app` compiled for the browser: mount into `document.body`, then run
+/// `Web.tea` compiled for the browser: mount into `document.body`, then run
 /// the update→diff→patch loop locally. Session stores do not exist client-side;
 /// `init` receives a `WebReq` synthesised from `location` + `document.cookie`.
 ///
-/// For routed apps (`Web.app { …, routes, notFound }` with a `page` field in
+/// For routed apps (`Web.tea { …, routes, notFound }` with a `page` field in
 /// the Model) see [`wasm_app_routed`].
 pub fn wasm_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     init: FInit,
@@ -156,7 +156,7 @@ where
     })
 }
 
-/// `Web.app { …, routes, notFound }` with a `page` field compiled for the
+/// `Web.tea { …, routes, notFound }` with a `page` field compiled for the
 /// browser. Mirrors `web_app_routed` on the server, but session-free: the
 /// model lives in the tab, URLs are matched client-side, and navigation uses
 /// the History API.
@@ -501,7 +501,7 @@ where
     Ok(())
 }
 
-/// Mount a routed `Web.app` in the browser. Identical to `mount_app` except:
+/// Mount a routed `Web.tea` in the browser. Identical to `mount_app` except:
 /// 1. The initial model's `page` field is set by routing the current URL.
 /// 2. A `popstate` listener is installed so back/forward navigation re-routes
 ///    the URL → model without going through `update`.

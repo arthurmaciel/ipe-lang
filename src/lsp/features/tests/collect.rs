@@ -309,7 +309,7 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
 }
 
 /// IPE-N0035 quick-fix: a Terminal app importing the Web shape's `Cmd` yields a
-/// "Change import to `Ipe.App.Tea.Terminal.Cmd`" code action whose edit, once
+/// "Change import to `Ipe.Tea.Terminal.Cmd`" code action whose edit, once
 /// applied, repoints the import to the app's shape and clears the diagnostic
 /// (SEAL — the program compiles), leaving the `as Cmd` binding untouched.
 #[test]
@@ -321,16 +321,16 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
     // — importing the `Ipe.Ui.Cli` surface here would raise IPE-N0020 (unknown module)
     // and short-circuit canon before the N0035 gate.
     let src = "module Main exposing (main)\n\n\
-        import Ipe.App.Tea.Cli as Cli\n\
-        import Ipe.App.Tea.Web.Cmd as Cmd\n\
-        import Ipe.App.Tea.Terminal.Sub as Sub\n\n\
+        import Ipe.Tea.Cli as Cli\n\
+        import Ipe.Tea.Web.Cmd as Cmd\n\
+        import Ipe.Tea.Terminal.Sub as Sub\n\n\
         init _u = ( { n = 0 }, Cmd.none )\n\
         update _m model = ( model, Cmd.none )\n\
         view _m = \"ok\"\n\
         subscriptions _m = Sub.none\n\
         onLine l = l\n\
         main =\n    \
-            Cli.app { init = init, update = update, view = view, subscriptions = subscriptions, onLine = onLine }\n";
+            Cli.tea { init = init, update = update, view = view, subscriptions = subscriptions, onLine = onLine }\n";
     let mut db = IpeDatabase::new();
     let entry = file(&db, &["Main"], src);
     let root = root_of(&db, &[(&["Main"], entry)]);
@@ -370,7 +370,7 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
             CodeActionOrCommand::Command(_) => None,
         })
         .expect("one CodeAction for IPE-N0035");
-    assert_eq!(action.title, "Change import to Ipe.App.Tea.Terminal.Cmd");
+    assert_eq!(action.title, "Change import to Ipe.Tea.Terminal.Cmd");
     let edit = action
         .edit
         .as_ref()
@@ -383,11 +383,11 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
     // module compiles — N0035 is gone.
     let fixed = apply_edit(src, edit);
     assert!(
-        fixed.contains("import Ipe.App.Tea.Terminal.Cmd as Cmd"),
+        fixed.contains("import Ipe.Tea.Terminal.Cmd as Cmd"),
         "the fixed source repoints to the Terminal shape, keeping the alias: {fixed:?}"
     );
     assert!(
-        !fixed.contains("Ipe.App.Tea.Web.Cmd"),
+        !fixed.contains("Ipe.Tea.Web.Cmd"),
         "the wrong-shape import is gone: {fixed:?}"
     );
     assert!(ipe_db::set_text_if_changed(&mut db, entry, &fixed));

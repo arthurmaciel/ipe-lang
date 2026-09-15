@@ -486,7 +486,7 @@ fn infer_core(
     // only warnings.
     let mut warnings: Vec<Diagnostic> = Vec::new();
 
-    // For routed `Web.app` calls: if the now-settled Model type has a `page`
+    // For routed `Web.tea` calls: if the now-settled Model type has a `page`
     // field, the `notFound` type must match that field's type.  Non-routed
     // apps (Model has no `page` field) are silently skipped — UNLESS the app
     // declared a non-empty `routes` list, in which case the routes are ignored
@@ -2284,7 +2284,7 @@ fn resolve_route_witness_checks(
     Ok(())
 }
 
-/// For routed `Web.app` calls: if the settled Model type has a `page` field,
+/// For routed `Web.tea` calls: if the settled Model type has a `page` field,
 /// the `notFound` type must match (IPE-T0001) — the `set_page` closure emitted
 /// by the backend already assumes this invariant.  Non-routed apps (Model has
 /// no `page` field) are silently skipped, so a blanket open-row projection is
@@ -2335,7 +2335,7 @@ fn resolve_routed_web_checks(
             // non-routed runtime path and silently ignored. This compiles
             // (matching the reference's `applyRoute` no-op), but it is
             // almost always a mistake — usually a mis-named `page` field. Emit
-            // the IPE-L0124 warning at the `Web.app` span.
+            // the IPE-L0124 warning at the `Web.tea` span.
             //
             // `route_count` is the total number of `Web.route` references in
             // the compile unit. In the common single-app-per-program case this
@@ -4357,7 +4357,7 @@ mod tests {
         );
     }
 
-    /// IPE-L0124: a `Web.app` with a non-empty `routes` list
+    /// IPE-L0124: a `Web.tea` with a non-empty `routes` list
     /// whose Model has NO `page` field emits a **warning**, not an error. The
     /// program still type-checks (`applyRoute` no-ops the same shape); the
     /// warning flags the likely mis-named routed-page field.

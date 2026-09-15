@@ -21,7 +21,7 @@ impl WebReq {
     /// native window (`web desktop` webview) whose app opens at its root. The
     /// same `WebReq` a browser tab reports on a fresh `GET /` load: a `GET`
     /// method, the root path, and no query, params, headers, or cookies. A
-    /// `Web.app` `init : WebReq -> …` receives this so the webview host runs the
+    /// `Web.tea` `init : WebReq -> …` receives this so the webview host runs the
     /// SAME init as the served and WASM hosts, never a separate `()` shape.
     #[must_use]
     pub fn local_root() -> Self {

@@ -11,7 +11,7 @@ module Ipe.Web.Head exposing
 
 -- | Ipe.Web.Head — typed helpers for emitting per-page <head>
 -- content from a Ipe.Web app via the optional `head : Model ->
--- List (Html msg)` field on `Web.app`.
+-- List (Html msg)` field on `Web.tea`.
 --
 -- The runtime calls the user-supplied `head` callback once per
 -- full GET (initial page load / ipe-nav navigation) and splices

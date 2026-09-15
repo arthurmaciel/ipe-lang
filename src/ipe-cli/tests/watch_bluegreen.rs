@@ -26,16 +26,16 @@ use ipe::watch::{WatchHandle, WatchOptions};
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// A minimal `Ipe.Web` (TEA) app whose rendered page carries `marker` in its
-/// heading, so a `GET /` can observe which binary is live. Uses `Web.app`, so
+/// heading, so a `GET /` can observe which binary is live. Uses `Web.tea`, so
 /// the emitted entry contains `ipe_runtime::web::web_app` — the marker
 /// `watch::is_ipe_web_project` keys the `/_ipe/readyz` readiness probe on.
 fn web_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\n\
          type Msg = Noop\n\n\
          type alias Model = {{ count : Int }}\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -48,7 +48,7 @@ fn web_fixture(marker: &str) -> String {
          view _model =\n    \
              Ui.column [ Ui.spacing 8 ] [ Ui.el [] (Ui.text \"{marker}\") ]\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init\n        \
                  , update = update\n        \
                  , view = view\n        \
@@ -69,11 +69,11 @@ fn web_fixture(marker: &str) -> String {
 fn ticker_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.String as String\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
          type alias Model = {{ count : Int }}\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -89,7 +89,7 @@ fn ticker_fixture(marker: &str) -> String {
                  , Ui.el [] (Ui.text (String.concat [ \"count=\", String.fromInt model.count ]))\n        \
                  ]\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init\n        \
                  , update = update\n        \
                  , view = view\n        \
@@ -109,11 +109,11 @@ fn ticker_fixture(marker: &str) -> String {
 fn changed_model_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.String as String\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
          type alias Model = {{ score : Int }}\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -129,7 +129,7 @@ fn changed_model_fixture(marker: &str) -> String {
                  , Ui.el [] (Ui.text (String.concat [ \"score=\", String.fromInt model.score ]))\n        \
                  ]\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init\n        \
                  , update = update\n        \
                  , view = view\n        \
@@ -725,11 +725,11 @@ fn bluegreen_rebuild_resets_cleanly_on_model_type_change() -> Result<(), BoxErro
 fn additive_ticker_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Ipe.App.Tea.Web as Web\n\
+         import Ipe.Tea.Web as Web\n\
          import Ipe.Ui as Ui\n\
          import Ipe.String as String\n\
-         import Ipe.App.Tea.Web.Cmd as Cmd\n\
-         import Ipe.App.Tea.Web.Sub as Sub\n\n\
+         import Ipe.Tea.Web.Cmd as Cmd\n\
+         import Ipe.Tea.Web.Sub as Sub\n\n\
          type Msg = Tick\n\n\
          type alias Model = {{ count : Int, label : String }}\n\n\
          init : WebReq -> ( Model, Cmd Msg )\n\
@@ -746,7 +746,7 @@ fn additive_ticker_fixture(marker: &str) -> String {
                  , Ui.el [] (Ui.text (String.concat [ \"label=\", model.label ]))\n        \
                  ]\n\n\
          main =\n    \
-             Web.app\n        \
+             Web.tea\n        \
                  {{ init = init\n        \
                  , update = update\n        \
                  , view = view\n        \

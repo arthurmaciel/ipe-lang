@@ -1,8 +1,8 @@
 module Main exposing (main)
 
-import Ipe.App.Tea.Tui exposing (app)
-import Ipe.App.Tea.Tui.Cmd as Cmd
-import Ipe.App.Tea.Tui.Sub as Sub
+import Ipe.Tea.Tui exposing (tea)
+import Ipe.Tea.Tui.Cmd as Cmd
+import Ipe.Tea.Tui.Sub as Sub
 import Ipe.Ui.Tui as Ui
 
 
@@ -46,7 +46,7 @@ view model =
 
 
 main =
-    app
+    tea
         { init = init
         , update = update
         , view = view

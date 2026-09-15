@@ -113,9 +113,9 @@ const BARE: &str = "module Main exposing (main)\n\
     import Ipe.Io as Io\n\
     main = Io.println \"bare\"\n";
 
-/// Minimal `Cli.app` (`CliApp` shape) program.
+/// Minimal `Cli.tea` (`CliApp` shape) program.
 ///
-/// `Cli.app` emits `ipe_runtime::tea::CliApp(console_app(...))`.
+/// `Cli.tea` emits `ipe_runtime::tea::CliApp(console_app(...))`.
 /// The `fn main` epilogue must call `ipe_main().run_blocking()` rather than
 /// `block_on(ipe_main())` — `CliApp` is not an `IpeTask` and `block_on`
 /// does not accept it. A missing or misrouted epilogue switch produces E0277
@@ -123,10 +123,10 @@ const BARE: &str = "module Main exposing (main)\n\
 /// always-run gate that catches that class without requiring a full `IPE_E2E`
 /// run of an actual interactive binary.
 const CLI_APP_LINES: &str = "module Main exposing (main)\n\
-    import Ipe.App.Tea.Cli as Cli\n\
+    import Ipe.Tea.Cli as Cli\n\
     import Ipe.Ui.Cli as Ui\n\
-    import Ipe.App.Tea.Terminal.Cmd\n\
-    import Ipe.App.Tea.Terminal.Sub\n\
+    import Ipe.Tea.Terminal.Cmd\n\
+    import Ipe.Tea.Terminal.Sub\n\
     type Msg = Line String\n\
     type alias Model = { count : Int }\n\
     init _unit = ( { count = 0 }, Cmd.none )\n\
@@ -135,7 +135,7 @@ const CLI_APP_LINES: &str = "module Main exposing (main)\n\
     view _model = Ui.text \"ok\"\n\
     subscriptions _model = Sub.none\n\
     onLine s = Line s\n\
-    main = Cli.app\n\
+    main = Cli.tea\n\
     \x20   { init = init, update = update, view = view\n\
     \x20   , subscriptions = subscriptions, onLine = onLine }\n";
 
@@ -144,9 +144,9 @@ const CLI_APP_LINES: &str = "module Main exposing (main)\n\
 /// (and, transitively, `tea`). A missing append surfaces as E0425 `cmd_publish`
 /// at `cargo build`.
 const CMD_PUBLISH: &str = "module Main exposing (main)\n\
-    import Ipe.App.Tea.Web as Web\n\
-    import Ipe.App.Tea.Web.Cmd as Cmd\n\
-    import Ipe.App.Tea.Web.Sub as Sub\n\
+    import Ipe.Tea.Web as Web\n\
+    import Ipe.Tea.Web.Cmd as Cmd\n\
+    import Ipe.Tea.Web.Sub as Sub\n\
     import Ipe.PubSub as PubSub\n\
     import Ipe.Ui as Ui\n\
     type Msg = Publish | Ignored\n\
@@ -158,7 +158,7 @@ const CMD_PUBLISH: &str = "module Main exposing (main)\n\
     \x20   Ignored -> ( model, Cmd.none )\n\
     subscriptions _model = Sub.none\n\
     view _model = Ui.html (Ui.layout [] (Ui.text \"ok\"))\n\
-    main = Web.app { init = init, update = update, view = view\n\
+    main = Web.tea { init = init, update = update, view = view\n\
     \x20            , subscriptions = subscriptions, routes = [], notFound = Ignored }\n";
 
 /// Minimal Web TEA app that registers `Sub.subscribeTopic` in `subscriptions`.
@@ -166,9 +166,9 @@ const CMD_PUBLISH: &str = "module Main exposing (main)\n\
 /// `web` runtime module. A missing append surfaces as E0425 `sub_subscribe_topic`
 /// at `cargo build`.
 const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
-    import Ipe.App.Tea.Web as Web\n\
-    import Ipe.App.Tea.Web.Cmd as Cmd\n\
-    import Ipe.App.Tea.Web.Sub as Sub\n\
+    import Ipe.Tea.Web as Web\n\
+    import Ipe.Tea.Web.Cmd as Cmd\n\
+    import Ipe.Tea.Web.Sub as Sub\n\
     import Ipe.PubSub as PubSub\n\
     import Ipe.Ui as Ui\n\
     type Msg = Got String | Ignored\n\
@@ -180,7 +180,7 @@ const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
     \x20   Ignored -> ( model, Cmd.none )\n\
     subscriptions _model = Sub.subscribeTopic topic Got\n\
     view _model = Ui.html (Ui.layout [] (Ui.text \"ok\"))\n\
-    main = Web.app { init = init, update = update, view = view\n\
+    main = Web.tea { init = init, update = update, view = view\n\
     \x20            , subscriptions = subscriptions, routes = [], notFound = Ignored }\n";
 
 /// `Html.renderStatic` from a CLI `main` (web WITHOUT any TEA/server kernel).
@@ -189,7 +189,7 @@ const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
 /// `crate::tea` before the fix.
 ///
 /// `renderStatic` lives under the shape-neutral `Ipe.Html`, so this Program
-/// imports NO `Ipe.App.Tea.*` shape and is not misclassified as a TEA app (ADR 0048).
+/// imports NO `Ipe.Tea.*` shape and is not misclassified as a TEA app (ADR 0048).
 const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
     import Ipe.Html as Html\n\
     type alias Model = { title : String }\n\
@@ -264,7 +264,7 @@ fn bare_shape_builds() {
     emit_and_build("bare", BARE).expect("bare shape must emit and cargo-build");
 }
 
-/// A `Cli.app` program emits `ipe_runtime::tea::CliApp(console_app(...))`.
+/// A `Cli.tea` program emits `ipe_runtime::tea::CliApp(console_app(...))`.
 /// The epilogue `fn main` must call `ipe_main().run_blocking()` — `CliApp` is
 /// not an `IpeTask`, so `block_on(ipe_main())` does not type-check (E0277/E0308).
 /// This test is the always-run gate for that SEAL class: a misrouted or missing
@@ -275,7 +275,7 @@ fn cli_app_lines_builds() {
         return;
     }
     emit_and_build("cli_app_lines", CLI_APP_LINES).expect(
-        "Cli.app must emit and cargo-build \
+        "Cli.tea must emit and cargo-build \
          (ipe_main must return CliApp and fn main must call run_blocking, not block_on)",
     );
 }
@@ -422,7 +422,7 @@ fn revoke_session_arity3_builds() {
     );
 }
 
-/// Minimal `Tui.app` program — the vendored emit path must include `seal_codec`
+/// Minimal `Tui.tea` program — the vendored emit path must include `seal_codec`
 /// in the emitted `ipe_runtime/mod.rs`.
 ///
 /// `ui/widget.rs` unconditionally imports `crate::seal_codec` under
@@ -431,11 +431,11 @@ fn revoke_session_arity3_builds() {
 /// the emitted crate fails with E0432 (`unresolved import crate::seal_codec`)
 /// at `cargo build` despite `ipe` exiting 0 — the SEAL breach this test gates.
 const TUI_APP: &str = "module Main exposing (main)\n\
-    import Ipe.App.Tea.Tui as Tui\n\
+    import Ipe.Tea.Tui as Tui\n\
     import Ipe.Ui.Cells as Cells\n\
     import Ipe.Ui.Cells exposing (Screen)\n\
-    import Ipe.App.Tea.Tui.Cmd\n\
-    import Ipe.App.Tea.Tui.Sub\n\
+    import Ipe.Tea.Tui.Cmd\n\
+    import Ipe.Tea.Tui.Sub\n\
     type Msg = NoOp\n\
     type alias Model = { count : Int }\n\
     type alias KeyEvent = { kind : String, value : String }\n\
@@ -449,10 +449,10 @@ const TUI_APP: &str = "module Main exposing (main)\n\
     subscriptions _model = Sub.none\n\
     onKey : KeyEvent -> Msg\n\
     onKey _event = NoOp\n\
-    main = Tui.app { init = init, update = update, view = view\n\
+    main = Tui.tea { init = init, update = update, view = view\n\
     \x20            , subscriptions = subscriptions, onKey = onKey }\n";
 
-/// Under the vendored emit model a `Tui.app` program must cargo-build.
+/// Under the vendored emit model a `Tui.tea` program must cargo-build.
 ///
 /// The Tui shape appends `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
 /// `ui/widget.rs` imports `crate::seal_codec` under `#[cfg(feature = "json")]`
@@ -465,7 +465,7 @@ fn tui_app_vendored_builds() {
         return;
     }
     emit_and_build_vendored("tui_app_vendored", TUI_APP).expect(
-        "Tui.app must cargo-build under the vendored emit model \
+        "Tui.tea must cargo-build under the vendored emit model \
          (seal_codec must be declared in ipe_runtime/mod.rs — was E0432)",
     );
 }

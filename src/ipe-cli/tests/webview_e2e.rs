@@ -1,15 +1,15 @@
 //! End-to-end tests for the DOM `Web` shape hosted as a native webview.
 //!
-//! A `Web.app` built under a webview-native (`web desktop`) delivery host is
+//! A `Web.tea` built under a webview-native (`web desktop`) delivery host is
 //! driven by `ipe_runtime::tea::WebViewApp` rather than the served
-//! `ipe_runtime::tea::WebApp`. These tests build a `Web.app` with the webview
+//! `ipe_runtime::tea::WebApp`. These tests build a `Web.tea` with the webview
 //! host forced on and assert the emitted project links and (Tier-B) opens a
 //! window. All tests are gated on `IPE_E2E=1`; without it they return early so
 //! the default `cargo test` stays fast.
 //!
 //! ## Architecture
 //!
-//! 1. A minimal `Web.app` program is written to a temp dir.
+//! 1. A minimal `Web.tea` program is written to a temp dir.
 //! 2. `ipe::build_with_options` compiles it with `webview_host = true` — the
 //!    same host decision the CLI derives from a resolved `web desktop` delivery.
 //! 3. `e2e_support::build_rust_binary` runs `cargo build` on the emitted project.
@@ -19,7 +19,7 @@
 //! * **Tier-A** (`webview_counter_build_only`): ipe compile + `cargo build
 //!   --features webview` links cleanly. The `webview` feature is promoted to the
 //!   default feature list, so a plain `cargo build` already uses it. This is the
-//!   SEAL assertion for a webview-hosted `Web.app`.
+//!   SEAL assertion for a webview-hosted `Web.tea`.
 //! * **Tier-B** (`webview_counter_tier_b`): the compiled binary is launched under
 //!   `xvfb-run -a timeout 5` to exercise the native-window open path. A timeout
 //!   exit (124) means the window stayed alive: pass. The test **loud-skips**
@@ -32,19 +32,19 @@
 //! IPE_E2E=1 cargo test webview_e2e
 //! ```
 
-/// A minimal `Web.app` counter, built under a webview host.
+/// A minimal `Web.tea` counter, built under a webview host.
 ///
 /// The webview executor takes `init/update/view/subscriptions`; the window is a
 /// delivery-host decision (threaded via `BuildOptions::webview_window`), never a
 /// source `main` field. `view` returns `Element Msg` — the same portable Ipe.Ui
 /// view a served `Web` page uses; the framework applies `Ui.layout` internally.
-/// `init` takes `WebReq`, matching the `Web.app` cfg scheme.
+/// `init` takes `WebReq`, matching the `Web.tea` cfg scheme.
 const IPE_WEB_COUNTER: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ui as Ui
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 import Ipe.String
 
 type Msg
@@ -79,7 +79,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -89,19 +89,19 @@ main =
         }
 "#;
 
-/// A minimal `Web.app` mounting a `CustomElement.node` whose DOWN state is a user record
+/// A minimal `Web.tea` mounting a `CustomElement.node` whose DOWN state is a user record
 /// (`EditorState`) and whose UP event is a user ADT (`EditorEvent`).
 ///
 /// The serde-derive gate on a widget's seal types keys on the browser SHAPE
 /// (`uses_web || uses_webview`), not the Model bound, so a serde-legal widget
-/// seal type derives serde in a webview-hosted `Web.app` exactly as in a served
+/// seal type derives serde in a webview-hosted `Web.tea` exactly as in a served
 /// `Web` build. This fixture proves the closed seam: ipe-accept ⇒ cargo-build.
 const IPE_WEB_WIDGET: &str = r#"module Main exposing (main)
 
-import Ipe.App.Tea.Web as Web
+import Ipe.Tea.Web as Web
 import Ipe.Ffi.Js.CustomElement as CustomElement
-import Ipe.App.Tea.Web.Cmd as Cmd
-import Ipe.App.Tea.Web.Sub as Sub
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
 
 type alias EditorState = { text : String, line : Int }
 
@@ -131,7 +131,7 @@ subscriptions _model =
     Sub.none
 
 main =
-    Web.app
+    Web.tea
         { init = init
         , update = update
         , view = view
@@ -163,7 +163,7 @@ fn webview_host_options() -> ipe::BuildOptions {
     }
 }
 
-/// Compile a `Web.app` program string under a webview host, build the emitted
+/// Compile a `Web.tea` program string under a webview host, build the emitted
 /// Rust project, and return the path to the compiled binary.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::PathBuf, BoxError> {
     compile_and_build_with_files(test_name, ipe_source, &[])
@@ -223,12 +223,12 @@ fn is_missing_linux_webview_system_libs(err: &str) -> bool {
     err.contains("cargo build failed") && err.contains("pkg-config exited with status code 1")
 }
 
-/// Tier-A: ipe compiles a `Web.app` under a webview host, the emitted Rust
+/// Tier-A: ipe compiles a `Web.tea` under a webview host, the emitted Rust
 /// project links (with the `webview` + `wry` + `tao` deps from the promoted
 /// default features), and the binary exists.
 ///
 /// Assertions:
-/// - emit: a webview-hosted `Web.app` renders the `WebViewApp` executor with the
+/// - emit: a webview-hosted `Web.tea` renders the `WebViewApp` executor with the
 ///   delivery-host window, and the `fn main` epilogue switches to `run_blocking`.
 /// - manifest: the emitted crate promotes `"webview"` to its default features,
 ///   wires `webview = ["dep:wry", "dep:tao"]`, and the runtime `mod.rs` gets the
@@ -259,7 +259,7 @@ fn webview_counter_build_only() -> Result<(), BoxError> {
 }
 
 /// SEAL golden: a `CustomElement.node` whose down is a user record and up is a user ADT
-/// must ipe-accept AND cargo-build in a webview-hosted `Web.app`.
+/// must ipe-accept AND cargo-build in a webview-hosted `Web.tea`.
 ///
 /// A serde-legal widget seal type derives serde in a webview build exactly as in
 /// a served `Web` build; a clean `cargo build` is the proof.
