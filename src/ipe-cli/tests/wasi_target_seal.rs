@@ -106,19 +106,30 @@ fn wasi_direct_floor_program_cargo_builds_for_wasip1() {
         .args(["--target", "wasm32-wasip1"])
         .current_dir(&out)
         .env("CARGO_TARGET_DIR", &target_dir)
-        // Neutralise a machine-global `[build] rustflags` (e.g. a dev host's
-        // `-C link-arg=-fuse-ld=mold`) for this child build: the wasm link step
-        // uses `rust-lld`, which rejects a system-linker flag. This per-triple
-        // rustflags env var OVERRIDES `[build] rustflags` (cargo does not merge
-        // them), mirroring the repo `.cargo/config.toml` wasm-target override —
-        // so the test proves the CODEGEN seal (ipe-accepts ⇒ cargo-builds),
-        // never the host's ambient linker choice.
-        .env("CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS", "-C debuginfo=0");
-    let status = cargo.status();
+        // Drop any ambient `RUSTFLAGS` / `CARGO_ENCODED_RUSTFLAGS` a dev host or
+        // CI runner exports (e.g. `-C link-arg=-fuse-ld=mold`): a global
+        // `RUSTFLAGS` OUTRANKS every `[target.<triple>] rustflags` config (cargo
+        // picks the FIRST source that sets flags — env before config), so leaving
+        // it set would mask the emitted crate's OWN `.cargo/config.toml`
+        // wasip1-linker override. Cleared here, the child build is governed by
+        // exactly the config the emitter ships — so a pass PROVES the emit-side
+        // seal (the mold-free link an end user gets), never a test-only env patch.
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS");
+    let output = cargo.output();
+    let ok = matches!(&output, Ok(o) if o.status.success());
     assert!(
-        matches!(&status, Ok(s) if s.success()),
+        ok,
         "THE SEAL: a sealed-floor WASI Direct program must cargo-build for \
-         wasm32-wasip1 (ipe-accepts ⇒ cargo-builds); got {status:?}",
+         wasm32-wasip1 (ipe-accepts ⇒ cargo-builds); got {}",
+        match &output {
+            Ok(o) => format!(
+                "status {:?}\n--- cargo stderr ---\n{}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(e) => format!("cargo failed to spawn: {e}"),
+        },
     );
     if e2e_support::child_shared_target_from_env().is_none() {
         let _ = std::fs::remove_dir_all(&target_dir);
