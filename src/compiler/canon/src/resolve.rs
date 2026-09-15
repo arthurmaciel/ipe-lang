@@ -1637,6 +1637,109 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Worker", "tea"),
 ];
 
+/// `true` iff a [`crate::shape_source::SHAPE_ENTRIES`] row lives in the `Ipe.Tea.*`
+/// namespace — the structural discriminator between a TEA app-entry (which has a
+/// [`TEA_APP_ENTRIES`] counterpart) and the sole non-TEA `Ipe.Http.Server`
+/// `listen` shape entry (which does not).
+#[allow(clippy::indexing_slicing)] // indices guarded by `len >= 2` then `== "Ipe"/"Tea"`
+const fn shape_entry_is_tea(path: &[&str]) -> bool {
+    path.len() >= 2
+        && crate::env::const_str_eq(path[0], "Ipe")
+        && crate::env::const_str_eq(path[1], "Tea")
+}
+
+/// `true` iff some [`TEA_APP_ENTRIES`] row is `(qualifier, name)`.
+#[allow(clippy::indexing_slicing)] // index guarded by `i < len`
+const fn tea_app_entries_has(qualifier: &str, name: &str) -> bool {
+    let mut i = 0;
+    while i < TEA_APP_ENTRIES.len() {
+        let (q, n) = TEA_APP_ENTRIES[i];
+        if crate::env::const_str_eq(q, qualifier) && crate::env::const_str_eq(n, name) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// `true` iff some `Ipe.Tea.*` [`crate::shape_source::SHAPE_ENTRIES`] row keys
+/// `(last-path-segment, name)` — the TEA-app view of that table, as
+/// [`TEA_APP_ENTRIES`] keys it.
+#[allow(clippy::indexing_slicing)] // indices guarded by `i < len` / non-empty path in SHAPE_ENTRIES
+const fn shape_entries_tea_has(qualifier: &str, name: &str) -> bool {
+    let entries = crate::shape_source::SHAPE_ENTRIES;
+    let mut i = 0;
+    while i < entries.len() {
+        let (path, n, _) = entries[i];
+        if shape_entry_is_tea(path)
+            && !path.is_empty()
+            && crate::env::const_str_eq(path[path.len() - 1], qualifier)
+            && crate::env::const_str_eq(n, name)
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// **Compile-time bijection tripwire (fail-closed).** The resolver's
+/// [`TEA_APP_ENTRIES`] (keyed by short qualifier) and the classifier's
+/// `Ipe.Tea.*` [`crate::shape_source::SHAPE_ENTRIES`] rows (keyed by canonical path)
+/// name the same TEA app-entries — the former's `(qualifier, name)` is exactly
+/// the latter's `(last-path-segment, name)`. Both peel the same `main` head to
+/// classify a program's shape; a one-sided edit would let `ipe` classify a
+/// program one way at the resolver and another at the shape gate.
+///
+/// This asserts the two-way agreement during const-eval, so the *build* breaks
+/// the instant the tables drift — never a test that can be skipped, nor a
+/// downstream shape misclassification. The `Ipe.Http.Server` `listen` row is not
+/// under `Ipe.Tea.*`, so it is (correctly) excluded from both directions: it is
+/// the one shape entry that is not a TEA app.
+///
+/// The `long_running_const_eval` allow covers the bounded
+/// `TEA_APP_ENTRIES.len() × SHAPE_ENTRIES.len()` cross-scan — deterministic and
+/// finite, just larger than the lint's default step budget.
+#[allow(long_running_const_eval)]
+#[allow(clippy::indexing_slicing)] // indices guarded by `i < len`
+const _: () = {
+    // Forward: every TEA app-entry the resolver recognises must be a
+    // `Ipe.Tea.*` shape entry the classifier recognises.
+    let mut i = 0;
+    while i < TEA_APP_ENTRIES.len() {
+        let (q, n) = TEA_APP_ENTRIES[i];
+        // IPE-RUST-AUDIT:ACCEPTED — runs during const-eval of this `const`, so it
+        // fails the build on table drift and can never panic at runtime.
+        assert!(
+            shape_entries_tea_has(q, n),
+            "shape-table drift: TEA_APP_ENTRIES has an entry with no matching \
+             `Ipe.Tea.*` SHAPE_ENTRIES row (by last-path-segment + name). Add the \
+             row to crate::shape_source::SHAPE_ENTRIES, or remove the stale TEA_APP_ENTRIES \
+             entry.",
+        );
+        i += 1;
+    }
+    // Backward: every `Ipe.Tea.*` shape entry must be a TEA app-entry the
+    // resolver recognises (non-`Ipe.Tea` rows, e.g. `Ipe.Http.Server`, are
+    // excluded by construction — they are not TEA apps).
+    let entries = crate::shape_source::SHAPE_ENTRIES;
+    let mut j = 0;
+    while j < entries.len() {
+        let (path, n, _) = entries[j];
+        if shape_entry_is_tea(path) && !path.is_empty() {
+            let qualifier = path[path.len() - 1];
+            // IPE-RUST-AUDIT:ACCEPTED — const-eval build-time proof, never a runtime abort.
+            assert!(
+                tea_app_entries_has(qualifier, n),
+                "shape-table drift: an `Ipe.Tea.*` SHAPE_ENTRIES row has no matching \
+                 TEA_APP_ENTRIES entry (by last-path-segment + name). Add the entry \
+                 to TEA_APP_ENTRIES, or remove the stale SHAPE_ENTRIES row.",
+            );
+        }
+        j += 1;
+    }
+};
+
 /// The canonical shape (rendering family) name for a TEA surface segment. Most
 /// shapes name themselves; the two terminal drive-axis surfaces (`Tui` / `Cli`)
 /// both fold onto the one `Terminal` rendering family, so their shape-scoped
