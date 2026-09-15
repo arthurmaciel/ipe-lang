@@ -89,6 +89,13 @@ pub struct ProjectManifest {
     /// presence pre-accepts the `.Unsafe`-import acknowledgment so a repeatedly
     /// built project never re-prompts and CI needs no flag. Empty when absent.
     pub capabilities_accept: BTreeSet<Capability>,
+    /// The `[capabilities] acceptsControl = […]` set: the elevated control models
+    /// (see [`crate::delivery::ControlModel`]) the consumer has reviewed and
+    /// accepted. The managed models (`tea`/`server`) run under the runtime's loop
+    /// and need no accept; only the self-driving `direct` model must appear here,
+    /// or the control-model consent gate refuses the build fail-closed. Empty when
+    /// the section is absent — the strict default that admits only managed models.
+    pub control_models_accept: BTreeSet<crate::delivery::ControlModel>,
     /// Whether the manifest contains a `[rust.wrapper]` section. The audit gate
     /// reads this to detect author-asserted wrapper bindings that it cannot
     /// regenerate from an independent pinned source (there is no registry pin,

@@ -366,6 +366,23 @@ fn audit_gate(
         emitted_dir: &prepared.emitted_dir,
         probe_fixture: tier2_probe_fixture()?,
     })?;
+
+    // Control-model consent (defence-in-depth boundary, sibling of the build-time
+    // gate): a package whose runnable entry runs an elevated (`Direct`) control
+    // model its own manifest does not accept is a fail-closed audit rejection. A
+    // managed model or a library (`NotApplicable`) needs no accept and passes
+    // silently. It runs LAST — after the native-bearing fail-closed checks
+    // (binding regeneration, provenance, Tier-2) — so the consent decision is the
+    // final gate on an otherwise-certifiable package and never preempts a
+    // native-surface refusal.
+    if let ControlModelDisclosure::Entry(model) = disclosure.control_model {
+        crate::control_model_consent::gate(
+            model,
+            &prepared.manifest.control_models_accept,
+            &prepared.manifest.name,
+        )?;
+    }
+
     Ok((tier2, disclosure))
 }
 
@@ -2298,6 +2315,83 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn audit_refuses_a_direct_entry_a_declared_accept_set_does_not_cover() {
+        // The audit-boundary control-model consent (defence-in-depth): a package
+        // that opted into control-model consent (a non-empty `acceptsControl`)
+        // whose declared set does not cover its actual Direct model is refused —
+        // fail-closed, never certified against a stale acceptance.
+        let (dir, mut prepared) = prepared_with_main(
+            "audit-consent-direct",
+            "module Main exposing (main)\n\nmain = doNothing\n",
+        );
+        prepared.manifest.control_models_accept =
+            std::iter::once(crate::delivery::ControlModel::Tea).collect();
+        let disclosure = derive_disclosure(&prepared, BTreeSet::new()).expect("derives Direct");
+        assert_eq!(
+            disclosure.control_model,
+            ControlModelDisclosure::Entry(crate::delivery::ControlModel::Direct),
+            "a plain-Task entry discloses the Direct model"
+        );
+        let err = crate::control_model_consent::gate(
+            crate::delivery::ControlModel::Direct,
+            &prepared.manifest.control_models_accept,
+            &prepared.manifest.name,
+        )
+        .expect_err("a declared accept-set that omits the derived model is refused");
+        assert!(err.to_string().contains("IPE-S0004"), "carries the code");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_accepts_a_direct_entry_a_declared_accept_set_covers() {
+        let (dir, mut prepared) = prepared_with_main(
+            "audit-consent-direct-ok",
+            "module Main exposing (main)\n\nmain = doNothing\n",
+        );
+        prepared.manifest.control_models_accept =
+            std::iter::once(crate::delivery::ControlModel::Direct).collect();
+        let disclosure = derive_disclosure(&prepared, BTreeSet::new()).expect("derives Direct");
+        assert_eq!(
+            disclosure.control_model,
+            ControlModelDisclosure::Entry(crate::delivery::ControlModel::Direct),
+        );
+        crate::control_model_consent::gate(
+            crate::delivery::ControlModel::Direct,
+            &prepared.manifest.control_models_accept,
+            &prepared.manifest.name,
+        )
+        .expect("a Direct entry a declared accept-set covers passes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_leaves_a_clean_entry_with_no_accept_set_unconstrained() {
+        // A clean package with no `acceptsControl` — including a legitimate
+        // self-driving Direct script — certifies: the model is disclosed, not
+        // gated, until the author opts into control-model consent.
+        let (dir, prepared) = prepared_with_main(
+            "audit-consent-clean",
+            "module Main exposing (main)\n\nmain = doNothing\n",
+        );
+        let disclosure = derive_disclosure(&prepared, BTreeSet::new()).expect("derives Direct");
+        assert_eq!(
+            disclosure.control_model,
+            ControlModelDisclosure::Entry(crate::delivery::ControlModel::Direct),
+        );
+        assert!(
+            prepared.manifest.control_models_accept.is_empty(),
+            "the clean package declares no acceptsControl"
+        );
+        crate::control_model_consent::gate(
+            crate::delivery::ControlModel::Direct,
+            &prepared.manifest.control_models_accept,
+            &prepared.manifest.name,
+        )
+        .expect("a clean Direct entry with no acceptsControl certifies unconstrained");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── Advisory-check gate-level tests ─────────────────────────────────────
 
     /// Build a minimal `Prepared` whose `manifest.root` points at `root`.
@@ -2318,6 +2412,7 @@ mod tests {
                 rust_dependencies: BTreeMap::new(),
                 capabilities: BTreeSet::new(),
                 capabilities_accept: BTreeSet::new(),
+                control_models_accept: BTreeSet::new(),
                 has_rust_wrapper: false,
                 programs: Vec::new(),
                 exposed_modules: Vec::new(),

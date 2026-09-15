@@ -260,6 +260,9 @@ impl BuilderReader<'_> {
             rust_dependencies: fields.rust_dependencies,
             capabilities: fields.capabilities,
             capabilities_accept: fields.capabilities_accept,
+            // A legacy manifest has no control-model concept; migration starts from
+            // the empty strict default (only managed models admitted).
+            control_models_accept: std::collections::BTreeSet::new(),
             has_rust_wrapper: false,
             programs: fields.programs,
             exposed_modules: fields.exposed_modules,
@@ -622,6 +625,9 @@ fn read_legacy_toml(text: &str, root: &Path) -> Result<ProjectManifest, CliError
         rust_dependencies: BTreeMap::new(),
         capabilities,
         capabilities_accept,
+        // A legacy `ipe.toml` has no control-model concept; migration starts from
+        // the empty strict default (only managed models admitted).
+        control_models_accept: BTreeSet::new(),
         has_rust_wrapper: false,
         programs: Vec::new(),
         exposed_modules: Vec::new(),
