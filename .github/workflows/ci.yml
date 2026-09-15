@@ -372,7 +372,11 @@ jobs:
       # deliberately excluded — the WASI accept-path selects only the sealed
       # floor.
       - run: cargo build -p ipe-runtime-rust --target wasm32-wasip1 --no-default-features
-      - run: cargo build -p ipe-runtime-rust --target wasm32-wasip1 --no-default-features --features time,log,json,uuid,random,decimal,regex
+      # The full WASI-admitted floor (available_on(WasmWasi)): pure families +
+      # crypto-core/secret/char-category. Building it here keeps THE SEAL live —
+      # a future regression that breaks any admitted feature on wasip1 reddens CI
+      # instead of shipping an ipe-accept-then-cargo-fail.
+      - run: cargo build -p ipe-runtime-rust --target wasm32-wasip1 --no-default-features --features time,log,json,uuid,random,decimal,regex,crypto-core,secret,char-category
 
   # ── test: build-once, shard-run ──────────────────────────────────────────────
   # The workspace's ~170 test binaries each statically link the full compiler

@@ -471,10 +471,11 @@ impl Delivery {
     /// permissive catch-all — a tuple not enumerated legal hits a refusal arm.
     /// A new [`Engine`], [`Host`], or [`TargetTriple`] member forces a new arm at
     /// compile time, so a forgotten combination cannot ship as an open default.
-    /// Co-located WASI (`wasm32-wasip1`) has no accept-path yet — its runtime
-    /// port has not landed — so every WASI triple is refused here; opening it
-    /// before the runtime exists would break THE SEAL (an effectful co-located
-    /// program would `ipe`-accept then fail `cargo build --target wasm32-wasip1`).
+    /// Co-located WASI (`wasm32-wasip1`) accepts only the sealed Direct/Script
+    /// floor (`available_on(WasmWasi)`: the pure + always-on effect-floor kernels
+    /// that build on wasip1); every non-viable shape (TEA/Server/Web) or kernel
+    /// (Http/WebSocket/Db/…) is refused here at ipe time, so THE SEAL holds — an
+    /// admitted wasip1 program `cargo build`s for that target.
     ///
     /// # Errors
     /// [`DeliveryError`] naming the exact illegal `(engine, delivery, triple)`
