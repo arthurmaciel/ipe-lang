@@ -306,6 +306,12 @@ pub type Pattern = Located<Pattern_>;
 pub enum Pattern_ {
     /// The wildcard `_`.
     PAnything,
+    /// The development-only catch-all `Debug._`. Covers every value like
+    /// [`Self::PAnything`] and is likewise irrefutable, but is EXEMPT from the
+    /// closed-union catch-all error (IPE-T0018) and, at lowering, marks its
+    /// module `uses_debug` so `ipe release` rejects it (IPE-L0140) — the same
+    /// development-only posture as every other `Ipe.Debug` member.
+    PDebugAnything,
     /// The unit pattern `()` — the sole value of the unit type. Binds nothing,
     /// typed at `()`. Irrefutable: unit has exactly one value.
     PUnit,
@@ -370,7 +376,7 @@ impl Pattern_ {
     ///
     /// | Variant | irrefutable? |
     /// |---|---|
-    /// | [`Self::PVar`], [`Self::PAnything`] | `true` |
+    /// | [`Self::PVar`], [`Self::PAnything`], [`Self::PDebugAnything`] | `true` |
     /// | [`Self::PRecord`] | `true` (field-pun; always matches once the record type is fixed) |
     /// | [`Self::PTuple`] | all elements irrefutable |
     /// | [`Self::PAlias`] | inner irrefutable |
@@ -379,7 +385,11 @@ impl Pattern_ {
     #[must_use]
     pub fn is_irrefutable(&self) -> bool {
         match self {
-            Self::PVar(_) | Self::PAnything | Self::PUnit | Self::PRecord(_) => true,
+            Self::PVar(_)
+            | Self::PAnything
+            | Self::PDebugAnything
+            | Self::PUnit
+            | Self::PRecord(_) => true,
             Self::PTuple(elems) => elems.iter().all(|e| e.value.is_irrefutable()),
             Self::PAlias(inner, _) => inner.value.is_irrefutable(),
             Self::POr(alts) => alts.iter().all(|a| a.value.is_irrefutable()),

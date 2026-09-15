@@ -5093,8 +5093,10 @@ fn canonicalise_value(
 /// Bind every variable a pattern introduces as a local in the environment.
 fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
     match p {
-        // The wildcard, the unit pattern, and the literal leaves all bind nothing.
+        // The wildcard, the dev-only `Debug._` catch-all, the unit pattern, and
+        // the literal leaves all bind nothing.
         src::Pattern_::PAnything
+        | src::Pattern_::PDebugAnything
         | src::Pattern_::PUnit
         | src::Pattern_::PInt(_)
         | src::Pattern_::PBool(_)
@@ -5151,6 +5153,7 @@ fn bound_name_set(p: &src::Pattern_) -> std::collections::BTreeSet<Symbol> {
 fn collect_bound_names(p: &src::Pattern_, names: &mut std::collections::BTreeSet<Symbol>) {
     match p {
         src::Pattern_::PAnything
+        | src::Pattern_::PDebugAnything
         | src::Pattern_::PUnit
         | src::Pattern_::PInt(_)
         | src::Pattern_::PBool(_)
@@ -5227,6 +5230,7 @@ fn collect_binders_no_dup(
     };
     match &p.value {
         src::Pattern_::PAnything
+        | src::Pattern_::PDebugAnything
         | src::Pattern_::PUnit
         | src::Pattern_::PInt(_)
         | src::Pattern_::PBool(_)
@@ -5278,6 +5282,7 @@ fn canonicalise_pattern(
     let span = p.span;
     let node = match &p.value {
         src::Pattern_::PAnything => canon::Pattern_::PAnything,
+        src::Pattern_::PDebugAnything => canon::Pattern_::PDebugAnything,
         src::Pattern_::PUnit => canon::Pattern_::PUnit,
         src::Pattern_::PVar(name) => canon::Pattern_::PVar(*name),
         src::Pattern_::PCtor(name, _, args) => {

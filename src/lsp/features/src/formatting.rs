@@ -463,6 +463,7 @@ fn push_pattern(
     let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
     match &pat.value {
         ipe_syntax::Pattern_::PAnything => out.push('_'),
+        ipe_syntax::Pattern_::PDebugAnything => out.push_str("Debug._"),
         ipe_syntax::Pattern_::PUnit => out.push_str("()"),
         ipe_syntax::Pattern_::PVar(sym) => out.push_str(resolve(*sym)),
         ipe_syntax::Pattern_::PCtor(name, module_segs, args) => {

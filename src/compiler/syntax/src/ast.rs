@@ -382,6 +382,14 @@ pub type Pattern = Located<Pattern_>;
 pub enum Pattern_ {
     /// The wildcard `_`.
     PAnything,
+    /// The development-only catch-all `Debug._`. Matches every value exactly
+    /// like [`Self::PAnything`], but is a deliberate escape hatch: it satisfies
+    /// exhaustiveness WITHOUT being subject to the closed-union catch-all error
+    /// (IPE-T0018), so a developer can defer handling of some variants during
+    /// development. Like every `Ipe.Debug` member it is rejected by `ipe
+    /// release` (IPE-L0140): reaching a `Debug._` at lowering marks the module
+    /// `uses_debug`, so the single production gate turns the release build back.
+    PDebugAnything,
     /// A variable binding.
     PVar(Symbol),
     /// A constructor pattern: name, dotted module segments, sub-patterns.

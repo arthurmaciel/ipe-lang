@@ -1292,7 +1292,7 @@ fn reject_dev_only_in_production(
         let diag = Diagnostic::Lower {
             span: ipe_diagnostics::Span::DUMMY,
             msg: ipe_diagnostics::LowerError::DevOnlyKernelInProduction {
-                kernel: "Debug.log".into(),
+                kernel: "Debug.*".into(),
             },
         };
         return Err((diag, home));
