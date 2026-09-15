@@ -141,8 +141,10 @@ const SHAPE_VIEW_LIBRARIES: &[(&[&str], &str, &str, Option<RenderSink>)] = &[
 ];
 
 /// The Script-hole hint (IPE-N0050): a **Warning** for a Script that imports a
-/// shape's view/UI library, builds a view, but — being a Script (a plain-`Task`
-/// `main`) — never renders it, so that UI is genuinely dropped.
+/// shape's view/UI library but never renders it.
+///
+/// Being a Script (a plain-`Task` `main`), any view it builds cannot be rendered,
+/// so that UI is genuinely dropped.
 ///
 /// Returns `None` for any non-Script `main` (an app renders its view; no hole),
 /// a Script that imports no shape view library (nothing built to drop), or a
