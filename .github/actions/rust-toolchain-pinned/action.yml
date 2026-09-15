@@ -1,0 +1,49 @@
+name: Install the pinned Rust toolchain
+description: >-
+  Install the exact toolchain channel declared in `rust-toolchain.toml`, so CI
+  always runs the same compiler a lane runs locally. The channel is read from
+  the file (never restated here), then handed to `dtolnay/rust-toolchain@master`
+  with an explicit `toolchain`, so there is no floating `@stable` tag to drift.
+  Extra `components`/`targets` a job needs are forwarded; the toolchain's own
+  declared set is a rustup default, this installs what a job additionally links.
+
+inputs:
+  components:
+    description: Comma-separated extra components (e.g. `clippy`, `rustfmt`).
+    required: false
+    default: ""
+  targets:
+    description: Comma-separated extra target triples (e.g. `wasm32-unknown-unknown`).
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # Read `channel = "X"` from rust-toolchain.toml. `[[:space:]]` tolerates any
+    # spacing; the first match wins. An empty result is a hard failure below —
+    # never a silent fallback to some other toolchain.
+    - name: Read the pinned channel from rust-toolchain.toml
+      id: channel
+      shell: bash
+      run: |
+        set -euo pipefail
+        file="rust-toolchain.toml"
+        if [[ ! -f "$file" ]]; then
+          echo "::error::${file} not found; cannot determine the pinned toolchain." >&2
+          exit 1
+        fi
+        channel="$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$file" | head -n1)"
+        if [[ -z "$channel" ]]; then
+          echo "::error::No 'channel = \"...\"' line in ${file}; cannot determine the pinned toolchain." >&2
+          exit 1
+        fi
+        echo "Pinned toolchain channel: ${channel}"
+        echo "channel=${channel}" >> "$GITHUB_OUTPUT"
+
+    - name: Install the pinned toolchain
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.channel.outputs.channel }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}

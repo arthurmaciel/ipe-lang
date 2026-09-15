@@ -57,7 +57,7 @@ jobs:
           # Build the tagged commit for both triggers: the release event's tag,
           # or the manually-dispatched tag input.
           ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2

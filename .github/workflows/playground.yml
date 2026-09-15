@@ -63,7 +63,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
         with:
           targets: wasm32-unknown-unknown
       - uses: mozilla-actions/sccache-action@v0.0.9
@@ -86,7 +86,7 @@ jobs:
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
