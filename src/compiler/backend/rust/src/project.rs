@@ -1792,7 +1792,9 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // Fixed kernel-wrapper prelude (IpeError, IpeTask<A>, Decoder<T>, …);
         // the wasm target takes the floor-filtered subset.
         match ctx.target {
-            ipe_ir::Target::Native => {
+            // Co-located WASI shares the native emission (block_on drives a
+            // `Direct`/`Script` `main` over WASI) — only the target triple differs.
+            ipe_ir::Target::Native | ipe_ir::Target::WasmWasi => {
                 out.push_str(&native_runtime_bindings(PreludeReach {
                     http_client: ctx.reaches_http_client(),
                     random: ctx.reaches_random(),
@@ -1836,7 +1838,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         }
 
         match ctx.target {
-            ipe_ir::Target::Native => out.push_str(&epilogue()?),
+            ipe_ir::Target::Native | ipe_ir::Target::WasmWasi => out.push_str(&epilogue()?),
             ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm(ctx)?),
         }
 
@@ -1869,8 +1871,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         //
         // WASM: `epilogue_wasm` uses a different entry without `block_on`, so
         // the switch is skipped there.
-        if ctx.target == ipe_ir::Target::Native
-            && SHAPE_APP_RETURN_TYPES.iter().any(|sig| out.contains(sig))
+        if matches!(
+            ctx.target,
+            ipe_ir::Target::Native | ipe_ir::Target::WasmWasi
+        ) && SHAPE_APP_RETURN_TYPES.iter().any(|sig| out.contains(sig))
         {
             let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
             if replaced == out {
@@ -3344,7 +3348,10 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     }
 
     match ctx.target {
-        ipe_ir::Target::Native => {
+        // Co-located WASI shares the native emission: a `Direct`/`Script`
+        // program's native effect floor runs over WASI (block_on drives `main`),
+        // NOT the browser TEA sink — only the wasip1 target triple differs.
+        ipe_ir::Target::Native | ipe_ir::Target::WasmWasi => {
             out.push_str(&native_runtime_bindings(PreludeReach {
                 http_client: ctx.reaches_http_client(),
                 random: ctx.reaches_random(),
@@ -3371,7 +3378,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     out.push('\n');
 
     match ctx.target {
-        ipe_ir::Target::Native => out.push_str(&epilogue()?),
+        ipe_ir::Target::Native | ipe_ir::Target::WasmWasi => out.push_str(&epilogue()?),
         ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm(ctx)?),
     }
 
@@ -3396,7 +3403,12 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
             })
         })
     });
-    if main_returns_shape_leaf && ctx.target == ipe_ir::Target::Native {
+    if main_returns_shape_leaf
+        && matches!(
+            ctx.target,
+            ipe_ir::Target::Native | ipe_ir::Target::WasmWasi
+        )
+    {
         let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
         if replaced == out {
             return Err(Diagnostic::CompilerBug {

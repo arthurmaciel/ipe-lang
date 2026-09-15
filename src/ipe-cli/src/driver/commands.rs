@@ -444,6 +444,28 @@ pub fn resolve_wasm_target(cli_wasm: bool, wasm_config: Option<&project::WasmCon
         || wasm_config.is_some_and(project::WasmConfig::implies_wasm_target)
 }
 
+/// Project the resolved wasm-vs-native bit into the `(engine, triple)` pair the
+/// delivery validity matrix ([`delivery::Delivery::admit_triple`]) gates on.
+///
+/// The CLI target surface today is exactly two cells: the browser client
+/// (`--target wasm` → the sandboxed `wasm32-unknown-unknown` engine) and the
+/// native host binary (its own triple). This is the single point that maps the
+/// bit to the typed matrix axes, so the matrix — not a separate biconditional —
+/// is the live gate at every `run_*_body` callsite. The co-located WASI engine
+/// (`Engine::WasmWasi` / `wasm32-wasip1`) has no CLI selector yet, so it is not
+/// produced here; the matrix already refuses every WASI cell reached by any
+/// other path.
+const fn delivery_engine_triple(wasm_target: bool) -> (delivery::Engine, delivery::TargetTriple) {
+    if wasm_target {
+        (
+            delivery::Engine::WasmClient,
+            delivery::TargetTriple::BrowserWasm,
+        )
+    } else {
+        (delivery::Engine::Native, delivery::TargetTriple::Host)
+    }
+}
+
 /// `ipe build [<path>]` — compile a program to a native or WebAssembly artifact.
 // A linear pipeline (parse → discover manifest → acknowledge unsafe → resolve
 // target → emit → cargo build); the steps share enough locals that splitting
@@ -614,11 +636,16 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     let wasm_target = resolve_wasm_target(wasm_target, manifest_wasm.as_ref());
 
     // The delivery runtime and the compile target are derived independently; fail
-    // closed unless they agree — a `spa` delivery MUST compile to wasm, and a wasm
-    // target MUST carry a `spa` delivery. This keeps the wasm-keyed native-deny
-    // backstops reachable for every sandboxed client.
+    // closed unless they agree — the `(engine, triple)` validity matrix is the
+    // single live gate. A `spa` delivery MUST compile to the browser wasm engine,
+    // and the browser engine MUST carry a `spa` delivery; a co-located native
+    // delivery MUST resolve to the native engine. This keeps the wasm-keyed
+    // native-deny backstops reachable for every sandboxed client, and is the
+    // structural successor to the `spa` IFF wasm biconditional (it subsumes it
+    // and adds the third — triple — axis).
+    let (engine, triple) = delivery_engine_triple(wasm_target);
     delivery
-        .reconcile_wasm_target(wasm_target)
+        .admit_triple(engine, triple)
         .map_err(|e| CliError::UsageOwned(format!("ipe build: {e}")))?;
 
     // The dependency model (native OR wasm) needs no vendored tree — the runtime
@@ -1005,12 +1032,13 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         manifest_wasm.as_ref(),
     );
 
-    // Fail closed unless the delivery runtime and the compile target agree — a
-    // `spa` delivery MUST compile to wasm, and a wasm target MUST carry a `spa`
-    // delivery — so a sandboxed client is never released as a native binary with
-    // the wasm-keyed native-deny backstops skipped.
+    // Fail closed unless the delivery runtime and the compile target agree — the
+    // `(engine, triple)` validity matrix is the single live gate — so a sandboxed
+    // client is never released as a native binary with the wasm-keyed native-deny
+    // backstops skipped.
+    let (engine, triple) = delivery_engine_triple(wasm_target);
     bundle_delivery_resolved
-        .reconcile_wasm_target(wasm_target)
+        .admit_triple(engine, triple)
         .map_err(|e| CliError::UsageOwned(format!("ipe release: {e}")))?;
 
     if wasm_target {
@@ -1912,12 +1940,13 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     // exec). A plain `ipe run` in a non-wasm project stays native.
     let wasm_target = resolve_wasm_target(false, manifest_wasm.as_ref());
 
-    // Fail closed unless the delivery runtime and the compile target agree — a
-    // `spa` delivery MUST compile to wasm, and a wasm target MUST carry a `spa`
-    // delivery — so the wasm-keyed native-deny backstops are never skipped for a
-    // sandboxed client that slipped through as a native run.
+    // Fail closed unless the delivery runtime and the compile target agree — the
+    // `(engine, triple)` validity matrix is the single live gate — so the
+    // wasm-keyed native-deny backstops are never skipped for a sandboxed client
+    // that slipped through as a native run.
+    let (engine, triple) = delivery_engine_triple(wasm_target);
     delivery
-        .reconcile_wasm_target(wasm_target)
+        .admit_triple(engine, triple)
         .map_err(|e| CliError::UsageOwned(format!("ipe run: {e}")))?;
 
     // The dependency model (native OR wasm) needs no vendored tree — the runtime

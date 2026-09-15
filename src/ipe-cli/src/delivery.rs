@@ -201,6 +201,12 @@ pub enum Engine {
     /// The sandboxed browser WASM client (`web spa`) — the default-deny
     /// allowlist. Effects only via Web-API substitutes; native effects denied.
     WasmClient,
+    /// The co-located portable WASI engine (`wasm32-wasip1`) — a
+    /// `Direct`/`Script` program's native effect floor over WASI. Distinct from
+    /// `WasmClient`: it runs native-ish effects (stdio, the WASI clock, the
+    /// preopened-dir filesystem, `random_get`), not the browser sandbox. Its
+    /// `available_on` is default-deny to the WASI-viable sealed floor.
+    WasmWasi,
 }
 
 impl Engine {
@@ -212,6 +218,7 @@ impl Engine {
         match target {
             ipe_ir::Target::Native => Self::Native,
             ipe_ir::Target::WasmClient => Self::WasmClient,
+            ipe_ir::Target::WasmWasi => Self::WasmWasi,
         }
     }
 }
@@ -521,6 +528,35 @@ impl Delivery {
                     }
                 }
             }
+            // The co-located portable WASI engine: exactly the sealed
+            // `Direct`/`Script` floor on the `wasm32-wasip1` triple, and nothing
+            // else. It is NEVER `spa` (that is the browser sandbox), and it
+            // carries ONLY a `Direct` control model — a TEA loop (`Tui`/`Cli`/
+            // `Web`) or a declarative `Server` has no co-located WASI floor
+            // (its runtime spine pulls tokio/axum, which do not build on wasip1),
+            // so admitting one would break THE SEAL. The other triples have no
+            // WASI form: the browser triple is the sandbox, and a musl/host
+            // triple is a native binary, not a wasip1 module.
+            Engine::WasmWasi => {
+                if is_spa {
+                    return Err(DeliveryError::WasiRefusesSpaDelivery);
+                }
+                match self.shape.control_model() {
+                    ControlModel::Direct => {}
+                    ControlModel::Tea | ControlModel::Server => {
+                        return Err(DeliveryError::WasiRequiresDirectShape { shape: self.shape });
+                    }
+                }
+                match triple {
+                    TargetTriple::Wasm32Wasip1 => Ok(()),
+                    TargetTriple::BrowserWasm
+                    | TargetTriple::Host
+                    | TargetTriple::X8664LinuxMusl
+                    | TargetTriple::Aarch64LinuxMusl => {
+                        Err(DeliveryError::WasiRequiresWasiTriple { triple })
+                    }
+                }
+            }
         }
     }
 }
@@ -620,6 +656,25 @@ pub enum DeliveryError {
     WebviewHasNoStaticTriple {
         /// The webview-native delivery that has no static triple.
         delivery: Delivery,
+    },
+    /// A co-located WASI build was asked to carry a `spa` delivery. `spa` is the
+    /// browser sandbox (`wasm32-unknown-unknown`); WASI is the co-located
+    /// native-ish target — the two are opposite ends of the wasm axis.
+    WasiRefusesSpaDelivery,
+    /// A co-located WASI build was asked for a non-`Direct` shape (a `Tui`/`Cli`/
+    /// `Web` TEA loop, or a `Server`). Only a `Direct` (`Task Error ()` script)
+    /// program has a co-located WASI floor: a TEA/server spine pulls
+    /// tokio/axum, which do not build on `wasm32-wasip1`.
+    WasiRequiresDirectShape {
+        /// The non-`Direct` shape asked for on the WASI engine.
+        shape: Shape,
+    },
+    /// A co-located WASI engine was asked for a triple other than
+    /// `wasm32-wasip1`. The WASI engine compiles only to its own portable
+    /// triple.
+    WasiRequiresWasiTriple {
+        /// The non-WASI triple asked for on the WASI engine.
+        triple: TargetTriple,
     },
 }
 
@@ -796,6 +851,33 @@ impl fmt::Display for DeliveryError {
                 "`{delivery}` links the system webview at runtime, so it has no \
                  static (musl) triple. Use `web` (served-live), `tui`, `cli`, or \
                  `server` for a static musl binary, or ship the desktop app bundle.",
+            ),
+            Self::WasiRefusesSpaDelivery => write!(
+                f,
+                "a co-located `wasm32-wasip1` build cannot carry a `spa` delivery. \
+                 `spa` is the browser sandbox (`wasm32-unknown-unknown`), which \
+                 denies native effects; WASI is the co-located, native-ish target \
+                 that runs a script's own effect floor. Drop `spa` for a WASI \
+                 build, or deliver `web spa` to the browser triple.",
+            ),
+            Self::WasiRequiresDirectShape { shape } => write!(
+                f,
+                "a co-located `wasm32-wasip1` build carries only a `Direct` script \
+                 (a plain `Task Error ()` `main`), but this is a `{}` app. A \
+                 `tui`/`cli`/`web` TEA loop and a `server` need the tokio/axum \
+                 reactor spine, which does not build on WASI. Build the `{}` app \
+                 natively, or ship a `Direct` script to `wasm32-wasip1`.",
+                shape.word(),
+                shape.word(),
+            ),
+            Self::WasiRequiresWasiTriple { triple } => write!(
+                f,
+                "a co-located WASI build compiles only to `wasm32-wasip1`, but `{}` \
+                 was requested. The WASI engine has exactly one triple — its \
+                 portable target. Drop the triple (it is implied by the WASI \
+                 build), or pick the delivery that carries `{}`.",
+                triple.as_str(),
+                triple.as_str(),
             ),
         }
     }
@@ -1084,6 +1166,7 @@ mod tests {
         // a second derivation — pins the SSOT map against drift.
         assert_eq!(Engine::of(ipe_ir::Target::Native), Engine::Native);
         assert_eq!(Engine::of(ipe_ir::Target::WasmClient), Engine::WasmClient);
+        assert_eq!(Engine::of(ipe_ir::Target::WasmWasi), Engine::WasmWasi);
     }
 
     // --- Refusals first: every illegal cell turned away with a typed diagnostic.
@@ -1098,16 +1181,72 @@ mod tests {
     }
 
     #[test]
-    fn colocated_wasi_is_refused_until_runtime() {
-        // Co-located WASI has NO accept-path in this increment (the runtime port
-        // has not landed). Every co-located delivery asking for `wasm32-wasip1`
-        // on the only engines that exist today (Native/WasmClient) is refused —
-        // proving no accept-path opened that could break THE SEAL.
+    fn wasi_engine_admits_only_direct_script() {
+        // The co-located WASI accept-path: a `Direct` script (`Task Error ()`)
+        // on `wasm32-wasip1` is the ONE admitted cell. THE SEAL rests on this —
+        // only the sealed floor a `Direct` program reaches builds on wasip1.
+        let script = Delivery::resolve(Shape::Script, None, Host::Default).unwrap();
+        assert_eq!(
+            script.admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    fn wasi_engine_refuses_non_direct_shapes() {
+        // A TEA loop (`Tui`/`Cli`/`Web`) or a `Server` has no co-located WASI
+        // floor — its spine pulls tokio/axum, which do not build on wasip1.
+        // Fail-closed with a typed diagnostic so the unbuildable shape never
+        // reaches the wasip1 `cargo build`.
+        for shape in [Shape::Tui, Shape::Cli, Shape::Server] {
+            let d = Delivery::resolve(shape, None, Host::Default).unwrap();
+            assert_eq!(
+                d.admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
+                Err(DeliveryError::WasiRequiresDirectShape { shape }),
+                "the WASI engine must refuse the non-Direct {shape:?} shape",
+            );
+        }
+        // A `web` (live) app is a TEA loop too — refused on the WASI engine.
+        assert_eq!(
+            served_live().admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
+            Err(DeliveryError::WasiRequiresDirectShape { shape: Shape::Web }),
+        );
+    }
+
+    #[test]
+    fn wasi_engine_refuses_spa_delivery() {
+        // `spa` is the browser sandbox — the exact opposite of co-located WASI.
+        assert_eq!(
+            spa().admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
+            Err(DeliveryError::WasiRefusesSpaDelivery),
+        );
+    }
+
+    #[test]
+    fn wasi_engine_refuses_non_wasi_triples() {
+        // The WASI engine compiles only to its own portable triple; every other
+        // triple (browser sandbox, host, musl) has no wasip1 form.
+        let script = Delivery::resolve(Shape::Script, None, Host::Default).unwrap();
+        for t in [
+            TargetTriple::BrowserWasm,
+            TargetTriple::Host,
+            TargetTriple::X8664LinuxMusl,
+            TargetTriple::Aarch64LinuxMusl,
+        ] {
+            assert_eq!(
+                script.admit_triple(Engine::WasmWasi, t),
+                Err(DeliveryError::WasiRequiresWasiTriple { triple: t }),
+            );
+        }
+    }
+
+    #[test]
+    fn native_engine_still_refuses_wasi_triple() {
+        // The WASI triple is admissible ONLY on the WASI engine — the native
+        // engine has no wasip1 form (defense in depth against a mis-routed
+        // triple slipping past the engine gate).
         for d in [
             Delivery::resolve(Shape::Script, None, Host::Default).unwrap(),
-            Delivery::resolve(Shape::Tui, None, Host::Default).unwrap(),
-            Delivery::resolve(Shape::Cli, None, Host::Default).unwrap(),
-            Delivery::resolve(Shape::Server, None, Host::Default).unwrap(),
             served_live(),
         ] {
             assert_eq!(
@@ -1115,7 +1254,6 @@ mod tests {
                 Err(DeliveryError::NativeEngineRefusesWasmTriple {
                     triple: TargetTriple::Wasm32Wasip1
                 }),
-                "co-located WASI must stay refused for {d} until the runtime lands",
             );
         }
     }
@@ -1266,6 +1404,11 @@ mod tests {
             DeliveryError::SpaRefusesWasiTriple,
             DeliveryError::WebviewHasNoStaticTriple {
                 delivery: web_desktop(),
+            },
+            DeliveryError::WasiRefusesSpaDelivery,
+            DeliveryError::WasiRequiresDirectShape { shape: Shape::Tui },
+            DeliveryError::WasiRequiresWasiTriple {
+                triple: TargetTriple::Host,
             },
         ];
         for c in &cases {
