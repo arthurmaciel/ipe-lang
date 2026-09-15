@@ -45,6 +45,7 @@
 //! the allocator vocabulary, and the wrapper path jail.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use ipe_diagnostics::{Located, Span};
@@ -157,6 +158,7 @@ struct ManifestFields {
     rust_dependencies: BTreeMap<String, RustDep>,
     capabilities: BTreeSet<Capability>,
     capabilities_accept: BTreeSet<Capability>,
+    control_models_accept: BTreeSet<crate::delivery::ControlModel>,
     wasm: WasmConfig,
     has_rust_wrapper: bool,
     programs: Vec<crate::project::Program>,
@@ -218,6 +220,7 @@ impl ManifestFields {
             rust_dependencies: self.rust_dependencies,
             capabilities: self.capabilities,
             capabilities_accept: self.capabilities_accept,
+            control_models_accept: self.control_models_accept,
             has_rust_wrapper: self.has_rust_wrapper,
             programs: self.programs,
             exposed_modules: self.exposed_modules,
@@ -381,12 +384,15 @@ impl Reader<'_> {
             match self.text(fname.value) {
                 "declares" => fields.capabilities = self.read_capability_set(value)?,
                 "accepts" => fields.capabilities_accept = self.read_capability_set(value)?,
+                "acceptsControl" => {
+                    fields.control_models_accept = self.read_control_model_set(value)?;
+                }
                 other => {
                     return Err(self.reject(
                         fname.span,
                         &format!(
-                            "`{other}` is not a capabilities field — expected `declares` or \
-                             `accepts`"
+                            "`{other}` is not a capabilities field — expected `declares`, \
+                             `accepts`, or `acceptsControl`"
                         ),
                     ));
                 }
@@ -1152,6 +1158,37 @@ impl Reader<'_> {
         Ok(set)
     }
 
+    /// Read a `[ Direct, Tea, … ]` list into the closed set of control models a
+    /// consumer accepts. Each element is a nullary control-model constructor
+    /// (`Tea`/`Server`/`Direct`); any token outside that closed set is rejected —
+    /// never read as a permissive default. An empty list is the strict default
+    /// admitting only the managed models.
+    fn read_control_model_set(
+        &self,
+        expr: &Expr,
+    ) -> Result<BTreeSet<crate::delivery::ControlModel>, CliError> {
+        use crate::delivery::ControlModel;
+        let mut set = BTreeSet::new();
+        for item in self.expect_list(expr)? {
+            let ctor = self.expect_ctor(item, "a control model")?;
+            let model = match ctor {
+                "Tea" => ControlModel::Tea,
+                "Server" => ControlModel::Server,
+                "Direct" => ControlModel::Direct,
+                other => {
+                    return Err(self.reject(
+                        item.span,
+                        &format!(
+                            "`{other}` is not a control model — use one of Tea, Server, or Direct"
+                        ),
+                    ));
+                }
+            };
+            set.insert(model);
+        }
+        Ok(set)
+    }
+
     /// Read a `[ Network, Clock, … ]` list into capability *wire names* the
     /// shared validators consume. Each element must be a capability constructor;
     /// its name is mapped to the wire spelling (e.g. `NativeFfi` → `native-ffi`).
@@ -1310,10 +1347,14 @@ pub fn render_manifest_record(manifest: &ProjectManifest) -> String {
     if !manifest.rust_dependencies.is_empty() {
         fields.push(render_rust_dependencies(&manifest.rust_dependencies));
     }
-    if !manifest.capabilities.is_empty() || !manifest.capabilities_accept.is_empty() {
+    if !manifest.capabilities.is_empty()
+        || !manifest.capabilities_accept.is_empty()
+        || !manifest.control_models_accept.is_empty()
+    {
         fields.push(render_capabilities(
             &manifest.capabilities,
             &manifest.capabilities_accept,
+            &manifest.control_models_accept,
         ));
     }
     if !manifest.exposed_modules.is_empty() {
@@ -1429,9 +1470,16 @@ fn render_rust_dependencies(deps: &BTreeMap<String, RustDep>) -> String {
     )
 }
 
-/// Render the `capabilities = { declares = …, accepts = … }` field. The
-/// constructor spelling is the inverse of [`capability_wire_name`].
-fn render_capabilities(declares: &BTreeSet<Capability>, accepts: &BTreeSet<Capability>) -> String {
+/// Render the `capabilities = { declares = …, accepts = …[, acceptsControl = …] }`
+/// field. The constructor spelling is the inverse of [`capability_wire_name`].
+///
+/// `acceptsControl` is rendered only when non-empty, so an existing manifest with
+/// no control-model acceptance round-trips unchanged (the empty strict default).
+fn render_capabilities(
+    declares: &BTreeSet<Capability>,
+    accepts: &BTreeSet<Capability>,
+    accepts_control: &BTreeSet<crate::delivery::ControlModel>,
+) -> String {
     let render_set = |set: &BTreeSet<Capability>| {
         if set.is_empty() {
             return "[]".to_owned();
@@ -1443,11 +1491,32 @@ fn render_capabilities(declares: &BTreeSet<Capability>, accepts: &BTreeSet<Capab
             .join(", ");
         format!("[ {items} ]")
     };
-    format!(
-        "capabilities =\n        {{ declares = {}\n        , accepts = {}\n        }}",
+    let mut out = format!(
+        "capabilities =\n        {{ declares = {}\n        , accepts = {}",
         render_set(declares),
         render_set(accepts)
-    )
+    );
+    if !accepts_control.is_empty() {
+        let items = accepts_control
+            .iter()
+            .map(|m| control_model_ctor_name(*m))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(out, "\n        , acceptsControl = [ {items} ]");
+    }
+    out.push_str("\n        }");
+    out
+}
+
+/// The `Ipe.Package` control-model constructor spelling — the inverse of
+/// [`ManifestReader::read_control_model_set`].
+const fn control_model_ctor_name(model: crate::delivery::ControlModel) -> &'static str {
+    use crate::delivery::ControlModel;
+    match model {
+        ControlModel::Tea => "Tea",
+        ControlModel::Server => "Server",
+        ControlModel::Direct => "Direct",
+    }
 }
 
 /// The `Ipe.Package` `Capability` constructor expression for a wire name — the
@@ -1920,6 +1989,69 @@ mod tests {
             ),
         );
         assert_rejected(&r);
+    }
+
+    #[test]
+    fn reject_unknown_control_model() {
+        // A token outside { Tea, Server, Direct } in `acceptsControl` is rejected
+        // fail-closed — never read as a permissive accept.
+        let r = read(
+            "reject_control_model",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", capabilities = {{ acceptsControl = [ Telepathy ] }} }}\n"
+            ),
+        );
+        assert_rejected(&r);
+    }
+
+    #[test]
+    fn reads_accepts_control_into_the_typed_set() {
+        let m = read(
+            "reads_accepts_control",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", capabilities = {{ acceptsControl = [ Direct ] }} }}\n"
+            ),
+        )
+        .expect("an acceptsControl set parses");
+        assert_eq!(
+            m.control_models_accept,
+            std::iter::once(crate::delivery::ControlModel::Direct).collect()
+        );
+    }
+
+    #[test]
+    fn accepts_control_round_trips_and_empty_is_omitted() {
+        // Non-empty acceptsControl renders and re-parses to the same set.
+        let with = read(
+            "accepts_control_rt",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", capabilities = {{ acceptsControl = [ Direct ] }} }}\n"
+            ),
+        )
+        .expect("parses");
+        let rendered = render_manifest_record(&with);
+        assert!(
+            rendered.contains("acceptsControl = [ Direct ]"),
+            "renders the accept: {rendered}"
+        );
+
+        // An empty acceptsControl (the strict default) is omitted, so a manifest
+        // with no control acceptance round-trips unchanged.
+        let without = read(
+            "no_accepts_control",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", capabilities = {{ declares = [ Network ] }} }}\n"
+            ),
+        )
+        .expect("parses");
+        assert!(
+            without.control_models_accept.is_empty(),
+            "absent acceptsControl is the empty strict default"
+        );
+        assert!(
+            !render_manifest_record(&without).contains("acceptsControl"),
+            "an empty acceptsControl is not rendered"
+        );
     }
 
     #[test]

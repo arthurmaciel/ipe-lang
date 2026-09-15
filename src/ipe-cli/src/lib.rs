@@ -24,6 +24,7 @@ mod cache;
 pub mod clean;
 pub mod cli_args;
 pub mod contained_path;
+pub mod control_model_consent;
 pub mod coverage;
 pub mod delivery;
 pub mod delivery_set;

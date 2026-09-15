@@ -114,7 +114,7 @@ impl Shape {
 /// surface can name the model without a second derivation that could disagree
 /// with the shape the compiler already pinned. This is the SSOT the `ipe audit`
 /// disclosure reads — it never re-inspects `main` on its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ControlModel {
     /// The Elm-style model/update/view loop — a `Web`/`Tui`/`Cli` shape.
     Tea,
@@ -127,7 +127,7 @@ pub enum ControlModel {
 
 impl ControlModel {
     /// The canonical word for this control model — the one vocabulary shared by
-    /// the audit disclosure, its JSON verdict, and docs.
+    /// the audit disclosure, its JSON verdict, the consent gate, and docs.
     #[must_use]
     pub const fn word(self) -> &'static str {
         match self {
@@ -135,6 +135,29 @@ impl ControlModel {
             Self::Server => "server",
             Self::Direct => "direct",
         }
+    }
+
+    /// Parse a control-model word (the inverse of [`Self::word`]). `None` for any
+    /// token outside the closed set — a consumer's `acceptsControl` entry that is
+    /// not a known model must be rejected, never read as a permissive default.
+    #[must_use]
+    pub fn from_word(word: &str) -> Option<Self> {
+        Some(match word {
+            "tea" => Self::Tea,
+            "server" => Self::Server,
+            "direct" => Self::Direct,
+            _ => return None,
+        })
+    }
+
+    /// Whether this control model is a *managed* one — the runtime drives the
+    /// loop and every effect flows through a capability axis already gated. The
+    /// managed models (`Tea`/`Server`) are the safe, implicitly-admitted default;
+    /// only the elevated [`Self::Direct`] model (a self-driving `Task Error ()`
+    /// program outside the managed loop) requires a consumer's explicit consent.
+    #[must_use]
+    pub const fn is_managed(self) -> bool {
+        matches!(self, Self::Tea | Self::Server)
     }
 }
 
@@ -935,6 +958,29 @@ mod tests {
         assert_eq!(ControlModel::Tea.word(), "tea");
         assert_eq!(ControlModel::Server.word(), "server");
         assert_eq!(ControlModel::Direct.word(), "direct");
+    }
+
+    #[test]
+    fn control_model_word_round_trips_and_rejects_unknown() {
+        for model in [
+            ControlModel::Tea,
+            ControlModel::Server,
+            ControlModel::Direct,
+        ] {
+            assert_eq!(ControlModel::from_word(model.word()), Some(model));
+        }
+        // A token outside the closed set is None — never a permissive default.
+        assert_eq!(ControlModel::from_word("Direct"), None); // case-sensitive
+        assert_eq!(ControlModel::from_word("telepathy"), None);
+        assert_eq!(ControlModel::from_word(""), None);
+    }
+
+    #[test]
+    fn only_direct_is_the_elevated_unmanaged_model() {
+        // The managed models run under the runtime's loop; Direct drives itself.
+        assert!(ControlModel::Tea.is_managed());
+        assert!(ControlModel::Server.is_managed());
+        assert!(!ControlModel::Direct.is_managed());
     }
 
     #[test]

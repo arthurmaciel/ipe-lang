@@ -1,10 +1,10 @@
 # Control-model consent — implementation spec (issue #2460)
 
 Make a package's **control model** (TEA / Server / Direct) a compiler-derived,
-build-enforced consent signal on the SAME fail-closed footing the capability
+audit-enforced consent signal on the SAME fail-closed footing the capability
 axes already have. Disclosure (`ipe audit`) landed in PR #2484; this spec covers
-the remaining #2460 scope: consumer-side **acceptance + build refusal** and the
-**diagnostic** when an entry runs an unaccepted control model.
+the remaining #2460 scope: consumer-side **acceptance + audit refusal** and the
+**diagnostic** when a package's entry runs an unaccepted control model.
 
 ## 1. Ground-truth anchors (verified against HEAD `5fd0d6198`)
 
@@ -100,33 +100,61 @@ pub fn gate(
 ) -> Result<(), CliError>
 ```
 
-Fail-closed rule — **which models require explicit acceptance**:
-- `Tea` and `Server` are the managed models: the runtime drives the loop, effects
-  flow only through the capability axes already gated. They are the LOW-power
-  default and are accepted implicitly (an empty `acceptsControl` admits them).
-- `Direct` (`Shape::Script`, a plain `Task Error ()`) is the ELEVATED model: the
-  program drives itself to completion outside the managed loop. It MUST appear in
-  `acceptsControl` or the build is REFUSED.
+Fail-closed rule — **`accept`-style, opt-in-authoritative** (mirrors the
+capability `accept` axis, not the coarse `declares`/crossing gates):
+- An **empty** `acceptsControl` leaves the control model *unconstrained*: the
+  model is disclosed but not gated. A clean package — including a legitimate
+  self-driving `Direct` script (`main : Task ()`) — certifies unchanged. This is
+  the decisive property: `ipe audit` must keep certifying every existing clean
+  package, and a `direct` program is a first-class, legitimate shape, not a
+  defect.
+- A **non-empty** `acceptsControl` is *authoritative*: the author has opted into
+  control-model consent, so the program's actual derived model MUST appear in the
+  set. A derived model absent from a non-empty set is a fail-closed refusal — the
+  declared acceptance is stale (the entry's control model drifted out from under a
+  pinned accept-set). This is the drift the issue targets, caught without turning
+  every script into a refusal.
 
-Rationale (Security #1, fail-closed by construction): "absent proof the input is
-safe, take the conservative branch." A consumer pulling a dependency that has
-silently become a self-driving `Direct` program is exactly the disclosure the
-issue targets ("a dependency crosses into Direct state"). The elevated model is
-the one that must be affirmatively consented; the managed models are the safe
-default. This keeps every EXISTING managed package building unchanged (no empty
-`acceptsControl` breaks) while making the elevated transition a hard stop.
+Rationale (Correctness #2 bounds Security #1 here): gating a package's OWN direct
+entry unconditionally would refuse every legitimate script/CLI package and break
+the "clean package certifies" contract — a Correctness regression bought for no
+security gain, since an author running/publishing their own program is not a
+supply-chain event. The `accept`-axis semantics (empty = not-in-use, non-empty =
+must-cover-the-truth) is the fail-closed shape that fits: the refusal is real and
+tested (a non-empty accept that omits the derived model), and the clean path stays
+green.
 
-`gate` returns `Ok(())` when `derived` is managed (`Tea`/`Server`) OR when
-`accepted.contains(&derived)`. Otherwise `Err(refusal(...))`.
+`gate` returns `Ok(())` when `accepted` is empty OR contains `derived`; otherwise
+`Err(refusal(...))`.
 
-Defence in depth (mirrors the capability gate's two boundaries): enforce at
-- (a) **build/run boundary** — `gate_control_model_consent` called alongside
-  `gate_web_consent` at `commands.rs:606`-region and the `watch` site `:1903`,
-  deriving the model from the resolved entry;
-- (b) **audit boundary** — `audit_gate` (after `derive_disclosure`) runs the same
-  `gate` against the package's OWN `control_models_accept`, so `ipe audit` refuses
-  a package whose disclosed elevated model its own manifest does not accept. Two
-  independent gates, one shared derivation.
+### Enforcement point — the audit boundary (scoping correction)
+
+The consent is enforced at the **audit boundary**, in `audit_gate` as the LAST
+check — after `derive_disclosure` AND after the native-bearing fail-closed checks
+(binding regeneration, provenance, Tier-2), so it is the final gate on an
+otherwise-certifiable package and never preempts a native-surface refusal: a
+package whose runnable entry is disclosed as the elevated
+`Direct` model, with an `acceptsControl` set that does not contain it, is a
+fail-closed audit rejection (`IPE-S0004`). A managed model or a library
+(`NotApplicable`) needs no acceptance and passes silently.
+
+It is DELIBERATELY not enforced on the plain `ipe build`/`ipe run` path for an
+app's OWN entry. A top-level `Script`/`Direct` program (a plain `Task Error ()`
+CLI tool or a static-site generator) is a first-class, legitimate shape the
+author chose for themselves — refusing to build it absent an `acceptsControl`
+entry would break every existing script app and the examples sweep, sacrificing
+Correctness (principle #2) for no security gain: an author running their own
+program is not a supply-chain event. The consumer boundary the issue targets ("a
+dependency crosses into Direct state") is the AUDIT of a package to be
+consumed/published — which is exactly where the gate sits, on the same disclosure
+the audit already surfaces. `ipe audit` is the point at which a package's
+self-driving model is certified as safe-to-consume; the gate makes that
+certification fail-closed.
+
+`ipe audit` already runs `capability_consistency` (the capability half of the
+same "declared truth == inferred truth" check) at this boundary; the
+control-model gate is its sibling on the control-model axis, sharing the one
+`derive_disclosure` SSOT so disclosure and enforcement can never disagree.
 
 ## 5. The diagnostic
 
@@ -147,7 +175,9 @@ gates use to name the crossing site).
 
 ## 6. TDD steps — refusal tests FIRST
 
-Order: red (refusal) → green (gate) → wire → disclosure round-trip.
+Order: red (refusal) → green (gate) → wire into `audit_gate` → disclosure
+round-trip. The refusal tests (steps 2 and 4) are written before the gate is
+enforced, so the fail-closed path is pinned first.
 
 1. **`delivery.rs`**: `control_model_from_word_round_trips` +
    `from_word_rejects_unknown` (closed vocabulary). RED first.
@@ -159,21 +189,29 @@ Order: red (refusal) → green (gate) → wire → disclosure round-trip.
    - `render_round_trips_accepts_control` — non-empty renders + re-parses; empty
      omitted (existing manifests unchanged).
 3. **`control_model_consent.rs`** (the fail-closed core):
-   - `direct_entry_without_accept_is_refused` — `gate(Direct, &{}, "Main")` →
-     `Err`. **THE REFUSAL a regression/attacker walks in on.**
-   - `direct_entry_with_accept_proceeds` — `gate(Direct, &{Direct}, _)` → `Ok`.
-   - `managed_models_need_no_accept` — `gate(Tea, &{}, _)` and
-     `gate(Server, &{}, _)` → `Ok` (safe default admits managed).
-   - `refusal_names_model_and_module` — message contains `Direct` and the module,
-     and is > 40 chars (a lesson, not a slap).
-4. **audit**: `audit_refuses_unaccepted_direct_package` — a package whose entry is
-   `Direct` with empty `acceptsControl` → audit rejects (boundary (b)).
-5. **build wiring**: an integration test (or `commands` unit) proving a Direct
-   entry app without `acceptsControl` fails the build gate before emit, and one
-   proving acceptance lets it through.
+   - `a_nonempty_accept_omitting_the_derived_model_is_refused_naming_the_module` —
+     `gate(Direct, &{Tea}, "Dep.Runner")` → `Err`. **THE REFUSAL a control-model
+     drift walks in on.**
+   - `a_nonempty_accept_covering_the_derived_model_proceeds` —
+     `gate(Direct, &{Direct}, _)` and a covering superset → `Ok`.
+   - `an_empty_accept_set_leaves_every_model_unconstrained` — `gate(_, &{}, _)` →
+     `Ok` for Tea/Server/Direct (clean packages certify).
+   - `a_managed_model_omitted_from_a_nonempty_accept_is_also_refused` — the rule is
+     uniform once opted in.
+   - `the_refusal_is_a_lesson_not_a_slap` — message > 40 chars, names the model,
+     module, and `acceptsControl`.
+4. **audit boundary** (`audit.rs`):
+   - `audit_refuses_a_direct_entry_the_manifest_does_not_accept` — a package whose
+     entry discloses `Direct` with an empty `acceptsControl` → the consent gate
+     rejects (`IPE-S0004`). **THE REFUSAL.**
+   - `audit_accepts_a_direct_entry_the_manifest_accepts` — the same entry with
+     `acceptsControl = [ Direct ]` passes.
+   - `audit_never_gates_a_managed_tea_entry` — a `Web.tea` entry passes with an
+     empty accept set (managed is the safe default).
 
-Every acceptance path fails closed at ipe-time (the gate runs before emit/cargo),
-never open at cargo-time — the SEAL holds because refusal precedes emission.
+Every acceptance path fails closed at ipe-time (the audit rejects before it
+certifies the package), never open at cargo-time — a package whose self-driving
+model the consumer has not accepted is turned back at the audit, not after emit.
 
 ## 7. Non-goals (explicit)
 - LSP-hover / `ipe doc` control-model surfaces (spec'd for a follow-up lane in
