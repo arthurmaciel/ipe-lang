@@ -266,27 +266,30 @@ Fields:
 ## `linearBackoff`
 
 ```ipe
-linearBackoff : Int -> Int -> RetryPolicy e
+linearBackoff : Int -> Duration -> RetryPolicy Error
 ```
 
-`linearBackoff maxAttempts delayMs` — a constant-delay policy that retries on
-every error.
+`linearBackoff maxAttempts delay` — a constant-delay policy that retries on
+every error.  Takes a typed `Ipe.Duration` for the delay (unit named at the call
+site); the raw milliseconds are unwrapped for the runtime policy kernel.
 
 ```ipe
-linearBackoff 3 200 --> RetryPolicy e
+linearBackoff 3 (Duration.millis 200) --> RetryPolicy Error
 ```
 
 ## `exponentialBackoff`
 
 ```ipe
-exponentialBackoff : Int -> Int -> RetryPolicy e
+exponentialBackoff : Int -> Duration -> RetryPolicy Error
 ```
 
-`exponentialBackoff maxAttempts baseMs` — a policy whose delay doubles each
-attempt (`baseMs * 2^(attempt-1)`); retries on every error.
+`exponentialBackoff maxAttempts base` — a policy whose delay doubles each
+attempt (`base * 2^(attempt-1)`); retries on every error.  Takes a typed
+`Ipe.Duration` for the base delay (unit named at the call site); the raw
+milliseconds are unwrapped for the runtime policy kernel.
 
 ```ipe
-exponentialBackoff 5 100 --> RetryPolicy e
+exponentialBackoff 5 (Duration.millis 100) --> RetryPolicy Error
 ```
 
 ## `withJitter`
@@ -300,7 +303,7 @@ withJitter : RetryPolicy e -> RetryPolicy e
 Already-jittered strategies are unchanged.
 
 ```ipe
-withJitter (exponentialBackoff 5 100) --> RetryPolicy e
+withJitter (exponentialBackoff 5 (Duration.millis 100)) --> RetryPolicy Error
 ```
 
 ## `retryOn`
@@ -313,7 +316,7 @@ retryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
 retries only on the errors `pred` selects.
 
 ```ipe
-retryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
+retryOn (\err -> True) (exponentialBackoff 3 (Duration.millis 100)) --> RetryPolicy Error
 ```
 
 ## `withRetryOn`
@@ -326,7 +329,7 @@ withRetryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
 a more pipeline-friendly name.
 
 ```ipe
-withRetryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
+withRetryOn (\err -> True) (exponentialBackoff 3 (Duration.millis 100)) --> RetryPolicy Error
 ```
 
 ## `defaultRetryPolicy`
@@ -352,7 +355,7 @@ withMaxAttempts : Int -> RetryPolicy e -> RetryPolicy e
 `withMaxAttempts n policy` — set the maximum number of attempts.
 
 ```ipe
-withMaxAttempts 4 (exponentialBackoff 3 100) --> RetryPolicy e
+withMaxAttempts 4 (exponentialBackoff 3 (Duration.millis 100)) --> RetryPolicy Error
 ```
 
 ## `withBaseMs`
@@ -366,7 +369,7 @@ withBaseMs : Duration -> RetryPolicy e -> RetryPolicy e
 for the runtime policy kernel.
 
 ```ipe
-withBaseMs (Duration.millis 250) (exponentialBackoff 3 100) --> RetryPolicy e
+withBaseMs (Duration.millis 250) (exponentialBackoff 3 (Duration.millis 100)) --> RetryPolicy Error
 ```
 
 ## `retryWith`

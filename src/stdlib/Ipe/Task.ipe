@@ -279,32 +279,45 @@ type alias RetryPolicy e =
     , strategy : BackoffStrategy
     }
 
-{-| `linearBackoff maxAttempts delayMs` — a constant-delay policy that retries on
-every error.
+{-| `linearBackoff maxAttempts delay` — a constant-delay policy that retries on
+every error.  Takes a typed `Ipe.Duration` for the delay (unit named at the call
+site); the raw milliseconds are unwrapped for the runtime policy kernel.
 
 ```ipe
-linearBackoff 3 200 --> RetryPolicy e
+linearBackoff 3 (Duration.millis 200) --> RetryPolicy Error
 ```
 -}
-linearBackoff : Int -> Int -> RetryPolicy e
-linearBackoff = Kernel.kernel "Task_linearBackoff"
+linearBackoff : Int -> Duration -> RetryPolicy Error
+linearBackoff maxAttempts delay =
+    linearBackoffKernel maxAttempts (Duration.toMillis delay)
 
-{-| `exponentialBackoff maxAttempts baseMs` — a policy whose delay doubles each
-attempt (`baseMs * 2^(attempt-1)`); retries on every error.
+
+linearBackoffKernel : Int -> Int -> RetryPolicy Error
+linearBackoffKernel = Kernel.kernel "Task_linearBackoff"
+
+{-| `exponentialBackoff maxAttempts base` — a policy whose delay doubles each
+attempt (`base * 2^(attempt-1)`); retries on every error.  Takes a typed
+`Ipe.Duration` for the base delay (unit named at the call site); the raw
+milliseconds are unwrapped for the runtime policy kernel.
 
 ```ipe
-exponentialBackoff 5 100 --> RetryPolicy e
+exponentialBackoff 5 (Duration.millis 100) --> RetryPolicy Error
 ```
 -}
-exponentialBackoff : Int -> Int -> RetryPolicy e
-exponentialBackoff = Kernel.kernel "Task_exponentialBackoff"
+exponentialBackoff : Int -> Duration -> RetryPolicy Error
+exponentialBackoff maxAttempts base =
+    exponentialBackoffKernel maxAttempts (Duration.toMillis base)
+
+
+exponentialBackoffKernel : Int -> Int -> RetryPolicy Error
+exponentialBackoffKernel = Kernel.kernel "Task_exponentialBackoff"
 
 {-| `withJitter policy` — upgrade the policy's strategy to its jitter variant:
 `Linear` becomes `LinearWithJitter`, `Exponential` becomes `ExponentialWithJitter`.
 Already-jittered strategies are unchanged.
 
 ```ipe
-withJitter (exponentialBackoff 5 100) --> RetryPolicy e
+withJitter (exponentialBackoff 5 (Duration.millis 100)) --> RetryPolicy Error
 ```
 -}
 withJitter : RetryPolicy e -> RetryPolicy e
@@ -314,7 +327,7 @@ withJitter = Kernel.kernel "Task_withJitter"
 retries only on the errors `pred` selects.
 
 ```ipe
-retryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
+retryOn (\err -> True) (exponentialBackoff 3 (Duration.millis 100)) --> RetryPolicy Error
 ```
 -}
 retryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
@@ -324,7 +337,7 @@ retryOn = Kernel.kernel "Task_retryOn"
 a more pipeline-friendly name.
 
 ```ipe
-withRetryOn (\err -> True) (exponentialBackoff 3 100) --> RetryPolicy Error
+withRetryOn (\err -> True) (exponentialBackoff 3 (Duration.millis 100)) --> RetryPolicy Error
 ```
 -}
 withRetryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
@@ -344,7 +357,7 @@ defaultRetryPolicy = Kernel.kernel "Task_defaultRetryPolicy"
 {-| `withMaxAttempts n policy` — set the maximum number of attempts.
 
 ```ipe
-withMaxAttempts 4 (exponentialBackoff 3 100) --> RetryPolicy e
+withMaxAttempts 4 (exponentialBackoff 3 (Duration.millis 100)) --> RetryPolicy Error
 ```
 -}
 withMaxAttempts : Int -> RetryPolicy e -> RetryPolicy e
@@ -355,7 +368,7 @@ withMaxAttempts = Kernel.kernel "Task_withMaxAttempts"
 for the runtime policy kernel.
 
 ```ipe
-withBaseMs (Duration.millis 250) (exponentialBackoff 3 100) --> RetryPolicy e
+withBaseMs (Duration.millis 250) (exponentialBackoff 3 (Duration.millis 100)) --> RetryPolicy Error
 ```
 -}
 withBaseMs : Duration -> RetryPolicy e -> RetryPolicy e
