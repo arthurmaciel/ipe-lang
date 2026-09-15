@@ -118,8 +118,11 @@ pub(crate) fn user_ipe_db_codec_cell_to_value(
             IpeCodecColType::CBool => {
                 return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_3: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_3) });
             }
-            IpeCodecColType::CBlob => {
+            IpeCodecColType::CTime => {
                 return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_4: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_4) });
+            }
+            IpeCodecColType::CBlob => {
+                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_5: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_5) });
             }
         }
     }
@@ -176,6 +179,16 @@ pub(crate) fn user_ipe_db_codec_scalar_cell_to_value(
                 match crate::user_ipe_db_codec_bool_from_cell(cell.clone()) {
                     IpeMaybe::Just(b) => {
                         return IpeResult::Ok(json_enc_bool(b));
+                    }
+                    IpeMaybe::Nothing => {
+                        return IpeResult::Err(crate::user_ipe_db_codec_bad_cell_error(name, colType, cell));
+                    }
+                }
+            }
+            IpeCodecColType::CTime => {
+                match string_to_int(cell.clone()) {
+                    IpeMaybe::Just(ms) => {
+                        return IpeResult::Ok(json_enc_int(ms));
                     }
                     IpeMaybe::Nothing => {
                         return IpeResult::Err(crate::user_ipe_db_codec_bad_cell_error(name, colType, cell));
@@ -258,6 +271,9 @@ pub(crate) fn user_ipe_db_codec_col_type_name(colType: IpeCodecColType) -> Strin
             }
             IpeCodecColType::CBool => {
                 return "boolean".to_string();
+            }
+            IpeCodecColType::CTime => {
+                return "integer timestamp".to_string();
             }
             IpeCodecColType::CBlob => {
                 return "JSON value".to_string();

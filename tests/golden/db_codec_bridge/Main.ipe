@@ -303,8 +303,8 @@ timestampBindsAsSqlTime =
     case DbCodec.codecToBinds stampedCodec { at = Timestamp.fromUnixMillis 1700000000000 } of
         Ok binds ->
             case binds of
-                [ ( "at", bound ) ] ->
-                    boundIsSqlTime bound
+                [ ( key, bound ) ] ->
+                    key == "at" && boundIsSqlTime bound
 
                 _ ->
                     False

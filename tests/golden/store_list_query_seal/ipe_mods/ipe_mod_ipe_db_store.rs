@@ -286,7 +286,7 @@ pub(crate) fn user_ipe_db_store_row_codec(
             mkDec: {
                 let __ipe_fn: ::std::sync::Arc<
                     dyn Fn(Rec_) -> Decoder<HashMap<String, String>> + Send + Sync + 'static,
-                > = ::std::sync::Arc::new(move |arg_12: Rec_| -> Decoder<HashMap<String, String>> {
+                > = ::std::sync::Arc::new(move |arg_13: Rec_| -> Decoder<HashMap<String, String>> {
                     config_dict(json_decode_string::<IpeError>())
                 });
                 __ipe_fn
