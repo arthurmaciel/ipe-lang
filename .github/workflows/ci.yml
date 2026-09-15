@@ -345,7 +345,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown, wasm32-wasip1
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
@@ -354,6 +354,21 @@ jobs:
       # implies `async`, but tokio is native-only, so `wasm-client,debugger`
       # links the recorder over the closed browser floor without a tokio graph.
       - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --no-default-features --features wasm-client,debugger
+      # Co-located WASI (`wasm32-wasip1`) effect floor: this build is what makes
+      # the runtime's `_WASI_EFFECT_FLOOR_SEAL` / `_WASI_TIME_FLOOR_SEAL` consts
+      # LIVE — they compile only on a wasip1 build with `wasm-client` off, so the
+      # instant a co-located `Direct`-reachable effect kernel loses its
+      # WASI-reachable arm this job fails, not a downstream `cargo build
+      # --target wasm32-wasip1`. The floor set is the sealed one: the always-on
+      # io/file/system/task modules plus `time`; the pure decode/format families
+      # (`json`/`uuid`/`random`/`decimal`/`regex`) ride along. Feature families
+      # bound to native networking or the tokio blocking pool
+      # (`http_client`/`websocket_client`/`server`/`tea`/`db`/`email`/
+      # `compression`/`csv_kernel`/`config`) are NOT WASI-viable and are
+      # deliberately excluded — the WASI accept-path selects only the sealed
+      # floor.
+      - run: cargo build -p ipe-runtime-rust --target wasm32-wasip1 --no-default-features
+      - run: cargo build -p ipe-runtime-rust --target wasm32-wasip1 --no-default-features --features time,log,json,uuid,random,decimal,regex
 
   # ── test: build-once, shard-run ──────────────────────────────────────────────
   # The workspace's ~170 test binaries each statically link the full compiler

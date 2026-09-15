@@ -804,7 +804,13 @@ mod tests {
 // TLS error, DNS failure) surfaces through the socket's `error`/`close` event,
 // which this substitute maps to `Task.fail` on `send`/`close` calls against a
 // never-opened id — never a panic/trap.
-#[cfg(target_arch = "wasm32")]
+// The browser `WebSocket` substitute is gated on `all(wasm32, wasm-client)`,
+// never a bare `wasm32`: the co-located WASI target (`wasm32-wasip1`,
+// `wasm-client` off) carries no `web-sys`/`wasm-bindgen`, so a bare-`wasm32`
+// arm would compile these browser bindings into a WASI build and fail cargo.
+// `websocket_client` is not WASI-viable (its native arm is `tokio/net`, which
+// does not build for wasm), so on WASI this substitute stays absent entirely.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 mod wasm_client {
     use super::{HashMap, IpeResult, IpeSub, IpeTask, ok_res};
     use std::cell::{Cell, RefCell};
@@ -1165,5 +1171,5 @@ mod wasm_client {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
 pub use wasm_client::*;
