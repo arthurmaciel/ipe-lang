@@ -1135,7 +1135,7 @@ mod tests {
 
         // Each shape uses a different entry point.
         assert!(
-            web_main.contains("Web.tea") || web_main.contains("app"),
+            web_main.contains("Web.tea") || web_main.contains("Web"),
             "web uses Web.tea"
         );
         assert!(
