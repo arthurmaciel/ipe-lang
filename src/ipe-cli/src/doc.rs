@@ -4049,10 +4049,8 @@ fn parse_link(s: &str) -> Option<(String, String, usize)> {
     let url = after_paren.get(..close_paren)?;
     // Reject a scheme that could execute script through the one doc-path
     // href-safety SSOT (`ipe_docs::markdown::SafeHref`); a link the SSOT refuses
-    // is left literal rather than unwrapped.
-    if ipe_docs::markdown::SafeHref::parse(url).is_none() {
-        return None;
-    }
+    // is left literal rather than unwrapped (`?` early-returns on refusal).
+    ipe_docs::markdown::SafeHref::parse(url)?;
     let consumed = 1 + close + 1 + 1 + close_paren + 1;
     Some((label.to_owned(), url.to_owned(), consumed))
 }
