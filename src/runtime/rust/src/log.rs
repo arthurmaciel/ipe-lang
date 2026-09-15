@@ -53,7 +53,11 @@ fn log_json() -> bool {
 /// (`2006-01-02T15:04:05.999999999Z07:00`): nanosecond precision with trailing
 /// zeros trimmed, UTC rendered as `Z`. Matches
 /// `now.UTC().Format(time.RFC3339Nano)`.
-#[cfg(not(target_arch = "wasm32"))]
+// The native-ish clock read covers host native AND WASI: `chrono::Utc::now()`
+// resolves against the real clock on `wasm32-wasip1` (WASI has a clock), so a
+// co-located WASI program logs real timestamps. Only the browser-`wasm-client`
+// build substitutes `Date.now()` (`chrono` traps on `wasm32-unknown-unknown`).
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
 fn rfc3339_nano_now() -> String {
     let now = chrono::Utc::now();
     let nanos = now.format("%9f").to_string();
@@ -75,13 +79,6 @@ fn rfc3339_nano_now() -> String {
     js_sys::Date::new_0().to_iso_string().into()
 }
 
-/// Without the browser glue (`wasm-client`) there is no `js_sys` time binding;
-/// the value only feeds `console.*`, which is itself a no-op in that build.
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm-client")))]
-fn rfc3339_nano_now() -> String {
-    String::new()
-}
-
 /// Minimal JSON string escaping for the hand-built plain/JSON records, matching
 ///  `json.Marshal` for the characters that occur in log text. Reuses the
 /// telemetry escaper so the two sinks never diverge.
@@ -96,13 +93,17 @@ fn json_str(s: &str) -> String {
 /// hanging up (`ipe-app | head`) would panic from a well-typed `Log.*` call.
 /// These helpers perform the write fallibly and intentionally drop the `Result`,
 /// turning a broken pipe into a silently-skipped line instead of an abort.
-#[cfg(not(target_arch = "wasm32"))]
+// The native-ish stdio write covers host native AND WASI: `wasm32-wasip1` has
+// real stdout/stderr, so a co-located WASI program's `Log.*` lines land on the
+// host streams. Only the browser-`wasm-client` build (no tab stdio) substitutes
+// `console.*`.
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
 fn write_stdout_line(line: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stdout().lock(), "{line}");
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
 fn write_stderr_line(line: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stderr().lock(), "{line}");
@@ -122,14 +123,6 @@ fn write_stdout_line(line: &str) {
 fn write_stderr_line(line: &str) {
     web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(line));
 }
-
-// Without the browser glue (`wasm-client`) there is no `console` binding; a
-// wasm build that does not use the browser client drops `Log.*` lines.
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm-client")))]
-fn write_stdout_line(_line: &str) {}
-
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm-client")))]
-fn write_stderr_line(_line: &str) {}
 
 /// Strip ASCII control characters from a log message for the plain-text path,
 /// matching the safety guarantee the JSON path already gets via `json_escape`.

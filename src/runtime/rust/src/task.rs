@@ -196,7 +196,17 @@ where
 // propagates to the entry boundary's synchronous-panic classifier (the same
 // place the tokio path's non-spawned webview driver relies on) — there is no
 // spawn here to `.join()`, matching `block_on_current_thread`'s contract.
-#[cfg(all(not(feature = "tokio"), not(target_arch = "wasm32")))]
+// The std-only single-thread poll loop — no tokio, no spawn. It is the LIVE
+// `block_on` on two targets: a `tokio`-less host build, AND co-located WASI
+// (`wasm32-wasip1`), whose single-threaded reactor has no tokio *crate* (tokio
+// is native-only in the manifest) even when a WASI build sets the `tokio`
+// feature flag via `async`. `std::thread::current`/`park` resolve on WASI, so a
+// `Direct` (`Task Error ()`) WASI program's `main` drives to completion here.
+// Only the browser `wasm-client` sink drives its loop elsewhere (`spawn_local`).
+#[cfg(all(
+    not(all(target_arch = "wasm32", feature = "wasm-client")),
+    any(not(feature = "tokio"), target_arch = "wasm32")
+))]
 pub fn block_on<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
 where
     E: From<String> + Send + 'static,
@@ -557,7 +567,11 @@ pub fn task_sequence<E: Send + 'static, A: Send + 'static>(
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+// `Task.run` drives an entry task to completion through `block_on`. Native-ish
+// (host native AND co-located WASI); only the browser `wasm-client` sink runs
+// its entry differently (`spawn_local`), so it is excluded there but present on
+// `wasm32-wasip1`, where a `Direct` program's `main` calls it.
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
 pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
     task: IpeTask<E, A>,
 ) -> IpeResult<E, A> {
@@ -658,7 +672,17 @@ pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
 // input-order-first failure), only without concurrency. So a hypothetical
 // misclassification degrades to sequential execution, never a hang or a wrong
 // result. TOTALITY: no unwrap/expect/panic/indexing.
-#[cfg(all(not(feature = "tokio"), not(target_arch = "wasm32")))]
+// The sequential std-only `Task.parallel`. Live on a `tokio`-less host build AND
+// co-located WASI (`wasm32-wasip1`), which is single-threaded with no tokio
+// spawn — so genuine concurrency is unavailable and the tasks run SEQUENTIALLY
+// in input order, short-circuiting on the first `Err`. The result value is
+// identical to the concurrent version (which also observes results in input
+// order); the divergence is timing, not semantics — never a hang or a wrong
+// answer. On WASI this is the LIVE `Task.parallel`, not dead code.
+#[cfg(all(
+    not(all(target_arch = "wasm32", feature = "wasm-client")),
+    any(not(feature = "tokio"), target_arch = "wasm32")
+))]
 pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
     tasks: Vec<IpeTask<E, A>>,
 ) -> IpeTask<E, Vec<A>> {

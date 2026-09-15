@@ -428,8 +428,12 @@ pub mod email;
 pub use email::*;
 
 // `tea` carries the target-neutral `IpeCmd`/`IpeSub` types plus the native
-// (tokio) loop; on wasm32 the wasm-client sink drives the same types with
-// the loop halves cfg'd out inside the file.
+// (tokio) loop; on wasm the wasm-client sink drives the same types with the loop
+// halves cfg'd out inside the file. The module gate is feature-based (so the
+// composed feature universe reaches it); every tokio-*crate* use inside the file
+// is additionally `not(target_arch = "wasm32")`, so a wasm build (browser or
+// co-located WASI) compiles the module through its wasm arms with the tokio crate
+// — native-only in the manifest — absent.
 #[cfg(any(
     feature = "tokio",
     all(target_arch = "wasm32", feature = "wasm-client")
@@ -443,8 +447,11 @@ pub use tea::*;
 
 // `Ipe.Ffi.Js` ports — the raw typed Ipê↔JS transport behind `Js.send` /
 // `Js.subscribe`. Rides `IpeCmd`/`IpeSub` (so it follows `tea`'s gate) and the
-// `seal_codec` (so it also needs `json`); available on the native tokio path and
-// the wasm-client sink, with the two halves cfg-split inside the file.
+// `seal_codec` (so it also needs `json`); available on the native tokio server
+// path and the browser wasm-client sink, with the two halves cfg-split inside
+// the file. On a co-located WASI (`wasm32-wasip1`) build the wasm-client glue is
+// absent, so no `Js.*` port kernel is reachable there — fail-closed: no JS host
+// to transport through.
 #[cfg(all(
     feature = "json",
     any(
@@ -545,7 +552,9 @@ pub mod ui;
 // Native desktop window backend — the webview host of a `web desktop` delivery
 // (a TEA app, so gated on the async runtime like `tea`). The cross-platform floor
 // (a stub returning a graceful Err) keeps the backend linking everywhere; the real
-// wry/tao window backend needs the system webview dev libs.
+// wry/tao window backend needs the system webview dev libs. It imports `tea`, so
+// it follows `tea`'s feature gate; the real wry/tao arm is behind the opt-in
+// `webview` feature, so a wasm build compiles only the tokio-free `Err` stub.
 #[cfg(feature = "tokio")]
 pub mod webview;
 #[cfg(feature = "tokio")]
@@ -683,4 +692,65 @@ pub mod revocation;
 pub use revocation::{
     auth_revocation_is_revoked, auth_revocation_restore_user, auth_revocation_revoke_session,
     auth_revocation_revoke_user,
+};
+
+// ── Co-located WASI (`wasm32-wasip1`) effect-floor seal ──────────────────────
+//
+// A compile-time SEAL for the co-located WASI target: it NAMES every effect
+// kernel a `Direct` (`Task Error ()` script) program reaches, so a co-located
+// `wasm32-wasip1` build of this crate FAILS to compile the instant any of them
+// lacks a WASI-reachable arm — the exact ipe-accepts-then-cargo-fails hole the
+// pipeline SEAL forbids, turned into a build break here rather than a downstream
+// `cargo build --target wasm32-wasip1` failure.
+//
+// Every kernel below maps to a real WASI capability (stdio, the WASI clock, the
+// preopened-dir filesystem, `random_get` entropy) — never a silent no-op of a
+// security-relevant effect. Effects with no WASI mapping (subprocess spawn) are
+// deliberately absent from this floor: `std::process` compiles on WASI and its
+// unsupported spawn returns a typed `Err`, so it stays fail-closed through the
+// existing `Result` channel without a special arm. The JS-host/reactor surfaces
+// (`Ffi.Js` ports, the TEA loop, the webview) are gated off this target entirely
+// (see the `js_port` / `tea` / `webview` gates above).
+//
+// Gated to the co-located WASI build (`wasm32-wasip1` without the browser
+// `wasm-client` glue) so it neither perturbs a native or browser build nor runs
+// as a host `cargo test` — its whole job is to make the WASI *build* prove the
+// floor resolves. `type_id`-free: it only takes function pointers.
+// The always-compiled floor: `io` / `file` / `system` / `task` carry no feature
+// gate, so a co-located WASI build at ANY feature set must resolve them.
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm-client")))]
+const _WASI_EFFECT_FLOOR_SEAL: () = {
+    // Binding each kernel (monomorphised at the crate's concrete `IpeError`)
+    // forces name resolution at compile time; a missing WASI arm is a hard E0425
+    // on the wasip1 build. A bare reference — not an explicit `fn`-pointer type —
+    // so the seal proves the symbol without restating each (complex) signature.
+    type E = crate::error::IpeError;
+    let _ = crate::io::io_write_stdout::<E>;
+    let _ = crate::io::io_write_stderr::<E>;
+    let _ = crate::io::io_println::<E>;
+    let _ = crate::io::io_read_line::<E>;
+    let _ = crate::file::file_read_file::<E>;
+    let _ = crate::file::file_write_file::<E>;
+    let _ = crate::system::system_args::<E>;
+    let _ = crate::system::system_getenv::<E>;
+    // The reactor spine a `Direct` program's `main` drives through: the std-only
+    // single-thread executor (no tokio, no spawn) is the LIVE arm on WASI.
+    let _ = crate::task::task_run::<E, ()>;
+    let _ = crate::task::block_on::<E, i64>;
+    let _ = crate::task::task_parallel::<E, i64>;
+};
+
+// The `Ipe.Time` clock reads live behind `time-core`; a WASI build that reaches
+// a `Time.*` kernel selects it, and then the clock must resolve against the real
+// WASI clock (`SystemTime`/`chrono`), never the browser `Date.now()` substitute.
+#[cfg(all(
+    target_arch = "wasm32",
+    not(feature = "wasm-client"),
+    feature = "time-core"
+))]
+const _WASI_TIME_FLOOR_SEAL: () = {
+    type E = crate::error::IpeError;
+    let _ = crate::time::time_now::<E>;
+    let _ = crate::time::time_unix_millis::<E>;
+    let _ = crate::time::time_sleep::<E>;
 };
