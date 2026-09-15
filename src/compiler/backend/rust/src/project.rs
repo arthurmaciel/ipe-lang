@@ -1792,7 +1792,9 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // Fixed kernel-wrapper prelude (IpeError, IpeTask<A>, Decoder<T>, …);
         // the wasm target takes the floor-filtered subset.
         match ctx.target {
-            ipe_ir::Target::Native => {
+            // Co-located WASI shares the native emission (block_on drives a
+            // `Direct`/`Script` `main` over WASI) — only the target triple differs.
+            ipe_ir::Target::Native | ipe_ir::Target::WasmWasi => {
                 out.push_str(&native_runtime_bindings(PreludeReach {
                     http_client: ctx.reaches_http_client(),
                     random: ctx.reaches_random(),
@@ -1836,7 +1838,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         }
 
         match ctx.target {
-            ipe_ir::Target::Native => out.push_str(&epilogue()?),
+            ipe_ir::Target::Native | ipe_ir::Target::WasmWasi => out.push_str(&epilogue()?),
             ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm(ctx)?),
         }
 
@@ -1869,8 +1871,10 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         //
         // WASM: `epilogue_wasm` uses a different entry without `block_on`, so
         // the switch is skipped there.
-        if ctx.target == ipe_ir::Target::Native
-            && SHAPE_APP_RETURN_TYPES.iter().any(|sig| out.contains(sig))
+        if matches!(
+            ctx.target,
+            ipe_ir::Target::Native | ipe_ir::Target::WasmWasi
+        ) && SHAPE_APP_RETURN_TYPES.iter().any(|sig| out.contains(sig))
         {
             let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
             if replaced == out {
@@ -2221,6 +2225,38 @@ fn insert_wasm_shared_files(files: &mut BTreeMap<RelPath, String>) -> DResult<()
     Ok(())
 }
 
+/// Emit the co-located WASI (`wasm32-wasip1`) crate's `.cargo/config.toml`.
+///
+/// The wasip1 link step runs `rust-lld` (wasm flavor), which rejects a native
+/// system-linker flag such as a host's `-C link-arg=-fuse-ld=mold` carried in a
+/// global `[build] rustflags`. A `[target.<triple>] rustflags` overrides
+/// `[build] rustflags` for that triple (cargo does not merge them), so a
+/// target-scoped set here keeps the WASI link mold-free regardless of the host's
+/// global cargo config — the SAME escape the browser
+/// `wasm32-unknown-unknown` emit uses in [`insert_wasm_shared_files`]. Without it
+/// an emitted WASI project built on a mold-configured machine fails the link,
+/// breaking THE SEAL (a wasip1-accepted program must `cargo build`).
+///
+/// The array is NON-empty on purpose: cargo treats an empty array as unset and
+/// falls back to `build.rustflags` — so a benign flag is required to shadow it.
+///
+/// # Errors
+///
+/// Returns a [`Diagnostic`] only if the fixed [`RelPath`] fails validation — a
+/// compiler bug, never a program property.
+fn insert_wasi_linker_config(files: &mut BTreeMap<RelPath, String>) -> DResult<()> {
+    files.insert(
+        RelPath::new(".cargo/config.toml")?,
+        "[target.wasm32-wasip1]\n\
+         # Non-empty on purpose: an empty array would not override a host\n\
+         # config's native `build.rustflags` (e.g. a mold link-arg), which\n\
+         # `rust-lld` rejects for wasm32.\n\
+         rustflags = [\"-C\", \"debuginfo=0\"]\n"
+            .to_owned(),
+    );
+    Ok(())
+}
+
 /// Drop the crate-root `pub mod ipe_runtime;` (the vendored-source declaration)
 /// from `src/main.rs` for the dependency model, where the runtime is an extern
 /// crate reached through the prelude. The following `pub use ipe_runtime::*;`
@@ -2468,6 +2504,11 @@ fn assemble_project_files(
                 })?;
             main.push_str("\nmod ffi;\n");
             cargo_toml = ffi_cargo_toml(&cargo_toml, ctx)?;
+        }
+        // Co-located WASI shares this native emission; its wasip1 link needs the
+        // mold-escaping target-scoped config the browser wasm emit also carries.
+        if ctx.target == ipe_ir::Target::WasmWasi {
+            insert_wasi_linker_config(&mut files)?;
         }
         let cargo_toml = apply_cargo_name(&cargo_toml, &safe_name);
         return Ok(EmittedProject {
@@ -3078,6 +3119,11 @@ fn assemble_project_files(
             })?;
         main.push_str("\nmod ffi;\n");
     }
+    // Co-located WASI shares this native emission; its wasip1 link needs the
+    // mold-escaping target-scoped config the browser wasm emit also carries.
+    if ctx.target == ipe_ir::Target::WasmWasi {
+        insert_wasi_linker_config(&mut files)?;
+    }
     let cargo_toml = apply_cargo_name(&cargo_toml, &safe_name);
     Ok(EmittedProject {
         files,
@@ -3344,7 +3390,10 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     }
 
     match ctx.target {
-        ipe_ir::Target::Native => {
+        // Co-located WASI shares the native emission: a `Direct`/`Script`
+        // program's native effect floor runs over WASI (block_on drives `main`),
+        // NOT the browser TEA sink — only the wasip1 target triple differs.
+        ipe_ir::Target::Native | ipe_ir::Target::WasmWasi => {
             out.push_str(&native_runtime_bindings(PreludeReach {
                 http_client: ctx.reaches_http_client(),
                 random: ctx.reaches_random(),
@@ -3371,7 +3420,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     out.push('\n');
 
     match ctx.target {
-        ipe_ir::Target::Native => out.push_str(&epilogue()?),
+        ipe_ir::Target::Native | ipe_ir::Target::WasmWasi => out.push_str(&epilogue()?),
         ipe_ir::Target::WasmClient => out.push_str(&epilogue_wasm(ctx)?),
     }
 
@@ -3396,7 +3445,12 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
             })
         })
     });
-    if main_returns_shape_leaf && ctx.target == ipe_ir::Target::Native {
+    if main_returns_shape_leaf
+        && matches!(
+            ctx.target,
+            ipe_ir::Target::Native | ipe_ir::Target::WasmWasi
+        )
+    {
         let replaced = out.replacen(SHAPE_APP_BLOCK_ON_ANCHOR, SHAPE_APP_RUN_BLOCKING, 1);
         if replaced == out {
             return Err(Diagnostic::CompilerBug {
@@ -5361,12 +5415,14 @@ mod tests {
         CARGO_DEP_TOML, CARGO_TOML, CARGO_WASM_DEP_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES,
         RUNTIME_CONFIG_RS_DB_SQLITE, RUNTIME_MOD_RS_WEB_APPEND, WASM_ABSENT_MODULE_PATHS,
         WASM_CARGO_TOML, WASM_PRESENT_OVERRIDES, async_runtime_cargo_toml,
-        crypto_core_heavy_cargo_toml, db_cargo_toml, jwt_cargo_toml, runtime_bindings,
-        server_cargo_toml, shake_ffi_by_fn_ident, wasm_present_modules, wasm_runtime_bindings,
-        web_cargo_toml, wrapper_call_paths,
+        crypto_core_heavy_cargo_toml, db_cargo_toml, insert_wasi_linker_config, jwt_cargo_toml,
+        runtime_bindings, server_cargo_toml, shake_ffi_by_fn_ident, wasm_present_modules,
+        wasm_runtime_bindings, web_cargo_toml, wrapper_call_paths,
     };
     use crate::DbDriver;
     use crate::crate_specs;
+    use ipe_backend::RelPath;
+    use std::collections::BTreeMap;
 
     /// Drift-guard for the `overflow-checks = false` dev-profile flag, stated
     /// once per emitted manifest source. Since #1124 the flag is a pure
@@ -6073,6 +6129,35 @@ mod tests {
         assert!(
             out.contains("// preamble") && out.contains("// trailer"),
             "surrounding non-region text must survive untouched: {out}"
+        );
+    }
+
+    /// THE SEAL (wasip1 link): the co-located WASI emit ships a target-scoped
+    /// `.cargo/config.toml` that shadows a host-global native-linker
+    /// `build.rustflags` (e.g. a mold link-arg `rust-lld` rejects). The array
+    /// must be NON-empty (cargo treats an empty array as unset and falls back to
+    /// `build.rustflags`), and it must key the `wasm32-wasip1` triple — not the
+    /// browser `wasm32-unknown-unknown`.
+    #[test]
+    fn wasi_emit_ships_a_mold_escaping_target_scoped_cargo_config() {
+        let mut files: BTreeMap<RelPath, String> = BTreeMap::new();
+        insert_wasi_linker_config(&mut files).expect("fixed RelPath must validate");
+
+        let cfg = files
+            .get(&RelPath::new(".cargo/config.toml").expect("fixed RelPath"))
+            .expect("WASI emit must ship .cargo/config.toml");
+
+        assert!(
+            cfg.contains("[target.wasm32-wasip1]"),
+            "config must key the wasip1 triple, got: {cfg}"
+        );
+        assert!(
+            cfg.contains("rustflags = [\"-C\", \"debuginfo=0\"]"),
+            "rustflags must be a NON-empty array to shadow a host build.rustflags, got: {cfg}"
+        );
+        assert!(
+            !cfg.contains("[]"),
+            "an empty array would not override a host build.rustflags, got: {cfg}"
         );
     }
 }

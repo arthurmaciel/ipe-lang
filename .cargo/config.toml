@@ -8,5 +8,15 @@
 # only (cargo does not merge them), so this pins the wasm link step to a
 # mold-free flag set while leaving native builds on whatever the host config
 # selects. Debuginfo is dropped by the crate's release profile, not here.
+#
+# Both wasm targets need the override: `wasm32-unknown-unknown` (the in-browser
+# compiler crate + browser-Spa bundles) and `wasm32-wasip1` (the co-located WASI
+# runtime + emitted WASI programs). Both link with `rust-lld`, which rejects the
+# machine-global `-fuse-ld=mold`; without a per-triple override the WASI link
+# step fails, so THE SEAL (a wasip1-accepted program cargo-builds) is only real
+# once this override exists.
 [target.wasm32-unknown-unknown]
+rustflags = ["-C", "debuginfo=0"]
+
+[target.wasm32-wasip1]
 rustflags = ["-C", "debuginfo=0"]

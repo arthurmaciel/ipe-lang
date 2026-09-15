@@ -275,6 +275,68 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         return RuntimeFeatureSet(set);
     }
 
+    // Co-located WASI (`wasm32-wasip1`): the SEALED FLOOR closure. A WASI build
+    // reaches ONLY the `Direct`/`Script` sealed floor — the delivery matrix
+    // (`admit_triple`) refuses every non-viable shape, and the `available_on`
+    // gate refuses every non-viable kernel, upstream of here. So the reachable
+    // feature universe is exactly the pure families + the always-on effect floor
+    // (`Io`/`File`/`System`/`Task`/`Time`).
+    //
+    // This arm restates that floor as a POSITIVE, closed selection rather than
+    // reusing the native map: the excluded families
+    // (`Server`/`Web`/`Tui`/`Webview`/`HttpClient`/`WebsocketClient`/`Db`/
+    // `Email`/`Locale`/`Config`/`Compression`/`CsvKernel`/`CacheKernel`/`Crypto`/
+    // `Jwt`) map to tokio/axum/reqwest/tokio-tungstenite/`spawn_blocking` stacks
+    // that DO NOT build on wasip1. Their `uses_*` flags are already false here
+    // (the upstream gates guarantee it), so this is defense in depth: even a
+    // mis-set flag cannot select an unbuildable feature and break THE SEAL. The
+    // `Async` feature is deliberately omitted — the reactor spine on wasip1 is
+    // the std-only `block_on` (no tokio), and `tokio` is `not(wasm32)`-gated in
+    // the runtime manifest, so selecting it would be inert at best.
+    if ctx.target == ipe_ir::Target::WasmWasi {
+        let mut set = BTreeSet::new();
+        if ctx.reaches_json() {
+            set.insert(RuntimeFeature::Json);
+        }
+        if ctx.uses_time {
+            set.insert(RuntimeFeature::Time);
+        }
+        if ctx.reaches_encoding() {
+            set.insert(RuntimeFeature::Encoding);
+        }
+        if ctx.uses_regex {
+            set.insert(RuntimeFeature::Regex);
+        }
+        if ctx.reaches_uuid() {
+            set.insert(RuntimeFeature::Uuid);
+        }
+        if ctx.reaches_random() {
+            set.insert(RuntimeFeature::Random);
+        }
+        if ctx.reaches_log() {
+            set.insert(RuntimeFeature::Log);
+        }
+        if ctx.reaches_time_core() {
+            set.insert(RuntimeFeature::TimeCore);
+        }
+        if ctx.reaches_decimal() {
+            set.insert(RuntimeFeature::Decimal);
+        }
+        if ctx.reaches_char_category() {
+            set.insert(RuntimeFeature::CharCategory);
+        }
+        // The crypto FLOOR (sha2/hmac/subtle/getrandom) — `Crypto.randomBytes`/
+        // `randomToken` and `Secret` live here; the heavy crypto surface
+        // (`Crypto`/`Jwt`) is NOT part of the sealed floor and stays unselected.
+        if ctx.reaches_crypto_core() {
+            set.insert(RuntimeFeature::CryptoCore);
+        }
+        if ctx.reaches_secret() {
+            set.insert(RuntimeFeature::Secret);
+        }
+        return RuntimeFeatureSet(set);
+    }
+
     let mut set = BTreeSet::new();
 
     // JSON codec (`serde_json`, and via `json = […, "serde"]` the serde stack).

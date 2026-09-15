@@ -1432,6 +1432,29 @@ pub fn compile_prepared(
         })?;
     }
 
+    // Co-located WASI (`wasm32-wasip1`) sealed-floor gate: the build-boundary
+    // backstop to the delivery matrix's shape gate. Every kernel named anywhere
+    // in the linked program must be on the WASI-viable sealed floor
+    // (`available_on(WasmWasi)`); a kernel outside it has no wasip1 runtime
+    // symbol, so this refusal replaces a `cargo build --target wasm32-wasip1`
+    // failure (THE SEAL). Defense in depth: even a kernel reached through a path
+    // the shape gate does not model is turned back here at `ipe` time.
+    if config.target(db) == ipe_ir::Target::WasmWasi {
+        let gate_result = {
+            let interner = shared_interner.lock();
+            ipe_canon::target_gate::check_wasm_wasi(linked, &interner)
+        };
+        gate_result.map_err(|diag| {
+            let span = diag_span(&diag);
+            let (file, src) = source_for_span(span);
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(diag),
+            }
+        })?;
+    }
+
     // Use the attributed variant so cross-module type errors are attributed to
     // the correct source file via the `home` carried on the failing constraint,
     // rather than relying solely on the byte-offset heuristic (`source_for_span`)
@@ -1538,7 +1561,9 @@ pub fn compile_prepared(
     // emit).
     if !widget_manifest.is_empty() {
         match config.target(db) {
-            ipe_ir::Target::Native => {
+            // Co-located WASI carries no widget surface (a `Direct` script has no
+            // `Web`/DOM shape), so it shares the native (no browser bundle) arm.
+            ipe_ir::Target::Native | ipe_ir::Target::WasmWasi => {
                 inject_widget_registration(&mut emitted, &widget_manifest)?;
             }
             ipe_ir::Target::WasmClient => {

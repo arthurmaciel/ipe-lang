@@ -25,11 +25,37 @@ use crate::ast::{CaseBranch, Def, Expr, Expr_, LetBinding, Module};
 /// [`Diagnostic::Name`] (IPE-N0029) at the first offending reference, in
 /// source order within each def.
 pub fn check_wasm_client(module: &Module, interner: &Interner) -> DResult<()> {
+    check_wasm_target(module, interner, Target::WasmClient)
+}
+
+/// Reject every kernel/FFI reference in `module` that has no denotation on the
+/// co-located WASI (`wasm32-wasip1`) target — the sealed-floor gate.
+///
+/// The SAME default-deny walk as [`check_wasm_client`], keyed to the WASI
+/// availability set (`available_on(Target::WasmWasi)`): a kernel outside the
+/// sealed floor has no wasip1 runtime symbol, so letting it through would trade
+/// this compile error for a `cargo build --target wasm32-wasip1` failure (THE
+/// SEAL). It is the build-boundary backstop to the delivery matrix's shape gate
+/// — defense in depth: even a kernel reached through a path the shape gate does
+/// not model is turned back here.
+///
+/// # Errors
+/// [`Diagnostic::Name`] (IPE-N0029) at the first offending reference, in
+/// source order within each def.
+pub fn check_wasm_wasi(module: &Module, interner: &Interner) -> DResult<()> {
+    check_wasm_target(module, interner, Target::WasmWasi)
+}
+
+/// The shared default-deny walk over `module`, parameterised by the wasm
+/// [`Target`] whose `available_on` set decides admission. One walker, two
+/// targets — the SSOT for "a kernel with no denotation on this wasm target is
+/// rejected before it can become a cargo failure".
+fn check_wasm_target(module: &Module, interner: &Interner, target: Target) -> DResult<()> {
     for def in &module.defs {
         let body = match def {
             Def::Untyped { body, .. } | Def::Typed { body, .. } => body,
         };
-        if let Some(d) = first_denied(body, interner) {
+        if let Some(d) = first_denied(body, interner, target) {
             return Err(d);
         }
     }
@@ -73,10 +99,10 @@ fn single_def_module(interner: &mut Interner, body_expr: Expr_) -> Module {
 /// contract: callee before arguments, scrutinee before arms, each binding
 /// before its continuation, if-condition before body before else, and
 /// tuple/list/record/update fields in their declaration order.
-fn first_denied(e: &Expr, interner: &Interner) -> Option<Diagnostic> {
+fn first_denied(e: &Expr, interner: &Interner, target: Target) -> Option<Diagnostic> {
     match &e.value {
         Expr_::VarKernel { id, module, name } => {
-            let allowed = id.is_some_and(|k| k.available_on(Target::WasmClient));
+            let allowed = id.is_some_and(|k| k.available_on(target));
             // `id: None` (a kernel resolved only by the string-match
             // fallback) fails closed — an unaudited kernel is denied.
             if allowed {
@@ -102,35 +128,44 @@ fn first_denied(e: &Expr, interner: &Interner) -> Option<Diagnostic> {
         | Expr_::CustomElementCtor(_)
         | Expr_::Char(_)
         | Expr_::Unit => None,
-        Expr_::Call(f, args) => first_denied(f, interner)
-            .or_else(|| args.iter().find_map(|a| first_denied(a, interner))),
-        Expr_::Case(scrut, branches) => first_denied(scrut, interner).or_else(|| {
+        Expr_::Call(f, args) => first_denied(f, interner, target)
+            .or_else(|| args.iter().find_map(|a| first_denied(a, interner, target))),
+        Expr_::Case(scrut, branches) => first_denied(scrut, interner, target).or_else(|| {
             branches
                 .iter()
-                .find_map(|CaseBranch { body, .. }| first_denied(body, interner))
+                .find_map(|CaseBranch { body, .. }| first_denied(body, interner, target))
         }),
-        Expr_::Lambda(_, body) => first_denied(body, interner),
+        Expr_::Lambda(_, body) => first_denied(body, interner, target),
         // Binops resolve to `Basics` arithmetic/comparison kernels —
         // pure, always client-representable.
         Expr_::Binop { lhs, rhs, .. } => {
-            first_denied(lhs, interner).or_else(|| first_denied(rhs, interner))
+            first_denied(lhs, interner, target).or_else(|| first_denied(rhs, interner, target))
         }
         Expr_::Let(bindings, body) => bindings
             .iter()
-            .find_map(|LetBinding { body: b, .. }| first_denied(b, interner))
-            .or_else(|| first_denied(body, interner)),
+            .find_map(|LetBinding { body: b, .. }| first_denied(b, interner, target))
+            .or_else(|| first_denied(body, interner, target)),
         Expr_::If(arms, els) => arms
             .iter()
-            .find_map(|(c, b)| first_denied(c, interner).or_else(|| first_denied(b, interner)))
-            .or_else(|| first_denied(els, interner)),
+            .find_map(|(c, b)| {
+                first_denied(c, interner, target).or_else(|| first_denied(b, interner, target))
+            })
+            .or_else(|| first_denied(els, interner, target)),
         Expr_::Tuple(items) | Expr_::List(items) => {
-            items.iter().find_map(|i| first_denied(i, interner))
+            items.iter().find_map(|i| first_denied(i, interner, target))
         }
-        Expr_::Cons(h, t) => first_denied(h, interner).or_else(|| first_denied(t, interner)),
-        Expr_::Record(fields) => fields.iter().find_map(|(_, v)| first_denied(v, interner)),
-        Expr_::Access(base, _) => first_denied(base, interner),
-        Expr_::Update(base, fields) => first_denied(base, interner)
-            .or_else(|| fields.iter().find_map(|(_, v)| first_denied(v, interner))),
+        Expr_::Cons(h, t) => {
+            first_denied(h, interner, target).or_else(|| first_denied(t, interner, target))
+        }
+        Expr_::Record(fields) => fields
+            .iter()
+            .find_map(|(_, v)| first_denied(v, interner, target)),
+        Expr_::Access(base, _) => first_denied(base, interner, target),
+        Expr_::Update(base, fields) => first_denied(base, interner, target).or_else(|| {
+            fields
+                .iter()
+                .find_map(|(_, v)| first_denied(v, interner, target))
+        }),
     }
 }
 

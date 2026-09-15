@@ -12761,6 +12761,20 @@ pub enum KernelId {
 /// a newly added kernel is unrepresentable client-side until audited and
 /// allowed, so the forgotten state is the safe state; see
 /// `docs/adr/0042-wasm-client-target.md` Q5 Layer 1).
+///
+/// `WasmWasi` is the co-located portable WASI target (`wasm32-wasip1`): a
+/// native-ish target whose effects run through WASI (stdio, the WASI clock, the
+/// preopened-dir filesystem, `random_get` entropy) rather than the browser
+/// sandbox's Web-API substitutes. It is DISTINCT from `WasmClient`: the browser
+/// client denies native effects and reaches the world only through Web APIs,
+/// whereas WASI runs a `Direct`/`Script` program's native effect floor. Its
+/// availability set is ALSO default-deny — a kernel appears only if its runtime
+/// module actually compiles on `wasm32-wasip1` — because the non-viable
+/// families (`Http`/`WebSocket` → reqwest/tokio-tungstenite → `tokio/net`→`mio`;
+/// `compression`/`csv`/`config` → `tokio::spawn_blocking`; the whole
+/// tokio/axum/db/TEA/browser surface) do not build on wasip1, and admitting one
+/// would break THE SEAL (`ipe`-accept then `cargo build --target wasm32-wasip1`
+/// fail).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum Target {
     /// The native host binary (server / CLI / TUI / desktop).
@@ -12769,6 +12783,11 @@ pub enum Target {
     /// A browser WASM bundle (`ipe build --target wasm`) — fully public,
     /// `wasm2wat`-inspectable; no server effect or secret may compile in.
     WasmClient,
+    /// A co-located portable WASI bundle (`wasm32-wasip1`) — a `Direct`/`Script`
+    /// program running its native effect floor over WASI. Default-deny to the
+    /// WASI-viable sealed floor; every non-viable family is refused at `ipe`
+    /// time so it never reaches the wasip1 `cargo build`.
+    WasmWasi,
 }
 
 impl StdlibKernel {
@@ -12786,6 +12805,7 @@ impl StdlibKernel {
         match target {
             Target::Native => true,
             Target::WasmClient => self.wasm_client_available(),
+            Target::WasmWasi => self.wasi_available(),
         }
     }
 
@@ -12984,6 +13004,130 @@ impl StdlibKernel {
             // or until a dedicated backend exists (Terminal/Ffi).
             KernelClass::Db | KernelClass::Server | KernelClass::Terminal | KernelClass::Ffi => {
                 false
+            }
+        }
+    }
+
+    /// The co-located WASI (`wasm32-wasip1`) allowlist — the SEALED FLOOR.
+    ///
+    /// Default-deny like [`Self::wasm_client_available`], but keyed to a
+    /// DIFFERENT viable set: WASI runs a `Direct`/`Script` program's NATIVE
+    /// effect floor through WASI (stdio, the WASI clock, the preopened-dir
+    /// filesystem, `random_get` entropy), so it admits the always-on effect
+    /// floor (`Io`/`File`/`System` + the `Task` reactor spine) and the pure
+    /// computational families — the exact surface the runtime
+    /// `_WASI_EFFECT_FLOOR_SEAL` binds and a wasip1 runtime build proves resolves.
+    ///
+    /// It is NOT the browser allowlist: the browser-only effect kernels denote
+    /// through Web-API substitutes (`Http` → `fetch`, `WebSocket` →
+    /// `web_sys::WebSocket`, the `Ipe.Ffi.Js` ports, the TEA loop, the render
+    /// surface) that have NO wasip1 arm, and their native crates
+    /// (reqwest/tokio-tungstenite → `tokio/net`→`mio`) do not build on wasip1.
+    /// Every such family is DENIED here — admitting one would break THE SEAL.
+    /// The catch-all `false` is the default-deny invariant: a newly added kernel
+    /// is unrepresentable on WASI until its runtime module is proven to compile
+    /// on `wasm32-wasip1`.
+    #[allow(clippy::too_many_lines)]
+    fn wasi_available(self) -> bool {
+        let decl = self.decl();
+        match decl.class {
+            // No co-located WASI denotation: the render surface / TEA wiring /
+            // `Web`-app entries are browser/native-loop surfaces (a WASI program
+            // is `Direct`/`Script`, never a TEA loop), and Db/Server/Terminal/Ffi
+            // ride tokio/axum/sqlx reactor spines that do not build on wasip1.
+            KernelClass::Ui
+            | KernelClass::Web
+            | KernelClass::Tea
+            | KernelClass::Db
+            | KernelClass::Server
+            | KernelClass::Terminal
+            | KernelClass::Ffi => false,
+            // Everything the runtime calls "pure" — which INCLUDES the effect
+            // floor (`Io`/`File`/`System`/`Task`/`Time`) as well as the genuine
+            // pure families — distinguished by qualifier + kernel.
+            KernelClass::Pure => {
+                // ICU4X case-mapping has no wasip1 build (same as the browser
+                // arm) — deny before the qualifier-wide allow fires.
+                if matches!(self, Self::StringToUpperIn | Self::StringToLowerIn) {
+                    return false;
+                }
+                // The always-on native effect floor a `Direct`/`Script` program
+                // reaches over WASI: stdio (`Io`), the preopened-dir filesystem
+                // (`File`), the process environment/args + exit (`System`). Each
+                // compiles on wasip1 (the always-compiled runtime modules the
+                // baseline wasip1 build resolves); an operation with no WASI
+                // mapping (subprocess spawn) returns a typed `Err`, never a panic
+                // — fail-closed through the `Result` channel. This is the exact
+                // surface the runtime `_WASI_EFFECT_FLOOR_SEAL` binds.
+                matches!(decl.qualifier, "Io" | "File" | "System")
+                // The full `Ipe.Time` calendar + clock surface. WASI HAS a real
+                // clock, so `Time.now`/`unixMillis`/`sleep` resolve against the
+                // native `SystemTime`/`chrono` arm (the `_WASI_TIME_FLOOR_SEAL`),
+                // NOT the browser `Date.now()` substitute — so the WHOLE family
+                // is viable, unlike on the browser (which admits only a subset).
+                || matches!(decl.qualifier, "Time")
+                // The pure computational families whose runtime modules build on
+                // wasip1 — the SAME proven-wasm modules the browser floor uses
+                // (no host I/O, no tokio, no un-shimmed entropy). `Http`/`Url`
+                // are DELIBERATELY absent: `Http` has no wasip1 arm (fetch is
+                // browser-only, reqwest does not build there), and `Url` is only
+                // pulled in by the HTTP client, so it carries no WASI denotation
+                // on the sealed floor.
+                || matches!(
+                    decl.qualifier,
+                    "String"
+                        | "Char"
+                        | "List"
+                        | "Basics"
+                        | "Math"
+                        | "Dict"
+                        | "Set"
+                        | "Maybe"
+                        | "Result"
+                        | "Error"
+                        | "Bytes"
+                        | "Encoding"
+                        | "JsonEnc"
+                        | "JsonDec"
+                        | "JsonDecP"
+                        | "Decimal"
+                        | "Regex"
+                        | "Path"
+                        | "Secret"
+                        | "CssSafety"
+                        | "Uuid"
+                        | "Log"
+                        | "Random"
+                )
+                // `Crypto.randomBytes`/`randomToken` — `random_get` entropy via
+                // getrandom. Every OTHER `Crypto` kernel (hashing, AEAD, RSA,
+                // PBKDF2) stays denied: the heavy crypto surface is out of the
+                // sealed floor.
+                || matches!(self, Self::CryptoRandomBytes | Self::CryptoRandomToken)
+                // `Task.*` pure future combinators — the std-only reactor spine
+                // (`block_on`/`task_run`/`task_parallel`, the LIVE wasip1 arm; no
+                // tokio) drives a `Direct` program's `main`. The tokio-bound
+                // `Task.run`/`parallel`/`retryWith`/`perform` stay denied (their
+                // runtime bodies are `block_on`/`tokio::spawn`/`tokio::time`).
+                || matches!(
+                    self,
+                    Self::TaskSucceed
+                        | Self::TaskFail
+                        | Self::TaskMap
+                        | Self::TaskMap2
+                        | Self::TaskMap3
+                        | Self::TaskMap4
+                        | Self::TaskMap5
+                        | Self::TaskAndThen
+                        | Self::TaskMapError
+                        | Self::TaskOnError
+                        | Self::TaskFromResult
+                        | Self::TaskAndThenResult
+                        | Self::TaskSequence
+                )
+                // `Env.public` — build-time-embedded allowlist (`option_env!` on
+                // wasm32, the same as the browser arm).
+                || matches!(self, Self::EnvPublic)
             }
         }
     }
@@ -13967,6 +14111,100 @@ mod tests {
         // Everything is available natively.
         for &sk in StdlibKernel::ALL {
             assert!(sk.available_on(Target::Native));
+        }
+    }
+
+    /// The `WasmWasi` (co-located `wasm32-wasip1`) allowlist is default-deny to
+    /// the SEALED FLOOR: the always-on native effect floor
+    /// (`Io`/`File`/`System`) + the WASI clock (`Time`) + the pure computational
+    /// families + the pure `Task` combinator spine, and NOTHING that pulls a
+    /// stack not building on wasip1. A kernel wrongly admitted here breaks THE
+    /// SEAL (`ipe`-accept then `cargo build --target wasm32-wasip1` fail); a
+    /// kernel wrongly denied turns away a buildable program.
+    #[test]
+    fn wasi_allowlist_is_default_deny() {
+        use super::Target;
+        // Admitted: the sealed floor a `Direct`/`Script` program reaches.
+        for allowed in [
+            // The always-on native effect floor over WASI.
+            StdlibKernel::IoPrintln,
+            StdlibKernel::IoWriteStdout,
+            StdlibKernel::IoReadLine,
+            StdlibKernel::FileReadFile,
+            StdlibKernel::FileWriteFile,
+            StdlibKernel::SystemArgs,
+            StdlibKernel::SystemGetenv,
+            StdlibKernel::SystemExit,
+            // The WASI clock — the WHOLE Time family (unlike the browser subset).
+            StdlibKernel::TimeNow,
+            StdlibKernel::TimeSleep,
+            StdlibKernel::TimeUnixMillis,
+            // Pure computational families.
+            StdlibKernel::StringFromInt,
+            StdlibKernel::ListMap,
+            StdlibKernel::DictInsert,
+            StdlibKernel::JsonDecDecodeString,
+            StdlibKernel::DecAdd,
+            StdlibKernel::LogInfo,
+            StdlibKernel::RandomInt,
+            // The pure `Task` combinator spine (std-only reactor; no tokio).
+            StdlibKernel::TaskSucceed,
+            StdlibKernel::TaskMap,
+            StdlibKernel::TaskAndThen,
+            StdlibKernel::TaskSequence,
+            // Entropy pair (`random_get`) + `Env.public`.
+            StdlibKernel::CryptoRandomBytes,
+            StdlibKernel::CryptoRandomToken,
+            StdlibKernel::EnvPublic,
+        ] {
+            assert!(
+                allowed.available_on(Target::WasmWasi),
+                "{allowed:?} must be WASI-representable (sealed floor)"
+            );
+        }
+        // DENIED: every family whose wasip1 build does not exist — the SEAL rests
+        // on these staying refused so they never reach the wasip1 cargo build.
+        for denied in [
+            // Http / WebSocket: reqwest / tokio-tungstenite → tokio/net → mio.
+            StdlibKernel::HttpGet,
+            StdlibKernel::HttpPost,
+            StdlibKernel::WebSocketConnect,
+            StdlibKernel::WebSocketSend,
+            StdlibKernel::SubSubscribeWebSocket,
+            // `Url` carries no WASI denotation of its own (only the HTTP client
+            // pulled it in, and that is denied).
+            StdlibKernel::UrlFromString,
+            // Db / Server / Email: tokio/axum/sqlx spines.
+            StdlibKernel::DbQuery,
+            StdlibKernel::DbConnect,
+            StdlibKernel::ServerListen,
+            StdlibKernel::EmailSend,
+            // TEA loop + render surface + Web app entries + terminal apps: a WASI
+            // program is `Direct`, never a TEA loop.
+            StdlibKernel::CmdPerform,
+            StdlibKernel::SubEvery,
+            StdlibKernel::UiButton,
+            StdlibKernel::HtmlNode,
+            StdlibKernel::WebApp,
+            StdlibKernel::TeaWorker,
+            StdlibKernel::TerminalAppLines,
+            StdlibKernel::TerminalAppScreen,
+            // Tokio-bound Task entries (block_on/spawn/time), and the auto-run
+            // aliases — their runtime bodies do not build on the std-only spine.
+            StdlibKernel::TaskRun,
+            StdlibKernel::TaskParallel,
+            StdlibKernel::TaskPerform,
+            // Heavy crypto (only the entropy pair is on the floor).
+            StdlibKernel::CryptoSha256,
+            StdlibKernel::CryptoAesGcmEncrypt,
+            // Auth (jsonwebtoken + secret consumers) + subprocess spawn (no WASI
+            // spawn mapping — but these are `Ffi`/`Server`-shaped, denied).
+            StdlibKernel::AuthSignToken,
+        ] {
+            assert!(
+                !denied.available_on(Target::WasmWasi),
+                "{denied:?} must have NO WASI denotation (breaks THE SEAL otherwise)"
+            );
         }
     }
 
