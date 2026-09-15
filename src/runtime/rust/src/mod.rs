@@ -428,19 +428,19 @@ pub mod email;
 pub use email::*;
 
 // `tea` carries the target-neutral `IpeCmd`/`IpeSub` types plus the native
-// (tokio) loop; on browser wasm the wasm-client sink drives the same types with
-// the loop halves cfg'd out inside the file. The tokio arm requires the tokio
-// *crate* (native-only in the manifest), so it is `not(target_arch = "wasm32")`
-// — a co-located WASI build (which may set the `tokio` feature flag via `async`
-// while the crate is absent) does not compile the reactor loop; its TEA driver
-// arrives with the WASI shape wiring in a later increment.
+// (tokio) loop; on wasm the wasm-client sink drives the same types with the loop
+// halves cfg'd out inside the file. The module gate is feature-based (so the
+// composed feature universe reaches it); every tokio-*crate* use inside the file
+// is additionally `not(target_arch = "wasm32")`, so a wasm build (browser or
+// co-located WASI) compiles the module through its wasm arms with the tokio crate
+// — native-only in the manifest — absent.
 #[cfg(any(
-    all(feature = "tokio", not(target_arch = "wasm32")),
+    feature = "tokio",
     all(target_arch = "wasm32", feature = "wasm-client")
 ))]
 pub mod tea;
 #[cfg(any(
-    all(feature = "tokio", not(target_arch = "wasm32")),
+    feature = "tokio",
     all(target_arch = "wasm32", feature = "wasm-client")
 ))]
 pub use tea::*;
@@ -449,13 +449,13 @@ pub use tea::*;
 // `Js.subscribe`. Rides `IpeCmd`/`IpeSub` (so it follows `tea`'s gate) and the
 // `seal_codec` (so it also needs `json`); available on the native tokio server
 // path and the browser wasm-client sink, with the two halves cfg-split inside
-// the file. A JS host exists on neither the native `tokio`-less build nor WASI
-// (`wasm32-wasip1`), so the module is absent there — a co-located WASI program
-// reaches no `Js.*` port kernel (fail-closed: no JS host to transport through).
+// the file. On a co-located WASI (`wasm32-wasip1`) build the wasm-client glue is
+// absent, so no `Js.*` port kernel is reachable there — fail-closed: no JS host
+// to transport through.
 #[cfg(all(
     feature = "json",
     any(
-        all(feature = "tokio", not(target_arch = "wasm32")),
+        feature = "tokio",
         all(target_arch = "wasm32", feature = "wasm-client")
     )
 ))]
@@ -463,7 +463,7 @@ pub mod js_port;
 #[cfg(all(
     feature = "json",
     any(
-        all(feature = "tokio", not(target_arch = "wasm32")),
+        feature = "tokio",
         all(target_arch = "wasm32", feature = "wasm-client")
     )
 ))]
@@ -553,11 +553,11 @@ pub mod ui;
 // (a TEA app, so gated on the async runtime like `tea`). The cross-platform floor
 // (a stub returning a graceful Err) keeps the backend linking everywhere; the real
 // wry/tao window backend needs the system webview dev libs. It imports `tea`, so
-// it follows `tea`'s native-tokio gate: a native desktop window has no WASI
-// (`wasm32-wasip1`) form, so the module is absent there.
-#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+// it follows `tea`'s feature gate; the real wry/tao arm is behind the opt-in
+// `webview` feature, so a wasm build compiles only the tokio-free `Err` stub.
+#[cfg(feature = "tokio")]
 pub mod webview;
-#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+#[cfg(feature = "tokio")]
 pub use webview::{WebViewAppCfg, WebViewWindowCfg, webview_app};
 
 // `CustomElement.node` custom-element glue generator + SRI-pinned asset addressing. A
