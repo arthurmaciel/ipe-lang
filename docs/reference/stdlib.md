@@ -2592,8 +2592,8 @@ Ipe.System -- process environment + args + termination
 | `lazy` | `lazy makeTask` — defer building a task until it is run, by wrapping it in a |
 | `BackoffStrategy` | The four backoff strategies available to `RetryPolicy`. |
 | `RetryPolicy` | Retry configuration for `retryWith`, built with the `linearBackoff` / |
-| `linearBackoff` | `linearBackoff maxAttempts delayMs` — a constant-delay policy that retries on |
-| `exponentialBackoff` | `exponentialBackoff maxAttempts baseMs` — a policy whose delay doubles each |
+| `linearBackoff` | `linearBackoff maxAttempts delay` — a constant-delay policy that retries on |
+| `exponentialBackoff` | `exponentialBackoff maxAttempts base` — a policy whose delay doubles each |
 | `withJitter` | `withJitter policy` — upgrade the policy's strategy to its jitter variant: |
 | `retryOn` | `retryOn pred policy` — replace the policy's `shouldRetry` predicate so it |
 | `withRetryOn` | `withRetryOn pred policy` — an alias for `retryOn` with the same semantics and |

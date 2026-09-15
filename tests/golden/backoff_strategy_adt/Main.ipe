@@ -18,8 +18,8 @@ import Ipe.Duration as Duration
 
 main =
     let
-        p1 = Task.linearBackoff 3 100
-        p2 = Task.exponentialBackoff 3 100
+        p1 = Task.linearBackoff 3 (Duration.millis 100)
+        p2 = Task.exponentialBackoff 3 (Duration.millis 100)
         p3 = Task.withJitter p1
         p4 = Task.withJitter p2
         p5 = Task.defaultRetryPolicy

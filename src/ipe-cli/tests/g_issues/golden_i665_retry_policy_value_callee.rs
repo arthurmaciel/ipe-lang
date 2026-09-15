@@ -4,7 +4,8 @@
 //!
 //! `Task.retryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e` returns a
 //! `RetryPolicy e` — an anonymous record carrying a `shouldRetry` predicate
-//! FUNCTION. A pipe (`Task.linearBackoff 5 1 |> Task.retryOn (\_ -> False)`)
+//! FUNCTION. A pipe
+//! (`Task.linearBackoff 5 (Duration.millis 1) |> Task.retryOn (\_ -> False)`)
 //! lowers `retryOn` through the value-callee (`Expr::Apply`) arm, whose
 //! fn-in-derive-carrier gate saw a fn-typed parameter plus a fn-carrying result
 //! record and rejected the application. That gate lacked the `RetryPolicy`

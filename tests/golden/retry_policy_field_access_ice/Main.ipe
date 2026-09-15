@@ -2,6 +2,7 @@ module Main exposing (main)
 
 import Ipe.Io as Io
 import Ipe.Task
+import Ipe.Duration as Duration
 
 
 -- Regression for the RetryPolicy struct-synthesis ICE (IPE-I0001).
@@ -25,7 +26,7 @@ main =
             Task.andThen
                 (\_ -> Io.println "ok")
                 (Task.retryWith
-                    (Task.linearBackoff 3 100
+                    (Task.linearBackoff 3 (Duration.millis 100)
                         |> Task.withMaxAttempts 5
                         |> Task.retryOn (\_ -> False)
                     )
@@ -35,7 +36,7 @@ main =
         (Task.andThen
             (\_ -> Io.println "withRetryOn ok")
             (Task.retryWith
-                (Task.exponentialBackoff 2 200
+                (Task.exponentialBackoff 2 (Duration.millis 200)
                     |> Task.withRetryOn (\_ -> True)
                 )
                 (Task.succeed "x")
