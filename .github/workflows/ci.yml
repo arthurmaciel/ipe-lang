@@ -1366,6 +1366,35 @@ jobs:
       - name: Fail if generated docs differ from committed files
         run: git diff --exit-code docs/reference/capabilities.md
 
+  # Semantic-parity gate for the doc-side Markdown parser.
+  #
+  # `Ipe.Markdown` is the Markdown parse authority. The doc-side Rust port
+  # (`ipe_docs::markdown`) is kept honest against it by a snapshot produced by
+  # an actual `ipe` run of the parity serializer
+  # (examples/shapes/script/markdown-parity): the run regenerates
+  # src/ipe-docs/src/markdown/parity/snapshot.txt and this job fails when the
+  # regenerated snapshot differs from the committed one, so a change to
+  # `Ipe.Markdown` that is not reflected in the committed snapshot — or a port
+  # that drifts from it — reddens the build (no silent parse-SSOT drift).
+  #
+  # Change-gated on `code`: the parser, the `Ipe.Markdown` authority, and the
+  # committed snapshot all live under `src/**`, so any change that can move the
+  # snapshot triggers this job; a pure prose-only PR skips vacuously. It always
+  # runs on push/nightly.
+  markdown-parity:
+    runs-on: ubuntu-latest
+    needs: [changes, quick-check]
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: Swatinem/rust-cache@v2
+      - name: Regenerate the Markdown parity snapshot via an ipe run
+        run: tools/scripts/regen-markdown-parity.sh
+      - name: Fail if the regenerated snapshot differs from the committed one
+        run: git diff --exit-code src/ipe-docs/src/markdown/parity/snapshot.txt
+
   # Headless-browser behaviour gate for Ipe.Browser.Geolocation +
   # Ipe.Browser.Clipboard — the three flows a raw TcpStream HTTP test cannot
   # exercise (browser permission grant/deny + JS API round-trips):

@@ -1,0 +1,166 @@
+=== header-h1 ===
+--- source ---
+# Release notes
+--- blocks ---
+(header H1 "Release notes")
+--- end ---
+=== header-h6 ===
+--- source ---
+###### Deep
+--- blocks ---
+(header H6 "Deep")
+--- end ---
+=== header-no-space ===
+--- source ---
+#nospace
+--- blocks ---
+(para "#nospace")
+--- end ---
+=== paragraph-fold ===
+--- source ---
+alpha
+beta
+--- blocks ---
+(para "alpha beta")
+--- end ---
+=== paragraph-hard-break ===
+--- source ---
+alpha  
+beta
+--- blocks ---
+(para "alpha  \nbeta")
+--- end ---
+=== bullet-list ===
+--- source ---
+- one
+- two
+--- blocks ---
+(bullet "one" "two")
+--- end ---
+=== numbered-list ===
+--- source ---
+1. one
+2. two
+--- blocks ---
+(numbered "one" "two")
+--- end ---
+=== code-fence ===
+--- source ---
+```ipe
+foo =
+    bar
+```
+--- blocks ---
+(code "foo =\n    bar")
+--- end ---
+=== rule-dash ===
+--- source ---
+---
+--- blocks ---
+(rule)
+--- end ---
+=== rule-star ===
+--- source ---
+***
+--- blocks ---
+(rule)
+--- end ---
+=== table ===
+--- source ---
+| A | B |
+|---|---|
+| 1 | 2 |
+--- blocks ---
+(table (hdr "A" "B") (row "1" "2"))
+--- end ---
+=== blockquote ===
+--- source ---
+> quoted
+> lines
+--- blocks ---
+(blockquote
+  (para "quoted lines")
+)
+--- end ---
+=== blockquote-nested ===
+--- source ---
+> outer
+> > inner
+--- blocks ---
+(blockquote
+  (para "outer")
+  (blockquote
+    (para "inner")
+  )
+)
+--- end ---
+=== inline-emphasis ===
+--- source ---
+a **bold** and *italic* and `code`
+--- blocks ---
+(para "a **bold** and *italic* and `code`")
+--- end ---
+=== inline-link-safe ===
+--- source ---
+see [docs](guide.html)
+--- blocks ---
+(para "see [docs](guide.html)")
+--- end ---
+=== inline-link-unsafe ===
+--- source ---
+[x](javascript:alert(1))
+--- blocks ---
+(para "[x](javascript:alert(1))")
+--- end ---
+=== inline-link-vbscript ===
+--- source ---
+[x](vbscript:msgbox(1))
+--- blocks ---
+(para "[x](vbscript:msgbox(1))")
+--- end ---
+=== inline-image ===
+--- source ---
+![alt](img.png)
+--- blocks ---
+(para "![alt](img.png)")
+--- end ---
+=== inline-unmatched ===
+--- source ---
+a * b and [x](y and `z
+--- blocks ---
+(para "a * b and [x](y and `z")
+--- end ---
+=== inline-multibyte ===
+--- source ---
+café ☕ **✓**
+--- blocks ---
+(para "café ☕ **✓**")
+--- end ---
+=== html-literal ===
+--- source ---
+a <script>x</script> b
+--- blocks ---
+(para "a <script>x</script> b")
+--- end ---
+=== mixed-doc ===
+--- source ---
+# Title
+
+Intro **para**.
+
+- item [link](https://a.example)
+
+> note
+
+| H |
+|---|
+| v |
+--- blocks ---
+(header H1 "Title")
+(para "Intro **para**.")
+(bullet "item [link](https://a.example)")
+(blockquote
+  (para "note")
+)
+(table (hdr "H") (row "v"))
+--- end ---

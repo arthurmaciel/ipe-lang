@@ -13,7 +13,7 @@ automated by a workflow token).
 
 ## Intended required set (= manifest `gate` + `gate-external` contexts)
 
-See `ci/required-set.json`. As of this change, 27 contexts:
+See `ci/required-set.json`. As of this change, 26 contexts:
 
 ```
 artifact-guard
@@ -31,6 +31,7 @@ fmt
 linux-arm64 (seccomp socket-deny + bubblewrap)
 linux-x64 (seccomp socket-deny + bubblewrap)
 macos-arm64 (sandbox-exec / Seatbelt)
+markdown-parity
 panic-scan
 playground-jail
 quick-check
@@ -54,6 +55,9 @@ they are `gate` in the manifest but were not in the ruleset):
 - `capabilities-docs-drift` — deterministic capabilities-docs diff.
 - `panic-scan` — panic-pattern scan (Soundness). Already required on `development`.
 - `registry-admission` — registry admission gate.
+- `markdown-parity` — deterministic Markdown parse-SSOT snapshot diff (parity
+  with `stdlib-docs-drift`; a red is a drift between the doc-side port and
+  `Ipe.Markdown`).
 
 No other changes: every other live required context is a manifest `gate` and stays.
 
