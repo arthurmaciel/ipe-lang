@@ -87,29 +87,71 @@ pub fn classify_main_shape(module: &Module, interner: &Interner) -> MainShape {
     head_shape(&value.value.body, module, interner).unwrap_or(MainShape::Script)
 }
 
-/// A top-level shape view/UI library and the shape whose app entry renders it.
+/// The render-to-`String` sink for a shape's view: the canonical module that
+/// exposes the serialiser turning a built view into a `String` (or writing it
+/// out), and the entry names that do so. A Script that references such a sink
+/// CONSUMES the view rather than dropping it — the static-site-generation case —
+/// so IPE-N0050 does not fire for the paired shape-UI library.
+///
+/// `Ipe.Html` re-exposes the native serialiser (`render` / `toString` / their
+/// pipeline-spelled aliases) and the render sink `renderStatic`; a `web`-shape UI
+/// (`Ipe.Ui` → `Ui.layout` → `Html`, or `Ipe.Html` directly) reaches a `String`
+/// through it. A row is [`None`] when the shape has no `String` sink at all
+/// (`Ipe.Ui.Cells` builds a `Screen` only a `Tui.tea` renders), so that UI is
+/// ALWAYS genuinely dropped in a Script and always warns.
+#[derive(Clone, Copy)]
+struct RenderSink {
+    /// Canonical dotted path of the module exposing the sink (`Ipe.Html`).
+    module: &'static [&'static str],
+    /// Entry names on `module` that consume a view into a `String` / render sink.
+    entries: &'static [&'static str],
+}
+
+/// The `web`-shape render-to-`String` sink: `Ipe.Html`'s re-exposed serialiser
+/// and render sink. Kept in lockstep with `Ipe/Html.ipe`'s exposed
+/// `render` / `renderStatic` / `toString` / `htmlRender`.
+const WEB_RENDER_SINK: RenderSink = RenderSink {
+    module: &["Ipe", "Html"],
+    entries: &["render", "renderStatic", "toString", "htmlRender"],
+};
+
+/// A top-level shape view/UI library, the shape whose app entry renders it, and
+/// the render-to-`String` sink (if any) that lets a Script consume it.
 /// These are the shape-agnostic-*looking* but shape-render surfaces a Script may
 /// legally import (they are NOT under `Ipe.Tea.*`, so IPE-N0033 does not fire),
-/// yet a Script has no `view` to hand them to. Each row names the shape and the
-/// app entry that WOULD render this UI.
-const SHAPE_VIEW_LIBRARIES: &[(&[&str], &str, &str)] = &[
-    // `Ipe.Ui` / `Ipe.Html` build the DOM view a `Web.tea` renders.
-    (&["Ipe", "Ui"], "web", "Web.tea"),
-    (&["Ipe", "Html"], "web", "Web.tea"),
-    // `Ipe.Ui.Cells` builds the terminal-cells view a `Tui.tea` renders.
-    (&["Ipe", "Ui", "Cells"], "terminal", "Tui.tea"),
+/// yet a Script has no `view` to hand them to. Each row names the shape, the app
+/// entry that WOULD render this UI, and the [`RenderSink`] that turns it into a
+/// `String` — `None` when the shape has no `String` sink.
+const SHAPE_VIEW_LIBRARIES: &[(&[&str], &str, &str, Option<RenderSink>)] = &[
+    // `Ipe.Ui` / `Ipe.Html` build the DOM view a `Web.tea` renders; both reach a
+    // `String` through `Ipe.Html`'s serialiser, so a static-site Script consumes
+    // them.
+    (&["Ipe", "Ui"], "web", "Web.tea", Some(WEB_RENDER_SINK)),
+    (&["Ipe", "Html"], "web", "Web.tea", Some(WEB_RENDER_SINK)),
+    // `Ipe.Ui.Cells` builds the terminal-cells view a `Tui.tea` renders; it has
+    // no `String` sink, so in a Script it is always genuinely dropped.
+    (&["Ipe", "Ui", "Cells"], "terminal", "Tui.tea", None),
 ];
 
 /// The Script-hole hint (IPE-N0050): a **Warning** for a Script that imports a
-/// shape's view/UI library but, being a Script (a plain-`Task` `main`), renders
-/// nothing — so that UI never reaches a screen.
+/// shape's view/UI library, builds a view, but — being a Script (a plain-`Task`
+/// `main`) — never renders it, so that UI is genuinely dropped.
 ///
 /// Returns `None` for any non-Script `main` (an app renders its view; no hole),
-/// or a Script that imports no shape view library (nothing built to drop). When
-/// it does fire, the returned [`Diagnostic`] is `Severity::Warning`: a Script is
-/// a legal program, so this HINTS the likely-intended `<Shape>.tea` entry rather
-/// than rejecting. Emit it into the compiler's warning channel; it must never
-/// fail the build.
+/// a Script that imports no shape view library (nothing built to drop), or a
+/// Script that DOES consume the built view through a render-to-`String` sink —
+/// static-site generation (`Ui.layout`/`Html` → `Html.render` → a `String` it
+/// prints or writes). When it does fire, the returned [`Diagnostic`] is
+/// `Severity::Warning`: a Script is a legal program, so this HINTS the
+/// likely-intended `<Shape>.tea` entry rather than rejecting. Emit it into the
+/// compiler's warning channel; it must never fail the build.
+///
+/// The carve-out is structural, not heuristic: the hint is withheld only when a
+/// reference in the program resolves — through the import table, exactly as name
+/// resolution does — to the paired shape's [`RenderSink`] (`Ipe.Html`'s
+/// serialiser). A bare `render` from an unrelated module, or a `H.render` whose
+/// `H` does not resolve to `Ipe.Html`, is NOT a sink, so the view stays dropped
+/// and the hint stands (fail-closed: absent proof the view is consumed, warn).
 ///
 /// This is deliberately distinct from IPE-N0033: that gate is a hard error for a
 /// Script importing the live-loop machinery under `Ipe.Tea.*`; this hint is for a
@@ -129,10 +171,16 @@ pub fn script_view_hole_hint(module: &Module, interner: &Interner) -> Option<Dia
         let Some(path) = module_path_segments(import, interner) else {
             continue;
         };
-        if let Some((_, shape, entry)) = SHAPE_VIEW_LIBRARIES
+        if let Some((_, shape, entry, sink)) = SHAPE_VIEW_LIBRARIES
             .iter()
-            .find(|(lib_path, _, _)| path_eq(lib_path, &path))
+            .find(|(lib_path, _, _, _)| path_eq(lib_path, &path))
         {
+            // A render-to-`String` sink for this shape, referenced anywhere in
+            // the program, CONSUMES the view — the static-site case — so the view
+            // is not dropped and no hole is reported.
+            if sink.is_some_and(|s| program_references_sink(&s, module, interner)) {
+                continue;
+            }
             let shape_ui_module = path.join(".").into_boxed_str();
             return Some(Diagnostic::Name {
                 span: import.name.span,
@@ -145,6 +193,139 @@ pub fn script_view_hole_hint(module: &Module, interner: &Interner) -> Option<Dia
         }
     }
     None
+}
+
+/// Does any value body in the module reference this render-to-`String` [`RenderSink`]?
+///
+/// A reference counts only when it resolves — through the same import table name
+/// resolution uses elsewhere in this module — to a `sink.entries` name on
+/// `sink.module`: a qualified `H.render` whose `H` resolves to `sink.module`, or
+/// a bare `render` an `import <sink.module> exposing (render)` brings into scope.
+/// A like-spelled name from any other module is not the sink (fail-closed).
+fn program_references_sink(sink: &RenderSink, module: &Module, interner: &Interner) -> bool {
+    module
+        .values
+        .iter()
+        .any(|value| expr_references_sink(&value.value.body, sink, module, interner))
+}
+
+/// Walk an expression tree for a reference to the [`RenderSink`], resolving each
+/// candidate name through the module's imports.
+fn expr_references_sink(
+    expr: &Expr,
+    sink: &RenderSink,
+    module: &Module,
+    interner: &Interner,
+) -> bool {
+    let hit_here = match &expr.value {
+        // `H.render` — the qualifier must resolve to the sink module and the name
+        // must be one of its consuming entries.
+        Expr_::VarQual(qual, name) => name_is_sink_qualified(*qual, *name, sink, module, interner),
+        // A bare `render` — a sink hit only when an exposing import of the sink
+        // module brings that exact name into scope.
+        Expr_::VarLocal(name) => name_is_sink_exposed(*name, sink, module, interner),
+        _ => false,
+    };
+    if hit_here {
+        return true;
+    }
+    // Recurse over every sub-expression. New `Expr_` variants must be added here;
+    // an unhandled variant is a compile error, never a silently-missed sink.
+    match &expr.value {
+        Expr_::VarLocal(_)
+        | Expr_::VarQual(_, _)
+        | Expr_::Int(_)
+        | Expr_::Float(_)
+        | Expr_::Str(_)
+        | Expr_::MultilineStr { .. }
+        | Expr_::Char(_)
+        | Expr_::PathLit(_)
+        | Expr_::Unit => false,
+        Expr_::Call(callee, args) => {
+            expr_references_sink(callee, sink, module, interner)
+                || args
+                    .iter()
+                    .any(|a| expr_references_sink(a, sink, module, interner))
+        }
+        Expr_::Case(scrutinee, arms) => {
+            expr_references_sink(scrutinee, sink, module, interner)
+                || arms
+                    .iter()
+                    .any(|(_, body)| expr_references_sink(body, sink, module, interner))
+        }
+        Expr_::Lambda(_, body) => expr_references_sink(body, sink, module, interner),
+        Expr_::Binops(chain, last) => {
+            chain
+                .iter()
+                .any(|(operand, _)| expr_references_sink(operand, sink, module, interner))
+                || expr_references_sink(last, sink, module, interner)
+        }
+        Expr_::Let(bindings, body) => {
+            bindings
+                .iter()
+                .any(|b| expr_references_sink(&b.body, sink, module, interner))
+                || expr_references_sink(body, sink, module, interner)
+        }
+        Expr_::If(branches, else_) => {
+            branches.iter().any(|(cond, branch)| {
+                expr_references_sink(cond, sink, module, interner)
+                    || expr_references_sink(branch, sink, module, interner)
+            }) || expr_references_sink(else_, sink, module, interner)
+        }
+        Expr_::Tuple(elems) | Expr_::List(elems) => elems
+            .iter()
+            .any(|e| expr_references_sink(e, sink, module, interner)),
+        Expr_::Record(fields) => fields
+            .iter()
+            .any(|(_, value)| expr_references_sink(value, sink, module, interner)),
+        Expr_::Update(_, fields) => fields
+            .iter()
+            .any(|(_, value)| expr_references_sink(value, sink, module, interner)),
+        Expr_::Access(base, _) => expr_references_sink(base, sink, module, interner),
+    }
+}
+
+/// Does the qualified reference `qualifier.name` name a `sink.entries` entry on
+/// `sink.module`, resolving `qualifier` through the import table (as
+/// [`shape_for_qualified`] does)? An alias or leaf that resolves to any other
+/// module is not the sink.
+fn name_is_sink_qualified(
+    qualifier: ipe_intern::Symbol,
+    name: ipe_intern::Symbol,
+    sink: &RenderSink,
+    module: &Module,
+    interner: &Interner,
+) -> bool {
+    let (Some(qual), Some(name)) = (interner.resolve(qualifier), interner.resolve(name)) else {
+        return false;
+    };
+    if !sink.entries.contains(&name) {
+        return false;
+    }
+    resolve_qualifier_to_module_path(qual, module, interner)
+        .is_some_and(|path| path_eq(sink.module, &path))
+}
+
+/// Does a bare reference `name` resolve to a `sink.entries` entry on `sink.module`
+/// through an `import <sink.module> exposing (name)` (as [`shape_for_exposed`]
+/// does)? Only an explicit exposing list binds a bare name here.
+fn name_is_sink_exposed(
+    name: ipe_intern::Symbol,
+    sink: &RenderSink,
+    module: &Module,
+    interner: &Interner,
+) -> bool {
+    let Some(name) = interner.resolve(name) else {
+        return false;
+    };
+    if !sink.entries.contains(&name) {
+        return false;
+    }
+    module.imports.iter().any(|import| {
+        import_exposes_value(import, name, interner)
+            && module_path_segments(import, interner)
+                .is_some_and(|path| path_eq(sink.module, &path))
+    })
 }
 
 /// Peel a `main` body to its head reference and match it against the shape
@@ -741,5 +922,91 @@ mod tests {
     fn script_without_view_import_has_no_hole() {
         // A plain Script that imports no view library builds nothing to drop.
         assert!(script_hole("module Main exposing (..)\n\nmain = Io.println \"hi\"\n").is_none());
+    }
+
+    #[test]
+    fn ssg_script_rendering_ui_to_string_has_no_hole() {
+        // Static-site generation: a Script builds an `Ipe.Ui` view, renders it to
+        // a `String` through `Ipe.Html`'s serialiser, and prints it. The view IS
+        // consumed, so IPE-N0050 must NOT fire.
+        assert!(
+            script_hole(
+                "module Main exposing (..)\n\
+                 import Ipe.Ui as Ui\n\
+                 import Ipe.Html as Html\n\n\
+                 main = Io.println (Html.render (Ui.layout [] page))\n"
+            )
+            .is_none(),
+            "a Script that renders its view to a String is SSG, not a dropped view"
+        );
+    }
+
+    #[test]
+    fn ssg_script_via_exposed_bare_render_has_no_hole() {
+        // The sink reached through a bare `render` an exposing import binds is
+        // still a consume — the carve-out resolves the name through the import
+        // table, not by spelling.
+        assert!(
+            script_hole(
+                "module Main exposing (..)\n\
+                 import Ipe.Html exposing (render)\n\n\
+                 main = Io.println (render page)\n"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn script_importing_ui_but_never_rendering_still_warns() {
+        // The original protection: a Script that imports `Ipe.Ui` and builds a
+        // view but never renders it to a String genuinely drops it — IPE-N0050
+        // must STILL fire.
+        let hint = script_hole(
+            "module Main exposing (..)\n\
+             import Ipe.Ui as Ui\n\n\
+             page = Ui.layout [] Ui.none\n\n\
+             main = Io.println \"hi\"\n",
+        )
+        .expect("a built-but-unrendered view is still a hole");
+        assert_eq!(hint.code(), ipe_diagnostics::IPE_N0050);
+    }
+
+    #[test]
+    fn bare_render_from_unrelated_module_still_warns() {
+        // A `render` that does NOT resolve to `Ipe.Html` (here a user function of
+        // the same name) is not the sink — the view stays dropped, the hint holds.
+        // Fail-closed: absent proof the view is consumed, warn.
+        let hint = script_hole(
+            "module Main exposing (..)\n\
+             import Ipe.Ui as Ui\n\n\
+             render x = x\n\n\
+             main = Io.println (render \"hi\")\n",
+        )
+        .expect("a like-spelled non-sink render must not suppress the hole");
+        assert_eq!(hint.code(), ipe_diagnostics::IPE_N0050);
+    }
+
+    #[test]
+    fn cells_ui_still_warns_even_with_html_render() {
+        // `Ipe.Ui.Cells` has no `String` sink — `Html.render` consumes an `Html`
+        // web view, never a `Screen`. The Cells view is still genuinely dropped,
+        // so the terminal hint must STILL fire.
+        let hint = script_hole(
+            "module Main exposing (..)\n\
+             import Ipe.Ui.Cells as Cells\n\
+             import Ipe.Html as Html\n\n\
+             main = Io.println (Html.render web)\n",
+        )
+        .expect("a Cells view has no String sink; it is always dropped");
+        assert!(
+            matches!(
+                &hint,
+                Diagnostic::Name {
+                    msg: NameError::ScriptImportsShapeView { shape, .. },
+                    ..
+                } if &**shape == "terminal"
+            ),
+            "wrong diagnostic: {hint:?}"
+        );
     }
 }
