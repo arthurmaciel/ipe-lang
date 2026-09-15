@@ -589,7 +589,7 @@ fn write_502(client: &mut TcpStream, reason: &str) -> std::io::Result<()> {
 /// `[u8]::trim_ascii` is stable but keeping a local mirror avoids an MSRV
 /// coupling in this dependency-light crate; it trims ASCII whitespace on both
 /// ends.
-fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
+const fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
     while let [first, rest @ ..] = bytes {
         if first.is_ascii_whitespace() {
             bytes = rest;
