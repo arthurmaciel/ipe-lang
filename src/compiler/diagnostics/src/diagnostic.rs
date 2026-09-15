@@ -1335,12 +1335,14 @@ pub enum LowerError {
         /// Short display name of the unsupported IR type.
         type_name: Box<str>,
     },
-    /// A development-only `Debug.*` escape hatch (`Debug.log`) was used in an
-    /// `ipe release` build. Debug values are for local inspection only; a
-    /// release build rejects them rather than silently stripping the call or
-    /// shipping a stray stderr write. [IPE-L0140]
+    /// A development-only `Debug.*` escape hatch — a `Debug.log` / `Debug.todo`
+    /// / `Debug.explain` call OR a `Debug._` catch-all pattern — was used in an
+    /// `ipe release` build. Debug constructs are for local inspection only; a
+    /// release build rejects them rather than silently stripping the call,
+    /// shipping a stray stderr write, or letting an unhandled variant fall
+    /// through a dev-only catch-all. [IPE-L0140]
     DevOnlyKernelInProduction {
-        /// The dotted kernel name (e.g. `Debug.log`).
+        /// The dotted family name reported to the user (`Debug.*`).
         kernel: Box<str>,
     },
     /// A committed source-text string LITERAL reached a `Secret`-typed

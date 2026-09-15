@@ -122,7 +122,7 @@ module Ipe.Codec exposing
     ( Codec(..)
     , ColType(..), Shape(..)
     , shape, columnOf, toValue, toJson, fromJson, fromJsonSafe
-    , string, int, bool, float, decimal, money
+    , string, int, bool, float, decimal, money, timestamp
     , map
     , list, maybe, dict
     , enum
@@ -140,17 +140,22 @@ import Ipe.Maybe as Maybe exposing (Maybe(..))
 import Ipe.Error as Error exposing (Error)
 import Ipe.Decimal as Decimal exposing (Decimal)
 import Ipe.Money as Money exposing (Money)
+import Ipe.Time.Timestamp as Timestamp exposing (Timestamp)
 
 
 -- | The dialect-neutral column type a codec maps to. The `Ipe.Db` layer maps
 -- these to concrete SQLite/Postgres types (`TEXT`/`VARCHAR`, `INTEGER`/`BOOLEAN`,
 -- …), so one codec works on every backend. `CNull t` is a nullable column of `t`.
+-- `CTime` is an instant stored as Unix milliseconds — INTEGER affinity like
+-- `CInt`, but it binds as the `SqlTime` role so a moment in time is never
+-- confused with a plain count.
 type ColType
     = CText
     | CInt
     | CReal
     | CBool
     | CBlob
+    | CTime
     | CNull ColType
 
 
@@ -351,6 +356,23 @@ moneyFromWire s =
 
         _ ->
             Decode.fail (badMoneyMessage s)
+
+
+-- | An instant ⇄ a JSON integer of Unix milliseconds. Encodes through
+-- `Timestamp.toUnixMillis` and decodes through `Timestamp.fromUnixMillis`
+-- (total: every `Int` is a valid instant), so the moment survives a round-trip
+-- exactly. One `CTime` column — stored with INTEGER affinity, but bound as the
+-- `SqlTime` role so a moment is never interchangeable with a plain count.
+--
+--     -- Codec.fromJson Codec.timestamp (Codec.toJson Codec.timestamp t) == Ok t
+--     -- Codec.shape Codec.timestamp == SScalar CTime
+timestamp : Codec Timestamp
+timestamp =
+    Codec
+        { enc = \t -> Encode.int (Timestamp.toUnixMillis t)
+        , mkDec = \_ -> Decode.map Timestamp.fromUnixMillis Decode.int
+        , shp = SScalar CTime
+        }
 
 
 -- ─── Scalar combinator ─────────────────────────────────────────────

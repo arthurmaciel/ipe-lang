@@ -1426,6 +1426,7 @@ fn canon_collect_pat_binds(pat: &canon::Pattern, bound: &mut BTreeSet<Symbol>) {
             bound.insert(*s);
         }
         canon::Pattern_::PAnything
+        | canon::Pattern_::PDebugAnything
         | canon::Pattern_::PUnit
         | canon::Pattern_::PInt(_)
         | canon::Pattern_::PBool(_)
@@ -3575,6 +3576,7 @@ fn collect_pvars_inner(pat: &canon::Pattern_, out: &mut Vec<Symbol>) {
         }
         // Leaf patterns: no bindings.
         canon::Pattern_::PAnything
+        | canon::Pattern_::PDebugAnything
         | canon::Pattern_::PUnit
         | canon::Pattern_::PInt(_)
         | canon::Pattern_::PBool(_)
@@ -9481,6 +9483,109 @@ fn collect_pat_ir_type_refs(pat: &Pat, enums: &mut BTreeSet<(ModPath, Symbol)>) 
     }
 }
 
+/// Does any pattern anywhere in the canon module use the development-only
+/// `Debug._` catch-all? Walks every top-level def body (and, transitively,
+/// every `case` / `let` / lambda it contains) over the CANON tree — the last
+/// representation that still distinguishes `Debug._` from a plain wildcard, as
+/// lowering erases both to [`Pat::Wildcard`]. A `true` result marks the module
+/// `uses_debug`, so `ipe release` rejects it (IPE-L0140), mirroring the
+/// `Debug.*` kernel posture exactly.
+fn module_uses_debug_pattern(m: &canon::Module) -> bool {
+    m.defs.iter().any(|def| {
+        let (patterns, body) = match def {
+            canon::Def::Untyped { patterns, body, .. }
+            | canon::Def::Typed { patterns, body, .. } => (patterns, body),
+        };
+        patterns.iter().any(|p| pattern_is_debug_wildcard(&p.value))
+            || expr_uses_debug_pattern(body)
+    })
+}
+
+/// Whether a pattern is (or nests) the `Debug._` catch-all.
+fn pattern_is_debug_wildcard(p: &canon::Pattern_) -> bool {
+    match p {
+        canon::Pattern_::PDebugAnything => true,
+        canon::Pattern_::PAnything
+        | canon::Pattern_::PUnit
+        | canon::Pattern_::PVar(_)
+        | canon::Pattern_::PRecord(_)
+        | canon::Pattern_::PInt(_)
+        | canon::Pattern_::PBool(_)
+        | canon::Pattern_::PChar(_)
+        | canon::Pattern_::PStr(_) => false,
+        canon::Pattern_::PCtor { args, .. } => {
+            args.iter().any(|a| pattern_is_debug_wildcard(&a.value))
+        }
+        canon::Pattern_::PTuple(elems) | canon::Pattern_::PList(elems) => {
+            elems.iter().any(|e| pattern_is_debug_wildcard(&e.value))
+        }
+        canon::Pattern_::PAlias(inner, _) => pattern_is_debug_wildcard(&inner.value),
+        canon::Pattern_::PCons(head, tail) => {
+            pattern_is_debug_wildcard(&head.value) || pattern_is_debug_wildcard(&tail.value)
+        }
+        canon::Pattern_::POr(alts) => alts.iter().any(|a| pattern_is_debug_wildcard(&a.value)),
+    }
+}
+
+/// Whether a canon expression (or any sub-expression) contains a `Debug._`
+/// catch-all pattern. Exhaustive over `Expr_` so a new expression shape cannot
+/// silently skip the scan (a missed shape would let a `Debug._` ship in a
+/// release build — the exact fail-open this must prevent).
+fn expr_uses_debug_pattern(e: &canon::Expr) -> bool {
+    match &e.value {
+        canon::Expr_::Int(_)
+        | canon::Expr_::Float(_)
+        | canon::Expr_::Str(_)
+        | canon::Expr_::PathLit(_)
+        | canon::Expr_::CustomElementCtor(_)
+        | canon::Expr_::Char(_)
+        | canon::Expr_::Unit
+        | canon::Expr_::VarLocal(_)
+        | canon::Expr_::VarTopLevel { .. }
+        | canon::Expr_::VarKernel { .. }
+        | canon::Expr_::VarCtor { .. } => false,
+        canon::Expr_::Call(callee, args) => {
+            expr_uses_debug_pattern(callee) || args.iter().any(expr_uses_debug_pattern)
+        }
+        canon::Expr_::ForeignCall { args, .. } => args.iter().any(expr_uses_debug_pattern),
+        canon::Expr_::Binop { lhs, rhs, .. } => {
+            expr_uses_debug_pattern(lhs) || expr_uses_debug_pattern(rhs)
+        }
+        canon::Expr_::Case(scrut, branches) => {
+            expr_uses_debug_pattern(scrut)
+                || branches.iter().any(|br| {
+                    pattern_is_debug_wildcard(&br.pat.value) || expr_uses_debug_pattern(&br.body)
+                })
+        }
+        canon::Expr_::Let(bindings, body) => {
+            bindings.iter().any(|b| {
+                pattern_is_debug_wildcard(&b.pat.value) || expr_uses_debug_pattern(&b.body)
+            }) || expr_uses_debug_pattern(body)
+        }
+        canon::Expr_::If(branches, else_expr) => {
+            branches
+                .iter()
+                .any(|(c, b)| expr_uses_debug_pattern(c) || expr_uses_debug_pattern(b))
+                || expr_uses_debug_pattern(else_expr)
+        }
+        canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
+            elems.iter().any(expr_uses_debug_pattern)
+        }
+        canon::Expr_::Cons(head, tail) => {
+            expr_uses_debug_pattern(head) || expr_uses_debug_pattern(tail)
+        }
+        canon::Expr_::Record(fields) => fields.iter().any(|(_, v)| expr_uses_debug_pattern(v)),
+        canon::Expr_::Lambda(params, body) => {
+            params.iter().any(|p| pattern_is_debug_wildcard(&p.value))
+                || expr_uses_debug_pattern(body)
+        }
+        canon::Expr_::Access(record, _) => expr_uses_debug_pattern(record),
+        canon::Expr_::Update(base, fields) => {
+            expr_uses_debug_pattern(base) || fields.iter().any(|(_, v)| expr_uses_debug_pattern(v))
+        }
+    }
+}
+
 /// Record every kernel callee reachable from `expr` into `usage`.
 ///
 /// Traversal shape mirrors the former per-family walkers exactly: `Call` /
@@ -15292,9 +15397,13 @@ impl<'a> Lowerer<'a> {
         // `mod ffi;` and appends the bound crates' Cargo.toml dep lines.
         let uses_ffi = kernel_usage.ffi;
 
-        // detect development-only `Debug.*` escape-hatch usage — a production
-        // build rejects it (IPE-L0140); recorded unconditionally here.
-        let uses_debug = kernel_usage.debug;
+        // detect development-only escape-hatch usage — a production build rejects
+        // it (IPE-L0140); recorded unconditionally here. Two dev-only surfaces
+        // feed the flag: a `Debug.*` kernel call (`kernel_usage.debug`, an IR
+        // scan) and a `Debug._` catch-all PATTERN. The pattern lowers to a plain
+        // wildcard, erasing its identity in the IR, so it must be detected on the
+        // canon module here — the sole point that still distinguishes it.
+        let uses_debug = kernel_usage.debug || module_uses_debug_pattern(self.m);
 
         // detect whether the program reaches ANY reactor-requiring kernel (async
         // IO, timer, spawn, network, db, an FFI call). When it does NOT, the
@@ -17157,10 +17266,11 @@ impl<'a> Lowerer<'a> {
             // A wildcard or unit param needs a name (Rust params are named) but
             // binds nothing: a fresh unused binder, no destructure. `()` is
             // irrefutable and its arg is unit-typed, so the fresh binder holds an
-            // unread unit value — `\() -> …` and `f () = …` are sound.
-            canon::Pattern_::PAnything | canon::Pattern_::PUnit => {
-                Ok(((self.fresh_param_binder()?, ir_ty), None))
-            }
+            // unread unit value — `\() -> …` and `f () = …` are sound. A
+            // `Debug._` param binds nothing exactly as `_` does.
+            canon::Pattern_::PAnything
+            | canon::Pattern_::PDebugAnything
+            | canon::Pattern_::PUnit => Ok(((self.fresh_param_binder()?, ir_ty), None)),
             // A destructuring param: a fresh binder holds the whole argument, and
             // a `Destructure` prologue opens it in the body.
             canon::Pattern_::PTuple(_)
@@ -27103,8 +27213,11 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             // `()` binds nothing and the type layer has pinned its scrutinee to
             // unit, so it lowers to a wildcard — sound: `_` matches the sole unit
-            // value.
-            canon::Pattern_::PAnything | canon::Pattern_::PUnit => Ok(Pat::Wildcard),
+            // value. `Debug._` is a dev-only catch-all lowered as a wildcard too;
+            // the module-level `uses_debug` scan is what turns a release build back.
+            canon::Pattern_::PAnything
+            | canon::Pattern_::PDebugAnything
+            | canon::Pattern_::PUnit => Ok(Pat::Wildcard),
             // Literal leaves lower to the matching refutable IR leaf.
             // Int / Bool / Char are `Copy` — a literal pattern against an owned
             // FIELD of one of those types is ordinary, sound Rust regardless of
@@ -27216,7 +27329,9 @@ impl<'a> Lowerer<'a> {
     fn lower_destructure_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
-            canon::Pattern_::PAnything | canon::Pattern_::PUnit => Ok(Pat::Wildcard),
+            canon::Pattern_::PAnything
+            | canon::Pattern_::PDebugAnything
+            | canon::Pattern_::PUnit => Ok(Pat::Wildcard),
             canon::Pattern_::PTuple(elems) => {
                 let subs = elems
                     .iter()
@@ -27573,11 +27688,12 @@ impl<'a> Lowerer<'a> {
                 args.iter().any(Self::col_needs_literal_tuple_path)
             }
             canon::Pattern_::PAlias(inner, _) => Self::col_needs_literal_tuple_path(inner),
-            // Leaves the by-value whole path lowers directly — a wildcard, variable,
-            // record field-pun, a scalar literal, or a string literal (handled by the
-            // backend's binder + `as_str()` guard) all match without a
-            // coerced-column path.
+            // Leaves the by-value whole path lowers directly — a wildcard, the
+            // dev-only `Debug._`, a variable, record field-pun, a scalar literal,
+            // or a string literal (handled by the backend's binder + `as_str()`
+            // guard) all match without a coerced-column path.
             canon::Pattern_::PAnything
+            | canon::Pattern_::PDebugAnything
             | canon::Pattern_::PUnit
             | canon::Pattern_::PVar(_)
             | canon::Pattern_::PRecord(_)
@@ -28840,8 +28956,12 @@ impl<'a> Lowerer<'a> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             // `()` is irrefutable and its scrutinee is unit-typed; a wildcard arm
-            // is the sound, exhaustive cover of the sole unit value.
-            canon::Pattern_::PAnything | canon::Pattern_::PUnit => Ok(Pat::Wildcard),
+            // is the sound, exhaustive cover of the sole unit value. `Debug._` is
+            // a dev-only catch-all arm lowered as a wildcard; a release build is
+            // turned back by the module-level `uses_debug` scan (IPE-L0140).
+            canon::Pattern_::PAnything
+            | canon::Pattern_::PDebugAnything
+            | canon::Pattern_::PUnit => Ok(Pat::Wildcard),
             canon::Pattern_::PInt(n) => Ok(Pat::Int(*n)),
             canon::Pattern_::PBool(b) => Ok(Pat::Bool(*b)),
             canon::Pattern_::PChar(c) => Ok(Pat::Char(c.clone())),

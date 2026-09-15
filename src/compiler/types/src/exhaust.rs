@@ -41,6 +41,14 @@ use ipe_canon::ast as canon;
 use ipe_diagnostics::{DResult, Diagnostic, SortedNames, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
 
+use crate::ty::Ty;
+
+/// Solved scrutinee types, keyed the way [`crate::SolvedTypes::regions`] is:
+/// `(owning-module home, expression span)`. A `case` scrutinee's entry gives
+/// the pass the union identity a bare `_`-only match cannot recover from its
+/// patterns.
+type Regions = BTreeMap<(Vec<Symbol>, Span), Ty>;
+
 /// `where_` tag for any internal-invariant bug raised while checking.
 const STAGE: &str = "intern.resolve";
 
@@ -312,9 +320,10 @@ enum UPat {
 fn expand_upats(p: &canon::Pattern_, budget: &mut ExhaustBudget) -> DResult<Vec<UPat>> {
     match p {
         // The unit pattern matches the single value of the unit type, so — like a
-        // wildcard, a variable, or a field-pun record — it covers its whole type
-        // in one arm.
+        // wildcard, the dev-only `Debug._`, a variable, or a field-pun record —
+        // it covers its whole type in one arm.
         canon::Pattern_::PAnything
+        | canon::Pattern_::PDebugAnything
         | canon::Pattern_::PVar(_)
         | canon::Pattern_::PUnit
         | canon::Pattern_::PRecord(_) => {
@@ -455,9 +464,10 @@ fn cartesian(columns: Vec<Vec<UPat>>, budget: &mut ExhaustBudget) -> DResult<Vec
 /// here — a nested unknown constructor inside one still excludes the `case`.
 fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
     match p {
-        // Wildcards, variables, field-pun records, and literal leaves reference
-        // no ADT constructor.
+        // Wildcards (`_` / `Debug._`), variables, field-pun records, and literal
+        // leaves reference no ADT constructor.
         canon::Pattern_::PAnything
+        | canon::Pattern_::PDebugAnything
         | canon::Pattern_::PVar(_)
         | canon::Pattern_::PUnit
         | canon::Pattern_::PRecord(_)
@@ -514,6 +524,7 @@ fn refutable_span(pat: &canon::Pattern) -> Option<Span> {
     match &pat.value {
         canon::Pattern_::PVar(_)
         | canon::Pattern_::PAnything
+        | canon::Pattern_::PDebugAnything
         | canon::Pattern_::PUnit
         | canon::Pattern_::PRecord(_) => None,
         canon::Pattern_::PTuple(elems) => elems.iter().find_map(refutable_span),
@@ -573,6 +584,7 @@ fn check_param_irrefutable(pat: &canon::Pattern) -> DResult<()> {
 pub fn check(
     module: &canon::Module,
     extra_unions: &[&canon::Union],
+    regions: &Regions,
     interner: &mut Interner,
     warnings: &mut Vec<Diagnostic>,
 ) -> DResult<()> {
@@ -586,19 +598,42 @@ pub fn check(
         for p in patterns {
             check_param_irrefutable(p)?;
         }
-        check_expr(body, &sigs, interner, warnings)?;
+        check_expr(body, def.home(), &sigs, regions, interner, warnings)?;
     }
     Ok(())
+}
+
+/// The read-only context threaded through the recursive `case` walk: the
+/// signature tables, the owning module's `home` (the [`Regions`] key prefix),
+/// the solved scrutinee-type map, and the interner. Bundling them keeps the
+/// recursion's argument list to `(expr, ctx)`.
+struct Ctx<'a> {
+    sigs: &'a Sigs,
+    home: &'a [Symbol],
+    regions: &'a Regions,
+    interner: &'a Interner,
 }
 
 /// Recursively check a single expression (and its sub-expressions) for `case`
 /// defects. The recursion depth is bounded by the parser's nesting cap.
 fn check_expr(
     e: &canon::Expr,
+    home: &[Symbol],
     sigs: &Sigs,
+    regions: &Regions,
     interner: &Interner,
     warnings: &mut Vec<Diagnostic>,
 ) -> DResult<()> {
+    let ctx = Ctx {
+        sigs,
+        home,
+        regions,
+        interner,
+    };
+    check_expr_ctx(e, &ctx, warnings)
+}
+
+fn check_expr_ctx(e: &canon::Expr, ctx: &Ctx<'_>, warnings: &mut Vec<Diagnostic>) -> DResult<()> {
     match &e.value {
         canon::Expr_::Int(_)
         | canon::Expr_::Float(_)
@@ -612,9 +647,9 @@ fn check_expr(
         | canon::Expr_::VarKernel { .. }
         | canon::Expr_::VarCtor { .. } => Ok(()),
         canon::Expr_::Call(callee, args) => {
-            check_expr(callee, sigs, interner, warnings)?;
+            check_expr_ctx(callee, ctx, warnings)?;
             for a in args {
-                check_expr(a, sigs, interner, warnings)?;
+                check_expr_ctx(a, ctx, warnings)?;
             }
             Ok(())
         }
@@ -622,19 +657,19 @@ fn check_expr(
         // arguments carry checkable structure.
         canon::Expr_::ForeignCall { args, .. } => {
             for a in args {
-                check_expr(a, sigs, interner, warnings)?;
+                check_expr_ctx(a, ctx, warnings)?;
             }
             Ok(())
         }
         canon::Expr_::Binop { lhs, rhs, .. } => {
-            check_expr(lhs, sigs, interner, warnings)?;
-            check_expr(rhs, sigs, interner, warnings)
+            check_expr_ctx(lhs, ctx, warnings)?;
+            check_expr_ctx(rhs, ctx, warnings)
         }
         canon::Expr_::Case(scrut, branches) => {
-            check_case(scrut, branches, sigs, interner, warnings)?;
-            check_expr(scrut, sigs, interner, warnings)?;
+            check_case(scrut, branches, ctx, warnings)?;
+            check_expr_ctx(scrut, ctx, warnings)?;
             for br in branches {
-                check_expr(&br.body, sigs, interner, warnings)?;
+                check_expr_ctx(&br.body, ctx, warnings)?;
             }
             Ok(())
         }
@@ -646,30 +681,30 @@ fn check_expr(
             // whose params are swept by the Lambda arm below.)
             for b in bindings {
                 check_param_irrefutable(&b.pat)?;
-                check_expr(&b.body, sigs, interner, warnings)?;
+                check_expr_ctx(&b.body, ctx, warnings)?;
             }
-            check_expr(body, sigs, interner, warnings)
+            check_expr_ctx(body, ctx, warnings)
         }
         canon::Expr_::If(branches, else_expr) => {
             for (cond, body) in branches {
-                check_expr(cond, sigs, interner, warnings)?;
-                check_expr(body, sigs, interner, warnings)?;
+                check_expr_ctx(cond, ctx, warnings)?;
+                check_expr_ctx(body, ctx, warnings)?;
             }
-            check_expr(else_expr, sigs, interner, warnings)
+            check_expr_ctx(else_expr, ctx, warnings)
         }
         canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
             for elem in elems {
-                check_expr(elem, sigs, interner, warnings)?;
+                check_expr_ctx(elem, ctx, warnings)?;
             }
             Ok(())
         }
         canon::Expr_::Cons(head, tail) => {
-            check_expr(head, sigs, interner, warnings)?;
-            check_expr(tail, sigs, interner, warnings)
+            check_expr_ctx(head, ctx, warnings)?;
+            check_expr_ctx(tail, ctx, warnings)
         }
         canon::Expr_::Record(fields) => {
             for (_, value) in fields {
-                check_expr(value, sigs, interner, warnings)?;
+                check_expr_ctx(value, ctx, warnings)?;
             }
             Ok(())
         }
@@ -680,13 +715,13 @@ fn check_expr(
             for p in params {
                 check_param_irrefutable(p)?;
             }
-            check_expr(body, sigs, interner, warnings)
+            check_expr_ctx(body, ctx, warnings)
         }
-        canon::Expr_::Access(record, _) => check_expr(record, sigs, interner, warnings),
+        canon::Expr_::Access(record, _) => check_expr_ctx(record, ctx, warnings),
         canon::Expr_::Update(base, fields) => {
-            check_expr(base, sigs, interner, warnings)?;
+            check_expr_ctx(base, ctx, warnings)?;
             for (_, value) in fields {
-                check_expr(value, sigs, interner, warnings)?;
+                check_expr_ctx(value, ctx, warnings)?;
             }
             Ok(())
         }
@@ -705,10 +740,11 @@ fn check_expr(
 fn check_case(
     scrut: &canon::Expr,
     branches: &[canon::CaseBranch],
-    sigs: &Sigs,
-    interner: &Interner,
+    ctx: &Ctx<'_>,
     warnings: &mut Vec<Diagnostic>,
 ) -> DResult<()> {
+    let sigs = ctx.sigs;
+    let interner = ctx.interner;
     if branches
         .iter()
         .any(|br| pattern_uses_unknown_ctor(&br.pat.value, sigs))
@@ -735,23 +771,21 @@ fn check_case(
     // constructors lint (IPE-T0018) can inspect, for each wildcard/variable arm,
     // which column heads appeared in the arms before it.
     let mut prior: Vec<Vec<UPat>> = Vec::new();
-    // Parallel list: the column heads seen at the start of each branch's analysis
-    // (i.e., the heads BEFORE that branch's rows are added), keyed by branch
-    // index.  A `None` entry marks a non-wildcard branch.
-    let mut wildcard_arm_info: Vec<Option<(Span, Vec<Head>)>> = Vec::new();
+    // The span of the FIRST top-level catch-all arm — a bare `_` or a variable
+    // binder that matches every value. The closed-union check (IPE-T0018) below
+    // reports at this span. A `Debug._` catch-all is deliberately NOT recorded:
+    // it is the explicit development-only escape hatch (release-rejected via the
+    // `Debug.*` gate at lowering), so it must be exempt from the closed-union
+    // error exactly as `Debug.log` is exempt from the ordinary kernel rules.
+    let mut catch_all_span: Option<Span> = None;
     for br in branches {
-        // Capture the top-level column heads before this arm is added. Only
-        // record them for wildcard / variable top-level arms (the lint targets
-        // just those).
-        let is_top_level_wildcard = matches!(
+        let is_top_level_catch_all = matches!(
             br.pat.value,
             canon::Pattern_::PAnything | canon::Pattern_::PVar(_)
         );
-        wildcard_arm_info.push(if is_top_level_wildcard {
-            Some((br.pat.span, column_heads(&prior)))
-        } else {
-            None
-        });
+        if is_top_level_catch_all && catch_all_span.is_none() {
+            catch_all_span = Some(br.pat.span);
+        }
 
         // A tuple / record arm is reported through the dedicated multi-arm
         // product gate at lowering (IPE-L0115), which gives a clearer message
@@ -817,71 +851,95 @@ fn check_case(
         });
     }
 
-    // Wildcard-covers-known-constructors lint (IPE-T0018): the case is
-    // exhaustive, but a wildcard / variable arm swallows constructors a finite
+    // Catch-all-over-a-closed-union error (IPE-T0018): the `case` is exhaustive,
+    // but a bare `_` / variable arm swallows one or more constructors a finite
     // closed union (a user `type` or a Prelude built-in ADT) could name
-    // explicitly. Adding a variant to that union later must surface at this
-    // match site rather than falling through silently.
+    // explicitly. Adding a variant to that union later would fall through the
+    // catch-all silently — a make-invalid-states hazard — so this is an ERROR
+    // (fail-closed), in both development and release builds. A `Debug._` arm is
+    // the sanctioned dev-only escape and was excluded from `catch_all_span`.
     //
-    // The lint fires when:
-    // * a top-level arm is a wildcard (`_`) or variable binder,
-    // * the arms before it introduced at least one named constructor of a
-    //   closed `Head::Adt` union into the column, AND
-    // * the remaining constructors are all named (not a bare `_` witness) —
-    //   meaning the type is finite and its full signature is known.
+    // The union identity is taken from the SCRUTINEE'S SOLVED TYPE, not from the
+    // constructor heads named in earlier arms. That closes the bare-`_`-only gap
+    // — `case c of _ -> …` over a closed union names no constructor, so a
+    // column-head-driven check saw nothing and let it through; the scrutinee's
+    // settled type carries the union identity regardless.
     //
-    // `Bool` (`Head::Bool`) and `List` (`Head::Nil` / `Head::Cons`) are closed
-    // but excluded: their variant sets are frozen, so a catch-all over them is
-    // a safe idiom. Open types (`Int`, `Char`, `String`) and tuples (always
-    // complete) never fire because their "remaining" set is either unbounded /
-    // a bare wildcard or empty.
-    for info in wildcard_arm_info {
-        let Some((span, heads_before)) = info else {
-            continue;
-        };
-        // Only fire when the column before this wildcard has named constructor
-        // heads — otherwise the wildcard is matching against a type whose
-        // exhaustiveness cannot be judged (no heads → unknown type, or a type
-        // the user wrote a wildcard-only case for).
-        if heads_before.is_empty() {
-            continue;
+    // `Bool` and `List` are closed too, but frozen by the language — no one adds
+    // a variant — so a catch-all over them is a safe idiom, not an evolution
+    // hazard; they are `Head::Bool` / `Head::Nil` / `Head::Cons`, never a
+    // `union_ctors` ADT entry, so they never reach this branch. Open types
+    // (`Int` / `Char` / `String`) and tuples are likewise not ADT unions here.
+    if let Some(span) = catch_all_span
+        && let Some(union_key) = scrutinee_union(scrut, ctx)
+        && let Some(all_ctors) = sigs.union_ctors.get(union_key)
+    {
+        // Constructors the arms name EXPLICITLY (a top-level constructor arm, or
+        // any alternative of a top-level or-pattern). Whatever the catch-all
+        // absorbs is the union set minus these.
+        let mut named: BTreeSet<Symbol> = BTreeSet::new();
+        for br in branches {
+            collect_named_ctors(&br.pat.value, &mut named);
         }
-        // Restrict the lint to CLOSED, USER-EVOLVABLE unions — the `Head::Adt`
-        // heads (a user `type` or a Prelude built-in union carried in the
-        // exhaustiveness signatures). `Bool` (`Head::Bool`) and `List`
-        // (`Head::Nil` / `Head::Cons`) are closed too, but their variant sets
-        // are frozen by the language: no one adds a variant to them, so a
-        // catch-all over them is a safe idiom, not an evolution hazard. Open
-        // literal heads (`Int` / `Char` / `String`) never reach here (their
-        // `remaining` set is a bare wildcard). The solver pins the scrutinee
-        // type before this pass, so every head in one column shares one type;
-        // inspecting the first head fixes the column's union identity.
-        if !matches!(heads_before.first(), Some(Head::Adt(..))) {
-            continue;
+        let uhome = &union_key.0;
+        let remaining: Vec<UPat> = all_ctors
+            .iter()
+            .filter(|(name, _)| !named.contains(name))
+            .map(|(name, ar)| UPat::Ctor(Head::Adt(uhome.clone(), *name), vec![UPat::Wild; *ar]))
+            .collect();
+        if !remaining.is_empty() {
+            let mut ctors: Vec<Box<str>> = Vec::with_capacity(remaining.len());
+            for p in &remaining {
+                ctors.push(render_upat(p, interner, false)?.into_boxed_str());
+            }
+            warnings.push(Diagnostic::Type {
+                span,
+                msg: TypeError::WildcardCoversKnownConstructors {
+                    constructors: SortedNames::new(ctors),
+                },
+            });
         }
-        // `missing_heads` tells us what constructors the wildcard covers.
-        // If every witness is a named constructor (not a bare `UPat::Wild`),
-        // the remaining set is finite and nameable — fire the lint.
-        let remaining = missing_heads(&heads_before, sigs);
-        // A bare `UPat::Wild` appears when the column's type is open (or the
-        // column head is unknown); skip in those cases.
-        let all_named = remaining.iter().all(|p| !matches!(p, UPat::Wild));
-        if !all_named || remaining.is_empty() {
-            continue;
-        }
-        let mut ctors: Vec<Box<str>> = Vec::with_capacity(remaining.len());
-        for p in &remaining {
-            ctors.push(render_upat(p, interner, false)?.into_boxed_str());
-        }
-        warnings.push(Diagnostic::Type {
-            span,
-            msg: TypeError::WildcardCoversKnownConstructors {
-                constructors: SortedNames::new(ctors),
-            },
-        });
     }
 
     Ok(())
+}
+
+/// The identity `(home, name)` of the scrutinee's union when its solved type is
+/// a CLOSED ADT union carried in the exhaustiveness signatures, else `None`.
+/// `None` covers every non-union scrutinee: `Bool`, `List`, open literal types,
+/// tuples, records, functions, and a scrutinee whose type never settled to a
+/// `Con` (an unsolved variable — the pass cannot prove the domain is a finite
+/// closed union, so it fails OPEN here, deferring to the ordinary exhaustiveness
+/// check rather than firing a false T0018). The caller reads the union's
+/// constructor list from [`Sigs::union_ctors`] under the returned key.
+fn scrutinee_union<'a>(scrut: &canon::Expr, ctx: &'a Ctx<'_>) -> Option<&'a TyId> {
+    let ty = ctx.regions.get(&(ctx.home.to_vec(), scrut.span))?;
+    let Ty::Con { module, name, .. } = ty else {
+        return None;
+    };
+    let key = (module.clone(), *name);
+    ctx.sigs.union_ctors.get_key_value(&key).map(|(k, _)| k)
+}
+
+/// Accumulate the constructor names a pattern refers to at the TOP column —
+/// a constructor arm names its own constructor; an or-pattern contributes each
+/// alternative's; an alias is transparent. Wildcards / variables / literals /
+/// tuples / records name no ADT constructor. Only the head constructor matters
+/// for the closed-union cover check (payload sub-patterns are irrelevant to
+/// which top-level variants are explicitly handled).
+fn collect_named_ctors(p: &canon::Pattern_, out: &mut BTreeSet<Symbol>) {
+    match p {
+        canon::Pattern_::PCtor { name, .. } => {
+            out.insert(*name);
+        }
+        canon::Pattern_::PAlias(inner, _) => collect_named_ctors(&inner.value, out),
+        canon::Pattern_::POr(alts) => {
+            for a in alts {
+                collect_named_ctors(&a.value, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Maranget usefulness with witness collection. Returns up to `cap` witness rows
@@ -1230,6 +1288,7 @@ fn render_upat(p: &UPat, interner: &Interner, atom: bool) -> DResult<String> {
 fn arm_label(p: &canon::Pattern_, interner: &Interner) -> DResult<Box<str>> {
     let s = match p {
         canon::Pattern_::PAnything => "_".to_owned(),
+        canon::Pattern_::PDebugAnything => "Debug._".to_owned(),
         canon::Pattern_::PUnit => "()".to_owned(),
         canon::Pattern_::PVar(name) | canon::Pattern_::PCtor { name, .. } => {
             resolve(interner, *name)?.to_string()

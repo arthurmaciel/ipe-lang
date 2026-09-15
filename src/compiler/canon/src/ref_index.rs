@@ -283,10 +283,11 @@ fn collect_pattern(
                 collect_pattern(map, a, containing);
             }
         }
-        // PVar, PAnything, PUnit, PRecord, PInt, PBool, PChar, PStr — no
-        // cross-module refs.
+        // PVar, PAnything, PDebugAnything, PUnit, PRecord, PInt, PBool, PChar,
+        // PStr — no cross-module refs.
         Pattern_::PVar(_)
         | Pattern_::PAnything
+        | Pattern_::PDebugAnything
         | Pattern_::PUnit
         | Pattern_::PRecord(_)
         | Pattern_::PInt(_)

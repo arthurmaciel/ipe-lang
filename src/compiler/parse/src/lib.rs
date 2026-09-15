@@ -1310,6 +1310,29 @@ mod tests {
     }
 
     #[test]
+    fn debug_wildcard_pattern_parses_as_pdebuganything() {
+        // `Debug._ -> …` parses as the dev-only catch-all `PDebugAnything`, not a
+        // constructor or a plain wildcard. It is a reserved literal spelling (the
+        // lexer folds `Debug._` into one identifier token).
+        let mut i = Interner::new();
+        let src =
+            format!("{HDR}v : Int\nv =\n    case n of\n        0 -> 0\n        Debug._ -> 1\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`Debug._` pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        assert!(
+            arms.get(1)
+                .is_some_and(|(p, _)| matches!(&p.value, Pattern_::PDebugAnything)),
+            "second arm head is `Debug._` (PDebugAnything), got {:?}",
+            arms.get(1).map(|(p, _)| &p.value)
+        );
+    }
+
+    #[test]
     fn or_pattern_parses_as_por_of_alternatives() {
         // `Up | Down -> …` parses as a two-alternative `POr` at the arm head.
         let mut i = Interner::new();

@@ -503,6 +503,21 @@ fn infer_core(
         &mut warnings,
     ));
 
+    // A read-back of every region's resolved type, taken HERE (before the final
+    // `SolvedTypes` assembly) so the exhaustiveness pass can consult a `case`
+    // scrutinee's settled type: a bare `_`-only match over a closed union carries
+    // NO constructor head in its patterns, so its union identity is knowable only
+    // from the scrutinee's type. This snapshot is used ONLY to identify a
+    // scrutinee's nominal union (a `Ty::Con` pinned by pattern constructors, which
+    // numeric/SQL defaulting below never rewrites), so taking it pre-defaulting is
+    // sound for that use. The map consumed by downstream tooling (`SolvedTypes`)
+    // is built separately AFTER defaulting, so emit still sees fully-defaulted
+    // region types. Iterated by reference to leave `generated.regions` intact.
+    let mut regions_for_exhaust: BTreeMap<(Vec<Symbol>, Span), Ty> = BTreeMap::new();
+    for ((home, span), var) in &generated.regions {
+        regions_for_exhaust.insert((home.clone(), *span), lift!(zonk(&mut uf, budget, *var)));
+    }
+
     // End-of-checking exhaustiveness + redundancy pass. Running it here — after
     // the solver settles — makes the lowerer's `Match::new` exhaustiveness
     // contract a genuinely unreachable compiler-bug case.
@@ -510,7 +525,13 @@ fn infer_core(
     // finding, so all offending sites are reported in one run. IPE-T0011 is a
     // Warning and must not abort; IPE-T0018 over a closed union is an Error.
     // IPE-T0010 (non-exhaustive) still early-returns `Err` from inside the pass.
-    lift!(exhaust::check(m, &dep_unions, interner, &mut warnings));
+    lift!(exhaust::check(
+        m,
+        &dep_unions,
+        &regions_for_exhaust,
+        interner,
+        &mut warnings
+    ));
 
     // Fail-closed promotion: a diagnostic collected above is only a compilation
     // failure if it is Error-severity. Partition the sink — Warning-severity
@@ -981,7 +1002,10 @@ fn infer_core(
         })
     });
 
-    // Read back every region's resolved type.
+    // Read back every region's resolved type — AFTER numeric/SQL defaulting, so
+    // the map handed to downstream tooling carries fully-defaulted types. (The
+    // exhaustiveness pass above used a separate pre-defaulting snapshot, which it
+    // only reads to identify a scrutinee's nominal union.)
     let mut regions = BTreeMap::new();
     for ((home, span), var) in generated.regions {
         regions.insert((home, span), lift!(zonk(&mut uf, budget, var)));
@@ -3720,6 +3744,42 @@ mod tests {
     }
 
     #[test]
+    fn or_pattern_missing_a_variant_is_non_exhaustive_t0010() {
+        // `Red | Green -> …` groups two of three variants; `Blue` is covered by
+        // no arm and no or-group, so the case is non-exhaustive — IPE-T0010,
+        // naming the missing `Blue`. Proves an or-pattern COUNTS toward
+        // exhaustiveness rather than being treated as a catch-all.
+        let src = "module Main exposing (main)\n\
+                   type Color = Red | Green | Blue\n\
+                   name : Color -> Int\n\
+                   name c =\n        case c of\n            Red | Green -> 1\n\
+                   main =\n    Io.println (String.fromInt (name Red))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let err = infer(&m, &mut i)
+            .expect_err("an or-group missing a union variant must be non-exhaustive (IPE-T0010)");
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Type {
+                    msg: TypeError::NonExhaustiveCase { .. },
+                    ..
+                }
+            ),
+            "expected IPE-T0010 NonExhaustiveCase, got {err:?}"
+        );
+        if let Diagnostic::Type {
+            msg: TypeError::NonExhaustiveCase { missing },
+            ..
+        } = &err
+        {
+            let names: Vec<&str> = missing.iter().map(AsRef::as_ref).collect();
+            assert_eq!(names, vec!["Blue"], "the uncovered variant is named");
+        }
+    }
+
+    #[test]
     fn or_pattern_redundant_alternative_is_flagged_t0011() {
         // `Red | Green` then `Green | Blue`: the second `Green` alternative is
         // already covered → IPE-T0011 (Warning), but the arm stays reachable via
@@ -4161,18 +4221,13 @@ mod tests {
         );
     }
 
-    /// Documented-limitation guard (design condition C1): a `case c of _ -> …`
-    /// whose ONLY arm is a bare catch-all over a closed union does NOT fire
-    /// IPE-T0018. The pass is column-driven — with no earlier constructor arm,
-    /// `heads_before` is empty and the union is never identified from the
-    /// pattern column. This is a known evolution-safety gap (a bare `_ ->`
-    /// swallows ALL variants and escapes the rule); closing it needs the solved
-    /// scrutinee `Ty` threaded into the pass. If this test ever starts firing
-    /// T0018, the gap has been closed — update the explain page's limitation
-    /// note accordingly. It must NEVER be claimed that closed-union catch-alls
-    /// are universally rejected.
+    /// A `case c of _ -> …` whose ONLY arm is a bare catch-all over a closed
+    /// union is an ERROR (IPE-T0018), naming every variant it silently absorbs.
+    /// The union identity comes from the scrutinee's solved type, so no earlier
+    /// constructor arm is needed to identify it — this is the fail-closed
+    /// boundary that a later-added variant cannot slip through unhandled.
     #[test]
-    fn bare_wildcard_only_case_over_closed_union_is_a_documented_gap() {
+    fn bare_wildcard_only_case_over_closed_union_is_rejected() {
         let src = "module Main exposing (main)\n\
                    type Color = Red | Green | Blue\n\
                    name : Color -> String\n\
@@ -4183,11 +4238,56 @@ mod tests {
             return;
         };
         let r = infer(&m, &mut i);
-        // The gap means this compiles clean today (no error, no T0018).
-        let types = r.expect(
-            "a bare `_ ->`-only case over a closed union is a documented gap: it \
-             compiles (does NOT fire IPE-T0018) because the pass is column-driven",
+        let err = r.expect_err(
+            "a bare `_ ->`-only case over a closed union must FAIL compilation — \
+             the catch-all absorbs every variant with no exhaustive cover",
         );
+        assert_eq!(
+            err.severity(),
+            ipe_diagnostics::Severity::Error,
+            "IPE-T0018 over a closed union must be Error-severity"
+        );
+        assert!(
+            matches!(
+                &err,
+                Diagnostic::Type {
+                    msg: TypeError::WildcardCoversKnownConstructors { .. },
+                    ..
+                }
+            ),
+            "expected IPE-T0018 WildcardCoversKnownConstructors, got {err:?}"
+        );
+        if let Diagnostic::Type {
+            msg: TypeError::WildcardCoversKnownConstructors { constructors },
+            ..
+        } = &err
+        {
+            let names: Vec<&str> = constructors.iter().map(AsRef::as_ref).collect();
+            assert_eq!(
+                names,
+                vec!["Blue", "Green", "Red"],
+                "the error names every absorbed constructor in canonical string order"
+            );
+        }
+    }
+
+    /// A `Debug._` catch-all over a closed union is EXEMPT from IPE-T0018: it is
+    /// the sanctioned development-only escape hatch, so the type checker accepts
+    /// it (release rejection is enforced separately, at lowering, via
+    /// IPE-L0140). Neither a T0018 error nor a T0018 warning is emitted.
+    #[test]
+    fn debug_wildcard_over_closed_union_is_exempt_from_t0018() {
+        let src = "module Main exposing (main)\n\
+                   type Color = Red | Green | Blue\n\
+                   name : Color -> String\n\
+                   name c =\n        case c of\n\
+                   \x20           Debug._ -> \"other\"\n\
+                   main =\n    Io.println (String.fromInt 0)\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let types = infer(&m, &mut i)
+            .expect("`Debug._` is the dev-only escape hatch — it type-checks (no IPE-T0018)");
         let t0018 = types
             .warnings
             .iter()
@@ -4201,11 +4301,7 @@ mod tests {
                 )
             })
             .count();
-        assert_eq!(
-            t0018, 0,
-            "documented gap: a bare `_ ->`-only closed-union case does not yet \
-             fire IPE-T0018 (column-driven pass); see explain/IPE-T0018.md"
-        );
+        assert_eq!(t0018, 0, "`Debug._` must not emit IPE-T0018 in any form");
     }
 
     /// Regression against the IPE-T0011 false-positive class (the ex10-shaped
