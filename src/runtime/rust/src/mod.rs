@@ -531,8 +531,10 @@ pub use css::*;
 // and the terminal Tui/Cli). Constructors clamp/parse at the boundary; the
 // conversions out (`to_css`/`to_hex`/`to_ansi`) are the single renderers each
 // surface calls. `to_ansi` is the sole truecolour→256→16 degradation point.
-// Referenced by qualified path (`ipe_runtime::color::*`) from generated code.
+// The `color_*` kernel shims are emitted as bare calls, so the module is
+// re-exported at the crate root like every other kernel module.
 pub mod color;
+pub use color::*;
 
 // The shared CSS length-unit renderer — the single spelling of the `Px`/`Vh`/
 // `Vw` units common to `Ipe.Ui.Length` and `Ipe.Css.Length`, so no surface

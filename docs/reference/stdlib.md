@@ -64,6 +64,7 @@ Each module listed below links to a detail page with the full documentation and 
 - [Cache](#cache)
 - [Char](#char)
 - [Codec](#codec)
+- [Color](#color)
 - [Compression](#compression)
 - [Config](#config)
 - [Crypto](#crypto)
@@ -1048,6 +1049,39 @@ Ipe.Codec — one invariant codec that drives BOTH the JSON direction and the
 | `var1` | A one-argument variant. `project` recognises this arm and yields its |
 | `var2` | A two-argument variant. |
 | `var3` | A three-argument variant. |
+
+## Color
+
+[Full reference](stdlib/Color.md)
+
+`Ipe.Color` — build, inspect, and transform sRGB colours.
+
+| Export | Summary |
+|--------|----------|
+| `rgb` | `rgb r g b` — an opaque sRGB colour from red/green/blue channels (0..255), |
+| `rgba` | `rgba r g b a` — an sRGB colour from red/green/blue channels (0..255) and an |
+| `hsl` | `hsl h s l` — a colour from hue (degrees), saturation, and lightness (0..1), |
+| `hsla` | `hsla h s l a` — an HSL colour with an alpha channel (0..1). |
+| `white` | Opaque white. |
+| `black` | Opaque black. |
+| `red` | Opaque red. |
+| `green` | Opaque green. |
+| `blue` | Opaque blue. |
+| `transparent` | Fully transparent. |
+| `toCss` | `toCss c` — the CSS `rgb()`/`rgba()` spelling of a colour. |
+| `toCssRgba` | `toCssRgba c` — always the four-channel `rgba()` spelling of a colour. |
+| `toHex` | `toHex c` — the `#rrggbb`/`#rrggbbaa` hex spelling of a colour. |
+| `luminance` | `luminance c` — the WCAG relative luminance of a colour (0..1). |
+| `withAlpha` | `withAlpha a c` — replace the alpha channel of `c` with `a` (0..1). |
+| `mix` | `mix t a b` — the perceptual blend of `a` and `b` at position `t` (0..1). |
+| `blend` | `blend src dst` — source-over alpha compositing of `src` onto `dst`. |
+| `lighten` | `lighten amount c` — raise the HSL lightness of `c` by `amount` (0..1). |
+| `darken` | `darken amount c` — lower the HSL lightness of `c` by `amount` (0..1). |
+| `saturate` | `saturate amount c` — raise the HSL saturation of `c` by `amount` (0..1). |
+| `desaturate` | `desaturate amount c` — lower the HSL saturation of `c` by `amount` (0..1). |
+| `rotateHue` | `rotateHue degrees c` — rotate the hue of `c` by `degrees`. |
+| `complementary` | `complementary c` — the 180°-hue-rotated complement of `c`. |
+| `grayscale` | `grayscale c` — fully desaturate `c` to grey. |
 
 ## Compression
 

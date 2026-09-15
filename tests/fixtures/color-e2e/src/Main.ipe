@@ -1,0 +1,17 @@
+module Main exposing (main)
+
+-- A NON-UI console program that builds a colour with `Ipe.Color` and prints its
+-- CSS + hex spelling. It imports NO `Ipe.Ui` surface, so the emitted project
+-- carries the always-vendored `ipe_runtime::color::Color` carrier with no UI
+-- feature — proving a colour value is one type everywhere, UI or not.
+import Ipe.Color as Color
+import Ipe.Io as Io
+
+
+main =
+    let
+        base = Color.rgb 40 120 200
+
+        faded = Color.withAlpha 0.5 base
+    in
+    Io.println (Color.toHex base ++ " " ++ Color.toCssRgba faded)

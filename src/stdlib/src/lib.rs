@@ -378,6 +378,14 @@ pub struct CompiledStdModule {
 /// owns; `Spacing` / `Sp` are unique to this module.
 const PALETTE: &str = include_str!("../Ipe/Palette.ipe");
 
+/// `Ipe.Color` — Layer-3 source; every member is a point-free
+/// `Kernel.kernel "Color_*"` alias resolved by `detect_kernel_alias` to the
+/// registered `Color*` kernels (`ipe_runtime::color::*`). Also re-exports the
+/// `Color` builtin type via the reserved-builtin-type path in
+/// `build_module_exports`. Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
+/// `"Color"` entry there).
+const COLOR: &str = include_str!("../Ipe/Color.ipe");
+
 /// `Ipe.Tuple` — pure pair helpers (elm/core `Tuple` parity).
 ///
 /// Pure Ipê source; no `Kernel.kernel` calls — every helper pattern-matches or
@@ -1342,6 +1350,15 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Bitwise",
         source: BITWISE,
+    },
+    // Ipe.Color — Layer-3 source; every member is a point-free
+    // `Kernel.kernel "Color_*"` alias resolved by `detect_kernel_alias` to the
+    // registered `Color*` kernels (`ipe_runtime::color::*`). Also re-exports the
+    // `Color` builtin type. Disjoint from `STDLIB_MODULE_QUALIFIERS` (no
+    // `"Color"` entry there).
+    CompiledStdModule {
+        dotted: "Ipe.Color",
+        source: COLOR,
     },
     // Ipe.String — Layer-3 source; every member is a point-free
     // `Kernel.kernel "String_*"` alias resolved by `detect_kernel_alias` to the

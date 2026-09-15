@@ -1,0 +1,160 @@
+-- | `Ipe.Color` — build, inspect, and transform sRGB colours.
+--
+-- A `Color` is an opaque sRGB value with red, green, blue, and alpha channels.
+-- It is the single colour type shared across every surface: a value built here
+-- is the same `Color` a DOM view, a terminal view, or a stylesheet consumes, so
+-- a colour is one type everywhere.
+--
+-- The functions cluster into families: constructors (`rgb`, `rgba`, `hsl`,
+-- `hsla`, and the named `white`/`black`/`red`/`green`/`blue`/`transparent`),
+-- accessors that render a colour to text (`toCss`, `toCssRgba`, `toHex`) or read
+-- a scalar off it (`luminance`, the WCAG relative luminance), and manipulation
+-- (`withAlpha`, `mix`, `blend`, `lighten`, `darken`, `saturate`, `desaturate`,
+-- `rotateHue`, `complementary`, `grayscale`).
+--
+-- Every member is a thin binding onto the colour kernels; the colour maths lives
+-- in one place in the runtime, never re-implemented at this surface.
+module Ipe.Color exposing
+    ( Color
+    , rgb, rgba, hsl, hsla
+    , white, black, red, green, blue, transparent
+    , toCss, toCssRgba, toHex, luminance
+    , withAlpha, mix, blend
+    , lighten, darken, saturate, desaturate
+    , rotateHue, complementary, grayscale
+    )
+
+
+import Ipe.Ffi.Kernel as Kernel
+
+
+-- ─── Constructors ───────────────────────────────────────────────────────────
+
+
+-- | `rgb r g b` — an opaque sRGB colour from red/green/blue channels (0..255),
+-- fully opaque (alpha = 1).
+rgb : Int -> Int -> Int -> Color
+rgb = Kernel.kernel "Color_rgb"
+
+
+-- | `rgba r g b a` — an sRGB colour from red/green/blue channels (0..255) and an
+-- alpha channel (0..1).
+rgba : Int -> Int -> Int -> Float -> Color
+rgba = Kernel.kernel "Color_rgba"
+
+
+-- | `hsl h s l` — a colour from hue (degrees), saturation, and lightness (0..1),
+-- fully opaque.
+hsl : Float -> Float -> Float -> Color
+hsl = Kernel.kernel "Color_hsl"
+
+
+-- | `hsla h s l a` — an HSL colour with an alpha channel (0..1).
+hsla : Float -> Float -> Float -> Float -> Color
+hsla = Kernel.kernel "Color_hsla"
+
+
+-- | Opaque white.
+white : Color
+white = Kernel.kernel "Color_white"
+
+
+-- | Opaque black.
+black : Color
+black = Kernel.kernel "Color_black"
+
+
+-- | Opaque red.
+red : Color
+red = Kernel.kernel "Color_red"
+
+
+-- | Opaque green.
+green : Color
+green = Kernel.kernel "Color_green"
+
+
+-- | Opaque blue.
+blue : Color
+blue = Kernel.kernel "Color_blue"
+
+
+-- | Fully transparent.
+transparent : Color
+transparent = Kernel.kernel "Color_transparent"
+
+
+-- ─── Accessors ──────────────────────────────────────────────────────────────
+
+
+-- | `toCss c` — the CSS `rgb()`/`rgba()` spelling of a colour.
+toCss : Color -> String
+toCss = Kernel.kernel "Color_toCss"
+
+
+-- | `toCssRgba c` — always the four-channel `rgba()` spelling of a colour.
+toCssRgba : Color -> String
+toCssRgba = Kernel.kernel "Color_toCssRgba"
+
+
+-- | `toHex c` — the `#rrggbb`/`#rrggbbaa` hex spelling of a colour.
+toHex : Color -> String
+toHex = Kernel.kernel "Color_toHex"
+
+
+-- | `luminance c` — the WCAG relative luminance of a colour (0..1).
+luminance : Color -> Float
+luminance = Kernel.kernel "Color_luminance"
+
+
+-- ─── Manipulation (data-last: the subject colour is the final argument) ───────
+
+
+-- | `withAlpha a c` — replace the alpha channel of `c` with `a` (0..1).
+withAlpha : Float -> Color -> Color
+withAlpha = Kernel.kernel "Color_withAlpha"
+
+
+-- | `mix t a b` — the perceptual blend of `a` and `b` at position `t` (0..1).
+mix : Float -> Color -> Color -> Color
+mix = Kernel.kernel "Color_mix"
+
+
+-- | `blend src dst` — source-over alpha compositing of `src` onto `dst`.
+blend : Color -> Color -> Color
+blend = Kernel.kernel "Color_blend"
+
+
+-- | `lighten amount c` — raise the HSL lightness of `c` by `amount` (0..1).
+lighten : Float -> Color -> Color
+lighten = Kernel.kernel "Color_lighten"
+
+
+-- | `darken amount c` — lower the HSL lightness of `c` by `amount` (0..1).
+darken : Float -> Color -> Color
+darken = Kernel.kernel "Color_darken"
+
+
+-- | `saturate amount c` — raise the HSL saturation of `c` by `amount` (0..1).
+saturate : Float -> Color -> Color
+saturate = Kernel.kernel "Color_saturate"
+
+
+-- | `desaturate amount c` — lower the HSL saturation of `c` by `amount` (0..1).
+desaturate : Float -> Color -> Color
+desaturate = Kernel.kernel "Color_desaturate"
+
+
+-- | `rotateHue degrees c` — rotate the hue of `c` by `degrees`.
+rotateHue : Float -> Color -> Color
+rotateHue = Kernel.kernel "Color_rotateHue"
+
+
+-- | `complementary c` — the 180°-hue-rotated complement of `c`.
+complementary : Color -> Color
+complementary = Kernel.kernel "Color_complementary"
+
+
+-- | `grayscale c` — fully desaturate `c` to grey.
+grayscale : Color -> Color
+grayscale = Kernel.kernel "Color_grayscale"
