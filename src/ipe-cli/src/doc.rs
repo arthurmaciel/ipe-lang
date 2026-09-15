@@ -3925,106 +3925,6 @@ fn html_escape(s: &str) -> String {
     out
 }
 
-/// Render a doc-comment body as structured HTML.
-///
-/// The output contains block-level tags and must be inserted verbatim into the
-/// page body — do not wrap it in an additional `<p>`.
-///
-/// Code blocks are emitted as `<pre class="doc-code"><code>…</code></pre>` with
-/// all content html-escaped and internal whitespace (newlines, leading spaces)
-/// preserved exactly as written.  Two detection rules apply:
-///
-/// * A fenced block is a run of lines bracketed by opening/closing fence lines
-///   that consist solely of three backticks (optionally followed by a language
-///   tag on the opening fence).  The fence lines themselves are stripped; inner
-///   lines are emitted verbatim.
-///
-/// * An indented block is a run of consecutive non-blank lines that each start
-///   with at least four spaces.  The leading four-space marker is stripped from
-///   each line; the remaining content (including any additional indentation) is
-///   preserved.
-///
-/// Prose paragraphs are blank-line–separated runs of non-code lines emitted as
-/// `<p class="comment">…</p>`.  Within prose, spans delimited by single
-/// backticks become `<code>…</code>`; all other text is html-escaped.
-/// Render inline Markdown spans in prose text: backtick code, `[text](url)`
-/// links, and `**bold**` / `*italic*` / `_italic_` emphasis. A `` ` `` code
-/// span is opaque — its interior is escaped verbatim, never re-scanned for
-/// emphasis or links. Any unmatched marker is emitted literally (fail-closed:
-/// malformed input renders as harmless text, never markup or a panic).
-fn render_inline(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = String::new();
-    let mut i = 0;
-    while let Some(&b) = bytes.get(i) {
-        match b {
-            b'`' => {
-                // Code span: copy verbatim (escaped) to the matching backtick.
-                if let Some(rel) = text.get(i + 1..).and_then(|r| r.find('`')) {
-                    let inner = text.get(i + 1..i + 1 + rel).unwrap_or("");
-                    out.push_str("<code>");
-                    out.push_str(&html_escape(inner));
-                    out.push_str("</code>");
-                    i += 1 + rel + 1;
-                } else {
-                    out.push('`');
-                    i += 1;
-                }
-            }
-            b'[' => {
-                // Link: `[text](url)`. Only a well-formed pair is a link.
-                if let Some((label, url, consumed)) = parse_link(text.get(i..).unwrap_or("")) {
-                    let _ = write!(
-                        out,
-                        "<a href=\"{}\">{}</a>",
-                        html_escape(&url),
-                        render_inline(&label)
-                    );
-                    i += consumed;
-                } else {
-                    out.push('[');
-                    i += 1;
-                }
-            }
-            b'*' | b'_' => {
-                let strong = b == b'*' && bytes.get(i + 1) == Some(&b'*');
-                let marker: &str = if strong {
-                    "**"
-                } else if b == b'*' {
-                    "*"
-                } else {
-                    "_"
-                };
-                let start = i + marker.len();
-                if let Some(rel) = text.get(start..).and_then(|r| r.find(marker))
-                    && rel > 0
-                {
-                    let inner = text.get(start..start + rel).unwrap_or("");
-                    let tag = if strong { "strong" } else { "em" };
-                    let _ = write!(out, "<{tag}>{}</{tag}>", render_inline(inner));
-                    i = start + rel + marker.len();
-                } else {
-                    out.push(char::from(b));
-                    i += 1;
-                }
-            }
-            _ => {
-                // Escape one HTML-significant char, or copy one plain char.
-                let ch = text.get(i..).and_then(|s| s.chars().next()).unwrap_or(' ');
-                match ch {
-                    '&' => out.push_str("&amp;"),
-                    '<' => out.push_str("&lt;"),
-                    '>' => out.push_str("&gt;"),
-                    '"' => out.push_str("&quot;"),
-                    other => out.push(other),
-                }
-                i += ch.len_utf8();
-            }
-        }
-    }
-    out
-}
-
 /// Parse a leading `[label](url)` link. Returns the label text, the URL, and
 /// the byte length consumed, or `None` when the slice does not open a
 /// well-formed link. Nested brackets in the label and parens in the URL are
@@ -4064,207 +3964,124 @@ fn is_safe_href(url: &str) -> bool {
     true
 }
 
-/// Flush a prose paragraph buffer to `out`.
-fn flush_prose(out: &mut String, prose: &mut Vec<String>) {
-    if prose.is_empty() {
-        return;
-    }
-    let text = prose.join(" ");
-    let _ = writeln!(out, "<p class=\"comment\">{}</p>", render_inline(&text));
-    prose.clear();
-}
-
-/// Flush a code block buffer to `out`, syntax-highlighting it when it parses
-/// as Ipê and falling back to escaped text otherwise. A contiguous run of
-/// code lines stays one `<pre>` block.
-fn flush_code(out: &mut String, code: &mut Vec<String>) {
-    if code.is_empty() {
-        return;
-    }
-    let source = code.join("\n");
-    out.push_str("<pre class=\"doc-code\">");
-    out.push_str(&highlight_ipe_snippet(&source));
-    out.push_str("</pre>\n");
-    code.clear();
-}
-
-/// Flush a bullet-list buffer as a `<ul>`, each item its own `<li>` — the raw
-/// `*`/`-` marker dropped, inline spans rendered.
-fn flush_list(out: &mut String, items: &mut Vec<String>) {
-    if items.is_empty() {
-        return;
-    }
-    out.push_str("<ul class=\"doc-list\">\n");
-    for item in items.iter() {
-        let _ = writeln!(out, "<li>{}</li>", render_inline(item));
-    }
-    out.push_str("</ul>\n");
-    items.clear();
-}
-
-/// Strip a leading bullet marker (`* `, `- `, or `+ `), returning the item
-/// text when the line is a list item.
-fn bullet_item(line: &str) -> Option<&str> {
-    let t = line.trim_start();
-    for marker in ["* ", "- ", "+ "] {
-        if let Some(rest) = t.strip_prefix(marker) {
-            return Some(rest.trim());
-        }
-    }
-    None
-}
-
-/// Parse an ATX heading (`#`..`######` then a space), returning the level
-/// (clamped so a page heading never outranks the surrounding `<h1>`/`<h2>`)
-/// and the trimmed heading text.
-fn atx_heading(line: &str) -> Option<(u8, &str)> {
-    let t = line.trim_start();
-    let hashes = t.bytes().take_while(|&c| c == b'#').count();
-    if hashes == 0 || hashes > 6 {
-        return None;
-    }
-    let rest = t.get(hashes..)?;
-    let text = rest.strip_prefix(' ')?.trim_end_matches(['#', ' ']).trim();
-    // Section headings inside a page body start at h3 so they nest under the
-    // page's own h1/h2 chrome.
-    let level = u8::try_from(hashes).unwrap_or(6).saturating_add(2).min(6);
-    Some((level, text))
-}
-
-/// Split a Markdown table row `| a | b |` into its trimmed cells, or `None`
-/// when the line is not a pipe-delimited row.
-fn table_cells(line: &str) -> Option<Vec<&str>> {
-    let t = line.trim();
-    if !t.starts_with('|') {
-        return None;
-    }
-    let inner = t.trim_start_matches('|').trim_end_matches('|');
-    Some(inner.split('|').map(str::trim).collect())
-}
-
-/// Whether a row is a header/body separator (`|---|:--:|`) — all cells are
-/// runs of `-` with optional leading/trailing `:` alignment marks.
-fn is_table_separator(cells: &[&str]) -> bool {
-    !cells.is_empty()
-        && cells.iter().all(|c| {
-            let t = c.trim_matches(':');
-            !t.is_empty() && t.bytes().all(|b| b == b'-')
-        })
-}
-
-/// Flush an accumulated Markdown table (its first row treated as the header)
-/// as an HTML `<table>`.
-fn flush_table(out: &mut String, rows: &mut Vec<Vec<String>>) {
-    if rows.is_empty() {
-        return;
-    }
-    out.push_str("<table class=\"doc-table\">\n");
-    for (idx, row) in rows.iter().enumerate() {
-        let cell_tag = if idx == 0 { "th" } else { "td" };
-        if idx == 0 {
-            out.push_str("<thead>\n");
-        } else if idx == 1 {
-            out.push_str("<tbody>\n");
-        }
-        out.push_str("<tr>");
-        for cell in row {
-            let _ = write!(out, "<{cell_tag}>{}</{cell_tag}>", render_inline(cell));
-        }
-        out.push_str("</tr>\n");
-        if idx == 0 {
-            out.push_str("</thead>\n");
-        }
-    }
-    if rows.len() > 1 {
-        out.push_str("</tbody>\n");
-    }
-    out.push_str("</table>\n");
-    rows.clear();
-}
-
-/// Render a doc-comment / Markdown body to HTML: paragraphs, ATX headings,
-/// bullet lists, pipe tables, fenced and indented code (Ipê-highlighted), and
-/// inline spans (code, links, emphasis). Unrecognised or malformed markup
-/// renders as safe escaped text — never a panic, never injected markup.
+/// Render a doc-comment / Markdown body to HTML through the one doc-side
+/// Markdown path: the `Ipe.Markdown` port's parser and escape-by-default walker
+/// (`ipe_docs::markdown`). Headings are shifted so a body heading nests under
+/// the page chrome, prose carries the `comment` class, and fenced code is
+/// Ipê-highlighted. Unrecognised or malformed markup renders as safe escaped
+/// text — never a panic, never injected markup.
 fn render_comment_html(comment: &str) -> String {
+    use ipe_docs::markdown::{parse::parse_blocks, walker};
+
+    // Section headings inside a page body start at h3 so they nest under the
+    // page's own h1/h2 chrome (the walker clamps at h6).
+    let normalised = fence_indented_code(comment);
+    let highlight = |body: &str| highlight_ipe_snippet(body);
+    let opts = walker::WalkOptions {
+        heading_offset: 2,
+        code_renderer: Some(&highlight),
+        para_class: Some("comment"),
+    };
+    walker::blocks_to_html(&parse_blocks(&normalised), &opts)
+}
+
+/// Normalise a doc-comment body into `Ipe.Markdown` source before parsing.
+///
+/// A doc-comment may present an example as a four-space-indented block (the
+/// stdlib convention). `Ipe.Markdown` — the parse SSOT — recognises only fenced
+/// code, so this boundary transform rewrites each maximal run of four-space
+/// indented lines into a ```` ``` ````-fenced block (the four-space marker
+/// stripped), leaving the SSOT parser as the single Markdown authority. Lines
+/// already inside a fence, and list/table/blockquote continuations, are left
+/// untouched so the transform never fabricates a code block from list content.
+fn fence_indented_code(body: &str) -> String {
     let mut out = String::new();
-    let mut prose: Vec<String> = Vec::new();
-    let mut code_buf: Vec<String> = Vec::new();
-    let mut list_buf: Vec<String> = Vec::new();
-    let mut table_buf: Vec<Vec<String>> = Vec::new();
-    let mut fenced = false;
+    let mut in_fence = false;
+    let mut in_indented = false;
+    // Whether the previous non-blank line was a block that legitimately carries
+    // indented continuations (a list / table / blockquote), where a four-space
+    // line is continuation, not a standalone code block.
+    let mut prev_was_container = false;
 
-    for line in comment.lines() {
-        let trimmed = line.trim_start_matches(' ');
-        let fence_delim = trimmed.starts_with("```");
-
-        if fenced {
-            if fence_delim {
-                // Closing delimiter: flush the accumulated code block.
-                fenced = false;
-                flush_code(&mut out, &mut code_buf);
-            } else {
-                code_buf.push(line.to_owned());
-            }
-        } else if fence_delim {
-            // Opening delimiter: flush open blocks, then enter fenced mode.
-            flush_prose(&mut out, &mut prose);
-            flush_list(&mut out, &mut list_buf);
-            flush_table(&mut out, &mut table_buf);
-            fenced = true;
-            // The opening delimiter line (plus any language tag) is dropped.
-        } else if let Some((level, text)) = atx_heading(line) {
-            // ATX heading: close open blocks, emit an `<hN>`.
-            flush_prose(&mut out, &mut prose);
-            flush_code(&mut out, &mut code_buf);
-            flush_list(&mut out, &mut list_buf);
-            flush_table(&mut out, &mut table_buf);
-            let _ = writeln!(out, "<h{level}>{}</h{level}>", render_inline(text));
-        } else if let Some(cells) = table_cells(line) {
-            // A table row: a separator row is dropped (it only marks the header
-            // boundary), any other row is a header or body row.
-            flush_prose(&mut out, &mut prose);
-            flush_code(&mut out, &mut code_buf);
-            flush_list(&mut out, &mut list_buf);
-            if !is_table_separator(&cells) {
-                table_buf.push(cells.into_iter().map(str::to_owned).collect());
-            }
-        } else if let Some(item) = bullet_item(line) {
-            // A list item: close any open prose/code, accumulate into the list.
-            flush_prose(&mut out, &mut prose);
-            flush_code(&mut out, &mut code_buf);
-            flush_table(&mut out, &mut table_buf);
-            list_buf.push(item.to_owned());
-        } else if list_buf.is_empty()
-            && table_buf.is_empty()
-            && let Some(rest) = line.strip_prefix("    ")
-        {
-            // Indented code block (only when not continuing a list/table): flush
-            // prose, strip the four-space marker.
-            flush_prose(&mut out, &mut prose);
-            code_buf.push(rest.to_owned());
-        } else if line.trim().is_empty() {
-            // Blank line: close any open paragraph, code, list, or table.
-            flush_prose(&mut out, &mut prose);
-            flush_code(&mut out, &mut code_buf);
-            flush_list(&mut out, &mut list_buf);
-            flush_table(&mut out, &mut table_buf);
-        } else {
-            // Prose line: close any open code, list, or table first.
-            flush_code(&mut out, &mut code_buf);
-            flush_list(&mut out, &mut list_buf);
-            flush_table(&mut out, &mut table_buf);
-            prose.push(line.trim().to_owned());
+    let close_indent = |out: &mut String, in_indented: &mut bool| {
+        if *in_indented {
+            out.push_str("```\n");
+            *in_indented = false;
         }
+    };
+
+    for line in body.lines() {
+        let is_fence_delim = line.trim_start().starts_with("```");
+        if in_fence {
+            // Inside an author fence: copy verbatim, toggle out on the closer.
+            out.push_str(line);
+            out.push('\n');
+            if is_fence_delim {
+                in_fence = false;
+            }
+            continue;
+        }
+        if is_fence_delim {
+            close_indent(&mut out, &mut in_indented);
+            in_fence = true;
+            prev_was_container = false;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+
+        let line_indented = line.starts_with("    ");
+        let is_blank = line.trim().is_empty();
+
+        if in_indented {
+            if line_indented {
+                // Continue the code block, stripping the four-space marker.
+                out.push_str(line.get(4..).unwrap_or(""));
+            } else if is_blank {
+                // A blank line may separate two indented paragraphs of the same
+                // block; keep it inside the fence (emitted below).
+            } else {
+                // A non-indented, non-blank line ends the code block.
+                close_indent(&mut out, &mut in_indented);
+                prev_was_container = is_container_line(line);
+                out.push_str(line);
+            }
+            out.push('\n');
+            continue;
+        }
+
+        // Not currently in an indented run. A four-space line opens one only
+        // when it is not a continuation of a list/table/blockquote.
+        if line_indented && !prev_was_container {
+            out.push_str("```\n");
+            in_indented = true;
+            out.push_str(line.get(4..).unwrap_or(""));
+            out.push('\n');
+            continue;
+        }
+
+        if !is_blank {
+            prev_was_container = is_container_line(line);
+        }
+        out.push_str(line);
+        out.push('\n');
     }
-
-    // Flush any trailing content (an unclosed fence is treated as a code block).
-    flush_prose(&mut out, &mut prose);
-    flush_code(&mut out, &mut code_buf);
-    flush_list(&mut out, &mut list_buf);
-    flush_table(&mut out, &mut table_buf);
-
+    close_indent(&mut out, &mut in_indented);
     out
+}
+
+/// Whether a line opens or continues a list / table / blockquote — a context
+/// where an indented follow-on line is a continuation, not a code block.
+fn is_container_line(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("- ")
+        || t.starts_with("* ")
+        || t.starts_with("+ ")
+        || t.starts_with('|')
+        || t.starts_with("> ")
+        || t == ">"
+        || t.split_once(". ")
+            .is_some_and(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Syntax-highlight an Ipê snippet into `<code>…</code>` inner HTML.
@@ -4707,9 +4524,10 @@ fn render_entry_page(
         body.push_str("<p class=\"comment\">No further documentation yet.</p>\n");
     } else {
         // Entry bodies are sourced from Markdown files (explain pages, construct
-        // docs, command help) — render via `comrak` so headings, code fences,
-        // tables, and links all work correctly.  `ipe`-tagged fenced blocks are
-        // highlighted via the shared token-classifier (no second lexer).
+        // docs, command help) — rendered through the one doc-side Markdown path
+        // (`ipe_docs::markdown` port + escape-by-default walker) so headings, code
+        // fences, tables, and links all work consistently. Fenced code is routed
+        // through the shared token-classifier highlighter (no second lexer).
         body.push_str(&ipe_docs::render::markdown_to_html(&entry.body));
     }
     html_page(&entry.title, "../style.css", &header, &body)
@@ -5627,10 +5445,16 @@ mod tests {
 
     #[test]
     fn render_comment_emphasis_becomes_strong_and_em() {
+        // `**`/`*` are the only emphasis markers the `Ipe.Markdown` parse SSOT
+        // recognises; `_` is literal text (rendered verbatim, never `<em>`).
         let html = render_comment_html("A **bold** and an *italic* and an _under_.");
         assert!(html.contains("<strong>bold</strong>"), "{html}");
         assert!(html.contains("<em>italic</em>"), "{html}");
-        assert!(html.contains("<em>under</em>"), "{html}");
+        assert!(
+            !html.contains("<em>under</em>"),
+            "underscore is not emphasis: {html}"
+        );
+        assert!(html.contains("_under_"), "underscore stays literal: {html}");
     }
 
     #[test]
@@ -5655,12 +5479,59 @@ mod tests {
     }
 
     #[test]
-    fn render_comment_unmatched_markers_stay_literal() {
-        // Malformed inline markers render as harmless text, never markup.
+    fn render_comment_malformed_link_is_never_a_live_anchor() {
+        // The fail-closed guarantee that matters: a malformed `[x](y …` (no
+        // closing paren) never becomes a live anchor, and every byte stays
+        // HTML-escaped — no markup can be injected. Under the `Ipe.Markdown`
+        // parse SSOT an unclosed `*`/`` ` `` degrades gracefully by consuming to
+        // end (inert emphasis/code), which is harmless; the security property is
+        // the absence of any `href`, not the absence of formatting tags.
         let html = render_comment_html("a * b and [x](y and `z");
-        assert!(!html.contains("<em>"), "lone asterisk not emphasis: {html}");
-        assert!(!html.contains("<a "), "lone bracket not a link: {html}");
-        assert!(!html.contains("<code>"), "lone backtick not code: {html}");
+        assert!(
+            !html.contains("<a "),
+            "malformed link is not an anchor: {html}"
+        );
+        assert!(!html.contains("href="), "no href emitted at all: {html}");
+        assert!(!html.contains("<script"), "no injected markup: {html}");
+    }
+
+    #[test]
+    fn render_comment_indented_multiline_example_stays_one_code_block() {
+        // A stdlib-style four-space-indented example (blank lines between its
+        // lines) is normalised to a single fenced block before the SSOT parser
+        // runs, so it renders as one `<pre>` code block, not run-together prose.
+        let comment = "Intro line:\n\n    foo : Int\n    foo =\n        1\n\nOutro.";
+        let html = render_comment_html(comment);
+        assert!(
+            html.contains("<pre class=\"doc-code\">"),
+            "indented example must render as a code block: {html}"
+        );
+        assert!(html.contains("foo : Int"), "code body preserved: {html}");
+        assert!(html.contains("Outro."), "trailing prose preserved: {html}");
+        // The four-space markers are stripped, never emitted as literal indent.
+        assert!(!html.contains("    foo : Int"), "marker stripped: {html}");
+    }
+
+    #[test]
+    fn fence_indented_code_does_not_fire_inside_a_list() {
+        // A four-space continuation under a bullet is list content, not a code
+        // block: the normaliser must leave it for the SSOT list parser.
+        let out = super::fence_indented_code("- item one\n    still the item\n- item two");
+        assert!(
+            !out.contains("```"),
+            "list continuation must not become a fence: {out:?}"
+        );
+    }
+
+    #[test]
+    fn fence_indented_code_leaves_author_fences_untouched() {
+        // Content already inside an author ```` ``` ```` fence is copied verbatim,
+        // even when a line happens to be four-space indented.
+        let src = "```\n    indented in fence\n```";
+        assert_eq!(
+            super::fence_indented_code(src),
+            "```\n    indented in fence\n```\n"
+        );
     }
 
     /// The HTML command page renders the same command metadata as

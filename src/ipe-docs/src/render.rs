@@ -162,59 +162,27 @@ pub fn html_escape(text: &str) -> String {
 
 // ── Markdown renderer ────────────────────────────────────────────────────────
 
-/// Render a Markdown string to HTML using `CommonMark` (via `comrak`).
+/// Render a Markdown string to HTML through the doc-side `Ipe.Markdown` port.
 ///
-/// Fenced code blocks with the `ipe` language tag are passed through
-/// [`highlight_snippet`], so they receive the same token-classifier highlights
-/// as every other snippet on the site.  All other language tags fall back to
-/// plain escaped text inside `<code>`.  No hand-rolled parser is involved.
+/// The one doc-side Markdown→HTML path: the source is parsed by the hand-ported
+/// [`Ipe.Markdown`] parser ([`markdown::parse_blocks`]) and emitted by the
+/// escape-by-default [`markdown::walker`]. Every fenced code block is passed
+/// through [`highlight_snippet`], so a snippet that parses as an Ipê module
+/// receives token-classifier highlights and anything else falls back to plain
+/// escaped text inside `<code>` — no raw HTML is ever passed through.
+///
+/// [`Ipe.Markdown`]: crate::markdown
 #[must_use]
 pub fn markdown_to_html(md: &str) -> String {
-    use comrak::nodes::{NodeHtmlBlock, NodeValue};
-    use comrak::{Arena, Options, format_html_with_plugins, parse_document};
+    use crate::markdown::{parse::parse_blocks, walker};
 
-    let mut options = Options::default();
-    options.extension.table = true;
-    options.extension.autolink = true;
-    // Allow the `HtmlBlock` nodes we inject for pre-rendered `ipe` snippets to
-    // pass through.  User-authored raw HTML in the Markdown source is not a
-    // concern here because the input is always trusted SSOT content (explain
-    // pages, stdlib doc-strings, construct files) — never free-form user input.
-    options.render.unsafe_ = true;
-
-    let arena = Arena::new();
-    let root = parse_document(&arena, md, &options);
-
-    // Rewrite `ipe`-tagged fenced blocks in-place: borrow the cell, produce
-    // the highlighted HTML, then swap the node value to `HtmlBlock` so comrak
-    // emits the pre-rendered fragment verbatim (no second lexer involved).
-    for node in root.descendants() {
-        let is_ipe_block = matches!(
-            &node.data.borrow().value,
-            NodeValue::CodeBlock(cb) if cb.info.trim() == "ipe"
-        );
-        if is_ipe_block {
-            let raw = {
-                let borrow = node.data.borrow();
-                let NodeValue::CodeBlock(ref cb) = borrow.value else {
-                    continue;
-                };
-                format!(
-                    "<pre class=\"doc-code\">{}</pre>\n",
-                    highlight_snippet(&cb.literal)
-                )
-            };
-            node.data.borrow_mut().value = NodeValue::HtmlBlock(NodeHtmlBlock {
-                block_type: 6,
-                literal: raw,
-            });
-        }
-    }
-
-    let mut out = Vec::new();
-    let plugins = comrak::Plugins::default();
-    let _ = format_html_with_plugins(root, &options, &mut out, &plugins);
-    String::from_utf8_lossy(&out).into_owned()
+    let highlight = |body: &str| highlight_snippet(body);
+    let opts = walker::WalkOptions {
+        heading_offset: 0,
+        code_renderer: Some(&highlight),
+        para_class: None,
+    };
+    walker::blocks_to_html(&parse_blocks(md), &opts)
 }
 
 // ── Page template ─────────────────────────────────────────────────────────────

@@ -41,6 +41,11 @@ pub struct WalkOptions<'a> {
     /// walker wraps it in `<pre>` without re-escaping. When absent, the walker
     /// falls back to escaped text in a `<code>` element.
     pub code_renderer: Option<&'a dyn Fn(&str) -> String>,
+    /// CSS class to place on every emitted `<p>`. A caller that styles doc-comment
+    /// prose (e.g. `p.comment`) supplies the class name; the walker escapes it
+    /// into the attribute. When absent, a bare `<p>` is emitted. This is a
+    /// presentation choice that lives with the caller, never in the leaf walker.
+    pub para_class: Option<&'a str>,
 }
 
 /// Render a list of blocks to an HTML fragment.
@@ -70,7 +75,12 @@ fn render_block(out: &mut String, block: &Block, opts: &WalkOptions, depth: usiz
             let _ = writeln!(out, "</h{n}>");
         }
         Block::Para(text) => {
-            out.push_str("<p>");
+            match opts.para_class {
+                Some(class) => {
+                    let _ = write!(out, "<p class=\"{}\">", html_escape(class));
+                }
+                None => out.push_str("<p>"),
+            }
             render_spans(out, &parse_spans(text), opts);
             out.push_str("</p>\n");
         }
@@ -242,6 +252,7 @@ mod tests {
         let opts = WalkOptions {
             heading_offset: offset,
             code_renderer: None,
+            para_class: None,
         };
         blocks_to_html(&parse_blocks(src), &opts)
     }
@@ -478,8 +489,28 @@ mod tests {
         let opts = WalkOptions {
             heading_offset: 0,
             code_renderer: Some(&|body: &str| format!("<code class=\"hl\">{body}</code>")),
+            para_class: None,
         };
         let out = blocks_to_html(&parse_blocks("```ipe\nfoo\n```"), &opts);
         assert!(out.contains("<code class=\"hl\">foo</code>"), "{out}");
+    }
+
+    #[test]
+    fn para_class_is_applied_and_escaped() {
+        let opts = WalkOptions {
+            heading_offset: 0,
+            code_renderer: None,
+            para_class: Some("comment"),
+        };
+        let out = blocks_to_html(&parse_blocks("hi"), &opts);
+        assert_eq!(out, "<p class=\"comment\">hi</p>\n");
+        // A class carrying an HTML special is escaped into the attribute.
+        let opts = WalkOptions {
+            heading_offset: 0,
+            code_renderer: None,
+            para_class: Some("a\"b"),
+        };
+        let out = blocks_to_html(&parse_blocks("hi"), &opts);
+        assert!(out.contains("class=\"a&quot;b\""), "{out}");
     }
 }
