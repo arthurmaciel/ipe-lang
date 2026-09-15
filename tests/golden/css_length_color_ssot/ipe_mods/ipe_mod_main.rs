@@ -6,41 +6,357 @@ pub(crate) fn main_lengths() -> String {
     CELL.get_or_init(|| {
         format!(
             "{}{}",
-            "0px".to_string(),
+            match IpeCssLength::Px(0i64) {
+                IpeCssLength::Px(n) => crate::user_ipe_length_to_css(n, IpeLengthUnit::Px),
+                IpeCssLength::Rem(n) => {
+                    format!("{}{}", crate::user_ipe_css_float_str(n), "rem".to_string())
+                }
+                IpeCssLength::Em(n) => {
+                    format!("{}{}", crate::user_ipe_css_float_str(n), "em".to_string())
+                }
+                IpeCssLength::Pct(n) => {
+                    format!("{}{}", crate::user_ipe_css_float_str(n), "%".to_string())
+                }
+                IpeCssLength::Vh(n) => crate::user_ipe_length_to_css(n, IpeLengthUnit::Vh),
+                IpeCssLength::Vw(n) => crate::user_ipe_length_to_css(n, IpeLengthUnit::Vw),
+                IpeCssLength::Ch(n) => {
+                    format!("{}{}", crate::user_ipe_css_float_str(n), "ch".to_string())
+                }
+                IpeCssLength::Fr(n) => format!("{}{}", string_from_int(n), "fr".to_string()),
+                IpeCssLength::Num(n) => crate::user_ipe_css_float_str(n),
+                IpeCssLength::LenAuto => "auto".to_string(),
+                IpeCssLength::LenZero => "0".to_string(),
+                IpeCssLength::LenRaw(s) => s,
+            },
             format!(
                 "{}{}",
                 "\n".to_string(),
                 format!(
                     "{}{}",
-                    "16px".to_string(),
+                    match IpeCssLength::Px(16i64) {
+                        IpeCssLength::Px(n) => crate::user_ipe_length_to_css(n, IpeLengthUnit::Px),
+                        IpeCssLength::Rem(n) => {
+                            format!("{}{}", crate::user_ipe_css_float_str(n), "rem".to_string())
+                        }
+                        IpeCssLength::Em(n) => {
+                            format!("{}{}", crate::user_ipe_css_float_str(n), "em".to_string())
+                        }
+                        IpeCssLength::Pct(n) => {
+                            format!("{}{}", crate::user_ipe_css_float_str(n), "%".to_string())
+                        }
+                        IpeCssLength::Vh(n) => crate::user_ipe_length_to_css(n, IpeLengthUnit::Vh),
+                        IpeCssLength::Vw(n) => crate::user_ipe_length_to_css(n, IpeLengthUnit::Vw),
+                        IpeCssLength::Ch(n) => {
+                            format!("{}{}", crate::user_ipe_css_float_str(n), "ch".to_string())
+                        }
+                        IpeCssLength::Fr(n) => {
+                            format!("{}{}", string_from_int(n), "fr".to_string())
+                        }
+                        IpeCssLength::Num(n) => crate::user_ipe_css_float_str(n),
+                        IpeCssLength::LenAuto => "auto".to_string(),
+                        IpeCssLength::LenZero => "0".to_string(),
+                        IpeCssLength::LenRaw(s) => s,
+                    },
                     format!(
                         "{}{}",
                         "\n".to_string(),
                         format!(
                             "{}{}",
-                            "100px".to_string(),
+                            match IpeCssLength::Px(100i64) {
+                                IpeCssLength::Px(n) => {
+                                    crate::user_ipe_length_to_css(n, IpeLengthUnit::Px)
+                                }
+                                IpeCssLength::Rem(n) => {
+                                    format!(
+                                        "{}{}",
+                                        crate::user_ipe_css_float_str(n),
+                                        "rem".to_string()
+                                    )
+                                }
+                                IpeCssLength::Em(n) => {
+                                    format!(
+                                        "{}{}",
+                                        crate::user_ipe_css_float_str(n),
+                                        "em".to_string()
+                                    )
+                                }
+                                IpeCssLength::Pct(n) => {
+                                    format!(
+                                        "{}{}",
+                                        crate::user_ipe_css_float_str(n),
+                                        "%".to_string()
+                                    )
+                                }
+                                IpeCssLength::Vh(n) => {
+                                    crate::user_ipe_length_to_css(n, IpeLengthUnit::Vh)
+                                }
+                                IpeCssLength::Vw(n) => {
+                                    crate::user_ipe_length_to_css(n, IpeLengthUnit::Vw)
+                                }
+                                IpeCssLength::Ch(n) => {
+                                    format!(
+                                        "{}{}",
+                                        crate::user_ipe_css_float_str(n),
+                                        "ch".to_string()
+                                    )
+                                }
+                                IpeCssLength::Fr(n) => {
+                                    format!("{}{}", string_from_int(n), "fr".to_string())
+                                }
+                                IpeCssLength::Num(n) => crate::user_ipe_css_float_str(n),
+                                IpeCssLength::LenAuto => "auto".to_string(),
+                                IpeCssLength::LenZero => "0".to_string(),
+                                IpeCssLength::LenRaw(s) => s,
+                            },
                             format!(
                                 "{}{}",
                                 "\n".to_string(),
                                 format!(
                                     "{}{}",
-                                    "50vh".to_string(),
+                                    match IpeCssLength::Vh(50i64) {
+                                        IpeCssLength::Px(n) => {
+                                            crate::user_ipe_length_to_css(n, IpeLengthUnit::Px)
+                                        }
+                                        IpeCssLength::Rem(n) => {
+                                            format!(
+                                                "{}{}",
+                                                crate::user_ipe_css_float_str(n),
+                                                "rem".to_string()
+                                            )
+                                        }
+                                        IpeCssLength::Em(n) => {
+                                            format!(
+                                                "{}{}",
+                                                crate::user_ipe_css_float_str(n),
+                                                "em".to_string()
+                                            )
+                                        }
+                                        IpeCssLength::Pct(n) => {
+                                            format!(
+                                                "{}{}",
+                                                crate::user_ipe_css_float_str(n),
+                                                "%".to_string()
+                                            )
+                                        }
+                                        IpeCssLength::Vh(n) => {
+                                            crate::user_ipe_length_to_css(n, IpeLengthUnit::Vh)
+                                        }
+                                        IpeCssLength::Vw(n) => {
+                                            crate::user_ipe_length_to_css(n, IpeLengthUnit::Vw)
+                                        }
+                                        IpeCssLength::Ch(n) => {
+                                            format!(
+                                                "{}{}",
+                                                crate::user_ipe_css_float_str(n),
+                                                "ch".to_string()
+                                            )
+                                        }
+                                        IpeCssLength::Fr(n) => {
+                                            format!("{}{}", string_from_int(n), "fr".to_string())
+                                        }
+                                        IpeCssLength::Num(n) => crate::user_ipe_css_float_str(n),
+                                        IpeCssLength::LenAuto => "auto".to_string(),
+                                        IpeCssLength::LenZero => "0".to_string(),
+                                        IpeCssLength::LenRaw(s) => s,
+                                    },
                                     format!(
                                         "{}{}",
                                         "\n".to_string(),
                                         format!(
                                             "{}{}",
-                                            "100vh".to_string(),
+                                            match IpeCssLength::Vh(100i64) {
+                                                IpeCssLength::Px(n) => {
+                                                    crate::user_ipe_length_to_css(
+                                                        n,
+                                                        IpeLengthUnit::Px,
+                                                    )
+                                                }
+                                                IpeCssLength::Rem(n) => {
+                                                    format!(
+                                                        "{}{}",
+                                                        crate::user_ipe_css_float_str(n),
+                                                        "rem".to_string()
+                                                    )
+                                                }
+                                                IpeCssLength::Em(n) => {
+                                                    format!(
+                                                        "{}{}",
+                                                        crate::user_ipe_css_float_str(n),
+                                                        "em".to_string()
+                                                    )
+                                                }
+                                                IpeCssLength::Pct(n) => {
+                                                    format!(
+                                                        "{}{}",
+                                                        crate::user_ipe_css_float_str(n),
+                                                        "%".to_string()
+                                                    )
+                                                }
+                                                IpeCssLength::Vh(n) => {
+                                                    crate::user_ipe_length_to_css(
+                                                        n,
+                                                        IpeLengthUnit::Vh,
+                                                    )
+                                                }
+                                                IpeCssLength::Vw(n) => {
+                                                    crate::user_ipe_length_to_css(
+                                                        n,
+                                                        IpeLengthUnit::Vw,
+                                                    )
+                                                }
+                                                IpeCssLength::Ch(n) => {
+                                                    format!(
+                                                        "{}{}",
+                                                        crate::user_ipe_css_float_str(n),
+                                                        "ch".to_string()
+                                                    )
+                                                }
+                                                IpeCssLength::Fr(n) => {
+                                                    format!(
+                                                        "{}{}",
+                                                        string_from_int(n),
+                                                        "fr".to_string()
+                                                    )
+                                                }
+                                                IpeCssLength::Num(n) => {
+                                                    crate::user_ipe_css_float_str(n)
+                                                }
+                                                IpeCssLength::LenAuto => "auto".to_string(),
+                                                IpeCssLength::LenZero => "0".to_string(),
+                                                IpeCssLength::LenRaw(s) => s,
+                                            },
                                             format!(
                                                 "{}{}",
                                                 "\n".to_string(),
                                                 format!(
                                                     "{}{}",
-                                                    "50vw".to_string(),
+                                                    match IpeCssLength::Vw(50i64) {
+                                                        IpeCssLength::Px(n) => {
+                                                            crate::user_ipe_length_to_css(
+                                                                n,
+                                                                IpeLengthUnit::Px,
+                                                            )
+                                                        }
+                                                        IpeCssLength::Rem(n) => {
+                                                            format!(
+                                                                "{}{}",
+                                                                crate::user_ipe_css_float_str(n),
+                                                                "rem".to_string()
+                                                            )
+                                                        }
+                                                        IpeCssLength::Em(n) => {
+                                                            format!(
+                                                                "{}{}",
+                                                                crate::user_ipe_css_float_str(n),
+                                                                "em".to_string()
+                                                            )
+                                                        }
+                                                        IpeCssLength::Pct(n) => {
+                                                            format!(
+                                                                "{}{}",
+                                                                crate::user_ipe_css_float_str(n),
+                                                                "%".to_string()
+                                                            )
+                                                        }
+                                                        IpeCssLength::Vh(n) => {
+                                                            crate::user_ipe_length_to_css(
+                                                                n,
+                                                                IpeLengthUnit::Vh,
+                                                            )
+                                                        }
+                                                        IpeCssLength::Vw(n) => {
+                                                            crate::user_ipe_length_to_css(
+                                                                n,
+                                                                IpeLengthUnit::Vw,
+                                                            )
+                                                        }
+                                                        IpeCssLength::Ch(n) => {
+                                                            format!(
+                                                                "{}{}",
+                                                                crate::user_ipe_css_float_str(n),
+                                                                "ch".to_string()
+                                                            )
+                                                        }
+                                                        IpeCssLength::Fr(n) => {
+                                                            format!(
+                                                                "{}{}",
+                                                                string_from_int(n),
+                                                                "fr".to_string()
+                                                            )
+                                                        }
+                                                        IpeCssLength::Num(n) => {
+                                                            crate::user_ipe_css_float_str(n)
+                                                        }
+                                                        IpeCssLength::LenAuto => "auto".to_string(),
+                                                        IpeCssLength::LenZero => "0".to_string(),
+                                                        IpeCssLength::LenRaw(s) => s,
+                                                    },
                                                     format!(
                                                         "{}{}",
                                                         "\n".to_string(),
-                                                        "100vw".to_string()
+                                                        match IpeCssLength::Vw(100i64) {
+                                                            IpeCssLength::Px(n) => {
+                                                                crate::user_ipe_length_to_css(
+                                                                    n,
+                                                                    IpeLengthUnit::Px,
+                                                                )
+                                                            }
+                                                            IpeCssLength::Rem(n) => {
+                                                                format!(
+                                                                    "{}{}",
+                                                                    crate::user_ipe_css_float_str(n),
+                                                                    "rem".to_string()
+                                                                )
+                                                            }
+                                                            IpeCssLength::Em(n) => {
+                                                                format!(
+                                                                    "{}{}",
+                                                                    crate::user_ipe_css_float_str(n),
+                                                                    "em".to_string()
+                                                                )
+                                                            }
+                                                            IpeCssLength::Pct(n) => {
+                                                                format!(
+                                                                    "{}{}",
+                                                                    crate::user_ipe_css_float_str(n),
+                                                                    "%".to_string()
+                                                                )
+                                                            }
+                                                            IpeCssLength::Vh(n) => {
+                                                                crate::user_ipe_length_to_css(
+                                                                    n,
+                                                                    IpeLengthUnit::Vh,
+                                                                )
+                                                            }
+                                                            IpeCssLength::Vw(n) => {
+                                                                crate::user_ipe_length_to_css(
+                                                                    n,
+                                                                    IpeLengthUnit::Vw,
+                                                                )
+                                                            }
+                                                            IpeCssLength::Ch(n) => {
+                                                                format!(
+                                                                    "{}{}",
+                                                                    crate::user_ipe_css_float_str(n),
+                                                                    "ch".to_string()
+                                                                )
+                                                            }
+                                                            IpeCssLength::Fr(n) => {
+                                                                format!(
+                                                                    "{}{}",
+                                                                    string_from_int(n),
+                                                                    "fr".to_string()
+                                                                )
+                                                            }
+                                                            IpeCssLength::Num(n) => {
+                                                                crate::user_ipe_css_float_str(n)
+                                                            }
+                                                            IpeCssLength::LenAuto => {
+                                                                "auto".to_string()
+                                                            }
+                                                            IpeCssLength::LenZero => "0".to_string(),
+                                                            IpeCssLength::LenRaw(s) => s,
+                                                        }
                                                     )
                                                 )
                                             )

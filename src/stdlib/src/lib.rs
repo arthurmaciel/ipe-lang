@@ -1269,6 +1269,16 @@ const STD_TIME_TIMESTAMP: &str = include_str!("../Ipe/Time/Timestamp.ipe");
 /// disjointness invariant holds.
 const STD_BYTESIZE: &str = include_str!("../Ipe/ByteSize.ipe");
 
+/// `Ipe.Length` -- the shared CSS length-unit spelling SSOT (compiled source).
+///
+/// Pure Ipe: defines `type Unit = Px | Vh | Vw` and folds it in `toCss`, the
+/// one Ipe-side place a shared `<n><unit>` length is spelled. `Ipe.Css`
+/// delegates its shared `Px`/`Vh`/`Vw` arms here; the language-level mirror of
+/// the runtime carrier `ipe_runtime::length::CssUnit`, held byte-equal to it by
+/// the `css_length_color_ssot` gate. No `Kernel.kernel` call. Not in
+/// `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
+const STD_LENGTH: &str = include_str!("../Ipe/Length.ipe");
+
 /// `Ipe.Http.StatusCode` — typed HTTP response status code (compiled source).
 ///
 /// Pure Ipê: defines `type StatusCode = StatusCode Int` (unexported ctor) with
@@ -1307,6 +1317,13 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.ByteSize",
         source: STD_BYTESIZE,
+    },
+    // Ipe.Length -- pure-Ipe SSOT for the shared CSS length-unit spelling
+    // (`Px`/`Vh`/`Vw`); `Ipe.Css` folds its shared arms through it. No kernel
+    // calls; the language-level mirror of `ipe_runtime::length::CssUnit`.
+    CompiledStdModule {
+        dotted: "Ipe.Length",
+        source: STD_LENGTH,
     },
     CompiledStdModule {
         dotted: "Ipe.Tuple",

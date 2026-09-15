@@ -223,6 +223,9 @@ fn main() {
     }
 }
 
+#[path = "ipe_mods/ipe_mod_ipe_length.rs"]
+mod ipe_mod_ipe_length;
+pub(crate) use ipe_mod_ipe_length::*;
 #[path = "ipe_mods/ipe_mod_ipe_css.rs"]
 mod ipe_mod_ipe_css;
 pub(crate) use ipe_mod_ipe_css::*;

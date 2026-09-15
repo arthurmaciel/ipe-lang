@@ -93,6 +93,7 @@ Each module listed below links to a detail page with the full documentation and 
 - [Http](#http)
 - [Http.StatusCode](#httpstatuscode)
 - [Io](#io)
+- [Length](#length)
 - [Level](#level)
 - [List](#list)
 - [Locale](#locale)
@@ -2026,6 +2027,17 @@ Ipe.Io — standard-I/O effect kernels.
 | `writeStderr` | (no summary) |
 | `println` | (no summary) |
 | `eprintln` | (no summary) |
+
+## Length
+
+[Full reference](stdlib/Length.md)
+
+Ipe.Length — the shared CSS length-unit spelling, as ONE language-level
+
+| Export | Summary |
+|--------|----------|
+| `Unit` | A CSS length unit whose spelling is shared across every Ipê surface. |
+| `toCss` | `toCss n unit` — the one place a shared length is spelled for CSS: an |
 
 ## Level
 

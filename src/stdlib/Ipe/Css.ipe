@@ -105,6 +105,7 @@ import Ipe.Basics as Basics
 import Ipe.Math as Math
 import Ipe.String as String
 import Ipe.List as List
+import Ipe.Length as Length
 import Ipe.CssSafety exposing (safeValue, safePropName, safeSelector, sanitizeRawBody, stripStyleClose)
 
 
@@ -353,7 +354,7 @@ lengthToString : Length -> String
 lengthToString lengthVal =
     case lengthVal of
         Px n ->
-            String.fromInt n ++ "px"
+            Length.toCss n Length.Px
 
         Rem n ->
             floatStr n ++ "rem"
@@ -365,10 +366,10 @@ lengthToString lengthVal =
             floatStr n ++ "%"
 
         Vh n ->
-            String.fromInt n ++ "vh"
+            Length.toCss n Length.Vh
 
         Vw n ->
-            String.fromInt n ++ "vw"
+            Length.toCss n Length.Vw
 
         Ch n ->
             floatStr n ++ "ch"

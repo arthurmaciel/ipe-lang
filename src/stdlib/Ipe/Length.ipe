@@ -1,0 +1,55 @@
+-- | Ipe.Length — the shared CSS length-unit spelling, as ONE language-level
+-- SSOT.
+--
+-- `Ipe.Ui.Length` (layout intent) and `Ipe.Css.Length` (typography) are two
+-- distinct surface types, deliberately not merged: a naive union pollutes each
+-- (Ui would gain a meaningless `Rem`/`Ch`, Css a meaningless `Fill`/`Min`).
+-- They share exactly the integer-magnitude units `Px`/`Vh`/`Vw`, whose CSS
+-- `<n><unit>` spelling MUST be byte-identical across surfaces.
+--
+-- This module owns that spelling for the Ipê side — the language-level mirror
+-- of the runtime carrier `ipe_runtime::length::CssUnit`, which owns the same
+-- spelling for the native side. `Ipe.Css.lengthToString` folds its shared arms
+-- through `toCss` here rather than re-deriving `String.fromInt n ++ "px"`, so
+-- the shared spelling exists in exactly one place per language. The two
+-- languages cannot import each other, so their byte-equivalence is asserted by
+-- the `css_length_color_ssot` equivalence gate, never hand-synced.
+--
+-- The unit set is closed to the genuinely-shared units; a surface-specific
+-- unit (`Ipe.Ui`'s `Fill`/`Content`, `Ipe.Css`'s `Rem`/`Em`/`Ch`/`Fr`) is
+-- spelled by its own surface, never here.
+module Ipe.Length exposing
+    ( Unit(..)
+    , toCss
+    )
+
+import Ipe.String as String
+
+
+-- | A CSS length unit whose spelling is shared across every Ipê surface.
+--
+-- Closed to the integer-magnitude units both `Ipe.Ui.Length` and
+-- `Ipe.Css.Length` express. A surface-specific unit is not representable here,
+-- so this type is the SSOT only for what is actually shared.
+type Unit
+    = Px
+    | Vh
+    | Vw
+
+
+-- | `toCss n unit` — the one place a shared length is spelled for CSS: an
+-- integer magnitude followed by the unit suffix (`toCss 16 Px` → `"16px"`).
+--
+-- Mirrors `ipe_runtime::length::CssUnit::css` byte-for-byte; the
+-- `css_length_color_ssot` gate holds the two in lockstep.
+toCss : Int -> Unit -> String
+toCss n unit =
+    case unit of
+        Px ->
+            String.fromInt n ++ "px"
+
+        Vh ->
+            String.fromInt n ++ "vh"
+
+        Vw ->
+            String.fromInt n ++ "vw"
