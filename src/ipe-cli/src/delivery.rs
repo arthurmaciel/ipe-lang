@@ -75,6 +75,22 @@ impl Shape {
         matches!(self, Self::Tui | Self::Cli)
     }
 
+    /// The control model this shape's `main` runs under — the compiler-derived
+    /// answer to "how does this program drive itself". It is a projection of the
+    /// same shape the compiler already pinned, never a second derivation: a
+    /// view-ful shape (`Web`/`Tui`/`Cli`) runs the Elm-style
+    /// model/update/view loop ([`ControlModel::Tea`]); a `Server` runs the
+    /// declarative request/response model; a `Script` (a plain `Task Error ()`)
+    /// runs directly to completion ([`ControlModel::Direct`]).
+    #[must_use]
+    pub const fn control_model(self) -> ControlModel {
+        match self {
+            Self::Web | Self::Tui | Self::Cli => ControlModel::Tea,
+            Self::Server => ControlModel::Server,
+            Self::Script => ControlModel::Direct,
+        }
+    }
+
     /// The delivery shape a compiler-classified `main` pins. The compiler is the
     /// single source of truth for the shape (spec § 0); this maps its
     /// [`ipe_canon::shape_source::MainShape`] onto the delivery vocabulary so the
@@ -88,6 +104,36 @@ impl Shape {
             MainShape::Cli => Self::Cli,
             MainShape::Server => Self::Server,
             MainShape::Web => Self::Web,
+        }
+    }
+}
+
+/// How a program drives itself, projected from its compiler-pinned [`Shape`].
+///
+/// A closed set: every shape maps to exactly one control model, so a disclosure
+/// surface can name the model without a second derivation that could disagree
+/// with the shape the compiler already pinned. This is the SSOT the `ipe audit`
+/// disclosure reads — it never re-inspects `main` on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlModel {
+    /// The Elm-style model/update/view loop — a `Web`/`Tui`/`Cli` shape.
+    Tea,
+    /// The declarative request/response model — a `Server` shape.
+    Server,
+    /// A plain `main : Task Error ()` that runs directly to completion — a
+    /// `Script` shape.
+    Direct,
+}
+
+impl ControlModel {
+    /// The canonical word for this control model — the one vocabulary shared by
+    /// the audit disclosure, its JSON verdict, and docs.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Tea => "tea",
+            Self::Server => "server",
+            Self::Direct => "direct",
         }
     }
 }
@@ -648,6 +694,21 @@ mod tests {
                 got: "wut".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn control_model_is_the_projection_of_the_pinned_shape() {
+        // The view-ful shapes run the TEA loop; a server is declarative; a script
+        // runs direct. Pins the SSOT projection against drift.
+        assert_eq!(Shape::Web.control_model(), ControlModel::Tea);
+        assert_eq!(Shape::Tui.control_model(), ControlModel::Tea);
+        assert_eq!(Shape::Cli.control_model(), ControlModel::Tea);
+        assert_eq!(Shape::Server.control_model(), ControlModel::Server);
+        assert_eq!(Shape::Script.control_model(), ControlModel::Direct);
+        // Every model has a stable, distinct word.
+        assert_eq!(ControlModel::Tea.word(), "tea");
+        assert_eq!(ControlModel::Server.word(), "server");
+        assert_eq!(ControlModel::Direct.word(), "direct");
     }
 
     #[test]
