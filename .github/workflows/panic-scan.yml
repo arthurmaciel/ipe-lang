@@ -42,7 +42,7 @@ jobs:
               - 'tools/panic-scan/**'
               - '.github/workflows/panic-scan.yml'
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain-pinned
         if: steps.filter.outputs.relevant == 'true'
 
       - name: Build the scanner
