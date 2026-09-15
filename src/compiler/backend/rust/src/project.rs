@@ -5296,9 +5296,11 @@ fn emit_db_projection_impls(ctx: &EmitCtx) -> DResult<String> {
         })?;
 
     // `SqlTime` stores a Unix-millisecond timestamp as `i64` — maps to
-    // `SqlParam::Int`.  `SqlDecimal` and `SqlMoney` carry lossless string
-    // representations (decimal digits for Decimal, "ISO_CODE AMOUNT" for
-    // Money) — both map to `SqlParam::Text`.  `SqlNull` carries a SqlValue
+    // `SqlParam::Int`.  `SqlDecimal` carries a native `Decimal`, rendered to a
+    // lossless TEXT param via `decimal_to_string` (the inverse of
+    // `db_decode_decimal`'s `RD::from_str` read); `SqlMoney` carries an
+    // "ISO_CODE AMOUNT" string — both bind as `SqlParam::Text`.  `SqlNull`
+    // carries a SqlValue
     // type-witness — threaded through (NOT discarded) into
     // `SqlParam::Null(Box<SqlParam>)` so the bind site (`bind_sql_param`)
     // can pick the correctly-typed `Option::<T>::None`, which matters on
@@ -5321,7 +5323,9 @@ impl {sv} {{
             Self::SqlBool(v) => ipe_runtime::db::SqlParam::Bool(v),
             Self::SqlBytes(v) => ipe_runtime::db::SqlParam::Bytes(v),
             Self::SqlTime(v) => ipe_runtime::db::SqlParam::Int(v),
-            Self::SqlDecimal(v) => ipe_runtime::db::SqlParam::Text(v),
+            Self::SqlDecimal(v) => {{
+                ipe_runtime::db::SqlParam::Text(ipe_runtime::decimal::decimal_to_string(v))
+            }}
             Self::SqlMoney(v) => ipe_runtime::db::SqlParam::Text(v),
             Self::SqlNull(inner) => {{
                 ipe_runtime::db::SqlParam::Null(Box::new(inner.into_sql_param()))

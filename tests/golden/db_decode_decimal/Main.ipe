@@ -31,7 +31,7 @@ main =
                             "CREATE TABLE measurements (label TEXT, value TEXT)"
                         Db.exec txconn
                             "INSERT INTO measurements (label, value) VALUES (?, ?)"
-                            [ SqlString "pi", SqlDecimal "3.14159" ]
+                            [ SqlString "pi", SqlDecimal (Decimal.fromMinor 5 314159) ]
                         Db.exec txconn
                             "INSERT INTO measurements (label, value) VALUES (?, ?)"
                             [ SqlString "broken", SqlString "NOT_A_NUMBER" ]
