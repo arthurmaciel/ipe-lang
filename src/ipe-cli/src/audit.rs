@@ -142,6 +142,55 @@ impl std::fmt::Display for Rejection {
     }
 }
 
+/// The compiler-derived facts a consumer needs to consent to a package: how its
+/// entry program drives itself (the control model) and the effect axes it can
+/// exercise (the capability set). Both are read from the compiler's own
+/// derivation, never a second source — the control model projects the shape the
+/// compiler pinned for `main`, and the capability set is the whole-tree inferred
+/// union the capability-consistency check already computes.
+///
+/// A closed value: a package either exposes a runnable entry (whose control model
+/// is one of the closed [`crate::delivery::ControlModel`] variants) or is a
+/// library with no self-driving entry ([`ControlModelDisclosure::NotApplicable`]).
+/// An entry that exists but cannot be classified is never represented here — it is
+/// a fail-closed rejection before a [`Disclosure`] is ever built, so no permissive
+/// default can be disclosed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Disclosure {
+    /// The entry program's control model, or the library marker.
+    control_model: ControlModelDisclosure,
+    /// The capability axes the whole package can exercise — the same inferred
+    /// union the capability-consistency check reconciles against the manifest.
+    capabilities: BTreeSet<Capability>,
+}
+
+/// The control model disclosed for a package: the entry program's model, or the
+/// marker for a library that exposes modules but runs no entry of its own.
+///
+/// There is deliberately no "unknown" variant. A runnable entry that cannot be
+/// classified fails the audit closed (a program whose self-driving model we
+/// cannot state must not be certified as safe), so the only representable states
+/// are a known model or a genuine absence of one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlModelDisclosure {
+    /// The entry program's compiler-pinned control model.
+    Entry(crate::delivery::ControlModel),
+    /// A library: it exposes modules but defines no runnable `main`, so it has no
+    /// control model of its own. Honest absence, not a permissive default.
+    NotApplicable,
+}
+
+impl ControlModelDisclosure {
+    /// The word disclosed for this control model — a closed-set model's own word,
+    /// or `"library"` for a package with no runnable entry.
+    const fn word(self) -> &'static str {
+        match self {
+            Self::Entry(model) => model.word(),
+            Self::NotApplicable => "library",
+        }
+    }
+}
+
 /// The already-built package the four checks read from: its parsed manifest, its
 /// `package.ipe` path, and the directory it was emitted into. Preparing these once
 /// keeps each check a pure function of a ready package rather than re-deriving
@@ -255,11 +304,14 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
         // has no separate flush-left line form, so `--plain` is the human report
         // (the format parse already rejected `--plain --json` together).
         OutputFormat::Human | OutputFormat::Plain => match outcome {
-            Ok(tier2) => {
+            Ok((tier2, disclosure)) => {
                 print!(
                     "{}",
                     crate::style::frame(&crate::style::gutter(&passing_summary(
-                        &name, &version, &tier2
+                        &name,
+                        &version,
+                        &tier2,
+                        &disclosure
                     )))
                 );
                 Ok(())
@@ -291,21 +343,30 @@ fn audit_gate(
     index_root: Option<&Path>,
     advisory_db: Option<&Path>,
     entry_publisher: Option<&str>,
-) -> Result<crate::audit_native::Tier2Outcome, CliError> {
+) -> Result<(crate::audit_native::Tier2Outcome, Disclosure), CliError> {
     reserved_namespace_ownership(prepared, entry_publisher)?;
     provenance_panic_scan(prepared)?;
-    capability_consistency(prepared)?;
+
+    // The whole-tree inferred capability union — computed once and shared by the
+    // consistency check (reconcile against the manifest) and the disclosure
+    // (surface to the consumer), so the two can never disagree about the effects.
+    let inferred = crate::infer_package_capabilities(&prepared.manifest_path)?;
+    capability_consistency(prepared, &inferred)?;
+
     enforced_semver(prepared, index_root)?;
     supply_chain(prepared)?;
     advisory_check(prepared, advisory_db)?;
 
-    crate::audit_native::native_tier2(&crate::audit_native::NativeAudit {
+    let disclosure = derive_disclosure(prepared, inferred)?;
+
+    let tier2 = crate::audit_native::native_tier2(&crate::audit_native::NativeAudit {
         declared: &prepared.manifest.capabilities,
         has_rust_deps: !prepared.manifest.rust_dependencies.is_empty(),
         root: &prepared.manifest.root,
         emitted_dir: &prepared.emitted_dir,
         probe_fixture: tier2_probe_fixture()?,
-    })
+    })?;
+    Ok((tier2, disclosure))
 }
 
 /// Emit the compact JSON audit verdict to stdout, then map a rejection to the
@@ -316,7 +377,7 @@ fn audit_gate(
 fn emit_audit_json(
     name: &str,
     version: &str,
-    outcome: &Result<crate::audit_native::Tier2Outcome, CliError>,
+    outcome: &Result<(crate::audit_native::Tier2Outcome, Disclosure), CliError>,
 ) -> Result<(), CliError> {
     println!("{}", audit_verdict_json(name, version, outcome));
 
@@ -334,25 +395,35 @@ fn emit_audit_json(
 fn audit_verdict_json(
     name: &str,
     version: &str,
-    outcome: &Result<crate::audit_native::Tier2Outcome, CliError>,
+    outcome: &Result<(crate::audit_native::Tier2Outcome, Disclosure), CliError>,
 ) -> String {
     use crate::audit_native::Tier2Outcome;
     use crate::cli_args::json;
 
     match outcome {
-        Ok(Tier2Outcome::SkippedPureIpe) => json::object(&[
+        Ok((Tier2Outcome::SkippedPureIpe, disclosure)) => json::object(&[
             ("package", json::string(name)),
             ("version", json::string(version)),
             ("tier1", json::string("pass")),
             ("tier2", json::string("skipped")),
+            (
+                "controlModel",
+                json::string(disclosure.control_model.word()),
+            ),
+            ("capabilities", disclosure_capabilities_json(disclosure)),
             ("certified", "true".to_owned()),
         ]),
-        Ok(Tier2Outcome::Certified { platform }) => json::object(&[
+        Ok((Tier2Outcome::Certified { platform }, disclosure)) => json::object(&[
             ("package", json::string(name)),
             ("version", json::string(version)),
             ("tier1", json::string("pass")),
             ("tier2", json::string("pass")),
             ("platform", json::string(platform)),
+            (
+                "controlModel",
+                json::string(disclosure.control_model.word()),
+            ),
+            ("capabilities", disclosure_capabilities_json(disclosure)),
             ("certified", "true".to_owned()),
         ]),
         Err(err) => json::object(&[
@@ -364,15 +435,27 @@ fn audit_verdict_json(
     }
 }
 
+/// The capability set as a compact JSON array of the axes' canonical words, in
+/// the set's deterministic order.
+fn disclosure_capabilities_json(disclosure: &Disclosure) -> String {
+    let words: Vec<&'static str> = disclosure.capabilities.iter().map(|c| c.as_str()).collect();
+    crate::cli_args::json::string_array(&words)
+}
+
 /// Compose the passing summary, advertising Tier-2 ONLY for what genuinely ran
 /// (the honest surface, ADR 0046). A pure Ipê package's summary is Tier-1 only,
 /// with the standing note that Tier-2 does not apply. A native package certified
 /// on a wired platform (`linux-x64`, `macos-arm64`, or `freebsd-x64`) names that
 /// platform and states that a Tier-2 certification is per-host — vouching only
 /// for the platform whose jail actually ran, never claimed cross-host.
-fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2Outcome) -> String {
+fn passing_summary(
+    name: &str,
+    version: &str,
+    tier2: &crate::audit_native::Tier2Outcome,
+    disclosure: &Disclosure,
+) -> String {
     use crate::audit_native::Tier2Outcome;
-    match tier2 {
+    let tier_line = match tier2 {
         Tier2Outcome::SkippedPureIpe => format!(
             "package audit: {name} {version} — all Tier-1 checks passed. (Pure Ipê package: \
              native Tier-2 does not apply.)"
@@ -384,7 +467,8 @@ fn passing_summary(name: &str, version: &str, tier2: &crate::audit_native::Tier2
              vouches only for the platform whose jail actually ran; running the audit on another \
              wired platform certifies that platform in turn."
         ),
-    }
+    };
+    format!("{tier_line}\n{}", disclosure_summary(name, disclosure))
 }
 
 /// The six-field result of [`parse_audit_args`]: `(project_path, index_root,
@@ -907,17 +991,21 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError
 /// axis (it enters the set when a module crosses into `Rust.` code) and, when
 /// present and consistent, is surfaced loudly per §1b.
 ///
+/// The `inferred` set is computed once by the caller (the same whole-tree union
+/// the disclosure surfaces) and reconciled here against the manifest, so the two
+/// surfaces can never disagree about the package's effects.
+///
 /// # Errors
-/// [`CliError::PackageAudit`] when the declared and inferred sets differ;
-/// [`CliError::Pipeline`] / [`CliError::Io`] when the package cannot be lowered
-/// at all.
-fn capability_consistency(prepared: &Prepared) -> Result<(), CliError> {
+/// [`CliError::PackageAudit`] when the declared and inferred sets differ.
+fn capability_consistency(
+    prepared: &Prepared,
+    inferred: &BTreeSet<Capability>,
+) -> Result<(), CliError> {
     use std::fmt::Write as _;
 
     let declared: BTreeSet<Capability> = prepared.manifest.capabilities.clone();
-    let inferred = crate::infer_package_capabilities(&prepared.manifest_path)?;
 
-    if declared == inferred {
+    if declared == *inferred {
         if declared.contains(&Capability::NativeFfi) {
             // Surfaced loudly per §1b: a package the user consents to as crossing
             // into opaque native code, whose true effect set cannot be inferred
@@ -939,7 +1027,7 @@ fn capability_consistency(prepared: &Prepared) -> Result<(), CliError> {
          — the declared set must be exactly the truth the user consents to.",
     );
     let missing: Vec<&'static str> = inferred.difference(&declared).map(|c| c.as_str()).collect();
-    let extra: Vec<&'static str> = declared.difference(&inferred).map(|c| c.as_str()).collect();
+    let extra: Vec<&'static str> = declared.difference(inferred).map(|c| c.as_str()).collect();
     if !missing.is_empty() {
         let _ = write!(
             message,
@@ -955,6 +1043,117 @@ fn capability_consistency(prepared: &Prepared) -> Result<(), CliError> {
         );
     }
     Err(reject(Check::Capability, message))
+}
+
+// ===========================================================================
+// Compiler-derived disclosure (control model + capability set)
+// ===========================================================================
+
+/// Derive the consumer-facing disclosure — the entry program's control model and
+/// the package's capability set — reusing the compiler's own derivations.
+///
+/// The capability set is the whole-tree inferred union the caller already
+/// computed (the SSOT the capability-consistency check reconciles), so the
+/// disclosed effects and the reconciled effects are the same value.
+///
+/// The control model is a projection of the shape the compiler pins for `main`
+/// ([`ipe_canon::shape_source::classify_main_shape`] → [`crate::delivery::Shape`]
+/// → [`crate::delivery::ControlModel`]), never a second inspection of `main`.
+/// It is derived **fail-closed**:
+///
+/// - A library that exposes modules but has no runnable entry file discloses
+///   [`ControlModelDisclosure::NotApplicable`] — an honest absence, not a
+///   permissive default.
+/// - A runnable entry that cannot be read or parsed at disclosure time is a hard
+///   rejection: a program whose self-driving model we cannot state must never be
+///   certified as safe with a permissive-looking default. (The package already
+///   built in [`prepare`], so this is a defence-in-depth second boundary, not the
+///   only one.)
+///
+/// # Errors
+/// [`CliError::PackageAudit`] with [`Check::Capability`] when a runnable entry
+/// exists but its control model cannot be derived.
+fn derive_disclosure(
+    prepared: &Prepared,
+    inferred: BTreeSet<Capability>,
+) -> Result<Disclosure, CliError> {
+    let entry = crate::driver::analysis_root_of(&prepared.manifest)?;
+
+    // A library ships no runnable `Main.ipe`; `analysis_root_of` then points at
+    // the first exposed module (or a non-existent default). Absent an entry file,
+    // the package drives nothing of its own — an honest absence, not a fail-open
+    // default.
+    if !entry.is_file() {
+        return Ok(Disclosure {
+            control_model: ControlModelDisclosure::NotApplicable,
+            capabilities: inferred,
+        });
+    }
+
+    // The entry file exists. Read + parse it. A read or parse failure fails the
+    // audit closed rather than disclosing a permissive default for a source we
+    // cannot classify.
+    let source =
+        crate::io_bounded::read_to_string_capped(&entry, crate::io_bounded::SOURCE_READ_CAP)
+            .map_err(|_| {
+                reject(
+                    Check::Capability,
+                    format!(
+                        "the package's entry source (`{}`) could not be read, so its control model \
+                     cannot be derived. A program whose self-driving model the audit cannot state \
+                     is refused rather than certified with an assumed model.",
+                        entry.display()
+                    ),
+                )
+            })?;
+    let mut interner = ipe_intern::Interner::new();
+    let module = ipe_parse::parse_module(&source, &mut interner).map_err(|_| {
+        reject(
+            Check::Capability,
+            format!(
+                "the package's entry source (`{}`) does not parse, so its control model cannot be \
+                 derived. A program whose self-driving model the audit cannot state is refused \
+                 rather than certified with an assumed model.",
+                entry.display()
+            ),
+        )
+    })?;
+
+    // A module that defines no `main` is not a runnable program — it is a library
+    // module the package exposes. It drives nothing of its own, so the control
+    // model is a genuine absence, distinct from a plain-`Task` Direct `main`.
+    let defines_main = interner
+        .lookup("main")
+        .is_some_and(|main_sym| module.values.iter().any(|v| v.value.name.value == main_sym));
+    if !defines_main {
+        return Ok(Disclosure {
+            control_model: ControlModelDisclosure::NotApplicable,
+            capabilities: inferred,
+        });
+    }
+
+    let shape = crate::delivery::Shape::from_main(ipe_canon::shape_source::classify_main_shape(
+        &module, &interner,
+    ));
+    Ok(Disclosure {
+        control_model: ControlModelDisclosure::Entry(shape.control_model()),
+        capabilities: inferred,
+    })
+}
+
+/// Render the disclosure as a human-readable frame — the control model and the
+/// (possibly empty) capability set the package can exercise.
+fn disclosure_summary(name: &str, disclosure: &Disclosure) -> String {
+    let caps: Vec<&'static str> = disclosure.capabilities.iter().map(|c| c.as_str()).collect();
+    let caps_line = if caps.is_empty() {
+        "none".to_owned()
+    } else {
+        caps.join(", ")
+    };
+    format!(
+        "package audit: `{name}` control model: {}; capabilities: {caps_line}.",
+        disclosure.control_model.word()
+    )
 }
 
 // ===========================================================================
@@ -1576,11 +1775,29 @@ mod tests {
     fn audit_verdict_json_is_compact_pass_and_fail() {
         use crate::audit_native::Tier2Outcome;
 
-        let pass = audit_verdict_json("http", "1.2.0", &Ok(Tier2Outcome::SkippedPureIpe));
-        assert_eq!(
-            pass,
-            "{\"package\":\"http\",\"version\":\"1.2.0\",\"tier1\":\"pass\",\"tier2\":\"skipped\",\"certified\":true}"
+        let disclosure = Disclosure {
+            control_model: ControlModelDisclosure::Entry(crate::delivery::ControlModel::Tea),
+            capabilities: BTreeSet::from([Capability::Clock, Capability::Network]),
+        };
+        let pass = audit_verdict_json(
+            "http",
+            "1.2.0",
+            &Ok((Tier2Outcome::SkippedPureIpe, disclosure)),
         );
+        // The verdict discloses the compiler-derived control model and the
+        // capability set, byte-uniform compact.
+        assert!(
+            pass.contains("\"controlModel\":\"tea\""),
+            "control model: {pass}"
+        );
+        assert!(
+            pass.contains("\"capabilities\":["),
+            "capabilities disclosed: {pass}"
+        );
+        assert!(pass.contains("\"clock\""), "clock axis present: {pass}");
+        assert!(pass.contains("\"network\""), "network axis present: {pass}");
+        assert!(pass.contains("\"certified\":true"), "pass verdict: {pass}");
+        assert!(!pass.contains(", "), "compact pass: {pass}");
 
         let fail = audit_verdict_json(
             "http",
@@ -1592,8 +1809,53 @@ mod tests {
         );
         assert!(fail.contains("\"certified\":false"), "fail verdict: {fail}");
         assert!(fail.contains("\"reason\":"), "carries a reason: {fail}");
+        // A rejected audit discloses NO control model — a fail-open default is
+        // never surfaced.
+        assert!(
+            !fail.contains("\"controlModel\""),
+            "a reject discloses no control model: {fail}"
+        );
         // Byte-uniform compact: no space after a comma.
         assert!(!fail.contains(", "), "compact: {fail}");
+    }
+
+    #[test]
+    fn control_model_disclosure_word_is_the_models_word_or_library() {
+        assert_eq!(
+            ControlModelDisclosure::Entry(crate::delivery::ControlModel::Tea).word(),
+            "tea"
+        );
+        assert_eq!(
+            ControlModelDisclosure::Entry(crate::delivery::ControlModel::Server).word(),
+            "server"
+        );
+        assert_eq!(
+            ControlModelDisclosure::Entry(crate::delivery::ControlModel::Direct).word(),
+            "direct"
+        );
+        assert_eq!(ControlModelDisclosure::NotApplicable.word(), "library");
+    }
+
+    #[test]
+    fn disclosure_summary_lists_capabilities_or_none() {
+        let with_caps = Disclosure {
+            control_model: ControlModelDisclosure::Entry(crate::delivery::ControlModel::Direct),
+            capabilities: BTreeSet::from([Capability::Clock]),
+        };
+        let s = disclosure_summary("pkg", &with_caps);
+        assert!(s.contains("control model: direct"), "names the model: {s}");
+        assert!(s.contains("capabilities: clock"), "lists the axis: {s}");
+
+        let empty = Disclosure {
+            control_model: ControlModelDisclosure::NotApplicable,
+            capabilities: BTreeSet::new(),
+        };
+        let s = disclosure_summary("lib", &empty);
+        assert!(s.contains("control model: library"), "library marker: {s}");
+        assert!(
+            s.contains("capabilities: none"),
+            "empty set reads none: {s}"
+        );
     }
 
     /// The Tier-2 probe fixture the gate runs is materialized from the embedded
@@ -1925,6 +2187,113 @@ mod tests {
         assert!(
             result.unwrap().is_some(),
             "a panic-bearing file must return Ok(Some(_))"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Disclosure derivation (control model + capabilities) ────────────────
+
+    /// Write a project with a single `src/Main.ipe` of `main_src` and return a
+    /// `Prepared` pointing at it. Only the manifest's `src_root` and `programs`
+    /// matter to [`derive_disclosure`].
+    fn prepared_with_main(tag: &str, main_src: &str) -> (PathBuf, Prepared) {
+        let dir = make_test_dir(tag);
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).expect("create src/");
+        std::fs::write(src.join("Main.ipe"), main_src).expect("write Main.ipe");
+        let prepared = make_prepared(&dir);
+        (dir, prepared)
+    }
+
+    #[test]
+    fn disclosure_derives_tea_for_a_web_tea_entry() {
+        let (dir, prepared) = prepared_with_main(
+            "disclosure-tea",
+            "module Main exposing (main)\n\
+             import Ipe.Tea.Web as Web\n\n\
+             main = Web.tea config\n",
+        );
+        let d = derive_disclosure(&prepared, BTreeSet::new()).expect("derives");
+        assert_eq!(
+            d.control_model,
+            ControlModelDisclosure::Entry(crate::delivery::ControlModel::Tea),
+            "a `Web.tea` entry discloses the TEA control model"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disclosure_derives_direct_for_a_plain_task_main() {
+        let (dir, prepared) = prepared_with_main(
+            "disclosure-direct",
+            "module Main exposing (main)\n\n\
+             main = doNothing\n",
+        );
+        let d = derive_disclosure(&prepared, BTreeSet::new()).expect("derives");
+        assert_eq!(
+            d.control_model,
+            ControlModelDisclosure::Entry(crate::delivery::ControlModel::Direct),
+            "a plain-`Task` `main` discloses the Direct control model"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disclosure_capabilities_are_the_inferred_set_passed_in() {
+        // The disclosure surfaces exactly the SSOT inferred set it is handed —
+        // never a re-derivation that could disagree with the consistency check.
+        let (dir, prepared) = prepared_with_main(
+            "disclosure-caps",
+            "module Main exposing (main)\n\nmain = doNothing\n",
+        );
+        let inferred = BTreeSet::from([Capability::Clock, Capability::Network]);
+        let d = derive_disclosure(&prepared, inferred.clone()).expect("derives");
+        assert_eq!(d.capabilities, inferred, "discloses the passed-in SSOT set");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disclosure_is_not_applicable_for_a_library_with_no_runnable_entry() {
+        // A library exposes modules but ships no runnable `Main.ipe`; it drives
+        // nothing, so the disclosure is an honest absence, not a default model.
+        let dir = make_test_dir("disclosure-library");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).expect("create src/");
+        std::fs::write(
+            src.join("MyLib.ipe"),
+            "module MyLib exposing (helper)\n\nhelper = 1\n",
+        )
+        .expect("write MyLib.ipe");
+        let mut prepared = make_prepared(&dir);
+        prepared.manifest.exposed_modules = vec!["MyLib".to_owned()];
+        let d = derive_disclosure(&prepared, BTreeSet::new()).expect("derives");
+        assert_eq!(
+            d.control_model,
+            ControlModelDisclosure::NotApplicable,
+            "a library with no runnable entry discloses no control model"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disclosure_fails_closed_when_a_runnable_entry_does_not_parse() {
+        // A `Main.ipe` exists (a runnable entry) but does not parse: the audit
+        // must REJECT rather than disclose a permissive-looking default. This is
+        // the fail-closed branch — a program whose control model we cannot state
+        // is refused, never certified as `direct`/library.
+        let (dir, prepared) = prepared_with_main(
+            "disclosure-unparseable",
+            "module Main exposing (main)\n\nmain = = = broken (((\n",
+        );
+        let err = derive_disclosure(&prepared, BTreeSet::new())
+            .expect_err("an unparseable runnable entry must fail closed");
+        assert!(
+            matches!(err, CliError::PackageAudit(ref r) if r.check == Check::Capability),
+            "fail-closed on an underivable control model is a Capability rejection: {err:?}"
+        );
+        assert!(
+            !err.to_string().contains("direct") && !err.to_string().contains("library"),
+            "the fail-closed reject discloses no permissive default model: {err}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
