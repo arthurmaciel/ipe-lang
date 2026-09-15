@@ -9,20 +9,25 @@ name: Build & test
 #     before a merge: fmt, clippy, quick-check, test (nextest unit/integration),
 #     the docs-drift gates, the first-party check-floor + shapes build gate,
 #     seal-smoke (build+run ONE emitted example, a fast SEAL proxy), the runtime
-#     feature-combo / full-feature builds (`emit` filter), wasm-floor (`wasm`
-#     filter), and the ASAN/TSAN sanitizers (`emit` filter — PRINCIPLE 3: a
-#     codegen/runtime change is exactly what introduces memory UB or a data race,
-#     so those gate PRE-merge). A docs/CI/yaml-only PR (no matching path) skips
-#     them all; a developer runs the same set locally to match CI.
+#     feature-combo / full-feature builds (`emit` filter), wasm-floor
+#     (`wasm` filter), and the ASAN/TSAN sanitizers (`emit` filter — PRINCIPLE 3:
+#     a codegen/runtime change is exactly what introduces memory UB or a data
+#     race, so those gate PRE-merge). It ALSO runs the full SEAL at PR time —
+#     the 14-shard e2e, the 8-way seal-slice, seal-modset (vendored), and the
+#     arm64 Tier-2 refuse-to-certify proof — each keyed on the `code` superset
+#     (not `emit`): a SEAL break is not emit-only, since a canon/types/lower
+#     acceptance change can make a program ipe-accept-then-cargo-fail, so gating
+#     on `code` closes that blind spot while each job's internal early-exit and
+#     the warm `test-prep` archive keep build depth cheap on a non-emit PR. A
+#     docs/CI/yaml-only PR (no matching path) skips them all; a developer runs
+#     the same set locally to match CI.
 #   • NIGHTLY SCHEDULE — the checks that a typical code change cannot break, or
 #     that depend on a flaky external environment: registry-admission (publish/
-#     registry INFRASTRUCTURE), browser-e2e (headless Playwright/Chromium), and
-#     the Linux Tier-2 jails (bwrap+seccomp). These never gate a PR; they produce
-#     main-required contexts the FF promotion waits on and catch regressions on
-#     the nightly dep/upstream sweep. The full 14-shard e2e, the 8-way seal-slice,
-#     and seal-modset (vendored) likewise produce those contexts; on a trusted-
-#     author PR they self-skip, an untrusted-author PR runs the full SEAL at PR
-#     time.
+#     registry INFRASTRUCTURE), browser-e2e (headless Playwright/Chromium — the
+#     only `Ipe.Browser` gate), and the Linux x64 Tier-2 jail (real bwrap+seccomp
+#     — env-flaky). These never gate a PR; they produce main-required contexts
+#     the FF promotion waits on and catch regressions on the nightly dep/upstream
+#     sweep.
 #
 # Job-level `if:` keys on the `changes` paths-filter output (all authors) for the
 # correctness/soundness gates and on github.event_name for the nightly infra/
@@ -51,11 +56,10 @@ permissions:
 
 concurrency:
   # On pull requests, cancel the previous run for the same ref so devs get fast
-  # feedback without wasting runner minutes. On on tags, never cancel: the heavy 
-  # push-only jobs (the full e2e/seal-slice
-  # matrices, the Tier-2 jails) produce the main-required contexts the FF
-  # promotion waits on — killing an in-progress push run would leave those
-  # contexts un-green and stall promotion.
+  # feedback without wasting runner minutes. On push/tags, never cancel: the
+  # heavy jobs (the full e2e/seal-slice matrices, the Tier-2 jails) produce the
+  # main-required contexts the FF promotion waits on — killing an in-progress
+  # push run would leave those contexts un-green and stall promotion.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -795,17 +799,19 @@ jobs:
   # regression now fails CI as it should.
   e2e:
     runs-on: ubuntu-latest
-    # off the PR gate (seal-smoke is the PR proxy); runs on push, nightly, and
-    # push/nightly gate. Fail-fast on a non-compiling tree. `test-prep` compiles
-    # the whole test-binary set once into `nextest.tar.zst`; each shard downloads
-    # and RUNS from that archive under IPE_E2E=1 (which changes only runtime
-    # behaviour, not the archived binaries), so no shard recompiles the workspace.
+    # THE SEAL (ipe-accepts ⇒ cargo-builds), gating every code PR. `test-prep`
+    # compiles the whole test-binary set once into `nextest.tar.zst`; each shard
+    # downloads and RUNS from that archive under IPE_E2E=1 (which changes only
+    # runtime behaviour, not the archived binaries), so no shard recompiles the
+    # workspace.
     needs: [changes, quick-check, test-prep]
-    # Off the PR gate for a trusted author (seal-smoke is the PR proxy); an
-    # untrusted-author PR runs the full SEAL at PR time (full gate).
-    if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+    # On the PR gate for ANY code change (all authors). A SEAL break is not
+    # emit-only: a canon/types/lower acceptance change can make a program
+    # ipe-accept that the backend then cannot cargo-build, so keying on the
+    # `code` superset (not `emit`) closes that blind spot. Build depth stays
+    # cheap on non-emit PRs via the internal `emit` early-exit below (the heavy
+    # cold-build shards self-skip; the light shards cover the non-emit surface).
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     # Wall-clock cap on the shard. Each per-test `cargo build` is already bounded
     # (nextest ci `slow-timeout` + `e2e_support`'s per-build 240s ceiling), but
     # nothing capped the SHARD as a whole, so it inherited GitHub's 360-min
@@ -900,12 +906,14 @@ jobs:
         # partitioned exactly once, so the SEAL union is identical to the old
         # `count:k/8` scheme — no coverage dropped, just re-timed.
         #
-        # Change-based selection (PR path only): when the `emit` paths-filter is
-        # false the diff cannot reach the backend/runtime/stdlib paths the heavy
-        # goldens exercise, so the 5 heavy shards exit 0 immediately.  The light
-        # shards (6-14) always run on a PR — they cover the compiler's non-emit
-        # surface and are cheap.  On push/nightly the full 14-shard suite runs
-        # regardless (the `emit` variable is unused outside a PR event).
+        # Change-based selection (PR path only): the matrix runs on every code
+        # PR, but when the `emit` paths-filter is false the diff cannot reach the
+        # backend/runtime/stdlib paths the heavy goldens exercise, so the 5 heavy
+        # cold-build shards exit 0 immediately.  The light shards (6-14) always
+        # run on a code PR — they cover the compiler's non-emit surface (a
+        # canon/types acceptance change reaches the SEAL here) and are cheap.  On
+        # push/nightly the full 14-shard suite runs regardless (the `emit`
+        # variable is unused outside a PR event).
         run: |
           event="${{ github.event_name }}"
           emit="${{ needs.changes.outputs.emit }}"
@@ -929,7 +937,8 @@ jobs:
   # (`e2e-all`) branch protection can require so a SEAL regression blocks a
   # landing. The `always()` guard makes a skipped/failed/cancelled shard a
   # FAILURE here, never a false green; a legitimate skip (the `e2e` matrix itself
-  # self-skips on pull_request) passes vacuously so the PR path is unaffected.
+  # skips on a no-code PR — docs/CI/yaml only) passes vacuously so that path is
+  # unaffected.
   # A bare, stable `name` so the required-check context is exactly `e2e-all`
   # (branch protection matches the check name literally; a parenthetical would
   # make the required-context string brittle).
@@ -955,8 +964,8 @@ jobs:
               echo "e2e-all: every shard passed — THE SEAL holds."
               ;;
             skipped)
-              # The e2e matrix self-skips on pull_request (seal-smoke is the PR
-              # proxy); nothing to aggregate, so this passes vacuously.
+              # The e2e matrix skips on a no-code PR (docs/CI/yaml only);
+              # nothing to aggregate, so this passes vacuously.
               echo "e2e-all: e2e shards skipped for this event — vacuously green."
               ;;
             *)
@@ -971,20 +980,22 @@ jobs:
   # suite, split across eight parallel sub-shards so the slice's wall-clock stays
   # low WITHOUT dropping coverage. Enough surface to catch an emit/const-fold/
   # golden regression (the classes this guard exists for); the full 14-shard `e2e`
-  # matrix + tier2 jails carry the exhaustive proof. Off the cheap PR gate — runs
-  # on nightly, producing the main-required `seal-slice` context
-  # the FF promotion waits on. The `seal-slice` aggregation job below is the
-  # single stable status: green only when every sub-shard passed.
+  # matrix + tier2 jails carry the exhaustive proof. Gates every code PR (all
+  # authors) and runs on nightly too, producing the main-required `seal-slice`
+  # context the FF promotion waits on. The `seal-slice` aggregation job below is
+  # the single stable status: green only when every sub-shard passed.
   seal-slice-shard:
     name: seal-slice-shard (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     # Reuse `test-prep`'s single-compile archive (see the e2e job) rather than
     # rebuilding the workspace per sub-shard.
     needs: [changes, quick-check, test-prep]
-    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
-    if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+    # On the PR gate for ANY code change (all authors). A SEAL break is not
+    # emit-only — a canon/types/lower acceptance change can flip a program to
+    # ipe-accept-then-cargo-fail — so keying on the `code` superset (not `emit`)
+    # closes that blind spot. This slice runs golden-e2e partitions from the warm
+    # `test-prep` archive (no from-scratch compile), so a code PR stays cheap.
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     # Wall-clock cap on the sub-shard (same rationale as the `e2e` job). This
     # slice is a golden-e2e partition against the warm shared target — lighter
     # than a heavy `e2e` shard — so 30 min (≈2× the warm-cache max) fails a hung
@@ -1063,7 +1074,7 @@ jobs:
   # one sub-shard-named job per partition, so no single sub-shard name is a durable target;
   # this job is GREEN only when every sub-shard passed. The `always()` guard makes
   # a skipped/failed/cancelled sub-shard a FAILURE here, while a legitimate
-  # PR-event skip (the sub-shards self-skip off the cheap PR gate) passes vacuously.
+  # skip (a no-code PR — docs/CI/yaml only) passes vacuously.
   seal-slice:
     name: seal-slice
     runs-on: ubuntu-latest
@@ -1101,16 +1112,18 @@ jobs:
   # build — a SEAL breach invisible to the dep-model gate. This job makes that
   # class of break visible and blocking.
   #
-  # Runs on push/nightly (like `e2e`); off the PR gate since each
-  # shape does a full `cargo build`. `seal-smoke` is the fast PR proxy.
+  # Gates every code PR (all authors) and runs on push/nightly. The break class
+  # is a vendored-manifest feature-flag drift, but a canon/types/lower acceptance
+  # change can equally make a program ipe-accept-then-cargo-fail under the
+  # vendored model, so keying on the `code` superset (not `emit`) closes that
+  # SEAL blind spot. It is a single `seal_modset` nextest run (not the 14-shard
+  # matrix), so a code PR stays cheap.
   seal-modset-vendored:
     name: seal-modset (vendored emit model)
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
-    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
-    if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+    # On the PR gate for ANY code change (all authors).
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     env:
       RUSTFLAGS: -C link-arg=-fuse-ld=mold
       IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
@@ -1241,10 +1254,13 @@ jobs:
   linux-arm64-tier2:
     name: linux-arm64-tier2 (fifth platform — fail-closed refuse-to-certify proof)
     runs-on: ubuntu-24.04-arm
-    # Off the PR gate for a trusted author; an untrusted-author PR runs it (full gate).
-    if: >-
-      github.event_name != 'pull_request'
-      || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+    needs: changes
+    # On the PR gate for ANY code change (all authors). The sandbox/reconciler
+    # refuse-to-certify path this proves spans canon + cli (not just emit), so a
+    # codegen change to it must redden a PR here, not only post-merge — keyed on
+    # the `code` superset. Pure aarch64 unit + audit_native tests (no jail),
+    # so it is stable code-correctness, not flaky-env.
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
