@@ -527,6 +527,11 @@ pub use css::*;
 // Referenced by qualified path (`ipe_runtime::color::*`) from generated code.
 pub mod color;
 
+// The shared CSS length-unit renderer — the single spelling of the `Px`/`Vh`/
+// `Vw` units common to `Ipe.Ui.Length` and `Ipe.Css.Length`, so no surface
+// re-derives how a shared length is written for CSS.
+pub mod length;
+
 // In-process telemetry sink (log/error rings + request counters) — always
 // compiled so `Ipe.Log.*` can feed it; the Ipe.Web `console` module serves it.
 pub mod telemetry;
