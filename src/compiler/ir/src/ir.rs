@@ -1221,7 +1221,7 @@ pub enum IrType {
     /// | plain             | Rust type                                         |
     /// |-------------------|---------------------------------------------------|
     /// | `Length`          | `ipe_runtime::ui::element::Length`                |
-    /// | `Color`           | `ipe_runtime::ui::element::Color`                 |
+    /// | `Color`           | `ipe_runtime::color::Color`                       |
     /// | `HAlign`          | `ipe_runtime::ui::element::HAlign`                |
     /// | `VAlign`          | `ipe_runtime::ui::element::VAlign`                |
     /// | `Location`        | `ipe_runtime::ui::element::Location`              |
@@ -1744,7 +1744,7 @@ pub enum UiCtor {
 pub enum UiPlain {
     /// `Length` — `ipe_runtime::ui::element::Length`.
     Length,
-    /// `Color` — `ipe_runtime::ui::element::Color`.
+    /// `Color` — `ipe_runtime::color::Color`.
     Color,
     /// `HAlign` — `ipe_runtime::ui::element::HAlign`.
     HAlign,

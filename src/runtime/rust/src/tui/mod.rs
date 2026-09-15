@@ -12,7 +12,8 @@ pub mod layout; // structured Element → ANSI cells
 pub use app::{tui_app, tui_app_ui};
 pub use cell::*;
 
-use crate::ui::element::{Attribute, Color, Element, HAlign};
+use crate::color::Color;
+use crate::ui::element::{Attribute, Element, HAlign};
 
 /// The first-class terminal colour palette (`Terminal.Color`): the sixteen
 /// named ANSI colours plus `default` (the terminal's own colour), plus a
@@ -148,7 +149,7 @@ fn translate_attrs<M>(attrs: Vec<TuiAttr<M>>) -> Vec<Attribute<M>> {
 fn term_fg_attr<M>(c: TermColor) -> Attribute<M> {
     match c {
         TermColor::Rgb(r, g, b) => {
-            Attribute::AttrFontColor(Color::Rgba(i64::from(r), i64::from(g), i64::from(b), 1.0))
+            Attribute::AttrFontColor(Color::rgb(i64::from(r), i64::from(g), i64::from(b)))
         }
         named => Attribute::AttrFontDecoration(format!("fg:{}", named.fg_code().unwrap_or(39))),
     }
@@ -158,7 +159,7 @@ fn term_fg_attr<M>(c: TermColor) -> Attribute<M> {
 fn term_bg_attr<M>(c: TermColor) -> Attribute<M> {
     match c {
         TermColor::Rgb(r, g, b) => {
-            Attribute::AttrBgColor(Color::Rgba(i64::from(r), i64::from(g), i64::from(b), 1.0))
+            Attribute::AttrBgColor(Color::rgb(i64::from(r), i64::from(g), i64::from(b)))
         }
         named => Attribute::AttrFontDecoration(format!("bg:{}", named.bg_code().unwrap_or(49))),
     }
@@ -622,10 +623,10 @@ mod tests {
 
     #[test]
     fn truecolor_translates_to_font_color_attribute() {
-        assert!(matches!(
+        assert_eq!(
             term_fg_attr::<()>(TermColor::Rgb(10, 20, 30)),
-            Attribute::AttrFontColor(Color::Rgba(10, 20, 30, _))
-        ));
+            Attribute::AttrFontColor(Color::rgb(10, 20, 30))
+        );
     }
 
     #[test]

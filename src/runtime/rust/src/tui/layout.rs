@@ -17,7 +17,8 @@
 //! slider value, Length(Fill/Min/Max). No panic vectors.
 
 use super::super::html::Html;
-use super::super::ui::{Attribute, Color, Description, Element, HAlign, Length, Location, VAlign};
+use super::super::ui::{Attribute, Description, Element, HAlign, Length, Location, VAlign};
+use crate::color::Color;
 use super::cell::sanitize_rune;
 use super::focus::{Focusable, InputRegistry};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -605,8 +606,8 @@ struct Ctx<'a, M> {
 }
 
 fn color_of(c: &Color) -> (u8, u8, u8) {
-    let Color::Rgba(r, g, b, _) = c;
-    ((*r & 0xff) as u8, (*g & 0xff) as u8, (*b & 0xff) as u8)
+    let (r, g, b, _) = c.to_rgba_bytes();
+    ((r & 0xff) as u8, (g & 0xff) as u8, (b & 0xff) as u8)
 }
 
 /// A BACKGROUND colour, honouring alpha: a fully-transparent colour
@@ -614,8 +615,8 @@ fn color_of(c: &Color) -> (u8, u8, u8) {
 /// an opaque black box. The terminal cell model is 1-bit alpha — any non-zero
 /// alpha is treated as fully opaque (no blending). (audit #10)
 fn bg_of(c: &Color) -> Option<(u8, u8, u8)> {
-    let Color::Rgba(_, _, _, a) = c;
-    if *a <= 0.0 { None } else { Some(color_of(c)) }
+    let (_, _, _, a) = c.to_rgba_bytes();
+    if a <= 0.0 { None } else { Some(color_of(c)) }
 }
 
 /// Clamp-add `delta` to a channel. Saturating — no overflow.
@@ -2721,7 +2722,7 @@ mod tests {
     }
 
     fn rgb(r: i64, g: i64, b: i64) -> Color {
-        Color::Rgba(r, g, b, 1.0)
+        Color::rgb(r, g, b)
     }
     fn node<M>(attrs: Vec<Attribute<M>>, kids: Vec<Element<M>>) -> Element<M> {
         Element::Node(Description::NoDescription, attrs, kids)

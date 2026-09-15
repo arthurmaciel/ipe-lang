@@ -820,11 +820,12 @@ mod tests {
     #[test]
     fn end_to_end_ui_hover_color_renders_scoped_style_and_leaves_no_marker() {
         use crate::html::{assign_ipe_ids, render_html};
-        use crate::ui::element::{Color, Element};
+        use crate::color::Color;
+        use crate::ui::element::Element;
         use crate::ui::helpers::ui_bg_hover_color_;
         use crate::ui::render::ui_layout;
 
-        let attrs = vec![ui_bg_hover_color_::<()>(Color::Rgba(0, 92, 215, 1.0))];
+        let attrs = vec![ui_bg_hover_color_::<()>(Color::rgba(0, 92, 215, 1.0))];
         let elem: Element<()> = Element::Text("hover me".to_owned());
         let mut html = ui_layout(attrs, elem);
         assign_ipe_ids(&mut html, "r");
@@ -944,13 +945,14 @@ mod tests {
     #[test]
     fn end_to_end_ui_media_query_renders_scoped_style_and_leaves_no_marker() {
         use crate::html::{assign_ipe_ids, render_html};
-        use crate::ui::element::{Attribute, Color, Element};
+        use crate::color::Color;
+        use crate::ui::element::{Attribute, Element};
         use crate::ui::helpers::ui_media_query_;
         use crate::ui::render::ui_layout;
 
         let elem = ui_media_query_::<()>(
             "(min-width: 768px)".to_owned(),
-            vec![Attribute::AttrBgColor(Color::Rgba(18, 18, 24, 1.0))],
+            vec![Attribute::AttrBgColor(Color::rgba(18, 18, 24, 1.0))],
             Element::Text("responsive".to_owned()),
         );
         let mut html = ui_layout(vec![], elem);
@@ -1054,13 +1056,14 @@ mod tests {
     #[test]
     fn end_to_end_ui_media_query_breakout_is_neutralised() {
         use crate::html::{assign_ipe_ids, render_html};
-        use crate::ui::element::{Attribute, Color, Element};
+        use crate::color::Color;
+        use crate::ui::element::{Attribute, Element};
         use crate::ui::helpers::ui_media_query_;
         use crate::ui::render::ui_layout;
 
         let elem = ui_media_query_::<()>(
             "(min-width: 1px) </style><script>alert(1)</script> { } @import url(evil)".to_owned(),
-            vec![Attribute::AttrBgColor(Color::Rgba(1, 2, 3, 1.0))],
+            vec![Attribute::AttrBgColor(Color::rgba(1, 2, 3, 1.0))],
             Element::Text("still here".to_owned()),
         );
         let mut html = ui_layout(vec![], elem);

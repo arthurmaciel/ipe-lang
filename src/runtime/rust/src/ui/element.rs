@@ -25,28 +25,6 @@ pub enum Color {
     Rgba(i64, i64, i64, f64),
 }
 
-impl Color {
-    /// Render this colour to its CSS value string. The single renderer for the
-    /// `Ipe.Ui.Color` domain: the inline-style path, the stylesheet path, the
-    /// `Ui.colorCss` kernel, and the gradient/shadow/pseudo builders all route
-    /// here, so a colour formats identically wherever it lands.
-    ///
-    /// The shared CSS spelling mirrors `Ipe.Css.colorToString`; byte-for-byte
-    /// equivalence for the shared `Rgba` shape is enforced by the
-    /// `css_length_color_ssot` equivalence test.
-    ///
-    /// The bytes are produced by the one colour SSOT
-    /// ([`crate::color::Color::to_css_rgba`]): `Ipe.Ui`'s `Color` is a
-    /// surface-level `Rgba` carrier that funnels into `ipe_runtime::color` for
-    /// rendering, so no surface re-derives how a colour is spelled.
-    #[must_use]
-    pub(crate) fn css(&self) -> String {
-        match self {
-            Self::Rgba(r, g, b, a) => crate::color::Color::rgba(*r, *g, *b, *a).to_css_rgba(),
-        }
-    }
-}
-
 /// `Ipe.Ui.Length`. `Min`/`Max` are self-recursive → `Box` (E0072 otherwise).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Length {
@@ -193,7 +171,7 @@ pub enum Attribute<M> {
     /// `href="javascript:"` XSS class — do not write one.
     AttrAttribute(String, String),
     AttrFontSize(i64),
-    AttrFontColor(Color),
+    AttrFontColor(crate::color::Color),
     AttrFontFamily(String),
     AttrFontWeight(i64),
     AttrFontItalic,
@@ -202,16 +180,16 @@ pub enum Attribute<M> {
     AttrFontLetterSpacing(f64),
     AttrFontWordSpacing(f64),
     AttrFontAlign(String),
-    AttrBgColor(Color),
+    AttrBgColor(crate::color::Color),
     AttrBgImage(String),
     AttrBgGradient(String),
     AttrBorderWidth(i64),
     AttrBorderWidthEach(i64, i64, i64, i64),
-    AttrBorderColor(Color),
+    AttrBorderColor(crate::color::Color),
     AttrBorderRounded(i64),
     AttrBorderStyle(String),
-    AttrBorderShadow(i64, i64, i64, i64, Color),
-    AttrBorderInsetShadow(i64, i64, i64, i64, Color),
+    AttrBorderShadow(i64, i64, i64, i64, crate::color::Color),
+    AttrBorderInsetShadow(i64, i64, i64, i64, crate::color::Color),
     AttrPointer,
     /// `Debug.explain` — draws visible outlines on this element and all
     /// descendants to make the invisible layout box tree visible during
@@ -355,13 +333,12 @@ mod tests {
     // renderer for the same value would break exactly this assertion.
     #[test]
     fn colour_renders_identically_across_paths() {
-        let c = Color::Rgba(18, 52, 86, 0.5);
-        let direct = c.css();
-        let kernel = super::super::helpers::ui_color_css_(c.clone());
+        let c = crate::color::Color::rgba(18, 52, 86, 0.5);
+        let direct = c.to_css_rgba();
+        let kernel = super::super::helpers::ui_color_css_(c);
 
         enum Msg {}
-        let style =
-            super::super::render::build_style_string(&[Attribute::<Msg>::AttrBgColor(c.clone())]);
+        let style = super::super::render::build_style_string(&[Attribute::<Msg>::AttrBgColor(c)]);
 
         assert_eq!(direct, "rgba(18,52,86,0.5)");
         assert_eq!(kernel, direct);
@@ -411,10 +388,14 @@ mod tests {
     // `golden_css_length_color_ssot` fixture in the `g_stdui` integration suite.
     #[test]
     fn color_css_matches_ipe_css_color_to_string_for_rgba() {
-        assert_eq!(Color::Rgba(0, 0, 0, 1.0).css(), "rgba(0,0,0,1)");
-        assert_eq!(Color::Rgba(255, 0, 0, 1.0).css(), "rgba(255,0,0,1)");
-        assert_eq!(Color::Rgba(0, 128, 255, 1.0).css(), "rgba(0,128,255,1)");
-        assert_eq!(Color::Rgba(0, 0, 0, 0.0).css(), "rgba(0,0,0,0)");
-        assert_eq!(Color::Rgba(255, 128, 0, 0.5).css(), "rgba(255,128,0,0.5)");
+        use crate::color::Color as C;
+        assert_eq!(C::rgba(0, 0, 0, 1.0).to_css_rgba(), "rgba(0,0,0,1)");
+        assert_eq!(C::rgba(255, 0, 0, 1.0).to_css_rgba(), "rgba(255,0,0,1)");
+        assert_eq!(C::rgba(0, 128, 255, 1.0).to_css_rgba(), "rgba(0,128,255,1)");
+        assert_eq!(C::rgba(0, 0, 0, 0.0).to_css_rgba(), "rgba(0,0,0,0)");
+        assert_eq!(
+            C::rgba(255, 128, 0, 0.5).to_css_rgba(),
+            "rgba(255,128,0,0.5)"
+        );
     }
 }
