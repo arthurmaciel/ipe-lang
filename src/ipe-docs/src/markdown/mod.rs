@@ -7,7 +7,7 @@
 //! honest against `Ipe.Markdown` by a semantic-parity gate that snapshots the
 //! expected tree from an actual `ipe` run.
 //!
-//! This module is the single home for the URL-scheme allowlist (`is_safe_href`)
+//! This module is the single home for the URL-scheme allowlist (`SafeHref`)
 //! and the parse tree. It is std-only — no runtime dependency, no indexing /
 //! `unwrap` / `panic` — so it is deny-set-clean by construction.
 //!
