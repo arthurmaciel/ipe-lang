@@ -121,8 +121,14 @@ pub(crate) fn user_ipe_db_codec_cell_to_value(
             IpeCodecColType::CTime => {
                 return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_4: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_4) });
             }
-            IpeCodecColType::CBlob => {
+            IpeCodecColType::CDecimal => {
                 return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_5: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_5) });
+            }
+            IpeCodecColType::CMoney => {
+                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_6: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_6) });
+            }
+            IpeCodecColType::CBlob => {
+                return crate::user_ipe_db_codec_require_present(name.clone(), maybeCell, move |eta_7: String| -> IpeResult<ipe_runtime::error::IpeError, JsonVal> { crate::user_ipe_db_codec_scalar_cell_to_value(name.clone(), colType.clone(), eta_7) });
             }
         }
     }
@@ -194,6 +200,19 @@ pub(crate) fn user_ipe_db_codec_scalar_cell_to_value(
                         return IpeResult::Err(crate::user_ipe_db_codec_bad_cell_error(name, colType, cell));
                     }
                 }
+            }
+            IpeCodecColType::CDecimal => {
+                match decimal_from_string::<IpeError>(cell.clone()) {
+                    IpeResult::Ok(_) => {
+                        return IpeResult::Ok(json_enc_string(cell));
+                    }
+                    IpeResult::Err(_) => {
+                        return IpeResult::Err(crate::user_ipe_db_codec_bad_cell_error(name, colType, cell));
+                    }
+                }
+            }
+            IpeCodecColType::CMoney => {
+                return IpeResult::Ok(json_enc_string(cell));
             }
             IpeCodecColType::CBlob => {
                 return decode_from_json_string(decode_value_identity::<IpeError>(), cell);
@@ -274,6 +293,12 @@ pub(crate) fn user_ipe_db_codec_col_type_name(colType: IpeCodecColType) -> Strin
             }
             IpeCodecColType::CTime => {
                 return "integer timestamp".to_string();
+            }
+            IpeCodecColType::CDecimal => {
+                return "exact decimal string".to_string();
+            }
+            IpeCodecColType::CMoney => {
+                return "money string (AMOUNT ISO_CODE)".to_string();
             }
             IpeCodecColType::CBlob => {
                 return "JSON value".to_string();
