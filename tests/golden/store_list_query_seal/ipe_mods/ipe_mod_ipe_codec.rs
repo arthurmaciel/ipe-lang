@@ -8,6 +8,8 @@ pub(crate) enum IpeCodecColType {
     CBool,
     CBlob,
     CTime,
+    CDecimal,
+    CMoney,
     CNull(Box<IpeCodecColType>),
 }
 impl IpeStringify for IpeCodecColType {
@@ -19,6 +21,8 @@ impl IpeStringify for IpeCodecColType {
             IpeCodecColType::CBool => "CBool".to_string(),
             IpeCodecColType::CBlob => "CBlob".to_string(),
             IpeCodecColType::CTime => "CTime".to_string(),
+            IpeCodecColType::CDecimal => "CDecimal".to_string(),
+            IpeCodecColType::CMoney => "CMoney".to_string(),
             IpeCodecColType::CNull(p0) => {
                 format!("CNull {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
             }

@@ -3704,6 +3704,12 @@ cellTypeOf colType =
         CBool ->
             TextCell
 
+        CDecimal ->
+            TextCell
+
+        CMoney ->
+            TextCell
+
         CBlob ->
             TextCell
 
@@ -3966,6 +3972,12 @@ sqlType colType =
 
         CTime ->
             "INTEGER"
+
+        CDecimal ->
+            "TEXT"
+
+        CMoney ->
+            "TEXT"
 
         CBlob ->
             "TEXT"

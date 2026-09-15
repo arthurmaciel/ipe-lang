@@ -18,6 +18,7 @@ import Ipe.Json.Encode as Encode
 import Ipe.Json.Decode as Decode
 import Ipe.Json.Decode.Pipeline as Pipeline
 import Ipe.Decimal as Dec exposing (Decimal)
+import Ipe.Money as Money exposing (Money)
 import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.String as String
@@ -120,6 +121,26 @@ decimalFromString s =
 
         Err _ ->
             Decode.fail "bad decimal"
+
+
+moneyFromWire : String -> Decoder Money
+moneyFromWire s =
+    case String.words s of
+        [ amountStr, codeStr ] ->
+            case Money.parseCurrency codeStr of
+                Just cur ->
+                    case Money.fromString cur amountStr of
+                        Ok m ->
+                            Decode.succeed m
+
+                        Err _ ->
+                            Decode.fail "bad money amount"
+
+                Nothing ->
+                    Decode.fail "bad money currency"
+
+        _ ->
+            Decode.fail "bad money wire"
 
 
 -- Mirror the store's cell representation: build a `Row` (Dict String String)
@@ -366,6 +387,230 @@ timestampRowRoundTrips =
             False
 
 
+-- A one-field record codec whose only column is `CDecimal`, built from the
+-- `Codec.decimal` scalar so the field carries the decimal role end-to-end.
+type alias Priced =
+    { amount : Decimal }
+
+
+makePriced : Decimal -> Priced
+makePriced amount =
+    { amount = amount }
+
+
+pricedCodec : Codec Priced
+pricedCodec =
+    Codec
+        { enc =
+            \p ->
+                Encode.object
+                    [ ( "amount", Codec.toValue Codec.decimal p.amount ) ]
+        , mkDec =
+            \_ ->
+                Decode.succeed makePriced
+                    |> Pipeline.required "amount" (Decode.andThen decimalFromString Decode.string)
+        , shp =
+            SRecord
+                [ ( "amount", Codec.columnOf (Codec.shape Codec.decimal) ) ]
+        }
+
+
+-- A `CDecimal` column binds as `SqlDecimal`, NEVER `SqlString`, even though
+-- the wire form is a JSON string. The role lives in the tag.
+decimalBindsAsSqlDecimal : Bool
+decimalBindsAsSqlDecimal =
+    case DbCodec.codecToBinds pricedCodec { amount = Dec.fromInt 12345 } of
+        Ok binds ->
+            case binds of
+                [ ( key, bound ) ] ->
+                    key == "amount" && boundIsSqlDecimal bound
+
+                _ ->
+                    False
+
+        Err _ ->
+            False
+
+
+-- The bound value is `SqlDecimal`, NEVER `SqlString` or any other variant.
+boundIsSqlDecimal : SqlValue -> Bool
+boundIsSqlDecimal bound =
+    case bound of
+        SqlDecimal _ ->
+            True
+
+        SqlString _ ->
+            False
+
+        SqlInt _ ->
+            False
+
+        SqlFloat _ ->
+            False
+
+        SqlBool _ ->
+            False
+
+        SqlBytes _ ->
+            False
+
+        SqlTime _ ->
+            False
+
+        SqlMoney _ ->
+            False
+
+        SqlNull _ ->
+            False
+
+
+-- The `SqlDecimal` cell rebuilds the original `Decimal` through the codec —
+-- lossless round-trip.
+decimalRowRoundTrips : Bool
+decimalRowRoundTrips =
+    let
+        original =
+            { amount = Dec.fromInt 99999 }
+    in
+    case DbCodec.codecToBinds pricedCodec original of
+        Ok binds ->
+            case DbCodec.codecFromRow pricedCodec (rowFromBinds binds) of
+                Ok back ->
+                    Dec.toString back.amount == Dec.toString original.amount
+
+                Err _ ->
+                    False
+
+        Err _ ->
+            False
+
+
+-- A one-field record codec whose only column is `CMoney`, built from the
+-- `Codec.money` scalar so the field carries the money role end-to-end.
+type alias Valued =
+    { price : Money }
+
+
+makeValued : Money -> Valued
+makeValued price =
+    { price = price }
+
+
+valuedCodec : Codec Valued
+valuedCodec =
+    Codec
+        { enc =
+            \v ->
+                Encode.object
+                    [ ( "price", Codec.toValue Codec.money v.price ) ]
+        , mkDec =
+            \_ ->
+                Decode.succeed makeValued
+                    |> Pipeline.required "price" (Decode.andThen moneyFromWire Decode.string)
+        , shp =
+            SRecord
+                [ ( "price", Codec.columnOf (Codec.shape Codec.money) ) ]
+        }
+
+
+-- A `CMoney` column binds as `SqlMoney`, NEVER `SqlString`. The role lives in
+-- the tag so a monetary value cannot be swapped for a bare text field.
+moneyBindsAsSqlMoney : Bool
+moneyBindsAsSqlMoney =
+    case Money.parseCurrency "USD" of
+        Just usd ->
+            case Money.fromString usd "42.00" of
+                Ok m ->
+                    case DbCodec.codecToBinds valuedCodec { price = m } of
+                        Ok binds ->
+                            case binds of
+                                [ ( key, bound ) ] ->
+                                    key == "price" && boundIsSqlMoney bound
+
+                                _ ->
+                                    False
+
+                        Err _ ->
+                            False
+
+                Err _ ->
+                    False
+
+        Nothing ->
+            False
+
+
+-- The bound value is `SqlMoney`, NEVER `SqlString` or any other variant.
+boundIsSqlMoney : SqlValue -> Bool
+boundIsSqlMoney bound =
+    case bound of
+        SqlMoney _ ->
+            True
+
+        SqlString _ ->
+            False
+
+        SqlInt _ ->
+            False
+
+        SqlFloat _ ->
+            False
+
+        SqlBool _ ->
+            False
+
+        SqlBytes _ ->
+            False
+
+        SqlTime _ ->
+            False
+
+        SqlDecimal _ ->
+            False
+
+        SqlNull _ ->
+            False
+
+
+-- The `SqlMoney` cell rebuilds the original `Money` through the codec —
+-- lossless round-trip preserving both amount and currency.
+moneyRowRoundTrips : Bool
+moneyRowRoundTrips =
+    case Money.parseCurrency "EUR" of
+        Just eur ->
+            case Money.fromString eur "199.99" of
+                Ok m ->
+                    let
+                        original =
+                            { price = m }
+                    in
+                    case DbCodec.codecToBinds valuedCodec original of
+                        Ok binds ->
+                            case DbCodec.codecFromRow valuedCodec (rowFromBinds binds) of
+                                Ok back ->
+                                    moneyEq back.price original.price
+
+                                Err _ ->
+                                    False
+
+                        Err _ ->
+                            False
+
+                Err _ ->
+                    False
+
+        Nothing ->
+            False
+
+
+moneyEq : Money -> Money -> Bool
+moneyEq a b =
+    Money.currencyCode (Money.currency a)
+        == Money.currencyCode (Money.currency b)
+        && Dec.toString (Money.amount a)
+        == Dec.toString (Money.amount b)
+
+
 main =
     if
         bridgeRoundTrips sample1
@@ -374,6 +619,10 @@ main =
             && missingColumnRejected
             && timestampBindsAsSqlTime
             && timestampRowRoundTrips
+            && decimalBindsAsSqlDecimal
+            && decimalRowRoundTrips
+            && moneyBindsAsSqlMoney
+            && moneyRowRoundTrips
     then
         Io.println "db-codec-bridge-ok"
 
