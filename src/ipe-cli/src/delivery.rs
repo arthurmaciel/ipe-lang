@@ -195,6 +195,100 @@ impl Host {
     }
 }
 
+/// The compile engine a program runs under.
+///
+/// The delivery-layer name for the backend [`ipe_ir::Target`], carried here so
+/// the validity matrix can reason over `(engine, delivery, triple)` in one place
+/// without importing the whole kernel crate. A projection of the same enum,
+/// never a second derivation.
+///
+/// A closed set kept in lock-step with [`ipe_ir::Target`] by [`Self::of`]: the
+/// instant a variant is added there, this `match` stops compiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// The native host binary — full-kernel effects, `available_on == true`.
+    Native,
+    /// The sandboxed browser WASM client (`web spa`) — the default-deny
+    /// allowlist. Effects only via Web-API substitutes; native effects denied.
+    WasmClient,
+}
+
+impl Engine {
+    /// Project a backend [`ipe_ir::Target`] onto the delivery-layer engine. The
+    /// backend enum is the single source of truth; this maps it, so a new
+    /// backend target forces a new arm here at compile time.
+    #[must_use]
+    pub const fn of(target: ipe_ir::Target) -> Self {
+        match target {
+            ipe_ir::Target::Native => Self::Native,
+            ipe_ir::Target::WasmClient => Self::WasmClient,
+        }
+    }
+}
+
+/// A representable target triple — the closed set the delivery layer can name.
+///
+/// Parsed from a raw `--target`/positional string ONCE at the boundary (parse,
+/// don't validate) so no unverifiable triple reaches the validity matrix or,
+/// past it, cargo.
+///
+/// The set is deliberately wider than what the CLI *accepts* today: it can name
+/// `wasm32-wasip1` so the matrix can state — and a test can pin — the
+/// fail-closed refusals around co-located WASI before that accept-path exists.
+/// A member being representable is not a licence to build it; the matrix
+/// ([`admit_triple`]) and the CLI accept-set ([`crate::cli_args::ReleaseTarget`])
+/// are the gates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetTriple {
+    /// The host's own triple — the implicit default (no `--target`).
+    Host,
+    /// `x86_64-unknown-linux-musl` — the static-musl x86-64 triple.
+    X8664LinuxMusl,
+    /// `aarch64-unknown-linux-musl` — the static-musl aarch64 triple.
+    Aarch64LinuxMusl,
+    /// `wasm32-unknown-unknown` — the browser sandbox triple (`web spa`).
+    BrowserWasm,
+    /// `wasm32-wasip1` — the co-located portable WASI triple. Representable so
+    /// the matrix can refuse it fail-closed; its accept-path is gated on the
+    /// WASI runtime port.
+    Wasm32Wasip1,
+}
+
+impl TargetTriple {
+    /// The rustc triple spelling. `Host` has no fixed spelling (it is the
+    /// ambient host), so it renders as `host`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::X8664LinuxMusl => "x86_64-unknown-linux-musl",
+            Self::Aarch64LinuxMusl => "aarch64-unknown-linux-musl",
+            Self::BrowserWasm => "wasm32-unknown-unknown",
+            Self::Wasm32Wasip1 => "wasm32-wasip1",
+        }
+    }
+
+    /// Parse a rustc triple string into the representable set. `None` for any
+    /// token outside the closed set — the caller turns that into a typed
+    /// refusal. The empty string and an unsupported triple are both `None`.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "x86_64-unknown-linux-musl" => Self::X8664LinuxMusl,
+            "aarch64-unknown-linux-musl" => Self::Aarch64LinuxMusl,
+            "wasm32-unknown-unknown" => Self::BrowserWasm,
+            "wasm32-wasip1" => Self::Wasm32Wasip1,
+            _ => return None,
+        })
+    }
+
+    /// Whether this triple names a WebAssembly target (either wasm flavour).
+    #[must_use]
+    pub const fn is_wasm(self) -> bool {
+        matches!(self, Self::BrowserWasm | Self::Wasm32Wasip1)
+    }
+}
+
 /// A fully-resolved delivery target — a shape, its (web-only) runtime, and a
 /// valid host.
 ///
@@ -366,6 +460,79 @@ impl Delivery {
             (true, true) | (false, false) => Ok(()),
         }
     }
+
+    /// The `(engine, delivery, triple)` validity matrix — a typed total function
+    /// that admits exactly the legal combinations and refuses every other with a
+    /// pedagogical [`DeliveryError`]. It is the structural successor to
+    /// [`Self::reconcile_wasm_target`]: it subsumes the `spa` IFF wasm
+    /// biconditional and adds the third axis (the triple), so the two wasm
+    /// flavours — the sandboxed browser client (`wasm32-unknown-unknown`) and the
+    /// co-located portable WASI target (`wasm32-wasip1`) — are kept cleanly
+    /// separate at one place.
+    ///
+    /// Fail-closed by construction: the `match` is exhaustive and has NO
+    /// permissive catch-all — a tuple not enumerated legal hits a refusal arm.
+    /// A new [`Engine`], [`Host`], or [`TargetTriple`] member forces a new arm at
+    /// compile time, so a forgotten combination cannot ship as an open default.
+    /// Co-located WASI (`wasm32-wasip1`) has no accept-path yet — its runtime
+    /// port has not landed — so every WASI triple is refused here; opening it
+    /// before the runtime exists would break THE SEAL (an effectful co-located
+    /// program would `ipe`-accept then fail `cargo build --target wasm32-wasip1`).
+    ///
+    /// # Errors
+    /// [`DeliveryError`] naming the exact illegal `(engine, delivery, triple)`
+    /// cell and its fix.
+    pub const fn admit_triple(
+        self,
+        engine: Engine,
+        triple: TargetTriple,
+    ) -> Result<(), DeliveryError> {
+        let is_spa = matches!(self.runtime, Some(Runtime::Spa));
+        match engine {
+            // The native host binary: a WASM triple has no native form, and a
+            // `spa` delivery must not resolve to a native engine (the wasm-keyed
+            // sandbox backstops would be skipped). Otherwise the static-triple
+            // gate decides which co-located triples are admissible.
+            Engine::Native => {
+                if is_spa {
+                    return Err(DeliveryError::SpaRequiresWasmTarget);
+                }
+                match triple {
+                    TargetTriple::BrowserWasm | TargetTriple::Wasm32Wasip1 => {
+                        Err(DeliveryError::NativeEngineRefusesWasmTriple { triple })
+                    }
+                    TargetTriple::Host => Ok(()),
+                    TargetTriple::X8664LinuxMusl | TargetTriple::Aarch64LinuxMusl => {
+                        // A musl static triple mirrors the `--static` gate: a
+                        // webview-native (`web desktop`) delivery links the
+                        // system webview and has no static form.
+                        if self.allows_static() {
+                            Ok(())
+                        } else {
+                            Err(DeliveryError::WebviewHasNoStaticTriple { delivery: self })
+                        }
+                    }
+                }
+            }
+            // The sandboxed browser client: exactly `web spa` on the browser
+            // triple, and nothing else. It NEVER widens to the WASI triple —
+            // that would be a sandbox escape hatch.
+            Engine::WasmClient => {
+                if !is_spa {
+                    return Err(DeliveryError::WasmTargetRequiresSpa);
+                }
+                match triple {
+                    TargetTriple::BrowserWasm => Ok(()),
+                    TargetTriple::Wasm32Wasip1 => Err(DeliveryError::SpaRefusesWasiTriple),
+                    TargetTriple::Host
+                    | TargetTriple::X8664LinuxMusl
+                    | TargetTriple::Aarch64LinuxMusl => {
+                        Err(DeliveryError::SpaRequiresBrowserTriple { triple })
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for Delivery {
@@ -438,6 +605,32 @@ pub enum DeliveryError {
     /// target exists only to carry a sandboxed `spa` app; a non-`spa` shape has
     /// no wasm form, so the two were derived from disagreeing sources.
     WasmTargetRequiresSpa,
+    /// A WASM triple was requested for the native engine. The native binary has
+    /// no WebAssembly form; the browser client compiles to
+    /// `wasm32-unknown-unknown`, and the co-located WASI target to
+    /// `wasm32-wasip1` — neither is a native build.
+    NativeEngineRefusesWasmTriple {
+        /// The WASM triple asked for on the native engine.
+        triple: TargetTriple,
+    },
+    /// A `web spa` client asked for a triple other than the browser sandbox
+    /// triple. The sandboxed client compiles only to `wasm32-unknown-unknown`.
+    SpaRequiresBrowserTriple {
+        /// The non-browser triple asked for on a `spa` delivery.
+        triple: TargetTriple,
+    },
+    /// A `web spa` client asked for the `wasm32-wasip1` (WASI) triple. The
+    /// browser sandbox never widens to WASI: WASI is the co-located portable
+    /// target with native-ish effects, the exact opposite of the browser
+    /// sandbox's default-deny surface. Allowing it would be a sandbox escape.
+    SpaRefusesWasiTriple,
+    /// A musl static triple was requested for a delivery that links the system
+    /// webview at runtime (`web desktop`), which has no static binary. Mirrors
+    /// the `--static` × webview refusal on the triple axis.
+    WebviewHasNoStaticTriple {
+        /// The webview-native delivery that has no static triple.
+        delivery: Delivery,
+    },
 }
 
 /// The runtime/host/target tokens parsed out of a delivery positional tail,
@@ -580,6 +773,39 @@ impl fmt::Display for DeliveryError {
                  every other shape has no wasm form. Deliver `web spa` to build for \
                  wasm, or drop the wasm target (`--target`/`IPE_TARGET`/`[wasm] mode`) \
                  for a native build.",
+            ),
+            Self::NativeEngineRefusesWasmTriple { triple } => write!(
+                f,
+                "`{}` is a WebAssembly triple, but this build targets the native \
+                 binary, which has no WASM form. The browser client compiles to \
+                 `wasm32-unknown-unknown` (deliver `web spa`); the co-located WASI \
+                 target compiles to `wasm32-wasip1`. Drop the WASM triple for a \
+                 native build, or pick the delivery that carries it.",
+                triple.as_str(),
+            ),
+            Self::SpaRequiresBrowserTriple { triple } => write!(
+                f,
+                "a `web spa` client compiles only to `wasm32-unknown-unknown`, but \
+                 `{}` was requested. The sandboxed browser client has exactly one \
+                 triple — its wasm sandbox. Drop the triple (it is implied by \
+                 `spa`), or drop `spa` for the delivery that carries `{}`.",
+                triple.as_str(),
+                triple.as_str(),
+            ),
+            Self::SpaRefusesWasiTriple => write!(
+                f,
+                "a `web spa` client cannot target `wasm32-wasip1`. The browser \
+                 sandbox denies native effects and reaches the world only through \
+                 Web-API capabilities; WASI is the co-located, native-ish target \
+                 for a `tui`/`cli`/`server`/served-`web` program, never the browser \
+                 sandbox. Deliver `web spa` to `wasm32-unknown-unknown`, or use a \
+                 co-located shape for a WASI build.",
+            ),
+            Self::WebviewHasNoStaticTriple { delivery } => write!(
+                f,
+                "`{delivery}` links the system webview at runtime, so it has no \
+                 static (musl) triple. Use `web` (served-live), `tui`, `cli`, or \
+                 `server` for a static musl binary, or ship the desktop app bundle.",
             ),
         }
     }
@@ -792,5 +1018,245 @@ mod tests {
         assert!(live.reconcile_wasm_target(false).is_ok());
         assert!(spa.reconcile_wasm_target(false).is_err());
         assert!(live.reconcile_wasm_target(true).is_err());
+    }
+
+    // === The engine × host × triple validity matrix (#2461) ===
+
+    fn spa() -> Delivery {
+        Delivery::resolve(Shape::Web, Some(Runtime::Spa), Host::Default).unwrap()
+    }
+    fn served_live() -> Delivery {
+        Delivery::resolve(Shape::Web, Some(Runtime::Live), Host::Default).unwrap()
+    }
+    fn web_desktop() -> Delivery {
+        Delivery::resolve(Shape::Web, Some(Runtime::Live), Host::Desktop).unwrap()
+    }
+
+    #[test]
+    fn target_triple_parse_is_closed() {
+        // Every representable triple round-trips; everything else is `None` —
+        // parse, don't validate. The empty string and one-past-the-last-legal
+        // (`wasm64`, gnu, a bogus wasm flavour) are all refused at the boundary.
+        assert_eq!(
+            TargetTriple::parse("x86_64-unknown-linux-musl"),
+            Some(TargetTriple::X8664LinuxMusl)
+        );
+        assert_eq!(
+            TargetTriple::parse("aarch64-unknown-linux-musl"),
+            Some(TargetTriple::Aarch64LinuxMusl)
+        );
+        assert_eq!(
+            TargetTriple::parse("wasm32-unknown-unknown"),
+            Some(TargetTriple::BrowserWasm)
+        );
+        assert_eq!(
+            TargetTriple::parse("wasm32-wasip1"),
+            Some(TargetTriple::Wasm32Wasip1)
+        );
+        assert_eq!(TargetTriple::parse(""), None);
+        assert_eq!(TargetTriple::parse("x86_64-unknown-linux-gnu"), None);
+        assert_eq!(TargetTriple::parse("wasm32-wasi"), None);
+        assert_eq!(TargetTriple::parse("wasm64-unknown-unknown"), None);
+        // The spellings are stable and match rustc's.
+        assert_eq!(TargetTriple::Wasm32Wasip1.as_str(), "wasm32-wasip1",);
+        assert!(TargetTriple::BrowserWasm.is_wasm());
+        assert!(TargetTriple::Wasm32Wasip1.is_wasm());
+        assert!(!TargetTriple::X8664LinuxMusl.is_wasm());
+        assert!(!TargetTriple::Host.is_wasm());
+    }
+
+    #[test]
+    fn engine_projects_the_backend_target() {
+        // The delivery-layer engine is a projection of the backend target, never
+        // a second derivation — pins the SSOT map against drift.
+        assert_eq!(Engine::of(ipe_ir::Target::Native), Engine::Native);
+        assert_eq!(Engine::of(ipe_ir::Target::WasmClient), Engine::WasmClient);
+    }
+
+    // --- Refusals first: every illegal cell turned away with a typed diagnostic.
+
+    #[test]
+    fn spa_refuses_wasi_triple() {
+        // THE headline separation: the browser sandbox never widens to WASI.
+        assert_eq!(
+            spa().admit_triple(Engine::WasmClient, TargetTriple::Wasm32Wasip1),
+            Err(DeliveryError::SpaRefusesWasiTriple),
+        );
+    }
+
+    #[test]
+    fn colocated_wasi_is_refused_until_runtime() {
+        // Co-located WASI has NO accept-path in this increment (the runtime port
+        // has not landed). Every co-located delivery asking for `wasm32-wasip1`
+        // on the only engines that exist today (Native/WasmClient) is refused —
+        // proving no accept-path opened that could break THE SEAL.
+        for d in [
+            Delivery::resolve(Shape::Script, None, Host::Default).unwrap(),
+            Delivery::resolve(Shape::Tui, None, Host::Default).unwrap(),
+            Delivery::resolve(Shape::Cli, None, Host::Default).unwrap(),
+            Delivery::resolve(Shape::Server, None, Host::Default).unwrap(),
+            served_live(),
+        ] {
+            assert_eq!(
+                d.admit_triple(Engine::Native, TargetTriple::Wasm32Wasip1),
+                Err(DeliveryError::NativeEngineRefusesWasmTriple {
+                    triple: TargetTriple::Wasm32Wasip1
+                }),
+                "co-located WASI must stay refused for {d} until the runtime lands",
+            );
+        }
+    }
+
+    #[test]
+    fn spa_requires_browser_triple() {
+        // A `spa` client on any non-browser triple is refused.
+        for t in [
+            TargetTriple::Host,
+            TargetTriple::X8664LinuxMusl,
+            TargetTriple::Aarch64LinuxMusl,
+        ] {
+            assert_eq!(
+                spa().admit_triple(Engine::WasmClient, t),
+                Err(DeliveryError::SpaRequiresBrowserTriple { triple: t }),
+            );
+        }
+    }
+
+    #[test]
+    fn native_engine_refuses_wasm_triples() {
+        // Both wasm flavours have no native form.
+        for t in [TargetTriple::BrowserWasm, TargetTriple::Wasm32Wasip1] {
+            assert_eq!(
+                served_live().admit_triple(Engine::Native, t),
+                Err(DeliveryError::NativeEngineRefusesWasmTriple { triple: t }),
+            );
+        }
+    }
+
+    #[test]
+    fn native_engine_refuses_spa_delivery() {
+        // A `spa` delivery must not resolve to the native engine — the
+        // wasm-keyed sandbox backstops would be skipped. Subsumes the
+        // biconditional's `SpaRequiresWasmTarget` half on the triple axis.
+        assert_eq!(
+            spa().admit_triple(Engine::Native, TargetTriple::Host),
+            Err(DeliveryError::SpaRequiresWasmTarget),
+        );
+    }
+
+    #[test]
+    fn wasm_client_engine_refuses_non_spa_delivery() {
+        // The symmetric half: the browser client engine only carries `spa`.
+        for d in [
+            served_live(),
+            web_desktop(),
+            Delivery::resolve(Shape::Cli, None, Host::Default).unwrap(),
+        ] {
+            assert_eq!(
+                d.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
+                Err(DeliveryError::WasmTargetRequiresSpa),
+                "the browser client engine must refuse the non-spa delivery {d}",
+            );
+        }
+    }
+
+    #[test]
+    fn webview_native_has_no_static_triple() {
+        // Mirrors the `--static` × webview refusal on the triple axis: a
+        // webview-native delivery has no musl binary.
+        for t in [TargetTriple::X8664LinuxMusl, TargetTriple::Aarch64LinuxMusl] {
+            assert_eq!(
+                web_desktop().admit_triple(Engine::Native, t),
+                Err(DeliveryError::WebviewHasNoStaticTriple {
+                    delivery: web_desktop()
+                }),
+            );
+        }
+    }
+
+    // --- Legal cells: the enumerated admissions.
+
+    #[test]
+    fn browser_spa_admits_browser_wasm() {
+        assert_eq!(
+            spa().admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    fn native_colocated_admits_host_and_musl() {
+        for d in [
+            Delivery::resolve(Shape::Script, None, Host::Default).unwrap(),
+            Delivery::resolve(Shape::Tui, None, Host::Default).unwrap(),
+            Delivery::resolve(Shape::Cli, None, Host::Default).unwrap(),
+            Delivery::resolve(Shape::Server, None, Host::Default).unwrap(),
+            served_live(),
+        ] {
+            assert_eq!(d.admit_triple(Engine::Native, TargetTriple::Host), Ok(()));
+            assert_eq!(
+                d.admit_triple(Engine::Native, TargetTriple::X8664LinuxMusl),
+                Ok(()),
+                "{d} is static-capable on x86-64 musl",
+            );
+            assert_eq!(
+                d.admit_triple(Engine::Native, TargetTriple::Aarch64LinuxMusl),
+                Ok(()),
+            );
+        }
+    }
+
+    #[test]
+    fn matrix_subsumes_the_biconditional() {
+        // The matrix must agree with `reconcile_wasm_target` on all four bool
+        // corners, so the two stay in lock-step until the callsites migrate —
+        // the matrix is a strict superset, never a regression of a refusal.
+        // (engine, triple) stands in for the bool: WasmClient+BrowserWasm ==
+        // wasm_target true; Native+Host == wasm_target false.
+        let spa = spa();
+        let live = served_live();
+        // spa + wasm  <=>  reconcile(true) ok
+        assert_eq!(
+            spa.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm)
+                .is_ok(),
+            spa.reconcile_wasm_target(true).is_ok(),
+        );
+        // spa + native  <=>  reconcile(false) err
+        assert_eq!(
+            spa.admit_triple(Engine::Native, TargetTriple::Host)
+                .is_err(),
+            spa.reconcile_wasm_target(false).is_err(),
+        );
+        // live + wasm  <=>  reconcile(true) err
+        assert_eq!(
+            live.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm)
+                .is_err(),
+            live.reconcile_wasm_target(true).is_err(),
+        );
+        // live + native  <=>  reconcile(false) ok
+        assert_eq!(
+            live.admit_triple(Engine::Native, TargetTriple::Host)
+                .is_ok(),
+            live.reconcile_wasm_target(false).is_ok(),
+        );
+    }
+
+    #[test]
+    fn matrix_refusals_teach_not_slap() {
+        let cases = [
+            DeliveryError::NativeEngineRefusesWasmTriple {
+                triple: TargetTriple::Wasm32Wasip1,
+            },
+            DeliveryError::SpaRequiresBrowserTriple {
+                triple: TargetTriple::X8664LinuxMusl,
+            },
+            DeliveryError::SpaRefusesWasiTriple,
+            DeliveryError::WebviewHasNoStaticTriple {
+                delivery: web_desktop(),
+            },
+        ];
+        for c in &cases {
+            assert!(c.to_string().len() > 40, "a refusal is a lesson: {c}");
+        }
     }
 }
