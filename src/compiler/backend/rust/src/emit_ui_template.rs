@@ -1813,7 +1813,7 @@ fn static_length(expr: &Expr) -> Option<CompileUiLength> {
 /// (a `Var` / `Access`) or a non-literal channel refuses and keeps the subtree
 /// compiled. The alpha of `Ui.rgb` / the named colors matches the runtime helper
 /// bodies (`ui_rgb_` → `a = 1.0`, `ui_transparent_` → `a = 0.0`).
-fn static_color(expr: &Expr) -> Option<CompileUiColor> {
+const fn static_color(expr: &Expr) -> Option<CompileUiColor> {
     let Expr::Call { callee, args, .. } = expr else {
         return None;
     };
