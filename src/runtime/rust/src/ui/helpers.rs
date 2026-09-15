@@ -9,8 +9,9 @@
 //! and to avoid shadowing the runtime's own `element` type names.
 
 use super::element::{
-    Attribute, Color, Description, Element, HAlign, Length, Location, PseudoClass, VAlign,
+    Attribute, Description, Element, HAlign, Length, Location, PseudoClass, VAlign,
 };
+use crate::color::Color;
 use crate::core::IpeMaybe;
 use crate::html::Html;
 
@@ -382,37 +383,41 @@ pub fn ui_maximum_(n: i64, l: Length) -> Length {
 /// `Ui.rgb : Int -> Int -> Int -> Color`  (alpha = 1.0)
 #[must_use]
 pub fn ui_rgb_(r: i64, g: i64, b: i64) -> Color {
-    Color::Rgba(r, g, b, 1.0)
+    Color::rgb(r, g, b)
 }
 
 /// `Ui.rgba : Int -> Int -> Int -> Float -> Color`
 #[must_use]
 pub fn ui_rgba_(r: i64, g: i64, b: i64, a: f64) -> Color {
-    Color::Rgba(r, g, b, a)
+    Color::rgba(r, g, b, a)
 }
 
 /// `Ui.white : Color`
 #[must_use]
 pub fn ui_white_() -> Color {
-    Color::Rgba(255, 255, 255, 1.0)
+    Color::white()
 }
 
 /// `Ui.black : Color`
 #[must_use]
 pub fn ui_black_() -> Color {
-    Color::Rgba(0, 0, 0, 1.0)
+    Color::black()
 }
 
 /// `Ui.transparent : Color`
 #[must_use]
 pub fn ui_transparent_() -> Color {
-    Color::Rgba(0, 0, 0, 0.0)
+    Color::transparent()
 }
 
 /// `Ui.colorCss : Color -> String` — convert a `Color` to its CSS string.
+///
+/// The `Ipe.Ui`/`Ipe.Css` surfaces always spell alpha (never collapse to
+/// `rgb(..)`), so this routes through [`Color::to_css_rgba`] to stay byte-exact
+/// with the pre-existing shared CSS goldens.
 #[must_use]
 pub fn ui_color_css_(c: Color) -> String {
-    c.css()
+    c.to_css_rgba()
 }
 
 // ── Background sub-module ─────────────────────────────────────────────────────
@@ -441,7 +446,7 @@ pub fn ui_background_linear_gradient_<M>(angle: f64, stops: Vec<(f64, Color)>) -
     use crate::string::string_from_float;
     let joined = stops
         .into_iter()
-        .map(|(pct, c)| format!("{} {}%", c.css(), string_from_float(pct)))
+        .map(|(pct, c)| format!("{} {}%", c.to_css_rgba(), string_from_float(pct)))
         .collect::<Vec<_>>()
         .join(", ");
     Attribute::AttrBgGradient(format!(
@@ -504,7 +509,7 @@ pub fn ui_border_shadow_<M>(
 pub fn ui_border_glow_<M>(blur: i64, c: Color) -> Attribute<M> {
     Attribute::AttrStyle(
         "box-shadow".into(),
-        format!("0px 0px {blur}px 0px {}", c.css()),
+        format!("0px 0px {blur}px 0px {}", c.to_css_rgba()),
     )
 }
 
@@ -842,7 +847,10 @@ pub fn ui_html_attribute_<M>(key: String, value: String) -> Attribute<M> {
 /// `Background.hoverColor : Color -> Attribute msg`
 #[must_use]
 pub fn ui_bg_hover_color_<M>(c: Color) -> Attribute<M> {
-    Attribute::AttrPseudoRule(PseudoClass::Hover, format!("background-color:{}", c.css()))
+    Attribute::AttrPseudoRule(
+        PseudoClass::Hover,
+        format!("background-color:{}", c.to_css_rgba()),
+    )
 }
 
 /// `Background.focusColor : Color -> Attribute msg`
@@ -850,14 +858,17 @@ pub fn ui_bg_hover_color_<M>(c: Color) -> Attribute<M> {
 pub fn ui_bg_focus_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::FocusVisible,
-        format!("background-color:{}", c.css()),
+        format!("background-color:{}", c.to_css_rgba()),
     )
 }
 
 /// `Background.activeColor : Color -> Attribute msg`
 #[must_use]
 pub fn ui_bg_active_color_<M>(c: Color) -> Attribute<M> {
-    Attribute::AttrPseudoRule(PseudoClass::Active, format!("background-color:{}", c.css()))
+    Attribute::AttrPseudoRule(
+        PseudoClass::Active,
+        format!("background-color:{}", c.to_css_rgba()),
+    )
 }
 
 /// `Background.disabledColor : Color -> Attribute msg`
@@ -865,7 +876,7 @@ pub fn ui_bg_active_color_<M>(c: Color) -> Attribute<M> {
 pub fn ui_bg_disabled_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::Disabled,
-        format!("background-color:{}", c.css()),
+        format!("background-color:{}", c.to_css_rgba()),
     )
 }
 
@@ -894,7 +905,10 @@ pub fn ui_border_dotted_<M>() -> Attribute<M> {
 /// `Border.hoverColor : Color -> Attribute msg`
 #[must_use]
 pub fn ui_border_hover_color_<M>(c: Color) -> Attribute<M> {
-    Attribute::AttrPseudoRule(PseudoClass::Hover, format!("border-color:{}", c.css()))
+    Attribute::AttrPseudoRule(
+        PseudoClass::Hover,
+        format!("border-color:{}", c.to_css_rgba()),
+    )
 }
 
 /// `Border.focusColor : Color -> Attribute msg`
@@ -902,14 +916,17 @@ pub fn ui_border_hover_color_<M>(c: Color) -> Attribute<M> {
 pub fn ui_border_focus_color_<M>(c: Color) -> Attribute<M> {
     Attribute::AttrPseudoRule(
         PseudoClass::FocusVisible,
-        format!("border-color:{}", c.css()),
+        format!("border-color:{}", c.to_css_rgba()),
     )
 }
 
 /// `Border.activeColor : Color -> Attribute msg`
 #[must_use]
 pub fn ui_border_active_color_<M>(c: Color) -> Attribute<M> {
-    Attribute::AttrPseudoRule(PseudoClass::Active, format!("border-color:{}", c.css()))
+    Attribute::AttrPseudoRule(
+        PseudoClass::Active,
+        format!("border-color:{}", c.to_css_rgba()),
+    )
 }
 
 /// `Border.hoverWidth : Int -> Attribute msg`
@@ -1054,25 +1071,28 @@ pub fn ui_font_monospace_() -> String {
 /// `Font.hoverColor : Color -> Attribute msg`
 #[must_use]
 pub fn ui_font_hover_color_<M>(c: Color) -> Attribute<M> {
-    Attribute::AttrPseudoRule(PseudoClass::Hover, format!("color:{}", c.css()))
+    Attribute::AttrPseudoRule(PseudoClass::Hover, format!("color:{}", c.to_css_rgba()))
 }
 
 /// `Font.focusColor : Color -> Attribute msg`
 #[must_use]
 pub fn ui_font_focus_color_<M>(c: Color) -> Attribute<M> {
-    Attribute::AttrPseudoRule(PseudoClass::FocusVisible, format!("color:{}", c.css()))
+    Attribute::AttrPseudoRule(
+        PseudoClass::FocusVisible,
+        format!("color:{}", c.to_css_rgba()),
+    )
 }
 
 /// `Font.activeColor : Color -> Attribute msg`
 #[must_use]
 pub fn ui_font_active_color_<M>(c: Color) -> Attribute<M> {
-    Attribute::AttrPseudoRule(PseudoClass::Active, format!("color:{}", c.css()))
+    Attribute::AttrPseudoRule(PseudoClass::Active, format!("color:{}", c.to_css_rgba()))
 }
 
 /// `Font.disabledColor : Color -> Attribute msg`
 #[must_use]
 pub fn ui_font_disabled_color_<M>(c: Color) -> Attribute<M> {
-    Attribute::AttrPseudoRule(PseudoClass::Disabled, format!("color:{}", c.css()))
+    Attribute::AttrPseudoRule(PseudoClass::Disabled, format!("color:{}", c.to_css_rgba()))
 }
 
 /// `Font.hoverSize : Int -> Attribute msg`

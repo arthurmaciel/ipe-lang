@@ -18,7 +18,8 @@
 //! exactly as it does a compiled literal. There is no code path, including
 //! deserialization, by which a `UiTemplate` yields a handler or unescaped HTML.
 
-use super::element::{Attribute, Color, Description, Element, HAlign, Length, PseudoClass, VAlign};
+use super::element::{Attribute, Description, Element, HAlign, Length, PseudoClass, VAlign};
+use crate::color::Color;
 use crate::html::{Attribute as HtmlAttribute, Event};
 
 /// A per-render handler resolution map: the concrete `Msg`s a templatized
@@ -86,8 +87,10 @@ impl<M: Clone> UiHandlerMap<M> {
 /// materialize and render agree on the bound.
 pub const MAX_UI_TEMPLATE_DEPTH: usize = crate::html::MAX_HTML_DEPTH;
 
-/// `Ipe.Ui.Color` reduced to inert data. Mirrors [`Color`] field-for-field —
-/// the single `Rgba` shape — so materialize rebuilds the exact `Color`.
+/// `Ipe.Ui.Color` reduced to inert byte data (R/G/B `0..=255`, alpha the stored
+/// float). The byte form is the exact round-trip of the [`Color`] byte
+/// constructors ([`Color::rgba`] / [`Color::to_rgba_bytes`]), so materialize
+/// rebuilds the exact `Color` the render path formats.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct UiColor {
@@ -99,18 +102,12 @@ pub struct UiColor {
 
 impl UiColor {
     fn from_color(c: &Color) -> Self {
-        match c {
-            Color::Rgba(r, g, b, a) => Self {
-                r: *r,
-                g: *g,
-                b: *b,
-                a: *a,
-            },
-        }
+        let (r, g, b, a) = c.to_rgba_bytes();
+        Self { r, g, b, a }
     }
 
     fn to_color(&self) -> Color {
-        Color::Rgba(self.r, self.g, self.b, self.a)
+        Color::rgba(self.r, self.g, self.b, self.a)
     }
 }
 
@@ -1819,7 +1816,8 @@ mod tests {
         materialize_ui_template, materialize_ui_template_with_handlers, ui_template_of,
         ui_template_of_holed,
     };
-    use crate::ui::element::{Attribute, Color, Description, Element, Length};
+    use crate::color::Color;
+    use crate::ui::element::{Attribute, Description, Element, Length};
     use crate::ui::render::ui_layout;
 
     // Render an `Element` the way the app does — through the public `ui_layout`
@@ -1890,9 +1888,9 @@ mod tests {
             vec![
                 Attribute::AttrPadding(4, 8, 4, 8),
                 Attribute::AttrFontSize(16),
-                Attribute::AttrFontColor(Color::Rgba(10, 20, 30, 1.0)),
+                Attribute::AttrFontColor(Color::rgba(10, 20, 30, 1.0)),
                 Attribute::AttrBorderWidth(2),
-                Attribute::AttrBorderColor(Color::Rgba(0, 0, 0, 0.5)),
+                Attribute::AttrBorderColor(Color::rgba(0, 0, 0, 0.5)),
                 Attribute::AttrClass("card".to_string()),
             ],
             vec![Element::Text("Body".to_string())],
@@ -2121,7 +2119,7 @@ mod tests {
             Description::DescMain,
             vec![
                 Attribute::AttrPadding(4, 8, 4, 8),
-                Attribute::AttrFontColor(Color::Rgba(1, 2, 3, 0.25)),
+                Attribute::AttrFontColor(Color::rgba(1, 2, 3, 0.25)),
             ],
             vec![Element::Text("hi".to_string())],
         );

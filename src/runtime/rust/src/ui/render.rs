@@ -199,7 +199,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 decl!("font-size:{n}px");
             }
             Attribute::AttrFontColor(c) => {
-                decl!("color:{}", c.css());
+                decl!("color:{}", c.to_css_rgba());
             }
             Attribute::AttrFontFamily(f) => {
                 // Value-as-data gate (UI CSS-escaping hardening): a raw Ipê
@@ -239,7 +239,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 }
             }
             Attribute::AttrBgColor(c) => {
-                decl!("background-color:{}", c.css());
+                decl!("background-color:{}", c.to_css_rgba());
             }
             Attribute::AttrBgImage(url) => {
                 // T3: check the raw URL scheme before wrapping in url().
@@ -291,7 +291,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 decl!("border-width:{t}px {r}px {b}px {l}px");
             }
             Attribute::AttrBorderColor(c) => {
-                decl!("border-color:{}", c.css());
+                decl!("border-color:{}", c.to_css_rgba());
             }
             Attribute::AttrBorderRounded(n) => {
                 decl!("border-radius:{n}px");
@@ -302,12 +302,15 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 }
             }
             Attribute::AttrBorderShadow(x, y, blur, spread, c) => {
-                decl!("box-shadow:{x}px {y}px {blur}px {spread}px {}", c.css());
+                decl!(
+                    "box-shadow:{x}px {y}px {blur}px {spread}px {}",
+                    c.to_css_rgba()
+                );
             }
             Attribute::AttrBorderInsetShadow(x, y, blur, spread, c) => {
                 decl!(
                     "box-shadow:inset {x}px {y}px {blur}px {spread}px {}",
-                    c.css()
+                    c.to_css_rgba()
                 );
             }
             Attribute::AttrPointer => {
@@ -1254,8 +1257,8 @@ pub fn ui_layout_with_vecs<M: Clone>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::element::Color;
     use super::*;
+    use crate::color::Color;
     use crate::html::render_html;
 
     #[derive(Clone, Debug, PartialEq)]
@@ -1345,7 +1348,7 @@ mod tests {
             1,
             2,
             0,
-            Color::Rgba(0, 0, 0, 1.0),
+            Color::rgba(0, 0, 0, 1.0),
         )];
         let elem: Element<TestMsg> = Element::Empty;
         let html = ui_layout(attrs, elem);
@@ -1365,7 +1368,7 @@ mod tests {
         // `Border.color`. Exercises the `ui_border_glow_` helper end to end.
         let attrs = vec![super::super::helpers::ui_border_glow_(
             4,
-            Color::Rgba(0, 0, 0, 1.0),
+            Color::rgba(0, 0, 0, 1.0),
         )];
         let elem: Element<TestMsg> = Element::Empty;
         let html = ui_layout(attrs, elem);
@@ -1388,7 +1391,7 @@ mod tests {
             1,
             2,
             0,
-            Color::Rgba(0, 0, 0, 1.0),
+            Color::rgba(0, 0, 0, 1.0),
         )];
         let elem: Element<TestMsg> = Element::Empty;
         let html = ui_layout(attrs, elem);
@@ -1683,7 +1686,7 @@ mod tests {
 
     #[test]
     fn layout_with_wrapper_and_root_attrs() {
-        let wrapper_attrs = vec![Attribute::AttrBgColor(Color::Rgba(0, 0, 0, 1.0))];
+        let wrapper_attrs = vec![Attribute::AttrBgColor(Color::rgba(0, 0, 0, 1.0))];
         let root_attrs = vec![Attribute::AttrPadding(4, 4, 4, 4)];
         let elem: Element<TestMsg> = Element::Text("content".to_owned());
         let html = ui_layout_with_vecs(wrapper_attrs, root_attrs, elem);
@@ -1877,8 +1880,8 @@ mod tests {
         >(
             90.0,
             vec![
-                (0.0, Color::Rgba(255, 0, 0, 1.0)),
-                (100.0, Color::Rgba(0, 0, 255, 1.0)),
+                (0.0, Color::rgba(255, 0, 0, 1.0)),
+                (100.0, Color::rgba(0, 0, 255, 1.0)),
             ],
         )];
         let html = ui_layout(attrs, Element::Empty);
@@ -1897,7 +1900,7 @@ mod tests {
         // `data-ipe-pc-rules="h|background-color:rgba(255,0,0,1)"` marker —
         // the wire format `ipe_runtime::web::style_inject::build_pc` decodes
         // into a ipe-id-scoped `<style>` block post-`assign_ipe_ids`.
-        let inner = vec![Attribute::AttrBgColor(Color::Rgba(255, 0, 0, 1.0))];
+        let inner = vec![Attribute::AttrBgColor(Color::rgba(255, 0, 0, 1.0))];
         let pseudo_attr =
             super::super::helpers::ui_on_pseudo_(super::super::helpers::ui_hover_(), inner);
         let attrs = vec![pseudo_attr];
@@ -1920,7 +1923,7 @@ mod tests {
         // ipe-id-scoped <style> block post-`assign_ipe_ids`.
         let elem = super::super::helpers::ui_media_query_::<TestMsg>(
             "(min-width: 768px)".to_owned(),
-            vec![Attribute::AttrBgColor(Color::Rgba(18, 18, 24, 1.0))],
+            vec![Attribute::AttrBgColor(Color::rgba(18, 18, 24, 1.0))],
             Element::Text("responsive".to_owned()),
         );
         let html = ui_layout(vec![], elem);
@@ -1943,7 +1946,7 @@ mod tests {
         // breakpoint rule targets the styled node and can re-lay-out its own
         // contents (e.g. align-items on the column itself).
         let child: Element<TestMsg> = super::super::helpers::ui_column_(
-            vec![Attribute::AttrBgColor(Color::Rgba(9, 9, 9, 1.0))],
+            vec![Attribute::AttrBgColor(Color::rgba(9, 9, 9, 1.0))],
             vec![Element::Text("col".to_owned())],
         );
         let elem = super::super::helpers::ui_media_query_::<TestMsg>(
@@ -1985,7 +1988,7 @@ mod tests {
         // passthrough that drops the query.
         let elem = super::super::helpers::ui_breakpoint_::<TestMsg>(
             super::super::helpers::ui_mobile_(),
-            vec![Attribute::AttrBgColor(Color::Rgba(1, 2, 3, 1.0))],
+            vec![Attribute::AttrBgColor(Color::rgba(1, 2, 3, 1.0))],
             Element::Text("m".to_owned()),
         );
         let html = ui_layout(vec![], elem);
@@ -2007,7 +2010,7 @@ mod tests {
     fn ui_media_query_breakout_query_drops_markers_fail_closed() {
         let elem = super::super::helpers::ui_media_query_::<TestMsg>(
             "(min-width: 1px) { } </style><script>alert(1)</script> @import url(evil)".to_owned(),
-            vec![Attribute::AttrBgColor(Color::Rgba(18, 18, 24, 1.0))],
+            vec![Attribute::AttrBgColor(Color::rgba(18, 18, 24, 1.0))],
             Element::Text("safe".to_owned()),
         );
         let html = ui_layout(vec![], elem);
@@ -2181,8 +2184,8 @@ mod tests {
         // NB: `Border.focusColor` maps to `PseudoClass::FocusVisible` (wire
         // tag "v"), not `Focus` ("f") — see `ui_border_focus_color_`.
         let attrs: Vec<Attribute<TestMsg>> = vec![
-            super::super::helpers::ui_bg_hover_color_(Color::Rgba(255, 0, 0, 1.0)),
-            super::super::helpers::ui_border_focus_color_(Color::Rgba(0, 0, 255, 1.0)),
+            super::super::helpers::ui_bg_hover_color_(Color::rgba(255, 0, 0, 1.0)),
+            super::super::helpers::ui_border_focus_color_(Color::rgba(0, 0, 255, 1.0)),
         ];
         let elem: Element<TestMsg> = Element::Text("hi".to_owned());
         let html = ui_layout(attrs, elem);
@@ -2379,7 +2382,7 @@ mod tests {
             vec![
                 Element::Text("label ".to_owned()),
                 ui_column_(
-                    vec![Attribute::AttrFontColor(Color::Rgba(0, 0, 255, 1.0))],
+                    vec![Attribute::AttrFontColor(Color::rgba(0, 0, 255, 1.0))],
                     vec![Element::Text("stacked".to_owned())],
                 ),
             ],

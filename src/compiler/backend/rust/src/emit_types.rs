@@ -510,7 +510,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         }
         IrType::UiPlain(plain) => match plain {
             UiPlain::Length => "ipe_runtime::ui::element::Length".to_owned(),
-            UiPlain::Color => "ipe_runtime::ui::element::Color".to_owned(),
+            UiPlain::Color => "ipe_runtime::color::Color".to_owned(),
             UiPlain::HAlign => "ipe_runtime::ui::element::HAlign".to_owned(),
             UiPlain::VAlign => "ipe_runtime::ui::element::VAlign".to_owned(),
             UiPlain::Location => "ipe_runtime::ui::element::Location".to_owned(),

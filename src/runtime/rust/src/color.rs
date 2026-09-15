@@ -334,6 +334,20 @@ impl Color {
         (self.r, self.g, self.b, self.a)
     }
 
+    /// Read back as byte channels `(r, g, b, a)`: `r`/`g`/`b` in `0..=255`, `a`
+    /// as the stored `[0,1]` float. The exact round-trip of the byte
+    /// constructors ([`Color::rgb`] / [`Color::rgba`]), so a surface that stores
+    /// a colour in byte form (the persisted UI template) rebuilds the same value.
+    #[must_use]
+    pub fn to_rgba_bytes(&self) -> (i64, i64, i64, f64) {
+        (
+            unit_to_byte(self.r),
+            unit_to_byte(self.g),
+            unit_to_byte(self.b),
+            self.a,
+        )
+    }
+
     /// `Ipe.Color.toHsla` — read back as `(hue-degrees, saturation, lightness,
     /// alpha)`, saturation/lightness as `[0,1]` fractions.
     #[must_use]

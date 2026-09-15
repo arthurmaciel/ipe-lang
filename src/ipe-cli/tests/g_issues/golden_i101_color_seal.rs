@@ -6,7 +6,7 @@
 //! that flows through the INFERRED lowering path to the opaque Ipe.Ui `Color`:
 //!
 //! * (i) a boxed `Fn(Color)` HOF argument emitted `Box<dyn
-//!   Fn(ipe_runtime::ui::element::Color) -> _>` → ipe-0 / cargo-101 (E0433).
+//!   Fn(ipe_runtime::color::Color) -> _>` → ipe-0 / cargo-101 (E0433).
 //! * (ii) a record field literal `{ c = Cyan }` lowered the field via the
 //!   ty-path (→ `UiPlain::Color`) while the annotation lowered it via
 //!   `ir_type_from_canon` (→ `MainColor`) — the two disagreed → IPE-I0001.
@@ -17,7 +17,7 @@
 //! builtin (no union entry) still falls through to `UiPlain`.
 //!
 //! Both goldens ALSO assert the coexistence invariant: the emitted Rust carries
-//! the user enum `MainColor` AND the runtime `ipe_runtime::ui::element::Color`
+//! the user enum `MainColor` AND the runtime `ipe_runtime::color::Color`
 //! (proof iii — the real Ipe.Ui Color is unchanged).
 //!
 //! Gated on `IPE_E2E=1`. Run:
@@ -96,15 +96,15 @@ fn user_color_via_hof_resolves_to_own_enum() {
         "user `type Color` must emit its own `MainColor` enum"
     );
     // …and the HOF's boxed `Fn(Color)` argument now takes `MainColor` (THE fix);
-    // pre-it was `Box<dyn Fn(ipe_runtime::ui::element::Color) -> _>` → E0433.
+    // pre-it was `Box<dyn Fn(ipe_runtime::color::Color) -> _>` → E0433.
     assert!(
         program.contains("Fn(MainColor)"),
         "the inferred boxed HOF argument must take `MainColor`, not the opaque \
          Ipe.Ui Color"
     );
     assert!(
-        !program.contains("Fn(ipe_runtime::ui::element::Color)"),
-        "the pre-#101 hijack (`Fn(ipe_runtime::ui::element::Color)`) must be gone"
+        !program.contains("Fn(ipe_runtime::color::Color)"),
+        "the pre-#101 hijack (`Fn(ipe_runtime::color::Color)`) must be gone"
     );
     // The genuine Ipe.Ui Color path (Ui.rgb / Background.color) is unchanged —
     // it flows through the runtime helpers (proof iii, coexistence).
