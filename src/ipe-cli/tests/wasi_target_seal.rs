@@ -105,7 +105,15 @@ fn wasi_direct_floor_program_cargo_builds_for_wasip1() {
         .arg("build")
         .args(["--target", "wasm32-wasip1"])
         .current_dir(&out)
-        .env("CARGO_TARGET_DIR", &target_dir);
+        .env("CARGO_TARGET_DIR", &target_dir)
+        // Neutralise a machine-global `[build] rustflags` (e.g. a dev host's
+        // `-C link-arg=-fuse-ld=mold`) for this child build: the wasm link step
+        // uses `rust-lld`, which rejects a system-linker flag. This per-triple
+        // rustflags env var OVERRIDES `[build] rustflags` (cargo does not merge
+        // them), mirroring the repo `.cargo/config.toml` wasm-target override —
+        // so the test proves the CODEGEN seal (ipe-accepts ⇒ cargo-builds),
+        // never the host's ambient linker choice.
+        .env("CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS", "-C debuginfo=0");
     let status = cargo.status();
     assert!(
         matches!(&status, Ok(s) if s.success()),
