@@ -1377,9 +1377,10 @@ jobs:
   # `Ipe.Markdown` that is not reflected in the committed snapshot — or a port
   # that drifts from it — reddens the build (no silent parse-SSOT drift).
   #
-  # Change-gated on `code`: both the parser (`src/**`) and the serializer
-  # (`examples/**`) live under it, so a pure prose-only PR skips vacuously; it
-  # always runs on push/nightly.
+  # Change-gated on `code`: the parser, the `Ipe.Markdown` authority, and the
+  # committed snapshot all live under `src/**`, so any change that can move the
+  # snapshot triggers this job; a pure prose-only PR skips vacuously. It always
+  # runs on push/nightly.
   markdown-parity:
     runs-on: ubuntu-latest
     needs: [changes, quick-check]
