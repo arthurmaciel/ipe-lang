@@ -1356,6 +1356,32 @@ mod registry_phase_c_tests {
             K::AuthRevocationRevokeSession,
             K::AuthRevocationRestoreUser,
             K::AuthRevocationIsRevoked,
+            // ── Ipe.Color constructor kernels (Ipê-new, no legacy oracle) ──
+            K::ColorRgb,
+            K::ColorRgba,
+            K::ColorHsl,
+            K::ColorHsla,
+            K::ColorWhite,
+            K::ColorBlack,
+            K::ColorRed,
+            K::ColorGreen,
+            K::ColorBlue,
+            K::ColorTransparent,
+            // Ipe.Color accessors + manipulation
+            K::ColorToCss,
+            K::ColorToCssRgba,
+            K::ColorToHex,
+            K::ColorLuminance,
+            K::ColorWithAlpha,
+            K::ColorMix,
+            K::ColorBlend,
+            K::ColorLighten,
+            K::ColorDarken,
+            K::ColorSaturate,
+            K::ColorDesaturate,
+            K::ColorRotateHue,
+            K::ColorComplementary,
+            K::ColorGrayscale,
         ]
     };
 

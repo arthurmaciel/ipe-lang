@@ -3076,6 +3076,35 @@ impl Builder<'_> {
                 int(),
                 fun(int(), fun(int(), fun(float(), term_color()))),
             ),
+            // ── Ipe.Color constructor kernels (unified `color::Color`). ──
+            K::ColorRgb => fun(int(), fun(int(), fun(int(), color()))),
+            K::ColorRgba => fun(
+                int(),
+                fun(int(), fun(int(), fun(float(), color()))),
+            ),
+            K::ColorHsl => fun(float(), fun(float(), fun(float(), color()))),
+            K::ColorHsla => fun(
+                float(),
+                fun(float(), fun(float(), fun(float(), color()))),
+            ),
+            K::ColorWhite
+            | K::ColorBlack
+            | K::ColorRed
+            | K::ColorGreen
+            | K::ColorBlue
+            | K::ColorTransparent => color(),
+            // Ipe.Color accessors + manipulation
+            K::ColorToCss | K::ColorToCssRgba | K::ColorToHex => fun(color(), string()),
+            K::ColorLuminance => fun(color(), float()),
+            K::ColorComplementary | K::ColorGrayscale => fun(color(), color()),
+            K::ColorWithAlpha
+            | K::ColorLighten
+            | K::ColorDarken
+            | K::ColorSaturate
+            | K::ColorDesaturate
+            | K::ColorRotateHue => fun(float(), fun(color(), color())),
+            K::ColorBlend => fun(color(), fun(color(), color())),
+            K::ColorMix => fun(float(), fun(color(), fun(color(), color()))),
             // `widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
             // (msg = var(0), down = var(1), up = var(2)).
             K::UiWidget => fun(

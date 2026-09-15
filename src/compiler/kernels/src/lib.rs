@@ -2994,6 +2994,56 @@ pub enum StdlibKernel {
     StringToUpperIn,
     /// `String.toLowerIn : Locale -> String -> String` — locale-correct lower-case.
     StringToLowerIn,
+    // ── Ipe.Color constructor kernels (produce the unified `color::Color`) ──
+    /// `Color.rgb : Int -> Int -> Int -> Color` — opaque sRGB colour, alpha = 1.
+    ColorRgb,
+    /// `Color.rgba : Int -> Int -> Int -> Float -> Color` — sRGB colour with alpha.
+    ColorRgba,
+    /// `Color.hsl : Float -> Float -> Float -> Color` — HSL colour, alpha = 1.
+    ColorHsl,
+    /// `Color.hsla : Float -> Float -> Float -> Float -> Color` — HSL colour with alpha.
+    ColorHsla,
+    /// `Color.white : Color`
+    ColorWhite,
+    /// `Color.black : Color`
+    ColorBlack,
+    /// `Color.red : Color`
+    ColorRed,
+    /// `Color.green : Color`
+    ColorGreen,
+    /// `Color.blue : Color`
+    ColorBlue,
+    /// `Color.transparent : Color` — fully transparent.
+    ColorTransparent,
+    // ── Ipe.Color accessor + manipulation kernels ──
+    /// `Color.toCss : Color -> String` — CSS `rgb()/rgba()` spelling.
+    ColorToCss,
+    /// `Color.toCssRgba : Color -> String` — always the four-channel `rgba()` form.
+    ColorToCssRgba,
+    /// `Color.toHex : Color -> String` — `#rrggbb`/`#rrggbbaa` hex spelling.
+    ColorToHex,
+    /// `Color.luminance : Color -> Float` — WCAG relative luminance.
+    ColorLuminance,
+    /// `Color.withAlpha : Float -> Color -> Color` — replace the alpha channel.
+    ColorWithAlpha,
+    /// `Color.mix : Float -> Color -> Color -> Color` — perceptual blend at `t`.
+    ColorMix,
+    /// `Color.blend : Color -> Color -> Color` — source-over alpha compositing.
+    ColorBlend,
+    /// `Color.lighten : Float -> Color -> Color` — raise HSL lightness.
+    ColorLighten,
+    /// `Color.darken : Float -> Color -> Color` — lower HSL lightness.
+    ColorDarken,
+    /// `Color.saturate : Float -> Color -> Color` — raise HSL saturation.
+    ColorSaturate,
+    /// `Color.desaturate : Float -> Color -> Color` — lower HSL saturation.
+    ColorDesaturate,
+    /// `Color.rotateHue : Float -> Color -> Color` — rotate the hue by degrees.
+    ColorRotateHue,
+    /// `Color.complementary : Color -> Color` — the 180°-rotated hue.
+    ColorComplementary,
+    /// `Color.grayscale : Color -> Color` — desaturate fully to grey.
+    ColorGrayscale,
 }
 
 impl StdlibKernel {
@@ -4052,6 +4102,32 @@ impl StdlibKernel {
             Self::TermColorDefault => d("TermColor", "default", 0, Pure, "term_color_default_"),
             Self::TermColorRgb => d("TermColor", "rgb", 3, Pure, "term_color_rgb_"),
             Self::TermColorRgba => d("TermColor", "rgba", 4, Pure, "term_color_rgba_"),
+            // ── Ipe.Color constructors ──
+            Self::ColorRgb => d("Color", "rgb", 3, Pure, "color_rgb"),
+            Self::ColorRgba => d("Color", "rgba", 4, Pure, "color_rgba"),
+            Self::ColorHsl => d("Color", "hsl", 3, Pure, "color_hsl"),
+            Self::ColorHsla => d("Color", "hsla", 4, Pure, "color_hsla"),
+            Self::ColorWhite => d("Color", "white", 0, Pure, "color_white"),
+            Self::ColorBlack => d("Color", "black", 0, Pure, "color_black"),
+            Self::ColorRed => d("Color", "red", 0, Pure, "color_red"),
+            Self::ColorGreen => d("Color", "green", 0, Pure, "color_green"),
+            Self::ColorBlue => d("Color", "blue", 0, Pure, "color_blue"),
+            Self::ColorTransparent => d("Color", "transparent", 0, Pure, "color_transparent"),
+            // ── Ipe.Color accessors + manipulation ──
+            Self::ColorToCss => d("Color", "toCss", 1, Pure, "color_to_css"),
+            Self::ColorToCssRgba => d("Color", "toCssRgba", 1, Pure, "color_to_css_rgba"),
+            Self::ColorToHex => d("Color", "toHex", 1, Pure, "color_to_hex"),
+            Self::ColorLuminance => d("Color", "luminance", 1, Pure, "color_luminance"),
+            Self::ColorWithAlpha => d("Color", "withAlpha", 2, Pure, "color_with_alpha"),
+            Self::ColorMix => d("Color", "mix", 3, Pure, "color_mix"),
+            Self::ColorBlend => d("Color", "blend", 2, Pure, "color_blend"),
+            Self::ColorLighten => d("Color", "lighten", 2, Pure, "color_lighten"),
+            Self::ColorDarken => d("Color", "darken", 2, Pure, "color_darken"),
+            Self::ColorSaturate => d("Color", "saturate", 2, Pure, "color_saturate"),
+            Self::ColorDesaturate => d("Color", "desaturate", 2, Pure, "color_desaturate"),
+            Self::ColorRotateHue => d("Color", "rotateHue", 2, Pure, "color_rotate_hue"),
+            Self::ColorComplementary => d("Color", "complementary", 1, Pure, "color_complementary"),
+            Self::ColorGrayscale => d("Color", "grayscale", 1, Pure, "color_grayscale"),
             Self::UiWidget => d("CustomElement", "node", 3, Ui, "ui_widget_"),
             Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
             Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
@@ -5601,6 +5677,32 @@ impl StdlibKernel {
         Self::TermColorDefault,
         Self::TermColorRgb,
         Self::TermColorRgba,
+        // ── Ipe.Color constructors ──
+        Self::ColorRgb,
+        Self::ColorRgba,
+        Self::ColorHsl,
+        Self::ColorHsla,
+        Self::ColorWhite,
+        Self::ColorBlack,
+        Self::ColorRed,
+        Self::ColorGreen,
+        Self::ColorBlue,
+        Self::ColorTransparent,
+        // ── Ipe.Color accessors + manipulation ──
+        Self::ColorToCss,
+        Self::ColorToCssRgba,
+        Self::ColorToHex,
+        Self::ColorLuminance,
+        Self::ColorWithAlpha,
+        Self::ColorMix,
+        Self::ColorBlend,
+        Self::ColorLighten,
+        Self::ColorDarken,
+        Self::ColorSaturate,
+        Self::ColorDesaturate,
+        Self::ColorRotateHue,
+        Self::ColorComplementary,
+        Self::ColorGrayscale,
         Self::UiWidget,
         Self::UiNode,
         Self::UiTaggedNode,
@@ -7944,6 +8046,27 @@ impl StdlibKernel {
         // The first-class terminal palette type. Both Tui and Cli `color`/`bg`
         // take it, so a colour is one type everywhere in a terminal view.
         const TERM_COLOR: TyShape = TyShape::Con(BuiltinTag::TermColor, &[]);
+        // ── Ipe.Color kernel scheme shapes (the unified `Color` value type). ──
+        // Reuses the existing `COLOR` const (`BuiltinTag::UiColor` and
+        // `BuiltinTag::Color` share the one runtime `color::Color` carrier).
+        const INT_TO_INT_TO_INT_TO_COLOR: TyShape =
+            TyShape::Fun(&INT, &TyShape::Fun(&INT, &TyShape::Fun(&INT, &COLOR)));
+        const INT_TO_INT_TO_INT_TO_FLOAT_TO_COLOR: TyShape = TyShape::Fun(
+            &INT,
+            &TyShape::Fun(&INT, &TyShape::Fun(&INT, &TyShape::Fun(&FLOAT, &COLOR))),
+        );
+        const FLOAT_TO_FLOAT_TO_FLOAT_TO_COLOR: TyShape =
+            TyShape::Fun(&FLOAT, &TyShape::Fun(&FLOAT, &TyShape::Fun(&FLOAT, &COLOR)));
+        const FLOAT_TO_FLOAT_TO_FLOAT_TO_FLOAT_TO_COLOR: TyShape = TyShape::Fun(
+            &FLOAT,
+            &TyShape::Fun(&FLOAT, &TyShape::Fun(&FLOAT, &TyShape::Fun(&FLOAT, &COLOR))),
+        );
+        const COLOR_TO_FLOAT: TyShape = TyShape::Fun(&COLOR, &FLOAT);
+        const COLOR_TO_COLOR: TyShape = TyShape::Fun(&COLOR, &COLOR);
+        const COLOR_TO_COLOR_TO_COLOR: TyShape = TyShape::Fun(&COLOR, &COLOR_TO_COLOR);
+        const FLOAT_TO_COLOR_TO_COLOR: TyShape = TyShape::Fun(&FLOAT, &COLOR_TO_COLOR);
+        const FLOAT_TO_COLOR_TO_COLOR_TO_COLOR: TyShape =
+            TyShape::Fun(&FLOAT, &COLOR_TO_COLOR_TO_COLOR);
         const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&TERM_COLOR, &TUI_ATTR_A);
         // `Lines msg` (var(0) = msg) and the Cli line-native attribute type and
         // list slots — DISTINCT from both DOM `UI_ATTR_A` and cell `TUI_ATTR_A`.
@@ -9521,6 +9644,32 @@ impl StdlibKernel {
             | Self::TermColorDefault => Some(&TERM_COLOR),
             Self::TermColorRgb => Some(&INT_TO_INT_TO_INT_TO_TERM_COLOR),
             Self::TermColorRgba => Some(&INT_TO_INT_TO_INT_TO_FLOAT_TO_TERM_COLOR),
+            // ── Ipe.Color constructors ──
+            Self::ColorRgb => Some(&INT_TO_INT_TO_INT_TO_COLOR),
+            Self::ColorRgba => Some(&INT_TO_INT_TO_INT_TO_FLOAT_TO_COLOR),
+            Self::ColorHsl => Some(&FLOAT_TO_FLOAT_TO_FLOAT_TO_COLOR),
+            Self::ColorHsla => Some(&FLOAT_TO_FLOAT_TO_FLOAT_TO_FLOAT_TO_COLOR),
+            Self::ColorWhite => Some(&COLOR),
+            Self::ColorBlack => Some(&COLOR),
+            Self::ColorRed => Some(&COLOR),
+            Self::ColorGreen => Some(&COLOR),
+            Self::ColorBlue => Some(&COLOR),
+            Self::ColorTransparent => Some(&COLOR),
+            // ── Ipe.Color accessors + manipulation ──
+            Self::ColorToCss => Some(&COLOR_TO_STRING),
+            Self::ColorToCssRgba => Some(&COLOR_TO_STRING),
+            Self::ColorToHex => Some(&COLOR_TO_STRING),
+            Self::ColorLuminance => Some(&COLOR_TO_FLOAT),
+            Self::ColorWithAlpha => Some(&FLOAT_TO_COLOR_TO_COLOR),
+            Self::ColorMix => Some(&FLOAT_TO_COLOR_TO_COLOR_TO_COLOR),
+            Self::ColorBlend => Some(&COLOR_TO_COLOR_TO_COLOR),
+            Self::ColorLighten => Some(&FLOAT_TO_COLOR_TO_COLOR),
+            Self::ColorDarken => Some(&FLOAT_TO_COLOR_TO_COLOR),
+            Self::ColorSaturate => Some(&FLOAT_TO_COLOR_TO_COLOR),
+            Self::ColorDesaturate => Some(&FLOAT_TO_COLOR_TO_COLOR),
+            Self::ColorRotateHue => Some(&FLOAT_TO_COLOR_TO_COLOR),
+            Self::ColorComplementary => Some(&COLOR_TO_COLOR),
+            Self::ColorGrayscale => Some(&COLOR_TO_COLOR),
             Self::UiWidget => Some(&UI_WIDGET),
             Self::UiNode => Some(&UI_NODE),
             Self::UiTaggedNode => Some(&UI_TAGGED_NODE),
@@ -10689,6 +10838,30 @@ impl StdlibKernel {
             | Self::TermColorDefault
             | Self::TermColorRgb
             | Self::TermColorRgba
+            | Self::ColorRgb
+            | Self::ColorRgba
+            | Self::ColorHsl
+            | Self::ColorHsla
+            | Self::ColorWhite
+            | Self::ColorBlack
+            | Self::ColorRed
+            | Self::ColorGreen
+            | Self::ColorBlue
+            | Self::ColorTransparent
+            | Self::ColorToCss
+            | Self::ColorToCssRgba
+            | Self::ColorToHex
+            | Self::ColorLuminance
+            | Self::ColorWithAlpha
+            | Self::ColorMix
+            | Self::ColorBlend
+            | Self::ColorLighten
+            | Self::ColorDarken
+            | Self::ColorSaturate
+            | Self::ColorDesaturate
+            | Self::ColorRotateHue
+            | Self::ColorComplementary
+            | Self::ColorGrayscale
             | Self::UiNode
             | Self::UiTaggedNode
             | Self::UiButton
