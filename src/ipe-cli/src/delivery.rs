@@ -433,39 +433,20 @@ impl Delivery {
         Ok(delivery)
     }
 
-    /// Enforce the biconditional that couples the delivery runtime to the compile
-    /// target: a `spa` delivery compiles to wasm, and a wasm target carries only a
-    /// `spa` delivery — `runtime() == Some(Runtime::Spa)` IFF `wasm_target`.
-    ///
-    /// The runtime and the target are derived from independent sources (the
-    /// delivery grammar vs the `--target`/`IPE_TARGET`/`[wasm].mode` chain); this
-    /// is the single point that refuses their disagreement. It is load-bearing for
-    /// security: the native-deny backstops that keep native effects out of a
-    /// sandboxed client are keyed to the wasm target, so a `spa` delivery that
-    /// slipped through as a native build would ship those effects into the
-    /// sandbox. Absent proof the two agree, the build is refused.
-    ///
-    /// # Errors
-    /// [`DeliveryError::SpaRequiresWasmTarget`] for a `spa` delivery with a native
-    /// target; [`DeliveryError::WasmTargetRequiresSpa`] for a wasm target without a
-    /// `spa` delivery.
-    pub const fn reconcile_wasm_target(self, wasm_target: bool) -> Result<(), DeliveryError> {
-        let is_spa = matches!(self.runtime, Some(Runtime::Spa));
-        match (is_spa, wasm_target) {
-            (true, false) => Err(DeliveryError::SpaRequiresWasmTarget),
-            (false, true) => Err(DeliveryError::WasmTargetRequiresSpa),
-            (true, true) | (false, false) => Ok(()),
-        }
-    }
-
     /// The `(engine, delivery, triple)` validity matrix — a typed total function
     /// that admits exactly the legal combinations and refuses every other with a
-    /// pedagogical [`DeliveryError`]. It is the structural successor to
-    /// [`Self::reconcile_wasm_target`]: it subsumes the `spa` IFF wasm
-    /// biconditional and adds the third axis (the triple), so the two wasm
-    /// flavours — the sandboxed browser client (`wasm32-unknown-unknown`) and the
-    /// co-located portable WASI target (`wasm32-wasip1`) — are kept cleanly
-    /// separate at one place.
+    /// pedagogical [`DeliveryError`]. It is the single live gate coupling the
+    /// delivery runtime to the compile target: it enforces the `spa` IFF wasm
+    /// biconditional (the runtime and the target are derived from independent
+    /// sources — the delivery grammar vs the `--target`/`IPE_TARGET`/`[wasm].mode`
+    /// chain — so this is the one point that refuses their disagreement) and adds
+    /// the third axis (the triple), so the two wasm flavours — the sandboxed
+    /// browser client (`wasm32-unknown-unknown`) and the co-located portable WASI
+    /// target (`wasm32-wasip1`) — are kept cleanly separate at one place. It is
+    /// load-bearing for security: the native-deny backstops that keep native
+    /// effects out of a sandboxed client are keyed to the wasm engine, so a `spa`
+    /// delivery that slipped through as a native build would ship those effects
+    /// into the sandbox. Absent proof the axes agree, the build is refused.
     ///
     /// Fail-closed by construction: the `match` is exhaustive and has NO
     /// permissive catch-all — a tuple not enumerated legal hits a refusal arm.
@@ -1068,54 +1049,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn spa_delivery_refuses_native_target() {
-        // The verified fail-open: a `web spa` app whose target resolved to native
-        // would silently skip the wasm-keyed sandbox backstops. Refuse it.
-        let spa = Delivery::resolve(Shape::Web, Some(Runtime::Spa), Host::Default).unwrap();
-        assert_eq!(
-            spa.reconcile_wasm_target(false),
-            Err(DeliveryError::SpaRequiresWasmTarget),
-        );
-        // The legal pairing (spa ⇒ wasm) is admitted.
-        assert_eq!(spa.reconcile_wasm_target(true), Ok(()));
-    }
-
-    #[test]
-    fn wasm_target_refuses_non_spa_delivery() {
-        // The symmetric half: a wasm target must carry a `spa` delivery. Every
-        // non-`spa` shape has no wasm form, so the two disagreed at their sources.
-        let live = Delivery::resolve(Shape::Web, Some(Runtime::Live), Host::Default).unwrap();
-        assert_eq!(
-            live.reconcile_wasm_target(true),
-            Err(DeliveryError::WasmTargetRequiresSpa),
-        );
-        assert_eq!(live.reconcile_wasm_target(false), Ok(()));
-
-        // A non-web shape has no runtime axis at all: native-only, wasm refused.
-        for shape in [Shape::Script, Shape::Cli, Shape::Server, Shape::Tui] {
-            let d = Delivery::resolve(shape, None, Host::Default).unwrap();
-            assert_eq!(
-                d.reconcile_wasm_target(true),
-                Err(DeliveryError::WasmTargetRequiresSpa),
-                "a non-web {shape:?} shape has no wasm form",
-            );
-            assert_eq!(d.reconcile_wasm_target(false), Ok(()));
-        }
-    }
-
-    #[test]
-    fn spa_wasm_biconditional_is_exhaustive() {
-        // Both agreeing corners pass; both disagreeing corners are refused —
-        // the invariant is `spa` IFF wasm, with no admitted middle.
-        let spa = Delivery::resolve(Shape::Web, Some(Runtime::Spa), Host::Default).unwrap();
-        let live = Delivery::resolve(Shape::Web, Some(Runtime::Live), Host::Default).unwrap();
-        assert!(spa.reconcile_wasm_target(true).is_ok());
-        assert!(live.reconcile_wasm_target(false).is_ok());
-        assert!(spa.reconcile_wasm_target(false).is_err());
-        assert!(live.reconcile_wasm_target(true).is_err());
-    }
-
     // === The engine × host × triple validity matrix (#2461) ===
 
     fn spa() -> Delivery {
@@ -1359,37 +1292,35 @@ mod tests {
     }
 
     #[test]
-    fn matrix_subsumes_the_biconditional() {
-        // The matrix must agree with `reconcile_wasm_target` on all four bool
-        // corners, so the two stay in lock-step until the callsites migrate —
-        // the matrix is a strict superset, never a regression of a refusal.
-        // (engine, triple) stands in for the bool: WasmClient+BrowserWasm ==
-        // wasm_target true; Native+Host == wasm_target false.
+    fn matrix_enforces_the_spa_iff_wasm_biconditional() {
+        // The matrix IS the `spa` IFF wasm biconditional: on the browser-client
+        // axis, `spa` compiles to wasm and wasm carries only `spa` — both
+        // agreeing corners admitted, both disagreeing corners refused, with no
+        // permissive middle. (engine, triple) is the target side of the
+        // biconditional: WasmClient+BrowserWasm is the wasm corner, Native+Host
+        // the native corner.
         let spa = spa();
         let live = served_live();
-        // spa + wasm  <=>  reconcile(true) ok
+        // spa + wasm: admitted (the sandboxed client's one legal target).
         assert_eq!(
-            spa.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm)
-                .is_ok(),
-            spa.reconcile_wasm_target(true).is_ok(),
+            spa.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
+            Ok(()),
         );
-        // spa + native  <=>  reconcile(false) err
+        // spa + native: refused — the wasm-keyed sandbox backstops would be
+        // skipped for a client shipped as a native binary.
         assert_eq!(
-            spa.admit_triple(Engine::Native, TargetTriple::Host)
-                .is_err(),
-            spa.reconcile_wasm_target(false).is_err(),
+            spa.admit_triple(Engine::Native, TargetTriple::Host),
+            Err(DeliveryError::SpaRequiresWasmTarget),
         );
-        // live + wasm  <=>  reconcile(true) err
+        // live + wasm: refused — a non-`spa` shape has no browser-wasm form.
         assert_eq!(
-            live.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm)
-                .is_err(),
-            live.reconcile_wasm_target(true).is_err(),
+            live.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
+            Err(DeliveryError::WasmTargetRequiresSpa),
         );
-        // live + native  <=>  reconcile(false) ok
+        // live + native: admitted — the co-located native binary.
         assert_eq!(
-            live.admit_triple(Engine::Native, TargetTriple::Host)
-                .is_ok(),
-            live.reconcile_wasm_target(false).is_ok(),
+            live.admit_triple(Engine::Native, TargetTriple::Host),
+            Ok(()),
         );
     }
 

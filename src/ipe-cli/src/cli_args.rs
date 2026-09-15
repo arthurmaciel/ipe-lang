@@ -469,6 +469,57 @@ impl StaticFlags {
     }
 }
 
+/// A WebAssembly compilation target selected on the CLI.
+///
+/// `--target wasm` and `--target wasi` are two distinct pseudo-triples (not
+/// static-link triples), captured as their own axis so the native static flags
+/// cannot also apply. The two WASM flavours are kept cleanly separate at the
+/// parse boundary
+/// (parse, don't validate): `Client` is the sandboxed browser bundle
+/// (`wasm32-unknown-unknown`, `web spa`); `Wasi` is the co-located portable
+/// WASI target (`wasm32-wasip1`) for a `Direct`/`Script` program. `None` is the
+/// ordinary native build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WasmKind {
+    /// No WASM target: an ordinary native build.
+    None,
+    /// `--target wasm` — the sandboxed browser client bundle.
+    Client,
+    /// `--target wasi` — the co-located portable `wasm32-wasip1` module.
+    Wasi,
+}
+
+impl WasmKind {
+    /// Classify a raw `--target` value into its WASM flavour. Only the two
+    /// pseudo-triple words (`wasm`, `wasi`) are WASM targets; every other value
+    /// (a real static-link triple, or `None`) is [`WasmKind::None`].
+    #[must_use]
+    pub fn classify(target: Option<&str>) -> Self {
+        match target {
+            Some("wasm") => Self::Client,
+            Some("wasi") => Self::Wasi,
+            _ => Self::None,
+        }
+    }
+
+    /// Whether this is a WASM target at all (either flavour) — the axis that
+    /// does not compose with the native static-link flags.
+    #[must_use]
+    pub const fn is_wasm(self) -> bool {
+        matches!(self, Self::Client | Self::Wasi)
+    }
+
+    /// The `--target` word that selects this flavour, for a pedagogical message.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Client => "wasm",
+            Self::Wasi => "wasi",
+        }
+    }
+}
+
 /// The compilation surface `ipe build` produces — dump the lowered IR, or emit
 /// a native/wasm project.
 ///
@@ -487,11 +538,12 @@ pub enum BuildMode {
     Emit {
         /// `--out <dir>` — where to write the emitted project.
         out: Option<String>,
-        /// `--target wasm` selects the browser target (a distinct compilation
-        /// axis), captured here so `--static` / `--allocator` cannot also apply.
-        wasm: bool,
+        /// `--target wasm`/`--target wasi` selects a WASM target (a distinct
+        /// compilation axis), captured here so `--static` / `--allocator`
+        /// cannot also apply.
+        wasm: WasmKind,
         /// The native static-request layer (`--static` / `--target <triple>` /
-        /// `--allocator` / `--allow-slow-allocator`). Empty under `--target wasm`.
+        /// `--allocator` / `--allow-slow-allocator`). Empty under a WASM target.
         static_layer: StaticRequestLayer,
     },
 }
@@ -599,24 +651,27 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         }
     }
 
-    // `--target wasm` is a compilation-target axis, not a static-link triple; it
-    // never enters static-request resolution and does not compose with the
-    // native static flags.
-    let wasm = static_flags.target.as_deref() == Some("wasm");
-    if wasm && (static_flags.static_flag || static_flags.allocator.is_some()) {
-        return Err(CliError::Usage(
-            "--static / --allocator are native-target flags; they do not compose with --target wasm",
-        ));
+    // `--target wasm`/`--target wasi` is a compilation-target axis, not a
+    // static-link triple; it never enters static-request resolution and does not
+    // compose with the native static flags.
+    let wasm = WasmKind::classify(static_flags.target.as_deref());
+    if wasm.is_wasm() && (static_flags.static_flag || static_flags.allocator.is_some()) {
+        return Err(CliError::UsageOwned(format!(
+            "--static / --allocator are native-target flags; they do not compose with --target {}",
+            wasm.word(),
+        )));
     }
-    if wasm && static_flags.allow_slow_allocator {
-        return Err(CliError::Usage(
-            "--allow-slow-allocator is a native-target flag; it does not compose with --target wasm",
-        ));
+    if wasm.is_wasm() && static_flags.allow_slow_allocator {
+        return Err(CliError::UsageOwned(format!(
+            "--allow-slow-allocator is a native-target flag; it does not compose with --target {}",
+            wasm.word(),
+        )));
     }
-    if wasm && static_flags.c_free {
-        return Err(CliError::Usage(
-            "--cfree is a native-target flag; it does not compose with --target wasm",
-        ));
+    if wasm.is_wasm() && static_flags.c_free {
+        return Err(CliError::UsageOwned(format!(
+            "--cfree is a native-target flag; it does not compose with --target {}",
+            wasm.word(),
+        )));
     }
 
     let mode = if emit_ir {
@@ -646,17 +701,17 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
             return Err(CliError::Usage("--emit-ir does not compose with --cfree"));
         }
         BuildMode::EmitIr
-    } else if wasm {
+    } else if wasm.is_wasm() {
         // Clear the pseudo-triple so it never enters static resolution.
         BuildMode::Emit {
             out,
-            wasm: true,
+            wasm,
             static_layer: StaticRequestLayer::default(),
         }
     } else {
         BuildMode::Emit {
             out,
-            wasm: false,
+            wasm: WasmKind::None,
             static_layer: static_flags.layer(),
         }
     };
@@ -767,11 +822,21 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
         }
     }
 
-    if static_flags.target.as_deref() == Some("wasm") {
-        return Err(CliError::Usage(
-            "ipe run builds and executes a native binary; --target wasm has no native artifact to \
-             run — use `ipe build --target wasm` to produce a browser bundle",
-        ));
+    match WasmKind::classify(static_flags.target.as_deref()) {
+        WasmKind::Client => {
+            return Err(CliError::Usage(
+                "ipe run builds and executes a native binary; --target wasm has no native \
+                 artifact to run — use `ipe build --target wasm` to produce a browser bundle",
+            ));
+        }
+        WasmKind::Wasi => {
+            return Err(CliError::Usage(
+                "ipe run builds and executes a native binary; --target wasi has no native \
+                 artifact to run — use `ipe build --target wasi` to produce a wasm32-wasip1 \
+                 module (run it under a WASI runtime such as wasmtime)",
+            ));
+        }
+        WasmKind::None => {}
     }
 
     Ok(RunArgs {
@@ -1344,7 +1409,7 @@ mod tests {
                 static_layer,
             } => {
                 assert!(out.is_none());
-                assert!(!wasm);
+                assert_eq!(wasm, WasmKind::None);
                 assert_eq!(static_layer, StaticRequestLayer::default());
             }
             BuildMode::EmitIr => panic!("default build must emit a project"),
@@ -1463,13 +1528,38 @@ mod tests {
     }
 
     #[test]
+    fn build_wasi_rejects_native_static_flags() {
+        // `--target wasi` is a WASM axis too: the native static-link flags do
+        // not compose with it, symmetric with `--target wasm`.
+        assert!(parse_build(&s(&["--target", "wasi", "--static"])).is_err());
+        assert!(parse_build(&s(&["--target", "wasi", "--allocator", "dlmalloc"])).is_err());
+        assert!(parse_build(&s(&["--target", "wasi", "--allow-slow-allocator"])).is_err());
+        assert!(parse_build(&s(&["--target", "wasi", "--cfree"])).is_err());
+    }
+
+    #[test]
     fn build_wasm_alone_ok() {
         match parse_build(&s(&["--target", "wasm"])).expect("wasm").mode {
             BuildMode::Emit {
                 wasm, static_layer, ..
             } => {
-                assert!(wasm);
+                assert_eq!(wasm, WasmKind::Client);
                 // The pseudo-triple must be cleared so it never reaches resolution.
+                assert_eq!(static_layer, StaticRequestLayer::default());
+            }
+            BuildMode::EmitIr => panic!(),
+        }
+    }
+
+    #[test]
+    fn build_wasi_alone_ok() {
+        // `--target wasi` selects the co-located WASI flavour, cleared from the
+        // static-request layer just like `--target wasm`.
+        match parse_build(&s(&["--target", "wasi"])).expect("wasi").mode {
+            BuildMode::Emit {
+                wasm, static_layer, ..
+            } => {
+                assert_eq!(wasm, WasmKind::Wasi);
                 assert_eq!(static_layer, StaticRequestLayer::default());
             }
             BuildMode::EmitIr => panic!(),
@@ -1485,7 +1575,7 @@ mod tests {
             BuildMode::Emit {
                 wasm, static_layer, ..
             } => {
-                assert!(!wasm);
+                assert_eq!(wasm, WasmKind::None);
                 assert_eq!(static_layer.static_build, Some(true));
                 assert_eq!(
                     static_layer.target.as_deref(),
@@ -1559,6 +1649,18 @@ mod tests {
     fn run_wasm_target_rejected() {
         assert!(matches!(
             parse_run(&s(&["--target", "wasm"])),
+            Err(CliError::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn run_wasi_target_rejected() {
+        // `ipe run` builds and executes a native binary; a `wasm32-wasip1`
+        // module has no native artifact to exec, so `--target wasi` is refused
+        // at parse time (build it with `ipe build --target wasi`, run under a
+        // WASI runtime such as wasmtime).
+        assert!(matches!(
+            parse_run(&s(&["--target", "wasi"])),
             Err(CliError::Usage(_))
         ));
     }

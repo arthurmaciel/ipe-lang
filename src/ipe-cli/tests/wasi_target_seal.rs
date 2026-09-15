@@ -1,17 +1,24 @@
-//! Co-located WASI (`wasm32-wasip1`) accept-path SEAL (issue #2461, increment 2).
+//! Co-located WASI (`wasm32-wasip1`) accept-path SEAL (issue #2461).
 //!
-//! Two obligations, both fail-closed by construction:
+//! Obligations, all fail-closed by construction:
 //!
-//! * **THE SEAL (accept):** a `Direct`/`Script` (`main : Task Error ()`) program
-//!   that reaches only the sealed WASI floor (`Ipe.Io` stdio) emits a project
-//!   that `cargo build --target wasm32-wasip1` — `ipe`-accepts ⇒ cargo-builds.
-//!   Gated on `IPE_E2E=1` (the default `cargo test` stays fast + offline).
-//! * **The refusal:** a program reaching a NON-viable family (`Ipe.Http`,
-//!   whose reqwest/`tokio/net` stack does not build on wasip1) is turned away at
-//!   `ipe` time with a typed diagnostic (IPE-N0029), never emitted — so the
-//!   unbuildable shape can never reach the wasip1 `cargo build`.
+//! * **THE SEAL (emit-side):** a `Direct`/`Script` (`main : Task Error ()`)
+//!   program that reaches only the sealed WASI floor (`Ipe.Io` stdio) emits a
+//!   project that `cargo build --target wasm32-wasip1` — `ipe`-accepts ⇒
+//!   cargo-builds. Gated on `IPE_E2E=1` (the default `cargo test` stays fast +
+//!   offline).
+//! * **THE SEAL (user path):** the SAME guarantee through the real CLI selector
+//!   — `ipe build --target wasi` on a sealed-floor `Direct` program produces a
+//!   `wasm32-wasip1` module that built. This is the path an end user walks.
+//! * **The refusal (emit-side):** a program reaching a NON-viable family
+//!   (`Ipe.Http`, whose reqwest/`tokio/net` stack does not build on wasip1) is
+//!   turned away at `ipe` time with a typed diagnostic (IPE-N0029), never
+//!   emitted — so the unbuildable shape can never reach the wasip1 `cargo build`.
+//! * **The refusal (user path):** `ipe build --target wasi` on a non-WASI-viable
+//!   shape (a TEA `Web` app) is refused at delivery-resolve time with a typed
+//!   diagnostic, before any emit — never a permissive default.
 //!
-//! The refusal test runs unconditionally (no cargo, no network): it is the
+//! The refusal tests run unconditionally (no cargo, no network): they are the
 //! standing check that the sealed-floor gate stays real.
 
 use std::path::{Path, PathBuf};
@@ -80,6 +87,46 @@ const HTTP_SHAPE_SOURCE: &str = "module Main exposing (main)\n\
      \x20\n\
      \x20       Nothing ->\n\
      \x20           Io.println \"bad url\"\n";
+
+/// A `Web` TEA app — a view-ful loop pinned to the `ControlModel::Tea` model,
+/// which is NOT WASI-viable (its runtime spine pulls tokio/axum). `--target
+/// wasi` on it must be refused at delivery-resolve time, before any emit.
+const WEB_TEA_SOURCE: &str = r"module Main exposing (main)
+
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.String
+import Ipe.Tea.Web.Sub
+
+type Msg = Increment
+
+type alias Model = { count : Int }
+
+init : WebReq -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+view : Model -> Element Msg
+view model =
+    Ui.text (String.fromInt model.count)
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Web.tea
+        { init = init, update = update, view = view, subscriptions = subscriptions
+        , routes = [], notFound = Increment
+        }
+";
 
 /// THE SEAL: a sealed-floor `Direct` program emits a project that
 /// `cargo build --target wasm32-wasip1` accepts. `ipe`-accepts ⇒ cargo-builds.
@@ -159,5 +206,100 @@ fn wasi_http_shape_is_refused_fail_closed() {
     assert!(
         !out.join("Cargo.toml").exists(),
         "a refused WASI shape must emit no project (fail-closed before emit)",
+    );
+}
+
+/// THE SEAL through the USER selector: `ipe build --target wasi` on a
+/// sealed-floor `Direct` program produces a `wasm32-wasip1` module that
+/// `cargo build`s. This exercises the real CLI path — parse `--target wasi`,
+/// resolve the compile target, gate through `admit_triple`, emit, and run the
+/// wasip1 cross-compile — not the emit helper directly. `ipe`-accepts (exit 0)
+/// ⇒ cargo-builds. Gated on `IPE_E2E=1`.
+#[test]
+fn ipe_build_target_wasi_user_path_cargo_builds() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let dir = scratch("wasi_seal_user_path");
+    let entry = write_entry(&dir.join("srcdir"), DIRECT_FLOOR_SOURCE);
+    let out = dir.join("out");
+
+    // Forward CI's warm shared target so the emitted crate's deps reuse
+    // compiled artifacts; else isolate a per-slot target. The wasip1 link is
+    // governed by the emitter's own `.cargo/config.toml`, so a global
+    // `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` (which outranks a `[target.<triple>]`
+    // config) is cleared for this process so the child cargo `run_cli` spawns
+    // sees exactly the emitted config — a pass proves the end-user seal.
+    let target_dir = e2e_support::child_shared_target_from_env()
+        .map_or_else(|| out.join("target"), PathBuf::from);
+    // SAFETY: nextest isolates each test in its own single-threaded-at-this-point
+    // process, so this env mutation does not leak to other tests and no other
+    // thread races these vars; the child cargo `run_cli` spawns inherits them.
+    unsafe {
+        std::env::set_var("CARGO_TARGET_DIR", &target_dir);
+        std::env::remove_var("RUSTFLAGS");
+        std::env::remove_var("CARGO_ENCODED_RUSTFLAGS");
+    }
+
+    let args = vec![
+        "build".to_owned(),
+        entry.to_string_lossy().into_owned(),
+        "--out".to_owned(),
+        out.to_string_lossy().into_owned(),
+        "--target".to_owned(),
+        "wasi".to_owned(),
+    ];
+    // THE SEAL: `run_cli` returns `Ok` ONLY if the wasip1 `cargo build`
+    // succeeded — `bundle_wasi` runs `cargo build --target wasm32-wasip1` and
+    // surfaces a non-zero exit as `CliError::EmittedBuildFailed`, so an `Ok`
+    // here is the end-to-end proof that the `ipe`-accepted program cargo-builds
+    // for the target through the real user selector. (The module artifact path
+    // is `bundle_wasi`'s own concern; a green build is the seal.)
+    let result = ipe::run_cli(&args);
+    assert!(
+        result.is_ok(),
+        "THE SEAL (user path): `ipe build --target wasi` on a sealed-floor Direct \
+         program must succeed (ipe-accepts ⇒ cargo-builds for wasm32-wasip1); got {result:?}",
+    );
+
+    if e2e_support::child_shared_target_from_env().is_none() {
+        let _ = std::fs::remove_dir_all(&target_dir);
+    }
+}
+
+/// The user-path refusal: `ipe build --target wasi` on a non-WASI-viable shape
+/// (a `Web` TEA app) is refused fail-closed with a typed diagnostic at
+/// delivery-resolve time — never a permissive default, never an emit. Runs
+/// unconditionally (no cargo): the standing check the selector fails closed.
+#[test]
+fn ipe_build_target_wasi_refuses_non_viable_shape_fail_closed() {
+    let dir = scratch("wasi_seal_user_refusal");
+    let entry = write_entry(&dir.join("srcdir"), WEB_TEA_SOURCE);
+    let out = dir.join("out");
+
+    let args = vec![
+        "build".to_owned(),
+        entry.to_string_lossy().into_owned(),
+        "--out".to_owned(),
+        out.to_string_lossy().into_owned(),
+        "--target".to_owned(),
+        "wasi".to_owned(),
+    ];
+    let err = ipe::run_cli(&args)
+        .expect_err("a Web TEA app must be REFUSED for --target wasi (not WASI-viable)");
+
+    // The refusal is a typed usage diagnostic naming the non-Direct shape — the
+    // `admit_triple` matrix's `WasiRequiresDirectShape` cell, surfaced through
+    // the CLI. Never a cargo failure, never a silent native fallback.
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("wasm32-wasip1") && rendered.contains("Direct"),
+        "the refusal must teach the WASI/Direct rule, got: {rendered}",
+    );
+    // Fail-closed before emit: nothing was written for the refused shape.
+    assert!(
+        !out.join("Cargo.toml").exists(),
+        "a refused WASI user build must emit no project (fail-closed before emit)",
     );
 }
