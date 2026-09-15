@@ -11,6 +11,8 @@
 //! The fixture also asserts the two fail-closed paths: a bare-scalar codec has
 //! no columns to bind (typed `Err`), and a row missing a required column decodes
 //! to a typed `Err` (schema drift surfaces as an error, never a wrong value).
+//! Prove-the-refusals: `CDecimal` binds as `SqlDecimal` (never `SqlString`);
+//! `CMoney` binds as `SqlMoney` (never `SqlString`); both round-trip losslessly.
 //!
 //! The fixture prints one `db-codec-bridge-ok` line iff every check holds, so
 //! the oracle is one line and any regression flips it, failing the seal loudly.

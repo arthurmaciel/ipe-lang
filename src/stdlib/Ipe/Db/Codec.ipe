@@ -46,6 +46,7 @@ import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Json.Encode as Encode
 import Ipe.Json.Decode as Decode
 import Ipe.Config as Config
+import Ipe.Decimal as Decimal exposing (Decimal)
 import Ipe.Dict as Dict
 import Ipe.List as List
 import Ipe.Maybe as Maybe exposing (Maybe(..))
@@ -119,20 +120,25 @@ bindColumn value name colType =
 -- JSON scalar its `ColType` implies and wraps it in the matching bound
 -- constructor:
 --
---   * `CText`  → JSON string  → `SqlString`
---   * `CInt`   → JSON integer → `SqlInt`
---   * `CReal`  → JSON number  → `SqlFloat`
---   * `CBool`  → JSON boolean → `SqlInt` 0/1 (bound as an integer flag)
---   * `CTime`  → JSON integer → `SqlTime` (Unix millis, bound as the time role)
---   * `CBlob`  → any JSON node → its compact serialisation as `SqlString` TEXT
+--   * `CText`    → JSON string  → `SqlString`
+--   * `CInt`     → JSON integer → `SqlInt`
+--   * `CReal`    → JSON number  → `SqlFloat`
+--   * `CBool`    → JSON boolean → `SqlInt` 0/1 (bound as an integer flag)
+--   * `CTime`    → JSON integer → `SqlTime` (Unix millis, bound as the time role)
+--   * `CDecimal` → JSON string  → `SqlDecimal` (lossless exact decimal; the
+--                  string is parsed to `Decimal` by the runtime bind, so a
+--                  quantity is never coerced through a lossy `Float`)
+--   * `CMoney`   → JSON string  → `SqlMoney` ("AMOUNT ISO_CODE" verbatim; the
+--                  runtime bind holds the full string, never a bare `SqlString`)
+--   * `CBlob`    → any JSON node → its compact serialisation as `SqlString` TEXT
 --   * `CNull inner` → JSON null → `SqlNull <inner witness>`; any other value is
 --     coerced as `inner`, so a nullable column binds a real NULL or the inner
 --     scalar, never a wrong type.
 --
--- An exact-decimal / money column's codec declares `CText` (it encodes to a JSON
--- string), so it flows through the `CText` arm as TEXT — never `CReal`, never a
--- lossy `Float`. A `CTime` column's millis bind as `SqlTime`, never `SqlInt`, so
--- an instant keeps its role in the parameter it is bound as.
+-- A `CTime` column's millis bind as `SqlTime`, never `SqlInt`; a `CDecimal`
+-- column binds as `SqlDecimal`, never `SqlString`; a `CMoney` column binds as
+-- `SqlMoney`, never `SqlString` — the role lives in the variant tag so each
+-- kind is structurally distinct at the bind site.
 sqlValueDecoder : ColType -> Decoder SqlValue
 sqlValueDecoder colType =
     case colType of
@@ -151,6 +157,12 @@ sqlValueDecoder colType =
         CTime ->
             Decode.map (\ms -> SqlTime ms) Decode.int
 
+        CDecimal ->
+            Decode.andThen decimalSqlDecoder Decode.string
+
+        CMoney ->
+            Decode.map (\s -> SqlMoney s) Decode.string
+
         CBlob ->
             Decode.map (\node -> SqlString (Encode.encode 0 node)) Decode.value
 
@@ -166,6 +178,18 @@ boolToInt b =
 
     else
         0
+
+
+-- | Parse a JSON string to a `SqlDecimal` bind. The `Decimal` runtime parses
+-- the lossless string; a malformed value is a typed decode failure.
+decimalSqlDecoder : String -> Decoder SqlValue
+decimalSqlDecoder s =
+    case Decimal.fromString s of
+        Ok d ->
+            Decode.succeed (SqlDecimal d)
+
+        Err _ ->
+            Decode.fail (badDecimalBindMessage s)
 
 
 -- | Fold a decoded nullable column to a `SqlValue`: `Nothing` (a JSON null) is a
@@ -203,6 +227,12 @@ nullWitness colType =
 
         CTime ->
             SqlTime 0
+
+        CDecimal ->
+            SqlDecimal (Decimal.fromInt 0)
+
+        CMoney ->
+            SqlMoney ""
 
         CBlob ->
             SqlString ""
@@ -316,12 +346,14 @@ consField row col acc =
 
 -- | Parse one row cell into the JSON node its `ColType` implies:
 --
---   * `CText`  → the cell verbatim as a JSON string
---   * `CInt`   → the cell parsed as an integer JSON number (non-integral → Err)
---   * `CReal`  → the cell parsed as a JSON number
---   * `CBool`  → `"0"`/`"1"` (or `"true"`/`"false"`) as a JSON boolean
---   * `CTime`  → the cell parsed as an integer JSON number of Unix millis
---   * `CBlob`  → the cell parsed as JSON TEXT back into its node
+--   * `CText`    → the cell verbatim as a JSON string
+--   * `CInt`     → the cell parsed as an integer JSON number (non-integral → Err)
+--   * `CReal`    → the cell parsed as a JSON number
+--   * `CBool`    → `"0"`/`"1"` (or `"true"`/`"false"`) as a JSON boolean
+--   * `CTime`    → the cell parsed as an integer JSON number of Unix millis
+--   * `CDecimal` → the cell validated as an exact decimal, kept as a JSON string
+--   * `CMoney`   → the cell kept verbatim as a JSON string ("AMOUNT ISO_CODE")
+--   * `CBlob`    → the cell parsed as JSON TEXT back into its node
 --   * `CNull inner` → JSON null when the cell is absent/`NULL`, else parse as
 --     `inner`
 --
@@ -354,6 +386,12 @@ cellToValue name colType maybeCell =
             requirePresent name maybeCell (scalarCellToValue name colType)
 
         CTime ->
+            requirePresent name maybeCell (scalarCellToValue name colType)
+
+        CDecimal ->
+            requirePresent name maybeCell (scalarCellToValue name colType)
+
+        CMoney ->
             requirePresent name maybeCell (scalarCellToValue name colType)
 
         CBlob ->
@@ -409,6 +447,17 @@ scalarCellToValue name colType cell =
 
                 Nothing ->
                     Err (badCellError name colType cell)
+
+        CDecimal ->
+            case Decimal.fromString cell of
+                Ok _ ->
+                    Ok (Encode.string cell)
+
+                Err _ ->
+                    Err (badCellError name colType cell)
+
+        CMoney ->
+            Ok (Encode.string cell)
 
         CBlob ->
             Decode.decodeString Decode.value cell
@@ -491,8 +540,19 @@ colTypeName colType =
         CTime ->
             "integer timestamp"
 
+        CDecimal ->
+            "exact decimal string"
+
+        CMoney ->
+            "money string (AMOUNT ISO_CODE)"
+
         CBlob ->
             "JSON value"
 
         CNull inner ->
             colTypeName inner
+
+
+badDecimalBindMessage : String -> String
+badDecimalBindMessage s =
+    String.concat [ "Ipe.Db.Codec: not an exact decimal \"", s, "\"" ]

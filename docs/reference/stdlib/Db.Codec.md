@@ -31,8 +31,10 @@ decoder. Both directions reuse the codec's own JSON seam:
 Fail-closed throughout. A codec whose `Shape` is not an `SRecord` cannot name
 columns, so both directions reject it with a typed `Error` rather than guess.
 A scalar that does not match its `ColType` is a typed `Err`, never a silently
-mis-typed bind. An exact-decimal or money field (whose codec encodes to a JSON
-string) round-trips as TEXT — it is never coerced through a lossy `Float`.
+mis-typed bind. A `CDecimal` column binds as `SqlDecimal` (never `SqlString`);
+a `CMoney` column binds as `SqlMoney` (never `SqlString`) — the role lives in
+the tag so each kind is structurally distinct at the bind site, and neither is
+ever coerced through a lossy `Float`.
 
     import Ipe.Db.Codec as DbCodec
     import Ipe.Codec as Codec exposing (Codec)

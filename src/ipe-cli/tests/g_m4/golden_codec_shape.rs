@@ -9,7 +9,7 @@
 //! * a direct-form record codec reports its `SRecord` column list (the same keys
 //!   the JSON round-trip uses) and round-trips a value;
 //! * `decimal` and `money` round-trip LOSSLESSLY (a value a `Float` would
-//!   corrupt), each a single `CText` column.
+//!   corrupt); `decimal` uses a `CDecimal` column, `money` uses a `CMoney` column.
 //!
 //! The fixture prints one `codec-shape-ok` line iff every fact holds, so the
 //! oracle is one line and any regression flips it loudly.
@@ -75,7 +75,7 @@ fn codec_shape_accepts_and_emits() {
 }
 
 /// The DB-shape surface (`Shape`/`ColType`, `shape`, `columnOf`, nullable
-/// columns, `decimal`/`money` lossless `CText`) reports the expected columns and
+/// columns, `decimal` → `CDecimal`, `money` → `CMoney`) reports the expected columns and
 /// round-trips a record and both exact-decimal scalars.
 /// Output: `codec-shape-ok`.
 #[test]

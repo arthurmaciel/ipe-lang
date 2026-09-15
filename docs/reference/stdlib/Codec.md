@@ -140,7 +140,10 @@ these to concrete SQLite/Postgres types (`TEXT`/`VARCHAR`, `INTEGER`/`BOOLEAN`,
 …), so one codec works on every backend. `CNull t` is a nullable column of `t`.
 `CTime` is an instant stored as Unix milliseconds — INTEGER affinity like
 `CInt`, but it binds as the `SqlTime` role so a moment in time is never
-confused with a plain count.
+confused with a plain count. `CDecimal` stores an exact decimal as a lossless
+TEXT string and binds as `SqlDecimal`; `CMoney` stores an "AMOUNT ISO_CODE"
+TEXT string and binds as `SqlMoney` — neither is ever coerced through a lossy
+`Float` or confused with a bare `SqlString`.
 
 ## `Shape`
 
@@ -259,9 +262,11 @@ decimal : Codec Decimal
 Exact decimal ⇄ a JSON STRING, LOSSLESS. The value encodes through
 `Decimal.toString` (its full precision) and decodes through
 `Decimal.fromString`, so `12.345678901234567890` survives a round-trip a
-`Float` would corrupt. One `CText` column — never `CReal`.
+`Float` would corrupt. One `CDecimal` column — TEXT affinity, but bound as
+`SqlDecimal` so an exact quantity is never confused with a bare text field.
 
     -- Codec.fromJson Codec.decimal (Codec.toJson Codec.decimal d) == Ok d
+    -- Codec.shape Codec.decimal == SScalar CDecimal
 
 ## `money`
 
@@ -273,9 +278,12 @@ Exact money ⇄ a JSON STRING carrying both the amount and the ISO currency
 code, LOSSLESS: `"12.34 USD"`. The amount encodes at full `Decimal` precision
 (not rounded to the currency's minor units the way a formatted display would
 round), and the currency survives verbatim, so the round-trip preserves the
-exact stored quantity a `Float` cents field would corrupt. One `CText` column.
+exact stored quantity a `Float` cents field would corrupt. One `CMoney` column
+— TEXT affinity, but bound as `SqlMoney` so a monetary value is never confused
+with a bare text field or an exact decimal.
 
     -- Codec.fromJson Codec.money (Codec.toJson Codec.money m) == Ok m
+    -- Codec.shape Codec.money == SScalar CMoney
 
 ## `timestamp`
 

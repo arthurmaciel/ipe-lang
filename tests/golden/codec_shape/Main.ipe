@@ -127,7 +127,7 @@ decimalRoundTrips =
             case Codec.fromJson Codec.decimal (Codec.toJson Codec.decimal d) of
                 Ok back ->
                     Decimal.eq back d
-                        && (Codec.shape Codec.decimal == SScalar CText)
+                        && (Codec.shape Codec.decimal == SScalar CDecimal)
 
                 Err _ ->
                     False
@@ -143,7 +143,7 @@ moneyRoundTrips =
             case Codec.fromJson Codec.money (Codec.toJson Codec.money m) of
                 Ok back ->
                     Money.eq back m
-                        && (Codec.shape Codec.money == SScalar CText)
+                        && (Codec.shape Codec.money == SScalar CMoney)
 
                 Err _ ->
                     False
