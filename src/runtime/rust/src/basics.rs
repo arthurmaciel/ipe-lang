@@ -50,6 +50,46 @@ pub fn basics_compare<T: PartialOrd>(a: T, b: T) -> IpeOrder {
     }
 }
 
+/// A minimal recursive, payload-carrying stdlib ADT — the proof vehicle for the
+/// type-bridge that lets a kernel return a recursive Ipê ADT (issue #2493).
+///
+/// `Leaf` carries an `Int` payload; `Node` carries a `List` of children,
+/// establishing both a payload variant and a recursive edge. The recursion is
+/// bounded by construction: `basics_tree_demo` builds a finite tree, and every
+/// child list is a heap `Vec`, so no unbounded stack growth on match/build.
+///
+/// The Rust variant idents (`Leaf`, `Node`) equal the Ipê variant names 1:1, so
+/// the backend's Spine alias (`pub type Tree = ipe_runtime::basics::IpeTree`)
+/// makes the emitted `Tree::Leaf(..)` / `Tree::Node(..)` resolve to THESE
+/// variants — the emitted `type Tree` and this runtime enum are ONE type.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum IpeTree {
+    /// A leaf carrying an `Int` payload.
+    Leaf(i64),
+    /// A branch carrying its ordered children.
+    Node(Vec<IpeTree>),
+}
+
+/// Ipê `Basics.treeDemo : Int -> Tree` — the proof kernel returning a recursive
+/// payload-carrying ADT.
+///
+/// Builds a finite, bounded demonstration tree: a `Node` whose children are `n`
+/// `Leaf` nodes (clamped to a small ceiling so an adversarial `n` cannot force
+/// an unbounded allocation), each `Leaf` carrying its index. `n <= 0` yields a
+/// single `Leaf 0`.
+#[must_use]
+pub fn basics_tree_demo(n: i64) -> IpeTree {
+    if n <= 0 {
+        return IpeTree::Leaf(0);
+    }
+    // Bounded by construction: cap the child count so input size cannot dictate
+    // an unbounded allocation (soundness principle 3 / security exhaustion).
+    let count = n.min(1024);
+    let children = (0..count).map(IpeTree::Leaf).collect();
+    IpeTree::Node(children)
+}
+
 /// Ipê `fst : (a, b) -> a` / `snd : (a, b) -> b`. Pure in stdlib, but the
 /// Prelude re-export lowers as a `VarKernel "Basics" "fst"`, so the Rust
 /// backend routes it to a runtime kernel. Tuples lower to Rust tuples.
