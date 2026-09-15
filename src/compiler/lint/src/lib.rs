@@ -880,6 +880,33 @@ mod tests {
         );
     }
 
+    /// A bare-`String` param NAMED `src` must NOT be flagged by `prim-param`.
+    /// `src` is overloaded — here it is parser source text (`Parser.run`'s
+    /// shape), not a media source. Steering it to a `MediaTarget` would be a
+    /// false positive, exactly what this conservative rule refuses. Pinning this
+    /// refusal keeps a future `src` name-hint from silently misfiring on
+    /// legitimate source-text APIs. (The media-`src` boundary is closed in the
+    /// type surface: `Html.Attributes.src` / `Ui.image` take a `MediaTarget`.)
+    #[test]
+    fn prim_param_does_not_flag_source_text_src() {
+        let src = "module Main exposing (run)\n\
+                   \n\
+                   run : String -> String\n\
+                   run src =\n\
+                   \x20   src\n";
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "prim-param"),
+            "a source-text `src : String` param must not be mis-steered to a media \
+             carrier, got: {:?}",
+            report
+                .findings
+                .iter()
+                .filter(|f| f.rule == "prim-param")
+                .collect::<Vec<_>>()
+        );
+    }
+
     /// An `adjacent-bools` finding carries a `SigFix` with a
     /// `GroupAdjacentBoolsIntoRecord` delta.
     #[test]

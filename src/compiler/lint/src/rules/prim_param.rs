@@ -53,6 +53,15 @@ const DOMAINS: &[Domain] = &[
         newtype: "Ipe.Url.Url",
         parse: "Url.fromString",
     },
+    // A media `src` is deliberately NOT a domain here. Unlike `url`/`href`, the
+    // name `src` is overloaded — it reads equally as a media source (an
+    // `Ipe.Html.Attributes.MediaTarget` fetch sink) or as source text (a parser
+    // input `String`, e.g. `Parser.run parser src`). A name-only heuristic cannot
+    // tell them apart, so steering every `src : String` to `MediaTarget` would
+    // misfire on legitimate source-text params — the false positive this rule's
+    // conservative contract forbids. The media-`src` boundary is instead closed
+    // in the type surface (`Html.Attributes.src`/`Ui.image` take a `MediaTarget`,
+    // never a bare `String`).
 ];
 
 pub fn check(ctx: &Ctx) -> Vec<Finding> {
