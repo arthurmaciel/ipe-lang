@@ -8,7 +8,11 @@
 //! from `Net.fromInt`. It also pins `Ipe.Duration`'s non-negativity invariant: a
 //! negative input to a constructor clamps to the zero span (`neg 0 0`), so a
 //! negative-millisecond duration that could disable a timeout floor has no
-//! representation.
+//! representation. The `ttlField 0` line pins the same guarantee at the
+//! config-field boundary: a negative span routed through `Cache.withTTL` (the
+//! only surface that fills the ttl config field) reaches the field as `0`, so
+//! no negative millisecond count can enter a timeout/ttl field through a
+//! builder.
 //!
 //! The frontend-accepts assertion runs in the default gate; the build-and-run
 //! proof is `IPE_E2E`-gated, matching every other golden in this suite.
@@ -80,7 +84,8 @@ fn typed_primitives_seal_builds_and_runs() {
                     dur 30000 120000\n\
                     neg 0 0\n\
                     bytes 10485760 4096\n\
-                    sat 9223372036854720000 9223372036853727232";
+                    sat 9223372036854720000 9223372036853727232\n\
+                    ttlField 0";
     assert_eq!(
         outcome.stdout.trim(),
         expected,

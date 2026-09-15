@@ -5,6 +5,7 @@ import Ipe.String as String
 import Ipe.Net as Net
 import Ipe.Duration as Duration
 import Ipe.ByteSize as ByteSize
+import Ipe.Cache as Cache
 import Ipe.Result as Result exposing (Result(..))
 
 
@@ -83,6 +84,23 @@ satLine =
         ++ String.fromInt (ByteSize.toBytes (ByteSize.mib 99999999999999))
 
 
+-- Config-field boundary: the only surface that fills a timeout/ttl/interval
+-- config field takes a `Duration`, so a negative span cannot reach the field —
+-- it is clamped to the zero span at construction. Routing `Duration.millis (0 -
+-- 5)` through `Cache.withTTL` (the ttl config-field setter) and reading the
+-- field back proves the floor cannot be disabled by a negative millisecond
+-- count entering through a builder. `withTTL Duration.zero` reads back `0` too;
+-- the clamp makes the negative case indistinguishable from the honest zero.
+ttlFieldLine : String
+ttlFieldLine =
+    let
+        cfg =
+            Cache.defaultCfg
+                |> Cache.withTTL (Duration.millis (0 - 5))
+    in
+    "ttlField " ++ String.fromInt cfg.ttlMs
+
+
 main =
     Io.println
         (String.join "\n"
@@ -93,5 +111,6 @@ main =
             , negLine
             , byteLine
             , satLine
+            , ttlFieldLine
             ]
         )
