@@ -1845,6 +1845,39 @@ pub fn runtime_context_for_message() -> Option<RuntimeContext> {
     })
 }
 
+/// The on-disk size of a just-produced artifact, or a typed [`CliError::Io`]
+/// naming the path when it cannot be stat'd. A size probe reads the real file:
+/// an absent or unreadable artifact is a bug to SURFACE, never a silent `0`
+/// (`metadata().map_or(0, …)` would paper over a missing module as a plausible
+/// "0 KB", hiding the fault).
+///
+/// # Errors
+/// [`CliError::Io`] when the artifact at `path` cannot be stat'd (missing or
+/// unreadable) — the artifact should exist by the time this is called, so a
+/// failure is a real defect the caller must not swallow.
+pub fn artifact_size_bytes(path: &Path) -> Result<u64, CliError> {
+    fs::metadata(path)
+        .map(|m| m.len())
+        .map_err(|e| io_err(path, e))
+}
+
+/// Render a byte count as a human size that is ACCURATE for any nonzero file:
+/// below 1 `KiB` it reports the exact byte count (so a small-but-real module
+/// never truncates to a misleading `0 KB`), at or above 1 `KiB` it reports
+/// `KiB` to one decimal (integer `bytes / 1024` alone would drop the fraction
+/// and round a 1.9 `KiB` module down to `1 KiB`).
+pub fn format_artifact_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} bytes")
+    } else {
+        // One decimal of KiB, computed in integer tenths so no float rounding
+        // can nudge the reported value; `bytes >= 1024` here, so the whole part
+        // is at least 1 and never reads as `0`.
+        let tenths = bytes * 10 / 1024;
+        format!("{}.{} KiB", tenths / 10, tenths % 10)
+    }
+}
+
 /// Run the three post-emit bundle steps for `--target wasm`:
 /// 1. `cargo build --target wasm32-unknown-unknown --release` (THE SEAL cross-target)
 /// 2. `wasm-bindgen` CLI — emits the JS glue + `www/pkg/ipe_app_bg.wasm`
@@ -1950,13 +1983,13 @@ pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
         );
     }
 
-    let bundle_kb = bg_wasm.metadata().map_or(0, |m| m.len() / 1024);
+    let bundle_size = format_artifact_size(artifact_size_bytes(&bg_wasm)?);
     let www = out_dir.join("www");
     eprintln!(
         "{}",
         style::gutter(&format!(
             "wasm bundle ready at {www}/\n\
-             bundle size: {bundle_kb} KB ({bg})\n\
+             bundle size: {bundle_size} ({bg})\n\
              serve with: python3 -m http.server -d {www} 8080",
             www = www.display(),
             bg = bg_wasm.display(),
@@ -2014,12 +2047,12 @@ pub fn bundle_wasi(out_dir: &Path) -> Result<PathBuf, CliError> {
     // wrote. Same value the executor loads — build-output and load-path are one
     // by construction, immune to any target-dir divergence.
     let module = wasi_artifact_path(&messages, out_dir)?;
-    let module_kb = module.metadata().map_or(0, |m| m.len() / 1024);
+    let module_size = format_artifact_size(artifact_size_bytes(&module)?);
     eprintln!(
         "{}",
         style::gutter(&format!(
             "wasm32-wasip1 module ready at {module}\n\
-             module size: {module_kb} KB\n\
+             module size: {module_size}\n\
              run with: wasmtime {module}",
             module = module.display(),
         ))

@@ -2594,3 +2594,69 @@ fn obligation_error_blames_owning_module_not_narrower_padded_sibling() {
 
     let _ = fs::remove_dir_all(&tmp);
 }
+
+// --- the wasm/wasi artifact size probe --------------------------------------
+
+#[test]
+fn format_artifact_size_never_reads_zero_for_a_nonzero_file() {
+    // The truncation bug: `bytes / 1024` renders any sub-KiB module as `0 KB`.
+    // A 1-byte and a 1023-byte artifact are real; neither may read as `0`.
+    assert_eq!(format_artifact_size(1), "1 bytes");
+    assert_eq!(format_artifact_size(512), "512 bytes");
+    assert_eq!(format_artifact_size(1023), "1023 bytes");
+    // A zero-length file is the one legitimate zero — reported exactly.
+    assert_eq!(format_artifact_size(0), "0 bytes");
+}
+
+#[test]
+fn format_artifact_size_keeps_the_kib_fraction() {
+    // At/above 1 KiB, integer `bytes / 1024` alone would drop the fraction and
+    // round 1.9 KiB down to a misleading `1 KiB`; the one-decimal form keeps it.
+    assert_eq!(format_artifact_size(1024), "1.0 KiB");
+    assert_eq!(format_artifact_size(1024 + 512), "1.5 KiB");
+    assert_eq!(format_artifact_size(2048), "2.0 KiB");
+    // A real trivial wasm module is a few KiB — its size is reported, not `0`.
+    assert_eq!(format_artifact_size(3 * 1024 + 100), "3.0 KiB");
+}
+
+#[test]
+fn artifact_size_bytes_reports_a_real_files_length() {
+    // The probe reads the real file: a nonzero artifact yields its true byte
+    // length, so the reported size is accurate rather than a hardcoded `0`.
+    let tmp = std::env::temp_dir().join(format!("artifact_size_probe_{}", std::process::id()));
+    let _ = fs::create_dir_all(&tmp);
+    let file = tmp.join("module.wasm");
+    let bytes = vec![0u8; 2500];
+    let write_ok = fs::write(&file, &bytes).is_ok();
+    assert!(
+        write_ok,
+        "test setup: writing the probe artifact must succeed"
+    );
+
+    // `CliError` is not `PartialEq`, so unwrap the Ok side and compare the value.
+    let size = artifact_size_bytes(&file).ok();
+    assert_eq!(
+        size,
+        Some(2500),
+        "the probe must report the real 2500-byte length, not a truncated 0",
+    );
+    assert_eq!(format_artifact_size(2500), "2.4 KiB");
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn artifact_size_bytes_surfaces_a_missing_artifact_as_a_typed_error() {
+    // A size probe reading a real artifact must SURFACE an absent path as a
+    // typed `Io` error — never paper it over as a plausible `0 KB` (the old
+    // `metadata().map_or(0, …)` hid a missing module behind a fake size).
+    let missing = std::env::temp_dir()
+        .join(format!("artifact_absent_{}", std::process::id()))
+        .join("nonexistent.wasm");
+    let err = artifact_size_bytes(&missing)
+        .expect_err("a missing artifact must be a typed error, not a silent 0");
+    assert!(
+        matches!(err, CliError::Io { .. }),
+        "the missing-artifact probe must be a typed Io error, got: {err:?}",
+    );
+}

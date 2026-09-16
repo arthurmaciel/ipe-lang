@@ -15,8 +15,12 @@
 //!   turned away at `ipe` time with a typed diagnostic (IPE-N0029), never
 //!   emitted — so the unbuildable shape can never reach the wasip1 `cargo build`.
 //! * **The refusal (user path):** `ipe build --target wasi` on a non-WASI-viable
-//!   shape (a TEA `Web` app) is refused at delivery-resolve time with a typed
-//!   diagnostic, before any emit — never a permissive default.
+//!   shape — a TEA `Web` app, or a live `Server.listen` web server whose
+//!   axum/tokio reactor spine does not build on `wasm32-wasip1` (preview1 has no
+//!   socket listen/accept) — is refused at delivery-resolve time with a typed
+//!   diagnostic, before any emit. The co-located WASI forms are `Direct`/`Script`
+//!   only; the Web-live server is fail-closed by the wasip1 limitation, not a
+//!   pending TODO.
 //!
 //! The refusal tests run unconditionally (no cargo, no network): they are the
 //! standing check that the sealed-floor gate stays real.
@@ -127,6 +131,25 @@ main =
         , routes = [], notFound = Increment
         }
 ";
+
+/// A live `Server` app — `main = Server.listen …`, pinned to
+/// `ControlModel::Server`. Its runtime spine is the axum/tokio reactor, which
+/// does not build on `wasm32-wasip1` (preview1 has no socket listen/accept, and
+/// tokio/mio do not compile for the target). `--target wasi` on it must be
+/// refused at delivery-resolve time, before any emit — the co-located WASI
+/// forms are `Direct`/`Script` only, never a live web server.
+const SERVER_SHAPE_SOURCE: &str = "module Main exposing (main)\n\
+     \n\
+     import Ipe.Http.Server as Server\n\
+     import Ipe.Task\n\
+     \n\
+     handle : Server.Request -> Task Error Server.Response\n\
+     handle _req =\n\
+     \x20   Task.succeed (Server.text \"ok\")\n\
+     \n\
+     main =\n\
+     \x20   Server.listen 8080\n\
+     \x20       [ Server.get \"/\" handle ]\n";
 
 /// THE SEAL: a sealed-floor `Direct` program emits a project that
 /// `cargo build --target wasm32-wasip1` accepts. `ipe`-accepts ⇒ cargo-builds.
@@ -389,6 +412,77 @@ fn ipe_run_target_wasi_refuses_non_viable_shape_fail_closed() {
     assert!(
         !out.join("Cargo.toml").exists(),
         "a refused WASI run must emit no project (fail-closed before emit)",
+    );
+}
+
+/// The live-web-server refusal: `ipe build --target wasi` on a `Server.listen`
+/// app is refused fail-closed at delivery-resolve time. A live web server needs
+/// the axum/tokio reactor spine, which does not build on `wasm32-wasip1`
+/// (preview1 has no socket listen/accept; tokio/mio do not compile for the
+/// target) — so the Web-live server is NOT a co-located WASI form, and the
+/// matrix admits only the `Direct`/`Script` floor. Runs unconditionally (no
+/// cargo): the standing check that a live server never reaches the wasip1 build.
+#[test]
+fn ipe_build_target_wasi_refuses_live_server_fail_closed() {
+    let dir = scratch("wasi_seal_server_refusal");
+    let entry = write_entry(&dir.join("srcdir"), SERVER_SHAPE_SOURCE);
+    let out = dir.join("out");
+
+    let args = vec![
+        "build".to_owned(),
+        entry.to_string_lossy().into_owned(),
+        "--out".to_owned(),
+        out.to_string_lossy().into_owned(),
+        "--target".to_owned(),
+        "wasi".to_owned(),
+    ];
+    let err = ipe::run_cli(&args)
+        .expect_err("a live Server.listen app must be REFUSED for --target wasi (not WASI-viable)");
+
+    // The refusal is the `admit_triple` matrix's `WasiRequiresDirectShape` cell,
+    // surfaced through the CLI — teaching the WASI/Direct rule, never a cargo
+    // failure and never a silent native fallback.
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("wasm32-wasip1") && rendered.contains("Direct"),
+        "the live-server refusal must teach the WASI/Direct rule, got: {rendered}",
+    );
+    // Fail-closed before emit: nothing was written for the refused server.
+    assert!(
+        !out.join("Cargo.toml").exists(),
+        "a refused WASI live-server build must emit no project (fail-closed before emit)",
+    );
+}
+
+/// The run-path mirror of the live-server refusal: `ipe run --target wasi` on a
+/// `Server.listen` app is refused fail-closed at the SAME `admit_triple` gate,
+/// so the run path never opens a looser door than build for the live server.
+#[test]
+fn ipe_run_target_wasi_refuses_live_server_fail_closed() {
+    let dir = scratch("wasi_run_server_refusal");
+    let entry = write_entry(&dir.join("srcdir"), SERVER_SHAPE_SOURCE);
+    let out = dir.join("out");
+
+    let args = vec![
+        "run".to_owned(),
+        entry.to_string_lossy().into_owned(),
+        "--out".to_owned(),
+        out.to_string_lossy().into_owned(),
+        "--target".to_owned(),
+        "wasi".to_owned(),
+    ];
+    let err = ipe::run_cli(&args).expect_err(
+        "a live Server.listen app must be REFUSED for `ipe run --target wasi` (not WASI-viable)",
+    );
+
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("wasm32-wasip1") && rendered.contains("Direct"),
+        "the run-path live-server refusal must teach the WASI/Direct rule, got: {rendered}",
+    );
+    assert!(
+        !out.join("Cargo.toml").exists(),
+        "a refused WASI live-server run must emit no project (fail-closed before emit)",
     );
 }
 
