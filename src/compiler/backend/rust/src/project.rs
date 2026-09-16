@@ -909,18 +909,6 @@ const RUNTIME_MOD_RS_UUID_APPEND: &str = "pub mod uuid_kernel;\npub use uuid_ker
 /// Program that reaches neither drops it.
 const RUNTIME_MOD_RS_RANDOM_APPEND: &str = "pub mod random;\npub use random::*;\n";
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program reaches the `Ipe.Tree`
-/// recursive-ADT bridge ([`EmitCtx::uses_tree`]).
-///
-/// `tree.rs` (the runtime SSOT for the `Tree` enum + `tree_demo_tree` /
-/// `tree_parse_tree` producers) is a standalone leaf declared only on demand —
-/// behind the `tree_kernel` feature, which [`runtime_features`] selects under the
-/// same `uses_tree` condition, so the module declaration and the crate feature
-/// stay in lockstep. Without this append a program that names `Tree` or calls a
-/// `Tree.*` kernel emits bare `Tree` / `tree_demo_tree` references that resolve to
-/// nothing (E0433 / E0425) — THE SEAL breach this closes.
-const RUNTIME_MOD_RS_TREE_APPEND: &str = "pub mod tree;\npub use tree::*;\n";
-
 // ── Ipe.Crypto — heavy cryptography (SHA-1/MD5, AEAD, PBKDF2) ────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses a HEAVY
@@ -2824,15 +2812,6 @@ fn assemble_project_files(
         // unaffected here — `getrandom` is enabled by `random || crypto-core`.
         if ctx.reaches_random() {
             mod_rs.push_str(RUNTIME_MOD_RS_RANDOM_APPEND);
-        }
-        // Ipe.Tree recursive-ADT bridge. `tree.rs` (the runtime `Tree` enum + its
-        // `tree_demo_tree` / `tree_parse_tree` producers) is declared when the
-        // program reaches an `Ipe.Tree` kernel OR names the `Tree` type in an
-        // emittable position (`uses_tree`, the fold `runtime_features` gates
-        // `tree_kernel` on). A standalone leaf — no other surface implies it — so
-        // a program that touches no `Tree` keeps it absent, dropping the module.
-        if ctx.uses_tree {
-            mod_rs.push_str(RUNTIME_MOD_RS_TREE_APPEND);
         }
         if ctx.uses_db {
             mod_rs.push_str(RUNTIME_MOD_RS_DB_APPEND);

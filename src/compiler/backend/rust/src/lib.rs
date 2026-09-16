@@ -948,15 +948,6 @@ pub(crate) struct EmitCtx<'a> {
     /// `cache` is a leaf module — no other runtime surface reaches it — so no other
     /// `uses_*` flag forces it on.
     pub(crate) uses_cache: bool,
-    /// `true` when the program reaches an `Ipe.Tree` kernel (`demoTree` /
-    /// `parseTree`), or a signature/record/enum mentions the runtime-backed `Tree`
-    /// recursive ADT. When set, [`crate::project::assemble_project_files`] declares
-    /// `pub mod tree; pub use tree::*;` in the emitted `ipe_runtime/mod.rs` and
-    /// selects the `tree_kernel` runtime feature (so the runtime crate compiles
-    /// `tree.rs` — `tree_demo_tree` / `tree_parse_tree` and the `Tree` enum the
-    /// emitted code references). `tree` is a leaf module — no other surface reaches
-    /// it.
-    pub(crate) uses_tree: bool,
     /// `true` when the program reaches an `Ipe.Encoding` / `Ipe.Bytes` kernel. The
     /// `encoding` runtime feature — the `base64`, `hex`, and `percent-encoding`
     /// crates plus the `encoding.rs` / `bytes.rs` modules — is selected under
@@ -2015,12 +2006,6 @@ impl<'a> EmitCtx<'a> {
         let uses_regex = uses_regex || has(ipe_ir::RuntimeFeatureId::Regex);
         let uses_csv = uses_csv || has(ipe_ir::RuntimeFeatureId::Csv);
         let uses_cache = uses_cache || has(ipe_ir::RuntimeFeatureId::CacheKernel);
-        // `Ipe.Tree` is a Module-flag-driven leaf: `tree` has no dedicated
-        // `IrType` leaf (it flows as `IrType::Enum{Ipe.Tree.Tree}` routed by
-        // name), so `program_type_feature_requirements` carries no `Tree` entry —
-        // the lowerer's `uses_tree` Module flag (kernel usage OR a `Tree`
-        // type-mention) is the sole selector, already folded below.
-        let uses_tree = program.modules.iter().any(|m| m.uses_tree);
         let uses_websocket = uses_websocket || has(ipe_ir::RuntimeFeatureId::WebsocketClient);
         let uses_email = uses_email || has(ipe_ir::RuntimeFeatureId::Email);
         let uses_crypto_core = uses_crypto_core || has(ipe_ir::RuntimeFeatureId::CryptoCore);
@@ -2080,7 +2065,6 @@ impl<'a> EmitCtx<'a> {
             uses_compression,
             uses_csv,
             uses_cache,
-            uses_tree,
             uses_encoding,
             uses_regex,
             uses_uuid,
@@ -3299,22 +3283,6 @@ impl<'a> EmitCtx<'a> {
             )
     }
 
-    /// `true` when `(home, ty)` is the `Ipe.Tree.Tree` recursive ADT backed by the
-    /// runtime enum `ipe_runtime::tree::Tree` — its `EnumDef` suppressed at lower,
-    /// so it is absent from `enum_names`. Keyed on the `["Ipe", "Tree"].Tree`
-    /// identity (not the bare name) so a user's own `type Tree` under a different
-    /// home falls through to its own emitted enum. Mirrors
-    /// [`Self::is_cache_handle_type`].
-    pub(crate) fn is_tree_type(&self, home: &ModPath, ty: Symbol) -> bool {
-        self.interner.resolve(ty) == Some("Tree")
-            && !self.enum_names.contains_key(&(home.clone(), ty))
-            && matches!(
-                home.0.as_slice(),
-                [a, b] if self.interner.resolve(*a) == Some("Ipe")
-                    && self.interner.resolve(*b) == Some("Tree")
-            )
-    }
-
     pub(crate) fn enum_name(&self, home: &ModPath, ty: Symbol) -> DResult<&str> {
         // `StreamId` is a builtin opaque Http.Stream type backed by the runtime
         // struct `IpeStreamId`.  It has no synthetic `EnumDef` injection (unlike
@@ -3339,14 +3307,6 @@ impl<'a> EmitCtx<'a> {
         // `case req.redirects of …` scrutinee type resolves in type position.
         if home.0.is_empty() && matches!(self.interner.resolve(ty), Some("RedirectPolicy")) {
             return Ok("RedirectPolicy");
-        }
-        // `Ipe.Tree.Tree` → the runtime enum `ipe_runtime::tree::Tree` (in scope via
-        // `pub use ipe_runtime::tree::*`). Its `EnumDef` is suppressed in `ipe_lower`
-        // (absent from `enum_names`), so a `Tree`-typed signature / field / scrutinee
-        // resolves here. Keyed on the `["Ipe", "Tree"].Tree` identity (not the bare
-        // name) so a user's own `type Tree` under a different home is unaffected.
-        if self.is_tree_type(home, ty) {
-            return Ok("Tree");
         }
         self.enum_names
             .get(&(home.clone(), ty))
@@ -3433,15 +3393,6 @@ impl<'a> EmitCtx<'a> {
             // scope via `pub use ipe_runtime::email::*`. A user's own
             // `type EmailProvider` DOES get an `EnumDef` and short-circuits above.
             Some("EmailProvider") => Some("EmailProvider"),
-            // `Ipe.Tree.Tree` is backed by the runtime enum `ipe_runtime::tree::Tree`
-            // (variant names `Leaf`/`Node` match the Ipê ctors verbatim; the `Node
-            // (List Tree)` recursion rides the existing `List` → `Vec` lowering). Its
-            // `EnumDef` is suppressed in `ipe_lower` (no `enum_names` entry, so the
-            // guard above lets this fire), so `Leaf n` / `Node children` construct the
-            // runtime variants and `case t of Leaf n -> …` / `Node kids -> …` match
-            // them positionally. In scope via `pub use ipe_runtime::tree::*`. A user's
-            // own `type Tree` DOES get an `EnumDef` and short-circuits above.
-            Some("Tree") => Some("Tree"),
             // `HttpMethod` is backed by `ipe_runtime::HttpMethod` — a
             // closed 7-variant unit enum (`Get`/`Post`/`Put`/`Delete`/
             // `Patch`/`Head`/`Options`). Constructor names match Ipê
@@ -5084,7 +5035,6 @@ mod record_struct_namespace_tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_cache: false,
-                uses_tree: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
@@ -5194,7 +5144,6 @@ mod record_struct_namespace_tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_cache: false,
-                uses_tree: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
@@ -5285,7 +5234,6 @@ mod record_struct_namespace_tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_cache: false,
-                uses_tree: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,

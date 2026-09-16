@@ -499,10 +499,6 @@ pub struct Builtins {
     /// (`Resend`/`Ses`/`SendGrid`/`Smtp`).  Backed by
     /// `ipe_runtime::email::EmailProvider`; lowered to `IrType::EmailProvider`.
     pub email_provider: Symbol,
-    /// `"Tree"` — the recursive `Ipe.Tree.Tree` ADT constructor (`Leaf`/`Node`).
-    /// Backed by `ipe_runtime::tree::Tree`; flows as `IrType::Enum{Ipe.Tree.Tree}`
-    /// routed by name (no dedicated `IrType` leaf). Mirrors [`Self::email_provider`].
-    pub tree_con: Symbol,
     /// `EmailMessage` record field names (`ipe_runtime::email::EmailMessage`).
     pub email_f_from: Symbol,
     pub email_f_to: Symbol,
@@ -735,12 +731,6 @@ pub struct Builtins {
     /// through the lowerer's home-keyed variant lookup into the unknown-builtin
     /// internal-compiler-error arm.
     pub email_home: Vec<Symbol>,
-    /// The interned module segments `["Ipe", "Tree"]` — the real home of the
-    /// `Tree` ADT. The `demoTree` / `parseTree` kernel schemes carry this home so a
-    /// point-free reference lowers to the runtime-backed enum instead of dropping
-    /// through the lowerer's home-keyed variant lookup into the unknown-builtin
-    /// internal-compiler-error arm (mirrors [`Self::email_home`]).
-    pub tree_home: Vec<Symbol>,
     /// The interned module segments `["Ipe", "Duration"]` — the real home of the
     /// `Duration` ADT. The `Http.withTimeout` kernel scheme carries this home so a
     /// point-free reference lowers to the compiled-module enum instead of dropping
@@ -926,7 +916,6 @@ impl Builtins {
             ws_f_ping_interval: interner.intern("pingInterval")?,
             // ── Ipe.Email type + record field symbols ───────────────────
             email_provider: interner.intern("EmailProvider")?,
-            tree_con: interner.intern("Tree")?,
             email_f_from: interner.intern("from")?,
             email_f_to: interner.intern("to")?,
             email_f_cc: interner.intern("cc")?,
@@ -1042,7 +1031,6 @@ impl Builtins {
             ],
             codec_home: vec![interner.intern("Ipe")?, interner.intern("Codec")?],
             email_home: vec![interner.intern("Ipe")?, interner.intern("Email")?],
-            tree_home: vec![interner.intern("Ipe")?, interner.intern("Tree")?],
             duration_home: vec![interner.intern("Ipe")?, interner.intern("Duration")?],
         })
     }

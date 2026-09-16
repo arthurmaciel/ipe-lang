@@ -159,16 +159,6 @@ pub struct Module {
     /// literals with no kernel call, so a config-only program still names the type
     /// and needs the module.
     pub uses_cache: bool,
-    /// `true` when the lowerer detected an `Ipe.Tree` kernel (`demoTree` /
-    /// `parseTree`), or a signature/record/enum mentions the runtime-backed `Tree`
-    /// recursive ADT. The backend reads this flag to declare `pub mod tree; pub use
-    /// tree::*;` in the emitted `ipe_runtime/mod.rs` and enable the `tree_kernel`
-    /// runtime-crate feature (which provides `tree_demo_tree` / `tree_parse_tree`
-    /// and the `Tree` enum the emitted code references). `tree` is a leaf module —
-    /// no other runtime surface reaches it. The type-mention guard mirrors
-    /// `uses_cache`'s: the `Leaf`/`Node` ctors are pure Ipê source that construct /
-    /// match a `Tree` with no kernel call.
-    pub uses_tree: bool,
     /// `true` when the lowerer detected at least one `Ipe.Encoding` codec kernel
     /// (`base64Encode` / `base64Decode` / `urlEncode` / `urlDecode` / `hexEncode`
     /// / `hexDecode`) or any `Ipe.Bytes` kernel.
@@ -4776,7 +4766,6 @@ mod tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_cache: false,
-                uses_tree: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
@@ -5311,7 +5300,6 @@ mod serde_persistence_tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_cache: false,
-                uses_tree: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,
@@ -5406,7 +5394,6 @@ mod serde_persistence_tests {
                 uses_compression: false,
                 uses_csv: false,
                 uses_cache: false,
-                uses_tree: false,
                 uses_encoding: false,
                 uses_regex: false,
                 uses_uuid: false,

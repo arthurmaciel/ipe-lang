@@ -237,31 +237,6 @@ pub(super) fn ir_type_mentions_cache_handle(ty: &IrType, interner: &Interner) ->
     })
 }
 
-/// `true` when `ty` mentions the `Ipe.Tree.Tree` recursive ADT — an
-/// `IrType::Enum` with home `["Ipe", "Tree"]` and name `Tree`, backed by
-/// `ipe_runtime::tree::Tree`. Its `EnumDef` is suppressed at lower (the runtime
-/// defines the enum), so a program that names / constructs / matches a `Tree`
-/// with NO `Tree.*` kernel call still emits a `Tree` reference that must resolve
-/// through the module's `pub use tree::*` glob — this guard forces the `tree`
-/// module + `tree_kernel` feature on for that mention. Matches the resolved
-/// `Ipe.Tree.Tree` identity, not the bare name, so a user's own `type Tree`
-/// under a different home never spuriously pins the runtime module. Mirrors
-/// [`ir_type_mentions_cache_handle`].
-pub(super) fn ir_type_mentions_tree(ty: &IrType, interner: &Interner) -> bool {
-    ir_type_mentions(ty, &|t| match t {
-        IrType::Enum { home, name, .. } => {
-            interner.resolve(*name) == Some("Tree")
-                && matches!(
-                    home.0.as_slice(),
-                    [a, b]
-                        if interner.resolve(*a) == Some("Ipe")
-                            && interner.resolve(*b) == Some("Tree")
-                )
-        }
-        _ => false,
-    })
-}
-
 /// `true` when `ty` mentions a builtin `Ipe.Http.Stream` opaque type — the
 /// `ChunkEvent` chunk-event enum (backed by
 /// `ipe_runtime::http_stream::ChunkEvent`) or the `StreamId` handle (backed by
