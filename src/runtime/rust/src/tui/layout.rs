@@ -2460,8 +2460,9 @@ fn no_color() -> bool {
 }
 
 /// Parse a `"fg:<code>"` / `"bg:<code>"` palette decoration into its SGR code.
-/// The `<code>` is produced by the runtime `TermColor::{fg,bg}_code`, so it is
-/// always a valid `u8`; a malformed string yields `None` (no colour, never a
+/// The `<code>` is produced by the terminal-attribute lowering from
+/// [`crate::color::AnsiColor::named_sgr_code`] (plus the `39`/`49` reset), so it
+/// is always a valid `u8`; a malformed string yields `None` (no colour, never a
 /// panic).
 fn parse_palette_code(s: &str) -> Option<u8> {
     s.split_once(':')
@@ -2490,13 +2491,12 @@ fn ansi_sgr_codes(rgb: (u8, u8, u8), profile: crate::color::TermProfile, fg: boo
             vec![format!("{intro};5;{i}")]
         }
         // The 16-colour palette maps index `0..=7` to the standard SGR base
-        // (30-37 fg / 40-47 bg) and `8..=15` to the bright base (90-97 / 100-107).
-        AnsiColor::Named(idx) => {
-            let idx = idx.clamp(0, 15);
-            let (lo, hi) = if fg { (30, 90) } else { (40, 100) };
-            let code = if idx < 8 { lo + idx } else { hi + (idx - 8) };
-            vec![code.to_string()]
-        }
+        // (30-37 fg / 40-47 bg) and `8..=15` to the bright base (90-97 / 100-107),
+        // via the one palette-code SSOT.
+        named @ AnsiColor::Named(_) => named
+            .named_sgr_code(fg)
+            .map(|code| vec![code.to_string()])
+            .unwrap_or_default(),
     }
 }
 

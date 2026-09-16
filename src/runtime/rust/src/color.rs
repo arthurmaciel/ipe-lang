@@ -68,6 +68,27 @@ pub enum AnsiColor {
     Rgb(i64, i64, i64),
 }
 
+impl AnsiColor {
+    /// The single portable SGR palette code for a `Named` entry: `30..=37`
+    /// (`fg`) / `40..=47` (`bg`) for indices `0..=7`, and the bright base
+    /// `90..=97` / `100..=107` for `8..=15`. The one place this palette
+    /// arithmetic lives — the truecolour degradation path
+    /// ([`crate::tui::layout`]) and the terminal-attribute translation
+    /// ([`crate::tui`]) both read it here. `None` for the non-palette variants
+    /// (`Default`, `Indexed`, `Rgb`), which each carry their own escape.
+    #[must_use]
+    pub fn named_sgr_code(self, fg: bool) -> Option<i64> {
+        match self {
+            AnsiColor::Named(idx) => {
+                let idx = idx.clamp(0, 15);
+                let (lo, hi) = if fg { (30, 90) } else { (40, 100) };
+                Some(if idx < 8 { lo + idx } else { hi + (idx - 8) })
+            }
+            AnsiColor::Default | AnsiColor::Indexed(_) | AnsiColor::Rgb(..) => None,
+        }
+    }
+}
+
 /// A WCAG conformance level: the pass threshold `meets_wcag` checks against.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WcagLevel {

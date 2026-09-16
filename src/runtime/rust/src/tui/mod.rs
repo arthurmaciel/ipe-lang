@@ -12,7 +12,7 @@ pub mod layout; // structured Element → ANSI cells
 pub use app::{tui_app, tui_app_ui};
 pub use cell::*;
 
-use crate::color::Color;
+use crate::color::{AnsiColor, Color};
 use crate::ui::element::{Attribute, Element, HAlign};
 
 /// The first-class terminal colour palette (`Terminal.Color`): the sixteen
@@ -109,9 +109,9 @@ pub enum TuiAttr<M> {
     /// Reverse video (swap foreground and background).
     Reverse,
     /// Foreground (text) colour, from the terminal palette.
-    FgColor(TermColor),
+    FgColor(AnsiColor),
     /// Background colour, from the terminal palette.
-    BgColor(TermColor),
+    BgColor(AnsiColor),
     /// Uninhabited-in-practice marker carrying the message type so `TuiAttr`
     /// stays parametric in `M` even though no current variant holds an `M`.
     _Msg(core::marker::PhantomData<M>),
@@ -146,22 +146,32 @@ fn translate_attrs<M>(attrs: Vec<TuiAttr<M>>) -> Vec<Attribute<M>> {
 /// carried as a decoration string (`"fg:31"`) so the terminal `sgr` path emits
 /// the portable SGR palette code; a truecolour takes the 24-bit `AttrFontColor`
 /// path the renderer already interprets.
-fn term_fg_attr<M>(c: TermColor) -> Attribute<M> {
-    match c {
-        TermColor::Rgb(r, g, b) => {
-            Attribute::AttrFontColor(Color::rgb(i64::from(r), i64::from(g), i64::from(b)))
-        }
-        named => Attribute::AttrFontDecoration(format!("fg:{}", named.fg_code().unwrap_or(39))),
-    }
+///
+/// The terminal palette a program can name (`Terminal.Color`) is exactly the
+/// `Named` / `Default` / `Rgb` shapes; an `Indexed` entry is unreachable from
+/// that surface, so it fails closed to the terminal default rather than
+/// fabricating a channel that cannot round-trip through the palette decoration.
+fn term_fg_attr<M>(c: AnsiColor) -> Attribute<M> {
+    term_color_attr(c, true)
 }
 
 /// Lower a palette background colour to a renderer attribute (see `term_fg_attr`).
-fn term_bg_attr<M>(c: TermColor) -> Attribute<M> {
+fn term_bg_attr<M>(c: AnsiColor) -> Attribute<M> {
+    term_color_attr(c, false)
+}
+
+/// Shared foreground/background lowering. `fg` selects the palette-code family
+/// (`3x`/`9x` vs `4x`/`10x`) and the truecolour attribute channel.
+fn term_color_attr<M>(c: AnsiColor, fg: bool) -> Attribute<M> {
     match c {
-        TermColor::Rgb(r, g, b) => {
-            Attribute::AttrBgColor(Color::rgb(i64::from(r), i64::from(g), i64::from(b)))
+        AnsiColor::Rgb(r, g, b) if fg => Attribute::AttrFontColor(Color::rgb(r, g, b)),
+        AnsiColor::Rgb(r, g, b) => Attribute::AttrBgColor(Color::rgb(r, g, b)),
+        palette => {
+            let default = if fg { 39 } else { 49 };
+            let prefix = if fg { "fg" } else { "bg" };
+            let code = palette.named_sgr_code(fg).unwrap_or(default);
+            Attribute::AttrFontDecoration(format!("{prefix}:{code}"))
         }
-        named => Attribute::AttrFontDecoration(format!("bg:{}", named.bg_code().unwrap_or(49))),
     }
 }
 
@@ -307,120 +317,125 @@ pub fn tui_reverse_<M>() -> TuiAttr<M> {
 
 /// `Ipe.Ui.Tui.color : Terminal.Color -> Attribute msg` — foreground colour.
 #[must_use]
-pub fn tui_color_<M>(c: TermColor) -> TuiAttr<M> {
+pub fn tui_color_<M>(c: AnsiColor) -> TuiAttr<M> {
     TuiAttr::FgColor(c)
 }
 
 /// `Ipe.Ui.Tui.bg : Terminal.Color -> Attribute msg` — background colour.
 #[must_use]
-pub fn tui_bg_<M>(c: TermColor) -> TuiAttr<M> {
+pub fn tui_bg_<M>(c: AnsiColor) -> TuiAttr<M> {
     TuiAttr::BgColor(c)
 }
 
 // ── Ipe.Tea.Terminal.Color palette constructors ──────────────────────────────
 
+/// The sixteen named palette entries carry their SGR index (`0..=15`): the
+/// standard eight `0..=7` (`black`..`white`) and the bright eight `8..=15`
+/// (`brightBlack`..`brightWhite`). `AnsiColor::named_sgr_code` maps each back to
+/// the identical portable SGR code the palette rendered before.
 /// `Terminal.Color.black : Color`
 #[must_use]
-pub const fn term_color_black_() -> TermColor {
-    TermColor::Black
+pub const fn term_color_black_() -> AnsiColor {
+    AnsiColor::Named(0)
 }
 /// `Terminal.Color.red : Color`
 #[must_use]
-pub const fn term_color_red_() -> TermColor {
-    TermColor::Red
+pub const fn term_color_red_() -> AnsiColor {
+    AnsiColor::Named(1)
 }
 /// `Terminal.Color.green : Color`
 #[must_use]
-pub const fn term_color_green_() -> TermColor {
-    TermColor::Green
+pub const fn term_color_green_() -> AnsiColor {
+    AnsiColor::Named(2)
 }
 /// `Terminal.Color.yellow : Color`
 #[must_use]
-pub const fn term_color_yellow_() -> TermColor {
-    TermColor::Yellow
+pub const fn term_color_yellow_() -> AnsiColor {
+    AnsiColor::Named(3)
 }
 /// `Terminal.Color.blue : Color`
 #[must_use]
-pub const fn term_color_blue_() -> TermColor {
-    TermColor::Blue
+pub const fn term_color_blue_() -> AnsiColor {
+    AnsiColor::Named(4)
 }
 /// `Terminal.Color.magenta : Color`
 #[must_use]
-pub const fn term_color_magenta_() -> TermColor {
-    TermColor::Magenta
+pub const fn term_color_magenta_() -> AnsiColor {
+    AnsiColor::Named(5)
 }
 /// `Terminal.Color.cyan : Color`
 #[must_use]
-pub const fn term_color_cyan_() -> TermColor {
-    TermColor::Cyan
+pub const fn term_color_cyan_() -> AnsiColor {
+    AnsiColor::Named(6)
 }
 /// `Terminal.Color.white : Color`
 #[must_use]
-pub const fn term_color_white_() -> TermColor {
-    TermColor::White
+pub const fn term_color_white_() -> AnsiColor {
+    AnsiColor::Named(7)
 }
 /// `Terminal.Color.brightBlack : Color`
 #[must_use]
-pub const fn term_color_bright_black_() -> TermColor {
-    TermColor::BrightBlack
+pub const fn term_color_bright_black_() -> AnsiColor {
+    AnsiColor::Named(8)
 }
 /// `Terminal.Color.brightRed : Color`
 #[must_use]
-pub const fn term_color_bright_red_() -> TermColor {
-    TermColor::BrightRed
+pub const fn term_color_bright_red_() -> AnsiColor {
+    AnsiColor::Named(9)
 }
 /// `Terminal.Color.brightGreen : Color`
 #[must_use]
-pub const fn term_color_bright_green_() -> TermColor {
-    TermColor::BrightGreen
+pub const fn term_color_bright_green_() -> AnsiColor {
+    AnsiColor::Named(10)
 }
 /// `Terminal.Color.brightYellow : Color`
 #[must_use]
-pub const fn term_color_bright_yellow_() -> TermColor {
-    TermColor::BrightYellow
+pub const fn term_color_bright_yellow_() -> AnsiColor {
+    AnsiColor::Named(11)
 }
 /// `Terminal.Color.brightBlue : Color`
 #[must_use]
-pub const fn term_color_bright_blue_() -> TermColor {
-    TermColor::BrightBlue
+pub const fn term_color_bright_blue_() -> AnsiColor {
+    AnsiColor::Named(12)
 }
 /// `Terminal.Color.brightMagenta : Color`
 #[must_use]
-pub const fn term_color_bright_magenta_() -> TermColor {
-    TermColor::BrightMagenta
+pub const fn term_color_bright_magenta_() -> AnsiColor {
+    AnsiColor::Named(13)
 }
 /// `Terminal.Color.brightCyan : Color`
 #[must_use]
-pub const fn term_color_bright_cyan_() -> TermColor {
-    TermColor::BrightCyan
+pub const fn term_color_bright_cyan_() -> AnsiColor {
+    AnsiColor::Named(14)
 }
 /// `Terminal.Color.brightWhite : Color`
 #[must_use]
-pub const fn term_color_bright_white_() -> TermColor {
-    TermColor::BrightWhite
+pub const fn term_color_bright_white_() -> AnsiColor {
+    AnsiColor::Named(15)
 }
 /// `Terminal.Color.default : Color`
 #[must_use]
-pub const fn term_color_default_() -> TermColor {
-    TermColor::Default
+pub const fn term_color_default_() -> AnsiColor {
+    AnsiColor::Default
 }
 /// `Terminal.Color.rgb : Int -> Int -> Int -> Color` — a 24-bit truecolour.
 /// Channels are clamped to 0-255.
 #[must_use]
-pub fn term_color_rgb_(r: i64, g: i64, b: i64) -> TermColor {
-    TermColor::Rgb(clamp_channel(r), clamp_channel(g), clamp_channel(b))
+pub fn term_color_rgb_(r: i64, g: i64, b: i64) -> AnsiColor {
+    AnsiColor::Rgb(clamp_channel(r), clamp_channel(g), clamp_channel(b))
 }
 /// `Terminal.Color.rgba : Int -> Int -> Int -> Float -> Color`. The alpha is
 /// accepted for surface parity with `Ui.rgba`; a terminal cell has no alpha, so
 /// the colour is applied opaque.
 #[must_use]
-pub fn term_color_rgba_(r: i64, g: i64, b: i64, _a: f64) -> TermColor {
-    TermColor::Rgb(clamp_channel(r), clamp_channel(g), clamp_channel(b))
+pub fn term_color_rgba_(r: i64, g: i64, b: i64, _a: f64) -> AnsiColor {
+    AnsiColor::Rgb(clamp_channel(r), clamp_channel(g), clamp_channel(b))
 }
 
-/// Clamp an `Int` colour channel into the representable `0..=255` byte range.
-fn clamp_channel(v: i64) -> u8 {
-    v.clamp(0, 255) as u8
+/// Clamp an `Int` colour channel into the representable `0..=255` byte range,
+/// widened to the `i64` the shared `AnsiColor::Rgb` carrier holds.
+fn clamp_channel(v: i64) -> i64 {
+    v.clamp(0, 255)
 }
 
 // ── Ipe.Ui.Cli line-oriented view surface ────────────────────────────────
@@ -440,9 +455,9 @@ pub enum CliAttr<M> {
     /// Reverse video (swap foreground and background).
     Reverse,
     /// Foreground (text) colour, from the terminal palette.
-    FgColor(TermColor),
+    FgColor(AnsiColor),
     /// Background colour, from the terminal palette.
-    BgColor(TermColor),
+    BgColor(AnsiColor),
     /// Marker carrying the message type so `CliAttr` stays parametric in `M`.
     _Msg(core::marker::PhantomData<M>),
 }
@@ -542,12 +557,12 @@ pub fn cli_reverse_<M>() -> CliAttr<M> {
 }
 /// `Ipe.Ui.Cli.color : Terminal.Color -> Attribute msg` — foreground colour.
 #[must_use]
-pub fn cli_color_<M>(c: TermColor) -> CliAttr<M> {
+pub fn cli_color_<M>(c: AnsiColor) -> CliAttr<M> {
     CliAttr::FgColor(c)
 }
 /// `Ipe.Ui.Cli.bg : Terminal.Color -> Attribute msg` — background colour.
 #[must_use]
-pub fn cli_bg_<M>(c: TermColor) -> CliAttr<M> {
+pub fn cli_bg_<M>(c: AnsiColor) -> CliAttr<M> {
     CliAttr::BgColor(c)
 }
 
@@ -591,40 +606,58 @@ mod tests {
         ));
     }
 
+    // The palette constructors carry the same portable SGR codes the terminal
+    // rendered before the carrier moved to `AnsiColor`: `red` → 31/41,
+    // `brightRed` → 91/101, `default` → 39/49, and the standard/bright endpoints.
     #[test]
     fn term_color_named_fg_and_bg_codes() {
-        assert_eq!(TermColor::Red.fg_code(), Some(31));
-        assert_eq!(TermColor::Red.bg_code(), Some(41));
-        assert_eq!(TermColor::BrightRed.fg_code(), Some(91));
-        assert_eq!(TermColor::BrightRed.bg_code(), Some(101));
-        assert_eq!(TermColor::Default.fg_code(), Some(39));
-        assert_eq!(TermColor::Default.bg_code(), Some(49));
-        assert_eq!(TermColor::Black.fg_code(), Some(30));
-        assert_eq!(TermColor::BrightWhite.fg_code(), Some(97));
+        assert_eq!(term_color_red_().named_sgr_code(true), Some(31));
+        assert_eq!(term_color_red_().named_sgr_code(false), Some(41));
+        assert_eq!(term_color_bright_red_().named_sgr_code(true), Some(91));
+        assert_eq!(term_color_bright_red_().named_sgr_code(false), Some(101));
+        assert_eq!(term_color_black_().named_sgr_code(true), Some(30));
+        assert_eq!(term_color_bright_white_().named_sgr_code(true), Some(97));
     }
 
+    // `default` and the truecolour path have no single named SGR code: `default`
+    // resets to the terminal's own colour, `rgb` emits a `38;2;…` sequence.
     #[test]
-    fn term_color_rgb_has_no_named_code() {
-        assert_eq!(TermColor::Rgb(1, 2, 3).fg_code(), None);
-        assert_eq!(TermColor::Rgb(1, 2, 3).bg_code(), None);
+    fn default_and_rgb_have_no_named_code() {
+        assert_eq!(term_color_default_().named_sgr_code(true), None);
+        assert_eq!(term_color_rgb_(1, 2, 3).named_sgr_code(true), None);
+        assert_eq!(term_color_rgb_(1, 2, 3).named_sgr_code(false), None);
     }
 
     #[test]
     fn named_palette_fg_translates_to_code_decoration() {
         assert!(matches!(
-            term_fg_attr::<()>(TermColor::Red),
+            term_fg_attr::<()>(term_color_red_()),
             Attribute::AttrFontDecoration(s) if s == "fg:31"
         ));
         assert!(matches!(
-            term_bg_attr::<()>(TermColor::Blue),
+            term_bg_attr::<()>(term_color_blue_()),
             Attribute::AttrFontDecoration(s) if s == "bg:44"
+        ));
+    }
+
+    // `default` reaches the palette-decoration branch and lowers to the reset
+    // code (39 fg / 49 bg), the byte-identical spelling the old carrier emitted.
+    #[test]
+    fn default_translates_to_reset_code_decoration() {
+        assert!(matches!(
+            term_fg_attr::<()>(term_color_default_()),
+            Attribute::AttrFontDecoration(s) if s == "fg:39"
+        ));
+        assert!(matches!(
+            term_bg_attr::<()>(term_color_default_()),
+            Attribute::AttrFontDecoration(s) if s == "bg:49"
         ));
     }
 
     #[test]
     fn truecolor_translates_to_font_color_attribute() {
         assert_eq!(
-            term_fg_attr::<()>(TermColor::Rgb(10, 20, 30)),
+            term_fg_attr::<()>(term_color_rgb_(10, 20, 30)),
             Attribute::AttrFontColor(Color::rgb(10, 20, 30))
         );
     }
@@ -636,14 +669,14 @@ mod tests {
             Some(Attribute::AttrFontWeight(700))
         ));
         assert!(matches!(
-            CliAttr::<()>::FgColor(TermColor::Green).translate(),
+            CliAttr::<()>::FgColor(term_color_green_()).translate(),
             Some(Attribute::AttrFontDecoration(s)) if s == "fg:32"
         ));
     }
 
     #[test]
     fn rgb_channels_clamp_into_byte_range() {
-        assert_eq!(term_color_rgb_(-5, 300, 128), TermColor::Rgb(0, 255, 128));
+        assert_eq!(term_color_rgb_(-5, 300, 128), AnsiColor::Rgb(0, 255, 128));
     }
 
     #[test]
@@ -694,7 +727,7 @@ mod tests {
     #[test]
     fn render_lines_view_carries_palette_color() {
         let out = render_lines_view(cli_line_::<()>(
-            vec![CliAttr::FgColor(TermColor::Red)],
+            vec![CliAttr::FgColor(term_color_red_())],
             "c".to_owned(),
         ));
         assert!(out.contains("31"));
