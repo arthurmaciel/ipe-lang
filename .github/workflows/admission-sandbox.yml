@@ -103,10 +103,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [changes]
+    # Skip on a maintainer-authored release-please PR (a version/CHANGELOG bump only):
+    # the OS-sandbox behaviour cannot change from a version-number bump, and the same
+    # commit's proof already ran on the code PR that introduced it. Keyed on
+    # `author_association == 'OWNER'` (a fork PR cannot be OWNER), so the
+    # untrusted-author full-run clause below is preserved — a fork naming its branch
+    # `release-please--…` still runs the full proof.
     if: >-
+      (
       needs.changes.outputs.code == 'true'
       || github.event_name != 'pull_request'
       || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      )
+      && !(github.event.pull_request.author_association == 'OWNER' && startsWith(github.head_ref, 'release-please--'))
 
     steps:
       - uses: actions/checkout@v5
@@ -142,10 +151,19 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     needs: [changes]
+    # Skip on a maintainer-authored release-please PR (a version/CHANGELOG bump only):
+    # the OS-sandbox behaviour cannot change from a version-number bump, and the same
+    # commit's proof already ran on the code PR that introduced it. Keyed on
+    # `author_association == 'OWNER'` (a fork PR cannot be OWNER), so the
+    # untrusted-author full-run clause below is preserved — a fork naming its branch
+    # `release-please--…` still runs the full proof.
     if: >-
+      (
       needs.changes.outputs.code == 'true'
       || github.event_name != 'pull_request'
       || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      )
+      && !(github.event.pull_request.author_association == 'OWNER' && startsWith(github.head_ref, 'release-please--'))
 
     steps:
       - uses: actions/checkout@v5
@@ -180,10 +198,19 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 15
     needs: [changes]
+    # Skip on a maintainer-authored release-please PR (a version/CHANGELOG bump only):
+    # the OS-sandbox behaviour cannot change from a version-number bump, and the same
+    # commit's proof already ran on the code PR that introduced it. Keyed on
+    # `author_association == 'OWNER'` (a fork PR cannot be OWNER), so the
+    # untrusted-author full-run clause below is preserved — a fork naming its branch
+    # `release-please--…` still runs the full proof.
     if: >-
+      (
       needs.changes.outputs.code == 'true'
       || github.event_name != 'pull_request'
       || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      )
+      && !(github.event.pull_request.author_association == 'OWNER' && startsWith(github.head_ref, 'release-please--'))
 
     steps:
       - uses: actions/checkout@v5
@@ -221,10 +248,19 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     needs: [changes]
+    # Skip on a maintainer-authored release-please PR (a version/CHANGELOG bump only):
+    # the OS-sandbox behaviour cannot change from a version-number bump, and the same
+    # commit's proof already ran on the code PR that introduced it. Keyed on
+    # `author_association == 'OWNER'` (a fork PR cannot be OWNER), so the
+    # untrusted-author full-run clause below is preserved — a fork naming its branch
+    # `release-please--…` still runs the full proof.
     if: >-
+      (
       needs.changes.outputs.code == 'true'
       || github.event_name != 'pull_request'
       || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      )
+      && !(github.event.pull_request.author_association == 'OWNER' && startsWith(github.head_ref, 'release-please--'))
 
     steps:
       - uses: actions/checkout@v5
@@ -320,10 +356,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [changes]
+    # Skip on a maintainer-authored release-please PR (a version/CHANGELOG bump only):
+    # the OS-sandbox behaviour cannot change from a version-number bump, and the same
+    # commit's proof already ran on the code PR that introduced it. Keyed on
+    # `author_association == 'OWNER'` (a fork PR cannot be OWNER), so the
+    # untrusted-author full-run clause below is preserved — a fork naming its branch
+    # `release-please--…` still runs the full proof.
     if: >-
+      (
       needs.changes.outputs.code == 'true'
       || github.event_name != 'pull_request'
       || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+      )
+      && !(github.event.pull_request.author_association == 'OWNER' && startsWith(github.head_ref, 'release-please--'))
 
     steps:
       - uses: actions/checkout@v5
