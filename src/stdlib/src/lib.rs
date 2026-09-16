@@ -540,10 +540,11 @@ const STD_UI_TUI: &str = include_str!("../Ipe/Ui/Tui.ipe");
 /// unnameable in a `Lines` view (a type error, never a silent render-time drop).
 const STD_UI_CLI: &str = include_str!("../Ipe/Ui/Cli.ipe");
 
-/// `Ipe.Tea.Terminal.Color` — the first-class terminal colour palette: a closed
-/// sum over the sixteen named ANSI colours plus `default`. Both the Tui and Cli
+/// `Ipe.Color.Ansi` — the first-class terminal colour palette: the sixteen named
+/// ANSI colours plus `default` and a truecolour path, each typed `AnsiColor`
+/// (the shared `ipe_runtime::color::AnsiColor` carrier). Both the Tui and Cli
 /// view surfaces accept it in their `color` / `bg` builders.
-const STD_TEA_TERMINAL_COLOR: &str = include_str!("../Ipe/Tea/Terminal/Color.ipe");
+const STD_COLOR_ANSI: &str = include_str!("../Ipe/Color/Ansi.ipe");
 
 /// `Ipe.Codec` — one invariant codec that drives the JSON direction.
 ///
@@ -1365,6 +1366,13 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         dotted: "Ipe.Color",
         source: COLOR,
     },
+    // Ipe.Color.Ansi — the terminal colour palette (`black`…`brightWhite`,
+    // `default`, `rgb`), each a point-free `Kernel.kernel "TermColor_*"` alias
+    // typed `AnsiColor`. Imports `Ipe.Color` for the `AnsiColor` type.
+    CompiledStdModule {
+        dotted: "Ipe.Color.Ansi",
+        source: STD_COLOR_ANSI,
+    },
     // Ipe.String — Layer-3 source; every member is a point-free
     // `Kernel.kernel "String_*"` alias resolved by `detect_kernel_alias` to the
     // registered `String*` kernels. Also re-exports the `String` builtin type
@@ -1541,10 +1549,6 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Ui.Cli",
         source: STD_UI_CLI,
-    },
-    CompiledStdModule {
-        dotted: "Ipe.Tea.Terminal.Color",
-        source: STD_TEA_TERMINAL_COLOR,
     },
     CompiledStdModule {
         dotted: "Ipe.Codec",

@@ -182,7 +182,6 @@ impl Builder<'_> {
             BuiltinTag::TuiAttr => self.builtins.tui_attr,
             BuiltinTag::CliLines => self.builtins.cli_lines,
             BuiltinTag::CliAttr => self.builtins.cli_attr,
-            BuiltinTag::TermColor => self.builtins.term_color,
             // The unified `Color` and the legacy `Ui.Color` share the interned
             // `"Color"` name; they collapse into one carrier as the migration removes
             // `UiColor`.
@@ -1015,12 +1014,6 @@ impl Builder<'_> {
             module: Vec::new(),
             name: self.builtins.cli_attr,
             args: vec![m],
-        };
-        // `term_color()` — the first-class terminal palette `Terminal.Color`.
-        let term_color = || Ty::Con {
-            module: Vec::new(),
-            name: self.builtins.term_color,
-            args: Vec::new(),
         };
         // `custom_element(down, up)` — the empty-home JS-widget boundary handle
         // `CustomElement down up`, the argument type of `CustomElement.node`.
@@ -3090,7 +3083,7 @@ impl Builder<'_> {
             | K::TuiUiUnderline
             | K::TuiUiDim
             | K::TuiUiReverse => tui_attr(var(0)),
-            K::TuiUiColor | K::TuiUiBg => fun(term_color(), tui_attr(var(0))),
+            K::TuiUiColor | K::TuiUiBg => fun(ansi_color(), tui_attr(var(0))),
             // ── Ipe.Ui.Cli line-oriented view + attribute builders ──
             K::CliUiNone => lines_t(var(0)),
             K::CliUiText => fun(string(), lines_t(var(0))),
@@ -3104,8 +3097,8 @@ impl Builder<'_> {
             K::CliUiBold | K::CliUiUnderline | K::CliUiDim | K::CliUiReverse => {
                 cli_attr(var(0))
             }
-            K::CliUiColor | K::CliUiBg => fun(term_color(), cli_attr(var(0))),
-            // ── Ipe.Tea.Terminal.Color palette constructors ──
+            K::CliUiColor | K::CliUiBg => fun(ansi_color(), cli_attr(var(0))),
+            // ── Ipe.Color terminal palette constructors (the `AnsiColor` type). ──
             K::TermColorBlack
             | K::TermColorRed
             | K::TermColorGreen
@@ -3122,11 +3115,11 @@ impl Builder<'_> {
             | K::TermColorBrightMagenta
             | K::TermColorBrightCyan
             | K::TermColorBrightWhite
-            | K::TermColorDefault => term_color(),
-            K::TermColorRgb => fun(int(), fun(int(), fun(int(), term_color()))),
+            | K::TermColorDefault => ansi_color(),
+            K::TermColorRgb => fun(int(), fun(int(), fun(int(), ansi_color()))),
             K::TermColorRgba => fun(
                 int(),
-                fun(int(), fun(int(), fun(float(), term_color()))),
+                fun(int(), fun(int(), fun(float(), ansi_color()))),
             ),
             // ── Ipe.Color constructor kernels (unified `color::Color`). ──
             K::ColorRgb => fun(int(), fun(int(), fun(int(), color()))),

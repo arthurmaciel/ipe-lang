@@ -193,8 +193,6 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
             UiPlain::PseudoClass => "PseudoClass".to_owned(),
             UiPlain::Description => "Description".to_owned(),
             UiPlain::LayoutContext => "LayoutContext".to_owned(),
-            // Ipe terminal palette, first-class in the terminal view surface.
-            UiPlain::TermColor => "Terminal.Color".to_owned(),
             // Ipe.Color companion value types (opaque carriers over the
             // `ipe_runtime::color::*` runtime types).
             UiPlain::ColorError => "ColorError".to_owned(),

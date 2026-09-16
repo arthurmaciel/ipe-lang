@@ -17407,8 +17407,6 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Terminal.Color` — the closed terminal colour palette (nullary).
-                "TermColor" => Ok(IrType::UiPlain(UiPlain::TermColor)),
                 // `Event msg` — a Ipe.Ui / Ipe.Html event handler carrier.
                 // Mirrors the `ir_type_from_ty` "Event" arm; same empty-home
                 // gap as `Attribute` for compiled-source stdlib annotations.
@@ -18815,8 +18813,6 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Terminal.Color` — the closed terminal colour palette (nullary).
-                "TermColor" => Ok(IrType::UiPlain(UiPlain::TermColor)),
                 // T2 trap: `Attribute` exists in BOTH `Ipe.Ui` and `Ipe.Html`.
                 // Disambiguate by `Ty::Con.module` — a module path containing
                 // "Html" identifies the `Ipe.Html.Attribute` form.
@@ -24505,7 +24501,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CliUiUnderline
                 | KernelFn::CliUiDim
                 | KernelFn::CliUiReverse
-                // `Ipe.Tea.Terminal.Color` nullary palette constructors.
+                // `Ipe.Color.Ansi` nullary palette constructors.
                 | KernelFn::TermColorBlack
                 | KernelFn::TermColorRed
                 | KernelFn::TermColorGreen
@@ -26318,7 +26314,7 @@ impl<'a> Lowerer<'a> {
                     ("CliUi", "reverse") => Ok(Callee::Kernel(KernelFn::CliUiReverse)),
                     ("CliUi", "color") => Ok(Callee::Kernel(KernelFn::CliUiColor)),
                     ("CliUi", "bg") => Ok(Callee::Kernel(KernelFn::CliUiBg)),
-                    // ── Ipe.Tea.Terminal.Color palette constructors ──
+                    // ── Ipe.Color.Ansi palette constructors (kernel home `TermColor`) ──
                     ("TermColor", "black") => Ok(Callee::Kernel(KernelFn::TermColorBlack)),
                     ("TermColor", "red") => Ok(Callee::Kernel(KernelFn::TermColorRed)),
                     ("TermColor", "green") => Ok(Callee::Kernel(KernelFn::TermColorGreen)),

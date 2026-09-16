@@ -242,17 +242,16 @@ pub struct Builtins {
     /// (bold/underline/dim/reverse/color/bg) inhabit it, so a 2D cell attribute
     /// or a DOM attribute is unnameable in a `Lines` view.
     pub cli_attr: Symbol,
-    /// `"TermColor"` (spelled `Terminal.Color`) — the closed terminal colour
-    /// palette. The argument type of the Tui and Cli `color` / `bg` builders.
-    pub term_color: Symbol,
     /// `"ColorError"` — the typed parse-error channel of the string-input colour
     /// constructors (`fromHex` / `fromName`). Backs `ipe_runtime::color::ColorError`.
     pub color_error: Symbol,
     /// `"TermProfile"` — the terminal capability profile `Color.toAnsi` targets.
     /// Backs `ipe_runtime::color::TermProfile`.
     pub term_profile: Symbol,
-    /// `"AnsiColor"` — the down-sampled terminal colour `Color.toAnsi` yields.
-    /// Backs `ipe_runtime::color::AnsiColor`.
+    /// `"AnsiColor"` — the terminal colour type: the palette `Ipe.Color`
+    /// constructors (`black`…`brightWhite`, `default`, `rgb`) build it, and
+    /// `Color.toAnsi` down-samples an sRGB `Color` to it. Backs
+    /// `ipe_runtime::color::AnsiColor`.
     pub ansi_color: Symbol,
     /// `"WcagLevel"` — the WCAG conformance level `Color.meetsWcag` checks
     /// against. Backs `ipe_runtime::color::WcagLevel`.
@@ -857,7 +856,6 @@ impl Builtins {
             tui_attr: interner.intern("TuiAttr")?,
             cli_lines: interner.intern("Lines")?,
             cli_attr: interner.intern("CliAttr")?,
-            term_color: interner.intern("TermColor")?,
             color_error: interner.intern("ColorError")?,
             term_profile: interner.intern("TermProfile")?,
             ansi_color: interner.intern("AnsiColor")?,

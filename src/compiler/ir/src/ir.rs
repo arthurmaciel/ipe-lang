@@ -1768,17 +1768,16 @@ pub enum UiPlain {
     Description,
     /// `LayoutContext` — `ipe_runtime::ui::element::LayoutContext`.
     LayoutContext,
-    /// `Terminal.Color` — `ipe_runtime::color::AnsiColor`, the closed terminal
-    /// colour palette accepted by the Tui and Cli `color` / `bg` builders.
-    TermColor,
     /// `ColorError` — `ipe_runtime::color::ColorError`, the typed parse-error
     /// channel of the `Ipe.Color` string constructors (`fromHex` / `fromName`).
     ColorError,
     /// `TermProfile` — `ipe_runtime::color::TermProfile`, the terminal capability
     /// profile `Color.toAnsi` targets.
     TermProfile,
-    /// `AnsiColor` — `ipe_runtime::color::AnsiColor`, the down-sampled terminal
-    /// colour `Color.toAnsi` yields.
+    /// `AnsiColor` — `ipe_runtime::color::AnsiColor`, the terminal colour: the
+    /// `Ipe.Color` palette constructors (`black`…`brightWhite`, `default`, `rgb`)
+    /// build it, `Color.toAnsi` down-samples an sRGB `Color` to it, and the Tui
+    /// and Cli `color` / `bg` builders accept it.
     AnsiColor,
     /// `WcagLevel` — `ipe_runtime::color::WcagLevel`, the WCAG conformance level
     /// (`aa` / `aaa`) `Color.meetsWcag` checks against.

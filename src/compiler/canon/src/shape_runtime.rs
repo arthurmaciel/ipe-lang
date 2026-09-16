@@ -356,7 +356,6 @@ mod tests {
             "Ipe.Tea.Cli",
             "Ipe.Ui.Cli",
             "Ipe.Tea.Terminal.Cmd",
-            "Ipe.Tea.Terminal.Color",
             "Ipe.Tea.WebView",
             "Ipe.Ui",
             "Ipe.Ui.Cells",

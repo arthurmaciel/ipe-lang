@@ -443,10 +443,6 @@ pub enum BuiltinTag {
     /// (bold/underline/dim/reverse/colour), so a 2D cell attribute or a DOM
     /// attribute is unnameable in a `Lines` view (a type error, never a drop).
     CliAttr,
-    /// `Color` (spelled `Terminal.Color`) — the closed terminal colour palette:
-    /// sixteen named ANSI colours plus `default`, plus a truecolour path. The
-    /// argument type of the Tui and Cli `color` / `bg` builders.
-    TermColor,
     /// `Color` — the unified opaque colour value type, `ipe_runtime::color::Color`.
     /// The single carrier shared by every surface (`Ui`/`Html`/`Css`/`Tui`/`Cli`);
     /// produced by the `Ipe.Color` constructor/manipulation kernels.
@@ -457,8 +453,10 @@ pub enum BuiltinTag {
     /// `TermProfile` — the terminal capability profile `Color.toAnsi` targets,
     /// `ipe_runtime::color::TermProfile`. Nullary.
     TermProfile,
-    /// `AnsiColor` — the down-sampled terminal colour `Color.toAnsi` yields,
-    /// `ipe_runtime::color::AnsiColor`. Nullary.
+    /// `AnsiColor` — the terminal colour type, `ipe_runtime::color::AnsiColor`.
+    /// Built by the `Ipe.Color` palette constructors (`black`…`brightWhite`,
+    /// `default`, `rgb`) and yielded by `Color.toAnsi`; the argument type of the
+    /// Tui and Cli `color` / `bg` builders. Nullary.
     AnsiColor,
     /// `WcagLevel` — the WCAG conformance level `Color.meetsWcag` checks against
     /// (`aa` / `aaa`), `ipe_runtime::color::WcagLevel`. Nullary.
@@ -1925,44 +1923,47 @@ pub enum StdlibKernel {
     CliUiColor,
     /// `CliUi.bg : Color -> Attribute msg` — background colour.
     CliUiBg,
-    // ── Ipe.Tea.Terminal.Color palette constructors (nullary closed sum) ───────
-    /// `TermColor.black : Color`
+    // ── Ipe.Color terminal palette constructors (the `AnsiColor` type) ─────────
+    // Internal kernel home stays `TermColor` (the reachability key
+    // `TermColor_*`); the user surface is `Ipe.Color`, the return type
+    // `AnsiColor`.
+    /// `TermColor.black : AnsiColor`
     TermColorBlack,
-    /// `TermColor.red : Color`
+    /// `TermColor.red : AnsiColor`
     TermColorRed,
-    /// `TermColor.green : Color`
+    /// `TermColor.green : AnsiColor`
     TermColorGreen,
-    /// `TermColor.yellow : Color`
+    /// `TermColor.yellow : AnsiColor`
     TermColorYellow,
-    /// `TermColor.blue : Color`
+    /// `TermColor.blue : AnsiColor`
     TermColorBlue,
-    /// `TermColor.magenta : Color`
+    /// `TermColor.magenta : AnsiColor`
     TermColorMagenta,
-    /// `TermColor.cyan : Color`
+    /// `TermColor.cyan : AnsiColor`
     TermColorCyan,
-    /// `TermColor.white : Color`
+    /// `TermColor.white : AnsiColor`
     TermColorWhite,
-    /// `TermColor.brightBlack : Color`
+    /// `TermColor.brightBlack : AnsiColor`
     TermColorBrightBlack,
-    /// `TermColor.brightRed : Color`
+    /// `TermColor.brightRed : AnsiColor`
     TermColorBrightRed,
-    /// `TermColor.brightGreen : Color`
+    /// `TermColor.brightGreen : AnsiColor`
     TermColorBrightGreen,
-    /// `TermColor.brightYellow : Color`
+    /// `TermColor.brightYellow : AnsiColor`
     TermColorBrightYellow,
-    /// `TermColor.brightBlue : Color`
+    /// `TermColor.brightBlue : AnsiColor`
     TermColorBrightBlue,
-    /// `TermColor.brightMagenta : Color`
+    /// `TermColor.brightMagenta : AnsiColor`
     TermColorBrightMagenta,
-    /// `TermColor.brightCyan : Color`
+    /// `TermColor.brightCyan : AnsiColor`
     TermColorBrightCyan,
-    /// `TermColor.brightWhite : Color`
+    /// `TermColor.brightWhite : AnsiColor`
     TermColorBrightWhite,
-    /// `TermColor.default : Color` — the terminal's own default colour.
+    /// `TermColor.default : AnsiColor` — the terminal's own default colour.
     TermColorDefault,
-    /// `TermColor.rgb : Int -> Int -> Int -> Color` — a 24-bit truecolour.
+    /// `TermColor.rgb : Int -> Int -> Int -> AnsiColor` — a 24-bit truecolour.
     TermColorRgb,
-    /// `TermColor.rgba : Int -> Int -> Int -> Float -> Color` — truecolour + alpha.
+    /// `TermColor.rgba : Int -> Int -> Int -> Float -> AnsiColor` — truecolour + alpha.
     TermColorRgba,
     /// `CustomElement.node : CustomElement down up -> down -> (up -> msg) -> Element msg` —
     /// the one view node that places a typed JS custom-element widget. The
@@ -4111,7 +4112,9 @@ impl StdlibKernel {
             Self::CliUiReverse => d("CliUi", "reverse", 0, Ui, "cli_reverse_"),
             Self::CliUiColor => d("CliUi", "color", 1, Ui, "cli_color_"),
             Self::CliUiBg => d("CliUi", "bg", 1, Ui, "cli_bg_"),
-            // ── Ipe.Tea.Terminal.Color palette constructors ──────────────
+            // ── Ipe.Color terminal palette constructors (the `AnsiColor` type).
+            // Internal home stays `TermColor` (the `TermColor_*` reachability
+            // key); the user surface is `Ipe.Color`. ──────────────────────────
             Self::TermColorBlack => d("TermColor", "black", 0, Pure, "term_color_black_"),
             Self::TermColorRed => d("TermColor", "red", 0, Pure, "term_color_red_"),
             Self::TermColorGreen => d("TermColor", "green", 0, Pure, "term_color_green_"),
@@ -5782,7 +5785,7 @@ impl StdlibKernel {
         Self::CliUiReverse,
         Self::CliUiColor,
         Self::CliUiBg,
-        // Ipe.Tea.Terminal.Color palette constructors
+        // Ipe.Color terminal palette constructors (the `AnsiColor` type)
         Self::TermColorBlack,
         Self::TermColorRed,
         Self::TermColorGreen,
@@ -8193,9 +8196,6 @@ impl StdlibKernel {
         const LIST_LIST_CHAR_TO_CELLS_A: TyShape = TyShape::Fun(&LIST_LIST_CHAR, &CELLS_A);
         // Cell-native attribute builders.
         const INT_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&INT, &TUI_ATTR_A);
-        // The first-class terminal palette type. Both Tui and Cli `color`/`bg`
-        // take it, so a colour is one type everywhere in a terminal view.
-        const TERM_COLOR: TyShape = TyShape::Con(BuiltinTag::TermColor, &[]);
         // ── Ipe.Color kernel scheme shapes (the unified `Color` value type). ──
         // Reuses the existing `COLOR` const (`BuiltinTag::UiColor` and
         // `BuiltinTag::Color` share the one runtime `color::Color` carrier).
@@ -8251,7 +8251,7 @@ impl StdlibKernel {
             TyShape::Fun(&COLOR, &TyShape::Fun(&LIST_COLOR, &COLOR));
         // `Deficiency -> Color -> Color` (simulate).
         const DEFICIENCY_TO_COLOR_TO_COLOR: TyShape = TyShape::Fun(&DEFICIENCY, &COLOR_TO_COLOR);
-        const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&TERM_COLOR, &TUI_ATTR_A);
+        const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&ANSI_COLOR, &TUI_ATTR_A);
         // `Lines msg` (var(0) = msg) and the Cli line-native attribute type and
         // list slots — DISTINCT from both DOM `UI_ATTR_A` and cell `TUI_ATTR_A`.
         const LINES_A: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_CLI, A]);
@@ -8266,15 +8266,15 @@ impl StdlibKernel {
         // `List (Lines msg) -> Lines msg` (lines)
         const LIST_LINES_A_TO_LINES_A: TyShape = TyShape::Fun(&LIST_LINES_A, &LINES_A);
         // Line-native colour attribute builders.
-        const COLOR_TO_CLI_ATTR_A: TyShape = TyShape::Fun(&TERM_COLOR, &CLI_ATTR_A);
-        // Terminal palette constructors.
-        const INT_TO_INT_TO_INT_TO_TERM_COLOR: TyShape =
-            TyShape::Fun(&INT, &TyShape::Fun(&INT, &TyShape::Fun(&INT, &TERM_COLOR)));
-        const INT_TO_INT_TO_INT_TO_FLOAT_TO_TERM_COLOR: TyShape = TyShape::Fun(
+        const COLOR_TO_CLI_ATTR_A: TyShape = TyShape::Fun(&ANSI_COLOR, &CLI_ATTR_A);
+        // Terminal palette constructors — build the shared `AnsiColor` carrier.
+        const INT_TO_INT_TO_INT_TO_ANSI_COLOR: TyShape =
+            TyShape::Fun(&INT, &TyShape::Fun(&INT, &TyShape::Fun(&INT, &ANSI_COLOR)));
+        const INT_TO_INT_TO_INT_TO_FLOAT_TO_ANSI_COLOR: TyShape = TyShape::Fun(
             &INT,
             &TyShape::Fun(
                 &INT,
-                &TyShape::Fun(&INT, &TyShape::Fun(&FLOAT, &TERM_COLOR)),
+                &TyShape::Fun(&INT, &TyShape::Fun(&FLOAT, &ANSI_COLOR)),
             ),
         );
 
@@ -9814,7 +9814,7 @@ impl StdlibKernel {
                 Some(&CLI_ATTR_A)
             }
             Self::CliUiColor | Self::CliUiBg => Some(&COLOR_TO_CLI_ATTR_A),
-            // ── Ipe.Tea.Terminal.Color palette constructors. ──
+            // ── Ipe.Color terminal palette constructors (the `AnsiColor` type). ──
             Self::TermColorBlack
             | Self::TermColorRed
             | Self::TermColorGreen
@@ -9831,9 +9831,9 @@ impl StdlibKernel {
             | Self::TermColorBrightMagenta
             | Self::TermColorBrightCyan
             | Self::TermColorBrightWhite
-            | Self::TermColorDefault => Some(&TERM_COLOR),
-            Self::TermColorRgb => Some(&INT_TO_INT_TO_INT_TO_TERM_COLOR),
-            Self::TermColorRgba => Some(&INT_TO_INT_TO_INT_TO_FLOAT_TO_TERM_COLOR),
+            | Self::TermColorDefault => Some(&ANSI_COLOR),
+            Self::TermColorRgb => Some(&INT_TO_INT_TO_INT_TO_ANSI_COLOR),
+            Self::TermColorRgba => Some(&INT_TO_INT_TO_INT_TO_FLOAT_TO_ANSI_COLOR),
             // ── Ipe.Color constructors ──
             Self::ColorRgb => Some(&INT_TO_INT_TO_INT_TO_COLOR),
             Self::ColorRgba => Some(&INT_TO_INT_TO_INT_TO_FLOAT_TO_COLOR),

@@ -25,7 +25,7 @@ module Ipe.Ui.Cli exposing
 
 
 import Ipe.Ffi.Kernel as Kernel
-import Ipe.Tea.Terminal.Color exposing (Color)
+import Ipe.Color exposing (AnsiColor)
 
 
 -- | An empty view — renders nothing.
@@ -69,10 +69,10 @@ reverse = Kernel.kernel "CliUi_reverse"
 
 
 -- | `color c` — the foreground (text) colour, from the terminal palette.
-color : Color -> Attribute msg
+color : AnsiColor -> Attribute msg
 color = Kernel.kernel "CliUi_color"
 
 
 -- | `bg c` — the background colour, from the terminal palette.
-bg : Color -> Attribute msg
+bg : AnsiColor -> Attribute msg
 bg = Kernel.kernel "CliUi_bg"
