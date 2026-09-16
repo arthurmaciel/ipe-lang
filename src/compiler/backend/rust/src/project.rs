@@ -99,8 +99,14 @@ autobins = false
 [features]
 # Selects the browser-target impls of the shared form-submit helpers in the
 # vendored runtime (`cfg(any(feature = "web", feature = "wasm-client"))`).
-default = ["wasm-client", "encoding", "serde", "json"]
+default = ["wasm-client", "web-core", "encoding", "serde", "json"]
 wasm-client = []
+# The browser sink renders through the server-free render core (`crate::dom`
+# diff/dispatch/form + `style_inject` + `page_shell`, all `#[cfg(feature =
+# "web-core")]` in the vendored source), so `web-core` is defaulted-on like
+# `serde`/`json`/`encoding` to satisfy those gates — mirroring the runtime
+# crate's own `wasm-client`, which pulls `web-core`.
+web-core = []
 # The floor serde derives (`IpeMaybe`/`IpeResult`/`IpeError`/`Decimal`/`Patch`)
 # and `json.rs` are `#[cfg(feature = "serde")]` / `#[cfg(feature = "json")]` in
 # the vendored source. `serde` / `serde_json` / `serde_urlencoded` stay
