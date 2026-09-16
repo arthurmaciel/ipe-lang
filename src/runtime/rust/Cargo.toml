@@ -392,14 +392,14 @@ json = ["dep:serde_json", "serde"]
 # the `Decimal` newtype.
 # `crypto-core`: `db.rs` SHA-256s the `_ipe_migrations` ledger checksum (a
 # cross-backend byte-exact contract).
-db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "dep:serde_json", "json", "serde", "bincode", "encoding", "random", "time-core", "decimal", "crypto-core", "url", "secret"]
+db = ["sqlx", "sqlx?/sqlite", "sqlx?/postgres", "tokio", "tokio/sync", "dep:serde_json", "json", "serde", "encoding", "random", "time-core", "decimal", "crypto-core", "url", "secret"]
 # `db-sqlite` / `db-postgres`: config.rs alias selectors. Only the emitter ever
 # enables one, and it selects exactly one (SEAL-checked) — the standalone crate
 # links both sqlx drivers regardless (see `db`). The `compile_error!` in
 # `config.rs` guards the union as a fail-closed guard, not a user surface.
 db-sqlite = ["db"]
 db-postgres = ["db"]
-redis_store = ["redis", "tokio", "tokio/sync", "dep:serde_json", "json", "serde", "async-trait", "bincode", "random"]
+redis_store = ["redis", "tokio", "tokio/sync", "dep:serde_json", "json", "serde", "async-trait", "random"]
 # Heavy crypto surface (`crypto.rs`): legacy SHA-1/MD5 checksums, AEAD, PBKDF2,
 # RSA. Owns `sha1` + `md-5` (crypto.rs-only) and implies `crypto-core` (the RSA
 # arm, the `Key` reveal, and the re-exported floor all live there).
