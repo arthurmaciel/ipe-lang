@@ -89,7 +89,6 @@ fn wasm_module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         uses_compression: false,
         uses_csv: false,
         uses_cache: false,
-        uses_tree: false,
         uses_encoding: f(18),
         uses_regex: f(3),
         uses_uuid: f(13),

@@ -93,13 +93,6 @@ pub enum RuntimeFeature {
     /// `IpeTask` return + its LCG-free eviction clock), so a program that reaches no
     /// `Ipe.Cache` surface drops the module.
     CacheKernel,
-    /// `tree_kernel` — the `tree.rs` recursive-ADT module (`uses_tree`: an
-    /// `Ipe.Tree` kernel — `demoTree` / `parseTree` — or a `Tree` type-mention). A
-    /// standalone leaf — no surface implies it. Selecting it compiles `tree.rs`
-    /// (the `tree_demo_tree` / `tree_parse_tree` functions and the `Tree` enum the
-    /// emitted code constructs + matches). Pure-CPU: pulls no extra deps, so a
-    /// program that reaches no `Ipe.Tree` surface drops the module.
-    TreeKernel,
     /// `time` — the IANA-zone calendar surface, `chrono-tz` (`uses_time`).
     Time,
     /// `encoding` — the `base64` + `hex` + `percent-encoding` codec crates and
@@ -205,7 +198,6 @@ impl RuntimeFeature {
             Self::Compression => "compression",
             Self::CsvKernel => "csv_kernel",
             Self::CacheKernel => "cache_kernel",
-            Self::TreeKernel => "tree_kernel",
             Self::Time => "time",
             Self::Encoding => "encoding",
             Self::Regex => "regex",
@@ -333,11 +325,6 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         if ctx.reaches_char_category() {
             set.insert(RuntimeFeature::CharCategory);
         }
-        // `Ipe.Tree` — a pure-CPU leaf, buildable on wasip1 (no async, no external
-        // deps). Part of the sealed floor's pure families.
-        if ctx.uses_tree {
-            set.insert(RuntimeFeature::TreeKernel);
-        }
         // The crypto FLOOR (sha2/hmac/subtle/getrandom) — `Crypto.randomBytes`/
         // `randomToken` and `Secret` live here; the heavy crypto surface
         // (`Crypto`/`Jwt`) is NOT part of the sealed floor and stays unselected.
@@ -442,13 +429,6 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     // none drops the module and its `cache_kernel`-gated deps.
     if ctx.uses_cache {
         set.insert(RuntimeFeature::CacheKernel);
-    }
-    // Ipe.Tree (`tree.rs`): the recursive-ADT module. A standalone leaf — no
-    // surface implies it. `uses_tree` folds an `Ipe.Tree` kernel with a `Tree`
-    // type-mention (the pure-Ipê `Leaf`/`Node` ctors construct / match a `Tree`
-    // with no kernel call). A program that reaches none drops the module.
-    if ctx.uses_tree {
-        set.insert(RuntimeFeature::TreeKernel);
     }
     if ctx.uses_time {
         set.insert(RuntimeFeature::Time);
@@ -616,7 +596,6 @@ mod tests {
             uses_compression: false,
             uses_csv: false,
             uses_cache: false,
-            uses_tree: false,
             uses_encoding: false,
             uses_regex: false,
             uses_uuid: false,
@@ -916,7 +895,6 @@ mod tests {
             RuntimeFeature::Compression,
             RuntimeFeature::CsvKernel,
             RuntimeFeature::CacheKernel,
-            RuntimeFeature::TreeKernel,
             RuntimeFeature::Time,
             RuntimeFeature::Decimal,
             RuntimeFeature::CharCategory,

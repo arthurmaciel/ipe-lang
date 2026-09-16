@@ -86,10 +86,6 @@ pub enum RuntimeModule {
     /// draw functions the emitted code references). Declared by the `uses_random`
     /// append.
     Random,
-    /// The `tree` feature-module (`ipe_runtime::tree`, whose `tree_demo_tree` /
-    /// `tree_parse_tree` functions and the `Tree` enum the emitted code
-    /// references). Declared by the `uses_tree` append.
-    Tree,
 }
 
 /// The event-payload shape of a `Ipe.Html.Events` builder.
@@ -509,13 +505,6 @@ pub enum BuiltinTag {
     /// (see `builtin_con_module`) so a point-free `send` reference lowers to the
     /// runtime-backed enum instead of an unhomed unknown-builtin `Con`.
     EmailProvider,
-    /// `Tree` — the recursive payload-carrying `Ipe.Tree` ADT (`Leaf Int | Node
-    /// (List Tree)`), backed by the runtime enum `ipe_runtime::tree::Tree`. Nullary
-    /// as a type constructor (its recursion lives in the `Node` payload, not in a
-    /// type parameter), and module-qualified with its `Ipe.Tree` home (see
-    /// `builtin_con_module`) so a point-free producer reference lowers to the
-    /// runtime-backed enum. The producer kernels `demoTree` / `parseTree` return it.
-    Tree,
     // ── Shape opaque app-leaf type constructors ──────────────────────────────
     /// `WebApp` — opaque app handle returned by `Web.tea` / `Web.appRouted` /
     /// `Web.appWith`. Nullary; backed by `ipe_runtime::tea::WebApp` (served) or
@@ -2860,17 +2849,6 @@ pub enum StdlibKernel {
     /// `Cache.statsRaw : Int -> Task Error { hits, misses, evictions }`.
     CacheStats,
 
-    // ── Ipe.Tree — recursive payload-carrying ADT bridge (#2493) ──────
-    // Pure; runtime `ipe_runtime::tree::*`. Routed via the compiled-source
-    // `Ipe.Tree` Layer-3 surface + `Kernel.kernel "Tree_*"` aliases. Both
-    // producers return the runtime-backed `Tree` enum by value; user code
-    // constructs (`Leaf`/`Node`) and `case`-matches it directly.
-    /// `Tree.demoTree : Int -> Tree` — build a small fixed recursive tree.
-    TreeDemo,
-    /// `Tree.parseTree : String -> Result Error Tree` — a bounded parse boundary
-    /// (typed limit error on over-deep input, never a panic).
-    TreeParse,
-
     // ── Ipe.Config — typed TOML/YAML/JSON decoders ────────────────────
     // Config shares the JSON `Decoder<E, T>` carrier and its `decode_*`
     // combinator runtime fns: `string`/`int`/`float`/`bool`/`field`/`at`/
@@ -4989,13 +4967,6 @@ impl StdlibKernel {
             Self::CacheSize => d("Cache", "size", 1, Pure, "cache_size"),
             Self::CacheStats => d("Cache", "stats", 1, Pure, "cache_stats"),
 
-            // ── Ipe.Tree ──────────────────────────────────────────────
-            // Runtime names MUST match `ipe_runtime::tree::*` exactly. Alias
-            // strings `Tree_demoTree` / `Tree_parseTree` split to qualifier `Tree`
-            // + the `name` written here; the emit column is the runtime fn.
-            Self::TreeDemo => d("Tree", "demoTree", 1, Pure, "tree_demo_tree"),
-            Self::TreeParse => d("Tree", "parseTree", 1, Pure, "tree_parse_tree"),
-
             // ── Ipe.Config ────────────────────────────────────────────
             // The 11 combinator/primitive kernels share the JSON `decode_*`
             // runtime fns; the 5 format/nullable/load kernels are Config-own
@@ -6291,8 +6262,6 @@ impl StdlibKernel {
         Self::CacheClear,
         Self::CacheSize,
         Self::CacheStats,
-        Self::TreeDemo,
-        Self::TreeParse,
         Self::ConfigString,
         Self::ConfigInt,
         Self::ConfigFloat,
@@ -8915,12 +8884,6 @@ impl StdlibKernel {
         const EMAIL_PROVIDER: TyShape = TyShape::Con(BuiltinTag::EmailProvider, &[]);
         const EMAIL_MESSAGE_TO_TASK: TyShape = TyShape::Fun(&EMAIL_MESSAGE, &TASK_STRING);
         const EMAIL_SEND: TyShape = TyShape::Fun(&EMAIL_PROVIDER, &EMAIL_MESSAGE_TO_TASK);
-        // Ipe.Tree — recursive payload-carrying ADT bridge (#2493).
-        // `demoTree : Int -> Tree`; `parseTree : String -> Result Error Tree`.
-        const TREE: TyShape = TyShape::Con(BuiltinTag::Tree, &[]);
-        const TREE_DEMO: TyShape = TyShape::Fun(&INT, &TREE);
-        const RESULT_ERROR_TREE: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, TREE]);
-        const TREE_PARSE: TyShape = TyShape::Fun(&STRING, &RESULT_ERROR_TREE);
         // RetryPolicy builders.
         const RETRY_POLICY_TO_RETRY_POLICY: TyShape = TyShape::Fun(&RETRY_POLICY, &RETRY_POLICY);
         const INT_TO_RETRY_POLICY: TyShape = TyShape::Fun(&INT, &RETRY_POLICY);
@@ -10082,9 +10045,6 @@ impl StdlibKernel {
             Self::WebSocketConnectWith => Some(&WS_CONNECT_WITH),
             // Email.
             Self::EmailSend => Some(&EMAIL_SEND),
-            // Ipe.Tree — recursive payload-carrying ADT bridge (#2493).
-            Self::TreeDemo => Some(&TREE_DEMO),
-            Self::TreeParse => Some(&TREE_PARSE),
             // RetryPolicy.
             Self::TaskLinearBackoff | Self::TaskExponentialBackoff => Some(&TASK_BACKOFF),
             Self::TaskWithJitter => Some(&RETRY_POLICY_TO_RETRY_POLICY),
@@ -10280,13 +10240,6 @@ impl StdlibKernel {
             | Self::CacheClear
             | Self::CacheSize
             | Self::CacheStats => Some(RuntimeModule::Cache),
-            // The `Ipe.Tree` family is `class = Pure` but its `tree_*` symbols and
-            // the `Tree` enum live only in `ipe_runtime::tree` — a standalone
-            // feature-module no emit-class pulls in. Declaring the module here is
-            // the SSOT that gates the `tree` append (the lowerer additionally forces
-            // it on a bare `Tree` type-mention with no kernel call — see
-            // `ir_type_mentions_tree`).
-            Self::TreeDemo | Self::TreeParse => Some(RuntimeModule::Tree),
             // The `Ipe.Random` family is `class = Pure` but its `random_*` draw
             // symbols live only in `ipe_runtime::random` — a standalone
             // feature-module no emit-class pulls in. Declaring the module here is
@@ -11470,8 +11423,6 @@ impl StdlibKernel {
             | Self::CacheClear
             | Self::CacheSize
             | Self::CacheStats
-            | Self::TreeDemo
-            | Self::TreeParse
             | Self::ConfigString
             | Self::ConfigInt
             | Self::ConfigFloat

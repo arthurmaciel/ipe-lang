@@ -54,7 +54,6 @@ fn module_source_files(module: RuntimeModule) -> Vec<PathBuf> {
         RuntimeModule::Server => &["server.rs", "server_stream.rs", "http_stream.rs"],
         RuntimeModule::Cache => &["cache.rs"],
         RuntimeModule::Random => &["random.rs"],
-        RuntimeModule::Tree => &["tree.rs"],
     };
     rel.iter().map(|r| root.join(r)).collect()
 }

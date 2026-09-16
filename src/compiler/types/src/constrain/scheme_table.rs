@@ -204,7 +204,6 @@ impl Builder<'_> {
             BuiltinTag::SessionHandle => self.builtins.session_handle,
             BuiltinTag::WebRoute => self.builtins.live_route_con,
             BuiltinTag::EmailProvider => self.builtins.email_provider,
-            BuiltinTag::Tree => self.builtins.tree_con,
             BuiltinTag::BackoffStrategy => self.builtins.backoffstrategy,
             BuiltinTag::WebApp => self.builtins.web_app,
             BuiltinTag::TuiApp => self.builtins.tui_app,
@@ -327,11 +326,6 @@ impl Builder<'_> {
             // unhomed `Con` misses the lowerer's home-keyed variant lookup and
             // drops into the unknown-builtin internal-compiler-error arm.
             BuiltinTag::EmailProvider => self.builtins.email_home.clone(),
-            // `Tree` is a compiled-source ADT (`Ipe.Tree.Tree`) backed by the
-            // runtime enum — its producer-kernel scheme reference must carry the
-            // real `["Ipe", "Tree"]` home so a point-free `demoTree` / `parseTree`
-            // lowers to the runtime-backed enum, exactly as `EmailProvider` does.
-            BuiltinTag::Tree => self.builtins.tree_home.clone(),
             // `Duration` is a compiled-source ADT (`Ipe.Duration.Duration`), not a
             // folded builtin — its `Http.withTimeout` scheme reference must carry
             // the real `["Ipe", "Duration"]` home so a point-free use lowers to the
@@ -811,15 +805,6 @@ impl Builder<'_> {
         let email_provider = || Ty::Con {
             module: self.builtins.email_home.clone(),
             name: self.builtins.email_provider,
-            args: Vec::new(),
-        };
-        // Ipe.Tree: the recursive payload-carrying `Tree` ADT (runtime
-        // `ipe_runtime::tree::Tree`), backed via `builtin_runtime_enum`. Carries the
-        // real `Ipe.Tree` home so a point-free `demoTree` / `parseTree` reference
-        // lowers to the runtime-backed enum (mirrors `email_provider`).
-        let tree = || Ty::Con {
-            module: self.builtins.tree_home.clone(),
-            name: self.builtins.tree_con,
             args: Vec::new(),
         };
         // `Key` — opaque role-typed crypto key (`ipe_runtime::crypto::Key`).
@@ -4442,11 +4427,6 @@ impl Builder<'_> {
             K::CacheClear => fun(int(), task_unit()),
             K::CacheSize => fun(int(), task(int())),
             K::CacheStats => fun(int(), task(cache_stats_rec())),
-
-            // ── Ipe.Tree — recursive payload-carrying ADT bridge (#2493) ───────────
-            // demoTree : Int -> Tree ; parseTree : String -> Result Error Tree.
-            K::TreeDemo => fun(int(), tree()),
-            K::TreeParse => fun(string(), result(error_ty(), tree())),
 
             // ── Ipe.Email ─────────────────────────────────────────────────────────
             // send : EmailProvider -> EmailMessage -> Task Error String

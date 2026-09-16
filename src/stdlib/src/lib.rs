@@ -1137,11 +1137,6 @@ const IPE_CORE_ENV: &str = include_str!("../Ipe/Env.ipe");
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CACHE: &str = include_str!("../Ipe/Cache.ipe");
 
-/// `Ipe.Tree` — the synthetic recursive payload-carrying ADT bridge (#2493). Its
-/// `Leaf`/`Node` ctors + patterns route to the runtime enum
-/// `ipe_runtime::tree::Tree`; `demoTree` / `parseTree` are the producer kernels.
-const STD_TREE: &str = include_str!("../Ipe/Tree.ipe");
-
 /// `Ipe.Compression` — gzip + zstd compression (compiled source).
 ///
 /// Members are point-free `Kernel.kernel "Compression_*"` aliases backed by the
@@ -1810,10 +1805,6 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Ipe.Cache",
         source: STD_CACHE,
-    },
-    CompiledStdModule {
-        dotted: "Ipe.Tree",
-        source: STD_TREE,
     },
     CompiledStdModule {
         dotted: "Ipe.Compression",
@@ -2553,112 +2544,6 @@ mod tests {
     ///
     /// The inverse direction (catalog entry → registry) is guarded by the
     /// `stdlib_catalog_matches_kernel_registry` tripwire in `ipe_canon`.
-    /// B3 SEAL tripwire (compiler-side half): the stdlib `type Tree` veneer's
-    /// constructor + field shape MUST equal the runtime `ipe_runtime::tree::Tree`
-    /// enum shape the `Ipe.Tree` bridge routes to — `Leaf Int | Node (List Tree)`.
-    ///
-    /// The bridge suppresses the stdlib `EnumDef` and emits every `Tree`
-    /// construction / pattern against the runtime enum. If the veneer drifted (a
-    /// renamed ctor, an extra field, a wrong field type) the compiler would still
-    /// accept `Tree` code, but the emitted Rust would reference a variant/arity the
-    /// runtime enum does not have — an `ipe`-exit-0-then-cargo-fail. Pinning the
-    /// shape here turns that drift into a failing test (the runtime half,
-    /// `_tree_shape_pin` in `tree.rs`, breaks the build symmetrically), so the two
-    /// definitions cannot silently diverge.
-    #[test]
-    fn tree_bridge_shape_matches_runtime() {
-        use ipe_intern::Interner;
-        use ipe_syntax::TypeAnnotation;
-
-        let mut interner = Interner::new();
-        let parsed =
-            ipe_parse::parse_module(STD_TREE, &mut interner).expect("Ipe/Tree.ipe must parse");
-        let tree_name = interner.intern("Tree").expect("intern Tree");
-        let union = parsed
-            .unions
-            .iter()
-            .find(|u| u.value.name.value == tree_name)
-            .expect("Ipe/Tree.ipe must declare `type Tree`");
-
-        // The bare name of a `TType` type-constructor annotation (its LAST dotted
-        // segment), or `None` for any non-`TType` shape.
-        let type_head = |ann: &TypeAnnotation| -> Option<String> {
-            match ann {
-                TypeAnnotation::TType(_q, segs, _args) => segs
-                    .last()
-                    .and_then(|s| interner.resolve(*s))
-                    .map(str::to_owned),
-                _ => None,
-            }
-        };
-
-        let ctors: Vec<(String, &Vec<TypeAnnotation>)> = union
-            .value
-            .ctors
-            .iter()
-            .map(|c| {
-                (
-                    interner
-                        .resolve(c.value.name)
-                        .expect("ctor name resolves")
-                        .to_owned(),
-                    &c.value.args,
-                )
-            })
-            .collect();
-
-        // Exactly two constructors, in declaration order — `Leaf` (one `Int`
-        // field) then `Node` (one `List Tree` field, the recursive edge). Matched
-        // on the whole slice so a wrong arity / order / field shape fails closed
-        // without any indexing or `panic!` (the crate denies both in test code).
-        match ctors.as_slice() {
-            [(leaf_name, leaf_args), (node_name, node_args)] => {
-                assert_eq!(
-                    (leaf_name.as_str(), node_name.as_str()),
-                    ("Leaf", "Node"),
-                    "Ipe.Tree must declare exactly `Leaf | Node` (drift vs ipe_runtime::tree::Tree)"
-                );
-                // `Leaf Int` — one field, an `Int`.
-                match leaf_args.as_slice() {
-                    [field] => assert_eq!(
-                        type_head(field).as_deref(),
-                        Some("Int"),
-                        "`Leaf`'s field must be `Int` (== runtime `Tree::Leaf(i64)`)"
-                    ),
-                    other => {
-                        assert_eq!(other.len(), 1, "`Leaf` must carry exactly one field");
-                    }
-                }
-                // `Node (List Tree)` — one field, a `List` whose element is `Tree`.
-                // Read the field's `(head, element)` shape into an `Option` and
-                // assert on that, so a non-`TType` field fails as `None` rather than
-                // via a denied `panic!`/`assert!(false)`.
-                let node_field_shape: Option<(Option<&str>, Option<String>)> =
-                    match node_args.as_slice() {
-                        [TypeAnnotation::TType(_q, segs, list_args)] => Some((
-                            segs.last().and_then(|s| interner.resolve(*s)),
-                            match list_args.as_slice() {
-                                [elem] => type_head(elem),
-                                _ => None,
-                            },
-                        )),
-                        _ => None,
-                    };
-                assert_eq!(
-                    node_field_shape,
-                    Some((Some("List"), Some("Tree".to_owned()))),
-                    "`Node`'s single field must be `List Tree` — a `List` of the \
-                     recursive self-reference `Tree` (== runtime `Tree::Node(Vec<Tree>)`)"
-                );
-            }
-            other => assert_eq!(
-                other.len(),
-                2,
-                "Ipe.Tree must declare exactly two constructors (`Leaf | Node`)"
-            ),
-        }
-    }
-
     #[test]
     fn every_kernel_is_reachable() {
         use ipe_canon::Env;
