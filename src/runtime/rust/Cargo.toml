@@ -440,9 +440,12 @@ web-core = ["dep:serde_json", "json", "serde", "dep:serde_urlencoded"]
 # bridge reuses) — NOT the full `web` feature and NOT the axum `server`: the
 # desktop-webview delivery renders over a LOCAL IPC bridge and runs no HTTP
 # server. `tokio` (the current-thread `block_on` the generated entry drives the
-# event loop through) is named explicitly since `web` no longer supplies it. The
-# no-server floor is machine-checked by `tests/webview_dep_floor.rs`.
-webview = ["wry", "tao", "web-core", "tokio"]
+# event loop through) is named explicitly since `web` no longer supplies it;
+# `random` rides it because `task.rs`'s tokio-gated retry-with-jitter path draws
+# from `random`'s LCG (`super::random::lcg_next`) — every tokio-enabling feature
+# must also enable `random` or the module is absent (same invariant as `async`).
+# The no-server floor is machine-checked by `tests/webview_dep_floor.rs`.
+webview = ["wry", "tao", "web-core", "tokio", "random"]
 config = ["json", "toml", "serde_yaml"]
 # `tokio/net`+`tokio/sync`: axum binds a listener (`tokio::net`) and the
 # server/live loop uses `tokio::sync`.

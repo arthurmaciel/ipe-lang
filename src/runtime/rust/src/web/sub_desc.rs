@@ -36,6 +36,7 @@
 //! datum, or a message JSON that does not decode into `Msg`. The dev patch channel
 //! is untrusted; every failure is a total no-op that installs no subscription.
 
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
 use crate::tea::IpeSub;
 
 /// Hard ceiling on a baked sub-description's message JSON considered for a

@@ -584,47 +584,20 @@ pub mod js_port_glue;
 #[cfg(feature = "web-core")]
 pub mod web_page_core;
 
-#[cfg(feature = "web")]
+// ONE `web` module for every render host. Under `web-core` alone — the
+// native-window `webview` backend (over a local IPC bridge) and the browser-WASM
+// `wasm-client` sink, neither of which runs an HTTP server — the module compiles
+// to just its server-free render core (`dom` diff/dispatch/form, `style_inject`,
+// `route`, `literal_table`, `template`, the pure hot-swap datum types, and the
+// `page_shell` scaffold). The `server` feature turns the full served surface
+// (axum router, SSE, session store, CSRF middleware, pub/sub broker) back on;
+// every axum/SSE/session item inside `web/` is `#[cfg(feature = "server")]`. One
+// `pub mod web;` for both hosts — the module-set closure sees a single `web`, no
+// shell.
+#[cfg(feature = "web-core")]
 pub mod web;
-#[cfg(feature = "web")]
+#[cfg(feature = "web-core")]
 pub use web::*;
-
-// The server-free render core without the full `web` feature: the lean `web`
-// shell. Two hosts reach it — the native-window `webview` backend (over a local
-// IPC bridge) and the browser-WASM `wasm-client` sink — neither of which runs an
-// HTTP server, so both must resolve `crate::web::{dispatch, style_inject,
-// page_shell, req, route}` WITHOUT pulling axum, SSE, or the session store. The
-// render-core submodules live in the target-neutral `crate::dom` (diff/dispatch/
-// form) and the pure `style_inject`/`page_shell`/`page_core` helpers; this shell
-// lifts them under the `web::` path the render hosts name, mirroring the full
-// `web` module's re-exports for exactly the server-free subset. Gated on
-// `web-core && !web` so a full-`web` build uses the real module and this shell is
-// absent (no duplicate `web`).
-#[cfg(all(feature = "web-core", not(feature = "web")))]
-pub mod web {
-    // Target-neutral render pipeline (diff → `Vec<Patch>`, handler index, typed
-    // form decode) — the same modules the full `web` mod re-exports.
-    pub use crate::dom::dispatch;
-    pub use crate::dom::form;
-    pub use crate::dom::req;
-    pub use crate::dom::req::*;
-    pub use dispatch::*;
-    pub use form::*;
-    // Style-injection render pass (pure over `html` + `css_safety`).
-    pub mod style_inject;
-    // The shared page scaffold (`page_shell` + `BASE_CSS`) — pure `format!`, no
-    // server dependency. Lives in `page_core` so both this shell and the full
-    // `web` mod re-export the ONE definition.
-    pub use crate::web_page_core::page_shell;
-    // The pure URL-pattern matcher — the browser-WASM sink (`wasm/mod.rs`) routes
-    // URLs through it; no server/tokio deps, compiles on wasm32.
-    pub mod route;
-    // The appearance literal table is pure std data (a `Vec<String>`), so it
-    // compiles anywhere. Expose it so a render-core web-shape build resolves
-    // `ipe_runtime::web::LiteralTable` exactly as a full-web build does.
-    pub mod literal_table;
-    pub use literal_table::LiteralTable;
-}
 
 pub mod ffi_polyfills;
 pub use ffi_polyfills::*;

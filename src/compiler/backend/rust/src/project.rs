@@ -1218,48 +1218,27 @@ const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;
 /// path (`web::dispatch::build_index`, `web::page_shell`,
 /// `web::style_inject::apply_style_injections`) plus `crate::html::*`. A
 /// desktop-webview delivery runs no HTTP server, so [`RUNTIME_MOD_RS_WEB_APPEND`]
-/// (the full axum `web` surface) is NOT appended for a bare-webview program;
-/// [`RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND`] instead declares the lean `web` shell
-/// that lifts only those server-free items. (A program that reaches BOTH `web`
-/// and `webview` keeps the full `web` module — the lean shell is elided by its
-/// `!uses_web` guard.)
+/// (the full axum server surface) is NOT appended for a bare-webview program;
+/// the render core it draws through is declared by
+/// [`RUNTIME_MOD_RS_WEB_CORE_APPEND`] (which fires for `uses_web || uses_webview`
+/// and pulls in the ONE real `web` module — server items inside stay
+/// `#[cfg(feature = "server")]`, so a webview build compiles only the render core).
 const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub mod webview;\n\
      #[cfg(feature = \"webview\")]\npub use webview::{webview_app, WebViewWindowCfg};\n";
 
-/// The server-free render core lifted under the `web::` path for a bare-webview
-/// program (`uses_webview && !uses_web`), mirroring the runtime crate's lean
-/// `web` shell (`#[cfg(all(feature = "web-core", not(feature = "web")))]`). The
-/// native backend renders through `web::dispatch` / `web::style_inject` /
-/// `web::page_shell` over a local IPC bridge — NO axum `server`, NO SSE, NO
-/// session store. `web_page_core` (the pure `page_shell` scaffold) is declared
-/// first so the shell's `pub use crate::web_page_core::page_shell;` resolves.
-/// `dom` (diff/dispatch/form/req) and `html`/`css_safety` are already declared by
-/// the UI/CSS appends (both fire on `uses_webview`).
-const RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND: &str = "#[cfg(feature = \"web-core\")]\npub mod web_page_core;\n\
-     #[cfg(feature = \"web-core\")]\npub mod web {\n\
-     pub use crate::dom::dispatch;\n\
-     pub use crate::dom::form;\n\
-     pub use crate::dom::req::*;\n\
-     pub use dispatch::*;\n\
-     pub use form::*;\n\
-     pub mod style_inject;\n\
-     pub use crate::web_page_core::page_shell;\n\
-     pub mod route;\n\
-     pub mod literal_table;\n\
-     pub use literal_table::LiteralTable;\n\
-     }\n";
-
-/// The server-free page scaffold (`web_page_core`) the FULL `web` surface also
-/// reaches: `web/mod.rs` does `pub use crate::web_page_core::page_shell;`, so a
-/// served-`web` emit must declare `web_page_core` as a sibling or the vendored
-/// `web` module fails `cargo build` (the module-set SEAL breach
-/// `runtime_modset_closure` pins). Declared under `web-core` (which the `web`
-/// feature always pulls). The bare-webview path declares it via
-/// [`RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND`] instead, and the two are mutually
-/// exclusive (that append fires only on `!uses_web`), so it is never declared
-/// twice.
-const RUNTIME_MOD_RS_WEB_PAGE_CORE_APPEND: &str =
-    "#[cfg(feature = \"web-core\")]\npub mod web_page_core;\n";
+/// The server-free render core, declared for EVERY render host (`uses_web ||
+/// uses_webview`): the ONE real `web` module (which compiles to just its
+/// render-core under `web-core` alone — every axum/SSE/session item inside is
+/// `#[cfg(feature = "server")]`) plus the pure `page_shell` scaffold
+/// (`web_page_core`). The native-window `webview` backend renders through
+/// `web::dispatch` / `web::style_inject` / `web::page_shell` / `web::route` over
+/// a local IPC bridge — NO axum `server`, NO SSE, NO session store. The full
+/// served surface ([`RUNTIME_MOD_RS_WEB_APPEND`]) is layered on top only when
+/// `uses_web`; `web_page_core` is declared here (not there) so a bare-webview
+/// program still resolves `web/mod.rs`'s `pub use crate::web_page_core::page_shell`.
+/// One `pub mod web;` for both hosts — the module-set closure sees a single `web`.
+const RUNTIME_MOD_RS_WEB_CORE_APPEND: &str = "#[cfg(feature = \"web-core\")]\npub mod web_page_core;\n\
+     #[cfg(feature = \"web-core\")]\npub mod web;\n";
 
 // ── Ipe.Web / Ipe.Web ─────────────────────────────────────────────────────
 
@@ -1288,11 +1267,13 @@ const RUNTIME_MOD_RS_WEB_PAGE_CORE_APPEND: &str =
 /// not via `pub use web::*;` (to avoid surfacing the internal `store` / `req`
 /// internals in the top-level namespace).
 ///
-/// `web/mod.rs` reaches three crate-root modules by absolute path —
-/// `crate::widget_assets` (`pub use crate::widget_assets;`), `crate::js_port_glue`
-/// (SRI-pinned Ffi.Js port asset), and `crate::js_port` (the port session/sink) —
-/// so this append declares all three under the same `web` feature gate, BEFORE
-/// `pub mod web;`. In the real runtime crate the `web` feature lists
+/// The `web` module itself is declared by [`RUNTIME_MOD_RS_WEB_CORE_APPEND`]
+/// (shared with the webview render host). This append layers ONLY the extra
+/// crate-root modules the SERVER surface of `web/mod.rs` reaches by absolute path
+/// under `#[cfg(feature = "server")]` — `crate::widget_assets`
+/// (`pub use crate::widget_assets;`), `crate::js_port_glue` (SRI-pinned Ffi.Js
+/// port asset), and `crate::js_port` (the port session/sink) — plus the server
+/// entry re-exports. In the real runtime crate the `web` feature lists
 /// `widget-assets` (whose `#[cfg]` also carries `js_port_glue`) and `web` reaches
 /// `js_port` transitively; the vendored trimmed `mod.rs` must declare the same
 /// closure or `web/mod.rs` fails E0432/E0433 (`crate::widget_assets` /
@@ -1301,7 +1282,6 @@ const RUNTIME_MOD_RS_WEB_PAGE_CORE_APPEND: &str =
 const RUNTIME_MOD_RS_WEB_APPEND: &str = "#[cfg(feature = \"web\")]\npub mod widget_assets;\n\
      #[cfg(feature = \"web\")]\npub mod js_port_glue;\n\
      #[cfg(feature = \"web\")]\npub mod js_port;\n\
-     #[cfg(feature = \"web\")]\npub mod web;\n\
      #[cfg(feature = \"web\")]\npub use web::{web_app, web_app_routed, web_render_static, sub_subscribe_topic, cmd_publish, cmd_publish_no_echo, pubsub_publish, pubsub_publish_no_echo, WebReq};\n";
 
 /// The `IpeCmd<M>` and `IpeSub<M>` project-level type aliases emitted when the
@@ -3072,11 +3052,17 @@ fn assemble_project_files(
         if ctx.uses_ui || ctx.uses_tui || ctx.uses_web || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
         }
-        // Ipe.Web app-entry kernels — the full axum `web` surface. NOT for
-        // webview: a bare-webview program uses the server-free lean `web` shell
-        // declared by `RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND` below instead.
+        // The server-free render core (`web_page_core` + the ONE real `web`
+        // module, which compiles to its render core alone under `web-core`) —
+        // declared for EVERY render host, served-web and desktop-webview alike.
+        if ctx.uses_web || ctx.uses_webview {
+            mod_rs.push_str(RUNTIME_MOD_RS_WEB_CORE_APPEND);
+        }
+        // Ipe.Web app-entry kernels — the full axum `web` server surface layered
+        // on top of the render core. `uses_web` only: a desktop-webview program
+        // runs no HTTP server, so the served entry points + widget/js-port modules
+        // stay absent (the `web` module's own server items are `#[cfg("server")]`).
         if ctx.uses_web {
-            mod_rs.push_str(RUNTIME_MOD_RS_WEB_PAGE_CORE_APPEND);
             mod_rs.push_str(RUNTIME_MOD_RS_WEB_APPEND);
         }
         // Ipe.Tui / Ipe.Tui app-entry kernels, AND the `Cli.tea` lines-view path:
@@ -3091,14 +3077,11 @@ fn assemble_project_files(
         if ctx.uses_tui || ctx.uses_console {
             mod_rs.push_str(RUNTIME_MOD_RS_TUI_APPEND);
         }
-        // Ipe.WebView app-entry kernel. A bare-webview program (no full `web`
-        // surface) first gets the server-free lean `web` shell + `web_page_core`
-        // the native backend renders through; a program that ALSO reaches `web`
-        // keeps the full module (the shell's `!uses_web` guard elides it).
+        // Ipe.WebView app-entry kernel. The render core it draws through
+        // (`web_page_core` + the real `web` module) is already declared by
+        // `RUNTIME_MOD_RS_WEB_CORE_APPEND` above (fires on `uses_web ||
+        // uses_webview`), so this only adds the `webview` window module.
         if ctx.uses_webview {
-            if !ctx.uses_web {
-                mod_rs.push_str(RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND);
-            }
             mod_rs.push_str(RUNTIME_MOD_RS_WEBVIEW_APPEND);
         }
         mod_rs
@@ -5455,11 +5438,12 @@ impl {sf} {{
 mod tests {
     use super::{
         CARGO_DEP_TOML, CARGO_TOML, CARGO_WASM_DEP_TOML, RUNTIME_CONFIG_RS_DB_POSTGRES,
-        RUNTIME_CONFIG_RS_DB_SQLITE, RUNTIME_MOD_RS_WEB_APPEND, WASM_ABSENT_MODULE_PATHS,
-        WASM_CARGO_TOML, WASM_PRESENT_OVERRIDES, async_runtime_cargo_toml,
-        crypto_core_heavy_cargo_toml, db_cargo_toml, insert_wasi_linker_config, jwt_cargo_toml,
-        runtime_bindings, server_cargo_toml, shake_ffi_by_fn_ident, wasm_present_modules,
-        wasm_runtime_bindings, web_cargo_toml, wrapper_call_paths,
+        RUNTIME_CONFIG_RS_DB_SQLITE, RUNTIME_MOD_RS_WEB_APPEND, RUNTIME_MOD_RS_WEB_CORE_APPEND,
+        WASM_ABSENT_MODULE_PATHS, WASM_CARGO_TOML, WASM_PRESENT_OVERRIDES,
+        async_runtime_cargo_toml, crypto_core_heavy_cargo_toml, db_cargo_toml,
+        insert_wasi_linker_config, jwt_cargo_toml, runtime_bindings, server_cargo_toml,
+        shake_ffi_by_fn_ident, wasm_present_modules, wasm_runtime_bindings, web_cargo_toml,
+        wrapper_call_paths,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -6016,34 +6000,31 @@ mod tests {
         );
     }
 
-    /// `RUNTIME_MOD_RS_WEB_APPEND` must declare the crate-root modules that
-    /// `web/mod.rs` reaches by absolute path — `widget_assets` (`pub use
+    /// The emitted `mod.rs` must declare the crate-root modules the SERVER surface
+    /// of `web/mod.rs` reaches by absolute path — `widget_assets` (`pub use
     /// crate::widget_assets;`), `js_port_glue` (`crate::js_port_glue::…`), and
     /// `js_port` (`crate::js_port::…`).  In the real crate the `web` feature pulls
     /// `widget-assets` (which also carries `js_port_glue`) and reaches `js_port`;
     /// the vendored trimmed `mod.rs` must declare the same closure or `web/mod.rs`
     /// fails E0432/E0433 (the module-set SEAL breach class caught by
-    /// `seal_modset::cmd_publish_no_live_builds`).  Each is declared BEFORE `pub
-    /// mod web;` so the references resolve.
+    /// `seal_modset::cmd_publish_no_live_builds`).  The `web` module itself is
+    /// declared by [`RUNTIME_MOD_RS_WEB_CORE_APPEND`] (shared with the webview
+    /// render host, pushed BEFORE this append); each server-only crate-root
+    /// module rides [`RUNTIME_MOD_RS_WEB_APPEND`] under `#[cfg(feature = "server")]`.
     #[test]
     fn web_mod_rs_declares_widget_assets_and_js_port_closure() {
+        assert!(
+            RUNTIME_MOD_RS_WEB_CORE_APPEND.contains("pub mod web;"),
+            "RUNTIME_MOD_RS_WEB_CORE_APPEND must declare `pub mod web;` (the ONE real \
+             web module shared by served-web and webview): {RUNTIME_MOD_RS_WEB_CORE_APPEND}"
+        );
         for module in ["widget_assets", "js_port_glue", "js_port"] {
             let decl = format!("pub mod {module};");
             assert!(
                 RUNTIME_MOD_RS_WEB_APPEND.contains(&decl),
-                "RUNTIME_MOD_RS_WEB_APPEND must declare `{decl}` — web/mod.rs names \
-                 `crate::{module}` by path (E0432/E0433 fix): {RUNTIME_MOD_RS_WEB_APPEND}"
-            );
-            let web_decl_at = RUNTIME_MOD_RS_WEB_APPEND
-                .find("pub mod web;")
-                .expect("WEB_APPEND declares `pub mod web;`");
-            let module_decl_at = RUNTIME_MOD_RS_WEB_APPEND
-                .find(&decl)
-                .expect("checked present above");
-            assert!(
-                module_decl_at < web_decl_at,
-                "`{decl}` must be declared BEFORE `pub mod web;` so web's path \
-                 references resolve: {RUNTIME_MOD_RS_WEB_APPEND}"
+                "RUNTIME_MOD_RS_WEB_APPEND must declare `{decl}` — web/mod.rs's server \
+                 surface names `crate::{module}` by path (E0432/E0433 fix): \
+                 {RUNTIME_MOD_RS_WEB_APPEND}"
             );
         }
     }
