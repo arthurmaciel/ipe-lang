@@ -3711,14 +3711,10 @@ fn db_cargo_toml(base: &str, driver: crate::DbDriver) -> DResult<String> {
     // used (DbPool / DbRow), not which sqlx features link.
     let _ = driver;
     let sqlx_features = r#""sqlite", "postgres""#;
-    // `bincode` rides with `sqlx`: the vendored live session store's
-    // checkpoint body is bincode-encoded under the same `db` feature gate.
     let sqlx_line = format!(
-        "{} = {{ version = \"{}\", features = [\"runtime-tokio-rustls\", {sqlx_features}] }}\n{} = \"{}\"\n\n",
+        "{} = {{ version = \"{}\", features = [\"runtime-tokio-rustls\", {sqlx_features}] }}\n\n",
         crate_specs::SQLX.name,
         crate_specs::SQLX.version,
-        crate_specs::BINCODE.name,
-        crate_specs::BINCODE.version,
     );
 
     let step1 = base.replacen(DEFAULT_LINE, DEFAULT_LINE_DB, 1);
