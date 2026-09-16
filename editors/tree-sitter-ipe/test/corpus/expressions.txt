@@ -1,0 +1,137 @@
+================================================================================
+Case expression with constructor and literal patterns
+================================================================================
+
+module M exposing (f)
+
+f x =
+    case x of
+        Just n ->
+            n + 1
+
+        Nothing ->
+            0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (value_declaration
+    name: (lower_identifier)
+    parameter: (var_pattern (lower_identifier))
+    body: (case_expr
+      scrutinee: (value_reference (lower_identifier))
+      (case_branch
+        pattern: (constructor_pattern_name (upper_identifier))
+        pattern: (var_pattern (lower_identifier))
+        body: (binary_expr
+          left: (value_reference (lower_identifier))
+          operator: (operator)
+          right: (number_literal)))
+      (case_branch
+        pattern: (constructor_pattern_name (upper_identifier))
+        body: (number_literal)))))
+
+================================================================================
+Let expression with multiple bindings
+================================================================================
+
+module M exposing (f)
+
+f x =
+    let
+        y = x + 1
+        z = y * 2
+    in
+        y + z
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (value_declaration
+    name: (lower_identifier)
+    parameter: (var_pattern (lower_identifier))
+    body: (let_expr
+      (let_binding
+        name: (var_pattern (lower_identifier))
+        value: (binary_expr
+          left: (value_reference (lower_identifier))
+          operator: (operator)
+          right: (number_literal)))
+      (let_binding
+        name: (var_pattern (lower_identifier))
+        value: (binary_expr
+          left: (value_reference (lower_identifier))
+          operator: (operator)
+          right: (number_literal)))
+      body: (binary_expr
+        left: (value_reference (lower_identifier))
+        operator: (operator)
+        right: (value_reference (lower_identifier))))))
+
+================================================================================
+Lambda passed to a qualified function
+================================================================================
+
+module M exposing (f)
+
+f =
+    List.map (\x -> x + 1) items
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (value_declaration
+    name: (lower_identifier)
+    body: (application
+      function: (value_qualified (qualified_lower))
+      argument: (parenthesized_expr
+        (lambda
+          parameter: (var_pattern (lower_identifier))
+          (binary_expr
+            left: (value_reference (lower_identifier))
+            operator: (operator)
+            right: (number_literal))))
+      argument: (value_reference (lower_identifier)))))
+
+================================================================================
+Do block with bind, let, and bare statements
+================================================================================
+
+module M exposing (main)
+
+main =
+    do
+        line <- readLine
+        n = toInt line
+        println n
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (value_declaration
+    name: (lower_identifier)
+    body: (do_expr
+      (do_statement
+        binder: (var_pattern (lower_identifier))
+        task: (value_reference (lower_identifier)))
+      (do_statement
+        name: (lower_identifier)
+        value: (application
+          function: (value_reference (lower_identifier))
+          argument: (value_reference (lower_identifier))))
+      (do_statement
+        (application
+          function: (value_reference (lower_identifier))
+          argument: (value_reference (lower_identifier)))))))

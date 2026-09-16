@@ -1,0 +1,101 @@
+================================================================================
+Record literal with every literal kind
+================================================================================
+
+module M exposing (v)
+
+v =
+    { count = 42
+    , ratio = 3.14
+    , name = "hi\n"
+    , first = 'a'
+    , items = [ 1, 2, 3 ]
+    , pair = ( 1, "x" )
+    , neg = -5
+    }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (value_declaration
+    name: (lower_identifier)
+    body: (record_expr
+      (record_field name: (lower_identifier) value: (number_literal))
+      (record_field name: (lower_identifier) value: (number_literal))
+      (record_field
+        name: (lower_identifier)
+        value: (string_literal (escape_sequence)))
+      (record_field name: (lower_identifier) value: (char_literal))
+      (record_field
+        name: (lower_identifier)
+        value: (list_expr (number_literal) (number_literal) (number_literal)))
+      (record_field
+        name: (lower_identifier)
+        value: (tuple_expr (number_literal) (string_literal)))
+      (record_field
+        name: (lower_identifier)
+        value: (negation (number_literal))))))
+
+================================================================================
+Record update with field access
+================================================================================
+
+module M exposing (f)
+
+f model =
+    { model | count = model.count + 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (value_declaration
+    name: (lower_identifier)
+    parameter: (var_pattern (lower_identifier))
+    body: (record_update
+      base: (lower_identifier)
+      (record_field
+        name: (lower_identifier)
+        value: (binary_expr
+          left: (field_access
+            (value_reference (lower_identifier))
+            field: (lower_identifier))
+          operator: (operator)
+          right: (number_literal))))))
+
+================================================================================
+Pipe operator chain
+================================================================================
+
+module M exposing (f)
+
+f xs =
+    xs
+        |> List.map toString
+        |> String.join ", "
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (value_declaration
+    name: (lower_identifier)
+    parameter: (var_pattern (lower_identifier))
+    body: (binary_expr
+      left: (binary_expr
+        left: (value_reference (lower_identifier))
+        operator: (operator)
+        right: (application
+          function: (value_qualified (qualified_lower))
+          argument: (value_reference (lower_identifier))))
+      operator: (operator)
+      right: (application
+        function: (value_qualified (qualified_lower))
+        argument: (string_literal)))))

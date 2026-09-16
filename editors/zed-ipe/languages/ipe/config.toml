@@ -1,0 +1,26 @@
+name = "Ipê"
+grammar = "ipe"
+path_suffixes = ["ipe"]
+line_comments = ["-- "]
+block_comment = ["{- ", " -}"]
+autoclose_before = "}])\"\n\t"
+tab_size = 4
+hard_tabs = false
+
+[[brackets]]
+start = "{"
+end = "}"
+close = true
+newline = true
+
+[[brackets]]
+start = "["
+end = "]"
+close = true
+newline = true
+
+[[brackets]]
+start = "("
+end = ")"
+close = true
+newline = false

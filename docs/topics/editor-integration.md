@@ -1,4 +1,13 @@
-# Editor integration (LSP)
+# Editor integration
+
+Two complementary pieces make an editor understand Ipê:
+
+- **`ipe lsp`** — semantics (completion, go-to-definition, rename, formatting,
+  diagnostics). Works with any LSP-compliant editor.
+- **`tree-sitter-ipe`** — syntax highlighting through the grammar in
+  `editors/tree-sitter-ipe/`. VS Code highlights through its own TextMate
+  grammar; every other editor highlights through tree-sitter. Each editor
+  section below wires both.
 
 `ipe lsp` speaks JSON-RPC over stdio and works with any LSP-compliant editor.
 Features: type-directed completion, go-to-definition, find-references, rename,
@@ -13,6 +22,20 @@ Away from such a context it falls back to every in-scope name. Every suggestion
 comes from the same type-checker `ipe build` runs, so a completion the editor
 offers is one the compiler accepts.
 
+## Syntax highlighting (tree-sitter)
+
+The grammar lives at `editors/tree-sitter-ipe/` and ships the generated parser
+plus `queries/{highlights,injections,locals,tags}.scm`. Build it once with the
+tree-sitter CLI (installed through the Rust toolchain — no JS toolchain needed):
+
+```bash
+cargo install tree-sitter-cli
+cd editors/tree-sitter-ipe && tree-sitter generate
+```
+
+The per-editor sections below point each host at this directory (or a checkout
+of it) and install the query files, alongside the LSP.
+
 ## Helix
 
 Add to `~/.config/helix/languages.toml`:
@@ -26,11 +49,37 @@ roots = ["package.ipe"]
 language-servers = ["ipe-lsp"]
 auto-format = true
 formatter = { command = "ipe", args = ["fmt", "--stdin"] }
+comment-tokens = ["--"]
+block-comment-tokens = { start = "{-", end = "-}" }
+indent = { tab-width = 4, unit = "    " }
 
 [language-server.ipe-lsp]
 command = "ipe"
 args = ["lsp"]
+
+# Point Helix at the tree-sitter grammar. Use a local checkout of this repo's
+# grammar directory, or the git URL + a subpath.
+[[grammar]]
+name = "ipe"
+source = { path = "/path/to/ipe-lang/editors/tree-sitter-ipe" }
+# Or fetch from git instead of a local path:
+# source = { git = "https://github.com/arthurmaciel/ipe-lang", rev = "main", subpath = "editors/tree-sitter-ipe" }
 ```
+
+Fetch and build the grammar, then install the queries into Helix's runtime:
+
+```bash
+hx --grammar fetch
+hx --grammar build
+
+# Helix looks up highlight queries under runtime/queries/<lang>/.
+mkdir -p ~/.config/helix/runtime/queries/ipe
+cp /path/to/ipe-lang/editors/tree-sitter-ipe/queries/*.scm \
+   ~/.config/helix/runtime/queries/ipe/
+```
+
+Verify with `hx --health ipe` — the *Highlight*, *Textobject*, and *Indent*
+rows should show the grammar and queries were found.
 
 ## Neovim (with `nvim-lspconfig`)
 
@@ -57,6 +106,40 @@ Add the filetype detection if needed:
 ```lua
 vim.filetype.add({ extension = { ipe = "ipe" } })
 ```
+
+### Highlighting with nvim-treesitter
+
+Register the grammar as a custom parser, then install it and drop in the
+queries:
+
+```lua
+local parsers = require("nvim-treesitter.parsers").get_parser_configs()
+
+parsers.ipe = {
+  install_info = {
+    -- A local checkout of this repo's grammar directory…
+    url = "/path/to/ipe-lang/editors/tree-sitter-ipe",
+    -- …or fetch from git and point at the subdirectory:
+    -- url = "https://github.com/arthurmaciel/ipe-lang",
+    -- location = "editors/tree-sitter-ipe",
+    files = { "src/parser.c", "src/scanner.c" },
+    branch = "main",
+  },
+  filetype = "ipe",
+}
+```
+
+Then `:TSInstall ipe`. Copy the query files where nvim-treesitter looks them
+up (`queries/ipe/` on the runtimepath):
+
+```bash
+mkdir -p ~/.config/nvim/queries/ipe
+cp /path/to/ipe-lang/editors/tree-sitter-ipe/queries/*.scm \
+   ~/.config/nvim/queries/ipe/
+```
+
+Enable highlighting in the nvim-treesitter setup (`highlight = { enable = true }`)
+and open a `.ipe` file; `:InspectTree` shows the parse.
 
 To enable format-on-save, install [`conform.nvim`](https://github.com/stevearc/conform.nvim) and add:
 
@@ -183,6 +266,34 @@ For format-on-save, add:
 (add-hook 'ipe-mode-hook (lambda () (add-hook 'before-save-hook #'indent-buffer nil t)))
 ```
 
+### Highlighting with treesit (Emacs 29+)
+
+Emacs 29+ has a built-in tree-sitter (`treesit`). Register the grammar source,
+install it, and derive the major mode from `prog-mode` via `treesit`:
+
+```elisp
+;; Where Emacs fetches and compiles grammars from.
+(add-to-list
+ 'treesit-language-source-alist
+ '(ipe "https://github.com/arthurmaciel/ipe-lang"
+       :source-dir "editors/tree-sitter-ipe/src"))
+;; Then: M-x treesit-install-language-grammar RET ipe RET
+;; (or `treesit-install-language-grammar` for each grammar you need).
+
+(define-derived-mode ipe-mode prog-mode "Ipê"
+  :group 'languages
+  (setq tab-width 4)
+  (when (treesit-ready-p 'ipe)
+    (treesit-parser-create 'ipe)
+    (treesit-major-mode-setup)))
+
+(add-to-list 'auto-mode-alist '("\\.ipe\\'" . ipe-mode))
+```
+
+`treesit` reads highlight rules from the grammar's `queries/highlights.scm`;
+copy the query files where your configuration expects them, or load them via
+`treesit-font-lock-rules` if you maintain the faces yourself.
+
 ### Doom Emacs
 
 Enable the `lsp` module in `init.el`:
@@ -277,3 +388,35 @@ add to the language entry:
 > does not work for your version, open a project containing a `package.ipe` and
 > use the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) → *Add Language
 > Server* to register `ipe lsp` interactively.
+
+### Highlighting via a Zed extension
+
+Zed highlights through a tree-sitter grammar packaged as an *extension*. A
+ready-to-install skeleton lives at `editors/zed-ipe/`; it points Zed at this
+repo's grammar and reuses the same queries. Its `extension.toml` declares the
+grammar and language, and `languages/ipe/config.toml` sets the file match,
+comments, and brackets:
+
+```toml
+# editors/zed-ipe/extension.toml
+id = "ipe"
+name = "Ipê"
+version = "0.1.0"
+schema_version = 1
+
+[grammars.ipe]
+repository = "https://github.com/arthurmaciel/ipe-lang"
+# The commit/tag to build; update on grammar changes.
+rev = "main"
+path = "editors/tree-sitter-ipe"
+
+[language_servers.ipe-lsp]
+name = "Ipê LSP"
+languages = ["Ipê"]
+```
+
+Install it as a dev extension: **Extensions** → **Install Dev Extension** →
+select `editors/zed-ipe/`. Zed builds the grammar and loads the highlight
+queries from the extension's `languages/ipe/` directory (copied from
+`editors/tree-sitter-ipe/queries/`). Keep the `settings.json` LSP block above
+for `ipe lsp`.

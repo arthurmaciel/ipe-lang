@@ -1,0 +1,43 @@
+{
+  "name": "tree-sitter-ipe",
+  "version": "0.1.0",
+  "description": "Ipê grammar for tree-sitter (editor syntax highlighting)",
+  "license": "Apache-2.0",
+  "keywords": [
+    "parser",
+    "tree-sitter",
+    "ipe"
+  ],
+  "files": [
+    "grammar.js",
+    "queries/**",
+    "src/**"
+  ],
+  "tree-sitter": [
+    {
+      "scope": "source.ipe",
+      "file-types": [
+        "ipe"
+      ],
+      "highlights": [
+        "queries/highlights.scm"
+      ],
+      "injections": [
+        "queries/injections.scm"
+      ],
+      "locals": [
+        "queries/locals.scm"
+      ],
+      "tags": [
+        "queries/tags.scm"
+      ]
+    }
+  ],
+  "scripts": {
+    "test": "tree-sitter test",
+    "parity": "bash scripts/parity-check.sh"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.27.0"
+  }
+}
