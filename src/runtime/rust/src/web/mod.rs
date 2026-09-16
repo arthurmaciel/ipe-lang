@@ -498,8 +498,10 @@ fn port_glue_script(base: &str) -> String {
 }
 
 /// No `Ipe.Ffi.Js` port glue when the widget-asset serving surface is absent: the
-/// page carries no port `<script>` and `window.ipe` is never wired.
-#[cfg(not(feature = "widget-assets"))]
+/// page carries no port `<script>` and `window.ipe` is never wired. Gated with
+/// `server` to match its callers (`render_page_full*`, server-only): the
+/// server-free `web-core` render core reaches neither the stub nor a caller.
+#[cfg(all(feature = "server", not(feature = "widget-assets")))]
 fn port_glue_script(_base: &str) -> String {
     String::new()
 }
