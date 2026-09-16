@@ -46,8 +46,8 @@ use ir_type_mentions::{
     ir_type_mentions_cache_handle, ir_type_mentions_csv, ir_type_mentions_decimal,
     ir_type_mentions_email, ir_type_mentions_http, ir_type_mentions_http_stream,
     ir_type_mentions_json, ir_type_mentions_locale, ir_type_mentions_secret,
-    ir_type_mentions_server, ir_type_mentions_sqlvalue, ir_type_mentions_url,
-    program_type_mentions,
+    ir_type_mentions_server, ir_type_mentions_sqlvalue, ir_type_mentions_tree,
+    ir_type_mentions_url, program_type_mentions,
 };
 #[cfg(test)]
 use record_shapes::OPAQUE_NAMES_ABOVE_GUARD;
@@ -8244,6 +8244,12 @@ struct KernelUsage {
     /// site (the pure-Ipê `defaultCfg` / `with*` builders produce a `CacheCfg`
     /// with no kernel call).
     cache: bool,
+    /// Any `Ipe.Tree` kernel (`demoTree` / `parseTree`) — gates the `tree`
+    /// runtime module and the `tree_kernel` runtime-crate feature. A standalone
+    /// leaf; no other surface reaches it. Unioned with a `Tree` type-mention guard
+    /// at the assembly site (the `Leaf`/`Node` ctors are pure Ipê source that
+    /// construct / match a `Tree` with no kernel call).
+    tree: bool,
     /// Any `Ipe.Encoding` / `Ipe.Bytes` kernel — gates the `encoding` + `bytes`
     /// runtime modules and the `base64` + `hex` + `percent-encoding` dependencies.
     /// The crypto/db/server/email/jwt/web surfaces also reach the raw codec crates
@@ -8401,6 +8407,7 @@ impl KernelUsage {
             && self.compression
             && self.csv
             && self.cache
+            && self.tree
             && self.encoding
             && self.regex
             && self.uuid
@@ -8498,6 +8505,7 @@ impl KernelUsage {
             Some(RuntimeModule::Web) => self.web = true,
             Some(RuntimeModule::Server) => self.server = true,
             Some(RuntimeModule::Cache) => self.cache = true,
+            Some(RuntimeModule::Tree) => self.tree = true,
             Some(RuntimeModule::Random) => self.random = true,
             None => {}
         }
@@ -14416,6 +14424,20 @@ impl<'a> Lowerer<'a> {
             if self.is_email_provider_union(u) {
                 continue;
             }
+            // `Ipe.Tree`'s `type Tree = Leaf Int | Node (List Tree)` is backed by
+            // the runtime enum `ipe_runtime::tree::Tree` (variant names `Leaf`/
+            // `Node` match the Ipê ctors verbatim; recursion rides the existing
+            // `List` → `Vec` lowering). Skip its `EnumDef` so the backend never
+            // emits a duplicate `StdTreeTree`; the `builtin_runtime_enum` /
+            // `enum_name` overrides route the type + ctors + patterns to the
+            // runtime enum (mirrors the `IpeCacheHandle` / `EmailProvider`
+            // suppression). `lower_enum` is still called above for its
+            // ctor-payload validation side effect. Tree carries NO phantom type
+            // args, so — unlike `Cache` — no arg-dropping is needed at
+            // `ir_type_from_canon`.
+            if self.is_tree_union(u) {
+                continue;
+            }
             types_ir.push(TypeDef::Enum(def));
         }
 
@@ -14780,6 +14802,19 @@ impl<'a> Lowerer<'a> {
                 ir_type_mentions_cache(t) || ir_type_mentions_cache_handle(t, interner)
             });
 
+        // detect `Ipe.Tree` usage — any `Tree.*` kernel (`demoTree` / `parseTree`),
+        // OR any emittable type position that mentions the runtime-backed `Tree`
+        // enum. The type-mention guard is required: the stdlib `type Tree` exposes
+        // its `Leaf`/`Node` ctors publicly, so user code can construct
+        // (`Tree.Node [...]`), pattern-match (`case t of Leaf n -> …`), or name
+        // `Tree` in a signature with NO `Tree.*` kernel call — every such position
+        // emits a `Tree` reference (via `pub use tree::*`) that would otherwise be
+        // undefined (E0412 — a SEAL breach). Mirrors the `uses_cache` fold.
+        let uses_tree = kernel_usage.tree
+            || program_type_mentions(&funcs, &records, &types_ir, &|t| {
+                ir_type_mentions_tree(t, interner)
+            });
+
         // detect HEAVY `Ipe.Crypto` usage — any legacy SHA-1/MD5, AEAD, or PBKDF2
         // kernel. The backend uses this flag to declare `crypto` in the emitted
         // `ipe_runtime/mod.rs` and add the `sha1` + `md-5` + `aes-gcm` +
@@ -14997,6 +15032,7 @@ impl<'a> Lowerer<'a> {
             uses_compression,
             uses_csv,
             uses_cache,
+            uses_tree,
             uses_encoding,
             uses_regex,
             uses_uuid,
@@ -15484,6 +15520,23 @@ impl<'a> Lowerer<'a> {
                 module,
                 [a, b] if self.interner.resolve(*a) == Some("Ipe")
                     && self.interner.resolve(*b) == Some("Email")
+            )
+    }
+
+    /// is `u` the `Ipe.Tree.Tree` recursive ADT — module `["Ipe", "Tree"]`, name
+    /// `Tree`? Backed by the runtime enum `ipe_runtime::tree::Tree`, so its
+    /// `EnumDef` is suppressed (the backend routes it via `builtin_runtime_enum`).
+    fn is_tree_union(&self, u: &canon::Union) -> bool {
+        self.is_tree_con(&u.home, u.name)
+    }
+
+    /// is `(module, name)` the `Ipe.Tree.Tree` recursive ADT?
+    fn is_tree_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("Tree")
+            && matches!(
+                module,
+                [a, b] if self.interner.resolve(*a) == Some("Ipe")
+                    && self.interner.resolve(*b) == Some("Tree")
             )
     }
 
@@ -25183,6 +25236,9 @@ impl<'a> Lowerer<'a> {
             ) => Ok(1),
             Callee::Kernel(KernelFn::CacheGet | KernelFn::CacheRemove) => Ok(2),
             Callee::Kernel(KernelFn::CachePut) => Ok(3),
+            // ── Ipe.Tree — recursive payload-carrying ADT bridge (#2493) ─
+            // demoTree : Int -> Tree ; parseTree : String -> Result Error Tree.
+            Callee::Kernel(KernelFn::TreeDemo | KernelFn::TreeParse) => Ok(1),
             // ── Ipe.Config ─────────────────────────────────────────────
             // Primitive decoders (string/int/float/bool) are arity-0 bare
             // decoders; nullable/list/succeed/fail take one arg; field/at/map/
@@ -29348,6 +29404,11 @@ mod tests {
         KernelFn::CacheClear,
         KernelFn::CacheSize,
         KernelFn::CacheStats,
+        // Ipe.Tree — recursive payload-carrying ADT bridge (#2493): id-resolved
+        // via the fast path (a compiled-source `Kernel.kernel "Tree_*"` alias),
+        // so no legacy string-match arm exists.
+        KernelFn::TreeDemo,
+        KernelFn::TreeParse,
         // Ipe.Config
         KernelFn::ConfigString,
         KernelFn::ConfigInt,
