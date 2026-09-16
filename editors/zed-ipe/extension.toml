@@ -1,0 +1,17 @@
+id = "ipe"
+name = "Ipê"
+description = "Ipê language support for Zed: syntax highlighting (tree-sitter) and the ipe LSP."
+version = "0.1.0"
+schema_version = 1
+authors = ["Arthur Maciel <arthurmaciel@gmail.com>"]
+repository = "https://github.com/arthurmaciel/ipe-lang"
+
+[grammars.ipe]
+repository = "https://github.com/arthurmaciel/ipe-lang"
+# The commit or tag to build the grammar from; update on grammar changes.
+rev = "main"
+path = "editors/tree-sitter-ipe"
+
+[language_servers.ipe-lsp]
+name = "Ipê LSP"
+languages = ["Ipê"]

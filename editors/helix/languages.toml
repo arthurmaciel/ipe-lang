@@ -1,0 +1,29 @@
+# Helix language + grammar configuration for Ipê.
+#
+# Drop the contents into ~/.config/helix/languages.toml, adjust the grammar
+# source path to your checkout, then:
+#   hx --grammar fetch && hx --grammar build
+#   mkdir -p ~/.config/helix/runtime/queries/ipe
+#   cp editors/tree-sitter-ipe/queries/*.scm ~/.config/helix/runtime/queries/ipe/
+#
+# See docs/topics/editor-integration.md for the full walkthrough.
+
+[[language]]
+name = "ipe"
+scope = "source.ipe"
+file-types = ["ipe"]
+roots = ["package.ipe"]
+language-servers = ["ipe-lsp"]
+auto-format = true
+formatter = { command = "ipe", args = ["fmt", "--stdin"] }
+comment-tokens = ["--"]
+block-comment-tokens = { start = "{-", end = "-}" }
+indent = { tab-width = 4, unit = "    " }
+
+[language-server.ipe-lsp]
+command = "ipe"
+args = ["lsp"]
+
+[[grammar]]
+name = "ipe"
+source = { git = "https://github.com/arthurmaciel/ipe-lang", rev = "main", subpath = "editors/tree-sitter-ipe" }

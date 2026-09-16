@@ -1,0 +1,70 @@
+================================================================================
+List, cons, and tuple patterns
+================================================================================
+
+module M exposing (f)
+
+f xs =
+    case xs of
+        [] ->
+            0
+
+        (x :: rest) ->
+            x
+
+        (a, b) ->
+            a
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (value_declaration
+    name: (lower_identifier)
+    parameter: (var_pattern (lower_identifier))
+    body: (case_expr
+      scrutinee: (value_reference (lower_identifier))
+      (case_branch
+        pattern: (list_pattern)
+        body: (number_literal))
+      (case_branch
+        pattern: (cons_pattern
+          (var_pattern (lower_identifier))
+          (var_pattern (lower_identifier)))
+        body: (value_reference (lower_identifier)))
+      (case_branch
+        pattern: (tuple_pattern
+          (var_pattern (lower_identifier))
+          (var_pattern (lower_identifier)))
+        body: (value_reference (lower_identifier))))))
+
+================================================================================
+If / then / else expression
+================================================================================
+
+module M exposing (f)
+
+f n =
+    if n > 0 then
+        "pos"
+    else
+        "neg"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (value_declaration
+    name: (lower_identifier)
+    parameter: (var_pattern (lower_identifier))
+    body: (if_expr
+      condition: (binary_expr
+        left: (value_reference (lower_identifier))
+        operator: (operator)
+        right: (number_literal))
+      consequence: (string_literal)
+      alternative: (string_literal))))

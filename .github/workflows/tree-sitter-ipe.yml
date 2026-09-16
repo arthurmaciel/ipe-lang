@@ -1,0 +1,72 @@
+# Drift gate for the tree-sitter-ipe grammar: the grammar must accept every
+# reference source the compiler accepts. Regenerates the parser, runs the
+# corpus unit tests, and parses all examples/** and src/stdlib/Ipe/** — failing
+# on any ERROR/MISSING node. The tree-sitter CLI installs through the Rust
+# toolchain (cargo install), so no separate JS toolchain is required.
+name: tree-sitter-ipe
+
+on:
+  push:
+    branches: [main, master, development]
+    paths:
+      - 'editors/tree-sitter-ipe/**'
+      - 'examples/**/*.ipe'
+      - 'src/stdlib/Ipe/**/*.ipe'
+      - '.github/workflows/tree-sitter-ipe.yml'
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  grammar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'editors/tree-sitter-ipe/**'
+              - 'examples/**/*.ipe'
+              - 'src/stdlib/Ipe/**/*.ipe'
+              - '.github/workflows/tree-sitter-ipe.yml'
+
+      - uses: ./.github/actions/rust-toolchain-pinned
+        if: steps.filter.outputs.relevant == 'true'
+
+      - name: Cache the tree-sitter CLI
+        if: steps.filter.outputs.relevant == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tree-sitter
+          key: tree-sitter-cli-0.27.0
+
+      - name: Install the tree-sitter CLI
+        if: steps.filter.outputs.relevant == 'true'
+        run: |
+          if ! command -v tree-sitter >/dev/null 2>&1; then
+            cargo install tree-sitter-cli --version ^0.27.0 --locked
+          fi
+          tree-sitter --version
+
+      - name: Generate the parser
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: editors/tree-sitter-ipe
+        run: tree-sitter generate
+
+      - name: Corpus unit tests
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: editors/tree-sitter-ipe
+        run: tree-sitter test
+
+      - name: Parity — parse the whole reference corpus
+        if: steps.filter.outputs.relevant == 'true'
+        run: bash editors/tree-sitter-ipe/scripts/parity-check.sh
+
+      - name: No grammar-relevant paths changed
+        if: steps.filter.outputs.relevant != 'true'
+        run: echo "No tree-sitter-ipe-relevant paths changed; gate is a no-op for this PR."

@@ -1,0 +1,25 @@
+================================================================================
+Line, block, and doc comments
+================================================================================
+
+module M exposing (x)
+
+-- a line comment
+{- a block comment -}
+
+
+{-| A doc comment above x. -}
+x =
+    1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_name (upper_identifier))
+    exposing: (exposing_list (exposed_item (lower_identifier))))
+  (block_comment)
+  (doc_comment)
+  (value_declaration
+    name: (lower_identifier)
+    body: (number_literal)))
