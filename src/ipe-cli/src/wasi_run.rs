@@ -20,6 +20,20 @@
 //! capabilities only through coarse CLI flags, may be absent, and may drift in
 //! version/behaviour — forcing us to trust its sandbox rather than derive ours.
 //!
+//! ## Bounded by construction — the same resource floor, both surfaces
+//!
+//! The native jail ALWAYS caps a run's address space, CPU, and wall clock from
+//! the profile's [`ipe_sandbox::run_jail::RunResourceLimits`] (`prlimit` +
+//! `timeout`). The embedded WASI run ports the SAME floor: the store carries a
+//! [`wasmtime::StoreLimits`] built from `limits.as_bytes` (linear-memory growth
+//! past the declared address-space ceiling traps, never exhausts the host heap),
+//! and the engine runs under an epoch deadline armed from the wall-clock floor
+//! (`limits.wall_secs`, or `limits.cpu_secs` when no wall clock is set — a
+//! server has no wall kill but a busy-loop is still bounded). A guest that
+//! allocates or spins past the floor is turned back with a typed
+//! [`CliError::WasiRunFailed`], never a hung or OOM-killed host. One capability
+//! AND resource model, two independent enforcement surfaces.
+//!
 //! ## The `wasi_run` feature
 //!
 //! wasmtime is a large dependency (a full wasm engine + the preview1 shim), so
@@ -80,15 +94,53 @@ pub const fn network_allowed(profile: &SandboxProfile) -> bool {
     profile.network
 }
 
+/// The address-space ceiling a WASI store's linear-memory limiter enforces.
+///
+/// Read straight off the SAME profile the native jail lowers (`limits.as_bytes`,
+/// the `prlimit --as` cap). Saturated into `usize` so a 64-bit cap on a 32-bit
+/// host clamps to the host maximum rather than wrapping — the floor never widens
+/// by truncation.
+#[must_use]
+pub fn memory_ceiling_bytes(profile: &SandboxProfile) -> usize {
+    usize::try_from(profile.limits.as_bytes).unwrap_or(usize::MAX)
+}
+
+/// The wall-clock ceiling (in seconds) the epoch deadline arms from.
+///
+/// The SAME floor the native jail's `timeout`/`--cpu` enforces. A profile with
+/// an explicit `wall_secs` uses it; a long-lived app (`wall_secs = None`, no
+/// wall kill) still bounds a busy-loop by the mandatory `cpu_secs` ceiling, so a
+/// CPU-bomb is turned back either way. Never `0` — a zero ceiling would arm a
+/// deadline already past, killing the guest before it starts; clamped to at
+/// least one second.
+#[must_use]
+pub const fn wall_ceiling_secs(profile: &SandboxProfile) -> u64 {
+    let secs = match profile.limits.wall_secs {
+        Some(w) => w,
+        None => profile.limits.cpu_secs,
+    };
+    if secs == 0 { 1 } else { secs }
+}
+
 #[cfg(feature = "wasi_run")]
 mod engine {
-    use super::{FsGrant, MODULE_ARGV0};
+    use super::{FsGrant, MODULE_ARGV0, memory_ceiling_bytes, wall_ceiling_secs};
     use crate::{CliError, Path};
     use ipe_sandbox::run_jail::SandboxProfile;
-    use wasmtime::{Engine, Linker, Module, Store};
+    use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
     use wasmtime_wasi::p2::WasiCtxBuilder;
     use wasmtime_wasi::preview1::{self, WasiP1Ctx};
     use wasmtime_wasi::{DirPerms, FilePerms, I32Exit};
+
+    /// The store's host data: the floor-derived WASI context PLUS the
+    /// address-space limiter. Both live in the store so the resource floor is
+    /// enforced by the same value the guest runs under — the WASI preview1
+    /// linker reaches the ctx through the accessor, and wasmtime reaches the
+    /// limiter through [`Store::limiter`].
+    struct HostState {
+        wasi: WasiP1Ctx,
+        limits: StoreLimits,
+    }
 
     /// The `wasi_run` feature is compiled in: the embedded engine is available.
     ///
@@ -97,6 +149,70 @@ mod engine {
     /// shape matches the feature-off twin so callers are feature-agnostic.
     pub const fn ensure_available() -> Result<(), CliError> {
         Ok(())
+    }
+
+    /// The wall-clock kill switch: a background thread that bumps the engine's
+    /// epoch ONCE after the wall-clock floor elapses, so a guest that overruns
+    /// its floor traps (a typed error) instead of hanging the host. Armed on
+    /// construction and disarmed on drop — the guest signalling completion ends
+    /// the thread's wait promptly rather than blocking the whole wall period.
+    struct WallDeadline {
+        done: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+        watchdog: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl WallDeadline {
+        /// Arm the deadline against `engine` for `wall_secs` seconds.
+        fn arm(engine: &Engine, wall_secs: u64) -> Self {
+            let done =
+                std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+            let watchdog_done = std::sync::Arc::clone(&done);
+            let watchdog_engine = engine.clone();
+            let watchdog = std::thread::spawn(move || {
+                let (lock, cvar) = &*watchdog_done;
+                let mut finished = lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut remaining = std::time::Duration::from_secs(wall_secs);
+                while !*finished && !remaining.is_zero() {
+                    let start = std::time::Instant::now();
+                    let (guard, timeout) = cvar
+                        .wait_timeout(finished, remaining)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    finished = guard;
+                    if timeout.timed_out() {
+                        break;
+                    }
+                    remaining = remaining.saturating_sub(start.elapsed());
+                }
+                if !*finished {
+                    // The guest is still running past its wall-clock floor: fire
+                    // the deadline. One increment suffices — the store deadline
+                    // is 1.
+                    watchdog_engine.increment_epoch();
+                }
+            });
+            Self {
+                done,
+                watchdog: Some(watchdog),
+            }
+        }
+    }
+
+    impl Drop for WallDeadline {
+        fn drop(&mut self) {
+            let (lock, cvar) = &*self.done;
+            {
+                let mut finished = lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *finished = true;
+            }
+            cvar.notify_all();
+            if let Some(handle) = self.watchdog.take() {
+                let _ = handle.join();
+            }
+        }
     }
 
     /// Build the deny-by-default [`WasiP1Ctx`] from the declared capability
@@ -179,9 +295,12 @@ mod engine {
     /// Instantiate and run the emitted `wasm32-wasip1` module under embedded
     /// wasmtime.
     ///
-    /// The guest is confined by the floor-derived [`WasiP1Ctx`]; its WASI exit
-    /// code is propagated, and a trap maps to a typed [`CliError`], never a host
-    /// panic.
+    /// The guest is confined by the floor-derived [`WasiP1Ctx`] AND the
+    /// floor-derived resource ceilings: a [`StoreLimits`] bounds linear-memory
+    /// growth to `limits.as_bytes` and an epoch deadline (armed from the
+    /// wall-clock floor) bounds run time. Its WASI exit code is propagated, and
+    /// any trap — including a memory-ceiling or wall-clock-deadline trap — maps
+    /// to a typed [`CliError`], never a host panic, host OOM, or host hang.
     ///
     /// `module_file` is the emitted `wasm32-wasip1` artifact, resolved by the
     /// caller from `cargo metadata` (the authoritative target dir).
@@ -207,7 +326,17 @@ mod engine {
             }
         })?;
 
-        let engine = Engine::default();
+        // Epoch interruption is the wall-clock kill switch: the engine is built
+        // from a Config with it enabled, the store arms a one-tick deadline, and
+        // a background thread bumps the epoch once after the wall-clock floor —
+        // so a busy-loop traps (a typed error) instead of hanging the host. This
+        // mirrors the native jail's `timeout`/`--cpu`.
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).map_err(|e| CliError::WasiRunFailed {
+            detail: format!("could not build the wasmtime engine: {e}"),
+        })?;
+
         let module =
             Module::from_file(&engine, module_file).map_err(|e| CliError::WasiRunFailed {
                 detail: format!(
@@ -216,13 +345,30 @@ mod engine {
                 ),
             })?;
 
-        let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
-        preview1::add_to_linker_sync(&mut linker, |t| t).map_err(|e| CliError::WasiRunFailed {
-            detail: format!("could not wire the WASI preview1 imports: {e}"),
-        })?;
+        let mut linker: Linker<HostState> = Linker::new(&engine);
+        preview1::add_to_linker_sync(&mut linker, |s: &mut HostState| &mut s.wasi).map_err(
+            |e| CliError::WasiRunFailed {
+                detail: format!("could not wire the WASI preview1 imports: {e}"),
+            },
+        )?;
 
         let ctx = build_ctx(profile, scratch.path(), working_tree, args)?;
-        let mut store = Store::new(&engine, ctx);
+        // Address-space ceiling: linear memory may not grow past the declared
+        // `as_bytes` floor. `trap_on_grow_failure` turns an over-cap `memory.grow`
+        // into a trap (→ typed `WasiRunFailed`) rather than a silent -1, so a
+        // heap-bomb is turned back, never allowed to exhaust the host.
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(memory_ceiling_bytes(profile))
+            .trap_on_grow_failure(true)
+            .build();
+        let mut store = Store::new(&engine, HostState { wasi: ctx, limits });
+        store.limiter(|s: &mut HostState| &mut s.limits);
+        store.set_epoch_deadline(1);
+
+        // Arm the wall-clock deadline; it disarms (signals + joins the watchdog)
+        // when `_deadline` drops at the end of this scope, whichever path we
+        // leave by — a `?` error return included.
+        let _deadline = WallDeadline::arm(&engine, wall_ceiling_secs(profile));
 
         let instance =
             linker
@@ -244,7 +390,10 @@ mod engine {
                 // A clean WASI exit surfaces as an `I32Exit` trap: exit 0 is
                 // success, non-zero is the guest's own outcome (propagated as
                 // `ipe run`'s non-zero exit). Any other trap is a genuine run
-                // failure — a typed error, never a host panic.
+                // failure — including a memory-ceiling trap (linear memory grew
+                // past `limits.as_bytes`) or a wall-clock epoch-deadline trap
+                // (the guest overran its wall floor) — a typed error, never a
+                // host panic, OOM, or hang.
                 if let Some(exit) = trap.downcast_ref::<I32Exit>() {
                     let code = exit.0;
                     return if code == 0 {
@@ -299,8 +448,8 @@ pub use engine::{ensure_available, run_wasi_module};
 
 #[cfg(test)]
 mod tests {
-    use super::{FsGrant, network_allowed};
-    use ipe_sandbox::run_jail::{FilesystemScope, SandboxProfile};
+    use super::{FsGrant, memory_ceiling_bytes, network_allowed, wall_ceiling_secs};
+    use ipe_sandbox::run_jail::{FilesystemScope, RunResourceLimits, SandboxProfile};
 
     #[test]
     fn isolated_scope_maps_to_scoped_tmp_only() {
@@ -340,5 +489,80 @@ mod tests {
             network_allowed(&granted),
             "an explicitly-granted network capability is the ONLY way sockets open",
         );
+    }
+
+    #[test]
+    fn memory_ceiling_is_read_from_the_profiles_address_space_floor() {
+        // The WASI store's linear-memory limiter reads the SAME `as_bytes` cap
+        // the native jail lowers into `prlimit --as` — not a hardcoded number —
+        // so the wasm memory floor equals the native floor by construction.
+        let p = SandboxProfile {
+            limits: RunResourceLimits {
+                as_bytes: 512 * 1024 * 1024,
+                ..RunResourceLimits::default()
+            },
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert_eq!(memory_ceiling_bytes(&p), 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn memory_ceiling_saturates_rather_than_wrapping() {
+        // A 64-bit cap wider than the host pointer clamps to the host maximum:
+        // the floor can never *widen* by truncation (fail-closed on overflow).
+        let p = SandboxProfile {
+            limits: RunResourceLimits {
+                as_bytes: u64::MAX,
+                ..RunResourceLimits::default()
+            },
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert_eq!(memory_ceiling_bytes(&p), usize::MAX);
+    }
+
+    #[test]
+    fn wall_deadline_uses_the_explicit_wall_floor_when_present() {
+        // An explicit wall-clock floor arms the epoch deadline directly — the
+        // WASI wall kill mirrors the native jail's `timeout`.
+        let p = SandboxProfile {
+            limits: RunResourceLimits {
+                wall_secs: Some(30),
+                ..RunResourceLimits::default()
+            },
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert_eq!(wall_ceiling_secs(&p), 30);
+    }
+
+    #[test]
+    fn wall_deadline_falls_back_to_the_cpu_floor_when_no_wall_clock() {
+        // A long-lived app has no wall kill (`wall_secs = None`), but a busy-loop
+        // is still bounded — the mandatory `cpu_secs` ceiling arms the deadline,
+        // so a CPU-bomb is turned back either way (never an unbounded host hang).
+        let p = SandboxProfile {
+            limits: RunResourceLimits {
+                wall_secs: None,
+                cpu_secs: 3600,
+                ..RunResourceLimits::default()
+            },
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert_eq!(wall_ceiling_secs(&p), 3600);
+    }
+
+    #[test]
+    fn wall_deadline_never_arms_at_zero() {
+        // A zero ceiling would fire a deadline already in the past, killing the
+        // guest before its first instruction; it is clamped to at least one
+        // second so the bound is real, not a self-inflicted instant kill.
+        let p = SandboxProfile {
+            limits: RunResourceLimits {
+                wall_secs: Some(0),
+                cpu_secs: 0,
+                ..RunResourceLimits::default()
+            },
+            ..SandboxProfile::maximally_isolated()
+        };
+        assert_eq!(wall_ceiling_secs(&p), 1);
     }
 }
