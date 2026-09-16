@@ -783,7 +783,9 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
 
     match compile_target {
         CompileTarget::WasmClient => bundle_wasm(&out_dir)?,
-        CompileTarget::WasmWasi => bundle_wasi(&out_dir)?,
+        CompileTarget::WasmWasi => {
+            bundle_wasi(&out_dir)?;
+        }
         CompileTarget::Native => compile_and_finalize_native_build(
             &out_dir,
             native_cargo,
@@ -1608,7 +1610,44 @@ pub fn build_emitted_project(
     runtime: Option<RuntimeContext>,
     io_path: &Path,
 ) -> Result<(), CliError> {
-    use std::io::BufReader;
+    build_emitted_project_core(cargo, what, runtime, io_path, false).map(drop)
+}
+
+/// Like [`build_emitted_project`], but *captures* `cargo`'s stdout and returns
+/// it on success instead of inheriting it. Used for a `--message-format=json`
+/// build whose machine-readable artifact stream (emitted on stdout, human
+/// progress on stderr) is parsed for the exact path cargo wrote — the single
+/// authoritative source for where an artifact landed, immune to any
+/// `CARGO_TARGET_DIR`/metadata divergence a reconstructed path would inherit.
+///
+/// A non-zero exit still surfaces as [`CliError::EmittedBuildFailed`] carrying
+/// the captured stderr (the SEAL build error), never a parse error.
+///
+/// # Errors
+/// - [`CliError::Io`] if `cargo` cannot be spawned or its pipes opened.
+/// - [`CliError::EmittedBuildFailed`] if `cargo` exits non-zero.
+pub fn build_emitted_project_capturing_stdout(
+    cargo: &mut std::process::Command,
+    what: &'static str,
+    runtime: Option<RuntimeContext>,
+    io_path: &Path,
+) -> Result<String, CliError> {
+    build_emitted_project_core(cargo, what, runtime, io_path, true)
+}
+
+/// Shared body of the emitted-project build. Streams `cargo`'s stderr live (and
+/// accumulates it for the typed failure diagnostic); `cargo`'s stdout is either
+/// inherited (`capture_stdout == false`, the default `cargo build` where stdout
+/// carries nothing) or captured and returned (`capture_stdout == true`, a
+/// `--message-format=json` build whose artifact stream is parsed by the caller).
+fn build_emitted_project_core(
+    cargo: &mut std::process::Command,
+    what: &'static str,
+    runtime: Option<RuntimeContext>,
+    io_path: &Path,
+    capture_stdout: bool,
+) -> Result<String, CliError> {
+    use std::io::{BufReader, Read};
     use std::process::Stdio;
 
     let io_err = |e: std::io::Error| CliError::Io {
@@ -1627,12 +1666,25 @@ pub fn build_emitted_project(
     cargo.arg("--locked");
 
     // Pipe stderr so we can both forward it live AND capture it for the typed
-    // error; leave stdout inherited (a `cargo build` writes only to stderr).
-    let mut child = cargo
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(io_err)?;
+    // error. Stdout is inherited for a plain build (nothing to capture) or piped
+    // when the caller wants the machine-readable JSON artifact stream.
+    cargo.stderr(Stdio::piped());
+    if capture_stdout {
+        cargo.stdout(Stdio::piped());
+    } else {
+        cargo.stdout(Stdio::inherit());
+    }
+    let mut child = cargo.spawn().map_err(io_err)?;
+
+    // Drain stdout on a dedicated thread so a large JSON stream and the live
+    // stderr relay make progress concurrently — reading them serially would
+    // deadlock once either full-and-unread pipe buffer stalls the child.
+    let stdout_reader = child.stdout.take().map(|mut stdout| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            stdout.read_to_string(&mut buf).map(|_| buf)
+        })
+    });
 
     // The pipe is present because we just set `Stdio::piped()`; the fallback
     // keeps this panic-free rather than unwrapping the `Option`.
@@ -1657,9 +1709,19 @@ pub fn build_emitted_project(
         }
     }
 
+    // Join the stdout drain: a thread panic or read error collapses to an I/O
+    // error rather than a lost artifact stream.
+    let stdout_captured = match stdout_reader {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| io_err(std::io::Error::other("cargo stdout reader thread panicked")))?
+            .map_err(io_err)?,
+        None => String::new(),
+    };
+
     let status = child.wait().map_err(io_err)?;
     if status.success() {
-        return Ok(());
+        return Ok(stdout_captured);
     }
     Err(CliError::EmittedBuildFailed {
         what,
@@ -1918,33 +1980,40 @@ pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
 ///
 /// # Errors
 /// [`CliError::EmittedBuildFailed`] when the wasip1 `cargo build` fails.
-pub fn bundle_wasi(out_dir: &Path) -> Result<(), CliError> {
+pub fn bundle_wasi(out_dir: &Path) -> Result<PathBuf, CliError> {
     // Fail closed before the cross-compile: a missing toolchain becomes a clear
     // root-cause message rather than an opaque OS spawn error.
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::BundleWasm)?;
 
     let mut cargo = std::process::Command::new(cargo_bin.path());
     cargo
-        .args(["build", "--target", "wasm32-wasip1", "--release"])
+        .args([
+            "build",
+            "--target",
+            "wasm32-wasip1",
+            "--release",
+            // Emit one JSON message per line on stdout so the exact artifact
+            // path cargo writes is read from the build itself, not reconstructed
+            // from a target-dir guess that a toggled `CARGO_TARGET_DIR` or a
+            // relocated `cargo metadata` can invalidate. Human progress stays on
+            // stderr (still streamed live by the build helper).
+            "--message-format=json",
+        ])
         .current_dir(out_dir)
-        // Pin the target dir to the emitted crate's own `<out>/target` so the
-        // module lands exactly where `wasi_module_path` resolves it — by
-        // construction, not via `cargo metadata` (which reports a relocated
-        // ambient `CARGO_TARGET_DIR` the build itself may not honour, so the
-        // executor would look for the `.wasm` in the wrong place). The emitted
-        // crate is ephemeral; its artifacts belong in its own tree.
-        .env("CARGO_TARGET_DIR", out_dir.join("target"))
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
     force_cargo_terminal_ui(&mut cargo);
-    build_emitted_project(
+    let messages = build_emitted_project_capturing_stdout(
         &mut cargo,
         "the emitted wasm32-wasip1 module",
         runtime_context_for_message(),
         out_dir,
     )?;
 
-    let module = wasi_module_path(out_dir)?;
+    // The authoritative module path: the `.wasm` bin artifact cargo reported it
+    // wrote. Same value the executor loads — build-output and load-path are one
+    // by construction, immune to any target-dir divergence.
+    let module = wasi_artifact_path(&messages, out_dir)?;
     let module_kb = module.metadata().map_or(0, |m| m.len() / 1024);
     eprintln!(
         "{}",
@@ -1955,31 +2024,61 @@ pub fn bundle_wasi(out_dir: &Path) -> Result<(), CliError> {
             module = module.display(),
         ))
     );
-    Ok(())
+    Ok(module)
 }
 
-/// The path of the emitted `wasm32-wasip1` module after a release cross-compile.
-///
-/// Resolved from cargo itself: the target directory via `cargo metadata` (the
-/// authoritative source that honours `CARGO_TARGET_DIR` / a `[build] target-dir`
-/// pin), and the artifact stem from the emitted crate's `[package] name` (a `-`
-/// in the crate name becomes `_` in the artifact). One source of truth so the
-/// `bundle_wasi` size probe and the `ipe run --target wasi` executor never
-/// disagree about where the module landed.
+/// Extract the emitted `wasm32-wasip1` module path from cargo's
+/// `--message-format=json` stream. Each stdout line is a JSON object; a
+/// `compiler-artifact` message for a `bin` target carries the produced files in
+/// `filenames` (and `executable`). The module is the `.wasm` under
+/// `wasm32-wasip1/release` — parsed from the build, never reconstructed.
 ///
 /// # Errors
-/// [`CliError`] when `cargo metadata` cannot resolve the target directory.
-pub fn wasi_module_path(out_dir: &Path) -> Result<PathBuf, CliError> {
-    let stem = emitted_bin_name(out_dir).replace('-', "_");
-    // `<out>/target` by construction — the exact dir `bundle_wasi` pins as the
-    // build's `CARGO_TARGET_DIR`. Resolving via `cargo metadata` here would
-    // return a relocated ambient dir the build did not use, so the executor
-    // would load (or fail to find) the wrong `.wasm`.
-    Ok(out_dir
-        .join("target")
-        .join("wasm32-wasip1")
-        .join("release")
-        .join(format!("{stem}.wasm")))
+/// [`CliError::UsageOwned`] when no such artifact appears in the stream (a
+/// cargo/JSON-schema mismatch surfaces here as a precise root-cause message
+/// rather than a downstream "could not load the module" from a guessed path).
+fn wasi_artifact_path(messages: &str, out_dir: &Path) -> Result<PathBuf, CliError> {
+    let is_wasi_wasm = |p: &Path| {
+        p.extension().is_some_and(|e| e == "wasm")
+            && p.components().any(|c| c.as_os_str() == "wasm32-wasip1")
+    };
+
+    for line in messages.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
+            // A non-JSON line (colour codes forced onto stdout, a stray print)
+            // is not the artifact stream — skip rather than fail the parse.
+            continue;
+        };
+        if msg.get("reason").and_then(serde_json::Value::as_str) != Some("compiler-artifact") {
+            continue;
+        }
+        // Prefer the explicit executable, then any produced filename; take the
+        // first that is a `.wasm` under the wasip1 triple.
+        let candidates = msg.get("executable").into_iter().chain(
+            msg.get("filenames")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten(),
+        );
+        for candidate in candidates {
+            if let Some(path) = candidate.as_str() {
+                let path = PathBuf::from(path);
+                if is_wasi_wasm(&path) {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    Err(CliError::UsageOwned(format!(
+        "the wasm32-wasip1 build reported no `.wasm` artifact for {} — cargo's \
+         JSON message stream carried no `compiler-artifact` naming the module",
+        out_dir.display(),
+    )))
 }
 
 /// `ipe run [<path>]` — compile a program and run the resulting binary.
@@ -2195,7 +2294,7 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
             // reaching here means the embedded engine is linked. Build the module
             // first — a green build is THE SEAL (ipe-accepts ⇒ cargo-builds for
             // the target) — then run it.
-            bundle_wasi(&out_dir)?;
+            let module = bundle_wasi(&out_dir)?;
             // Derive the capability floor exactly as the native jail does
             // (`resolve_for_run` → `build_profile`), so the WASI context enforces
             // the SAME deny-by-default model — defend-in-depth, one capability
@@ -2217,11 +2316,10 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
                 path: PathBuf::from("."),
                 source: e,
             })?;
-            // Resolve the module path the SAME way `bundle_wasi` reports it
-            // (`wasi_module_path`: cargo-metadata target dir + the emitted crate's
-            // artifact name), so the executor loads exactly the module the build
-            // produced regardless of a relocated `CARGO_TARGET_DIR`.
-            let module = wasi_module_path(&out_dir)?;
+            // `module` is the exact path cargo reported writing (captured from
+            // the build's JSON artifact stream), so the executor loads precisely
+            // the module the build produced regardless of a relocated
+            // `CARGO_TARGET_DIR` or a divergent `cargo metadata`.
             return wasi_run::run_wasi_module(&module, &profile, &working_tree, &bin_args);
         }
         CompileTarget::Native => {}
