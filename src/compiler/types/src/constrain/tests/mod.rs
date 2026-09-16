@@ -1382,6 +1382,26 @@ mod registry_phase_c_tests {
             K::ColorRotateHue,
             K::ColorComplementary,
             K::ColorGrayscale,
+            // Ipe.Color a11y / profile / parse kernels (S3)
+            K::ColorFromHex,
+            K::ColorFromName,
+            K::ColorTrueColorProfile,
+            K::ColorAnsi256Profile,
+            K::ColorAnsi16Profile,
+            K::ColorNoColorProfile,
+            K::ColorToAnsi,
+            K::ColorWcagAa,
+            K::ColorWcagAaa,
+            K::ColorNormalText,
+            K::ColorLargeText,
+            K::ColorContrastRatio,
+            K::ColorReadableTextOn,
+            K::ColorMeetsWcag,
+            K::ColorMaximumContrast,
+            K::ColorProtanopia,
+            K::ColorDeuteranopia,
+            K::ColorTritanopia,
+            K::ColorSimulate,
         ]
     };
 

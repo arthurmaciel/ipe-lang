@@ -216,3 +216,162 @@ grayscale : Color -> Color
 
 `grayscale c` — fully desaturate `c` to grey.
 
+## `fromHex`
+
+```ipe
+fromHex : String -> Result ColorError Color
+```
+
+`fromHex s` — parse a `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` hex string,
+returning `Err` with a typed `ColorError` on a bad digit or bad length.
+
+## `fromName`
+
+```ipe
+fromName : String -> Result ColorError Color
+```
+
+`fromName s` — parse a curated named colour, returning `Err` with a typed
+`ColorError` when the name is not in the set.
+
+## `trueColorProfile`
+
+```ipe
+trueColorProfile : TermProfile
+```
+
+The 24-bit truecolour terminal target.
+
+## `ansi256Profile`
+
+```ipe
+ansi256Profile : TermProfile
+```
+
+The 256-colour xterm-palette terminal target.
+
+## `ansi16Profile`
+
+```ipe
+ansi16Profile : TermProfile
+```
+
+The 16 SGR-palette terminal target.
+
+## `noColorProfile`
+
+```ipe
+noColorProfile : TermProfile
+```
+
+The no-colour terminal target (everything degrades to the default).
+
+## `toAnsi`
+
+```ipe
+toAnsi : TermProfile -> Color -> AnsiColor
+```
+
+`toAnsi profile c` — down-sample `c` for a terminal `profile`. The single
+truecolour→256→16 degradation point; the nearest-16 mapping is the runtime SSOT.
+
+## `wcagAa`
+
+```ipe
+wcagAa : WcagLevel
+```
+
+The WCAG AA conformance level (`4.5:1` normal text, `3.0:1` large text).
+
+## `wcagAaa`
+
+```ipe
+wcagAaa : WcagLevel
+```
+
+The WCAG AAA conformance level (`7.0:1` normal text, `4.5:1` large text).
+
+## `normalText`
+
+```ipe
+normalText : TextSize
+```
+
+The normal-size text band.
+
+## `largeText`
+
+```ipe
+largeText : TextSize
+```
+
+The large-text band (`>=18pt`, or `>=14pt` bold).
+
+## `contrastRatio`
+
+```ipe
+contrastRatio : Color -> Color -> Float
+```
+
+`contrastRatio a b` — the WCAG contrast ratio between two colours (1..21).
+
+## `readableTextOn`
+
+```ipe
+readableTextOn : Color -> Color
+```
+
+`readableTextOn bg` — black or white, whichever contrasts more against `bg`.
+
+## `meetsWcag`
+
+```ipe
+meetsWcag : WcagLevel -> TextSize -> Color -> Color -> Bool
+```
+
+`meetsWcag level size fg bg` — whether `fg` on `bg` meets the WCAG `level`
+threshold for text of the given `size`.
+
+## `maximumContrast`
+
+```ipe
+maximumContrast : Color -> List Color -> Color
+```
+
+`maximumContrast target candidates` — the candidate colour with the highest
+contrast against `target` (falls back to `readableTextOn target` — black or
+white — when the list is empty).
+
+## `protanopia`
+
+```ipe
+protanopia : Deficiency
+```
+
+Red-blind colour-vision deficiency.
+
+## `deuteranopia`
+
+```ipe
+deuteranopia : Deficiency
+```
+
+Green-blind colour-vision deficiency.
+
+## `tritanopia`
+
+```ipe
+tritanopia : Deficiency
+```
+
+Blue-blind colour-vision deficiency.
+
+## `simulate`
+
+```ipe
+simulate : Deficiency -> Color -> Color
+```
+
+`simulate deficiency c` — preview `c` as seen under a colour-vision
+`deficiency`.
+

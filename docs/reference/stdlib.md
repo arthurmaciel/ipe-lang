@@ -1082,6 +1082,25 @@ Ipe.Codec — one invariant codec that drives BOTH the JSON direction and the
 | `rotateHue` | `rotateHue degrees c` — rotate the hue of `c` by `degrees`. |
 | `complementary` | `complementary c` — the 180°-hue-rotated complement of `c`. |
 | `grayscale` | `grayscale c` — fully desaturate `c` to grey. |
+| `fromHex` | `fromHex s` — parse a `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` hex string, |
+| `fromName` | `fromName s` — parse a curated named colour, returning `Err` with a typed |
+| `trueColorProfile` | The 24-bit truecolour terminal target. |
+| `ansi256Profile` | The 256-colour xterm-palette terminal target. |
+| `ansi16Profile` | The 16 SGR-palette terminal target. |
+| `noColorProfile` | The no-colour terminal target (everything degrades to the default). |
+| `toAnsi` | `toAnsi profile c` — down-sample `c` for a terminal `profile`. The single |
+| `wcagAa` | The WCAG AA conformance level (`4.5:1` normal text, `3.0:1` large text). |
+| `wcagAaa` | The WCAG AAA conformance level (`7.0:1` normal text, `4.5:1` large text). |
+| `normalText` | The normal-size text band. |
+| `largeText` | The large-text band (`>=18pt`, or `>=14pt` bold). |
+| `contrastRatio` | `contrastRatio a b` — the WCAG contrast ratio between two colours (1..21). |
+| `readableTextOn` | `readableTextOn bg` — black or white, whichever contrasts more against `bg`. |
+| `meetsWcag` | `meetsWcag level size fg bg` — whether `fg` on `bg` meets the WCAG `level` |
+| `maximumContrast` | `maximumContrast target candidates` — the candidate colour with the highest |
+| `protanopia` | Red-blind colour-vision deficiency. |
+| `deuteranopia` | Green-blind colour-vision deficiency. |
+| `tritanopia` | Blue-blind colour-vision deficiency. |
+| `simulate` | `simulate deficiency c` — preview `c` as seen under a colour-vision |
 
 ## Compression
 

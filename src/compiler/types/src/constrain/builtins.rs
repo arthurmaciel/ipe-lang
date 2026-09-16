@@ -254,6 +254,15 @@ pub struct Builtins {
     /// `"AnsiColor"` — the down-sampled terminal colour `Color.toAnsi` yields.
     /// Backs `ipe_runtime::color::AnsiColor`.
     pub ansi_color: Symbol,
+    /// `"WcagLevel"` — the WCAG conformance level `Color.meetsWcag` checks
+    /// against. Backs `ipe_runtime::color::WcagLevel`.
+    pub wcag_level: Symbol,
+    /// `"TextSize"` — the text-size band a WCAG threshold applies to. Backs
+    /// `ipe_runtime::color::TextSize`.
+    pub text_size: Symbol,
+    /// `"Deficiency"` — the colour-vision deficiency `Color.simulate` previews.
+    /// Backs `ipe_runtime::color::Deficiency`.
+    pub deficiency: Symbol,
     /// `"CustomElement"` — the JS-widget boundary type constructor
     /// `CustomElement down up`. Empty-module opaque handle; consumed only by the
     /// `CustomElement.node` kernel scheme.
@@ -842,6 +851,9 @@ impl Builtins {
             color_error: interner.intern("ColorError")?,
             term_profile: interner.intern("TermProfile")?,
             ansi_color: interner.intern("AnsiColor")?,
+            wcag_level: interner.intern("WcagLevel")?,
+            text_size: interner.intern("TextSize")?,
+            deficiency: interner.intern("Deficiency")?,
             custom_element: interner.intern("CustomElement")?,
             html_con: interner.intern("Html")?,
             length: interner.intern("Length")?,

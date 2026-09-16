@@ -100,6 +100,7 @@ impl Builder<'_> {
     /// Resolve a structural [`BuiltinTag`] to the interned type-constructor
     /// [`Symbol`] the `stdlib_scheme` table uses for the same built-in, so an
     /// interpreted shape is byte-identical to the hand-built `Ty`.
+    #[allow(clippy::too_many_lines)] // one arm per BuiltinTag variant, deliberately exhaustive
     pub const fn builtin_symbol(&self, tag: BuiltinTag) -> Symbol {
         match tag {
             BuiltinTag::Int => self.builtins.int,
@@ -189,6 +190,9 @@ impl Builder<'_> {
             BuiltinTag::ColorError => self.builtins.color_error,
             BuiltinTag::TermProfile => self.builtins.term_profile,
             BuiltinTag::AnsiColor => self.builtins.ansi_color,
+            BuiltinTag::WcagLevel => self.builtins.wcag_level,
+            BuiltinTag::TextSize => self.builtins.text_size,
+            BuiltinTag::Deficiency => self.builtins.deficiency,
             BuiltinTag::CustomElement => self.builtins.custom_element,
             BuiltinTag::Html => self.builtins.html_con,
             BuiltinTag::UiLength => self.builtins.length,
@@ -1051,6 +1055,39 @@ impl Builder<'_> {
         let color = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.color,
+            args: Vec::new(),
+        };
+        // Ipe.Color a11y / profile / parse companion value types — each a nullary
+        // `Con` over its interned name, lowered to the matching
+        // `IrType::UiPlain(UiPlain::*)` and emitted as `ipe_runtime::color::*`.
+        let color_error = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.color_error,
+            args: Vec::new(),
+        };
+        let term_profile = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.term_profile,
+            args: Vec::new(),
+        };
+        let ansi_color = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.ansi_color,
+            args: Vec::new(),
+        };
+        let wcag_level = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.wcag_level,
+            args: Vec::new(),
+        };
+        let text_size = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.text_size,
+            args: Vec::new(),
+        };
+        let deficiency = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.deficiency,
             args: Vec::new(),
         };
         // `description()` — the opaque `Description` semantic-description type
@@ -3105,6 +3142,29 @@ impl Builder<'_> {
             | K::ColorRotateHue => fun(float(), fun(color(), color())),
             K::ColorBlend => fun(color(), fun(color(), color())),
             K::ColorMix => fun(float(), fun(color(), fun(color(), color()))),
+            // ── Ipe.Color parse boundary (typed `Result ColorError Color`). ──
+            K::ColorFromHex | K::ColorFromName => {
+                fun(string(), result(color_error(), color()))
+            }
+            // ── Ipe.Color profile / toAnsi ──
+            K::ColorTrueColorProfile
+            | K::ColorAnsi256Profile
+            | K::ColorAnsi16Profile
+            | K::ColorNoColorProfile => term_profile(),
+            K::ColorToAnsi => fun(term_profile(), fun(color(), ansi_color())),
+            // ── Ipe.Color WCAG / contrast (a11y) ──
+            K::ColorWcagAa | K::ColorWcagAaa => wcag_level(),
+            K::ColorNormalText | K::ColorLargeText => text_size(),
+            K::ColorContrastRatio => fun(color(), fun(color(), float())),
+            K::ColorReadableTextOn => fun(color(), color()),
+            K::ColorMeetsWcag => fun(
+                wcag_level(),
+                fun(text_size(), fun(color(), fun(color(), bool_ty()))),
+            ),
+            K::ColorMaximumContrast => fun(color(), fun(list(color()), color())),
+            // ── Ipe.Color colour-vision-deficiency simulation ──
+            K::ColorProtanopia | K::ColorDeuteranopia | K::ColorTritanopia => deficiency(),
+            K::ColorSimulate => fun(deficiency(), fun(color(), color())),
             // `widget : CustomElement down up -> down -> (up -> msg) -> Element msg`
             // (msg = var(0), down = var(1), up = var(2)).
             K::UiWidget => fun(

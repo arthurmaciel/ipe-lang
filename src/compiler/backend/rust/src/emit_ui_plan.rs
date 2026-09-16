@@ -1538,6 +1538,27 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::ColorRotateHue
         | KernelFn::ColorComplementary
         | KernelFn::ColorGrayscale
+        // The `Ipe.Color` a11y/profile/parse kernels produce/consume opaque
+        // colour values and scalars, with no appearance-hoist literal position.
+        | KernelFn::ColorFromHex
+        | KernelFn::ColorFromName
+        | KernelFn::ColorTrueColorProfile
+        | KernelFn::ColorAnsi256Profile
+        | KernelFn::ColorAnsi16Profile
+        | KernelFn::ColorNoColorProfile
+        | KernelFn::ColorToAnsi
+        | KernelFn::ColorWcagAa
+        | KernelFn::ColorWcagAaa
+        | KernelFn::ColorNormalText
+        | KernelFn::ColorLargeText
+        | KernelFn::ColorContrastRatio
+        | KernelFn::ColorReadableTextOn
+        | KernelFn::ColorMeetsWcag
+        | KernelFn::ColorMaximumContrast
+        | KernelFn::ColorProtanopia
+        | KernelFn::ColorDeuteranopia
+        | KernelFn::ColorTritanopia
+        | KernelFn::ColorSimulate
         // The worker app-entry carries no appearance-hoist literal position.
         | KernelFn::TeaWorker => &[],
     }
