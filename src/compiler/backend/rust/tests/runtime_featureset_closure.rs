@@ -82,7 +82,7 @@ use ipe_ir::{
 /// closure covers exactly the programs the module closure does. The proof is
 /// per-flag + monotone + composed (see the module docs), NOT a `2^FLAG_COUNT`
 /// enumeration — it scales to a far larger flag count in linear time.
-const FLAG_COUNT: usize = 30;
+const FLAG_COUNT: usize = 31;
 
 /// How many random full masks the backstop [`sampled_full_masks_are_closed`]
 /// exercises, on top of the deterministic corners. Bounded so the sample cost
@@ -192,6 +192,9 @@ fn module_for_mask(name: ipe_intern::Symbol, mask: u32) -> Module {
         // `uses_cache` is a pure surface (no reactor) — NOT in the async union. A
         // standalone leaf: gates the `cache` module + the `cache_kernel` feature.
         uses_cache: f(28),
+        // `uses_tree` is a pure surface (no reactor) — NOT in the async union. A
+        // standalone leaf: gates the `tree` module + the `tree_kernel` feature.
+        uses_tree: f(30),
         // `uses_encoding` is a pure surface (no reactor) — NOT in the async union.
         uses_encoding: f(18),
         // `uses_regex` / `uses_uuid` / `uses_random` / `uses_log` /
@@ -1003,6 +1006,7 @@ fn uses_locale_selects_locale_feature() {
             uses_compression: false,
             uses_csv: false,
             uses_cache: false,
+            uses_tree: false,
             uses_encoding: false,
             uses_regex: false,
             uses_uuid: false,
@@ -1070,6 +1074,7 @@ fn uses_email_selects_email_feature() {
             uses_compression: false,
             uses_csv: false,
             uses_cache: false,
+            uses_tree: false,
             uses_encoding: false,
             uses_regex: false,
             uses_uuid: false,
@@ -1189,6 +1194,7 @@ fn email_parse_address_only_cargo_builds() -> DResult<()> {
             uses_compression: false,
             uses_csv: false,
             uses_cache: false,
+            uses_tree: false,
             uses_encoding: false,
             uses_regex: false,
             uses_uuid: false,

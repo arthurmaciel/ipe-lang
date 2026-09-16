@@ -1,0 +1,55 @@
+-- | Ipe.Tree — a minimal recursive, payload-carrying ADT.
+--
+-- `Tree` is the synthetic proof that a kernel can return a recursive,
+-- payload-carrying, runtime-backed stdlib ADT that user code constructs and
+-- `case`-matches (issue #2493).  The type is a veneer over the runtime enum
+-- `ipe_runtime::tree::Tree`; its `Leaf`/`Node` constructors and pattern matches
+-- lower directly to that enum.  Recursion rides the `List` lowering — a `Node`
+-- holds a `List Tree` of children, so no self-referential boxing is needed at
+-- the bridge boundary.
+--
+-- Example:
+--
+--     import Ipe.Tree as Tree exposing (Tree(..))
+--
+--     depth : Tree -> Int
+--     depth tree =
+--         case tree of
+--             Leaf _ ->
+--                 1
+--
+--             Node children ->
+--                 1 + List.foldl (\c acc -> max acc (depth c)) 0 children
+module Ipe.Tree exposing
+    ( Tree(..)
+    , demoTree
+    , parseTree
+    )
+
+import Ipe.Ffi.Kernel as Kernel
+import Ipe.Error exposing (Error)
+
+
+-- | A recursive, payload-carrying sum.  `Leaf` carries an `Int`; `Node` carries
+-- its children as a `List Tree` (the recursive edge).
+type Tree
+    = Leaf Int
+    | Node (List Tree)
+
+
+-- | `demoTree n` — build a small fixed tree whose leaf payloads derive from `n`.
+-- Total and allocation-bounded (the shape is fixed), so no input can make it
+-- grow without bound.
+demoTree : Int -> Tree
+demoTree =
+    Kernel.kernel "Tree_demoTree"
+
+
+-- | `parseTree s` — parse a tiny S-expression into a `Tree`, or fail with a
+-- typed `Error`.  Grammar: a leaf is `L<int>` (e.g. `L7`, `L-3`); a node is
+-- `(child child …)`.  This is a parse boundary: the untrusted `String` becomes
+-- a typed `Tree` once, and every failure — malformed syntax OR nesting past the
+-- depth ceiling — is a typed `Error`, never a panic or an unbounded allocation.
+parseTree : String -> Result Error Tree
+parseTree =
+    Kernel.kernel "Tree_parseTree"

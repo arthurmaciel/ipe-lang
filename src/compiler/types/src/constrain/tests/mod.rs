@@ -1260,6 +1260,9 @@ mod registry_phase_c_tests {
             K::ConfigDecodeYaml,
             K::ConfigDecodeJson,
             K::ConfigLoadFromFile,
+            // ── Ipe.Tree — recursive payload-carrying ADT bridge (2) ───
+            K::TreeDemo,
+            K::TreeParse,
             // ── Ipe.Email (1) ──────────────────────────────────────────
             K::EmailSend,
             // ── Ipe.Crypto typed-key newtypes (5) ──────────────────────

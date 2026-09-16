@@ -332,6 +332,11 @@ pub mod cache;
 #[cfg(feature = "cache_kernel")]
 pub use cache::*;
 
+#[cfg(feature = "tree_kernel")]
+pub mod tree;
+#[cfg(feature = "tree_kernel")]
+pub use tree::*;
+
 #[cfg(feature = "tui")]
 pub mod tui;
 // NB: no `pub use tui::*` — its `diff` module name collides with web's `diff`.

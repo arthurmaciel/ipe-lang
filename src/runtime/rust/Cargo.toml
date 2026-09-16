@@ -419,6 +419,10 @@ jwt = ["json", "crypto", "secret", "dep:jsonwebtoken", "uuid"]
 compression = ["flate2", "zstd", "tokio", "random"]
 csv_kernel = ["csv", "tokio", "random"]
 cache_kernel = ["tokio", "random"]
+# `Ipe.Tree` — the synthetic recursive payload-carrying stdlib ADT bridge.
+# Pure-CPU (no async, no external deps): a program that reaches no `Ipe.Tree`
+# kernel drops the module entirely.
+tree_kernel = []
 # `tokio`: tea.rs (the shared Cli/Tui event loop, pulled by tui/app.rs) uses
 # `tokio::sync::mpsc`. Without it the standalone `--features tui` build fails to
 # resolve the `tea` module + `tokio`.
@@ -481,7 +485,7 @@ widget-assets = ["crypto-core", "encoding"]
 # `db-postgres` (not bare `db`) selects a concrete sqlx driver — it also pulls
 # `sqlite`, so both driver code paths compile. `jwt` + `url` cover the
 # JWT/auth and URL/SSRF surfaces that `db`/`web`/`http_client` reach.
-full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "crypto-core", "secret", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random", "decimal", "char-category"]
+full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "crypto", "crypto-core", "secret", "compression", "csv_kernel", "cache_kernel", "tree_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "web", "time", "log", "regex", "uuid", "random", "decimal", "char-category"]
 # Development-only time-travelling debugger core (recorder / re-fold / export /
 # import). NOT in `full` and NOT implied by `wasm-client` — the debugger is a
 # build-mode opt-in (`ipe build/run --debugger`), never a default. `ipe release`

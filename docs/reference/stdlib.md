@@ -124,6 +124,7 @@ Each module listed below links to a detail page with the full documentation and 
 - [Time.Timestamp](#timetimestamp)
 - [ToString](#tostring)
 - [Trace](#trace)
+- [Tree](#tree)
 - [Tuple](#tuple)
 - [Ui](#ui)
 - [Ui.Animation](#uianimation)
@@ -2772,6 +2773,18 @@ Ipe.Trace — opt-in distributed-tracing spans.
 | `span` | Wrap a Task in a named child span.  The Task's value flows |
 | `event` | Record an instantaneous, named event on the current span |
 | `attr` | Annotate the current span with a `key = value` string |
+
+## Tree
+
+[Full reference](stdlib/Tree.md)
+
+Ipe.Tree — a minimal recursive, payload-carrying ADT.
+
+| Export | Summary |
+|--------|----------|
+| `Tree` | A recursive, payload-carrying sum.  `Leaf` carries an `Int`; `Node` carries |
+| `demoTree` | `demoTree n` — build a small fixed tree whose leaf payloads derive from `n`. |
+| `parseTree` | `parseTree s` — parse a tiny S-expression into a `Tree`, or fail with a |
 
 ## Tuple
 
