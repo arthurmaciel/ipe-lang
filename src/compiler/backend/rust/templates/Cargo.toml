@@ -46,9 +46,9 @@ random = []
 # sinks, `web_page_core.rs`) need this entry to compile — every render host (web /
 # wasm-client / webview) promotes it. `web` implies it, mirroring the runtime crate.
 web-core = []
-web = []
+web = ["web-core"]
 redis_store = []
-webview = []
+webview = ["web-core"]
 tui = []
 websocket_client = []
 # Declared but inert in the vendored escape hatch: `chrono` stays non-optional
