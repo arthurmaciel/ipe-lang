@@ -195,6 +195,14 @@ fn ir_type_name_at(interner: &Interner, ty: &IrType, depth: u16) -> String {
             UiPlain::LayoutContext => "LayoutContext".to_owned(),
             // Ipe terminal palette, first-class in the terminal view surface.
             UiPlain::TermColor => "Terminal.Color".to_owned(),
+            // Ipe.Color companion value types (opaque carriers over the
+            // `ipe_runtime::color::*` runtime types).
+            UiPlain::ColorError => "ColorError".to_owned(),
+            UiPlain::TermProfile => "TermProfile".to_owned(),
+            UiPlain::AnsiColor => "AnsiColor".to_owned(),
+            UiPlain::WcagLevel => "WcagLevel".to_owned(),
+            UiPlain::TextSize => "TextSize".to_owned(),
+            UiPlain::Deficiency => "Deficiency".to_owned(),
         },
         IrType::WebReq => "WebReq".to_owned(),
         IrType::SessionHandle => "SessionHandle".to_owned(),

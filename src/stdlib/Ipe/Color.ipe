@@ -15,13 +15,19 @@
 -- Every member is a thin binding onto the colour kernels; the colour maths lives
 -- in one place in the runtime, never re-implemented at this surface.
 module Ipe.Color exposing
-    ( Color
+    ( Color, ColorError
+    , TermProfile, AnsiColor, WcagLevel, TextSize, Deficiency
     , rgb, rgba, hsl, hsla
     , white, black, red, green, blue, transparent
     , toCss, toCssRgba, toHex, luminance
     , withAlpha, mix, blend
     , lighten, darken, saturate, desaturate
     , rotateHue, complementary, grayscale
+    , fromHex, fromName
+    , trueColorProfile, ansi256Profile, ansi16Profile, noColorProfile, toAnsi
+    , wcagAa, wcagAaa, normalText, largeText
+    , contrastRatio, readableTextOn, meetsWcag, maximumContrast
+    , protanopia, deuteranopia, tritanopia, simulate
     )
 
 
@@ -158,3 +164,122 @@ complementary = Kernel.kernel "Color_complementary"
 -- | `grayscale c` — fully desaturate `c` to grey.
 grayscale : Color -> Color
 grayscale = Kernel.kernel "Color_grayscale"
+
+
+-- ─── Parse boundary (typed `Result ColorError Color`) ─────────────────────────
+--
+-- String input is untrusted, so it parses to the typed `ColorError` channel
+-- rather than a silent bad colour: a malformed hex or an unknown name is turned
+-- back with a typed error (parse-don't-validate, fail-closed), never a panic or
+-- a default colour.
+
+
+-- | `fromHex s` — parse a `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa` hex string,
+-- returning `Err` with a typed `ColorError` on a bad digit or bad length.
+fromHex : String -> Result ColorError Color
+fromHex = Kernel.kernel "Color_fromHex"
+
+
+-- | `fromName s` — parse a curated named colour, returning `Err` with a typed
+-- `ColorError` when the name is not in the set.
+fromName : String -> Result ColorError Color
+fromName = Kernel.kernel "Color_fromName"
+
+
+-- ─── Terminal profile + down-sampling ─────────────────────────────────────────
+
+
+-- | The 24-bit truecolour terminal target.
+trueColorProfile : TermProfile
+trueColorProfile = Kernel.kernel "Color_trueColorProfile"
+
+
+-- | The 256-colour xterm-palette terminal target.
+ansi256Profile : TermProfile
+ansi256Profile = Kernel.kernel "Color_ansi256Profile"
+
+
+-- | The 16 SGR-palette terminal target.
+ansi16Profile : TermProfile
+ansi16Profile = Kernel.kernel "Color_ansi16Profile"
+
+
+-- | The no-colour terminal target (everything degrades to the default).
+noColorProfile : TermProfile
+noColorProfile = Kernel.kernel "Color_noColorProfile"
+
+
+-- | `toAnsi profile c` — down-sample `c` for a terminal `profile`. The single
+-- truecolour→256→16 degradation point; the nearest-16 mapping is the runtime SSOT.
+toAnsi : TermProfile -> Color -> AnsiColor
+toAnsi = Kernel.kernel "Color_toAnsi"
+
+
+-- ─── WCAG / contrast (accessibility) ──────────────────────────────────────────
+
+
+-- | The WCAG AA conformance level (`4.5:1` normal text, `3.0:1` large text).
+wcagAa : WcagLevel
+wcagAa = Kernel.kernel "Color_wcagAa"
+
+
+-- | The WCAG AAA conformance level (`7.0:1` normal text, `4.5:1` large text).
+wcagAaa : WcagLevel
+wcagAaa = Kernel.kernel "Color_wcagAaa"
+
+
+-- | The normal-size text band.
+normalText : TextSize
+normalText = Kernel.kernel "Color_normalText"
+
+
+-- | The large-text band (`>=18pt`, or `>=14pt` bold).
+largeText : TextSize
+largeText = Kernel.kernel "Color_largeText"
+
+
+-- | `contrastRatio a b` — the WCAG contrast ratio between two colours (1..21).
+contrastRatio : Color -> Color -> Float
+contrastRatio = Kernel.kernel "Color_contrastRatio"
+
+
+-- | `readableTextOn bg` — black or white, whichever contrasts more against `bg`.
+readableTextOn : Color -> Color
+readableTextOn = Kernel.kernel "Color_readableTextOn"
+
+
+-- | `meetsWcag level size fg bg` — whether `fg` on `bg` meets the WCAG `level`
+-- threshold for text of the given `size`.
+meetsWcag : WcagLevel -> TextSize -> Color -> Color -> Bool
+meetsWcag = Kernel.kernel "Color_meetsWcag"
+
+
+-- | `maximumContrast target candidates` — the candidate colour with the highest
+-- contrast against `target` (falls back to `readableTextOn target` — black or
+-- white — when the list is empty).
+maximumContrast : Color -> List Color -> Color
+maximumContrast = Kernel.kernel "Color_maximumContrast"
+
+
+-- ─── Colour-vision-deficiency simulation ──────────────────────────────────────
+
+
+-- | Red-blind colour-vision deficiency.
+protanopia : Deficiency
+protanopia = Kernel.kernel "Color_protanopia"
+
+
+-- | Green-blind colour-vision deficiency.
+deuteranopia : Deficiency
+deuteranopia = Kernel.kernel "Color_deuteranopia"
+
+
+-- | Blue-blind colour-vision deficiency.
+tritanopia : Deficiency
+tritanopia = Kernel.kernel "Color_tritanopia"
+
+
+-- | `simulate deficiency c` — preview `c` as seen under a colour-vision
+-- `deficiency`.
+simulate : Deficiency -> Color -> Color
+simulate = Kernel.kernel "Color_simulate"

@@ -1069,6 +1069,148 @@ pub fn color_grayscale(c: Color) -> Color {
     c.grayscale()
 }
 
+// ── Ipe.Color parse boundary (typed `Result ColorError Color`) ──────────────
+//
+// String input is genuinely untrusted, so it parses to the typed `ColorError`
+// channel rather than a silent bad colour (parse-don't-validate, fail-closed):
+// a malformed hex or an unknown name is turned back with the typed error the
+// runtime SSOT (`Color::from_hex` / `Color::from_name`) already produces. No
+// parsing is re-implemented at the emit boundary. The shim returns the Ipê
+// `IpeResult<E, A>` carrier the emitted `case` arms match on (error type first),
+// with `ColorError` as the concrete error — never the std `Result`.
+
+/// `Color.fromHex : String -> Result ColorError Color`
+#[must_use]
+pub fn color_from_hex(input: String) -> crate::core::IpeResult<ColorError, Color> {
+    match Color::from_hex(&input) {
+        Ok(c) => crate::core::IpeResult::Ok(c),
+        Err(e) => crate::core::IpeResult::Err(e),
+    }
+}
+
+/// `Color.fromName : String -> Result ColorError Color`
+#[must_use]
+pub fn color_from_name(name: String) -> crate::core::IpeResult<ColorError, Color> {
+    match Color::from_name(&name) {
+        Ok(c) => crate::core::IpeResult::Ok(c),
+        Err(e) => crate::core::IpeResult::Err(e),
+    }
+}
+
+// ── Ipe.Color terminal-profile constructors (nullary `TermProfile`) ──────────
+
+/// `Color.trueColorProfile : TermProfile`
+#[must_use]
+pub fn color_true_color_profile() -> TermProfile {
+    TermProfile::TrueColor
+}
+
+/// `Color.ansi256Profile : TermProfile`
+#[must_use]
+pub fn color_ansi256_profile() -> TermProfile {
+    TermProfile::Ansi256
+}
+
+/// `Color.ansi16Profile : TermProfile`
+#[must_use]
+pub fn color_ansi16_profile() -> TermProfile {
+    TermProfile::Ansi16
+}
+
+/// `Color.noColorProfile : TermProfile`
+#[must_use]
+pub fn color_no_color_profile() -> TermProfile {
+    TermProfile::NoColor
+}
+
+/// `Color.toAnsi : TermProfile -> Color -> AnsiColor`
+///
+/// The single truecolour→256→16 down-sampling point; `to_ansi` on `Color` is the
+/// nearest-16 SSOT, never a re-derived brightness threshold here.
+#[must_use]
+pub fn color_to_ansi(profile: TermProfile, c: Color) -> AnsiColor {
+    c.to_ansi(profile)
+}
+
+// ── Ipe.Color WCAG / contrast (a11y) ─────────────────────────────────────────
+
+/// `Color.wcagAa : WcagLevel`
+#[must_use]
+pub fn color_wcag_aa() -> WcagLevel {
+    WcagLevel::AA
+}
+
+/// `Color.wcagAaa : WcagLevel`
+#[must_use]
+pub fn color_wcag_aaa() -> WcagLevel {
+    WcagLevel::AAA
+}
+
+/// `Color.normalText : TextSize`
+#[must_use]
+pub fn color_normal_text() -> TextSize {
+    TextSize::NormalText
+}
+
+/// `Color.largeText : TextSize`
+#[must_use]
+pub fn color_large_text() -> TextSize {
+    TextSize::LargeText
+}
+
+/// `Color.contrastRatio : Color -> Color -> Float`
+#[must_use]
+pub fn color_contrast_ratio(a: Color, b: Color) -> f64 {
+    Color::contrast_ratio(a, b)
+}
+
+/// `Color.readableTextOn : Color -> Color` — black or white, whichever contrasts
+/// more against the background.
+#[must_use]
+pub fn color_readable_text_on(bg: Color) -> Color {
+    Color::readable_text_on(bg)
+}
+
+/// `Color.meetsWcag : WcagLevel -> TextSize -> Color -> Color -> Bool`
+#[must_use]
+pub fn color_meets_wcag(level: WcagLevel, size: TextSize, fg: Color, bg: Color) -> bool {
+    Color::meets_wcag(level, size, fg, bg)
+}
+
+/// `Color.maximumContrast : Color -> List Color -> Color` — the candidate with
+/// the highest contrast against `target` (the target itself on an empty list).
+#[must_use]
+pub fn color_maximum_contrast(target: Color, candidates: Vec<Color>) -> Color {
+    Color::maximum_contrast(target, &candidates)
+}
+
+// ── Ipe.Color colour-vision-deficiency simulation ────────────────────────────
+
+/// `Color.protanopia : Deficiency`
+#[must_use]
+pub fn color_protanopia() -> Deficiency {
+    Deficiency::Protanopia
+}
+
+/// `Color.deuteranopia : Deficiency`
+#[must_use]
+pub fn color_deuteranopia() -> Deficiency {
+    Deficiency::Deuteranopia
+}
+
+/// `Color.tritanopia : Deficiency`
+#[must_use]
+pub fn color_tritanopia() -> Deficiency {
+    Deficiency::Tritanopia
+}
+
+/// `Color.simulate : Deficiency -> Color -> Color` — preview `c` under a
+/// colour-vision deficiency.
+#[must_use]
+pub fn color_simulate(deficiency: Deficiency, c: Color) -> Color {
+    c.simulate(deficiency)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1374,5 +1516,113 @@ mod tests {
         assert!(Color::steps(0, &stops).is_empty());
         assert!(Color::steps(4, &[]).is_empty());
         assert_eq!(Color::steps(3, &[Color::red()]).len(), 3);
+    }
+
+    // ── S3 kernel-shim boundary tests (the emit-boundary free functions) ──
+
+    #[test]
+    fn color_from_hex_shim_parses_and_round_trips() {
+        // The shim returns the Ipê `IpeResult` carrier (not std `Result`).
+        let got = match color_from_hex("#ff8800".to_owned()) {
+            crate::core::IpeResult::Ok(c) => c,
+            crate::core::IpeResult::Err(e) => panic!("expected Ok, got {e:?}"),
+        };
+        assert_eq!(got, Color::rgb(255, 136, 0));
+        // The shim is the exact SSOT parser, so `toHex` round-trips.
+        assert_eq!(color_to_hex(got), "#ff8800");
+    }
+
+    #[test]
+    fn color_from_hex_shim_rejects_bad_input_typed() {
+        use crate::core::IpeResult;
+        // Bad digit → typed `ColorError`, never a panic or a default colour.
+        match color_from_hex("#gg0000".to_owned()) {
+            IpeResult::Err(ColorError::BadHexDigit(c)) => assert_eq!(c, 'g'),
+            other => panic!("expected BadHexDigit, got {other:?}"),
+        }
+        // Bad length → typed `ColorError::BadHexLength`, not a silent fallback.
+        match color_from_hex("#12345".to_owned()) {
+            IpeResult::Err(ColorError::BadHexLength(n)) => assert_eq!(n, 5),
+            other => panic!("expected BadHexLength, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn color_from_name_shim_parses_and_refuses_unknown() {
+        use crate::core::IpeResult;
+        assert_eq!(
+            color_from_name("red".to_owned()),
+            IpeResult::Ok(Color::red())
+        );
+        // An unknown name is turned back with the typed error, not defaulted.
+        match color_from_name("chartreusey".to_owned()) {
+            IpeResult::Err(ColorError::UnknownColorName(n)) => assert_eq!(n, "chartreusey"),
+            other => panic!("expected UnknownColorName, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn color_to_ansi_shim_delegates_to_nearest_16_ssot() {
+        // The shim degrades through `Color::to_ansi` (the nearest-16 SSOT); it
+        // must NOT re-derive a brightness threshold. Pure black on the 16-palette
+        // maps to the named index the SSOT table dictates.
+        let black16 = color_to_ansi(color_ansi16_profile(), Color::black());
+        assert_eq!(black16, Color::black().to_ansi(TermProfile::Ansi16));
+        assert!(matches!(black16, AnsiColor::Named(_)));
+        // Truecolour is exact; no-colour degrades to the terminal default.
+        assert_eq!(
+            color_to_ansi(color_true_color_profile(), Color::rgb(10, 20, 30)),
+            AnsiColor::Rgb(10, 20, 30)
+        );
+        assert_eq!(
+            color_to_ansi(color_no_color_profile(), Color::red()),
+            AnsiColor::Default
+        );
+    }
+
+    #[test]
+    fn color_wcag_shims_delegate() {
+        // contrastRatio black/white is the WCAG maximum (21:1).
+        assert!((color_contrast_ratio(Color::black(), Color::white()) - 21.0).abs() < 1e-9);
+        // Black-on-white passes AA normal text; a low-contrast pair fails.
+        assert!(color_meets_wcag(
+            color_wcag_aa(),
+            color_normal_text(),
+            Color::black(),
+            Color::white()
+        ));
+        assert!(!color_meets_wcag(
+            color_wcag_aaa(),
+            color_large_text(),
+            Color::rgb(200, 200, 200),
+            Color::white()
+        ));
+        // readableTextOn a light bg is black; the empty candidate list falls back
+        // to the readable-text colour for the target (black on white) — total.
+        assert_eq!(color_readable_text_on(Color::white()), Color::black());
+        assert_eq!(
+            color_maximum_contrast(Color::white(), Vec::new()),
+            Color::readable_text_on(Color::white())
+        );
+        assert_eq!(
+            color_maximum_contrast(
+                Color::white(),
+                vec![Color::black(), Color::rgb(240, 240, 240)]
+            ),
+            Color::black()
+        );
+    }
+
+    #[test]
+    fn color_simulate_shim_delegates_and_preserves_alpha() {
+        let c = Color::rgba(200, 50, 50, 0.5);
+        for deficiency in [color_protanopia(), color_deuteranopia(), color_tritanopia()] {
+            let sim = color_simulate(deficiency, c);
+            // Delegates to the `Color::simulate` SSOT (identical result)…
+            assert_eq!(sim, c.simulate(deficiency));
+            // …and the alpha channel survives the projection.
+            let (.., a) = sim.to_rgba();
+            assert!((a - 0.5).abs() < 1e-9);
+        }
     }
 }

@@ -456,6 +456,15 @@ pub enum BuiltinTag {
     /// `AnsiColor` — the down-sampled terminal colour `Color.toAnsi` yields,
     /// `ipe_runtime::color::AnsiColor`. Nullary.
     AnsiColor,
+    /// `WcagLevel` — the WCAG conformance level `Color.meetsWcag` checks against
+    /// (`aa` / `aaa`), `ipe_runtime::color::WcagLevel`. Nullary.
+    WcagLevel,
+    /// `TextSize` — the text-size band a WCAG threshold applies to
+    /// (`normalText` / `largeText`), `ipe_runtime::color::TextSize`. Nullary.
+    TextSize,
+    /// `Deficiency` — the colour-vision deficiency `Color.simulate` previews,
+    /// `ipe_runtime::color::Deficiency`. Nullary.
+    Deficiency,
     /// `CustomElement` — the JS-widget boundary constructor `CustomElement down up`,
     /// applied to its sealed down-state and up-event types. Empty-module
     /// (unqualified); an opaque handle produced only by the reserved `CustomElement.fromFile`
@@ -3044,6 +3053,48 @@ pub enum StdlibKernel {
     ColorComplementary,
     /// `Color.grayscale : Color -> Color` — desaturate fully to grey.
     ColorGrayscale,
+    // ── Ipe.Color parse boundary (typed `Result ColorError Color`) ──
+    /// `Color.fromHex : String -> Result ColorError Color` — parse a hex string.
+    ColorFromHex,
+    /// `Color.fromName : String -> Result ColorError Color` — parse a named colour.
+    ColorFromName,
+    // ── Ipe.Color terminal-profile constructors (nullary `TermProfile`) ──
+    /// `Color.trueColorProfile : TermProfile` — 24-bit truecolour target.
+    ColorTrueColorProfile,
+    /// `Color.ansi256Profile : TermProfile` — 256-colour xterm target.
+    ColorAnsi256Profile,
+    /// `Color.ansi16Profile : TermProfile` — 16 SGR-palette target.
+    ColorAnsi16Profile,
+    /// `Color.noColorProfile : TermProfile` — degrade everything to default.
+    ColorNoColorProfile,
+    /// `Color.toAnsi : TermProfile -> Color -> AnsiColor` — down-sample a colour.
+    ColorToAnsi,
+    // ── Ipe.Color WCAG / contrast (a11y) ──
+    /// `Color.wcagAa : WcagLevel` — the WCAG AA conformance level.
+    ColorWcagAa,
+    /// `Color.wcagAaa : WcagLevel` — the WCAG AAA conformance level.
+    ColorWcagAaa,
+    /// `Color.normalText : TextSize` — the normal-size text band.
+    ColorNormalText,
+    /// `Color.largeText : TextSize` — the large-text band.
+    ColorLargeText,
+    /// `Color.contrastRatio : Color -> Color -> Float` — WCAG contrast ratio.
+    ColorContrastRatio,
+    /// `Color.readableTextOn : Color -> Color` — black or white for legibility.
+    ColorReadableTextOn,
+    /// `Color.meetsWcag : WcagLevel -> TextSize -> Color -> Color -> Bool`.
+    ColorMeetsWcag,
+    /// `Color.maximumContrast : Color -> List Color -> Color` — best candidate.
+    ColorMaximumContrast,
+    // ── Ipe.Color colour-vision-deficiency simulation ──
+    /// `Color.protanopia : Deficiency` — red-blind.
+    ColorProtanopia,
+    /// `Color.deuteranopia : Deficiency` — green-blind.
+    ColorDeuteranopia,
+    /// `Color.tritanopia : Deficiency` — blue-blind.
+    ColorTritanopia,
+    /// `Color.simulate : Deficiency -> Color -> Color` — CVD preview.
+    ColorSimulate,
 }
 
 impl StdlibKernel {
@@ -4128,6 +4179,51 @@ impl StdlibKernel {
             Self::ColorRotateHue => d("Color", "rotateHue", 2, Pure, "color_rotate_hue"),
             Self::ColorComplementary => d("Color", "complementary", 1, Pure, "color_complementary"),
             Self::ColorGrayscale => d("Color", "grayscale", 1, Pure, "color_grayscale"),
+            // ── Ipe.Color parse boundary (typed `Result ColorError Color`) ──
+            Self::ColorFromHex => d("Color", "fromHex", 1, Pure, "color_from_hex"),
+            Self::ColorFromName => d("Color", "fromName", 1, Pure, "color_from_name"),
+            // ── Ipe.Color terminal-profile constructors + toAnsi ──
+            Self::ColorTrueColorProfile => d(
+                "Color",
+                "trueColorProfile",
+                0,
+                Pure,
+                "color_true_color_profile",
+            ),
+            Self::ColorAnsi256Profile => {
+                d("Color", "ansi256Profile", 0, Pure, "color_ansi256_profile")
+            }
+            Self::ColorAnsi16Profile => {
+                d("Color", "ansi16Profile", 0, Pure, "color_ansi16_profile")
+            }
+            Self::ColorNoColorProfile => {
+                d("Color", "noColorProfile", 0, Pure, "color_no_color_profile")
+            }
+            Self::ColorToAnsi => d("Color", "toAnsi", 2, Pure, "color_to_ansi"),
+            // ── Ipe.Color WCAG / contrast (a11y) ──
+            Self::ColorWcagAa => d("Color", "wcagAa", 0, Pure, "color_wcag_aa"),
+            Self::ColorWcagAaa => d("Color", "wcagAaa", 0, Pure, "color_wcag_aaa"),
+            Self::ColorNormalText => d("Color", "normalText", 0, Pure, "color_normal_text"),
+            Self::ColorLargeText => d("Color", "largeText", 0, Pure, "color_large_text"),
+            Self::ColorContrastRatio => {
+                d("Color", "contrastRatio", 2, Pure, "color_contrast_ratio")
+            }
+            Self::ColorReadableTextOn => {
+                d("Color", "readableTextOn", 1, Pure, "color_readable_text_on")
+            }
+            Self::ColorMeetsWcag => d("Color", "meetsWcag", 4, Pure, "color_meets_wcag"),
+            Self::ColorMaximumContrast => d(
+                "Color",
+                "maximumContrast",
+                2,
+                Pure,
+                "color_maximum_contrast",
+            ),
+            // ── Ipe.Color colour-vision-deficiency simulation ──
+            Self::ColorProtanopia => d("Color", "protanopia", 0, Pure, "color_protanopia"),
+            Self::ColorDeuteranopia => d("Color", "deuteranopia", 0, Pure, "color_deuteranopia"),
+            Self::ColorTritanopia => d("Color", "tritanopia", 0, Pure, "color_tritanopia"),
+            Self::ColorSimulate => d("Color", "simulate", 2, Pure, "color_simulate"),
             Self::UiWidget => d("CustomElement", "node", 3, Ui, "ui_widget_"),
             Self::UiNode => d("Ui", "node", 3, Ui, "ui_node_"),
             Self::UiTaggedNode => d("Ui", "taggedNode", 4, Ui, "ui_tagged_node_"),
@@ -5703,6 +5799,29 @@ impl StdlibKernel {
         Self::ColorRotateHue,
         Self::ColorComplementary,
         Self::ColorGrayscale,
+        // ── Ipe.Color parse boundary ──
+        Self::ColorFromHex,
+        Self::ColorFromName,
+        // ── Ipe.Color profile / toAnsi ──
+        Self::ColorTrueColorProfile,
+        Self::ColorAnsi256Profile,
+        Self::ColorAnsi16Profile,
+        Self::ColorNoColorProfile,
+        Self::ColorToAnsi,
+        // ── Ipe.Color WCAG / contrast (a11y) ──
+        Self::ColorWcagAa,
+        Self::ColorWcagAaa,
+        Self::ColorNormalText,
+        Self::ColorLargeText,
+        Self::ColorContrastRatio,
+        Self::ColorReadableTextOn,
+        Self::ColorMeetsWcag,
+        Self::ColorMaximumContrast,
+        // ── Ipe.Color colour-vision-deficiency simulation ──
+        Self::ColorProtanopia,
+        Self::ColorDeuteranopia,
+        Self::ColorTritanopia,
+        Self::ColorSimulate,
         Self::UiWidget,
         Self::UiNode,
         Self::UiTaggedNode,
@@ -8067,6 +8186,40 @@ impl StdlibKernel {
         const FLOAT_TO_COLOR_TO_COLOR: TyShape = TyShape::Fun(&FLOAT, &COLOR_TO_COLOR);
         const FLOAT_TO_COLOR_TO_COLOR_TO_COLOR: TyShape =
             TyShape::Fun(&FLOAT, &COLOR_TO_COLOR_TO_COLOR);
+        // ── Ipe.Color a11y / profile / parse companion-type scheme shapes. ──
+        // The opaque companion carriers (`ColorError` / `TermProfile` /
+        // `AnsiColor` / `WcagLevel` / `TextSize` / `Deficiency`), each a nullary
+        // `Con` over its dedicated `BuiltinTag`, and the kernel arrows over them.
+        const COLOR_ERROR: TyShape = TyShape::Con(BuiltinTag::ColorError, &[]);
+        const TERM_PROFILE: TyShape = TyShape::Con(BuiltinTag::TermProfile, &[]);
+        const ANSI_COLOR: TyShape = TyShape::Con(BuiltinTag::AnsiColor, &[]);
+        const WCAG_LEVEL: TyShape = TyShape::Con(BuiltinTag::WcagLevel, &[]);
+        const TEXT_SIZE: TyShape = TyShape::Con(BuiltinTag::TextSize, &[]);
+        const DEFICIENCY: TyShape = TyShape::Con(BuiltinTag::Deficiency, &[]);
+        // `String -> Result ColorError Color` (fromHex / fromName).
+        const RESULT_COLOR_ERROR_COLOR: TyShape =
+            TyShape::Con(BuiltinTag::Result, &[COLOR_ERROR, COLOR]);
+        const STRING_TO_RESULT_COLOR_ERROR_COLOR: TyShape =
+            TyShape::Fun(&STRING, &RESULT_COLOR_ERROR_COLOR);
+        // `TermProfile -> Color -> AnsiColor` (toAnsi).
+        const TERM_PROFILE_TO_COLOR_TO_ANSI: TyShape =
+            TyShape::Fun(&TERM_PROFILE, &TyShape::Fun(&COLOR, &ANSI_COLOR));
+        // `Color -> Color -> Float` (contrastRatio).
+        const COLOR_TO_COLOR_TO_FLOAT: TyShape = TyShape::Fun(&COLOR, &COLOR_TO_FLOAT);
+        // `WcagLevel -> TextSize -> Color -> Color -> Bool` (meetsWcag).
+        const WCAG_LEVEL_TO_TEXT_SIZE_TO_COLOR_TO_COLOR_TO_BOOL: TyShape = TyShape::Fun(
+            &WCAG_LEVEL,
+            &TyShape::Fun(
+                &TEXT_SIZE,
+                &TyShape::Fun(&COLOR, &TyShape::Fun(&COLOR, &BOOL)),
+            ),
+        );
+        // `Color -> List Color -> Color` (maximumContrast).
+        const LIST_COLOR: TyShape = TyShape::Con(BuiltinTag::List, &[COLOR]);
+        const COLOR_TO_LIST_COLOR_TO_COLOR: TyShape =
+            TyShape::Fun(&COLOR, &TyShape::Fun(&LIST_COLOR, &COLOR));
+        // `Deficiency -> Color -> Color` (simulate).
+        const DEFICIENCY_TO_COLOR_TO_COLOR: TyShape = TyShape::Fun(&DEFICIENCY, &COLOR_TO_COLOR);
         const COLOR_TO_TUI_ATTR_A: TyShape = TyShape::Fun(&TERM_COLOR, &TUI_ATTR_A);
         // `Lines msg` (var(0) = msg) and the Cli line-native attribute type and
         // list slots — DISTINCT from both DOM `UI_ATTR_A` and cell `TUI_ATTR_A`.
@@ -9670,6 +9823,26 @@ impl StdlibKernel {
             Self::ColorRotateHue => Some(&FLOAT_TO_COLOR_TO_COLOR),
             Self::ColorComplementary => Some(&COLOR_TO_COLOR),
             Self::ColorGrayscale => Some(&COLOR_TO_COLOR),
+            // ── Ipe.Color parse boundary (typed `Result ColorError Color`) ──
+            Self::ColorFromHex | Self::ColorFromName => Some(&STRING_TO_RESULT_COLOR_ERROR_COLOR),
+            // ── Ipe.Color profile / toAnsi ──
+            Self::ColorTrueColorProfile
+            | Self::ColorAnsi256Profile
+            | Self::ColorAnsi16Profile
+            | Self::ColorNoColorProfile => Some(&TERM_PROFILE),
+            Self::ColorToAnsi => Some(&TERM_PROFILE_TO_COLOR_TO_ANSI),
+            // ── Ipe.Color WCAG / contrast (a11y) ──
+            Self::ColorWcagAa | Self::ColorWcagAaa => Some(&WCAG_LEVEL),
+            Self::ColorNormalText | Self::ColorLargeText => Some(&TEXT_SIZE),
+            Self::ColorContrastRatio => Some(&COLOR_TO_COLOR_TO_FLOAT),
+            Self::ColorReadableTextOn => Some(&COLOR_TO_COLOR),
+            Self::ColorMeetsWcag => Some(&WCAG_LEVEL_TO_TEXT_SIZE_TO_COLOR_TO_COLOR_TO_BOOL),
+            Self::ColorMaximumContrast => Some(&COLOR_TO_LIST_COLOR_TO_COLOR),
+            // ── Ipe.Color colour-vision-deficiency simulation ──
+            Self::ColorProtanopia | Self::ColorDeuteranopia | Self::ColorTritanopia => {
+                Some(&DEFICIENCY)
+            }
+            Self::ColorSimulate => Some(&DEFICIENCY_TO_COLOR_TO_COLOR),
             Self::UiWidget => Some(&UI_WIDGET),
             Self::UiNode => Some(&UI_NODE),
             Self::UiTaggedNode => Some(&UI_TAGGED_NODE),
@@ -10862,6 +11035,25 @@ impl StdlibKernel {
             | Self::ColorRotateHue
             | Self::ColorComplementary
             | Self::ColorGrayscale
+            | Self::ColorFromHex
+            | Self::ColorFromName
+            | Self::ColorTrueColorProfile
+            | Self::ColorAnsi256Profile
+            | Self::ColorAnsi16Profile
+            | Self::ColorNoColorProfile
+            | Self::ColorToAnsi
+            | Self::ColorWcagAa
+            | Self::ColorWcagAaa
+            | Self::ColorNormalText
+            | Self::ColorLargeText
+            | Self::ColorContrastRatio
+            | Self::ColorReadableTextOn
+            | Self::ColorMeetsWcag
+            | Self::ColorMaximumContrast
+            | Self::ColorProtanopia
+            | Self::ColorDeuteranopia
+            | Self::ColorTritanopia
+            | Self::ColorSimulate
             | Self::UiNode
             | Self::UiTaggedNode
             | Self::UiButton

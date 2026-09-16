@@ -13,5 +13,29 @@ main =
         base = Color.rgb 40 120 200
 
         faded = Color.withAlpha 0.5 base
+
+        -- Parse boundary: a bad hex parses to the typed `ColorError` channel,
+        -- never a panic or a silent default. On the `Ok` path we take the parsed
+        -- colour; on the `Err` path we fall back to opaque black.
+        parsed =
+            case Color.fromHex "#2878c8" of
+                Ok c ->
+                    c
+
+                Err _ ->
+                    Color.black
+
+        -- Profile down-sampling: the nearest-16 SSOT, exercised so the emitted
+        -- program links the `toAnsi` shim + the `AnsiColor` carrier.
+        readable =
+            Color.readableTextOn base
     in
-    Io.println (Color.toHex base ++ " " ++ Color.toCssRgba faded)
+    Io.println
+        (Color.toHex base
+            ++ " "
+            ++ Color.toCssRgba faded
+            ++ " "
+            ++ Color.toHex parsed
+            ++ " "
+            ++ Color.toHex readable
+        )

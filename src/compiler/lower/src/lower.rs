@@ -17619,6 +17619,14 @@ impl<'a> Lowerer<'a> {
                 // enum (the `enum_variants` guard above fires first for those).
                 "Length" => Ok(IrType::UiPlain(UiPlain::Length)),
                 "Color" => Ok(IrType::UiPlain(UiPlain::Color)),
+                // Ipe.Color a11y / profile / parse companion value types — opaque
+                // nullary carriers over the `ipe_runtime::color::*` runtime types.
+                "ColorError" => Ok(IrType::UiPlain(UiPlain::ColorError)),
+                "TermProfile" => Ok(IrType::UiPlain(UiPlain::TermProfile)),
+                "AnsiColor" => Ok(IrType::UiPlain(UiPlain::AnsiColor)),
+                "WcagLevel" => Ok(IrType::UiPlain(UiPlain::WcagLevel)),
+                "TextSize" => Ok(IrType::UiPlain(UiPlain::TextSize)),
+                "Deficiency" => Ok(IrType::UiPlain(UiPlain::Deficiency)),
                 "HAlign" => Ok(IrType::UiPlain(UiPlain::HAlign)),
                 "VAlign" => Ok(IrType::UiPlain(UiPlain::VAlign)),
                 "Location" => Ok(IrType::UiPlain(UiPlain::Location)),
@@ -18940,6 +18948,14 @@ impl<'a> Lowerer<'a> {
                 // program `type Color` / `type Length` never lands here.
                 "Length" => Ok(IrType::UiPlain(UiPlain::Length)),
                 "Color" => Ok(IrType::UiPlain(UiPlain::Color)),
+                // Ipe.Color a11y / profile / parse companion value types — opaque
+                // nullary carriers over the `ipe_runtime::color::*` runtime types.
+                "ColorError" => Ok(IrType::UiPlain(UiPlain::ColorError)),
+                "TermProfile" => Ok(IrType::UiPlain(UiPlain::TermProfile)),
+                "AnsiColor" => Ok(IrType::UiPlain(UiPlain::AnsiColor)),
+                "WcagLevel" => Ok(IrType::UiPlain(UiPlain::WcagLevel)),
+                "TextSize" => Ok(IrType::UiPlain(UiPlain::TextSize)),
+                "Deficiency" => Ok(IrType::UiPlain(UiPlain::Deficiency)),
                 "HAlign" => Ok(IrType::UiPlain(UiPlain::HAlign)),
                 "VAlign" => Ok(IrType::UiPlain(UiPlain::VAlign)),
                 "Location" => Ok(IrType::UiPlain(UiPlain::Location)),
@@ -25247,6 +25263,35 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ColorRotateHue,
             ) => Ok(2),
             Callee::Kernel(KernelFn::ColorMix) => Ok(3),
+            // ── Ipe.Color a11y / profile / parse kernels ──
+            // Nullary profile / wcag-level / text-size / deficiency constructors.
+            Callee::Kernel(
+                KernelFn::ColorTrueColorProfile
+                | KernelFn::ColorAnsi256Profile
+                | KernelFn::ColorAnsi16Profile
+                | KernelFn::ColorNoColorProfile
+                | KernelFn::ColorWcagAa
+                | KernelFn::ColorWcagAaa
+                | KernelFn::ColorNormalText
+                | KernelFn::ColorLargeText
+                | KernelFn::ColorProtanopia
+                | KernelFn::ColorDeuteranopia
+                | KernelFn::ColorTritanopia,
+            ) => Ok(0),
+            // `fromHex`/`fromName` (String), `readableTextOn` (Color).
+            Callee::Kernel(
+                KernelFn::ColorFromHex
+                | KernelFn::ColorFromName
+                | KernelFn::ColorReadableTextOn,
+            ) => Ok(1),
+            // `toAnsi`/`contrastRatio`/`maximumContrast`/`simulate`.
+            Callee::Kernel(
+                KernelFn::ColorToAnsi
+                | KernelFn::ColorContrastRatio
+                | KernelFn::ColorMaximumContrast
+                | KernelFn::ColorSimulate,
+            ) => Ok(2),
+            Callee::Kernel(KernelFn::ColorMeetsWcag) => Ok(4),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -29419,6 +29464,28 @@ mod tests {
         KernelFn::ColorRotateHue,
         KernelFn::ColorComplementary,
         KernelFn::ColorGrayscale,
+        // Ipe.Color a11y / profile / parse kernels — reached exclusively through
+        // the `Kernel.kernel "Color_*"` alias fast-path (no legacy `lower_callee`
+        // string-match arm), same as the S2+S6 colour kernels above.
+        KernelFn::ColorFromHex,
+        KernelFn::ColorFromName,
+        KernelFn::ColorTrueColorProfile,
+        KernelFn::ColorAnsi256Profile,
+        KernelFn::ColorAnsi16Profile,
+        KernelFn::ColorNoColorProfile,
+        KernelFn::ColorToAnsi,
+        KernelFn::ColorWcagAa,
+        KernelFn::ColorWcagAaa,
+        KernelFn::ColorNormalText,
+        KernelFn::ColorLargeText,
+        KernelFn::ColorContrastRatio,
+        KernelFn::ColorReadableTextOn,
+        KernelFn::ColorMeetsWcag,
+        KernelFn::ColorMaximumContrast,
+        KernelFn::ColorProtanopia,
+        KernelFn::ColorDeuteranopia,
+        KernelFn::ColorTritanopia,
+        KernelFn::ColorSimulate,
     ];
 
     /// Verifies that for every non-excluded variant in `KernelFn::ALL`, the

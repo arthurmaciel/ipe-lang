@@ -1761,6 +1761,24 @@ pub enum UiPlain {
     /// `Terminal.Color` — `ipe_runtime::tui::TermColor`, the closed terminal
     /// colour palette accepted by the Tui and Cli `color` / `bg` builders.
     TermColor,
+    /// `ColorError` — `ipe_runtime::color::ColorError`, the typed parse-error
+    /// channel of the `Ipe.Color` string constructors (`fromHex` / `fromName`).
+    ColorError,
+    /// `TermProfile` — `ipe_runtime::color::TermProfile`, the terminal capability
+    /// profile `Color.toAnsi` targets.
+    TermProfile,
+    /// `AnsiColor` — `ipe_runtime::color::AnsiColor`, the down-sampled terminal
+    /// colour `Color.toAnsi` yields.
+    AnsiColor,
+    /// `WcagLevel` — `ipe_runtime::color::WcagLevel`, the WCAG conformance level
+    /// (`aa` / `aaa`) `Color.meetsWcag` checks against.
+    WcagLevel,
+    /// `TextSize` — `ipe_runtime::color::TextSize`, the text-size band
+    /// (`normalText` / `largeText`) a WCAG threshold applies to.
+    TextSize,
+    /// `Deficiency` — `ipe_runtime::color::Deficiency`, the colour-vision
+    /// deficiency `Color.simulate` previews.
+    Deficiency,
 }
 
 /// Total predicate: does the Rust type that [`IrType`] renders to support the
