@@ -522,9 +522,9 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             // the crate root, so the bare-path shim call also resolves).
             UiPlain::ColorError => "ipe_runtime::color::ColorError".to_owned(),
             UiPlain::TermProfile => "ipe_runtime::color::TermProfile".to_owned(),
-            // `Terminal.Color` and the `Ipe.Color` `AnsiColor` companion share the
-            // one terminal-colour SSOT carrier.
-            UiPlain::TermColor | UiPlain::AnsiColor => "ipe_runtime::color::AnsiColor".to_owned(),
+            // The terminal-colour type: the palette constructors build it and
+            // `Color.toAnsi` yields it.
+            UiPlain::AnsiColor => "ipe_runtime::color::AnsiColor".to_owned(),
             UiPlain::WcagLevel => "ipe_runtime::color::WcagLevel".to_owned(),
             UiPlain::TextSize => "ipe_runtime::color::TextSize".to_owned(),
             UiPlain::Deficiency => "ipe_runtime::color::Deficiency".to_owned(),

@@ -15,76 +15,6 @@ pub use cell::*;
 use crate::color::{AnsiColor, Color};
 use crate::ui::element::{Attribute, Element, HAlign};
 
-/// The first-class terminal colour palette (`Terminal.Color`): the sixteen
-/// named ANSI colours plus `default` (the terminal's own colour), plus a
-/// truecolour path. A closed sum — an invalid colour has no representation.
-///
-/// Named colours render as ANSI SGR palette codes (portable across terminals);
-/// `Rgb` / `Rgba` render as 24-bit truecolour on terminals that support it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TermColor {
-    Black,
-    Red,
-    Green,
-    Yellow,
-    Blue,
-    Magenta,
-    Cyan,
-    White,
-    BrightBlack,
-    BrightRed,
-    BrightGreen,
-    BrightYellow,
-    BrightBlue,
-    BrightMagenta,
-    BrightCyan,
-    BrightWhite,
-    /// The terminal's own default foreground / background colour.
-    Default,
-    /// A 24-bit truecolour (red, green, blue), 0-255 each.
-    Rgb(u8, u8, u8),
-}
-
-impl TermColor {
-    /// The ANSI SGR code for this colour as a *foreground*: named palette codes
-    /// 30-37 / 90-97, `default` 39. Returns `None` for the truecolour path
-    /// (rendered separately as a `38;2;r;g;b` sequence).
-    #[must_use]
-    pub const fn fg_code(self) -> Option<u8> {
-        Some(match self {
-            TermColor::Black => 30,
-            TermColor::Red => 31,
-            TermColor::Green => 32,
-            TermColor::Yellow => 33,
-            TermColor::Blue => 34,
-            TermColor::Magenta => 35,
-            TermColor::Cyan => 36,
-            TermColor::White => 37,
-            TermColor::BrightBlack => 90,
-            TermColor::BrightRed => 91,
-            TermColor::BrightGreen => 92,
-            TermColor::BrightYellow => 93,
-            TermColor::BrightBlue => 94,
-            TermColor::BrightMagenta => 95,
-            TermColor::BrightCyan => 96,
-            TermColor::BrightWhite => 97,
-            TermColor::Default => 39,
-            TermColor::Rgb(..) => return None,
-        })
-    }
-
-    /// The ANSI SGR code for this colour as a *background*: named palette codes
-    /// 40-47 / 100-107, `default` 49. Returns `None` for the truecolour path.
-    #[must_use]
-    pub const fn bg_code(self) -> Option<u8> {
-        // Background codes are the foreground code offset by 10.
-        match self.fg_code() {
-            Some(fg) => Some(fg + 10),
-            None => None,
-        }
-    }
-}
-
 /// A cell-native view attribute: the ONLY attributes a terminal `Screen` view
 /// can carry.  Distinct from the DOM `ui::Attribute` — DOM-only affordances
 /// (`onClick`, `scrollbars`, `inFront`, …) have no `TuiAttr` variant, so they
@@ -147,7 +77,7 @@ fn translate_attrs<M>(attrs: Vec<TuiAttr<M>>) -> Vec<Attribute<M>> {
 /// the portable SGR palette code; a truecolour takes the 24-bit `AttrFontColor`
 /// path the renderer already interprets.
 ///
-/// The terminal palette a program can name (`Terminal.Color`) is exactly the
+/// The terminal palette a program can name (`Ipe.Color.Ansi`) is exactly the
 /// `Named` / `Default` / `Rgb` shapes; an `Indexed` entry is unreachable from
 /// that surface, so it fails closed to the terminal default rather than
 /// fabricating a channel that cannot round-trip through the palette decoration.
@@ -315,116 +245,116 @@ pub fn tui_reverse_<M>() -> TuiAttr<M> {
     TuiAttr::Reverse
 }
 
-/// `Ipe.Ui.Tui.color : Terminal.Color -> Attribute msg` — foreground colour.
+/// `Ipe.Ui.Tui.color : AnsiColor -> Attribute msg` — foreground colour.
 #[must_use]
 pub fn tui_color_<M>(c: AnsiColor) -> TuiAttr<M> {
     TuiAttr::FgColor(c)
 }
 
-/// `Ipe.Ui.Tui.bg : Terminal.Color -> Attribute msg` — background colour.
+/// `Ipe.Ui.Tui.bg : AnsiColor -> Attribute msg` — background colour.
 #[must_use]
 pub fn tui_bg_<M>(c: AnsiColor) -> TuiAttr<M> {
     TuiAttr::BgColor(c)
 }
 
-// ── Ipe.Tea.Terminal.Color palette constructors ──────────────────────────────
+// ── Ipe.Color.Ansi palette constructors ───────────────────────────────────────
 
 /// The sixteen named palette entries carry their SGR index (`0..=15`): the
 /// standard eight `0..=7` (`black`..`white`) and the bright eight `8..=15`
 /// (`brightBlack`..`brightWhite`). `AnsiColor::named_sgr_code` maps each back to
 /// the identical portable SGR code the palette rendered before.
-/// `Terminal.Color.black : Color`
+/// `Ipe.Color.Ansi.black : AnsiColor`
 #[must_use]
 pub const fn term_color_black_() -> AnsiColor {
     AnsiColor::Named(0)
 }
-/// `Terminal.Color.red : Color`
+/// `Ipe.Color.Ansi.red : AnsiColor`
 #[must_use]
 pub const fn term_color_red_() -> AnsiColor {
     AnsiColor::Named(1)
 }
-/// `Terminal.Color.green : Color`
+/// `Ipe.Color.Ansi.green : AnsiColor`
 #[must_use]
 pub const fn term_color_green_() -> AnsiColor {
     AnsiColor::Named(2)
 }
-/// `Terminal.Color.yellow : Color`
+/// `Ipe.Color.Ansi.yellow : AnsiColor`
 #[must_use]
 pub const fn term_color_yellow_() -> AnsiColor {
     AnsiColor::Named(3)
 }
-/// `Terminal.Color.blue : Color`
+/// `Ipe.Color.Ansi.blue : AnsiColor`
 #[must_use]
 pub const fn term_color_blue_() -> AnsiColor {
     AnsiColor::Named(4)
 }
-/// `Terminal.Color.magenta : Color`
+/// `Ipe.Color.Ansi.magenta : AnsiColor`
 #[must_use]
 pub const fn term_color_magenta_() -> AnsiColor {
     AnsiColor::Named(5)
 }
-/// `Terminal.Color.cyan : Color`
+/// `Ipe.Color.Ansi.cyan : AnsiColor`
 #[must_use]
 pub const fn term_color_cyan_() -> AnsiColor {
     AnsiColor::Named(6)
 }
-/// `Terminal.Color.white : Color`
+/// `Ipe.Color.Ansi.white : AnsiColor`
 #[must_use]
 pub const fn term_color_white_() -> AnsiColor {
     AnsiColor::Named(7)
 }
-/// `Terminal.Color.brightBlack : Color`
+/// `Ipe.Color.Ansi.brightBlack : AnsiColor`
 #[must_use]
 pub const fn term_color_bright_black_() -> AnsiColor {
     AnsiColor::Named(8)
 }
-/// `Terminal.Color.brightRed : Color`
+/// `Ipe.Color.Ansi.brightRed : AnsiColor`
 #[must_use]
 pub const fn term_color_bright_red_() -> AnsiColor {
     AnsiColor::Named(9)
 }
-/// `Terminal.Color.brightGreen : Color`
+/// `Ipe.Color.Ansi.brightGreen : AnsiColor`
 #[must_use]
 pub const fn term_color_bright_green_() -> AnsiColor {
     AnsiColor::Named(10)
 }
-/// `Terminal.Color.brightYellow : Color`
+/// `Ipe.Color.Ansi.brightYellow : AnsiColor`
 #[must_use]
 pub const fn term_color_bright_yellow_() -> AnsiColor {
     AnsiColor::Named(11)
 }
-/// `Terminal.Color.brightBlue : Color`
+/// `Ipe.Color.Ansi.brightBlue : AnsiColor`
 #[must_use]
 pub const fn term_color_bright_blue_() -> AnsiColor {
     AnsiColor::Named(12)
 }
-/// `Terminal.Color.brightMagenta : Color`
+/// `Ipe.Color.Ansi.brightMagenta : AnsiColor`
 #[must_use]
 pub const fn term_color_bright_magenta_() -> AnsiColor {
     AnsiColor::Named(13)
 }
-/// `Terminal.Color.brightCyan : Color`
+/// `Ipe.Color.Ansi.brightCyan : AnsiColor`
 #[must_use]
 pub const fn term_color_bright_cyan_() -> AnsiColor {
     AnsiColor::Named(14)
 }
-/// `Terminal.Color.brightWhite : Color`
+/// `Ipe.Color.Ansi.brightWhite : AnsiColor`
 #[must_use]
 pub const fn term_color_bright_white_() -> AnsiColor {
     AnsiColor::Named(15)
 }
-/// `Terminal.Color.default : Color`
+/// `Ipe.Color.Ansi.default : AnsiColor`
 #[must_use]
 pub const fn term_color_default_() -> AnsiColor {
     AnsiColor::Default
 }
-/// `Terminal.Color.rgb : Int -> Int -> Int -> Color` — a 24-bit truecolour.
+/// `Ipe.Color.Ansi.rgb : Int -> Int -> Int -> AnsiColor` — a 24-bit truecolour.
 /// Channels are clamped to 0-255.
 #[must_use]
 pub fn term_color_rgb_(r: i64, g: i64, b: i64) -> AnsiColor {
     AnsiColor::Rgb(clamp_channel(r), clamp_channel(g), clamp_channel(b))
 }
-/// `Terminal.Color.rgba : Int -> Int -> Int -> Float -> Color`. The alpha is
+/// `Ipe.Color.Ansi.rgba : Int -> Int -> Int -> Float -> AnsiColor`. The alpha is
 /// accepted for surface parity with `Ui.rgba`; a terminal cell has no alpha, so
 /// the colour is applied opaque.
 #[must_use]
@@ -555,12 +485,12 @@ pub fn cli_dim_<M>() -> CliAttr<M> {
 pub fn cli_reverse_<M>() -> CliAttr<M> {
     CliAttr::Reverse
 }
-/// `Ipe.Ui.Cli.color : Terminal.Color -> Attribute msg` — foreground colour.
+/// `Ipe.Ui.Cli.color : AnsiColor -> Attribute msg` — foreground colour.
 #[must_use]
 pub fn cli_color_<M>(c: AnsiColor) -> CliAttr<M> {
     CliAttr::FgColor(c)
 }
-/// `Ipe.Ui.Cli.bg : Terminal.Color -> Attribute msg` — background colour.
+/// `Ipe.Ui.Cli.bg : AnsiColor -> Attribute msg` — background colour.
 #[must_use]
 pub fn cli_bg_<M>(c: AnsiColor) -> CliAttr<M> {
     CliAttr::BgColor(c)

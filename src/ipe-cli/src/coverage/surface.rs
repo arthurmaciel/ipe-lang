@@ -289,9 +289,10 @@ const QUALIFIER_MODULE_OVERRIDES: &[(&str, &[&str])] = &[
     // `lines`, `bold`, `underline`, `dim`, `reverse`, `color`, `bg`) live in
     // `Ipe.Ui.Cli`.
     ("CliUi", &["Ipe", "Ui", "Cli"]),
-    // `TermColor` palette constructors (`black` … `brightWhite`, `default`) live
-    // in `Ipe.Tea.Terminal.Color`.
-    ("TermColor", &["Ipe", "Tea", "Terminal", "Color"]),
+    // The `TermColor` kernel home backs the terminal palette constructors
+    // (`black` … `brightWhite`, `default`, `rgb`) that now live in `Ipe.Color`,
+    // typed `AnsiColor`.
+    ("TermColor", &["Ipe", "Color"]),
 ];
 
 /// The dotted module path a kernel qualifier lives under.

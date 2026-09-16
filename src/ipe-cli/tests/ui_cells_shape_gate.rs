@@ -339,7 +339,7 @@ import Ipe.Tea.Cli.Cmd as Cmd
 import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
-import Ipe.Tea.Terminal.Color as Color
+import Ipe.Color.Ansi as Color
 
 type Msg = NoOp
 
@@ -382,9 +382,9 @@ main =
 "#;
 
 /// The structured `Lines` view surface, its line-native `Attribute` builders,
-/// and the first-class `Terminal.Color` palette type-check + lower + emit under
-/// the Cli shape (ipe-0). The `Cli.tea` `view` returns a `Lines msg` value built
-/// from those builders.
+/// and the `Ipe.Color` terminal palette (`AnsiColor`) type-check + lower + emit
+/// under the Cli shape (ipe-0). The `Cli.tea` `view` returns a `Lines msg` value
+/// built from those builders.
 #[test]
 fn cli_lines_surface_with_palette_is_accepted() -> Result<(), BoxError> {
     assert_accepted("cli_lines_palette", CLI_WITH_LINES_HELPER)

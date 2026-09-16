@@ -301,10 +301,6 @@ pub const RESERVED_BUILTIN_TYPES: &[&str] = &[
     // only through `Ipe.Ui.Cli.*` kernels.
     "Lines",
     "CliAttr",
-    // `Ipe.Tea.Terminal.Color`'s palette type `Color` (interned `TermColor`).
-    // Reserved so a user `type Color …` in a terminal module cannot forge a
-    // look-alike palette; built only through `Ipe.Tea.Terminal.Color.*` kernels.
-    "TermColor",
     // `Ipe.Color`'s opaque companion types. The unified colour value type `Color`
     // is user-shadowable via the empty-home `Ui.Color` name (its lowerer arm sits
     // below the `enum_variants` guard); these companions instead carry a fixed
@@ -548,8 +544,8 @@ pub fn builtin_empty_home_arity(name: Option<&str>) -> Option<usize> {
         // IPE-N0031 rather than the lowerer's empty-home ICE.
         "Dict" | "Result" | "Program" | "View" => Some(2),
         "ReadOnly" | "ReadWrite" | "HostMode" | "LogLevel" | "CsrfMode" | "RevocationMode"
-        | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" | "TermColor" | "ColorError"
-        | "TermProfile" | "AnsiColor" | "WcagLevel" | "TextSize" | "Deficiency" => Some(0),
+        | "ProjectionTerm" | "ProjectionOperand" | "ArithOp" | "ColorError" | "TermProfile"
+        | "AnsiColor" | "WcagLevel" | "TextSize" | "Deficiency" => Some(0),
         _ => None,
     }
 }

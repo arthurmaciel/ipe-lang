@@ -304,10 +304,10 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         KernelFn::UiRgb => &[(0, Int), (1, Int), (2, Int)],
         // `rgba`: three `Int` channels plus a `Float` alpha (opacity).
         KernelFn::UiRgba => &[(0, Int), (1, Int), (2, Int), (3, Float)],
-        // `Terminal.Color.rgb : Int -> Int -> Int -> Color` — three direct
+        // `Ipe.Color.Ansi.rgb : Int -> Int -> Int -> AnsiColor` — three direct
         // channel literals, the truecolour path of the terminal palette.
         KernelFn::TermColorRgb => &[(0, Int), (1, Int), (2, Int)],
-        // `Terminal.Color.rgba : Int -> Int -> Int -> Float -> Color` — three
+        // `Ipe.Color.Ansi.rgba : Int -> Int -> Int -> Float -> AnsiColor` — three
         // `Int` channels plus a `Float` alpha.
         KernelFn::TermColorRgba => &[(0, Int), (1, Int), (2, Int), (3, Float)],
 
@@ -1677,7 +1677,7 @@ pub const fn ui_call_shape(k: KernelFn) -> Option<UiEmitPlan> {
         KernelFn::CliUiReverse => pos("ipe_runtime::tui::cli_reverse_", 0),
         KernelFn::CliUiColor => pos("ipe_runtime::tui::cli_color_", 1),
         KernelFn::CliUiBg => pos("ipe_runtime::tui::cli_bg_", 1),
-        // ── Ipe.Tea.Terminal.Color palette constructors ──
+        // ── Ipe.Color.Ansi palette constructors ──
         KernelFn::TermColorBlack => pos("ipe_runtime::tui::term_color_black_", 0),
         KernelFn::TermColorRed => pos("ipe_runtime::tui::term_color_red_", 0),
         KernelFn::TermColorGreen => pos("ipe_runtime::tui::term_color_green_", 0),
