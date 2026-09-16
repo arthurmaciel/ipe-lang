@@ -110,8 +110,6 @@ md-5 = { version = "0.10", optional = true }
 # it emits. `db-postgres` also activates `sqlite` (the Live session store keeps
 # a sqlite side table even under the postgres driver — see `db_cargo_toml`).
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls"], optional = true }
-# Ipe.Web session-checkpoint body encoding (H24 wire format: base64(tag ++ bincode)).
-bincode = { version = "1", optional = true }
 redis = { version = "0.27", features = ["tokio-comp"], optional = true }
 # `Ipe.Regex` regex kernels + `String.isUrl`, behind the `regex` feature. A
 # program that reaches neither drops `regex` and its aho-corasick / regex-automata
@@ -473,7 +471,7 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # A web app with an HTTP kernel (`uses_http`) or email selects `http_client`
 # through `reaches_http_client()` in the backend — reqwest never enters a plain
 # web app.
-web = ["widget-assets", "server", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core", "bincode"]
+web = ["widget-assets", "server", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
 # The `CustomElement.node` custom-element glue generator + SRI-pinned asset addressing
 # (`widget_assets.rs`) as a STANDALONE surface, decoupled from the heavy `web`
 # server. `sha2` (content digest) rides `crypto-core`; `base64` (the SRI value)
