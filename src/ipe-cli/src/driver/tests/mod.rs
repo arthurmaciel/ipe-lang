@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
-    ALL_CODES, Applicability, BTreeMap, Diagnostic, Path, PathBuf, Suggestion, fs, project, style,
+    ALL_CODES, Applicability, BTreeMap, Diagnostic, Path, PathBuf, Suggestion, cli_args, fs,
+    project, style,
 };
 use ipe_diagnostics::{NameError, Span};
 
@@ -1635,9 +1636,10 @@ fn wasm_config(mode: Option<&str>) -> project::WasmConfig {
 #[test]
 fn wasm_mode_spa_infers_wasm_target() {
     let cfg = wasm_config(Some("spa"));
-    assert!(
-        resolve_wasm_target(false, Some(&cfg)),
-        "spa mode must infer wasm target"
+    assert_eq!(
+        resolve_compile_target(cli_args::WasmKind::None, Some(&cfg)),
+        CompileTarget::WasmClient,
+        "spa mode must infer the browser wasm client"
     );
 }
 
@@ -1645,9 +1647,10 @@ fn wasm_mode_spa_infers_wasm_target() {
 #[test]
 fn wasm_mode_hydrate_infers_wasm_target() {
     let cfg = wasm_config(Some("hydrate"));
-    assert!(
-        resolve_wasm_target(false, Some(&cfg)),
-        "hydrate mode must infer wasm target"
+    assert_eq!(
+        resolve_compile_target(cli_args::WasmKind::None, Some(&cfg)),
+        CompileTarget::WasmClient,
+        "hydrate mode must infer the browser wasm client"
     );
 }
 
@@ -1655,17 +1658,19 @@ fn wasm_mode_hydrate_infers_wasm_target() {
 #[test]
 fn wasm_mode_off_does_not_infer_wasm_target() {
     let cfg = wasm_config(Some("off"));
-    assert!(
-        !resolve_wasm_target(false, Some(&cfg)),
-        "off mode must not infer wasm target"
+    assert_eq!(
+        resolve_compile_target(cli_args::WasmKind::None, Some(&cfg)),
+        CompileTarget::Native,
+        "off mode must not infer a wasm target"
     );
 }
 
 /// No `[wasm]` section (None config) → native default.
 #[test]
 fn no_wasm_config_defaults_to_native_target() {
-    assert!(
-        !resolve_wasm_target(false, None),
+    assert_eq!(
+        resolve_compile_target(cli_args::WasmKind::None, None),
+        CompileTarget::Native,
         "absent [wasm] section must default to native"
     );
 }
@@ -1674,17 +1679,19 @@ fn no_wasm_config_defaults_to_native_target() {
 #[test]
 fn wasm_config_absent_mode_key_defaults_to_native_target() {
     let cfg = wasm_config(None);
-    assert!(
-        !resolve_wasm_target(false, Some(&cfg)),
+    assert_eq!(
+        resolve_compile_target(cli_args::WasmKind::None, Some(&cfg)),
+        CompileTarget::Native,
         "absent mode key must default to native"
     );
 }
 
-/// CLI `--target wasm` (`cli_wasm` = true) wins even when no manifest.
+/// CLI `--target wasm` wins even when no manifest.
 #[test]
 fn cli_flag_overrides_absent_manifest_to_wasm() {
-    assert!(
-        resolve_wasm_target(true, None),
+    assert_eq!(
+        resolve_compile_target(cli_args::WasmKind::Client, None),
+        CompileTarget::WasmClient,
         "cli flag must win over absent manifest"
     );
 }
@@ -1693,10 +1700,42 @@ fn cli_flag_overrides_absent_manifest_to_wasm() {
 #[test]
 fn cli_flag_wins_over_mode_off() {
     let cfg = wasm_config(Some("off"));
-    assert!(
-        resolve_wasm_target(true, Some(&cfg)),
+    assert_eq!(
+        resolve_compile_target(cli_args::WasmKind::Client, Some(&cfg)),
+        CompileTarget::WasmClient,
         "explicit cli --target wasm must win over mode=off"
     );
+}
+
+/// CLI `--target wasi` selects the co-located WASI target, over any manifest.
+#[test]
+fn cli_flag_wasi_selects_colocated_wasi() {
+    let cfg = wasm_config(Some("spa"));
+    assert_eq!(
+        resolve_compile_target(cli_args::WasmKind::Wasi, None),
+        CompileTarget::WasmWasi,
+        "cli --target wasi selects the co-located WASI target"
+    );
+    assert_eq!(
+        resolve_compile_target(cli_args::WasmKind::Wasi, Some(&cfg)),
+        CompileTarget::WasmWasi,
+        "explicit cli --target wasi wins over a browser [wasm].mode",
+    );
+}
+
+/// The manifest `[wasm].mode` selects the browser client only — WASI is an
+/// explicit per-invocation target, never a project-default inferred from a
+/// manifest that only knows the browser mode words.
+#[test]
+fn manifest_never_infers_wasi() {
+    for mode in [Some("spa"), Some("hydrate"), Some("off"), None] {
+        let cfg = wasm_config(mode);
+        assert_ne!(
+            resolve_compile_target(cli_args::WasmKind::None, Some(&cfg)),
+            CompileTarget::WasmWasi,
+            "no [wasm].mode may infer the co-located WASI target",
+        );
+    }
 }
 
 /// `declared_modules` reads exactly the `pub mod X;` / `mod X;` statements a

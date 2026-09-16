@@ -273,8 +273,9 @@ const COMMANDS: &[Command] = &[
                 desc: "produce a statically linked binary",
             },
             Opt {
-                flag: "[--target <triple|wasm>]",
-                desc: "cross-compile to <triple>, or build for the browser with wasm",
+                flag: "[--target <triple|wasm|wasi>]",
+                desc: "cross-compile to <triple>, the browser (`wasm`), or co-located \
+                       WebAssembly/WASI (`wasi`, a wasm32-wasip1 module for a Direct script)",
             },
             Opt {
                 flag: "[--emit-permissions <ios|macos|android>]",
