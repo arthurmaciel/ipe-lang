@@ -13,6 +13,13 @@ fn main() -> ExitCode {
         Err(ipe::CliError::UpgradeCheckExit { code }) => {
             ExitCode::from(u8::try_from(code).unwrap_or(2))
         }
+        // A wasm32-wasip1 module ran under embedded wasmtime and returned a
+        // non-zero WASI exit code; the guest owns the outcome, so propagate its
+        // exact code (mirroring how a native run surfaces a child's exit).
+        Err(err @ ipe::CliError::WasiRunExited { code }) => {
+            eprintln!("{err}");
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
         // These variants render their own complete screen — a full help page, a
         // gate report, or a self-guttered environment message — so the
         // soft-yellow error banner (which belongs to short one-line diagnostics)
@@ -33,6 +40,11 @@ fn main() -> ExitCode {
             | ipe::CliError::LintGateFailed
             | ipe::CliError::EjectUnsupported { .. }
             | ipe::CliError::UpgradeFeedUnreachable
+            // The WASI-run refusals gutter themselves (feature-off refusal, or a
+            // trap/instantiation failure), so they print as-is rather than under
+            // the one-line diagnostic banner.
+            | ipe::CliError::WasiRunFeatureDisabled
+            | ipe::CliError::WasiRunFailed { .. }
             // The JSON was already written to stderr; nothing more to print.
             | ipe::CliError::DiagnosticJsonEmitted),
         ) => {

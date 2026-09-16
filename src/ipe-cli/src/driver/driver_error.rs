@@ -365,6 +365,29 @@ pub enum CliError {
         /// What was wrong with the file.
         detail: String,
     },
+    /// `ipe run --target wasi` was invoked on an `ipe` binary built WITHOUT the
+    /// `wasi_run` feature, so no embedded wasmtime engine is linked to execute
+    /// the emitted `wasm32-wasip1` module. A typed refusal naming the feature —
+    /// never a panic, never a silent fall-through to a native run — so the
+    /// missing-engine case is fail-closed and self-explaining.
+    WasiRunFeatureDisabled,
+    /// The embedded wasmtime engine could not load, instantiate, or run the
+    /// emitted `wasm32-wasip1` module (a compile/link error in the engine, a
+    /// missing WASI export, or a guest trap that is not a clean exit). A WASI
+    /// trap maps here to a typed non-zero exit, never a host panic. Carries a
+    /// short detail describing what failed.
+    WasiRunFailed {
+        /// What specifically failed in the embedded run.
+        detail: String,
+    },
+    /// The emitted `wasm32-wasip1` module ran to completion under embedded
+    /// wasmtime and returned a non-zero WASI exit code. Propagated as `ipe
+    /// run`'s own non-zero exit, mirroring how the native run surfaces a child's
+    /// non-zero status — the guest's own outcome, not a driver fault.
+    WasiRunExited {
+        /// The module's WASI exit code (non-zero).
+        code: i32,
+    },
 }
 
 impl From<toolchain::ToolchainMissing> for CliError {
@@ -616,6 +639,28 @@ impl std::fmt::Display for CliError {
                     path.display()
                 )
             }
+            Self::WasiRunFeatureDisabled => write!(
+                f,
+                "{}ipe run --target wasi needs the embedded wasmtime engine, but this `ipe` \
+                 binary was built without the `wasi_run` feature.\n  = help: build the module \
+                 with `ipe build --target wasi` and run it under a WASI runtime, or reinstall an \
+                 `ipe` compiled with `--features wasi_run` (the default in release packaging).",
+                style::GUTTER
+            ),
+            Self::WasiRunFailed { detail } => write!(
+                f,
+                "{}ipe run --target wasi: the emitted wasm32-wasip1 module could not be run under \
+                 the embedded wasmtime engine — {detail}",
+                style::GUTTER
+            ),
+            // The guest ran to completion and returned a non-zero WASI exit; this
+            // one-line verdict pairs with `ipe run`'s own non-zero exit, mirroring
+            // the native run's child-exit surfacing.
+            Self::WasiRunExited { code } => write!(
+                f,
+                "{}the wasm32-wasip1 module exited with code {code}",
+                style::GUTTER
+            ),
         }
     }
 }

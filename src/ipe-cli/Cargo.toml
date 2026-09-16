@@ -23,6 +23,17 @@ path = "src/main.rs"
 # default so an ordinary `ipe` build stays lean.
 signing = ["dep:sigstore", "dep:sigstore_protobuf_specs", "dep:pki_types"]
 
+# `ipe run --target wasi` executes the emitted `wasm32-wasip1` module in an
+# EMBEDDED wasmtime engine (never an external `wasmtime` binary), so the WASI
+# context is built by us from the program's declared capability floor — the
+# SAME deny-by-default model as the native run jail. wasmtime is a large
+# dependency (a full wasm engine + the preview1 WASI shim), so it sits behind
+# this feature, OFF by default so an ordinary dev/test `ipe` build stays lean
+# and ON for release packaging. With the feature off `ipe run --target wasi`
+# returns a typed refusal naming the feature — never a panic, never a silent
+# fallback.
+wasi_run = ["dep:wasmtime", "dep:wasmtime-wasi"]
+
 [dependencies]
 ipe_stdlib = { path = "../stdlib" }
 ipe_docs = { path = "../ipe-docs" }
@@ -128,6 +139,17 @@ sigstore_protobuf_specs = { version = "0.5", default-features = false, optional 
 # so the offline trust-root parse can build owned `CertificateDer` values from
 # the DER bytes in `trusted_root.json`.
 pki_types = { package = "rustls-pki-types", version = "1", optional = true }
+
+# The embedded wasm engine + the WASI preview1 shim for `ipe run --target wasi`,
+# behind the optional `wasi_run` feature. `wasmtime` runs the emitted
+# `wasm32-wasip1` module in-process; `wasmtime-wasi`'s `p1` module supplies the
+# preview1 `WasiCtxBuilder` we drive from the declared capability floor
+# (preopened dirs, env allowlist, args) with NO ambient authority. The Cranelift
+# JIT default backend is kept (the module is executed once per `ipe run`, not a
+# cold-start-sensitive path). Optional so the default build never links the
+# engine's graph.
+wasmtime = { version = "35", default-features = false, features = ["cranelift", "runtime", "std"], optional = true }
+wasmtime-wasi = { version = "35", default-features = false, features = ["preview1"], optional = true }
 
 # `ipe health`'s free-disk check reads the filesystem's available blocks via
 # `statvfs(2)`. rustix exposes the syscall directly — no libc binding in our own

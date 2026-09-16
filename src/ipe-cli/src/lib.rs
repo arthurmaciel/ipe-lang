@@ -64,6 +64,7 @@ pub mod style;
 pub mod toolchain;
 pub mod unsafe_ack;
 pub mod version_check;
+pub mod wasi_run;
 pub mod web_consent;
 /// The embedded Ipê standard-library source now lives in the dependency-free
 /// [`ipe_stdlib`] leaf crate so the WebAssembly frontend can share one copy.
