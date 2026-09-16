@@ -303,3 +303,129 @@ fn ipe_build_target_wasi_refuses_non_viable_shape_fail_closed() {
         "a refused WASI user build must emit no project (fail-closed before emit)",
     );
 }
+
+// ── the RUN path (`ipe run --target wasi`, embedded wasmtime) ────────────────
+
+/// THE SEAL for the run path (feature on): `ipe run --target wasi` on a
+/// sealed-floor `Direct` program builds the `wasm32-wasip1` module AND executes
+/// it under the embedded wasmtime engine, confined by a WASI context derived
+/// from the program's declared capability floor. `run_cli` returns `Ok` ONLY
+/// when the guest ran to a clean exit 0 — so an `Ok` here is the end-to-end
+/// proof that the `ipe`-accepted program built for the target and ran correctly
+/// under the deny-by-default context. Gated on `IPE_E2E=1` (default `cargo test`
+/// stays fast + offline) AND on the `wasi_run` feature (the embedded engine).
+#[cfg(feature = "wasi_run")]
+#[test]
+fn ipe_run_target_wasi_executes_under_wasmtime() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let dir = scratch("wasi_run_exec");
+    let entry = write_entry(&dir.join("srcdir"), DIRECT_FLOOR_SOURCE);
+    let out = dir.join("out");
+
+    let target_dir = e2e_support::child_shared_target_from_env()
+        .map_or_else(|| out.join("target"), PathBuf::from);
+    // SAFETY: nextest isolates each test in its own process, so this env mutation
+    // does not leak to other tests and no other thread races these vars; the
+    // wasip1 cross-compile `run_cli` drives inherits them, and clearing
+    // RUSTFLAGS keeps the emitter's own `.cargo/config.toml` linker override the
+    // governing one (a global RUSTFLAGS outranks a `[target.<triple>]` config).
+    unsafe {
+        std::env::set_var("CARGO_TARGET_DIR", &target_dir);
+        std::env::remove_var("RUSTFLAGS");
+        std::env::remove_var("CARGO_ENCODED_RUSTFLAGS");
+    }
+
+    let args = vec![
+        "run".to_owned(),
+        entry.to_string_lossy().into_owned(),
+        "--out".to_owned(),
+        out.to_string_lossy().into_owned(),
+        "--target".to_owned(),
+        "wasi".to_owned(),
+    ];
+    let result = ipe::run_cli(&args);
+    assert!(
+        result.is_ok(),
+        "THE SEAL (run path): `ipe run --target wasi` on a sealed-floor Direct \
+         program must build the wasm32-wasip1 module and run it to a clean exit \
+         under embedded wasmtime; got {result:?}",
+    );
+
+    if e2e_support::child_shared_target_from_env().is_none() {
+        let _ = std::fs::remove_dir_all(&target_dir);
+    }
+}
+
+/// The run-path refusal (non-viable shape): `ipe run --target wasi` on a `Web`
+/// TEA app is refused fail-closed at delivery-resolve time — the SAME
+/// `admit_triple` matrix `ipe build --target wasi` gates on, so the run path
+/// never opens a looser door than build. Runs unconditionally (no cargo, no
+/// engine): the standing check that the selector fails closed for the run path.
+#[test]
+fn ipe_run_target_wasi_refuses_non_viable_shape_fail_closed() {
+    let dir = scratch("wasi_run_refuse_shape");
+    let entry = write_entry(&dir.join("srcdir"), WEB_TEA_SOURCE);
+    let out = dir.join("out");
+
+    let args = vec![
+        "run".to_owned(),
+        entry.to_string_lossy().into_owned(),
+        "--out".to_owned(),
+        out.to_string_lossy().into_owned(),
+        "--target".to_owned(),
+        "wasi".to_owned(),
+    ];
+    let err = ipe::run_cli(&args)
+        .expect_err("a Web TEA app must be REFUSED for `ipe run --target wasi` (not WASI-viable)");
+
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("wasm32-wasip1") && rendered.contains("Direct"),
+        "the run-path refusal must teach the WASI/Direct rule, got: {rendered}",
+    );
+    assert!(
+        !out.join("Cargo.toml").exists(),
+        "a refused WASI run must emit no project (fail-closed before emit)",
+    );
+}
+
+/// The run-path refusal (feature off): with `wasi_run` disabled, `ipe run
+/// --target wasi` returns a typed refusal naming the missing feature — never a
+/// panic, never a silent native fallback, and never a (wasted) wasip1 build.
+/// Runs unconditionally when the feature is off; no cargo, no network.
+#[cfg(not(feature = "wasi_run"))]
+#[test]
+fn ipe_run_target_wasi_feature_off_is_typed_refusal() {
+    let dir = scratch("wasi_run_feature_off");
+    let entry = write_entry(&dir.join("srcdir"), DIRECT_FLOOR_SOURCE);
+    let out = dir.join("out");
+
+    let args = vec![
+        "run".to_owned(),
+        entry.to_string_lossy().into_owned(),
+        "--out".to_owned(),
+        out.to_string_lossy().into_owned(),
+        "--target".to_owned(),
+        "wasi".to_owned(),
+    ];
+    let err = ipe::run_cli(&args)
+        .expect_err("`ipe run --target wasi` without the wasi_run feature must be refused");
+
+    assert!(
+        matches!(err, CliError::WasiRunFeatureDisabled),
+        "the feature-off refusal must be the typed WasiRunFeatureDisabled, got: {err:?}",
+    );
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("wasi_run"),
+        "the refusal must name the missing feature, got: {rendered}",
+    );
+    // Fail-closed BEFORE the (costly) wasip1 build: nothing was emitted.
+    assert!(
+        !out.join("Cargo.toml").exists(),
+        "the feature-off refusal must fire before any emit (no wasted build)",
+    );
+}

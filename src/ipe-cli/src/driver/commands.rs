@@ -10,7 +10,8 @@ use super::{
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, Write, build_plan, cli_args,
     delivery, explain_page, ffi, fs, help, io_bounded, native_ffi_consent, package_manifest,
-    project, run_sandbox, runtime_embed, style, title, toolchain, unsafe_ack, watch, web_consent,
+    project, run_sandbox, runtime_embed, style, title, toolchain, unsafe_ack, wasi_run, watch,
+    web_consent,
 };
 
 /// The misuse reason shown when `build` / `run` / `watch` are invoked with no
@@ -1926,6 +1927,13 @@ pub fn bundle_wasi(out_dir: &Path) -> Result<(), CliError> {
     cargo
         .args(["build", "--target", "wasm32-wasip1", "--release"])
         .current_dir(out_dir)
+        // Pin the target dir to the emitted crate's own `<out>/target` so the
+        // module lands exactly where `wasi_module_path` resolves it — by
+        // construction, not via `cargo metadata` (which reports a relocated
+        // ambient `CARGO_TARGET_DIR` the build itself may not honour, so the
+        // executor would look for the `.wasm` in the wrong place). The emitted
+        // crate is ephemeral; its artifacts belong in its own tree.
+        .env("CARGO_TARGET_DIR", out_dir.join("target"))
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
     force_cargo_terminal_ui(&mut cargo);
@@ -1936,20 +1944,7 @@ pub fn bundle_wasi(out_dir: &Path) -> Result<(), CliError> {
         out_dir,
     )?;
 
-    let module = {
-        let via_env = std::env::var_os("CARGO_TARGET_DIR").map(|d| {
-            std::path::PathBuf::from(d)
-                .join("wasm32-wasip1")
-                .join("release")
-                .join("ipe_app.wasm")
-        });
-        let via_crate = out_dir
-            .join("target")
-            .join("wasm32-wasip1")
-            .join("release")
-            .join("ipe_app.wasm");
-        via_env.filter(|p| p.is_file()).unwrap_or(via_crate)
-    };
+    let module = wasi_module_path(out_dir)?;
     let module_kb = module.metadata().map_or(0, |m| m.len() / 1024);
     eprintln!(
         "{}",
@@ -1961,6 +1956,30 @@ pub fn bundle_wasi(out_dir: &Path) -> Result<(), CliError> {
         ))
     );
     Ok(())
+}
+
+/// The path of the emitted `wasm32-wasip1` module after a release cross-compile.
+///
+/// Resolved from cargo itself: the target directory via `cargo metadata` (the
+/// authoritative source that honours `CARGO_TARGET_DIR` / a `[build] target-dir`
+/// pin), and the artifact stem from the emitted crate's `[package] name` (a `-`
+/// in the crate name becomes `_` in the artifact). One source of truth so the
+/// `bundle_wasi` size probe and the `ipe run --target wasi` executor never
+/// disagree about where the module landed.
+///
+/// # Errors
+/// [`CliError`] when `cargo metadata` cannot resolve the target directory.
+pub fn wasi_module_path(out_dir: &Path) -> Result<PathBuf, CliError> {
+    let stem = emitted_bin_name(out_dir).replace('-', "_");
+    // `<out>/target` by construction — the exact dir `bundle_wasi` pins as the
+    // build's `CARGO_TARGET_DIR`. Resolving via `cargo metadata` here would
+    // return a relocated ambient dir the build did not use, so the executor
+    // would load (or fail to find) the wrong `.wasm`.
+    Ok(out_dir
+        .join("target")
+        .join("wasm32-wasip1")
+        .join("release")
+        .join(format!("{stem}.wasm")))
 }
 
 /// `ipe run [<path>]` — compile a program and run the resulting binary.
@@ -1996,6 +2015,10 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
     let bin_args = args.bin_args;
     let cli_layer = args.static_layer;
+    // The CLI `--target` flavour (`--target wasi` selects the co-located WASI
+    // module the embedded wasmtime path runs; `--target wasm` was refused at
+    // parse). Manifest `[wasm].mode` still selects only the browser client.
+    let cli_wasm = args.wasm;
     let entry = match args.entry {
         Some(e) => e,
         None => default_entry()?,
@@ -2054,11 +2077,12 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     gate_native_ffi_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
 
     // When the project declares [wasm].mode != "off", or IPE_TARGET=wasm is
-    // set, treat `ipe run` as a wasm build-and-bundle (no native binary to
-    // exec). A plain `ipe run` in a non-wasm project stays native. A WASI target
-    // has no native artifact to exec, so `--target wasi` is refused at parse time
-    // (`parse_run`); `ipe run` here resolves only Native or the browser client.
-    let compile_target = resolve_compile_target(cli_args::WasmKind::None, manifest_wasm.as_ref());
+    // set, treat `ipe run` as a browser wasm build-and-bundle (no native binary
+    // to exec). `--target wasi` selects the co-located WASI module, which `ipe
+    // run` EXECUTES under embedded wasmtime. A plain `ipe run` in a non-wasm
+    // project stays native. (`--target wasm` was refused at parse: the browser
+    // bundle has no executable form.)
+    let compile_target = resolve_compile_target(cli_wasm, manifest_wasm.as_ref());
     let wasm_target = compile_target.is_wasm();
 
     // Fail closed unless the delivery runtime and the compile target agree — the
@@ -2069,6 +2093,17 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     delivery
         .admit_triple(engine, triple)
         .map_err(|e| CliError::UsageOwned(format!("ipe run: {e}")))?;
+
+    // `ipe run --target wasi` EXECUTES the emitted module under embedded
+    // wasmtime; fail closed BEFORE any emit or build when no engine is linked
+    // (the `wasi_run` feature is off), so a `wasi_run`-less `ipe` returns a typed
+    // refusal naming the feature with NO wasted work — never a panic, never a
+    // silent native fallback. Ordered AFTER `admit_triple` so a non-viable shape
+    // (Tea/Server/Web) is still refused at resolve first (the run path never
+    // opens a looser door than build).
+    if matches!(compile_target, CompileTarget::WasmWasi) {
+        wasi_run::ensure_available()?;
+    }
 
     // The dependency model (native OR wasm) needs no vendored tree — the runtime
     // is a path dependency. Only a dep-model-OFF build vendors the source subtree.
@@ -2145,11 +2180,51 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
-    // A wasm project has no native binary to run; `ipe run` for a wasm
-    // project produces the browser bundle (same post-emit step as
-    // `ipe build --target wasm`) and returns, skipping the native exec steps.
-    if wasm_target {
-        return bundle_wasm(&out_dir);
+    // Post-emit routing per compile target:
+    //   * WasmClient — a browser bundle has no executable form under `ipe run`;
+    //     produce the bundle (same step as `ipe build --target wasm`) and stop.
+    //   * WasmWasi — build the `wasm32-wasip1` module (THE SEAL, via the SAME
+    //     `bundle_wasi` build path `ipe build --target wasi` uses) and then
+    //     EXECUTE it under embedded wasmtime, confined by a WASI context derived
+    //     from the SAME declared capability floor the native run jail reads.
+    //   * Native — fall through to the cargo build + jailed exec below.
+    match compile_target {
+        CompileTarget::WasmClient => return bundle_wasm(&out_dir),
+        CompileTarget::WasmWasi => {
+            // The `wasi_run` feature gate already fired before emit (above), so
+            // reaching here means the embedded engine is linked. Build the module
+            // first — a green build is THE SEAL (ipe-accepts ⇒ cargo-builds for
+            // the target) — then run it.
+            bundle_wasi(&out_dir)?;
+            // Derive the capability floor exactly as the native jail does
+            // (`resolve_for_run` → `build_profile`), so the WASI context enforces
+            // the SAME deny-by-default model — defend-in-depth, one capability
+            // model expressed two ways (seccomp+bwrap vs a `WasiCtx`).
+            let manifest_parsed = match &manifest {
+                Some(m) => Some(project::parse_manifest(m)?),
+                None => None,
+            };
+            let driver = manifest_parsed
+                .as_ref()
+                .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
+            let resolved = run_sandbox::resolve_for_run(
+                manifest_parsed.as_ref(),
+                manifest.as_deref(),
+                &entry_path,
+            )?;
+            let profile = run_sandbox::build_profile(&resolved, driver)?;
+            let working_tree = std::env::current_dir().map_err(|e| CliError::Io {
+                path: PathBuf::from("."),
+                source: e,
+            })?;
+            // Resolve the module path the SAME way `bundle_wasi` reports it
+            // (`wasi_module_path`: cargo-metadata target dir + the emitted crate's
+            // artifact name), so the executor loads exactly the module the build
+            // produced regardless of a relocated `CARGO_TARGET_DIR`.
+            let module = wasi_module_path(&out_dir)?;
+            return wasi_run::run_wasi_module(&module, &profile, &working_tree, &bin_args);
+        }
+        CompileTarget::Native => {}
     }
 
     // --- Step 2: cargo build the emitted project ---

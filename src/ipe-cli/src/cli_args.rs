@@ -743,6 +743,11 @@ pub struct RunArgs {
     pub runtime: Option<String>,
     /// The native static-request layer.
     pub static_layer: StaticRequestLayer,
+    /// The WASM compilation target selected on the CLI. `Client` (`--target
+    /// wasm`, the browser bundle) has no executable form under `ipe run` and is
+    /// refused at parse; `Wasi` (`--target wasi`) routes `ipe run` to the
+    /// embedded-wasmtime execution path; `None` is the ordinary native run.
+    pub wasm: WasmKind,
     /// `--accept-risks` — take responsibility for every disclosed `.Unsafe`
     /// escape-hatch import and proceed without the acknowledgment prompt. Same
     /// one-off consent as `ipe build --accept-risks`.
@@ -764,9 +769,11 @@ pub struct RunArgs {
 ///
 /// Splits on the first `--`: everything before is `ipe`-owned, everything after
 /// is forwarded to the emitted binary untouched. `ipe run` builds and executes a
-/// NATIVE process, so `--target wasm` (which has no native binary to run) is
-/// rejected here rather than flowing into static resolution and surfacing as a
-/// confusing "target requires --static" refusal.
+/// process: a native binary, or — under `--target wasi` — the emitted
+/// `wasm32-wasip1` module in an embedded wasmtime engine. `--target wasm` (the
+/// browser bundle, which has no executable form) is rejected here rather than
+/// flowing into static resolution and surfacing as a confusing "target requires
+/// --static" refusal.
 ///
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
@@ -822,7 +829,14 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
         }
     }
 
-    match WasmKind::classify(static_flags.target.as_deref()) {
+    // `--target wasm`/`--target wasi` is a compilation-target axis, not a
+    // static-link triple; classify it before `static_flags.layer()` consumes
+    // the flags. `--target wasi` runs the emitted module under embedded
+    // wasmtime, so it composes with none of the native static-link flags — the
+    // same non-composition `ipe build` enforces (they lower to a native triple
+    // that a wasm target has no use for).
+    let wasm = WasmKind::classify(static_flags.target.as_deref());
+    match wasm {
         WasmKind::Client => {
             return Err(CliError::Usage(
                 "ipe run builds and executes a native binary; --target wasm has no native \
@@ -830,21 +844,38 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
             ));
         }
         WasmKind::Wasi => {
-            return Err(CliError::Usage(
-                "ipe run builds and executes a native binary; --target wasi has no native \
-                 artifact to run — use `ipe build --target wasi` to produce a wasm32-wasip1 \
-                 module (run it under a WASI runtime such as wasmtime)",
-            ));
+            if static_flags.static_flag
+                || static_flags.allocator.is_some()
+                || static_flags.allow_slow_allocator
+                || static_flags.c_free
+            {
+                return Err(CliError::Usage(
+                    "--static / --allocator / --allow-slow-allocator / --cfree are native-target \
+                     flags; they do not compose with --target wasi",
+                ));
+            }
         }
         WasmKind::None => {}
     }
+
+    // A wasm target's `--target` word is a pseudo-triple, not a static-link
+    // triple; clear the static-request layer so it never enters static
+    // resolution (which would refuse `--target wasi` as a native triple missing
+    // `--static`) — mirroring `parse_build`'s wasm arm. The wasm flavour is
+    // carried on `wasm` and routed by the compile target downstream.
+    let static_layer = if wasm.is_wasm() {
+        StaticRequestLayer::default()
+    } else {
+        static_flags.layer()
+    };
 
     Ok(RunArgs {
         entry,
         delivery,
         out,
         runtime,
-        static_layer: static_flags.layer(),
+        static_layer,
+        wasm,
         accept_risks,
         debugger,
         bin_args,
@@ -1654,15 +1685,22 @@ mod tests {
     }
 
     #[test]
-    fn run_wasi_target_rejected() {
-        // `ipe run` builds and executes a native binary; a `wasm32-wasip1`
-        // module has no native artifact to exec, so `--target wasi` is refused
-        // at parse time (build it with `ipe build --target wasi`, run under a
-        // WASI runtime such as wasmtime).
-        assert!(matches!(
-            parse_run(&s(&["--target", "wasi"])),
-            Err(CliError::Usage(_))
-        ));
+    fn run_wasi_target_is_accepted_and_captured() {
+        // `ipe run --target wasi` now EXECUTES the emitted `wasm32-wasip1` module
+        // under embedded wasmtime, so the flag is accepted at parse and captured
+        // as the WASI compilation target (routed to the wasmtime path downstream).
+        let a = parse_run(&s(&["--target", "wasi"])).expect("wasi accepted");
+        assert_eq!(a.wasm, WasmKind::Wasi);
+    }
+
+    #[test]
+    fn run_wasi_does_not_compose_with_static_flags() {
+        // `--target wasi` is a wasm axis; the native static-link flags do not
+        // apply to it — the same non-composition `ipe build --target wasi` enforces.
+        assert!(parse_run(&s(&["--target", "wasi", "--static"])).is_err());
+        assert!(parse_run(&s(&["--target", "wasi", "--allocator", "dlmalloc"])).is_err());
+        assert!(parse_run(&s(&["--target", "wasi", "--cfree"])).is_err());
+        assert!(parse_run(&s(&["--target", "wasi", "--allow-slow-allocator"])).is_err());
     }
 
     #[test]
