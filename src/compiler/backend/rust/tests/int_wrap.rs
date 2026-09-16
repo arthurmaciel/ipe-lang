@@ -146,7 +146,7 @@ fn build_overflow_checked_and_assert(
     // Force `overflow-checks=on` regardless of the emitted crate's dev profile.
     // Under raw-infix i64 arithmetic this makes the boundary op panic on build-
     // then-run; the wrapping helpers keep it total.
-    let target_dir = seal_e2e::emitted_target_dir(&out);
+    let target_dir = seal_e2e::emitted_run_target_dir(&out);
     let status = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(&out)

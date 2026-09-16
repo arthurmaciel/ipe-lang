@@ -331,7 +331,7 @@ fn build_and_assert(
         std::fs::write(&path, contents).map_err(|e| seal_e2e::io_bug(&path, &e))?;
     }
 
-    let target_dir = seal_e2e::emitted_target_dir(&out);
+    let target_dir = seal_e2e::emitted_run_target_dir(&out);
     let status = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(&out)

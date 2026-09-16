@@ -436,7 +436,7 @@ fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
         std::fs::write(&path, contents).map_err(|e| seal_e2e::io_bug(&path, &e))?;
     }
 
-    let target_dir = seal_e2e::emitted_target_dir(&out);
+    let target_dir = seal_e2e::emitted_run_target_dir(&out);
     let status = std::process::Command::new("cargo")
         .arg("build")
         .current_dir(&out)
