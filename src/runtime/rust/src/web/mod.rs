@@ -306,7 +306,7 @@ boot();\
     page_shell("", &body_inner, &tail_scripts)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod island_escape_tests {
     use super::island_escape;
 
@@ -4535,7 +4535,7 @@ fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
 // `use super::*`), so a non-Web Ipe.Html / Ipe.Ui render doesn't pull this
 // server module in.
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod reload_push_tests {
     use super::*;
     use crate::web::store::{MemoryStore, SessionHandle, SessionStore};
@@ -4623,7 +4623,7 @@ mod reload_push_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_appearance_push_tests {
     //! Applying an appearance patch to the running app re-renders
     //! `view(currentModel)` from the CURRENT Model (never through `update`) and
@@ -4672,6 +4672,7 @@ mod hot_appearance_push_tests {
         }))
     }
 
+    #[allow(clippy::expect_used)] // test helper — panic on bad fixture is correct
     fn parse_patch_frame(frame: &str) -> serde_json::Value {
         // frame = "event: patches\ndata: <json>\n\n"; recover the json line.
         let data = frame
@@ -4684,6 +4685,7 @@ mod hot_appearance_push_tests {
     // Run an async test body on a fresh current-thread runtime while holding the
     // process-global overlay guard in SYNC scope, so the guard never crosses an
     // await point (the overlay statics are the shared state being serialised).
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = guard();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -4792,7 +4794,7 @@ mod hot_appearance_push_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod dev_banner_tests {
     use super::dev_console_banner;
 
@@ -4824,7 +4826,7 @@ mod dev_banner_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod duration_parse_tests {
     use super::parse_duration_secs;
 
@@ -4851,7 +4853,7 @@ mod duration_parse_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod request_is_https_tests {
     use super::request_is_https_with_trust;
 
@@ -4883,7 +4885,7 @@ mod request_is_https_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod base_path_tests {
     use super::{
         client_js_path, cookie_name_for, cookie_path_for, normalise_base_path, render_page_full,
@@ -4979,7 +4981,7 @@ mod base_path_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod session_lost_body_tests {
     //! Guards the LOAD-BEARING session-lost 404 wire contract.
     //!
@@ -5060,7 +5062,7 @@ mod session_lost_body_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod admission_control_tests {
     use super::*;
 
@@ -5122,7 +5124,7 @@ mod admission_control_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod sse_reconnect_reconcile_tests {
     //! Proves the two-half reconcile contract for SSE reconnect:
     //! 1. A reconnect whose `?path=` differs from the session's current route
@@ -5233,6 +5235,7 @@ mod sse_reconnect_reconcile_tests {
     }
 
     /// Helper: read the current rendered text from the session's `last_view`.
+    #[allow(clippy::unwrap_used)] // test helper — lock poison is a test environment issue
     fn rendered_text(entry: &SessionHandle<TestPage, ()>) -> String {
         let g = entry.lock().unwrap();
         render_html(&g.last_view)
@@ -5459,7 +5462,7 @@ mod sse_reconnect_reconcile_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod static_noise_mime_tests {
     use super::static_noise_mime;
 
@@ -5540,7 +5543,7 @@ mod recursion_session_isolation_tests {
 /// These are env-mutating tests and must not run in parallel — they use
 /// `std::env::set_var`/`remove_var` which are unsafe in Rust 2024 (see the
 /// ENV_LOCK rationale in system.rs). Each test cleans up after itself.
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod security_env_tests {
 
     // ── IPE_WEB_CSRF_ORIGIN_CHECK ─────────────────────────────────────────────
@@ -5637,7 +5640,7 @@ mod security_env_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod watch_status_handler_tests {
     //! Regression-locks the `POST /_ipe/watch/status` trust boundary.
     //!
@@ -5751,6 +5754,7 @@ mod watch_status_handler_tests {
         }))
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_status(
         router: Router,
         token_header: Option<&str>,
@@ -6299,7 +6303,7 @@ mod watch_status_handler_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_transition_handler_tests {
     //! Regression-locks the `POST /_ipe/hot-transition` trust boundary — the
     //! dev-only leg that mutates the server-held Model from an untrusted dev
@@ -6382,6 +6386,7 @@ mod hot_transition_handler_tests {
             .with_state(state)
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot(token: Option<&str>, body: &str) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
@@ -6399,6 +6404,7 @@ mod hot_transition_handler_tests {
     /// the overlay override + transition registry are the shared state being
     /// serialised, and the guard is released only after the whole async body has
     /// run on a fresh current-thread runtime.
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = overlay_test_lock();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -6500,7 +6506,7 @@ mod hot_transition_handler_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_init_session_scoping_tests {
     //! Regression-locks the session-scoping invariant of `POST /_ipe/hot-init`:
     //! an init-datum edit is visible to FRESH sessions (those created after the
@@ -6541,6 +6547,7 @@ mod hot_init_session_scoping_tests {
     // ── Init fn — mirrors the compiler-emitted `init` body ───────────────────
 
     /// The JSON the compiler bakes for `init _ = ({ count = 0 }, Cmd.none)`.
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn baked_json() -> String {
         let datum = InitDatum {
             model: serde_json::to_value(Counter { count: 0 }).expect("serialize"),
@@ -6660,6 +6667,7 @@ mod hot_init_session_scoping_tests {
     }
 
     /// POST `/_ipe/hot-init` with a token and a JSON body `{old_json, new_json}`.
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot_init(
         router: Router,
         token: &str,
@@ -6799,7 +6807,7 @@ mod hot_init_session_scoping_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_msg_handler_tests {
     //! Regression-locks the `POST /_ipe/hot-msg` trust boundary — the dev-only leg
     //! that extends the server-held `Msg` set from an untrusted dev channel. Every
@@ -6882,6 +6890,7 @@ mod hot_msg_handler_tests {
             .with_state(state)
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot(token: Option<&str>, body: &str) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
@@ -6894,6 +6903,7 @@ mod hot_msg_handler_tests {
         make_router().oneshot(req).await.expect("router responds")
     }
 
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = overlay_test_lock();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -7012,7 +7022,7 @@ mod hot_msg_handler_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_init_handler_tests {
     //! Regression-locks the `POST /_ipe/hot-init` trust boundary — the dev-only
     //! leg that updates the server-held init datum from an untrusted dev channel.
@@ -7093,6 +7103,7 @@ mod hot_init_handler_tests {
             .with_state(state)
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot_init(token: Option<&str>, body: &str) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
@@ -7105,6 +7116,7 @@ mod hot_init_handler_tests {
         make_router().oneshot(req).await.expect("router responds")
     }
 
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = overlay_test_lock();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -7117,6 +7129,7 @@ mod hot_init_handler_tests {
         locked_remove_var("IPE_WATCH_HOT_TOKEN");
     }
 
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn baked_json() -> String {
         serde_json::to_string(&InitDatum {
             model: serde_json::json!({}),
@@ -7124,6 +7137,7 @@ mod hot_init_handler_tests {
         .expect("serialize datum")
     }
 
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn replacement_json() -> String {
         serde_json::to_string(&InitDatum {
             model: serde_json::json!({"x": 1}),
@@ -7225,7 +7239,7 @@ mod hot_init_handler_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_wiring_handler_tests {
     //! Regression-locks the `POST /_ipe/hot-wiring` trust boundary — the dev-only
     //! leg that updates the server-held Cmd wiring from an untrusted dev channel.
@@ -7306,6 +7320,7 @@ mod hot_wiring_handler_tests {
             .with_state(state)
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot_wiring(token: Option<&str>, body: &str) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
@@ -7318,6 +7333,7 @@ mod hot_wiring_handler_tests {
         make_router().oneshot(req).await.expect("router responds")
     }
 
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = overlay_test_lock();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -7330,10 +7346,12 @@ mod hot_wiring_handler_tests {
         locked_remove_var("IPE_WATCH_HOT_TOKEN");
     }
 
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn baked_none_json() -> String {
         serde_json::to_string(&CmdWiring::none()).expect("serialize wiring")
     }
 
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn wiring_effect_0_json() -> String {
         serde_json::to_string(&CmdWiring::effect(0)).expect("serialize wiring")
     }
@@ -7458,7 +7476,7 @@ mod bind_error_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod reset_state_tests {
     use super::reset_state_from_env;
 
@@ -7504,7 +7522,7 @@ mod reset_state_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod emitted_router_behavior_tests {
     //! In-process behavior tier for THE SEAL's live-server guarantees.
     //!
@@ -7739,6 +7757,7 @@ mod emitted_router_behavior_tests {
     /// `(minted_sid, body)`. `minted_sid` is the `ipe_sid` from any `Set-Cookie`
     /// header (the response also sets a CSRF cookie, so scan ALL of them), or
     /// empty when none was set.
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn get(router: axum::Router, path: &str, cookie: Option<&str>) -> (String, String) {
         let mut b = Request::builder().method("GET").uri(path);
         if let Some(c) = cookie {
@@ -7762,6 +7781,7 @@ mod emitted_router_behavior_tests {
         (sid, String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_event(router: axum::Router, cookie: &str, body: &str) -> StatusCode {
         let resp = router
             .oneshot(
@@ -7805,6 +7825,7 @@ mod emitted_router_behavior_tests {
         panic!("model did not reach the expected state within 2s");
     }
 
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_csrf_off<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         // Serialize env mutation across these tests; `IPE_CSRF` is process-global.
         let _g = crate::web::literal_table::overlay_test_lock();
