@@ -113,6 +113,15 @@ checks:
     producer: admission-sandbox.yml
     guards: Security
 
+  # ── Editor tooling (per-change gate) ──────────────────────────────────────
+  # The tree-sitter grammar must accept every reference `.ipe` file (stdlib +
+  # examples) with zero ERROR/MISSING — the drift guard keeping the editor
+  # grammar in lockstep with the compiler's hand-written parser. Runs on every
+  # PR (passes trivially when no grammar/corpus change; blocks only on drift).
+  - context: grammar
+    disposition: gate
+    producer: tree-sitter-ipe.yml
+
   # ── E2E + seal-slice aggregators (gate) ───────────────────────────────────
   - context: e2e-all
     disposition: gate
