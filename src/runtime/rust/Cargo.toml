@@ -421,11 +421,28 @@ cache_kernel = ["tokio", "random"]
 # `tokio::sync::mpsc`. Without it the standalone `--features tui` build fails to
 # resolve the `tea` module + `tokio`.
 tui = ["unicode-width", "crossterm", "tokio", "random"]
+# The server-free render core: the target-neutral `crate::dom` diff/dispatch/form
+# pipeline, the `web::style_inject`/`page_shell` render helpers, and the
+# `dom::req::WebReq` init context — everything a patch consumer needs to render an
+# `Html` tree and resolve DOM events to Msgs, with NO axum HTTP `server`, no SSE,
+# and no session store. It is the floor shared by every render host: the served
+# `web` surface, the browser-WASM `wasm-client` sink, AND the native-window
+# `webview` backend all imply it. A render-core `#[cfg]` in the source keys off
+# THIS feature (not `web`), so the core compiles wherever any of the three is
+# selected. `serde_json` backs the webview IPC parse + the floor wire; `json`
+# pulls `serde` (the `Patch`/`FormData` derives); `serde_urlencoded` is the typed
+# form-record decode (`dom/form.rs`).
+web-core = ["dep:serde_json", "json", "serde", "dep:serde_urlencoded"]
 # Real native-window Webview backend (opt-in; needs the system webview dev libs).
 # NOT in `full` — default/CI builds compile the cross-platform stub instead.
-# Pulls `web` to reuse its Html renderer + event-dispatch (HandlerIndex) for the
-# in-process IPC bridge.
-webview = ["wry", "tao", "web"]
+# Pulls ONLY the server-free `web-core` render core (the `Html` renderer +
+# event-dispatch `HandlerIndex` + `page_shell`/`style_inject` the in-process IPC
+# bridge reuses) — NOT the full `web` feature and NOT the axum `server`: the
+# desktop-webview delivery renders over a LOCAL IPC bridge and runs no HTTP
+# server. `tokio` (the current-thread `block_on` the generated entry drives the
+# event loop through) is named explicitly since `web` no longer supplies it. The
+# no-server floor is machine-checked by `tests/webview_dep_floor.rs`.
+webview = ["wry", "tao", "web-core", "tokio"]
 config = ["json", "toml", "serde_yaml"]
 # `tokio/net`+`tokio/sync`: axum binds a listener (`tokio::net`) and the
 # server/live loop uses `tokio::sync`.
@@ -467,7 +484,7 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # A web app with an HTTP kernel (`uses_http`) or email selects `http_client`
 # through `reaches_http_client()` in the backend — reqwest never enters a plain
 # web app.
-web = ["widget-assets", "server", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
+web = ["web-core", "widget-assets", "server", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
 # The `CustomElement.node` custom-element glue generator + SRI-pinned asset addressing
 # (`widget_assets.rs`) as a STANDALONE surface, decoupled from the heavy `web`
 # server. `sha2` (content digest) rides `crypto-core`; `base64` (the SRI value)
@@ -510,6 +527,10 @@ wasm-client = [
     "json",
     "serde",
     "dep:serde_urlencoded",
+    # The browser sink renders through the same server-free render core (the
+    # `crate::dom` diff/dispatch/form pipeline + `style_inject`), so it selects
+    # `web-core` to satisfy the render-core `#[cfg(feature = "web-core")]` gates.
+    "web-core",
     # The static wasm module set (`WASM_RUNTIME_MOD_RS`) declares `crypto_core`
     # and `secret` unconditionally, so `wasm-client` implies both features to
     # satisfy the source `#[cfg]` gates and pull `sha2`/`hmac`/`subtle`/`getrandom`

@@ -365,13 +365,17 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
         });
     }
 
-    // Server (axum): the server surface, plus web/webview whose runtime modules
-    // import it — matching `server_cargo_toml`'s guard.
-    if ctx.uses_server || ctx.uses_web || ctx.uses_webview {
+    // Server (axum): the served surface, plus the Live web app whose runtime
+    // modules import it. NOT webview: the desktop-webview delivery renders over a
+    // local IPC bridge and runs no HTTP server, so it selects only the
+    // server-free `web-core` render core (via `Webview` below), never axum.
+    if ctx.uses_server || ctx.uses_web {
         set.insert(RuntimeFeature::Server);
     }
-    // Web app runtime — forced by webview (its backend imports `web`).
-    if ctx.uses_web || ctx.uses_webview {
+    // Web app runtime (the full axum-backed Live surface). NOT forced by webview:
+    // the native backend reuses the server-free render core (`web-core`, pulled by
+    // the `Webview` feature), not the HTTP `web` surface.
+    if ctx.uses_web {
         set.insert(RuntimeFeature::Web);
     }
     // Both terminal drive axes select the `tui` Cargo feature: `Tui.tea`

@@ -713,8 +713,9 @@ const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 
 // ── Ipe.Http.Server ──────────────────────────────────────────────────────
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program uses the server
-/// surface (`uses_server || uses_web || uses_webview`).
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses the axum server
+/// surface (`uses_server || uses_web`). NOT webview — the desktop-webview
+/// delivery renders over a local IPC bridge and links no HTTP server.
 ///
 /// `server.rs` and `server_stream.rs` are gated by the `server` Cargo feature
 /// in the runtime source. The generated Cargo.toml's default features include
@@ -1213,13 +1214,52 @@ const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;
 /// `webview::WebViewWindowCfg` into the module namespace so the generated
 /// `main.rs` can call them.
 ///
-/// The `web` module must also be loaded (webview's real backend imports
-/// `ipe_runtime::web::dispatch::build_index` and `ipe_runtime::html::*`)
-/// — but `uses_web` is forced true when `uses_webview` is true
-/// (see `emit_program`), so `RUNTIME_MOD_RS_WEB_APPEND` is already appended
-/// by the time this addition fires.
+/// The webview backend imports the SERVER-FREE render core through the `web::`
+/// path (`web::dispatch::build_index`, `web::page_shell`,
+/// `web::style_inject::apply_style_injections`) plus `crate::html::*`. A
+/// desktop-webview delivery runs no HTTP server, so [`RUNTIME_MOD_RS_WEB_APPEND`]
+/// (the full axum `web` surface) is NOT appended for a bare-webview program;
+/// [`RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND`] instead declares the lean `web` shell
+/// that lifts only those server-free items. (A program that reaches BOTH `web`
+/// and `webview` keeps the full `web` module — the lean shell is elided by its
+/// `!uses_web` guard.)
 const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub mod webview;\n\
      #[cfg(feature = \"webview\")]\npub use webview::{webview_app, WebViewWindowCfg};\n";
+
+/// The server-free render core lifted under the `web::` path for a bare-webview
+/// program (`uses_webview && !uses_web`), mirroring the runtime crate's lean
+/// `web` shell (`#[cfg(all(feature = "web-core", not(feature = "web")))]`). The
+/// native backend renders through `web::dispatch` / `web::style_inject` /
+/// `web::page_shell` over a local IPC bridge — NO axum `server`, NO SSE, NO
+/// session store. `web_page_core` (the pure `page_shell` scaffold) is declared
+/// first so the shell's `pub use crate::web_page_core::page_shell;` resolves.
+/// `dom` (diff/dispatch/form/req) and `html`/`css_safety` are already declared by
+/// the UI/CSS appends (both fire on `uses_webview`).
+const RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND: &str = "#[cfg(feature = \"web-core\")]\npub mod web_page_core;\n\
+     #[cfg(feature = \"web-core\")]\npub mod web {\n\
+     pub use crate::dom::dispatch;\n\
+     pub use crate::dom::form;\n\
+     pub use crate::dom::req::*;\n\
+     pub use dispatch::*;\n\
+     pub use form::*;\n\
+     pub mod style_inject;\n\
+     pub use crate::web_page_core::page_shell;\n\
+     pub mod route;\n\
+     pub mod literal_table;\n\
+     pub use literal_table::LiteralTable;\n\
+     }\n";
+
+/// The server-free page scaffold (`web_page_core`) the FULL `web` surface also
+/// reaches: `web/mod.rs` does `pub use crate::web_page_core::page_shell;`, so a
+/// served-`web` emit must declare `web_page_core` as a sibling or the vendored
+/// `web` module fails `cargo build` (the module-set SEAL breach
+/// `runtime_modset_closure` pins). Declared under `web-core` (which the `web`
+/// feature always pulls). The bare-webview path declares it via
+/// [`RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND`] instead, and the two are mutually
+/// exclusive (that append fires only on `!uses_web`), so it is never declared
+/// twice.
+const RUNTIME_MOD_RS_WEB_PAGE_CORE_APPEND: &str =
+    "#[cfg(feature = \"web-core\")]\npub mod web_page_core;\n";
 
 // ── Ipe.Web / Ipe.Web ─────────────────────────────────────────────────────
 
@@ -2563,24 +2603,20 @@ fn assemble_project_files(
     } else {
         (async_base, RUNTIME_CONFIG_RS.to_owned())
     };
-    // Apply server manifest extension on top of whichever base was chosen above.
-    // Web also needs axum + tower-http (the web runtime uses axum
-    // internally).  Apply server_cargo_toml for both `uses_server`, `uses_web`,
-    // and `uses_webview` (Webview's real backend imports from the web module,
-    // which uses axum; the function is idempotent when multiple flags are set).
-    let cargo_toml = if ctx.uses_server || ctx.uses_web || ctx.uses_webview {
+    // Apply the axum server manifest extension. The served surface and the Live
+    // `web` app need axum + tower-http; a desktop-webview delivery does NOT (it
+    // renders over a local IPC bridge, no HTTP server), so it is excluded — its
+    // render core is the server-free `web-core` promoted by `webview_cargo_toml`.
+    let cargo_toml = if ctx.uses_server || ctx.uses_web {
         server_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
     };
-    // When the program uses Web, add "web" to the default features.
-    // The base manifest already declares `web = []` as a non-default feature;
-    // we just need to promote it to the `default` list so the compiled binary
-    // includes the `web` module.
-    // Webview's real backend imports `ipe_runtime::web::dispatch`
-    // (for `build_index`) and `ipe_runtime::html::render_html` — both gated
-    // behind the `web` feature. Force-promote `web` for Webview as well.
-    let cargo_toml = if ctx.uses_web || ctx.uses_webview {
+    // When the program uses the Live `web` app, add "web" to the default
+    // features (the base manifest declares `web = []` as a non-default feature).
+    // NOT for webview: its native backend reuses only the server-free render core
+    // (`web-core`, promoted by `webview_cargo_toml`), never the axum `web` surface.
+    let cargo_toml = if ctx.uses_web {
         web_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
@@ -2934,12 +2970,11 @@ fn assemble_project_files(
         }
         // `web/csrf.rs` unconditionally re-exports `crate::server::csrf_*`
         // (`csrf_gen_token`, `csrf_token_well_formed`, `csrf_pair_valid`), so
-        // `pub mod server;` must be emitted whenever the web module is declared —
-        // not just for explicit `Ipe.Http.Server` use. `server_cargo_toml`
-        // already adds `"server"` to default features for all three of
-        // uses_server/uses_web/uses_webview, so the feature flag is always on;
-        // this mirrors the module declaration to match.
-        if ctx.uses_server || ctx.uses_web || ctx.uses_webview {
+        // `pub mod server;` must be emitted whenever the full `web` module is
+        // declared — not just for explicit `Ipe.Http.Server` use. NOT for
+        // webview: the lean render-core `web` shell reaches no `csrf`/`server`,
+        // and `server_cargo_toml` no longer selects `"server"` for webview.
+        if ctx.uses_server || ctx.uses_web {
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
         }
         // Ipe.WebSocket client — declare `ws_client` (its `ssrf` dep is
@@ -2965,16 +3000,12 @@ fn assemble_project_files(
         // `server.rs`'s `authed_route` builder names `crate::principal::Principal`
         // at the module level, and `db.rs`/`jwt.rs` reach it too — the real crate
         // gates `principal` on `any(server, db, jwt)`. The emitter must mirror that
-        // exact closure (server = `uses_server || uses_web || uses_webview`) or a
-        // server/db/jwt program with no direct `Principal` kernel fails E0433
-        // (`crate::principal` not found) — the module-set SEAL breach pinned by
-        // `seal_modset::revoke_session_arity3_builds`.
-        if ctx.uses_principal
-            || ctx.uses_server
-            || ctx.uses_web
-            || ctx.uses_webview
-            || ctx.uses_db
-            || ctx.reaches_jwt()
+        // exact closure (server = `uses_server || uses_web`) or a server/db/jwt
+        // program with no direct `Principal` kernel fails E0433 (`crate::principal`
+        // not found) — the module-set SEAL breach pinned by
+        // `seal_modset::revoke_session_arity3_builds`. NOT webview: the lean
+        // render-core shell reaches no `crate::principal`.
+        if ctx.uses_principal || ctx.uses_server || ctx.uses_web || ctx.uses_db || ctx.reaches_jwt()
         {
             mod_rs.push_str(RUNTIME_MOD_RS_PRINCIPAL_APPEND);
         }
@@ -3041,8 +3072,11 @@ fn assemble_project_files(
         if ctx.uses_ui || ctx.uses_tui || ctx.uses_web || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
         }
-        // Ipe.Web / Ipe.Web app-entry kernels.
-        if ctx.uses_web || ctx.uses_webview {
+        // Ipe.Web app-entry kernels — the full axum `web` surface. NOT for
+        // webview: a bare-webview program uses the server-free lean `web` shell
+        // declared by `RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND` below instead.
+        if ctx.uses_web {
+            mod_rs.push_str(RUNTIME_MOD_RS_WEB_PAGE_CORE_APPEND);
             mod_rs.push_str(RUNTIME_MOD_RS_WEB_APPEND);
         }
         // Ipe.Tui / Ipe.Tui app-entry kernels, AND the `Cli.tea` lines-view path:
@@ -3057,8 +3091,14 @@ fn assemble_project_files(
         if ctx.uses_tui || ctx.uses_console {
             mod_rs.push_str(RUNTIME_MOD_RS_TUI_APPEND);
         }
-        // Ipe.WebView / Ipe.WebView app-entry kernel.
+        // Ipe.WebView app-entry kernel. A bare-webview program (no full `web`
+        // surface) first gets the server-free lean `web` shell + `web_page_core`
+        // the native backend renders through; a program that ALSO reaches `web`
+        // keeps the full module (the shell's `!uses_web` guard elides it).
         if ctx.uses_webview {
+            if !ctx.uses_web {
+                mod_rs.push_str(RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND);
+            }
             mod_rs.push_str(RUNTIME_MOD_RS_WEBVIEW_APPEND);
         }
         mod_rs
@@ -4114,7 +4154,13 @@ fn webview_cargo_toml(base: &str) -> DResult<String> {
     let close = search_from + rel;
     let mut step1 = String::with_capacity(base.len() + 64);
     step1.push_str(base.get(..close).unwrap_or(""));
-    step1.push_str(r#", "webview""#);
+    // Promote the server-free render core (`web-core`) alongside `webview`: the
+    // native backend renders through `crate::dom` + `style_inject` + `page_shell`
+    // (all `#[cfg(feature = "web-core")]` in the vendored source) over a local IPC
+    // bridge, with NO axum `server` and NO `web` surface. This is the vendored
+    // counterpart of the dep-model, where the runtime crate's own `webview`
+    // feature pulls `web-core`.
+    step1.push_str(r#", "web-core", "webview""#);
     step1.push_str(base.get(close..).unwrap_or(""));
 
     // Step 2 — wire the `webview` feature to its deps (`dep:wry` + `dep:tao`).
