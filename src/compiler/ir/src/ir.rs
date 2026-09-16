@@ -1758,7 +1758,7 @@ pub enum UiPlain {
     Description,
     /// `LayoutContext` — `ipe_runtime::ui::element::LayoutContext`.
     LayoutContext,
-    /// `Terminal.Color` — `ipe_runtime::tui::TermColor`, the closed terminal
+    /// `Terminal.Color` — `ipe_runtime::color::AnsiColor`, the closed terminal
     /// colour palette accepted by the Tui and Cli `color` / `bg` builders.
     TermColor,
     /// `ColorError` — `ipe_runtime::color::ColorError`, the typed parse-error
