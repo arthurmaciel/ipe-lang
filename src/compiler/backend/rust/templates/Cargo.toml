@@ -48,7 +48,10 @@ random = []
 web-core = []
 web = ["web-core"]
 redis_store = []
-webview = ["web-core"]
+# `webview = []` is a surgery anchor: `webview_cargo_toml` replaces it with the
+# wry+tao deps AND promotes `web-core` + `webview` into `default` — so a webview
+# build activates the render core without a static feature edge here.
+webview = []
 tui = []
 websocket_client = []
 # Declared but inert in the vendored escape hatch: `chrono` stays non-optional
