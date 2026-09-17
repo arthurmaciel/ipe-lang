@@ -19,6 +19,7 @@ use std::fmt::Write as _;
 
 use ipe_backend::{EmittedProject, RelPath};
 use ipe_diagnostics::{DResult, Diagnostic};
+use ipe_intern::Symbol;
 use ipe_ir::{IrType, ModPath, Program};
 
 use crate::EmitCtx;
@@ -3171,7 +3172,58 @@ fn assemble_project_files(
 /// The gate is an **allowlist**: only data-only, serialisable `IrType`s pass.
 /// Function types, runtime handles, secret/SQL-fragment/crypto opaques, UI
 /// element types, and TEA-runtime opaques all fail.
-fn ir_type_contains_non_serde(ty: &IrType) -> bool {
+///
+/// `program` is used to resolve named user `Enum`/`Record` ADTs so the walk
+/// descends into their variant field types, not only their type arguments.
+/// `visited` prevents infinite loops on cyclic ADTs (`type Tree = Node (List
+/// Tree)`): a `(home, name)` pair entered in `visited` is treated as
+/// non-poisoning (serde-OK so far) for that cycle edge — the rest of the walk
+/// decides the final verdict.
+fn ir_type_contains_non_serde(ty: &IrType, program: &Program) -> bool {
+    ir_type_contains_non_serde_inner(ty, program, &mut BTreeSet::new())
+}
+
+/// Resolve a named `Enum` ADT and decide whether any of its variant field
+/// types — or any of its applied type args — is non-serde. A cyclic back-edge
+/// (`type Tree = Node (List Tree)`) is treated as serde-OK for that edge; the
+/// non-cyclic paths decide the verdict, so recursion always terminates.
+fn enum_contains_non_serde(
+    home: &ModPath,
+    name: Symbol,
+    args: &[IrType],
+    program: &Program,
+    visited: &mut BTreeSet<(ModPath, Symbol)>,
+) -> bool {
+    let args_non_serde = |visited: &mut BTreeSet<(ModPath, Symbol)>| {
+        args.iter()
+            .any(|a| ir_type_contains_non_serde_inner(a, program, visited))
+    };
+    // A back-edge onto an ADT already on the stack: only its type args can add
+    // new information (the variant fields are being walked by the outer frame).
+    if !visited.insert((home.clone(), name)) {
+        return args_non_serde(visited);
+    }
+    let def = program.modules.iter().find_map(|m| {
+        m.types.iter().find_map(|td| {
+            let ipe_ir::TypeDef::Enum(def) = td;
+            (def.home == *home && def.name == name).then_some(def)
+        })
+    });
+    let variant_fields_poisoned = def.is_some_and(|def| {
+        def.variants
+            .iter()
+            .flat_map(|v| v.fields.iter())
+            .any(|f| ir_type_contains_non_serde_inner(f, program, visited))
+    });
+    visited.remove(&(home.clone(), name));
+    variant_fields_poisoned || args_non_serde(visited)
+}
+
+fn ir_type_contains_non_serde_inner(
+    ty: &IrType,
+    program: &Program,
+    visited: &mut BTreeSet<(ModPath, Symbol)>,
+) -> bool {
     match ty {
         // ── Primitive data types — serialisable, no recursion needed ─────
         IrType::Int
@@ -3199,13 +3251,28 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
 
         // ── Serialisable container types — recurse into inner types ───────
         IrType::Maybe(inner) | IrType::List(inner) | IrType::Set(inner) => {
-            ir_type_contains_non_serde(inner)
+            ir_type_contains_non_serde_inner(inner, program, visited)
         }
-        IrType::Result(a, b) => ir_type_contains_non_serde(a) || ir_type_contains_non_serde(b),
-        IrType::Dict(k, v) => ir_type_contains_non_serde(k) || ir_type_contains_non_serde(v),
-        IrType::Tuple(elems) => elems.iter().any(ir_type_contains_non_serde),
-        IrType::Record(fields) => fields.values().any(ir_type_contains_non_serde),
-        IrType::Enum { args, .. } => args.iter().any(ir_type_contains_non_serde),
+        IrType::Result(a, b) => {
+            ir_type_contains_non_serde_inner(a, program, visited)
+                || ir_type_contains_non_serde_inner(b, program, visited)
+        }
+        IrType::Dict(k, v) => {
+            ir_type_contains_non_serde_inner(k, program, visited)
+                || ir_type_contains_non_serde_inner(v, program, visited)
+        }
+        IrType::Tuple(elems) => elems
+            .iter()
+            .any(|e| ir_type_contains_non_serde_inner(e, program, visited)),
+        IrType::Record(fields) => fields
+            .values()
+            .any(|f| ir_type_contains_non_serde_inner(f, program, visited)),
+
+        // ── Named user ADT — resolve to its `EnumDef` and recurse into its
+        //    variant field types + type args (guarded against cyclic ADTs).
+        IrType::Enum { home, name, args } => {
+            enum_contains_non_serde(home, *name, args, program, visited)
+        }
 
         // ── Never serialisable ────────────────────────────────────────────
         // Function types, UI element types, and the non-serde server-surface
@@ -3331,7 +3398,7 @@ fn check_hydration_state_fields(ctx: &EmitCtx, program: &Program) -> DResult<()>
     // Resolve the target type to the field types the `hydrate` export will
     // serialise, then reject any non-serde leaf.
     for field_ty in hydration_target_field_types(target_ty, program) {
-        if ir_type_contains_non_serde(field_ty) {
+        if ir_type_contains_non_serde(field_ty, program) {
             return Err(Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::project::check_hydration_state_fields",
                 detail: format!(

@@ -33,7 +33,7 @@ use ipe_backend_rust::RustBackend;
 use ipe_diagnostics::DResult;
 use ipe_intern::Interner;
 use ipe_ir::{EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef, Variant};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -445,4 +445,143 @@ fn no_projection_emits_no_hydrate_glue() -> DResult<()> {
          an absent island type):\n{spine}"
     );
     Ok(())
+}
+
+/// Build a wasm-hydrate `Program` where `HydrationState` has ONE field whose
+/// type is a named user ADT `Inner`, and `Inner`'s variant carries `inner_fields`.
+///
+/// This exercises the nested-ADT path of the field-safety gate (#2550): a
+/// `Secret` buried in `Inner` must be caught even though the outer
+/// `HydrationState` field type is `IrType::Enum { Inner }`, not `IrType::Secret`.
+fn hydrate_program_with_nested_adt(
+    interner: &mut Interner,
+    inner_fields: Vec<IrType>,
+) -> DResult<Program> {
+    let main = interner.intern("Main")?;
+    let hs_name = interner.intern("HydrationState")?;
+    let inner_name = interner.intern("Inner")?;
+
+    // `type Inner = Inner <inner_fields...>`
+    let inner_def = EnumDef {
+        name: inner_name,
+        home: ModPath(vec![main]),
+        type_params: vec![],
+        variants: vec![Variant {
+            name: inner_name,
+            fields: inner_fields,
+        }],
+    };
+    let inner_ty = IrType::Enum {
+        home: ModPath(vec![main]),
+        name: inner_name,
+        args: vec![],
+    };
+
+    // `type HydrationState = HydrationState Inner`
+    let hs_def = EnumDef {
+        name: hs_name,
+        home: ModPath(vec![main]),
+        type_params: vec![],
+        variants: vec![Variant {
+            name: hs_name,
+            fields: vec![inner_ty],
+        }],
+    };
+    let hs_ty = IrType::Enum {
+        home: ModPath(vec![main]),
+        name: hs_name,
+        args: vec![],
+    };
+
+    let from_hs = interner.intern("fromHydrationState")?;
+    let hs_param = interner.intern("hs")?;
+    let from_hs_fn = Func {
+        id: FuncId::from_raw(1),
+        name: from_hs,
+        home: ModPath(vec![main]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(hs_param, hs_ty)],
+        ret: IrType::Int,
+        body: Expr::Int(0),
+    };
+
+    Ok(Program {
+        imports_unsafe_submodule: false,
+        imported_web_capabilities: BTreeSet::new(),
+        modules: vec![Module {
+            name: ModPath(vec![main]),
+            types: vec![TypeDef::Enum(inner_def), TypeDef::Enum(hs_def)],
+            funcs: vec![from_hs_fn],
+            entry: None,
+            records: vec![],
+            uses_tea: false,
+            uses_server: false,
+            uses_http: false,
+            uses_config: false,
+            uses_compression: false,
+            uses_csv: false,
+            uses_cache: false,
+            uses_encoding: false,
+            uses_regex: false,
+            uses_uuid: false,
+            uses_random: false,
+            uses_log: false,
+            uses_decimal: false,
+            uses_char_category: false,
+            uses_crypto_core: false,
+            uses_secret: false,
+            uses_json: false,
+            uses_crypto: false,
+            uses_jwt: false,
+            uses_url: false,
+            uses_ui: false,
+            uses_web: false,
+            uses_tui: false,
+            uses_console: false,
+            uses_webview: false,
+            uses_css: false,
+            uses_auth: false,
+            uses_principal: false,
+            uses_websocket: false,
+            uses_email: false,
+            uses_locale: false,
+            uses_time: false,
+            uses_env_public: false,
+            uses_debug: false,
+            uses_ffi: false,
+            uses_async_runtime: false,
+        }],
+    })
+}
+
+/// A `Secret` buried in a nested user ADT field must be REJECTED by the gate
+/// with a clean IPE diagnostic — not silently reach `cargo` as an opaque E0277.
+///
+/// Layout: `HydrationState` has one field of type `Inner`; `Inner` carries a
+/// `Secret`. The gate must descend into `Inner`'s variant fields and catch the
+/// `Secret` at ipe-compile time. (#2550)
+#[test]
+fn nested_adt_with_secret_field_is_rejected() -> DResult<()> {
+    let mut interner = Interner::new();
+    let prog = hydrate_program_with_nested_adt(&mut interner, vec![IrType::Secret])?;
+    let err = hydrate_backend(&interner)
+        .emit_spine(&prog)
+        .expect_err("Secret in nested ADT must be rejected by the gate");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("non-serialisable"),
+        "gate error must flag the non-serialisable field: {msg}"
+    );
+    Ok(())
+}
+
+/// A nested user ADT whose fields are all serde-safe must NOT be rejected —
+/// only non-serde leaves poison the gate. (#2550 positive / no-false-rejection)
+#[test]
+fn nested_adt_with_serde_only_fields_is_accepted() -> DResult<()> {
+    let mut interner = Interner::new();
+    // `Inner` carries only `Int` and `Str` — both serde-safe.
+    let prog = hydrate_program_with_nested_adt(&mut interner, vec![IrType::Int, IrType::Str])?;
+    hydrate_backend(&interner).emit_spine(&prog).map(|_| ())
 }
