@@ -3385,10 +3385,9 @@ fn hydration_target_field_types<'p>(
                     (def.home == *home && def.name == *name).then_some(def)
                 })
             });
-            match def {
-                Some(def) => def.variants.iter().flat_map(|v| v.fields.iter()).collect(),
-                None => Vec::new(),
-            }
+            def.map_or_else(Vec::new, |def| {
+                def.variants.iter().flat_map(|v| v.fields.iter()).collect()
+            })
         }
         ipe_ir::IrType::Record(fields) => fields.values().collect(),
         other => vec![other],
