@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.84](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.83...ipe-v0.1.84) (2026-09-17)
+
+
+### Bug Fixes
+
+* **cli:** route the sandbox-override warning through the style palette ([#2557](https://github.com/arthurmaciel/ipe-lang/issues/2557)) ([f016e2d](https://github.com/arthurmaciel/ipe-lang/commit/f016e2d5e839a99043957221eba0896b7967ed67))
+
 ## [0.1.83](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.82...ipe-v0.1.83) (2026-09-17)
 
 
