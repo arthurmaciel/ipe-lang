@@ -96,6 +96,23 @@ fn with_slot<R>(handle: i64, default: R, f: impl FnOnce(&mut Slot) -> R) -> R {
 /// `Cache.newRaw : CacheCfg -> Task Error Int` — allocate a cache, return its handle.
 pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> IpeTask<E, i64> {
     Box::pin(async move {
+        // Bounded by construction (PRINCIPLES §3): the type's contract is
+        // "bounded by entry count" (Ipe.Cache header). A non-positive
+        // `maxEntries` would leave `cache_put`'s `max > 0` LRU cap inert — an
+        // unbounded, caller-driven allocation. Reject it at the sole
+        // construction boundary (fail-closed) rather than silently disabling
+        // the bound. (`ttlMs`/`maxBytes` are documented "0 disables"; a
+        // per-entry ceiling is not — an unbounded entry count has no legitimate
+        // "disabled" meaning for an LRU cache.)
+        if cfg.maxEntries <= 0 {
+            return IpeResult::Err(
+                format!(
+                    "Cache.new: maxEntries must be positive (got {}); an LRU cache is bounded by entry count",
+                    cfg.maxEntries
+                )
+                .into(),
+            );
+        }
         // `maxBytes` is not enforced on the Rust backend: the value is erased to a
         // `Box<dyn Any>`, so per-entry byte accounting isn't available without a
         // size-measuring bound. Warn ONCE so a caller relying on it for a memory
@@ -345,6 +362,39 @@ mod tests {
             IpeResult::Ok(v) => v,
             IpeResult::Err(_) => panic!("cache task failed"),
         }
+    }
+
+    fn try_new(cfg: CacheCfg) -> IpeResult<IpeError, i64> {
+        crate::task::block_on(cache_new_raw::<IpeError>(cfg))
+    }
+
+    /// Bounded by construction (PRINCIPLES §3): a non-positive `maxEntries`
+    /// would leave the LRU cap inert (unbounded growth), so `Cache.new` refuses
+    /// it at the construction boundary — fail-closed — rather than silently
+    /// creating an unbounded cache. A positive `maxEntries` still succeeds.
+    #[test]
+    fn new_rejects_non_positive_max_entries() {
+        for bad in [0, -1, i64::MIN] {
+            assert!(
+                matches!(
+                    try_new(CacheCfg {
+                        maxEntries: bad,
+                        ttlMs: 0,
+                        maxBytes: 0,
+                    }),
+                    IpeResult::Err(_)
+                ),
+                "maxEntries = {bad} must be refused (unbounded LRU is not representable)"
+            );
+        }
+        assert!(matches!(
+            try_new(CacheCfg {
+                maxEntries: 1,
+                ttlMs: 0,
+                maxBytes: 0,
+            }),
+            IpeResult::Ok(_)
+        ));
     }
 
     #[test]

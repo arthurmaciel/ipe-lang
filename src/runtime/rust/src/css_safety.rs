@@ -336,11 +336,37 @@ const ALLOWED_VALUE_FUNCTIONS: &[&str] = &[
     "counters",
 ];
 
+/// Maximum nested-function depth the value grammar descends before rejecting.
+/// Every allowlisted function argument list recurses one level
+/// ([`value_parse_function`] → [`value_grammar_parses`]), so an attacker-authored
+/// value like `calc(calc(calc(…)))` nested N deep would otherwise cost N stack
+/// frames — unbounded on untrusted (Model-derived) CSS, a stack-overflow abort
+/// that breaks soundness (PRINCIPLES §3, bounded by construction). A real CSS
+/// value nests only a handful of levels (`repeating-linear-gradient(color-mix(…),
+/// calc(…))`); this ceiling is far above any legitimate value, and a value past
+/// it is refused (fail-closed, same drop-on-doubt outcome as any unrecognized
+/// construct). MUST stay identical to
+/// `ipe_kernels::css_value_safety::MAX_VALUE_DEPTH` — the
+/// `value_policy_agrees_with_shared_kernel_policy` test pins the whole policy
+/// equal, so a divergence is caught at test time.
+const MAX_VALUE_DEPTH: usize = 32;
+
 /// Parse `s` (already lowercased) against the allowlisted CSS declaration-value
 /// grammar. Returns `false` on the first unrecognized byte, unbalanced paren,
-/// unrecognized function name, or scheme-bearing `url(...)`. Mirror of the
-/// shared `ipe_kernels::css_value_safety::value_parses`.
+/// unrecognized function name, scheme-bearing `url(...)`, or a nesting depth past
+/// [`MAX_VALUE_DEPTH`]. Mirror of the shared
+/// `ipe_kernels::css_value_safety::value_parses`.
 fn value_grammar_parses(s: &str) -> bool {
+    value_grammar_parses_at(s, 0)
+}
+
+/// Depth-tracked core of [`value_grammar_parses`]. `depth` counts the nested
+/// function-argument recursions taken to reach `s`; past [`MAX_VALUE_DEPTH`] the
+/// value is rejected (fail-closed) rather than descending further.
+fn value_grammar_parses_at(s: &str, depth: usize) -> bool {
+    if depth > MAX_VALUE_DEPTH {
+        return false;
+    }
     let bytes = s.as_bytes();
     let mut i = 0;
     while let Some(&c) = bytes.get(i) {
@@ -362,7 +388,7 @@ fn value_grammar_parses(s: &str) -> bool {
             }
             continue;
         }
-        match value_parse_token(bytes, i) {
+        match value_parse_token(bytes, i, depth) {
             Some(next) => i = next,
             None => return false,
         }
@@ -372,35 +398,37 @@ fn value_grammar_parses(s: &str) -> bool {
 
 /// Parse one value token (ident/number run, optionally an `ident(...)` function
 /// call) starting at `start`. Mirror of the shared kernel's `parse_token`.
-fn value_parse_token(bytes: &[u8], start: usize) -> Option<usize> {
+fn value_parse_token(bytes: &[u8], start: usize, depth: usize) -> Option<usize> {
     let mut i = start;
     while bytes.get(i).is_some_and(|&b| is_value_token_byte(b)) {
         i += 1;
     }
     if bytes.get(i) == Some(&b'(') {
-        return value_parse_function(bytes, bytes.get(start..i)?, i);
+        return value_parse_function(bytes, bytes.get(start..i)?, i, depth);
     }
     if i > start { Some(i) } else { None }
 }
 
 /// Parse a balanced `name(...)` function call. `name` must be on
 /// [`ALLOWED_VALUE_FUNCTIONS`]; `url(...)` gates its argument scheme-free, every
-/// other function recurses into its argument list. Mirror of the shared kernel's
-/// `parse_function`.
-fn value_parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
+/// other function recurses into its argument list (one deeper level). Mirror of
+/// the shared kernel's `parse_function`.
+fn value_parse_function(bytes: &[u8], name: &[u8], open: usize, depth: usize) -> Option<usize> {
     let name_str = core::str::from_utf8(name).ok()?;
     if !ALLOWED_VALUE_FUNCTIONS.contains(&name_str) {
         return None;
     }
-    let mut depth = 0usize;
+    // `paren_depth` is the local bracket-balance counter — distinct from the
+    // recursion `depth` param, which bounds nested-function descent.
+    let mut paren_depth = 0usize;
     let mut close = None;
     let mut i = open;
     while let Some(&b) = bytes.get(i) {
         match b {
-            b'(' => depth += 1,
+            b'(' => paren_depth += 1,
             b')' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
+                paren_depth = paren_depth.saturating_sub(1);
+                if paren_depth == 0 {
                     close = Some(i);
                     break;
                 }
@@ -417,7 +445,7 @@ fn value_parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize>
         }
     } else {
         let inner_str = core::str::from_utf8(inner).ok()?;
-        if !value_grammar_parses(inner_str) {
+        if !value_grammar_parses_at(inner_str, depth + 1) {
             return None;
         }
     }
@@ -931,6 +959,40 @@ mod tests {
         assert!(SafeCssValue::parse("#ff6600").is_some()); // benign passes
     }
 
+    /// Bounded by construction (PRINCIPLES §3): an untrusted (Model-derived) CSS
+    /// value whose nested-function depth exceeds [`MAX_VALUE_DEPTH`] is REFUSED
+    /// rather than recursed into. Without the cap this deeply-nested
+    /// `calc(calc(…))` would overflow the stack at render time — a soundness
+    /// break and a remote-input exhaustion vector (PRINCIPLES §1). A
+    /// legitimately shallow value still parses; the boundary is exact.
+    #[test]
+    fn value_rejects_pathologically_nested_value_fail_closed() {
+        let deep = format!("{}1px{}", "calc(".repeat(5_000), ")".repeat(5_000));
+        assert!(
+            SafeCssValue::parse(&deep).is_none(),
+            "a value nested past MAX_VALUE_DEPTH must be refused, not recursed into"
+        );
+        assert!(SafeCssValue::parse("calc(min(10px, max(2px, 4px)))").is_some());
+        let ok = format!(
+            "{}1px{}",
+            "calc(".repeat(MAX_VALUE_DEPTH),
+            ")".repeat(MAX_VALUE_DEPTH)
+        );
+        assert!(
+            SafeCssValue::parse(&ok).is_some(),
+            "depth == MAX_VALUE_DEPTH must parse"
+        );
+        let over = format!(
+            "{}1px{}",
+            "calc(".repeat(MAX_VALUE_DEPTH + 2),
+            ")".repeat(MAX_VALUE_DEPTH + 2)
+        );
+        assert!(
+            SafeCssValue::parse(&over).is_none(),
+            "depth past MAX_VALUE_DEPTH must be refused"
+        );
+    }
+
     // ── A9: loud-strip diagnostic ────────────────────────────────────────────
 
     /// The security OUTCOME of `parse_reporting` is identical to `parse` for
@@ -1333,7 +1395,24 @@ mod tests {
             "-moz-binding:url(x)",
             "a { color: red }",
             "@import url(x)",
-        ] {
+        ]
+        .into_iter()
+        .map(String::from)
+        // Depth-bound agreement: both mirrors share MAX_VALUE_DEPTH, so a value
+        // at the ceiling is accepted by both and one past it rejected by both.
+        .chain([
+            format!(
+                "{}1px{}",
+                "calc(".repeat(MAX_VALUE_DEPTH),
+                ")".repeat(MAX_VALUE_DEPTH)
+            ),
+            format!(
+                "{}1px{}",
+                "calc(".repeat(MAX_VALUE_DEPTH + 2),
+                ")".repeat(MAX_VALUE_DEPTH + 2)
+            ),
+        ]) {
+            let v = v.as_str();
             assert_eq!(
                 SafeCssValue::parse(v).is_some(),
                 ipe_kernels::css_value_is_safe(v),

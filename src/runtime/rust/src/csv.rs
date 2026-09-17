@@ -12,8 +12,9 @@ use super::*;
 // ── shared blocking-pool helper ───────────────────────────────────────
 //
 // `csv_parse_stream_from_file` does a blocking `std::fs::File::open` +
-// incremental CSV read (up to `IPE_CSV_MAX_ROWS`, default 10M rows, with NO
-// byte cap) inline. Pre-fix that work ran EAGERLY, before `Box::pin` was even
+// incremental CSV read (bounded by `IPE_CSV_MAX_ROWS`, default 10M rows, AND
+// `IPE_CSV_MAX_BYTES`, default 512 MiB of decoded field bytes) inline. Pre-fix
+// that work ran EAGERLY, before `Box::pin` was even
 // constructed — i.e. calling the kernel function itself blocked the caller,
 // not just polling the returned future. Offload to tokio's blocking pool so
 // a large/slow file can't stall the tokio worker thread. This module is
@@ -70,24 +71,70 @@ fn validated_delimiter<E: From<String>>(delim: &str) -> IpeResult<E, u8> {
     }
 }
 
+/// Row-count ceiling (default 10M). A large/untrusted input would otherwise
+/// accumulate rows unbounded; past the cap the parse `Err`s rather than OOMs.
+/// Overridable via `IPE_CSV_MAX_ROWS`.
+fn csv_max_rows() -> usize {
+    crate::system::read_env_var("IPE_CSV_MAX_ROWS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(10_000_000)
+}
+
+/// Total-decoded-bytes ceiling (default 512 MiB, mirroring `File.readFile`'s
+/// `IPE_FILE_READ_MAX`). The row cap alone does NOT bound memory: a single huge
+/// record (one row of gigabytes) or a file of oversized fields slips under any
+/// row count while exhausting the heap. Bounded by construction (PRINCIPLES §3,
+/// and §1's exhaustion clause when the CSV arrives over the network): the sum of
+/// decoded field bytes is tracked and the parse `Err`s the moment it exceeds the
+/// ceiling, never OOMs. Overridable via `IPE_CSV_MAX_BYTES`.
+fn csv_max_bytes() -> u64 {
+    crate::system::read_env_var("IPE_CSV_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(512 * 1024 * 1024)
+}
+
+/// Add this record's decoded field bytes to `seen`, returning `Err` when the
+/// running total would exceed `cap`. The count is the sum of field lengths (the
+/// bytes actually retained in the returned rows), so the ceiling bounds the
+/// heap the parsed document occupies — the real exhaustion vector — rather than
+/// the on-wire size. Saturating so the accumulator itself cannot overflow.
+fn accrue_record_bytes(seen: &mut u64, rec: &::csv::StringRecord, cap: u64) -> Result<(), String> {
+    let record_bytes: u64 = rec.iter().map(|f| f.len() as u64).sum();
+    *seen = seen.saturating_add(record_bytes);
+    if *seen > cap {
+        return Err(format!(
+            "exceeds byte cap of {cap} (raise IPE_CSV_MAX_BYTES)"
+        ));
+    }
+    Ok(())
+}
+
 fn parse_delim<E: From<String>>(text: &str, delim: u8) -> IpeResult<E, CsvDoc> {
     let mut rdr = ::csv::ReaderBuilder::new()
         .delimiter(delim)
         .has_headers(true)
         .flexible(true)
         .from_reader(text.as_bytes());
+    // Row cap AND byte cap: a large/untrusted input would otherwise accumulate
+    // unbounded into `rows` — either by row COUNT (many small rows) or by decoded
+    // BYTES (one huge record / oversized fields that slips under any row count).
+    // Bound both → Err rather than OOM. Mirrors csv_parse_stream_from_file's caps.
+    let max_rows = csv_max_rows();
+    let max_bytes = csv_max_bytes();
+    let mut seen_bytes: u64 = 0;
     let header: Vec<String> = match rdr.headers() {
-        Ok(h) => h.iter().map(|s| s.to_string()).collect(),
+        Ok(h) => {
+            if let Err(e) = accrue_record_bytes(&mut seen_bytes, h, max_bytes) {
+                return IpeResult::Err(format!("Csv.parse: {e}").into());
+            }
+            h.iter().map(|s| s.to_string()).collect()
+        }
         Err(e) => return IpeResult::Err(format!("Csv.parse: {}", e).into()),
     };
-    // Row cap: a large/untrusted input would otherwise accumulate unbounded into
-    // `rows`. Bound it (IPE_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
-    // Mirrors csv_parse_stream_from_file's cap.
-    let max_rows: usize = crate::system::read_env_var("IPE_CSV_MAX_ROWS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(10_000_000);
     let mut rows = Vec::new();
     for rec in rdr.records() {
         match rec {
@@ -100,6 +147,9 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> IpeResult<E, CsvDoc> {
                         )
                         .into(),
                     );
+                }
+                if let Err(e) = accrue_record_bytes(&mut seen_bytes, &r, max_bytes) {
+                    return IpeResult::Err(format!("Csv.parse: {e}").into());
                 }
                 rows.push(r.iter().map(|s| s.to_string()).collect());
             }
@@ -200,14 +250,14 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
         .has_headers(false)
         .flexible(true)
         .from_reader(std::io::BufReader::new(file));
-    // Row cap: although rows stream in, they all accumulate in `out`, so an
-    // untrusted huge file is still an unbounded allocation. Bound it
-    // (IPE_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
-    let max_rows: usize = crate::system::read_env_var("IPE_CSV_MAX_ROWS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(10_000_000);
+    // Row cap AND byte cap: although rows stream in, they all accumulate in
+    // `out`, so an untrusted huge file is still an unbounded allocation — whether
+    // by row COUNT or by decoded BYTES (a single monster record / oversized
+    // fields slips under any row count). Bound both (IPE_CSV_MAX_ROWS default 10M,
+    // IPE_CSV_MAX_BYTES default 512 MiB) → Err rather than OOM.
+    let max_rows = csv_max_rows();
+    let max_bytes = csv_max_bytes();
+    let mut seen_bytes: u64 = 0;
     let mut out = Vec::new();
     for rec in rdr.records() {
         let r = rec.map_err(|e| e.to_string())?;
@@ -217,6 +267,7 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
                 max_rows
             ));
         }
+        accrue_record_bytes(&mut seen_bytes, &r, max_bytes)?;
         out.push(r.iter().map(|s| s.to_string()).collect());
     }
     Ok(out)
@@ -229,9 +280,9 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
 /// enforced at construction by `Path.fromString`; the validated string is
 /// extracted once before the async move.
 ///
-/// file I/O + incremental CSV parsing (up to `IPE_CSV_MAX_ROWS`, no
-/// byte cap) is offloaded to tokio's blocking pool via `run_blocking` — see
-/// the module-level doc comment on `run_blocking` above.
+/// file I/O + incremental CSV parsing (bounded by `IPE_CSV_MAX_ROWS` AND
+/// `IPE_CSV_MAX_BYTES`) is offloaded to tokio's blocking pool via `run_blocking`
+/// — see the module-level doc comment on `run_blocking` above.
 pub fn csv_parse_stream_from_file<E: From<String> + Send + 'static>(
     path: crate::path::Path,
 ) -> IpeTask<E, Vec<Vec<String>>> {
@@ -264,6 +315,39 @@ mod tests {
         assert!(encode_delim(&doc, b',').contains("'=SUM(A1)"));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_CSV_SANITIZE_FORMULAS") };
+    }
+
+    /// Bounded by construction (PRINCIPLES §3): a CSV whose decoded field bytes
+    /// exceed `IPE_CSV_MAX_BYTES` is turned back with a typed `Err` — a single
+    /// huge record (one row, many bytes) that slips UNDER the row cap still
+    /// cannot exhaust the heap. The reject fires at the byte bound, not on OOM.
+    #[test]
+    fn parse_respects_byte_cap_on_a_single_huge_record() {
+        // One data row whose single field is 1000 bytes — far under any row cap,
+        // but over a deliberately tiny byte cap.
+        let big_field = "x".repeat(1000);
+        let text = format!("h\n{big_field}\n");
+        // SAFETY: test-only env mutation; `set_var`/`remove_var` are `unsafe` in Rust 2024 (environ race).
+        unsafe { std::env::set_var("IPE_CSV_MAX_BYTES", "100") };
+        let res: IpeResult<String, CsvDoc> = csv_parse(text);
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_CSV_MAX_BYTES") };
+        assert!(
+            matches!(res, IpeResult::Err(_)),
+            "a record past the byte cap must Err, not accumulate unboundedly"
+        );
+    }
+
+    /// A CSV within the byte cap still parses cleanly — the ceiling rejects only
+    /// the over-large input, never a legitimate document.
+    #[test]
+    fn parse_under_byte_cap_still_succeeds() {
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_CSV_MAX_BYTES", "100") };
+        let res: IpeResult<String, CsvDoc> = csv_parse("a,b\n1,2\n3,4".to_string());
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_CSV_MAX_BYTES") };
+        assert!(matches!(res, IpeResult::Ok(_)));
     }
 
     #[test]
@@ -347,6 +431,29 @@ mod tests {
         assert!(
             matches!(res, IpeResult::Err(_)),
             "6-row file under a 2-row cap must Err"
+        );
+    }
+
+    /// Bounded by construction (PRINCIPLES §3): the streaming file path caps
+    /// decoded bytes too, so a file of oversized records that stays UNDER the row
+    /// cap still cannot exhaust the heap — it `Err`s at the byte bound.
+    #[test]
+    fn parse_stream_from_file_respects_byte_cap() {
+        let p =
+            std::env::temp_dir().join(format!("ipe_csv_stream_bytes_{}.csv", std::process::id()));
+        // 3 rows, each field 1000 bytes — well under any row cap, over a tiny byte cap.
+        let big = "y".repeat(1000);
+        std::fs::write(&p, format!("{big}\n{big}\n{big}\n")).unwrap();
+        // SAFETY: test-only env mutation; `set_var`/`remove_var` are `unsafe` in Rust 2024 (environ race).
+        unsafe { std::env::set_var("IPE_CSV_MAX_BYTES", "100") };
+        let res: IpeResult<String, Vec<Vec<String>>> =
+            block(csv_parse_stream_from_file(make_path(&p.to_string_lossy())));
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_CSV_MAX_BYTES") };
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            matches!(res, IpeResult::Err(_)),
+            "a file past the byte cap must Err, not accumulate unboundedly"
         );
     }
 }
