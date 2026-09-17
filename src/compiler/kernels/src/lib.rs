@@ -10458,7 +10458,19 @@ impl StdlibKernel {
             // the fail-closed direction: it over-reports on wasm32 at no cost,
             // and it re-injects the allowlisted keys into the scrubbed jail
             // environment so `Env.public` does not silently return `Nothing`.
-            | Self::EnvPublic => Some(Capability::Env),
+            | Self::EnvPublic
+            // `App.fromEnv` / `App.fromEnvRequired` read a CALLER-NAMED
+            // environment variable at startup (`read_env_var` →
+            // `std::env::var`) and seal it into a `Secret`. That live process-env
+            // read is the same enforceable env axis `System.getenv` discloses —
+            // the resource an OS jail isolates by scrubbing the environment.
+            // Unlike the sibling `Setting`-builders (`Db.url`, `Console.*Token`),
+            // which only wrap an already-obtained value, THESE kernels perform
+            // the read, so under-reporting them would hide a real env dependency
+            // (and silently break under a scrubbed jail) — the fail-closed
+            // direction discloses `Env`.
+            | Self::AppFromEnv
+            | Self::AppFromEnvRequired => Some(Capability::Env),
             Self::ProcessRun | Self::ProcessRunWith | Self::ProcessRunInPty => {
                 Some(Capability::Subprocess)
             }
@@ -11351,11 +11363,11 @@ impl StdlibKernel {
             | Self::SecretReveal
             | Self::SecretUse
             | Self::SecretRedacted
-            // Runtime-config front door — building a setting/env-secret value
-            // discloses no capability; the capability is the app run itself.
+            // Runtime-config front door — building a `Setting` value discloses no
+            // capability; the capability is the app run itself. (`App.fromEnv` /
+            // `App.fromEnvRequired` are NOT here: they READ the process env and
+            // are classified `Env` above.)
             | Self::WebAppWith
-            | Self::AppFromEnv
-            | Self::AppFromEnvRequired
             | Self::HostBind
             | Self::LogLevelSetting
             | Self::DbUrlSetting
@@ -13540,6 +13552,28 @@ mod tests {
     /// false and fails here, before any downstream `ALL`-driven test can pass on
     /// an incomplete registry. It also asserts `ALL` has no duplicate entries and
     /// no exclusion is wrongly also present in `ALL`.
+    /// `App.fromEnv` / `App.fromEnvRequired` READ a caller-named process
+    /// environment variable at startup (`read_env_var` → `std::env::var`), the
+    /// same enforceable env axis `System.getenv` / `Env.public` disclose. They
+    /// MUST classify as [`Capability::Env`], not `None`: under-reporting an env
+    /// read is the dangerous direction (it hides the dependency from the audit
+    /// surface and breaks silently under a scrubbed OS jail). Pins the refusal so
+    /// a regression to `None` fails here.
+    #[test]
+    fn app_from_env_kernels_disclose_env_capability() {
+        use super::Capability;
+        assert_eq!(
+            StdlibKernel::AppFromEnv.capability_classification(),
+            Some(Capability::Env),
+            "App.fromEnv reads the process environment and must disclose Env"
+        );
+        assert_eq!(
+            StdlibKernel::AppFromEnvRequired.capability_classification(),
+            Some(Capability::Env),
+            "App.fromEnvRequired reads the process environment and must disclose Env"
+        );
+    }
+
     #[test]
     fn all_covers_every_variant_except_documented_exclusions() {
         for (i, &a) in StdlibKernel::ALL.iter().enumerate() {

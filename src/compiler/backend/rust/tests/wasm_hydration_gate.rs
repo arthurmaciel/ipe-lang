@@ -1,19 +1,25 @@
-//! M7 gate: `HydrationState` field-type gate (spec:
+//! M7 gate: hydration-state field-type gate (spec:
 //! `docs/adr/0042-wasm-client-target.md` §M7 field-type gate).
 //!
 //! When `wasm_hydrate_mode = true` (set by `[wasm] mode = "hydrate"` in
-//! `package.ipe`), the backend inspects the `HydrationState` type declared in
-//! module `Main` and rejects any field whose `IrType` is non-serialisable
-//! (server-surface handles, async primitives, function types, etc.).
+//! `package.ipe`), the backend inspects the island parse-target type — the
+//! `fromHydrationState` projection's parameter type, whatever the user named it
+//! — and rejects any field whose `IrType` is non-serialisable (server-surface
+//! handles, async primitives, function types, etc.). Keying on the projection
+//! parameter (not a literal `HydrationState` name) is what makes the gate catch
+//! a leak in a program that names its island type differently.
 //!
 //! Gate properties proven here:
-//!   * A `HydrationState` with a `Secret` field → compile error (the
+//!   * A projection target with a `Secret` field → compile error (the
 //!     canonical containment predicate from the spec).
-//!   * A `HydrationState` with all-primitive fields → compiles clean.
-//!   * A program with NO `HydrationState` type passes the gate (not every
-//!     hydrate-mode program declares an explicit alias).
+//!   * A projection target with all-primitive fields → compiles clean.
+//!   * A projection target NAMED something other than `HydrationState` but with
+//!     a `Secret` field is STILL rejected (the gate keys on the real target,
+//!     not the literal type name).
+//!   * A program with NO `fromHydrationState` projection passes the gate (no
+//!     island parse target ⇒ nothing serialised ⇒ nothing to leak).
 //!   * The gate is a no-op when `wasm_hydrate_mode = false` — the same
-//!     `Secret`-fielded type compiles cleanly in non-hydrate native mode.
+//!     `Secret`-fielded target compiles cleanly in non-hydrate native mode.
 //!   * The emitted `hydrate` glue references the SAME Rust type its
 //!     `main_from_hydration_state` signature names — the structural `RecCount`
 //!     record-alias struct, never the nonexistent `MainHydrationState`
@@ -31,20 +37,43 @@ use std::collections::BTreeMap;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Build a minimal wasm-hydrate-mode `Program` with a `Main` module that
-/// contains a single `HydrationState` type whose sole variant carries `fields`.
-fn hydrate_program(interner: &mut Interner, fields: Vec<IrType>) -> DResult<Program> {
+/// Build a minimal wasm-hydrate-mode `Program` whose `Main` module declares an
+/// island type named `type_name` (a single-ctor alias) carrying `fields`, AND a
+/// `fromHydrationState` projection that takes that type — so the emitted
+/// `hydrate` export actually serialises it. This is the real leak path the gate
+/// guards: the gate walks the PROJECTION TARGET's fields, whatever it is named.
+fn hydrate_program_named(
+    interner: &mut Interner,
+    type_name: &str,
+    fields: Vec<IrType>,
+) -> DResult<Program> {
     let main = interner.intern("Main")?;
-    let hs_name = interner.intern("HydrationState")?;
-    let var_name = interner.intern("HydrationState")?; // single-ctor alias shape
+    let hs_name = interner.intern(type_name)?;
     let hs_def = EnumDef {
         name: hs_name,
         home: ModPath(vec![main]),
         type_params: vec![],
         variants: vec![Variant {
-            name: var_name,
+            name: hs_name,
             fields,
         }],
+    };
+    let hs_ty = IrType::Enum {
+        home: ModPath(vec![main]),
+        name: hs_name,
+        args: vec![],
+    };
+    let from_hs = interner.intern("fromHydrationState")?;
+    let hs_param = interner.intern("hs")?;
+    let from_hs_fn = Func {
+        id: FuncId::from_raw(1),
+        name: from_hs,
+        home: ModPath(vec![main]),
+        type_params: vec![],
+        row_params: vec![],
+        params: vec![(hs_param, hs_ty)],
+        ret: IrType::Int,
+        body: Expr::Var(hs_param),
     };
     Ok(Program {
         imports_unsafe_submodule: false,
@@ -52,7 +81,7 @@ fn hydrate_program(interner: &mut Interner, fields: Vec<IrType>) -> DResult<Prog
         modules: vec![Module {
             name: ModPath(vec![main]),
             types: vec![TypeDef::Enum(hs_def)],
-            funcs: vec![],
+            funcs: vec![from_hs_fn],
             entry: None,
             records: vec![],
             uses_tea: false,
@@ -93,6 +122,12 @@ fn hydrate_program(interner: &mut Interner, fields: Vec<IrType>) -> DResult<Prog
             uses_async_runtime: false,
         }],
     })
+}
+
+/// Convenience: an island type named `HydrationState` carrying `fields`, with
+/// the `fromHydrationState` projection over it.
+fn hydrate_program(interner: &mut Interner, fields: Vec<IrType>) -> DResult<Program> {
+    hydrate_program_named(interner, "HydrationState", fields)
 }
 
 /// Build the wasm-hydrate-mode `RustBackend`.
@@ -137,7 +172,7 @@ fn hydration_state_db_field_is_compile_error() -> DResult<()> {
     Ok(())
 }
 
-/// A `HydrationState` with only `Int` and `String` fields compiles cleanly.
+/// A projection target with only `Int` and `String` fields compiles cleanly.
 #[test]
 fn hydration_state_primitive_fields_compile_clean() -> DResult<()> {
     let mut interner = Interner::new();
@@ -145,8 +180,29 @@ fn hydration_state_primitive_fields_compile_clean() -> DResult<()> {
     hydrate_backend(&interner).emit_spine(&prog).map(|_| ())
 }
 
-/// A program with NO `HydrationState` type passes the gate — the presence of
-/// the type is optional.
+/// The gate keys on the real parse target, NOT a literal `HydrationState` name:
+/// a projection whose target is named `AppState` (anything but `HydrationState`)
+/// but carries a `Secret` field is STILL rejected. Under a literal-name lookup
+/// this leak would slip through the gate and reach the emitted `hydrate` export
+/// (a secret-leak / SEAL break); driving the gate off the projection parameter
+/// closes it regardless of the type's name.
+#[test]
+fn aliased_target_name_with_secret_field_is_still_rejected() -> DResult<()> {
+    let mut interner = Interner::new();
+    let prog = hydrate_program_named(&mut interner, "AppState", vec![IrType::Secret])?;
+    let err = hydrate_backend(&interner)
+        .emit_spine(&prog)
+        .expect_err("a Secret-fielded island target must be rejected whatever its name");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("non-serialisable"),
+        "error should flag the non-serialisable field: {msg}"
+    );
+    Ok(())
+}
+
+/// A program with NO `fromHydrationState` projection passes the gate — with no
+/// island parse target, nothing is serialised, so there is nothing to leak.
 #[test]
 fn no_hydration_state_type_passes_gate() -> DResult<()> {
     let mut interner = Interner::new();
