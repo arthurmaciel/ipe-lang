@@ -46,7 +46,9 @@ use std::collections::HashMap;
 // WebSocket client can validate URLs without linking reqwest). The reqwest-
 // coupled `ssrf_apply` + the request executor below import the three they use.
 #[cfg(not(target_arch = "wasm32"))]
-use super::ssrf::{resolve_first_non_private_addr, ssrf_check_url, ssrf_deny_private_enabled};
+use super::ssrf::{
+    resolve_first_non_private_addr, ssrf_check_url_nonblocking, ssrf_deny_private_enabled,
+};
 
 /// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
 #[derive(Clone, Debug)]
@@ -331,8 +333,47 @@ fn redact_userinfo(url: &str) -> String {
     }
 }
 
+/// Bounded DNS deadline for the pre-send resolve. A stalling resolver must not
+/// pin a worker (or a `spawn_blocking` thread) indefinitely — a remote party that
+/// controls the target hostname's authoritative server could otherwise exhaust the
+/// pool. Overridable via `IPE_HTTP_DNS_TIMEOUT_MS`; floored to a sane default.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn ssrf_apply(
+const HTTP_DNS_TIMEOUT_MS_DEFAULT: u64 = 5_000;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn http_dns_timeout() -> std::time::Duration {
+    let ms = crate::system::read_env_var("IPE_HTTP_DNS_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(HTTP_DNS_TIMEOUT_MS_DEFAULT);
+    std::time::Duration::from_millis(ms)
+}
+
+/// Resolve `host` off the async worker: the private-range vet runs a synchronous
+/// `to_socket_addrs` for a named host, so it is moved to `spawn_blocking` and
+/// bounded by a DNS deadline. Mirrors `DenyPrivateResolver`, which already does
+/// this for the connect-time resolve. An IP literal short-circuits inside
+/// `resolve_first_non_private_addr` without blocking, so the blocking pool is only
+/// used when a real DNS lookup is unavoidable.
+#[cfg(not(target_arch = "wasm32"))]
+async fn resolve_first_non_private_addr_off_worker(
+    host: String,
+) -> Result<std::net::SocketAddr, String> {
+    let fut = tokio::task::spawn_blocking(move || resolve_first_non_private_addr(&host));
+    match tokio::time::timeout(http_dns_timeout(), fut).await {
+        Ok(Ok(res)) => res,
+        Ok(Err(join)) => Err(format!(
+            "http: blocked: DNS resolver task failed: {join} (IPE_HTTP_DENY_PRIVATE)"
+        )),
+        Err(_) => {
+            Err("http: blocked: DNS resolution timed out (IPE_HTTP_DENY_PRIVATE)".to_string())
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn ssrf_apply(
     mut builder: reqwest::ClientBuilder,
     url: &str,
     policy: RedirectPolicy,
@@ -357,8 +398,14 @@ pub(crate) fn ssrf_apply(
             .host_str()
             .ok_or_else(|| "http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string())?
             .to_owned();
-        let addr = resolve_first_non_private_addr(&host)?;
-        builder = builder.resolve_to_addrs(host.as_str(), &[addr]);
+        // Resolve OFF the async worker (bracket-strip happens inside for a v6
+        // literal), then key the static override on the UNBRACKETED host —
+        // reqwest/hyper look up the DNS override by the unbracketed hostname
+        // (`Uri::host`), so a `"[::1]"` key would never match and the pin would
+        // silently not apply.
+        let addr = resolve_first_non_private_addr_off_worker(host.clone()).await?;
+        let pin_key = super::ssrf::strip_ipv6_brackets(&host);
+        builder = builder.resolve_to_addrs(pin_key, &[addr]);
         // Pin EVERY hostname (the initial host's static override above + every
         // redirect hop) through the vetting resolver so a redirect to a DIFFERENT
         // hostname can't be re-resolved by name to a rebind target at connect.
@@ -378,7 +425,12 @@ pub(crate) fn ssrf_apply(
                     if attempt.previous().len() >= max {
                         return attempt.error(format!("http: too many redirects (max {})", max));
                     }
-                    if let Err(msg) = ssrf_check_url(attempt.url().as_str()) {
+                    // Non-blocking hop guard: scheme + IP-literal range check
+                    // only. A named-host hop is vetted by `DenyPrivateResolver`
+                    // on the blocking pool at connect; re-resolving here would
+                    // pin a sync DNS call on a tokio worker inside reqwest's sync
+                    // redirect closure — the starvation this whole path avoids.
+                    if let Err(msg) = ssrf_check_url_nonblocking(attempt.url().as_str()) {
                         return attempt.error(msg);
                     }
                     attempt.follow()
@@ -433,7 +485,7 @@ async fn do_request<E: From<String> + Send + 'static>(
     }
 
     let builder = reqwest::Client::builder();
-    let mut builder = match ssrf_apply(builder, &req.url, req.redirects) {
+    let mut builder = match ssrf_apply(builder, &req.url, req.redirects).await {
         Ok(b) => b,
         Err(e) => return IpeResult::Err(e.into()),
     };
@@ -768,32 +820,81 @@ async fn do_fetch<E: From<String> + 'static>(req: HttpRequest) -> IpeResult<E, H
         }
     }
 
-    let text_promise = match resp.text() {
-        Ok(p) => p,
-        Err(e) => {
-            return IpeResult::Err(format!("http: failed reading response body: {:?}", e).into());
-        }
-    };
-    let text_value = match JsFuture::from(text_promise).await {
-        Ok(v) => v,
-        Err(e) => {
-            return IpeResult::Err(format!("http: failed reading response body: {:?}", e).into());
-        }
-    };
-    let body = text_value.as_string().unwrap_or_default();
+    // Stream the body incrementally with a running cap so an untrusted (or
+    // upstream-controlled) response is BOUNDED BY CONSTRUCTION — never fully
+    // buffered by `Response.text()` before the size is known. Mirrors the native
+    // `read_body_capped` incremental floor. `content_length()` is unreliable in a
+    // browser (absent under transfer-encoding, or a lie), so the load-bearing
+    // guard is the per-chunk cap in the loop, not a header pre-check.
     let cap = wasm_http_body_cap();
-    if body.len() > cap {
-        return IpeResult::Err(
-            format!("http: response body too large (> {cap} bytes; raise IPE_HTTP_MAX_BODY_BYTES)")
-                .into(),
-        );
-    }
+    let body = match read_wasm_body_capped(&resp, cap).await {
+        Ok(b) => b,
+        Err(e) => return IpeResult::Err(e.into()),
+    };
 
     ok_res(HttpResponse {
         status,
         body,
         headers: out_headers,
     })
+}
+
+/// Read a `web_sys::Response` body incrementally, aborting the instant the running
+/// total would exceed `cap` — the browser mirror of the native `read_body_capped`.
+/// Pulls chunks from `Response.body()`'s `ReadableStream` reader (each a
+/// `Uint8Array`) rather than `Response.text()`, so a hostile/oversized body is
+/// bounded to `cap` resident bytes by construction, never fully buffered first.
+/// Decodes UTF-8 lossily (parity with the native arm and `Http.Stream`).
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
+async fn read_wasm_body_capped(resp: &web_sys::Response, cap: usize) -> Result<String, String> {
+    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen_futures::JsFuture;
+
+    // A body-less response (e.g. 204) has no stream; treat as empty.
+    let stream = match resp.body() {
+        Some(s) => s,
+        None => return Ok(String::new()),
+    };
+    let reader: web_sys::ReadableStreamDefaultReader = stream
+        .get_reader()
+        .dyn_into()
+        .map_err(|_| "http: failed reading response body".to_string())?;
+
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        let result = JsFuture::from(reader.read())
+            .await
+            .map_err(|_| "http: failed reading response body".to_string())?;
+        // Each read resolves to `{ done: bool, value: Uint8Array }`.
+        let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
+            .ok()
+            .and_then(|d| d.as_bool())
+            .unwrap_or(true);
+        let value = js_sys::Reflect::get(&result, &JsValue::from_str("value"))
+            .unwrap_or(JsValue::UNDEFINED);
+        if !value.is_undefined() && !value.is_null() {
+            let chunk = js_sys::Uint8Array::new(&value);
+            let len = chunk.length() as usize;
+            if buf.len().saturating_add(len) > cap {
+                // Release the underlying connection before bailing.
+                let _ = reader.cancel();
+                return Err(format!(
+                    "http: response body too large (> {cap} bytes; raise IPE_HTTP_MAX_BODY_BYTES)"
+                ));
+            }
+            let start = buf.len();
+            buf.resize(start + len, 0);
+            // `copy_to` writes exactly `len` bytes into the freshly sized tail;
+            // the slice length matches `chunk.length()`, so no truncation.
+            if let Some(dst) = buf.get_mut(start..start + len) {
+                chunk.copy_to(dst);
+            }
+        }
+        if done {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// Http.get : Url -> Task Error HttpResponse (browser substitute)

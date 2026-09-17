@@ -131,6 +131,21 @@ pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// Strip a single surrounding `[`…`]` from an IPv6-literal host as it appears in
+/// a URL authority (`Url::host_str()` returns `"[::1]"`, not `"::1"`). Returns the
+/// inner slice when BOTH brackets are present, else the input unchanged — a plain
+/// hostname or bare v4 literal is returned as-is (they carry no brackets), so a
+/// subsequent `IpAddr::parse` still correctly fails for a hostname.
+///
+/// This is the single normalization point that puts every v6 URL host back on the
+/// `is_private_ip` path; it is also used to key reqwest's `resolve_to_addrs`, whose
+/// lookup key is the UNBRACKETED host (hyper's `Uri::host`).
+pub(crate) fn strip_ipv6_brackets(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
+}
+
 /// Resolves `host` (plain hostname or IP literal), checks that none of its
 /// addresses is in a disallowed private range, and returns the first non-private
 /// `SocketAddr` (port 0) so the caller can **pin** reqwest's DNS resolver to
@@ -162,8 +177,14 @@ pub(crate) fn resolve_first_non_private_addr_with_port(
     host: &str,
     port: u16,
 ) -> Result<SocketAddr, String> {
-    // Try parsing as an IP literal first (avoids a DNS round-trip for bare IPs).
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    // Parse-don't-validate at the boundary: a URL host taken from
+    // `Url::host_str()` returns an IPv6 literal BRACKETED (`"[::1]"`), which
+    // fails BOTH `IpAddr::parse` and `to_socket_addrs`. Strip a single
+    // bracket pair and parse the IP literal FIRST, so every v6 literal is put
+    // back on the `is_private_ip` guarded path (loopback/ULA/link-local/NAT64/
+    // 6to4/v4-mapped) instead of slipping through on an accidental resolve
+    // failure; public v6 literals still pass.
+    if let Ok(ip) = strip_ipv6_brackets(host).parse::<IpAddr>() {
         if is_private_ip(ip) {
             return Err(format!(
                 "http: blocked: private/loopback host {} (IPE_HTTP_DENY_PRIVATE)",
@@ -323,6 +344,54 @@ pub(crate) fn ssrf_check_url(url: &str) -> Result<(), String> {
     };
 
     check_host_not_private(host)
+}
+
+/// Non-blocking redirect-hop guard: validate a URL's scheme and, when the host is
+/// an IP LITERAL, its private-range status — WITHOUT a DNS round-trip. For a named
+/// host the blocking DNS vet is already done by `http_client::DenyPrivateResolver`
+/// at connect time (on the blocking pool), so re-resolving here would only pin a
+/// sync `to_socket_addrs` on a tokio worker inside reqwest's sync redirect closure
+/// (the very starvation `ssrf_apply` moves off-worker). IP-literal redirect targets
+/// bypass the resolver, so they MUST still be range-checked here — that check is
+/// pure and non-blocking.
+///
+/// Returns `Ok(())` if allowed, `Err(message)` if blocked.
+pub(crate) fn ssrf_check_url_nonblocking(url: &str) -> Result<(), String> {
+    let parsed = match Url::parse(url) {
+        Ok(u) => u,
+        Err(e) => {
+            return Err(format!(
+                "http: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
+                url, e
+            ));
+        }
+    };
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" {
+        return Err(format!(
+            "http: blocked: scheme {:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)",
+            scheme
+        ));
+    }
+    let host = match parsed.host_str() {
+        Some(h) => h,
+        None => {
+            return Err("http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string());
+        }
+    };
+    // Only IP literals are decided here (no DNS); a named host defers to the
+    // connect-time resolver. `strip_ipv6_brackets` puts a `[::1]`-style literal
+    // back on the `is_private_ip` path; a hostname simply fails the parse and
+    // falls through to Ok.
+    if let Ok(ip) = strip_ipv6_brackets(host).parse::<IpAddr>()
+        && is_private_ip(ip)
+    {
+        return Err(format!(
+            "http: blocked: private/loopback host {} (IPE_HTTP_DENY_PRIVATE)",
+            ip
+        ));
+    }
+    Ok(())
 }
 
 /// Validate a single URL against the deny-private guard (no client build) — for
@@ -613,6 +682,133 @@ mod tests {
     fn resolve_non_private_rejects_v4mapped_loopback() {
         let err = resolve_first_non_private_addr("::ffff:127.0.0.1").unwrap_err();
         assert!(err.contains("blocked"), "expected blocked, got: {err}");
+    }
+
+    // -----------------------------------------------------------------------
+    // #2534 — bracketed IPv6-literal hosts (as returned by `Url::host_str()`)
+    // must reach `is_private_ip`, not slip through on a resolve failure. The
+    // deny reason is the LITERAL-path message ("private/loopback host <ip>"),
+    // proving the block came from `is_private_ip` on the parsed value — NOT the
+    // `to_socket_addrs` "could not resolve"/"resolved to no addresses" fallback.
+    // -----------------------------------------------------------------------
+
+    fn assert_blocked_by_is_private_ip(host: &str) {
+        let err = resolve_first_non_private_addr(host)
+            .expect_err("bracketed private v6 literal must be blocked");
+        assert!(
+            err.contains("private/loopback host"),
+            "host {host:?} must be blocked BY is_private_ip (literal path), got: {err}"
+        );
+        // Must NOT be a resolve-failure fallthrough.
+        assert!(
+            !err.contains("could not resolve") && !err.contains("resolved to no addresses"),
+            "host {host:?} was blocked by a resolve error, not is_private_ip: {err}"
+        );
+    }
+
+    #[test]
+    fn strip_ipv6_brackets_unwraps_only_a_matched_pair() {
+        assert_eq!(strip_ipv6_brackets("[::1]"), "::1");
+        assert_eq!(strip_ipv6_brackets("[fd00::1]"), "fd00::1");
+        // No brackets / bare v4 / hostname pass through untouched.
+        assert_eq!(strip_ipv6_brackets("::1"), "::1");
+        assert_eq!(strip_ipv6_brackets("127.0.0.1"), "127.0.0.1");
+        assert_eq!(strip_ipv6_brackets("example.com"), "example.com");
+        // A lone bracket is not a pair — left as-is (still fails IpAddr::parse).
+        assert_eq!(strip_ipv6_brackets("[::1"), "[::1");
+        assert_eq!(strip_ipv6_brackets("::1]"), "::1]");
+    }
+
+    #[test]
+    fn resolve_non_private_blocks_bracketed_v6_loopback() {
+        assert_blocked_by_is_private_ip("[::1]");
+    }
+
+    #[test]
+    fn resolve_non_private_blocks_bracketed_v6_ula() {
+        assert_blocked_by_is_private_ip("[fd00::1]");
+    }
+
+    #[test]
+    fn resolve_non_private_blocks_bracketed_v6_link_local() {
+        assert_blocked_by_is_private_ip("[fe80::1]");
+    }
+
+    #[test]
+    fn resolve_non_private_blocks_bracketed_v4mapped_loopback() {
+        assert_blocked_by_is_private_ip("[::ffff:127.0.0.1]");
+    }
+
+    #[test]
+    fn resolve_non_private_blocks_bracketed_nat64_imds() {
+        // 64:ff9b::7f00:1 → 127.0.0.1 (NAT64-wrapped loopback).
+        assert_blocked_by_is_private_ip("[64:ff9b::7f00:1]");
+    }
+
+    #[test]
+    fn resolve_non_private_allows_bracketed_public_v6() {
+        // Cloudflare public v6, bracketed as a URL host would present it.
+        let sa = resolve_first_non_private_addr("[2606:4700:4700::1111]")
+            .expect("public bracketed v6 literal must be allowed");
+        assert_eq!(
+            sa.ip(),
+            "2606:4700:4700::1111".parse::<IpAddr>().unwrap(),
+            "the vetted addr must be the unbracketed parsed literal"
+        );
+    }
+
+    #[test]
+    fn ssrf_check_url_blocks_bracketed_v6_loopback_and_ula() {
+        // The URL entrypoint (host_str returns the bracketed form) must block.
+        for url in [
+            "http://[::1]/admin",
+            "http://[fd00::1]/x",
+            "https://[fe80::1]/",
+        ] {
+            let err = ssrf_check_url(url).expect_err("bracketed private v6 URL must be blocked");
+            assert!(err.contains("blocked"), "url {url:?} → got: {err}");
+        }
+    }
+
+    #[test]
+    fn ssrf_check_url_allows_bracketed_public_v6() {
+        assert!(ssrf_check_url("https://[2606:4700:4700::1111]/").is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // #2536 item 1 — the non-blocking redirect-hop guard. It decides IP
+    // literals (incl. bracketed v6) purely and defers named hosts to the
+    // connect-time resolver (so a hostname is NOT rejected here for lack of DNS).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nonblocking_check_blocks_private_ip_literals() {
+        for url in [
+            "http://127.0.0.1/admin",
+            "http://10.0.0.5/x",
+            "http://169.254.169.254/latest/meta",
+            "http://[::1]/",
+            "http://[fd00::1]/",
+            "http://[64:ff9b::7f00:1]/", // NAT64 → 127.0.0.1
+        ] {
+            let err = ssrf_check_url_nonblocking(url)
+                .expect_err("private IP-literal hop must be blocked without DNS");
+            assert!(err.contains("blocked"), "url {url:?} → got: {err}");
+        }
+    }
+
+    #[test]
+    fn nonblocking_check_rejects_non_http_scheme() {
+        let err = ssrf_check_url_nonblocking("ftp://example.com/x").unwrap_err();
+        assert!(err.contains("scheme"), "got: {err}");
+    }
+
+    #[test]
+    fn nonblocking_check_allows_public_ip_and_defers_hostnames() {
+        // Public IP literal: allowed. Hostname: deferred (no DNS here) → Ok.
+        assert!(ssrf_check_url_nonblocking("https://1.1.1.1/").is_ok());
+        assert!(ssrf_check_url_nonblocking("https://[2606:4700:4700::1111]/").is_ok());
+        assert!(ssrf_check_url_nonblocking("https://example.com/path").is_ok());
     }
 
     // -----------------------------------------------------------------------

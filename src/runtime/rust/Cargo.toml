@@ -269,6 +269,11 @@ web-sys = { version = "0.3", optional = true, features = [
     "RequestRedirect",
     "Response",
     "Headers",
+    # Incremental (capped) response-body read: `Response.body()` →
+    # `ReadableStream.get_reader()` → chunk loop, so an untrusted body is bounded
+    # by construction rather than fully buffered by `Response.text()`.
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
     "AbortController",
     "AbortSignal",
     "WebSocket",

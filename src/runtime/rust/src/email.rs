@@ -232,7 +232,9 @@ async fn email_post_json<E: From<String>>(
         builder,
         url,
         crate::http_client::RedirectPolicy::NoRedirects,
-    ) {
+    )
+    .await
+    {
         Ok(b) => b,
         Err(e) => return Err(e.into()),
     };
