@@ -588,15 +588,14 @@ impl std::fmt::Display for CliError {
                 "{}lint: findings remain at or above the gate severity (see above)",
                 style::GUTTER
             ),
-            // Both already wrote their final output; nothing more to display.
-            Self::DiagnosticJsonEmitted | Self::UpgradeCheckExit { .. } => Ok(()),
-            Self::UpgradeFeedUnreachable => write!(
-                f,
-                "{}{}{}  couldn't reach the release feed — check your connection",
-                style::GUTTER,
-                style::glyph::FAIL,
-                style::GUTTER
-            ),
+            // These already wrote their final output; nothing more to display.
+            // `run_upgrade` prints the framed "feed unreachable" line (human) or
+            // the machine payload (`--json`/`--plain`) before returning, so the
+            // error renders nothing here — otherwise the line prints twice (the
+            // duplicate that stderr showed under the stdout frame).
+            Self::DiagnosticJsonEmitted
+            | Self::UpgradeCheckExit { .. }
+            | Self::UpgradeFeedUnreachable => Ok(()),
             Self::FileTooLarge { path, max } => write!(
                 f,
                 "{}: file exceeds the {max}-byte read ceiling — \

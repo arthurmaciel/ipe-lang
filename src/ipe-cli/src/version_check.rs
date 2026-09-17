@@ -54,10 +54,18 @@ pub fn current_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 0, 0))
 }
 
-/// Parse a release tag (`v0.1.75` or `0.1.75`) into a semver; `None` on junk.
+/// Parse a release tag into a semver; `None` on junk.
+///
+/// Release-please tags the `ipe` package as `ipe-v0.1.82`; the bare forms
+/// `v0.1.82` and `0.1.82` are also accepted. A semver core always begins at the
+/// first ASCII digit, so parse from there — format-agnostic to any leading
+/// component or `v` prefix — while a tag carrying no version (`latest`) still
+/// yields `None`. Anchoring on the first digit (not a hard-coded `ipe-`) keeps
+/// this from re-hard-mirroring the release-please package name.
 fn parse_tag(tag: &str) -> Option<Version> {
     let trimmed = tag.trim();
-    Version::parse(trimmed.strip_prefix('v').unwrap_or(trimmed)).ok()
+    let start = trimmed.find(|c: char| c.is_ascii_digit())?;
+    Version::parse(&trimmed[start..]).ok()
 }
 
 /// The pure comparison — the test surface.
@@ -137,9 +145,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_tag_strips_leading_v_and_rejects_junk() {
+    fn parse_tag_accepts_release_please_prefix_and_rejects_junk() {
+        // The live scheme: release-please tags the `ipe` package this way.
+        assert_eq!(parse_tag("ipe-v0.1.82"), Some(v("0.1.82")));
+        // Bare forms stay valid.
         assert_eq!(parse_tag("v0.1.75"), Some(v("0.1.75")));
         assert_eq!(parse_tag("0.1.75"), Some(v("0.1.75")));
+        // A prerelease core is preserved after the prefix.
+        assert_eq!(parse_tag("ipe-v0.2.0-rc.1"), Some(v("0.2.0-rc.1")));
+        // Version-less / empty tags are still rejected (fail closed).
         assert_eq!(parse_tag("latest"), None);
         assert_eq!(parse_tag(""), None);
     }
