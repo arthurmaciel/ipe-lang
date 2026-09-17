@@ -699,6 +699,15 @@ pub static ENV_VARS: &[EnvVar] = &[
         subsystem: Subsystem::Http,
         class: Class::Tunable,
     },
+    EnvVar {
+        name: "IPE_HTTP_DNS_TIMEOUT_MS",
+        default: "5000 (5 s)",
+        purpose: "Deadline (ms) for the SSRF pre-send DNS resolve, run off the async \
+                  worker via spawn_blocking. Bounds worker-pool starvation from a slow \
+                  or stalling resolver on an outbound request.",
+        subsystem: Subsystem::Http,
+        class: Class::SecurityTunable,
+    },
     // ── Observability ─────────────────────────────────────────────────────────
     EnvVar {
         name: "IPE_ENV",
