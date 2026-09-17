@@ -186,8 +186,8 @@ web-sys = { version = "0.3", features = [
   "CustomEvent",
   "Request", "RequestInit", "RequestMode", "RequestRedirect",
   "Response", "Headers", "AbortController", "AbortSignal",
-  // Incremental capped body read (fetch arm): `Response.body()` →
-  // `ReadableStream.get_reader()` → chunk loop (mirrors the runtime crate).
+  # Incremental capped body read (fetch arm): Response.body() ->
+  # ReadableStream.get_reader() -> chunk loop (mirrors the runtime crate).
   "ReadableStream", "ReadableStreamDefaultReader",
   "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "BinaryType",
   "PopStateEvent", "History",
