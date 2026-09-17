@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.82](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.81...ipe-v0.1.82) (2026-09-17)
+
+
+### Bug Fixes
+
+* **backend:** hydration-serde gate recurses into nested user ADT variant fields ([#2553](https://github.com/arthurmaciel/ipe-lang/issues/2553)) ([78ca083](https://github.com/arthurmaciel/ipe-lang/commit/78ca083e41a30ef036548ffae792813a05c3162c)), closes [#2550](https://github.com/arthurmaciel/ipe-lang/issues/2550)
+
 ## [0.1.81](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.80...ipe-v0.1.81) (2026-09-17)
 
 
