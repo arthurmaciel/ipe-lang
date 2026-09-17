@@ -644,6 +644,30 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     // `webview_host` below.
     let delivery = resolve_delivery(&entry_path, &args.delivery, wants_static, "build")?;
 
+    // Trust-boundary consent gates — hoisted ABOVE the bundle early-return so a
+    // `desktop`/`ios`/`android` bundle build is gated too (a bundle is a
+    // distributable). Acknowledge any disclosed `.Unsafe` escape-hatch import
+    // BEFORE the (costly) emit + cargo build OR bundle. The safe path (no `.Unsafe`
+    // import) returns silently; an exposed program requires `--accept-risks`, the
+    // manifest token, or an interactive yes, and a non-interactive build without
+    // consent fails closed rather than blocking on a prompt.
+    acknowledge_unsafe_imports(
+        manifest_parsed.as_ref(),
+        manifest.as_deref(),
+        &entry_path,
+        args.accept_risks,
+    )?;
+
+    // App-boundary web-capability consent: a disclosed `js-port:<axis>` reached by
+    // a dependency must be granted by THIS app's `[capabilities] accept`, else the
+    // build fails closed naming the disclosing module.
+    gate_web_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
+    // App-boundary native-crossing consent: a disclosed `native-ffi` crossing
+    // reached by a dependency must be granted by THIS app's `[capabilities]
+    // declared`, else the build fails closed naming the disclosing `Rust.<Crate>`.
+    gate_native_ffi_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
     // A `desktop`/`ios`/`android` host is an application bundle, not a plain
     // artifact: route it through the delivery-grammar bundler (a fast dev bundle
     // for `build`). The served/default host falls through to the ordinary compile
@@ -661,28 +685,6 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     if args.fix {
         apply_fixes_cmd(&entry_path, true, &mut std::io::stdout())?;
     }
-
-    // Acknowledge any disclosed `.Unsafe` escape-hatch import BEFORE the (costly)
-    // emit + cargo build. The safe path (no `.Unsafe` import) returns silently;
-    // an exposed program requires `--accept-risks`, the manifest token, or an
-    // interactive yes, and a non-interactive build without consent fails closed
-    // rather than blocking on a prompt.
-    acknowledge_unsafe_imports(
-        manifest_parsed.as_ref(),
-        manifest.as_deref(),
-        &entry_path,
-        args.accept_risks,
-    )?;
-
-    // App-boundary web-capability consent: a disclosed `js-port:<axis>` reached by
-    // a dependency must be granted by THIS app's `[capabilities] accept`, else the
-    // build fails closed naming the disclosing module.
-    gate_web_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
-
-    // App-boundary native-crossing consent: a disclosed `native-ffi` crossing
-    // reached by a dependency must be granted by THIS app's `[capabilities]
-    // declared`, else the build fails closed naming the disclosing `Rust.<Crate>`.
-    gate_native_ffi_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
 
     // Precedence: CLI --target wasm|wasi > IPE_TARGET=wasm|wasi > [wasm].mode.
     let compile_target = resolve_compile_target(wasm_target, manifest_wasm.as_ref());
@@ -1058,6 +1060,33 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         return emit_permissions(platform, Some(entry.as_str()), "release");
     }
 
+    // Discover the manifest (same logic as build/eject).
+    let manifest = discover_manifest(&entry_path)?;
+
+    let manifest_parsed = match manifest.as_deref() {
+        Some(m) => Some(project::parse_manifest(m)?),
+        None => None,
+    };
+
+    // The same trust-boundary consent gates `build` and `run` enforce, applied
+    // BEFORE any emit, cargo build, OR bundle — hoisted above the bundle
+    // early-return so EVERY release target (served artifact AND a
+    // desktop/ios/android distributable bundle) is gated. A distributable is the
+    // most consequential output, so it must never ship a disclosed `.Unsafe`
+    // escape hatch, `js-port:<axis>` web crossing, or `native-ffi` crossing that
+    // the app's manifest did not grant. Release is non-interactive by design: it
+    // carries no `--accept-risks` and never prompts, so an ungranted disclosure
+    // fails closed here, and the durable manifest `[capabilities]` grant is the
+    // only way through (a CI release must not block on a TTY prompt).
+    acknowledge_unsafe_imports(
+        manifest_parsed.as_ref(),
+        manifest.as_deref(),
+        &entry_path,
+        false,
+    )?;
+    gate_web_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+    gate_native_ffi_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
     // A `desktop`/`ios`/`android` host is a production distributable bundle:
     // route it through the delivery-grammar bundler (the `release` production
     // profile). The served/default host falls through to the ordinary release
@@ -1068,13 +1097,6 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         return bundle_delivery(host, BundleProfile::Release, Some(entry.as_str()));
     }
 
-    // Discover the manifest (same logic as build/eject).
-    let manifest = discover_manifest(&entry_path)?;
-
-    let manifest_parsed = match manifest.as_deref() {
-        Some(m) => Some(project::parse_manifest(m)?),
-        None => None,
-    };
     let manifest_wasm: Option<project::WasmConfig> =
         manifest_parsed.as_ref().map(|m| m.wasm.clone());
 

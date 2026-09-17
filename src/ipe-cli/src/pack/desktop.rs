@@ -303,6 +303,44 @@ pub(crate) fn sanitise_identifier(name: &str) -> String {
     }
 }
 
+/// Refuse a bundle root directory name that is not exactly one non-traversing
+/// path component.
+///
+/// The macOS `.app` root keeps the raw display name, and that name flows into
+/// `dist_dir.join(root_name)` for both the write and the pre-pack
+/// `remove_dir_all` in [`materialise`]. A name carrying a path separator, a `..`
+/// component, or an absolute prefix would resolve OUTSIDE `dist_dir` — turning a
+/// pack into an arbitrary-path write and delete. This is the fail-closed
+/// boundary: a `root_name` whose `Path` is anything other than a single
+/// [`std::path::Component::Normal`] is rejected before any layout is returned, so
+/// no untrusted manifest name can escape the distribution directory.
+///
+/// `display_name` is the raw name, named only so the refusal message points at
+/// the offending manifest field.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when `root_name` is not a single normal path
+/// component.
+fn reject_traversing_bundle_root(
+    root_name: &str,
+    display_name: &str,
+) -> Result<(), super::super::CliError> {
+    use std::path::Component;
+    let mut components = Path::new(root_name).components();
+    let single_normal = matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    );
+    if single_normal {
+        return Ok(());
+    }
+    Err(super::super::CliError::UsageOwned(format!(
+        "package.ipe: name `{display_name}` cannot be a macOS bundle directory — a bundle root \
+         must be a single path component, but this name introduces a path separator, a `..` \
+         traversal, or an absolute path. Choose a name without `/`, `\\`, or `..`."
+    )))
+}
+
 /// The per-OS icon file a bundle carries, derived from the single source icon.
 ///
 /// The *name* and *format* are decided here (pure data); rendering the source
@@ -397,6 +435,17 @@ pub fn layout(
 
     match os {
         DesktopOs::MacOs => {
+            // The macOS bundle directory keeps the app's display name (spaces and
+            // punctuation are legal in a `.app` name), so — unlike the fully
+            // sanitised Linux/Windows roots — this is the one root_name derived
+            // from the raw manifest name. That raw name reaches
+            // `dist_dir.join(root_name)` and `remove_dir_all` in `materialise`, so
+            // a name that is not a single, non-traversing path component
+            // (`../victim`, `a/b`, an absolute path) would let the bundler write
+            // and delete OUTSIDE dist_dir. Refuse fail-closed before any layout is
+            // returned: the bundle root must be exactly one normal path component.
+            let root_name = format!("{}.app", identity.name);
+            reject_traversing_bundle_root(&root_name, &identity.name)?;
             // The Apple platform a macOS bundle derives its permissions for —
             // taken from the OS mapping, never hardcoded, so the platform a
             // bundle renders for is a single source.
@@ -422,7 +471,7 @@ pub fn layout(
             });
             Ok(BundleLayout {
                 os,
-                root_name: format!("{}.app", identity.name),
+                root_name,
                 files,
             })
         }
@@ -853,6 +902,42 @@ mod tests {
         assert!(paths.contains(&"Contents/MacOS/my-app"));
         assert!(paths.contains(&"Contents/Info.plist"));
         assert!(paths.contains(&"Contents/Resources/my-app.icns"));
+    }
+
+    #[test]
+    fn a_traversing_app_name_is_refused_for_the_mac_bundle_root() {
+        // A manifest name is untrusted. On macOS the `.app` root keeps the raw
+        // name, which reaches `dist_dir.join(root_name)` and `remove_dir_all`; a
+        // name that resolves outside `dist_dir` must be refused BEFORE a layout is
+        // returned, never joined. Each of these would escape the distribution
+        // directory (write + delete an arbitrary path) if the raw name were used.
+        for hostile in [
+            "../victim",
+            "../../etc/cron.d/x",
+            "a/b",
+            "nested/../escape",
+            "/abs/root",
+            "with/slash",
+        ] {
+            let identity = BundleIdentity::new(hostile, Some("1.0.0"), None);
+            let result = layout(DesktopOs::MacOs, &identity, &accepts(&[]), None);
+            assert!(
+                result.is_err(),
+                "a traversing macOS bundle name `{hostile}` must be refused, not joined"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_display_name_still_makes_a_valid_mac_bundle_root() {
+        // The refusal must not over-reject: a normal display name with spaces and
+        // punctuation is a legal single `.app` component and must still pass.
+        for ok in ["My App", "App 2.0", "café", "under_score", "Dot.In.Name"] {
+            let identity = BundleIdentity::new(ok, Some("1.0.0"), None);
+            let layout =
+                layout(DesktopOs::MacOs, &identity, &accepts(&[]), None).expect("mac layout");
+            assert_eq!(layout.root_name, format!("{ok}.app"));
+        }
     }
 
     #[test]

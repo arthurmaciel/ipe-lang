@@ -365,7 +365,8 @@ mod windows_jail {
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_PROCESS_TIME, JOBOBJECT_BASIC_LIMIT_INFORMATION,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
         SetInformationJobObject,
     };
@@ -781,16 +782,33 @@ mod windows_jail {
         let job = OwnedHandle(handle);
 
         let active_cap = active_process_cap(profile);
+        // The address-space and CPU-second ceilings the profile mandates. On the
+        // Unix arms these are `prlimit --as`/`--cpu`; the Job Object enforces the
+        // equivalents so a runaway or memory-bomb under an untrusted `ipe run` is
+        // bounded on every platform, not just Unix (PRINCIPLES.md: bounded by
+        // construction — a process that could exhaust host memory or spin forever
+        // has broken soundness, and over the network principle 1's exhaustion
+        // clause too). `JobMemoryLimit` caps the job's committed bytes;
+        // `PerProcessUserTimeLimit` (100-ns units) caps each process's CPU time —
+        // exceeding either terminates the whole job.
+        let mem_bytes = profile.limits.job_memory_limit_bytes();
+        let cpu_100ns = profile.limits.cpu_time_100ns();
 
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         info.BasicLimitInformation = JOBOBJECT_BASIC_LIMIT_INFORMATION {
             // KILL_ON_JOB_CLOSE: every process dies when the launcher's job handle
-            // closes. ACTIVE_PROCESS: the count cap. BREAKAWAY_OK is deliberately
-            // NOT set — a child cannot escape the job.
-            LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+            // closes. ACTIVE_PROCESS: the count cap. PROCESS_TIME: the per-process
+            // CPU-second ceiling. JOB_MEMORY: the job-wide committed-bytes ceiling.
+            // BREAKAWAY_OK is deliberately NOT set — a child cannot escape the job.
+            LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                | JOB_OBJECT_LIMIT_PROCESS_TIME
+                | JOB_OBJECT_LIMIT_JOB_MEMORY,
             ActiveProcessLimit: active_cap,
+            PerProcessUserTimeLimit: cpu_100ns,
             ..info.BasicLimitInformation
         };
+        info.JobMemoryLimit = mem_bytes;
 
         // SAFETY: `info` is a fully-initialized extended-limit struct; the call
         // reads `size_of::<…>()` bytes from it and applies them to the owned job.
