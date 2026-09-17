@@ -356,6 +356,10 @@ pub(crate) fn ssrf_check_url(url: &str) -> Result<(), String> {
 /// pure and non-blocking.
 ///
 /// Returns `Ok(())` if allowed, `Err(message)` if blocked.
+// Only `http_client::ssrf_apply`'s reqwest redirect closure calls this; the `ssrf`
+// module also compiles under `db`/`websocket_client` (DSN / ws pin) where that caller
+// is absent, so allow-dead there (mirrors `ssrf_pinned_ws_addr`'s cfg_attr).
+#[cfg_attr(not(feature = "http_client"), allow(dead_code))]
 pub(crate) fn ssrf_check_url_nonblocking(url: &str) -> Result<(), String> {
     let parsed = match Url::parse(url) {
         Ok(u) => u,
