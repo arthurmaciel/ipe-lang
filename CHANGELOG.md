@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.83](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.82...ipe-v0.1.83) (2026-09-17)
+
+
+### Bug Fixes
+
+* **cli:** parse the release-please `ipe-v` tag prefix in the upgrade check ([#2555](https://github.com/arthurmaciel/ipe-lang/issues/2555)) ([848daa5](https://github.com/arthurmaciel/ipe-lang/commit/848daa585a36aa6de4dde6d9ee021d4f1677c4e4))
+
 ## [0.1.82](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.81...ipe-v0.1.82) (2026-09-17)
 
 
