@@ -117,14 +117,10 @@ impl RunResourceLimits {
     /// wrapping to a tiny (or zero) limit that would kill a legitimate app early
     /// or, worse, silently drop the bound.
     #[must_use]
-    pub const fn cpu_time_100ns(&self) -> i64 {
+    pub fn cpu_time_100ns(&self) -> i64 {
         // 1 s = 10_000_000 × 100 ns. Saturate the multiply, then clamp into i64.
         let ticks = self.cpu_secs.saturating_mul(10_000_000);
-        if ticks > i64::MAX as u64 {
-            i64::MAX
-        } else {
-            ticks as i64
-        }
+        i64::try_from(ticks).unwrap_or(i64::MAX)
     }
 
     /// The address-space ceiling in bytes for the Win32 Job Object
@@ -137,12 +133,8 @@ impl RunResourceLimits {
     /// saturation keeps the bound honest and never accidentally permissive-then-
     /// starved.
     #[must_use]
-    pub const fn job_memory_limit_bytes(&self) -> usize {
-        if self.as_bytes > usize::MAX as u64 {
-            usize::MAX
-        } else {
-            self.as_bytes as usize
-        }
+    pub fn job_memory_limit_bytes(&self) -> usize {
+        usize::try_from(self.as_bytes).unwrap_or(usize::MAX)
     }
 }
 
