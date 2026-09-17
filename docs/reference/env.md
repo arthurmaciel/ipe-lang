@@ -101,6 +101,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 
 | Variable | Default | Effect | Class |
 |----------|---------|--------|-------|
+| `IPE_CSV_MAX_BYTES` | 536870912 (512 MiB) | Maximum total decoded field bytes parsed from a single CSV input. Bounds heap use when rows fit the row cap but carry oversized fields. | `Tunable` |
 | `IPE_CSV_MAX_ROWS` | 10000000 (10 M) | Maximum rows parsed from a single CSV input. Prevents OOM from unbounded CSV streams. | `Tunable` |
 | `IPE_CSV_SANITIZE_FORMULAS` | unset (false) | Set to `1`, `on`, `true`, or `yes` to prefix formula-injection characters (`=`, `+`, `-`, `@`) with a single quote in CSV output, preventing spreadsheet formula injection. | `SecurityTunable` |
 

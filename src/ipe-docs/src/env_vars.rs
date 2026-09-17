@@ -506,6 +506,14 @@ pub static ENV_VARS: &[EnvVar] = &[
     },
     // ── CSV ───────────────────────────────────────────────────────────────────
     EnvVar {
+        name: "IPE_CSV_MAX_BYTES",
+        default: "536870912 (512 MiB)",
+        purpose: "Maximum total decoded field bytes parsed from a single CSV input. \
+                  Bounds heap use when rows fit the row cap but carry oversized fields.",
+        subsystem: Subsystem::Csv,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_CSV_MAX_ROWS",
         default: "10000000 (10 M)",
         purpose: "Maximum rows parsed from a single CSV input. Prevents OOM from \

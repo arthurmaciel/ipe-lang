@@ -202,10 +202,33 @@ pub fn css_value_is_safe(v: &str) -> bool {
     value_parses(&low) && (!low.contains('\\') || value_parses(&css_unescape(&low)))
 }
 
+/// Maximum nested-function depth the value grammar descends before rejecting.
+/// Every allowlisted function argument list recurses one level ([`parse_function`]
+/// → [`value_parses`]), so a value like `calc(calc(calc(…)))` nested N deep would
+/// otherwise cost N stack frames. Even at compile time a source literal's nesting
+/// is attacker-controllable in principle and unbounded recursion is a
+/// stack-overflow abort (PRINCIPLES §3, bounded by construction); a real CSS value
+/// nests only a handful of levels, so this ceiling is far above any legitimate
+/// value and a value past it is refused (fail-closed). MUST stay identical to the
+/// runtime mirror `css_safety::MAX_VALUE_DEPTH`
+/// (`value_policy_agrees_with_shared_kernel_policy` pins the policy equal).
+const MAX_VALUE_DEPTH: usize = 32;
+
 /// Parse `s` (already lowercased) as a whitespace/`,`/`/`-separated sequence of
 /// recognized value tokens. Returns `false` on the first unrecognized byte,
-/// unbalanced paren, unrecognized function name, or scheme-bearing `url(...)`.
+/// unbalanced paren, unrecognized function name, scheme-bearing `url(...)`, or a
+/// nesting depth past [`MAX_VALUE_DEPTH`].
 fn value_parses(s: &str) -> bool {
+    value_parses_at(s, 0)
+}
+
+/// Depth-tracked core of [`value_parses`]. `depth` counts the nested
+/// function-argument recursions taken to reach `s`; past [`MAX_VALUE_DEPTH`] the
+/// value is rejected (fail-closed) rather than descending further.
+fn value_parses_at(s: &str, depth: usize) -> bool {
+    if depth > MAX_VALUE_DEPTH {
+        return false;
+    }
     let bytes = s.as_bytes();
     let mut i = 0;
     while let Some(&c) = bytes.get(i) {
@@ -237,7 +260,7 @@ fn value_parses(s: &str) -> bool {
             }
         }
         // A value token: an ident/number run, possibly a function `ident(...)`.
-        match parse_token(bytes, i) {
+        match parse_token(bytes, i, depth) {
             Some(next) => i = next,
             None => return false,
         }
@@ -249,7 +272,7 @@ fn value_parses(s: &str) -> bool {
 /// it is immediately followed by `(` — a balanced function call whose name is
 /// on [`ALLOWED_FUNCTIONS`]. Returns the index just past the token, or `None`
 /// if any byte is unrecognized or the function is not allowlisted.
-fn parse_token(bytes: &[u8], start: usize) -> Option<usize> {
+fn parse_token(bytes: &[u8], start: usize, depth: usize) -> Option<usize> {
     let mut i = start;
     // Consume the ident/number/hexcolour run: the character class permitted in
     // a bare token. `:` is deliberately EXCLUDED so no scheme (`javascript:`,
@@ -260,7 +283,7 @@ fn parse_token(bytes: &[u8], start: usize) -> Option<usize> {
     // A function call: the just-consumed run is the name, and `(` opens it.
     if bytes.get(i) == Some(&b'(') {
         let name = bytes.get(start..i)?;
-        return parse_function(bytes, name, i);
+        return parse_function(bytes, name, i, depth);
     }
     // A bare token must have consumed at least one byte; otherwise `start`
     // points at an unrecognized byte and the value is rejected.
@@ -271,22 +294,24 @@ fn parse_token(bytes: &[u8], start: usize) -> Option<usize> {
 /// `open` indexes its `(`. The name must be on [`ALLOWED_FUNCTIONS`]. `url(...)`
 /// gates its argument scheme-free via [`url_arg_is_safe`]; every other allowed
 /// function recursively parses its argument list as a nested value.
-fn parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
+fn parse_function(bytes: &[u8], name: &[u8], open: usize, depth: usize) -> Option<usize> {
     let name_str = core::str::from_utf8(name).ok()?;
     if ALLOWED_FUNCTIONS.binary_search(&name_str).is_err() {
         return None;
     }
     // Find the matching close paren, tracking nesting so an inner function's
     // parens do not end this call early. Bail (reject) on an unbalanced call.
-    let mut depth = 0usize;
+    // (`paren_depth` is the local bracket-balance counter — distinct from the
+    // recursion `depth` param, which bounds nested-function descent.)
+    let mut paren_depth = 0usize;
     let mut close = None;
     let mut i = open;
     while let Some(&b) = bytes.get(i) {
         match b {
-            b'(' => depth += 1,
+            b'(' => paren_depth += 1,
             b')' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
+                paren_depth = paren_depth.saturating_sub(1);
+                if paren_depth == 0 {
                     close = Some(i);
                     break;
                 }
@@ -303,9 +328,10 @@ fn parse_function(bytes: &[u8], name: &[u8], open: usize) -> Option<usize> {
         }
     } else {
         // The argument list is itself a value: parse it with the same grammar
-        // so a smuggled construct inside a `calc(...)` / `var(...)` is caught.
+        // (one level deeper) so a smuggled construct inside a `calc(...)` /
+        // `var(...)` is caught and the descent stays depth-bounded.
         let inner_str = core::str::from_utf8(inner).ok()?;
-        if !value_parses(inner_str) {
+        if !value_parses_at(inner_str, depth + 1) {
             return None;
         }
     }
@@ -531,5 +557,42 @@ mod tests {
     fn rejects_empty_value() {
         assert!(!css_value_is_safe(""));
         assert!(!css_value_is_safe("   "));
+    }
+
+    /// Bounded by construction (PRINCIPLES §3): a value whose nested-function
+    /// depth exceeds [`super::MAX_VALUE_DEPTH`] is REFUSED rather than recursed
+    /// into — a `calc(calc(calc(…)))` nested thousands deep must not blow the
+    /// stack. A legitimately-nested value (a handful of levels) still parses.
+    #[test]
+    fn rejects_pathologically_nested_value_fail_closed() {
+        // Well past the ceiling but far below what would overflow the stack
+        // WITHOUT the cap — proving the reject happens at the depth bound, not
+        // at a crash.
+        let deep = format!("{}1px{}", "calc(".repeat(5_000), ")".repeat(5_000));
+        assert!(
+            !css_value_is_safe(&deep),
+            "a value nested past MAX_VALUE_DEPTH must be refused, not recursed into"
+        );
+        // A legitimately shallow nesting (well within the ceiling) still passes.
+        assert!(css_value_is_safe("calc(min(10px, max(2px, 4px)))"));
+        // The exact boundary: MAX_VALUE_DEPTH levels parse; one more is refused.
+        let ok = format!(
+            "{}1px{}",
+            "calc(".repeat(super::MAX_VALUE_DEPTH),
+            ")".repeat(super::MAX_VALUE_DEPTH)
+        );
+        assert!(
+            css_value_is_safe(&ok),
+            "depth == MAX_VALUE_DEPTH must parse"
+        );
+        let over = format!(
+            "{}1px{}",
+            "calc(".repeat(super::MAX_VALUE_DEPTH + 2),
+            ")".repeat(super::MAX_VALUE_DEPTH + 2)
+        );
+        assert!(
+            !css_value_is_safe(&over),
+            "depth past MAX_VALUE_DEPTH must be refused"
+        );
     }
 }
