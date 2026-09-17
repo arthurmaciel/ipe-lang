@@ -105,6 +105,47 @@ impl Default for RunResourceLimits {
     }
 }
 
+impl RunResourceLimits {
+    /// The CPU-second ceiling in Win32 Job-Object 100-nanosecond units, saturating
+    /// at [`i64::MAX`].
+    ///
+    /// The Unix arms feed `cpu_secs` to `prlimit --cpu`; the Windows Job Object's
+    /// `PerProcessUserTimeLimit` field is the same CPU ceiling expressed in 100-ns
+    /// ticks. Kept as a pure, host-independent mapping so the conversion is
+    /// unit-tested on any host, not only where the Win32 call links — and so an
+    /// overflow saturates to the largest representable ceiling rather than
+    /// wrapping to a tiny (or zero) limit that would kill a legitimate app early
+    /// or, worse, silently drop the bound.
+    #[must_use]
+    pub const fn cpu_time_100ns(&self) -> i64 {
+        // 1 s = 10_000_000 × 100 ns. Saturate the multiply, then clamp into i64.
+        let ticks = self.cpu_secs.saturating_mul(10_000_000);
+        if ticks > i64::MAX as u64 {
+            i64::MAX
+        } else {
+            ticks as i64
+        }
+    }
+
+    /// The address-space ceiling in bytes for the Win32 Job Object
+    /// `JobMemoryLimit`, saturating at [`usize::MAX`].
+    ///
+    /// The Unix arms feed `as_bytes` to `prlimit --as`; the Job Object's
+    /// `JobMemoryLimit` is the job-wide committed-bytes equivalent. A `u64` that
+    /// exceeds a 32-bit `usize` saturates rather than truncating — a truncated
+    /// value could set a ceiling far below the intended one (or zero), so
+    /// saturation keeps the bound honest and never accidentally permissive-then-
+    /// starved.
+    #[must_use]
+    pub const fn job_memory_limit_bytes(&self) -> usize {
+        if self.as_bytes > usize::MAX as u64 {
+            usize::MAX
+        } else {
+            self.as_bytes as usize
+        }
+    }
+}
+
 /// The platform-independent description of a run jail.
 ///
 /// What the emitted app may touch, derived from its capability set. A
@@ -594,4 +635,72 @@ pub fn scan_capfloor(bytes: &[u8]) -> Option<SandboxProfile> {
     }
     merged.env_allowlist = env_names.into_iter().map(str::to_owned).collect();
     Some(merged)
+}
+
+#[cfg(test)]
+mod limit_mapping_tests {
+    use super::RunResourceLimits;
+
+    #[test]
+    fn cpu_seconds_map_to_hundred_nanosecond_ticks() {
+        // The Windows Job Object's PerProcessUserTimeLimit is the same CPU-second
+        // ceiling as the Unix `prlimit --cpu`, expressed in 100-ns units:
+        // 1 s = 10_000_000 ticks. The default run-jail cap must round-trip exactly.
+        let l = RunResourceLimits {
+            cpu_secs: 1,
+            ..RunResourceLimits::default()
+        };
+        assert_eq!(l.cpu_time_100ns(), 10_000_000);
+        let d = RunResourceLimits::default();
+        assert_eq!(d.cpu_time_100ns(), 86_400 * 10_000_000);
+    }
+
+    #[test]
+    fn an_absurd_cpu_ceiling_saturates_instead_of_wrapping_to_a_tiny_bound() {
+        // A hostile or corrupt profile carrying a huge cpu_secs must NOT wrap the
+        // 100-ns multiply into a small (or negative) i64 that would kill a
+        // legitimate app almost immediately, nor silently drop the ceiling. It
+        // saturates to the largest representable bound — still a bound.
+        let l = RunResourceLimits {
+            cpu_secs: u64::MAX,
+            ..RunResourceLimits::default()
+        };
+        assert_eq!(l.cpu_time_100ns(), i64::MAX);
+        // Just past the i64 tick ceiling also saturates rather than overflowing.
+        let past = RunResourceLimits {
+            cpu_secs: (i64::MAX as u64 / 10_000_000) + 1,
+            ..RunResourceLimits::default()
+        };
+        assert_eq!(past.cpu_time_100ns(), i64::MAX);
+    }
+
+    #[test]
+    fn address_space_maps_to_the_job_memory_byte_ceiling() {
+        let l = RunResourceLimits {
+            as_bytes: 4 * 1024 * 1024 * 1024,
+            ..RunResourceLimits::default()
+        };
+        // On a 64-bit host the 4 GiB default fits usize exactly.
+        assert_eq!(l.job_memory_limit_bytes() as u64, 4 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn an_over_usize_memory_ceiling_saturates_instead_of_truncating() {
+        // A byte ceiling beyond a 32-bit usize must saturate to usize::MAX, never
+        // truncate to a tiny value that would starve a legitimate app or, by
+        // wrapping to zero, drop the memory bound entirely. On a 64-bit host
+        // u64::MAX still exceeds usize::MAX only on 32-bit, so assert the invariant
+        // that the result never exceeds usize::MAX and is monotone.
+        let huge = RunResourceLimits {
+            as_bytes: u64::MAX,
+            ..RunResourceLimits::default()
+        };
+        assert_eq!(huge.job_memory_limit_bytes(), usize::MAX);
+        // A value that fits is preserved exactly.
+        let fits = RunResourceLimits {
+            as_bytes: 1024,
+            ..RunResourceLimits::default()
+        };
+        assert_eq!(fits.job_memory_limit_bytes(), 1024);
+    }
 }

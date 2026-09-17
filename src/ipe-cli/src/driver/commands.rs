@@ -1075,6 +1075,26 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         Some(m) => Some(project::parse_manifest(m)?),
         None => None,
     };
+
+    // The same trust-boundary consent gates `build` and `run` enforce, applied to
+    // the release artifact BEFORE any emit or cargo build. A distributable is the
+    // most consequential output, so it must never ship a disclosed `.Unsafe`
+    // escape hatch, `js-port:<axis>` web crossing, or `native-ffi` crossing that
+    // the app's manifest did not grant — releasing without them would let a shipped
+    // binary carry a capability the author never consented to. Release is
+    // non-interactive by design: it carries no `--accept-risks` and never prompts,
+    // so an ungranted disclosure fails closed here, and the durable manifest
+    // `[capabilities]` grant is the only way through — exactly the release-time
+    // consent shape (a CI release must not block on a TTY prompt).
+    acknowledge_unsafe_imports(
+        manifest_parsed.as_ref(),
+        manifest.as_deref(),
+        &entry_path,
+        false,
+    )?;
+    gate_web_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+    gate_native_ffi_consent(manifest_parsed.as_ref(), manifest.as_deref(), &entry_path)?;
+
     let manifest_wasm: Option<project::WasmConfig> =
         manifest_parsed.as_ref().map(|m| m.wasm.clone());
 
