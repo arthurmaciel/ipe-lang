@@ -3290,75 +3290,109 @@ fn ir_type_contains_non_serde(ty: &IrType) -> bool {
     }
 }
 
-/// Gate: when `ctx.wasm_hydrate_mode`, find the type named `HydrationState`
-/// in module `Main` and verify that every field is serialisation-safe.
+/// Gate: when `ctx.wasm_hydrate_mode`, verify every field of the island
+/// parse-target type is serialisation-safe.
 ///
-/// A `HydrationState` with a non-serde field type (e.g. `Secret`, `Db`,
-/// `Task`, a function type) is a compile error — the emitted `hydrate` export
-/// serialises this type as JSON, so any such field would silently leak a
-/// server-side secret or produce a `cargo` type error.
+/// The parse target is NOT a type named literally `HydrationState`: it is
+/// whatever type the user's `fromHydrationState` projection takes as its
+/// parameter — the exact type [`EmitCtx::resolve_hydration_state_rust_name`]
+/// resolves for the `hydrate` glue (the user may name that ADT `MyState`,
+/// `MainHydrationState`, etc.). Keying on a literal `HydrationState` name
+/// would miss (or check the wrong type for) any program that names its island
+/// type differently, letting a non-serde field slip through the gate — so the
+/// gate is driven off the SAME projection parameter the emit path uses (single
+/// source of truth, no drift between gate and glue).
 ///
-/// The gate fires at compile time (during backend emission), giving the user
-/// a clear diagnostic rather than a mysterious `serde` bound failure from
-/// `rustc`.
+/// A target with a non-serde field type (e.g. `Secret`, `Db`, `Task`, a
+/// function type) is a compile error — the emitted `hydrate` export serialises
+/// this type as JSON, so any such field would silently leak a server-side
+/// secret or produce a `cargo` type error (an ipe-accept-then-cargo-fail SEAL
+/// break). The gate fires at compile time, giving a clear diagnostic rather
+/// than a mysterious `serde` bound failure from `rustc`.
+///
+/// When the program declares no `fromHydrationState` projection there is no
+/// island parse target to check (the glue falls through to a clean init), so
+/// the gate passes.
 fn check_hydration_state_fields(ctx: &EmitCtx, program: &Program) -> DResult<()> {
     if !ctx.wasm_hydrate_mode {
         return Ok(());
     }
 
-    // Find the module named `Main` in the program.
-    let main_sym = ctx.interner.lookup("Main");
-    let Some(main_sym) = main_sym else {
-        // No `Main` symbol at all — the program is not a Web app; the
-        // `hydrate` emit path will fail elsewhere with a clearer error.
+    // The island parse target is `fromHydrationState`'s parameter type — the
+    // same target the emit glue names. No projection ⇒ no island parse ⇒
+    // nothing to check.
+    let Some(target_ty) = hydration_projection_param_ty(ctx, program) else {
         return Ok(());
     };
 
-    let main_module = program.modules.iter().find(|m| m.name.0 == [main_sym]);
-    let Some(main_module) = main_module else {
-        return Ok(());
-    };
-
-    // Find the `HydrationState` type def in `Main`.
-    let hs_sym = ctx.interner.lookup("HydrationState");
-    let Some(hs_sym) = hs_sym else {
-        // No `HydrationState` type — also valid (the hydrate path will use
-        // the convention-based name; if it is absent the emitted code will
-        // fail with a rust compile error, not a silent miscompile).
-        return Ok(());
-    };
-
-    let hs_type = main_module.types.iter().find(|td| {
-        let ipe_ir::TypeDef::Enum(def) = td;
-        def.name == hs_sym
-    });
-    let Some(ipe_ir::TypeDef::Enum(hs_def)) = hs_type else {
-        return Ok(());
-    };
-
-    // Walk every field of every variant.  `HydrationState` is expected to be
-    // a record alias (single unit variant with named fields), but we check all
-    // variants for completeness.
-    for variant in &hs_def.variants {
-        for field_ty in &variant.fields {
-            if ir_type_contains_non_serde(field_ty) {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::project::check_hydration_state_fields",
-                    detail: format!(
-                        "`HydrationState` has a non-serialisable field type \
-                         `{field_ty:?}`. \
-                         `HydrationState` is serialised as JSON in the WASM \
-                         hydration island; server-surface types (Db, Secret, \
-                         Task, function types, etc.) must not appear as fields. \
-                         Declare a separate client-safe type that contains only \
-                         the data the client needs."
-                    ),
-                });
-            }
+    // Resolve the target type to the field types the `hydrate` export will
+    // serialise, then reject any non-serde leaf.
+    for field_ty in hydration_target_field_types(target_ty, program) {
+        if ir_type_contains_non_serde(field_ty) {
+            return Err(Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::project::check_hydration_state_fields",
+                detail: format!(
+                    "the hydration-state type has a non-serialisable field type \
+                     `{field_ty:?}`. \
+                     The hydration state is serialised as JSON in the WASM \
+                     hydration island; server-surface types (Db, Secret, \
+                     Task, function types, etc.) must not appear as fields. \
+                     Declare a separate client-safe type that contains only \
+                     the data the client needs."
+                ),
+            });
         }
     }
 
     Ok(())
+}
+
+/// The `IrType` of the `fromHydrationState` projection's first parameter — the
+/// island parse target — or `None` when the program declares no such
+/// projection (or one with no parameter). Mirrors the target-selection logic in
+/// [`EmitCtx::resolve_hydration_state_rust_name`] so the gate and the emitted
+/// glue always agree on which type is the island target.
+fn hydration_projection_param_ty<'p>(
+    ctx: &EmitCtx,
+    program: &'p Program,
+) -> Option<&'p ipe_ir::IrType> {
+    for module in &program.modules {
+        for func in &module.funcs {
+            if ctx.interner.resolve(func.name) != Some(ipe_ir::HYDRATION_PROJECTION_NAME) {
+                continue;
+            }
+            return func.params.first().map(|(_, ty)| ty);
+        }
+    }
+    None
+}
+
+/// The field types the `hydrate` export serialises for a given island parse
+/// target. A user enum/record resolves to its declared fields; any other leaf
+/// (a bare `Int`, a `List`, etc.) is itself the single serialised value, so it
+/// is returned as one "field" and checked directly. Never panics: an unresolved
+/// enum name yields no fields (the emitted code would then fail with a clear
+/// `rustc` error, not a silent miscompile).
+fn hydration_target_field_types<'p>(
+    target_ty: &'p ipe_ir::IrType,
+    program: &'p Program,
+) -> Vec<&'p ipe_ir::IrType> {
+    match target_ty {
+        ipe_ir::IrType::Enum { home, name, .. } => {
+            let def = program.modules.iter().find_map(|m| {
+                m.types.iter().find_map(|td| {
+                    let ipe_ir::TypeDef::Enum(def) = td;
+                    (def.home == *home && def.name == *name).then_some(def)
+                })
+            });
+            match def {
+                Some(def) => def.variants.iter().flat_map(|v| v.fields.iter()).collect(),
+                None => Vec::new(),
+            }
+        }
+        ipe_ir::IrType::Record(fields) => fields.values().collect(),
+        other => vec![other],
+    }
 }
 
 /// Render the `Spine` tier's text for `program` — everything that is

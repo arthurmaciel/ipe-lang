@@ -32,8 +32,8 @@
 //! A [`Transition`] carries only: a field NAME (a string), one of a small closed
 //! set of [`TransitionOp`]s, and a [`Source`] that is a literal or the named
 //! field itself. It has no code, no call, no nesting — [`apply_transition`]
-//! cannot run arbitrary logic, cannot panic/unwrap/index/overflow (integer ops
-//! are checked and REFUSE on overflow, returning the input model), and refuses
+//! cannot run arbitrary logic, cannot panic/unwrap/index (integer ops wrap in
+//! two's complement, the defined Ipê `Int` semantics, never abort), and refuses
 //! (returns the input model unchanged) anything it cannot prove applies: a
 //! missing field, a type mismatch, a non-object model, an oversized model, or a
 //! strict-decode failure. The dev patch channel is untrusted; every failure is a
@@ -64,8 +64,9 @@ pub enum Source {
 
 /// The closed set of field operations a [`Transition`] can describe. Exhaustive
 /// and wildcard-free: a new op shape forces a compile-time decision here and in
-/// the classifier, never a silent mis-encode. Every arithmetic op is CHECKED and
-/// refuses (via [`apply_transition`] returning the input model) on overflow or a
+/// the classifier, never a silent mis-encode. Every arithmetic op wraps in
+/// two's complement (the defined Ipê `Int` semantics, matching the compiled
+/// arm) and refuses (via [`apply_transition`] returning the input model) on a
 /// type mismatch, so none can panic.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TransitionOp {
@@ -74,10 +75,11 @@ pub enum TransitionOp {
     /// field's existing type or the strict re-decode refuses.
     Set,
     /// Integer add: `field = field + source` (`Increment -> { m | count = count + 1 }`).
-    /// Both the field and the source must be integers; overflow refuses.
+    /// Both the field and the source must be integers; overflow wraps (two's
+    /// complement), matching the compiled arm's `ipe_int_add`.
     IntAdd,
     /// Integer subtract: `field = field - source` (`Decrement -> …`). Both
-    /// integers; overflow refuses.
+    /// integers; overflow wraps, matching `ipe_int_sub`.
     IntSub,
     /// Boolean negate: `field = not field` (`Toggle -> { m | on = not on }`).
     /// The field must be a boolean; the source is ignored.
@@ -116,8 +118,9 @@ impl Transition {
 ///
 /// Total and fail-closed: on ANY condition it cannot prove — a non-object model,
 /// an oversized model, a missing target field, a source field that is absent, a
-/// type mismatch between the op and the field/source, an arithmetic overflow, or
-/// a strict-decode failure of the merged object — it returns `model` UNCHANGED.
+/// type mismatch between the op and the field/source, or a strict-decode failure
+/// of the merged object — it returns `model` UNCHANGED. (Integer overflow is not
+/// a refusal: it wraps, matching the compiled arm's defined `Int` semantics.)
 /// It never panics, never unwraps, never indexes, and never coerces a value into
 /// the `Model`: the final strict decode is the backstop that rejects anything
 /// that would not type-check as the compiled arm.
@@ -176,7 +179,8 @@ where
 }
 
 /// Compute the field's next JSON value under the closed op, or `None` (refuse) on
-/// any type mismatch, missing source field, or arithmetic overflow.
+/// any type mismatch or missing source field. Arithmetic wraps (two's
+/// complement, the defined `Int` semantics), so overflow is not a refusal.
 #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
 fn compute_next(
     op: &TransitionOp,
@@ -192,14 +196,19 @@ fn compute_next(
         TransitionOp::IntAdd => {
             let a = current.as_i64()?;
             let b = resolve_source(source, obj)?.as_i64()?;
-            // Checked: an overflowing add REFUSES rather than wraps or panics.
-            let sum = a.checked_add(b)?;
+            // Two's-complement wrapping, the single defined semantics of Ipê `+`
+            // on `Int` (`ipe_runtime::math::ipe_int_add`). The compiled arm emits
+            // that wrapping add, so this datum path MUST wrap too — a checked
+            // refuse-on-overflow would silently diverge from the direct compiled
+            // arm at the i64 boundary and break dev == prod.
+            let sum = a.wrapping_add(b);
             Some(serde_json::Value::from(sum))
         }
         TransitionOp::IntSub => {
             let a = current.as_i64()?;
             let b = resolve_source(source, obj)?.as_i64()?;
-            let diff = a.checked_sub(b)?;
+            // Wrapping, matching `ipe_runtime::math::ipe_int_sub` (see `IntAdd`).
+            let diff = a.wrapping_sub(b);
             Some(serde_json::Value::from(diff))
         }
         TransitionOp::BoolNot => {
@@ -489,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn int_add_overflow_refuses() {
+    fn int_add_overflow_wraps_matching_compiled_arm() {
         let m = Counter {
             count: i64::MAX,
             name: "a".to_string(),
@@ -500,15 +509,13 @@ mod tests {
             op: TransitionOp::IntAdd,
             source: Source::Int(1),
         };
-        assert_eq!(
-            apply_transition(&t, m.clone()),
-            m,
-            "an overflowing add must refuse (checked), never wrap or panic"
-        );
+        // Wraps to `i64::MIN`, exactly as the compiled arm's `ipe_int_add` — the
+        // datum path must not diverge from the direct arm at the i64 boundary.
+        assert_eq!(apply_transition(&t, m).count, i64::MIN);
     }
 
     #[test]
-    fn int_sub_overflow_refuses() {
+    fn int_sub_overflow_wraps_matching_compiled_arm() {
         let m = Counter {
             count: i64::MIN,
             name: "a".to_string(),
@@ -519,7 +526,8 @@ mod tests {
             op: TransitionOp::IntSub,
             source: Source::Int(1),
         };
-        assert_eq!(apply_transition(&t, m.clone()), m);
+        // Wraps to `i64::MAX`, matching `ipe_int_sub`.
+        assert_eq!(apply_transition(&t, m).count, i64::MAX);
     }
 
     #[test]
