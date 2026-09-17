@@ -155,6 +155,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 |----------|---------|--------|-------|
 | `IPE_HTTP_BIND` | unset (loopback in dev, all-interfaces in release) | Override the host address the HTTP server binds. Takes precedence over the `Host.bind` setting and the build-profile default. The conservative loopback default keeps a dev server off the LAN. | `SecurityTunable` |
 | `IPE_HTTP_DENY_PRIVATE` | unset (auto: on in production, off in dev) | Set to `1`, `on`, or `true` to block all outbound HTTP / SMTP / database connections to RFC-1918 private, loopback, and link-local addresses, closing the SSRF attack surface. In production the guard is on by default; set to `0` to disable explicitly in dev. | `SecurityTunable` |
+| `IPE_HTTP_DNS_TIMEOUT_MS` | 5000 (5 s) | Deadline (ms) for the SSRF pre-send DNS resolve, run off the async worker via spawn_blocking. Bounds worker-pool starvation from a slow or stalling resolver on an outbound request. | `SecurityTunable` |
 | `IPE_HTTP_MAX_BODY_BYTES` | 33554432 (32 MiB) | Maximum request-body size (bytes) for outbound `Http.*` calls. Prevents OOM from unexpectedly large responses. | `Tunable` |
 
 ## Observability
