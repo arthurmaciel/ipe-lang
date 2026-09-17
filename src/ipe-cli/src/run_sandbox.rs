@@ -183,12 +183,10 @@ pub fn resolve_refusal(
     }
 
     // Recorded consent: warn loudly, in red, and proceed unconfined.
-    eprintln!(
-        "\x1b[1;31mwarning: {OVERRIDE_ENV}=1 — running native Rust code ({}) WITHOUT a capability \
-         jail. Its effects are NOT proven safe and it runs with your full authority. Install a \
-         jail primitive to confine it; never set this in CI.\x1b[0m",
-        names.join(", ")
-    );
+    // Route through the style palette so the warning honours use_color / NO_COLOR
+    // and never leaks ANSI escapes into piped or redirected stderr.
+    let p = crate::style::Palette::for_stream(&std::io::stderr());
+    eprint!("{}", override_warning(p, &names.join(", ")));
     Ok(true)
 }
 
@@ -486,6 +484,16 @@ pub fn load_and_verify_artifact(
     Ok(profile)
 }
 
+/// Build the sandbox-override warning string from a resolved palette.
+///
+/// Separating construction from emission makes the colour-gating contract
+/// testable: callers drive this with `Palette::COLOR` or `Palette::PLAIN` and
+/// assert on the presence or absence of ANSI escapes without touching a real
+/// terminal.
+fn override_warning(p: &crate::style::Palette, axes: &str) -> String {
+    crate::style::sandbox_override_warning(p, OVERRIDE_ENV, axes)
+}
+
 /// Resolve the inferred and declared capability sets for a run, given the
 /// project manifest (if any) and the resolved entry file used for single-file
 /// inference.
@@ -716,6 +724,44 @@ mod tests {
     #[test]
     fn inject_floor_reference_refuses_a_missing_main_anchor() {
         assert!(inject_floor_reference("fn not_main() {}\n").is_err());
+    }
+
+    #[test]
+    fn override_warning_plain_palette_has_no_ansi() {
+        let w = override_warning(&crate::style::Palette::PLAIN, "network, filesystem");
+        assert!(
+            !w.contains('\x1b'),
+            "plain palette must produce no ANSI escapes: {w:?}"
+        );
+        assert!(
+            w.contains(OVERRIDE_ENV),
+            "warning must name the override env var: {w:?}"
+        );
+        assert!(
+            w.contains("network, filesystem"),
+            "warning must list the axes: {w:?}"
+        );
+    }
+
+    #[test]
+    fn override_warning_colour_palette_has_red_and_bold() {
+        let w = override_warning(&crate::style::Palette::COLOR, "network");
+        assert!(
+            w.contains('\x1b'),
+            "colour palette must include ANSI escapes: {w:?}"
+        );
+        assert!(
+            w.contains(crate::style::Palette::COLOR.red),
+            "colour warning must be red: {w:?}"
+        );
+        assert!(
+            w.contains(crate::style::Palette::COLOR.bold),
+            "colour warning must be bold: {w:?}"
+        );
+        assert!(
+            w.contains(crate::style::Palette::COLOR.reset),
+            "colour warning must reset attributes: {w:?}"
+        );
     }
 
     #[test]
