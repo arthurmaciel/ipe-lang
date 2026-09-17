@@ -454,6 +454,35 @@ fn push_type_annotation(
     }
 }
 
+/// Push `pat` in atom position (a constructor argument or the head of a `::`)
+/// — wraps the pattern in parens when it would otherwise re-parse with a
+/// different structure:
+/// - a `PCtor` with arguments: `Just x` in atom position reads as two atoms
+/// - `PCons`/`PAlias`/`POr`: all bind looser than constructor application, so
+///   `a :: b` or `p as n` or `p1 | p2` as a single ctor arg would steal the
+///   surrounding constructor's remaining arguments
+fn push_pattern_atom(
+    out: &mut String,
+    pat: &ipe_syntax::Pattern,
+    interner: &ipe_intern::Interner,
+    original: &str,
+) {
+    let needs_parens = match &pat.value {
+        ipe_syntax::Pattern_::PCtor(_, _, args) if !args.is_empty() => true,
+        ipe_syntax::Pattern_::PCons(..)
+        | ipe_syntax::Pattern_::PAlias(..)
+        | ipe_syntax::Pattern_::POr(..) => true,
+        _ => false,
+    };
+    if needs_parens {
+        out.push('(');
+        push_pattern(out, pat, interner, original);
+        out.push(')');
+    } else {
+        push_pattern(out, pat, interner, original);
+    }
+}
+
 fn push_pattern(
     out: &mut String,
     pat: &ipe_syntax::Pattern,
@@ -476,17 +505,7 @@ fn push_pattern(
             out.push_str(resolve(*name));
             for arg in args {
                 out.push(' ');
-                let needs_parens = matches!(
-                    &arg.value,
-                    ipe_syntax::Pattern_::PCtor(_, _, a) if !a.is_empty()
-                );
-                if needs_parens {
-                    out.push('(');
-                    push_pattern(out, arg, interner, original);
-                    out.push(')');
-                } else {
-                    push_pattern(out, arg, interner, original);
-                }
+                push_pattern_atom(out, arg, interner, original);
             }
         }
         ipe_syntax::Pattern_::PTuple(elems) => {
@@ -538,7 +557,11 @@ fn push_pattern(
             out.push(']');
         }
         ipe_syntax::Pattern_::PCons(h, t) => {
-            push_pattern(out, h, interner, original);
+            // The head is in atom position: `POr`/`PAlias`/`PCtor-with-args`
+            // there would re-parse as stealing surrounding ctor args or wrapping
+            // the tail in their grouping.  The tail is safe bare — `::` is
+            // right-associative and `as` folds into the tail's own `parse_cons_as`.
+            push_pattern_atom(out, h, interner, original);
             out.push_str(" :: ");
             push_pattern(out, t, interner, original);
         }
@@ -877,5 +900,121 @@ mod tests {
         let f = file(&db, &["Main"], "this is not valid ipe source @@@@");
         let result = format_document(&db, f, PositionEncoding::Utf16);
         assert!(result.is_none(), "no edit for unparseable source");
+    }
+
+    /// Helper: format `src` once and return the resulting text (or `src`
+    /// unchanged when the formatter produced no edit).
+    fn apply_format(db: &IpeDatabase, src: &str) -> String {
+        let f = file(db, &["Main"], src);
+        let edits = format_document(db, f, PositionEncoding::Utf16)
+            .expect("source must parse for format_document to return Some");
+        edits
+            .into_iter()
+            .next()
+            .map_or_else(|| src.to_owned(), |e| e.new_text)
+    }
+
+    /// A `POr` pattern used as a constructor argument must be parenthesised in
+    /// the formatted output; without parens `Wrap (A | B)` would reparse as two
+    /// arms `Wrap A` and `B` in a surrounding `case`.
+    ///
+    /// Round-trip proof: format → re-parse → re-format must be idempotent and
+    /// the re-parse must not fail (the second-parse gate in `format_document`
+    /// already catches a non-parseable output, but idempotence proves the
+    /// *meaning* is preserved too).
+    #[test]
+    fn por_as_ctor_arg_is_parenthesised() {
+        let db = IpeDatabase::new();
+        // `case x of\n    Wrap (A | B) -> 1` — the formatter must emit `(A | B)`
+        // not `A | B` as the argument to `Wrap`.
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    case x of\n",
+            "        Wrap (A | B) -> 1\n",
+            "        _ -> 0\n",
+        );
+        let pass1 = apply_format(&db, src);
+        assert!(
+            pass1.contains("(A | B)"),
+            "POr ctor arg must be parenthesised, got:\n{pass1}"
+        );
+        // Idempotence: a second format must be a no-op.
+        let pass2 = apply_format(&db, &pass1);
+        assert_eq!(pass1, pass2, "formatter must be idempotent on POr ctor arg");
+    }
+
+    /// A `PCons` pattern used as a constructor argument must be parenthesised.
+    /// `Wrap (x :: xs)` bare as `Wrap x :: xs` re-parses with `Wrap x` as the
+    /// cons head and `xs` as the tail — a completely different structure.
+    #[test]
+    fn pcons_as_ctor_arg_is_parenthesised() {
+        let db = IpeDatabase::new();
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    case lst of\n",
+            "        Wrap (x :: xs) -> 1\n",
+            "        _ -> 0\n",
+        );
+        let pass1 = apply_format(&db, src);
+        assert!(
+            pass1.contains("(x :: xs)"),
+            "PCons ctor arg must be parenthesised, got:\n{pass1}"
+        );
+        let pass2 = apply_format(&db, &pass1);
+        assert_eq!(
+            pass1, pass2,
+            "formatter must be idempotent on PCons ctor arg"
+        );
+    }
+
+    /// A `PAlias` pattern used as a constructor argument must be parenthesised.
+    /// `Wrap (p as n)` bare as `Wrap p as n` re-parses as `(Wrap p) as n` — the
+    /// alias wraps the entire constructor application, not just its argument.
+    #[test]
+    fn palias_as_ctor_arg_is_parenthesised() {
+        let db = IpeDatabase::new();
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    case x of\n",
+            "        Wrap (p as n) -> 1\n",
+            "        _ -> 0\n",
+        );
+        let pass1 = apply_format(&db, src);
+        assert!(
+            pass1.contains("(p as n)"),
+            "PAlias ctor arg must be parenthesised, got:\n{pass1}"
+        );
+        let pass2 = apply_format(&db, &pass1);
+        assert_eq!(
+            pass1, pass2,
+            "formatter must be idempotent on PAlias ctor arg"
+        );
+    }
+
+    /// A `POr` pattern as the head of a `PCons` must be parenthesised.
+    /// `(A | B) :: xs` bare as `A | B :: xs` re-parses as `POr(A, PCons(B, xs))`.
+    #[test]
+    fn por_as_pcons_head_is_parenthesised() {
+        let db = IpeDatabase::new();
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    case lst of\n",
+            "        (A | B) :: xs -> 1\n",
+            "        _ -> 0\n",
+        );
+        let pass1 = apply_format(&db, src);
+        assert!(
+            pass1.contains("(A | B) ::"),
+            "POr cons head must be parenthesised, got:\n{pass1}"
+        );
+        let pass2 = apply_format(&db, &pass1);
+        assert_eq!(
+            pass1, pass2,
+            "formatter must be idempotent on POr cons head"
+        );
     }
 }

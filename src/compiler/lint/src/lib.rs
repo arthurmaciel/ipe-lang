@@ -842,6 +842,59 @@ mod tests {
         );
     }
 
+    /// When a nested call is a direct operand of a binary operator, the
+    /// `--fix` replacement must be wrapped in parentheses.  Without parens,
+    /// `n * (List.map f (List.filter p xs))` would become
+    /// `n * xs |> List.filter p |> List.map f`, which re-parses as
+    /// `(n * xs) |> … |> …` — a completely different program.
+    #[test]
+    fn pipeline_fix_in_binop_operand_wraps_in_parens() {
+        // `n * List.map f (List.filter p xs)` — the nested call is a
+        // right-hand operand of `*`.
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    n * List.map f (List.filter p xs)\n",
+        );
+        let outcome = apply_fixes(&[module(src)], &LintConfig::default());
+        assert_eq!(outcome.applied, 1, "one pipeline rewrite expected");
+        let fixed = outcome
+            .rewritten
+            .get(&vec!["Main".to_owned()])
+            .expect("Main was rewritten");
+        // The replacement must be parenthesised so `*` still binds its original
+        // operands.
+        assert!(
+            fixed.contains("* (xs |> List.filter p |> List.map f)"),
+            "pipeline in binop operand must be parenthesised, got:\n{fixed}"
+        );
+    }
+
+    /// Symmetrical refusal: a nested call NOT inside a `Binops` operand must
+    /// NOT gain spurious parens — the plain pipeline reads cleanly on its own.
+    #[test]
+    fn pipeline_fix_outside_binop_has_no_extra_parens() {
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    List.map fmt (List.filter live records)\n",
+        );
+        let outcome = apply_fixes(&[module(src)], &LintConfig::default());
+        assert_eq!(outcome.applied, 1, "one pipeline rewrite expected");
+        let fixed = outcome
+            .rewritten
+            .get(&vec!["Main".to_owned()])
+            .expect("Main was rewritten");
+        assert!(
+            !fixed.contains("(records |> List.filter live |> List.map fmt)"),
+            "standalone pipeline must not be wrapped in parens, got:\n{fixed}"
+        );
+        assert!(
+            fixed.contains("records |> List.filter live |> List.map fmt"),
+            "plain pipeline expected, got:\n{fixed}"
+        );
+    }
+
     // ── sig-fix tests ─────────────────────────────────────────────────────────
 
     /// A `prim-param` finding carries a `SigFix` naming the symbol and a
