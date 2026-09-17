@@ -514,6 +514,14 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::Tunable,
     },
     EnvVar {
+        name: "IPE_CSV_MAX_BYTES",
+        default: "536870912 (512 MiB)",
+        purpose: "Maximum total decoded field bytes parsed from a single CSV input. \
+                  Bounds heap use when rows fit the row cap but carry oversized fields.",
+        subsystem: Subsystem::Csv,
+        class: Class::Tunable,
+    },
+    EnvVar {
         name: "IPE_CSV_SANITIZE_FORMULAS",
         default: "unset (false)",
         purpose: "Set to `1`, `on`, `true`, or `yes` to prefix formula-injection \
