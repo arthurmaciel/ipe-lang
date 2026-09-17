@@ -433,11 +433,25 @@ pub async fn ensure_console_proxy() -> bool {
     // heartbeat (~15 s) + TTL (~35 s) so long-lived `/_ipe/sse` streams are not
     // severed. `.build()` only fails on a TLS-backend init error (we use none
     // for loopback http); fall back to the default client rather than panic.
+    // `redirect::Policy::none()`: a reverse proxy RELAYS an upstream 3xx to the
+    // browser verbatim — it must never follow it itself. Following would both
+    // break proxy semantics (the client never learns the redirect) and re-issue
+    // the forwarded request headers to the redirect target; `forward` strips the
+    // parent admin `Authorization` before forwarding, but other forwarded headers
+    // (cookies) must not be replayed to an upstream-chosen location. On a builder
+    // error fall back to a redirect-disabled default, never the plain
+    // `Client::new()` (whose default WOULD follow up to 10 hops).
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .read_timeout(Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+        .unwrap_or_else(|_| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        });
     if PROXY
         .set(ProxyState {
             client,
@@ -565,6 +579,78 @@ mod tests {
         let text = String::from_utf8_lossy(&bytes);
         // Prefix stripped → child sees /_ipe/event; method, query, body preserved.
         assert_eq!(text, "POST /_ipe/event?x=1 hi", "got: {text}");
+    }
+
+    // Prove the refusal: the proxy RELAYS an upstream 3xx to the caller and does
+    // NOT follow it. A redirect-disabled client is what `ensure_console_proxy`
+    // builds; forwarding a request whose upstream answers 307→leak must return
+    // the 307 to the caller (browser) and leave the leak target untouched, so no
+    // forwarded header is replayed to an upstream-chosen location.
+    #[tokio::test]
+    async fn forward_relays_redirect_without_following() {
+        use axum::extract::State;
+        use axum::response::IntoResponse;
+        use axum::{Router, routing::any};
+        use std::sync::{Arc, Mutex};
+
+        let leak_hits: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+        async fn leak(State(hits): State<Arc<Mutex<u32>>>) -> &'static str {
+            if let Ok(mut g) = hits.lock() {
+                *g += 1;
+            }
+            "LEAKED"
+        }
+        let leak_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind leak");
+        let leak_port = leak_listener.local_addr().expect("addr").port();
+        let leak_app = Router::new()
+            .fallback(any(leak))
+            .with_state(leak_hits.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(leak_listener, leak_app).await;
+        });
+
+        let leak_base = format!("http://127.0.0.1:{leak_port}");
+        async fn redirect(State(loc): State<String>) -> axum::response::Response {
+            (
+                axum::http::StatusCode::TEMPORARY_REDIRECT,
+                [(axum::http::header::LOCATION, format!("{loc}/leak"))],
+                "moved",
+            )
+                .into_response()
+        }
+        let up_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream");
+        let up_port = up_listener.local_addr().expect("addr").port();
+        let up_app = Router::new()
+            .fallback(any(redirect))
+            .with_state(leak_base.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(up_listener, up_app).await;
+        });
+
+        // The same redirect-disabled client `ensure_console_proxy` constructs.
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client");
+        let upstream = format!("http://127.0.0.1:{up_port}");
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/_ipe/console")
+            .body(axum::body::Body::empty())
+            .expect("build req");
+
+        let resp = forward(&client, &upstream, req).await;
+        // The 307 is relayed to the caller, NOT followed.
+        assert_eq!(resp.status(), axum::http::StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            *leak_hits.lock().expect("lock"),
+            0,
+            "proxy followed the redirect instead of relaying it"
+        );
     }
 
     // The bare mount path `/_ipe/console` (no trailing slash) maps to the

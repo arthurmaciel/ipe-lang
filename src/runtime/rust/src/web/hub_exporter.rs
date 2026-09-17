@@ -142,6 +142,30 @@ struct OtlpBatch {
     json: String,
 }
 
+/// The exporter's reqwest client: bounded push/connect timeouts (a hung hub
+/// can't wedge the task) AND `redirect::Policy::none()`. Following a redirect is
+/// a secret-leak vector — reqwest's default follows up to 10 hops and RETAINS
+/// the `Authorization` bearer across a same-host `https→http` scheme-downgrade
+/// redirect, defeating the https-only enable gate and pushing the token over
+/// cleartext. A machine-to-machine exporter POSTs to its configured endpoint; it
+/// must never chase a 3xx to an attacker-chosen location. On a builder error
+/// (TLS backend init) fall back to a redirect-disabled default rather than the
+/// plain `Client::new()` (whose default WOULD follow), so the safe policy holds
+/// even on the fallback path.
+fn exporter_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+}
+
 /// Accumulate entries; on each tick encode + push, retrying spooled batches
 /// first. Channel close drains a final flush. A `Flush` sentinel drains
 /// immediately and acks.
@@ -154,11 +178,7 @@ async fn batcher(
 ) {
     // Cap each push so a hung/black-holed hub (TCP handshake completes, no HTTP
     // response — slowloris) can't wedge the exporter task forever.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .connect_timeout(Duration::from_secs(5))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client = exporter_client();
     let mut logs: Vec<(u64, String, String)> = Vec::new();
     let mut spans: Vec<(u64, String, u64, bool)> = Vec::new();
     let mut spool: VecDeque<OtlpBatch> = VecDeque::new();
@@ -494,5 +514,85 @@ mod tests {
             assert_eq!(auth, &format!("Bearer {token}"));
             let _: serde_json::Value = serde_json::from_str(body).expect("valid OTLP json");
         }
+    }
+
+    // Prove the refusal: the exporter client does NOT follow a redirect. A hub
+    // that answers a push with a 307 to a *different* (leak) endpoint must NOT
+    // cause the bearer token to be re-sent to that endpoint. reqwest's DEFAULT
+    // would follow up to 10 hops and retain `Authorization` across a same-host
+    // scheme-downgrade — this asserts our `Policy::none()` prevents that. The
+    // leak endpoint records zero requests, and the redirect is surfaced as a
+    // non-2xx (the batch is re-spooled, not silently dropped).
+    #[tokio::test]
+    async fn exporter_does_not_follow_redirect_and_never_leaks_bearer() {
+        use axum::extract::State;
+        use axum::response::IntoResponse;
+        use axum::{Router, routing::any};
+        use std::sync::{Arc, Mutex};
+
+        // The leak target: any request here is a token-leak failure.
+        let leak_hits: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        async fn leak(State(hits): State<Arc<Mutex<Vec<String>>>>, req: axum::extract::Request) {
+            let auth = req
+                .headers()
+                .get("authorization")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            if let Ok(mut g) = hits.lock() {
+                g.push(auth);
+            }
+        }
+        let leak_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind leak");
+        let leak_port = leak_listener.local_addr().expect("addr").port();
+        let leak_app = Router::new()
+            .fallback(any(leak))
+            .with_state(leak_hits.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(leak_listener, leak_app).await;
+        });
+
+        // The hub: answers every push with a 307 redirect to the leak target.
+        let leak_base = format!("http://127.0.0.1:{leak_port}");
+        async fn redirect(State(loc): State<String>) -> axum::response::Response {
+            (
+                axum::http::StatusCode::TEMPORARY_REDIRECT,
+                [(axum::http::header::LOCATION, format!("{loc}/leak"))],
+                "moved",
+            )
+                .into_response()
+        }
+        let hub_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind hub");
+        let hub_port = hub_listener.local_addr().expect("addr").port();
+        let hub_app = Router::new()
+            .fallback(any(redirect))
+            .with_state(leak_base.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(hub_listener, hub_app).await;
+        });
+
+        let client = exporter_client();
+        let base = format!("http://127.0.0.1:{hub_port}");
+        let token = "x".repeat(MIN_TOKEN_BYTES);
+        let batch = OtlpBatch {
+            path: "/v1/logs",
+            json: "{}".to_string(),
+        };
+
+        // A 307 is not a 2xx → push_one reports failure (batch would be re-spooled).
+        let ok = push_one(&client, &base, &token, &batch).await;
+        assert!(!ok, "a 3xx redirect must NOT count as a successful push");
+
+        // The load-bearing assertion: the redirect was NOT followed, so the leak
+        // endpoint saw no request at all — the bearer never crossed to it.
+        let hits = leak_hits.lock().map(|g| g.clone()).unwrap_or_default();
+        assert!(
+            hits.is_empty(),
+            "exporter followed the redirect and leaked to the redirect target: {hits:?}"
+        );
     }
 }

@@ -149,6 +149,31 @@ fn enable(label: &str, ingest_url: String, interval_ms: u64) {
     tokio::spawn(batcher(rx, ingest_url, token, interval_ms));
 }
 
+/// The exporter's reqwest client: explicit timeouts so a parent that accepts
+/// the TCP connection but never responds (slow/hung/half-dead) can't wedge the
+/// batcher task (and, through it, `flush_now`'s pre-exit drain) forever; AND
+/// `redirect::Policy::none()`. This exporter sends `IPE_INGEST_TOKEN` as a
+/// header on every push — following a redirect is a secret-leak vector: reqwest's
+/// default follows up to 10 hops and re-sends the credential to the redirect
+/// target, defeating the https-only enable gate (`url_allows_cleartext_token`)
+/// by pushing the token to an attacker-chosen `http://` location. Push to the
+/// configured ingest only; never chase a 3xx. On a builder error fall back to a
+/// redirect-disabled default rather than the plain `Client::new()` (whose
+/// default WOULD follow), so the safe policy holds even on the fallback path.
+fn exporter_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(2))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+}
+
 /// Accumulate entries and flush a batch on each tick. Channel close drains a
 /// final batch then exits. A `Flush` sentinel drains immediately and acks.
 async fn batcher(
@@ -157,14 +182,7 @@ async fn batcher(
     token: Option<String>,
     interval_ms: u64,
 ) {
-    // Explicit timeouts so a parent that accepts the TCP connection but never
-    // responds (slow/hung/half-dead) can't wedge the batcher task (and, through
-    // it, `flush_now`'s pre-exit drain) forever. Total fallback — never panics.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .connect_timeout(Duration::from_secs(2))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let client = exporter_client();
     let mut buf: Vec<Entry> = Vec::new();
     let mut tick = tokio::time::interval(Duration::from_millis(interval_ms));
     // The first tick fires immediately; skip it so we don't flush an empty batch.
@@ -387,6 +405,87 @@ mod tests {
         let result = tokio::time::timeout(Duration::from_millis(500), ack_rx).await;
         assert!(result.is_ok(), "flush ack must arrive within 500 ms");
         assert!(result.unwrap().is_ok(), "ack oneshot must not be dropped");
+    }
+
+    // Prove the refusal: the exporter client does NOT follow a redirect, so the
+    // ingest token is never re-sent to a redirect target. A parent that answers
+    // the push with a 307 to a *different* (leak) endpoint must not cause the
+    // `x-ipe-ingest-token` header to cross to that endpoint — reqwest's DEFAULT
+    // would follow up to 10 hops and re-send it. This asserts `Policy::none()`
+    // prevents that: the leak endpoint records zero requests.
+    #[tokio::test]
+    async fn exporter_does_not_follow_redirect_and_never_leaks_ingest_token() {
+        use axum::extract::State;
+        use axum::response::IntoResponse;
+        use axum::{Router, routing::any};
+        use std::sync::{Arc, Mutex};
+
+        // The leak target: any request here is a token-leak failure.
+        let leak_hits: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        async fn leak(State(hits): State<Arc<Mutex<Vec<String>>>>, req: axum::extract::Request) {
+            let tok = req
+                .headers()
+                .get("x-ipe-ingest-token")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            if let Ok(mut g) = hits.lock() {
+                g.push(tok);
+            }
+        }
+        let leak_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind leak");
+        let leak_port = leak_listener.local_addr().expect("addr").port();
+        let leak_app = Router::new()
+            .fallback(any(leak))
+            .with_state(leak_hits.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(leak_listener, leak_app).await;
+        });
+
+        // The parent: answers every push with a 307 redirect to the leak target.
+        let leak_base = format!("http://127.0.0.1:{leak_port}");
+        async fn redirect(State(loc): State<String>) -> axum::response::Response {
+            (
+                axum::http::StatusCode::TEMPORARY_REDIRECT,
+                [(axum::http::header::LOCATION, format!("{loc}/leak"))],
+                "moved",
+            )
+                .into_response()
+        }
+        let parent_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind parent");
+        let parent_port = parent_listener.local_addr().expect("addr").port();
+        let parent_app = Router::new()
+            .fallback(any(redirect))
+            .with_state(leak_base.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(parent_listener, parent_app).await;
+        });
+
+        let client = exporter_client();
+        let ingest_url = format!("http://127.0.0.1:{parent_port}/_ipe/observability/ingest");
+        let buf = vec![Entry::Log {
+            ts_ms: 1,
+            level: "info".into(),
+            message: "hi".into(),
+        }];
+
+        flush(
+            &client,
+            &ingest_url,
+            Some("super-secret-ingest-token"),
+            &buf,
+        )
+        .await;
+
+        let hits = leak_hits.lock().map(|g| g.clone()).unwrap_or_default();
+        assert!(
+            hits.is_empty(),
+            "exporter followed the redirect and leaked the ingest token: {hits:?}"
+        );
     }
 
     /// `flush_now` is a no-op when the exporter is disabled (SENDER not set).
