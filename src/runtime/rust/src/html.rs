@@ -177,9 +177,11 @@ const VOID: &[&str] = &[
 /// True for HTML void elements (no children, self-closing). Exposed for the
 /// style-injection pass, which must hoist a `<style>` to a sibling slot after a
 /// void element because `render_into` emits no children for void tags.
-/// Its sole consumer is `live/style_inject.rs`, so it is `live`-gated (webview
-/// enables `live` too); a non-live build that gained a caller would fail loud.
-#[cfg(feature = "web")]
+/// Its sole consumer is the render-core `style_inject` pass, so it is gated on
+/// the `web-core` render floor (every render host — served web, browser-WASM,
+/// native webview — selects it); a build with no render core that gained a
+/// caller would fail loud.
+#[cfg(feature = "web-core")]
 pub(crate) fn is_void(tag: &str) -> bool {
     VOID.contains(&tag)
 }
@@ -943,7 +945,7 @@ pub fn html_on_bool_<M>(
 /// arm) closes this by re-wrapping the boxed value in a freshly-declared
 /// closure at the call site instead of forwarding the box itself — see that
 /// arm's comment for the full mechanism.
-#[cfg(any(feature = "web", feature = "wasm-client"))]
+#[cfg(feature = "web-core")]
 #[must_use]
 pub fn html_on_raw_<M, T, F>(name: String, payload: F) -> Attribute<M>
 where
@@ -964,7 +966,7 @@ where
 /// degrading to a structural no-op attribute here is not a regression for
 /// Tui — it was never functional there and Tui has no form-submit wire
 /// concept.
-#[cfg(not(any(feature = "web", feature = "wasm-client")))]
+#[cfg(not(feature = "web-core"))]
 pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribute<M> {
     Attribute::NoAttr
 }
@@ -987,7 +989,7 @@ pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribut
 /// already `Clone` by construction (`HandlerIndex<M: Clone>` — every wire
 /// event handler, including plain `onClick`'s `Event::OnMsg`, already clones
 /// the dispatched value).
-#[cfg(any(feature = "web", feature = "wasm-client"))]
+#[cfg(feature = "web-core")]
 #[must_use]
 pub fn html_on_raw_fixed_<M: Clone + Send + Sync + 'static>(name: String, msg: M) -> Attribute<M> {
     Attribute::EventAttr(Event::OnForm(
@@ -998,7 +1000,7 @@ pub fn html_on_raw_fixed_<M: Clone + Send + Sync + 'static>(name: String, msg: M
 
 /// Non-`live` builds — same degrade-to-no-op rationale as `html_on_raw_`
 /// above.
-#[cfg(not(any(feature = "web", feature = "wasm-client")))]
+#[cfg(not(feature = "web-core"))]
 pub fn html_on_raw_fixed_<M>(_name: String, _msg: M) -> Attribute<M> {
     Attribute::NoAttr
 }

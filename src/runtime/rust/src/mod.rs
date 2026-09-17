@@ -577,27 +577,27 @@ pub mod widget_assets;
 #[cfg(feature = "widget-assets")]
 pub mod js_port_glue;
 
-#[cfg(feature = "web")]
-pub mod web;
-#[cfg(feature = "web")]
-pub use web::*;
+// The server-free HTML page scaffold (`page_shell` + `BASE_CSS`) — pure
+// `format!`, shared by every render host. Declared under the render-core floor
+// so the lean `web` shell and the full `web` module both re-export the ONE
+// definition.
+#[cfg(feature = "web-core")]
+pub mod web_page_core;
 
-// Browser-WASM without the full `web` feature: the wasm TEA sink
-// (`wasm/mod.rs`) routes URLs through `web::route`, the pure URL-pattern matcher
-// (no server/tokio deps — it compiles on wasm32). Expose that one submodule
-// through a lean `web` shell so `crate::web::route` resolves, without pulling
-// the heavy `web` surface (axum, SSE, session store). Mirrors the emitted
-// browser-WASM module set (`ipe_backend_rust`'s `WASM_RUNTIME_MOD_RS`).
-#[cfg(all(target_arch = "wasm32", feature = "wasm-client", not(feature = "web")))]
-pub mod web {
-    pub mod route;
-    // The appearance literal table is pure std data (a `Vec<String>`), so it
-    // compiles on wasm32 with no extra dependency. Expose it through the lean
-    // web shell too, so a browser-WASM web-shape build resolves
-    // `ipe_runtime::web::LiteralTable` exactly as a native web-shape build does.
-    pub mod literal_table;
-    pub use literal_table::LiteralTable;
-}
+// ONE `web` module for every render host. Under `web-core` alone — the
+// native-window `webview` backend (over a local IPC bridge) and the browser-WASM
+// `wasm-client` sink, neither of which runs an HTTP server — the module compiles
+// to just its server-free render core (`dom` diff/dispatch/form, `style_inject`,
+// `route`, `literal_table`, `template`, the pure hot-swap datum types, and the
+// `page_shell` scaffold). The `server` feature turns the full served surface
+// (axum router, SSE, session store, CSRF middleware, pub/sub broker) back on;
+// every axum/SSE/session item inside `web/` is `#[cfg(feature = "server")]`. One
+// `pub mod web;` for both hosts — the module-set closure sees a single `web`, no
+// shell.
+#[cfg(feature = "web-core")]
+pub mod web;
+#[cfg(feature = "web-core")]
+pub use web::*;
 
 pub mod ffi_polyfills;
 pub use ffi_polyfills::*;

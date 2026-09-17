@@ -295,16 +295,16 @@ mod imp {
                         *control_flow = ControlFlow::Exit;
                     }
                     Event::UserEvent(UserEvent::Ipc(body)) => {
-                        if let Some((ipe_id, ev, args)) = parse_ipc(&body) {
-                            if let Some(msg) = index.resolve(&ipe_id, &ev, &args) {
-                                let (next, _cmd) = update(msg, model.clone());
-                                warn_dropped_cmd_if_real(&_cmd);
-                                model = next;
-                                let (nbody, nindex) = render::<Model, Msg, _>(&view, &model);
-                                index = nindex;
-                                let js = format!("window.__ipeApply({})", json_str(&nbody));
-                                let _ = webview.evaluate_script(&js);
-                            }
+                        if let Some((ipe_id, ev, args)) = parse_ipc(&body)
+                            && let Some(msg) = index.resolve(&ipe_id, &ev, &args)
+                        {
+                            let (next, _cmd) = update(msg, model.clone());
+                            warn_dropped_cmd_if_real(&_cmd);
+                            model = next;
+                            let (nbody, nindex) = render::<Model, Msg, _>(&view, &model);
+                            index = nindex;
+                            let js = format!("window.__ipeApply({})", json_str(&nbody));
+                            let _ = webview.evaluate_script(&js);
                         }
                     }
                     _ => {}

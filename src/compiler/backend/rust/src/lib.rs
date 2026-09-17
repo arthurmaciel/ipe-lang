@@ -1923,13 +1923,16 @@ impl<'a> EmitCtx<'a> {
         // detect Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.Console / Ipe.WebView usage.
         // `uses_webview` is the webview-native delivery signal: the resolved
         // `web desktop` host (threaded in as `webview_host`) OR a source module
-        // that still carries the leaf. A webview delivery implies the web surface,
-        // so it also forces `uses_web` — the webview runtime imports from the web
-        // module and the served/desktop pipelines share the same web app.
+        // that still carries the leaf. A webview-native delivery renders the
+        // server-free `web-core` core over a local IPC bridge; it does NOT run the
+        // axum `web` surface, so `uses_webview` does NOT force `uses_web`. The
+        // `uses_webview && !uses_web` path selects the lean render shell
+        // (`RUNTIME_MOD_RS_WEBVIEW_CORE_APPEND`) and the `web-core`/`webview` Cargo
+        // features; a program that reaches BOTH keeps the full `web` module.
         let uses_webview = webview_host || program.modules.iter().any(|m| m.uses_webview);
         let (uses_ui, uses_web, uses_tui, uses_console) = (
             program.modules.iter().any(|m| m.uses_ui),
-            program.modules.iter().any(|m| m.uses_web) || uses_webview,
+            program.modules.iter().any(|m| m.uses_web),
             program.modules.iter().any(|m| m.uses_tui),
             program.modules.iter().any(|m| m.uses_console),
         );

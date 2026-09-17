@@ -10,14 +10,15 @@ pub mod diff;
 pub use diff::*;
 pub mod dispatch;
 pub use dispatch::*;
-// `form.rs` decodes typed form records through `serde_urlencoded`. Its only
-// consumers are the Live web wire (`web::mod`) and the browser-WASM sink
-// (`wasm::mod`) — both behind `web`/`wasm-client`, which is where
-// `serde_urlencoded` now lives. Gated on the same union so a non-web program
-// drops the module and the `serde_urlencoded`/`form_urlencoded` crates.
-#[cfg(any(feature = "web", feature = "wasm-client"))]
+// `form.rs` decodes typed form records through `serde_urlencoded`. Its consumers
+// are the render hosts — the Live web wire (`web::mod`), the browser-WASM sink
+// (`wasm::mod`), and the native webview bridge — all of which select the
+// server-free `web-core` render core (where `serde_urlencoded` lives). Gated on
+// that floor so a non-render program drops the module and the
+// `serde_urlencoded`/`form_urlencoded` crates.
+#[cfg(feature = "web-core")]
 pub mod form;
-#[cfg(any(feature = "web", feature = "wasm-client"))]
+#[cfg(feature = "web-core")]
 pub use form::*;
 pub mod req;
 pub use req::*;

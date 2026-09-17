@@ -116,6 +116,7 @@ pub struct MsgSet {
     pub variants: Vec<MsgVariant>,
 }
 
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
 impl MsgSet {
     /// Build a descriptor at the current schema version from `variants`.
     #[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]

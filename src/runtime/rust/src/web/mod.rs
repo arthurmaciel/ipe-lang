@@ -6,9 +6,12 @@ pub use crate::dom::diff;
 pub use crate::dom::dispatch;
 pub use diff::*;
 pub use dispatch::*;
+// `sse` is the axum Server-Sent-Events patch channel — server-only.
+#[cfg(feature = "server")]
 pub mod sse;
 pub use crate::dom::form;
 pub use form::*;
+#[cfg(feature = "server")]
 pub use sse::*;
 pub mod literal_table;
 pub use literal_table::LiteralTable;
@@ -16,7 +19,12 @@ pub mod template;
 pub use template::{Template, TemplateAttr, materialize_template, template_of};
 pub mod route;
 pub use route::*;
+// `console` (dev telemetry ingest) and `csrf` (axum CSRF middleware +
+// `crate::server` re-exports) are axum/`server`-only. `style_inject` is pure
+// render-core and stays unconditional.
+#[cfg(feature = "server")]
 pub mod console;
+#[cfg(feature = "server")]
 pub mod csrf;
 pub mod style_inject;
 // Custom-element (`CustomElement.node`) registration glue + SRI-pinned author-JS serving.
@@ -26,6 +34,9 @@ pub mod style_inject;
 // (the process-start `register` + route mounting) keeps its security shape.
 // Populated
 // once at process start by the generated `main`; inert for a widget-free program.
+// Rides the `web` feature (which lists `widget-assets`); the server surface is
+// its only in-module consumer.
+#[cfg(feature = "server")]
 pub use crate::widget_assets;
 // Pre-built console child + reverse-proxy — spawns the bundled console
 // binary and proxies /_ipe/console/*; falls back to in-process `console` when the
@@ -33,6 +44,8 @@ pub use crate::widget_assets;
 // app that makes no outbound HTTP calls (no `http_client` feature) stays reqwest-free.
 #[cfg(feature = "http_client")]
 pub mod console_proxy;
+// Observability middleware + noise ingest — axum request/response types, server-only.
+#[cfg(feature = "server")]
 pub mod observability;
 // Observability export pipelines: federation push to a parent ingest
 // and remote-hub OTLP push. Both env-gated + inert by default.
@@ -49,21 +62,35 @@ pub mod push_exporter;
 pub mod hub;
 #[cfg(feature = "db")]
 pub use hub::*;
+// `req` builds a `WebReq` from an axum request; `store` is the axum/sqlx session
+// store — both server-only. Render hosts take their `WebReq` from the
+// target-neutral `crate::dom::req` instead.
+#[cfg(feature = "server")]
 pub mod req;
+#[cfg(feature = "server")]
 pub use req::*;
+#[cfg(feature = "server")]
 pub mod store;
+#[cfg(feature = "server")]
 pub use store::*;
 // Additive-superset Model reconstruction: keeps a returning session's state
 // when the app's `Model` gains a new field (see the module doc). A pure,
 // self-contained decision + splice over a self-describing checkpoint body.
 pub mod additive;
+// The session-aware pub/sub broker (`crate::tea` + tokio broadcast) — server-only.
+#[cfg(feature = "server")]
 pub mod pubsub;
 // Inert `update`-arm transitions: the logic counterpart of the appearance
 // `literal_table`. A data-describable `update` arm (a field record-update, a
 // toggle, a setter) reduces to a `Transition` datum run by the compiled
 // `apply_transition` — one update semantics, dev == prod (see the module doc).
 pub mod transition;
-pub use transition::{Transition, apply_transition, apply_transition_hot};
+pub use transition::Transition;
+// The `apply_transition*` server-side session-Model mutators are gated at their
+// definition on `any(db, redis_store, web)`; mirror that on the re-export so the
+// render core (which never mutates a server-held Model) drops them cleanly.
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+pub use transition::{apply_transition, apply_transition_hot};
 // The additive-only `Msg` SET codec: a schema-tagged descriptor of the running
 // program's `Msg` variant surface. Gates whether a live edit that adds a variant
 // (plus its arm and a button firing it) may hot-swap — accepted only when the new
@@ -75,21 +102,27 @@ pub mod msg_set;
 // reduces to a `SubDescription` datum built by the compiled `sub_every_hot` —
 // one subscription semantics, dev == prod (see the module doc).
 pub mod sub_desc;
-pub use sub_desc::{SubDescription, build_sub, sub_every_hot};
+pub use sub_desc::SubDescription;
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+pub use sub_desc::{build_sub, sub_every_hot};
 // Inert session-`init` datum: the STARTING-`Model` counterpart of `transition`.
 // A data-describable `init` (a record of closed leaf values, `Cmd.none`) reduces
 // to an `InitDatum` decoded by the compiled `apply_init_hot` at session creation
 // only — one init semantics, dev == prod, and session-scoped by construction (a
 // live session never re-consults it). See the module doc.
 pub mod init_datum;
-pub use init_datum::{InitDatum, apply_init, apply_init_hot};
+pub use init_datum::InitDatum;
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+pub use init_datum::{apply_init, apply_init_hot};
 // Inert `update`-arm Cmd WIRING: which compiled effect an arm fires, as data
 // (the effect BODY stays compiled). A wiring edit — an arm now fires a different
 // already-compiled effect — is a data patch selected by the compiled
 // `select_cmd_hot`; a genuinely-new effect body grows the arm's effect table and
 // recompiles. See the module doc.
 pub mod cmd_wiring;
-pub use cmd_wiring::{CmdWiring, fire_cmd_wiring, select_cmd_hot, select_effect};
+pub use cmd_wiring::CmdWiring;
+#[cfg(any(feature = "db", feature = "redis_store", feature = "web"))]
+pub use cmd_wiring::{fire_cmd_wiring, select_cmd_hot, select_effect};
 // Explicit re-export of ONLY the codegen-referenced kernel functions. A glob
 // (`pub use pubsub::*`) leaked the broker's `Event<T>` into this namespace,
 // colliding with the HTML `Event` enum re-exported below (`pub use …html::*`)
@@ -97,15 +130,19 @@ pub use cmd_wiring::{CmdWiring, fire_cmd_wiring, select_cmd_hot, select_effect};
 // `ipe_runtime::Event`. The broker internals (`Event`, `Broker`, `broker`,
 // `subscribe`, `publish`) are `pub(crate)` in pubsub.rs — they never leave the
 // crate, so they don't need re-exporting here.
+#[cfg(feature = "server")]
 pub use pubsub::{
     cmd_publish, cmd_publish_no_echo, pubsub_publish, pubsub_publish_no_echo, sub_subscribe_topic,
 };
 
 // Html ADTs + renderer now live in the standalone top-level `html` module;
 // re-export them so live submodules (diff.rs, store.rs, …) that `use super::*`
-// still see Html / Attribute / Event / render_html / html_render_.
+// still see Html / Attribute / Event / render_html / html_render_. The render
+// core reaches `crate::html` directly, so the re-export rides the server surface.
+#[cfg(feature = "server")]
 pub use crate::html::*;
 
+#[cfg(feature = "server")]
 use super::*;
 
 /// Body returned with a session-miss 404 from `/_ipe/event` and `/_ipe/sse`.
@@ -117,6 +154,7 @@ use super::*;
 /// the same string; diverging it (the old `"no session"` body) silently broke
 /// recovery after a server restart — the browser shows "Reconnecting…" forever.
 /// Guarded by `session_lost_body_tests`.
+#[cfg(feature = "server")]
 const SESSION_LOST_BODY: &str = "session not found";
 
 // ─── Client assets ────────────────────────────────────────────────────────────
@@ -124,6 +162,7 @@ const SESSION_LOST_BODY: &str = "session not found";
 /// The browser-side Ipe.Web client JS asset. The 12 header `%`-verb
 /// lines are replaced with static literals; the two `%%` CSS escapes are
 /// un-escaped to `%`.
+#[cfg(feature = "server")]
 const CLIENT_JS: &str = include_str!("client.js");
 
 /// Content-addressing for the client asset: computed ONCE at first access via
@@ -136,9 +175,11 @@ const CLIENT_JS: &str = include_str!("client.js");
 /// Both are derived from the same digest, computed once and interned.
 /// The `sha2` crate is unconditionally available in every generated Web project
 /// (`default` features always include `crypto` which gates `sha2`).
+#[cfg(feature = "server")]
 static CLIENT_JS_HASH: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 
 /// Return `(hex16, base64full)` for `CLIENT_JS`, computing once on first call.
+#[cfg(feature = "server")]
 fn client_js_hashes() -> &'static (String, String) {
     CLIENT_JS_HASH.get_or_init(|| {
         use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -154,59 +195,23 @@ fn client_js_hashes() -> &'static (String, String) {
 /// `/_ipe/client.a1b2c3d4e5f6a7b8.js`. The path is stable for a given
 /// `client.js` build and changes whenever the file changes — making
 /// `Cache-Control: immutable` safe. Callers may prepend the sub-app `base`.
+#[cfg(feature = "server")]
 pub fn client_js_path() -> String {
     let (hex16, _) = client_js_hashes();
     format!("/_ipe/client.{}.js", hex16)
 }
 
-/// Minimal CSS reset injected into every Ipe.Web page.
-const BASE_CSS: &str = concat!(
-    "*,*::before,*::after{box-sizing:border-box}",
-    "html,body{margin:0;padding:0;min-height:100%}",
-    "body{min-height:100vh;display:flex;flex-direction:column;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,\"Helvetica Neue\",Arial,sans-serif;line-height:1.4}",
-    "#ipe-root{display:flex;flex-direction:column;flex:1 0 auto;min-height:0}",
-    "h1,h2,h3,h4,h5,h6,p,ul,ol,li,figure,blockquote,pre,dl,dd{margin:0;padding:0;font-weight:inherit;font-size:inherit}",
-    "button,input,select,textarea{font:inherit;color:inherit}",
-    "button{background:none;border:0;padding:0;cursor:pointer;text-align:inherit}",
-    "a{color:inherit;text-decoration:none}",
-    "img,video,canvas,svg{display:block;max-width:100%}",
-);
-
 // ─── Page renders ─────────────────────────────────────────────────────────────
 
-/// Shared HTML page scaffold used by every render path.
-///
-/// Emits, in order:
-///   1. Standard HTML5 boilerplate (`<!DOCTYPE html><html>`).
-///   2. A `<head>` containing:
-///      - `<meta charset="utf-8">` (character encoding, always first).
-///      - `<meta name="viewport" …>` (full-bleed on mobile and native webview).
-///      - `<style>{BASE_CSS}</style>` (the compile-time reset; no user data).
-///      - `head_extra` — any additional per-backend head content (empty string
-///        for backends that need none).
-///   3. `<body>{body_inner}</body>` — the pre-rendered HTML body.
-///   4. `tail_scripts` — `<script>` tags appended after `</body>` (empty string
-///      for backends that carry no scripts).
-///
-/// `body_inner` must already be HTML-escaped (produced by `render_html`).
-/// `head_extra` and `tail_scripts` are compile-time or session-derived
-/// literals assembled by the caller; no user-controlled text reaches them.
-pub fn page_shell(head_extra: &str, body_inner: &str, tail_scripts: &str) -> String {
-    format!(
-        "<!DOCTYPE html><html><head>\
-         <meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <style>{BASE_CSS}</style>\
-         {head_extra}\
-         </head>\
-         <body>{body_inner}</body>\
-         {tail_scripts}\
-         </html>"
-    )
-}
+// `page_shell` + its `BASE_CSS` reset are the server-free page scaffold; they
+// live in the render-core `web_page_core` module (shared with the lean render
+// hosts) and are re-exported here so every `page_shell(...)` call site in this
+// module — and the emitted `ipe_runtime::web::page_shell` path — stays valid.
+pub use crate::web_page_core::page_shell;
 
 /// Render `view(model)` to a full HTML page and print it — the static
 /// render path (the interactive server is `web_app`).
+#[cfg(feature = "server")]
 pub fn web_render_static<E, Model, Msg, FView>(view: FView, model: Model) -> IpeTask<E, ()>
 where
     E: Send + 'static,
@@ -224,6 +229,7 @@ where
 }
 
 /// Static SSR page: body only, no client JS.
+#[cfg(feature = "server")]
 pub fn render_page(body: &str) -> String {
     page_shell("", &format!("<div id=\"ipe-root\">{body}</div>"), "")
 }
@@ -248,6 +254,7 @@ pub fn render_page(body: &str) -> String {
 ///
 /// Identical escape class as the telemetry `json_escape` U+2028/2029 gap —
 /// the island serialiser applies it here for consistency.
+#[cfg(feature = "server")]
 pub fn island_escape(json: &str) -> String {
     let mut out = String::with_capacity(json.len());
     for ch in json.chars() {
@@ -280,6 +287,7 @@ pub fn island_escape(json: &str) -> String {
 /// `island_json` — serde-serialised `HydrationState` (BEFORE island_escape;
 ///                 this function applies the escape internally).
 /// `pkg_base`    — URL prefix for the WASM bundle assets, e.g. `/pkg` or `./pkg`.
+#[cfg(feature = "server")]
 pub fn render_page_hydrate(body: &str, island_json: &str, pkg_base: &str) -> String {
     let escaped = island_escape(island_json);
     let body_inner = format!("<div id=\"ipe-root\">{body}</div>");
@@ -298,7 +306,7 @@ boot();\
     page_shell("", &body_inner, &tail_scripts)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod island_escape_tests {
     use super::island_escape;
 
@@ -367,6 +375,7 @@ mod island_escape_tests {
 /// and emit the `window.__IPE_*` assignments the client (`client.js`) reads
 /// with a hardcoded fallback. Malformed values fall back to the default; never
 /// panics.
+#[cfg(feature = "server")]
 fn web_client_config_js() -> String {
     fn num(var: &str, default: u64) -> u64 {
         crate::system::read_env_var(var)
@@ -424,6 +433,7 @@ fn web_client_config_js() -> String {
 /// off/0/false), the app is NOT in production, and the app is root-mounted
 /// (not a sub-app). Mirrors the three conditions the banner injection already
 /// uses so no new env var is needed.
+#[cfg(feature = "server")]
 fn watch_banner_active(base: &str) -> bool {
     if crate::telemetry::production_from_env() {
         return false;
@@ -440,6 +450,7 @@ fn watch_banner_active(base: &str) -> bool {
     )
 }
 
+#[cfg(feature = "server")]
 pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> String {
     // sid_js / base_js / csrf_js: Rust Debug ("{:?}") of a &str yields a
     // double-quoted, properly-escaped JS string literal for plain ASCII
@@ -487,8 +498,10 @@ fn port_glue_script(base: &str) -> String {
 }
 
 /// No `Ipe.Ffi.Js` port glue when the widget-asset serving surface is absent: the
-/// page carries no port `<script>` and `window.ipe` is never wired.
-#[cfg(not(feature = "widget-assets"))]
+/// page carries no port `<script>` and `window.ipe` is never wired. Gated with
+/// `server` to match its callers (`render_page_full*`, server-only): the
+/// server-free `web-core` render core reaches neither the stub nor a caller.
+#[cfg(all(feature = "server", not(feature = "widget-assets")))]
 fn port_glue_script(_base: &str) -> String {
     String::new()
 }
@@ -496,7 +509,7 @@ fn port_glue_script(_base: &str) -> String {
 /// Same as [`render_page_full`] but appends `overlay` (raw HTML) after the
 /// `#ipe-root` div. The overlay must carry `data-ipe-debugger` so the
 /// diff/patch engine ignores it.
-#[cfg(feature = "debugger")]
+#[cfg(all(feature = "server", feature = "debugger"))]
 fn render_page_full_with_overlay(
     sid: &str,
     base: &str,
@@ -528,20 +541,26 @@ fn render_page_full_with_overlay(
 /// implementation lives in the always-compiled `telemetry` module so the
 /// Ipe.Http.Server path (`server.rs`) shares the identical byte-exact banner;
 /// this is a thin re-export for the Web page renderer.
+#[cfg(feature = "server")]
 fn dev_console_banner(base: &str) -> String {
     crate::telemetry::dev_console_banner(base)
 }
 
 // ─── web_app: axum mount + per-session TEA driver over SSE ─────────────────
 
+#[cfg(feature = "server")]
 use crate::tea::{IpeCmd, IpeSub};
+#[cfg(feature = "server")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "server")]
 use std::sync::{Arc, Mutex, Weak};
+#[cfg(feature = "server")]
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 /// Per-session live state behind an `Arc<Mutex<…>>`. `index` / `last_view` are
 /// re-derived on every commit; `sse_tx` is filled when the browser attaches the
 /// SSE channel; `msg_tx` feeds the per-session driver loop.
+#[cfg(feature = "server")]
 pub struct SessionEntry<Model, Msg> {
     pub model: Model,
     pub last_view: Html<Msg>,
@@ -567,6 +586,7 @@ pub struct SessionEntry<Model, Msg> {
 /// We use `globalSeq` (the server-owned broadcast counter) rather than the
 /// local `seq` so it never collides with the client's own POST-local seq gate.
 #[derive(serde::Serialize)]
+#[cfg(feature = "server")]
 struct PatchEnvelope<'a> {
     #[serde(rename = "globalSeq")]
     global_seq: u64,
@@ -579,6 +599,7 @@ struct PatchEnvelope<'a> {
 /// Only mounted when the dev banner is active (non-production, root-mounted,
 /// and `IPE_WEB_BANNER` not explicitly disabled).
 #[derive(serde::Deserialize)]
+#[cfg(feature = "server")]
 struct WatchStatusBody {
     ok: bool,
     #[serde(default)]
@@ -596,6 +617,7 @@ struct WatchStatusBody {
 /// `/_ipe/watch/status` endpoint and replayed to new SSE connections so a
 /// browser refresh during a failed build still shows the error.
 #[derive(Clone, Debug)]
+#[cfg(feature = "server")]
 struct WatchBuildStatus {
     ok: bool,
     error: Option<String>,
@@ -608,6 +630,7 @@ struct WatchBuildStatus {
 /// raw, and a raw newline inside the value would break the `data:` line framing.
 /// A crafted excerpt is confined to the `error` string value: it cannot inject
 /// sibling fields.
+#[cfg(feature = "server")]
 fn watch_status_sse_payload(ok: bool, error: Option<&str>) -> String {
     let value = if ok {
         serde_json::json!({ "ok": true })
@@ -623,6 +646,7 @@ fn watch_status_sse_payload(ok: bool, error: Option<&str>) -> String {
 /// `ipe-<event>` marker. We resolve handlers server-side by ipe-id + event,
 /// so `handlerId` is the authoritative locator; `event` is derived below.
 #[derive(serde::Deserialize)]
+#[cfg(feature = "server")]
 struct EventBody {
     #[serde(default)]
     #[serde(rename = "sessionId")]
@@ -649,6 +673,7 @@ struct EventBody {
 }
 
 /// Coerce a wire arg `Value` to the string the click/input/keydown path expects.
+#[cfg(feature = "server")]
 fn value_to_string(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => s.clone(),
@@ -658,15 +683,19 @@ fn value_to_string(v: &serde_json::Value) -> String {
 
 /// Boxed route resolver: a freshly-`init`'d model + GET path → the model whose
 /// `page` field reflects the matched route.
+#[cfg(feature = "server")]
 type RouteResolver<Model> = Arc<dyn Fn(Model, &str) -> Model + Send + Sync>;
 /// Boxed param resolver: a GET path → the matched route's `:name`→value params.
+#[cfg(feature = "server")]
 type ParamResolver = Arc<dyn Fn(&str) -> crate::dict::IpeDict<String> + Send + Sync>;
 /// Boxed route predicate: does a GET path match a declared route?
 /// Gates the page handler's browser-noise 404 and the
 /// unrouted-GET-against-a-live-session 404 — see `page`.
+#[cfg(feature = "server")]
 type RouteMatched = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Shared axum state: the session store + Arc'd TEA callbacks.
+#[cfg(feature = "server")]
 pub(crate) struct WebState<Model, Msg, FInit, FUpdate, FView, FSubs> {
     store: Arc<dyn store::SessionStore<Model, Msg>>,
     init: Arc<FInit>,
@@ -706,6 +735,7 @@ pub(crate) struct WebState<Model, Msg, FInit, FUpdate, FView, FSubs> {
 }
 
 // Manual Clone — derive would demand Clone on the closures (they're behind Arc).
+#[cfg(feature = "server")]
 impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
     for WebState<Model, Msg, FInit, FUpdate, FView, FSubs>
 {
@@ -729,6 +759,7 @@ impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
 /// (opt-out). Default 50_000 — far above any single-instance real load, low
 /// enough to bound memory under a session-creation flood.
 /// Env `IPE_WEB_MAX_SESSIONS`.
+#[cfg(feature = "server")]
 fn max_sessions() -> usize {
     crate::system::read_env_var("IPE_WEB_MAX_SESSIONS")
         .ok()
@@ -739,9 +770,11 @@ fn max_sessions() -> usize {
 /// RAII admission slot: decrements `WebState::session_count` exactly once when
 /// the owning `drive_session` task exits (any path). Paired 1:1 with the
 /// `fetch_add` reservation at the session-create site — the ONLY decrement.
+#[cfg(feature = "server")]
 struct SessionSlot {
     count: Arc<AtomicUsize>,
 }
+#[cfg(feature = "server")]
 impl Drop for SessionSlot {
     fn drop(&mut self) {
         self.count.fetch_sub(1, Ordering::SeqCst);
@@ -750,6 +783,7 @@ impl Drop for SessionSlot {
 
 /// Fire a `Cmd`: None/Batch recurse; Perform spawns the composed task→Msg thunk
 /// and pushes the result back into the per-session loop.
+#[cfg(feature = "server")]
 fn run_cmd<Msg: Send + 'static>(cmd: IpeCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
     match cmd {
         IpeCmd::None => {}
@@ -782,6 +816,7 @@ fn run_cmd<Msg: Send + 'static>(cmd: IpeCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
 /// (Re-)spawn subscription tasks. Aborts the previous handles first (one model
 /// re-evaluated each commit). When `subscriptions` is `Sub.none`, this is
 /// exercised mainly by the None arm.
+#[cfg(feature = "server")]
 fn spawn_subs<Msg: Clone + Send + 'static>(
     sub: IpeSub<Msg>,
     tx: &Sender<Msg>,
@@ -839,6 +874,7 @@ fn spawn_subs<Msg: Clone + Send + 'static>(
 // Arc'd TEA callbacks, the store, the sid) — bundling them into a struct purely to
 // satisfy the 7-arg heuristic would add indirection without clarifying anything.
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "server")]
 async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     // WEAK ref: the driver must NOT keep the session alive. The strong holders are
     // the store map (until TTL evict) and any open SSE connection (pins the entry
@@ -1057,6 +1093,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
 /// OS CSPRNG (the approved security-randomness source per `random.rs`), and its
 /// `simple` form is exactly 32 lowercase-hex chars — same shape, no `aes-gcm`.
 /// Never panics.
+#[cfg(feature = "server")]
 fn new_sid() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
@@ -1064,6 +1101,7 @@ fn new_sid() -> String {
 /// Normalise a raw `IPE_WEB_BASE_PATH` value: trim, drop a trailing slash,
 /// ensure a single leading slash. `""` / `"/"` collapse to `""` (root-mounted —
 /// no prefix).
+#[cfg(feature = "server")]
 fn normalise_base_path(raw: &str) -> String {
     let t = raw.trim().trim_end_matches('/');
     if t.is_empty() {
@@ -1092,6 +1130,7 @@ fn normalise_base_path(raw: &str) -> String {
 /// Mirrors `csrf::csrf_cookie_name_for`. Plain-HTTP dev keeps the bare `ipe_sid`
 /// (`__Host-` requires Secure, which a browser drops over `http://`). A sub-app
 /// (Path != `/`) can never use `__Host-`, so it keeps the base-scoped name.
+#[cfg(feature = "server")]
 fn cookie_name_for(base: &str) -> String {
     if base.is_empty() {
         if csrf::cookies_secure() {
@@ -1111,6 +1150,7 @@ fn cookie_name_for(base: &str) -> String {
 /// Cookie `Path` for a given (normalised) base path: the base for a sub-app
 /// (scopes the cookie to `/<base>/*` so it is never sent to the parent's own
 /// routes — protecting the parent session), else `/`.
+#[cfg(feature = "server")]
 fn cookie_path_for(base: &str) -> String {
     if base.is_empty() {
         "/".to_string()
@@ -1126,17 +1166,20 @@ fn cookie_path_for(base: &str) -> String {
 /// `/_ipe/event` and `/_ipe/sse` paths with it. The browser reaches this child
 /// only through the parent proxy, which strips the prefix before forwarding —
 /// so the child's own router stays root-relative.
+#[cfg(feature = "server")]
 pub(super) fn web_base_path() -> String {
     normalise_base_path(&crate::system::read_env_var("IPE_WEB_BASE_PATH").unwrap_or_default())
 }
 
 /// The active session cookie name (read AND write must agree, so both
 /// `page_response` and `sid_from_cookie` route through this).
+#[cfg(feature = "server")]
 fn session_cookie_name() -> String {
     cookie_name_for(&web_base_path())
 }
 
 /// The active session cookie `Path`.
+#[cfg(feature = "server")]
 fn cookie_path() -> String {
     cookie_path_for(&web_base_path())
 }
@@ -1148,6 +1191,7 @@ fn cookie_path() -> String {
 ///
 /// Snapshotted once (env is stable at process start; same rationale as
 /// `csrf::cookies_secure()` — avoids a per-request global env-lock read).
+#[cfg(feature = "server")]
 fn trust_proxy_headers() -> bool {
     use std::sync::OnceLock;
     static TRUST: OnceLock<bool> = OnceLock::new();
@@ -1166,6 +1210,7 @@ fn trust_proxy_headers() -> bool {
 /// when `trust` is true — otherwise a client could forge `X-Forwarded-Proto`
 /// to fool the Secure-cookie decision (the same footgun `server.rs` already
 /// closed for `X-Forwarded-For`).
+#[cfg(feature = "server")]
 fn request_is_https_with_trust(headers: &axum::http::HeaderMap, trust: bool) -> bool {
     if !trust {
         return false;
@@ -1180,13 +1225,14 @@ fn request_is_https_with_trust(headers: &axum::http::HeaderMap, trust: bool) -> 
 /// Request-scoped HTTPS detection: true when THIS request arrived over TLS at
 /// the trusted proxy (`X-Forwarded-Proto: https`). See
 /// `request_is_https_with_trust` for the testable core.
+#[cfg(feature = "server")]
 fn request_is_https(headers: &axum::http::HeaderMap) -> bool {
     request_is_https_with_trust(headers, trust_proxy_headers())
 }
 
 /// Build the full-page HTTP response for a GET (initial render or reuse): the
 /// client-bearing HTML wrap + the session cookie (name/path base-path-aware).
-#[cfg(not(feature = "debugger"))]
+#[cfg(all(feature = "server", not(feature = "debugger")))]
 fn page_response(
     sid: &str,
     body: &str,
@@ -1268,7 +1314,7 @@ fn page_response(
 
 /// Same as [`page_response`] but injects `overlay` (raw HTML) after `#ipe-root`
 /// via [`render_page_full_with_overlay`]. Active only with the `debugger` feature.
-#[cfg(feature = "debugger")]
+#[cfg(all(feature = "server", feature = "debugger"))]
 fn page_response_with_overlay(
     sid: &str,
     body: &str,
@@ -1322,6 +1368,7 @@ fn page_response_with_overlay(
 /// Maximum request body bytes for `/_ipe/event`: `IPE_WEB_MAX_BODY_BYTES`,
 /// default 5 MiB (5 << 20 = 5 242 880). The default covers `Event.onFile` /
 /// `Event.onImage` data-URL payloads; override for larger file uploads.
+#[cfg(feature = "server")]
 fn web_max_body_bytes() -> usize {
     crate::system::read_env_var("IPE_WEB_MAX_BODY_BYTES")
         .ok()
@@ -1360,6 +1407,7 @@ mod web_max_body_bytes_tests {
 /// Session idle-TTL under the one config precedence `env > setting-in-code >
 /// fallback`: `IPE_WEB_TTL` wins, else an installed `Web.sessionTtl` setting,
 /// else the default 1800 (30 min).
+#[cfg(feature = "server")]
 fn web_ttl() -> std::time::Duration {
     let secs = crate::system::read_env_var("IPE_WEB_TTL")
         .ok()
@@ -1373,6 +1421,7 @@ fn web_ttl() -> std::time::Duration {
 /// or more `<number><unit>` segments with units `h` / `m` / `s`
 /// (e.g. `30m`, `1h`, `24h`, `90s`, `1h30m`). Total: any malformed input
 /// returns `None` (caller falls back to the default) — never panics.
+#[cfg(feature = "server")]
 fn parse_duration_secs(raw: &str) -> Option<u64> {
     let s = raw.trim();
     if s.is_empty() {
@@ -1430,6 +1479,7 @@ fn parse_duration_secs(raw: &str) -> Option<u64> {
 /// Fail-closed by design: any read failure or unrecognised value is treated as
 /// `false` (the additive algorithm runs normally), so a misconfigured env never
 /// silently corrupts state — it only fails to reset.
+#[cfg(feature = "server")]
 pub(crate) fn reset_state_from_env() -> bool {
     crate::system::read_env_var("IPE_WEB_RESET_STATE")
         .ok()
@@ -1440,6 +1490,7 @@ pub(crate) fn reset_state_from_env() -> bool {
 /// Best-effort bounded flush of all active telemetry exporters (push + hub).
 /// Tunable via `IPE_WEB_SHUTDOWN_GRACE_MS` (default 1500 ms; 0 = exit at
 /// once).
+#[cfg(feature = "server")]
 fn shutdown_grace() -> std::time::Duration {
     let ms = crate::system::read_env_var("IPE_WEB_SHUTDOWN_GRACE_MS")
         .ok()
@@ -1457,7 +1508,7 @@ fn shutdown_grace() -> std::time::Duration {
 /// No-op when `http_client` is absent: the push/hub exporters make outbound
 /// HTTP calls and are gated behind that feature; a web app with no outbound
 /// HTTP kernel has no exporters to flush.
-#[cfg(feature = "http_client")]
+#[cfg(all(feature = "server", feature = "http_client"))]
 async fn flush_exporters() {
     // 500 ms total cap (split across two exporters in sequence — each is capped
     // independently so a slow/unavailable first target doesn't eat all of the
@@ -1466,7 +1517,7 @@ async fn flush_exporters() {
     push_exporter::flush_now(CAP_MS).await;
     hub_exporter::flush_now(CAP_MS).await;
 }
-#[cfg(not(feature = "http_client"))]
+#[cfg(all(feature = "server", not(feature = "http_client")))]
 async fn flush_exporters() {}
 
 /// Push a bounded `event: reload` frame to every session THIS PROCESS is
@@ -1482,6 +1533,7 @@ async fn flush_exporters() {}
 /// already covers the restart-detection floor; this only shaves latency),
 /// and a session that disconnects between the enumerate and the push
 /// misses a frame it can't act on anyway.
+#[cfg(feature = "server")]
 async fn push_reload_to_web_sessions<Model, Msg>(store: &Arc<dyn store::SessionStore<Model, Msg>>)
 where
     Model: Send + 'static,
@@ -1516,6 +1568,7 @@ where
 /// Dev-only: gated by [`literal_table::dev_overlay_active`] (flag on AND
 /// non-production). When inactive it registers nothing and pushes no frame, so
 /// no appearance patch is ever observable in a production build.
+#[cfg(feature = "server")]
 async fn apply_literal_patch_to_web_sessions<Model, Msg, FView>(
     store: &Arc<dyn store::SessionStore<Model, Msg>>,
     view: &Arc<FView>,
@@ -1582,6 +1635,7 @@ async fn apply_literal_patch_to_web_sessions<Model, Msg, FView>(
 /// module uses (dev-console mount, metrics auth). Split from
 /// `web_shutdown_signal` so the gate itself is unit-testable without
 /// delivering a real signal.
+#[cfg(feature = "server")]
 async fn maybe_push_reload_to_web_sessions<Model, Msg>(
     store: &Arc<dyn store::SessionStore<Model, Msg>>,
 ) where
@@ -1606,6 +1660,7 @@ async fn maybe_push_reload_to_web_sessions<Model, Msg>(
 ///
 /// Robustness: a failed SIGTERM registration must NOT crash — it degrades to
 /// SIGINT-only (`ctrl_c`). On non-unix only `ctrl_c` is available.
+#[cfg(feature = "server")]
 async fn web_shutdown_signal<Model, Msg>(store: Arc<dyn store::SessionStore<Model, Msg>>)
 where
     Model: Send + 'static,
@@ -1682,6 +1737,7 @@ where
 /// Resolve when the next SIGINT or SIGTERM arrives. Total + robust: if SIGTERM
 /// can't be registered (rare), fall back to SIGINT (`ctrl_c`) only rather than
 /// panicking. On non-unix, only `ctrl_c` exists.
+#[cfg(feature = "server")]
 async fn wait_for_term_or_int() {
     #[cfg(unix)]
     {
@@ -1716,6 +1772,7 @@ async fn wait_for_term_or_int() {
 /// req-reader can bootstrap session state on first render. A non-req init is
 /// monomorphised to ignore the threaded `WebReq`.
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "server")]
 pub fn web_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     init: FInit,
     update: FUpdate,
@@ -1802,6 +1859,7 @@ where
 ///
 /// `Model`/`Msg`/the four callbacks stay concrete inside the returned closure —
 /// only the outer builder is boxed (no `dyn` over the app's handlers).
+#[cfg(feature = "server")]
 pub fn web_embed_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
     init: FInit,
     update: FUpdate,
@@ -1911,6 +1969,7 @@ fn fail_closed_router(message: String) -> axum::Router {
 /// are erased into the boxed resolver, so `serve_web`/`WebState` keep the
 /// original 6 type params.
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "server")]
 pub fn web_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
     init: FInit,
     update: FUpdate,
@@ -2004,6 +2063,7 @@ where
 /// orphaning every handler on the page the browser is actually showing (all
 /// subsequent events, form submits included, would silently resolve to
 /// nothing).
+#[cfg(feature = "server")]
 fn is_browser_noise_path(p: &str) -> bool {
     if matches!(
         p,
@@ -2039,6 +2099,7 @@ fn is_browser_noise_path(p: &str) -> bool {
 /// `..`) is rejected BEFORE the join — stricter than  `filepath.Clean`,
 /// no traversal can escape the dir. A directory (or unreadable file) reads
 /// as `Err` → `None` → 404.
+#[cfg(feature = "server")]
 async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Response> {
     use axum::response::IntoResponse;
     // IPE_WEB_STATIC_DIR: a non-empty value mounts the named directory at /static.
@@ -2069,6 +2130,7 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
 /// Content type for a browser-noise file served from the static root. The
 /// extensions here mirror what browsers actually probe at the origin root.
 /// Anything unknown falls back to octet-stream rather than guessing.
+#[cfg(feature = "server")]
 fn static_noise_mime(ext: &str) -> &'static str {
     match ext {
         "ico" => "image/x-icon",
@@ -2090,6 +2152,7 @@ fn static_noise_mime(ext: &str) -> &'static str {
     }
 }
 
+#[cfg(feature = "server")]
 mod handlers {
     use super::*;
     use axum::extract::State;
@@ -3930,6 +3993,7 @@ mod handlers {
 /// Shared server setup for `web_app` / `web_app_routed`: nested HTTP
 /// handlers (`page` / `sse_handler` / `event_handler`), router + bind/serve.
 /// The only per-entry difference (the `route_resolver`) lives on `state`.
+#[cfg(feature = "server")]
 async fn serve_web<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     state: WebState<Model, Msg, FInit, FUpdate, FView, FSubs>,
 ) -> IpeResult<E, ()>
@@ -4055,6 +4119,7 @@ where
 /// prefix on the shared server port. `use_console_proxy` is decided by the
 /// caller so this stays feature-clean (the caller passes `false` when
 /// `http_client` is off).
+#[cfg(feature = "server")]
 pub(crate) fn build_web_router<Model, Msg, FInit, FUpdate, FView, FSubs>(
     state: WebState<Model, Msg, FInit, FUpdate, FView, FSubs>,
     // Read only when `http_client` is active (the console-proxy arm); the
@@ -4449,6 +4514,7 @@ where
 /// Read the session cookie from request headers. Uses the base-path-aware
 /// cookie name (`session_cookie_name`) so a sub-app reads its own scoped cookie,
 /// never the parent's `ipe_sid`.
+#[cfg(feature = "server")]
 fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
     let name = session_cookie_name();
     let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
@@ -4469,7 +4535,7 @@ fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
 // `use super::*`), so a non-Web Ipe.Html / Ipe.Ui render doesn't pull this
 // server module in.
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod reload_push_tests {
     use super::*;
     use crate::web::store::{MemoryStore, SessionHandle, SessionStore};
@@ -4557,7 +4623,7 @@ mod reload_push_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_appearance_push_tests {
     //! Applying an appearance patch to the running app re-renders
     //! `view(currentModel)` from the CURRENT Model (never through `update`) and
@@ -4606,6 +4672,7 @@ mod hot_appearance_push_tests {
         }))
     }
 
+    #[allow(clippy::expect_used)] // test helper — panic on bad fixture is correct
     fn parse_patch_frame(frame: &str) -> serde_json::Value {
         // frame = "event: patches\ndata: <json>\n\n"; recover the json line.
         let data = frame
@@ -4618,6 +4685,7 @@ mod hot_appearance_push_tests {
     // Run an async test body on a fresh current-thread runtime while holding the
     // process-global overlay guard in SYNC scope, so the guard never crosses an
     // await point (the overlay statics are the shared state being serialised).
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = guard();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -4726,7 +4794,7 @@ mod hot_appearance_push_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod dev_banner_tests {
     use super::dev_console_banner;
 
@@ -4758,7 +4826,7 @@ mod dev_banner_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod duration_parse_tests {
     use super::parse_duration_secs;
 
@@ -4785,7 +4853,7 @@ mod duration_parse_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod request_is_https_tests {
     use super::request_is_https_with_trust;
 
@@ -4817,7 +4885,7 @@ mod request_is_https_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod base_path_tests {
     use super::{
         client_js_path, cookie_name_for, cookie_path_for, normalise_base_path, render_page_full,
@@ -4913,7 +4981,7 @@ mod base_path_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod session_lost_body_tests {
     //! Guards the LOAD-BEARING session-lost 404 wire contract.
     //!
@@ -4994,7 +5062,7 @@ mod session_lost_body_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod admission_control_tests {
     use super::*;
 
@@ -5056,7 +5124,7 @@ mod admission_control_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod sse_reconnect_reconcile_tests {
     //! Proves the two-half reconcile contract for SSE reconnect:
     //! 1. A reconnect whose `?path=` differs from the session's current route
@@ -5167,6 +5235,7 @@ mod sse_reconnect_reconcile_tests {
     }
 
     /// Helper: read the current rendered text from the session's `last_view`.
+    #[allow(clippy::unwrap_used)] // test helper — lock poison is a test environment issue
     fn rendered_text(entry: &SessionHandle<TestPage, ()>) -> String {
         let g = entry.lock().unwrap();
         render_html(&g.last_view)
@@ -5393,7 +5462,7 @@ mod sse_reconnect_reconcile_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod static_noise_mime_tests {
     use super::static_noise_mime;
 
@@ -5474,7 +5543,7 @@ mod recursion_session_isolation_tests {
 /// These are env-mutating tests and must not run in parallel — they use
 /// `std::env::set_var`/`remove_var` which are unsafe in Rust 2024 (see the
 /// ENV_LOCK rationale in system.rs). Each test cleans up after itself.
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod security_env_tests {
 
     // ── IPE_WEB_CSRF_ORIGIN_CHECK ─────────────────────────────────────────────
@@ -5571,7 +5640,7 @@ mod security_env_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod watch_status_handler_tests {
     //! Regression-locks the `POST /_ipe/watch/status` trust boundary.
     //!
@@ -5685,6 +5754,7 @@ mod watch_status_handler_tests {
         }))
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_status(
         router: Router,
         token_header: Option<&str>,
@@ -6233,7 +6303,7 @@ mod watch_status_handler_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_transition_handler_tests {
     //! Regression-locks the `POST /_ipe/hot-transition` trust boundary — the
     //! dev-only leg that mutates the server-held Model from an untrusted dev
@@ -6316,6 +6386,7 @@ mod hot_transition_handler_tests {
             .with_state(state)
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot(token: Option<&str>, body: &str) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
@@ -6333,6 +6404,7 @@ mod hot_transition_handler_tests {
     /// the overlay override + transition registry are the shared state being
     /// serialised, and the guard is released only after the whole async body has
     /// run on a fresh current-thread runtime.
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = overlay_test_lock();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -6434,7 +6506,7 @@ mod hot_transition_handler_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_init_session_scoping_tests {
     //! Regression-locks the session-scoping invariant of `POST /_ipe/hot-init`:
     //! an init-datum edit is visible to FRESH sessions (those created after the
@@ -6475,6 +6547,7 @@ mod hot_init_session_scoping_tests {
     // ── Init fn — mirrors the compiler-emitted `init` body ───────────────────
 
     /// The JSON the compiler bakes for `init _ = ({ count = 0 }, Cmd.none)`.
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn baked_json() -> String {
         let datum = InitDatum {
             model: serde_json::to_value(Counter { count: 0 }).expect("serialize"),
@@ -6594,6 +6667,7 @@ mod hot_init_session_scoping_tests {
     }
 
     /// POST `/_ipe/hot-init` with a token and a JSON body `{old_json, new_json}`.
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot_init(
         router: Router,
         token: &str,
@@ -6733,7 +6807,7 @@ mod hot_init_session_scoping_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_msg_handler_tests {
     //! Regression-locks the `POST /_ipe/hot-msg` trust boundary — the dev-only leg
     //! that extends the server-held `Msg` set from an untrusted dev channel. Every
@@ -6816,6 +6890,7 @@ mod hot_msg_handler_tests {
             .with_state(state)
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot(token: Option<&str>, body: &str) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
@@ -6828,6 +6903,7 @@ mod hot_msg_handler_tests {
         make_router().oneshot(req).await.expect("router responds")
     }
 
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = overlay_test_lock();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -6946,7 +7022,7 @@ mod hot_msg_handler_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_init_handler_tests {
     //! Regression-locks the `POST /_ipe/hot-init` trust boundary — the dev-only
     //! leg that updates the server-held init datum from an untrusted dev channel.
@@ -7027,6 +7103,7 @@ mod hot_init_handler_tests {
             .with_state(state)
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot_init(token: Option<&str>, body: &str) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
@@ -7039,6 +7116,7 @@ mod hot_init_handler_tests {
         make_router().oneshot(req).await.expect("router responds")
     }
 
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = overlay_test_lock();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -7051,6 +7129,7 @@ mod hot_init_handler_tests {
         locked_remove_var("IPE_WATCH_HOT_TOKEN");
     }
 
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn baked_json() -> String {
         serde_json::to_string(&InitDatum {
             model: serde_json::json!({}),
@@ -7058,6 +7137,7 @@ mod hot_init_handler_tests {
         .expect("serialize datum")
     }
 
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn replacement_json() -> String {
         serde_json::to_string(&InitDatum {
             model: serde_json::json!({"x": 1}),
@@ -7159,7 +7239,7 @@ mod hot_init_handler_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod hot_wiring_handler_tests {
     //! Regression-locks the `POST /_ipe/hot-wiring` trust boundary — the dev-only
     //! leg that updates the server-held Cmd wiring from an untrusted dev channel.
@@ -7240,6 +7320,7 @@ mod hot_wiring_handler_tests {
             .with_state(state)
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_hot_wiring(token: Option<&str>, body: &str) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
@@ -7252,6 +7333,7 @@ mod hot_wiring_handler_tests {
         make_router().oneshot(req).await.expect("router responds")
     }
 
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_overlay_serialised<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         let _g = overlay_test_lock();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -7264,10 +7346,12 @@ mod hot_wiring_handler_tests {
         locked_remove_var("IPE_WATCH_HOT_TOKEN");
     }
 
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn baked_none_json() -> String {
         serde_json::to_string(&CmdWiring::none()).expect("serialize wiring")
     }
 
+    #[allow(clippy::expect_used)] // test helper — serialisation of a known-good literal cannot fail
     fn wiring_effect_0_json() -> String {
         serde_json::to_string(&CmdWiring::effect(0)).expect("serialize wiring")
     }
@@ -7392,7 +7476,7 @@ mod bind_error_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod reset_state_tests {
     use super::reset_state_from_env;
 
@@ -7438,7 +7522,7 @@ mod reset_state_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod emitted_router_behavior_tests {
     //! In-process behavior tier for THE SEAL's live-server guarantees.
     //!
@@ -7673,6 +7757,7 @@ mod emitted_router_behavior_tests {
     /// `(minted_sid, body)`. `minted_sid` is the `ipe_sid` from any `Set-Cookie`
     /// header (the response also sets a CSRF cookie, so scan ALL of them), or
     /// empty when none was set.
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn get(router: axum::Router, path: &str, cookie: Option<&str>) -> (String, String) {
         let mut b = Request::builder().method("GET").uri(path);
         if let Some(c) = cookie {
@@ -7696,6 +7781,7 @@ mod emitted_router_behavior_tests {
         (sid, String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    #[allow(clippy::expect_used)] // test helper — request build / router failure is a test environment issue
     async fn post_event(router: axum::Router, cookie: &str, body: &str) -> StatusCode {
         let resp = router
             .oneshot(
@@ -7739,6 +7825,7 @@ mod emitted_router_behavior_tests {
         panic!("model did not reach the expected state within 2s");
     }
 
+    #[allow(clippy::expect_used)] // test helper — runtime build failure is a test environment issue
     fn with_csrf_off<F: std::future::Future<Output = ()>>(body: impl FnOnce() -> F) {
         // Serialize env mutation across these tests; `IPE_CSRF` is process-global.
         let _g = crate::web::literal_table::overlay_test_lock();

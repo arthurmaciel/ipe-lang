@@ -38,8 +38,19 @@ serde = []
 regex = []
 uuid = []
 random = []
-web = []
+# The server-free render core (the `crate::dom` diff/dispatch/form pipeline +
+# `style_inject`/`page_shell`). Declared but inert in the vendored escape hatch:
+# its deps (`serde` / `serde_json` / `serde_urlencoded`) stay non-optional below.
+# The render-core `#[cfg(feature = "web-core")]` gates in the vendored source
+# (`dom/form.rs`, `html.rs`'s `html_on_raw_*`/`is_void`, `css_safety.rs`'s style
+# sinks, `web_page_core.rs`) need this entry to compile — every render host (web /
+# wasm-client / webview) promotes it. `web` implies it, mirroring the runtime crate.
+web-core = []
+web = ["web-core"]
 redis_store = []
+# `webview = []` is a surgery anchor: `webview_cargo_toml` replaces it with the
+# wry+tao deps AND promotes `web-core` + `webview` into `default` — so a webview
+# build activates the render core without a static feature edge here.
 webview = []
 tui = []
 websocket_client = []
