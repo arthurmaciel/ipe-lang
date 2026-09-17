@@ -692,14 +692,6 @@ pub static ENV_VARS: &[EnvVar] = &[
         class: Class::SecurityTunable,
     },
     EnvVar {
-        name: "IPE_HTTP_MAX_BODY_BYTES",
-        default: "33554432 (32 MiB)",
-        purpose: "Maximum request-body size (bytes) for outbound `Http.*` calls. \
-                  Prevents OOM from unexpectedly large responses.",
-        subsystem: Subsystem::Http,
-        class: Class::Tunable,
-    },
-    EnvVar {
         name: "IPE_HTTP_DNS_TIMEOUT_MS",
         default: "5000 (5 s)",
         purpose: "Deadline (ms) for the SSRF pre-send DNS resolve, run off the async \
@@ -707,6 +699,14 @@ pub static ENV_VARS: &[EnvVar] = &[
                   or stalling resolver on an outbound request.",
         subsystem: Subsystem::Http,
         class: Class::SecurityTunable,
+    },
+    EnvVar {
+        name: "IPE_HTTP_MAX_BODY_BYTES",
+        default: "33554432 (32 MiB)",
+        purpose: "Maximum request-body size (bytes) for outbound `Http.*` calls. \
+                  Prevents OOM from unexpectedly large responses.",
+        subsystem: Subsystem::Http,
+        class: Class::Tunable,
     },
     // ── Observability ─────────────────────────────────────────────────────────
     EnvVar {
