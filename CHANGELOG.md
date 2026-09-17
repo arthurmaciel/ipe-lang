@@ -10,6 +10,20 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.81](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.80...ipe-v0.1.81) (2026-09-17)
+
+
+### Bug Fixes
+
+* **compiler:** int-overflow SSOT in transition classifier, hydration-gate target, App.fromEnv capability ([#2549](https://github.com/arthurmaciel/ipe-lang/issues/2549)) ([da3f6ea](https://github.com/arthurmaciel/ipe-lang/commit/da3f6ea284cc7235b5ddc036ca61c17b66872fcf))
+* **lint:** prefer-pipeline --fix dropped operator precedence when the ([595e196](https://github.com/arthurmaciel/ipe-lang/commit/595e1969e4f56f9f86561c5d092ebc6cb48333e9))
+* **lsp,lint:** parenthesise PCons/PAlias/POr ctor args and guard pipeline fix precedence ([#2545](https://github.com/arthurmaciel/ipe-lang/issues/2545)) ([595e196](https://github.com/arthurmaciel/ipe-lang/commit/595e1969e4f56f9f86561c5d092ebc6cb48333e9))
+* **lsp:** push_pattern omitted parens for PCons/PAlias/POr in atom position ([595e196](https://github.com/arthurmaciel/ipe-lang/commit/595e1969e4f56f9f86561c5d092ebc6cb48333e9))
+* **runtime,security:** bound CSS-value recursion, CSV bytes, and cache entry cap ([#2546](https://github.com/arthurmaciel/ipe-lang/issues/2546)) ([bd03b22](https://github.com/arthurmaciel/ipe-lang/commit/bd03b226b3ec9ad3c4add99a125d2a2216394a54))
+* **security:** close IPv6-literal SSRF bypass + harden outbound HTTP ([#2538](https://github.com/arthurmaciel/ipe-lang/issues/2538)) ([2fc30bc](https://github.com/arthurmaciel/ipe-lang/commit/2fc30bccc8ce8748de41479bcf1fa2edf46acdee))
+* **security:** pin redirect policy on credential-bearing web clients ([#2539](https://github.com/arthurmaciel/ipe-lang/issues/2539)) ([4615997](https://github.com/arthurmaciel/ipe-lang/commit/4615997253df874cd9b913e4f47cf2cb3c5cdd73)), closes [#2535](https://github.com/arthurmaciel/ipe-lang/issues/2535)
+* **security:** Windows run-jail ceilings, ipe release consent gates, macOS bundle-name traversal ([#2552](https://github.com/arthurmaciel/ipe-lang/issues/2552)) ([2187683](https://github.com/arthurmaciel/ipe-lang/commit/21876832cc8b355350f8ef19bf4203e3c94d87d9))
+
 ## [0.1.80](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.79...ipe-v0.1.80) (2026-09-17)
 
 
