@@ -825,6 +825,147 @@ struct LiteralAccum {
     defaults: Vec<String>,
 }
 
+/// The transient, per-scope emit state — everything whose value depends on
+/// *where in the emission* we currently are, not on the immutable program-wide
+/// configuration held by the rest of [`EmitCtx`]. Kept apart from that config by
+/// construction so a scope field can never be mistaken for (or leak into) a
+/// configuration flag: this is the only mutable surface of [`EmitCtx`], reachable
+/// solely through the balanced `enter`/`exit` (and `begin`/`end`) methods below.
+///
+/// Every field is interior-mutable so the emit — which threads a shared
+/// `&EmitCtx` — can arm and disarm a scope without an added parameter on every
+/// emit function.
+#[derive(Default)]
+struct ScopeState {
+    /// Per-function accumulator for hoisted style literals, reset at the start of
+    /// each function body (see [`LiteralAccum`]).
+    lit_accum: RefCell<LiteralAccum>,
+    /// The `Model` parameter symbol of the `update` function currently being
+    /// emitted, set only while emitting a TEA `update` lambda body under
+    /// [`EmitCtx::hot_appearance`]. `Some` there arms
+    /// [`crate::emit_expr::emit_match`] to reduce a data-describable arm to an
+    /// `apply_transition_hot` call (the logic counterpart of the appearance
+    /// literal-table hoist); `None` everywhere else, so no other `case` is ever
+    /// transition-rewritten.
+    transition_model_param: RefCell<Option<ipe_intern::Symbol>>,
+    /// Whether a TEA `subscriptions` body is currently being emitted under
+    /// [`EmitCtx::hot_appearance`]. `true` only while emitting a
+    /// `Model -> Sub Msg` function body under the flag; arms
+    /// [`crate::emit_expr`]'s `Sub.every` / `Time.every` kernel emit to reduce a
+    /// data-describable tick entry to a `sub_every_hot("<baked datum>")` call.
+    /// `false` everywhere else, so no other `Sub.every`/`Time.every` is ever
+    /// sub-rewritten.
+    subs_hot_active: RefCell<bool>,
+}
+
+impl ScopeState {
+    /// Arm the per-function literal accumulator for a fresh function body and
+    /// return the previous accumulator state so the caller can restore it after
+    /// the body is emitted. Only meaningful under
+    /// [`EmitCtx::hot_appearance`]; when the flag is off it is a cheap no-op
+    /// reset that stays inert (nothing ever hoists), keeping the emit
+    /// byte-identical to the direct-literal form.
+    fn begin_function_literals(&self, hot_appearance: bool) -> LiteralAccum {
+        std::mem::replace(
+            &mut *self.lit_accum.borrow_mut(),
+            LiteralAccum {
+                active: hot_appearance,
+                closure_depth: 0,
+                probe_depth: 0,
+                defaults: Vec::new(),
+            },
+        )
+    }
+
+    /// Finish the current function body: take its accumulated style-literal
+    /// defaults (in emit order) and restore the previous accumulator. An empty
+    /// vector means nothing was hoisted, so the caller emits no table prologue.
+    fn end_function_literals(&self, previous: LiteralAccum) -> Vec<String> {
+        let finished = std::mem::replace(&mut *self.lit_accum.borrow_mut(), previous);
+        finished.defaults
+    }
+
+    /// Enter a `move`-closure body: hoisting is fenced off inside a closure
+    /// because it captures `__ipe_lit` by move. Balanced by [`Self::exit_closure`].
+    fn enter_closure(&self) {
+        self.lit_accum.borrow_mut().closure_depth += 1;
+    }
+
+    /// Leave a `move`-closure body, re-enabling top-level hoisting once every
+    /// enclosing closure has been left. Saturating so an unbalanced call can
+    /// never underflow (it would only, at worst, leave hoisting fenced off).
+    fn exit_closure(&self) {
+        let mut accum = self.lit_accum.borrow_mut();
+        accum.closure_depth = accum.closure_depth.saturating_sub(1);
+    }
+
+    /// Arm the `update`-arm transition rewrite for the duration of the `update`
+    /// lambda body. Returns the previous value so the caller can restore it.
+    fn begin_transition_update(
+        &self,
+        model_param: Option<ipe_intern::Symbol>,
+    ) -> Option<ipe_intern::Symbol> {
+        std::mem::replace(&mut *self.transition_model_param.borrow_mut(), model_param)
+    }
+
+    /// Restore the transition-update arming saved by [`Self::begin_transition_update`].
+    fn end_transition_update(&self, prev: Option<ipe_intern::Symbol>) {
+        *self.transition_model_param.borrow_mut() = prev;
+    }
+
+    /// The `Model` parameter of the `update` lambda currently being emitted, when
+    /// the transition rewrite is armed; `None` otherwise.
+    fn transition_model_param(&self) -> Option<ipe_intern::Symbol> {
+        *self.transition_model_param.borrow()
+    }
+
+    /// Arm the `subscriptions`-entry sub-description rewrite for the duration of a
+    /// TEA `subscriptions` lambda body. Returns the previous value so the caller
+    /// can restore it.
+    fn begin_subs_hot(&self, active: bool) -> bool {
+        std::mem::replace(&mut *self.subs_hot_active.borrow_mut(), active)
+    }
+
+    /// Restore the subscriptions arming saved by [`Self::begin_subs_hot`].
+    fn end_subs_hot(&self, prev: bool) {
+        *self.subs_hot_active.borrow_mut() = prev;
+    }
+
+    /// Whether the `subscriptions`-entry sub-description rewrite is currently armed.
+    fn subs_hot_active(&self) -> bool {
+        *self.subs_hot_active.borrow()
+    }
+
+    /// Enter a discard-only probe emit: hoisting is suppressed so the probe does
+    /// not append a literal the real emit will append again. Balanced by
+    /// [`Self::exit_probe`].
+    fn enter_probe(&self) {
+        self.lit_accum.borrow_mut().probe_depth += 1;
+    }
+
+    /// Leave a probe emit, re-enabling hoisting once every enclosing probe has
+    /// been left. Saturating against an unbalanced call.
+    fn exit_probe(&self) {
+        let mut accum = self.lit_accum.borrow_mut();
+        accum.probe_depth = accum.probe_depth.saturating_sub(1);
+    }
+
+    /// Hoist a style-value literal into the current function's table, returning
+    /// its slot index. `None` when hoisting is not armed (flag off, no active
+    /// body, or inside a `move` closure) — the caller then emits the literal
+    /// directly. The baked default is exactly `value`, so a read of the returned
+    /// slot renders identically to the direct literal (dev == prod).
+    fn hoist_style_literal(&self, value: &str) -> Option<usize> {
+        let mut accum = self.lit_accum.borrow_mut();
+        if !accum.active || accum.closure_depth != 0 || accum.probe_depth != 0 {
+            return None;
+        }
+        let idx = accum.defaults.len();
+        accum.defaults.push(value.to_owned());
+        Some(idx)
+    }
+}
+
 /// Shared emission context: the interner plus the precomputed Ipê → Rust name
 /// maps so each emit site is a `O(log n)` lookup rather than recomputing the
 /// naming rules. Built once per [`RustBackend::emit`].
@@ -1293,31 +1434,12 @@ pub(crate) struct EmitCtx<'a> {
     /// this map at the call site falls through to the ordinary emit, conservative
     /// by construction.
     pub(crate) ui_structural_wrappers: BTreeMap<FuncId, crate::emit_ui_template::WrapperBody>,
-    /// Per-function accumulator for hoisted style literals, reset at the start of
-    /// each function body (see [`LiteralAccum`]). Interior-mutable so the emit,
-    /// which threads `&EmitCtx`, can append a literal's slot without an added
-    /// parameter on every emit function.
-    lit_accum: RefCell<LiteralAccum>,
-    /// The `Model` parameter symbol of the `update` function currently being
-    /// emitted, set only while emitting a TEA `update` lambda body under
-    /// [`Self::hot_appearance`]. `Some` there arms [`crate::emit_expr::emit_match`]
-    /// to reduce a data-describable arm to an `apply_transition_hot` call (the
-    /// logic counterpart of the appearance literal-table hoist); `None`
-    /// everywhere else, so no other `case` is ever transition-rewritten.
-    /// Interior-mutable so the arming threads through the shared `&EmitCtx`
-    /// without an added parameter on every emit function, exactly as
-    /// [`Self::lit_accum`] does for the appearance hoist.
-    transition_model_param: RefCell<Option<ipe_intern::Symbol>>,
-    /// Whether a TEA `subscriptions` body is currently being emitted under
-    /// [`Self::hot_appearance`]. `true` only while emitting a `Model -> Sub Msg`
-    /// function body under the flag; arms [`crate::emit_expr`]'s `Sub.every` /
-    /// `Time.every` kernel emit to reduce a data-describable tick entry to a
-    /// `sub_every_hot("<baked datum>")` call (the subscriptions counterpart of the
-    /// `update`-arm transition rewrite). `false` everywhere else, so no other
-    /// `Sub.every`/`Time.every` is ever sub-rewritten. Interior-mutable so the
-    /// arming threads through the shared `&EmitCtx`, exactly as
-    /// [`Self::transition_model_param`] does for the transition rewrite.
-    subs_hot_active: RefCell<bool>,
+    /// The transient, per-scope emit state (literal accumulator, transition-arm
+    /// and subscriptions arming). Kept apart from the immutable config above so a
+    /// scope field cannot leak into a config flag; reachable only through the
+    /// balanced `enter`/`exit` (and `begin`/`end`) delegating methods, never as a
+    /// bare field. See [`ScopeState`].
+    scope: ScopeState,
     /// The `Ipe.Browser.*` web capabilities the program was GRANTED (disclosed
     /// by importing the reserved browser modules; the resolver derives the set
     /// and the linker unions it onto the [`Program`]). A served web app emits a
@@ -2118,9 +2240,7 @@ impl<'a> EmitCtx<'a> {
             cargo_name,
             hot_appearance,
             ui_structural_wrappers,
-            lit_accum: RefCell::new(LiteralAccum::default()),
-            transition_model_param: RefCell::new(None),
-            subs_hot_active: RefCell::new(false),
+            scope: ScopeState::default(),
             web_capabilities: program.imported_web_capabilities.clone(),
         };
         // Resolve the `HydrationState` type name through the same renderer the
@@ -2169,37 +2289,26 @@ impl<'a> EmitCtx<'a> {
     /// the flag is off it is a cheap no-op reset that stays inert (nothing ever
     /// hoists), keeping the emit byte-identical to the direct-literal form.
     fn begin_function_literals(&self) -> LiteralAccum {
-        std::mem::replace(
-            &mut *self.lit_accum.borrow_mut(),
-            LiteralAccum {
-                active: self.hot_appearance,
-                closure_depth: 0,
-                probe_depth: 0,
-                defaults: Vec::new(),
-            },
-        )
+        self.scope.begin_function_literals(self.hot_appearance)
     }
 
     /// Finish the current function body: take its accumulated style-literal
     /// defaults (in emit order) and restore the previous accumulator. An empty
     /// vector means nothing was hoisted, so the caller emits no table prologue.
     fn end_function_literals(&self, previous: LiteralAccum) -> Vec<String> {
-        let finished = std::mem::replace(&mut *self.lit_accum.borrow_mut(), previous);
-        finished.defaults
+        self.scope.end_function_literals(previous)
     }
 
     /// Enter a `move`-closure body: hoisting is fenced off inside a closure
     /// because it captures `__ipe_lit` by move. Balanced by [`Self::exit_closure`].
     fn enter_closure(&self) {
-        self.lit_accum.borrow_mut().closure_depth += 1;
+        self.scope.enter_closure();
     }
 
     /// Leave a `move`-closure body, re-enabling top-level hoisting once every
-    /// enclosing closure has been left. Saturating so an unbalanced call can
-    /// never underflow (it would only, at worst, leave hoisting fenced off).
+    /// enclosing closure has been left.
     fn exit_closure(&self) {
-        let mut accum = self.lit_accum.borrow_mut();
-        accum.closure_depth = accum.closure_depth.saturating_sub(1);
+        self.scope.exit_closure();
     }
 
     /// Arm the `update`-arm transition rewrite for the duration of the `update`
@@ -2213,12 +2322,12 @@ impl<'a> EmitCtx<'a> {
         &self,
         model_param: Option<ipe_intern::Symbol>,
     ) -> Option<ipe_intern::Symbol> {
-        std::mem::replace(&mut *self.transition_model_param.borrow_mut(), model_param)
+        self.scope.begin_transition_update(model_param)
     }
 
     /// Restore the transition-update arming saved by [`Self::begin_transition_update`].
     pub(crate) fn end_transition_update(&self, prev: Option<ipe_intern::Symbol>) {
-        *self.transition_model_param.borrow_mut() = prev;
+        self.scope.end_transition_update(prev);
     }
 
     /// The `Model` parameter of the `update` lambda currently being emitted, when
@@ -2226,7 +2335,7 @@ impl<'a> EmitCtx<'a> {
     /// [`crate::emit_expr::emit_match`] to decide whether to attempt the
     /// transition reduction on the top `case`.
     pub(crate) fn transition_model_param(&self) -> Option<ipe_intern::Symbol> {
-        *self.transition_model_param.borrow()
+        self.scope.transition_model_param()
     }
 
     /// Arm the `subscriptions`-entry sub-description rewrite for the duration of a
@@ -2236,33 +2345,32 @@ impl<'a> EmitCtx<'a> {
     /// caller can restore it after the body is emitted (nested lambdas never leak
     /// the arming). `false` leaves every subscription compiled.
     fn begin_subs_hot(&self, active: bool) -> bool {
-        std::mem::replace(&mut *self.subs_hot_active.borrow_mut(), active)
+        self.scope.begin_subs_hot(active)
     }
 
     /// Restore the subscriptions arming saved by [`Self::begin_subs_hot`].
     fn end_subs_hot(&self, prev: bool) {
-        *self.subs_hot_active.borrow_mut() = prev;
+        self.scope.end_subs_hot(prev);
     }
 
     /// Whether the `subscriptions`-entry sub-description rewrite is currently
     /// armed. Read by [`crate::emit_expr`]'s `Sub.every`/`Time.every` emit to
     /// decide whether to attempt the sub-description reduction.
     pub(crate) fn subs_hot_active(&self) -> bool {
-        *self.subs_hot_active.borrow()
+        self.scope.subs_hot_active()
     }
 
     /// Enter a discard-only probe emit: hoisting is suppressed so the probe does
     /// not append a literal the real emit will append again. Balanced by
     /// [`Self::exit_probe`].
     fn enter_probe(&self) {
-        self.lit_accum.borrow_mut().probe_depth += 1;
+        self.scope.enter_probe();
     }
 
     /// Leave a probe emit, re-enabling hoisting once every enclosing probe has
-    /// been left. Saturating against an unbalanced call.
+    /// been left.
     fn exit_probe(&self) {
-        let mut accum = self.lit_accum.borrow_mut();
-        accum.probe_depth = accum.probe_depth.saturating_sub(1);
+        self.scope.exit_probe();
     }
 
     /// Hoist a style-value literal into the current function's table, returning
@@ -2271,13 +2379,7 @@ impl<'a> EmitCtx<'a> {
     /// directly. The baked default is exactly `value`, so a read of the returned
     /// slot renders identically to the direct literal (dev == prod).
     fn hoist_style_literal(&self, value: &str) -> Option<usize> {
-        let mut accum = self.lit_accum.borrow_mut();
-        if !accum.active || accum.closure_depth != 0 || accum.probe_depth != 0 {
-            return None;
-        }
-        let idx = accum.defaults.len();
-        accum.defaults.push(value.to_owned());
-        Some(idx)
+        self.scope.hoist_style_literal(value)
     }
 
     /// Is `home` a driver-generated FFI interface module (`Rust.*`)? The
