@@ -17,7 +17,7 @@
 //!   semantics require: `Just []` FALLS THROUGH to the fallback, never panics.
 //!
 //! Residual scope, kept fail-closed with a clean diagnostic (documented in
-//! `docs/adr/0010-pattern-and-lowering-completeness.md` Item C):
+//! `docs/adr/0002-codegen-soundness-and-the-seal.md` Item C):
 //!
 //! * A guarded nested-cons arm with NO trailing catch-all is guard-non-exhaustive
 //!   to rustc, so it stays IPE-L0116 rather than an accept-then-cargo-fail.

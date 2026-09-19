@@ -1,6 +1,6 @@
 //! The on-disk build cache.
 //!
-//! Decision record: `docs/adr/0032-salsa-incremental-compilation-phase1.md`.
+//! Decision record: `docs/adr/0007-build-incrementality-and-release-infra.md`.
 //!
 //! Everything in-process is memoized, but nothing survives ACROSS process
 //! invocations — every `ipe build` starts a cold [`ipe_db::IpeDatabase`].

@@ -1590,7 +1590,7 @@ pub fn server_web_socket_close_client<E: From<String> + Send + 'static>(id: i64)
 // The i64 family above is the registry API kept for upstream-sync; these
 // adapters sit in front of it.
 //
-// Design decisions (docs/adr/0023-websocket-server-kernel-only-typed-handles.md):
+// Design decisions (docs/adr/0003-security-render-and-data-access-invariants.md):
 //   D2 — WsServerCfg is monomorphic (pins E = IpeError, drops phantom msg).
 //   D3 — kernels take WsHandle, not i64; adapters unwrap.
 //   D4 — bounded fail-fast `try_send` (IPE_WS_SEND_BUFFER=256 default).

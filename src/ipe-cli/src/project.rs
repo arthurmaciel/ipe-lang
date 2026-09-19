@@ -345,7 +345,7 @@ fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
     Ok(segments)
 }
 
-/// `[wasm]` section of a `package.ipe` manifest (spec: `docs/adr/0042-wasm-client-target.md` Q6
+/// `[wasm]` section of a `package.ipe` manifest (spec: `docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md` Q6
 /// "Opt-in mechanism").
 ///
 /// ```toml

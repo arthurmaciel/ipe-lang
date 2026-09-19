@@ -2531,7 +2531,7 @@ impl Builder<'_> {
             // `SqlMoney` writes on INSERT) back into its amount/currency-code
             // pair. Deliberately NOT `Decoder Money`: `Money`/`Currency` are
             // project-generated types unnameable from this crate (see
-            // `docs/adr/0013-multi-driver-db-compile-time-selection.md`) — a
+            // `docs/adr/0003-security-render-and-data-access-invariants.md`) — a
             // recorded divergence from the the backend's `Decoder Money`,
             // sanctioned divergence §B-DbDecMoney.
             K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
@@ -3031,7 +3031,7 @@ impl Builder<'_> {
             // genuine `Ty::Var(u32::MAX)` hole (legacy `kernel_ty` has no Html/
             // Ui/Background/Border/Font arm), so all land in FIRST_SCHEMED.
             // Verified vs runtime fn params + lower `callee_arity` per
-            // docs/adr/0020-html-ui-live-kernel-arity-tripwire.md. `Web.appRouted`
+            // docs/adr/0002-codegen-soundness-and-the-seal.md. `Web.appRouted`
             // is EXCLUDED (REACHABLE_BUT_UNLOWERED) — its lowering is
             // `Feature::RoutedWebApp` unsupported, so a caller fails closed.
 

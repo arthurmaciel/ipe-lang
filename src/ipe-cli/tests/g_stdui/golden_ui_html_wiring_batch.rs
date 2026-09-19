@@ -7,7 +7,7 @@
 //!
 //! `Ui.mediaQuery` is NOT exercised here — it has its own golden
 //! (`golden_ui_mediaquery.rs`; see
-//! `docs/adr/0019-ui-mediaquery-safe-boundary.md`).
+//! `docs/adr/0003-security-render-and-data-access-invariants.md`).
 //!
 //! ## Oracle provenance
 //!

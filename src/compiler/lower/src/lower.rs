@@ -9995,7 +9995,7 @@ fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
 /// the shared shadow-aware tree walk behind [`rewrite_destructure_read`].
 /// Factoring the walk out keeps a rewrite's shadow handling in one place
 /// rather than reimplemented per call site (spec §2.5,
-/// `docs/adr/0011-emitter-clone-borrow-discipline.md`).
+/// `docs/adr/0002-codegen-soundness-and-the-seal.md`).
 ///
 /// Shadow-safe: stops rewriting into any scope where `target` is rebound by:
 /// * `Expr::Let { name, … }` — `name == target` shadows in `body`
@@ -20634,7 +20634,7 @@ impl<'a> Lowerer<'a> {
     /// fully-applied value, and finishing it needs a nested-closure
     /// (`curryN`-style) lowering this Stage does not implement (Stage 2,
     /// tracked separately — see
-    /// `docs/adr/0015-constructor-payload-functions-narrowed-gates.md` §3). Fail closed
+    /// `docs/adr/0002-codegen-soundness-and-the-seal.md` §3). Fail closed
     /// here rather than let an unfinished chain reach a use site with no
     /// sound lowering.
     ///
@@ -25395,7 +25395,7 @@ impl<'a> Lowerer<'a> {
     /// BACKSTOP (Tier 1) behind the primary type-checker obligation
     /// (`ipe_types::constrain::constrain_var_kernel`'s `hof_kernel_result`
     /// `TyBounds` tie, Tier 2 — see
-    /// `docs/adr/0016-andmap-arity-gate-type-obligation.md` §3.2):
+    /// `docs/adr/0001-language-semantics-and-types.md` §3.2):
     /// Tier 2 already rejects the hazard as a type error (`IPE-T0014`)
     /// before lowering ever runs; this backstop gives a second, independent
     /// line of defense keyed on the ACTUAL kernel-call resolution boundary
@@ -27417,7 +27417,7 @@ impl<'a> Lowerer<'a> {
     /// binder binds gets its free reads rewritten to a fresh, masked
     /// re-destructure of a thunk call
     /// (`{ let (d1, _) = (destr_thunk_N)(); d1 }`) — see
-    /// `docs/adr/0011-emitter-clone-borrow-discipline.md` §2.
+    /// `docs/adr/0002-codegen-soundness-and-the-seal.md` §2.
     /// Sound for the same reason Fix C is sound: Decoders are pure values, so
     /// re-evaluating the construction per read is semantics-neutral.
     /// Uniformly thunking ALL bound names (Decoder-typed or not) mirrors Fix
@@ -28979,7 +28979,7 @@ mod tests {
     /// [`Lowerer`] — [`decl_equiv_legacy_match`] and
     /// [`callee_arity_matches_decl_arity`] both call this rather than
     /// hand-rolling their own copy of the ~35-symbol interning block (see
-    /// `docs/adr/0009-kernel-registry-single-source-and-sealed-match.md`
+    /// `docs/adr/0002-codegen-soundness-and-the-seal.md`
     /// Item 3, Step 1: "Reuse the exact `BuiltinCtors` construction ...
     /// verbatim — do not hand-roll a second copy").
     #[allow(clippy::too_many_lines)] // straight-line interning of every built-in ctor name

@@ -1375,7 +1375,7 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 // `data-ipe-mq-q` / `data-ipe-mq-rules` marker pair consumed by
 // `web::style_inject::build_mq` into a ipe-id-scoped
 // `<style data-ipe-mq="<sid>">@media <q> { [ipe-id="<sid>"] { <rules> } }</style>`
-// block.  (See docs/adr/0019-ui-mediaquery-safe-boundary.md.)
+// block.  (See docs/adr/0003-security-render-and-data-access-invariants.md.)
 
 // NOTE: these six breakpoint constants return a bare `String` with NO `M` in
 // the signature, so they take NO type parameter. A phantom `<M>` here would be

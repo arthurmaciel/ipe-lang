@@ -1,6 +1,6 @@
 //! Gate — row-poly subset/superset record resolution (A7 watch).
 //!
-//! `docs/adr/0018-row-poly-records-pinned-before-lowering.md` records the
+//! `docs/adr/0001-language-semantics-and-types.md` records the
 //! verdict: **no defect found**. Every
 //! row-polymorphic subset/superset record shape reachable through Ipê's
 //! surface today either resolves end-to-end in parity with the reference
@@ -281,7 +281,7 @@ fn closed_superset_is_ipe_t0001() {
 /// to accept without adding per-record-shape callee monomorphisation to the
 /// backend would reintroduce the A7 exact-key miss as an ICE (best case) or
 /// a seal-violating emitted-code type error. See
-/// docs/adr/0018-row-poly-records-pinned-before-lowering.md "Coupling
+/// docs/adr/0001-language-semantics-and-types.md "Coupling
 /// tripwire" for the ORIGINAL (broader) framing of that risk — the fixture
 /// here covers only the local-let-binding instance of it.
 #[test]
@@ -339,7 +339,7 @@ fn row_var_annotation_lowers_to_witness_generic() {
     assert!(
         built.is_ok(),
         "{name} must now BUILD: a single-field argument-position row annotation \
-         lowers to a witness-bounded generic (ADR-0018 canary); err = {:?}",
+         lowers to a witness-bounded generic (ADR-0001 canary); err = {:?}",
         built.err()
     );
 
@@ -450,7 +450,7 @@ fn accessor_cargo_builds_and_prints_names() {
 // ---------------------------------------------------------------------------
 // row_poly_greet — the increment-1 vertical slice: ONE row-polymorphic
 // annotated function called with TWO different concrete shapes. No single
-// closed struct can serve both, so this is the shape ADR-0018's two-superset
+// closed struct can serve both, so this is the shape ADR-0001's two-superset
 // tripwire forbade for the UNANNOTATED path — here it is accepted because the
 // annotation opts into witness-trait monomorphisation. Accept end-to-end.
 // ---------------------------------------------------------------------------

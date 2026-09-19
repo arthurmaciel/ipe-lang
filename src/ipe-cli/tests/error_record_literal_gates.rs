@@ -1,5 +1,5 @@
 //! Negative gates for the SEAL fix
-//! (`docs/adr/0017-error-payload-nominal-identity.md`): a bare record literal
+//! (`docs/adr/0001-language-semantics-and-types.md`): a bare record literal
 //! must NOT construct the nominal error-payload types `PanicInfo` / `TypeInfo` /
 //! `ErrorInfo`. Under structural registration each fixture would be an
 //! exit-0-then-cargo-fail (well-typed in ipe, but the emitted Rust passes a

@@ -7,7 +7,7 @@
 //! from scratch on every save" watch mode would defeat the entire point of
 //! the salsa port.
 //!
-//! Decision record: `docs/adr/0032-salsa-incremental-compilation-phase1.md`.
+//! Decision record: `docs/adr/0007-build-incrementality-and-release-infra.md`.
 //!
 //! ## Architecture
 //!

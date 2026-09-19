@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Tier-2 native-code capability enforcement (ADR 0046).
+//! Tier-2 native-code capability enforcement (ADR 0004).
 //!
 //! Two layers:
 //!

@@ -7,7 +7,7 @@
 //! the OS jail, and execs the app inside it. An undeclared effect the app
 //! attempts fails at the OS boundary; a declared one works.
 //!
-//! The jail is **scoped to native-bearing programs** (ADR 0040). Pure Ipê is
+//! The jail is **scoped to native-bearing programs** (ADR 0004). Pure Ipê is
 //! structurally bounded to its inferred capabilities — an unreachable effect is
 //! absent from the binary — so it needs no runtime jail and runs directly. Only
 //! a program that crosses into `Rust.` FFI ([`Capability::NativeFfi`]) has
@@ -17,7 +17,7 @@
 //! Where a native-bearing program runs on a platform with no jail primitive, the
 //! jail cannot be established. That is fail-closed by default — the run refuses —
 //! but [`OVERRIDE_ENV`] is the recorded-consent escape: with it set, the run
-//! proceeds unconfined after a loud warning (ADR 0040 "best-effort with
+//! proceeds unconfined after a loud warning (ADR 0004 "best-effort with
 //! consent"). Pure programs never take this path.
 
 use std::collections::BTreeSet;
@@ -36,7 +36,7 @@ use crate::scratch::ScratchDir;
 /// that lets a native-bearing program run on a platform with no jail primitive.
 ///
 /// DISTINCT from the FFI-compile override (`IPE_FFI_ALLOW_UNSANDBOXED`). Only a
-/// native-bearing program can ever reach the jail (ADR 0040); when its platform
+/// native-bearing program can ever reach the jail (ADR 0004); when its platform
 /// has no jail, this flag downgrades the fail-closed refusal to a loud warning
 /// and proceeds unconfined. Unset, the run refuses. Never set it in CI.
 pub const OVERRIDE_ENV: &str = "IPE_ALLOW_UNSANDBOXED";
@@ -52,7 +52,7 @@ pub const OVERRIDE_ENV: &str = "IPE_ALLOW_UNSANDBOXED";
 /// `NativeFfi`, but a set carrying only the disclosure axis must still jail. A
 /// pure Ipê program (neither, whatever else it infers) is structurally bounded
 /// to its inferred capabilities and needs no runtime jail, so callers run it
-/// directly (ADR 0040).
+/// directly (ADR 0004).
 #[must_use]
 pub fn is_native_bearing(union: &BTreeSet<Capability>) -> bool {
     union.contains(&Capability::NativeFfi) || union.contains(&Capability::FfiRaw)
@@ -135,7 +135,7 @@ pub fn override_requested() -> bool {
 /// Decide what to do when the jail cannot be established for a native-bearing
 /// `union`.
 ///
-/// Only native-bearing programs are jailed (ADR 0040), so this path is always
+/// Only native-bearing programs are jailed (ADR 0004), so this path is always
 /// opaque native code on a platform with no jail primitive.
 ///
 /// Fail-closed by default: without recorded consent ([`OVERRIDE_ENV`]) the run
@@ -193,7 +193,7 @@ pub fn resolve_refusal(
 /// Establish the jail and exec `app` inside it, or apply the fail-closed
 /// refusal / recorded-consent policy.
 ///
-/// Callers invoke this only for native-bearing programs (ADR 0040). On success
+/// Callers invoke this only for native-bearing programs (ADR 0004). On success
 /// (jail established) this **does not return** — it replaces the current process
 /// with the jailed app. When the platform has no jail primitive and recorded
 /// consent ([`OVERRIDE_ENV`]) is present, it returns `Ok(())` and the caller
@@ -414,7 +414,7 @@ fn inject_floor_reference(src: &str) -> Result<String, CliError> {
 }
 
 /// Whether a built artifact's binary carries an embedded capability floor — i.e.
-/// it was emitted for a native-bearing program (ADR 0040).
+/// it was emitted for a native-bearing program (ADR 0004).
 ///
 /// `ipe build` embeds the floor (and writes an `ipe.profile`) only for a program
 /// that reaches `Rust.` code; a pure Ipê artifact carries neither and needs no

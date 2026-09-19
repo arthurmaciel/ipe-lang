@@ -1,5 +1,5 @@
 //! M7 gate: hydration-state field-type gate (spec:
-//! `docs/adr/0042-wasm-client-target.md` §M7 field-type gate).
+//! `docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md` §M7 field-type gate).
 //!
 //! When `wasm_hydrate_mode = true` (set by `[wasm] mode = "hydrate"` in
 //! `package.ipe`), the backend inspects the island parse-target type — the

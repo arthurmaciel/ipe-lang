@@ -150,7 +150,7 @@ pub fn system_args<E: Send + 'static>(_: ()) -> IpeTask<E, Vec<String>> {
 // dependency, so `tokio` is not guaranteed present here. Same
 // `#[cfg(feature = "tokio")]` / fallback split `file.rs` uses for its own
 // `run_blocking` helper (real generated Ipê projects always have `tokio` —
-// see `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md`
+// see `docs/adr/0003-security-render-and-data-access-invariants.md`
 // §2.2 — so the fallback only matters for this crate's own narrow-feature
 // standalone builds).
 // tokio is native-only (declared under the `cfg(not(target_arch = "wasm32"))`

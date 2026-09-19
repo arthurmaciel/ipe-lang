@@ -1,6 +1,6 @@
 //! The Tier-2 link-reachability probe emitter.
 //!
-//! Tier-2 admission ([`crate::audit_native`] in `ipe-cli`, ADR 0046) must build
+//! Tier-2 admission ([`crate::audit_native`] in `ipe-cli`, ADR 0004) must build
 //! and link a native-bearing package's OWN foreign surface under a jail scoped
 //! to its declared capability set, so a build-time capability reach (a
 //! `build.rs`, proc-macro, linker script, or `bindgen` fetch inside a bound

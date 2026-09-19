@@ -11,7 +11,7 @@
 //! nested in a ctor payload) is IPE-L0128 fail-closed — the clone-rebuild
 //! repair is only sound for dispatch-free inners.
 //!
-//! Spec: `docs/adr/0011-emitter-clone-borrow-discipline.md` §1.
+//! Spec: `docs/adr/0002-codegen-soundness-and-the-seal.md` §1.
 //!
 //! Run: `IPE_E2E=1 cargo test golden_i99`
 

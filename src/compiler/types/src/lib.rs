@@ -85,7 +85,7 @@ pub struct SolvedTypes {
     pub regions: BTreeMap<(Vec<Symbol>, Span), Ty>,
     /// The type EXPECTED at each source region by its surrounding context,
     /// keyed by `(home_module_path, Span)` — the type-directed-completion
-    /// sidecar (ADR 0034 / LSP plan §6). Where [`Self::regions`] holds the type
+    /// sidecar (ADR 0007 / LSP plan §6). Where [`Self::regions`] holds the type
     /// an expression WAS inferred to have, this holds the type its enclosing
     /// context PUSHES DOWN onto it: a `Call` argument's declared parameter
     /// slot, a typed def body's annotation return, an `if`/`case` branch's
@@ -146,7 +146,7 @@ pub struct SolvedTypes {
     /// `"b"`, …), keyed by `(home, def_name)`. Absent or empty for a def that
     /// stayed fully monomorphic (no boundary-free residual `Flex` root) — the
     /// lowerer's untyped-def arm behaves exactly as before this field
-    /// existed. See `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
+    /// existed. See `docs/adr/0001-language-semantics-and-types.md`.
     pub untyped_type_params: BTreeMap<(Vec<Symbol>, Symbol), Vec<Symbol>>,
     /// Annotation type-variable symbols of each **typed** binding whose only
     /// role is a UI message slot (`Html msg` / `Element msg` / `Attribute msg`
@@ -422,7 +422,7 @@ fn infer_core(
     // cross-module call site's field accesses / record updates need the
     // freshly-instantiated (not the stale program-wide-shared) structure to
     // resolve correctly. See
-    // `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
+    // `docs/adr/0001-language-semantics-and-types.md`.
     let untyped_schemes = promote_untyped_boundaries(&mut uf, budget, interner, &generated)?;
 
     // Discharge deferred field accesses and record updates in a joint fixpoint.
@@ -1342,7 +1342,7 @@ fn emitted_bound_satisfied(
     // is also rejected) is the SAME documented loss every sibling bound
     // accepts; genuine cross-binding obligation propagation is a follow-up
     // design for ALL bounds at once — see
-    // `docs/adr/0016-andmap-arity-gate-type-obligation.md` §6.
+    // `docs/adr/0001-language-semantics-and-types.md` §6.
     let not_curried_ok = !matches!(ty, Ty::Fun(_, _) | Ty::Var(_));
     // SQL-bind-parameter obligation: satisfied by exactly the Ipê
     // types the runtime has a `From<T> for SqlParam` impl for — the bare
@@ -1784,7 +1784,7 @@ enum ErrFieldTy {
 
 /// Fixed field tables for the NOMINAL error-payload types `PanicInfo` /
 /// `TypeInfo` / `ErrorInfo` (SEAL fix — see
-/// `docs/adr/0017-error-payload-nominal-identity.md`).
+/// `docs/adr/0001-language-semantics-and-types.md`).
 ///
 /// These three types are opaque `Con`s at the type level (so a bare record
 /// literal cannot masquerade as the runtime's concrete `IpePanicInfo` /
@@ -2618,7 +2618,7 @@ mod tests {
         }
     }
 
-    // ── Type-directed-completion `expected` sidecar (ADR 0034 / plan §6) ──────
+    // ── Type-directed-completion `expected` sidecar (ADR 0007 / plan §6) ──────
 
     #[test]
     fn expected_type_at_typed_body_is_the_annotation_return() {
@@ -5251,7 +5251,7 @@ mod tests {
     /// using it at two different concrete types from within its own module is
     /// a sound rejection, exactly matching the reference `ipe` compiler's
     /// `CLocal` semantics (see
-    /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`). A
+    /// `docs/adr/0001-language-semantics-and-types.md`). A
     /// CROSS-module use at two different types IS accepted — see
     /// [`untyped_binding_generalizes_across_cross_module_uses`]. To get
     /// polymorphism from within the same module, annotate it (see

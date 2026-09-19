@@ -581,7 +581,7 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
 
     // Structural prechecks (no fetch): version-count ceiling, per-version
     // immutability against the baseline, and source continuity (anti-squat). This
-    // is the authoritative wall (ADR 0044) — it enforces these even for an entry
+    // is the authoritative wall (ADR 0007) — it enforces these even for an entry
     // hand-edited around the author-side `ipe publish`, which an attacker opening
     // the index PR directly would bypass.
     index::admission_precheck(&submitted, baseline.as_ref())?;

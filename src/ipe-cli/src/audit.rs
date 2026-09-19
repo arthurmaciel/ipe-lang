@@ -8,7 +8,7 @@
 //! authoritative gate, so the two verdicts cannot diverge.
 //!
 //! The four Tier-1 checks (see
-//! `docs/adr/0044-package-coordination-manifest-index-gate.md`), each wired to existing machinery:
+//! `docs/adr/0007-build-incrementality-and-release-infra.md`), each wired to existing machinery:
 //!
 //! 1. **Provenance panic-scan** — author-supplied FFI wrapper Rust
 //!    (`*_bindings.rs` in the project's FFI cache) is scanned with the SAME token
@@ -36,7 +36,7 @@
 //! a `[rust.dependencies]` crate) a fifth check, [`crate::audit_native::native_tier2`],
 //! runs after the four Tier-1 checks: it builds and exercises the package's
 //! native code inside a jail scoped to its declared capability set and
-//! reconciles observed-vs-declared, fail-closed (ADR 0046). It genuinely
+//! reconciles observed-vs-declared, fail-closed (ADR 0004). It genuinely
 //! certifies only the wired-and-proven platforms (`linux-x64` under
 //! bwrap+seccomp, `macos-arm64` under `sandbox-exec` Seatbelt, `freebsd-x64`
 //! under `jail(8)`); other platforms remain a documented refuse-to-certify and
@@ -66,7 +66,7 @@ use crate::scratch::ScratchDir;
 ///
 /// The first four are the universal Tier-1 checks; [`Self::NativeTier2`] is the
 /// native-code capability-enforcement check, appended only for native-bearing
-/// packages (ADR 0046). [`Self::NativeBindingRegen`] is the prerequisite step
+/// packages (ADR 0004). [`Self::NativeBindingRegen`] is the prerequisite step
 /// that runs before Tier-1 for native-bearing packages: it regenerates the FFI
 /// bindings from the pinned `[rust.dependencies]` inside the sandbox so the
 /// gate never trusts committed or absent bindings.
@@ -224,7 +224,7 @@ struct Prepared {
 
 /// The wrapper-owned Tier-2 admission probe fixture, embedded in the binary and
 /// materialized to a runtime scratch path on use. Tier-2 copies it into the
-/// jail's scratch and runs it as the exit-owning wrapper (ADR 0046).
+/// jail's scratch and runs it as the exit-owning wrapper (ADR 0004).
 ///
 /// The fixture SOURCE is embedded at build time (the tracked fixture files stay
 /// the single source of truth); a shipped binary can find it with no source
@@ -347,7 +347,7 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
 /// FIRST rejection is the verdict. A pure Ipê package skips Tier-2 (Tier-1 already
 /// gated it exactly); a native package builds and exercises its native code under
 /// a declared-scoped jail and reconciles observed-vs-declared, fail-closed
-/// (ADR 0046).
+/// (ADR 0004).
 ///
 /// `entry_publisher` is the index entry's publisher when the registry admission
 /// gate runs this (the blessed first-party publisher legitimately owns the
@@ -475,7 +475,7 @@ fn disclosure_capabilities_json(disclosure: &Disclosure) -> String {
 }
 
 /// Compose the passing summary, advertising Tier-2 ONLY for what genuinely ran
-/// (the honest surface, ADR 0046). A pure Ipê package's summary is Tier-1 only,
+/// (the honest surface, ADR 0004). A pure Ipê package's summary is Tier-1 only,
 /// with the standing note that Tier-2 does not apply. A native package certified
 /// on a wired platform (`linux-x64`, `macos-arm64`, or `freebsd-x64`) names that
 /// platform and states that a Tier-2 certification is per-host — vouching only

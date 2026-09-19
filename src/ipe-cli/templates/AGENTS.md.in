@@ -68,7 +68,7 @@ report =
 -- value: "total={{count}}\ndone\n" (no leading spaces, no leading newline)
 ```
 
-### Auto-import: three tiers (ADR 0047)
+### Auto-import: three tiers (ADR 0001)
 
 Two tiers are ambient — in scope with no `import`; a third requires an explicit
 `import`.

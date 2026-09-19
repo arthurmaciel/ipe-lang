@@ -7,7 +7,7 @@ use super::{
 // ===========================================================================
 // Boundary Scheme Promotion — untyped top-level binding generalization.
 //
-// See `docs/adr/0008-untyped-binding-module-boundary-generalization.md` for the
+// See `docs/adr/0001-language-semantics-and-types.md` for the
 // full design. Summary: an unannotated top-level binding is monomorphic
 // *within its home module* (unchanged), but is generalized into a scheme at
 // its module's boundary, so each cross-module reference instantiates it
@@ -299,7 +299,7 @@ pub fn mint_synth_symbol(interner: &mut Interner, next: &mut u32) -> DResult<Sym
 /// reference and generalize every untyped def at its home module's boundary.
 ///
 /// Runs once, over the WHOLE linked program, between `solve_attributed` and
-/// `resolve_deferred` (see `docs/adr/0008-untyped-binding-module-boundary-generalization.md`'s
+/// `resolve_deferred` (see `docs/adr/0001-language-semantics-and-types.md`'s
 /// algorithm section). Walks `module_order` (dependency-first topo order): for
 /// each module, first discharges its own OUTGOING pending instantiations
 /// (against schemes already computed for modules it depends on — always

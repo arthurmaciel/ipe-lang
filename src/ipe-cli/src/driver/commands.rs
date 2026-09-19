@@ -825,7 +825,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
 ///
 /// A native-bearing artifact then carries its own runtime enforcement — an
 /// `ipe.profile` mirror plus the authoritative capability floor embedded in the
-/// binary — so the jail travels with a copied-off-host artifact (ADR 0040). A
+/// binary — so the jail travels with a copied-off-host artifact (ADR 0004). A
 /// pure Ipê artifact is structurally bounded and needs neither profile nor floor.
 ///
 /// # Errors
@@ -2429,7 +2429,7 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
 
     // --- Step 3a: resolve the capability set and, for native code, the jail ---
     // The jail confines the emitted app to `inferred ∪ declared`. It is scoped to
-    // native-bearing programs (ADR 0040): pure Ipê is structurally bounded to its
+    // native-bearing programs (ADR 0004): pure Ipê is structurally bounded to its
     // inferred capabilities and runs directly; only a `Rust.` crossing has
     // effects inference cannot prove, and only that is jailed. For a native
     // program a missing primitive is fail-closed (refuses unless recorded
@@ -2526,7 +2526,7 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
 /// `ipe exec <artifact-dir> [-- args…]` — run a built artifact, jailing it when
 /// it is native-bearing.
 ///
-/// The deployable launcher. A **native-bearing** artifact (ADR 0040) carries an
+/// The deployable launcher. A **native-bearing** artifact (ADR 0004) carries an
 /// `ipe.profile` mirror plus a capability floor embedded in the binary, so an
 /// artifact copied off the build host still runs confined: the profile is
 /// *strictly parsed* (parse-fail ⇒ refuse) and refused if weaker than the
@@ -2578,7 +2578,7 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
         app_args.iter().map(std::ffi::OsString::from).collect();
 
     // A native-bearing artifact carries an embedded capability floor and is
-    // jailed; a pure Ipê artifact carries none and runs directly (ADR 0040).
+    // jailed; a pure Ipê artifact carries none and runs directly (ADR 0004).
     if run_sandbox::artifact_is_native(&bin)? {
         let profile_path = dir.join("ipe.profile");
         if !profile_path.is_file() {

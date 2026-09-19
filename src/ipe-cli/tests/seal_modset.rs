@@ -189,7 +189,7 @@ const SUB_SUBSCRIBE: &str = "module Main exposing (main)\n\
 /// `crate::tea` before the fix.
 ///
 /// `renderStatic` lives under the shape-neutral `Ipe.Html`, so this Program
-/// imports NO `Ipe.Tea.*` shape and is not misclassified as a TEA app (ADR 0048).
+/// imports NO `Ipe.Tea.*` shape and is not misclassified as a TEA app (ADR 0005).
 const LIVE_RENDER_STATIC: &str = "module Main exposing (main)\n\
     import Ipe.Html as Html\n\
     type alias Model = { title : String }\n\
