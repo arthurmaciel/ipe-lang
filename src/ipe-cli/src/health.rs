@@ -77,9 +77,11 @@ impl Status {
     /// The glyph that leads this status on the human report.
     const fn glyph(self) -> &'static str {
         match self {
-            Self::Ok => style::glyph::OK,
+            // Ok and Missing share the success/failure glyphs from the SSOT; Warn
+            // and Unknown are health-only states with their own bullets.
+            Self::Ok => style::outcome_glyph(style::Outcome::Success),
             Self::Warn => "!",
-            Self::Missing => style::glyph::FAIL,
+            Self::Missing => style::outcome_glyph(style::Outcome::Failure),
             Self::Unknown => "?",
         }
     }
@@ -1398,12 +1400,11 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
         // failure — so the applied/failed edit is legible at a glance.
         match apply_one(fix) {
             Ok(outcome) => {
+                let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
                 print!(
                     "{}",
                     style::gutter(&format!(
-                        "{FIX_BODY_INDENT}{}{}{} {outcome}\n",
-                        p.green,
-                        style::glyph::OK,
+                        "{FIX_BODY_INDENT}{tint}{glyph}{} {outcome}\n",
                         p.reset
                     ))
                 );
@@ -1413,12 +1414,11 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
                 // failed edit must not abort the rest, and it must not exit the
                 // command non-zero (the exit code is the diagnostic verdict, not
                 // the apply outcome).
+                let (glyph, tint) = style::Outcome::Failure.glyph_and_tint(p);
                 print!(
                     "{}",
                     style::gutter(&format!(
-                        "{FIX_BODY_INDENT}{}{}{} could not apply: {e}\n",
-                        p.red,
-                        style::glyph::FAIL,
+                        "{FIX_BODY_INDENT}{tint}{glyph}{} could not apply: {e}\n",
                         p.reset
                     ))
                 );

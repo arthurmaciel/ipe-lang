@@ -104,9 +104,11 @@ pub fn usage_unexpected_argument(command: &str, arg: &str) -> CliError {
 /// error rather than a silent last-wins, so a caller never gets a format it did
 /// not ask for.
 ///
-/// Only the commands that emit machine-consumable data (`capabilities`, `diff`,
-/// `version`, `explain` with no code) accept these flags; `run` / `build` /
-/// `init` / `watch` / `fix` / `fmt` and `--help` do not.
+/// Only the commands that emit machine-consumable data accept these flags; the
+/// exact set is the help SSOT's per-command flag list (`help::COMMANDS`), not a
+/// list restated here — a command advertises `--plain`/`--json` there and parses
+/// them through this type. Commands whose output is an action rather than data
+/// (`run` / `build` / `init` / `watch`) and `--help` do not take them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     /// The default: human-friendly, guttered, coloured on a terminal.

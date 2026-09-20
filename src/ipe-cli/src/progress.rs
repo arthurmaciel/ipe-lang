@@ -20,7 +20,7 @@
 
 use std::io::{IsTerminal, Write};
 
-use crate::style::{self, GUTTER, Palette, glyph};
+use crate::style::{self, GUTTER, Outcome, Palette};
 
 /// How a stage line is presented: animated and rewritten in place on a
 /// terminal, or one settled plain line per stage otherwise.
@@ -77,7 +77,8 @@ pub fn running_line(mode: Mode, label: &str, frame_index: usize) -> String {
             let frame = spinner_frame(frame_index);
             format!(
                 "\r{GUTTER}{y}{frame}{r} {y}{label}{r}{CLEAR_TO_EOL}",
-                y = p.bright_yellow,
+                // A running step wears the in-progress tint from the style SSOT.
+                y = style::outcome_tint(Outcome::Step, p),
                 r = p.reset,
             )
         }
@@ -93,7 +94,7 @@ pub fn running_line(mode: Mode, label: &str, frame_index: usize) -> String {
 /// message on their own line.
 #[must_use]
 pub fn success_line(mode: Mode, msg: &str) -> String {
-    outcome_line(mode, glyph::OK, mode.palette().green, msg)
+    outcome_line(mode, Outcome::Success, msg)
 }
 
 /// Render the failure outcome for `msg`.
@@ -103,19 +104,24 @@ pub fn success_line(mode: Mode, msg: &str) -> String {
 /// Plain: the gutter, the cross glyph, and the plain message on their own line.
 #[must_use]
 pub fn failure_line(mode: Mode, msg: &str) -> String {
-    outcome_line(mode, glyph::FAIL, mode.palette().red, msg)
+    outcome_line(mode, Outcome::Failure, msg)
 }
 
-/// The shared outcome shape: `<glyph> <msg>` in `color`, rewriting the running
-/// line in place on a terminal and standing alone in plain mode.
-fn outcome_line(mode: Mode, outcome_glyph: &str, color: &str, msg: &str) -> String {
+/// The shared outcome shape: `<glyph> <msg>` in the outcome's tint, rewriting
+/// the running line in place on a terminal and standing alone in plain mode.
+///
+/// The glyph and tint both come from `outcome` via the [`crate::style`] SSOT,
+/// so a success is a green check and a failure a red cross by one decision, not
+/// a per-site pairing.
+fn outcome_line(mode: Mode, outcome: Outcome, msg: &str) -> String {
     let p = mode.palette();
+    let (glyph, color) = outcome.glyph_and_tint(p);
     match mode {
         Mode::Terminal => format!(
-            "\r{GUTTER}{color}{outcome_glyph}{r} {color}{msg}{r}{CLEAR_TO_EOL}\n",
+            "\r{GUTTER}{color}{glyph}{r} {color}{msg}{r}{CLEAR_TO_EOL}\n",
             r = p.reset,
         ),
-        Mode::Plain => format!("{GUTTER}{outcome_glyph} {msg}\n"),
+        Mode::Plain => format!("{GUTTER}{glyph} {msg}\n"),
     }
 }
 
@@ -268,7 +274,7 @@ mod tests {
         let line = success_line(Mode::Terminal, "Found ipe-v0.1.36");
         assert!(line.starts_with('\r'));
         assert!(line.ends_with('\n'));
-        assert!(line.contains(glyph::OK));
+        assert!(line.contains(style::glyph::OK));
         assert!(line.contains(Palette::COLOR.green));
         assert!(line.contains("Found ipe-v0.1.36"));
         assert!(!line.contains(Palette::COLOR.red));
@@ -279,7 +285,7 @@ mod tests {
         let line = failure_line(Mode::Terminal, "Binary for latest release not found");
         assert!(line.starts_with('\r'));
         assert!(line.ends_with('\n'));
-        assert!(line.contains(glyph::FAIL));
+        assert!(line.contains(style::glyph::FAIL));
         assert!(line.contains(Palette::COLOR.red));
         assert!(line.contains("Binary for latest release not found"));
         assert!(!line.contains(Palette::COLOR.green));

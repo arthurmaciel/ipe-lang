@@ -444,7 +444,7 @@ pub fn test_failed_message(code: i32) -> String {
     format!(
         "{}{} one or more tests failed (runner exited {code})",
         style::GUTTER,
-        style::glyph::FAIL,
+        style::outcome_glyph(style::Outcome::Failure),
     )
 }
 
@@ -559,14 +559,14 @@ impl std::fmt::Display for CliError {
             // caller prints it as-is.
             Self::TestFailed { code } => f.write_str(&test_failed_message(*code)),
             Self::UpgradeNoPrebuilt { version, platform } => {
-                use crate::style::{GUTTER, glyph};
+                use crate::style::{self, GUTTER};
                 write!(
                     f,
                     "{GUTTER}{} No prebuilt binary for {version} on {platform}.\n\
                      {GUTTER}    Possibly the binaries for that version are still being generated.\n\
                      {GUTTER}    If you prefer, build from source:\n\
                      {GUTTER}        cargo install --git https://github.com/arthurmaciel/ipe-lang ipe",
-                    glyph::FAIL
+                    style::outcome_glyph(style::Outcome::Failure)
                 )
             }
             // The toolchain-missing message gutters and frames itself; it owns

@@ -98,14 +98,14 @@ impl std::fmt::Display for ToolchainMissing {
     /// toolchain (naming THIS command's task), and the per-disposition fix.
     /// Self-guttered — the caller prints it as-is, without re-wrapping.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use crate::style::{GUTTER, glyph};
+        use crate::style::{self, GUTTER};
         let task = self.intent.task_phrase();
         write!(
             f,
             "{GUTTER}{} Rust and Cargo were not found.\n\
              {GUTTER}    Ipê compiles your program to Rust and then runs Cargo to {task},\n\
              {GUTTER}    so it needs the Rust toolchain installed and reachable.\n",
-            glyph::FAIL
+            style::outcome_glyph(style::Outcome::Failure)
         )?;
         match &self.disposition {
             Disposition::NotInstalled => write!(
