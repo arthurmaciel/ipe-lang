@@ -1930,6 +1930,71 @@ mod registry_phase_c_tests {
              fixtures",
         );
     }
+
+    /// A stdlib record alias is expanded by `normalize_annotation_ty` keyed on
+    /// the RESOLVED identity — the empty-home builtin sentinel — never a bare
+    /// name string. Pins both directions of that gate for every stdlib record
+    /// alias the normaliser knows: `Migration`, `HttpRequest`, `HttpResponse`,
+    /// and the server `Response`.
+    ///
+    /// * Forward: the genuine builtin (empty `module`) DOES expand to a
+    ///   `Ty::Record` — the annotation stays usable.
+    /// * Refusal: a user type of the SAME short name carrying a non-empty
+    ///   module home is left an opaque `Ty::Con` — a colliding user record is
+    ///   NOT hijacked into the stdlib alias's structural record (which would be
+    ///   a correctness/soundness hole: the user's own ADT/alias silently
+    ///   replaced by the stdlib shape).
+    #[test]
+    fn stdlib_record_alias_expands_only_on_empty_home_identity() {
+        use super::super::RowTail;
+
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        // Pre-intern each alias name and a user module segment BEFORE the
+        // builder borrows the interner immutably.
+        let alias_names = ["Migration", "HttpRequest", "HttpResponse", "Response"];
+        let mut name_syms = Vec::new();
+        for n in alias_names {
+            name_syms.push(interner.intern(n).expect("intern alias name"));
+        }
+        let user_module = interner.intern("MyApp").expect("intern user module");
+
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
+
+        for (n, name) in alias_names.iter().zip(name_syms) {
+            // Forward: empty-home builtin identity expands to a record.
+            let builtin = Ty::Con {
+                module: Vec::new(),
+                name,
+                args: Vec::new(),
+            };
+            let expanded = builder
+                .normalize_annotation_ty(builtin, Span::DUMMY)
+                .expect("builtin alias must normalise");
+            assert!(
+                matches!(expanded, Ty::Record(_, RowTail::Closed)),
+                "the builtin `{n}` (empty home) must expand to a closed record, \
+                 got {expanded:?}",
+            );
+
+            // Refusal: a user type of the same short name, homed in its own
+            // module, must NOT be expanded — it stays an opaque `Ty::Con`.
+            let user = Ty::Con {
+                module: vec![user_module],
+                name,
+                args: Vec::new(),
+            };
+            let kept = builder
+                .normalize_annotation_ty(user.clone(), Span::DUMMY)
+                .expect("user type must normalise");
+            assert_eq!(
+                kept, user,
+                "a user `{n}` (home `MyApp`) must be left an opaque Con, not \
+                 hijacked into the stdlib record",
+            );
+        }
+    }
 }
 
 #[cfg(test)]
