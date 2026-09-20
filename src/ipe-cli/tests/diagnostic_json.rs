@@ -300,6 +300,43 @@ fn build_json_unknown_flag_is_still_a_plain_usage_error() {
 }
 
 // ---------------------------------------------------------------------------
+// mimalloc note must not reach a machine stream (#2590)
+// ---------------------------------------------------------------------------
+
+/// On `--json` or `--plain`, the mimalloc opt-in `note:` must not appear on
+/// stderr. The note is human furniture — it belongs only in `--human` mode.
+///
+/// The test drives `ipe build --static --allocator mimalloc <format>` against a
+/// non-existent entry. The process fails (preflight cannot find the musl
+/// toolchain, or the entry file is absent), but the failing path that MATTERS
+/// here is `resolve_static_plan`, which runs at plan-resolution time, before
+/// any filesystem access. Regardless of where the failure fires, the machine
+/// stderr must be free of the mimalloc note.
+#[test]
+fn mimalloc_note_absent_from_machine_stderr() {
+    for format in ["--json", "--plain"] {
+        for cmd in ["build", "run"] {
+            let r = run_ipe(&[
+                cmd,
+                "NoSuchEntry.ipe",
+                "--static",
+                "--allocator",
+                "mimalloc",
+                format,
+            ]);
+            // The run must fail (no musl toolchain or no file) — but whatever
+            // error fires, the mimalloc human note must not be on stderr.
+            assert!(
+                !r.stderr.contains("note: mimalloc"),
+                "`ipe {cmd} {format}` must not emit the mimalloc note on a \
+                 machine stream; stderr was: {:?}",
+                r.stderr,
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ipe run --json
 // ---------------------------------------------------------------------------
 

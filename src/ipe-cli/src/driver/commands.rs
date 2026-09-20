@@ -404,6 +404,7 @@ pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError>
 pub fn resolve_static_plan(
     cli_layer: build_plan::StaticRequestLayer,
     manifest: Option<&Path>,
+    output_format: cli_args::OutputFormat,
 ) -> Result<Option<ipe_backend_rust::static_build::StaticPlan>, CliError> {
     let toml_layer = match manifest {
         Some(m) => project::parse_manifest(m)?.static_request,
@@ -417,9 +418,12 @@ pub fn resolve_static_plan(
     let static_plan = build_plan::resolve(&merged)?;
     if let Some(plan) = &static_plan {
         build_plan::preflight(plan)?;
-        if plan.allocator() == ipe_backend_rust::static_build::StaticAllocator::Mimalloc {
+        if plan.allocator() == ipe_backend_rust::static_build::StaticAllocator::Mimalloc
+            && output_format == cli_args::OutputFormat::Human
+        {
             // The design's explicit opt-in notice: the C cost is acknowledged,
-            // never silent.
+            // never silent. Human mode only — machine streams must stay
+            // furniture-free (see #2590).
             eprintln!(
                 "{}",
                 style::gutter(
@@ -635,7 +639,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     // env + manifest layers and touch no source. Resolving here — before
     // resolve_delivery reads the entry file — ensures a refused build produces
     // no artifact and touches nothing, even when the entry path does not exist.
-    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref(), args.format)?;
 
     // Resolve the delivery grammar against the shape `main` pins: the optional
     // `[shape]` cross-check, the `[runtime] [host]` tail, and the `--static`
@@ -2182,6 +2186,7 @@ pub fn run_run(rest: &[String]) -> Result<(), CliError> {
 #[allow(clippy::too_many_lines)]
 pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
+    let output_format = args.format;
     let bin_args = args.bin_args;
     let cli_layer = args.static_layer;
     // The CLI `--target` flavour (`--target wasi` selects the co-located WASI
@@ -2217,7 +2222,7 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     // env + manifest layers and touch no source. Resolving here — before
     // resolve_delivery reads the entry file — ensures a refused run produces
     // no artifact and touches nothing, even when the entry path does not exist.
-    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref(), output_format)?;
 
     // Resolve the delivery grammar (shape cross-check, runtime/host, `--static`
     // gate) against the shape `main` pins — same as `ipe build`. A webview-native
