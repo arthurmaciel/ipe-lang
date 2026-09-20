@@ -38,10 +38,12 @@ pub struct DeliveryPositionals {
 /// Split a run of positional tokens into the delivery positionals: an optional
 /// leading `[shape]` word, then the `[runtime] [host] [target]` tail.
 ///
-/// A leading token that is a shape word (`web`/`tui`/`cli`/`server`/`script`) is
+/// A leading token that is a shape word (`web`/`tui`/`cli`/`worker`/`script`) is
 /// the cross-check shape; any other leading token belongs to the tail (a
 /// runtime/host/target), so a bare `ipe build spa` and a bare `ipe build web`
-/// both parse. The tail is parsed by [`DeliveryTokens::parse`].
+/// both parse. `server` is NOT a shape word — a server is a `script` — so a
+/// leading `server` reads as an entry path, never a shape. The tail is parsed
+/// by [`DeliveryTokens::parse`].
 ///
 /// # Errors
 /// [`DeliveryError`] surfaced as a [`CliError::UsageOwned`] when a tail token is
