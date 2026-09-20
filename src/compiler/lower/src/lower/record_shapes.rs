@@ -138,6 +138,7 @@ pub(super) const HTTP_REQUEST_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
 // a rename in `ipe_ir::record_shapes` (or here) that drifts the two apart fails
 // `cargo build` in this crate — the backend's name-only fallback keys off the
 // same SSOT, so drift can no longer silently break THE SEAL.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if this table's NAME column drifts from the `ipe_ir` SSOT, the field-name SEAL invariant [ledger #boundary]
 const _: () = assert!(pair_names_match(
     HTTP_REQUEST_FIELD_TYPES,
     ipe_ir::record_shapes::HTTP_REQUEST_FIELDS
@@ -159,6 +160,7 @@ pub(super) const SERVER_RESPONSE_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
 ];
 
 // NAME column bound to the shared SSOT — see the note at HTTP_REQUEST_FIELD_TYPES.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if this table's NAME column drifts from the `ipe_ir` SSOT, the field-name SEAL invariant [ledger #boundary]
 const _: () = assert!(pair_names_match(
     SERVER_RESPONSE_FIELD_TYPES,
     ipe_ir::record_shapes::SERVER_RESPONSE_FIELDS
@@ -355,6 +357,7 @@ pub(super) const WEBSOCKET_CFG_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
 ];
 
 // NAME column bound to the shared SSOT — see the note at HTTP_REQUEST_FIELD_TYPES.
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if this table's NAME column drifts from the `ipe_ir` SSOT, the field-name SEAL invariant [ledger #boundary]
 const _: () = assert!(pair_names_match(
     WEBSOCKET_CFG_FIELD_TYPES,
     ipe_ir::record_shapes::WEBSOCKET_CFG_FIELDS
