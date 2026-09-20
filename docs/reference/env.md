@@ -157,6 +157,8 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_HTTP_DENY_PRIVATE` | unset (auto: on in production, off in dev) | Set to `1`, `on`, or `true` to block all outbound HTTP / SMTP / database connections to RFC-1918 private, loopback, and link-local addresses, closing the SSRF attack surface. In production the guard is on by default; set to `0` to disable explicitly in dev. | `SecurityTunable` |
 | `IPE_HTTP_DNS_TIMEOUT_MS` | 5000 (5 s) | Deadline (ms) for the SSRF pre-send DNS resolve, run off the async worker via spawn_blocking. Bounds worker-pool starvation from a slow or stalling resolver on an outbound request. | `SecurityTunable` |
 | `IPE_HTTP_MAX_BODY_BYTES` | 33554432 (32 MiB) | Maximum request-body size (bytes) for outbound `Http.*` calls. Prevents OOM from unexpectedly large responses. | `Tunable` |
+| `IPE_HTTP_MAX_INFLIGHT` | 1024 | Global cap on simultaneously in-flight HTTP requests at the `Server.listen` front door. Bounds task/worker fan-out; requests beyond the cap are backpressured and, with the request timeout outermost, shed as a timeout rather than queued unboundedly. | `SecurityTunable` |
+| `IPE_HTTP_REQUEST_TIMEOUT` | 30 (seconds) | Per-request deadline (seconds) at the `Server.listen` front door. A request — headers or body — that does not complete within the window is dropped with 408, closing the slowloris hold-open vector. | `SecurityTunable` |
 
 ## Observability
 
@@ -221,6 +223,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | Variable | Default | Effect | Class |
 |----------|---------|--------|-------|
 | `IPE_WS_HEARTBEAT` | 30 | WebSocket ping interval (seconds). A peer that does not respond within two intervals is considered dead and disconnected. | `Tunable` |
+| `IPE_WS_MAX_CONNECTIONS` | 1024 | Ceiling on simultaneously live server WebSocket peers. Each peer pins a registry slot, an mpsc channel, and a heartbeat task; an upgrade beyond the ceiling is refused with 503 before any slot is allocated, bounding FD/memory exhaustion by construction. | `SecurityTunable` |
 | `IPE_WS_MAX_MESSAGE_BYTES` | 1048576 (1 MiB) | Maximum WebSocket message size (bytes) for both client and server connections. Messages larger than this limit are rejected. | `Tunable` |
 | `IPE_WS_SEND_BUFFER` | 256 | Per-connection outbound frame buffer depth. A full buffer applies backpressure (the send kernel returns `Err`) rather than dropping frames. | `Tunable` |
 
