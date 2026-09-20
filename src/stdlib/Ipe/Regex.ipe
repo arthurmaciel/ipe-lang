@@ -8,6 +8,12 @@
 --
 -- The `Regex` type is a built-in opaque handle (backed by
 -- `ipe_runtime::regex_kernel::Regex`); it needs no explicit import.
+--
+-- Every operation caps the subject at a declared byte ceiling (default 16 MiB,
+-- overridable via `IPE_REGEX_MAX_INPUT_BYTES`): a subject past the bound is
+-- turned back at the boundary — `match` yields `False`, `find` `Nothing`,
+-- `findAll` `[]`, `replace` the subject unchanged, `split` the subject as a
+-- single element — so an untrusted subject can never drive unbounded work.
 module Ipe.Regex exposing
     ( compile
     , match
