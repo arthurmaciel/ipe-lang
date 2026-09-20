@@ -393,6 +393,25 @@ impl TyBounds {
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
+
+    /// Every individual obligation bit as a single-bit set, one entry per raw
+    /// flag. The use-site super-bound gate's completeness test walks this so a
+    /// newly-added bit that no gate clause covers fails the build (an uncovered
+    /// bit would vacuously admit a function type at a generic emission — the
+    /// exact ipe-accepts-then-cargo-rejects seal break this guards).
+    pub const ALL_BITS: &'static [Self] = &[
+        Self(Self::ADD),
+        Self(Self::SUB),
+        Self(Self::MUL),
+        Self(Self::ORD),
+        Self(Self::EQ),
+        Self(Self::SET_ELEM),
+        Self(Self::DICT_KEY),
+        Self(Self::SHOW),
+        Self(Self::APPEND),
+        Self(Self::HOF_KERNEL_RESULT),
+        Self(Self::SQL_PARAM),
+    ];
 }
 
 /// What a union-find variable resolves to during inference.

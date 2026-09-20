@@ -1292,6 +1292,31 @@ fn emitted_bound_satisfied(
     ty: &Ty,
     enum_embeds_fn: &impl Fn(&[Symbol], Symbol) -> bool,
 ) -> bool {
+    super_bounds_satisfied(
+        interner,
+        bounds,
+        ty,
+        super_bounds::BoundSite::EmittedGeneric,
+        enum_embeds_fn,
+    )
+}
+
+/// The single per-bound clause set both super-type gates share, selected by
+/// [`super_bounds::BoundSite`]. `emitted_bound_satisfied` (generic emission) and
+/// [`concrete_super_ok`] (direct concrete pin) are its only two callers; the
+/// sole legitimate difference between them — `Ord` over `String`, admitted at a
+/// concrete pin but not under a `Copy`-bound emitted generic — is carried by the
+/// `site` argument, so no clause is stated twice and neither gate can silently
+/// omit one (a missing use-site clause is an ipe-accepts-then-cargo-fails seal
+/// break). `TyBounds::ALL_BITS` walked by `all_bounds_have_a_use_site_clause`
+/// pins that every obligation bit reaches a clause here.
+fn super_bounds_satisfied(
+    interner: &Interner,
+    bounds: TyBounds,
+    ty: &Ty,
+    site: super_bounds::BoundSite,
+    enum_embeds_fn: &impl Fn(&[Symbol], Symbol) -> bool,
+) -> bool {
     let prim = match ty {
         Ty::Con { module, name, args } if module.is_empty() && args.is_empty() => {
             interner.resolve(*name)
@@ -1299,14 +1324,15 @@ fn emitted_bound_satisfied(
         _ => None,
     };
     let number_ok = super_bounds::prim_satisfies_number(prim);
-    // Ordering at an emitted-generic site: `String` excluded (Rust `Copy`
-    // restriction). See `super_bounds::ORD_COPY` vs `ORD_BORROW`.
-    let ord_ok = super_bounds::prim_satisfies_ord(prim, super_bounds::BoundSite::EmittedGeneric);
-    // A `Set` element / `Dict` key emission carries no `Copy` (the runtime
-    // helpers consume by value; `String` keys must be admitted), so the
-    // generic-use gate uses the `String`-inclusive comparable-key set.
+    // Ordering `String` slot varies by site: excluded under a `Copy`-bound
+    // emitted generic, included at a borrow-based concrete pin. See
+    // `super_bounds::ORD_COPY` vs `ORD_BORROW`.
+    let ord_ok = super_bounds::prim_satisfies_ord(prim, site);
+    // A `Set` element / `Dict` key carries no `Copy` (the runtime helpers
+    // consume by value; `String` keys must be admitted), so both sites use the
+    // `String`-inclusive comparable-key set.
     let key_ok = super_bounds::prim_satisfies_comparable_key(prim);
-    // `++` at a generic emission site: accepted for `String` or `List _`.
+    // `++`: accepted for `String` or `List _`.
     let appendable_ok = super_bounds::prim_satisfies_append_prim(prim)
         || matches!(ty,
             Ty::Con { module, name, args }
@@ -1324,36 +1350,35 @@ fn emitted_bound_satisfied(
     // only cares whether the callback's final RESULT itself is an arrow.
     //
     // A bare `Ty::Var` fails CLOSED, exactly like every sibling obligation in
-    // this function and per this function's own doc-comment contract ("a
-    // non-concrete type — a bare variable the obligation escaped into —
-    // satisfies nothing"). This is load-bearing for the seal: an ANNOTATED
-    // DOUBLE FORWARDER (`am2 x f = am1 x f` over `am1 x f = Result.andMap x
-    // f`, both with explicit signatures) instantiates `am1`'s obligated `b`
-    // to `am2`'s OWN fresh annotation skolem — a bare variable at this
-    // check. `check_scheme_applications` is a one-shot check, not a
-    // bound-transfer: `am2` itself never touches the kernel, so it records
-    // no obligation of its own, and a fail-OPEN here (the 4th-attempt bug,
-    // reverted in 2a7b0d6) let an arity-2 payload flow unguarded to `main`'s
-    // call of `am2` and reach `cargo build` as E0308. Failing closed rejects
-    // the inner `am1` reference itself — the same conservative behaviour
-    // `Math.min`'s `ord` obligation already shows on the identical
-    // double-forwarder shape ("a is not a Comparable type" at both hops).
-    // The precision loss (a legitimately-arity-1 annotated double forwarder
-    // is also rejected) is the SAME documented loss every sibling bound
-    // accepts; genuine cross-binding obligation propagation is a follow-up
-    // design for ALL bounds at once — see
+    // this function ("a non-concrete type — a bare variable the obligation
+    // escaped into — satisfies nothing"). This is load-bearing for the seal:
+    // an ANNOTATED DOUBLE FORWARDER (`am2 x f = am1 x f` over `am1 x f =
+    // Result.andMap x f`, both with explicit signatures) instantiates `am1`'s
+    // obligated `b` to `am2`'s OWN fresh annotation skolem — a bare variable at
+    // this check. `check_scheme_applications` is a one-shot check, not a
+    // bound-transfer: `am2` itself never touches the kernel, so it records no
+    // obligation of its own, and a fail-OPEN here let an arity-2 payload flow
+    // unguarded to `main`'s call of `am2` and reach `cargo build` as E0308.
+    // Failing closed rejects the inner `am1` reference itself — the same
+    // conservative behaviour `Math.min`'s `ord` obligation already shows on the
+    // identical double-forwarder shape. The precision loss (a legitimately-
+    // arity-1 annotated double forwarder is also rejected) is the SAME
+    // documented loss every sibling bound accepts; genuine cross-binding
+    // obligation propagation is a follow-up design for ALL bounds at once — see
     // `docs/adr/0001-language-semantics-and-types.md` §6.
     let not_curried_ok = !matches!(ty, Ty::Fun(_, _) | Ty::Var(_));
-    // SQL-bind-parameter obligation: satisfied by exactly the Ipê
-    // types the runtime has a `From<T> for SqlParam` impl for — the bare
-    // scalars `ipe_runtime::db` binds directly, plus the `SqlValue` ADT
-    // itself (whose generated `From` impl covers the typed-mixed-param
-    // case). Matches [`concrete_super_ok`]'s `sql_param_ok`.
+    // SQL-bind-parameter obligation: satisfied by exactly the Ipê types the
+    // runtime has a `From<T> for SqlParam` impl for — the bare scalars
+    // `ipe_runtime::db` binds directly, plus the `SqlValue` ADT itself.
     let sql_param_ok = super_bounds::prim_satisfies_sql_param(prim);
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
         && (!bounds.has_eq() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_comparable_key() || key_ok)
+        // Stringify (`toString` / `Log.*With`): showable iff it contains no
+        // function anywhere — the SAME "no function nested" rule as equatable,
+        // since every non-function type derives `IpeStringify`.
+        && (!bounds.has_show() || ty_is_equatable(ty, enum_embeds_fn))
         && (!bounds.has_append() || appendable_ok)
         && (!bounds.has_hof_kernel_result() || not_curried_ok)
         && (!bounds.has_sql_param() || sql_param_ok)
@@ -1373,48 +1398,13 @@ pub(crate) fn concrete_super_ok(
     ty: &Ty,
     enum_embeds_fn: &impl Fn(&[Symbol], Symbol) -> bool,
 ) -> bool {
-    let prim = match ty {
-        Ty::Con { module, name, args } if module.is_empty() && args.is_empty() => {
-            interner.resolve(*name)
-        }
-        _ => None,
-    };
-    let number_ok = super_bounds::prim_satisfies_number(prim);
-    // Ordering at a concrete-pin site: `String` included (direct comparison
-    // borrows operands; no `Copy` needed). See `super_bounds::ORD_BORROW`.
-    let ord_ok = super_bounds::prim_satisfies_ord(prim, super_bounds::BoundSite::ConcretePin);
-    // `++` accepts `String` (bare scalar) or `List _` (one type arg).
-    let appendable_ok = super_bounds::prim_satisfies_append_prim(prim)
-        || matches!(ty,
-            Ty::Con { module, name, args }
-                if module.is_empty()
-                    && args.len() == 1
-                    && interner.resolve(*name) == Some("List")
-        );
-    // SQL-bind-parameter obligation pinned directly to a concrete
-    // type: the runtime's `From<T> for SqlParam` set — `String` / `Int` /
-    // `Float` / `Bool`, plus the `SqlValue` ADT itself.
-    let sql_param_ok = super_bounds::prim_satisfies_sql_param(prim);
-    // A `Set` element / `Dict` key pinned directly to a concrete type: the Ipê
-    // `comparable` scalar set. `Float` satisfies the Ipê typing here; the
-    // Rust-backend `f64`-as-key reality is gated at lowering.
-    let key_ok = super_bounds::prim_satisfies_comparable_key(prim);
-    (!bounds.has_number() || number_ok)
-        && (!bounds.has_ord() || ord_ok)
-        && (!bounds.has_eq() || ty_is_equatable(ty, enum_embeds_fn))
-        && (!bounds.has_comparable_key() || key_ok)
-        // Stringify (`toString` / `Log.*With`): showable iff it contains no
-        // function anywhere — the SAME "no function nested" rule as equatable,
-        // since every non-function type derives `IpeStringify`.
-        && (!bounds.has_show() || ty_is_equatable(ty, enum_embeds_fn))
-        && (!bounds.has_append() || appendable_ok)
-        // See `emitted_bound_satisfied`'s matching comment — same
-        // structurally-shallow, fail-closed-on-`Ty::Var` check, reused for
-        // the concrete-pin path. (A `Content::Structure` root cannot zonk to
-        // a bare head `Ty::Var`, so the `Ty::Var` arm is unreachable here —
-        // kept anyway so the two predicates cannot drift apart again.)
-        && (!bounds.has_hof_kernel_result() || !matches!(ty, Ty::Fun(_, _) | Ty::Var(_)))
-        && (!bounds.has_sql_param() || sql_param_ok)
+    super_bounds_satisfied(
+        interner,
+        bounds,
+        ty,
+        super_bounds::BoundSite::ConcretePin,
+        enum_embeds_fn,
+    )
 }
 
 /// Whether a resolved type derives Rust's `PartialEq`: true for every fully
@@ -5714,6 +5704,95 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Every obligation bit must reach a clause in the shared use-site gate.
+    /// An arrow type satisfies NO super-type bound — so for each single-bit set
+    /// a function must be rejected at both call sites. A future bit added to
+    /// `TyBounds` but left out of `super_bounds_satisfied`'s conjunction would
+    /// leave that bit's clause vacuously true, accepting the function and
+    /// re-opening the ipe-accepts-then-cargo-fails seal break; this walk turns
+    /// that omission into a failing test rather than a downstream `cargo` error.
+    #[test]
+    fn every_bound_bit_rejects_a_function_at_both_sites() {
+        let mut i = Interner::new();
+        let int_sym = i.intern("Int").expect("intern Int");
+        let int_ty = Ty::Con {
+            module: Vec::new(),
+            name: int_sym,
+            args: Vec::new(),
+        };
+        let fn_ty = Ty::Fun(Box::new(int_ty.clone()), Box::new(int_ty));
+        let no_fn_enums = |_home: &[Symbol], _name: Symbol| false;
+        for &bit in TyBounds::ALL_BITS {
+            assert!(
+                !bit.is_empty(),
+                "ALL_BITS entries are single obligation bits, never EMPTY"
+            );
+            assert!(
+                !super_bounds_satisfied(
+                    &i,
+                    bit,
+                    &fn_ty,
+                    super_bounds::BoundSite::EmittedGeneric,
+                    &no_fn_enums,
+                ),
+                "obligation bit {bit:?} must reject a function type at an emitted-generic \
+                 site — a vacuously-true clause here is a SEAL hole (ipe accepts, cargo fails)"
+            );
+            assert!(
+                !super_bounds_satisfied(
+                    &i,
+                    bit,
+                    &fn_ty,
+                    super_bounds::BoundSite::ConcretePin,
+                    &no_fn_enums,
+                ),
+                "obligation bit {bit:?} must reject a function type at a concrete-pin site"
+            );
+        }
+    }
+
+    /// A `Show`-bounded generic instantiated to a FUNCTION must be REJECTED at
+    /// type-check. `describe x = Basics.toString x` gives `describe : a -> String`
+    /// with a `Stringify` obligation on `a`; a cross-use `describe someFn` (with
+    /// `someFn : Int -> Int`) instantiates `a` to an arrow. Before the use-site
+    /// gate carried the `Show` clause, `ipe` accepted this and the backend emitted
+    /// `fn describe<T0: IpeStringify>(..)` fed a closure — an E0277 at `cargo`.
+    #[test]
+    fn show_bounded_generic_escaping_to_function_is_rejected() {
+        let src = format!(
+            "{M2C_HDR}describe : a -> String\n\
+             describe x =\n    Basics.toString x\n\n\
+             someFn : Int -> Int\n\
+             someFn n =\n    n\n\n\
+             main =\n    describe someFn\n"
+        );
+        let (solved, _i, _m) = infer_src(&src);
+        assert!(
+            solved.is_err(),
+            "a Stringify-bounded generic instantiated to a function must be \
+             rejected at type-check (SEAL): {solved:?}"
+        );
+    }
+
+    /// The happy path the refusal above must not break: `describe` on a bare
+    /// scalar and on a `String` both type-check (every non-function type derives
+    /// `IpeStringify`).
+    #[test]
+    fn show_bounded_generic_accepts_non_function_arguments() {
+        for arg in ["5", "\"x\""] {
+            let src = format!(
+                "{M2C_HDR}describe : a -> String\n\
+                 describe x =\n    Basics.toString x\n\n\
+                 main =\n    describe {arg}\n"
+            );
+            let (solved, _i, _m) = infer_src(&src);
+            assert!(
+                solved.is_ok(),
+                "`describe {arg}` (a showable non-function argument) must type-check: {solved:?}"
+            );
         }
     }
 }
