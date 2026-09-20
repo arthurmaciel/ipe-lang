@@ -140,17 +140,22 @@ impl IpeWrappingNeg for f64 {
 /// monomorphises.
 pub trait IpeWrappingAdd<Rhs = Self>: Sized {
     type Output;
+    /// The additive identity — the seed a wrapping additive fold starts from,
+    /// so an empty fold yields `0` / `0.0`.
+    const IPE_ADD_IDENTITY: Self;
     #[must_use]
     fn ipe_wrapping_add(self, rhs: Rhs) -> Self::Output;
 }
 impl IpeWrappingAdd for i64 {
     type Output = i64;
+    const IPE_ADD_IDENTITY: i64 = 0;
     fn ipe_wrapping_add(self, rhs: i64) -> i64 {
         self.wrapping_add(rhs)
     }
 }
 impl IpeWrappingAdd for f64 {
     type Output = f64;
+    const IPE_ADD_IDENTITY: f64 = 0.0;
     fn ipe_wrapping_add(self, rhs: f64) -> f64 {
         self + rhs
     }
@@ -182,17 +187,22 @@ impl IpeWrappingSub for f64 {
 /// `i64` wraps on overflow; `f64` is total.
 pub trait IpeWrappingMul<Rhs = Self>: Sized {
     type Output;
+    /// The multiplicative identity — the seed a wrapping multiplicative fold
+    /// starts from, so an empty fold yields `1` / `1.0`.
+    const IPE_MUL_IDENTITY: Self;
     #[must_use]
     fn ipe_wrapping_mul(self, rhs: Rhs) -> Self::Output;
 }
 impl IpeWrappingMul for i64 {
     type Output = i64;
+    const IPE_MUL_IDENTITY: i64 = 1;
     fn ipe_wrapping_mul(self, rhs: i64) -> i64 {
         self.wrapping_mul(rhs)
     }
 }
 impl IpeWrappingMul for f64 {
     type Output = f64;
+    const IPE_MUL_IDENTITY: f64 = 1.0;
     fn ipe_wrapping_mul(self, rhs: f64) -> f64 {
         self * rhs
     }
