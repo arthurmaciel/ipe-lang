@@ -8,7 +8,10 @@
 //!
 //! Ranges: `IPE-P####` parse, `IPE-N####` name resolution, `IPE-T####` type,
 //! `IPE-L####` lower / not-yet-supported, `IPE-F####` foreign bindings (FFI),
-//! `IPE-I####` internal (compiler bug).
+//! `IPE-S####` security consent, `IPE-E####` environment, `IPE-I####` internal
+//! (compiler bug). The single letter after `IPE-` is the code's [`Family`], and
+//! [`Code::family`] derives it from that byte — the taxonomy letter and the
+//! family are one fact, not two that can drift.
 //!
 //! Single source of truth: the [`code!`] table below declares every code once,
 //! pairing its wire string with its one-line title and its `ipe doc` page.
@@ -31,11 +34,60 @@ pub const ISSUE_TRACKER_URL: &str = "https://github.com/arthurmaciel/ipe-lang/is
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Code(&'static str);
 
+/// The taxonomy family a [`Code`] belongs to — the compiler stage or concern
+/// that owns it.
+///
+/// Encoded by the single letter after `IPE-` in the wire string, so a code's
+/// family is not a second fact to keep in sync but a projection of the code
+/// itself (see [`Code::family`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Family {
+    /// `IPE-P####` — parse / lex.
+    Parse,
+    /// `IPE-N####` — name resolution.
+    Name,
+    /// `IPE-T####` — type inference / checking.
+    Type,
+    /// `IPE-L####` — lowering / not-yet-supported.
+    Lower,
+    /// `IPE-F####` — foreign bindings (FFI) and the sandbox jail that hosts them.
+    Ffi,
+    /// `IPE-S####` — security consent.
+    Security,
+    /// `IPE-E####` — environment (network, registry, host).
+    Environment,
+    /// `IPE-I####` — internal compiler bug (an ICE); the only family whose
+    /// diagnostics carry [`Severity::Bug`].
+    Internal,
+}
+
 impl Code {
     /// The wire form of the code, e.g. `"IPE-T0001"`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         self.0
+    }
+
+    /// The [`Family`] this code belongs to, derived from the family letter — the
+    /// byte at index 4 of the `"IPE-X…"` wire string (`I`,`P`,`E`,`-`, then the
+    /// letter). Matched with a bounds-checked slice pattern (never an unchecked
+    /// `[4]` index) so a malformed wire string — impossible for a taxonomy
+    /// constant, but the field is a `&'static str` — yields [`Family::Internal`]
+    /// rather than panicking: fail-closed to the "report a bug" family. `const`
+    /// so the family chokepoints in `Diagnostic::code`'s helpers evaluate at
+    /// build time.
+    #[must_use]
+    pub const fn family(self) -> Family {
+        match *self.0.as_bytes() {
+            [b'I', b'P', b'E', b'-', b'P', ..] => Family::Parse,
+            [b'I', b'P', b'E', b'-', b'N', ..] => Family::Name,
+            [b'I', b'P', b'E', b'-', b'T', ..] => Family::Type,
+            [b'I', b'P', b'E', b'-', b'L', ..] => Family::Lower,
+            [b'I', b'P', b'E', b'-', b'F', ..] => Family::Ffi,
+            [b'I', b'P', b'E', b'-', b'S', ..] => Family::Security,
+            [b'I', b'P', b'E', b'-', b'E', ..] => Family::Environment,
+            _ => Family::Internal,
+        }
     }
 }
 
