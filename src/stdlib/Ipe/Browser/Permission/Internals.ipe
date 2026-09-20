@@ -12,7 +12,10 @@ module Ipe.Browser.Permission.Internals exposing
     , request
     , requestOne
     , subscribe
+    , subscribeFor
     , inbound
+    , inboundFor
+    , nameToken
     )
 
 import Ipe.Error as Error exposing (Error)
@@ -91,6 +94,51 @@ subscribe toMsg =
     Js.subscribe inbound toMsg
 
 
+-- | `subscribeFor name toMsg` — the inbound subscription scoped to a SINGLE
+-- permission. The gate is `inboundFor name`: a frame is decoded only when its
+-- `name` field matches `name`'s canonical token; a frame for any OTHER
+-- permission fails the decode closed and is dropped whole, exactly as a
+-- malformed frame is. The subscription therefore delivers ONLY `name`'s change
+-- frames — the per-name contract the signature advertises, enforced at the
+-- trust boundary (parse-don't-validate), never by a downstream comparison a
+-- caller could omit.
+subscribeFor : PermissionName -> (JsMsg -> msg) -> Sub.Sub msg
+subscribeFor name toMsg =
+    Js.subscribe (inboundFor name) toMsg
+
+
+-- | The canonical wire token for each permission name — the single source of
+-- truth shared by the outbound request and the inbound frame's `name` field.
+-- These are the W3C Permissions API `PermissionDescriptor.name` strings, so the
+-- served first-party JS echoes the same token it received.
+nameToken : PermissionName -> String
+nameToken name =
+    case name of
+        Camera ->
+            "camera"
+
+        Microphone ->
+            "microphone"
+
+        Geolocation ->
+            "geolocation"
+
+        Notifications ->
+            "notifications"
+
+        PersistentStorage ->
+            "persistent-storage"
+
+        ClipboardRead ->
+            "clipboard-read"
+
+        ClipboardWrite ->
+            "clipboard-write"
+
+        MidiSysex ->
+            "midi"
+
+
 -- | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok`
 -- flag: a true flag decodes a `state` string into the closed state vocabulary;
 -- a false flag decodes the closed `error` vocabulary. An unrecognised token
@@ -98,6 +146,25 @@ subscribe toMsg =
 inbound : Decode.Decoder JsMsg
 inbound =
     Decode.andThen decodeByOk (Decode.field "ok" Decode.bool)
+
+
+-- | `inboundFor name` — the name-scoped variant of `inbound`. It first reads
+-- the frame's `name` field and requires it to equal `name`'s canonical token;
+-- a mismatch fails the decode closed, so a change frame for a DIFFERENT
+-- permission is dropped rather than folded into this subscription. On a match
+-- the frame decodes exactly as `inbound` does.
+inboundFor : PermissionName -> Decode.Decoder JsMsg
+inboundFor name =
+    Decode.andThen (gateName name) (Decode.field "name" Decode.string)
+
+
+gateName : PermissionName -> String -> Decode.Decoder JsMsg
+gateName name token =
+    if token == nameToken name then
+        inbound
+
+    else
+        Decode.fail ("permission change frame for other permission: " ++ token)
 
 
 decodeByOk : Bool -> Decode.Decoder JsMsg

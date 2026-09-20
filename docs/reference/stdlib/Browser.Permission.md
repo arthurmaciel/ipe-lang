@@ -83,12 +83,14 @@ the `changes` subscription. Outbound `Cmd`.
 changes : Internals.PermissionName -> (Result Error PermissionState -> msg) -> Sub.Sub msg
 ```
 
-`changes name toMsg` — the inbound subscription for state changes on `name`,
-wired in `subscriptions`.
+`changes name toMsg` — the inbound subscription for state changes on
+`name`, and ONLY `name`, wired in `subscriptions`.
 
 The decoder IS the security gate: every inbound value runs through the total,
-bounded seal decoder for the narrow `JsMsg`; a malformed / mismatched frame is
-dropped whole. A decoded `JsMsg` is folded EXHAUSTIVELY into a
-`Result Error PermissionState` — a typed state becomes `Ok`, an unavailability
-a typed `Err`.
+bounded seal decoder, which here also requires the frame's permission name to
+match `name` — a frame for any other watched permission fails the decode
+closed and is dropped whole, so this subscription never reports another
+permission's state as `name`'s. A decoded `JsMsg` is folded EXHAUSTIVELY into
+a `Result Error PermissionState` — a typed state becomes `Ok`, an
+unavailability a typed `Err`.
 
