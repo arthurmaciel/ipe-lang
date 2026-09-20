@@ -1849,6 +1849,62 @@ mod registry_phase_c_tests {
         );
     }
 
+    /// The `Key` obligation qualifier (`Set`/`Dict`/`Cache`) selects the WHOLE
+    /// module in `key_obligation_for`, a SUPERSET of the keyed kernels pinned in
+    /// `OBLIGATION_SLOTS`. A non-keyed member (`Dict.size`, `Set.toList`,
+    /// `Cache.clear`, …) has no pinned `Key` slot, so it must reach the
+    /// no-obligation return and type-check — NOT be turned away with IPE-L0108.
+    /// This drives the real `constrain_var_kernel` tie site (not a synthetic
+    /// scheme), the exact path a `f d = Dict.size d` reference walks, so a
+    /// regression that fails these closed (making the whole Set/Dict stdlib stop
+    /// type-checking) breaks the build here. The keyed members must still resolve
+    /// too — their `Ord`/`Hash` bound is layered without error.
+    #[test]
+    fn non_keyed_set_dict_kernels_type_check() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        // `module`/`name` are retained only for diagnostics at the tie site.
+        let dummy = interner.intern("_").expect("intern placeholder symbol");
+        let mut uf = UnionFind::<Content>::new();
+        let mut builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
+
+        // Non-keyed Set/Dict/Cache kernels: selected by the module qualifier but
+        // absent from OBLIGATION_SLOTS → must return Ok (no key bound), not L0108.
+        for k in [
+            StdlibKernel::DictSize,
+            StdlibKernel::DictMember,
+            StdlibKernel::DictKeys,
+            StdlibKernel::DictMap,
+            StdlibKernel::SetToList,
+            StdlibKernel::SetFoldl,
+            StdlibKernel::CacheClear,
+            StdlibKernel::CacheSize,
+        ] {
+            let r = builder.constrain_var_kernel(Some(k), dummy, dummy, Span::DUMMY);
+            assert!(
+                r.is_ok(),
+                "{k:?}: non-keyed Set/Dict/Cache kernel must type-check (no pinned \
+                 Key slot = no-obligation), got {r:?}",
+            );
+        }
+
+        // Keyed kernels still resolve — the Ord/Hash key bound is layered without
+        // error (its refusal of a non-comparable key is a solve-time property,
+        // pinned at the CLI/pipeline level).
+        for k in [
+            StdlibKernel::DictInsert,
+            StdlibKernel::DictGet,
+            StdlibKernel::SetInsert,
+            StdlibKernel::SetMap,
+        ] {
+            let r = builder.constrain_var_kernel(Some(k), dummy, dummy, Span::DUMMY);
+            assert!(
+                r.is_ok(),
+                "{k:?}: keyed kernel must still resolve, got {r:?}"
+            );
+        }
+    }
+
     /// The [`Builder::hof_result_slot_for`] table
     /// cannot drift from the kernel scheme shapes ([`Builder::resolve_scheme`]):
     /// for every table entry, the slot's raw var must be exactly the FINAL RESULT
