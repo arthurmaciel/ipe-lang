@@ -1632,14 +1632,14 @@ fn wasm_config(mode: Option<&str>) -> project::WasmConfig {
     }
 }
 
-/// `[wasm] mode = "spa"` with no CLI flag → inferred `WasmClient`.
+/// `[wasm] mode = "solo"` with no CLI flag → inferred `WasmClient`.
 #[test]
-fn wasm_mode_spa_infers_wasm_target() {
-    let cfg = wasm_config(Some("spa"));
+fn wasm_mode_solo_infers_wasm_target() {
+    let cfg = wasm_config(Some("solo"));
     assert_eq!(
         resolve_compile_target(cli_args::WasmKind::None, Some(&cfg)),
         CompileTarget::WasmClient,
-        "spa mode must infer the browser wasm client"
+        "solo mode must infer the browser wasm client"
     );
 }
 
@@ -1710,7 +1710,7 @@ fn cli_flag_wins_over_mode_off() {
 /// CLI `--target wasi` selects the co-located WASI target, over any manifest.
 #[test]
 fn cli_flag_wasi_selects_colocated_wasi() {
-    let cfg = wasm_config(Some("spa"));
+    let cfg = wasm_config(Some("solo"));
     assert_eq!(
         resolve_compile_target(cli_args::WasmKind::Wasi, None),
         CompileTarget::WasmWasi,
@@ -1728,7 +1728,7 @@ fn cli_flag_wasi_selects_colocated_wasi() {
 /// manifest that only knows the browser mode words.
 #[test]
 fn manifest_never_infers_wasi() {
-    for mode in [Some("spa"), Some("hydrate"), Some("off"), None] {
+    for mode in [Some("solo"), Some("hydrate"), Some("off"), None] {
         let cfg = wasm_config(mode);
         assert_ne!(
             resolve_compile_target(cli_args::WasmKind::None, Some(&cfg)),
@@ -1841,7 +1841,7 @@ fn eject_refuses_a_wasm_mode_project_from_the_manifest_tier() {
     // with no `IPE_TARGET` env set — the tier the env-only check missed.
     fs::write(
         tmp.join("package.ipe"),
-        "module Package exposing (package)\n\n\npackage =\n    { name = \"w\", wasm = On { mode = Spa } }\n",
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"w\", wasm = On { mode = Solo } }\n",
     )
     .expect("write package.ipe");
     fs::write(

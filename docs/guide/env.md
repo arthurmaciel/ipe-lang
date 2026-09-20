@@ -38,7 +38,7 @@ package : Package
 package =
     { name = "wasm-env-public"
     , version = "0.1.0"
-    , wasm = On { mode = Spa, publicEnv = [ "API_BASE_URL" ] }
+    , wasm = On { mode = Solo, publicEnv = [ "API_BASE_URL" ] }
     }
 ```
 

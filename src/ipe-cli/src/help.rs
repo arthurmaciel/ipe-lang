@@ -212,7 +212,7 @@ const COMMANDS: &[Command] = &[
         args: "[<directory>] [<shape>] [<runtime>]",
         args_desc: "directory: where to scaffold (`.` or omitted → the current directory). \
                     shape: script | tui | cli | server | web (default web) — picks the template. \
-                    runtime (web only): live (default) | spa — seeds the default delivery. \
+                    runtime (web only): served (default) | solo — seeds the default delivery. \
                     Host and target are delivery choices, chosen later at build/release. On a TTY \
                     an omitted positional is prompted; a re-run reconciles (creates only missing \
                     files) and refuses a shape that conflicts with the existing `main`.",
@@ -239,8 +239,8 @@ const COMMANDS: &[Command] = &[
         args: "[<path>] [<shape>] [<runtime>] [<host>] [<target>]",
         args_desc: "path: a source file, a project directory, or a package.ipe (default: the \
                     current project). shape is derived from `main` and, if written, only \
-                    cross-checked. runtime/host apply to `web` only: `web` = served live (live is \
-                    the unnamed default, never written), `web spa` = sandboxed browser client, and \
+                    cross-checked. runtime/host apply to `web` only: `web` = served (served is \
+                    the unnamed default, never written), `web solo` = self-contained browser client, and \
                     a host is desktop/ios/android. A `desktop`/`ios`/`android` host lays out the \
                     app bundle for that host (a fast dev bundle; `release web <host>` produces the \
                     production distributable). With no delivery args, `build` builds the \

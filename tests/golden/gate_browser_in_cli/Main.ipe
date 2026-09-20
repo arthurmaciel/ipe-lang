@@ -5,7 +5,7 @@ module Main exposing (main)
 -- `Ipe.Browser.Clipboard` — a browser host capability that needs a JS host. A
 -- terminal app has no browser and never will, so the import has no denotation
 -- here; it fails closed at resolve, before any Rust is generated. The fix is a
--- web app (`web` / `web spa`), which is hosted in a browser.
+-- web app (`web` / `web solo`), which is hosted in a browser.
 
 import Ipe.String as String
 import Ipe.Task as Task

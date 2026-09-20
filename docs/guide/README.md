@@ -24,7 +24,7 @@ at the top and follow the links; each page assumes only the ones before it.
   how to apply each step manually.
 - [Delivering an app](delivery.md) — shape vs delivery, then packaging a `Web`
   app into a desktop bundle (`ipe release web desktop`) and a mobile
-  system-webview shell (`ipe release web spa ios|android`) through the one
+  system-webview shell (`ipe release web solo ios|android`) through the one
   delivery grammar.
 
 ## Standard-library guides

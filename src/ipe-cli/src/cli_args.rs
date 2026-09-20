@@ -40,14 +40,14 @@ pub struct DeliveryPositionals {
 ///
 /// A leading token that is a shape word (`web`/`tui`/`cli`/`worker`/`script`) is
 /// the cross-check shape; any other leading token belongs to the tail (a
-/// runtime/host/target), so a bare `ipe build spa` and a bare `ipe build web`
+/// runtime/host/target), so a bare `ipe build solo` and a bare `ipe build web`
 /// both parse. `server` is NOT a shape word — a server is a `script` — so a
 /// leading `server` reads as an entry path, never a shape. The tail is parsed
 /// by [`DeliveryTokens::parse`].
 ///
 /// # Errors
 /// [`DeliveryError`] surfaced as a [`CliError::UsageOwned`] when a tail token is
-/// neither `spa`, a host, nor a plausible target (e.g. the `live` word).
+/// neither `solo`, a host, nor a plausible target (e.g. the `served` word).
 fn take_delivery_positionals(
     positionals: &[String],
     command: &str,
@@ -341,8 +341,8 @@ fn take_leading_entry(
     }
 }
 
-/// `true` when `token` is a delivery word — a shape (`web`/`tui`/…), the `spa`
-/// runtime, the never-written `live`, or a host (`desktop`/`ios`/`android`).
+/// `true` when `token` is a delivery word — a shape (`web`/`tui`/…), the `solo`
+/// runtime, the never-written `served`, or a host (`desktop`/`ios`/`android`).
 /// Used to tell a leading entry-path positional from a leading delivery word so
 /// `ipe build web` (a delivery) and `ipe build src/Main.ipe` (an entry) both
 /// parse. A target triple is deliberately excluded: a leading bare triple with
@@ -350,8 +350,8 @@ fn take_leading_entry(
 /// and the delivery parse rejects it in tail position if it slips through.
 fn is_delivery_word(token: &str) -> bool {
     Shape::from_word(token).is_some()
-        || token == "spa"
-        || token == "live"
+        || token == "solo"
+        || token == "served"
         || crate::delivery::Host::from_word(token).is_some()
 }
 
@@ -480,7 +480,7 @@ impl StaticFlags {
 /// cannot also apply. The two WASM flavours are kept cleanly separate at the
 /// parse boundary
 /// (parse, don't validate): `Client` is the sandboxed browser bundle
-/// (`wasm32-unknown-unknown`, `web spa`); `Wasi` is the co-located portable
+/// (`wasm32-unknown-unknown`, `web solo`); `Wasi` is the co-located portable
 /// WASI target (`wasm32-wasip1`) for a `Direct`/`Script` program. `None` is the
 /// ordinary native build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,6 +556,7 @@ pub enum BuildMode {
 // Four independent one-of-two CLI switches (`fix`, `accept_risks`, `debugger`,
 // `quiet`) each maps naturally to a bool; a two-variant enum or state machine
 // would obscure their independence rather than clarify it.
+#[derive(Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct BuildArgs {
     /// The positional entry (`None` → project-aware default).
@@ -1474,22 +1475,23 @@ mod tests {
     }
 
     #[test]
-    fn build_web_spa_host_parses() {
-        let a = parse_build(&s(&["web", "spa", "ios"])).expect("web spa ios");
+    fn build_web_solo_host_parses() {
+        let a = parse_build(&s(&["web", "solo", "ios"])).expect("web solo ios");
         assert_eq!(a.delivery.stated_shape, Some(Shape::Web));
         assert_eq!(
             a.delivery.tokens.runtime,
-            Some(crate::delivery::Runtime::Spa)
+            Some(crate::delivery::Runtime::Solo)
         );
         assert_eq!(a.delivery.tokens.host, crate::delivery::Host::Ios);
     }
 
     #[test]
-    fn build_live_word_is_a_pedagogical_refusal() {
-        match parse_build(&s(&["web", "live"])) {
-            Err(CliError::UsageOwned(m)) => assert!(m.contains("live"), "got: {m}"),
-            _ => panic!("`live` must be refused as a word"),
-        }
+    fn build_served_word_is_a_pedagogical_refusal() {
+        let refused = parse_build(&s(&["web", "served"]));
+        assert!(
+            matches!(&refused, Err(CliError::UsageOwned(m)) if m.contains("served")),
+            "`served` must be refused as a word: {refused:?}"
+        );
     }
 
     #[test]
