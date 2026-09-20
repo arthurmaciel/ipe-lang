@@ -959,12 +959,11 @@ pub fn run_type_check(rest: &[String]) -> Result<(), CliError> {
         }
         cli_args::OutputFormat::Human => {
             let p = style::Palette::for_stream(&std::io::stdout());
+            let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
             print!(
                 "{}",
                 style::frame(&style::gutter(&format!(
-                    "{}{} No type errors — this program type-checks.{}",
-                    p.green,
-                    style::glyph::OK,
+                    "{tint}{glyph} No type errors — this program type-checks.{}",
                     p.reset,
                 )))
             );
@@ -1519,7 +1518,9 @@ pub fn render_capabilities(
                         body,
                         "  {}{}{} {}{name}{}",
                         p.yellow,
-                        style::glyph::STEP,
+                        // The step bullet from the SSOT; the tint is the soft
+                        // yellow this capability list wears, not running amber.
+                        style::outcome_glyph(style::Outcome::Step),
                         p.reset,
                         p.yellow,
                         p.reset,
@@ -1639,12 +1640,11 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     match action {
         version_check::UpgradeAction::UpToDate => {
             let v = vc.current.to_string();
+            let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
             print!(
                 "{}",
                 style::frame(&style::gutter(&format!(
-                    "{}{}{} ipe {v} — already the latest release",
-                    p.green,
-                    style::glyph::OK,
+                    "{tint}{glyph}{} ipe {v} — already the latest release",
                     p.reset
                 )))
             );
@@ -1656,12 +1656,11 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
             return Ok(());
         }
         version_check::UpgradeAction::Unreachable => {
+            let (glyph, tint) = style::Outcome::Failure.glyph_and_tint(p);
             print!(
                 "{}",
                 style::frame(&style::gutter(&format!(
-                    "{}{}{}  couldn't reach the release feed — check your connection",
-                    p.red,
-                    style::glyph::FAIL,
+                    "{tint}{glyph}{}  couldn't reach the release feed — check your connection",
                     p.reset
                 )))
             );

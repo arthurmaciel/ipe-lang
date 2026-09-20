@@ -764,7 +764,10 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         style::print_command_header();
         eprintln!(
             "{}",
-            style::gutter(&format!("{} building {entry}", style::glyph::STEP))
+            style::gutter(&format!(
+                "{} building {entry}",
+                style::outcome_glyph(style::Outcome::Step)
+            ))
         );
     }
 
@@ -804,7 +807,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
             "{}",
             style::gutter(&format!(
                 "{} built → {}",
-                style::glyph::OK,
+                style::outcome_glyph(style::Outcome::Success),
                 out_dir.display()
             ))
         );
@@ -968,7 +971,10 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     if show_progress {
         eprintln!(
             "{}",
-            style::gutter(&format!("{} ejecting {entry}", style::glyph::STEP))
+            style::gutter(&format!(
+                "{} ejecting {entry}",
+                style::outcome_glyph(style::Outcome::Step)
+            ))
         );
     }
 
@@ -989,7 +995,7 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
             "{}",
             style::gutter(&format!(
                 "{} ejected → {} (self-contained; `cd {} && cargo build`)",
-                style::glyph::OK,
+                style::outcome_glyph(style::Outcome::Success),
                 out_dir.display(),
                 out_dir.display()
             ))
@@ -1139,7 +1145,10 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         if show_progress {
             eprintln!(
                 "{}",
-                style::gutter(&format!("{} releasing {entry} (wasm)", style::glyph::STEP))
+                style::gutter(&format!(
+                    "{} releasing {entry} (wasm)",
+                    style::outcome_glyph(style::Outcome::Step)
+                ))
             );
         }
 
@@ -1184,7 +1193,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
                 "{}",
                 style::gutter(&format!(
                     "{} released → {}/www/",
-                    style::glyph::OK,
+                    style::outcome_glyph(style::Outcome::Success),
                     out_dir.display()
                 ))
             );
@@ -1228,7 +1237,10 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         if show_progress {
             eprintln!(
                 "{}",
-                style::gutter(&format!("{} releasing {entry}", style::glyph::STEP))
+                style::gutter(&format!(
+                    "{} releasing {entry}",
+                    style::outcome_glyph(style::Outcome::Step)
+                ))
             );
         }
 
@@ -1300,7 +1312,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
                 "{}",
                 style::gutter(&format!(
                     "{} released → {}",
-                    style::glyph::OK,
+                    style::outcome_glyph(style::Outcome::Success),
                     dest.display()
                 ))
             );
@@ -1317,7 +1329,10 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     if show_progress {
         eprintln!(
             "{}",
-            style::gutter(&format!("{} releasing {entry}", style::glyph::STEP))
+            style::gutter(&format!(
+                "{} releasing {entry}",
+                style::outcome_glyph(style::Outcome::Step)
+            ))
         );
     }
 
@@ -1485,7 +1500,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
                 style::gutter(&format!(
                     "{} released → {} (single self-jailing binary; \
                      run `--capabilities` to audit)",
-                    style::glyph::OK,
+                    style::outcome_glyph(style::Outcome::Success),
                     artifact.display()
                 ))
             ),
@@ -1495,7 +1510,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
                     "{} released (bundle) → {} (run `./ipe-wrapper -- <args>`; \
                      WARNING: ipe-app can be run directly, bypassing the sandbox — \
                      prefer embed mode for production)",
-                    style::glyph::OK,
+                    style::outcome_glyph(style::Outcome::Success),
                     artifact.display()
                 ))
             ),
@@ -2318,7 +2333,10 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         style::print_command_header();
         eprintln!(
             "{}",
-            style::gutter(&format!("{} building {entry}", style::glyph::STEP))
+            style::gutter(&format!(
+                "{} building {entry}",
+                style::outcome_glyph(style::Outcome::Step)
+            ))
         );
     }
 

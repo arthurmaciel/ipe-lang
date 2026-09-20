@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::CliError;
 use crate::cli_args::{self, OutputFormat};
-use crate::style::{self, glyph};
+use crate::style;
 
 /// The generated directories `clean` removes, named relative to the project
 /// root. This is the deletion allowlist — nothing outside it is ever a
@@ -163,12 +163,15 @@ fn print_summary(removed: &[String], format: OutputFormat) {
         }
         Human => {
             let p = style::Palette::for_stream(&std::io::stdout());
+            // A completed clean is a success: its glyph and green tint come from
+            // the style SSOT, not a per-site glyph/colour pairing.
+            let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
             let mut body = String::new();
             if removed.is_empty() {
                 body.push_str("Nothing to clean — no generated output found.\n");
             } else {
                 for dir in removed {
-                    let _ = writeln!(body, "{} removed {dir}", glyph::OK);
+                    let _ = writeln!(body, "{glyph} removed {dir}");
                 }
                 let n = removed.len();
                 let noun = if n == 1 { "directory" } else { "directories" };
@@ -176,7 +179,7 @@ fn print_summary(removed: &[String], format: OutputFormat) {
             }
             print!(
                 "{}",
-                style::frame(&style::gutter(&format!("{}{body}{}", p.green, p.reset)))
+                style::frame(&style::gutter(&format!("{tint}{body}{}", p.reset)))
             );
         }
     }

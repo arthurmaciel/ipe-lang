@@ -253,7 +253,13 @@ fn watch_line(text: &crate::style::TerminalSafe, role: WatchRole) -> String {
         WatchRole::Success => (p.green, "", p.reset),
         // A failed rebuild leaves the last-good binary running, so it is a soft
         // warning, not a hard stop — a calm light yellow, never alarming red.
-        WatchRole::Failure => (p.bright_yellow, crate::style::glyph::FAIL, p.reset),
+        WatchRole::Failure => (
+            // Failure glyph from the SSOT; the tint is the soft warning amber,
+            // not red — a failed rebuild leaves the last-good binary running.
+            p.bright_yellow,
+            crate::style::outcome_glyph(crate::style::Outcome::Failure),
+            p.reset,
+        ),
     };
     let prefix = if glyph.is_empty() {
         format!("{colour}{}{reset}", crate::style::GUTTER)
@@ -1262,10 +1268,13 @@ fn run_inner(
                         // below to set it off from the next watch line. Light
                         // yellow, not red — the last-good binary stays up.
                         let p = crate::style::Palette::for_stream(&std::io::stderr());
+                        // The failure glyph comes from the style SSOT; the tint is
+                        // deliberately the soft warning amber, not the red a hard
+                        // failure wears — the last-good binary stays up.
                         let body = format!(
                             "{}{} [ipe watch] build failed (last-good binary stays up):{}\n{}",
                             p.bright_yellow,
-                            crate::style::glyph::FAIL,
+                            crate::style::outcome_glyph(crate::style::Outcome::Failure),
                             p.reset,
                             msg.trim_end()
                         );

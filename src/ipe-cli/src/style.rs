@@ -92,6 +92,59 @@ pub mod glyph {
     pub const FAIL: &str = "✗";
 }
 
+/// The semantic role of a human-facing status line — the outcome the line
+/// reports, independent of how it is painted.
+///
+/// This is the composition vocabulary above the raw [`glyph`] and [`Palette`]
+/// facts: a call site names the *outcome* ([`Outcome::Success`]) and lets
+/// [`outcome_glyph`] and [`outcome_tint`] resolve the glyph and tint together,
+/// so the glyph and colour of an outcome are chosen in exactly one place. A
+/// site that instead picks `glyph::OK` beside `palette.green` by hand can drift
+/// (a green cross, a red check); routing through the outcome closes that class.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Outcome {
+    /// A step in progress: the step bullet, painted in the running amber.
+    Step,
+    /// A completed step: the success check, painted green.
+    Success,
+    /// A failed step: the failure cross, painted red.
+    Failure,
+}
+
+impl Outcome {
+    /// The glyph and tint (against `p`) for this outcome, resolved together.
+    #[must_use]
+    pub const fn glyph_and_tint(self, p: &Palette) -> (&'static str, &'static str) {
+        (outcome_glyph(self), outcome_tint(self, p))
+    }
+}
+
+/// The glyph that leads a line reporting `outcome` — the single mapping from a
+/// semantic outcome to its [`glyph`], so a step, a success, and a failure each
+/// pick their bullet in one place.
+#[must_use]
+pub const fn outcome_glyph(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Step => glyph::STEP,
+        Outcome::Success => glyph::OK,
+        Outcome::Failure => glyph::FAIL,
+    }
+}
+
+/// The tint (an escape from `p`) that paints a line reporting `outcome`.
+///
+/// Amber for a step in progress, green for a success, red for a failure — the
+/// single mapping from a semantic outcome to its palette field, paired with
+/// [`outcome_glyph`] so glyph and colour never drift apart.
+#[must_use]
+pub const fn outcome_tint(outcome: Outcome, p: &Palette) -> &'static str {
+    match outcome {
+        Outcome::Step => p.bright_yellow,
+        Outcome::Success => p.green,
+        Outcome::Failure => p.red,
+    }
+}
+
 /// The braille download spinner, one frame per animation tick. The installer
 /// mirrors these ten frames in its `spin_glyph` case.
 pub const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -353,11 +406,12 @@ pub fn print_error_banner(message: &str) {
 #[must_use]
 pub fn status_line(ok: bool, message: &TerminalSafe, color: bool) -> String {
     let p = Palette::select(color);
-    let (glyph, tint) = if ok {
-        (glyph::OK, p.green)
+    let outcome = if ok {
+        Outcome::Success
     } else {
-        (glyph::FAIL, p.red)
+        Outcome::Failure
     };
+    let (glyph, tint) = outcome.glyph_and_tint(p);
     frame(&gutter(&format!("{tint}{glyph}{} {message}", p.reset)))
 }
 
@@ -376,6 +430,42 @@ mod tests {
         // `select` returns the coloured palette on true, the plain one on false.
         assert!(Palette::select(true).red.contains('\x1b'));
         assert!(Palette::select(false).red.is_empty());
+    }
+
+    #[test]
+    fn outcome_pairs_each_glyph_with_its_tint_in_one_place() {
+        // Each outcome resolves its glyph and tint together, so the pairing is
+        // defined once — a step bullet in amber, a success check in green, a
+        // failure cross in red.
+        let c = &Palette::COLOR;
+        assert_eq!(outcome_glyph(Outcome::Step), glyph::STEP);
+        assert_eq!(outcome_glyph(Outcome::Success), glyph::OK);
+        assert_eq!(outcome_glyph(Outcome::Failure), glyph::FAIL);
+        assert_eq!(outcome_tint(Outcome::Step, c), c.bright_yellow);
+        assert_eq!(outcome_tint(Outcome::Success, c), c.green);
+        assert_eq!(outcome_tint(Outcome::Failure, c), c.red);
+        // The convenience pairing agrees with the two field functions.
+        assert_eq!(Outcome::Success.glyph_and_tint(c), (glyph::OK, c.green));
+        // Under the plain palette every tint is empty, so no ANSI leaks.
+        assert!(outcome_tint(Outcome::Failure, &Palette::PLAIN).is_empty());
+    }
+
+    #[test]
+    fn status_line_routes_success_and_failure_through_the_outcome_ssot() {
+        let ok = status_line(true, &TerminalSafe::sanitize("built"), true);
+        assert!(ok.contains(glyph::OK), "success uses the check glyph");
+        assert!(ok.contains(Palette::COLOR.green), "success is green");
+        assert!(!ok.contains(Palette::COLOR.red), "success is never red");
+        let bad = status_line(false, &TerminalSafe::sanitize("broke"), true);
+        assert!(bad.contains(glyph::FAIL), "failure uses the cross glyph");
+        assert!(bad.contains(Palette::COLOR.red), "failure is red");
+        assert!(
+            !bad.contains(Palette::COLOR.green),
+            "failure is never green"
+        );
+        // Plain mode carries no ANSI in either outcome.
+        assert!(!status_line(true, &TerminalSafe::sanitize("built"), false).contains('\x1b'));
+        assert!(!status_line(false, &TerminalSafe::sanitize("broke"), false).contains('\x1b'));
     }
 
     #[test]

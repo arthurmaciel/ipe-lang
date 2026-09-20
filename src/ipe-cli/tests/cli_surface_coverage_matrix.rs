@@ -27,16 +27,6 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
         "eject",
         "no integration test for ipe-eject path yet",
     ),
-    (
-        "tested",
-        "migrate",
-        "no integration test for ipe-migrate path yet",
-    ),
-    (
-        "tested",
-        "health",
-        "no integration test for ipe-health path yet",
-    ),
 ];
 
 #[test]
