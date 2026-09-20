@@ -389,10 +389,16 @@ pub(crate) fn user_ipe_db_store_decode_rows<T1: 'static + Send + Sync + Clone>(
             let rest = rest.to_vec();
             match crate::user_ipe_db_codec_codec_from_row(codec.clone(), first) {
                 IpeResult::Err(e) => task_fail(e),
-                IpeResult::Ok(value) => task_map({
-                    let __ipe_fn: Box<dyn Fn(Vec<T1>) -> Vec<T1> + Send + Sync + 'static> = Box::new(move |more: Vec<T1>| -> Vec<T1> { ipe_runtime::list::ipe_list_cons(value.clone(), more) });
-                    __ipe_fn
-                }, crate::user_ipe_db_store_decode_rows(codec, rest)),
+                IpeResult::Ok(value) => task_map(
+                    {
+                        let __ipe_fn: Box<dyn Fn(Vec<T1>) -> Vec<T1> + Send + Sync + 'static> =
+                            Box::new(move |more: Vec<T1>| -> Vec<T1> {
+                                ipe_runtime::list::ipe_list_cons(value.clone(), more)
+                            });
+                        __ipe_fn
+                    },
+                    crate::user_ipe_db_store_decode_rows(codec, rest),
+                ),
             }
         }
     }
@@ -474,10 +480,28 @@ pub(crate) fn user_ipe_db_store_policy_fragment(
 ) -> ipe_runtime::db::SqlFragment {
     let _ipe_recursion_guard = crate::recursion_guard();
     match policy {
-        IpeDbStorePolicy::Policy(rules) => list_foldl({
-            let __ipe_fn: Box<dyn Fn(IpeDbStoreRule, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static> = Box::new(move |rule: IpeDbStoreRule, acc: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment { sql_and(acc, crate::user_ipe_db_store_rule_fragment(principal.clone(), rule)) });
-            __ipe_fn
-        }, crate::user_ipe_db_store_always_true(), rules),
+        IpeDbStorePolicy::Policy(rules) => {
+            list_foldl(
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(IpeDbStoreRule, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(
+                        move |rule: IpeDbStoreRule, acc: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                            sql_and(
+                                acc,
+                                crate::user_ipe_db_store_rule_fragment(principal.clone(), rule),
+                            )
+                        },
+                    );
+                    __ipe_fn
+                },
+                crate::user_ipe_db_store_always_true(),
+                rules,
+            )
+        }
     }
 }
 pub(crate) fn user_ipe_db_store_rule_fragment(

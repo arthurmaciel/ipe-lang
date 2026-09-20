@@ -755,7 +755,14 @@ fn render_brace_body(
         out.push_str(" }");
         return;
     }
-    let body_flat = flat || (!has_hard_break(body) && fits(body, cfg, start_col, indent));
+    // The body inlines flat ONLY when its flat form is genuinely single-line — a
+    // nested opaque variant (`CallArgs`/`StructLit`/`Chain`) hides its own
+    // `HardLine` from `has_hard_break`, so its flat render can still embed a `\n`
+    // (a block arg, a one-per-line-broken wide record). A first-line-only fit
+    // would drop the braces on such a body; `fits_single_line` rejects the
+    // embedded newline, keeping the block form `rustfmt` emits.
+    let body_flat =
+        flat || (!has_hard_break(body) && fits_single_line(body, cfg, start_col, indent));
     if body_flat {
         render_at(body, cfg, indent, start_col, true, out);
         return;
@@ -986,7 +993,13 @@ fn render_match_arm_tail(
     out: &mut String,
 ) {
     let start_col = eff_col(out, col);
-    let body_flat = !has_hard_break(body) && fits(body, cfg, start_col, indent);
+    // Inline `body,` only when the body's flat form is genuinely single-line. A
+    // non-control body wrapping an opaque variant (`CallArgs` with a block arg,
+    // a wide `StructLit`, a block-bearing `Chain`) hides its `HardLine` from
+    // `has_hard_break`, so its flat render can embed a `\n`; a first-line-only fit
+    // sees only the short first line and would inline it, dropping the arm braces
+    // `rustfmt` keeps. `fits_single_line` rejects the embedded newline.
+    let body_flat = !has_hard_break(body) && fits_single_line(body, cfg, start_col, indent);
     if body_flat {
         render_at(body, cfg, indent, start_col, true, out);
         out.push(',');
@@ -1083,10 +1096,16 @@ fn render_assign(
 
     // FLAT: the whole `prefix rhs;` fits on the current line. An enclosing group
     // that already chose flat forces this too. A hard break in either side rules
-    // it out (a statement-block RHS never lays out flat).
+    // it out (a statement-block RHS never lays out flat). A `flat_width` measures
+    // only the first line, so an RHS wrapping an opaque variant (an applied-lambda
+    // `let p: T = foo(let x = 1 in x)`) whose flat render embeds a `\n` would look
+    // short here and glue the RHS flat, dropping the delimiters `rustfmt` keeps.
+    // Treat such an embedded newline as overflow: the same-line form requires a
+    // genuinely single-line RHS flat render.
     let same_line_end = start_col + prefix_flat_w + rhs_flat_w + trailer;
     let no_hard_break = !has_hard_break(prefix) && !has_hard_break(rhs);
-    if flat || (no_hard_break && same_line_end <= cfg.max_width) {
+    let rhs_single_line = flat_is_single_line(rhs, cfg, 0, indent);
+    if flat || (no_hard_break && rhs_single_line && same_line_end <= cfg.max_width) {
         render_at(prefix, cfg, indent, start_col, true, out);
         let c = current_col(out);
         render_at(rhs, cfg, indent, c, true, out);
@@ -1213,6 +1232,19 @@ fn flat_width(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> 
     scratch.split('\n').next().unwrap_or(&scratch).len()
 }
 
+/// Whether `doc` rendered entirely flat from column `start_col` is genuinely
+/// single-line — no embedded `\n`. An opaque variant (`CallArgs`/`StructLit`/
+/// `Chain`) hides its own `HardLine` from [`has_hard_break`], so a flat render of
+/// it can still carry a newline (a block argument, a wide record broken
+/// one-per-line). [`flat_width`] measures only the first line and misses that;
+/// the assignment's same-line fit gates on this so it never glues a
+/// multiline-flat RHS onto the prefix and drops the delimiters `rustfmt` keeps.
+fn flat_is_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
+    let mut scratch = String::new();
+    render_at(doc, cfg, indent, start_col, true, &mut scratch);
+    !scratch.contains('\n')
+}
+
 /// `doc` rendered from `start_col` at block indent `indent`, letting its own
 /// groups decide their internal breaks (non-flat), with `start_col` leading
 /// spaces so every line's length is an absolute column. The assignment axis
@@ -1300,23 +1332,8 @@ fn trim_trailing_spaces(out: &mut String) {
     out.truncate(trimmed);
 }
 
-/// Whether `doc` rendered flat from column `start_col` fits within the width up
-/// to its first hard break. Renders into a scratch buffer with the group under
-/// test flat; a nested hard break (statement-block) produces a newline that ends
-/// the measured line — the width up to that newline is what must fit, matching
-/// rustfmt's "does the head fit" test. Callers only fit-test groups with no hard
-/// break of their own ([`has_hard_break`] gates that), so in practice the
-/// scratch is a single line, but measuring to the first newline is the correct
-/// general rule.
-fn fits(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
-    let mut scratch = String::new();
-    render_at(doc, cfg.no_reserve(), indent, start_col, true, &mut scratch);
-    let first_line = scratch.split('\n').next().unwrap_or(&scratch);
-    start_col + first_line.len() <= cfg.margin()
-}
-
 /// Whether `doc` rendered flat from column `start_col` is genuinely single-line
-/// AND fits the width. Stricter than [`fits`]: a flat render that still carries a
+/// AND fits the width. A flat render that still carries a
 /// newline — a byte-leaf whose legacy-emitter text embeds a multiline block — is
 /// NOT single-line, so the enclosing [`Doc::Group`] must break its delimited list
 /// one element per line rather than glue the multiline element inline. This is the
@@ -1324,7 +1341,7 @@ fn fits(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
 /// structured multiline argument out in place ONLY through the dedicated
 /// [`Doc::BraceBody`] closure/arm shape; a plain multiline delimited element breaks
 /// the whole list. Groups with only soft `Line`/`Softline` breaks never embed a
-/// newline in their flat form, so this coincides with [`fits`] for them.
+/// newline in their flat form, so a single-line render is exactly a fitting one.
 fn fits_single_line(doc: &Doc, cfg: RenderConfig, start_col: usize, indent: usize) -> bool {
     let mut scratch = String::new();
     render_at(doc, cfg.no_reserve(), indent, start_col, true, &mut scratch);
@@ -2801,6 +2818,106 @@ mod p0_tests {
         assert_eq!(doc.normalized_leaves(), "(if c { t } else { e })");
     }
 
+    /// A statement-block Doc `{ let x: i64 = 1; x }` — a `HardLine` before each
+    /// statement, the closing brace on its own line. Its `HardLine` is hidden from
+    /// `has_hard_break` once wrapped in a `CallArgs`.
+    fn stmt_block() -> Doc {
+        Doc::concat(vec![
+            Doc::text("{"),
+            Doc::nest(
+                4,
+                Doc::concat(vec![
+                    Doc::HardLine,
+                    Doc::text("let x: i64 = 1;"),
+                    Doc::HardLine,
+                    Doc::text("x"),
+                ]),
+            ),
+            Doc::HardLine,
+            Doc::text("}"),
+        ])
+    }
+
+    /// A call `f({ <stmt block> }, 0)` carrying a statement-block first argument —
+    /// the `CallArgs` variant hides the block's `HardLine` from `has_hard_break`,
+    /// so only a genuinely-single-line fit rejects gluing it flat.
+    fn call_with_block_arg() -> Doc {
+        Doc::call_args(
+            Doc::text("f("),
+            vec![stmt_block(), Doc::text("0")],
+            Doc::text(")"),
+            true,
+        )
+    }
+
+    #[test]
+    fn brace_body_braces_when_body_is_wide_record_literal() {
+        // A plain record literal wider than `STRUCT_LIT_WIDTH` (18) renders one field
+        // per line even flat — the `StructLit` hides that multiline break from
+        // `has_hard_break`. A first-line-only fit sees the short head `Rec {` and
+        // would drop the closure braces; the single-line discipline rejects the
+        // embedded newline, so the `BraceBody` braces and blocks. Prove-the-refusal
+        // for the StructLit-through-BraceBody SEAL break.
+        let record = Doc::struct_lit(
+            Doc::text("Rec {"),
+            vec![
+                Doc::text("field_one: 111"),
+                Doc::text("field_two: 222"),
+                Doc::text("field_three: 333"),
+            ],
+            Doc::text("}"),
+        );
+        let doc = Doc::concat(vec![Doc::text("move |_| "), Doc::brace_body(record)]);
+        let got = render(&doc, RenderConfig::default());
+        assert!(
+            got.starts_with("move |_| {\n") && got.trim_end().ends_with('}'),
+            "a wide record body must brace/block, not inline flat:\n{got}"
+        );
+        assert!(
+            got.contains("field_one: 111,\n"),
+            "the record must break one field per line inside the block:\n{got}"
+        );
+    }
+
+    #[test]
+    fn brace_body_braces_when_body_is_call_with_block_arg() {
+        // A closure body `f({ let x = 1; x }, 0)` whose call carries a statement-block
+        // argument: the block's `HardLine` is hidden by the `CallArgs`, so the flat
+        // render embeds a `\n`. A first-line-only fit sees the short head `f(` and
+        // drops the closure braces; the single-line discipline keeps them.
+        let doc = Doc::concat(vec![
+            Doc::text("move |_| "),
+            Doc::brace_body(call_with_block_arg()),
+        ]);
+        let got = render(&doc, RenderConfig::default());
+        assert!(
+            got.starts_with("move |_| {\n") && got.trim_end().ends_with('}'),
+            "a block-arg call body must brace/block, not inline flat:\n{got}"
+        );
+        assert!(
+            got.contains("f(\n"),
+            "the block-arg call must break one arg per line inside the block:\n{got}"
+        );
+    }
+
+    #[test]
+    fn match_arm_tail_blocks_when_noncontrol_body_is_call_with_block_arg() {
+        // A non-control arm body `f({ let x = 1; x }, 0)` (a `CallArgs`, not an
+        // If/Let/chain): its block-arg `HardLine` is hidden from `has_hard_break`, so
+        // the flat render embeds a `\n`. A first-line-only fit would inline `body,`;
+        // the single-line discipline rejects the newline and the arm blocks.
+        let doc = Doc::match_arm_tail(call_with_block_arg(), false);
+        let got = render(&doc, RenderConfig::default());
+        assert!(
+            !got.starts_with("f({"),
+            "the arm body must not glue its block onto the call head:\n{got}"
+        );
+        assert!(
+            got.contains("f(\n"),
+            "the block-arg call arm body must break one arg per line:\n{got}"
+        );
+    }
+
     /// Render an assignment `doc` as a block statement at block `indent`: seed the
     /// output with the indent, render, and append the trailing `;` the `trailer`
     /// accounted for. Returns the whole statement line(s), matching the column
@@ -2881,6 +2998,25 @@ mod p0_tests {
         // string emitter writes — so the SEAL holds across the break.
         let doc = Doc::assign(Doc::text("let x: T = "), Doc::text("value"), 1);
         assert_eq!(doc.normalized_leaves(), "let x: T = value");
+    }
+
+    #[test]
+    fn assign_blocks_when_rhs_is_call_with_block_arg() {
+        // An applied-lambda RHS `let p: T = f({ let x = 1; x }, 0);`: the block arg's
+        // `HardLine` is hidden by the `CallArgs`, so `flat_width(rhs)` measures only
+        // the short first line `f(` and the same-line form would glue the multiline
+        // RHS onto the prefix, dropping the delimiters. The single-line gate treats
+        // the embedded newline as overflow, so the RHS breaks its args in place.
+        // Prove-the-refusal for the Assign-through-applied-lambda SEAL break.
+        let got = render_assign_stmt(4, "let p: T = ", call_with_block_arg());
+        assert!(
+            !got.contains("f({"),
+            "the RHS must not glue its block onto the call head:\n{got}"
+        );
+        assert!(
+            got.contains("f(\n"),
+            "the block-arg call RHS must break one arg per line:\n{got}"
+        );
     }
 
     #[test]
