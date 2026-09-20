@@ -867,8 +867,8 @@ pub fn zonk_underflow() -> Diagnostic {
 // ===========================================================================
 
 impl<'a> Builder<'a> {
-    /// Minimal [`Builder`] for reading the pure scheme table
-    /// ([`Self::stdlib_scheme`]) outside a full inference run. Only `uf`,
+    /// Minimal [`Builder`] for reading kernel schemes
+    /// ([`Self::resolve_scheme`]) outside a full inference run. Only `uf`,
     /// `interner`, and `builtins` are load-bearing for that method; every
     /// other field is empty. Pre-intern any needed strings BEFORE taking the
     /// immutable borrow into `interner`.
@@ -922,10 +922,10 @@ impl<'a> Builder<'a> {
 ///
 /// This is the *lift* behind the salsa `kernel_types()` query: the table is
 /// read through the SAME [`Builder::resolve_scheme`] adapter inference uses
-/// (a `TyShape`-carrying kernel is interpreted; every other resolves through
-/// [`Builder::stdlib_scheme`]), so the memoized table can never drift from what
-/// constraint generation actually applies. The schemes are pure functions of
-/// the interned builtin names — no union-find state is created or consumed.
+/// (each schemed kernel's `TyShape` is interpreted), so the memoized table can
+/// never drift from what constraint generation actually applies. The schemes are
+/// pure functions of the interned builtin names — no union-find state is created
+/// or consumed.
 ///
 /// Interning note: [`Builtins::new`] interns the builtin type/constructor
 /// names (idempotent lookups when they are already interned — which is the
@@ -950,9 +950,8 @@ pub fn kernel_type_table(interner: &mut Interner) -> Result<Vec<(StdlibKernel, T
 /// This is the free-function entry to the scheme-by-key bridge: a consumer
 /// holding a [`ipe_kernels::KernelDef`] reads `def.scheme` (a [`SchemeKey`]) and
 /// resolves it here to the same `Ty` inference uses, via the single
-/// [`Builder::resolve_scheme`] interpreter (which delegates to
-/// [`Builder::stdlib_scheme`]). `Ok(None)` mirrors the table — the kernel has no
-/// registry scheme (a routed / unlowered bucket).
+/// [`Builder::resolve_scheme`] interpreter. `Ok(None)` means the kernel has no
+/// scheme (a routed / unlowered bucket).
 ///
 /// # Errors
 /// Propagates the interner-capacity diagnostic from [`Builtins::new`] (the only

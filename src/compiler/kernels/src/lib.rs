@@ -516,6 +516,36 @@ pub enum BuiltinTag {
     /// `CliApp` — opaque app handle returned by `Cli.tea`. Nullary;
     /// backed by `ipe_runtime::tea::CliApp`.
     CliApp,
+    // ── Ipe.Db.Store query-algebra ADTs ──────────────────────────────────────
+    // Each is homed at `["Ipe", "Db", "Store"]` (see `builtin_con_module`) so a
+    // point-free reference lowers to the emitted enum, exactly as the accessor
+    // query / schema / policy leaves require.
+    /// `Store` — the classified queryable table `Store row`, applied to its row
+    /// type. Homed at `Ipe.Db.Store`.
+    DbStore,
+    /// `Draft` — the unclassified table `Draft row`, applied to its row type.
+    /// Homed at `Ipe.Db.Store`.
+    DbDraft,
+    /// `Joined` — the two-store inner-join `Joined a b`, applied to both sides'
+    /// row types. Homed at `Ipe.Db.Store`.
+    DbJoined,
+    /// `Select` — the column-projection `Select row`, applied to the projected
+    /// shape. Homed at `Ipe.Db.Store`.
+    DbSelect,
+    /// `Policy` — the row-security policy algebra `Policy row`, applied to its
+    /// phantom row type. Homed at `Ipe.Db.Store`.
+    DbPolicy,
+    /// `Cond` — the typed `WHERE`-predicate `Cond row`, applied to the store's
+    /// row type. Homed at `Ipe.Db.Store`.
+    DbCond,
+    /// `Order` — the `Ipe.Db.Store.Order` nullary sort-direction ADT
+    /// (`Asc | Desc`), the second argument of `orderByLeft` / `orderByRight`.
+    /// Empty-module, distinct from [`Self::Order`] (the three-way comparison
+    /// result) though both interpret to the interned name `Order`.
+    DbOrder,
+    /// `Codec` — the `Ipe.Codec.Codec inner` codec ADT, the first parameter of
+    /// the `*By` accessor query leaves. Homed at `Ipe.Codec`.
+    Codec,
 }
 
 /// A `'static`, `const`-embeddable representation of a kernel's HM type scheme.
@@ -529,10 +559,9 @@ pub enum BuiltinTag {
 /// anonymous tuples, and records (closed or open-row), with **rank-1
 /// scheme-local type variables** ([`Self::Var`]).
 /// A scheme var is a `'static` positional index, NOT a solver union-find var:
-/// the `ipe_types` interpreter maps each index to the same placeholder
-/// `Ty::Var` the `stdlib_scheme` table builds, and generalization /
-/// instantiation with fresh solver vars happens LATER at the use site
-/// (`instantiate_in`). So the interpreter still touches no union-find state.
+/// the `ipe_types` interpreter maps each index to a placeholder `Ty::Var`, and
+/// generalization / instantiation with fresh solver vars happens LATER at the
+/// use site (`instantiate_in`). So the interpreter touches no union-find state.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TyShape {
     /// A function arrow `arg -> result`. Nested on the right to build a spine.
@@ -570,9 +599,8 @@ pub enum TyShape {
     /// (`0` → the scheme's first variable `a`, `1` → `b`, …). Repeating the
     /// same index within one scheme denotes the SAME variable — the interpreter
     /// resolves each index to the identical placeholder `Ty::Var`, so both `a`s
-    /// in `List a -> List b`'s shape share one variable. The index is the raw
-    /// the `stdlib_scheme` table's `var(i)` builder uses, so an interpreted
-    /// shape is byte-identical to the hand-built scheme.
+    /// in `List a -> List b`'s shape share one variable. The index is the raw the
+    /// interpreter puts on the placeholder `Ty::Var`.
     Var(u8),
 }
 
@@ -597,7 +625,7 @@ pub enum RowTailShape {
 /// [`ipe_intern::Symbol`].
 ///
 /// A [`TyShape::Record`] cannot reference the interned field symbols the
-/// `stdlib_scheme` table's `Ty::Record` keys use — those exist only after the
+/// interpreted `Ty::Record` keys use — those exist only after the
 /// `Interner` runs, and `ipe_kernels` is a leaf crate. So a record shape names
 /// each field by this `'static` tag, and the single interpreter in `ipe_types`
 /// resolves the tag against its `Builtins` field-symbol cache, reproducing the
@@ -839,11 +867,11 @@ pub struct KernelDef {
     pub runtime_module: Option<RuntimeModule>,
     /// A reference to this kernel's HM type scheme (see [`SchemeKey`]).
     pub scheme: SchemeKey,
-    /// The structural encoding of this kernel's HM type scheme, when one exists.
-    /// `Some` means `ipe_types` interprets this shape (producing a `Ty`
-    /// byte-identical to the `stdlib_scheme` table's); `None` means the kernel
-    /// resolves through the `stdlib_scheme` table via [`Self::scheme`] — the case
-    /// for every polymorphic scheme. See [`StdlibKernel::scheme_shape`].
+    /// The structural encoding of this kernel's HM type scheme — the single
+    /// source `ipe_types` interprets into the concrete `Ty` (via [`Self::scheme`]
+    /// / `resolve_scheme`). `Some` for every schemed kernel; `None` ONLY for a
+    /// genuinely unschemed kernel (a routed / unlowered bucket), whose caller
+    /// fails closed rather than type-checks. See [`StdlibKernel::scheme_shape`].
     pub shape: Option<&'static TyShape>,
 }
 
@@ -2233,8 +2261,7 @@ pub enum StdlibKernel {
     /// `ui_media_query_`), mirroring upstream's `breakpoint bp attrs child =
     /// mediaQuery (breakpointToQuery bp) attrs child` — `breakpointToQuery`
     /// is the identity here because `Breakpoint` is typed as `String` in the
-    /// Rust port (see sanctioned divergence note in
-    /// `constrain.rs::stdlib_scheme`, `UiBreakpoint` arm).
+    /// Rust port.
     UiBreakpoint,
     /// `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
     ///
@@ -5906,13 +5933,12 @@ impl StdlibKernel {
         Self::HtmlBoolAttribute,
         Self::HtmlNoAttr,
         // `Html.styleNode` (F7) — a canon `Html` qualifier member (env.rs).
-        // Registering it here gives it id=Some so its stdlib_scheme arm is
-        // consulted; without this it would fail closed. A canon qualifier
-        // member absent from ALL is minted with id=None and rides the
-        // `Ty::Var(u32::MAX)` fallback.
+        // Registering it here gives it id=Some so its scheme resolves; without
+        // this it would fail closed. A canon qualifier member absent from ALL is
+        // minted with id=None and fails closed at the caller.
         Self::HtmlStyleNode,
         // `Html.Unsafe.unsafeScript` — same registration rationale as
-        // `HtmlStyleNode` above (id=Some so its stdlib_scheme arm resolves).
+        // `HtmlStyleNode` above (id=Some so its scheme resolves).
         Self::HtmlScriptNode,
         // Web
         Self::WebApp,
@@ -6411,38 +6437,24 @@ impl StdlibKernel {
         }
     }
 
-    /// The structural [`TyShape`] encoding of this kernel's HM type scheme, when
-    /// it has one.
+    /// The structural [`TyShape`] encoding of this kernel's HM type scheme — the
+    /// single source `ipe_types` interprets into the concrete `Ty`.
     ///
-    /// `Some` when the scheme is expressible structurally — `ipe_types`
-    /// interprets the returned shape into a `Ty` byte-identical to what the
-    /// `stdlib_scheme` table produces. `None` for a scheme that is not, which
-    /// resolves through that table instead. A shape may be **monomorphic** (an
-    /// arrow spine over the primitive built-ins) or **rank-1 polymorphic** (over
-    /// [`TyShape::Var`] applied to the `List` / `Maybe` / `Dict` / `Set`
-    /// constructors, tuples, records, and open rows). [`TyShape`]'s vocabulary
-    /// carries a [`TyShape::Tuple`] node, a [`TyShape::Record`] node, and a
-    /// [`RowTailShape::Open`] open-tail marker, so tuple-, record-, and
+    /// `Some` for every schemed kernel; `None` ONLY for a genuinely unschemed
+    /// kernel (a routed / unlowered bucket), whose caller fails closed rather than
+    /// type-checks. A shape may be **monomorphic** (an arrow spine over the
+    /// primitive built-ins) or **rank-1 polymorphic** (over [`TyShape::Var`]
+    /// applied to the `List` / `Maybe` / `Dict` / `Set` and every opaque
+    /// [`BuiltinTag`] constructor, tuples, records, and open rows). [`TyShape`]'s
+    /// vocabulary carries a [`TyShape::Tuple`] node, a [`TyShape::Record`] node,
+    /// and a [`RowTailShape::Open`] open-tail marker, so tuple-, record-, and
     /// open-row-shaped schemes are all expressible.
     ///
-    /// A fully-monomorphic kernel family whose scheme is an arrow spine over the
-    /// primitive built-ins ([`BuiltinTag`]) carries a shape assembled as a
-    /// `'static` value from the primitive leaves below; it embeds directly as the
-    /// carried shape and the `ipe_types` interpreter reproduces the exact `Ty` a
-    /// hand-written `stdlib_scheme` arm would.
-    ///
-    /// The core `List` combinator family carries a **polymorphic** shape over the
-    /// scheme-local type variables `a` (index 0) and `b` (index 1) applied to the
-    /// container constructors — `map : (a -> b) -> List a -> List b`, and the
-    /// tuple-shaped `zip`/`unzip`/`partition`/`map2`..`map5`/`indexedMap`/
-    /// `foldl`/`foldr`/`sortWith` over [`TyShape::Tuple`].
-    ///
-    /// The classes that carry NO shape and resolve through the `stdlib_scheme`
-    /// table are the schemes whose type the structural vocabulary cannot yet name:
-    /// a **bounded** super-var (the `comparable` / `number`-obligated members
-    /// `sort`/`sortBy`, `sum`, `product`, `maximum`, `minimum`, whose bound is
-    /// minted in `constrain_var_kernel` before the scheme is read), and a scheme
-    /// touching an opaque constructor not yet tagged in [`BuiltinTag`].
+    /// A `comparable` / `number`-obligated member (`sort`/`sortBy`, `sum`,
+    /// `product`, `maximum`, `minimum`, `min`/`max`, `clamp`, the `Store`
+    /// arithmetic operators) carries its BASE (unbounded) shape here; the bound
+    /// is minted in `constrain_var_kernel`, which takes the base scheme by
+    /// direct-build or by tying the base's var to a bounded super-var.
     #[must_use]
     #[allow(clippy::too_many_lines)] // one flat declarative spine table per family
     #[allow(clippy::match_same_arms)] // family-grouped spine table; merging cross-family arms with coincidentally-equal spines would obscure the per-family structure
@@ -6690,8 +6702,7 @@ impl StdlibKernel {
         const MAYBE_IS_NOTHING: TyShape = TyShape::Fun(&MAYBE_A, &BOOL);
 
         // ── Result combinators (rank-1 polymorphic, arrow-only). Var indices
-        //    follow each kernel's scheme exactly (see the `stdlib_scheme`
-        //    witness). ──
+        //    follow each kernel's published signature exactly. ──
         // withDefault : a -> Result b a -> a   (var(0)=a, var(1)=b)
         const RESULT_B_A: TyShape = TyShape::Con(BuiltinTag::Result, &[B, A]);
         const RESULT_B_A_TO_A: TyShape = TyShape::Fun(&RESULT_B_A, &A);
@@ -7796,9 +7807,7 @@ impl StdlibKernel {
         // Ipe.Ffi.Js ports. `send : a -> Cmd msg` — payload `a` is the scheme's `A`
         // (the sealed crossing value), `msg` is `B` (so `Cmd msg` reuses `CMD_B`).
         // `subscribe : Decoder a -> (a -> msg) -> Sub msg` — decoded `a` is `A`,
-        // `msg` is `B`, reusing `DEC_A` / `A_TO_B` / `SUB_B`. The variable order
-        // matches the HM scheme in `ipe_types::constrain` byte-for-byte (checked by
-        // `interpreted_shape_matches_legacy`). The seal-legality of the concrete
+        // `msg` is `B`, reusing `DEC_A` / `A_TO_B` / `SUB_B`. The seal-legality of the concrete
         // `a` is not expressible as a `TyShape` bound (it is a structural predicate,
         // not a class), so it is enforced separately at lowering
         // (`reject_illegal_js_port_seal`), exactly as `CustomElement`'s seal is a
@@ -8460,11 +8469,10 @@ impl StdlibKernel {
         const SERVER_LISTEN: TyShape = TyShape::Fun(&INT, &LIST_SERVER_ROUTE_TO_TASK_UNIT);
 
         // ── Record field-value shapes + the record nodes themselves. ──
-        // Each record mirrors its `stdlib_scheme` arm's `Ty::Record` field-for-
-        // field; the interpreter re-sorts by resolved field symbol, so fields are
-        // declared here in ascending resolved-symbol order (asserted by the
-        // byte-identity oracle). The `label` field symbol is shared across the
-        // `Ui.button` / `Ui.link` / `Input` records via `FieldTag::Label`.
+        // The interpreter re-sorts a record's fields by resolved field symbol, so
+        // fields are declared here in ascending resolved-symbol order. The `label`
+        // field symbol is shared across the `Ui.button` / `Ui.link` / `Input`
+        // records via `FieldTag::Label`.
         const WEB_REQ: TyShape = TyShape::Con(BuiltinTag::WebReq, &[]);
         const WEB_ROUTE_C: TyShape = TyShape::Con(BuiltinTag::WebRoute, &[C]);
         const UI_ELEM_B: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_WEB, B]);
@@ -8504,8 +8512,7 @@ impl StdlibKernel {
         // `HttpRequest { body, headers, method, url, timeout, redirects }`.
         // Field order matches the BTreeMap iteration order (ascending intern-symbol
         // order from the Builtins constructor): body, headers, method, url, timeout,
-        // redirects — NOT alphabetical order.  The `interpreted_shape_matches_legacy`
-        // test enforces this invariant.
+        // redirects — NOT alphabetical order.
         const HTTP_REQUEST: TyShape = TyShape::Record {
             fields: &[
                 (FieldTag::HttpBody, &STRING),
@@ -8976,6 +8983,190 @@ impl StdlibKernel {
         const INPUT_RADIO: TyShape = {
             const CFG_TO_ELEM: TyShape = TyShape::Fun(&INPUT_RADIO_CFG, &UI_ELEM_A);
             TyShape::Fun(&LIST_UI_ATTR_A, &CFG_TO_ELEM)
+        };
+
+        // ── Ipe.Decimal / Ipe.Money value shapes. ──
+        const RESULT_ERR_DECIMAL: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, DECIMAL]);
+        const RESULT_ERR_UNIT: TyShape = TyShape::Con(BuiltinTag::Result, &[ERROR, UNIT]);
+        const LIST_DECIMAL: TyShape = TyShape::Con(BuiltinTag::List, &[DECIMAL]);
+        const INT_TO_DECIMAL: TyShape = TyShape::Fun(&INT, &DECIMAL);
+        const FLOAT_TO_DECIMAL: TyShape = TyShape::Fun(&FLOAT, &DECIMAL);
+        const STRING_TO_RESULT_ERR_DECIMAL: TyShape = TyShape::Fun(&STRING, &RESULT_ERR_DECIMAL);
+        const INT_TO_INT_TO_DECIMAL: TyShape = TyShape::Fun(&INT, &INT_TO_DECIMAL);
+        const DECIMAL_TO_STRING: TyShape = TyShape::Fun(&DECIMAL, &STRING);
+        const DECIMAL_TO_FLOAT: TyShape = TyShape::Fun(&DECIMAL, &FLOAT);
+        const DECIMAL_TO_INT: TyShape = TyShape::Fun(&DECIMAL, &INT);
+        const DECIMAL_TO_BOOL: TyShape = TyShape::Fun(&DECIMAL, &BOOL);
+        const DECIMAL_TO_DECIMAL: TyShape = TyShape::Fun(&DECIMAL, &DECIMAL);
+        const INT_TO_DECIMAL_TO_STRING: TyShape = TyShape::Fun(&INT, &DECIMAL_TO_STRING);
+        const INT_TO_DECIMAL_TO_INT: TyShape = TyShape::Fun(&INT, &DECIMAL_TO_INT);
+        const DECIMAL_TO_DECIMAL_TO_DECIMAL: TyShape = TyShape::Fun(&DECIMAL, &DECIMAL_TO_DECIMAL);
+        const DECIMAL_TO_DECIMAL_TO_INT: TyShape = TyShape::Fun(&DECIMAL, &DECIMAL_TO_INT);
+        const DECIMAL_TO_DECIMAL_TO_BOOL: TyShape = TyShape::Fun(&DECIMAL, &DECIMAL_TO_BOOL);
+        const DECIMAL_TO_RESULT_ERR_DECIMAL: TyShape = TyShape::Fun(&DECIMAL, &RESULT_ERR_DECIMAL);
+        const DECIMAL_TO_DECIMAL_TO_RESULT_ERR_DECIMAL: TyShape =
+            TyShape::Fun(&DECIMAL, &DECIMAL_TO_RESULT_ERR_DECIMAL);
+        const INT_TO_DECIMAL_TO_DECIMAL: TyShape = TyShape::Fun(&INT, &DECIMAL_TO_DECIMAL);
+        // `Decimal.formatWith : String -> String -> Int -> Decimal -> String`.
+        const STRING_TO_STRING_TO_INT_TO_DECIMAL_TO_STRING: TyShape = {
+            const TAIL: TyShape = TyShape::Fun(&STRING, &INT_TO_DECIMAL_TO_STRING);
+            TyShape::Fun(&STRING, &TAIL)
+        };
+        // `Money.format / formatWithCode : String -> Decimal -> String`.
+        const STRING_TO_DECIMAL_TO_STRING: TyShape = TyShape::Fun(&STRING, &DECIMAL_TO_STRING);
+        // `Money.allocate : Int -> Int -> Decimal -> List Decimal`.
+        const DECIMAL_TO_LIST_DECIMAL: TyShape = TyShape::Fun(&DECIMAL, &LIST_DECIMAL);
+        const INT_TO_DECIMAL_TO_LIST_DECIMAL: TyShape =
+            TyShape::Fun(&INT, &DECIMAL_TO_LIST_DECIMAL);
+        const MONEY_ALLOCATE: TyShape = TyShape::Fun(&INT, &INT_TO_DECIMAL_TO_LIST_DECIMAL);
+        // `Money.setRate : String -> String -> Decimal -> Result Error ()`.
+        const DECIMAL_TO_RESULT_ERR_UNIT: TyShape = TyShape::Fun(&DECIMAL, &RESULT_ERR_UNIT);
+        const STRING_TO_DECIMAL_TO_RESULT_ERR_UNIT: TyShape =
+            TyShape::Fun(&STRING, &DECIMAL_TO_RESULT_ERR_UNIT);
+        const MONEY_SET_RATE: TyShape =
+            TyShape::Fun(&STRING, &STRING_TO_DECIMAL_TO_RESULT_ERR_UNIT);
+        // `Money.getRate : String -> String -> Result Error Decimal`.
+        const STRING_TO_RESULT_ERR_DECIMAL_MONEY: TyShape =
+            TyShape::Fun(&STRING, &RESULT_ERR_DECIMAL);
+        const MONEY_GET_RATE: TyShape = TyShape::Fun(&STRING, &STRING_TO_RESULT_ERR_DECIMAL_MONEY);
+        // `Money.clearRates : () -> Result Error ()`.
+        const UNIT_TO_RESULT_ERR_UNIT: TyShape = TyShape::Fun(&UNIT, &RESULT_ERR_UNIT);
+
+        // ── Ipe.App runtime-config front door / Ipe.Web settings. ──
+        const SETTING_A: TyShape = TyShape::Con(BuiltinTag::Setting, &[A]);
+        const SHAPE_WEB_TAG: TyShape = TyShape::Con(BuiltinTag::ShapeWeb, &[]);
+        const SETTING_WEB: TyShape = TyShape::Con(BuiltinTag::Setting, &[SHAPE_WEB_TAG]);
+        const HOST_MODE_TO_SETTING_A: TyShape = TyShape::Fun(&HOST_MODE, &SETTING_A);
+        const LOG_LEVEL_TO_SETTING_A: TyShape = TyShape::Fun(&LOG_LEVEL, &SETTING_A);
+        const SECRET_TO_SETTING_A: TyShape = TyShape::Fun(&SECRET, &SETTING_A);
+        const CSRF_MODE_TO_SETTING_WEB: TyShape = TyShape::Fun(&CSRF_MODE, &SETTING_WEB);
+        const INT_TO_SETTING_WEB: TyShape = TyShape::Fun(&INT, &SETTING_WEB);
+        const REVOCATION_MODE_TO_SETTING_WEB: TyShape =
+            TyShape::Fun(&REVOCATION_MODE, &SETTING_WEB);
+        // `Web.appWith : List (Setting Web) -> WEB_APP_CFG -> Program Web msg`.
+        const LIST_SETTING_WEB: TyShape = TyShape::Con(BuiltinTag::List, &[SETTING_WEB]);
+        const WEB_APP_WITH: TyShape = {
+            const CFG_TO_PROGRAM: TyShape = TyShape::Fun(&WEB_APP_CFG, &PROGRAM_WEB);
+            TyShape::Fun(&LIST_SETTING_WEB, &CFG_TO_PROGRAM)
+        };
+        // `Web.route : String -> builder -> WebRoute page` (builder = B, page = A).
+        const WEB_ROUTE_A: TyShape = TyShape::Con(BuiltinTag::WebRoute, &[A]);
+        const B_TO_WEB_ROUTE_A: TyShape = TyShape::Fun(&B, &WEB_ROUTE_A);
+        const WEB_ROUTE_KERNEL: TyShape = TyShape::Fun(&STRING, &B_TO_WEB_ROUTE_A);
+        // `Web.renderStatic : (a -> Html b) -> a -> Task ()`.
+        const HTML_B: TyShape = TyShape::Con(BuiltinTag::Html, &[B]);
+        const A_TO_HTML_B: TyShape = TyShape::Fun(&A, &HTML_B);
+        const A_TO_TASK_UNIT: TyShape = TyShape::Fun(&A, &TASK_UNIT);
+        const WEB_RENDER_STATIC: TyShape = TyShape::Fun(&A_TO_HTML_B, &A_TO_TASK_UNIT);
+
+        // ── Ipe.Cache (the raw-Int-handle read/write kernels). ──
+        const TASK_MAYBE_B: TyShape = TyShape::Con(BuiltinTag::Task, &[MAYBE_B]);
+        const A_TO_TASK_MAYBE_B: TyShape = TyShape::Fun(&A, &TASK_MAYBE_B);
+        const CACHE_GET: TyShape = TyShape::Fun(&INT, &A_TO_TASK_MAYBE_B);
+        const B_TO_TASK_UNIT: TyShape = TyShape::Fun(&B, &TASK_UNIT);
+        const A_TO_B_TO_TASK_UNIT: TyShape = TyShape::Fun(&A, &B_TO_TASK_UNIT);
+        const CACHE_PUT: TyShape = TyShape::Fun(&INT, &A_TO_B_TO_TASK_UNIT);
+        const INT_TO_A_TO_TASK_UNIT: TyShape = TyShape::Fun(&INT, &A_TO_TASK_UNIT);
+        const CACHE_REMOVE: TyShape = INT_TO_A_TO_TASK_UNIT;
+        const CACHE_CLEAR: TyShape = TyShape::Fun(&INT, &TASK_UNIT);
+        const CACHE_SIZE: TyShape = TyShape::Fun(&INT, &TASK_INT);
+
+        // ── Ipe.Secret.use : Secret -> (String -> a) -> a. ──
+        // The callback `(String -> a)` sits in ARGUMENT position, distinct from
+        // the existing `STRING_TO_A_TO_A` (`String -> a -> a`).
+        const STRING_TO_A_ARROW_TO_A: TyShape = TyShape::Fun(&STRING_TO_A, &A);
+        const SECRET_USE: TyShape = TyShape::Fun(&SECRET, &STRING_TO_A_ARROW_TO_A);
+
+        // ── Ipe.Csv.parseStreamFromFile : Path -> Task (List (List String)). ──
+        const LIST_LIST_STRING_CSV: TyShape = TyShape::Con(BuiltinTag::List, &[LIST_STRING]);
+        const TASK_LIST_LIST_STRING: TyShape =
+            TyShape::Con(BuiltinTag::Task, &[LIST_LIST_STRING_CSV]);
+        const CSV_PARSE_STREAM_FROM_FILE: TyShape = TyShape::Fun(&PATH, &TASK_LIST_LIST_STRING);
+
+        // ── Border.glow : Int -> Color -> Attribute msg. ──
+        const BORDER_GLOW: TyShape = TyShape::Fun(&INT, &COLOR_TO_UI_ATTR_A);
+
+        // ── Ipe.Db.Store query-algebra shapes. ──
+        // ADT applications over the store home (interpreted via `builtin_con_module`).
+        const STORE_A: TyShape = TyShape::Con(BuiltinTag::DbStore, &[A]);
+        const STORE_B: TyShape = TyShape::Con(BuiltinTag::DbStore, &[B]);
+        const DRAFT_A: TyShape = TyShape::Con(BuiltinTag::DbDraft, &[A]);
+        const JOINED_A_B: TyShape = TyShape::Con(BuiltinTag::DbJoined, &[A, B]);
+        const SELECT_C: TyShape = TyShape::Con(BuiltinTag::DbSelect, &[C]);
+        const POLICY_A: TyShape = TyShape::Con(BuiltinTag::DbPolicy, &[A]);
+        const COND_A: TyShape = TyShape::Con(BuiltinTag::DbCond, &[A]);
+        const CODEC_B: TyShape = TyShape::Con(BuiltinTag::Codec, &[B]);
+        const DB_ORDER: TyShape = TyShape::Con(BuiltinTag::DbOrder, &[]);
+        // `join : Store a -> (a -> k) -> Store b -> (b -> k) -> Joined a b`
+        // (k = var(2) = C).
+        const STORE_JOIN: TyShape = {
+            const A_TO_C: TyShape = TyShape::Fun(&A, &C);
+            const B_TO_C: TyShape = TyShape::Fun(&B, &C);
+            const B_TO_C_TO_JOINED: TyShape = TyShape::Fun(&B_TO_C, &JOINED_A_B);
+            const STORE_B_TO_REST: TyShape = TyShape::Fun(&STORE_B, &B_TO_C_TO_JOINED);
+            const A_TO_C_TO_REST: TyShape = TyShape::Fun(&A_TO_C, &STORE_B_TO_REST);
+            TyShape::Fun(&STORE_A, &A_TO_C_TO_REST)
+        };
+        // `select : ((a, b) -> row) -> Joined a b -> Select row` (row = var(2) = C).
+        const STORE_SELECT: TyShape = {
+            const TUPLE_A_B: TyShape = TyShape::Tuple(&[A, B]);
+            const TUPLE_TO_C: TyShape = TyShape::Fun(&TUPLE_A_B, &C);
+            const JOINED_TO_SELECT: TyShape = TyShape::Fun(&JOINED_A_B, &SELECT_C);
+            TyShape::Fun(&TUPLE_TO_C, &JOINED_TO_SELECT)
+        };
+        // `literal : t -> t` (t = var(0)).
+        const A_TO_A_IDENT: TyShape = TyShape::Fun(&A, &A);
+        // `upper / lower : String -> String` — reuse STRING_TO_STRING.
+        // `coalesce / add / sub / mul : a -> a -> a` (a = var(0)).
+        const A_TO_A_TO_A_STORE: TyShape = {
+            const TAIL: TyShape = TyShape::Fun(&A, &A);
+            TyShape::Fun(&A, &TAIL)
+        };
+        // Accessor query leaf: `(row -> t) -> t -> Cond row`
+        // (row = var(0), t = var(1)).
+        const A_TO_B_GETTER: TyShape = TyShape::Fun(&A, &B);
+        const B_TO_COND_A: TyShape = TyShape::Fun(&B, &COND_A);
+        const STORE_EQ_COL: TyShape = TyShape::Fun(&A_TO_B_GETTER, &B_TO_COND_A);
+        // `*By : Codec t -> (row -> t) -> t -> Cond row`.
+        const STORE_EQ_BY: TyShape = TyShape::Fun(&CODEC_B, &STORE_EQ_COL);
+        // `like : (row -> String) -> String -> Cond row`.
+        const A_TO_STRING_GETTER: TyShape = TyShape::Fun(&A, &STRING);
+        const STRING_TO_COND_A: TyShape = TyShape::Fun(&STRING, &COND_A);
+        const STORE_LIKE: TyShape = TyShape::Fun(&A_TO_STRING_GETTER, &STRING_TO_COND_A);
+        // `isNull / notNull : (row -> t) -> Cond row`.
+        const STORE_IS_NULL: TyShape = TyShape::Fun(&A_TO_B_GETTER, &COND_A);
+        // `inList : (row -> t) -> List t -> Cond row`.
+        const LIST_B_TO_COND_A: TyShape = {
+            const LIST_B_INNER: TyShape = TyShape::Con(BuiltinTag::List, &[B]);
+            TyShape::Fun(&LIST_B_INNER, &COND_A)
+        };
+        const STORE_IN_LIST_COL: TyShape = TyShape::Fun(&A_TO_B_GETTER, &LIST_B_TO_COND_A);
+        // `inListBy : Codec t -> (row -> t) -> List t -> Cond row`.
+        const STORE_IN_LIST_BY: TyShape = TyShape::Fun(&CODEC_B, &STORE_IN_LIST_COL);
+        // Schema builders: `(row -> t) -> Draft row -> Draft row`.
+        const DRAFT_A_TO_DRAFT_A: TyShape = TyShape::Fun(&DRAFT_A, &DRAFT_A);
+        const STORE_SCHEMA_BUILDER: TyShape = TyShape::Fun(&A_TO_B_GETTER, &DRAFT_A_TO_DRAFT_A);
+        // `defaultText : (row -> String) -> String -> Draft row -> Draft row`.
+        const STRING_TO_DRAFT_A_TO_DRAFT_A: TyShape = TyShape::Fun(&STRING, &DRAFT_A_TO_DRAFT_A);
+        const STORE_DEFAULT_TEXT: TyShape =
+            TyShape::Fun(&A_TO_STRING_GETTER, &STRING_TO_DRAFT_A_TO_DRAFT_A);
+        // `defaultInt : (row -> Int) -> Int -> Draft row -> Draft row`.
+        const A_TO_INT_GETTER: TyShape = TyShape::Fun(&A, &INT);
+        const INT_TO_DRAFT_A_TO_DRAFT_A: TyShape = TyShape::Fun(&INT, &DRAFT_A_TO_DRAFT_A);
+        const STORE_DEFAULT_INT: TyShape =
+            TyShape::Fun(&A_TO_INT_GETTER, &INT_TO_DRAFT_A_TO_DRAFT_A);
+        // Policy builders: `(row -> t) -> Policy row`.
+        const STORE_POLICY_BUILDER: TyShape = TyShape::Fun(&A_TO_B_GETTER, &POLICY_A);
+        // `orderByLeft : (a -> k) -> Order -> Joined a b -> Joined a b` (k = var(2)).
+        const JOINED_TO_JOINED: TyShape = TyShape::Fun(&JOINED_A_B, &JOINED_A_B);
+        const ORDER_TO_JOINED_TO_JOINED: TyShape = TyShape::Fun(&DB_ORDER, &JOINED_TO_JOINED);
+        const STORE_ORDER_BY_LEFT: TyShape = {
+            const A_TO_C: TyShape = TyShape::Fun(&A, &C);
+            TyShape::Fun(&A_TO_C, &ORDER_TO_JOINED_TO_JOINED)
+        };
+        const STORE_ORDER_BY_RIGHT: TyShape = {
+            const B_TO_C: TyShape = TyShape::Fun(&B, &C);
+            TyShape::Fun(&B_TO_C, &ORDER_TO_JOINED_TO_JOINED)
         };
 
         match self {
@@ -10081,7 +10272,123 @@ impl StdlibKernel {
             Self::InputSlider => Some(&INPUT_SLIDER),
             Self::InputRadio | Self::InputRadioRow => Some(&INPUT_RADIO),
 
-            _ => None,
+            // ── Ipe.Decimal. ──
+            Self::DecZero | Self::DecOne | Self::DecOneHundred => Some(&DECIMAL),
+            Self::DecFromString => Some(&STRING_TO_RESULT_ERR_DECIMAL),
+            Self::DecFromInt => Some(&INT_TO_DECIMAL),
+            Self::DecFromFloat => Some(&FLOAT_TO_DECIMAL),
+            Self::DecFromMinor => Some(&INT_TO_INT_TO_DECIMAL),
+            Self::DecToString => Some(&DECIMAL_TO_STRING),
+            Self::DecToStringFixed => Some(&INT_TO_DECIMAL_TO_STRING),
+            Self::DecToFloat => Some(&DECIMAL_TO_FLOAT),
+            Self::DecToInt => Some(&DECIMAL_TO_INT),
+            Self::DecToMinor => Some(&INT_TO_DECIMAL_TO_INT),
+            Self::DecAdd
+            | Self::DecSub
+            | Self::DecMul
+            | Self::DecMin
+            | Self::DecMax
+            | Self::DecPercentOf
+            | Self::DecAddPercent
+            | Self::DecSubPercent => Some(&DECIMAL_TO_DECIMAL_TO_DECIMAL),
+            Self::DecDiv | Self::DecMod => Some(&DECIMAL_TO_DECIMAL_TO_RESULT_ERR_DECIMAL),
+            Self::DecNeg | Self::DecAbs | Self::DecFloor | Self::DecCeil => {
+                Some(&DECIMAL_TO_DECIMAL)
+            }
+            Self::DecRound | Self::DecRoundHalfUp | Self::DecTruncate => {
+                Some(&INT_TO_DECIMAL_TO_DECIMAL)
+            }
+            Self::DecCompare => Some(&DECIMAL_TO_DECIMAL_TO_INT),
+            Self::DecEq
+            | Self::DecNeq
+            | Self::DecLt
+            | Self::DecLte
+            | Self::DecGt
+            | Self::DecGte => Some(&DECIMAL_TO_DECIMAL_TO_BOOL),
+            Self::DecIsZero | Self::DecIsPositive | Self::DecIsNegative => Some(&DECIMAL_TO_BOOL),
+            Self::DecFormatWith => Some(&STRING_TO_STRING_TO_INT_TO_DECIMAL_TO_STRING),
+
+            // ── Ipe.Money (ISO-code-taking kernels over Decimal). ──
+            Self::MoneyFormat | Self::MoneyFormatWithCode => Some(&STRING_TO_DECIMAL_TO_STRING),
+            Self::MoneyAllocate => Some(&MONEY_ALLOCATE),
+            Self::MoneySetRate => Some(&MONEY_SET_RATE),
+            Self::MoneyGetRate => Some(&MONEY_GET_RATE),
+            Self::MoneyClearRates => Some(&UNIT_TO_RESULT_ERR_UNIT),
+
+            // ── Ipe.App runtime-config front door / Ipe.Web settings. ──
+            Self::AppFromEnv | Self::AppFromEnvRequired => Some(&STRING_TO_SECRET),
+            Self::HostBind => Some(&HOST_MODE_TO_SETTING_A),
+            Self::LogLevelSetting => Some(&LOG_LEVEL_TO_SETTING_A),
+            Self::DbUrlSetting
+            | Self::ConsoleAdminToken
+            | Self::ConsoleIngestToken
+            | Self::ConsoleMetricsToken => Some(&SECRET_TO_SETTING_A),
+            Self::WebCsrf => Some(&CSRF_MODE_TO_SETTING_WEB),
+            Self::WebSessionTtl | Self::WebAuthMaxLifetime | Self::WebAuthSlideWindow => {
+                Some(&INT_TO_SETTING_WEB)
+            }
+            Self::WebAuthRevocationMode => Some(&REVOCATION_MODE_TO_SETTING_WEB),
+            Self::WebAppWith => Some(&WEB_APP_WITH),
+            Self::WebRoute => Some(&WEB_ROUTE_KERNEL),
+            Self::WebRenderStatic => Some(&WEB_RENDER_STATIC),
+
+            // ── Ipe.Cache raw-Int-handle read/write. ──
+            Self::CacheGet => Some(&CACHE_GET),
+            Self::CachePut => Some(&CACHE_PUT),
+            Self::CacheRemove => Some(&CACHE_REMOVE),
+            Self::CacheClear => Some(&CACHE_CLEAR),
+            Self::CacheSize => Some(&CACHE_SIZE),
+
+            // ── Ipe.Secret.use. ──
+            Self::SecretUse => Some(&SECRET_USE),
+
+            // ── Ipe.Csv streaming parse. ──
+            Self::CsvParseStreamFromFile => Some(&CSV_PARSE_STREAM_FROM_FILE),
+
+            // ── Border.glow. ──
+            Self::BorderGlow => Some(&BORDER_GLOW),
+
+            // ── Ipe.Db.Store query algebra. ──
+            Self::StoreJoin => Some(&STORE_JOIN),
+            Self::StoreSelect => Some(&STORE_SELECT),
+            Self::StoreLiteral => Some(&A_TO_A_IDENT),
+            Self::StoreUpper | Self::StoreLower => Some(&STRING_TO_STRING),
+            Self::StoreCoalesce | Self::StoreAdd | Self::StoreSub | Self::StoreMul => {
+                Some(&A_TO_A_TO_A_STORE)
+            }
+            Self::StoreEqCol
+            | Self::StoreNeqCol
+            | Self::StoreGtCol
+            | Self::StoreGteCol
+            | Self::StoreLtCol
+            | Self::StoreLteCol => Some(&STORE_EQ_COL),
+            Self::StoreEqBy
+            | Self::StoreNeqBy
+            | Self::StoreGtBy
+            | Self::StoreGteBy
+            | Self::StoreLtBy
+            | Self::StoreLteBy => Some(&STORE_EQ_BY),
+            Self::StoreLike => Some(&STORE_LIKE),
+            Self::StoreIsNull | Self::StoreNotNull => Some(&STORE_IS_NULL),
+            Self::StoreInListCol => Some(&STORE_IN_LIST_COL),
+            Self::StoreInListBy => Some(&STORE_IN_LIST_BY),
+            Self::StorePrimaryKey
+            | Self::StoreSerial
+            | Self::StoreUnique
+            | Self::StoreDefaultNow
+            | Self::StoreTouchOnUpdate => Some(&STORE_SCHEMA_BUILDER),
+            Self::StoreDefaultText => Some(&STORE_DEFAULT_TEXT),
+            Self::StoreDefaultInt => Some(&STORE_DEFAULT_INT),
+            Self::StoreOwnerColumn | Self::StoreImmutable => Some(&STORE_POLICY_BUILDER),
+            Self::StoreOrderByLeft => Some(&STORE_ORDER_BY_LEFT),
+            Self::StoreOrderByRight => Some(&STORE_ORDER_BY_RIGHT),
+
+            // The ONLY unschemed kernel: `Web.appRouted`'s lowering
+            // (`Feature::RoutedWebApp`) is unimplemented, so it deliberately
+            // carries no scheme and its caller fails closed. An exhaustive arm (no
+            // wildcard) means any NEW kernel must declare its shape here or fail to
+            // compile — an unschemed-but-resolved kernel is unrepresentable.
+            Self::WebAppRouted => None,
         }
     }
 
