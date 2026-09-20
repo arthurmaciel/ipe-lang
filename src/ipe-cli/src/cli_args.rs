@@ -182,6 +182,41 @@ pub mod json {
     }
 }
 
+/// Extract the output format from a raw argument tail in a FIRST, infallible
+/// pass — before any fallible parse runs — so a parse error can still be
+/// rendered in the format the caller asked for.
+///
+/// This scan never fails: it ignores every token that is not a format flag
+/// (including the unknown flag or malformed argument that will make the real
+/// parse fail), because its sole job is to learn the disclosure surface before
+/// the fallible parse decides the outcome. `--json` wins over `--plain` when
+/// both appear (both are machine surfaces; the real parse still rejects the
+/// combination, and routing that conflict through a machine envelope keeps the
+/// machine stream clean rather than leaking a human banner). Absent any format
+/// flag the default is [`OutputFormat::Human`].
+///
+/// This is the SSOT the machine-mode command bodies (`build` / `run` /
+/// `type-check`) use to resolve their format up front; it must agree with the
+/// per-command parsers' own [`consume_format_flag`] result on any tail those
+/// parsers accept, so a successful parse and this peek never disagree about the
+/// chosen format.
+#[must_use]
+pub fn peek_output_format(rest: &[String]) -> OutputFormat {
+    let mut saw_plain = false;
+    for arg in rest {
+        match arg.as_str() {
+            "--json" => return OutputFormat::Json,
+            "--plain" => saw_plain = true,
+            _ => {}
+        }
+    }
+    if saw_plain {
+        OutputFormat::Plain
+    } else {
+        OutputFormat::Human
+    }
+}
+
 /// Recognise `--plain` / `--json` in `flag`, folding the choice into `slot`.
 /// Returns `Ok(true)` when `flag` was an output-format flag (consumed),
 /// `Ok(false)` when it is some other token the caller must handle.

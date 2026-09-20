@@ -287,15 +287,22 @@ fn build_json_on_type_error_exits_nonzero_with_schema_conforming_json() {
 }
 
 #[test]
-fn build_json_unknown_flag_is_still_a_plain_usage_error() {
-    // `--json` is accepted; a truly unknown flag stays a command-line usage
-    // error and is NOT reformatted as a JSON diagnostic object.
+fn build_json_unknown_flag_renders_the_machine_error_envelope() {
+    // Under `--json`, an unknown-flag usage error must render through the machine
+    // error envelope — never fall through to the human usage/banner path (that
+    // human-furniture-in-a-machine-stream leak is exactly what resolving the
+    // output format BEFORE the parse closes). It is the compact
+    // `ipe.cli.error/1` usage envelope, not the rich diagnostic object.
     let r = run_ipe(&["build", "--json", "--completely-unknown-flag-xyz"]);
     assert!(!r.ok, "an unknown flag must exit non-zero");
+    let stderr = r.stderr.trim();
     assert!(
-        !r.stderr.trim().starts_with('{'),
-        "an unknown flag must not produce a JSON object, got: {:?}",
-        r.stderr
+        stderr.starts_with('{') && stderr.contains("ipe.cli.error/1"),
+        "an unknown flag under --json must render the machine error envelope, got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("Ipê lang"),
+        "no human banner may reach the machine stream, got: {stderr:?}"
     );
 }
 

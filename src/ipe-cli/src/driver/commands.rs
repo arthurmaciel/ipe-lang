@@ -537,10 +537,10 @@ pub struct BuildSuccess {
 
 #[allow(clippy::too_many_lines)]
 pub fn run_build(rest: &[String]) -> Result<(), CliError> {
-    // Parse args once to learn the format before running the body.
-    let format = cli_args::parse_build(rest)
-        .map(|a| a.format)
-        .unwrap_or_default();
+    // Resolve the output format in a first, infallible pass — before the
+    // fallible parse in the body — so a parse error still renders through the
+    // machine surface the caller asked for rather than the human banner.
+    let format = cli_args::peek_output_format(rest);
     let result = run_build_body(rest);
     match result {
         Err(e) => Err(if format == cli_args::OutputFormat::Human {
@@ -2170,9 +2170,9 @@ fn wasi_artifact_path(messages: &str, out_dir: &Path) -> Result<PathBuf, CliErro
 // exec); the steps share enough locals that splitting reads worse than the whole.
 #[allow(clippy::too_many_lines)]
 pub fn run_run(rest: &[String]) -> Result<(), CliError> {
-    let format = cli_args::parse_run(rest)
-        .map(|a| a.format)
-        .unwrap_or_default();
+    // First, infallible format pass before the body's fallible parse, so a parse
+    // error honours the requested machine surface (see [`run_build`]).
+    let format = cli_args::peek_output_format(rest);
     run_run_body(rest).map_err(|e| {
         if format == cli_args::OutputFormat::Human {
             e
