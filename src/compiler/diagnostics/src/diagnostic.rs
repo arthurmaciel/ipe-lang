@@ -1973,6 +1973,7 @@ impl Diagnostic {
 /// release builds too — so this is a hard `assert`; it is unreachable for a
 /// correctly-wired arm (the code and its family are the same fact).
 const fn in_family(c: Code, f: Family) -> Code {
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); it fails the BUILD if a code's family disagrees with its producer's arm, the code-to-family SEAL invariant PRINCIPLES mandates be build-enforced [ledger #boundary]
     assert!(
         code_family_eq(c.family(), f),
         "diagnostic code family drift: this code does not belong to the producer's family"
@@ -2020,18 +2021,18 @@ const fn in_internal(c: Code) -> Code {
 // the wrong family fails the build (not a deletable test). One representative
 // constant per family is enough — every arm of a producer goes through the same
 // chokepoint, so pinning the chokepoint pins the whole producer.
-const _: () = {
-    assert!(matches!(parse_code_family().family(), Family::Parse));
-    assert!(matches!(name_code_family().family(), Family::Name));
-    assert!(matches!(type_code_family().family(), Family::Type));
-    assert!(matches!(lower_code_family().family(), Family::Lower));
-    assert!(matches!(ffi_code_family().family(), Family::Ffi));
-    assert!(matches!(bug_code_family().family(), Family::Internal));
-    // Consent and RegistryUnreachable return their code directly in `code()`
-    // (no producer helper); pin those constants' families here too.
-    assert!(matches!(IPE_S0001.family(), Family::Security));
-    assert!(matches!(IPE_E0001.family(), Family::Environment));
-};
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); one conjunction pins every producer to its family at build time (Consent/RegistryUnreachable return their code directly in `code()`, so pin those constants too), so a mis-wired chokepoint is a build error, not a mislabelled diagnostic [ledger #boundary]
+const _: () = assert!(
+    matches!(parse_code_family().family(), Family::Parse)
+        && matches!(name_code_family().family(), Family::Name)
+        && matches!(type_code_family().family(), Family::Type)
+        && matches!(lower_code_family().family(), Family::Lower)
+        && matches!(ffi_code_family().family(), Family::Ffi)
+        && matches!(bug_code_family().family(), Family::Internal)
+        && matches!(IPE_S0001.family(), Family::Security)
+        && matches!(IPE_E0001.family(), Family::Environment),
+    "diagnostic code family drift: a producer returns a code outside its family",
+);
 
 const fn parse_code_family() -> Code {
     in_parse(IPE_P0001)
