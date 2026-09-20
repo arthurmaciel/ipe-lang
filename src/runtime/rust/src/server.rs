@@ -1553,23 +1553,23 @@ pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
                 "websocket: cross-origin request rejected (set Ws.withOriginPatterns to allow)",
             ));
         }
+        // Live-peer ceiling (fail-closed). Checked after the origin checks and
+        // before the upgrader is taken, so it runs on EVERY path and before any
+        // id/channel/task is minted — "allocated slot without a capacity check"
+        // is unrepresentable. A race between this check and the registry insert
+        // is closed by a re-check at the insert site in `ws_loop`.
+        {
+            let live = ws_registry()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len();
+            if live >= ws_max_connections() {
+                return ok_res(ws_resp(503, "websocket: server at connection capacity"));
+            }
+        }
         let upgrader = WS_UPGRADER.try_with(|c| c.take()).ok().flatten();
         match upgrader {
             Some(up) => {
-                // Live-peer ceiling (fail-closed). Checked at the single choke
-                // point every upgrade passes, BEFORE any id/channel/task is
-                // minted, so "allocated slot without a capacity check" is
-                // unrepresentable. A race between this check and the registry
-                // insert is closed by a re-check at the insert site in `ws_loop`.
-                {
-                    let live = ws_registry()
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .len();
-                    if live >= ws_max_connections() {
-                        return ok_res(ws_resp(503, "websocket: server at connection capacity"));
-                    }
-                }
                 let id = WS_NEXT_ID.fetch_add(1, Ordering::Relaxed);
                 // Enforce the cap at the framing layer: tokio-tungstenite rejects
                 // an over-cap frame/message before it is ever fully buffered, so
