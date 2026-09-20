@@ -35,8 +35,6 @@ pub enum Shape {
     /// `main = Worker.tea …` — the view-less TEA loop; renders nothing, a native
     /// co-located binary with no runtime or host axis.
     Worker,
-    /// `main = Server.listen …` — an HTTP server.
-    Server,
     /// `main = Web.tea …` — a DOM app, the only shape with a runtime choice.
     Web,
 }
@@ -51,14 +49,15 @@ impl Shape {
             Self::Tui => "tui",
             Self::Cli => "cli",
             Self::Worker => "worker",
-            Self::Server => "server",
             Self::Web => "web",
         }
     }
 
     /// Parse a shape word. `None` for any token outside the closed set (so a
     /// leading positional that is not a shape word is read as an entry path, not
-    /// a mistyped shape).
+    /// a mistyped shape). `server` is NOT a shape word: a server is a `script`
+    /// (a `Direct` `Task Error ()` running `Server.listen`), so a leading
+    /// `server` token reads as an entry path, never a shape.
     #[must_use]
     pub fn from_word(word: &str) -> Option<Self> {
         Some(match word {
@@ -66,7 +65,6 @@ impl Shape {
             "tui" => Self::Tui,
             "cli" => Self::Cli,
             "worker" => Self::Worker,
-            "server" => Self::Server,
             "web" => Self::Web,
             _ => return None,
         })
@@ -84,9 +82,9 @@ impl Shape {
     /// answer to "how does this program drive itself". It is a projection of the
     /// same shape the compiler already pinned, never a second derivation: a
     /// view-ful shape (`Web`/`Tui`/`Cli`) runs the Elm-style
-    /// model/update/view loop ([`ControlModel::Tea`]); a `Server` runs the
-    /// declarative request/response model; a `Script` (a plain `Task Error ()`)
-    /// runs directly to completion ([`ControlModel::Direct`]).
+    /// model/update/view loop ([`ControlModel::Tea`]); a `Script` (a plain
+    /// `Task Error ()` — a batch tool or a listening `Server.listen` server
+    /// alike) runs directly to completion ([`ControlModel::Direct`]).
     #[must_use]
     pub const fn control_model(self) -> ControlModel {
         ControlModel::from_shape(self.to_main())
@@ -103,7 +101,6 @@ impl Shape {
             Self::Tui => MainShape::Tui,
             Self::Cli => MainShape::Cli,
             Self::Worker => MainShape::Worker,
-            Self::Server => MainShape::Server,
             Self::Web => MainShape::Web,
         }
     }
@@ -120,7 +117,6 @@ impl Shape {
             MainShape::Tui => Self::Tui,
             MainShape::Cli => Self::Cli,
             MainShape::Worker => Self::Worker,
-            MainShape::Server => Self::Server,
             MainShape::Web => Self::Web,
         }
     }
@@ -349,7 +345,7 @@ impl Delivery {
     #[must_use]
     pub const fn allows_static(self) -> bool {
         match self.shape {
-            Shape::Script | Shape::Tui | Shape::Cli | Shape::Worker | Shape::Server => true,
+            Shape::Script | Shape::Tui | Shape::Cli | Shape::Worker => true,
             Shape::Web => matches!(
                 self,
                 Self {
@@ -461,9 +457,12 @@ impl Delivery {
     /// compile time, so a forgotten combination cannot ship as an open default.
     /// Co-located WASI (`wasm32-wasip1`) accepts only the sealed Direct/Script
     /// floor (`available_on(WasmWasi)`: the pure + always-on effect-floor kernels
-    /// that build on wasip1); every non-viable shape (TEA/Server/Web) or kernel
-    /// (Http/WebSocket/Db/…) is refused here at ipe time, so THE SEAL holds — an
-    /// admitted wasip1 program `cargo build`s for that target.
+    /// that build on wasip1); every non-viable TEA shape (`Tui`/`Cli`/`Web`) is
+    /// refused here at ipe time, and every non-viable kernel — including a
+    /// server's `Server.listen` (a `Direct` shape, so it passes this control-model
+    /// gate) and Http/WebSocket/Db/… — is refused by the per-kernel sealed floor
+    /// (`check_wasm_wasi`, IPE-N0029), so THE SEAL holds either way: an admitted
+    /// wasip1 program `cargo build`s for that target.
     ///
     /// # Errors
     /// [`DeliveryError`] naming the exact illegal `(engine, delivery, triple)`
@@ -521,18 +520,21 @@ impl Delivery {
             // `Direct`/`Script` floor on the `wasm32-wasip1` triple, and nothing
             // else. It is NEVER `spa` (that is the browser sandbox), and it
             // carries ONLY a `Direct` control model — a TEA loop (`Tui`/`Cli`/
-            // `Web`) or a declarative `Server` has no co-located WASI floor
-            // (its runtime spine pulls tokio/axum, which do not build on wasip1),
-            // so admitting one would break THE SEAL. The other triples have no
-            // WASI form: the browser triple is the sandbox, and a musl/host
-            // triple is a native binary, not a wasip1 module.
+            // `Web`) has no co-located WASI floor (its runtime spine pulls
+            // tokio/axum, which do not build on wasip1), so admitting one would
+            // break THE SEAL. A `Server.listen` program is a `Direct` shape, so
+            // it passes THIS gate; its own tokio/axum-bound `ServerListen` kernel
+            // is turned back by the per-kernel sealed floor (`check_wasm_wasi`),
+            // the defense-in-depth backstop that upholds THE SEAL for it. The
+            // other triples have no WASI form: the browser triple is the sandbox,
+            // and a musl/host triple is a native binary, not a wasip1 module.
             Engine::WasmWasi => {
                 if is_spa {
                     return Err(DeliveryError::WasiRefusesSpaDelivery);
                 }
                 match self.shape.control_model() {
                     ControlModel::Direct => {}
-                    ControlModel::Tea | ControlModel::Server => {
+                    ControlModel::Tea => {
                         return Err(DeliveryError::WasiRequiresDirectShape { shape: self.shape });
                     }
                 }
@@ -651,9 +653,10 @@ pub enum DeliveryError {
     /// native-ish target — the two are opposite ends of the wasm axis.
     WasiRefusesSpaDelivery,
     /// A co-located WASI build was asked for a non-`Direct` shape (a `Tui`/`Cli`/
-    /// `Web` TEA loop, or a `Server`). Only a `Direct` (`Task Error ()` script)
-    /// program has a co-located WASI floor: a TEA/server spine pulls
-    /// tokio/axum, which do not build on `wasm32-wasip1`.
+    /// `Web` TEA loop). Only a `Direct` (`Task Error ()` script) program has a
+    /// co-located WASI floor: a TEA loop's spine pulls tokio/axum, which do not
+    /// build on `wasm32-wasip1`. (A server is a `Direct` shape and passes this
+    /// gate; its `Server.listen` kernel is refused by the per-kernel WASI floor.)
     WasiRequiresDirectShape {
         /// The non-`Direct` shape asked for on the WASI engine.
         shape: Shape,
@@ -775,14 +778,14 @@ impl fmt::Display for DeliveryError {
                 Host::Desktop if delivery.runtime() == Some(Runtime::Live) => write!(
                     f,
                     "`web desktop` links the system webview at runtime, so it has no \
-                     static binary. Use `web` (served-live), `tui`, `cli`, or `server` \
+                     static binary. Use `web` (served-live), `tui`, `cli`, or `script` \
                      for a static musl binary, or ship the desktop app bundle.",
                 ),
                 _ => write!(
                     f,
                     "`{delivery}` targets wasm or a native bundle, so `--static` (a musl \
                      binary) does not apply. `--static` is for the co-located, \
-                     no-webview shapes: `script`, `tui`, `cli`, `server`, or served `web`.",
+                     no-webview shapes: `script`, `tui`, `cli`, or served `web`.",
                 ),
             },
             Self::UnknownToken { got } => write!(
@@ -831,7 +834,7 @@ impl fmt::Display for DeliveryError {
                 "a `web spa` client cannot target `wasm32-wasip1`. The browser \
                  sandbox denies native effects and reaches the world only through \
                  Web-API capabilities; WASI is the co-located, native-ish target \
-                 for a `tui`/`cli`/`server`/served-`web` program, never the browser \
+                 for a `tui`/`cli`/`script`/served-`web` program, never the browser \
                  sandbox. Deliver `web spa` to `wasm32-unknown-unknown`, or use a \
                  co-located shape for a WASI build.",
             ),
@@ -839,7 +842,7 @@ impl fmt::Display for DeliveryError {
                 f,
                 "`{delivery}` links the system webview at runtime, so it has no \
                  static (musl) triple. Use `web` (served-live), `tui`, `cli`, or \
-                 `server` for a static musl binary, or ship the desktop app bundle.",
+                 `script` for a static musl binary, or ship the desktop app bundle.",
             ),
             Self::WasiRefusesSpaDelivery => write!(
                 f,
@@ -853,9 +856,9 @@ impl fmt::Display for DeliveryError {
                 f,
                 "a co-located `wasm32-wasip1` build carries only a `Direct` script \
                  (a plain `Task Error ()` `main`), but this is a `{}` app. A \
-                 `tui`/`cli`/`web` TEA loop and a `server` need the tokio/axum \
-                 reactor spine, which does not build on WASI. Build the `{}` app \
-                 natively, or ship a `Direct` script to `wasm32-wasip1`.",
+                 `tui`/`cli`/`web` TEA loop needs the reactor spine, which does not \
+                 build on WASI. Build the `{}` app natively, or ship a `Direct` \
+                 script to `wasm32-wasip1`.",
                 shape.word(),
                 shape.word(),
             ),
@@ -942,13 +945,7 @@ mod tests {
 
     #[test]
     fn runtime_or_host_on_non_web_is_refused() {
-        for shape in [
-            Shape::Script,
-            Shape::Tui,
-            Shape::Cli,
-            Shape::Worker,
-            Shape::Server,
-        ] {
+        for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Worker] {
             assert_eq!(
                 Delivery::resolve(shape, Some(Runtime::Spa), Host::Default).unwrap_err(),
                 DeliveryError::RuntimeOnNonWeb { shape }
@@ -965,13 +962,7 @@ mod tests {
 
     #[test]
     fn non_web_shapes_are_static_capable() {
-        for shape in [
-            Shape::Script,
-            Shape::Tui,
-            Shape::Cli,
-            Shape::Worker,
-            Shape::Server,
-        ] {
+        for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Worker] {
             let d = Delivery::resolve(shape, None, Host::Default).unwrap();
             assert_eq!(d.runtime(), None);
             assert!(d.allows_static());
@@ -997,32 +988,29 @@ mod tests {
 
     #[test]
     fn control_model_is_the_projection_of_the_pinned_shape() {
-        // The view-ful shapes run the TEA loop; a server is declarative; a script
-        // runs direct. Pins the SSOT projection against drift.
+        // The view-ful shapes run the TEA loop; a script runs direct. Pins the
+        // SSOT projection against drift.
         assert_eq!(Shape::Web.control_model(), ControlModel::Tea);
         assert_eq!(Shape::Tui.control_model(), ControlModel::Tea);
         assert_eq!(Shape::Cli.control_model(), ControlModel::Tea);
         // A worker is the view-less corner of the same managed loop — Tea, never
         // a run-to-completion Direct program.
         assert_eq!(Shape::Worker.control_model(), ControlModel::Tea);
-        assert_eq!(Shape::Server.control_model(), ControlModel::Server);
+        // A server is a `script` — a `Direct` `Task Error ()` run to completion.
         assert_eq!(Shape::Script.control_model(), ControlModel::Direct);
         // Every model has a stable, distinct word.
         assert_eq!(ControlModel::Tea.word(), "tea");
-        assert_eq!(ControlModel::Server.word(), "server");
         assert_eq!(ControlModel::Direct.word(), "direct");
     }
 
     #[test]
     fn control_model_word_round_trips_and_rejects_unknown() {
-        for model in [
-            ControlModel::Tea,
-            ControlModel::Server,
-            ControlModel::Direct,
-        ] {
+        for model in [ControlModel::Tea, ControlModel::Direct] {
             assert_eq!(ControlModel::from_word(model.word()), Some(model));
         }
         // A token outside the closed set is None — never a permissive default.
+        // The retired `server` model no longer parses.
+        assert_eq!(ControlModel::from_word("server"), None);
         assert_eq!(ControlModel::from_word("Direct"), None); // case-sensitive
         assert_eq!(ControlModel::from_word("telepathy"), None);
         assert_eq!(ControlModel::from_word(""), None);
@@ -1030,9 +1018,8 @@ mod tests {
 
     #[test]
     fn only_direct_is_the_elevated_unmanaged_model() {
-        // The managed models run under the runtime's loop; Direct drives itself.
+        // The managed model runs under the runtime's loop; Direct drives itself.
         assert!(ControlModel::Tea.is_managed());
-        assert!(ControlModel::Server.is_managed());
         assert!(!ControlModel::Direct.is_managed());
     }
 
@@ -1043,12 +1030,13 @@ mod tests {
             Shape::Tui,
             Shape::Cli,
             Shape::Worker,
-            Shape::Server,
             Shape::Web,
         ] {
             assert_eq!(Shape::from_word(shape.word()), Some(shape));
         }
         assert_eq!(Shape::from_word("nope"), None);
+        // `server` is not a shape word — it reads as an entry path.
+        assert_eq!(Shape::from_word("server"), None);
     }
 
     #[test]
@@ -1151,11 +1139,11 @@ mod tests {
 
     #[test]
     fn wasi_engine_refuses_non_direct_shapes() {
-        // A TEA loop (`Tui`/`Cli`/`Web`) or a `Server` has no co-located WASI
-        // floor — its spine pulls tokio/axum, which do not build on wasip1.
-        // Fail-closed with a typed diagnostic so the unbuildable shape never
-        // reaches the wasip1 `cargo build`.
-        for shape in [Shape::Tui, Shape::Cli, Shape::Worker, Shape::Server] {
+        // A TEA loop (`Tui`/`Cli`/`Web`/`Worker`) has no co-located WASI floor —
+        // its spine pulls tokio/axum, which do not build on wasip1. Fail-closed
+        // with a typed diagnostic so the unbuildable shape never reaches the
+        // wasip1 `cargo build`.
+        for shape in [Shape::Tui, Shape::Cli, Shape::Worker] {
             let d = Delivery::resolve(shape, None, Host::Default).unwrap();
             assert_eq!(
                 d.admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
@@ -1167,6 +1155,17 @@ mod tests {
         assert_eq!(
             served_live().admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
             Err(DeliveryError::WasiRequiresDirectShape { shape: Shape::Web }),
+        );
+        // A `script` (the `Direct` bucket a server folds into) PASSES this
+        // control-model gate — a server's own tokio/axum-bound `Server.listen`
+        // kernel is instead turned back by the per-kernel WASI floor
+        // (`ipe_canon::target_gate::check_wasm_wasi`), the defense-in-depth
+        // backstop that upholds THE SEAL for it.
+        assert_eq!(
+            Delivery::resolve(Shape::Script, None, Host::Default)
+                .unwrap()
+                .admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
+            Ok(()),
         );
     }
 
@@ -1299,7 +1298,6 @@ mod tests {
             Delivery::resolve(Shape::Tui, None, Host::Default).unwrap(),
             Delivery::resolve(Shape::Cli, None, Host::Default).unwrap(),
             Delivery::resolve(Shape::Worker, None, Host::Default).unwrap(),
-            Delivery::resolve(Shape::Server, None, Host::Default).unwrap(),
             served_live(),
         ] {
             assert_eq!(d.admit_triple(Engine::Native, TargetTriple::Host), Ok(()));

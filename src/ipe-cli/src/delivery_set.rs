@@ -380,7 +380,6 @@ mod tests {
             Shape::Tui,
             Shape::Cli,
             Shape::Worker,
-            Shape::Server,
             Shape::Web,
         ] {
             let set = DeliverySet::resolve(shape, &[]).expect("empty resolves to singleton");
@@ -406,13 +405,7 @@ mod tests {
 
     #[test]
     fn web_entry_on_non_web_shape_is_pedagogical() {
-        for shape in [
-            Shape::Script,
-            Shape::Tui,
-            Shape::Cli,
-            Shape::Worker,
-            Shape::Server,
-        ] {
+        for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Worker] {
             let err = DeliverySet::resolve(shape, &[ShipEntry::SpaIos]).unwrap_err();
             let CliError::UsageOwned(msg) = err else {
                 panic!("expected a named rejection, got {err:?}");

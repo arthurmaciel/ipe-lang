@@ -50,8 +50,6 @@ pub enum Shape {
     /// binary. Co-located, capability-gated (no view sink → no browser, no
     /// sandbox).
     Worker,
-    /// `main = Server.listen …` — an HTTP server.
-    Server,
     /// `main = Web.tea …` — a DOM app, the only shape with a runtime choice.
     Web,
 }
@@ -66,7 +64,6 @@ impl Shape {
             MainShape::Tui => Self::Tui,
             MainShape::Cli => Self::Cli,
             MainShape::Worker => Self::Worker,
-            MainShape::Server => Self::Server,
             MainShape::Web => Self::Web,
         }
     }
@@ -80,7 +77,6 @@ impl Shape {
             Self::Tui => "tui",
             Self::Cli => "cli",
             Self::Worker => "worker",
-            Self::Server => "server",
             Self::Web => "web",
         }
     }
@@ -92,8 +88,8 @@ impl Shape {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runtime {
     /// The loop sits *at* native effects: served/desktop `live` for Web, and the
-    /// single runtime of every non-Web shape (`terminal`, `server`, `binary`).
-    /// Native effects (`Ipe.Db`, `Ipe.File`, a `Secret`) are admissible.
+    /// single runtime of every non-Web shape (`terminal`, `binary`). Native
+    /// effects (`Ipe.Db`, `Ipe.File`, a `Secret`) are admissible.
     CoLocated,
     /// The sandboxed client loop — wasm in a browser/webview (`web spa`). Effects
     /// reach the host only through Web-platform capabilities plus HTTP to a
@@ -118,7 +114,7 @@ impl Placement {
     #[must_use]
     pub const fn sole_for(shape: Shape) -> Option<Self> {
         match shape {
-            Shape::Script | Shape::Tui | Shape::Cli | Shape::Worker | Shape::Server => Some(Self {
+            Shape::Script | Shape::Tui | Shape::Cli | Shape::Worker => Some(Self {
                 shape,
                 runtime: Runtime::CoLocated,
             }),
@@ -127,15 +123,13 @@ impl Placement {
     }
 
     /// The canonical placement phrase for a diagnostic — `script`, `terminal`,
-    /// `worker`, `server`, `web live`, or `web spa`. One vocabulary with the CLI
-    /// grammar.
+    /// `worker`, `web live`, or `web spa`. One vocabulary with the CLI grammar.
     #[must_use]
     pub const fn phrase(self) -> &'static str {
         match (self.shape, self.runtime) {
             (Shape::Script, _) => "script",
             (Shape::Tui | Shape::Cli, _) => "terminal",
             (Shape::Worker, _) => "worker",
-            (Shape::Server, _) => "server",
             (Shape::Web, Runtime::CoLocated) => "web live",
             (Shape::Web, Runtime::Spa) => "web spa",
         }
@@ -159,11 +153,11 @@ pub enum ModuleClass {
     Pure,
     /// `Ipe.Browser.*` — Web-platform host capabilities (Geolocation, Camera,
     /// Microphone, Clipboard, …). Needs a JS host: admissible in the Web shape
-    /// (live or spa, on any host). Rejected in the live-rendering terminal and
-    /// server shapes, which have no browser and never will. The `script` shape
-    /// is exempt: it renders nothing and is the build-time harness a decoder
-    /// probe or an export check imports these modules from, so a browser module
-    /// there is a no-render tool use, not a mis-placed live capability.
+    /// (live or spa, on any host). Rejected in the live-rendering terminal
+    /// shapes, which have no browser and never will. The `script` shape is
+    /// exempt: it renders nothing and is the build-time harness a decoder probe
+    /// or an export check imports these modules from, so a browser module there
+    /// is a no-render tool use, not a mis-placed live capability.
     BrowserHost,
     /// `Ipe.Db.*`, `Ipe.File.*`, the server `Ipe.Http.Server`, and `Auth` secret
     /// surfaces — direct native effects. Admissible only in a co-located runtime;
@@ -288,13 +282,14 @@ pub const fn allowed_in(class: ModuleClass, placement: Placement) -> Admissibili
 
         // Browser host capabilities: the Web shape (live served/desktop or spa
         // browser/ios/android/desktop) has a JS host. The live-rendering terminal
-        // and server shapes never do, so they are rejected. `script` renders
-        // nothing and is the build-time harness (decoder probes, export checks)
-        // these modules are imported from, so it is exempt — a no-render tool use,
-        // not a mis-placed live capability.
+        // shapes never do, so they are rejected. `script` renders nothing and is
+        // the build-time harness (decoder probes, export checks) these modules
+        // are imported from, so it is exempt — a no-render tool use, not a
+        // mis-placed live capability. A server is a `script` too (a `Direct`
+        // program running `Server.listen`), so it takes the same exempt arm.
         ModuleClass::BrowserHost => match placement.shape {
             Shape::Web | Shape::Script => Allow,
-            Shape::Tui | Shape::Cli | Shape::Worker | Shape::Server => {
+            Shape::Tui | Shape::Cli | Shape::Worker => {
                 Deny(DenyReason::BrowserOutsideBrowserHost { placement })
             }
         },
@@ -302,7 +297,7 @@ pub const fn allowed_in(class: ModuleClass, placement: Placement) -> Admissibili
         // Native effects: co-located only. The security invariant — a native
         // effect (DB handle, secret) must never be emitted into a sandboxed
         // browser bundle. Denied in `spa`; admissible in every co-located
-        // runtime (live, terminal, server, script).
+        // runtime (live, terminal, script — a server being a `script`).
         ModuleClass::NativeEffect => match placement.runtime {
             Runtime::CoLocated => Allow,
             Runtime::Spa => Deny(DenyReason::NativeEffectInSandbox),
@@ -345,7 +340,6 @@ mod tests {
             co(Shape::Tui),
             co(Shape::Cli),
             co(Shape::Worker),
-            co(Shape::Server),
             web(Runtime::CoLocated),
             web(Runtime::Spa),
         ] {
@@ -397,7 +391,6 @@ mod tests {
             co(Shape::Tui),
             co(Shape::Cli),
             co(Shape::Worker),
-            co(Shape::Server),
             web(Runtime::CoLocated),
         ] {
             assert_eq!(
@@ -436,8 +429,9 @@ mod tests {
             allowed_in(ModuleClass::BrowserHost, co(Shape::Script)),
             Admissibility::Allow
         );
-        // No browser in the terminal, worker, and server shapes.
-        for shape in [Shape::Tui, Shape::Cli, Shape::Worker, Shape::Server] {
+        // No browser in the terminal and worker shapes. (A server is a `script`,
+        // which takes the exempt no-render arm above.)
+        for shape in [Shape::Tui, Shape::Cli, Shape::Worker] {
             assert_eq!(
                 allowed_in(ModuleClass::BrowserHost, co(shape)),
                 Admissibility::Deny(DenyReason::BrowserOutsideBrowserHost {
@@ -450,13 +444,7 @@ mod tests {
     #[test]
     fn sole_placement_is_none_for_web_some_otherwise() {
         assert_eq!(Placement::sole_for(Shape::Web), None);
-        for shape in [
-            Shape::Script,
-            Shape::Tui,
-            Shape::Cli,
-            Shape::Worker,
-            Shape::Server,
-        ] {
+        for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Worker] {
             assert_eq!(
                 Placement::sole_for(shape),
                 Some(Placement {

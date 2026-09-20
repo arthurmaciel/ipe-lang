@@ -137,10 +137,11 @@ pub fn classify_desktop_shape(
         None => match classify_entry_shape(root)? {
             delivery::Shape::Web => Ok(pack::desktop::AppShape::WebView),
             delivery::Shape::Tui | delivery::Shape::Cli => Ok(pack::desktop::AppShape::Terminal),
-            // A `script` renders nothing, a `worker` runs a view-less loop, and a
-            // `server` main renders http, not a desktop window; all classify as a
-            // plain program so the webview gate refuses them by name.
-            delivery::Shape::Script | delivery::Shape::Worker | delivery::Shape::Server => {
+            // A `script` renders nothing and a `worker` runs a view-less loop
+            // (a server is a `script` running `Server.listen`, rendering http
+            // rather than a desktop window); all classify as a plain program so
+            // the webview gate refuses them by name.
+            delivery::Shape::Script | delivery::Shape::Worker => {
                 Ok(pack::desktop::AppShape::Program)
             }
         },

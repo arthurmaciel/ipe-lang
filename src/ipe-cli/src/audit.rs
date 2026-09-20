@@ -1890,10 +1890,6 @@ mod tests {
             "tea"
         );
         assert_eq!(
-            ControlModelDisclosure::Entry(crate::delivery::ControlModel::Server).word(),
-            "server"
-        );
-        assert_eq!(
             ControlModelDisclosure::Entry(crate::delivery::ControlModel::Direct).word(),
             "direct"
         );

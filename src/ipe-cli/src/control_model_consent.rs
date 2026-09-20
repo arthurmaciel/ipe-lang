@@ -1,7 +1,7 @@
 //! The consent gate for a program's compiler-derived control model.
 //!
 //! A program's control model — how it drives itself — is *disclosed* by the
-//! shape the compiler pins for `main` (TEA / Server / Direct; see
+//! shape the compiler pins for `main` (TEA / Direct; see
 //! [`crate::delivery::ControlModel`]). The `acceptsControl` manifest field records
 //! the models the author has reviewed and consented to expose. This gate is the
 //! sibling of [`crate::native_ffi_consent::gate`] and shares its fail-closed
@@ -15,10 +15,9 @@
 //! after its author pinned an accept-set that no longer covers it — without
 //! turning every self-driving script into a refusal.
 //!
-//! The managed models ([`ControlModel::Tea`] / [`ControlModel::Server`]) run under
-//! the runtime's own loop, with every effect flowing through a capability axis the
-//! sibling gates ([`crate::web_consent`] / [`crate::native_ffi_consent`]) already
-//! guard.
+//! The managed model ([`ControlModel::Tea`]) runs under the runtime's own loop,
+//! with every effect flowing through a capability axis the sibling gates
+//! ([`crate::web_consent`] / [`crate::native_ffi_consent`]) already guard.
 
 use std::collections::BTreeSet;
 
@@ -80,7 +79,6 @@ fn refusal(derived: ControlModel, entry_module: &str) -> CliError {
 const fn control_model_ctor(model: ControlModel) -> &'static str {
     match model {
         ControlModel::Tea => "Tea",
-        ControlModel::Server => "Server",
         ControlModel::Direct => "Direct",
     }
 }
@@ -98,10 +96,8 @@ mod tests {
         // The disclosed-not-gated default: a clean package (any model, including a
         // self-driving Direct script) certifies with no `acceptsControl`.
         gate(ControlModel::Tea, &BTreeSet::new(), "Main").expect("Tea passes with empty accept");
-        gate(ControlModel::Server, &BTreeSet::new(), "Main")
-            .expect("Server passes with empty accept");
         gate(ControlModel::Direct, &BTreeSet::new(), "Main")
-            .expect("a clean Direct script certifies with no acceptsControl");
+            .expect("a clean Direct script (a batch tool or a server alike) certifies with no acceptsControl");
     }
 
     #[test]

@@ -63,10 +63,14 @@ const AGENTS_MD: &str = include_str!("../templates/AGENTS.md.in");
 
 // ── shape model ───────────────────────────────────────────────────────────────
 
-/// The six project shapes a wizard or `--shape` flag may select.
+/// The scaffold templates a wizard or `--shape` flag may select.
 ///
-/// The shape is pinned by `main`'s entry function; the manifest's `delivery`
-/// sections provide per-host build configuration for each resolved target.
+/// The compiler shape is pinned by `main`'s entry function; the manifest's
+/// `delivery` sections provide per-host build configuration for each resolved
+/// target. `Server` is a scaffold *template* convenience only — a server is the
+/// `Direct` (`script`) shape running `Server.listen`, so its generated project
+/// is a `script` program with a `Server.listen` starter `main`, not a distinct
+/// compiler shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum InitShape {
     /// `main = Web.tea …` — DOM rendering, live or SPA.
@@ -78,7 +82,8 @@ pub enum InitShape {
     Cli,
     /// `main = Worker.tea …` — the view-less TEA loop; no rendering.
     Worker,
-    /// `main = Server.listen …` — HTTP server.
+    /// `main = Server.listen …` — a `Direct` (`script`) program that runs an HTTP
+    /// server; a scaffold-template convenience, not a distinct compiler shape.
     Server,
     /// `main : Task Error ()` — plain task, no rendering.
     Script,
@@ -417,14 +422,15 @@ fn guard_rerun_conflict(
 /// The shape an existing project's `src/Main.ipe` *confidently* pins, or `None`
 /// when the entry is absent, unparseable, or not confidently classifiable.
 ///
-/// The four rendering shapes (`web`/`tui`/`cli`/`server`) are recognised by a
+/// The TEA rendering shapes (`web`/`tui`/`cli`/`worker`) are recognised by a
 /// qualified entry head (`Web.tea`/`Tui.tea`/…) via the lenient scaffold-detection
 /// classifier ([`ipe_canon::shape_source::scaffold_shape_hint`]) — deliberately
 /// NOT the strict capability-gate classifier, so a partially written entry still
-/// reads its shape. Both a genuine `Task Error ()` script and an un-spellable head
-/// collapse to [`ipe_canon::shape_source::MainShape::Script`], so a `Script`
-/// result is ambiguous — refusing on it would risk a false conflict against a
-/// project this read merely could not classify. Soundness direction
+/// reads its shape. A genuine `Task Error ()` script, a listening `Server.listen`
+/// server, and an un-spellable head all collapse to
+/// [`ipe_canon::shape_source::MainShape::Script`], so a `Script` result is
+/// ambiguous — refusing on it would risk a false conflict against a project this
+/// read merely could not classify. Soundness direction
 /// (spec § 5): the re-run guard over-permits toward *reconcile* rather than refuse
 /// a project that is not confidently a different shape; the only cost of a missed
 /// conflict is a reconcile that leaves every present file untouched anyway.
@@ -458,9 +464,11 @@ fn existing_project_shape(target_dir: &Path) -> Result<Option<InitShape>, CliErr
 }
 
 /// Map a classified `main` shape onto the confidently-pinned [`InitShape`], or
-/// `None` for the ambiguous `Script` fallback (a real script *or* an un-pinnable
-/// head). Only a qualified rendering-entry head yields one of the four confident
-/// shapes.
+/// `None` for the ambiguous `Script` fallback (a real script, a listening
+/// `Server.listen` server, *or* an un-pinnable head — all collapse to
+/// [`ipe_canon::shape_source::MainShape::Script`]). Only a qualified
+/// rendering-entry head yields one of the confident TEA shapes; a server is a
+/// `script`, so it reconciles under the ambiguous fallback like any bare `Task`.
 const fn confidently_pinned_shape(shape: ipe_canon::shape_source::MainShape) -> Option<InitShape> {
     use ipe_canon::shape_source::MainShape;
     match shape {
@@ -468,7 +476,6 @@ const fn confidently_pinned_shape(shape: ipe_canon::shape_source::MainShape) -> 
         MainShape::Tui => Some(InitShape::Tui),
         MainShape::Cli => Some(InitShape::Cli),
         MainShape::Worker => Some(InitShape::Worker),
-        MainShape::Server => Some(InitShape::Server),
         MainShape::Script => None,
     }
 }

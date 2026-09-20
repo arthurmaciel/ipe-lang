@@ -293,6 +293,43 @@ mod tests {
             .expect("a kernel-free program must pass the Layer-1 gate unconditionally");
     }
 
+    /// THE SEAL for the collapsed `server` bucket: a `Server.listen` program is
+    /// a `Direct` (`script`) shape, so the delivery matrix's shape gate no longer
+    /// refuses it on `wasm32-wasip1` — the per-kernel sealed floor MUST. This
+    /// pins that floor: `StdlibKernel::ServerListen` carries `KernelClass::Server`
+    /// and so is NOT in `available_on(WasmWasi)`, so `check_wasm_wasi` refuses it
+    /// at `ipe` time (IPE-N0029). tokio/axum do not build on wasip1, so admitting
+    /// it would break the ipe-accepts ⇒ cargo-builds SEAL; this refusal is the
+    /// invariant that replaces the dropped shape arm.
+    #[test]
+    fn server_listen_is_denied_on_wasi_floor() {
+        assert!(
+            !StdlibKernel::ServerListen.available_on(Target::WasmWasi),
+            "Server.listen has no wasip1 denotation — it must stay off the sealed WASI floor"
+        );
+        let mut interner = Interner::new();
+        let module_sym = intern(&mut interner, "Ipe.Http.Server");
+        let name = intern(&mut interner, "listen");
+        let body = Expr_::VarKernel {
+            id: Some(StdlibKernel::ServerListen),
+            module: module_sym,
+            name,
+        };
+        let module = single_def_module(&mut interner, body);
+        let err = check_wasm_wasi(&module, &interner)
+            .expect_err("Server.listen must be refused on the wasm32-wasip1 target");
+        assert!(
+            matches!(
+                err,
+                Diagnostic::Name {
+                    msg: NameError::ServerOnlyKernelForWasm { .. },
+                    ..
+                }
+            ),
+            "expected ServerOnlyKernelForWasm, got {err:?}"
+        );
+    }
+
     /// Builds a denied `VarKernel` expression at the given byte-offset span.
     fn denied_kernel_at(interner: &mut Interner, lo: u32) -> Expr {
         use ipe_diagnostics::Located;

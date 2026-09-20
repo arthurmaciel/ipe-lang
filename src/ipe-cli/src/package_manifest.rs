@@ -1160,9 +1160,9 @@ impl Reader<'_> {
 
     /// Read a `[ Direct, Tea, … ]` list into the closed set of control models a
     /// consumer accepts. Each element is a nullary control-model constructor
-    /// (`Tea`/`Server`/`Direct`); any token outside that closed set is rejected —
-    /// never read as a permissive default. An empty list is the strict default
-    /// admitting only the managed models.
+    /// (`Tea`/`Direct`); any token outside that closed set is rejected — never
+    /// read as a permissive default. An empty list is the strict default
+    /// admitting only the managed model.
     fn read_control_model_set(
         &self,
         expr: &Expr,
@@ -1173,14 +1173,11 @@ impl Reader<'_> {
             let ctor = self.expect_ctor(item, "a control model")?;
             let model = match ctor {
                 "Tea" => ControlModel::Tea,
-                "Server" => ControlModel::Server,
                 "Direct" => ControlModel::Direct,
                 other => {
                     return Err(self.reject(
                         item.span,
-                        &format!(
-                            "`{other}` is not a control model — use one of Tea, Server, or Direct"
-                        ),
+                        &format!("`{other}` is not a control model — use one of Tea or Direct"),
                     ));
                 }
             };
@@ -1514,7 +1511,6 @@ const fn control_model_ctor_name(model: crate::delivery::ControlModel) -> &'stat
     use crate::delivery::ControlModel;
     match model {
         ControlModel::Tea => "Tea",
-        ControlModel::Server => "Server",
         ControlModel::Direct => "Direct",
     }
 }
@@ -1993,12 +1989,21 @@ mod tests {
 
     #[test]
     fn reject_unknown_control_model() {
-        // A token outside { Tea, Server, Direct } in `acceptsControl` is rejected
+        // A token outside { Tea, Direct } in `acceptsControl` is rejected
         // fail-closed — never read as a permissive accept.
         let r = read(
             "reject_control_model",
             &format!(
                 "{HEADER}package =\n    {{ name = \"x\", capabilities = {{ acceptsControl = [ Telepathy ] }} }}\n"
+            ),
+        );
+        assert_rejected(&r);
+        // The retired `Server` control model is now among the rejected tokens —
+        // a server is a `Direct` program, so its acceptance is spelled `Direct`.
+        let r = read(
+            "reject_server_control_model",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", capabilities = {{ acceptsControl = [ Server ] }} }}\n"
             ),
         );
         assert_rejected(&r);

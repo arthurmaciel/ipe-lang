@@ -4,8 +4,9 @@
 //!
 //! A program's shape is pinned by what `main` head-calls, never by config: a
 //! `main = Web.tea …` is a DOM app, `main = Tui.tea …` a terminal-cells app,
-//! `main = Cli.tea …` a terminal-lines app, `main = Server.listen …` a server,
-//! and any other `main` (a plain `Task`) a script. This peels the same
+//! `main = Cli.tea …` a terminal-lines app, and any other `main` (a plain
+//! `Task`) a script — a batch tool or an HTTP server (`main = Server.listen …`)
+//! alike, since both share the `Task Error ()` interface. This peels the same
 //! head-forms the resolver's shape gate peels — application, lambda, and `let` —
 //! so the CLI cross-check and the compiler agree on one classification.
 
@@ -29,8 +30,6 @@ pub enum MainShape {
     /// `init` / `update` / `subscriptions` with no `view`. Co-located and
     /// capability-gated; renders nothing.
     Worker,
-    /// `main = Server.listen …` — an HTTP server.
-    Server,
     /// `main = Web.tea …` / `appRouted` / `appWith` — the DOM shape. A webview is
     /// a delivery *host* of this shape (`web desktop`), not a distinct shape
     /// (spec § 1).
@@ -49,10 +48,9 @@ pub enum ControlModel {
     /// The Elm-style model/update/(view) loop — a `Web`/`Tui`/`Cli`/`Worker`
     /// shape. The `Worker` corner runs the same managed loop with no `view`.
     Tea,
-    /// The declarative request/response model — a `Server` shape.
-    Server,
     /// A plain `main : Task Error ()` that runs directly to completion — a
-    /// `Script` shape.
+    /// `Script` shape (a batch tool or a listening `Server.listen` server alike;
+    /// server-ness is disclosed on the capability axis, not as a control model).
     Direct,
 }
 
@@ -60,13 +58,12 @@ impl ControlModel {
     /// The control model a compiler-pinned [`MainShape`] runs under. A projection
     /// of the shape the compiler already pinned, never a second derivation: a
     /// view-ful shape (`Web`/`Tui`/`Cli`) and the view-less `Worker` run the
-    /// Elm-style managed loop; a `Server` runs the declarative request/response
-    /// model; a `Script` (a plain `Task Error ()`) runs directly to completion.
+    /// Elm-style managed loop; a `Script` (a plain `Task Error ()`) runs directly
+    /// to completion, a one-shot batch tool or a listening server alike.
     #[must_use]
     pub const fn from_shape(shape: MainShape) -> Self {
         match shape {
             MainShape::Web | MainShape::Tui | MainShape::Cli | MainShape::Worker => Self::Tea,
-            MainShape::Server => Self::Server,
             MainShape::Script => Self::Direct,
         }
     }
@@ -78,7 +75,6 @@ impl ControlModel {
     pub const fn word(self) -> &'static str {
         match self {
             Self::Tea => "tea",
-            Self::Server => "server",
             Self::Direct => "direct",
         }
     }
@@ -90,7 +86,6 @@ impl ControlModel {
     pub fn from_word(word: &str) -> Option<Self> {
         Some(match word {
             "tea" => Self::Tea,
-            "server" => Self::Server,
             "direct" => Self::Direct,
             _ => return None,
         })
@@ -98,39 +93,40 @@ impl ControlModel {
 
     /// Whether this control model is a *managed* one — the runtime drives the
     /// loop and every effect flows through a capability axis already gated. The
-    /// managed models (`Tea`/`Server`) are the safe, implicitly-admitted default;
-    /// only the elevated [`Self::Direct`] model (a self-driving `Task Error ()`
-    /// program outside the managed loop) requires a consumer's explicit consent.
+    /// managed model (`Tea`) is the safe, implicitly-admitted default; only the
+    /// elevated [`Self::Direct`] model (a self-driving `Task Error ()` program
+    /// outside the managed loop) requires a consumer's explicit consent.
     #[must_use]
     pub const fn is_managed(self) -> bool {
-        matches!(self, Self::Tea | Self::Server)
+        matches!(self, Self::Tea)
     }
 }
 
 /// A `main` head that head-calls one of these `(canonical-module-path, name)`
 /// pairs pins the paired shape. The first element is the head's *canonical
 /// module* — the full dotted stdlib path the written qualifier resolves to
-/// through the import table (`Ipe.Tea.Web` for a `Web`/aliased head,
-/// `Ipe.Http.Server` for `Server.listen`), NEVER the written qualifier token,
-/// which may be an alias (`import … as S`) or accidentally collide with a
-/// user module's leaf (`Acme.Server`). Matching the resolved canonical path — not
-/// the spelling — is what closes the alias/rename gap and the leaf-collision gap
-/// (issue #2142).
+/// through the import table (`Ipe.Tea.Web` for a `Web`/aliased head), NEVER the
+/// written qualifier token, which may be an alias (`import … as W`) or
+/// accidentally collide with a user module's leaf (`Acme.Web`). Matching the
+/// resolved canonical path — not the spelling — is what closes the alias/rename
+/// gap and the leaf-collision gap (issue #2142).
+///
+/// Every row is a TEA app entry under `Ipe.Tea.*`. A `Server.listen` head is
+/// NOT here: a server is a plain `Task Error ()` `Direct` program (spelled
+/// `script`), disclosed on the capability axis, so it falls through to
+/// [`MainShape::Script`] like any other bare `Task`.
 ///
 /// This table and the resolver's `TEA_APP_ENTRIES` are held in agreement by a
 /// build-time relation (a `const` bijection assertion in `resolve`), not by
-/// prose: the `Ipe.Tea.*` rows here — keyed by canonical path — must be exactly the
-/// `TEA_APP_ENTRIES` rows keyed by `(last-path-segment, name)`. A one-sided edit
-/// fails compilation. The `Ipe.Http.Server` `listen` row is the sole non-TEA
-/// entry (an HTTP server, not a TEA app), so it deliberately has no
-/// `TEA_APP_ENTRIES` counterpart.
+/// prose: the `Ipe.Tea.*` rows here — keyed by canonical path — must be exactly
+/// the `TEA_APP_ENTRIES` rows keyed by `(last-path-segment, name)`. A one-sided
+/// edit fails compilation.
 pub(crate) const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
     (&["Ipe", "Tea", "Web"], "tea", MainShape::Web),
     (&["Ipe", "Tea", "Web"], "appRouted", MainShape::Web),
     (&["Ipe", "Tea", "Web"], "appWith", MainShape::Web),
     (&["Ipe", "Tea", "Tui"], "tea", MainShape::Tui),
     (&["Ipe", "Tea", "Cli"], "tea", MainShape::Cli),
-    (&["Ipe", "Http", "Server"], "listen", MainShape::Server),
     // `Ipe.Tea.Worker.tea` — the view-less worker app-entry: the no-view corner
     // of the TEA loop. It pins the first-class `MainShape::Worker`, whose control
     // model discloses as `Tea` (a managed `init`/`update`/`subscriptions` loop),
@@ -414,9 +410,9 @@ fn name_is_sink_exposed(
 /// Peel a `main` body to its head reference and match it against the shape
 /// entries. `None` when the head is not a shape-entry reference.
 ///
-/// A head is a shape entry either qualified — `Web.tea`, `Server.listen`, or an
-/// aliased `S.listen` from `import Ipe.Http.Server as S` — or unqualified through
-/// an `import Ipe.Tea.Web exposing (tea)` that brings the entry into scope under
+/// A head is a shape entry either qualified — `Web.tea`, or an aliased `W.tea`
+/// from `import Ipe.Tea.Web as W` — or unqualified through an
+/// `import Ipe.Tea.Web exposing (tea)` that brings the entry into scope under
 /// its bare name. A qualified head's written qualifier is resolved through the
 /// import table to the *canonical module* it names, then matched — never the
 /// written token — so an alias or rename classifies identically to the
@@ -431,9 +427,9 @@ fn head_shape(body: &Expr, module: &Module, interner: &Interner) -> Option<MainS
             // `\arg -> entry cfg` (lambda body) and `let … in entry cfg` (the
             // `in` body) both peel to the inner expression.
             Expr_::Lambda(_, inner) | Expr_::Let(_, inner) => node = inner,
-            // `Server.listen` / `S.listen` (alias) / `Web.tea` at the head pins
-            // its shape — but only after the written qualifier is resolved to the
-            // canonical module it imports; a spelling match would break on rename.
+            // `Web.tea` / `W.tea` (alias) at the head pins its shape — but only
+            // after the written qualifier is resolved to the canonical module it
+            // imports; a spelling match would break on rename.
             Expr_::VarQual(qual, name) => {
                 let (q, n) = (interner.resolve(*qual)?, interner.resolve(*name)?);
                 return shape_for_qualified(q, n, module, interner);
@@ -453,14 +449,13 @@ fn head_shape(body: &Expr, module: &Module, interner: &Interner) -> Option<MainS
 /// through the import table to the canonical module it names before matching.
 ///
 /// `qualifier` is the *written* token at the call site — a module leaf
-/// (`Server` from `import Ipe.Http.Server`) or an alias (`S` from `… as S`). We
+/// (`Web` from `import Ipe.Tea.Web`) or an alias (`W` from `… as W`). We
 /// resolve it exactly as name resolution would: the import whose `as` alias is
 /// `qualifier`, or, absent an alias, whose module-path leaf is `qualifier`, names
 /// the canonical module; that module's FULL dotted path keys the shape table.
 /// Matching the full canonical path closes both gaps of #2142: an alias
-/// (`S.listen` → `Ipe.Http.Server.listen` → Server) and a like-spelled user
-/// module (`Acme.Server.listen` does NOT resolve to `Ipe.Http.Server`, so it
-/// stays a Script).
+/// (`W.tea` → `Ipe.Tea.Web.tea` → Web) and a like-spelled user module
+/// (`Acme.Web.tea` does NOT resolve to `Ipe.Tea.Web`, so it stays a Script).
 ///
 /// Fail-safe: a qualifier no import in scope names (a bare reference that never
 /// resolves) pins no shape (`None`) — the least-capability Script posture, never
@@ -482,7 +477,7 @@ fn shape_for_qualified(
 /// no alias binds `M`'s own leaf segment. So a written `qualifier` names the
 /// canonical module of the first import whose alias equals it, or — when it
 /// matches no alias — whose module-path leaf equals it. Returns that module's
-/// full dotted path (`["Ipe", "Http", "Server"]`), which keys [`SHAPE_ENTRIES`].
+/// full dotted path (`["Ipe", "Tea", "Web"]`), which keys [`SHAPE_ENTRIES`].
 ///
 /// Returns `None` when no import in scope names the qualifier (fail-safe to
 /// Script, never a panic). An alias always shadows a leaf of the same spelling
@@ -606,7 +601,7 @@ fn import_exposes_value(import: &Import, name: &str, interner: &Interner) -> boo
 /// re-run guard would stop recognising the project's shape.
 ///
 /// So this reads the shape by the *written* head qualifier's leaf spelling
-/// (`Tui.tea`/`Web.tea`/`Cli.tea`/`Server.listen`), matching the shape entries by
+/// (`Tui.tea`/`Web.tea`/`Cli.tea`/`Worker.tea`), matching the shape entries by
 /// their module leaf and entry name, without requiring the import to resolve. It
 /// exists purely to pick a scaffold template / detect a re-run conflict — a wrong
 /// read scaffolds the wrong thing or misses a conflict, it can NEVER escalate a
@@ -684,32 +679,27 @@ mod tests {
             ControlModel::Tea
         );
         assert_eq!(
-            ControlModel::from_shape(MainShape::Server),
-            ControlModel::Server
-        );
-        assert_eq!(
             ControlModel::from_shape(MainShape::Script),
             ControlModel::Direct
         );
 
         assert_eq!(ControlModel::Tea.word(), "tea");
-        assert_eq!(ControlModel::Server.word(), "server");
         assert_eq!(ControlModel::Direct.word(), "direct");
 
         // `word` and `from_word` are exact inverses over the closed set, and no
-        // out-of-set token parses (fail-closed — never a permissive default).
-        for m in [
-            ControlModel::Tea,
-            ControlModel::Server,
-            ControlModel::Direct,
-        ] {
+        // out-of-set token parses (fail-closed — never a permissive default). The
+        // retired `server` model no longer parses.
+        for m in [ControlModel::Tea, ControlModel::Direct] {
             assert_eq!(ControlModel::from_word(m.word()), Some(m));
         }
+        assert_eq!(ControlModel::from_word("server"), None);
         assert_eq!(ControlModel::from_word("library"), None);
         assert_eq!(ControlModel::from_word(""), None);
 
+        // Only the managed TEA loop is implicitly admitted; a `Direct` program
+        // (a `Task Error ()` run to completion — a batch tool or a listening
+        // server alike) requires a consumer's explicit consent.
         assert!(ControlModel::Tea.is_managed());
-        assert!(ControlModel::Server.is_managed());
         assert!(!ControlModel::Direct.is_managed());
     }
 
@@ -790,13 +780,17 @@ mod tests {
     }
 
     #[test]
-    fn server_listen_head_is_server() {
-        assert_eq!(
-            classify(
-                "module Main exposing (..)\n\nimport Ipe.Http.Server\n\nmain = Server.listen cfg\n"
-            ),
-            MainShape::Server
+    fn server_listen_head_is_script() {
+        // A `Server.listen` main is a plain `Task Error ()` — the SAME interface
+        // as a batch script — so it classifies `Script` (the `Direct` bucket),
+        // NOT a distinct shape. Server-ness is disclosed on the capability axis
+        // (`Server.listen` classifies `Capability::Network`), never as a shape or
+        // a control model.
+        let shape = classify(
+            "module Main exposing (..)\n\nimport Ipe.Http.Server\n\nmain = Server.listen cfg\n",
         );
+        assert_eq!(shape, MainShape::Script);
+        assert_eq!(ControlModel::from_shape(shape), ControlModel::Direct);
     }
 
     #[test]
@@ -824,17 +818,16 @@ mod tests {
     }
 
     #[test]
-    fn aliased_server_listen_head_is_server() {
-        // Issue #2142 (O2): the classifier keys on the RESOLVED module of the
-        // head, not the written qualifier. `import Ipe.Http.Server as S` +
-        // `main = S.listen …` must classify Server — the alias `S` resolves to
-        // `Ipe.Http.Server.listen`. A spelling match on `S` or `Server` is the
-        // bug; the capability gate keyed on it would otherwise be forgeable.
+    fn aliased_server_listen_head_is_script() {
+        // A `Server.listen` head — however imported or aliased — is a plain
+        // `Task Error ()`, so it classifies `Script` (the `Direct` bucket): the
+        // shape table holds no server row to key on. An `import … as S` alias
+        // resolves the same way and lands in the same bucket.
         assert_eq!(
             classify(
                 "module Main exposing (..)\n\nimport Ipe.Http.Server as S\n\nmain = S.listen cfg\n"
             ),
-            MainShape::Server
+            MainShape::Script
         );
     }
 
@@ -906,8 +899,14 @@ mod tests {
             MainShape::Cli
         );
         assert_eq!(
+            scaffold_hint("module Main exposing (main)\n\nmain = Worker.tea config\n"),
+            MainShape::Worker
+        );
+        // A `Server.listen` head is not a shape entry — it scaffolds as the
+        // `Direct` bucket (`script`), like any other bare `Task`.
+        assert_eq!(
             scaffold_hint("module Main exposing (main)\n\nmain = Server.listen config\n"),
-            MainShape::Server
+            MainShape::Script
         );
         assert_eq!(
             scaffold_hint("module Main exposing (main)\n\nmain = Widget.app config\n"),
