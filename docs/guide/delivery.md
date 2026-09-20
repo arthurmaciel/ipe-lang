@@ -14,8 +14,8 @@ Two independent questions decide how a program ships:
   never written in `package.ipe`; it is read from `main`.
 - **Delivery** — for a `Web` app only, *how* the DOM app runs and *where* it is
   hosted. This is two sub-axes:
-  - **runtime** — `live` (a co-located server loop; the unnamed default) or
-    `spa` (a sandboxed client compiled to WebAssembly).
+  - **runtime** — `served` (a co-located server loop; the unnamed default) or
+    `solo` (a self-contained client compiled to WebAssembly).
   - **host** — where a resolved shape × runtime runs: served, `desktop`, `ios`,
     or `android`.
 
@@ -26,10 +26,10 @@ for each; you name the host in one uniform grammar: `ipe <verb> <shape> <host>`.
 `build web <host>` lays out a fast development bundle; `release web <host>` the
 production distributable.
 
-Only the `Web` shape has these axes. A `tui`, `cli`, `server`, or `script` app
+Only the `Web` shape has these axes. A `tui`, `cli`, `worker`, or `script` app
 builds one way, so it has no runtime or host to choose.
 
-The full rationale — why webview is a host and not a shape, why `live` is never
+The full rationale — why webview is a host and not a shape, why `served` is never
 spelled out — is [ADR 0005](../adr/0005-delivery-shapes-runtimes-hosts-targets.md).
 
 ## The `delivery` record
@@ -55,7 +55,7 @@ Run `ipe doc Ipe.Package` for every field.
 
 ## Desktop: a webview-native bundle
 
-A desktop app is the `Web` shape run `live` inside a native window (a system
+A desktop app is the `Web` shape run `served` inside a native window (a system
 webview over a local bridge, not a browser tab). It needs no extra manifest —
 the `main` head `Web.tea` is enough.
 
@@ -88,11 +88,11 @@ a Linux host; a macOS `.app` or a Windows `.exe` + zip has its *layout and
 manifest* written for inspection here, but the signed, runnable artifact must be
 finished on that OS's own runner (cross-OS toolchains are out of scope).
 
-## Mobile: a wasm SPA in a system-webview shell
+## Mobile: a wasm client in a system-webview shell
 
-A mobile app is the `Web` shape delivered as an `spa` — the DOM app compiled to
+A mobile app is the `Web` shape delivered as a `solo` — the DOM app compiled to
 WebAssembly and hosted offline from app assets inside a native iOS/Android
-webview. Because it is the `spa` runtime, the app must enable the wasm client in
+webview. Because it is the `solo` runtime, the app must enable the wasm client in
 `package.ipe`:
 
 ```ipe
@@ -100,15 +100,15 @@ package : Package
 package =
     { name = "ui-layout"
     , version = "0.1.0"
-    , wasm = On { mode = Spa }
+    , wasm = On { mode = Solo }
     }
 ```
 
-Then package for a device OS. Because mobile is the `spa` runtime, the host is
-spelled `web spa <os>`:
+Then package for a device OS. Because mobile is the `solo` runtime, the host is
+spelled `web solo <os>`:
 
 ```
-ipe release web spa android
+ipe release web solo android
 ```
 
 This builds the wasm bundle and materialises a native shell:
@@ -121,16 +121,16 @@ packaged `ui-layout` for android → dist/android/ui-layout-android
         inside it with the Android SDK to produce an APK.
 ```
 
-The Android shell is a ready-to-build Gradle project; the SPA rides under
+The Android shell is a ready-to-build Gradle project; the client rides under
 `app/src/main/assets/www/` and a `WebViewAssetLoader` serves it same-origin, so
 there is no remote host and no `file://` access. Finish the APK with
 `./gradlew assembleDebug` where the Android SDK is present.
 
-`ipe release web spa ios` writes the equivalent Xcode project (`WKWebView` +
+`ipe release web solo ios` writes the equivalent Xcode project (`WKWebView` +
 `WKURLSchemeHandler`). Its layout and derived-permission manifest are written for
 inspection, but a signed `.ipa` must be produced on a macOS runner with Xcode and
-a signing identity. As with desktop, `build web spa <os>` lays out the same shell
-around a fast dev SPA; `release web spa <os>` hosts the production SPA.
+a signing identity. As with desktop, `build web solo <os>` lays out the same shell
+around a fast dev client; `release web solo <os>` hosts the production client.
 
 ## OS permissions come from your capabilities
 
@@ -163,8 +163,8 @@ path selects a project other than the current directory.
 ## Where to go next
 
 - [ADR 0005](../adr/0005-delivery-shapes-runtimes-hosts-targets.md) — the two-axis delivery
-  model in full: the five shapes, the two web runtimes, and why each is where it
-  is.
+  model in full: the four TEA shapes plus the direct bucket, the two web runtimes,
+  and why each is where it is.
 - `ipe doc Ipe.Package` — every `delivery`, `wasm`, and `capabilities` field.
 - `ipe build --help` / `ipe release --help` — the one delivery grammar (`ipe
   <verb> [shape] [runtime] [host]`): `build` compiles or bundles a single

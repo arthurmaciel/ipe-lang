@@ -1,6 +1,6 @@
 //! No-server floor for the native desktop-webview delivery.
 //!
-//! A `web live desktop` (webview-native) program renders the diff/patch pipeline
+//! A `web desktop` (webview-native) program renders the diff/patch pipeline
 //! over a LOCAL IPC bridge and runs NO HTTP server — so the emitted crate must
 //! reach only the server-free `web-core` render core, never the axum `server` nor
 //! the full `web` surface. This is the native counterpart of the wasm/SPA floor
@@ -24,7 +24,7 @@ use ipe_ir::{ModPath, Module, Program};
 /// `uses_server`. `uses_ui` + `uses_async_runtime` mirror a real webview app (the
 /// backend forces the async spine for the webview event loop; a webview view is a
 /// render surface). The one built module carries the flags the lowerer would set
-/// for a `web live desktop` entry.
+/// for a `web desktop` entry.
 fn webview_program(interner: &mut Interner) -> Program {
     #[allow(clippy::expect_used)]
     let main = interner.intern("Main").expect("intern");

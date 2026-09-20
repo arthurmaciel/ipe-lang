@@ -22,7 +22,7 @@
 //! The manifest is a `{ name = "…", version = "…", …, build = { … } }` record
 //! typed by the `Ipe.Package` stdlib schema. Every finite choice — the database
 //! driver, a program's shape, the allocator, the wasm mode, a capability — is a
-//! closed-union constructor (`Sqlite`, `Web`, `Dlmalloc`, `Spa`, `Network`), so
+//! closed-union constructor (`Sqlite`, `Web`, `Dlmalloc`, `Solo`, `Network`), so
 //! a typo is a name that does not exist rather than a live-with-it string. Open
 //! text (`version`, an `entry` file, a `Cross` triple) is a `String`, parsed at
 //! this read boundary. No field can hold a function or an effect — the record is
@@ -855,16 +855,16 @@ impl Reader<'_> {
                 Ok(ShipEntry::Binary(BinaryTarget::Cross(triple)))
             }
             "desktop" => Ok(ShipEntry::Desktop),
-            "spa" => Ok(ShipEntry::Spa),
-            "spaDesktop" => Ok(ShipEntry::SpaDesktop),
-            "spaIos" => Ok(ShipEntry::SpaIos),
-            "spaAndroid" => Ok(ShipEntry::SpaAndroid),
+            "solo" => Ok(ShipEntry::Solo),
+            "soloDesktop" => Ok(ShipEntry::SoloDesktop),
+            "soloIos" => Ok(ShipEntry::SoloIos),
+            "soloAndroid" => Ok(ShipEntry::SoloAndroid),
             other => Err(self.reject(
                 expr.span,
                 &format!(
                     "`{other}` is not a ship builder — use `binary`, `staticBinary`, \
-                     `crossBinary \"<triple>\"`, `desktop`, `spa`, `spaDesktop`, `spaIos`, or \
-                     `spaAndroid`"
+                     `crossBinary \"<triple>\"`, `desktop`, `solo`, `soloDesktop`, `soloIos`, or \
+                     `soloAndroid`"
                 ),
             )),
         }
@@ -1013,20 +1013,20 @@ impl Reader<'_> {
         if !saw_mode {
             return Err(self.reject(
                 expr.span,
-                "an `On { … }` wasm bundle must set `mode = Spa` or `mode = Hydrate`",
+                "an `On { … }` wasm bundle must set `mode = Solo` or `mode = Hydrate`",
             ));
         }
         Ok(wasm)
     }
 
-    /// Read a `wasm` `mode` field: `Spa` / `Hydrate`, mapped to its wire mode.
+    /// Read a `wasm` `mode` field: `Solo` / `Hydrate`, mapped to its wire mode.
     fn read_wasm_mode(&self, expr: &Expr) -> Result<String, CliError> {
         match self.expect_ctor(expr, "a wasm mode")? {
-            "Spa" => Ok("spa".to_owned()),
+            "Solo" => Ok("solo".to_owned()),
             "Hydrate" => Ok("hydrate".to_owned()),
             other => Err(self.reject(
                 expr.span,
-                &format!("`{other}` is not a wasm mode — use `Spa` or `Hydrate`"),
+                &format!("`{other}` is not a wasm mode — use `Solo` or `Hydrate`"),
             )),
         }
     }
@@ -1586,7 +1586,7 @@ fn render_wasm(wasm: &WasmConfig) -> Option<String> {
     }
     let mode = match wasm.mode.as_deref() {
         Some("hydrate") => "Hydrate",
-        _ => "Spa",
+        _ => "Solo",
     };
     let mut parts = vec![format!("mode = {mode}")];
     if let Some(entry) = &wasm.entry {
@@ -1639,10 +1639,10 @@ fn ship_builder_expr(entry: ShipEntry) -> String {
             format!("crossBinary {}", quote(triple.as_str()))
         }
         ShipEntry::Desktop => "desktop".to_owned(),
-        ShipEntry::Spa => "spa".to_owned(),
-        ShipEntry::SpaDesktop => "spaDesktop".to_owned(),
-        ShipEntry::SpaIos => "spaIos".to_owned(),
-        ShipEntry::SpaAndroid => "spaAndroid".to_owned(),
+        ShipEntry::Solo => "solo".to_owned(),
+        ShipEntry::SoloDesktop => "soloDesktop".to_owned(),
+        ShipEntry::SoloIos => "soloIos".to_owned(),
+        ShipEntry::SoloAndroid => "soloAndroid".to_owned(),
     }
 }
 
@@ -1804,7 +1804,7 @@ mod tests {
              \x20       }}\n\
              \x20   , wasm =\n\
              \x20       On\n\
-             \x20           {{ mode = Spa\n\
+             \x20           {{ mode = Solo\n\
              \x20           , entry = \"src/Client.ipe\"\n\
              \x20           , mount = \"#app\"\n\
              \x20           , publicEnv = [ \"API_BASE_URL\", \"APP_VERSION\" ]\n\
@@ -1869,7 +1869,7 @@ mod tests {
         let accept_names: Vec<&str> = m.capabilities_accept.iter().map(|c| c.as_str()).collect();
         assert_eq!(accept_names, vec!["unsafe"]);
 
-        assert_eq!(m.wasm.mode.as_deref(), Some("spa"));
+        assert_eq!(m.wasm.mode.as_deref(), Some("solo"));
         assert_eq!(m.wasm.entry.as_deref(), Some("src/Client.ipe"));
         assert_eq!(m.wasm.mount.as_deref(), Some("#app"));
         assert_eq!(m.wasm.public_env, vec!["API_BASE_URL", "APP_VERSION"]);
@@ -1955,7 +1955,7 @@ mod tests {
         let r = read(
             "reject_secret_env",
             &format!(
-                "{HEADER}package =\n    {{ name = \"x\", wasm = On {{ mode = Spa, publicEnv = [ \"DATABASE_URL\" ] }} }}\n"
+                "{HEADER}package =\n    {{ name = \"x\", wasm = On {{ mode = Solo, publicEnv = [ \"DATABASE_URL\" ] }} }}\n"
             ),
         );
         assert_rejected(&r);
@@ -2135,7 +2135,7 @@ mod tests {
         let r = read(
             "ok_env",
             &format!(
-                "{HEADER}package =\n    {{ name = \"x\", wasm = On {{ mode = Spa, publicEnv = [ \"API_BASE_URL\" ] }} }}\n"
+                "{HEADER}package =\n    {{ name = \"x\", wasm = On {{ mode = Solo, publicEnv = [ \"API_BASE_URL\" ] }} }}\n"
             ),
         );
         let m = r.expect("allowed env must parse");
@@ -2388,7 +2388,7 @@ mod tests {
         let m = read(
             "ships_all",
             &format!(
-                "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships =\n        [ binary\n        , staticBinary\n        , crossBinary \"aarch64-unknown-linux-musl\"\n        , desktop\n        , spa\n        , spaDesktop\n        , spaIos\n        , spaAndroid\n        ] }} }}\n"
+                "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships =\n        [ binary\n        , staticBinary\n        , crossBinary \"aarch64-unknown-linux-musl\"\n        , desktop\n        , solo\n        , soloDesktop\n        , soloIos\n        , soloAndroid\n        ] }} }}\n"
             ),
         )
         .expect("every ship builder must parse");
@@ -2399,10 +2399,10 @@ mod tests {
                 ShipEntry::Binary(BinaryTarget::Static),
                 ShipEntry::Binary(BinaryTarget::Cross(StaticTriple::Aarch64LinuxMusl)),
                 ShipEntry::Desktop,
-                ShipEntry::Spa,
-                ShipEntry::SpaDesktop,
-                ShipEntry::SpaIos,
-                ShipEntry::SpaAndroid,
+                ShipEntry::Solo,
+                ShipEntry::SoloDesktop,
+                ShipEntry::SoloIos,
+                ShipEntry::SoloAndroid,
             ]
         );
     }
@@ -2444,7 +2444,7 @@ mod tests {
         let r = read(
             "ships_dup",
             &format!(
-                "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships = [ spa, spa ] }} }}\n"
+                "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships = [ solo, solo ] }} }}\n"
             ),
         );
         assert_rejected(&r);
@@ -2462,7 +2462,7 @@ mod tests {
     #[test]
     fn ships_render_round_trips() {
         let source = format!(
-            "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships = [ binary, spaIos ] }} }}\n"
+            "{HEADER}package =\n    {{ name = \"x\", delivery = {{ ships = [ binary, soloIos ] }} }}\n"
         );
         let m = read("ships_render_in", &source).expect("parse");
         let rendered = render_manifest_record(&m);

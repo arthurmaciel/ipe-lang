@@ -54,7 +54,7 @@ impl BundleProfile {
 pub enum BundleHost {
     /// `web desktop` — a self-contained per-OS desktop bundle for the host OS.
     Desktop,
-    /// `web spa ios` / `web spa android` — a native mobile system-webview shell.
+    /// `web solo ios` / `web solo android` — a native mobile system-webview shell.
     Mobile(pack::mobile::MobileOs),
 }
 
@@ -87,7 +87,7 @@ impl BundleHost {
 /// delivery — the single entry point `build`/`release` call once they know the
 /// bundle host and profile.
 ///
-/// `web desktop` lays out a webview-native desktop bundle; `web spa ios|android`
+/// `web desktop` lays out a webview-native desktop bundle; `web solo ios|android`
 /// builds the client-wasm SPA and lays out a native mobile system-webview shell.
 /// The permission-manifest derivation ([`pack::permissions`]) remains the single
 /// source of truth for what each bundle may do — this routing never authors a
@@ -214,19 +214,57 @@ pub fn validate_mobile_shape(
 
 /// Owns the cargo-build and filesystem materialisation steps for a bundle.
 ///
-/// Constructed once per invocation from the resolved OS, profile, and parsed
-/// manifest. The pure gates ([`validate_desktop_shape`] /
-/// [`validate_mobile_shape`]) must pass before any method is called — this
-/// type is the I/O half of the seam, not the validation half.
-pub struct BundleAssembler<'a> {
+/// The I/O half of the seam, never the validation half. It is unreachable
+/// except through a gate witness ([`GatedDesktop`] / [`GatedMobile`]): its
+/// constructor and assembly methods are private, so no in-crate caller can
+/// obtain a runnable assembler without first passing the fail-closed shape gate
+/// that mints the witness. "Assemble an ungated shape" has no representation.
+struct BundleAssembler<'a> {
     manifest: &'a project::ProjectManifest,
     manifest_path: &'a Path,
     profile: BundleProfile,
 }
 
+/// A desktop-shape gate witness: proof that [`validate_desktop_shape`] passed
+/// for the wrapped assembler. The ONLY way to obtain one is
+/// [`BundleAssembler::gate_desktop`], which runs the gate first; its
+/// [`assemble`](GatedDesktop::assemble) is the sole entry to desktop assembly.
+pub struct GatedDesktop<'a>(BundleAssembler<'a>);
+
+/// A mobile-shape gate witness: proof that [`validate_mobile_shape`] passed for
+/// the wrapped assembler. The ONLY way to obtain one is
+/// [`BundleAssembler::gate_mobile`], which runs the gate first; its
+/// [`assemble`](GatedMobile::assemble) is the sole entry to mobile assembly.
+pub struct GatedMobile<'a>(BundleAssembler<'a>);
+
+impl GatedDesktop<'_> {
+    /// Emit + compile the app and materialise the desktop bundle. Reachable
+    /// only by holding this witness, so the shape gate is already proven passed.
+    ///
+    /// # Errors
+    /// Build/emit errors from the underlying compile; [`CliError::Io`] on any
+    /// filesystem failure while materialising the bundle.
+    pub fn assemble(self, os: pack::desktop::DesktopOs) -> Result<(), CliError> {
+        self.0.assemble_desktop(os)
+    }
+}
+
+impl GatedMobile<'_> {
+    /// Build the wasm SPA and materialise the mobile shell. Reachable only by
+    /// holding this witness, so the shape gate is already proven passed.
+    ///
+    /// # Errors
+    /// The wasm build's own errors; [`CliError::Io`] on any filesystem failure
+    /// while collecting the bundle or materialising the shell.
+    pub fn assemble(self, os: pack::mobile::MobileOs) -> Result<(), CliError> {
+        self.0.assemble_mobile(os)
+    }
+}
+
 impl<'a> BundleAssembler<'a> {
-    /// Construct an assembler for `manifest` at the given profile.
-    pub const fn new(
+    /// Construct an assembler for `manifest` at the given profile. Private: a
+    /// runnable assembler is reachable only through a gate witness.
+    const fn new(
         manifest: &'a project::ProjectManifest,
         manifest_path: &'a Path,
         profile: BundleProfile,
@@ -238,16 +276,57 @@ impl<'a> BundleAssembler<'a> {
         }
     }
 
+    /// Run the desktop shape gate ([`validate_desktop_shape`]) and, only when it
+    /// passes, mint a [`GatedDesktop`] witness wrapping the assembler. This is
+    /// the sole constructor of a runnable desktop assembler, so ungated desktop
+    /// assembly is unrepresentable.
+    ///
+    /// # Errors
+    /// [`CliError::UsageOwned`] wrapping a [`pack::desktop::DesktopRefusal`] when
+    /// the shape is not webview-capable; classification errors from the entry
+    /// source when no shape is declared.
+    pub fn gate_desktop(
+        manifest: &'a project::ProjectManifest,
+        manifest_path: &'a Path,
+        profile: BundleProfile,
+        root: &Path,
+    ) -> Result<GatedDesktop<'a>, CliError> {
+        validate_desktop_shape(manifest.default_program().and_then(|p| p.shape), root)?;
+        Ok(GatedDesktop(Self::new(manifest, manifest_path, profile)))
+    }
+
+    /// Run the mobile shape gate ([`validate_mobile_shape`]) and, only when it
+    /// passes, mint a [`GatedMobile`] witness wrapping the assembler. This is the
+    /// sole constructor of a runnable mobile assembler, so ungated mobile
+    /// assembly is unrepresentable.
+    ///
+    /// # Errors
+    /// [`CliError::UsageOwned`] wrapping a [`pack::mobile::MobileRefusal`] when
+    /// the shape is not a wasm-enabled `Web` app; classification errors from the
+    /// entry source when no shape is declared.
+    pub fn gate_mobile(
+        manifest: &'a project::ProjectManifest,
+        manifest_path: &'a Path,
+        profile: BundleProfile,
+        root: &Path,
+    ) -> Result<GatedMobile<'a>, CliError> {
+        validate_mobile_shape(
+            manifest.default_program().and_then(|p| p.shape),
+            root,
+            &manifest.wasm,
+        )?;
+        Ok(GatedMobile(Self::new(manifest, manifest_path, profile)))
+    }
+
     /// Emit + compile the app to a binary, generate the desktop bundle layout,
     /// and materialise (Linux) or describe (macOS/Windows) the bundle on disk.
-    ///
-    /// Callers must have already run [`validate_desktop_shape`] — this method
-    /// does not re-check the shape gate.
+    /// Private: reached only through a [`GatedDesktop`] witness, so the shape
+    /// gate is already proven passed.
     ///
     /// # Errors
     /// Build/emit errors from the underlying compile; [`CliError::Io`] on any
     /// filesystem failure while materialising the bundle.
-    pub fn assemble_desktop(&self, os: pack::desktop::DesktopOs) -> Result<(), CliError> {
+    fn assemble_desktop(&self, os: pack::desktop::DesktopOs) -> Result<(), CliError> {
         let manifest = self.manifest;
         let identity = pack::desktop::BundleIdentity::new(
             &manifest.name,
@@ -320,15 +399,13 @@ impl<'a> BundleAssembler<'a> {
     }
 
     /// Build the wasm SPA, collect its `www/` tree, generate the mobile shell
-    /// layout, and materialise the shell on disk.
-    ///
-    /// Callers must have already run [`validate_mobile_shape`] — this method
-    /// does not re-check the shape or wasm-capability gate.
+    /// layout, and materialise the shell on disk. Private: reached only through
+    /// a [`GatedMobile`] witness, so the shape gate is already proven passed.
     ///
     /// # Errors
     /// The wasm build's own errors; [`CliError::Io`] on any filesystem failure
     /// while collecting the bundle or materialising the shell.
-    pub fn assemble_mobile(&self, os: pack::mobile::MobileOs) -> Result<(), CliError> {
+    fn assemble_mobile(&self, os: pack::mobile::MobileOs) -> Result<(), CliError> {
         let manifest = self.manifest;
         let identity = pack::desktop::BundleIdentity::new(
             &manifest.name,
@@ -416,13 +493,13 @@ pub fn pack_desktop(profile: BundleProfile, path: Option<&str>) -> Result<(), Cl
     // source. An author's declared `programs` shape, when present, is honoured
     // as an explicit override for the rare app that declares one; otherwise the
     // main-classified shape decides. A non-web `main` is refused up front,
-    // naming its shape.
-    validate_desktop_shape(manifest.default_program().and_then(|p| p.shape), &root)?;
-
-    BundleAssembler::new(&manifest, &manifest_path, profile).assemble_desktop(os)
+    // naming its shape. The witness constructor runs the gate and is the only
+    // way to obtain a runnable assembler — assembling an ungated shape has no
+    // representation.
+    BundleAssembler::gate_desktop(&manifest, &manifest_path, profile, &root)?.assemble(os)
 }
 
-/// `build|release web spa <os> [<path>]` — build the client-wasm SPA and lay out
+/// `build|release web solo <os> [<path>]` — build the client-wasm SPA and lay out
 /// a native mobile system-webview shell for `os` (`ios` / `android`) that hosts
 /// the SPA offline from app assets.
 ///
@@ -456,17 +533,13 @@ pub fn pack_mobile(
     // wasm-enabled `Web` SPA. A declared non-`Web` shape, or a `Web` app with the
     // `[wasm]` mode off, is refused up front (naming exactly what is missing). An
     // app that declares no shape at all is trusted to infer `Web`.
-    // The mobile packager hosts the `web spa <ios|android>` SPA: the shape is
+    // The mobile packager hosts the `web solo <ios|android>` SPA: the shape is
     // pinned by `main`. Honour an explicit declared shape when present, else
     // classify `main` — a non-web `main` fails the `require_web_spa` gate by
     // name rather than silently packaging a terminal or script app as an SPA.
-    validate_mobile_shape(
-        manifest.default_program().and_then(|p| p.shape),
-        &root,
-        &manifest.wasm,
-    )?;
-
-    BundleAssembler::new(&manifest, &manifest_path, profile).assemble_mobile(os)
+    // The witness constructor runs the gate and is the only way to obtain a
+    // runnable assembler — assembling an ungated shape has no representation.
+    BundleAssembler::gate_mobile(&manifest, &manifest_path, profile, &root)?.assemble(os)
 }
 
 /// Build the hostable SPA bundle at `build_dir/www/` through this binary —
@@ -476,7 +549,7 @@ pub fn pack_mobile(
 /// Invoking the same binary keeps the wasm bundle pipeline (emit + cargo +
 /// wasm-bindgen) authoritative — the mobile shell hosts exactly the bundle a
 /// plain wasm build/release produces, never a re-implemented variant. The profile
-/// carries through so a `release web spa <os>` shell hosts the production SPA.
+/// carries through so a `release web solo <os>` shell hosts the production SPA.
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] when this binary's path cannot be resolved or the
@@ -2469,7 +2542,7 @@ mod pack_gate_tests {
     #[test]
     fn mobile_gate_refuses_terminal_shape() {
         let wasm_on = project::WasmConfig {
-            mode: Some("spa".to_owned()),
+            mode: Some("solo".to_owned()),
             ..Default::default()
         };
         let err = validate_mobile_shape(
@@ -2495,7 +2568,7 @@ mod pack_gate_tests {
     #[test]
     fn mobile_gate_refuses_program_shape() {
         let wasm_on = project::WasmConfig {
-            mode: Some("spa".to_owned()),
+            mode: Some("solo".to_owned()),
             ..Default::default()
         };
         let err =
@@ -2529,7 +2602,7 @@ mod pack_gate_tests {
             return;
         };
         assert!(
-            msg.contains("wasm") || msg.contains("Wasm") || msg.contains("spa"),
+            msg.contains("wasm") || msg.contains("Wasm") || msg.contains("solo"),
             "refusal names the missing wasm capability: {msg}"
         );
     }
@@ -2538,7 +2611,7 @@ mod pack_gate_tests {
     #[test]
     fn mobile_gate_accepts_web_shape_with_wasm_spa() {
         let wasm_on = project::WasmConfig {
-            mode: Some("spa".to_owned()),
+            mode: Some("solo".to_owned()),
             ..Default::default()
         };
         validate_mobile_shape(Some(project::EntryShape::Web), Path::new("."), &wasm_on)
@@ -2562,7 +2635,7 @@ mod pack_gate_tests {
     #[test]
     fn classify_mobile_cap_web_wasm_on() {
         let wasm_on = project::WasmConfig {
-            mode: Some("spa".to_owned()),
+            mode: Some("solo".to_owned()),
             ..Default::default()
         };
         let cap = classify_mobile_spa_cap(Some(project::EntryShape::Web), Path::new("."), &wasm_on)
@@ -2575,7 +2648,7 @@ mod pack_gate_tests {
     #[test]
     fn classify_mobile_cap_terminal_wasm_on() {
         let wasm_on = project::WasmConfig {
-            mode: Some("spa".to_owned()),
+            mode: Some("solo".to_owned()),
             ..Default::default()
         };
         let cap = classify_mobile_spa_cap(

@@ -242,6 +242,17 @@ enum WatchRole {
     Failure,
 }
 
+/// The single source of truth for the "first SIGTERM consumed" ack.
+///
+/// The forwarder emits this text once, through [`watch_line`] (so the printed
+/// line wraps it in gutter/colour escapes — match it as a substring, never for
+/// byte-equality), the moment it consumes the first SIGTERM and begins the
+/// orderly teardown. Any supervisor or test that must observe consumption waits
+/// for this line rather than a timing guess: a second SIGTERM sent only after
+/// it appears is provably after the forwarder spent its one registration, so it
+/// is guaranteed absorbed.
+pub const SIGTERM_TEARDOWN_MARKER: &str = "[ipe watch] SIGTERM received; shutting down";
+
 /// `text` is already-sanitised [`TerminalSafe`], mirroring [`crate::style::error_banner`]:
 /// the line's own gutter/colour escapes are the only control bytes the output may
 /// carry. Callers construct it via [`crate::style::TerminalSafe::sanitize`] at the
@@ -925,6 +936,23 @@ fn run_inner(
             // registration fails degrades to the pre-existing behaviour (no
             // PID-only-SIGTERM handling), never a hard failure of `ipe watch`.
             if let Err(e) = ipe_watch::install_sigterm_forwarder(move || {
+                // Announce, on the forwarder thread, that the FIRST SIGTERM has
+                // been consumed and the orderly teardown is starting — the one
+                // registration `signal-hook` holds is now spent, so every later
+                // SIGTERM is absorbed (a stuck `ipe watch` needs SIGKILL). This
+                // notice is emitted BEFORE the `Shutdown` event is sent, so its
+                // appearance is a happens-before proof that the forwarder has
+                // consumed the signal: a supervisor (or the double-SIGTERM proof
+                // test) can wait for this line as an explicit ack rather than
+                // guessing a delay. Not `--quiet`-gated: a shutdown-on-signal
+                // notice is a load-bearing operational fact, not chatter.
+                eprintln!(
+                    "{}",
+                    watch_line(
+                        &crate::style::TerminalSafe::sanitize(SIGTERM_TEARDOWN_MARKER),
+                        WatchRole::Info,
+                    )
+                );
                 let _ = evt_tx.send(OrchestratorEvent::Shutdown);
             }) {
                 eprintln!(

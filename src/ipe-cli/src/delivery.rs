@@ -9,7 +9,7 @@
 //!   positional is a *validated cross-check* against `main`, not a second source
 //!   of truth.
 //! * **runtime × host** — for the `web` shape only, whether the loop is
-//!   co-located (`live`, the unnamed default) or sandboxed (`spa`), and which
+//!   co-located (`served`, the unnamed default) or sandboxed (`solo`), and which
 //!   host carries it.
 //!
 //! Every invalid combination is a [`DeliveryError`] — a kind-teacher diagnostic
@@ -135,31 +135,33 @@ pub use ipe_canon::shape_source::ControlModel;
 /// other shape has exactly one, so this axis is absent for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runtime {
-    /// The co-located server loop — LiveView-style diff/patch to a thin client,
-    /// direct native effects. The **unnamed default**: it is never written on
-    /// the CLI. `web` alone means live; typing `live` is a [`DeliveryError`].
-    Live,
-    /// The sandboxed client loop — wasm in a webview/browser, effects only via
-    /// Web-API capabilities plus HTTP to a backend. The only web runtime word.
-    Spa,
+    /// The co-located server loop — server-rendered, live-updated (SSR + SSE)
+    /// diff/patch to a thin client, direct native effects. The **unnamed
+    /// default**: it is never written on the CLI. `web` alone means served;
+    /// typing `served` is a [`DeliveryError`].
+    Served,
+    /// The self-contained client loop — a WebAssembly client with no co-located
+    /// server, effects only via Web-API capabilities plus HTTP to a backend. The
+    /// only web runtime word.
+    Solo,
 }
 
 /// A delivery host — where a resolved shape × runtime actually runs (spec § 2,
 /// § 4). Not every host is valid for every runtime; the validity table decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Host {
-    /// The implicit host: `web` (served, over SSE) or `web spa` (the browser).
+    /// The implicit host: `web` (served, over SSE) or `web solo` (the browser).
     /// Never written — it is what an absent host token means.
     #[default]
     Default,
-    /// `desktop`. Under `live` it is **webview-native** (the diff/patch pipeline
-    /// over a local IPC bridge); under `spa` it is **webview-wasm** (the browser
-    /// SPA wrapped in a `wry` shell).
+    /// `desktop`. Under `served` it is **webview-native** (the diff/patch
+    /// pipeline over a local IPC bridge); under `solo` it is **webview-wasm** (the
+    /// self-contained client wrapped in a `wry` shell).
     Desktop,
-    /// `ios` — a wasm SPA in `WKWebView` plus a native shell. `spa` only.
+    /// `ios` — a wasm client in `WKWebView` plus a native shell. `solo` only.
     Ios,
-    /// `android` — a wasm SPA in an Android `WebView` plus a native shell. `spa`
-    /// only.
+    /// `android` — a wasm client in an Android `WebView` plus a native shell.
+    /// `solo` only.
     Android,
 }
 
@@ -201,7 +203,7 @@ impl Host {
 pub enum Engine {
     /// The native host binary — full-kernel effects, `available_on == true`.
     Native,
-    /// The sandboxed browser WASM client (`web spa`) — the default-deny
+    /// The sandboxed browser WASM client (`web solo`) — the default-deny
     /// allowlist. Effects only via Web-API substitutes; native effects denied.
     WasmClient,
     /// The co-located portable WASI engine (`wasm32-wasip1`) — a
@@ -246,7 +248,7 @@ pub enum TargetTriple {
     X8664LinuxMusl,
     /// `aarch64-unknown-linux-musl` — the static-musl aarch64 triple.
     Aarch64LinuxMusl,
-    /// `wasm32-unknown-unknown` — the browser sandbox triple (`web spa`).
+    /// `wasm32-unknown-unknown` — the browser sandbox triple (`web solo`).
     BrowserWasm,
     /// `wasm32-wasip1` — the co-located portable WASI triple. Representable so
     /// the matrix can refuse it fail-closed; its accept-path is gated on the
@@ -332,7 +334,7 @@ impl Delivery {
             self,
             Self {
                 shape: Shape::Web,
-                runtime: Some(Runtime::Live),
+                runtime: Some(Runtime::Served),
                 host: Host::Desktop,
             }
         )
@@ -340,7 +342,7 @@ impl Delivery {
 
     /// `true` when a static (musl) artifact is admissible for this delivery.
     /// Only the co-located, no-webview shapes qualify: a webview host links the
-    /// system webview at runtime, and a `spa`/mobile host is a wasm/bundle
+    /// system webview at runtime, and a `solo`/mobile host is a wasm/bundle
     /// target where a musl triple is moot.
     #[must_use]
     pub const fn allows_static(self) -> bool {
@@ -349,7 +351,7 @@ impl Delivery {
             Shape::Web => matches!(
                 self,
                 Self {
-                    runtime: Some(Runtime::Live),
+                    runtime: Some(Runtime::Served),
                     host: Host::Default,
                     ..
                 }
@@ -358,12 +360,12 @@ impl Delivery {
     }
 
     /// Resolve a `main`-pinned shape and the parsed runtime/host tokens into a
-    /// valid [`Delivery`], applying the defaults (`web` → live, every host →
+    /// valid [`Delivery`], applying the defaults (`web` → served, every host →
     /// its implicit default) and rejecting every invalid combination with a
     /// pedagogical [`DeliveryError`].
     ///
     /// `runtime`/`host` apply to `web` only; a runtime or non-default host on a
-    /// non-web shape is refused. For `web`, an absent runtime means live.
+    /// non-web shape is refused. For `web`, an absent runtime means served.
     ///
     /// # Errors
     /// [`DeliveryError`] naming the exact invalid combination and its fix.
@@ -386,17 +388,17 @@ impl Delivery {
             });
         }
 
-        // Web: absent runtime is the unnamed live default.
-        let runtime = runtime.unwrap_or(Runtime::Live);
+        // Web: absent runtime is the unnamed served default.
+        let runtime = runtime.unwrap_or(Runtime::Served);
         match runtime {
-            Runtime::Live => match host {
-                // Served live (implicit) or webview-native desktop.
+            Runtime::Served => match host {
+                // Served (implicit) or webview-native desktop.
                 Host::Default | Host::Desktop => {}
                 Host::Ios | Host::Android => {
-                    return Err(DeliveryError::LiveHostNotMobile { host });
+                    return Err(DeliveryError::ServedHostNotMobile { host });
                 }
             },
-            Runtime::Spa => {} // every host is valid for spa.
+            Runtime::Solo => {} // every host is valid for solo.
         }
         Ok(Self {
             shape,
@@ -439,7 +441,7 @@ impl Delivery {
     /// The `(engine, delivery, triple)` validity matrix — a typed total function
     /// that admits exactly the legal combinations and refuses every other with a
     /// pedagogical [`DeliveryError`]. It is the single live gate coupling the
-    /// delivery runtime to the compile target: it enforces the `spa` IFF wasm
+    /// delivery runtime to the compile target: it enforces the `solo` IFF wasm
     /// biconditional (the runtime and the target are derived from independent
     /// sources — the delivery grammar vs the `--target`/`IPE_TARGET`/`[wasm].mode`
     /// chain — so this is the one point that refuses their disagreement) and adds
@@ -447,7 +449,7 @@ impl Delivery {
     /// browser client (`wasm32-unknown-unknown`) and the co-located portable WASI
     /// target (`wasm32-wasip1`) — are kept cleanly separate at one place. It is
     /// load-bearing for security: the native-deny backstops that keep native
-    /// effects out of a sandboxed client are keyed to the wasm engine, so a `spa`
+    /// effects out of a sandboxed client are keyed to the wasm engine, so a `solo`
     /// delivery that slipped through as a native build would ship those effects
     /// into the sandbox. Absent proof the axes agree, the build is refused.
     ///
@@ -472,15 +474,15 @@ impl Delivery {
         engine: Engine,
         triple: TargetTriple,
     ) -> Result<(), DeliveryError> {
-        let is_spa = matches!(self.runtime, Some(Runtime::Spa));
+        let is_solo = matches!(self.runtime, Some(Runtime::Solo));
         match engine {
             // The native host binary: a WASM triple has no native form, and a
-            // `spa` delivery must not resolve to a native engine (the wasm-keyed
+            // `solo` delivery must not resolve to a native engine (the wasm-keyed
             // sandbox backstops would be skipped). Otherwise the static-triple
             // gate decides which co-located triples are admissible.
             Engine::Native => {
-                if is_spa {
-                    return Err(DeliveryError::SpaRequiresWasmTarget);
+                if is_solo {
+                    return Err(DeliveryError::SoloRequiresWasmTarget);
                 }
                 match triple {
                     TargetTriple::BrowserWasm | TargetTriple::Wasm32Wasip1 => {
@@ -499,26 +501,26 @@ impl Delivery {
                     }
                 }
             }
-            // The sandboxed browser client: exactly `web spa` on the browser
+            // The sandboxed browser client: exactly `web solo` on the browser
             // triple, and nothing else. It NEVER widens to the WASI triple —
             // that would be a sandbox escape hatch.
             Engine::WasmClient => {
-                if !is_spa {
-                    return Err(DeliveryError::WasmTargetRequiresSpa);
+                if !is_solo {
+                    return Err(DeliveryError::WasmTargetRequiresSolo);
                 }
                 match triple {
                     TargetTriple::BrowserWasm => Ok(()),
-                    TargetTriple::Wasm32Wasip1 => Err(DeliveryError::SpaRefusesWasiTriple),
+                    TargetTriple::Wasm32Wasip1 => Err(DeliveryError::SoloRefusesWasiTriple),
                     TargetTriple::Host
                     | TargetTriple::X8664LinuxMusl
                     | TargetTriple::Aarch64LinuxMusl => {
-                        Err(DeliveryError::SpaRequiresBrowserTriple { triple })
+                        Err(DeliveryError::SoloRequiresBrowserTriple { triple })
                     }
                 }
             }
             // The co-located portable WASI engine: exactly the sealed
             // `Direct`/`Script` floor on the `wasm32-wasip1` triple, and nothing
-            // else. It is NEVER `spa` (that is the browser sandbox), and it
+            // else. It is NEVER `solo` (that is the browser sandbox), and it
             // carries ONLY a `Direct` control model — a TEA loop (`Tui`/`Cli`/
             // `Web`) has no co-located WASI floor (its runtime spine pulls
             // tokio/axum, which do not build on wasip1), so admitting one would
@@ -529,8 +531,8 @@ impl Delivery {
             // other triples have no WASI form: the browser triple is the sandbox,
             // and a musl/host triple is a native binary, not a wasip1 module.
             Engine::WasmWasi => {
-                if is_spa {
-                    return Err(DeliveryError::WasiRefusesSpaDelivery);
+                if is_solo {
+                    return Err(DeliveryError::WasiRefusesSoloDelivery);
                 }
                 match self.shape.control_model() {
                     ControlModel::Direct => {}
@@ -555,8 +557,8 @@ impl Delivery {
 impl fmt::Display for Delivery {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.shape.word())?;
-        if self.runtime == Some(Runtime::Spa) {
-            f.write_str(" spa")?;
+        if self.runtime == Some(Runtime::Solo) {
+            f.write_str(" solo")?;
         }
         if let Some(word) = self.host.word() {
             write!(f, " {word}")?;
@@ -580,10 +582,10 @@ pub enum DeliveryError {
         /// The shape `main`'s entry actually selects.
         pinned: Shape,
     },
-    /// The literal token `live` was written. `live` is the unnamed default — it
-    /// is never spelled out.
-    LiveNotAWord,
-    /// A runtime word (`spa`) was given for a non-web shape, which has no runtime
+    /// The literal token `served` was written. `served` is the unnamed default —
+    /// it is never spelled out.
+    ServedNotAWord,
+    /// A runtime word (`solo`) was given for a non-web shape, which has no runtime
     /// axis.
     RuntimeOnNonWeb {
         /// The non-web shape that was given a runtime word.
@@ -596,14 +598,14 @@ pub enum DeliveryError {
         /// The host word given.
         host: Host,
     },
-    /// A mobile host (`ios`/`android`) was given for the live runtime. Mobile is
-    /// a sandboxed `spa` target only.
-    LiveHostNotMobile {
-        /// The mobile host that live does not carry.
+    /// A mobile host (`ios`/`android`) was given for the served runtime. Mobile
+    /// is a self-contained `solo` target only.
+    ServedHostNotMobile {
+        /// The mobile host that served does not carry.
         host: Host,
     },
     /// `--static` was requested for a delivery that cannot be a static musl
-    /// binary (a webview host, or a `spa`/mobile wasm/bundle target).
+    /// binary (a webview host, or a `solo`/mobile wasm/bundle target).
     StaticNotAllowed {
         /// The delivery that has no static form.
         delivery: Delivery,
@@ -613,15 +615,15 @@ pub enum DeliveryError {
         /// The offending token.
         got: String,
     },
-    /// A `spa` delivery resolved to a native compile target. A sandboxed client
+    /// A `solo` delivery resolved to a native compile target. A sandboxed client
     /// must compile to wasm — the native-deny backstops that keep native effects
-    /// out of the sandbox are keyed to the wasm target, so a native `spa` build
+    /// out of the sandbox are keyed to the wasm target, so a native `solo` build
     /// would ship those effects into a sandboxed client.
-    SpaRequiresWasmTarget,
-    /// A wasm compile target resolved without a `spa` delivery. The wasm client
-    /// target exists only to carry a sandboxed `spa` app; a non-`spa` shape has
+    SoloRequiresWasmTarget,
+    /// A wasm compile target resolved without a `solo` delivery. The wasm client
+    /// target exists only to carry a sandboxed `solo` app; a non-`solo` shape has
     /// no wasm form, so the two were derived from disagreeing sources.
-    WasmTargetRequiresSpa,
+    WasmTargetRequiresSolo,
     /// A WASM triple was requested for the native engine. The native binary has
     /// no WebAssembly form; the browser client compiles to
     /// `wasm32-unknown-unknown`, and the co-located WASI target to
@@ -630,17 +632,17 @@ pub enum DeliveryError {
         /// The WASM triple asked for on the native engine.
         triple: TargetTriple,
     },
-    /// A `web spa` client asked for a triple other than the browser sandbox
+    /// A `web solo` client asked for a triple other than the browser sandbox
     /// triple. The sandboxed client compiles only to `wasm32-unknown-unknown`.
-    SpaRequiresBrowserTriple {
-        /// The non-browser triple asked for on a `spa` delivery.
+    SoloRequiresBrowserTriple {
+        /// The non-browser triple asked for on a `solo` delivery.
         triple: TargetTriple,
     },
-    /// A `web spa` client asked for the `wasm32-wasip1` (WASI) triple. The
+    /// A `web solo` client asked for the `wasm32-wasip1` (WASI) triple. The
     /// browser sandbox never widens to WASI: WASI is the co-located portable
     /// target with native-ish effects, the exact opposite of the browser
     /// sandbox's default-deny surface. Allowing it would be a sandbox escape.
-    SpaRefusesWasiTriple,
+    SoloRefusesWasiTriple,
     /// A musl static triple was requested for a delivery that links the system
     /// webview at runtime (`web desktop`), which has no static binary. Mirrors
     /// the `--static` × webview refusal on the triple axis.
@@ -648,10 +650,10 @@ pub enum DeliveryError {
         /// The webview-native delivery that has no static triple.
         delivery: Delivery,
     },
-    /// A co-located WASI build was asked to carry a `spa` delivery. `spa` is the
-    /// browser sandbox (`wasm32-unknown-unknown`); WASI is the co-located
+    /// A co-located WASI build was asked to carry a `solo` delivery. `solo` is
+    /// the browser sandbox (`wasm32-unknown-unknown`); WASI is the co-located
     /// native-ish target — the two are opposite ends of the wasm axis.
-    WasiRefusesSpaDelivery,
+    WasiRefusesSoloDelivery,
     /// A co-located WASI build was asked for a non-`Direct` shape (a `Tui`/`Cli`/
     /// `Web` TEA loop). Only a `Direct` (`Task Error ()` script) program has a
     /// co-located WASI floor: a TEA loop's spine pulls tokio/axum, which do not
@@ -675,8 +677,8 @@ pub enum DeliveryError {
 /// packager/static layer; runtime/host are the typed axes.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct DeliveryTokens {
-    /// The parsed web runtime (`Some(Spa)` if `spa` was written; `None` = live
-    /// default). Only meaningful for the web shape.
+    /// The parsed web runtime (`Some(Solo)` if `solo` was written; `None` =
+    /// served default). Only meaningful for the web shape.
     pub runtime: Option<Runtime>,
     /// The parsed host, defaulting to the implicit host.
     pub host: Host,
@@ -687,22 +689,22 @@ pub struct DeliveryTokens {
 impl DeliveryTokens {
     /// Parse the delivery tail — the positional tokens that follow an optional
     /// `[shape]` — into typed axes. Order is `[runtime] [host] [target]`; each is
-    /// optional. `spa` is the only runtime word (`live` is refused as a word);
+    /// optional. `solo` is the only runtime word (`served` is refused as a word);
     /// `desktop`/`ios`/`android` are hosts; anything else is taken as a target
     /// triple (a second unknown non-triple token is [`DeliveryError::UnknownToken`]).
     ///
     /// # Errors
-    /// [`DeliveryError::LiveNotAWord`] if `live` is written;
-    /// [`DeliveryError::UnknownToken`] for a token that is neither `spa`, a host,
+    /// [`DeliveryError::ServedNotAWord`] if `served` is written;
+    /// [`DeliveryError::UnknownToken`] for a token that is neither `solo`, a host,
     /// nor a plausible target where a target has already been taken.
     pub fn parse(tokens: &[String]) -> Result<Self, DeliveryError> {
         let mut out = Self::default();
         for tok in tokens {
-            if tok == "live" {
-                return Err(DeliveryError::LiveNotAWord);
+            if tok == "served" {
+                return Err(DeliveryError::ServedNotAWord);
             }
-            if tok == "spa" {
-                out.runtime = Some(Runtime::Spa);
+            if tok == "solo" {
+                out.runtime = Some(Runtime::Solo);
                 continue;
             }
             if let Some(host) = Host::from_word(tok) {
@@ -744,17 +746,17 @@ impl fmt::Display for DeliveryError {
                 stated.word(),
                 stated.word(),
             ),
-            Self::LiveNotAWord => write!(
+            Self::ServedNotAWord => write!(
                 f,
-                "`live` is the default runtime, so it is never written. The web shape \
-                 runs live (a co-located server loop) unless you opt into `spa` (a \
-                 sandboxed client). Write `web` for served-live, or `web desktop` for \
-                 live on the desktop.",
+                "`served` is the default runtime, so it is never written. The web shape \
+                 runs served (a co-located server loop) unless you opt into `solo` (a \
+                 self-contained client). Write `web` for served, or `web desktop` for \
+                 served on the desktop.",
             ),
             Self::RuntimeOnNonWeb { shape } => write!(
                 f,
-                "`spa` is a web runtime, but this is a `{}` app. Only the `web` shape \
-                 has a runtime choice (live vs spa) — every other shape runs one way. \
+                "`solo` is a web runtime, but this is a `{}` app. Only the `web` shape \
+                 has a runtime choice (served vs solo) — every other shape runs one way. \
                  Drop the runtime word.",
                 shape.word(),
             ),
@@ -767,18 +769,19 @@ impl fmt::Display for DeliveryError {
                 shape.word(),
                 shape.word(),
             ),
-            Self::LiveHostNotMobile { host } => write!(
+            Self::ServedHostNotMobile { host } => write!(
                 f,
-                "`{host}` is a `spa` host, not a live host. Mobile ships a sandboxed \
-                 client (`web spa {host}`); live is the co-located server loop (served \
-                 or `web desktop`). Write `web spa {host}` for mobile.",
+                "`{host}` is a `solo` host, not a served host. Mobile ships a \
+                 self-contained client (`web solo {host}`); served is the co-located \
+                 server loop (served or `web desktop`). Write `web solo {host}` for \
+                 mobile.",
                 host = host.word().unwrap_or("default"),
             ),
             Self::StaticNotAllowed { delivery } => match delivery.host() {
-                Host::Desktop if delivery.runtime() == Some(Runtime::Live) => write!(
+                Host::Desktop if delivery.runtime() == Some(Runtime::Served) => write!(
                     f,
                     "`web desktop` links the system webview at runtime, so it has no \
-                     static binary. Use `web` (served-live), `tui`, `cli`, or `script` \
+                     static binary. Use `web` (served), `tui`, `cli`, or `script` \
                      for a static musl binary, or ship the desktop app bundle.",
                 ),
                 _ => write!(
@@ -791,23 +794,23 @@ impl fmt::Display for DeliveryError {
             Self::UnknownToken { got } => write!(
                 f,
                 "`{got}` is not a runtime, host, or target. The web runtime word is \
-                 `spa` (live is the default). Hosts are `desktop`, `ios`, `android`. \
+                 `solo` (served is the default). Hosts are `desktop`, `ios`, `android`. \
                  Targets are a Rust triple (or `--static` for musl).",
             ),
-            Self::SpaRequiresWasmTarget => write!(
+            Self::SoloRequiresWasmTarget => write!(
                 f,
-                "a `spa` delivery is a sandboxed client that must compile to wasm, but \
-                 the target resolved to native. The sandbox's native-deny guards are \
-                 keyed to the wasm target, so a native `spa` build would ship native \
+                "a `solo` delivery is a self-contained client that must compile to wasm, \
+                 but the target resolved to native. The sandbox's native-deny guards are \
+                 keyed to the wasm target, so a native `solo` build would ship native \
                  effects into the sandbox. Build for wasm — pass `--target wasm`, set \
                  `IPE_TARGET=wasm`, or set `[wasm] mode` in `package.ipe` — or drop \
-                 `spa` for a co-located live delivery.",
+                 `solo` for a co-located served delivery.",
             ),
-            Self::WasmTargetRequiresSpa => write!(
+            Self::WasmTargetRequiresSolo => write!(
                 f,
-                "a wasm compile target was requested, but the delivery is not `spa`. \
-                 The wasm client target exists only to carry a sandboxed `spa` app; \
-                 every other shape has no wasm form. Deliver `web spa` to build for \
+                "a wasm compile target was requested, but the delivery is not `solo`. \
+                 The wasm client target exists only to carry a self-contained `solo` app; \
+                 every other shape has no wasm form. Deliver `web solo` to build for \
                  wasm, or drop the wasm target (`--target`/`IPE_TARGET`/`[wasm] mode`) \
                  for a native build.",
             ),
@@ -815,27 +818,27 @@ impl fmt::Display for DeliveryError {
                 f,
                 "`{}` is a WebAssembly triple, but this build targets the native \
                  binary, which has no WASM form. The browser client compiles to \
-                 `wasm32-unknown-unknown` (deliver `web spa`); the co-located WASI \
+                 `wasm32-unknown-unknown` (deliver `web solo`); the co-located WASI \
                  target compiles to `wasm32-wasip1`. Drop the WASM triple for a \
                  native build, or pick the delivery that carries it.",
                 triple.as_str(),
             ),
-            Self::SpaRequiresBrowserTriple { triple } => write!(
+            Self::SoloRequiresBrowserTriple { triple } => write!(
                 f,
-                "a `web spa` client compiles only to `wasm32-unknown-unknown`, but \
+                "a `web solo` client compiles only to `wasm32-unknown-unknown`, but \
                  `{}` was requested. The sandboxed browser client has exactly one \
                  triple — its wasm sandbox. Drop the triple (it is implied by \
-                 `spa`), or drop `spa` for the delivery that carries `{}`.",
+                 `solo`), or drop `solo` for the delivery that carries `{}`.",
                 triple.as_str(),
                 triple.as_str(),
             ),
-            Self::SpaRefusesWasiTriple => write!(
+            Self::SoloRefusesWasiTriple => write!(
                 f,
-                "a `web spa` client cannot target `wasm32-wasip1`. The browser \
+                "a `web solo` client cannot target `wasm32-wasip1`. The browser \
                  sandbox denies native effects and reaches the world only through \
                  Web-API capabilities; WASI is the co-located, native-ish target \
                  for a `tui`/`cli`/`script`/served-`web` program, never the browser \
-                 sandbox. Deliver `web spa` to `wasm32-unknown-unknown`, or use a \
+                 sandbox. Deliver `web solo` to `wasm32-unknown-unknown`, or use a \
                  co-located shape for a WASI build.",
             ),
             Self::WebviewHasNoStaticTriple { delivery } => write!(
@@ -844,13 +847,13 @@ impl fmt::Display for DeliveryError {
                  static (musl) triple. Use `web` (served-live), `tui`, `cli`, or \
                  `script` for a static musl binary, or ship the desktop app bundle.",
             ),
-            Self::WasiRefusesSpaDelivery => write!(
+            Self::WasiRefusesSoloDelivery => write!(
                 f,
-                "a co-located `wasm32-wasip1` build cannot carry a `spa` delivery. \
-                 `spa` is the browser sandbox (`wasm32-unknown-unknown`), which \
+                "a co-located `wasm32-wasip1` build cannot carry a `solo` delivery. \
+                 `solo` is the browser sandbox (`wasm32-unknown-unknown`), which \
                  denies native effects; WASI is the co-located, native-ish target \
-                 that runs a script's own effect floor. Drop `spa` for a WASI \
-                 build, or deliver `web spa` to the browser triple.",
+                 that runs a script's own effect floor. Drop `solo` for a WASI \
+                 build, or deliver `web solo` to the browser triple.",
             ),
             Self::WasiRequiresDirectShape { shape } => write!(
                 f,
@@ -884,16 +887,13 @@ mod tests {
     }
 
     #[test]
-    fn web_no_tokens_is_served_live_default() {
+    fn web_no_tokens_is_served_default() {
         let t = DeliveryTokens::parse(&tokens(&[])).unwrap();
         let d = Delivery::resolve(Shape::Web, t.runtime, t.host).unwrap();
-        assert_eq!(d.runtime(), Some(Runtime::Live));
+        assert_eq!(d.runtime(), Some(Runtime::Served));
         assert_eq!(d.host(), Host::Default);
         assert!(!d.is_webview_native());
-        assert!(
-            d.allows_static(),
-            "served live is a co-located static target"
-        );
+        assert!(d.allows_static(), "served is a co-located static target");
         assert_eq!(d.to_string(), "web");
     }
 
@@ -907,38 +907,38 @@ mod tests {
     }
 
     #[test]
-    fn web_spa_hosts_all_resolve() {
+    fn web_solo_hosts_all_resolve() {
         for host in ["desktop", "ios", "android"] {
-            let t = DeliveryTokens::parse(&tokens(&["spa", host])).unwrap();
+            let t = DeliveryTokens::parse(&tokens(&["solo", host])).unwrap();
             let d = Delivery::resolve(Shape::Web, t.runtime, t.host).unwrap();
-            assert_eq!(d.runtime(), Some(Runtime::Spa));
-            assert!(!d.is_webview_native(), "spa is never webview-native");
+            assert_eq!(d.runtime(), Some(Runtime::Solo));
+            assert!(!d.is_webview_native(), "solo is never webview-native");
             assert!(!d.allows_static());
         }
-        let t = DeliveryTokens::parse(&tokens(&["spa"])).unwrap();
+        let t = DeliveryTokens::parse(&tokens(&["solo"])).unwrap();
         let d = Delivery::resolve(Shape::Web, t.runtime, t.host).unwrap();
         assert_eq!(d.host(), Host::Default);
         assert!(!d.allows_static());
     }
 
     #[test]
-    fn live_is_never_a_word() {
+    fn served_is_never_a_word() {
         assert_eq!(
-            DeliveryTokens::parse(&tokens(&["live"])).unwrap_err(),
-            DeliveryError::LiveNotAWord
+            DeliveryTokens::parse(&tokens(&["served"])).unwrap_err(),
+            DeliveryError::ServedNotAWord
         );
         assert_eq!(
-            DeliveryTokens::parse(&tokens(&["spa", "live"])).unwrap_err(),
-            DeliveryError::LiveNotAWord
+            DeliveryTokens::parse(&tokens(&["solo", "served"])).unwrap_err(),
+            DeliveryError::ServedNotAWord
         );
     }
 
     #[test]
-    fn live_refuses_mobile_hosts() {
+    fn served_refuses_mobile_hosts() {
         for host in [Host::Ios, Host::Android] {
             assert_eq!(
                 Delivery::resolve(Shape::Web, None, host).unwrap_err(),
-                DeliveryError::LiveHostNotMobile { host }
+                DeliveryError::ServedHostNotMobile { host }
             );
         }
     }
@@ -947,7 +947,7 @@ mod tests {
     fn runtime_or_host_on_non_web_is_refused() {
         for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Worker] {
             assert_eq!(
-                Delivery::resolve(shape, Some(Runtime::Spa), Host::Default).unwrap_err(),
+                Delivery::resolve(shape, Some(Runtime::Solo), Host::Default).unwrap_err(),
                 DeliveryError::RuntimeOnNonWeb { shape }
             );
             assert_eq!(
@@ -971,8 +971,8 @@ mod tests {
 
     #[test]
     fn target_triple_positional_is_kept() {
-        let t = DeliveryTokens::parse(&tokens(&["spa", "wasm32-unknown-unknown"])).unwrap();
-        assert_eq!(t.runtime, Some(Runtime::Spa));
+        let t = DeliveryTokens::parse(&tokens(&["solo", "wasm32-unknown-unknown"])).unwrap();
+        assert_eq!(t.runtime, Some(Runtime::Solo));
         assert_eq!(t.target.as_deref(), Some("wasm32-unknown-unknown"));
     }
 
@@ -1042,18 +1042,18 @@ mod tests {
     #[test]
     fn messages_teach_not_slap() {
         let cases = [
-            DeliveryError::LiveNotAWord,
+            DeliveryError::ServedNotAWord,
             DeliveryError::ShapeMismatch {
                 stated: Shape::Tui,
                 pinned: Shape::Web,
             },
             DeliveryError::RuntimeOnNonWeb { shape: Shape::Cli },
-            DeliveryError::LiveHostNotMobile { host: Host::Ios },
+            DeliveryError::ServedHostNotMobile { host: Host::Ios },
             DeliveryError::StaticNotAllowed {
                 delivery: Delivery::resolve(Shape::Web, None, Host::Desktop).unwrap(),
             },
-            DeliveryError::SpaRequiresWasmTarget,
-            DeliveryError::WasmTargetRequiresSpa,
+            DeliveryError::SoloRequiresWasmTarget,
+            DeliveryError::WasmTargetRequiresSolo,
         ];
         for c in &cases {
             assert!(c.to_string().len() > 40, "a refusal is a lesson: {c}");
@@ -1062,14 +1062,14 @@ mod tests {
 
     // === The engine × host × triple validity matrix (#2461) ===
 
-    fn spa() -> Delivery {
-        Delivery::resolve(Shape::Web, Some(Runtime::Spa), Host::Default).unwrap()
+    fn solo() -> Delivery {
+        Delivery::resolve(Shape::Web, Some(Runtime::Solo), Host::Default).unwrap()
     }
-    fn served_live() -> Delivery {
-        Delivery::resolve(Shape::Web, Some(Runtime::Live), Host::Default).unwrap()
+    fn served() -> Delivery {
+        Delivery::resolve(Shape::Web, Some(Runtime::Served), Host::Default).unwrap()
     }
     fn web_desktop() -> Delivery {
-        Delivery::resolve(Shape::Web, Some(Runtime::Live), Host::Desktop).unwrap()
+        Delivery::resolve(Shape::Web, Some(Runtime::Served), Host::Desktop).unwrap()
     }
 
     #[test]
@@ -1117,11 +1117,11 @@ mod tests {
     // --- Refusals first: every illegal cell turned away with a typed diagnostic.
 
     #[test]
-    fn spa_refuses_wasi_triple() {
+    fn solo_refuses_wasi_triple() {
         // THE headline separation: the browser sandbox never widens to WASI.
         assert_eq!(
-            spa().admit_triple(Engine::WasmClient, TargetTriple::Wasm32Wasip1),
-            Err(DeliveryError::SpaRefusesWasiTriple),
+            solo().admit_triple(Engine::WasmClient, TargetTriple::Wasm32Wasip1),
+            Err(DeliveryError::SoloRefusesWasiTriple),
         );
     }
 
@@ -1151,9 +1151,9 @@ mod tests {
                 "the WASI engine must refuse the non-Direct {shape:?} shape",
             );
         }
-        // A `web` (live) app is a TEA loop too — refused on the WASI engine.
+        // A `web` (served) app is a TEA loop too — refused on the WASI engine.
         assert_eq!(
-            served_live().admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
+            served().admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
             Err(DeliveryError::WasiRequiresDirectShape { shape: Shape::Web }),
         );
         // A `script` (the `Direct` bucket a server folds into) PASSES this
@@ -1170,11 +1170,11 @@ mod tests {
     }
 
     #[test]
-    fn wasi_engine_refuses_spa_delivery() {
-        // `spa` is the browser sandbox — the exact opposite of co-located WASI.
+    fn wasi_engine_refuses_solo_delivery() {
+        // `solo` is the browser sandbox — the exact opposite of co-located WASI.
         assert_eq!(
-            spa().admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
-            Err(DeliveryError::WasiRefusesSpaDelivery),
+            solo().admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
+            Err(DeliveryError::WasiRefusesSoloDelivery),
         );
     }
 
@@ -1203,7 +1203,7 @@ mod tests {
         // triple slipping past the engine gate).
         for d in [
             Delivery::resolve(Shape::Script, None, Host::Default).unwrap(),
-            served_live(),
+            served(),
         ] {
             assert_eq!(
                 d.admit_triple(Engine::Native, TargetTriple::Wasm32Wasip1),
@@ -1215,16 +1215,16 @@ mod tests {
     }
 
     #[test]
-    fn spa_requires_browser_triple() {
-        // A `spa` client on any non-browser triple is refused.
+    fn solo_requires_browser_triple() {
+        // A `solo` client on any non-browser triple is refused.
         for t in [
             TargetTriple::Host,
             TargetTriple::X8664LinuxMusl,
             TargetTriple::Aarch64LinuxMusl,
         ] {
             assert_eq!(
-                spa().admit_triple(Engine::WasmClient, t),
-                Err(DeliveryError::SpaRequiresBrowserTriple { triple: t }),
+                solo().admit_triple(Engine::WasmClient, t),
+                Err(DeliveryError::SoloRequiresBrowserTriple { triple: t }),
             );
         }
     }
@@ -1234,35 +1234,35 @@ mod tests {
         // Both wasm flavours have no native form.
         for t in [TargetTriple::BrowserWasm, TargetTriple::Wasm32Wasip1] {
             assert_eq!(
-                served_live().admit_triple(Engine::Native, t),
+                served().admit_triple(Engine::Native, t),
                 Err(DeliveryError::NativeEngineRefusesWasmTriple { triple: t }),
             );
         }
     }
 
     #[test]
-    fn native_engine_refuses_spa_delivery() {
-        // A `spa` delivery must not resolve to the native engine — the
+    fn native_engine_refuses_solo_delivery() {
+        // A `solo` delivery must not resolve to the native engine — the
         // wasm-keyed sandbox backstops would be skipped. Subsumes the
-        // biconditional's `SpaRequiresWasmTarget` half on the triple axis.
+        // biconditional's `SoloRequiresWasmTarget` half on the triple axis.
         assert_eq!(
-            spa().admit_triple(Engine::Native, TargetTriple::Host),
-            Err(DeliveryError::SpaRequiresWasmTarget),
+            solo().admit_triple(Engine::Native, TargetTriple::Host),
+            Err(DeliveryError::SoloRequiresWasmTarget),
         );
     }
 
     #[test]
-    fn wasm_client_engine_refuses_non_spa_delivery() {
-        // The symmetric half: the browser client engine only carries `spa`.
+    fn wasm_client_engine_refuses_non_solo_delivery() {
+        // The symmetric half: the browser client engine only carries `solo`.
         for d in [
-            served_live(),
+            served(),
             web_desktop(),
             Delivery::resolve(Shape::Cli, None, Host::Default).unwrap(),
         ] {
             assert_eq!(
                 d.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
-                Err(DeliveryError::WasmTargetRequiresSpa),
-                "the browser client engine must refuse the non-spa delivery {d}",
+                Err(DeliveryError::WasmTargetRequiresSolo),
+                "the browser client engine must refuse the non-solo delivery {d}",
             );
         }
     }
@@ -1284,9 +1284,9 @@ mod tests {
     // --- Legal cells: the enumerated admissions.
 
     #[test]
-    fn browser_spa_admits_browser_wasm() {
+    fn browser_solo_admits_browser_wasm() {
         assert_eq!(
-            spa().admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
+            solo().admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
             Ok(()),
         );
     }
@@ -1298,7 +1298,7 @@ mod tests {
             Delivery::resolve(Shape::Tui, None, Host::Default).unwrap(),
             Delivery::resolve(Shape::Cli, None, Host::Default).unwrap(),
             Delivery::resolve(Shape::Worker, None, Host::Default).unwrap(),
-            served_live(),
+            served(),
         ] {
             assert_eq!(d.admit_triple(Engine::Native, TargetTriple::Host), Ok(()));
             assert_eq!(
@@ -1314,34 +1314,34 @@ mod tests {
     }
 
     #[test]
-    fn matrix_enforces_the_spa_iff_wasm_biconditional() {
-        // The matrix IS the `spa` IFF wasm biconditional: on the browser-client
-        // axis, `spa` compiles to wasm and wasm carries only `spa` — both
+    fn matrix_enforces_the_solo_iff_wasm_biconditional() {
+        // The matrix IS the `solo` IFF wasm biconditional: on the browser-client
+        // axis, `solo` compiles to wasm and wasm carries only `solo` — both
         // agreeing corners admitted, both disagreeing corners refused, with no
         // permissive middle. (engine, triple) is the target side of the
         // biconditional: WasmClient+BrowserWasm is the wasm corner, Native+Host
         // the native corner.
-        let spa = spa();
-        let live = served_live();
-        // spa + wasm: admitted (the sandboxed client's one legal target).
+        let solo = solo();
+        let served = served();
+        // solo + wasm: admitted (the sandboxed client's one legal target).
         assert_eq!(
-            spa.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
+            solo.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
             Ok(()),
         );
-        // spa + native: refused — the wasm-keyed sandbox backstops would be
+        // solo + native: refused — the wasm-keyed sandbox backstops would be
         // skipped for a client shipped as a native binary.
         assert_eq!(
-            spa.admit_triple(Engine::Native, TargetTriple::Host),
-            Err(DeliveryError::SpaRequiresWasmTarget),
+            solo.admit_triple(Engine::Native, TargetTriple::Host),
+            Err(DeliveryError::SoloRequiresWasmTarget),
         );
-        // live + wasm: refused — a non-`spa` shape has no browser-wasm form.
+        // served + wasm: refused — a non-`solo` shape has no browser-wasm form.
         assert_eq!(
-            live.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
-            Err(DeliveryError::WasmTargetRequiresSpa),
+            served.admit_triple(Engine::WasmClient, TargetTriple::BrowserWasm),
+            Err(DeliveryError::WasmTargetRequiresSolo),
         );
-        // live + native: admitted — the co-located native binary.
+        // served + native: admitted — the co-located native binary.
         assert_eq!(
-            live.admit_triple(Engine::Native, TargetTriple::Host),
+            served.admit_triple(Engine::Native, TargetTriple::Host),
             Ok(()),
         );
     }
@@ -1352,14 +1352,14 @@ mod tests {
             DeliveryError::NativeEngineRefusesWasmTriple {
                 triple: TargetTriple::Wasm32Wasip1,
             },
-            DeliveryError::SpaRequiresBrowserTriple {
+            DeliveryError::SoloRequiresBrowserTriple {
                 triple: TargetTriple::X8664LinuxMusl,
             },
-            DeliveryError::SpaRefusesWasiTriple,
+            DeliveryError::SoloRefusesWasiTriple,
             DeliveryError::WebviewHasNoStaticTriple {
                 delivery: web_desktop(),
             },
-            DeliveryError::WasiRefusesSpaDelivery,
+            DeliveryError::WasiRefusesSoloDelivery,
             DeliveryError::WasiRequiresDirectShape { shape: Shape::Tui },
             DeliveryError::WasiRequiresWasiTriple {
                 triple: TargetTriple::Host,

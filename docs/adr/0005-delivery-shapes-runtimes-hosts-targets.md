@@ -39,7 +39,7 @@ point.
 
 ### The shape set
 
-> **NEEDS UPDATE AFTER IMPLEMENTATION** — the designed set is four TEA shapes (`web`/`tui`/`cli`/`worker`) plus one direct bucket (`script`), with `worker` a first-class shape and `server` folded into `script`; the code has five shapes {`Script`, `Tui`, `Cli`, `Server`, `Web`} and no `worker` (`src/compiler/canon/src/shape_source.rs:21`, `src/compiler/canon/src/shape_runtime.rs:42`); tracked in #2566–2569. Once landed, replace the five-shape enum below with the four-TEA-shapes-plus-direct-bucket account.
+> **IMPLEMENTED** — the shape set is four TEA shapes (`web`/`tui`/`cli`/`worker`) plus one direct bucket (`script`). `worker` is a first-class shape; `server` is folded into `script` (a `Direct` `Task Error ()` running `Server.listen`). The account below is current.
 
 There are **four TEA shapes** — `web`, `tui`, `cli`, `worker` — that share the
 Elm `init` / `update` / `subscriptions` loop and differ only by their **view
@@ -63,7 +63,7 @@ axis (a network-listen capability), not a distinct shape or control model.
 
 ### Control models: {Tea, Direct}
 
-> **NEEDS UPDATE AFTER IMPLEMENTATION** — the designed set is two control models {`Tea`, `Direct`}; the code has three, {`Tea`, `Server`, `Direct`}, with a server still projecting to a distinct `Server` control model (`src/compiler/canon/src/shape_source.rs:44`, `src/ipe-cli/src/delivery.rs` `control_model`); tracked in #2566–2569. Once landed, delete the `Server` control model and project a server's shape to `Direct`.
+> **IMPLEMENTED** — the control-model set is two: {`Tea`, `Direct`}. The retired `Server` model no longer parses; a server's `script` shape projects to `Direct`.
 
 A shape projects to exactly one control model:
 
@@ -82,7 +82,7 @@ security signal.
 
 ### Runtime vocabulary: `served` ↔ `solo`
 
-> **NEEDS UPDATE AFTER IMPLEMENTATION** — the designed runtime words are `served` (unnamed default) and `solo`; the code uses `live`/`CoLocated` and `spa` (`src/compiler/canon/src/shape_runtime.rs` `Runtime`, `src/ipe-cli/src/delivery.rs` `Runtime::{Live,Spa}`); tracked in #2566–2569. Once landed, rename `Live`/`CoLocated` → `served` and `Spa` → `solo` across the `Runtime` enum, CLI grammar, `package.ipe`, `ipe doc`, hover, and diagnostics, retiring the `live`/`spa` words.
+> **IMPLEMENTED** — the runtime vocabulary is `served` (unnamed default; typing it is a `DeliveryError`) and `solo` (the one explicit runtime word). The retired words `live` and `spa` are accepted for one release as deprecated aliases and then removed.
 
 The `web` shape — the only shape with a runtime choice — is delivered under one
 of two runtimes:

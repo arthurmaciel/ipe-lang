@@ -134,12 +134,12 @@ pub struct DeliveryConfig {
     /// [`crate::delivery_set::DeliverySet::resolve`]). The `ships` list declares
     /// *what* ships; the sections below configure *how* each looks.
     pub ships: Vec<crate::delivery_set::ShipEntry>,
-    /// Window title, width, and height for the `web live desktop`
+    /// Window title, width, and height for the `web desktop`
     /// (webview-native) host.
     pub desktop: DesktopDelivery,
-    /// Bundle identifier and orientation for `web spa ios` / `web spa android`.
+    /// Bundle identifier and orientation for `web solo ios` / `web solo android`.
     pub mobile: MobileDelivery,
-    /// Base path for the `web spa` browser host.
+    /// Base path for the `web solo` browser host.
     pub browser: BrowserDelivery,
 }
 
@@ -350,7 +350,7 @@ fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
 ///
 /// ```toml
 /// [wasm]
-/// mode      = "spa"              # spa (MVP) | hydrate (MVP+1) | off (default)
+/// mode      = "solo"             # solo (MVP) | hydrate (MVP+1) | off (default)
 /// entry     = "src/Client.ipe"   # client entry; its reachability closure is the bundle
 /// mount     = "#app"             # SPA mount node
 /// publicEnv = ["API_BASE_URL"]   # default-deny allowlist; rejects IPE_* / secret patterns
@@ -358,7 +358,7 @@ fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WasmConfig {
-    /// `"spa"` / `"hydrate"` / `"off"` (default when the key or section is
+    /// `"solo"` / `"hydrate"` / `"off"` (default when the key or section is
     /// absent — `--target wasm` still works without a `[wasm]` section; this
     /// field is metadata for the eventual SSR+hydration/SPA-shell split, not
     /// a gate on `ipe build --target wasm` itself).
@@ -381,7 +381,7 @@ impl WasmConfig {
     /// Whether this config's `mode` implies the `WasmClient` compilation
     /// target.
     ///
-    /// `true` for any active mode (`"spa"`, `"hydrate"`, or any future on-value).
+    /// `true` for any active mode (`"solo"`, `"hydrate"`, or any future on-value).
     /// `false` for the explicit opt-out (`"off"`) and for the absent default
     /// (no `[wasm]` section / no `mode` key — both leave `mode` as `None`).
     #[must_use]
@@ -1145,14 +1145,14 @@ import String
     // ── WasmConfig::implies_wasm_target ──────────────────────────────────────
 
     #[test]
-    fn implies_wasm_target_spa_and_hydrate_are_on() {
+    fn implies_wasm_target_solo_and_hydrate_are_on() {
         assert!(
             WasmConfig {
-                mode: Some("spa".to_owned()),
+                mode: Some("solo".to_owned()),
                 ..Default::default()
             }
             .implies_wasm_target(),
-            "mode=spa must imply wasm target"
+            "mode=solo must imply wasm target"
         );
         assert!(
             WasmConfig {

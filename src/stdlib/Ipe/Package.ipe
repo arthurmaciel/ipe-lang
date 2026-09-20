@@ -41,10 +41,10 @@ module Ipe.Package exposing
     , staticBinary
     , crossBinary
     , desktop
-    , spa
-    , spaDesktop
-    , spaIos
-    , spaAndroid
+    , solo
+    , soloDesktop
+    , soloIos
+    , soloAndroid
     , DesktopConfig
     , MobileConfig
     , BrowserConfig
@@ -97,7 +97,7 @@ type alias Delivery =
 -- Every entry is one of the closed builder vocabulary — a typo is an unknown
 -- name at read time, never a string compared at build time. Each builder maps
 -- one-to-one onto the CLI delivery grammar (`binary` is the shape's co-located
--- artifact; `spaIos` is `web spa ios`), so the manifest stores the same
+-- artifact; `soloIos` is `web solo ios`), so the manifest stores the same
 -- sentences the CLI accepts. An omitted `ships` field means the implicit
 -- `[ binary ]` singleton — the shape's default delivery.
 type Ship
@@ -105,14 +105,14 @@ type Ship
     | ShipStaticBinary
     | ShipCross String
     | ShipDesktop
-    | ShipSpa
-    | ShipSpaDesktop
-    | ShipSpaIos
-    | ShipSpaAndroid
+    | ShipSolo
+    | ShipSoloDesktop
+    | ShipSoloIos
+    | ShipSoloAndroid
 
 
--- | The shape's own co-located artifact on the host triple (for `web`, served
--- live). Meaningful for every shape.
+-- | The shape's own co-located artifact on the host triple (for `web`,
+-- served). Meaningful for every shape.
 binary : Ship
 binary =
     ShipBinary
@@ -137,31 +137,31 @@ desktop =
     ShipDesktop
 
 
--- | The `web spa` browser wasm bundle. Web shape only.
-spa : Ship
-spa =
-    ShipSpa
+-- | The `web solo` browser wasm bundle. Web shape only.
+solo : Ship
+solo =
+    ShipSolo
 
 
--- | The `web spa desktop` wasm bundle plus a native webview shell.
-spaDesktop : Ship
-spaDesktop =
-    ShipSpaDesktop
+-- | The `web solo desktop` wasm bundle plus a native webview shell.
+soloDesktop : Ship
+soloDesktop =
+    ShipSoloDesktop
 
 
--- | The `web spa ios` wasm bundle plus an iOS shell.
-spaIos : Ship
-spaIos =
-    ShipSpaIos
+-- | The `web solo ios` wasm bundle plus an iOS shell.
+soloIos : Ship
+soloIos =
+    ShipSoloIos
 
 
--- | The `web spa android` wasm bundle plus an Android shell.
-spaAndroid : Ship
-spaAndroid =
-    ShipSpaAndroid
+-- | The `web solo android` wasm bundle plus an Android shell.
+soloAndroid : Ship
+soloAndroid =
+    ShipSoloAndroid
 
 
--- | Configuration for the `web live desktop` (webview-native) host.
+-- | Configuration for the `web desktop` (webview-native) host.
 --
 -- `title` is the native window title. `width` and `height` are the initial
 -- inner dimensions in logical pixels; the user may resize afterwards.
@@ -172,7 +172,7 @@ type alias DesktopConfig =
     }
 
 
--- | Configuration for the `web spa ios` / `web spa android` mobile hosts.
+-- | Configuration for the `web solo ios` / `web solo android` mobile hosts.
 --
 -- `bundleId` is the reverse-DNS application identifier required by both
 -- platforms (`com.example.myapp`). `orientation` locks the device orientation
@@ -190,10 +190,10 @@ type Orientation
     | Any
 
 
--- | Configuration for the `web spa` browser host.
+-- | Configuration for the `web solo` browser host.
 --
--- `basePath` is the URL base path the SPA is served from. Use `"/"` for the
--- root and `"/app"` when the SPA lives at a sub-path behind a reverse proxy.
+-- `basePath` is the URL base path the client is served from. Use `"/"` for the
+-- root and `"/app"` when the client lives at a sub-path behind a reverse proxy.
 type alias BrowserConfig =
     { basePath : String
     }
@@ -289,7 +289,7 @@ type WasmClient
 
 -- | The rendering strategy of a wasm client bundle.
 type WasmMode
-    = Spa
+    = Solo
     | Hydrate
 
 

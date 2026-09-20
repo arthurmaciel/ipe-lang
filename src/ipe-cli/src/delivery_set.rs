@@ -53,18 +53,18 @@ pub enum BinaryTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShipEntry {
     /// The shape's own co-located artifact, on the given target. For `web` this
-    /// is served live. Meaningful for every shape.
+    /// is served. Meaningful for every shape.
     Binary(BinaryTarget),
     /// `web desktop` — the webview-native desktop bundle.
     Desktop,
-    /// `web spa` — the browser wasm bundle.
-    Spa,
-    /// `web spa desktop` — the wasm bundle plus a native webview shell.
-    SpaDesktop,
-    /// `web spa ios` — the wasm bundle plus an iOS shell.
-    SpaIos,
-    /// `web spa android` — the wasm bundle plus an Android shell.
-    SpaAndroid,
+    /// `web solo` — the browser wasm bundle.
+    Solo,
+    /// `web solo desktop` — the wasm bundle plus a native webview shell.
+    SoloDesktop,
+    /// `web solo ios` — the wasm bundle plus an iOS shell.
+    SoloIos,
+    /// `web solo android` — the wasm bundle plus an Android shell.
+    SoloAndroid,
 }
 
 impl ShipEntry {
@@ -74,11 +74,11 @@ impl ShipEntry {
     const fn web_axes(self) -> Option<(Option<Runtime>, Host)> {
         Some(match self {
             Self::Binary(_) => return None,
-            Self::Desktop => (Some(Runtime::Live), Host::Desktop),
-            Self::Spa => (Some(Runtime::Spa), Host::Default),
-            Self::SpaDesktop => (Some(Runtime::Spa), Host::Desktop),
-            Self::SpaIos => (Some(Runtime::Spa), Host::Ios),
-            Self::SpaAndroid => (Some(Runtime::Spa), Host::Android),
+            Self::Desktop => (Some(Runtime::Served), Host::Desktop),
+            Self::Solo => (Some(Runtime::Solo), Host::Default),
+            Self::SoloDesktop => (Some(Runtime::Solo), Host::Desktop),
+            Self::SoloIos => (Some(Runtime::Solo), Host::Ios),
+            Self::SoloAndroid => (Some(Runtime::Solo), Host::Android),
         })
     }
 }
@@ -184,11 +184,11 @@ impl DeliverySet {
                 }
                 return Ok(PlannedDelivery { delivery, target });
             }
-            ShipEntry::Desktop => (Some(Runtime::Live), Host::Desktop),
-            ShipEntry::Spa => (Some(Runtime::Spa), Host::Default),
-            ShipEntry::SpaDesktop => (Some(Runtime::Spa), Host::Desktop),
-            ShipEntry::SpaIos => (Some(Runtime::Spa), Host::Ios),
-            ShipEntry::SpaAndroid => (Some(Runtime::Spa), Host::Android),
+            ShipEntry::Desktop => (Some(Runtime::Served), Host::Desktop),
+            ShipEntry::Solo => (Some(Runtime::Solo), Host::Default),
+            ShipEntry::SoloDesktop => (Some(Runtime::Solo), Host::Desktop),
+            ShipEntry::SoloIos => (Some(Runtime::Solo), Host::Ios),
+            ShipEntry::SoloAndroid => (Some(Runtime::Solo), Host::Android),
         };
 
         // A web-bearing entry: reject a non-web shape first with the shape lesson,
@@ -322,8 +322,8 @@ fn web_entry_on_non_web(pinned: Shape, entry: ShipEntry) -> CliError {
     let words = describe_entry(entry);
     CliError::UsageOwned(format!(
         "package.ipe declares `{words}`, but `main` is a `{shape}` app. The web hosts \
-         (desktop, spa, spa ios, …) carry a sandboxed web client; a `{shape}` app ships \
-         as a binary. Remove the entry, or change `main` to a `Web.tea` entry.",
+         (desktop, solo, solo ios, …) carry a self-contained web client; a `{shape}` app \
+         ships as a binary. Remove the entry, or change `main` to a `Web.tea` entry.",
         shape = pinned.word(),
     ))
 }
@@ -336,7 +336,7 @@ fn describe_entry(entry: ShipEntry) -> String {
         ShipEntry::Binary(BinaryTarget::Host) => "binary".to_owned(),
         ShipEntry::Binary(BinaryTarget::Static) => "staticBinary".to_owned(),
         ShipEntry::Binary(BinaryTarget::Cross(t)) => format!("crossBinary {}", t.as_str()),
-        // A web-bearing entry reads as its resolved delivery words (`web spa ios`).
+        // A web-bearing entry reads as its resolved delivery words (`web solo ios`).
         _ => match entry.web_axes() {
             Some((runtime, host)) => Delivery::resolve(Shape::Web, runtime, host)
                 .map_or_else(|_| ship_builder_word(entry).to_owned(), |d| d.to_string()),
@@ -351,10 +351,10 @@ const fn ship_builder_word(entry: ShipEntry) -> &'static str {
     match entry {
         ShipEntry::Binary(_) => "binary",
         ShipEntry::Desktop => "desktop",
-        ShipEntry::Spa => "spa",
-        ShipEntry::SpaDesktop => "spaDesktop",
-        ShipEntry::SpaIos => "spaIos",
-        ShipEntry::SpaAndroid => "spaAndroid",
+        ShipEntry::Solo => "solo",
+        ShipEntry::SoloDesktop => "soloDesktop",
+        ShipEntry::SoloIos => "soloIos",
+        ShipEntry::SoloAndroid => "soloAndroid",
     }
 }
 
@@ -395,18 +395,18 @@ mod tests {
         let entries = [
             ShipEntry::Binary(BinaryTarget::Host),
             ShipEntry::Desktop,
-            ShipEntry::Spa,
-            ShipEntry::SpaIos,
+            ShipEntry::Solo,
+            ShipEntry::SoloIos,
         ];
         let set = DeliverySet::resolve(Shape::Web, &entries).expect("web set resolves");
         let slugs: Vec<String> = set.planned().iter().map(|p| p.slug()).collect();
-        assert_eq!(slugs, ["web", "web-desktop", "web-spa", "web-spa-ios"]);
+        assert_eq!(slugs, ["web", "web-desktop", "web-solo", "web-solo-ios"]);
     }
 
     #[test]
     fn web_entry_on_non_web_shape_is_pedagogical() {
         for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Worker] {
-            let err = DeliverySet::resolve(shape, &[ShipEntry::SpaIos]).unwrap_err();
+            let err = DeliverySet::resolve(shape, &[ShipEntry::SoloIos]).unwrap_err();
             let CliError::UsageOwned(msg) = err else {
                 panic!("expected a named rejection, got {err:?}");
             };
@@ -419,18 +419,19 @@ mod tests {
     fn static_binary_refused_where_delivery_has_no_static_form() {
         // `web desktop` is webview-native: no musl binary. The `allows_static`
         // gate refuses a `Static` target on it — but that arm is reached only for
-        // the co-located `Binary` entry, whose delivery is served-live for web
+        // the co-located `Binary` entry, whose delivery is served for web
         // (which *does* allow static). The genuine refusal lands on a shape whose
         // binary cannot be static: none of the current shapes, so assert the gate
         // holds for the web-desktop delivery directly instead.
         let set = DeliverySet::resolve(Shape::Web, &[ShipEntry::Binary(BinaryTarget::Static)])
-            .expect("served-live web is static-capable");
+            .expect("served web is static-capable");
         assert_eq!(set.planned()[0].target(), BinaryTarget::Static);
     }
 
     #[test]
     fn duplicate_entry_is_rejected() {
-        let err = DeliverySet::resolve(Shape::Web, &[ShipEntry::Spa, ShipEntry::Spa]).unwrap_err();
+        let err =
+            DeliverySet::resolve(Shape::Web, &[ShipEntry::Solo, ShipEntry::Solo]).unwrap_err();
         let CliError::UsageOwned(msg) = err else {
             panic!("expected a named rejection, got {err:?}");
         };
@@ -455,7 +456,7 @@ mod tests {
     fn release_each_all_built_is_all_released() {
         let set = DeliverySet::resolve(
             Shape::Web,
-            &[ShipEntry::Binary(BinaryTarget::Host), ShipEntry::Spa],
+            &[ShipEntry::Binary(BinaryTarget::Host), ShipEntry::Solo],
         )
         .expect("web set resolves");
         let outcome = set.release_each(|plan| Ok(PathBuf::from(plan.slug())));
@@ -472,15 +473,16 @@ mod tests {
             Shape::Web,
             &[
                 ShipEntry::Binary(BinaryTarget::Host),
-                ShipEntry::Spa,
+                ShipEntry::Solo,
                 ShipEntry::Desktop,
             ],
         )
         .expect("web set resolves");
-        // Fail exactly the second delivery (spa).
+        // Fail exactly the second delivery (solo).
         let outcome = set.release_each(|plan| {
-            if matches!(plan.delivery().runtime(), Some(Runtime::Spa)) && plan.slug() == "web-spa" {
-                Err(CliError::UsageOwned("spa bundle failed".to_owned()))
+            if matches!(plan.delivery().runtime(), Some(Runtime::Solo)) && plan.slug() == "web-solo"
+            {
+                Err(CliError::UsageOwned("solo bundle failed".to_owned()))
             } else {
                 Ok(PathBuf::from(plan.slug()))
             }
@@ -490,7 +492,7 @@ mod tests {
             ReleaseOutcome::Incomplete { built, failed } => {
                 assert_eq!(built.len(), 2);
                 assert_eq!(failed.len(), 1);
-                assert_eq!(failed[0].0.to_string(), "web spa");
+                assert_eq!(failed[0].0.to_string(), "web solo");
             }
             other => panic!("expected Incomplete, got {other:?}"),
         }
