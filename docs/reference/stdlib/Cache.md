@@ -11,6 +11,10 @@ read; `0` disables.  Both keys and values are typed via phantom
 parameters — the runtime stringifies the key for the LRU map
 but the surface API stays parametric.
 
+The number of live caches is itself bounded: `new` fails once too
+many caches are live, and `destroy` reclaims one.  A long-lived
+server creating caches per request must `destroy` them when done.
+
 Every typed record ships with a `defaultCfg` constructor + `with*`
 builder helpers so future field additions don't break record literals.
 
@@ -140,4 +144,16 @@ stats : Cache k v -> Task Error { hits : Int, misses : Int, evictions : Int }
 `stats cache` — running totals of `{ hits, misses, evictions }`
 since the cache was created.  Counters are monotone — they
 survive `clear`.
+
+## `destroy`
+
+```ipe
+destroy : Cache k v -> Task Error ()
+```
+
+`destroy cache` — reclaim the cache, freeing its handle.  The registry
+caps the number of live caches, so a long-lived server that creates caches
+per request must destroy them when done.  Idempotent — destroying an
+already-destroyed cache succeeds silently.  Using a cache after `destroy`
+behaves as an empty cache (misses / no-ops), never a failure.
 
