@@ -338,6 +338,35 @@ pub enum Doc {
         /// The trailing `.method(…)` text, including the leading dot.
         method: Box<Self>,
     },
+    /// A parenthesized `if`/`else` expression `(if cond { then } else { else })`,
+    /// laid out with `rustfmt`'s `single_line_if_else_max_width` rule. The whole
+    /// construct stays on one line when the un-parenthesized `if cond { then } else
+    /// { else }` text is at most `single_line_if_else_max_width` (default 50)
+    /// columns wide — an ABSOLUTE, column-independent threshold — and otherwise
+    /// breaks each branch body onto its own line in block form:
+    ///
+    /// ```text
+    /// (if cond {
+    ///     then
+    /// } else {
+    ///     else
+    /// })
+    /// ```
+    ///
+    /// Unlike a [`Doc::Group`], the threshold is absolute (measured from the flat
+    /// leaf widths, not the remaining column budget), so this cannot be a soft
+    /// group. The break decision is independent of any enclosing group. SEAL
+    /// accounting: `(if `, `cond`, ` { `, `then`, ` } else { `, `else`, and ` })`
+    /// are all leaves (the string emitter writes those exact tokens); the block
+    /// form's newlines are pure whitespace and normalize to the flat separators.
+    IfElse {
+        /// The condition document (a single-line leaf run).
+        cond: Box<Self>,
+        /// The then-branch body document.
+        then_: Box<Self>,
+        /// The else-branch body document.
+        else_: Box<Self>,
+    },
 }
 
 /// One operand of a [`Doc::Chain`], with the operator that precedes it (if any).
@@ -465,6 +494,16 @@ impl Doc {
         Self::MethodChain {
             receiver: Box::new(receiver),
             method: Box::new(method),
+        }
+    }
+
+    /// A parenthesized `if`/`else` that breaks its branches to block form when the
+    /// construct exceeds `single_line_if_else_max_width`. See [`Doc::IfElse`].
+    pub fn if_else(cond: Self, then_: Self, else_: Self) -> Self {
+        Self::IfElse {
+            cond: Box::new(cond),
+            then_: Box::new(then_),
+            else_: Box::new(else_),
         }
     }
 
@@ -600,7 +639,28 @@ impl Doc {
                 receiver.collect_leaves(out);
                 method.collect_leaves(out);
             }
+            // The `(if … { … } else { … })` tokens the string emitter writes
+            // adjacently. The block form's newlines are pure whitespace and its
+            // brace tokens are identical, so both layouts normalize to the same
+            // leaves — the branch bodies carry their own leaves in between.
+            Self::IfElse { cond, then_, else_ } => {
+                Self::collect_if_else_leaves(cond, then_, else_, out);
+            }
         }
+    }
+
+    /// Append the `(if cond { then } else { else })` leaf tokens for a
+    /// [`Doc::IfElse`], with each branch's own leaves in between — the exact
+    /// adjacent token sequence the string emitter writes, identical in the inline
+    /// and block layouts.
+    fn collect_if_else_leaves(cond: &Self, then_: &Self, else_: &Self, out: &mut String) {
+        out.push_str("(if ");
+        cond.collect_leaves(out);
+        out.push_str(" { ");
+        then_.collect_leaves(out);
+        out.push_str(" } else { ");
+        else_.collect_leaves(out);
+        out.push_str(" })");
     }
 
     /// The whitespace-normalized leaf string: runs of whitespace collapsed to a

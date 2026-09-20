@@ -151,11 +151,12 @@ pub fn build_doc(
             build_call_binop(ctx, *op, lhs, rhs, indent, child, generics)
         }
 
-        // A parenthesized `if`/`else` expression. rustfmt keeps the whole
-        // construct on one line when the `if cond { then } else { else }` text
-        // (WITHOUT the outer parens) is at most `single_line_if_else_max_width`
-        // (50) columns wide — an absolute, column-independent threshold — and
-        // otherwise breaks each branch body onto its own line in block form.
+        // A parenthesized `if`/`else` expression: a shape-faithful `Doc::IfElse`
+        // over the three branch documents. The renderer keeps the whole construct
+        // on one line when the `if cond { then } else { else }` text (WITHOUT the
+        // outer parens) fits `single_line_if_else_max_width` — an absolute,
+        // column-independent threshold — and otherwise breaks each branch body onto
+        // its own line in block form.
         Expr::If { cond, then_, else_ } => {
             build_if(ctx, cond, then_, else_, indent, child, generics)
         }
@@ -869,22 +870,12 @@ fn build_func_value(
     ]))
 }
 
-/// `rustfmt`'s `single_line_if_else_max_width` (default 50): the maximum width of
-/// an `if cond { then } else { else }` construct — measured WITHOUT the outer
-/// parentheses the emitter wraps it in — that `rustfmt` keeps on one line. Wider
-/// constructs break each branch body onto its own line. The threshold is absolute
-/// (column-independent), so the decision is made here at build time from the flat
-/// leaf widths.
-const SINGLE_LINE_IF_ELSE_MAX_WIDTH: usize = 50;
-
-/// Build the `Doc` for a parenthesized `if`/`else`. The string emitter produces
-/// `(if {cond} {{ {then} }} else {{ {else} }})`; this builder carries the exact
-/// same tokens but, when the un-parenthesized construct exceeds
-/// [`SINGLE_LINE_IF_ELSE_MAX_WIDTH`], lays the branch bodies out in broken block
-/// form (`HardLine`-separated), matching `rustfmt`.
-///
-/// The branch bodies are built recursively so a nested chain / `if` inside a
-/// branch structures too; a branch's own leaves carry its exact tokens.
+/// Build the shape-faithful [`Doc::IfElse`] for a parenthesized `if`/`else`. This
+/// builder carries only IR shape — the three branch documents, built recursively
+/// so a nested chain / `if` inside a branch structures too. The single-line-vs-
+/// block-form layout decision (`rustfmt`'s `single_line_if_else_max_width`) belongs
+/// to the renderer, which measures the flat construct width and lays the branch
+/// bodies out inline or in broken block form.
 fn build_if(
     ctx: &EmitCtx,
     cond: &Expr,
@@ -895,55 +886,13 @@ fn build_if(
     generics: GenericScope,
 ) -> DResult<Doc> {
     // The branch bodies' visual indentation comes entirely from the renderer's
-    // `Nest(4)` wrappers below; the builder `indent` is threaded unchanged so a
+    // `Nest(4)` wrappers; the builder `indent` is threaded unchanged so a
     // single-line branch leaf carries no embedded indentation that would
     // double-count against the `Nest`.
     let cond_doc = build_doc(ctx, cond, indent, depth, generics)?;
     let then_doc = build_doc(ctx, then_, indent, depth, generics)?;
     let else_doc = build_doc(ctx, else_, indent, depth, generics)?;
-
-    // The single-line construct width, WITHOUT the outer parens:
-    // `if ` + cond + ` { ` + then + ` } else { ` + else + ` }`.
-    let cond_flat = cond_doc.normalized_leaves();
-    let then_flat = then_doc.normalized_leaves();
-    let else_flat = else_doc.normalized_leaves();
-    let construct_width = "if ".len()
-        + cond_flat.len()
-        + " { ".len()
-        + then_flat.len()
-        + " } else { ".len()
-        + else_flat.len()
-        + " }".len();
-
-    if construct_width <= SINGLE_LINE_IF_ELSE_MAX_WIDTH {
-        // Inline: `(if cond { then } else { else })`. Soft `Line`s so a wider
-        // enclosing group could in principle break it, but the width test already
-        // guaranteed it fits.
-        return Ok(Doc::concat(vec![
-            Doc::text("(if "),
-            cond_doc,
-            Doc::text(" { "),
-            then_doc,
-            Doc::text(" } else { "),
-            else_doc,
-            Doc::text(" })"),
-        ]));
-    }
-
-    // Broken block form. Braces sit at the enclosing block `indent`; each branch
-    // body indents to `indent + 4`. `HardLine`s force the layout unconditionally,
-    // matching `rustfmt`'s block-form `if` once past the single-line threshold.
-    Ok(Doc::concat(vec![
-        Doc::text("(if "),
-        cond_doc,
-        Doc::text(" {"),
-        Doc::nest(4, Doc::concat(vec![Doc::HardLine, then_doc])),
-        Doc::HardLine,
-        Doc::text("} else {"),
-        Doc::nest(4, Doc::concat(vec![Doc::HardLine, else_doc])),
-        Doc::HardLine,
-        Doc::text("})"),
-    ]))
+    Ok(Doc::if_else(cond_doc, then_doc, else_doc))
 }
 
 /// Build a `rustfmt`-canonical delimited list: `{open}{a0}, {a1}, …{close}` when
