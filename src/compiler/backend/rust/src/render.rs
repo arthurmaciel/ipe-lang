@@ -1263,14 +1263,19 @@ fn has_hard_break(doc: &Doc) -> bool {
         // An `OrPattern` decides its own flat-vs-vertical layout independently
         // and carries only text alternatives — never a hard break.
         | Doc::OrPattern { .. } => false,
-        // An `IfElse` hides its own breaks ONLY when it renders inline. A
-        // block-form `IfElse` (wider than the absolute
-        // `single_line_if_else_max_width`) DOES carry hard breaks the enclosing
-        // `BraceBody` must see — otherwise `fits` (which measures only the short
-        // first line `(if cond {`) would inline a tall body into a closure/CAF
-        // brace-body and drop its braces. Same width test as `render_if_else`.
+        // An `IfElse` carries a break the enclosing `BraceBody` must see in TWO
+        // cases, mirroring the old inline-`build_if` `Concat` whose `has_hard_break`
+        // recursed into its children: (a) it renders block-form (wider than the
+        // absolute `single_line_if_else_max_width`), or (b) a branch itself carries
+        // a hard break (a `let..in` branch emits a `HardLine`). Otherwise `fits`
+        // (which measures only the short first line `(if cond {`) would inline a
+        // tall body into a closure/CAF brace-body and drop its braces. Width test
+        // shared with `render_if_else`.
         Doc::IfElse { cond, then_, else_ } => {
             if_else_construct_width(cond, then_, else_) > SINGLE_LINE_IF_ELSE_MAX_WIDTH
+                || has_hard_break(cond)
+                || has_hard_break(then_)
+                || has_hard_break(else_)
         }
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         // `Nest` is pure indentation and `ElidableParen` pure wrapping: each forwards
@@ -2703,6 +2708,37 @@ mod p0_tests {
         assert!(
             got.trim_end().ends_with('}'),
             "the braced block must close with `}}`, got:\n{got}"
+        );
+    }
+
+    #[test]
+    fn brace_body_with_narrow_if_else_hardbreak_branch_stays_braced() {
+        // A NARROW if-else (construct width <= threshold) whose BRANCH carries a
+        // HardLine (a `let..in` / block branch) must still keep its brace-body
+        // braces. `has_hard_break(Doc::IfElse)` recurses into the branches like the
+        // old inline `build_if` Concat did; a width-only test would report false and
+        // let `fits` (first-line-only) inline the tall branch and drop the braces.
+        let block_branch = Doc::concat(vec![
+            Doc::text("({"),
+            Doc::nest(
+                4,
+                Doc::concat(vec![
+                    Doc::HardLine,
+                    Doc::text("let x = 1;"),
+                    Doc::HardLine,
+                    Doc::text("x"),
+                ]),
+            ),
+            Doc::HardLine,
+            Doc::text("})"),
+        ]);
+        // Narrow: the branch HardLines collapse to spaces in `normalized_leaves`.
+        let narrow = Doc::if_else(Doc::text("c"), block_branch, Doc::text("e"));
+        let doc = Doc::concat(vec![Doc::text("move |_| "), Doc::brace_body(narrow)]);
+        let got = render(&doc, RenderConfig::default());
+        assert!(
+            got.starts_with("move |_| {\n"),
+            "a narrow if-else with a hard-break branch must render as a braced block, got:\n{got}"
         );
     }
 
