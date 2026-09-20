@@ -2655,4 +2655,43 @@ mod tests {
             failures.join("\n")
         );
     }
+
+    /// The Browser-capability family maps an inbound permission `Denied` to the
+    /// distinct `Error.permissionDenied` kind, never to the generic
+    /// `Error.unavailable`. `Fullscreen` folds a `Denied` reply in both
+    /// `foldOutcome` (a `Task Error ()`) and `toResult` (a `Result Error Bool`);
+    /// a caller matching on the error kind must be able to tell a permission
+    /// refusal from a genuinely-absent API, so both arms carry
+    /// `Error.permissionDenied`, matching every sibling module in the cluster
+    /// (`Camera`, `FilePicker`, `Geolocation`, `Microphone`).
+    #[test]
+    fn fullscreen_denial_is_permission_denied_not_unavailable() {
+        let src = IPE_BROWSER_FULLSCREEN;
+        // Both folds must route `Denied` to the distinct permission kind: one
+        // occurrence in `foldOutcome`, one in `toResult`.
+        let denied_arms = src.match_indices("Denied ->").count();
+        assert_eq!(
+            denied_arms, 2,
+            "Fullscreen should fold `Denied` in exactly two places (foldOutcome + toResult), \
+             found {denied_arms}"
+        );
+        assert_eq!(
+            src.match_indices("Task.fail Error.permissionDenied")
+                .count(),
+            1,
+            "foldOutcome's `Denied` arm must fail with the distinct `Error.permissionDenied` kind"
+        );
+        assert_eq!(
+            src.match_indices("Err Error.permissionDenied").count(),
+            1,
+            "toResult's `Denied` arm must yield the distinct `Error.permissionDenied` kind"
+        );
+        // A denial must NOT be downgraded to the generic `unavailable` kind, the
+        // regression this pins: `unavailable` may only describe an absent API.
+        assert!(
+            !src.contains("Error.unavailable \"fullscreen request denied\""),
+            "a fullscreen permission denial must not fold to `Error.unavailable` \
+             (it is indistinguishable from an absent API)"
+        );
+    }
 }
