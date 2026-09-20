@@ -38,9 +38,11 @@ pub enum ObligationKind {
 /// scheme literally contains `Ty::Var(slot)` — so a scheme-var reorder that
 /// would silently drop a `comparable` / SQL-param / Show bound (or a Web
 /// witness) breaks the build instead. The `Key` family is qualifier-selected by
-/// [`Builder::key_obligation_for`]; the `Ipe.Cache` key-less kernels
-/// (`newRaw`/`clear`/`size`/`stats`) are DELIBERATELY absent — they carry no
-/// scheme-var 0, handled by an explicit no-obligation sub-case at the tie site.
+/// [`Builder::key_obligation_for`] over the WHOLE `Set`/`Dict`/`Cache` module —
+/// a superset of the keyed kernels pinned here. The non-keyed majority
+/// (`Dict.size`, `Set.toList`, `Cache.clear`, …) carry no bindable key var and
+/// are DELIBERATELY absent; for them the tie site treats a missing `Key` slot as
+/// the legitimate no-obligation case, returning the scheme unbounded.
 pub const OBLIGATION_SLOTS: &[(StdlibKernel, u32, ObligationKind)] = {
     use ObligationKind as O;
     use StdlibKernel as K;
@@ -394,8 +396,9 @@ impl Builder<'_> {
     /// The raw scheme-var slot of a kernel obligation, read from the
     /// [`OBLIGATION_SLOTS`] SSOT rather than an inline literal at the tie site —
     /// so a scheme-var reorder cannot leave the tie index and the scheme shape
-    /// disagreeing. `None` iff the `(k, kind)` pair is not a pinned obligation
-    /// (the caller then fails closed).
+    /// disagreeing. `None` iff the `(k, kind)` pair is not a pinned obligation —
+    /// a fail-closed miss for the exact-domain selectors (SQL-param, Web), and
+    /// the benign no-obligation case for the broad `Key` module selector.
     fn obligation_slot(k: StdlibKernel, kind: ObligationKind) -> Option<u32> {
         OBLIGATION_SLOTS
             .iter()
@@ -624,33 +627,29 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
-                // `Ipe.Cache`'s key-less kernels (`newRaw`/`clear`/`size`/
-                // `stats`) carry no scheme-var 0, so they are DELIBERATELY absent
-                // from `OBLIGATION_SLOTS`: the key qualifier selects them here,
-                // but there is no key to bound. An explicit no-obligation
-                // sub-case makes "deliberately key-less" representable — the
-                // remaining keyed kernels then fail closed on a missing slot
-                // rather than silently returning an unbounded scheme.
-                if matches!(
-                    k,
-                    StdlibKernel::CacheNewRaw
-                        | StdlibKernel::CacheClear
-                        | StdlibKernel::CacheSize
-                        | StdlibKernel::CacheStats
-                ) {
-                    return Ok(var);
+                // The key qualifier (`Set`/`Dict`/`Cache` in `key_obligation_for`)
+                // selects the WHOLE module. The key/element is raw scheme-var 0 by
+                // construction across every kernel in it — the convention the
+                // `OBLIGATION_SLOTS` `Key` entries assert (each has `Ty::Var(0)`,
+                // checked by `obligation_slots_match_scheme_shapes`). Bind that var
+                // WHENEVER the instantiated scheme carries it, reading slot 0
+                // directly rather than the pinned table: this is what makes key
+                // coverage COMPLETE. Every key-BEARING kernel — `insert`/`get`/
+                // `remove` AND `singleton`/`member`/`update`/`fromList`/… , a
+                // superset of the pinned rows — thus fails closed on a
+                // non-`comparable` key. A reader whose var 0 is nonetheless the key
+                // (`Dict.size`/`Dict.values`/`Dict.keys`/`Set.toList`) takes the
+                // bound harmlessly — it is already satisfied, since a `Dict k v` /
+                // `Set a` value can only exist for a `comparable` key/element. The
+                // key-LESS `Ipe.Cache` kernels (`newRaw`/`clear`/`size`/`stats`)
+                // carry no scheme-var 0 at all, so `vars.get(&0)` is `None` and the
+                // tie is a correct no-op. A table lookup here (the prior shape) fails
+                // OPEN the instant a keyed kernel is unpinned — the `Dict.singleton`
+                // hole this closes; slot 0 cannot drift out of coverage.
+                if let Some(&key_var) = vars.get(&0) {
+                    let s = self.super_var(bound, span)?;
+                    self.eq(span, key_var, s);
                 }
-                let slot =
-                    Self::obligation_slot(k, ObligationKind::Key).ok_or(Diagnostic::Lower {
-                        span,
-                        msg: LowerError::Unsupported(Feature::Kernels),
-                    })?;
-                let key_var = *vars.get(&slot).ok_or(Diagnostic::Lower {
-                    span,
-                    msg: LowerError::Unsupported(Feature::Kernels),
-                })?;
-                let s = self.super_var(bound, span)?;
-                self.eq(span, key_var, s);
                 // `Set.map : (a -> b) -> Set a -> Set b` — the RESULT element
                 // `b` (raw scheme-var 1) also backs a `BTreeSet<b>`, so it
                 // carries the same `set_elem` (Ord) obligation as the source
