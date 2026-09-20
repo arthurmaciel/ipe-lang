@@ -2,7 +2,7 @@ use super::{
     CliError, build_emitted_project, build_project, build_source_graph,
     build_test_with_project_sources, build_with_sibling_discovery,
     capabilities_including_served_widgets, cargo_target_directory, classify_entry_shape,
-    create_source_root, default_entry, discover_manifest, emit_pipeline_json, emitted_bin_name,
+    create_source_root, default_entry, discover_manifest, emit_machine_error, emitted_bin_name,
     force_cargo_terminal_ui, resolve_runtime, resolve_vendored_runtime_dir, run_build,
     runtime_context_for_message, typecheck_entry_via_graph,
 };
@@ -1017,10 +1017,10 @@ pub fn run_type_check(rest: &[String]) -> Result<(), CliError> {
     };
     let entry = resolve_analysis_entry(&arg)?;
     typecheck_entry_via_graph(&entry).map_err(|e| {
-        if args.format == cli_args::OutputFormat::Json {
-            emit_pipeline_json(e)
-        } else {
+        if args.format == cli_args::OutputFormat::Human {
             e
+        } else {
+            emit_machine_error(args.format, "type-check", &e)
         }
     })?;
     match args.format {

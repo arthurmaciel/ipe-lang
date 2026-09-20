@@ -1,7 +1,7 @@
 use super::{nearest_command, nearest_group_member};
 use crate::{
     Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, delivery,
-    help, publish, render, render_json, style, toolchain,
+    help, machine_output, publish, render, render_json, style, toolchain,
 };
 
 /// The runtime crate an emitted project linked against: its root and declared
@@ -416,24 +416,44 @@ impl From<delivery::DeliveryError> for CliError {
     }
 }
 
-/// Emit a `Pipeline` diagnostic as a JSON object on stderr, then return
-/// [`CliError::DiagnosticJsonEmitted`] so the caller exits non-zero without
-/// printing the human-readable layout a second time.
+/// Emit an error for `command` on a machine (`--json` / `--plain`) stream, then
+/// return [`CliError::DiagnosticJsonEmitted`] so the caller exits non-zero with
+/// nothing more printed.
 ///
-/// Any non-`Pipeline` error is returned as-is (the human path continues for it).
-pub fn emit_pipeline_json(err: CliError) -> CliError {
-    if let CliError::Pipeline {
-        ref file,
-        ref src,
-        ref diag,
-    } = err
-    {
-        let json = render_json(diag, &file.to_string_lossy(), src);
-        // Best-effort write; if stderr is closed we still exit non-zero.
-        let _ = std::io::stderr().write_all(json.as_bytes());
-        return CliError::DiagnosticJsonEmitted;
-    }
-    err
+/// This is the single machine-error routing point for the machine-mode command
+/// bodies (`type-check`, `build`, `run`). It closes the disclosure class every
+/// one of them shared: under a machine format NO error may fall through to the
+/// human [`style::print_error_banner`] on the top-level path — a soft-yellow
+/// banner in a `--json` or `--plain` stream is exactly the leak this unification
+/// prevents.
+///
+/// * A `Pipeline` compile diagnostic under `--json` keeps its established rich
+///   schema ([`render_json`]) — `code`, `severity`, spans, hints — a shape
+///   downstream consumers already parse.
+/// * Every other case renders through the shared
+///   [`machine_output::machine_error`]: the `--json` error envelope, or the
+///   `--plain` flush-left reason. Either way the message is the error's curated
+///   `Display` text, ANSI/control-stripped — never a raw internal string and
+///   never the human banner.
+///
+/// The rendering is written to stderr (a machine failure keeps stdout clean) as
+/// best-effort — if stderr is closed the process still exits non-zero via the
+/// sentinel.
+pub fn emit_machine_error(
+    format: crate::cli_args::OutputFormat,
+    command: &str,
+    err: &CliError,
+) -> CliError {
+    use crate::cli_args::OutputFormat;
+    let rendered = match err {
+        CliError::Pipeline { file, src, diag } if format == OutputFormat::Json => {
+            render_json(diag, &file.to_string_lossy(), src)
+        }
+        _ => machine_output::machine_error(format, command, &err.to_string()),
+    };
+    // Best-effort write; if stderr is closed we still exit non-zero.
+    let _ = std::io::stderr().write_all(rendered.as_bytes());
+    CliError::DiagnosticJsonEmitted
 }
 
 /// The one-line stderr verdict for a failed test run, guttered and glyphed so
