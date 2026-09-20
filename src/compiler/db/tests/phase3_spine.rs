@@ -87,6 +87,7 @@ const DEP_A_BODY_EDIT: &str = "module A exposing (visible)\n\nvisible = 1\n\nhid
 const IMPORTER_B: &str = "module B exposing (b)\n\nimport A exposing (visible)\n\nb = visible\n";
 const CYCLIC_A: &str = "module A exposing (a)\n\nimport B\n\na = 1\n";
 const CYCLIC_B: &str = "module B exposing (b)\n\nimport A\n\nb = 2\n";
+const ENTRY_C: &str = "module C exposing (c)\n\nc = 3\n";
 
 // ---------------------------------------------------------------------------
 // topo_order
@@ -152,6 +153,47 @@ fn topo_order_cycle_is_a_value_not_a_panic() {
             }
         ),
         "linked_program must propagate IPE-N0021, got: {spine_err:?}"
+    );
+}
+
+/// A cycle among modules the ENTRY never reaches (orphans) is still detected.
+/// Entry C imports nothing; the orphaned pair A↔B forms a cycle. The cycle
+/// gate must cover the whole file set — not just the entry-reachable prefix —
+/// so `topo_order` returns the IPE-N0021 value and `linked_program`'s
+/// per-module `canonicalize` recursion never reaches salsa's dependency-cycle
+/// panic.
+#[test]
+fn topo_order_orphan_cycle_is_a_value_not_a_panic() {
+    let (db, _log) = logged_db();
+    let c = file(&db, &["C"], ENTRY_C);
+    let a = file(&db, &["A"], CYCLIC_A);
+    let b = file(&db, &["B"], CYCLIC_B);
+    let root = root_of(&db, &[(&["C"], c), (&["A"], a), (&["B"], b)]);
+
+    let err = topo_order(&db, root, c).expect_err("orphan A↔B cycle must be rejected");
+    assert!(
+        matches!(
+            &err,
+            Diagnostic::Name {
+                msg: NameError::ImportCycle { .. },
+                ..
+            }
+        ),
+        "orphan cycle must surface as IPE-N0021, got: {err:?}"
+    );
+
+    // The driver-level spine canonicalises the orphan pair; it must return the
+    // same value-level diagnostic rather than panic on the salsa cycle.
+    let spine_err = linked_program(&db, root, c).expect_err("spine sees the orphan cycle");
+    assert!(
+        matches!(
+            &spine_err,
+            Diagnostic::Name {
+                msg: NameError::ImportCycle { .. },
+                ..
+            }
+        ),
+        "linked_program must propagate IPE-N0021 on an orphan cycle, got: {spine_err:?}"
     );
 }
 
