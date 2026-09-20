@@ -580,22 +580,12 @@ fn render_info_plist(
     ))
 }
 
-/// Escape the five XML special characters for a plist text node. Bundle identity
-/// values are author-supplied strings, so they are escaped even though the
-/// derived permission keys/purposes are fixed ASCII.
+/// Escape an author-supplied string for a plist text node. Bundle identity values
+/// are author-supplied, so they are escaped even though the derived permission
+/// keys/purposes are fixed ASCII. Routes through the packager's shared XML escape
+/// ([`crate::pack::xml_escape`]).
 fn plist_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            other => out.push(other),
-        }
-    }
-    out
+    crate::pack::xml_escape(text)
 }
 
 /// Render a freedesktop `.desktop` launcher for the Linux bundle.
