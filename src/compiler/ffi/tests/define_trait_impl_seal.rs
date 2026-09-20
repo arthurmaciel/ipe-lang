@@ -94,7 +94,7 @@ fn a_marked_trait_impl_type_binds_its_symbols_and_depends_by_path() {
     let deps = cargo_dep_lines(&pkg).expect("renders a path dep line");
     assert_eq!(
         deps,
-        [r#"sprite-wrap = { path = "wrappers/sprite" }"#],
+        [r#"sprite_wrap = { path = "wrappers/sprite" }"#],
         "the wrapper is a path dependency of the emitted app crate"
     );
 }

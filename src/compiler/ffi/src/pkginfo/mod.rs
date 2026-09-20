@@ -679,6 +679,16 @@ impl PkgInfo {
         self.name.as_str()
     }
 
+    /// The validated crate name as the charset-gated newtype — the only value
+    /// permitted to reach the manifest emitter's TOML dependency-KEY position
+    /// (`<name> = "=<version>"`). Deriving the key from anything but this typed
+    /// name (e.g. the weakly gated [`Self::pkg_path`]) would let an
+    /// attacker-influenced string reach the key position; the type forbids it.
+    #[must_use]
+    pub const fn name_pkg(&self) -> &PackageName {
+        &self.name
+    }
+
     /// The exact resolved crate version (may be empty on inspector failure).
     #[must_use]
     pub fn version(&self) -> &str {
