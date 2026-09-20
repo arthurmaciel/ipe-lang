@@ -144,7 +144,10 @@ impl Builder<'_> {
                             found: args.len(),
                         },
                     })
-                } else if args.is_empty() && self.interner.resolve(name) == Some("HttpRequest") {
+                } else if module.is_empty()
+                    && args.is_empty()
+                    && self.interner.resolve(name) == Some("HttpRequest")
+                {
                     // `HttpRequest` is a stdlib type alias for a structural record
                     // (`{ body, headers, method, redirects, timeout, url }`).  The Rust port has no Ipê-source stdlib
                     // files, so the canonicaliser never registers `HttpRequest` as a
@@ -152,6 +155,13 @@ impl Builder<'_> {
                     // here so user annotations like `upstreamRequest : HttpRequest`
                     // unify with the structural record that kernels such as
                     // `HttpStreamOpen` / `HttpGet` / `HttpPost` expect.
+                    //
+                    // The `module.is_empty()` guard keys the match on the RESOLVED
+                    // identity, not the bare name: only the empty-home builtin
+                    // sentinel (`from_canon` copies `Type::Con.home`, empty for
+                    // reserved/kernel builtins) expands. A user's own
+                    // `type HttpRequest` — user-shadowable, carrying its real
+                    // non-empty module home — is left intact so its ADT wins.
                     let mk = |n: Symbol| Ty::Con {
                         module: Vec::new(),
                         name: n,
@@ -177,10 +187,14 @@ impl Builder<'_> {
                     req_fields.insert(self.builtins.http_f_timeout, int());
                     req_fields.insert(self.builtins.http_f_url, string());
                     Ok(Ty::Record(req_fields, RowTail::Closed))
-                } else if args.is_empty() && self.interner.resolve(name) == Some("HttpResponse") {
+                } else if module.is_empty()
+                    && args.is_empty()
+                    && self.interner.resolve(name) == Some("HttpResponse")
+                {
                     // `HttpResponse` is a stdlib type alias for `{ body : String,
                     // headers : Dict String String, status : Int }`.  Expand for the
-                    // same reason as `HttpRequest` above.
+                    // same reason — and under the same empty-home identity guard —
+                    // as `HttpRequest` above.
                     let mk = |n: Symbol| Ty::Con {
                         module: Vec::new(),
                         name: n,
@@ -198,13 +212,18 @@ impl Builder<'_> {
                     resp_fields.insert(self.builtins.http_f_headers, dict(string(), string()));
                     resp_fields.insert(self.builtins.http_f_status, int());
                     Ok(Ty::Record(resp_fields, RowTail::Closed))
-                } else if args.is_empty() && self.interner.resolve(name) == Some("Response") {
+                } else if module.is_empty()
+                    && args.is_empty()
+                    && self.interner.resolve(name) == Some("Response")
+                {
                     // `Ipe.Http.Server.Response` is a record alias
                     // `{ status : Int, body : String, headers : Dict String
                     // String, contentType : String }` (reference
                     // `Ipê/Http/Server.ipe:66`). Expand structurally — same
-                    // mechanism as `HttpResponse` above — so a handler can build
-                    // it as a record literal and read fields off it.
+                    // mechanism and same empty-home identity guard as
+                    // `HttpResponse` above — so a handler can build it as a record
+                    // literal and read fields off it. A user's own qualified
+                    // `Response` (non-empty module home) is not touched.
                     let mk = |n: Symbol| Ty::Con {
                         module: Vec::new(),
                         name: n,
@@ -223,11 +242,16 @@ impl Builder<'_> {
                     resp_fields.insert(self.builtins.http_f_headers, dict(string(), string()));
                     resp_fields.insert(self.builtins.http_f_status, int());
                     Ok(Ty::Record(resp_fields, RowTail::Closed))
-                } else if args.is_empty() && self.interner.resolve(name) == Some("Migration") {
+                } else if module.is_empty()
+                    && args.is_empty()
+                    && self.interner.resolve(name) == Some("Migration")
+                {
                     // `Ipe.Db.Migration` is a record alias
                     // `{ name : String, sql : String }`. Expand structurally so a
                     // program can build migrations as record literals in a
-                    // `List Migration`.
+                    // `List Migration`. `Migration` is user-shadowable, so the
+                    // empty-home identity guard keeps a user's own `type Migration`
+                    // (non-empty module home) from being expanded here.
                     let mk = |n: Symbol| Ty::Con {
                         module: Vec::new(),
                         name: n,

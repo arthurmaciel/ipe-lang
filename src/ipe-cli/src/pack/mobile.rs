@@ -855,33 +855,18 @@ fn ios_readme(root_name: &str) -> String {
 
 // ── Escaping ─────────────────────────────────────────────────────────────────
 
-/// Escape the five XML special characters for a plist text node. Identity values
-/// are author-supplied strings, so they are escaped; the derived permission
-/// keys/purposes are fixed ASCII.
+/// Escape an author-supplied string for a plist text node. Identity values are
+/// author-supplied, so they are escaped; the derived permission keys/purposes are
+/// fixed ASCII. Routes through the packager's shared XML escape ([`crate::pack::xml_escape`]).
 fn plist_escape(text: &str) -> String {
-    xml_escape(text)
+    crate::pack::xml_escape(text)
 }
 
-/// Escape an XML attribute value (the five XML special characters). Used for the
-/// author-supplied identity strings spliced into the Android manifest.
+/// Escape an author-supplied string for an XML attribute value — the identity
+/// strings spliced into the Android manifest. Routes through the packager's
+/// shared XML escape ([`crate::pack::xml_escape`]).
 fn xml_attr_escape(text: &str) -> String {
-    xml_escape(text)
-}
-
-/// Escape the five XML special characters (`& < > " '`).
-fn xml_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            other => out.push(other),
-        }
-    }
-    out
+    crate::pack::xml_escape(text)
 }
 
 /// Escape a Gradle single-quoted / double-quoted string value: strip the quote and
