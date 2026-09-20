@@ -652,6 +652,7 @@ fn definition_span_in_parse(
             }
         }
     }
+    drop(interner);
     None
 }
 
