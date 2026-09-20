@@ -26,7 +26,7 @@ for each; you name the host in one uniform grammar: `ipe <verb> <shape> <host>`.
 `build web <host>` lays out a fast development bundle; `release web <host>` the
 production distributable.
 
-Only the `Web` shape has these axes. A `tui`, `cli`, `server`, or `script` app
+Only the `Web` shape has these axes. A `tui`, `cli`, `worker`, or `script` app
 builds one way, so it has no runtime or host to choose.
 
 The full rationale — why webview is a host and not a shape, why `served` is never
@@ -163,8 +163,8 @@ path selects a project other than the current directory.
 ## Where to go next
 
 - [ADR 0005](../adr/0005-delivery-shapes-runtimes-hosts-targets.md) — the two-axis delivery
-  model in full: the five shapes, the two web runtimes, and why each is where it
-  is.
+  model in full: the four TEA shapes plus the direct bucket, the two web runtimes,
+  and why each is where it is.
 - `ipe doc Ipe.Package` — every `delivery`, `wasm`, and `capabilities` field.
 - `ipe build --help` / `ipe release --help` — the one delivery grammar (`ipe
   <verb> [shape] [runtime] [host]`): `build` compiles or bundles a single
