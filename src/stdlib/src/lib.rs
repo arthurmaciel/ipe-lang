@@ -2773,4 +2773,26 @@ mod tests {
              completion is not a query answer",
         );
     }
+
+    /// Fail-closed axis decode (issue #2692, sibling of #2650): the
+    /// `DeviceOrientation` reading decoder must read each axis with
+    /// `Decode.nullable`, which distinguishes JSON null (→ `Nothing`) from a
+    /// wrong-type value (→ decode error, whole frame dropped). The regression
+    /// this pins is `Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed
+    /// Nothing ]`: its `succeed Nothing` fallback swallows a present-but-wrong-type
+    /// axis into `Nothing`, fabricating a plausible reading (fail-open).
+    #[test]
+    fn device_orientation_axes_decode_fail_closed_on_wrong_type() {
+        let src = IPE_BROWSER_ORIENTATION_INTERNALS;
+        assert_eq!(
+            src.matches("Decode.nullable Decode.float").count(),
+            3,
+            "each of the three axes (alpha/beta/gamma) must decode with `Decode.nullable`",
+        );
+        assert!(
+            !src.contains("Decode.succeed Nothing"),
+            "no axis may fall back to `Decode.succeed Nothing` — it swallows a \
+             wrong-type value into `Nothing`, the fail-open boundary of #2692",
+        );
+    }
 }
