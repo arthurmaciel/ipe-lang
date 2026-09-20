@@ -98,13 +98,15 @@ Production-grade code no survive guesswork.
 
 ### The six decisions to confirm
 
-1. **App shape** — match matrix. The TEA shapes live under `Ipe.Tea.*`:
-   `Ipe.Tea.Web`=web UI, `Ipe.Tea.Tui`=terminal UI (`Tui.tea`) and
-   `Ipe.Tea.Cli`=line-oriented REPL (`Cli.tea`), `Ipe.Tea.WebView`=desktop.
-   `Ipe.Http.Server`=headless API and a plain `main` (one-shot/cron) are both
-   the non-TEA **Program** shape.
+1. **App shape** — match matrix. The four TEA shapes live under `Ipe.Tea.*`:
+   `Ipe.Tea.Web`=web UI (`Web.tea`), `Ipe.Tea.Tui`=terminal UI (`Tui.tea`),
+   `Ipe.Tea.Cli`=line-oriented REPL (`Cli.tea`), `Ipe.Tea.Worker`=view-less
+   managed loop (`Worker.tea`). A desktop or mobile app is the `web` shape
+   delivered to a host (`web desktop` / `web solo ios` / `web solo android`),
+   not a separate shape. A plain `main : Task Error ()` is the **script** (direct)
+   shape — a batch tool, cron job, or HTTP server (`Server.listen`) alike.
    Importing anything under `Ipe.Tea.*` marks a module a TEA app; a plain-`main`
-   Program that imports a `Ipe.Tea.*` shape is rejected (IPE-N0033).
+   script that imports a `Ipe.Tea.*` shape is rejected (IPE-N0033).
 2. **Persistence** — SQLite (single-file, embeds) / PostgreSQL / Firestore /
    Redis / none.
 3. **Auth** — none / `Ipe.Auth` (cookies+JWT, you own users) / OAuth
@@ -123,14 +125,16 @@ Ask one focused question per ambiguity; no guess heroically.
 |------------------------------------------|--------------------|------------------------------------|-------|
 | Web app (forms, real-time, UI state)     | **Ipe.Tea.Web**        | `Web.tea cfg`                      | HTTP-first; SSE patches; sessions + cookies + routing built in. |
 | Multi-tenant SaaS / dashboard            | **Ipe.Tea.Web + auth-app gate** | `Web.tea { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
-| Desktop app                              | **Ipe.Tea.WebView**    | `WebView.app cfg`                  | macOS today; Linux / Windows later. |
+| Desktop app                              | **Ipe.Tea.Web** (host=desktop) | `Web.tea cfg` + `ipe build web desktop` | Same `web` shape; desktop is a delivery host. |
+| Mobile app (iOS / Android)               | **Ipe.Tea.Web** (solo runtime) | `Web.tea cfg` + `ipe release web solo ios\|android` | `wasm = On { mode = Solo }` in `package.ipe`. |
+| View-less background TEA worker          | **Ipe.Tea.Worker**     | `Worker.tea cfg`                   | Managed `init`/`update`/`subscriptions` loop, no view sink. |
 | Line-oriented interactive tool           | **Ipe.Tea.Cli**        | `Cli.tea cfg`                      | Managed stdin-driven TEA loop (init/update/view/onLine). |
 | Terminal UI (TUI)                        | **Ipe.Tea.Tui**        | `Tui.tea cfg`                      | `Screen` view (`Ipe.Ui.Tui`), a terminal-only view type. |
-| HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
-| WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
-| Server-sent stream (LLM tokens, SSE)     | **Ipe.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Ipe.Http.Stream`. |
-| One-shot CLI tool                        | **Program** (plain `main`) | `main = cliCmd`                    | Argparse via `System.args`. |
-| Background job / cron worker             | **Program** (plain `main`) | `main = scheduledWork`             | No UI loop; `Task.parallel` for fan-out. |
+| HTTP / JSON API (no browser UI)          | **script** (plain `main`) | `main = Server.listen 8000 [...]`  | `Direct` shape; routes + middleware (CORS / rate-limit / logging / basic-auth). |
+| WebSocket-driven feed                    | **script** (plain `main`) | `Server.upgrade req`               | Bidirectional; lives inside a `Server.listen` script. |
+| Server-sent stream (LLM tokens, SSE)     | **script** (plain `main`) | `Server.Stream.emit`               | Mirror of `Ipe.Http.Stream`. |
+| One-shot CLI tool                        | **script** (plain `main`) | `main = cliCmd`                    | Argparse via `System.args`. |
+| Background job / cron worker             | **script** (plain `main`) | `main = scheduledWork`             | No UI loop; `Task.parallel` for fan-out. |
 
 ### Pinned defaults (always apply unless user overrules)
 
