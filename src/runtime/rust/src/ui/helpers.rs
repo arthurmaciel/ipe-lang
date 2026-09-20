@@ -155,11 +155,32 @@ pub fn ui_button_<M: Clone>(
 
 /// `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
 /// Renders as `<a href=url>label</a>`.
+///
+/// SECURITY: a `target="_blank"` anchor grants the opened page `window.opener`,
+/// a reverse-tabnabbing lever an untrusted `href` (e.g. a markdown link) can use
+/// to navigate the opener. Any new-tab link therefore severs the opener by
+/// construction: when the attrs carry `target="_blank"` and no explicit `rel`,
+/// a `rel="noopener noreferrer"` is attached here — the single sink through
+/// which every `Ui.link` flows — so no stdlib call site can emit a `_blank`
+/// link without it.
 #[must_use]
 pub fn ui_link_<M: Clone>(attrs: Vec<Attribute<M>>, url: String, label: Element<M>) -> Element<M> {
-    let mut full = Vec::with_capacity(attrs.len() + 1);
+    let opens_new_tab = attrs.iter().any(|a| {
+        matches!(a, Attribute::AttrAttribute(name, value) if name == "target" && value == "_blank")
+    });
+    let has_rel = attrs
+        .iter()
+        .any(|a| matches!(a, Attribute::AttrAttribute(name, _) if name == "rel"));
+    let extra = usize::from(opens_new_tab && !has_rel);
+    let mut full = Vec::with_capacity(attrs.len() + 1 + extra);
     full.push(Attribute::AttrAttribute("href".into(), url));
     full.extend(attrs);
+    if opens_new_tab && !has_rel {
+        full.push(Attribute::AttrAttribute(
+            "rel".into(),
+            "noopener noreferrer".into(),
+        ));
+    }
     Element::TaggedNode("a".into(), Description::NoDescription, full, vec![label])
 }
 
@@ -1613,5 +1634,77 @@ mod script_node_tests {
             "the breakout must not survive into the render: {html}"
         );
         assert!(html.starts_with("<script>") && html.ends_with("</script>"));
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::ui_link_;
+    use super::{Attribute, Element};
+
+    fn link_attrs(el: &Element<()>) -> &[Attribute<()>] {
+        let Element::TaggedNode(tag, _, attrs, _) = el else {
+            unreachable!("ui_link_ builds a TaggedNode");
+        };
+        assert_eq!(tag, "a");
+        attrs
+    }
+
+    fn has_attr(attrs: &[Attribute<()>], name: &str, value: &str) -> bool {
+        attrs
+            .iter()
+            .any(|a| matches!(a, Attribute::AttrAttribute(n, v) if n == name && v == value))
+    }
+
+    fn rel_count(attrs: &[Attribute<()>]) -> usize {
+        attrs
+            .iter()
+            .filter(|a| matches!(a, Attribute::AttrAttribute(n, _) if n == "rel"))
+            .count()
+    }
+
+    #[test]
+    fn blank_target_link_gets_noopener_noreferrer() {
+        // The untrusted-markdown new-tab link (Ipe/Markdown.ipe LinkSpan): a
+        // `target="_blank"` over an attacker-chosen href must sever the opener.
+        let el: Element<()> = ui_link_(
+            vec![Attribute::AttrAttribute("target".into(), "_blank".into())],
+            "https://attacker.example/".into(),
+            Element::Text("label".into()),
+        );
+        let attrs = link_attrs(&el);
+        assert!(
+            has_attr(attrs, "rel", "noopener noreferrer"),
+            "a _blank link must carry rel=noopener noreferrer: {attrs:?}"
+        );
+    }
+
+    #[test]
+    fn same_tab_link_gets_no_rel() {
+        // No `target="_blank"` -> the link stays in the same tab, no opener to
+        // sever, so no rel is fabricated.
+        let el: Element<()> = ui_link_(
+            vec![],
+            "https://example.com/".into(),
+            Element::Text("label".into()),
+        );
+        assert_eq!(rel_count(link_attrs(&el)), 0);
+    }
+
+    #[test]
+    fn caller_supplied_rel_is_not_duplicated() {
+        // A call site that already sets its own rel keeps it verbatim; the sink
+        // never emits a second, conflicting `rel`.
+        let el: Element<()> = ui_link_(
+            vec![
+                Attribute::AttrAttribute("target".into(), "_blank".into()),
+                Attribute::AttrAttribute("rel".into(), "noopener".into()),
+            ],
+            "https://example.com/".into(),
+            Element::Text("label".into()),
+        );
+        let attrs = link_attrs(&el);
+        assert_eq!(rel_count(attrs), 1);
+        assert!(has_attr(attrs, "rel", "noopener"));
     }
 }
