@@ -42,6 +42,7 @@ pub const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
 pub const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "timeout", "url"];
 
 /// `Ipe.Http.Server.Response` field names (`ipe_runtime::server::ServerResponse`).
+///
 /// The runtime struct carries one EXTRA runtime-only field, `cookies:
 /// Vec<String>` (multi-`Set-Cookie` support), which the Ipê record alias does
 /// not expose — the backend defaults it to `Vec::new()`.
@@ -69,7 +70,9 @@ pub const EMAIL_SES_FIELDS: &[&str] = &["key", "region", "secret"];
 /// `Ipe.Email` `SmtpConfig` field names (`ipe_runtime::email::SmtpConfig`).
 pub const EMAIL_SMTP_FIELDS: &[&str] = &["host", "pass", "port", "user"];
 
-/// Are two `&str` slices element-for-element equal? A `const fn` byte compare
+/// Are two `&str` slices element-for-element equal?
+///
+/// A `const fn` byte compare
 /// so a consumer that keeps its own copy of a name column can bind it to the
 /// shared const with `const _: () = assert!(names_match(TABLE, X));` — a name
 /// drift then fails `cargo build` (const-eval) rather than a downstream cargo
