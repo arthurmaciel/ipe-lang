@@ -145,16 +145,19 @@ pub fn prepare_rename(
 
     // Try the position as a reference first (common case).
     let canonical = crate::db_access::canonicalize_checked(db, root, entry, file)?;
-    if let Some((_, name_sym)) = crate::navigation::find_ref_at_pub(&canonical.module, byte) {
-        let name = {
-            let interner = db.interner().lock();
-            let n = interner.resolve(name_sym).map(str::to_owned)?;
-            drop(interner);
-            n
-        };
-        // Re-find the span for the PrepareRename range.
-        let span = crate::navigation::ref_span_at(&canonical.module, byte)?;
-        return Some(PrepareRename { name, span });
+    let ref_hit = {
+        let interner = db.interner().lock();
+        crate::navigation::find_ref_at_pub(&canonical.module, byte, &interner).and_then(
+            |(_, name_sym)| {
+                let name = interner.resolve(name_sym).map(str::to_owned)?;
+                // Re-find the span for the PrepareRename range.
+                let span = crate::navigation::ref_span_at(&canonical.module, byte, &interner)?;
+                Some(PrepareRename { name, span })
+            },
+        )
+    };
+    if let Some(prepared) = ref_hit {
+        return Some(prepared);
     }
 
     // Try the position as a definition site.
