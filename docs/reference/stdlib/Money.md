@@ -331,5 +331,8 @@ Drop every registered rate (test / admin).
 convert : Currency -> Money -> Result Error Money
 ```
 
-Convert Money to a target currency using the registered rate.
+Convert Money to a target currency using the registered rate, quantizing the rated amount to the target currency's minor units.
+Rounds half-away-from-zero (matching `format`), so the result already
+satisfies that currency's precision invariant — a converted value never
+carries sub-minor-unit precision.
 
