@@ -555,6 +555,42 @@ fn hydrate_program_with_nested_adt(
     })
 }
 
+/// The gate must fire on the FULL public emission path, not only the isolated
+/// `emit_spine` entry the tests above drive. A single-`Main`-module program
+/// collapses to `emit_program`'s single-file branch — which renders `main.rs`
+/// inline and NEVER calls `emit_spine` — so if the gate lived only in
+/// `emit_spine`, a `Secret`-fielded hydration island would sail through
+/// `emit()` and leak into the client JSON island. This pins the rejection on
+/// `Backend::emit` itself, matching the split path's existing refusal.
+#[test]
+fn single_module_emit_rejects_secret_hydration_field() -> DResult<()> {
+    use ipe_backend::Backend;
+
+    let mut interner = Interner::new();
+    let prog = hydrate_program(&mut interner, vec![IrType::Secret])?;
+    let err = hydrate_backend(&interner)
+        .emit(&prog)
+        .expect_err("single-module emit() must reject a Secret-fielded hydration island");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("non-serialisable"),
+        "single-module emit() must flag the non-serialisable field: {msg}"
+    );
+    Ok(())
+}
+
+/// The same single-module public-path gate accepts an all-primitive island —
+/// proving the `emit()` rejection above is the gate firing on a real leak, not
+/// a blanket failure of the single-file branch under hydrate mode.
+#[test]
+fn single_module_emit_accepts_primitive_hydration_fields() -> DResult<()> {
+    use ipe_backend::Backend;
+
+    let mut interner = Interner::new();
+    let prog = hydrate_program(&mut interner, vec![IrType::Int, IrType::Str])?;
+    hydrate_backend(&interner).emit(&prog).map(|_| ())
+}
+
 /// A `Secret` buried in a nested user ADT field must be REJECTED by the gate
 /// with a clean IPE diagnostic — not silently reach `cargo` as an opaque E0277.
 ///
