@@ -1932,6 +1932,83 @@ mod registry_phase_c_tests {
         );
     }
 
+    /// Every pinned kernel-obligation slot's scheme literally contains its
+    /// `Ty::Var(slot)` — the coherence tripwire mirroring
+    /// `hof_result_slots_match_scheme_shapes` for the shape-(B) obligations
+    /// (Dict/Set/Cache key, `Set.map` result, `Db.*` SQL-param, `Log.*With`/
+    /// `Debug.log` Show, `Web.tea`/`Web.embed` Model+notFound, `Web.route`
+    /// page+builder). The `constrain_var_kernel` tie sites now fail closed on a
+    /// missing slot, so a scheme-var reorder that drops the slot would surface
+    /// as a loud IPE-L0108 at type-check; this test is the SECOND, independent
+    /// boundary (defend-in-depth) that turns the same drift into a build break.
+    /// Freezes the covered count so silently removing an entry (obligation
+    /// gone → hazard reopened) fails here.
+    #[test]
+    fn obligation_slots_match_scheme_shapes() {
+        use super::super::constrain_ast::{EXPECTED_OBLIGATION_SLOT_COUNT, OBLIGATION_SLOTS};
+
+        // Collect every raw `Ty::Var(n)` id reachable in a scheme (a scheme
+        // never carries a solver-space tagged var, so a plain structural walk
+        // suffices — the row-tail `Open(n)` carries a var id too).
+        fn collect_scheme_var_ids(t: &Ty, out: &mut std::collections::BTreeSet<u32>) {
+            match t {
+                Ty::Var(n) => {
+                    out.insert(*n);
+                }
+                Ty::Fun(a, b) => {
+                    collect_scheme_var_ids(a, out);
+                    collect_scheme_var_ids(b, out);
+                }
+                Ty::Con { args, .. } | Ty::Tuple(args) => {
+                    for a in args {
+                        collect_scheme_var_ids(a, out);
+                    }
+                }
+                Ty::Record(fields, tail) => {
+                    for f in fields.values() {
+                        collect_scheme_var_ids(f, out);
+                    }
+                    if let super::super::RowTail::Open(n) = tail {
+                        out.insert(*n);
+                    }
+                }
+                Ty::Unit => {}
+            }
+        }
+
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
+
+        let mut covered = 0;
+        for &(k, slot, kind) in OBLIGATION_SLOTS {
+            covered += 1;
+            let scheme = builder.resolve_scheme(k.def().scheme);
+            assert!(
+                scheme.is_some(),
+                "{k:?} carries a {kind:?} obligation slot and must be schemed",
+            );
+            let Some(scheme) = scheme else { continue };
+
+            let mut vars = std::collections::BTreeSet::new();
+            collect_scheme_var_ids(&scheme, &mut vars);
+            assert!(
+                vars.contains(&slot),
+                "{k:?} ({kind:?}): OBLIGATION_SLOTS pins raw var {slot} but the \
+                 scheme has no Ty::Var({slot}) — a scheme-var reorder would drop \
+                 the obligation; re-derive the slot from scheme_table.rs",
+            );
+        }
+        // Freeze the covered count so silently dropping a pinned slot (its
+        // obligation removed → hazard reopened) fails loudly here.
+        assert_eq!(
+            covered, EXPECTED_OBLIGATION_SLOT_COUNT,
+            "OBLIGATION_SLOTS must pin exactly {EXPECTED_OBLIGATION_SLOT_COUNT} \
+             obligation slots; adding/removing one must update this pin",
+        );
+    }
+
     /// A stdlib record alias is expanded by `normalize_annotation_ty` keyed on
     /// the RESOLVED identity — the empty-home builtin sentinel — never a bare
     /// name string. Pins both directions of that gate for every stdlib record
