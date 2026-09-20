@@ -39,6 +39,7 @@ const MAIN_TUI_IPE: &str = include_str!("../templates/Main.tui.ipe");
 const MAIN_CLI_IPE: &str = include_str!("../templates/Main.cli.ipe");
 const MAIN_SERVER_IPE: &str = include_str!("../templates/Main.server.ipe");
 const MAIN_SCRIPT_IPE: &str = include_str!("../templates/Main.script.ipe");
+const MAIN_WORKER_IPE: &str = include_str!("../templates/Main.worker.ipe");
 
 // ── per-shape package.ipe templates (carry a `{name}` hole) ──────────────────
 
@@ -47,6 +48,7 @@ const PACKAGE_TUI_IPE: &str = include_str!("../templates/package.tui.ipe.in");
 const PACKAGE_CLI_IPE: &str = include_str!("../templates/package.cli.ipe.in");
 const PACKAGE_SERVER_IPE: &str = include_str!("../templates/package.server.ipe.in");
 const PACKAGE_SCRIPT_IPE: &str = include_str!("../templates/package.script.ipe.in");
+const PACKAGE_WORKER_IPE: &str = include_str!("../templates/package.worker.ipe.in");
 
 // ── shared templates ──────────────────────────────────────────────────────────
 
@@ -61,7 +63,7 @@ const AGENTS_MD: &str = include_str!("../templates/AGENTS.md.in");
 
 // ── shape model ───────────────────────────────────────────────────────────────
 
-/// The five project shapes a wizard or `--shape` flag may select.
+/// The six project shapes a wizard or `--shape` flag may select.
 ///
 /// The shape is pinned by `main`'s entry function; the manifest's `delivery`
 /// sections provide per-host build configuration for each resolved target.
@@ -74,6 +76,8 @@ pub enum InitShape {
     Tui,
     /// `main = Cli.tea …` — terminal lines rendering.
     Cli,
+    /// `main = Worker.tea …` — the view-less TEA loop; no rendering.
+    Worker,
     /// `main = Server.listen …` — HTTP server.
     Server,
     /// `main : Task Error ()` — plain task, no rendering.
@@ -87,6 +91,7 @@ impl InitShape {
             "web" => Some(Self::Web),
             "tui" => Some(Self::Tui),
             "cli" => Some(Self::Cli),
+            "worker" => Some(Self::Worker),
             "server" => Some(Self::Server),
             "script" => Some(Self::Script),
             _ => None,
@@ -100,6 +105,7 @@ impl InitShape {
             Self::Web => "web",
             Self::Tui => "tui",
             Self::Cli => "cli",
+            Self::Worker => "worker",
             Self::Server => "server",
             Self::Script => "script",
         }
@@ -118,6 +124,7 @@ impl InitShape {
             Self::Web => MAIN_WEB_IPE,
             Self::Tui => MAIN_TUI_IPE,
             Self::Cli => MAIN_CLI_IPE,
+            Self::Worker => MAIN_WORKER_IPE,
             Self::Server => MAIN_SERVER_IPE,
             Self::Script => MAIN_SCRIPT_IPE,
         }
@@ -129,6 +136,7 @@ impl InitShape {
             Self::Web => PACKAGE_WEB_IPE,
             Self::Tui => PACKAGE_TUI_IPE,
             Self::Cli => PACKAGE_CLI_IPE,
+            Self::Worker => PACKAGE_WORKER_IPE,
             Self::Server => PACKAGE_SERVER_IPE,
             Self::Script => PACKAGE_SCRIPT_IPE,
         }
@@ -459,6 +467,7 @@ const fn confidently_pinned_shape(shape: ipe_canon::shape_source::MainShape) -> 
         MainShape::Web => Some(InitShape::Web),
         MainShape::Tui => Some(InitShape::Tui),
         MainShape::Cli => Some(InitShape::Cli),
+        MainShape::Worker => Some(InitShape::Worker),
         MainShape::Server => Some(InitShape::Server),
         MainShape::Script => None,
     }
@@ -485,7 +494,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
             "--lib" => lib = true,
             "--shape" => {
                 let val = iter.next().ok_or(CliError::Usage(
-                    "ipe init: `--shape` requires a value: script, tui, cli, server, web",
+                    "ipe init: `--shape` requires a value: script, tui, cli, worker, server, web",
                 ))?;
                 shape_flag = Some(parse_shape_word(val)?);
             }
@@ -547,7 +556,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
 fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
     InitShape::parse(word).ok_or_else(|| {
         CliError::UsageOwned(format!(
-            "ipe init: unknown shape `{word}` — expected: script, tui, cli, server, web"
+            "ipe init: unknown shape `{word}` — expected: script, tui, cli, worker, server, web"
         ))
     })
 }
@@ -575,8 +584,9 @@ fn wizard_shape() -> Result<InitShape, CliError> {
              [1] web    — browser / desktop / mobile app  (default)\n\
              [2] tui    — terminal UI with cells\n\
              [3] cli    — command-line program with text output\n\
-             [4] server — HTTP server\n\
-             [5] script — plain task, no rendering\n\
+             [4] worker — view-less TEA loop (init/update/subscriptions)\n\
+             [5] server — HTTP server\n\
+             [6] script — plain task, no rendering\n\
              \n\
              Shape [1]: "
         )
@@ -587,12 +597,13 @@ fn wizard_shape() -> Result<InitShape, CliError> {
         "" | "1" | "web" => InitShape::Web,
         "2" | "tui" => InitShape::Tui,
         "3" | "cli" => InitShape::Cli,
-        "4" | "server" => InitShape::Server,
-        "5" | "script" => InitShape::Script,
+        "4" | "worker" => InitShape::Worker,
+        "5" | "server" => InitShape::Server,
+        "6" | "script" => InitShape::Script,
         other => {
             return Err(CliError::UsageOwned(format!(
-                "ipe init: unknown shape `{other}` — expected 1-5 or one of: \
-                 web, tui, cli, server, script"
+                "ipe init: unknown shape `{other}` — expected 1-6 or one of: \
+                 web, tui, cli, worker, server, script"
             )));
         }
     };
@@ -1050,6 +1061,7 @@ mod tests {
         for shape in [
             InitShape::Tui,
             InitShape::Cli,
+            InitShape::Worker,
             InitShape::Server,
             InitShape::Script,
         ] {
@@ -1112,10 +1124,31 @@ mod tests {
     }
 
     #[test]
+    fn scaffolded_worker_manifest_re_parses() {
+        let files = managed_files("tick-worker", InitShape::Worker, InitRuntime::Live);
+        let manifest = files
+            .iter()
+            .find(|f| f.rel == Path::new("package.ipe"))
+            .expect("init writes a package.ipe");
+
+        let root = std::env::temp_dir().join("ipe_init_worker_roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        write_stub_src(&root);
+        let path = root.join("package.ipe");
+        std::fs::write(&path, &manifest.content).expect("write scaffolded package.ipe");
+
+        let parsed =
+            crate::project::parse_manifest(&path).expect("scaffolded worker manifest re-parses");
+        assert_eq!(parsed.name, "tick-worker");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn each_shape_scaffolds_a_distinct_main_ipe() {
         let web = managed_files("x", InitShape::Web, InitRuntime::Live);
         let tui = managed_files("x", InitShape::Tui, InitRuntime::Live);
         let cli = managed_files("x", InitShape::Cli, InitRuntime::Live);
+        let worker = managed_files("x", InitShape::Worker, InitRuntime::Live);
         let server = managed_files("x", InitShape::Server, InitRuntime::Live);
         let script = managed_files("x", InitShape::Script, InitRuntime::Live);
 
@@ -1130,6 +1163,7 @@ mod tests {
         let web_main = main(&web);
         let tui_main = main(&tui);
         let cli_main = main(&cli);
+        let worker_main = main(&worker);
         let server_main = main(&server);
         let script_main = main(&script);
 
@@ -1146,14 +1180,22 @@ mod tests {
             cli_main.contains("Cli.tea") || cli_main.contains("Cli"),
             "cli uses Cli.tea"
         );
+        assert!(worker_main.contains("Worker.tea"), "worker uses Worker.tea");
         assert!(
             server_main.contains("Server.listen"),
             "server uses Server.listen"
         );
         assert!(script_main.contains("Task"), "script uses Task");
 
-        // All five are distinct.
-        let mains = [&web_main, &tui_main, &cli_main, &server_main, &script_main];
+        // All six are distinct.
+        let mains = [
+            &web_main,
+            &tui_main,
+            &cli_main,
+            &worker_main,
+            &server_main,
+            &script_main,
+        ];
         for (i, a) in mains.iter().enumerate() {
             for (j, b) in mains.iter().enumerate() {
                 if i != j {
@@ -1308,6 +1350,7 @@ mod tests {
             ("web", InitShape::Web),
             ("tui", InitShape::Tui),
             ("cli", InitShape::Cli),
+            ("worker", InitShape::Worker),
             ("server", InitShape::Server),
             ("script", InitShape::Script),
         ] {
@@ -1473,6 +1516,7 @@ mod tests {
             InitShape::Web,
             InitShape::Tui,
             InitShape::Cli,
+            InitShape::Worker,
             InitShape::Server,
             InitShape::Script,
         ] {
