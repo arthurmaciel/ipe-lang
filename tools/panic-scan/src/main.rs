@@ -37,7 +37,14 @@ fn main() -> ExitCode {
                     found = true;
                 }
             }
-            Err(e) => eprintln!("panic-scan: {path}: could not lex ({e}) — review manually"),
+            // A file the scanner cannot lex is unaudited, not clean: "cannot
+            // analyze" must never read as "no panics". Fail closed on it so
+            // the inventory has no silent-skip hole — the maintainer must make
+            // the file lex or exclude it explicitly.
+            Err(e) => {
+                eprintln!("panic-scan: {path}: could not lex ({e}) — cannot audit; fail closed");
+                return ExitCode::from(2);
+            }
         }
     }
     if found {
