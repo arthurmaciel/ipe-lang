@@ -1223,7 +1223,7 @@ mod registry_phase_c_tests {
             K::CsvEncode,
             K::CsvEncodeWithDelimiter,
             K::CsvParseStreamFromFile,
-            // ── Ipe.Cache (7) ──────────────────────────────────────────
+            // ── Ipe.Cache (8) ──────────────────────────────────────────
             K::CacheNewRaw,
             K::CacheGet,
             K::CachePut,
@@ -1231,6 +1231,7 @@ mod registry_phase_c_tests {
             K::CacheClear,
             K::CacheSize,
             K::CacheStats,
+            K::CacheDestroyRaw,
             // ── Ipe.Config (16) ────────────────────────────────────
             K::ConfigString,
             K::ConfigInt,

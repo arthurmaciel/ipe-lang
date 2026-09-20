@@ -5,6 +5,10 @@
 -- parameters — the runtime stringifies the key for the LRU map
 -- but the surface API stays parametric.
 --
+-- The number of live caches is itself bounded: `new` fails once too
+-- many caches are live, and `destroy` reclaims one.  A long-lived
+-- server creating caches per request must `destroy` them when done.
+--
 -- Every typed record ships with a `defaultCfg` constructor + `with*`
 -- builder helpers so future field additions don't break record literals.
 --
@@ -35,6 +39,7 @@ module Ipe.Cache exposing
     , clear
     , size
     , stats
+    , destroy
     )
 
 
@@ -198,3 +203,21 @@ stats cache =
 
         Cache raw ->
             statsRaw raw
+
+
+destroyRaw : Int -> Task Error ()
+destroyRaw =
+    Kernel.kernel "Cache_destroy"
+
+
+-- | `destroy cache` — reclaim the cache, freeing its handle.  The registry
+-- caps the number of live caches, so a long-lived server that creates caches
+-- per request must destroy them when done.  Idempotent — destroying an
+-- already-destroyed cache succeeds silently.  Using a cache after `destroy`
+-- behaves as an empty cache (misses / no-ops), never a failure.
+destroy : Cache k v -> Task Error ()
+destroy cache =
+    case cache of
+
+        Cache raw ->
+            destroyRaw raw

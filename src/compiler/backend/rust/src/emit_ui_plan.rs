@@ -1456,6 +1456,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::CacheClear
         | KernelFn::CacheSize
         | KernelFn::CacheStats
+        | KernelFn::CacheDestroyRaw
         | KernelFn::ConfigString
         | KernelFn::ConfigInt
         | KernelFn::ConfigFloat

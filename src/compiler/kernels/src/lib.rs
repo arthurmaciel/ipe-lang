@@ -2875,6 +2875,8 @@ pub enum StdlibKernel {
     CacheSize,
     /// `Cache.statsRaw : Int -> Task Error { hits, misses, evictions }`.
     CacheStats,
+    /// `Cache.destroyRaw : Int -> Task Error ()` — reclaim a cache handle.
+    CacheDestroyRaw,
 
     // ── Ipe.Config — typed TOML/YAML/JSON decoders ────────────────────
     // Config shares the JSON `Decoder<E, T>` carrier and its `decode_*`
@@ -4993,6 +4995,7 @@ impl StdlibKernel {
             Self::CacheClear => d("Cache", "clear", 1, Pure, "cache_clear"),
             Self::CacheSize => d("Cache", "size", 1, Pure, "cache_size"),
             Self::CacheStats => d("Cache", "stats", 1, Pure, "cache_stats"),
+            Self::CacheDestroyRaw => d("Cache", "destroy", 1, Pure, "cache_destroy"),
 
             // ── Ipe.Config ────────────────────────────────────────────
             // The 11 combinator/primitive kernels share the JSON `decode_*`
@@ -6288,6 +6291,7 @@ impl StdlibKernel {
         Self::CacheClear,
         Self::CacheSize,
         Self::CacheStats,
+        Self::CacheDestroyRaw,
         Self::ConfigString,
         Self::ConfigInt,
         Self::ConfigFloat,
@@ -6432,6 +6436,7 @@ impl StdlibKernel {
             Self::CacheClear => "Cache.clearRaw".to_owned(),
             Self::CacheSize => "Cache.sizeRaw".to_owned(),
             Self::CacheStats => "Cache.statsRaw".to_owned(),
+            Self::CacheDestroyRaw => "Cache.destroyRaw".to_owned(),
             // Default: derive from the canonical qualifier + name.
             _ => format!("{}.{}", d.qualifier, d.name),
         }
@@ -10338,6 +10343,8 @@ impl StdlibKernel {
             Self::CacheRemove => Some(&CACHE_REMOVE),
             Self::CacheClear => Some(&CACHE_CLEAR),
             Self::CacheSize => Some(&CACHE_SIZE),
+            // `Cache.destroyRaw : Int -> Task ()` — same shape as `clearRaw`.
+            Self::CacheDestroyRaw => Some(&CACHE_CLEAR),
 
             // ── Ipe.Secret.use. ──
             Self::SecretUse => Some(&SECRET_USE),
@@ -10546,7 +10553,8 @@ impl StdlibKernel {
             | Self::CacheRemove
             | Self::CacheClear
             | Self::CacheSize
-            | Self::CacheStats => Some(RuntimeModule::Cache),
+            | Self::CacheStats
+            | Self::CacheDestroyRaw => Some(RuntimeModule::Cache),
             // The `Ipe.Random` family is `class = Pure` but its `random_*` draw
             // symbols live only in `ipe_runtime::random` — a standalone
             // feature-module no emit-class pulls in. Declaring the module here is
@@ -11742,6 +11750,7 @@ impl StdlibKernel {
             | Self::CacheClear
             | Self::CacheSize
             | Self::CacheStats
+            | Self::CacheDestroyRaw
             | Self::ConfigString
             | Self::ConfigInt
             | Self::ConfigFloat
@@ -12444,6 +12453,7 @@ impl StdlibKernel {
                 | Self::CacheClear
                 | Self::CacheSize
                 | Self::CacheStats
+                | Self::CacheDestroyRaw
         )
     }
 
