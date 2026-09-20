@@ -185,22 +185,7 @@ fn render_at(
                 out.push_str(s);
             }
         }
-        Doc::Concat(docs) => {
-            // A child's own trailing `reserve` is the enclosing reserve PLUS the flat
-            // width of every following sibling that lands on the SAME line — the
-            // closing delimiter text a wrapper appends after a breakable construct
-            // (`Box::new(<closure>)`'s `)`, then the enclosing `;`). Only siblings
-            // that render single-line count; once one would break, the reserve no
-            // longer applies to earlier children (their tail is that break, not the
-            // delimiter). This lets a `BraceBody`/`CallArgs` child re-test its own fit
-            // against the width `rustfmt`'s `Shape` leaves after its trailing tokens.
-            for (i, d) in docs.iter().enumerate() {
-                let c = eff_col(out, col);
-                let suffix = trailing_siblings_flat_width(docs.get(i + 1..).unwrap_or(&[]));
-                let child_cfg = cfg.with_reserve(cfg.reserve + suffix);
-                render_at(d, child_cfg, indent, c, flat, out);
-            }
-        }
+        Doc::Concat(docs) => render_concat(docs, cfg, indent, col, flat, out),
         Doc::Nest(n, inner) => {
             render_at(inner, cfg, indent + n, col, flat, out);
         }
@@ -271,6 +256,33 @@ fn render_at(
         Doc::MethodChain { receiver, method } => {
             render_method_chain(receiver, method, cfg, indent, col, flat, out);
         }
+        Doc::IfElse { cond, then_, else_ } => {
+            render_if_else(cond, then_, else_, cfg, indent, col, flat, out);
+        }
+    }
+}
+
+/// Render a [`Doc::Concat`]: each child in order, threading the reserve budget. A
+/// child's own trailing `reserve` is the enclosing reserve PLUS the flat width of
+/// every following sibling that lands on the SAME line — the closing delimiter text
+/// a wrapper appends after a breakable construct (`Box::new(<closure>)`'s `)`, then
+/// the enclosing `;`). Only siblings that render single-line count; once one would
+/// break, the reserve no longer applies to earlier children (their tail is that
+/// break, not the delimiter). This lets a `BraceBody`/`CallArgs` child re-test its
+/// own fit against the width `rustfmt`'s `Shape` leaves after its trailing tokens.
+fn render_concat(
+    docs: &[Doc],
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    for (i, d) in docs.iter().enumerate() {
+        let c = eff_col(out, col);
+        let suffix = trailing_siblings_flat_width(docs.get(i + 1..).unwrap_or(&[]));
+        let child_cfg = cfg.with_reserve(cfg.reserve + suffix);
+        render_at(d, child_cfg, indent, c, flat, out);
     }
 }
 
@@ -819,6 +831,93 @@ fn body_broken_forces_flat(body: &Doc, cfg: RenderConfig, indent: usize, start_c
         .any(|line| line.len() > cfg.max_width && line_is_unbreakable_atom(line))
 }
 
+/// `rustfmt`'s `single_line_if_else_max_width` (default 50): the maximum width of
+/// an `if cond { then } else { else }` construct — measured WITHOUT the outer
+/// parentheses the emitter wraps it in — that `rustfmt` keeps on one line. Wider
+/// constructs break each branch body onto its own line. The threshold is absolute
+/// (column-independent), so the decision is a function of the flat leaf widths.
+const SINGLE_LINE_IF_ELSE_MAX_WIDTH: usize = 50;
+
+/// Render a [`Doc::IfElse`] with `rustfmt`'s `single_line_if_else_max_width` rule.
+/// The single-line construct width WITHOUT the outer parens (the `if cond { then }
+/// else { else }` text) is measured from the branches' flat leaves; when it is at
+/// most [`SINGLE_LINE_IF_ELSE_MAX_WIDTH`] the whole construct stays inline `(if cond
+/// { then } else { else })`, otherwise each branch body breaks onto its own line at
+/// one indent step. The threshold is absolute, so the decision is independent of the
+/// enclosing column (a wider enclosing group cannot force it broken, nor a deep
+/// indent).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "renderer threads the three branch docs + cfg/indent/col/flat"
+)]
+fn render_if_else(
+    cond: &Doc,
+    then_: &Doc,
+    else_: &Doc,
+    cfg: RenderConfig,
+    indent: usize,
+    col: usize,
+    flat: bool,
+    out: &mut String,
+) {
+    // The single-line construct width, WITHOUT the outer parens:
+    // `if ` + cond + ` { ` + then + ` } else { ` + else + ` }`, from the flat
+    // leaf widths. The threshold is absolute (column-independent).
+    let construct_width = "if ".len()
+        + cond.normalized_leaves().len()
+        + " { ".len()
+        + then_.normalized_leaves().len()
+        + " } else { ".len()
+        + else_.normalized_leaves().len()
+        + " }".len();
+
+    let start_col = eff_col(out, col);
+    if construct_width <= SINGLE_LINE_IF_ELSE_MAX_WIDTH {
+        // Inline `(if cond { then } else { else })`. Soft `Line`s so a wider
+        // enclosing group could in principle break it, but the width test already
+        // guaranteed it fits.
+        render_at(
+            &Doc::concat(vec![
+                Doc::text("(if "),
+                cond.clone(),
+                Doc::text(" { "),
+                then_.clone(),
+                Doc::text(" } else { "),
+                else_.clone(),
+                Doc::text(" })"),
+            ]),
+            cfg,
+            indent,
+            start_col,
+            flat,
+            out,
+        );
+        return;
+    }
+
+    // Broken block form. Braces sit at the enclosing block `indent`; each branch
+    // body indents to `indent + 4`. `HardLine`s force the layout unconditionally,
+    // matching `rustfmt`'s block-form `if` once past the single-line threshold.
+    render_at(
+        &Doc::concat(vec![
+            Doc::text("(if "),
+            cond.clone(),
+            Doc::text(" {"),
+            Doc::nest(4, Doc::concat(vec![Doc::HardLine, then_.clone()])),
+            Doc::HardLine,
+            Doc::text("} else {"),
+            Doc::nest(4, Doc::concat(vec![Doc::HardLine, else_.clone()])),
+            Doc::HardLine,
+            Doc::text("})"),
+        ]),
+        cfg,
+        indent,
+        start_col,
+        flat,
+        out,
+    );
+}
+
 /// Whether a rendered line, trimmed of indentation, is a single UNBREAKABLE atom:
 /// a bare string literal or an identifier/path/type with no TOP-LEVEL break point —
 /// no `(` / `[` / `{` group opener and no top-level `, ` separator outside a string
@@ -1157,7 +1256,11 @@ fn has_hard_break(doc: &Doc) -> bool {
         | Doc::MethodChain { .. }
         // An `OrPattern` decides its own flat-vs-vertical layout independently
         // and carries only text alternatives — never a hard break.
-        | Doc::OrPattern { .. } => false,
+        | Doc::OrPattern { .. }
+        // An `IfElse` decides its own inline-vs-block layout independently (its
+        // absolute `single_line_if_else_max_width` re-test), so it hides its own
+        // breaks from the enclosing group like `Group` / `BraceBody` / `CallArgs`.
+        | Doc::IfElse { .. } => false,
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         // `Nest` is pure indentation and `ElidableParen` pure wrapping: each forwards
         // its break behavior to its inner (a paren-block carries the statement
@@ -2577,6 +2680,53 @@ mod p0_tests {
         assert_eq!(doc.normalized_leaves(), "{ rest }");
         // Flat render drops the braces (matches rustfmt), so rendered != leaves here.
         assert_eq!(render(&doc, RenderConfig::default()), "rest");
+    }
+
+    #[test]
+    fn if_else_stays_inline_at_the_width_threshold_from_docs_alone() {
+        // The `single_line_if_else_max_width` layout policy is verifiable from pure
+        // `Doc`s — no IR. `if cond1234567890 { thenvalab } else { elsevalab }` is
+        // exactly 50 columns WITHOUT the outer parens (the threshold), so it stays
+        // inline whatever the enclosing indent.
+        let doc = Doc::if_else(
+            Doc::text("cond1234567890"),
+            Doc::text("thenvalab"),
+            Doc::text("elsevalab"),
+        );
+        let seeded = Doc::nest(4, doc);
+        assert_eq!(
+            render(&seeded, RenderConfig::default()),
+            "(if cond1234567890 { thenvalab } else { elsevalab })",
+            "a 50-wide construct stays inline"
+        );
+    }
+
+    #[test]
+    fn if_else_breaks_to_block_form_one_past_the_threshold() {
+        // One column past the threshold (a 51-wide construct) breaks each branch body
+        // onto its own line at one indent step, braces dedented back to the block
+        // indent — the block form, decided by the renderer from the flat leaf widths.
+        let doc = Doc::if_else(
+            Doc::text("cond1234567890"),
+            Doc::text("thenvalabc"),
+            Doc::text("elsevalab"),
+        );
+        let stmt = Doc::nest(4, Doc::concat(vec![Doc::text("let z = "), doc]));
+        let got = render(&stmt, RenderConfig::default());
+        let expected = "let z = (if cond1234567890 {\n        thenvalabc\n    } else {\n        elsevalab\n    })";
+        assert_eq!(
+            got, expected,
+            "\n--- got ---\n{got}\n--- want ---\n{expected}"
+        );
+    }
+
+    #[test]
+    fn if_else_leaves_carry_the_parens_and_braces_for_the_seal() {
+        // The `(if … { … } else { … })` tokens ARE the SEAL leaf sequence (the string
+        // emitter writes them adjacently), identical in both the inline and block
+        // layouts — the block form's newlines normalize away.
+        let doc = Doc::if_else(Doc::text("c"), Doc::text("t"), Doc::text("e"));
+        assert_eq!(doc.normalized_leaves(), "(if c { t } else { e })");
     }
 
     /// Render an assignment `doc` as a block statement at block `indent`: seed the
