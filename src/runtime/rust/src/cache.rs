@@ -10,8 +10,16 @@
 //! Ipê `getRaw : … -> Task Error (Maybe v)` return makes `V` available). Keys
 //! are matched by `PartialEq` (already in the codegen's standard generic bounds)
 //! via a linear scan — no `Eq`/`Hash` needed, so the generic stdlib wrappers
-//! type-check without any bound-threading. O(n) per op, fine for the small caches
-//! Ipê uses; a future codegen `Eq+Hash` bound would allow an O(1) `HashMap`.
+//! type-check without any bound-threading. Entry lookup within a handle is O(n)
+//! in that handle's entry count, fine for the small caches Ipê uses; a future
+//! codegen `Eq+Hash` bound would allow an O(1) `HashMap`.
+//!
+//! The registry itself keys handles in a `HashMap<i64, Slot>` (O(1) lookup) and
+//! is bounded by construction: `MAX_LIVE_CACHES` caps the number of live caches
+//! and `cache_destroy` reclaims a handle's `Slot`. Two independent bounds — a
+//! fail-closed ceiling at construction and caller-driven reclamation — so a
+//! long-lived server calling `cache_new_raw` per request cannot leak `Slot`s
+//! without limit.
 //!
 //! Both the `Vec<CacheEntry<K>>` downcast (by `K`) and the value downcast (by
 //! `V`) are **correct by construction** — every op on a handle uses the same
@@ -22,6 +30,7 @@
 
 use super::*;
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -76,19 +85,34 @@ struct Slot {
     store: Option<Box<dyn Any + Send>>, // Vec<CacheEntry<K>>, created lazily on first K-bearing op
 }
 
-// type_complexity (accepted, cosmetic): the `(next_handle, Vec<(handle, Slot)>)`
-// tuple is this registry's one-off internal store shape — a type alias would
-// hide it rather than clarify. Not a soundness concern.
-#[allow(clippy::type_complexity)]
-fn registry() -> &'static Mutex<(i64, Vec<(i64, Slot)>)> {
-    static R: OnceLock<Mutex<(i64, Vec<(i64, Slot)>)>> = OnceLock::new();
-    R.get_or_init(|| Mutex::new((0, Vec::new())))
+/// Declared ceiling on the number of simultaneously live caches — the SSOT for
+/// the registry bound. `cache_new_raw` fails closed once `live` reaches it, so
+/// the registry is bounded by construction even against a caller that never
+/// calls `cache_destroy`.
+const MAX_LIVE_CACHES: i64 = 4096;
+
+/// The global cache registry: a monotonic handle counter plus the live caches
+/// keyed by handle. Keying by the exact `i64` handle makes every op O(1) and
+/// never observes `HashMap` iteration order, so output stays deterministic.
+struct Registry {
+    next: i64,
+    live: HashMap<i64, Slot>,
+}
+
+fn registry() -> &'static Mutex<Registry> {
+    static R: OnceLock<Mutex<Registry>> = OnceLock::new();
+    R.get_or_init(|| {
+        Mutex::new(Registry {
+            next: 0,
+            live: HashMap::new(),
+        })
+    })
 }
 
 fn with_slot<R>(handle: i64, default: R, f: impl FnOnce(&mut Slot) -> R) -> R {
     let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
-    match g.1.iter_mut().find(|(h, _)| *h == handle) {
-        Some((_, slot)) => f(slot),
+    match g.live.get_mut(&handle) {
+        Some(slot) => f(slot),
         None => default,
     }
 }
@@ -130,12 +154,24 @@ pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> IpeTask
         }
         let h = {
             let mut g = registry().lock().unwrap_or_else(|e| e.into_inner());
+            // Fail-closed ceiling (PRINCIPLES §1/§3): refuse a new cache once the
+            // registry is full rather than growing without bound or silently
+            // evicting a cache another task still holds a handle to. Reclamation
+            // is caller-driven (`cache_destroy`); this is the hard backstop.
+            if g.live.len() as i64 >= MAX_LIVE_CACHES {
+                return IpeResult::Err(
+                    format!(
+                        "Cache.new: live cache limit reached ({MAX_LIVE_CACHES}); destroy unused caches before creating more"
+                    )
+                    .into(),
+                );
+            }
             // Saturating: monotonic handle counter — `+= 1` would debug-panic on
             // i64 overflow. (Saturating at i64::MAX is benign: reaching it needs
             // ~2^63 cache allocations; the cap merely keeps the op total.)
-            g.0 = g.0.saturating_add(1);
-            let h = g.0;
-            g.1.push((
+            g.next = g.next.saturating_add(1);
+            let h = g.next;
+            g.live.insert(
                 h,
                 Slot {
                     cfg,
@@ -146,7 +182,7 @@ pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> IpeTask
                     seq: 0,
                     store: None,
                 },
-            ));
+            );
             h
         };
         ok_res(h)
@@ -328,6 +364,22 @@ pub fn cache_clear<E: Send + From<String> + 'static>(handle: i64) -> IpeTask<E, 
     })
 }
 
+/// `Cache.destroyRaw : Int -> Task Error ()` — reclaim a cache's `Slot`,
+/// freeing a registry slot against the `MAX_LIVE_CACHES` ceiling. Idempotent:
+/// destroying an unknown or already-destroyed handle is a no-op `Ok(())` (the
+/// same convention as `cache_remove`). After destroy, every op on the handle
+/// takes the missing-handle `default` branch.
+pub fn cache_destroy<E: Send + From<String> + 'static>(handle: i64) -> IpeTask<E, ()> {
+    Box::pin(async move {
+        registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .live
+            .remove(&handle);
+        ok_res(())
+    })
+}
+
 /// `Cache.sizeRaw : Int -> Task Error Int`.
 pub fn cache_size<E: Send + From<String> + 'static>(handle: i64) -> IpeTask<E, i64> {
     Box::pin(async move { ok_res(with_slot(handle, 0, |slot| slot.entries)) })
@@ -455,5 +507,103 @@ mod tests {
             IpeMaybe::Just(1)
         );
         assert_eq!(run(cache_stats::<IpeError>(h)).evictions, 1);
+    }
+
+    fn tiny_cfg() -> CacheCfg {
+        CacheCfg {
+            maxEntries: 1,
+            ttlMs: 0,
+            maxBytes: 0,
+        }
+    }
+
+    /// Registry bounded by construction (PRINCIPLES §1/§3): after `MAX_LIVE_CACHES`
+    /// live caches, the next `cache_new_raw` fails closed rather than growing the
+    /// registry without bound. Pins the exhaustion backstop. Destroys the caches
+    /// created here so the shared process-wide registry is left at its prior size.
+    #[test]
+    fn registry_bounded_by_ceiling() {
+        // Bring the live count up to the ceiling from wherever it currently sits
+        // (the registry is process-global and other tests may hold caches), then
+        // assert the boundary. Track our own handles to reclaim them afterwards.
+        let mut ours = Vec::new();
+        loop {
+            let live = {
+                let g = registry().lock().unwrap_or_else(|e| e.into_inner());
+                g.live.len() as i64
+            };
+            if live >= MAX_LIVE_CACHES {
+                break;
+            }
+            match try_new(tiny_cfg()) {
+                IpeResult::Ok(h) => ours.push(h),
+                IpeResult::Err(_) => break,
+            }
+        }
+        // At (or above) the ceiling, a further allocation is refused.
+        assert!(
+            matches!(try_new(tiny_cfg()), IpeResult::Err(_)),
+            "cache_new_raw must fail closed at the MAX_LIVE_CACHES ceiling"
+        );
+        for h in ours {
+            run(cache_destroy::<IpeError>(h));
+        }
+    }
+
+    /// `cache_destroy` reclaims the handle's `Slot`: subsequent ops take the
+    /// missing-handle `default` branch, and a fresh `cache_new_raw` succeeds again
+    /// (a freed slot is reusable against the ceiling).
+    #[test]
+    fn destroy_reclaims_handle() {
+        let h = run(cache_new_raw::<IpeError>(CacheCfg {
+            maxEntries: 8,
+            ttlMs: 0,
+            maxBytes: 0,
+        }));
+        run(cache_put::<IpeError, String, String>(
+            h,
+            "a".into(),
+            "1".into(),
+        ));
+        assert_eq!(run(cache_size::<IpeError>(h)), 1);
+        run(cache_destroy::<IpeError>(h));
+        // Destroyed handle resolves to the default branch: size 0, get Nothing.
+        assert_eq!(run(cache_size::<IpeError>(h)), 0);
+        assert_eq!(
+            run(cache_get::<IpeError, String, String>(h, "a".into())),
+            IpeMaybe::Nothing
+        );
+        // A fresh cache still allocates after reclamation.
+        assert!(matches!(try_new(tiny_cfg()), IpeResult::Ok(_)));
+    }
+
+    /// `cache_destroy` is idempotent — destroying twice, and destroying an unknown
+    /// handle, both succeed (matches the `remove`-idempotent convention).
+    #[test]
+    fn destroy_is_idempotent() {
+        let h = run(cache_new_raw::<IpeError>(tiny_cfg()));
+        run(cache_destroy::<IpeError>(h));
+        run(cache_destroy::<IpeError>(h)); // second destroy on same handle
+        run(cache_destroy::<IpeError>(i64::MAX)); // unknown handle
+    }
+
+    /// Behavioral proxy for the map-keyed (not scan-based) registry: with several
+    /// live caches, destroying an early handle leaves later handles resolvable and
+    /// the destroyed one unresolvable. Every op keys by the exact handle.
+    #[test]
+    fn lookup_is_map_keyed_not_scan() {
+        let a = run(cache_new_raw::<IpeError>(tiny_cfg()));
+        let b = run(cache_new_raw::<IpeError>(tiny_cfg()));
+        let c = run(cache_new_raw::<IpeError>(tiny_cfg()));
+        run(cache_put::<IpeError, String, i64>(c, "k".into(), 9));
+        run(cache_destroy::<IpeError>(a)); // destroy an early handle
+        // The late handle still resolves; the destroyed early one does not.
+        assert_eq!(
+            run(cache_get::<IpeError, String, i64>(c, "k".into())),
+            IpeMaybe::Just(9)
+        );
+        assert_eq!(run(cache_size::<IpeError>(a)), 0);
+        run(cache_destroy::<IpeError>(b));
+        run(cache_destroy::<IpeError>(c));
     }
 }
