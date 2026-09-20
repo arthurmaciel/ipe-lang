@@ -412,7 +412,58 @@ impl TyBounds {
         Self(Self::HOF_KERNEL_RESULT),
         Self(Self::SQL_PARAM),
     ];
+
+    /// The OR of every real obligation flag — the SSOT the completeness link
+    /// checks [`Self::ALL_BITS`] against. A new `1 << n` flag added with its
+    /// `has_*` accessor and gate clause but forgotten in `ALL_BITS` would leave
+    /// the use-site-clause walk vacuous (fail-open — the flag's clause admits a
+    /// function type unchecked); listing the new flag here without also adding
+    /// its `ALL_BITS` entry breaks the `build` below instead.
+    const ALL: u16 = Self::ADD
+        | Self::SUB
+        | Self::MUL
+        | Self::ORD
+        | Self::EQ
+        | Self::SET_ELEM
+        | Self::DICT_KEY
+        | Self::SHOW
+        | Self::APPEND
+        | Self::HOF_KERNEL_RESULT
+        | Self::SQL_PARAM;
+
+    /// The OR-fold of every entry in [`Self::ALL_BITS`] — a `const fn` so the
+    /// completeness link below is a compile-time check, not a skippable test.
+    const fn all_bits_union() -> u16 {
+        let mut acc = 0u16;
+        let mut rest = Self::ALL_BITS;
+        while let [first, tail @ ..] = rest {
+            acc |= first.0;
+            rest = tail;
+        }
+        acc
+    }
 }
+
+/// Build-time completeness link: `ALL_BITS` must enumerate EXACTLY the flags in
+/// `ALL`, each exactly once. The union equality catches a flag left out of (or
+/// duplicated in) `ALL_BITS`; the length-vs-popcount equality additionally
+/// rejects a duplicate entry that would still union to `ALL`. Either drift
+/// fails the build, so the use-site-clause completeness walk can never pass
+/// vacuously over a missing bit.
+const _: () = {
+    // IPE-RUST-AUDIT:ACCEPTED compile-time completeness assert — a `const` build
+    // check evaluated at compile time, never a runtime panic path. The union
+    // equality catches a flag left out of (or duplicated in) `ALL_BITS`; the
+    // length-vs-popcount equality additionally rejects a duplicate that would
+    // still union to `ALL`. Either drift fails the build.
+    assert!(
+        TyBounds::all_bits_union() == TyBounds::ALL
+            && TyBounds::ALL_BITS.len() == TyBounds::ALL.count_ones() as usize,
+        "TyBounds::ALL_BITS must enumerate exactly the flags in TyBounds::ALL, each \
+         once — a flag added to ALL without an ALL_BITS entry, or a duplicate/missing \
+         single-bit entry, breaks this build"
+    );
+};
 
 /// What a union-find variable resolves to during inference.
 #[derive(Clone, PartialEq, Eq, Debug)]

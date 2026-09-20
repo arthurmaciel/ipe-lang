@@ -5754,44 +5754,80 @@ mod tests {
         }
     }
 
-    /// A `Show`-bounded generic instantiated to a FUNCTION must be REJECTED at
-    /// type-check. `describe x = Basics.toString x` gives `describe : a -> String`
-    /// with a `Stringify` obligation on `a`; a cross-use `describe someFn` (with
-    /// `someFn : Int -> Int`) instantiates `a` to an arrow. Before the use-site
-    /// gate carried the `Show` clause, `ipe` accepted this and the backend emitted
+    /// A `Show`-bounded generic instantiated to a FUNCTION must be REJECTED by
+    /// the shared use-site gate. The obligation models `describe : a -> String`
+    /// with `describe x = Basics.toString x` — a `Stringify` obligation on `a` —
+    /// instantiated to `someFn : Int -> Int`. Before the gate carried the `Show`
+    /// clause, `ipe` accepted this and the backend emitted
     /// `fn describe<T0: IpeStringify>(..)` fed a closure — an E0277 at `cargo`.
+    ///
+    /// Driven directly against `super_bounds_satisfied` (like
+    /// [`every_bound_bit_rejects_a_function_at_both_sites`]) rather than through
+    /// a stdlib call: the single-module inference harness canonicalises `Main`
+    /// with no stdlib in scope, so a qualified `Basics.toString` dies at
+    /// `UnknownModule` before any Show obligation is recorded — a refusal that
+    /// never reaches this gate and holds green even with the `Show` clause
+    /// deleted (vacuous). This construction exercises the `has_show()` conjunct
+    /// itself: removing it from `super_bounds_satisfied` turns this assertion RED.
     #[test]
     fn show_bounded_generic_escaping_to_function_is_rejected() {
-        let src = format!(
-            "{M2C_HDR}describe : a -> String\n\
-             describe x =\n    Basics.toString x\n\n\
-             someFn : Int -> Int\n\
-             someFn n =\n    n\n\n\
-             main =\n    describe someFn\n"
-        );
-        let (solved, _i, _m) = infer_src(&src);
+        let mut i = Interner::new();
+        let int_sym = i.intern("Int").expect("intern Int");
+        let int_ty = Ty::Con {
+            module: Vec::new(),
+            name: int_sym,
+            args: Vec::new(),
+        };
+        let fn_ty = Ty::Fun(Box::new(int_ty.clone()), Box::new(int_ty));
+        let no_fn_enums = |_home: &[Symbol], _name: Symbol| false;
+        let show = TyBounds::show();
         assert!(
-            solved.is_err(),
+            !super_bounds_satisfied(
+                &i,
+                show,
+                &fn_ty,
+                super_bounds::BoundSite::EmittedGeneric,
+                &no_fn_enums,
+            ),
             "a Stringify-bounded generic instantiated to a function must be \
-             rejected at type-check (SEAL): {solved:?}"
+             rejected at an emitted-generic site (SEAL)"
+        );
+        assert!(
+            !super_bounds_satisfied(
+                &i,
+                show,
+                &fn_ty,
+                super_bounds::BoundSite::ConcretePin,
+                &no_fn_enums,
+            ),
+            "a Stringify obligation pinned directly to a function must be rejected \
+             at a concrete-pin site (SEAL)"
         );
     }
 
-    /// The happy path the refusal above must not break: `describe` on a bare
-    /// scalar and on a `String` both type-check (every non-function type derives
-    /// `IpeStringify`).
+    /// The happy path the refusal above must not break: a `Show` obligation is
+    /// satisfied by a non-function type (`Int`), at both use sites — every
+    /// non-function type derives `IpeStringify`. Driven directly against the
+    /// gate for the same reason as the refusal above.
     #[test]
     fn show_bounded_generic_accepts_non_function_arguments() {
-        for arg in ["5", "\"x\""] {
-            let src = format!(
-                "{M2C_HDR}describe : a -> String\n\
-                 describe x =\n    Basics.toString x\n\n\
-                 main =\n    describe {arg}\n"
-            );
-            let (solved, _i, _m) = infer_src(&src);
+        let mut i = Interner::new();
+        let int_sym = i.intern("Int").expect("intern Int");
+        let int_ty = Ty::Con {
+            module: Vec::new(),
+            name: int_sym,
+            args: Vec::new(),
+        };
+        let no_fn_enums = |_home: &[Symbol], _name: Symbol| false;
+        let show = TyBounds::show();
+        for site in [
+            super_bounds::BoundSite::EmittedGeneric,
+            super_bounds::BoundSite::ConcretePin,
+        ] {
             assert!(
-                solved.is_ok(),
-                "`describe {arg}` (a showable non-function argument) must type-check: {solved:?}"
+                super_bounds_satisfied(&i, show, &int_ty, site, &no_fn_enums),
+                "a Stringify-satisfying non-function type (Int) must be accepted \
+                 at {site:?}"
             );
         }
     }
