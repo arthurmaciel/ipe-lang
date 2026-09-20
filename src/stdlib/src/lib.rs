@@ -2694,4 +2694,83 @@ mod tests {
              (it is indistinguishable from an absent API)"
         );
     }
+
+    /// Fail-closed second boundary (issue #2651): `ScreenOrientation.foldOutcome`
+    /// folds the correlated reply to `lock`/`unlock`. The shared inbound `JsMsg`
+    /// spans all three commands' replies, so a `Query`'s `Orientation` frame can
+    /// arrive on a lock/unlock correlation id. Only the genuine `Ok_` (a lock or
+    /// unlock completed) may fold to success; an `Orientation` reply — a query
+    /// answer — must fold to a typed failure, mirroring `foldOrientation`, which
+    /// rejects `Ok_` as "query returned no type". A regression that maps
+    /// `Orientation _` back to `Task.succeed ()` fails open: a query answer would
+    /// be reported as a lock success though no lock was ever confirmed.
+    #[test]
+    fn screen_orientation_lock_fold_rejects_query_reply() {
+        use ipe_syntax::{Expr_, Pattern_};
+
+        let mut interner = Interner::new();
+        let parsed = ipe_parse::parse_module(IPE_BROWSER_SCREEN_ORIENTATION, &mut interner)
+            .expect("ScreenOrientation must parse");
+
+        let orientation_ctor = interner
+            .intern("Orientation")
+            .expect("intern `Orientation`");
+        let ok_ctor = interner.intern("Ok_").expect("intern `Ok_`");
+        let task_qual = interner.intern("Task").expect("intern `Task`");
+        let fail_name = interner.intern("fail").expect("intern `fail`");
+        let succeed_name = interner.intern("succeed").expect("intern `succeed`");
+
+        // The RHS of a `case` arm is a `Task.fail (...)` call.
+        let calls_task = |body: &ipe_syntax::Expr, member| -> bool {
+            let Expr_::Call(callee, _) = &body.value else {
+                return false;
+            };
+            matches!(
+                &callee.value,
+                Expr_::VarQual(q, m) if *q == task_qual && *m == member
+            )
+        };
+
+        // Find the single arm of `fold`'s `case` whose head constructor is `ctor`.
+        let mut arm_rhs = |fold_name: &str, ctor| -> ipe_syntax::Expr {
+            let sym = interner
+                .intern(fold_name)
+                .expect("intern the fold binding name");
+            let value = parsed
+                .values
+                .iter()
+                .find(|v| v.value.name.value == sym)
+                .unwrap_or_else(|| panic!("`{fold_name}` must be a top-level binding"));
+            let Expr_::Case(_, arms) = &value.value.body.value else {
+                panic!("`{fold_name}` body must be a `case`");
+            };
+            arms.iter()
+                .find_map(|(pat, rhs)| match &pat.value {
+                    Pattern_::PCtor(name, _, _) if *name == ctor => Some(rhs.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("`{fold_name}` must have an arm for the constructor"))
+        };
+
+        // The lock/unlock fold rejects a query (`Orientation`) reply: fail, not succeed.
+        let lock_orientation = arm_rhs("foldOutcome", orientation_ctor);
+        assert!(
+            calls_task(&lock_orientation, fail_name),
+            "foldOutcome's `Orientation _` arm must fold to `Task.fail` — a query \
+             reply is not a lock/unlock success (fail-closed second boundary)",
+        );
+        assert!(
+            !calls_task(&lock_orientation, succeed_name),
+            "foldOutcome's `Orientation _` arm must NOT fold to `Task.succeed` — \
+             that is the fail-open boundary of issue #2651",
+        );
+
+        // Defend-in-depth mirror: the query fold rejects a lock/unlock (`Ok_`) reply.
+        let query_ok = arm_rhs("foldOrientation", ok_ctor);
+        assert!(
+            calls_task(&query_ok, fail_name),
+            "foldOrientation's `Ok_` arm must fold to `Task.fail` — a lock/unlock \
+             completion is not a query answer",
+        );
+    }
 }
