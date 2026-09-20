@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::diag::{Diagnostic, SourceDefect};
 use crate::naming::{WRAPPER_END_SENTINEL, WRAPPER_SENTINEL_PREFIX};
-use crate::pkginfo::{CrateVersion, FeatureName, PkgInfo};
+use crate::pkginfo::{CrateVersion, FeatureName, PackageName, PkgInfo};
 
 // ── crate-name gate ─────────────────────────────────────────────────────────
 
@@ -1433,21 +1433,27 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
     // transitive deps resolve through the wrapper's `Cargo.toml`, so the single
     // path line is the whole dependency surface the app needs to add.
     if !pkg.wrapper_path().is_empty() {
-        let name = crate::bindings::pkg_to_crate_import(pkg.pkg_path()).replace('_', "-");
+        // The Cargo `[dependencies]` KEY is the charset-gated package NAME, never
+        // the weakly gated `pkg_path` (which may even be a `--manifest` filesystem
+        // path): the type forbids any ungated string reaching the TOML key.
         lines.push(render_path_dep_line(
-            &name,
+            pkg.name_pkg(),
             pkg.wrapper_path().as_str(),
             pkg.features(),
         ));
         return Ok(lines);
     }
     if pkg.transitive_deps().is_empty() {
-        // No probe metadata: pin the primary crate from the package header.
+        // No probe metadata: pin the primary crate from the package header. The
+        // dependency KEY is the charset-gated package name, never `pkg_path`.
         if pkg.version().is_empty() {
             return Err(missing_version(pkg.name()));
         }
-        let name = crate::bindings::pkg_to_crate_import(pkg.pkg_path()).replace('_', "-");
-        lines.push(render_dep_line(&name, pkg.crate_version(), pkg.features()));
+        lines.push(render_dep_line(
+            pkg.name_pkg(),
+            pkg.crate_version(),
+            pkg.features(),
+        ));
         return Ok(lines);
     }
     for dep in pkg.transitive_deps() {
@@ -1468,7 +1474,7 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         } else {
             &[]
         };
-        lines.push(render_dep_line(dep.name.as_str(), &dep.version, features));
+        lines.push(render_dep_line(&dep.name, &dep.version, features));
     }
     lines.sort();
     Ok(lines)
@@ -1481,7 +1487,8 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
 /// string cannot reach any of the three splice positions, so no
 /// `"`-and-newline payload can break out of its TOML string and inject manifest
 /// content — the types, not a runtime escape, close the injection class.
-fn render_dep_line(name: &str, version: &CrateVersion, features: &[FeatureName]) -> String {
+fn render_dep_line(name: &PackageName, version: &CrateVersion, features: &[FeatureName]) -> String {
+    let name = name.as_str();
     let version = version.as_str();
     if features.is_empty() {
         format!("{name} = \"={version}\"")
@@ -1504,7 +1511,8 @@ fn render_dep_line(name: &str, version: &CrateVersion, features: &[FeatureName])
 /// could close its TOML string and inject manifest content; `name` and each
 /// feature are the same decode-validated newtypes `render_dep_line` splices, so
 /// no raw string reaches a TOML position.
-fn render_path_dep_line(name: &str, path: &str, features: &[FeatureName]) -> String {
+fn render_path_dep_line(name: &PackageName, path: &str, features: &[FeatureName]) -> String {
+    let name = name.as_str();
     if features.is_empty() {
         format!("{name} = {{ path = \"{path}\" }}")
     } else {
@@ -2150,9 +2158,12 @@ mod tests {
             .to_string(),
         )
         .expect("decodes");
+        // The dependency KEY is the charset-gated package NAME (`pkg.name()`),
+        // not the weakly gated `pkg_path` — the underscore form is the crate's
+        // own package name and a valid Cargo `[dependencies]` key.
         assert_eq!(
             cargo_dep_lines(&pkg).expect("renders"),
-            vec!["serde-json = \"=1.0.145\""]
+            vec!["serde_json = \"=1.0.145\""]
         );
     }
 
@@ -2215,6 +2226,36 @@ mod tests {
                 })
             ),
             "an injection-bearing feature must fail closed at decode: {decoded:?}"
+        );
+    }
+
+    #[test]
+    fn an_injection_bearing_pkg_path_never_reaches_a_manifest_line() {
+        // `pkg_path` is only weakly gated (control chars refused, but `"`, `{`,
+        // `}`, `[`, `]`, space admitted) because it is a crate name OR a
+        // `--manifest` filesystem path. It MUST NOT be the source of the Cargo
+        // `[dependencies]` KEY: the key is derived from the charset-gated
+        // `PackageName` (`pkg.name_pkg()`), so a hostile `pkg` value cannot reach
+        // the unescaped TOML key position. Here a legal-charset `name` decodes,
+        // an injection-bearing `pkg` rides along, and the emitted key is the
+        // clean package name — the hostile path never appears in any line.
+        let evil_pkg = "semver\", x = \"{ evil }";
+        let pkg = PkgInfo::decode_json(
+            &json!({
+                "pkg": evil_pkg,
+                "name": "semver",
+                "version": "1.0.145",
+                "functions": [],
+                "errors": []
+            })
+            .to_string(),
+        )
+        .expect("a legal package name decodes even when pkg_path is hostile");
+        let lines = cargo_dep_lines(&pkg).expect("renders");
+        assert_eq!(lines, vec!["semver = \"=1.0.145\""]);
+        assert!(
+            lines.iter().all(|l| !l.contains(evil_pkg)),
+            "the weakly-gated pkg_path must never reach a manifest line: {lines:?}"
         );
     }
 

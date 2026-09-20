@@ -91,7 +91,7 @@ fn a_wrapper_crate_binds_its_symbols_and_depends_by_path() {
     let deps = cargo_dep_lines(&pkg).expect("renders a path dep line");
     assert_eq!(
         deps,
-        [r#"engine-wrap = { path = "wrappers/engine" }"#],
+        [r#"engine_wrap = { path = "wrappers/engine" }"#],
         "the wrapper is a path dependency of the emitted app crate"
     );
 }
