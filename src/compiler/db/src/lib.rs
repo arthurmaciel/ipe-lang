@@ -468,13 +468,14 @@ enum Color {
 /// kernel imports are silently ignored. The DFS starts from `entry_path`, so
 /// the traversal (and therefore the dep-first prefix of the result) is
 /// independent of the order of `modules`; modules NOT reachable from the
-/// entry are appended afterwards in `modules` order.
+/// entry are then visited by the SAME DFS in `modules` order, so the whole
+/// file set — reachable prefix and orphan suffix alike — is cycle-checked.
 ///
 /// # Errors
-/// Returns [`CycleError`] when an import cycle is detected — this gate is
-/// what keeps a cyclic graph away from the recursive `canonicalize` /
-/// `module_interface` demands (whose direct misuse would hit salsa's
-/// dependency-cycle panic).
+/// Returns [`CycleError`] when an import cycle is detected ANYWHERE in the
+/// file set, orphans included — this gate is what keeps a cyclic graph away
+/// from the recursive `canonicalize` / `module_interface` demands (whose
+/// direct misuse would hit salsa's dependency-cycle panic).
 pub fn topological_order_paths<F>(
     modules: &[Vec<String>],
     entry_path: &[String],
@@ -491,76 +492,90 @@ where
         .collect();
 
     let mut result: Vec<Vec<String>> = Vec::new();
-    // Explicit stack avoids recursion-stack overflow on deep dep graphs.
-    let mut stack: Vec<DfsFrame> = Vec::new();
 
-    // Start the DFS from `entry_path` so we only visit modules reachable from
-    // the entry. Unknown modules (not in `module_set`) are skipped — the
-    // caller's canonicalisation emits IPE-N0020 for them.
-    let entry_deps = imports_of(entry_path)
-        .into_iter()
-        .filter(|d| module_set.contains(d.as_slice()))
-        .collect();
-    if let Some(color_entry) = color.get_mut(entry_path) {
-        *color_entry = Color::Gray;
-    }
-    stack.push((entry_path.to_vec(), entry_deps, vec![entry_path.join(".")]));
-
-    while let Some((node, mut deps, dfs_path)) = stack.pop() {
-        if let Some(next_dep) = deps.pop() {
-            match color.get(next_dep.as_slice()) {
-                Some(Color::Gray) => {
-                    // Back edge → cycle. Build the cycle path from this node's
-                    // ancestor path (owned here — the node was popped, not yet
-                    // re-pushed).
-                    let target = next_dep.join(".");
-                    let mut cycle_path = dfs_path;
-                    cycle_path.push(target);
-                    return Err(CycleError { path: cycle_path });
-                }
-                Some(Color::Black) | None => {
-                    // Black: already fully visited — skip.
-                    // None: not in module_set (stdlib import) — skip; IPE-N0020
-                    // fires later if it's a real local dep that's missing.
-                    // Re-push the current node with its remaining deps, reusing
-                    // the ancestor path — no child frame needs a copy here.
-                    stack.push((node, deps, dfs_path));
-                }
-                Some(Color::White) => {
-                    // First visit — push with its deps. The child's ancestor
-                    // path extends this node's, so it is the only copy taken;
-                    // the current node is re-pushed with the original.
-                    let sub_deps: Vec<Vec<String>> = imports_of(&next_dep)
-                        .into_iter()
-                        .filter(|d| module_set.contains(d.as_slice()))
-                        .collect();
-                    if let Some(c) = color.get_mut(next_dep.as_slice()) {
-                        *c = Color::Gray;
-                    }
-                    let mut sub_path = dfs_path.clone();
-                    sub_path.push(next_dep.join("."));
-                    stack.push((node, deps, dfs_path));
-                    stack.push((next_dep, sub_deps, sub_path));
-                }
-            }
-        } else {
-            // All deps processed — mark node Black and record it.
-            if let Some(c) = color.get_mut(node.as_slice()) {
-                *c = Color::Black;
-            }
-            result.push(node);
+    // One stack-based 3-colour DFS, seeded from an arbitrary White root. Both
+    // the entry seed and every orphan seed run THIS traversal, so a cycle is
+    // detected identically whether or not it is reachable from the entry — the
+    // whole file set is cycle-checked, matching the modules `linked_program`
+    // will `canonicalize`.
+    let dfs_from = |seed: &[String],
+                    color: &mut BTreeMap<&[String], Color>,
+                    result: &mut Vec<Vec<String>>|
+     -> Result<(), CycleError> {
+        // Explicit stack avoids recursion-stack overflow on deep dep graphs.
+        let mut stack: Vec<DfsFrame> = Vec::new();
+        let seed_deps = imports_of(seed)
+            .into_iter()
+            .filter(|d| module_set.contains(d.as_slice()))
+            .collect();
+        if let Some(color_seed) = color.get_mut(seed) {
+            *color_seed = Color::Gray;
         }
-    }
+        stack.push((seed.to_vec(), seed_deps, vec![seed.join(".")]));
 
-    // Modules not reachable from the entry (isolated / orphaned) are appended
-    // after the reachable prefix, in `modules` order.
-    for m in modules {
-        if !matches!(color.get(m.as_slice()), Some(Color::Black)) {
-            // Mark Black so a duplicate entry in `modules` is appended once.
-            if let Some(c) = color.get_mut(m.as_slice()) {
-                *c = Color::Black;
+        while let Some((node, mut deps, dfs_path)) = stack.pop() {
+            if let Some(next_dep) = deps.pop() {
+                match color.get(next_dep.as_slice()) {
+                    Some(Color::Gray) => {
+                        // Back edge → cycle. Build the cycle path from this
+                        // node's ancestor path (owned here — the node was
+                        // popped, not yet re-pushed).
+                        let target = next_dep.join(".");
+                        let mut cycle_path = dfs_path;
+                        cycle_path.push(target);
+                        return Err(CycleError { path: cycle_path });
+                    }
+                    Some(Color::Black) | None => {
+                        // Black: already fully visited — skip.
+                        // None: not in module_set (stdlib import) — skip;
+                        // IPE-N0020 fires later if it's a real local dep that's
+                        // missing. Re-push the current node with its remaining
+                        // deps, reusing the ancestor path — no child frame needs
+                        // a copy here.
+                        stack.push((node, deps, dfs_path));
+                    }
+                    Some(Color::White) => {
+                        // First visit — push with its deps. The child's ancestor
+                        // path extends this node's, so it is the only copy taken;
+                        // the current node is re-pushed with the original.
+                        let sub_deps: Vec<Vec<String>> = imports_of(&next_dep)
+                            .into_iter()
+                            .filter(|d| module_set.contains(d.as_slice()))
+                            .collect();
+                        if let Some(c) = color.get_mut(next_dep.as_slice()) {
+                            *c = Color::Gray;
+                        }
+                        let mut sub_path = dfs_path.clone();
+                        sub_path.push(next_dep.join("."));
+                        stack.push((node, deps, dfs_path));
+                        stack.push((next_dep, sub_deps, sub_path));
+                    }
+                }
+            } else {
+                // All deps processed — mark node Black and record it.
+                if let Some(c) = color.get_mut(node.as_slice()) {
+                    *c = Color::Black;
+                }
+                result.push(node);
             }
-            result.push(m.clone());
+        }
+        Ok(())
+    };
+
+    // Seed from `entry_path` first so the reachable prefix (and therefore the
+    // byte-identity SEAL against the driver's interning order) is independent
+    // of the order of `modules`.
+    dfs_from(entry_path, &mut color, &mut result)?;
+
+    // Then seed the SAME cycle-detecting DFS from every module the entry never
+    // reached (orphans), in `modules` order. A cycle among orphans surfaces as
+    // `CycleError` exactly like a reachable one, so every module
+    // `linked_program` canonicalises is cycle-checked — the recursive
+    // `canonicalize` / `module_interface` demand can never hit salsa's
+    // dependency-cycle panic.
+    for m in modules {
+        if matches!(color.get(m.as_slice()), Some(Color::White)) {
+            dfs_from(m, &mut color, &mut result)?;
         }
     }
 
