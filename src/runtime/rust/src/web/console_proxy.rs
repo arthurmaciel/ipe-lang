@@ -107,22 +107,13 @@ pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Opti
     } else {
         cmd.env_remove("IPE_CONSOLE_DB_PATH");
     }
-    // Linux: parent-death signal. If the parent process dies for ANY reason
-    // (SIGKILL, OOM, panic-abort) the kernel delivers SIGTERM to this child, so
-    // it can never outlive the parent as an orphan. No-op on non-Linux (the
-    // signal handler + kill_on_drop cover those).
-    #[cfg(target_os = "linux")]
-    {
-        // SAFETY: the closure runs in the forked child between fork and exec. It
-        // only calls prctl (async-signal-safe) — no allocation, no locks, no
-        // Rust runtime re-entry. Failure is non-fatal (best-effort hardening).
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM as libc::c_ulong);
-                Ok(())
-            });
-        }
-    }
+    // Parent-death signal: if the parent dies for ANY reason (SIGKILL, OOM,
+    // panic-abort) the kernel SIGTERMs this child, so it can never outlive the
+    // parent as an orphan. Routed through the SINGLE sanctioned `PR_SET_PDEATHSIG`
+    // site (`system::harden_child_parent_death`) via tokio's std view — the
+    // `pre_exec` set there is honoured by tokio's spawn. `kill_on_drop` above
+    // remains the graceful-path floor tokio adds on top. No-op on non-Linux.
+    crate::system::harden_child_parent_death(cmd.as_std_mut());
     match cmd.spawn() {
         Ok(child) => {
             if let Ok(mut g) = CHILD.lock() {

@@ -470,10 +470,10 @@ impl SupervisorState {
 ///
 /// SAFETY / design note: this uses the SAFE, portable [`Child::kill`]
 /// (SIGKILL) as the escalation path. A true graceful SIGTERM needs a raw
-/// `kill(2)` call, which the runtime's own `console_proxy` module already
-/// isolates as the ONE sanctioned `unsafe` site in the whole workspace (see
-/// `PRINCIPLES.md`) — this module deliberately does NOT duplicate that
-/// unsafe surface. Consequence: the "graceful" step here is a bounded WAIT
+/// `kill(2)` call; the runtime isolates the whole workspace's raw-signal
+/// `unsafe` in one place (`system::harden_child_parent_death`, the sanctioned
+/// `PR_SET_PDEATHSIG` site — see `PRINCIPLES.md`) — this module deliberately
+/// does NOT duplicate that unsafe surface. Consequence: the "graceful" step here is a bounded WAIT
 /// (letting a process that is already shutting down on its own drain)
 /// rather than an ACTIVE SIGTERM; [`Child::kill`] (SIGKILL, always
 /// available safely) is the hard stop once the grace window elapses. The

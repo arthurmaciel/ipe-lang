@@ -288,6 +288,35 @@ fn apply_env_overlay(builder: &mut std::process::Command) {
     }
 }
 
+/// Give a child the non-graceful death floor: if the parent process dies by ANY
+/// means (SIGKILL, OOM, panic-abort — the paths a signal handler or `Drop` can
+/// never run on) the kernel delivers SIGTERM to the child, so it can never
+/// outlive the parent as an orphan holding a port or other resource. No-op on
+/// non-Linux (where graceful shutdown / kill-tracking are the only floor).
+///
+/// THE single sanctioned `PR_SET_PDEATHSIG` site in the whole workspace (see
+/// `PRINCIPLES.md` / `AGENTS.md`). Both callers route their child here:
+/// `ipe watch`'s `spawn_command` (a `std::process::Command`) and the runtime's
+/// `web::console_proxy::spawn_console` (a `tokio::process::Command`, via its
+/// `as_std_mut()` view — the `pre_exec` set here is honoured by tokio's spawn).
+/// Its `kill_on_drop` covers the graceful paths the std side handles via explicit
+/// `Child` tracking; this floor is the shared NON-graceful guarantee.
+pub fn harden_child_parent_death(_builder: &mut std::process::Command) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // SAFETY: the closure runs in the forked child between fork and exec. It
+        // only calls prctl (async-signal-safe) — no allocation, no locks, no
+        // Rust runtime re-entry. Failure is non-fatal (best-effort hardening).
+        unsafe {
+            _builder.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM as libc::c_ulong);
+                Ok(())
+            });
+        }
+    }
+}
+
 fn process_run_sync(cmd: &str, args: &[String], cap: u64) -> Result<ProcessCapture, String> {
     use std::process::{Command, Stdio};
 
@@ -1065,6 +1094,23 @@ mod exit_hook_tests {
             CALLS.load(Ordering::SeqCst) >= 1,
             "registered exit hook must run"
         );
+    }
+}
+
+#[cfg(test)]
+mod parent_death_floor_tests {
+    use super::harden_child_parent_death;
+
+    /// The floor installs a fork-time `pre_exec` (Linux `PR_SET_PDEATHSIG`); on
+    /// every OS a hardened child must still spawn and run normally — the prctl is
+    /// async-signal-safe and best-effort, so it can never break the spawn. Pins
+    /// that routing a `Command` through the floor keeps it launchable.
+    #[test]
+    fn hardened_child_still_spawns_and_runs() {
+        let mut cmd = std::process::Command::new("/bin/true");
+        harden_child_parent_death(&mut cmd);
+        let status = cmd.status().expect("hardened child must spawn");
+        assert!(status.success(), "hardened /bin/true must exit 0");
     }
 }
 
