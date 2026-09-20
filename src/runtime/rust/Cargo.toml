@@ -41,7 +41,13 @@ csv = { version = "1", optional = true }
 toml = { version = "0.8", optional = true }
 serde_yaml = { version = "0.9", optional = true }
 axum = { version = "0.7", features = ["ws"], optional = true }
-tower-http = { version = "0.5", features = ["fs", "catch-panic"], optional = true }
+tower-http = { version = "0.5", features = ["fs", "catch-panic", "timeout"], optional = true }
+# `tower` (limit + util) backs the server front-door DoS ceilings:
+# `GlobalConcurrencyLimitLayer` (in-flight cap) needs `limit`; `ServiceExt`
+# (`util`) drives a `Router` through a single request in the server unit tests.
+# Gated by the `server` feature — absent from wasm/library builds and never
+# propagated to emitted projects (they build their own manifest).
+tower = { version = "0.5", features = ["limit", "util"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "stream"], optional = true }
 # `url`: optional, behind the `url` feature. Backs the `Ipe.Url` typed-URL
 # module (`url.rs`, the parse-don't-validate seal + `form_urlencoded` query
@@ -455,7 +461,7 @@ config = ["json", "toml", "serde_yaml"]
 # `tokio/net`+`tokio/sync`: axum binds a listener (`tokio::net`) and the
 # server/live loop uses `tokio::sync`.
 # `crypto-core`: `server.rs` constant-time compares session ids via `subtle`.
-server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "futures-util", "encoding", "uuid", "random", "crypto-core"]
+server = ["tokio", "tokio/net", "tokio/sync", "axum", "tower-http", "tower", "futures-util", "encoding", "uuid", "random", "crypto-core"]
 # The reqwest-free `ssrf` module parses URLs via the `url` crate (which reqwest
 # re-exports as `reqwest::Url`); `url` is behind the `url` feature.
 # `serde`: `http_stream.rs` derives Serialize/Deserialize on its SSE event
@@ -618,14 +624,9 @@ bcrypt = "0.17"
 aes-gcm = "0.10"
 chacha20poly1305 = "0.10"
 pbkdf2 = "0.12"
-# `tower` (util feature) is a TEST-ONLY dep for `ServiceExt::oneshot`, which
-# drives a Router through a single request in unit tests (e.g. asserting a
-# panicking handler is caught as a 500). It does NOT propagate to generated
-# projects — those emit their own Cargo.toml from crate-specs.toml. `tokio`
-# native-only for the same reason `websocket_client`/`server`/`db` gate it in
-# `[dependencies]`: no meaningful wasm32 denotation (single-threaded browser
-# event loop, no OS threads for `tokio::spawn`/`block_on`).
-tower = { version = "0.5", features = ["util"] }
+# `tower` moved to an optional `[dependencies]` gated by the `server` feature
+# (it now backs the front-door concurrency-cap layer, not only the test-only
+# `ServiceExt::oneshot`). The `server` unit tests reach it through that feature.
 tokio = { version = "1", features = ["full", "test-util", "macros"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
