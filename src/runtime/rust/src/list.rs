@@ -1,7 +1,7 @@
 //! Ipe.List kernel — the single home for the List runtime surface.
 
 use super::IpeMaybe;
-use super::basics::IpeOrder;
+use super::basics::{IpeOrder, IpeWrappingAdd, IpeWrappingMul};
 
 /// `Ipe.List.singleton : a -> List a` — the one-element list `[x]`. Total.
 pub fn list_singleton<T>(x: T) -> Vec<T> {
@@ -20,17 +20,24 @@ pub fn list_repeat<T: Clone>(n: i64, x: T) -> Vec<T> {
 }
 
 /// `Ipe.List.sum : number a => List a -> a` — the additive fold. Empty list
-/// sums to the type's additive identity (`0` / `0.0`) via `Iterator::sum`.
+/// sums to the type's additive identity (`0` / `0.0`). Folds through the same
+/// wrapping add Ipê's `(+)` lowers to, so the reduction wraps identically to
+/// repeated inline `(+)` and never overflow-aborts under `overflow-checks=on`.
 #[must_use]
-pub fn list_sum<T: std::iter::Sum>(xs: Vec<T>) -> T {
-    xs.into_iter().sum()
+pub fn list_sum<T: IpeWrappingAdd<T, Output = T>>(xs: Vec<T>) -> T {
+    xs.into_iter()
+        .fold(T::IPE_ADD_IDENTITY, |acc, x| acc.ipe_wrapping_add(x))
 }
 
 /// `Ipe.List.product : number a => List a -> a` — the multiplicative fold.
-/// Empty list yields the multiplicative identity (`1` / `1.0`).
+/// Empty list yields the multiplicative identity (`1` / `1.0`). Folds through
+/// the same wrapping mul Ipê's `(*)` lowers to, so the reduction wraps
+/// identically to repeated inline `(*)` and never overflow-aborts under
+/// `overflow-checks=on`.
 #[must_use]
-pub fn list_product<T: std::iter::Product>(xs: Vec<T>) -> T {
-    xs.into_iter().product()
+pub fn list_product<T: IpeWrappingMul<T, Output = T>>(xs: Vec<T>) -> T {
+    xs.into_iter()
+        .fold(T::IPE_MUL_IDENTITY, |acc, x| acc.ipe_wrapping_mul(x))
 }
 
 /// `Ipe.List.maximum : comparable a => List a -> Maybe a` — the largest
@@ -683,6 +690,24 @@ mod tests {
         assert_eq!(list_product(vec![2i64, 3, 4]), 24);
         assert_eq!(list_product(Vec::<i64>::new()), 1); // Elm: product [] == 1
         assert_eq!(list_sum(vec![1.5f64, 2.5]), 4.0);
+    }
+
+    /// The additive/multiplicative fold wraps two's-complement, exactly like a
+    /// repeated inline `(+)`/`(*)`, and never overflow-aborts — the fold routes
+    /// through `ipe_wrapping_add`/`ipe_wrapping_mul`, so this holds under any
+    /// Cargo profile's `overflow-checks` setting (the assertion could not even
+    /// reach a value past `i64::MAX` if the fold panicked instead).
+    #[test]
+    fn sum_product_wrap_past_int_max_no_panic() {
+        // sum [i64::MAX, 1] == i64::MAX.wrapping_add(1) == i64::MIN.
+        assert_eq!(list_sum(vec![i64::MAX, 1]), i64::MIN);
+        // Matches repeated inline `(+)`: MAX + 1 wraps to MIN.
+        assert_eq!(list_sum(vec![i64::MAX, 1]), i64::MAX.wrapping_add(1));
+        // sum [i64::MIN, -1] wraps forward to i64::MAX.
+        assert_eq!(list_sum(vec![i64::MIN, -1]), i64::MAX);
+        // product [i64::MAX, 2] == i64::MAX.wrapping_mul(2) == -2.
+        assert_eq!(list_product(vec![i64::MAX, 2]), i64::MAX.wrapping_mul(2));
+        assert_eq!(list_product(vec![i64::MAX, 2]), -2);
     }
 
     #[test]
