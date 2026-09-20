@@ -610,9 +610,18 @@ pub enum DeliveryError {
         /// The delivery that has no static form.
         delivery: Delivery,
     },
-    /// An unknown token appeared where a runtime, host, or target was expected.
+    /// An unknown token appeared where a runtime or host was expected.
     UnknownToken {
         /// The offending token.
+        got: String,
+    },
+    /// A runtime (`solo`) or host (`desktop`/`ios`/`android`) token was given
+    /// more than once. Each axis accepts exactly one value; a second token on
+    /// the same axis is a conflict, not a last-wins override.
+    DuplicateToken {
+        /// `"runtime"` or `"host"`.
+        kind: &'static str,
+        /// The conflicting token that was seen a second time.
         got: String,
     },
     /// A `solo` delivery resolved to a native compile target. A sandboxed client
@@ -672,9 +681,8 @@ pub enum DeliveryError {
     },
 }
 
-/// The runtime/host/target tokens parsed out of a delivery positional tail,
-/// before validity resolution. `target` is a raw Rust triple kept for the
-/// packager/static layer; runtime/host are the typed axes.
+/// The runtime/host tokens parsed out of a delivery positional tail, before
+/// validity resolution. Both axes are optional; resolution supplies the defaults.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct DeliveryTokens {
     /// The parsed web runtime (`Some(Solo)` if `solo` was written; `None` =
@@ -682,54 +690,52 @@ pub struct DeliveryTokens {
     pub runtime: Option<Runtime>,
     /// The parsed host, defaulting to the implicit host.
     pub host: Host,
-    /// A raw target triple token, if one was given as a positional.
-    pub target: Option<String>,
 }
 
 impl DeliveryTokens {
     /// Parse the delivery tail — the positional tokens that follow an optional
-    /// `[shape]` — into typed axes. Order is `[runtime] [host] [target]`; each is
-    /// optional. `solo` is the only runtime word (`served` is refused as a word);
-    /// `desktop`/`ios`/`android` are hosts; anything else is taken as a target
-    /// triple (a second unknown non-triple token is [`DeliveryError::UnknownToken`]).
+    /// `[shape]` — into typed axes. `solo` is the only runtime word (`served`
+    /// is refused); `desktop`/`ios`/`android` are hosts. A repeated host or
+    /// runtime token is [`DeliveryError::DuplicateToken`].
     ///
     /// # Errors
     /// [`DeliveryError::ServedNotAWord`] if `served` is written;
-    /// [`DeliveryError::UnknownToken`] for a token that is neither `solo`, a host,
-    /// nor a plausible target where a target has already been taken.
+    /// [`DeliveryError::DuplicateToken`] for a repeated host or runtime token;
+    /// [`DeliveryError::UnknownToken`] for any other unrecognised token.
     pub fn parse(tokens: &[String]) -> Result<Self, DeliveryError> {
         let mut out = Self::default();
+        let mut saw_runtime = false;
+        let mut saw_host = false;
         for tok in tokens {
             if tok == "served" {
                 return Err(DeliveryError::ServedNotAWord);
             }
             if tok == "solo" {
+                if saw_runtime {
+                    return Err(DeliveryError::DuplicateToken {
+                        kind: "runtime",
+                        got: tok.clone(),
+                    });
+                }
+                saw_runtime = true;
                 out.runtime = Some(Runtime::Solo);
                 continue;
             }
             if let Some(host) = Host::from_word(tok) {
+                if saw_host {
+                    return Err(DeliveryError::DuplicateToken {
+                        kind: "host",
+                        got: tok.clone(),
+                    });
+                }
+                saw_host = true;
                 out.host = host;
-                continue;
-            }
-            if out.target.is_none() && looks_like_target(tok) {
-                out.target = Some(tok.clone());
                 continue;
             }
             return Err(DeliveryError::UnknownToken { got: tok.clone() });
         }
         Ok(out)
     }
-}
-
-/// A Rust target triple is a hyphenated identifier (`x86_64-unknown-linux-musl`,
-/// `wasm32-unknown-unknown`, `aarch64-apple-ios`). This is the coarse shape test
-/// that separates a target positional from a mistyped runtime/host word; the
-/// static/packager layers validate the exact triple against their curated sets.
-fn looks_like_target(tok: &str) -> bool {
-    tok.contains('-')
-        && tok
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 impl fmt::Display for DeliveryError {
@@ -793,9 +799,15 @@ impl fmt::Display for DeliveryError {
             },
             Self::UnknownToken { got } => write!(
                 f,
-                "`{got}` is not a runtime, host, or target. The web runtime word is \
+                "`{got}` is not a runtime or host word. The web runtime word is \
                  `solo` (served is the default). Hosts are `desktop`, `ios`, `android`. \
-                 Targets are a Rust triple (or `--static` for musl).",
+                 Use `--static` for a musl binary or `--target` for a cross-compile triple.",
+            ),
+            Self::DuplicateToken { kind, got } => write!(
+                f,
+                "`{got}` repeats the {kind} — each axis takes exactly one value. \
+                 Write the {kind} once: e.g. `web solo` (not `web solo solo`) or \
+                 `web desktop` (not `web desktop ios`). Drop the duplicate `{got}`.",
             ),
             Self::SoloRequiresWasmTarget => write!(
                 f,
@@ -970,13 +982,6 @@ mod tests {
     }
 
     #[test]
-    fn target_triple_positional_is_kept() {
-        let t = DeliveryTokens::parse(&tokens(&["solo", "wasm32-unknown-unknown"])).unwrap();
-        assert_eq!(t.runtime, Some(Runtime::Solo));
-        assert_eq!(t.target.as_deref(), Some("wasm32-unknown-unknown"));
-    }
-
-    #[test]
     fn unknown_token_is_pedagogical() {
         assert_eq!(
             DeliveryTokens::parse(&tokens(&["wut"])).unwrap_err(),
@@ -984,6 +989,52 @@ mod tests {
                 got: "wut".to_owned()
             }
         );
+        // A hyphenated token that looks like a target triple is no longer
+        // silently absorbed — the grammar has no target positional. It must
+        // be an unknown-token refusal, not silent last-wins acceptance.
+        assert!(matches!(
+            DeliveryTokens::parse(&tokens(&["wasm32-unknown-unknown"])).unwrap_err(),
+            DeliveryError::UnknownToken { .. }
+        ));
+    }
+
+    #[test]
+    fn duplicate_runtime_token_is_refused() {
+        // `solo solo` — second runtime token must be a typed refusal, not last-wins.
+        assert!(matches!(
+            DeliveryTokens::parse(&tokens(&["solo", "solo"])).unwrap_err(),
+            DeliveryError::DuplicateToken {
+                kind: "runtime",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn duplicate_host_token_is_refused() {
+        // Two host words — second host must be a typed refusal, not last-wins.
+        assert!(matches!(
+            DeliveryTokens::parse(&tokens(&["desktop", "ios"])).unwrap_err(),
+            DeliveryError::DuplicateToken { kind: "host", .. }
+        ));
+        assert!(matches!(
+            DeliveryTokens::parse(&tokens(&["android", "android"])).unwrap_err(),
+            DeliveryError::DuplicateToken { kind: "host", .. }
+        ));
+    }
+
+    #[test]
+    fn duplicate_token_message_is_pedagogical() {
+        let e = DeliveryError::DuplicateToken {
+            kind: "runtime",
+            got: "solo".to_owned(),
+        };
+        assert!(e.to_string().len() > 40, "a refusal is a lesson: {e}");
+        let e2 = DeliveryError::DuplicateToken {
+            kind: "host",
+            got: "ios".to_owned(),
+        };
+        assert!(e2.to_string().len() > 40, "a refusal is a lesson: {e2}");
     }
 
     #[test]
