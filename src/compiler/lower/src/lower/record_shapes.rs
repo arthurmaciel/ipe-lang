@@ -73,6 +73,27 @@ pub(super) enum HttpFieldTy {
     RedirectPolicyAdt,
 }
 
+/// Does the NAME column of a `(name, type)` pair table equal the shared
+/// name-only SSOT slice, element-for-element? A `const fn` so a name+type table
+/// can bind its names to `ipe_ir::record_shapes` with a `const _: () =
+/// assert!(pair_names_match(TABLE, X));` — a name drift then fails `cargo build`
+/// (const-eval), un-skippable. Byte-for-byte `&str` equality is delegated to
+/// [`ipe_ir::record_shapes::names_match`] on the extracted names; the walk uses
+/// slice-pattern destructuring (`[head, tail @ ..]`), never `[_]` indexing, so
+/// the `indexing_slicing` restriction holds.
+const fn pair_names_match(pairs: &[(&str, HttpFieldTy)], names: &[&str]) -> bool {
+    match (pairs, names) {
+        ([], []) => true,
+        ([(name, _), pairs_rest @ ..], [shared, names_rest @ ..]) => {
+            // A one-element slice reuses the shared byte comparator so the
+            // `&str`-equality logic lives in exactly one place (`ipe_ir`).
+            ipe_ir::record_shapes::names_match(&[*name], &[*shared])
+                && pair_names_match(pairs_rest, names_rest)
+        }
+        _ => false,
+    }
+}
+
 /// The canonical `HttpRequest` record shape as `(field name, expected field
 /// TYPE)` pairs, alphabetically sorted by name: `body`, `headers`, `method`,
 /// `redirects`, `timeout`, `url`.
@@ -113,6 +134,15 @@ pub(super) const HTTP_REQUEST_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
     ("url", HttpFieldTy::Str),
 ];
 
+// The NAME column of this local name+type table is bound to the shared SSOT so
+// a rename in `ipe_ir::record_shapes` (or here) that drifts the two apart fails
+// `cargo build` in this crate — the backend's name-only fallback keys off the
+// same SSOT, so drift can no longer silently break THE SEAL.
+const _: () = assert!(pair_names_match(
+    HTTP_REQUEST_FIELD_TYPES,
+    ipe_ir::record_shapes::HTTP_REQUEST_FIELDS
+));
+
 /// The canonical `Ipe.Http.Server.Response` record shape as `(field name,
 /// expected field TYPE)` pairs, alphabetically sorted by name: `body`,
 /// `contentType`, `headers`, `status`. Matches the reference
@@ -127,6 +157,12 @@ pub(super) const SERVER_RESPONSE_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
     ("headers", HttpFieldTy::StrStrDict),
     ("status", HttpFieldTy::Int),
 ];
+
+// NAME column bound to the shared SSOT — see the note at HTTP_REQUEST_FIELD_TYPES.
+const _: () = assert!(pair_names_match(
+    SERVER_RESPONSE_FIELD_TYPES,
+    ipe_ir::record_shapes::SERVER_RESPONSE_FIELDS
+));
 
 /// Does `fields` match the canonical `Response` record shape — same NAMES *and*
 /// TYPES as [`SERVER_RESPONSE_FIELD_TYPES`]? Sorts `fields` by name in place
@@ -299,8 +335,9 @@ pub(super) fn is_http_request_canon_shape(
 /// sorted: `maxBytes`, `maxEntries`, `ttlMs` — all `Int`. Folded to the nominal
 /// `IrType::CacheCfg` (`ipe_runtime::cache::CacheCfg`) so a `Cache.defaultCfg`
 /// record literal constructs the runtime struct the `cache_new_raw` kernel
-/// takes (same mechanism as the `HttpRequest` fold above).
-pub(super) const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
+/// takes (same mechanism as the `HttpRequest` fold above). Re-exported from the
+/// shared SSOT so lower and backend read one definition.
+pub(super) use ipe_ir::record_shapes::CACHE_CFG_FIELDS;
 
 /// The canonical `Ipe.WebSocket.WebSocketCfg` field NAMES *and* TYPES,
 /// alphabetically sorted by name — `headers : List (String, String)`,
@@ -316,6 +353,12 @@ pub(super) const WEBSOCKET_CFG_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
     ("timeout", HttpFieldTy::Int),
     ("url", HttpFieldTy::Str),
 ];
+
+// NAME column bound to the shared SSOT — see the note at HTTP_REQUEST_FIELD_TYPES.
+const _: () = assert!(pair_names_match(
+    WEBSOCKET_CFG_FIELD_TYPES,
+    ipe_ir::record_shapes::WEBSOCKET_CFG_FIELDS
+));
 
 /// Does `fields` (as `(resolved name, &Ty)` pairs) match the canonical
 /// `WebSocketCfg` shape — same field NAMES *and* TYPES as
@@ -421,9 +464,10 @@ pub(super) fn is_all_int_canon_record_shape(
 /// nominal `IrType::CsvDoc` (`ipe_runtime::csv::CsvDoc`) so a record literal fed
 /// to `Csv.encode` constructs the runtime struct the `csv_encode` kernel takes,
 /// and a `csv_parse` result is field-accessed on that struct's pub fields (same
-/// mechanism as the `HttpRequest` / `CacheCfg` folds above). Kept in sync with
-/// the backend's `CSV_DOC_FIELDS` and `ipe_types`' `csv_rec` type scheme.
-pub(super) const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
+/// mechanism as the `HttpRequest` / `CacheCfg` folds above). The `ipe_types`
+/// `csv_rec` type scheme mirrors this shape. Re-exported from the shared SSOT
+/// so lower and backend read one definition.
+pub(super) use ipe_ir::record_shapes::CSV_DOC_FIELDS;
 
 /// Is `ty` the built-in `List String` — a `List` `Con` whose single arg is the
 /// built-in `String`? The inner-element depth is selected by `list_depth`
@@ -506,33 +550,19 @@ pub(super) fn is_csv_doc_canon_shape(
 // take (mirror of the `CsvDoc` / `CacheCfg` folds). Each shape is matched on
 // field NAMES *and* field TYPES so an unrelated same-arity record does not fold.
 
-/// `Attachment` — sorted field NAMES `{ content, filename, mimeType }`:
-/// `content : Bytes`, `filename : String`, `mimeType : String`.
-/// Folds to `IrType::EmailAttachment`.
-pub(super) const EMAIL_ATTACHMENT_FIELDS: &[&str] = &["content", "filename", "mimeType"];
-
-/// `SesConfig` — sorted field NAMES `{ key, region, secret }`: `key`/`region`
-/// are `String`, `secret` is a sealed `Secret`. Folds to `IrType::EmailSesConfig`.
-pub(super) const EMAIL_SES_FIELDS: &[&str] = &["key", "region", "secret"];
-
-/// `SmtpConfig` — sorted field NAMES `{ host, pass, port, user }`: `port : Int`,
-/// `pass : Secret` (sealed), `host`/`user` are `String`. Folds to
-/// `IrType::EmailSmtpConfig`.
-pub(super) const EMAIL_SMTP_FIELDS: &[&str] = &["host", "pass", "port", "user"];
-
-/// `EmailMessage` — sorted field NAMES `{ attachments, bcc, cc, from, htmlBody,
-/// replyTo, subject, textBody, to }`. Folds to `IrType::EmailMessage`.
-pub(super) const EMAIL_MESSAGE_FIELDS: &[&str] = &[
-    "attachments",
-    "bcc",
-    "cc",
-    "from",
-    "htmlBody",
-    "replyTo",
-    "subject",
-    "textBody",
-    "to",
-];
+/// The four `Ipe.Email` field-name sets, re-exported from the shared SSOT so
+/// lower and backend read one definition:
+/// - `EMAIL_ATTACHMENT_FIELDS` — `{ content, filename, mimeType }` (`content :
+///   Bytes`, `filename`/`mimeType : String`); folds to `IrType::EmailAttachment`.
+/// - `EMAIL_SES_FIELDS` — `{ key, region, secret }` (`key`/`region : String`,
+///   `secret : Secret`); folds to `IrType::EmailSesConfig`.
+/// - `EMAIL_SMTP_FIELDS` — `{ host, pass, port, user }` (`port : Int`, `pass :
+///   Secret`, `host`/`user : String`); folds to `IrType::EmailSmtpConfig`.
+/// - `EMAIL_MESSAGE_FIELDS` — `{ attachments, bcc, cc, from, htmlBody, replyTo,
+///   subject, textBody, to }`; folds to `IrType::EmailMessage`.
+pub(super) use ipe_ir::record_shapes::{
+    EMAIL_ATTACHMENT_FIELDS, EMAIL_MESSAGE_FIELDS, EMAIL_SES_FIELDS, EMAIL_SMTP_FIELDS,
+};
 
 /// Is `ty` the built-in `String`?
 pub(super) fn ty_is_string(ty: &Ty, interner: &Interner) -> bool {
@@ -814,14 +844,15 @@ pub(super) fn canon_ty_is_list_of_attachment(ty: &canon::Type, interner: &Intern
 // `CacheCfg` / `CsvDoc` / `EmailMessage`). Sorted field names: args < command
 // < cwd < env.
 
-/// `ProcessRunWithCfg` — sorted field NAMES `{ args, command, cwd, env }`.
-/// Folds to `IrType::ProcessRunWithCfg`.
-pub(super) const PROCESS_RUN_WITH_CFG_FIELDS: &[&str] = &["args", "command", "cwd", "env"];
-
-/// `ProcessRunInPtyCfg` — sorted field NAMES `{ args, cols, command, cwd, env,
-/// rows }`. Folds to `IrType::ProcessRunInPtyCfg`.
-pub(super) const PROCESS_RUN_IN_PTY_CFG_FIELDS: &[&str] =
-    &["args", "cols", "command", "cwd", "env", "rows"];
+/// The two `Ipe.Process` config field-name sets, re-exported from the shared
+/// SSOT so lower and backend read one definition:
+/// - `PROCESS_RUN_WITH_CFG_FIELDS` — `{ args, command, cwd, env }`; folds to
+///   `IrType::ProcessRunWithCfg`.
+/// - `PROCESS_RUN_IN_PTY_CFG_FIELDS` — `{ args, cols, command, cwd, env, rows }`;
+///   folds to `IrType::ProcessRunInPtyCfg`.
+pub(super) use ipe_ir::record_shapes::{
+    PROCESS_RUN_IN_PTY_CFG_FIELDS, PROCESS_RUN_WITH_CFG_FIELDS,
+};
 
 /// Is `ty` the built-in `Path` — an empty-module, arg-less `Con` named `Path`?
 pub(super) fn ty_is_path(ty: &Ty, interner: &Interner) -> bool {

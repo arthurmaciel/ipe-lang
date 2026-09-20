@@ -13,6 +13,7 @@
 
 mod ir;
 mod pretty;
+pub mod record_shapes;
 
 pub use ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType,
