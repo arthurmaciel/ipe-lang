@@ -250,6 +250,13 @@ pub fn rename(
 
 /// Find the name-token span of `old_name` in the defining module `module_path`.
 ///
+/// The defining site is either a top-level value binding or a data constructor
+/// declared in a `type` union — both are renameable top-level symbols. A
+/// constructor's canonical [`Ctor`](crate::ast::Ctor) span begins at its name
+/// token, so the name-token span is `[span.lo, span.lo + name_len)`, mirroring
+/// the go-to-definition walker's convention; this keeps the defining-site edit a
+/// single-token replacement rather than rewriting the whole constructor clause.
+///
 /// Returns `(module_path_slice, name_span, name_string)` on success.
 fn find_defining_site<'a>(
     interner: &Interner,
@@ -266,6 +273,16 @@ fn find_defining_site<'a>(
             if def_name.value == old_name {
                 let name_str = interner.resolve(old_name).unwrap_or("").to_owned();
                 return Some((path, def_name.span, name_str));
+            }
+        }
+        for union in &m.unions {
+            for ctor in &union.ctors {
+                if ctor.name == old_name {
+                    let name_str = interner.resolve(old_name).unwrap_or("").to_owned();
+                    let len = u32::try_from(name_str.len()).unwrap_or(0);
+                    let name_span = Span::new(ctor.span.lo, ctor.span.lo.saturating_add(len));
+                    return Some((path, name_span, name_str));
+                }
             }
         }
     }
@@ -692,6 +709,125 @@ mod tests {
         assert!(
             matches!(err, Err(RenameError::CaptureConflict { ref new_name, .. }) if new_name == "other"),
             "expected CaptureConflict for 'other', got {err:?}"
+        );
+    }
+
+    // ── test 6: constructor rename covers declaration, value use, pattern ─────
+    //
+    // A data constructor is a renameable top-level symbol. Renaming `Red` must
+    // edit its declaration in the `type` union, its value use (`VarCtor`), and
+    // its `case`-pattern use (`PCtor`) — every site, or the refactor leaves a
+    // dangling reference. This pins the constructor path through
+    // `find_defining_site`, which value-only lookup skipped (SymbolNotFound).
+
+    #[test]
+    fn renames_constructor_declaration_value_use_and_pattern() {
+        use crate::ast::{CaseBranch, Ctor, Pattern, Pattern_, Union};
+
+        let mut i = Interner::new();
+        let main_sym = sym(&mut i, "Main");
+        let color_sym = sym(&mut i, "Color");
+        let red_sym = sym(&mut i, "Red");
+        let green_sym = sym(&mut i, "Green");
+        let pick_sym = sym(&mut i, "pick");
+        let describe_sym = sym(&mut i, "describe");
+        let c_sym = sym(&mut i, "c");
+
+        // `type Color = Red | Green` — `Red`'s canonical Ctor span begins at its
+        // name token, so the declaration name-token span is [40, 43).
+        let union = Union {
+            home: vec![main_sym],
+            name: color_sym,
+            vars: vec![],
+            ctors: vec![
+                Ctor {
+                    name: red_sym,
+                    index: 0,
+                    arity: 0,
+                    args: vec![],
+                    span: span(40, 43),
+                },
+                Ctor {
+                    name: green_sym,
+                    index: 1,
+                    arity: 0,
+                    args: vec![],
+                    span: span(46, 51),
+                },
+            ],
+        };
+
+        // `pick = Red` — a constructor value use (`VarCtor`) at [100, 103).
+        let pick_def = value_def(
+            span(90, 94),
+            pick_sym,
+            vec![main_sym],
+            expr(
+                span(100, 103),
+                Expr_::VarCtor {
+                    home: vec![main_sym],
+                    type_name: color_sym,
+                    name: red_sym,
+                    index: 0,
+                },
+            ),
+        );
+
+        // `describe c = case c of Red -> ...` — a constructor pattern (`PCtor`)
+        // whose name token begins at the pattern's low offset, span [200, 203).
+        let red_pat = Pattern {
+            span: span(200, 203),
+            value: Pattern_::PCtor {
+                home: vec![main_sym],
+                type_name: color_sym,
+                name: red_sym,
+                index: 0,
+                args: vec![],
+            },
+        };
+        let describe_body = expr(
+            span(170, 210),
+            Expr_::Case(
+                Box::new(expr(span(165, 166), Expr_::VarLocal(c_sym))),
+                vec![CaseBranch {
+                    pat: red_pat,
+                    body: expr(span(207, 208), Expr_::Int(1)),
+                }],
+            ),
+        );
+        let describe_def = value_def(span(150, 158), describe_sym, vec![main_sym], describe_body);
+
+        let main_mod = Module {
+            name: vec![main_sym],
+            unions: vec![union],
+            defs: vec![pick_def, describe_def],
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: BTreeSet::new(),
+        };
+        let main_path = main_mod.name.clone();
+        let all: &[(&Module, &[Symbol])] = &[(&main_mod, &main_path)];
+        let index = ReferenceIndex::build(all);
+
+        let edit_set = rename(&i, &index, all, &[main_sym], red_sym, "Crimson")
+            .expect("constructor rename must reach the engine and succeed");
+
+        for e in &edit_set.edits {
+            assert_eq!(e.replacement, "Crimson");
+            assert_eq!(e.file, main_path);
+        }
+
+        let mut spans: Vec<(u32, u32)> = edit_set
+            .edits
+            .iter()
+            .map(|e| (e.span.lo, e.span.hi))
+            .collect();
+        spans.sort_unstable();
+        // Declaration name token, value use, pattern name token — all three.
+        assert_eq!(
+            spans,
+            vec![(40, 43), (100, 103), (200, 203)],
+            "constructor rename must edit declaration + value use + pattern, got {:?}",
+            edit_set.edits
         );
     }
 }

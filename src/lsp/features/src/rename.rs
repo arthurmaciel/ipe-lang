@@ -555,4 +555,84 @@ mod tests {
             }
         }
     }
+
+    // ── Constructor rename (issue #2654) ─────────────────────────────────────
+    //
+    // A rename with the cursor on a constructor value use must reach the canon
+    // rename engine and rewrite EVERY site: the declaration in the `type` union,
+    // the value use, and the `case` pattern. Before this fix the request gated
+    // on a value-only defining-site lookup and returned a silent no-op.
+
+    const CTOR_MAIN: &str = "module Main exposing (main)\n\
+                             \n\
+                             type Color = Red | Green\n\
+                             \n\
+                             pick : Color\n\
+                             pick = Red\n\
+                             \n\
+                             describe : Color -> Int\n\
+                             describe c =\n\
+                             \x20   case c of\n\
+                             \x20       Red -> 1\n\
+                             \x20       Green -> 2\n\
+                             \n\
+                             main : Int\n\
+                             main = describe pick\n";
+
+    fn ctor_value_use_byte() -> u32 {
+        // The `Red` in `pick = Red` (a value use), not the declaration.
+        let decl = CTOR_MAIN.find("Red | Green").expect("union decl has Red");
+        let use_off = CTOR_MAIN[decl + 3..]
+            .find("Red")
+            .map(|o| decl + 3 + o)
+            .expect("value use of Red follows the declaration");
+        u32::try_from(use_off).expect("fits u32")
+    }
+
+    fn ctor_uri(_module: &[String]) -> Option<Url> {
+        Url::from_file_path("/fake/Main.ipe").ok()
+    }
+
+    fn ctor_text(module: &[String]) -> Option<String> {
+        match module.first().map(String::as_str) {
+            Some("Main") => Some(CTOR_MAIN.to_owned()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn rename_constructor_edits_declaration_value_use_and_pattern() {
+        let db = IpeDatabase::new();
+        let entry = file(&db, &["Main"], CTOR_MAIN);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+
+        let ws_edit = rename(
+            &db,
+            root,
+            entry,
+            &["Main".to_owned()],
+            &super::RenameRequest {
+                byte: ctor_value_use_byte(),
+                new_name: "Crimson",
+                encoding: PositionEncoding::Utf16,
+            },
+            &super::ModuleResolver {
+                uri_of_module: &ctor_uri,
+                text_of_module: &ctor_text,
+            },
+        )
+        .expect("constructor rename must reach the engine and return Some");
+
+        let changes = ws_edit.changes.expect("has changes");
+        let edits: Vec<_> = changes.values().flatten().collect();
+        // Declaration in the union + value use + `case` pattern = 3 edits.
+        assert_eq!(
+            edits.len(),
+            3,
+            "constructor rename must edit declaration + value use + pattern, got: {edits:?}"
+        );
+        for edit in &edits {
+            assert_eq!(edit.new_text, "Crimson");
+        }
+    }
 }
