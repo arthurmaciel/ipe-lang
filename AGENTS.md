@@ -88,7 +88,9 @@ When a lint or gate fires, fix the code — never the lint level, never the gate
   crate/gate-wide. Ledgered production allows carry `IPE-RUST-AUDIT:ACCEPTED`;
   `tools/panic-scan` is the inventory SSOT.
 - **`unsafe` is forbidden.** Exactly ONE sanctioned block: `prctl(PR_SET_PDEATHSIG)`
-  in `live::console_proxy`. Every other module is `unsafe`-free.
+  in `system::harden_child_parent_death` (the runtime's single parent-death floor —
+  every child-spawner, `console_proxy` and `ipe watch` alike, routes through it).
+  Every other module is `unsafe`-free.
 - **Edition 2024** — workspace crates and every emitted project.
 
 ## No `dyn Any` — concrete over generic

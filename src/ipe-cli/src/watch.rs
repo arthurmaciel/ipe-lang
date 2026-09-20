@@ -1296,17 +1296,7 @@ fn run_inner(
                         // below to set it off from the next watch line. Light
                         // yellow, not red — the last-good binary stays up.
                         let p = crate::style::Palette::for_stream(&std::io::stderr());
-                        // The failure glyph comes from the style SSOT; the tint is
-                        // deliberately the soft warning amber, not the red a hard
-                        // failure wears — the last-good binary stays up.
-                        let body = format!(
-                            "{}{} [ipe watch] build failed (last-good binary stays up):{}\n{}",
-                            p.bright_yellow,
-                            crate::style::outcome_glyph(crate::style::Outcome::Failure),
-                            p.reset,
-                            msg.trim_end()
-                        );
-                        eprint!("\n{}\n", crate::style::gutter(&body));
+                        eprint!("\n{}\n", compile_failed_frame(&msg, p));
                         emit(opts, WatchEvent::CompileFailed { generation: g });
                         if let (Some(tok), Some(app_port)) = (
                             hot_token.as_deref(),
@@ -1578,6 +1568,25 @@ fn run_inner(
                                             WatchRole::Failure
                                         )
                                     );
+                                    // The green binary is already built, but the
+                                    // cutover can't proceed without an internal
+                                    // port. Mirror the resolve-failure recovery:
+                                    // clear the browser "Recompiling" banner (it
+                                    // would otherwise hang forever) and schedule a
+                                    // retry so this build is re-driven rather than
+                                    // silently abandoned until an unrelated edit.
+                                    if let (Some(tok), Some(app_port)) = (
+                                        hot_token.as_deref(),
+                                        app_status_port(Some(proxy), opts.port),
+                                    ) {
+                                        post_watch_status(
+                                            app_port,
+                                            tok,
+                                            false,
+                                            &format!("internal-port allocation failed: {e}"),
+                                        );
+                                    }
+                                    schedule_resolve_retry(&evt_tx);
                                     continue;
                                 }
                             };
@@ -2340,7 +2349,37 @@ fn spawn_command(exe_path: &Path, env: &[(String, String)]) -> Command {
     for (k, v) in env {
         cmd.env(k, v);
     }
+    // Non-graceful death floor: the supervisor reaps this child on every GRACEFUL
+    // path (shutdown / SIGTERM-forwarder / Drop), but a SIGKILL/OOM/panic-abort of
+    // `ipe watch` would otherwise orphan it holding the dev port. On Linux the
+    // kernel then SIGTERMs it when we die by ANY means. (Runtime-crate SSOT — the
+    // sole sanctioned `PR_SET_PDEATHSIG`; the watch crates stay unsafe-free.)
+    ipe_runtime_rust::system::harden_child_parent_death(&mut cmd);
     cmd
+}
+
+/// Frame a compiler diagnostic for the watch stderr build-failed report: the
+/// guttered, soft-yellow block `ipe watch` prints when a compile fails while the
+/// last-good binary stays up.
+///
+/// The diagnostic carries `.ipe` source-span snippets — untrusted text that
+/// could smuggle raw control/ANSI bytes able to move the cursor, recolour, or
+/// hide output on our stderr. It is sanitised through [`crate::style::TerminalSafe`]
+/// FIRST; the palette escapes are our own, added only after the untrusted text is
+/// neutralised, so the frame's sole control bytes are the ones we put there.
+fn compile_failed_frame(msg: &str, p: &crate::style::Palette) -> String {
+    let safe_msg = crate::style::TerminalSafe::sanitize(msg.trim_end());
+    // The failure glyph comes from the style SSOT; the tint is deliberately the
+    // soft warning amber, not the red a hard failure wears — the last-good binary
+    // stays up.
+    let body = format!(
+        "{}{} [ipe watch] build failed (last-good binary stays up):{}\n{}",
+        p.bright_yellow,
+        crate::style::outcome_glyph(crate::style::Outcome::Failure),
+        p.reset,
+        safe_msg.as_str()
+    );
+    crate::style::gutter(&body)
 }
 
 /// Extract the first non-blank line from a compiler diagnostic, capped at
@@ -2891,9 +2930,9 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
-        apply_build_accel_env, child_env, choose_build_accel, dir_has_dep_rlib, env_flag_on,
-        first_error_line, mint_hot_token, mpsc, schedule_resolve_retry, strip_ansi,
-        watch_status_body,
+        apply_build_accel_env, child_env, choose_build_accel, compile_failed_frame,
+        dir_has_dep_rlib, env_flag_on, first_error_line, mint_hot_token, mpsc,
+        schedule_resolve_retry, spawn_command, strip_ansi, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3151,14 +3190,22 @@ mod tests {
     #[test]
     fn schedule_resolve_retry_waits_before_sending() {
         let (evt_tx, evt_rx) = mpsc::channel::<OrchestratorEvent>();
+        let started = std::time::Instant::now();
         schedule_resolve_retry(&evt_tx);
-        assert!(
-            evt_rx.recv_timeout(Duration::from_millis(10)).is_err(),
-            "the retry must not fire immediately"
-        );
+        // The retry rides a real `RESOLVE_RETRY_DELAY` `thread::sleep`, which can
+        // never wake early — so the send is bounded BELOW by that delay. Assert
+        // that lower bound was honoured (measured at arrival) rather than probing
+        // a fixed short wall-clock window: under CPU contention the test thread
+        // itself can be starved past the delay before it observes the channel,
+        // which made the old 10ms-empty probe flake. Load can only make the
+        // observed delay longer, never shorter, so this stays deterministic.
         evt_rx
             .recv_timeout(RESOLVE_RETRY_DELAY * 4)
             .expect("the retry must still arrive after the short delay");
+        assert!(
+            started.elapsed() >= RESOLVE_RETRY_DELAY / 2,
+            "the retry must be delayed by ~RESOLVE_RETRY_DELAY, not fire immediately"
+        );
     }
 
     /// A build-failure excerpt laced with carriage returns, ANSI escapes, and a
@@ -3217,6 +3264,63 @@ mod tests {
     fn first_error_line_strips_ansi_and_picks_first_nonblank() {
         let raw = "\r\n\u{1b}[1m\u{1b}[38;5;9merror[E0308]\u{1b}[0m: mismatched types\nnext line";
         assert_eq!(first_error_line(raw), "error[E0308]: mismatched types");
+    }
+
+    /// Prove the refusal: a compiler diagnostic carrying a `.ipe` source snippet
+    /// laced with a raw `ESC`, a CSI sequence, and a bare control byte must reach
+    /// the watch stderr frame SANITISED — no raw escape survives to move the
+    /// cursor, recolour, or hide text — while the visible diagnostic text stays
+    /// intact. The frame's only escapes are our own palette codes (empty under a
+    /// no-colour palette, which is what the test uses).
+    #[test]
+    fn compile_failed_frame_sanitizes_untrusted_diagnostic() {
+        // A no-colour palette so the ONLY escapes that could appear are ones the
+        // untrusted message smuggles in — none may survive.
+        let p = crate::style::Palette::select(false);
+        let hostile =
+            "type error near:\n\u{1b}[31m  x = \u{1b}]0;pwned\u{7}evil\u{1b}[0m\r\n\u{7}bell";
+        let frame = compile_failed_frame(hostile, p);
+        assert!(
+            !frame.contains('\u{1b}'),
+            "no raw ESC may reach stderr: {frame:?}"
+        );
+        assert!(
+            !frame.contains('\u{7}'),
+            "no raw BEL/control byte may reach stderr: {frame:?}"
+        );
+        // The human-readable content still comes through.
+        assert!(
+            frame.contains("type error near:"),
+            "diagnostic text preserved"
+        );
+        assert!(
+            frame.contains("evil"),
+            "the snippet body survives sanitising"
+        );
+        assert!(frame.contains("bell"), "text after a control byte survives");
+    }
+
+    /// `spawn_command` builds a launchable child `Command` with the requested env
+    /// applied, and routes it through the runtime's parent-death floor
+    /// (`harden_child_parent_death`) so a non-graceful `ipe watch` death cannot
+    /// orphan the child. The floor is a Linux `pre_exec` (a fork-time syscall not
+    /// observable from the parent `Command`), so this pins the observable
+    /// contract: the env is set and the command is the requested binary.
+    #[test]
+    fn spawn_command_sets_env_and_is_launchable() {
+        let env = vec![("IPE_WEB_PORT".to_string(), "4321".to_string())];
+        let cmd = spawn_command(Path::new("/bin/true"), &env);
+        assert_eq!(cmd.get_program(), OsStr::new("/bin/true"));
+        let has_port = cmd
+            .get_envs()
+            .filter_map(|(k, v)| v.map(|v| (k.to_owned(), v.to_owned())))
+            .any(|pair| {
+                pair == (
+                    OsStr::new("IPE_WEB_PORT").to_owned(),
+                    OsStr::new("4321").to_owned(),
+                )
+            });
+        assert!(has_port, "child env must carry the requested port");
     }
 
     /// The hot-control token is 256 bits of OS-CSPRNG output rendered as 64 hex
