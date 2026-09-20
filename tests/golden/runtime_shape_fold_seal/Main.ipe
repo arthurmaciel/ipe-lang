@@ -1,0 +1,57 @@
+module Main exposing (main)
+
+import Ipe.Cache as Cache
+import Ipe.Dict as Dict
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server exposing (Response)
+import Ipe.Io as Io
+import Ipe.String
+import Ipe.Task as Task exposing (Task)
+
+
+-- SEAL fixture for the runtime-shape field-NAME SSOT (`ipe_ir::record_shapes`).
+-- A record literal of a runtime-folded shape is emitted through the backend's
+-- name-only fallback (no synthesised `Rec…` struct, because `ipe_lower` folds
+-- the shape to its opaque `IrType` variant). If the lower-side name column and
+-- the backend's name-only set ever drift, the literal would emit a synthesised
+-- `Rec…` struct while the kernel takes the nominal runtime struct: `ipe` exits
+-- 0 then the emitted crate fails `cargo build` (E0063/E0560/E0308). The shared
+-- SSOT + the `const _: ()` name-equality asserts make such a drift a build
+-- failure in `ipe_lower`; this fixture is the defense-in-depth SEAL that
+-- re-proves the two nominal folds actually reach the runtime structs.
+
+-- A RAW `CacheCfg` record literal (no builder) fed straight to `Cache.new`.
+-- The name-only fallback must reconstruct the runtime `CacheCfg` struct the
+-- `cache_new_raw` kernel takes.
+cacheCfg : Cache.CacheCfg
+cacheCfg =
+    { maxEntries = 8
+    , ttlMs = 0
+    , maxBytes = 0
+    }
+
+
+-- A RAW `Response` record literal (the reference `Ipe.Http.Server.Response`
+-- shape). The name-only fallback must reconstruct the runtime `ServerResponse`
+-- struct (with its extra runtime-only `cookies` field defaulted).
+response : Response
+response =
+    { status = 200
+    , body = "ok"
+    , headers = Dict.empty
+    , contentType = "text/plain"
+    }
+
+
+-- Read a field off each folded value so both literals are load-bearing.
+sizeOfNewCache : Task Error Int
+sizeOfNewCache =
+    Task.andThen
+        (\cache -> Cache.size cache)
+        (Cache.new cacheCfg)
+
+
+main =
+    Task.andThen
+        (\n -> Io.println (String.fromInt (n + response.status)))
+        sizeOfNewCache

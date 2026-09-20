@@ -1,93 +1,21 @@
 use super::{DResult, Diagnostic, Expr, GenericScope, IrType, Symbol, emit_expr_at, indent_of};
 use crate::EmitCtx;
 use core::fmt::Write as _;
+use ipe_ir::record_shapes as shapes;
 
-/// Field names of the `HttpRequest` runtime struct, sorted alphabetically.
-/// Used by [`emit_record`] as a FALLBACK to detect `HttpRequest` literals and
-/// bypass the synthesised-struct lookup (the type is defined in
-/// `ipe_runtime::http_client`, not emitted by the backend) — consulted only
-/// when [`EmitCtx::has_record_struct_for`] finds no registered struct for the
-/// literal's field-name set. See that method's doc comment for why the two
-/// checks must run in THIS order (registry first, name-only fallback
-/// second): `ipe_backend_rust` has no access to `ipe_lower`'s `Ty` /
-/// `canon::Type` (no cross-crate dependency), so it cannot re-run the
-/// lowerer's now-TYPE-AWARE `HttpRequest`-shape test
-/// (`ipe_lower::lower::is_http_request_shape`) directly here — deferring to
-/// the registry is how this call site stays in sync with that test without
-/// duplicating it.
-pub const HTTP_REQUEST_FIELDS: &[&str] =
-    &["body", "headers", "method", "redirects", "timeout", "url"];
-
-/// the sorted `Ipe.Process.runWith` input record field-name set — a record
-/// literal with exactly these names (and no registered synthesised struct,
-/// because the lowerer folded the shape to `IrType::ProcessRunWithCfg`)
-/// constructs the runtime `ipe_runtime::system::ProcessRunWithCfg` struct.
-/// Mirrors [`CACHE_CFG_FIELDS`]; kept in sync with
-/// `ipe_lower::lower::PROCESS_RUN_WITH_CFG_FIELDS`.
-pub const PROCESS_RUN_WITH_CFG_FIELDS: &[&str] = &["args", "command", "cwd", "env"];
-
-/// the sorted `Ipe.Process.runInPty` config field-name set — a record literal
-/// with exactly these names (and no registered synthesised struct, because the
-/// lowerer folded the shape to `IrType::ProcessRunInPtyCfg`) constructs the
-/// runtime `ipe_runtime::system::ProcessRunInPtyCfg` struct. Kept in sync with
-/// `ipe_lower::lower::PROCESS_RUN_IN_PTY_CFG_FIELDS`.
-pub const PROCESS_RUN_IN_PTY_CFG_FIELDS: &[&str] =
-    &["args", "cols", "command", "cwd", "env", "rows"];
-
-/// the sorted `Ipe.Cache.CacheCfg` field-name set — a record literal with
-/// exactly these names (and no registered synthesised struct, because the
-/// lowerer folded the shape to `IrType::CacheCfg`) constructs the runtime
-/// `ipe_runtime::cache::CacheCfg` struct. Mirrors [`HTTP_REQUEST_FIELDS`]; kept
-/// in sync with `ipe_lower::lower::CACHE_CFG_FIELDS`.
-pub const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
-
-/// the sorted `Ipe.Csv.Csv` field-name set — a record literal with exactly
-/// these names (and no registered synthesised struct, because the lowerer
-/// folded the shape to `IrType::CsvDoc`) constructs the runtime
-/// `ipe_runtime::csv::CsvDoc` struct. Mirrors [`CACHE_CFG_FIELDS`]; kept in
-/// sync with `ipe_lower::lower::CSV_DOC_FIELDS`.
-pub const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
-
-/// the sorted `Ipe.WebSocket.WebSocketCfg` field-name set — a record
-/// literal with exactly these names (and no registered synthesised struct,
-/// because the lowerer folded the shape to `IrType::WebSocketClientCfg`)
-/// constructs the runtime `ipe_runtime::ws_client::WsClientCfg` struct. Mirrors
-/// [`CACHE_CFG_FIELDS`]; kept in sync with
-/// `ipe_lower::lower::WEBSOCKET_CFG_FIELD_TYPES`.
-pub const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "timeout", "url"];
-
-/// the sorted `Ipe.Http.Server.Response` field-name set. A record literal
-/// with exactly these names (and no registered synthesised struct, because the
-/// lowerer folded the shape to `IrType::ServerResponse`) constructs the runtime
-/// `ipe_runtime::server::ServerResponse` struct. That struct carries one EXTRA
-/// runtime-only field, `cookies: Vec<String>` (multi-`Set-Cookie` support),
-/// which the Ipê record alias does not expose — so the literal must default it
-/// to `Vec::new()`. Kept in sync with `ipe_lower::lower::SERVER_RESPONSE_FIELD_TYPES`.
-pub const SERVER_RESPONSE_FIELDS: &[&str] = &["body", "contentType", "headers", "status"];
-
-/// the sorted `Ipe.Email` record field-name sets. A record literal with exactly
-/// one of these name-sets (and no registered synthesised struct, because the
-/// lowerer folded the shape to the matching `IrType::Email*`) constructs the
-/// runtime struct (re-exported bare via `pub use email::*`). Mirror of the
-/// `CsvDoc` fall-through; kept in sync with `ipe_lower::lower::EMAIL_*_FIELDS`.
-/// The four name-sets are mutually distinct, so the name-only match is exact
-/// (soundness note: a genuine `Ipe.Email` literal never gets a registered
-/// struct because the lowerer intercepts it into the `IrType::Email*` fold
-/// first — the same rationale as `CsvDoc`).
-pub const EMAIL_MESSAGE_FIELDS: &[&str] = &[
-    "attachments",
-    "bcc",
-    "cc",
-    "from",
-    "htmlBody",
-    "replyTo",
-    "subject",
-    "textBody",
-    "to",
-];
-pub const EMAIL_ATTACHMENT_FIELDS: &[&str] = &["content", "filename", "mimeType"];
-pub const EMAIL_SES_FIELDS: &[&str] = &["key", "region", "secret"];
-pub const EMAIL_SMTP_FIELDS: &[&str] = &["host", "pass", "port", "user"];
+// The runtime-shape field-NAME sets are the single source of truth in
+// `ipe_ir::record_shapes`; this crate consumes them through `shapes::*`. They
+// drive the FALLBACK below in [`record_struct_name`]: when
+// [`EmitCtx::has_record_struct_for`] finds no registered struct for a literal's
+// field-name set, the shape is matched against these sets to reconstruct the
+// nominal runtime struct name (the runtime types live in `ipe_runtime`, not
+// emitted here). The registry-first / name-only-second ordering matters: this
+// crate has no access to `ipe_lower`'s `Ty` / `canon::Type`, so it cannot
+// re-run the lowerer's now-TYPE-AWARE shape tests directly — deferring to the
+// registry is how this call site stays in sync with them without duplicating
+// them. The shared SSOT closes the remaining gap: a lower-side name rename
+// updates every consumer at once and fails the build if a bound name-column
+// drifts (see `ipe_lower`'s `const _: ()` name-equality assertions).
 
 /// Emit a record literal `{ x = e1, ... }` as a named struct literal
 /// `RecXY { x: <e1>, ... }`. `depth` is the literal's own IR-nesting level; its
@@ -161,62 +89,63 @@ pub fn record_struct_name(
         } else {
             let mut sorted = key.clone();
             sorted.sort();
-            let is_http_request = sorted.len() == HTTP_REQUEST_FIELDS.len()
+            let is_http_request = sorted.len() == shapes::HTTP_REQUEST_FIELDS.len()
                 && sorted
                     .iter()
-                    .zip(HTTP_REQUEST_FIELDS.iter())
+                    .zip(shapes::HTTP_REQUEST_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
             // same fall-through as HttpRequest — a `ProcessRunWithCfg`-shaped
             // literal has no registered struct (folded to
             // `IrType::ProcessRunWithCfg`), so it constructs the runtime
             // `ProcessRunWithCfg` (re-exported bare via the glob).
-            let is_process_run_with_cfg = sorted.len() == PROCESS_RUN_WITH_CFG_FIELDS.len()
+            let is_process_run_with_cfg = sorted.len() == shapes::PROCESS_RUN_WITH_CFG_FIELDS.len()
                 && sorted
                     .iter()
-                    .zip(PROCESS_RUN_WITH_CFG_FIELDS.iter())
+                    .zip(shapes::PROCESS_RUN_WITH_CFG_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
             // same fall-through as `ProcessRunWithCfg` — a `ProcessRunInPtyCfg`-shaped
             // literal has no registered struct (folded to
             // `IrType::ProcessRunInPtyCfg`), so it constructs the runtime
             // `ProcessRunInPtyCfg` (re-exported bare via the glob).
-            let is_process_run_in_pty_cfg = sorted.len() == PROCESS_RUN_IN_PTY_CFG_FIELDS.len()
+            let is_process_run_in_pty_cfg = sorted.len()
+                == shapes::PROCESS_RUN_IN_PTY_CFG_FIELDS.len()
                 && sorted
                     .iter()
-                    .zip(PROCESS_RUN_IN_PTY_CFG_FIELDS.iter())
+                    .zip(shapes::PROCESS_RUN_IN_PTY_CFG_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
             // same fall-through as HttpRequest — a `CacheCfg`-shaped literal
             // has no registered struct (folded to `IrType::CacheCfg`), so it
             // constructs the runtime `CacheCfg` (re-exported bare via the glob).
-            let is_cache_cfg = sorted.len() == CACHE_CFG_FIELDS.len()
+            let is_cache_cfg = sorted.len() == shapes::CACHE_CFG_FIELDS.len()
                 && sorted
                     .iter()
-                    .zip(CACHE_CFG_FIELDS.iter())
+                    .zip(shapes::CACHE_CFG_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
             // same fall-through — a `Csv`-shaped literal has no registered
             // struct (folded to `IrType::CsvDoc`), so it constructs the runtime
             // `CsvDoc` (re-exported bare via the `pub use csv::*` glob).
-            let is_csv_doc = sorted.len() == CSV_DOC_FIELDS.len()
+            let is_csv_doc = sorted.len() == shapes::CSV_DOC_FIELDS.len()
                 && sorted
                     .iter()
-                    .zip(CSV_DOC_FIELDS.iter())
+                    .zip(shapes::CSV_DOC_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
             // same fall-through — a `WebSocketCfg`-shaped literal has no
             // registered struct (folded to `IrType::WebSocketClientCfg`), so it
             // constructs the runtime `WsClientCfg` (re-exported bare via the
             // `pub use ws_client::*` glob).
-            let is_websocket_cfg = sorted.len() == WEBSOCKET_CFG_FIELDS.len()
+            let is_websocket_cfg = sorted.len() == shapes::WEBSOCKET_CFG_FIELDS.len()
                 && sorted
                     .iter()
-                    .zip(WEBSOCKET_CFG_FIELDS.iter())
+                    .zip(shapes::WEBSOCKET_CFG_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
             // same fall-through — a `Response`-shaped literal has no
             // registered struct (folded to `IrType::ServerResponse`), so it
             // constructs the runtime `ServerResponse` (re-exported bare via the
             // `pub use server::*` glob).
-            is_server_response = sorted.len() == SERVER_RESPONSE_FIELDS.len()
+            is_server_response = sorted.len() == shapes::SERVER_RESPONSE_FIELDS.len()
                 && sorted
                     .iter()
-                    .zip(SERVER_RESPONSE_FIELDS.iter())
+                    .zip(shapes::SERVER_RESPONSE_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
             // Ipe.Email fall-throughs — same rationale as `CsvDoc`: a
             // `defaultMessage`/`defaultAttachment`/… built literal has no
@@ -244,13 +173,13 @@ pub fn record_struct_name(
                 "WsClientCfg".to_owned()
             } else if is_server_response {
                 "ServerResponse".to_owned()
-            } else if name_set_is(EMAIL_MESSAGE_FIELDS) {
+            } else if name_set_is(shapes::EMAIL_MESSAGE_FIELDS) {
                 "EmailMessage".to_owned()
-            } else if name_set_is(EMAIL_ATTACHMENT_FIELDS) {
+            } else if name_set_is(shapes::EMAIL_ATTACHMENT_FIELDS) {
                 "EmailAttachment".to_owned()
-            } else if name_set_is(EMAIL_SES_FIELDS) {
+            } else if name_set_is(shapes::EMAIL_SES_FIELDS) {
                 "SesConfig".to_owned()
-            } else if name_set_is(EMAIL_SMTP_FIELDS) {
+            } else if name_set_is(shapes::EMAIL_SMTP_FIELDS) {
                 "SmtpConfig".to_owned()
             } else {
                 ctx.record_name_for_literal(&key, ty)?.to_owned()

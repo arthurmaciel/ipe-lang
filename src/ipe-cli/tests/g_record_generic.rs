@@ -40,3 +40,5 @@ mod golden_records;
 mod golden_reused_generic_clone;
 #[path = "g_record_generic/golden_row_poly_records.rs"]
 mod golden_row_poly_records;
+#[path = "g_record_generic/golden_runtime_shape_fold_seal.rs"]
+mod golden_runtime_shape_fold_seal;
