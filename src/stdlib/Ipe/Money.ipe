@@ -534,7 +534,10 @@ clearRates : () -> Result Error ()
 clearRates = Kernel.kernel "Money_clearRates"
 
 
--- | Convert Money to a target currency using the registered rate.
+-- | Convert Money to a target currency using the registered rate, quantizing the rated amount to the target currency's minor units.
+-- Rounds half-away-from-zero (matching `format`), so the result already
+-- satisfies that currency's precision invariant — a converted value never
+-- carries sub-minor-unit precision.
 convert : Currency -> Money -> Result Error Money
 convert to m =
     if eqCurrency (currency m) to then
@@ -542,7 +545,7 @@ convert to m =
     else
         case getRate (currency m) to of
             Ok rate ->
-                Ok (Money (Dec.mul rate (amount m)) to)
+                Ok (Money (Dec.roundHalfUp (minorUnits to) (Dec.mul rate (amount m))) to)
 
             Err e ->
                 Err e

@@ -299,3 +299,46 @@ fn set_rate_zero_and_negative_rejected_matches_go() {
     assert!(r2.is_err(), "setRate(-0.5) must fail");
     let _: IpeResult<IpeError, ()> = money_clear_rates(());
 }
+
+// `Ipe.Money.convert` composes the rated amount as
+// `Money (Decimal.roundHalfUp (minorUnits to) (Decimal.mul rate (amount m))) to`,
+// so the result already satisfies the target currency's minor-unit invariant
+// (an integer number of minor units, no sub-minor-unit precision). These pin
+// that composition — the same kernels `convert` calls — across differing minor-
+// unit scales and on the exact half-way boundary.
+
+// Mirror of `convert`'s quantization step for a rated amount landing in `to`.
+fn convert_amount(
+    to: &str,
+    rate: ipe_runtime_rust::decimal::Decimal,
+    amount: ipe_runtime_rust::decimal::Decimal,
+) -> String {
+    let scale = money_minor_units(to.to_string());
+    decimal_to_string(decimal_round_half_up(scale, decimal_mul(rate, amount)))
+}
+
+#[test]
+fn convert_quantizes_to_target_minor_units() {
+    // USD (2 dp) → JPY (0 dp): 10.00 × 149.37 = 1493.70, quantized to 0 dp = 1494
+    // (half-away-from-zero rounds .70 up). A fractional yen is not a valid JPY.
+    assert_eq!(convert_amount("JPY", d("149.37"), d("10.00")), "1494");
+
+    // JPY (0 dp) → USD (2 dp): 1000 × 0.0067 = 6.70, within 2 dp (toString drops
+    // the trailing zero → "6.7"; the value is 6.70, a valid USD amount).
+    assert_eq!(convert_amount("USD", d("0.0067"), d("1000")), "6.7");
+
+    // USD (2 dp) → BHD (3 dp): 5.00 × 0.376 = 1.880, within 3 dp.
+    assert_eq!(money_minor_units("BHD".to_string()), 3);
+    assert_eq!(convert_amount("BHD", d("0.376"), d("5.00")), "1.88");
+}
+
+#[test]
+fn convert_rounds_half_away_from_zero_on_the_boundary() {
+    // JPY (0 dp): exact .5 boundary rounds away from zero, both signs.
+    assert_eq!(convert_amount("JPY", d("1.5"), d("1")), "2");
+    assert_eq!(convert_amount("JPY", d("1.5"), d("-1")), "-2");
+
+    // USD (2 dp): 2.545 → 2.55 (matching `format`'s documented rounding).
+    assert_eq!(convert_amount("USD", d("1"), d("2.545")), "2.55");
+    assert_eq!(convert_amount("USD", d("1"), d("-2.545")), "-2.55");
+}

@@ -2346,7 +2346,7 @@ Ipe.Money — currency-typed Money on `Ipe.Decimal`.
 | `getRate` | Look up a registered rate (identity for from == to; missing → Err). |
 | `hasRate` | (no summary) |
 | `clearRates` | Drop every registered rate (test / admin). |
-| `convert` | Convert Money to a target currency using the registered rate. |
+| `convert` | Convert Money to a target currency using the registered rate, quantizing the rated amount to the target currency's minor units. |
 
 ## Net
 
