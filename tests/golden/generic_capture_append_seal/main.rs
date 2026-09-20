@@ -218,10 +218,18 @@ pub fn main_collect_rows<T1: 'static + Send + Sync + Clone, T2: 'static + Send +
             let rest = rest.to_vec();
             match (read)(first) {
                 IpeResult::Err(e) => task_fail(e),
-                IpeResult::Ok(value) => task_map({
-                    let __ipe_fn: Box<dyn Fn(Vec<T1>) -> Vec<T1> + Send + Sync + 'static> = Box::new(move |more: Vec<T1>| -> Vec<T1> { list_append(vec![value.clone()], more) });
-                    __ipe_fn
-                }, crate::main_collect_rows(read, rest)),
+                IpeResult::Ok(value) => {
+                    task_map(
+                        {
+                            let __ipe_fn: Box<dyn Fn(Vec<T1>) -> Vec<T1> + Send + Sync + 'static> =
+                                Box::new(move |more: Vec<T1>| -> Vec<T1> {
+                                    list_append(vec![value.clone()], more)
+                                });
+                            __ipe_fn
+                        },
+                        crate::main_collect_rows(read, rest),
+                    )
+                }
             }
         }
     }

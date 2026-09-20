@@ -399,10 +399,16 @@ pub(crate) fn user_ipe_db_store_decode_rows<T1: 'static + Send + Sync + Clone>(
             let rest = rest.to_vec();
             match crate::user_ipe_db_codec_codec_from_row(codec.clone(), first) {
                 IpeResult::Err(e) => task_fail(e),
-                IpeResult::Ok(value) => task_map({
-                    let __ipe_fn: Box<dyn Fn(Vec<T1>) -> Vec<T1> + Send + Sync + 'static> = Box::new(move |more: Vec<T1>| -> Vec<T1> { ipe_runtime::list::ipe_list_cons(value.clone(), more) });
-                    __ipe_fn
-                }, crate::user_ipe_db_store_decode_rows(codec, rest)),
+                IpeResult::Ok(value) => task_map(
+                    {
+                        let __ipe_fn: Box<dyn Fn(Vec<T1>) -> Vec<T1> + Send + Sync + 'static> =
+                            Box::new(move |more: Vec<T1>| -> Vec<T1> {
+                                ipe_runtime::list::ipe_list_cons(value.clone(), more)
+                            });
+                        __ipe_fn
+                    },
+                    crate::user_ipe_db_store_decode_rows(codec, rest),
+                ),
             }
         }
     }
