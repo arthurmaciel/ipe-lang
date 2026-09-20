@@ -10,26 +10,26 @@
 //! so existing call sites keep compiling while producers migrate.
 
 use crate::code::{
-    Code, IPE_E0001, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_F4413,
-    IPE_F4414, IPE_F4415, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102,
-    IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203, IPE_L0100, IPE_L0101, IPE_L0102,
-    IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111,
-    IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119,
-    IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127,
-    IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0134, IPE_L0135, IPE_L0136,
-    IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0146, IPE_L0147,
-    IPE_L0148, IPE_L0149, IPE_L0150, IPE_L0151, IPE_L0153, IPE_L0200, IPE_N0001, IPE_N0002,
-    IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020,
-    IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028,
-    IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035, IPE_N0036,
-    IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044, IPE_N0045,
-    IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_N0050, IPE_P0001, IPE_P0002, IPE_P0003,
-    IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017,
-    IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041, IPE_P0050,
-    IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066, IPE_P0067,
-    IPE_P0068, IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
-    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
-    IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    Code, Family, IPE_E0001, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412,
+    IPE_F4413, IPE_F4414, IPE_F4415, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101,
+    IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203, IPE_L0100, IPE_L0101,
+    IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110,
+    IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118,
+    IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126,
+    IPE_L0127, IPE_L0128, IPE_L0129, IPE_L0130, IPE_L0131, IPE_L0132, IPE_L0134, IPE_L0135,
+    IPE_L0136, IPE_L0140, IPE_L0141, IPE_L0142, IPE_L0143, IPE_L0144, IPE_L0145, IPE_L0146,
+    IPE_L0147, IPE_L0148, IPE_L0149, IPE_L0150, IPE_L0151, IPE_L0153, IPE_L0200, IPE_N0001,
+    IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013,
+    IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
+    IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035,
+    IPE_N0036, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044,
+    IPE_N0045, IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_N0050, IPE_P0001, IPE_P0002,
+    IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016,
+    IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041,
+    IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066,
+    IPE_P0067, IPE_P0068, IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003,
+    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
+    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -1952,9 +1952,108 @@ impl Diagnostic {
 }
 
 // --- code() helpers --------------------------------------------------------
+//
+// The SEAL invariant (PRINCIPLES: "a diagnostic's code family with its prefix
+// letter — assert that agreement at build time so the instant they drift the
+// build breaks") is enforced here by routing every arm's returned [`Code`]
+// through a family chokepoint. Each `in_<family>` const fn asserts the code's
+// [`Code::family`] before returning it, so a mis-filed arm (e.g. a `TypeError`
+// mapped to an `IPE-N` code by a one-character typo) makes the chokepoint's
+// assertion the reachable outcome — turned back the moment any test or build
+// drives that arm, never rendered as a mislabelled diagnostic. The per-producer
+// `const _` blocks below force the family chokepoints to be exercised at
+// compile time for the representative constant each producer's family owns, so a
+// wrong chokepoint wiring (`parse_code` routing through `in_name`) is a build
+// error, not a runtime one.
+
+/// A family chokepoint: assert `c` belongs to `f`, then return it unchanged.
+///
+/// Const so it can gate a `const fn` producer's arms and be evaluated at
+/// compile time. `debug_assert` is not enough — the guarantee must hold in
+/// release builds too — so this is a hard `assert`; it is unreachable for a
+/// correctly-wired arm (the code and its family are the same fact).
+const fn in_family(c: Code, f: Family) -> Code {
+    assert!(
+        code_family_eq(c.family(), f),
+        "diagnostic code family drift: this code does not belong to the producer's family"
+    );
+    c
+}
+
+/// `PartialEq` is not `const`-callable on [`Family`]; this is the const
+/// equality the chokepoint needs.
+const fn code_family_eq(a: Family, b: Family) -> bool {
+    matches!(
+        (a, b),
+        (Family::Parse, Family::Parse)
+            | (Family::Name, Family::Name)
+            | (Family::Type, Family::Type)
+            | (Family::Lower, Family::Lower)
+            | (Family::Ffi, Family::Ffi)
+            | (Family::Security, Family::Security)
+            | (Family::Environment, Family::Environment)
+            | (Family::Internal, Family::Internal)
+    )
+}
+
+const fn in_parse(c: Code) -> Code {
+    in_family(c, Family::Parse)
+}
+const fn in_name(c: Code) -> Code {
+    in_family(c, Family::Name)
+}
+const fn in_type(c: Code) -> Code {
+    in_family(c, Family::Type)
+}
+const fn in_lower(c: Code) -> Code {
+    in_family(c, Family::Lower)
+}
+const fn in_ffi(c: Code) -> Code {
+    in_family(c, Family::Ffi)
+}
+const fn in_internal(c: Code) -> Code {
+    in_family(c, Family::Internal)
+}
+
+// Compile-time proof that each producer routes through the chokepoint of its own
+// family: these const evaluations run at build time, so a chokepoint wired to
+// the wrong family fails the build (not a deletable test). One representative
+// constant per family is enough — every arm of a producer goes through the same
+// chokepoint, so pinning the chokepoint pins the whole producer.
+const _: () = {
+    assert!(matches!(parse_code_family().family(), Family::Parse));
+    assert!(matches!(name_code_family().family(), Family::Name));
+    assert!(matches!(type_code_family().family(), Family::Type));
+    assert!(matches!(lower_code_family().family(), Family::Lower));
+    assert!(matches!(ffi_code_family().family(), Family::Ffi));
+    assert!(matches!(bug_code_family().family(), Family::Internal));
+    // Consent and RegistryUnreachable return their code directly in `code()`
+    // (no producer helper); pin those constants' families here too.
+    assert!(matches!(IPE_S0001.family(), Family::Security));
+    assert!(matches!(IPE_E0001.family(), Family::Environment));
+};
+
+const fn parse_code_family() -> Code {
+    in_parse(IPE_P0001)
+}
+const fn name_code_family() -> Code {
+    in_name(IPE_N0001)
+}
+const fn type_code_family() -> Code {
+    in_type(IPE_T0001)
+}
+const fn lower_code_family() -> Code {
+    in_lower(IPE_L0100)
+}
+const fn ffi_code_family() -> Code {
+    in_ffi(IPE_F4400)
+}
+const fn bug_code_family() -> Code {
+    in_internal(IPE_I0001)
+}
 
 const fn parse_code(msg: &ParseError) -> Code {
-    match msg {
+    in_parse(match msg {
         ParseError::Unexpected | ParseError::UnexpectedToken { .. } => IPE_P0001,
         ParseError::UnexpectedEof { .. } => IPE_P0002,
         ParseError::TooDeep | ParseError::NestingTooDeep { .. } => IPE_P0003,
@@ -1985,11 +2084,11 @@ const fn parse_code(msg: &ParseError) -> Code {
         ParseError::AnnotationWithoutBinding { .. } => IPE_P0068,
         ParseError::DuplicateAnnotation { .. } => IPE_P0069,
         ParseError::SourceTooLarge { .. } => IPE_P0070,
-    }
+    })
 }
 
 const fn name_code(msg: &NameError) -> Code {
-    match msg {
+    in_name(match msg {
         NameError::Unknown | NameError::ValueNotFound { .. } => IPE_N0001,
         NameError::TypeNotFound { .. } => IPE_N0002,
         NameError::ConstructorNotFound { .. } => IPE_N0003,
@@ -2029,11 +2128,11 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::RustNameFold { .. } => IPE_N0048,
         NameError::DuplicatePatternBinder { .. } => IPE_N0049,
         NameError::ScriptImportsShapeView { .. } => IPE_N0050,
-    }
+    })
 }
 
 const fn type_code(msg: &TypeError) -> Code {
-    match msg {
+    in_type(match msg {
         TypeError::Mismatch | TypeError::TypeMismatch { .. } => IPE_T0001,
         TypeError::InfiniteType { .. } => IPE_T0002,
         TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => IPE_T0003,
@@ -2049,11 +2148,11 @@ const fn type_code(msg: &TypeError) -> Code {
         TypeError::OrPatternBindingMismatch { .. } => IPE_T0019,
         TypeError::TaskArity { .. } => IPE_T0016,
         TypeError::WebViewReturnsHtml => IPE_T0020,
-    }
+    })
 }
 
 const fn lower_code(msg: &LowerError) -> Code {
-    match msg {
+    in_lower(match msg {
         LowerError::Unsupported(f) => feature_code(*f),
         LowerError::InadmissibleAppModel { .. } => IPE_L0120,
         LowerError::InadmissibleAppMsg { .. } => IPE_L0125,
@@ -2078,11 +2177,11 @@ const fn lower_code(msg: &LowerError) -> Code {
         LowerError::StoreEqAccessorInvalid(_) => IPE_L0145,
         LowerError::PointFreeAccessorKernel { .. } => IPE_L0146,
         LowerError::StoreSelectProjectionInvalid(_) => IPE_L0149,
-    }
+    })
 }
 
 const fn feature_code(f: Feature) -> Code {
-    match f {
+    in_lower(match f {
         Feature::CasePatternKinds => IPE_L0100,
         Feature::BinOps => IPE_L0101,
         Feature::Polymorphism => IPE_L0102,
@@ -2111,14 +2210,14 @@ const fn feature_code(f: Feature) -> Code {
         Feature::FunctionElementEquality => IPE_L0134,
         Feature::NonCloneValueReuse => IPE_L0135,
         Feature::JsPortBoundarySeal => IPE_L0148,
-    }
+    })
 }
 
 /// Maps a `CompilerBug.where_` tag to a stable `IPE-I####`. Unknown tags fall
 /// back to the generic [`IPE_I0001`]; producers opt into a specific code by
 /// stamping one of the recognised tags.
 fn bug_code(where_: &str) -> Code {
-    match where_ {
+    in_internal(match where_ {
         "intern.resolve" => IPE_I0010,
         "intern.capacity" => IPE_I0011,
         "ir.match.unknown_variant" => IPE_I0100,
@@ -2130,7 +2229,7 @@ fn bug_code(where_: &str) -> Code {
         "backend.type_name_collision" => IPE_I0202,
         "backend.golden_anchor" => IPE_I0203,
         _ => IPE_I0001,
-    }
+    })
 }
 
 // --- help() helpers --------------------------------------------------------
@@ -2689,7 +2788,7 @@ fn undeterminable_return_any_help() -> Vec<HelpLine> {
 // --- ffi_code / sandbox_code / ffi_help / sandbox_help / consent_help -------
 
 const fn ffi_code(msg: &FfiError) -> Code {
-    match msg {
+    in_ffi(match msg {
         FfiError::CallUnrenderable { .. } | FfiError::GenericNotBindable { .. } => IPE_F4400,
         FfiError::WireMalformed { .. } => IPE_F4401,
         FfiError::ShapeContradiction { .. } => IPE_F4402,
@@ -2697,14 +2796,20 @@ const fn ffi_code(msg: &FfiError) -> Code {
         FfiError::ArtifactIo { .. } => IPE_F4412,
         FfiError::AssertedRefused { .. } => IPE_F4414,
         FfiError::SystemLibraryNotFound { .. } => IPE_F4415,
-    }
+    })
 }
 
+/// The sandbox is the FFI jail, so its diagnostics deliberately live in the
+/// `IPE-F` family rather than a family of their own — the one sanctioned
+/// family cross in the taxonomy. Routing through `in_ffi` (not `in_internal`)
+/// encodes that as an explicit, asserted choice: a sandbox arm that returned a
+/// non-`IPE-F` code would fail the chokepoint, so the exception cannot silently
+/// widen into an unremarked hole in the family invariant.
 const fn sandbox_code(msg: &SandboxError) -> Code {
-    match msg {
+    in_ffi(match msg {
         SandboxError::BuildJail { .. } => IPE_F4410,
         SandboxError::RunJail { .. } => IPE_F4413,
-    }
+    })
 }
 
 fn ffi_help(msg: &FfiError) -> Vec<HelpLine> {
@@ -2798,6 +2903,146 @@ fn did_you_mean(suggestions: &[Box<str>], span: Span) -> Vec<HelpLine> {
             .iter()
             .map(|s| HelpLine::DidYouMean(s.clone()))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod code_family_tests {
+    use super::{
+        ConsentError, Diagnostic, Feature, FfiError, LowerError, NameError, ParseError,
+        SandboxError, TypeError,
+    };
+    use crate::code::{Family, Severity};
+    use crate::span::Span;
+
+    /// One representative [`Diagnostic`] for every family, paired with the
+    /// family its rendered [`Diagnostic::code`] must belong to. `Sandbox` is
+    /// deliberately paired with [`Family::Ffi`] — the one sanctioned family
+    /// cross (the sandbox is the FFI jail) — so this table pins the exception
+    /// too, not only the rule.
+    fn family_representatives() -> Vec<(Diagnostic, Family)> {
+        vec![
+            (
+                Diagnostic::Parse {
+                    span: Span::DUMMY,
+                    msg: ParseError::Unexpected,
+                },
+                Family::Parse,
+            ),
+            (
+                Diagnostic::Name {
+                    span: Span::DUMMY,
+                    msg: NameError::Unknown,
+                },
+                Family::Name,
+            ),
+            (
+                Diagnostic::Type {
+                    span: Span::DUMMY,
+                    msg: TypeError::Mismatch,
+                },
+                Family::Type,
+            ),
+            (
+                Diagnostic::Lower {
+                    span: Span::DUMMY,
+                    msg: LowerError::Unsupported(Feature::CasePatternKinds),
+                },
+                Family::Lower,
+            ),
+            (
+                Diagnostic::Ffi {
+                    msg: FfiError::WireMalformed {
+                        context: "test".to_owned(),
+                        detail: "test".to_owned(),
+                    },
+                },
+                Family::Ffi,
+            ),
+            (
+                Diagnostic::Sandbox {
+                    msg: SandboxError::BuildJail {
+                        detail: "test".to_owned(),
+                    },
+                },
+                Family::Ffi,
+            ),
+            (
+                Diagnostic::Consent {
+                    msg: ConsentError::NonInteractive {
+                        body: "test".to_owned(),
+                    },
+                },
+                Family::Security,
+            ),
+            (
+                Diagnostic::RegistryUnreachable {
+                    detail: "test".to_owned(),
+                },
+                Family::Environment,
+            ),
+            (
+                Diagnostic::CompilerBug {
+                    where_: "ir.match.non_exhaustive",
+                    detail: "test".to_owned(),
+                },
+                Family::Internal,
+            ),
+        ]
+    }
+
+    /// Every representative diagnostic's rendered code belongs to the family it
+    /// is filed under — the runtime companion to the compile-time chokepoints in
+    /// `code()`'s helpers. Drives the real `code()` path, so a producer arm that
+    /// returned a wrong-family code (a typo one edit could introduce) is turned
+    /// back here even for a variant no const-eval representative exercises.
+    #[test]
+    fn every_representative_code_matches_its_family() {
+        for (diag, family) in family_representatives() {
+            assert_eq!(
+                diag.code().family(),
+                family,
+                "{} has family {:?}, expected {family:?}",
+                diag.code().as_str(),
+                diag.code().family()
+            );
+        }
+    }
+
+    /// The severity/family biconditional the SEAL demands:
+    /// `severity == Bug` **iff** `family == Internal`. A `Bug` outside the
+    /// internal family, or an internal code that is not a `Bug`, mislabels the
+    /// diagnostic's exit policy and "please report" framing — so both directions
+    /// are pinned.
+    #[test]
+    fn bug_severity_iff_internal_family() {
+        for (diag, _) in family_representatives() {
+            let is_bug = matches!(diag.severity(), Severity::Bug);
+            let is_internal = matches!(diag.code().family(), Family::Internal);
+            assert_eq!(
+                is_bug,
+                is_internal,
+                "{}: severity==Bug is {is_bug} but family==Internal is {is_internal}",
+                diag.code().as_str()
+            );
+        }
+    }
+
+    /// A code's derived family round-trips its wire prefix over the whole
+    /// taxonomy: every `IPE-I####` derives [`Family::Internal`] and every other
+    /// code derives a non-`Internal` family. This is the fail-closed guard on
+    /// [`crate::code::Code::family`]'s byte-4 derivation across all shipped codes.
+    #[test]
+    fn every_taxonomy_code_derives_a_prefix_consistent_family() {
+        for &c in crate::code::ALL_CODES {
+            let internal = matches!(c.family(), Family::Internal);
+            assert_eq!(
+                internal,
+                c.as_str().starts_with("IPE-I"),
+                "{} derives Internal={internal} but its wire prefix disagrees",
+                c.as_str()
+            );
+        }
     }
 }
 
