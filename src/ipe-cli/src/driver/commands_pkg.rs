@@ -1010,19 +1010,31 @@ pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, Cl
 /// With `--json`, each diagnostic is a JSON object on stderr, and success
 /// is `{"status":"ok"}` on stdout — both machine-parseable.
 pub fn run_type_check(rest: &[String]) -> Result<(), CliError> {
+    // First, infallible format pass before the body's fallible parse, so a parse
+    // error (an unknown flag, a second positional) still renders through the
+    // requested machine surface rather than the human banner (see `run_build`).
+    let format = cli_args::peek_output_format(rest);
+    run_type_check_body(rest).map_err(|e| {
+        if format == cli_args::OutputFormat::Human {
+            e
+        } else {
+            emit_machine_error(format, "type-check", &e)
+        }
+    })
+}
+
+/// Inner implementation of [`run_type_check`], unaware of how a failure is
+/// rendered; the caller routes any error through the resolved output format.
+pub fn run_type_check_body(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_type_check(rest)?;
     let arg = match args.entry {
         Some(e) => PathBuf::from(e),
         None => PathBuf::from(default_entry()?),
     };
     let entry = resolve_analysis_entry(&arg)?;
-    typecheck_entry_via_graph(&entry).map_err(|e| {
-        if args.format == cli_args::OutputFormat::Human {
-            e
-        } else {
-            emit_machine_error(args.format, "type-check", &e)
-        }
-    })?;
+    // Propagate any diagnostic raw; `run_type_check` routes it through the
+    // resolved output format (the single machine-error boundary).
+    typecheck_entry_via_graph(&entry)?;
     match args.format {
         cli_args::OutputFormat::Json => {
             println!("{{\"status\":\"ok\"}}");

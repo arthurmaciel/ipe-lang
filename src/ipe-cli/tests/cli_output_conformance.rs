@@ -492,3 +492,94 @@ fn human_failure_quadrant_shows_the_guttered_help_surface() {
         r.stderr
     );
 }
+
+/// A parse error under `--json` is itself a machine outcome: because the output
+/// format is resolved in a first, infallible pass BEFORE the fallible parse, an
+/// unknown flag on a machine-mode invocation renders through the `ipe.cli.error/1`
+/// envelope on stderr — never the human `--help` banner. The stdout stream stays
+/// clean, the output carries no ANSI, and the JSON is well-formed. This is the
+/// exact leak issue #2591 closed: a parse error must not fall to the human banner
+/// when the caller asked for a machine surface. `build` and `type-check` are two
+/// independent machine-mode command bodies, both proven.
+#[test]
+fn parse_error_under_json_renders_the_machine_envelope() {
+    for cmd in ["build", "type-check"] {
+        // The unknown flag makes the parse fail; `--json` was resolved first.
+        let r = run(&[cmd, "--bad-flag", "--json"]);
+        assert!(
+            !r.ok,
+            "`ipe {cmd} --bad-flag --json` must exit non-zero on the parse error",
+        );
+        assert!(
+            r.stdout.is_empty(),
+            "`ipe {cmd}` machine parse-error must write nothing to stdout, got: {:?}",
+            r.stdout,
+        );
+        assert!(
+            !r.stdout.contains('\x1b') && !r.stderr.contains('\x1b'),
+            "`ipe {cmd}` machine parse-error must carry no ANSI under NO_COLOR: {:?}",
+            r.stderr,
+        );
+        // No human banner: the error banner (`Ipê lang - …`) and the help page
+        // header (`Ipê language …`) both carry `Ipê lang`, so its absence proves
+        // neither leaked into the machine stream.
+        assert!(
+            !r.stderr.contains("Ipê lang"),
+            "`ipe {cmd}` machine parse-error must not show the human banner/help: {:?}",
+            r.stderr,
+        );
+        assert!(
+            is_well_formed_json(&r.stderr),
+            "`ipe {cmd} --json` parse-error stderr must be well-formed JSON: {:?}",
+            r.stderr,
+        );
+        assert!(
+            r.stderr.contains("\"ipe.cli.error/1\""),
+            "`ipe {cmd} --json` parse-error must carry the ipe.cli.error/1 schema tag: {:?}",
+            r.stderr,
+        );
+    }
+}
+
+/// The `--plain` counterpart: a parse error under `--plain` renders a flush-left,
+/// unstyled reason line on stderr — not the framed, guttered human help page and
+/// not a JSON object. Same first-pass format resolution, the plain machine
+/// surface. Proven for the same two command bodies.
+#[test]
+fn parse_error_under_plain_renders_a_flush_left_reason() {
+    for cmd in ["build", "type-check"] {
+        let r = run(&[cmd, "--bad-flag", "--plain"]);
+        assert!(
+            !r.ok,
+            "`ipe {cmd} --bad-flag --plain` must exit non-zero on the parse error",
+        );
+        assert!(
+            r.stdout.is_empty(),
+            "`ipe {cmd}` plain parse-error must write nothing to stdout, got: {:?}",
+            r.stdout,
+        );
+        assert!(
+            !r.stdout.contains('\x1b') && !r.stderr.contains('\x1b'),
+            "`ipe {cmd}` plain parse-error must carry no ANSI under NO_COLOR: {:?}",
+            r.stderr,
+        );
+        // Flush-left: no two-space human gutter, no leading framing blank line.
+        let stderr = r.stderr.trim_end_matches('\n');
+        assert!(
+            !stderr.is_empty() && !stderr.starts_with(' ') && !stderr.starts_with('\n'),
+            "`ipe {cmd}` plain parse-error must be a flush-left reason line: {:?}",
+            r.stderr,
+        );
+        // Not the human help page and not a JSON envelope.
+        assert!(
+            !r.stderr.contains("Ipê lang"),
+            "`ipe {cmd}` plain parse-error must not show the human banner/help: {:?}",
+            r.stderr,
+        );
+        assert!(
+            !r.stderr.contains("\"ipe.cli.error/1\""),
+            "`ipe {cmd} --plain` parse-error must be plain text, not JSON: {:?}",
+            r.stderr,
+        );
+    }
+}
