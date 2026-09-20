@@ -244,12 +244,16 @@ fn wait_for_child_of(ipe_pid: u32, timeout: Duration) -> Option<u32> {
 }
 
 /// Spawn a REAL `ipe watch` subprocess (the `run()` path, `external_stop =
-/// None` — the only caller the SIGTERM forwarder is installed for).
+/// None` — the only caller the SIGTERM forwarder is installed for). When
+/// `capture_stderr` is set the child's stderr is piped so the caller can
+/// synchronize on the [`ipe::watch::SIGTERM_TEARDOWN_MARKER`] ack; otherwise it
+/// is discarded.
 #[cfg(target_os = "linux")]
 fn spawn_ipe_watch(
     entry: &Path,
     out_dir: &Path,
     port: u16,
+    capture_stderr: bool,
 ) -> Result<std::process::Child, BoxError> {
     let runtime_dir = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
@@ -263,7 +267,11 @@ fn spawn_ipe_watch(
         .arg("--port")
         .arg(port.to_string())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(if capture_stderr {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        });
     // Forward CI's warm shared target (exported ONLY as IPE_ORACLE_SHARED_TARGET)
     // as the child `ipe watch`'s CARGO_TARGET_DIR, so its rebuild links against a
     // pre-compiled dep tree — the SAME target `warm_server_fixture_deps` warms.
@@ -273,6 +281,52 @@ fn spawn_ipe_watch(
     }
     cmd.spawn()
         .map_err(|e| -> BoxError { format!("ipe watch must spawn: {e}").into() })
+}
+
+/// Take the child's piped stderr and, on a reader thread, scan it line-by-line
+/// for `marker` (matched as a substring — the emitted line wraps the marker in
+/// gutter/colour escapes). The returned receiver yields `true` the instant a
+/// line containing the marker is seen, `false` if stderr closes first (the
+/// child exited before printing it). The thread keeps draining stderr after the
+/// match so the child never blocks on a full pipe during teardown.
+///
+/// Synchronizing on this ack — rather than a fixed sleep — is what makes the
+/// double-SIGTERM sequence deterministic: the second signal is sent only once
+/// the forwarder has provably consumed the first.
+#[cfg(target_os = "linux")]
+fn watch_marker_seen(
+    child: &mut std::process::Child,
+    marker: &'static str,
+) -> Result<std::sync::mpsc::Receiver<bool>, BoxError> {
+    use std::io::BufRead;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("child stderr must be piped to observe the teardown ack")?;
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stderr);
+        let mut announced = false;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                // A non-empty read: check it for the marker.
+                Ok(n) if n > 0 => {
+                    if !announced && line.contains(marker) {
+                        announced = true;
+                        let _ = tx.send(true);
+                    }
+                }
+                // Zero bytes (stderr closed) or a read error: stop draining.
+                Ok(_) | Err(_) => break,
+            }
+        }
+        if !announced {
+            let _ = tx.send(false);
+        }
+    });
+    Ok(rx)
 }
 
 /// Poll `child.try_wait()` until it exits or `timeout` elapses.
@@ -313,7 +367,7 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() ->
         .map_err(|e| -> BoxError { format!("write Main.ipe: {e}").into() })?;
 
     let port = 19157;
-    let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
+    let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, false)?;
 
     if !wait_for_body(port, "v1", WATCH_SERVE_BUDGET) {
         let _ = ipe_proc.kill();
@@ -457,7 +511,7 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
         .map_err(|e| -> BoxError { format!("write Main.ipe: {e}").into() })?;
 
     let port = 19158;
-    let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
+    let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, true)?;
 
     if !wait_for_body(port, "v1", WATCH_SERVE_BUDGET) {
         let _ = ipe_proc.kill();
@@ -467,15 +521,41 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
     let child_pid = wait_for_child_of(ipe_proc.id(), Duration::from_secs(10))
         .ok_or("the supervised child must be discoverable via /proc once v1 is serving")?;
 
+    // Watch the child's stderr for the forwarder's teardown ack BEFORE sending
+    // any signal, so the reader thread is already draining when the marker is
+    // printed.
+    let marker_rx = watch_marker_seen(&mut ipe_proc, ipe::watch::SIGTERM_TEARDOWN_MARKER)?;
+
     // First SIGTERM: starts the forwarder's orderly teardown.
     sigterm(ipe_proc.id())?;
 
-    // A second SIGTERM lands right behind it, racing the in-flight teardown.
-    // The forwarder has consumed its one signal, so this must be absorbed —
-    // never a signal-death of the process. Sending twice at a short interval
-    // exercises both orderings (teardown still running vs. just finished); a
-    // signal to an already-exited pid is harmless.
-    std::thread::sleep(Duration::from_millis(50));
+    // Barrier — NOT a sleep: block until the forwarder has PROVABLY consumed the
+    // first SIGTERM (it printed the teardown marker on its dedicated thread just
+    // before sending the `Shutdown` event). Only then is `signal-hook`'s one
+    // registration spent, so every later SIGTERM is guaranteed absorbed. This
+    // makes the double-signal ordering deterministic under any scheduling load —
+    // the racy 50 ms guess this replaces could, under full-suite concurrency,
+    // send the second SIGTERM before the first was consumed.
+    let acked = marker_rx
+        .recv_timeout(Duration::from_secs(30))
+        .map_err(|_| -> BoxError {
+            "the forwarder must announce it consumed the first SIGTERM (teardown marker)".into()
+        })?;
+    if !acked {
+        let _ = ipe_proc.kill();
+        let _ = ipe_proc.wait();
+        return Err(
+            "child stderr closed before the SIGTERM teardown marker — the forwarder never \
+             reported consuming the first signal"
+                .into(),
+        );
+    }
+
+    // Two further SIGTERMs land AFTER the ack, so the forwarder has definitely
+    // spent its one registration: both must be silently absorbed — never a
+    // signal-death of the process. Sending twice a beat apart exercises the
+    // teardown-still-running and teardown-finished orderings; a signal to an
+    // already-exited pid is harmless.
     let _ = sigterm(ipe_proc.id());
     std::thread::sleep(Duration::from_millis(50));
     let _ = sigterm(ipe_proc.id());
