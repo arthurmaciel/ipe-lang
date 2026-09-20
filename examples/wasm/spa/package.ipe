@@ -8,5 +8,5 @@ package =
     { name = "wasm-spa"
     , version = "0.1.0"
     , wasm =
-        On { mode = Spa, mount = "#app" }
+        On { mode = Solo, mount = "#app" }
     }

@@ -424,12 +424,14 @@ impl BuilderReader<'_> {
         let stages = linearise(head);
         let mut wasm = WasmConfig::default();
         for stage in stages {
-            // A bare `Wasm.spa` / `Wasm.hydrate` head atom, or a refinement call.
+            // A bare `Wasm.solo` / `Wasm.hydrate` head atom, or a refinement call.
+            // The retired `Wasm.spa` is still read here — a legacy manifest names
+            // the old word — and mapped to the new `solo` wire mode.
             let Some((m, builder, args)) = self.call(stage) else {
                 return Err(oops("a wasm stage is not a recognised builder"));
             };
             match (m, builder) {
-                ("Wasm", "spa") => wasm.mode = Some("spa".to_owned()),
+                ("Wasm", "solo" | "spa") => wasm.mode = Some("solo".to_owned()),
                 ("Wasm", "hydrate") => wasm.mode = Some("hydrate".to_owned()),
                 ("Wasm", "entry") => wasm.entry = Some(str_arg(args, 0)?),
                 ("Wasm", "mount") => wasm.mount = Some(str_arg(args, 0)?),
@@ -758,7 +760,8 @@ mod tests {
         let out = std::fs::read_to_string(&path).expect("read back");
         let m = crate::package_manifest::read_package_manifest(&out, &root, &path)
             .expect("record reads");
-        assert_eq!(m.wasm.mode.as_deref(), Some("spa"));
+        // The legacy `Wasm.spa` builder migrates to the renamed `solo` wire mode.
+        assert_eq!(m.wasm.mode.as_deref(), Some("solo"));
         assert_eq!(m.wasm.mount.as_deref(), Some("#app"));
         assert!(m.capabilities_accept.iter().any(|c| c.as_str() == "unsafe"));
         let _ = std::fs::remove_dir_all(&root);

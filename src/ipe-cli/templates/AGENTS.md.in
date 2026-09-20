@@ -1058,16 +1058,16 @@ package =
     { name = "<project>"
     , wasm =
         On                                     -- Off (absent = native) | On { … }
-            { mode = Spa                        -- Spa | Hydrate
+            { mode = Solo                       -- Solo | Hydrate
             , entry = "src/Client.ipe"          -- client entry file (defaults to the build's own entry)
-            , mount = "#app"                    -- SPA mount selector
+            , mount = "#app"                    -- solo mount selector
             , publicEnv = [ "API_BASE_URL" ]    -- default-deny allowlist; rejects IPE_*/secret-pattern names
             , optLevel = "z"
             }
     }
 ```
 
-When `wasm = On { mode = Spa }` (or `Hydrate`), the compiler infers the wasm
+When `wasm = On { mode = Solo }` (or `Hydrate`), the compiler infers the wasm
 target: `ipe build` is equivalent to `ipe build --target wasm` without an
 explicit flag. Precedence (highest first): `--target wasm` CLI flag >
 `IPE_TARGET=wasm` env > the manifest's `wasm` mode > default native. An

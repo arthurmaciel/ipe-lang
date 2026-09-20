@@ -276,8 +276,8 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
 
     // Validate the delivery grammar against the shape `main` pins: the `[shape]`
     // cross-check and the `[runtime] [host]` tail. `ipe watch` is a dev
-    // build-run-reload loop that serves the live runtime; it takes no `--static`.
-    // A grammar refusal (e.g. `web spa ios`, which cannot be watched — see the
+    // build-run-reload loop that serves the served runtime; it takes no `--static`.
+    // A grammar refusal (e.g. `web solo ios`, which cannot be watched — see the
     // spec's mobile-watch note) is caught here before the loop starts.
     let _delivery = resolve_delivery(Path::new(&entry), &args.delivery, false, "watch")?;
 
@@ -445,7 +445,7 @@ pub fn resolve_static_plan(
 pub enum CompileTarget {
     /// The native host binary (server / CLI / TUI / desktop / script).
     Native,
-    /// The sandboxed browser WASM client (`--target wasm`, `web spa`).
+    /// The sandboxed browser WASM client (`--target wasm`, `web solo`).
     WasmClient,
     /// The co-located portable WASI module (`--target wasi`) — a
     /// `Direct`/`Script` program's native effect floor over `wasm32-wasip1`.
