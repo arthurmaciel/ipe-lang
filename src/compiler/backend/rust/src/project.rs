@@ -3866,7 +3866,8 @@ fn db_cargo_toml(base: &str, driver: crate::DbDriver) -> DResult<String> {
 ///    features (required by `server.rs`'s `TcpListener` and `mpsc` usage).
 /// 3. Appending `axum`, `tower-http` (with `timeout`), and `tower` (with
 ///    `limit`) dependency lines before `[profile.dev]` — the latter two back
-///    the front-door DoS ceilings (`TimeoutLayer` + `GlobalConcurrencyLimitLayer`).
+///    the front-door denial-of-service ceilings (`TimeoutLayer` +
+///    `GlobalConcurrencyLimitLayer`).
 ///
 /// Takes the current manifest string so it can be composed with
 /// [`db_cargo_toml`] when a program uses both Db and Server kernels.
