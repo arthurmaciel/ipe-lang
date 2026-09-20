@@ -103,6 +103,18 @@ render =
         ++ routeOf "https://example.com/search?q=rust"
         ++ " "
         ++ routeOf "https://example.com/nowhere"
+        -- A `%XX` escape in a captured path segment decodes at the parse
+        -- boundary: `john%20doe` matches the decoded literal `john doe`.
+        ++ " "
+        ++ routeOf "https://example.com/user/john%20doe"
+        -- A `%XX` escape in a query value decodes: `hello%20world` -> `hello world`.
+        ++ " "
+        ++ routeOf "https://example.com/search?q=hello%20world"
+        -- A malformed percent-escape fails closed: the segment cannot decode, so
+        -- `parse` yields `Nothing` and the router reports no match (never the raw
+        -- encoded form).
+        ++ " "
+        ++ routeOf "https://example.com/user/bad%C0"
     }
 
 

@@ -942,10 +942,10 @@ fn render_bundle_entry(entry: &crate::doc_bundle::DocEntry, format: OutputFormat
         OutputFormat::Json => {
             println!(
                 "{{\"kind\":{},\"key\":{},\"title\":{},\"body\":{}}}",
-                doc_json_str(entry.kind.prefix()),
-                doc_json_str(&entry.key),
-                doc_json_str(&entry.title),
-                doc_json_str(&entry.body),
+                json_string(entry.kind.prefix()),
+                json_string(&entry.key),
+                json_string(&entry.title),
+                json_string(&entry.body),
             );
         }
         OutputFormat::Human => {
@@ -1008,9 +1008,9 @@ fn render_doc_entry_json(entry: &ipe_docs::Entry) -> String {
     };
     format!(
         "{{\"kind\":{},\"key\":{},\"text\":{}}}\n",
-        doc_json_str(kind),
-        doc_json_str(&entry.source_key),
-        doc_json_str(&entry.text),
+        json_string(kind),
+        json_string(&entry.source_key),
+        json_string(&entry.text),
     )
 }
 
@@ -1038,12 +1038,6 @@ fn render_doc_entry_human(entry: &ipe_docs::Entry, p: &crate::style::Palette) ->
         }
     }
     out
-}
-
-/// Minimal JSON string escaping for the doc lookup renderer (no serde dependency).
-fn doc_json_str(s: &str) -> String {
-    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 /// Run `ipe doc` for the parsed [`DocMode`].
@@ -5254,6 +5248,40 @@ mod tests {
     #[test]
     fn json_escapes_control_and_quote() {
         assert_eq!(json_string("a\"b\\c\n"), "\"a\\\"b\\\\c\\n\"");
+    }
+
+    #[test]
+    fn doc_entry_json_escapes_control_bytes_and_parses() {
+        // A diagnostic/symbol `text` is a multi-line body carrying raw `\n` and
+        // C0 control bytes; the `ipe doc <key> --json` surface must escape them so
+        // the output round-trips through a strict JSON parser (RFC 8259) rather
+        // than leaking a raw U+000A that a serde/`jq` consumer rejects.
+        let text = "line one\nline two\u{1}tail";
+        let entry = ipe_docs::Entry {
+            kind: ipe_docs::EntryKind::Diagnostic,
+            source_key: "IPE-L0107".to_owned(),
+            text: text.to_owned(),
+        };
+        let rendered = render_doc_entry_json(&entry);
+        // No raw control byte survives on the wire: the only newline is the
+        // trailing record separator this renderer appends.
+        assert_eq!(rendered.matches('\n').count(), 1);
+        assert!(rendered.ends_with('\n'));
+        assert!(!rendered.trim_end_matches('\n').contains('\n'));
+        let value: serde_json::Value =
+            serde_json::from_str(&rendered).expect("--json output must be valid JSON");
+        assert_eq!(
+            value.get("kind").and_then(serde_json::Value::as_str),
+            Some("diagnostic")
+        );
+        assert_eq!(
+            value.get("key").and_then(serde_json::Value::as_str),
+            Some("IPE-L0107")
+        );
+        assert_eq!(
+            value.get("text").and_then(serde_json::Value::as_str),
+            Some(text)
+        );
     }
 
     /// A resolved type-constructor `TyDoc`, e.g. `con("M", "Color", [])`.

@@ -18,6 +18,7 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 - [Compression](#compression)
 - [Config](#config)
 - [CSV](#csv)
+- [Regex](#regex)
 - [Database](#database)
 - [Doc](#doc)
 - [Email](#email)
@@ -104,6 +105,12 @@ Every `IPE_*` variable the runtime, CLI, and compiler read. The table is grouped
 | `IPE_CSV_MAX_BYTES` | 536870912 (512 MiB) | Maximum total decoded field bytes parsed from a single CSV input. Bounds heap use when rows fit the row cap but carry oversized fields. | `Tunable` |
 | `IPE_CSV_MAX_ROWS` | 10000000 (10 M) | Maximum rows parsed from a single CSV input. Prevents OOM from unbounded CSV streams. | `Tunable` |
 | `IPE_CSV_SANITIZE_FORMULAS` | unset (false) | Set to `1`, `on`, `true`, or `yes` to prefix formula-injection characters (`=`, `+`, `-`, `@`) with a single quote in CSV output, preventing spreadsheet formula injection. | `SecurityTunable` |
+
+## Regex
+
+| Variable | Default | Effect | Class |
+|----------|---------|--------|-------|
+| `IPE_REGEX_MAX_INPUT_BYTES` | 16777216 (16 MiB) | Maximum subject (input) size in bytes that any `Ipe.Regex` match/find/findAll/replace/split will scan. Past the ceiling the operation returns its safe empty result, bounding untrusted-input work and allocation. | `Tunable` |
 
 ## Database
 

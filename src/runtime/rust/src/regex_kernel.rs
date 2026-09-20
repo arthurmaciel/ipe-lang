@@ -7,6 +7,32 @@
 use super::{IpeMaybe, IpeResult};
 use std::sync::Arc;
 
+/// Subject-length ceiling (default 16 MiB) shared by every `Ipe.Regex`
+/// operation. The `regex` crate is linear-time (RE2, no catastrophic
+/// backtracking) and `Regex::new` bounds COMPILE via its 10 MB `size_limit`,
+/// but the SUBJECT is otherwise unbounded: a multi-hundred-MB attacker-supplied
+/// string handed to `findAll` on `\b` allocates tens of millions of small
+/// `String`s. Bounded by construction (PRINCIPLES §3, and §1's exhaustion
+/// clause when the subject arrives over the network): past this ceiling each
+/// operation returns its total safe outcome (no match / no split / identity)
+/// rather than being driven through an unbounded scan-and-collect. Mirrors the
+/// sibling decode caps (`IPE_CSV_MAX_BYTES`, `IPE_DECOMPRESS_MAX_BYTES`,
+/// `DEFAULT_SEAL_MAX_INPUT_BYTES`). Overridable via `IPE_REGEX_MAX_INPUT_BYTES`.
+fn regex_max_input_bytes() -> usize {
+    crate::system::read_env_var("IPE_REGEX_MAX_INPUT_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(16 * 1024 * 1024)
+}
+
+/// The single fail-closed gate all five entrypoints share: is `s` within the
+/// declared subject ceiling? A subject past the bound is turned back at the
+/// boundary before any scan begins.
+fn within_input_ceiling(s: &str) -> bool {
+    s.len() <= regex_max_input_bytes()
+}
+
 /// `Ipe.Regex`'s opaque compiled-pattern handle. Newtype over an `Arc`-shared
 /// [`regex::Regex`] so cloning is a refcount bump (a `Regex` value may flow
 /// through several call sites).
@@ -33,14 +59,20 @@ pub fn regex_compile<E: From<String>>(pattern: String) -> IpeResult<E, Regex> {
 }
 
 /// `Regex.match : Regex -> String -> Bool` — does the pattern match anywhere?
+/// A subject past the shared ceiling yields `false` (fail-closed: absent a
+/// bounded scan, the safe answer is "no proven match").
 #[must_use]
 pub fn regex_match(re: Regex, s: String) -> bool {
-    re.0.is_match(&s)
+    within_input_ceiling(&s) && re.0.is_match(&s)
 }
 
 /// `Regex.find : Regex -> String -> Maybe String` — first match, if any.
+/// A subject past the shared ceiling yields `Nothing` (fail-closed).
 #[must_use]
 pub fn regex_find(re: Regex, s: String) -> IpeMaybe<String> {
+    if !within_input_ceiling(&s) {
+        return IpeMaybe::Nothing;
+    }
     match re.0.find(&s) {
         Some(m) => IpeMaybe::Just(m.as_str().to_string()),
         None => IpeMaybe::Nothing,
@@ -48,15 +80,26 @@ pub fn regex_find(re: Regex, s: String) -> IpeMaybe<String> {
 }
 
 /// `Regex.findAll : Regex -> String -> List String` — every match, in order.
+/// A subject past the shared ceiling yields the empty list (fail-closed: no
+/// unbounded `Vec<String>` collect over an oversized subject).
 #[must_use]
 pub fn regex_find_all(re: Regex, s: String) -> Vec<String> {
+    if !within_input_ceiling(&s) {
+        return Vec::new();
+    }
     re.0.find_iter(&s).map(|m| m.as_str().to_string()).collect()
 }
 
 /// `Regex.replace : Regex -> String -> String -> String` — replace every match
 /// with `replacement` (RE2 `$1` substitution syntax).
+/// A subject past the shared ceiling is returned unchanged (fail-closed: the
+/// identity is the total safe outcome, applying no replacements rather than
+/// scanning an oversized subject).
 #[must_use]
 pub fn regex_replace(re: Regex, replacement: String, s: String) -> String {
+    if !within_input_ceiling(&s) {
+        return s;
+    }
     re.0.replace_all(&s, replacement.as_str()).to_string()
 }
 
@@ -68,6 +111,12 @@ pub fn regex_replace(re: Regex, replacement: String, s: String) -> String {
 /// Implements this by tracking the start of the most recent match manually.
 #[must_use]
 pub fn regex_split(re: Regex, s: String) -> Vec<String> {
+    // A subject past the shared ceiling yields the whole subject as one field
+    // (fail-closed: the no-split outcome, applying no split rather than
+    // collecting one owned String per match over an oversized subject).
+    if !within_input_ceiling(&s) {
+        return vec![s];
+    }
     // A non-empty pattern against empty input yields one empty field.
     if !re.0.as_str().is_empty() && s.is_empty() {
         return vec![String::new()];
@@ -189,6 +238,63 @@ mod tests {
     fn test_split() {
         let parts = regex_split(ok(r",\s*"), "a, b,c,  d".to_string());
         assert_eq!(parts, vec!["a", "b", "c", "d"]);
+    }
+
+    /// A subject one byte past the default ceiling is turned back at the
+    /// boundary by EVERY entrypoint — the refusal that keeps an untrusted
+    /// subject from driving an unbounded scan-and-collect (issue #2644). Each
+    /// op returns its total safe outcome, never an unbounded `Vec<String>`.
+    #[test]
+    fn oversized_subject_is_refused_by_every_entrypoint() {
+        let cap = regex_max_input_bytes();
+        // One byte past the ceiling: `a`*cap then a trailing byte, so a match
+        // WOULD exist were the subject scanned — proving the refusal is the
+        // ceiling, not an absent match.
+        let mut oversized = "a".repeat(cap);
+        oversized.push('b');
+        assert!(oversized.len() > cap);
+
+        let re = ok(r"a|b");
+
+        // match → false (no proven match)
+        assert!(!regex_match(re.clone(), oversized.clone()));
+
+        // find → Nothing
+        assert!(matches!(
+            regex_find(re.clone(), oversized.clone()),
+            IpeMaybe::Nothing
+        ));
+
+        // findAll → empty list (the unbounded-Vec vector, closed)
+        assert!(regex_find_all(re.clone(), oversized.clone()).is_empty());
+
+        // replace → identity (input returned unchanged, no replacements)
+        assert_eq!(
+            regex_replace(re.clone(), "X".to_string(), oversized.clone()),
+            oversized
+        );
+
+        // split → whole subject as one field (no split applied)
+        assert_eq!(regex_split(re, oversized.clone()), vec![oversized]);
+    }
+
+    /// A subject exactly AT the ceiling is still processed normally — the bound
+    /// is `len() <= cap`, so the last legal size is not spuriously refused.
+    #[test]
+    fn subject_at_ceiling_is_processed_normally() {
+        let cap = regex_max_input_bytes();
+        // `cap`-byte subject beginning with a digit, so a match exists and is
+        // returned — confirming AT-cap is inside the accepted region.
+        let mut at_cap = String::with_capacity(cap);
+        at_cap.push('7');
+        at_cap.push_str(&"a".repeat(cap - 1));
+        assert_eq!(at_cap.len(), cap);
+
+        assert!(regex_match(ok(r"\d"), at_cap.clone()));
+        assert!(matches!(
+            regex_find(ok(r"\d"), at_cap),
+            IpeMaybe::Just(ref d) if d == "7"
+        ));
     }
 
     #[test]

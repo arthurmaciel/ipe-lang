@@ -606,11 +606,13 @@ Ipe.Browser.Notification.Internals — the low-level notification port surface:
 | `Options` | The `Notification` display payload, mirroring the Web API `Notification` |
 | `defaults` | The default payload for a bare `notify title`: the given title, no body, no |
 | `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
-| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `JsMsg` | The NARROW closed INBOUND port type for the `outcomes` subscription — |
+| `PermissionReply` | The closed reply vocabulary of a `RequestPermission` request — a SEPARATE |
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
-| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `requestOne` | `requestOne cmd` — correlated one-shot permission `JsCmd` → `Task Error |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
+| `permissionInbound` | The total, fail-closed decoder for a `RequestPermission` reply. Structurally |
 
 ## Browser.Orientation
 
@@ -651,7 +653,7 @@ Ipe.Browser.Permission — query and watch browser permission state via
 | `PermissionName` | Re-export of `Internals.PermissionName` — the closed set of W3C Permissions |
 | `query` | `query name` — read the current state of a single browser permission ONCE, |
 | `watch` | `watch name` — begin a CONTINUOUS state-change stream for a single |
-| `changes` | `changes name toMsg` — the inbound subscription for state changes on `name`, |
+| `changes` | `changes name toMsg` — the inbound subscription for state changes on |
 
 ## Browser.Permission.Internals
 
@@ -667,7 +669,10 @@ Ipe.Browser.Permission.Internals — the low-level Permissions API port
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `subscribeFor` | `subscribeFor name toMsg` — the inbound subscription scoped to a SINGLE |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+| `inboundFor` | `inboundFor name` — the name-scoped variant of `inbound`. It first reads |
+| `nameToken` | The canonical wire token for each permission name — the single source of |
 
 ## Browser.Recorder
 
@@ -2347,7 +2352,7 @@ Ipe.Money — currency-typed Money on `Ipe.Decimal`.
 | `getRate` | Look up a registered rate (identity for from == to; missing → Err). |
 | `hasRate` | (no summary) |
 | `clearRates` | Drop every registered rate (test / admin). |
-| `convert` | Convert Money to a target currency using the registered rate. |
+| `convert` | Convert Money to a target currency using the registered rate, quantizing the rated amount to the target currency's minor units. |
 
 ## Net
 
@@ -2645,7 +2650,7 @@ Ipe.System -- process environment + args + termination
 | `unsetenv` | (no summary) |
 | `cwd` | (no summary) |
 | `getcwd` | Alias for `cwd` -- kept for backward compatibility. |
-| `loadEnv` | Load environment variables from a `.env`-formatted file at the |
+| `loadEnv` | Load environment variables from `./.env` (the `.env` file in the |
 | `exit` | Terminate the process with the given exit code.  Polymorphic |
 
 ## Task

@@ -62,6 +62,8 @@ pub enum Subsystem {
     Http,
     /// Observability: logging, tracing, telemetry export.
     Observability,
+    /// Regex matching input ceiling.
+    Regex,
     /// Compression (gzip / zstd decompression).
     Compression,
     /// Config-file loading.
@@ -94,6 +96,7 @@ impl Subsystem {
             Self::File => "File",
             Self::Http => "HTTP client",
             Self::Observability => "Observability",
+            Self::Regex => "Regex",
             Self::Compression => "Compression",
             Self::Config => "Config",
             Self::Runtime => "Runtime",
@@ -529,6 +532,17 @@ pub static ENV_VARS: &[EnvVar] = &[
                   preventing spreadsheet formula injection.",
         subsystem: Subsystem::Csv,
         class: Class::SecurityTunable,
+    },
+    // ── Regex ─────────────────────────────────────────────────────────────────
+    EnvVar {
+        name: "IPE_REGEX_MAX_INPUT_BYTES",
+        default: "16777216 (16 MiB)",
+        purpose: "Maximum subject (input) size in bytes that any `Ipe.Regex` \
+                  match/find/findAll/replace/split will scan. Past the ceiling the \
+                  operation returns its safe empty result, bounding untrusted-input \
+                  work and allocation.",
+        subsystem: Subsystem::Regex,
+        class: Class::Tunable,
     },
     // ── Database ──────────────────────────────────────────────────────────────
     EnvVar {

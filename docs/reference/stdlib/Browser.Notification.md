@@ -8,8 +8,11 @@ Ipe.Browser.Notification — show system notifications over `Ipe.Ffi.Js` ports.
 
 A first-party proof of the per-capability web mechanism spanning BOTH port
 directions: outbound `JsCmd`s (`requestPermission` / `notify`) request a
-notification operation, and an inbound `JsMsg` carries the permission outcome or
-a display acknowledgement. Both cross the same seal codec and fail-closed port
+notification operation, and an inbound frame carries a permission reply
+(`PermissionReply`, correlated to `requestPermission`) or a display
+acknowledgement (`JsMsg`, over the `outcomes` subscription). The two reply
+vocabularies are separate types so a display ack has no representation as a
+permission outcome. Both cross the same seal codec and fail-closed port
 discipline as every other port; there is no second transport.
 
 Importing this reserved `Ipe.Browser.<Api>` module discloses

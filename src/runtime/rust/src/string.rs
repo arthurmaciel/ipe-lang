@@ -401,51 +401,69 @@ pub fn string_from_list(chars: Vec<char>) -> String {
     chars.into_iter().collect()
 }
 
+/// True for an unquoted RFC 5321 local-part atom character: `ALPHA` / `DIGIT`
+/// and the atext specials `!#$%&'*+/=?^_`{|}~-`. The `.` separator is handled
+/// by the label walk, not here, so a bare `.` is not an atom character.
+fn is_local_atext(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "!#$%&'*+/=?^_`{|}~-".contains(c)
+}
+
+/// True when `part` is a dot-separated sequence of non-empty runs of
+/// characters satisfying `atom_char` — i.e. no leading dot, no trailing dot,
+/// and no empty label from a `..`. An empty `part` is rejected.
+fn is_dot_atom(part: &str, atom_char: impl Fn(char) -> bool) -> bool {
+    if part.is_empty() {
+        return false;
+    }
+    part.split('.')
+        .all(|label| !label.is_empty() && label.chars().all(&atom_char))
+}
+
+/// True when `label` is a legal RFC 5321 domain label: a non-empty run of
+/// `ALPHA` / `DIGIT` / `-` with neither a leading nor a trailing hyphen.
+fn is_domain_label(label: &str) -> bool {
+    !label.is_empty()
+        && !label.starts_with('-')
+        && !label.ends_with('-')
+        && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 /// `String.isEmail : String -> Bool`
-/// RFC 5322 syntactic check. Does NOT verify the mailbox exists.
+/// Syntactic check for an RFC 5321 dot-atom mailbox. Does NOT verify the
+/// mailbox exists.
 ///
-/// Structural validation rules:
-/// - exactly one "@" not at the start or end
-/// - local part non-empty
-/// - domain part non-empty and contains at least one "."
+/// Fail-closed: absent proof the address is a legal dot-atom mailbox it is
+/// rejected. Only bare `user@host` is accepted — no `Name <user@host>`
+/// wrapping, no quoted-string local part, no address-literal domain.
+///
+/// - exactly one `@`, splitting a non-empty local part from a non-empty domain
+/// - local part is an unquoted dot-atom: each `.`-separated label non-empty
+///   (so no leading/trailing/consecutive dot) and drawn from `ALPHA` / `DIGIT`
+///   plus `!#$%&'*+/=?^_`{|}~-`
+/// - domain is at least two dot-atom labels (so it carries a `.`); each label
+///   is `ALPHA` / `DIGIT` / `-` with no leading/trailing hyphen and non-empty
+///   (so no leading/trailing/consecutive dot)
 ///
 /// (No regex crate needed for this level of validation.)
 #[must_use]
 pub fn string_is_email(s: String) -> bool {
-    // Only bare "user@host" is accepted — no "Name <user@host>" wrapping.
     let s = s.trim();
-    if s.is_empty() || s.starts_with('<') || s.contains(' ') {
+    // Exactly one `@`: a missing or a second `@` is not a dot-atom mailbox.
+    let mut parts = s.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
         return false;
-    }
-    let mut parts = s.splitn(2, '@');
-    let local = match parts.next() {
-        Some(l) if !l.is_empty() => l,
-        _ => return false,
     };
-    let domain = match parts.next() {
-        Some(d) if !d.is_empty() => d,
-        _ => return false,
-    };
-    // Local part must not contain unquoted "@" again.
-    if domain.contains('@') {
+    if !is_dot_atom(local, is_local_atext) {
         return false;
     }
-    // Domain must have at least one dot and non-empty labels around it.
-    // `find` returns the byte index; `None` (no dot) maps to 0 so the
-    // `dot == 0` check below rejects it cleanly.
-    let dot = domain.find('.').unwrap_or(0);
-    let last_valid = domain.len().saturating_sub(1);
-    if dot == 0 || dot >= last_valid {
+    // A mailbox domain needs at least two labels so it carries a separating
+    // `.` (`user@example` is not a deliverable domain).
+    let mut labels = domain.split('.');
+    let has_two_labels = labels.by_ref().take(2).count() == 2;
+    if !has_two_labels {
         return false;
     }
-    // Disallow control characters (C0 range < 0x20, and DEL 0x7F).
-    if local.chars().any(|c| (c as u32) < 32 || c as u32 == 127) {
-        return false;
-    }
-    if domain.chars().any(|c| (c as u32) < 32 || c as u32 == 127) {
-        return false;
-    }
-    true
+    domain.split('.').all(is_domain_label)
 }
 
 // `String.isUrl` (`string_is_url`) is the sole `regex`-crate consumer outside the
@@ -961,6 +979,74 @@ mod tests {
     #[test]
     fn test_is_email_with_plus() {
         assert!(string_is_email("user+tag@example.com".into()));
+    }
+    #[test]
+    fn test_is_email_dot_atom_specials_accepted() {
+        // Every atext special in the local part is a legal dot-atom character.
+        assert!(string_is_email("a!#$%&'*+/=?^_`{|}~-b@example.com".into()));
+    }
+    #[test]
+    fn test_is_email_subdomain_accepted() {
+        assert!(string_is_email("user@mail.example.co.uk".into()));
+    }
+    #[test]
+    fn test_is_email_hyphen_in_label_accepted() {
+        // A hyphen inside (not leading/trailing) a domain label is legal.
+        assert!(string_is_email("user@my-host.example.com".into()));
+    }
+    #[test]
+    fn test_is_email_reject_comma_local() {
+        assert!(!string_is_email("a,b@example.com".into()));
+    }
+    #[test]
+    fn test_is_email_reject_semicolon_local() {
+        assert!(!string_is_email("a;b@example.com".into()));
+    }
+    #[test]
+    fn test_is_email_reject_quoted_local() {
+        assert!(!string_is_email("\"quoted\"@x.com".into()));
+    }
+    #[test]
+    fn test_is_email_reject_leading_dot_local() {
+        assert!(!string_is_email(".a@b.co".into()));
+    }
+    #[test]
+    fn test_is_email_reject_trailing_dot_local() {
+        assert!(!string_is_email("a.@b.co".into()));
+    }
+    #[test]
+    fn test_is_email_reject_double_dot_local() {
+        assert!(!string_is_email("a..b@b.co".into()));
+    }
+    #[test]
+    fn test_is_email_reject_leading_hyphen_label() {
+        assert!(!string_is_email("a@-b.co".into()));
+    }
+    #[test]
+    fn test_is_email_reject_trailing_hyphen_label() {
+        assert!(!string_is_email("a@b-.co".into()));
+    }
+    #[test]
+    fn test_is_email_reject_double_dot_domain() {
+        assert!(!string_is_email("foo@bar..com".into()));
+    }
+    #[test]
+    fn test_is_email_reject_trailing_dot_domain() {
+        assert!(!string_is_email("foo@bar.com.".into()));
+    }
+    #[test]
+    fn test_is_email_reject_leading_dot_domain() {
+        assert!(!string_is_email("foo@.bar.com".into()));
+    }
+    #[test]
+    fn test_is_email_reject_second_at() {
+        assert!(!string_is_email("a@b@c.com".into()));
+    }
+    #[test]
+    fn test_is_email_reject_control_char() {
+        // A C0 control (here CR) is outside atext — kept rejected so no
+        // SMTP-header-injection address slips the seal.
+        assert!(!string_is_email("a\rb@example.com".into()));
     }
 
     // string_pad_left

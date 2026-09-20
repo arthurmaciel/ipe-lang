@@ -101,10 +101,15 @@ pub fn time_unix_millis<E: 'static>(_: ()) -> IpeTask<E, i64> {
 /// sibling formatter in this module.
 #[must_use]
 pub fn time_time_string(ms: i64) -> String {
-    Utc.timestamp_opt(ms / 1000, 0)
-        .single()
-        .map(|dt| dt.format("%H:%M:%S").to_string())
-        .unwrap_or_default()
+    use chrono::{TimeZone, Utc};
+    // Millis-native construction (shared with every sibling formatter): dividing
+    // ms by 1000 truncates toward zero, which shifts a pre-epoch (negative) ms
+    // to the wrong second, so a sub-second-before-epoch instant would render the
+    // epoch second instead of the prior day's wall-clock time.
+    match Utc.timestamp_millis_opt(ms).single() {
+        Some(dt) => dt.format("%H:%M:%S").to_string(),
+        None => String::new(),
+    }
 }
 
 /// `Time.addMillis : Int -> Int -> Int` — pure integer addition.
@@ -631,6 +636,32 @@ mod time_string_tests {
         unsafe { std::env::set_var("TZ", "Asia/Tokyo") };
         assert_eq!(time_time_string(ms), "15:30:45");
         unsafe { std::env::remove_var("TZ") };
+    }
+
+    #[test]
+    fn time_string_epoch_is_midnight() {
+        assert_eq!(time_time_string(0), "00:00:00");
+    }
+
+    #[test]
+    fn time_string_positive_sub_second_remainder() {
+        // 500ms past 15:30:45 stays on the same second (no rounding up).
+        assert_eq!(time_time_string(1_615_735_845_500), "15:30:45");
+    }
+
+    #[test]
+    fn time_string_pre_epoch_sub_second_remainder() {
+        // -500ms is 0.5s BEFORE the epoch: the correct UTC wall-clock time is
+        // 23:59:59 of the prior day, not the epoch second 00:00:00. Truncation
+        // toward zero (ms / 1000 == 0) would wrongly render "00:00:00"; the
+        // millis-native construction floors correctly.
+        assert_eq!(time_time_string(-500), "23:59:59");
+    }
+
+    #[test]
+    fn time_string_pre_epoch_whole_second() {
+        // -1000ms is exactly one second before the epoch: 23:59:59.
+        assert_eq!(time_time_string(-1000), "23:59:59");
     }
 }
 
