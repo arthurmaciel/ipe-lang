@@ -1421,4 +1421,190 @@ mod tests {
             );
         }
     }
+
+    use proptest::prelude::*;
+    use proptest::test_runner::FileFailurePersistence;
+
+    // Names the two mirrors must agree on function-wise: the kernel allowlist
+    // (`ipe_kernels`) plus a few off-list names, so an `ALLOWED_FUNCTIONS` vs
+    // `ALLOWED_VALUE_FUNCTIONS` drift is a generated (not merely sampled)
+    // divergence. Off-list names (`expression`, `image-set`, `-moz-binding`)
+    // probe the reject side.
+    fn css_function_name() -> impl Strategy<Value = String> {
+        prop_oneof![
+            // On-list: drawn from the kernel's own allowlist so a runtime-mirror
+            // allowlist drift is caught.
+            prop::sample::select(
+                &[
+                    "attr",
+                    "blur",
+                    "calc",
+                    "clamp",
+                    "color-mix",
+                    "conic-gradient",
+                    "counter",
+                    "cubic-bezier",
+                    "drop-shadow",
+                    "env",
+                    "format",
+                    "hsl",
+                    "hsla",
+                    "linear-gradient",
+                    "local",
+                    "matrix",
+                    "max",
+                    "min",
+                    "minmax",
+                    "radial-gradient",
+                    "repeat",
+                    "repeating-linear-gradient",
+                    "rgb",
+                    "rgba",
+                    "rotate",
+                    "scale",
+                    "steps",
+                    "translate",
+                    "translatex",
+                    "url",
+                    "var",
+                ][..]
+            )
+            .prop_map(str::to_owned),
+            // Off-list: must be rejected by both mirrors.
+            prop::sample::select(
+                &["expression", "image-set", "-moz-binding", "behavior", "foo"][..]
+            )
+            .prop_map(str::to_owned),
+            // Arbitrary idents, to probe the allowlist edge with unlisted names.
+            "[a-z][a-z0-9-]{0,10}",
+        ]
+    }
+
+    // A leaf CSS token: ident, number+unit, hex colour, quoted string with
+    // occasional embedded metacharacters, the `!important` flag, or a `url(...)`
+    // whose arg spans `is_url_path_byte` members AND excluded bytes (`:`, `//`,
+    // quote, ws) to probe the scheme gate. Hex-escapes (`\65 `, `\3a`) exercise
+    // the raw-vs-`css_unescape` double-parse divergence.
+    fn css_leaf() -> impl Strategy<Value = String> {
+        prop_oneof![
+            "[a-z][a-z0-9-]{0,12}",
+            r"[-+]?[0-9]{1,4}(\.[0-9]{1,3})?(px|%|deg|rem|fr|vw|em)?",
+            "#[0-9a-fA-F]{3}",
+            "#[0-9a-fA-F]{6}",
+            "#[0-9a-fA-F]{8}",
+            r#""[a-z0-9 \\"()<>;]{0,10}""#,
+            Just("!important".to_owned()),
+            r"\\(65|75|3a|3A) ?[a-z]{0,6}",
+            // url(...) arg pool: path bytes + scheme-gate probes.
+            prop::sample::select(
+                &[
+                    "url(x.png)",
+                    "url(/a/b.woff2)",
+                    "url(javascript:alert(1))",
+                    "url(data:text/html,x)",
+                    "url(//evil.example/x)",
+                    "url( x.png)",
+                    "url(\"x.png\")",
+                    "url(a:b)",
+                ][..]
+            )
+            .prop_map(str::to_owned),
+        ]
+    }
+
+    // Recursive CSS value straddling `MAX_VALUE_DEPTH` (nesting 0..35) with the
+    // grammar's separators, so the two mirrors are compared on and just past the
+    // depth ceiling and the allowlist boundary — where hand-synced parsers drift.
+    fn css_value_structured() -> impl Strategy<Value = String> {
+        css_leaf().prop_recursive(35, 256, 4, |inner| {
+            prop_oneof![
+                // function wrapping an inner value
+                (css_function_name(), inner.clone()).prop_map(|(f, arg)| format!("{f}({arg})")),
+                // token sequence with a grammar separator
+                (
+                    inner.clone(),
+                    prop::sample::select(&[" ", ",", "/", "%"][..]),
+                    inner
+                )
+                    .prop_map(|(a, sep, b)| format!("{a}{sep}{b}")),
+            ]
+        })
+    }
+
+    // Adversarial byte / injection-string strategy: reaches surfaces the
+    // structured grammar never lands on — control bytes, unbalanced parens,
+    // empty/whitespace, non-ASCII past `0x80`, and the injection sink substrings.
+    fn css_value_adversarial() -> impl Strategy<Value = String> {
+        prop_oneof![
+            prop::collection::vec(any::<u8>(), 0..64)
+                .prop_filter_map("valid utf8", |b| String::from_utf8(b).ok()),
+            prop::collection::vec(
+                prop::sample::select(
+                    &[
+                        "<",
+                        ">",
+                        "{",
+                        "}",
+                        ";",
+                        ":",
+                        "(",
+                        ")",
+                        "\"",
+                        "'",
+                        "/",
+                        "%",
+                        "!",
+                        "\\",
+                        "@",
+                        "#",
+                        " ",
+                        "javascript:",
+                        "data:",
+                        "expression",
+                        "//",
+                        "</style>",
+                        "@import",
+                        "url(",
+                        "attr(",
+                        "\\65 ",
+                    ][..]
+                ),
+                0..12
+            )
+            .prop_map(|parts| parts.concat()),
+        ]
+    }
+
+    proptest! {
+        // Pins the SSOT equality the two hand-maintained CSS-value parsers promise:
+        // the render-time `SafeCssValue::parse` accepts a value IFF the compile-time
+        // `ipe_kernels::css_value_is_safe` does — over the whole grammar plus an
+        // adversarial byte surface, not the 20 fixed corpus points. Any drift in
+        // either allowlist, either `MAX_VALUE_DEPTH`, `css_unescape`, an `is_*_byte`
+        // set, or a control-flow edge surfaces as a minimal shrunk counterexample.
+        // A false-accept in the runtime mirror is a live XSS/exfiltration hole.
+        #![proptest_config(ProptestConfig {
+            cases: 512,
+            failure_persistence: Some(Box::new(FileFailurePersistence::WithSource(
+                "proptest-regressions",
+            ))),
+            ..ProptestConfig::default()
+        })]
+
+        #[test]
+        fn value_gate_mirrors_agree_over_generated_surface(
+            v in prop_oneof![
+                3 => css_value_structured(),
+                1 => css_value_adversarial(),
+            ],
+        ) {
+            prop_assert_eq!(
+                SafeCssValue::parse(&v).is_some(),
+                ipe_kernels::css_value_is_safe(&v),
+                "runtime SafeCssValue and shared css_value_is_safe drift on {:?} \
+                 — the hoist gate and the render gate must be one policy",
+                v
+            );
+        }
+    }
 }
