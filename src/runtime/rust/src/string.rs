@@ -454,24 +454,30 @@ pub fn string_is_email(s: String) -> bool {
 // crate. `String.isUrl` therefore reaches the `regex_kernel` module and selects
 // the `regex` feature, exactly like an `Ipe.Regex` kernel.
 
+/// Ceiling on any pad target width. `n` is caller-controlled; an unbounded
+/// value would OOM on the fill loop, so every pad builder refuses past this.
+const MAX_PAD_WIDTH: i64 = 16_000_000;
+
+/// Bounded number of pad characters to add to reach target width `n` from an
+/// `have`-codepoint string. `None` when no padding is needed (`n <= have`) or
+/// when `n` exceeds `MAX_PAD_WIDTH` — the caller returns the string unchanged,
+/// so no pad builder can exhaust the allocator on caller-controlled `n`.
+fn bounded_pad_count(n: i64, have: i64) -> Option<usize> {
+    if n <= have || n > MAX_PAD_WIDTH {
+        return None;
+    }
+    Some((n - have) as usize)
+}
+
 /// `String.padLeft : Int -> Char -> String -> String`
 /// Pads `s` on the left with `ch` until `s` is at least `n` Unicode codepoints
 /// wide. Returns `s` unchanged when already `n` or more codepoints wide.
 #[must_use]
 pub fn string_pad_left(n: i64, ch: char, s: String) -> String {
-    if n <= 0 {
-        return s;
-    }
     let rune_count = s.chars().count() as i64;
-    if rune_count >= n {
+    let Some(pad_count) = bounded_pad_count(n, rune_count) else {
         return s;
-    }
-    // Bound the pad width: n is caller-controlled; a huge n would OOM on
-    // with_capacity + the push loop. Cap the padded width at 16M chars.
-    if n > 16_000_000 {
-        return s;
-    }
-    let pad_count = (n - rune_count) as usize;
+    };
     let mut out = String::with_capacity(s.len() + pad_count);
     for _ in 0..pad_count {
         out.push(ch);
@@ -485,19 +491,10 @@ pub fn string_pad_left(n: i64, ch: char, s: String) -> String {
 /// wide. Returns `s` unchanged when already `n` or more codepoints wide.
 #[must_use]
 pub fn string_pad_right(n: i64, ch: char, s: String) -> String {
-    if n <= 0 {
-        return s;
-    }
     let rune_count = s.chars().count() as i64;
-    if rune_count >= n {
+    let Some(pad_count) = bounded_pad_count(n, rune_count) else {
         return s;
-    }
-    // Bound the pad width: n is caller-controlled; a huge n would OOM on
-    // with_capacity + the push loop. Cap the padded width at 16M chars.
-    if n > 16_000_000 {
-        return s;
-    }
-    let pad_count = (n - rune_count) as usize;
+    };
     let mut out = String::with_capacity(s.len() + pad_count);
     out.push_str(&s);
     for _ in 0..pad_count {
@@ -539,13 +536,12 @@ pub fn string_uncons(s: String) -> IpeMaybe<(char, String)> {
 #[must_use]
 pub fn string_pad(n: i64, ch: char, s: String) -> String {
     let len = s.chars().count() as i64;
-    if n <= len {
+    let Some(total) = bounded_pad_count(n, len) else {
         return s;
-    }
-    let total = (n - len) as usize;
+    };
     let left = total / 2;
     let right = total - left;
-    let mut out = String::new();
+    let mut out = String::with_capacity(s.len() + total);
     for _ in 0..left {
         out.push(ch);
     }
@@ -1192,6 +1188,33 @@ mod tests {
         assert_eq!(string_pad(5, ' ', "abc".into()), " abc ");
         assert_eq!(string_pad(4, '.', "ab".into()), ".ab.");
         assert_eq!(string_pad(2, '.', "abc".into()), "abc"); // n<=len → unchanged
+    }
+
+    // Refusal: a caller-controlled width past MAX_PAD_WIDTH must return the
+    // string unchanged, never attempt the unbounded fill loop that would OOM.
+    #[test]
+    fn pad_width_past_ceiling_returns_unchanged() {
+        assert_eq!(string_pad(9_000_000_000_000, ' ', "x".into()), "x");
+        assert_eq!(string_pad(i64::MAX, ' ', "x".into()), "x");
+    }
+    #[test]
+    fn pad_left_width_past_ceiling_returns_unchanged() {
+        assert_eq!(string_pad_left(9_000_000_000_000, '0', "x".into()), "x");
+        assert_eq!(string_pad_left(i64::MAX, '0', "x".into()), "x");
+    }
+    #[test]
+    fn pad_right_width_past_ceiling_returns_unchanged() {
+        assert_eq!(string_pad_right(9_000_000_000_000, '-', "x".into()), "x");
+        assert_eq!(string_pad_right(i64::MAX, '-', "x".into()), "x");
+    }
+    // The ceiling itself is the last width that still pads.
+    #[test]
+    fn pad_at_exact_ceiling_still_pads() {
+        assert_eq!(
+            bounded_pad_count(MAX_PAD_WIDTH, 0),
+            Some(MAX_PAD_WIDTH as usize)
+        );
+        assert_eq!(bounded_pad_count(MAX_PAD_WIDTH + 1, 0), None);
     }
 
     #[test]
