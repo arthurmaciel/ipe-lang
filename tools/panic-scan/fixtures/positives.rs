@@ -33,6 +33,15 @@ fn f26() {
     unwrap(); //@HIT
 }
 
+// Fully-qualified / UFCS panicking calls: the same methods reached through a
+// type path have no leading dot (`Ident :: method (`) and MUST be flagged just
+// like their receiver-syntax forms.
+fn f31() { let _ = Result::unwrap(r); } //@HIT
+fn f32() { let _ = Option::expect(o, "m"); } //@HIT
+fn f33() { let _ = Result::unwrap_err(r); } //@HIT
+fn f34() { let _ = std::result::Result::unwrap(r); } //@HIT
+fn f35() { let _ = Result::unwrap::<T>(r); } //@HIT
+
 // A cfg whose predicate does NOT guarantee test-only compilation is production
 // code and MUST still be flagged — the test exemption is precise, not a hole.
 

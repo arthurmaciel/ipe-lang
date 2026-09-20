@@ -277,6 +277,32 @@ fn scan_stream(ts: TokenStream, hits: &mut Vec<Hit>) {
                 }
             }
 
+            // Fully-qualified / UFCS call: `… :: <method> ( … )` — the same
+            // panicking method reached through a type path (`Result::unwrap(x)`,
+            // `Option::expect(o, m)`, `std::result::Result::unwrap(x)`) rather
+            // than receiver syntax. Keyed on the trailing `:: <method> (` so any
+            // path depth is covered; the two-colon shape distinguishes it from a
+            // method call (no leading `::`) and never double-counts `x.unwrap()`.
+            TokenTree::Punct(c1) if c1.as_char() == ':' => {
+                if let (Some(TokenTree::Punct(c2)), Some(TokenTree::Ident(id))) =
+                    (toks.get(i + 1), toks.get(i + 2))
+                {
+                    if c2.as_char() == ':' && METHODS.contains(&id.to_string().as_str()) {
+                        let is_call = match toks.get(i + 3) {
+                            Some(TokenTree::Group(g)) => g.delimiter() == Delimiter::Parenthesis,
+                            Some(TokenTree::Punct(p)) => p.as_char() == ':',
+                            _ => false,
+                        };
+                        if is_call {
+                            hits.push(Hit {
+                                line: id.span().start().line,
+                                tok: format!("::{id}()"),
+                            });
+                        }
+                    }
+                }
+            }
+
             _ => {}
         }
 

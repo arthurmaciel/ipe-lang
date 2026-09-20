@@ -17,6 +17,9 @@ fn n11() { assert_impl_all!(T: Send); }       // a different macro, compile-time
 fn n12() { let r = r#"raw .unwrap() panic!()"#; } // raw string literal
 fn n13() { let _ = value.expected; }          // field named 'expected'
 fn n14() { let _ = o.unwrap_none(); }         // not in the banned set
+fn n18() { let _ = Result::unwrap_or(r, 0); } // UFCS total combinator, no panic
+fn n19() { let _ = Vec::unwrap_none(v); }     // UFCS, not in the banned set
+fn n20() { let _ = module::process(x); }      // trailing ident not a method
 
 // Sanctioned sites: a real construct carrying the audit marker on its own line,
 // or on the line directly above it, is a reviewed ledger exception — no hit.
