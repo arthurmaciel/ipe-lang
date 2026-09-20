@@ -651,7 +651,7 @@ Ipe.Browser.Permission — query and watch browser permission state via
 | `PermissionName` | Re-export of `Internals.PermissionName` — the closed set of W3C Permissions |
 | `query` | `query name` — read the current state of a single browser permission ONCE, |
 | `watch` | `watch name` — begin a CONTINUOUS state-change stream for a single |
-| `changes` | `changes name toMsg` — the inbound subscription for state changes on `name`, |
+| `changes` | `changes name toMsg` — the inbound subscription for state changes on |
 
 ## Browser.Permission.Internals
 
@@ -667,7 +667,10 @@ Ipe.Browser.Permission.Internals — the low-level Permissions API port
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
 | `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
+| `subscribeFor` | `subscribeFor name toMsg` — the inbound subscription scoped to a SINGLE |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok` |
+| `inboundFor` | `inboundFor name` — the name-scoped variant of `inbound`. It first reads |
+| `nameToken` | The canonical wire token for each permission name — the single source of |
 
 ## Browser.Recorder
 

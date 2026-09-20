@@ -73,6 +73,21 @@ subscribe : (JsMsg -> msg) -> Sub.Sub msg
 decoder. `inbound` IS the security gate; a malformed / mismatched frame is
 dropped whole.
 
+## `subscribeFor`
+
+```ipe
+subscribeFor : PermissionName -> (JsMsg -> msg) -> Sub.Sub msg
+```
+
+`subscribeFor name toMsg` — the inbound subscription scoped to a SINGLE
+permission. The gate is `inboundFor name`: a frame is decoded only when its
+`name` field matches `name`'s canonical token; a frame for any OTHER
+permission fails the decode closed and is dropped whole, exactly as a
+malformed frame is. The subscription therefore delivers ONLY `name`'s change
+frames — the per-name contract the signature advertises, enforced at the
+trust boundary (parse-don't-validate), never by a downstream comparison a
+caller could omit.
+
 ## `inbound`
 
 ```ipe
@@ -83,4 +98,27 @@ The total, fail-closed decoder for the inbound `JsMsg`. It reads the `ok`
 flag: a true flag decodes a `state` string into the closed state vocabulary;
 a false flag decodes the closed `error` vocabulary. An unrecognised token
 fails the decode closed (the frame is dropped).
+
+## `inboundFor`
+
+```ipe
+inboundFor : PermissionName -> Decode.Decoder JsMsg
+```
+
+`inboundFor name` — the name-scoped variant of `inbound`. It first reads
+the frame's `name` field and requires it to equal `name`'s canonical token;
+a mismatch fails the decode closed, so a change frame for a DIFFERENT
+permission is dropped rather than folded into this subscription. On a match
+the frame decodes exactly as `inbound` does.
+
+## `nameToken`
+
+```ipe
+nameToken : PermissionName -> String
+```
+
+The canonical wire token for each permission name — the single source of
+truth shared by the outbound request and the inbound frame's `name` field.
+These are the W3C Permissions API `PermissionDescriptor.name` strings, so the
+served first-party JS echoes the same token it received.
 
