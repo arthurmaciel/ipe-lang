@@ -2644,7 +2644,7 @@ Ipe.System -- process environment + args + termination
 | `unsetenv` | (no summary) |
 | `cwd` | (no summary) |
 | `getcwd` | Alias for `cwd` -- kept for backward compatibility. |
-| `loadEnv` | Load environment variables from a `.env`-formatted file at the |
+| `loadEnv` | Load environment variables from `./.env` (the `.env` file in the |
 | `exit` | Terminate the process with the given exit code.  Polymorphic |
 
 ## Task
