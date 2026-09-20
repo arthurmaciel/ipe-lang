@@ -403,6 +403,47 @@ fn machine_success_quadrants_route_through_the_ssot() {
     }
 }
 
+/// A machine-mode operational failure that is NOT a compile diagnostic (here an
+/// I/O error: `type-check --json` on a path that does not exist) must render the
+/// shared machine-error envelope on stderr — never the human `Ipê lang` banner
+/// leaking into a `--json` invocation. This is the disclosure boundary the
+/// machine-output SSOT closes: before it, any non-`Pipeline` error under a
+/// machine format fell through to the human banner path. stdout stays clean, the
+/// stream carries no ANSI, and the envelope names the error schema, status, and
+/// command without exposing a raw internal string.
+#[test]
+fn machine_mode_operational_error_routes_through_the_error_envelope() {
+    let r = run(&["type-check", "--json", "/does-not-exist/nope.ipe"]);
+    assert!(!r.ok, "a missing file under --json must exit non-zero");
+    assert!(
+        r.stdout.is_empty(),
+        "a machine failure must write nothing to stdout, got: {:?}",
+        r.stdout
+    );
+    // The human error banner (its version lead-in) must never reach the machine
+    // stream — that is the exact leak the SSOT prevents.
+    assert!(
+        !r.stderr.contains("Ipê lang"),
+        "the human banner must never leak into a --json stream: {:?}",
+        r.stderr
+    );
+    assert!(
+        !r.stdout.contains('\x1b') && !r.stderr.contains('\x1b'),
+        "the machine-error stream must carry no ANSI under NO_COLOR",
+    );
+    let line = r.stderr.trim();
+    assert!(
+        is_well_formed_json(line),
+        "the machine error must be well-formed JSON: {line:?}"
+    );
+    assert!(
+        line.contains("\"schema\":\"ipe.cli.error/1\"")
+            && line.contains("\"status\":\"error\"")
+            && line.contains("\"command\":\"type-check\""),
+        "the machine error must be the shared envelope with schema/status/command: {line:?}"
+    );
+}
+
 /// The human-success quadrant for a self-contained command (`type-check` on a
 /// well-typed program): the default (no machine flag) output is framed (opens
 /// with a blank line) and guttered (every non-blank line indented two spaces) —

@@ -2,7 +2,7 @@ use super::{
     BuildOptions, BundleHost, BundleProfile, CliError, RuntimeContext, apply_fixes_cmd,
     attribute_canon_errors, attribute_post_link_error, bluegreen_enabled,
     build_project_with_options, build_with_sibling_discovery_with_options, bundle_delivery,
-    collect_entry_and_siblings, create_source_root, emit_permissions, emit_pipeline_json,
+    collect_entry_and_siblings, create_source_root, emit_machine_error, emit_permissions,
     find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map, io_err,
     render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
     runtime_dep_from_env, single_file_cargo_name_from_env,
@@ -539,10 +539,10 @@ pub fn run_build(rest: &[String]) -> Result<(), CliError> {
         .unwrap_or_default();
     let result = run_build_body(rest);
     match result {
-        Err(e) => Err(if format == cli_args::OutputFormat::Json {
-            emit_pipeline_json(e)
-        } else {
+        Err(e) => Err(if format == cli_args::OutputFormat::Human {
             e
+        } else {
+            emit_machine_error(format, "build", &e)
         }),
         Ok(success) => {
             if format == cli_args::OutputFormat::Json {
@@ -2170,10 +2170,10 @@ pub fn run_run(rest: &[String]) -> Result<(), CliError> {
         .map(|a| a.format)
         .unwrap_or_default();
     run_run_body(rest).map_err(|e| {
-        if format == cli_args::OutputFormat::Json {
-            emit_pipeline_json(e)
-        } else {
+        if format == cli_args::OutputFormat::Human {
             e
+        } else {
+            emit_machine_error(format, "run", &e)
         }
     })
 }
