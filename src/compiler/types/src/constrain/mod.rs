@@ -130,7 +130,7 @@ pub struct Builder<'a> {
     pub regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
     /// The type EXPECTED at each source region by its surrounding context,
     /// keyed by `(home_module_path, Span)` — the type-directed-completion
-    /// sidecar (ADR 0034 / LSP plan §6). Where [`Self::regions`] records the
+    /// sidecar (ADR 0007 / LSP plan §6). Where [`Self::regions`] records the
     /// type an expression WAS inferred to have, this records the type its
     /// enclosing context PUSHES DOWN onto it: a `Call` argument's declared
     /// parameter slot, a typed def body's annotation return, an `if` branch's
@@ -254,7 +254,7 @@ pub struct Builder<'a> {
     /// placeholder here, discharged post-solve by `promote_untyped_boundaries`
     /// against the source binding's *generalized* scheme — see the "Boundary
     /// Scheme Promotion" design at
-    /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
+    /// `docs/adr/0001-language-semantics-and-types.md`.
     pub pending_instantiations: Vec<PendingInstantiation>,
     /// Per-kernel memo of [`Builder::resolve_scheme`]. A kernel's scheme is a
     /// pure function of the interned built-in names (fixed for the builder's

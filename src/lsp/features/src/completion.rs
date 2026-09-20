@@ -7,7 +7,7 @@
 //! type-check still yields completion items — the provider degrades gracefully
 //! to kind-only, scope-only items rather than returning nothing.
 //!
-//! ## Type-directed ranking (ADR 0034 / LSP plan §6)
+//! ## Type-directed ranking (ADR 0007 / LSP plan §6)
 //!
 //! When the cursor sits in a position with a contextual expected type (a call
 //! argument, a typed body, an `if`/`case` branch, a list element — see

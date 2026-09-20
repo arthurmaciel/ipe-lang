@@ -687,7 +687,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 // wasm32 browser substitute — `fetch` (Open Decision 1, resolved)
 // ---------------------------------------------------------------------------
 //
-// `docs/adr/0042-wasm-client-target.md`'s Open Decision 1 asks to settle
+// `docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md`'s Open Decision 1 asks to settle
 // reqwest-wasm vs raw `web-sys` fetch against the actual `http_client` kernel
 // code. Resolved to raw `web-sys` fetch:
 //

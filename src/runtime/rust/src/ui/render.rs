@@ -208,7 +208,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 // drop on failure, same posture as `AttrStyle` /
                 // `AttrBgGradient` below. Legit font stacks (commas, quotes,
                 // spaces) pass untouched. See
-                // `docs/adr/0005-ui-html-render-invariants.md §2`.
+                // `docs/adr/0003-security-render-and-data-access-invariants.md §2`.
                 if let Some(v) = SafeCssValue::parse(f) {
                     decl!("font-family:{}", v.as_str());
                 }

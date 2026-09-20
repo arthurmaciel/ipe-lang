@@ -344,7 +344,7 @@ impl JailForTarget {
 /// Whether a capability's runtime effects Ipê CANNOT contain for the given
 /// target — decided PER AXIS against the jail's confined set.
 ///
-/// The hand-off (ADR 0038): a runtime-enforced axis IN the target's confined set
+/// The hand-off (ADR 0004): a runtime-enforced axis IN the target's confined set
 /// is *contained* (an undeclared syscall fails closed at the OS boundary), so it
 /// is admissible. An axis NOT in the confined set has no jail confining it, so it
 /// is still unenforceable and refused — the honest per-target, per-axis posture.
@@ -859,7 +859,7 @@ impl std::fmt::Display for RefuseReason {
 /// Reconcile a wrapper's declared capability set against the scan of its source,
 /// and decide admissibility **per axis against the target's confined set**.
 ///
-/// The hand-off (ADR 0038): the refuse-until-jail posture is lifted to
+/// The hand-off (ADR 0004): the refuse-until-jail posture is lifted to
 /// admit-and-isolate on exactly the axes the target's jail confines. Each check
 /// is per axis against [`JailForTarget::confined`]:
 ///

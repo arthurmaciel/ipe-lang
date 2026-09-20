@@ -6,7 +6,7 @@
 //! out-of-repo original they mirror; embedding them keeps the build portable
 //! and the toolchain hermetic.
 //!
-//! `Ipe.Basics` is the canonical implicit module (ADR 0047): its Tier-A surface
+//! `Ipe.Basics` is the canonical implicit module (ADR 0001): its Tier-A surface
 //! is auto-imported into every module. There is no `Ipe.Prelude` module — the
 //! old value-flooding alias is removed, so `import Ipe.Prelude` does not resolve.
 //! The source is ordinary Ipê: the same parser that reads user code reads it (the

@@ -6,7 +6,7 @@
 //! author's word" into "observed under confinement and reconciled": it builds
 //! and exercises the package's native code inside a jail scoped to *exactly* the
 //! declared capability set, then reconciles observed-vs-declared, fail-closed on
-//! every mismatch (ADR 0046).
+//! every mismatch (ADR 0004).
 //!
 //! ## The observation is by denial, not by tracing
 //!
@@ -85,7 +85,7 @@ use crate::scratch::ScratchDir;
 /// `native_tier2_on_platform` there refuses to certify before this is ever used
 /// as an admit label, so it can never appear on a passing line.
 ///
-/// Every unwired platform is a refuse-to-certify (ADR 0046) — never claimed in
+/// Every unwired platform is a refuse-to-certify (ADR 0004) — never claimed in
 /// the honest surface, never counted as vouching.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub const CERTIFIED_PLATFORM: &str = "linux-x64";
@@ -201,7 +201,7 @@ pub fn is_native_bearing(declared: &BTreeSet<Capability>, has_rust_deps: bool) -
 
 /// The wrapper-owned payload for one jailed probe run.
 ///
-/// Structurally enforces the child-of-wrapper rule (ADR 0046): the probe wrapper
+/// Structurally enforces the child-of-wrapper rule (ADR 0004): the probe wrapper
 /// script we author owns the per-axis exit-code contract, and the untrusted
 /// build command is only ever appended AFTER it, as a strictly subordinate tail
 /// the wrapper runs as its child. A denial in the untrusted build surfaces as
@@ -371,7 +371,7 @@ pub trait ProbeRunner {
 /// The static wrapper scan's verdict on whether an axis is *reachable* in the
 /// package's author Rust — the laundering-path cross-check for declared-but-unused.
 ///
-/// (ADR 0046.) Abstracted so the reconciler stays pure and testable.
+/// (ADR 0004.) Abstracted so the reconciler stays pure and testable.
 pub trait StaticReachability {
     /// Whether the static scan proposes that the wrapper reaches `axis`. A
     /// declared-but-unused reject fires only when this is `false` AND the tighten
@@ -385,7 +385,7 @@ pub trait StaticReachability {
 ///
 /// Uses the SAME `profile_from_capabilities` the runtime jail uses — so what
 /// Tier-2 confines a build to and what the shipped artifact is confined to at run
-/// time cannot drift (ADR 0046).
+/// time cannot drift (ADR 0004).
 ///
 /// `subprocess` is force-granted on top of the declared set: the probe wrapper
 /// forks a helper (to open a socket / attempt an out-of-scratch write), and that
@@ -438,7 +438,7 @@ fn tightened_profile(
 }
 
 /// Reconcile a native package's observed behaviour against its declared set,
-/// fail-closed on the full §2.3 matrix (ADR 0046).
+/// fail-closed on the full §2.3 matrix (ADR 0004).
 ///
 /// Pure over the two abstracted observers so the whole matrix is unit-testable
 /// without a real jail.
@@ -711,7 +711,7 @@ fn collect_bindings(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CliError> 
     Ok(())
 }
 
-/// Run Tier-2 native enforcement over an already-built package (ADR 0046).
+/// Run Tier-2 native enforcement over an already-built package (ADR 0004).
 ///
 /// A pure Ipê package (not native-bearing) returns [`Tier2Outcome::SkippedPureIpe`]
 /// — Tier-1 already proved it exactly.
@@ -1016,7 +1016,7 @@ fn native_tier2_on_platform(audit: &NativeAudit) -> Result<Tier2Outcome, CliErro
 
 /// Off every wired platform Tier-2 NEVER constructs `Certified`: it rejects
 /// fail-closed (an unwired host cannot confine the build, so it cannot vouch for
-/// the native surface). Only the CI matrix on a wired platform admits (ADR 0046).
+/// the native surface). Only the CI matrix on a wired platform admits (ADR 0004).
 #[cfg(not(any(
     all(
         target_os = "linux",

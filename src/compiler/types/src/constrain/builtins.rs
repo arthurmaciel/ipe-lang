@@ -68,7 +68,7 @@ pub struct Builtins {
     pub ed_custom: Symbol,
     /// `PanicInfo` / `TypeInfo` / `ErrorInfo` — NOMINAL type-constructor
     /// symbols (SEAL fix, see
-    /// `docs/adr/0017-error-payload-nominal-identity.md`). The three payload
+    /// `docs/adr/0001-language-semantics-and-types.md`). The three payload
     /// record types are opaque nominal Cons (like the server `Request`), NOT
     /// structural records: a bare record literal must not unify with them —
     /// the runtime backs them with concrete structs (`IpePanicInfo` /

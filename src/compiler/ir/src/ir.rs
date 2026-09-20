@@ -1193,7 +1193,7 @@ pub enum IrType {
     ///
     /// Constructed by `Ws.defaultCfg` and threaded through the `Ws.with*`
     /// builder chain; consumed by `Ws.upgrade`.  Phantom `msg` type parameter
-    /// dropped (D2 — see docs/adr/0023-websocket-server-kernel-only-typed-handles.md).
+    /// dropped (D2 — see docs/adr/0003-security-render-and-data-access-invariants.md).
     WebSocketServerCfg,
     // ── Ipe.Ui / Ipe.Html parametric types ──────────────────────────────
     /// A parametric `Ipe.Ui` or `Ipe.Html` type — one that carries a message type
@@ -1366,7 +1366,7 @@ pub enum IrType {
     /// The built-in NOMINAL `ErrorInfo` type — `Error`'s second constructor
     /// argument, `{ message : String, details : Maybe ErrorDetails }` at the
     /// field level (SEAL fix — see `docs/architecture/
-    /// docs/adr/0017-error-payload-nominal-identity.md`).
+    /// docs/adr/0001-language-semantics-and-types.md`).
     ///
     /// Renders as `ipe_runtime::error::IpeErrorInfo`. NOT a structural
     /// record: a bare record literal cannot construct it (the type checker
@@ -1412,7 +1412,7 @@ pub enum IrType {
     /// never round-trip through a session store or any other serialisation
     /// path (this is ALSO the WASM hydration-island containment predicate a
     /// future `HydrationState` field-type gate consults, per
-    /// `docs/adr/0042-wasm-client-target.md` §Q6 — nothing to build yet, the
+    /// `docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md` §Q6 — nothing to build yet, the
     /// target does not exist). `Debug` and the Ipê-facing `IpeStringify` (the
     /// trait backing `toString` / interpolation / `Log.*With`) are BOTH
     /// hand-written on the runtime type to ALWAYS render a fixed
@@ -2875,7 +2875,7 @@ pub enum Expr {
     /// textual heuristic, whether the read needs a `.clone()` (a heap-backed
     /// field) or can skip it (a Rust-`Copy` scalar) — see AUD-09's
     /// type-directed Copy-elision,
-    /// `docs/adr/0011-emitter-clone-borrow-discipline.md` §3.
+    /// `docs/adr/0002-codegen-soundness-and-the-seal.md` §3.
     /// When the lowerer cannot resolve a concrete field type (a still-generic
     /// field inside a polymorphic body), it falls back to
     /// [`IrType::Generic`], which the backend classifies as non-`Copy` and
@@ -3401,7 +3401,7 @@ pub fn is_irrefutable(pat: &Pat) -> bool {
 /// position (IPE-L0128) rather than let it reach the backend, where
 /// honoring it soundly would require matching the scrutinee by reference
 /// throughout — a materially larger redesign. See
-/// `docs/adr/0011-emitter-clone-borrow-discipline.md` §1.
+/// `docs/adr/0002-codegen-soundness-and-the-seal.md` §1.
 #[must_use]
 pub fn is_dispatch_free(pat: &Pat) -> bool {
     match pat {

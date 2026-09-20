@@ -1,5 +1,5 @@
 //! E2E golden for `Ui.mediaQuery` (see
-//! `docs/adr/0019-ui-mediaquery-safe-boundary.md`). Also exercises
+//! `docs/adr/0003-security-render-and-data-access-invariants.md`). Also exercises
 //! `Ui.breakpoint`, which delegates to the same marker-emitting mechanism
 //! rather than an eager-passthrough stub.
 //!

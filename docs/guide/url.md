@@ -162,5 +162,5 @@ caller can reach.
 - **Concepts:** [The parse-don't-validate idiom](../idioms/parse-dont-validate.md)
   — a `Url` is the boundary where an untyped string becomes a typed, scheme-vetted
   value no downstream code re-checks. The [live/HTTP security invariants
-  ADR](../adr/0004-live-http-web-security-invariants.md) — where URL validation
+  ADR](../adr/0003-security-render-and-data-access-invariants.md) — where URL validation
   sits in the request path.

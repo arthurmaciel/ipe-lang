@@ -12,7 +12,7 @@
 //! that's polling the returned future. Running the work INLINE on the calling
 //! thread before the future is polled would block every other task scheduled
 //! on that worker for the call's full duration. See
-//! `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.
+//! `docs/adr/0003-security-render-and-data-access-invariants.md` §2.
 //!
 //! # Decompression bomb protection
 //!

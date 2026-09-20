@@ -2162,7 +2162,7 @@ fn audit_entry_rejects_when_all_versions_are_already_in_baseline() {
 /// must be a hard reject naming immutability, never a silent skip. This closes
 /// the version-delta bypass: were the delta keyed on version number alone, a
 /// rewritten `source`/`rev`/`sha256`/`capabilities` on an already-published
-/// version would slip past both hash-verify and audit (ADR 0044, §receiving-gate).
+/// version would slip past both hash-verify and audit (ADR 0007, §receiving-gate).
 #[test]
 fn audit_entry_rejects_rewriting_a_published_version() {
     let submitted_root = temp_dir_unique("ae-immutable-sub");

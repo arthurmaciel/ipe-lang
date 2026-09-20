@@ -537,7 +537,7 @@ const fn win_exit_to_i32(code: u32) -> i32 {
 /// run-jail arm today, so this introduces the returning build-jail lowering
 /// directly onto a scratch-rooted `jail(2)` (established via the `jail(8)` CLI —
 /// the same external-primitive shape the macOS arm uses with `sandbox-exec`, so
-/// no new `unsafe` FFI is introduced). Per ADR 0051 the `jail(2)` posture is a
+/// no new `unsafe` FFI is introduced). Per ADR 0004 the `jail(2)` posture is a
 /// sanctioned alternative to `cap_enter` for lowering the axes:
 ///
 /// - **network** — withheld ⇒ `vnet=new`: the jail gets a brand-new, EMPTY network
@@ -1224,7 +1224,7 @@ mod freebsd_jail {
         };
 
         // A withheld subprocess axis MUST be a genuine kernel denial of process
-        // creation, not mere omission (ADR 0051). `rctl(8)` with
+        // creation, not mere omission (ADR 0004). `rctl(8)` with
         // `jail:NAME:maxproc:deny=1` is the jail posture that denies `fork`/
         // `pdfork`/`exec` of a new process at the kernel boundary: the rule is
         // pre-registered by jail name and the kernel enforces it when the jail is

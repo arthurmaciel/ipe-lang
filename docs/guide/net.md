@@ -95,4 +95,4 @@ that just wants a sensible port.
   (see `ipe doc Ipe.Db.Dsn`) is a connection surface that takes a `Port`.
 - **Concepts:** [The parse-don't-validate idiom](../idioms/parse-dont-validate.md)
   — the discipline the opaque `Port` embodies. The
-  [live/HTTP security invariants ADR](../adr/0004-live-http-web-security-invariants.md).
+  [live/HTTP security invariants ADR](../adr/0003-security-render-and-data-access-invariants.md).

@@ -72,7 +72,7 @@ pub fn expr_value_is_non_clone(expr: &Expr) -> bool {
 ///
 /// Used by the `Expr::Access` emission arm for AUD-09's type-directed
 /// Copy elision — see
-/// `docs/adr/0011-emitter-clone-borrow-discipline.md` §3.
+/// `docs/adr/0002-codegen-soundness-and-the-seal.md` §3.
 pub const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
     matches!(
         ty,

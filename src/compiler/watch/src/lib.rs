@@ -27,7 +27,7 @@
 //!   port, so a rebuild can cut traffic over to a freshly-ready binary without
 //!   dropping the browser's connection. Never in a release build.
 //!
-//! Decision record: `docs/adr/0032-salsa-incremental-compilation-phase1.md`.
+//! Decision record: `docs/adr/0007-build-incrementality-and-release-infra.md`.
 
 pub mod coalesce;
 pub mod process;

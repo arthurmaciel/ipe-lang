@@ -729,7 +729,7 @@ mod registry_phase_c_tests {
             // Ipe.Html / Ipe.Ui / Ipe.Web rendering family (42).
             // All genuine `Ty::Var(u32::MAX)` holes (legacy `kernel_ty` has no
             // Html/Ui/Background/Border/Font arm). Verified vs runtime + lower
-            // `callee_arity` in docs/adr/0020-html-ui-live-kernel-arity-tripwire.md.
+            // `callee_arity` in docs/adr/0002-codegen-soundness-and-the-seal.md.
             // `WebAppRouted` is EXCLUDED here — it is `REACHABLE_BUT_UNLOWERED`.
             K::HtmlRender,
             K::HtmlEscapeText,
@@ -1685,7 +1685,7 @@ mod registry_phase_c_tests {
     /// THROUGH the [`SchemeKey`] bridge — `def().scheme` -> [`resolve_scheme`] —
     /// and assert the scheme's leading-arrow count equals `def().arity`, plus one
     /// for the [`RETURNS_HANDLER`] class whose result value is itself a function.
-    /// This is the extension of ADR 0009's
+    /// This is the extension of ADR 0002's
     /// `callee_arity`-derives-from-`decl().arity` rule to the *scheme*: a kernel
     /// whose declared arity disagrees with the arrow count of its type is a
     /// coherence failure here, caught pre-cargo, not a silent hole deep in the

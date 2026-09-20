@@ -32,7 +32,7 @@ use super::{IpeResult, IpeTask, from_u8_slice, ok_res, str_err};
 // `tests/golden/basics/Cargo.toml`), so the `#[cfg(not(feature = "tokio"))]`
 // fallback below only matters for the standalone `ipe-runtime-rust` crate's
 // own narrow-feature builds, never for a real Ipê program. See
-// `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.2.
+// `docs/adr/0003-security-render-and-data-access-invariants.md` §2.2.
 // tokio is native-only (declared under the `cfg(not(target_arch = "wasm32"))`
 // dependency table), so the `spawn_blocking` offload compiles only there. On
 // wasm32 the synchronous fallback runs even when `feature = "tokio"` is set —

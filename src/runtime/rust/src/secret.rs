@@ -12,8 +12,8 @@
 //! hand-written impl on `Secret` itself, so there is no OTHER impl a caller
 //! could accidentally reach that would expose the plaintext.
 //!
-//! # Design (see ADR 0006 for the `Secret` sealed-newtype decision;
-//! docs/adr/0012-sqlfragment-derive-safe-seal.md for the sibling `SqlFragment`)
+//! # Design (see ADR 0003 for the `Secret` sealed-newtype decision;
+//! docs/adr/0003-security-render-and-data-access-invariants.md for the sibling `SqlFragment`)
 //!
 //! * `Clone` — derived (a `Secret` may be stored, passed around, and used at
 //!   more than one call site, same as any other opaque runtime value).
@@ -53,7 +53,7 @@
 //!
 //! # WASM hydration-island boundary (out of scope, not gated here)
 //!
-//! `docs/adr/0042-wasm-client-target.md` §Q6 documents a future
+//! `docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md` §Q6 documents a future
 //! `HydrationState` field-type gate that must reject any field whose type
 //! transitively contains `Secret` (or any other server-only/secret-bearing
 //! type) at the `HydrationState` declaration. That gate has NOTHING TO GATE

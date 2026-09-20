@@ -6,7 +6,7 @@
 //! that is declared but not pinned, or pinned but not hash-verified, or a native
 //! crate whose capability set is never declared, is a gap that this surface names
 //! at its coordinate. The four columns check the reproducibility and honesty
-//! guarantees ADR 0044 mandates for every entry admitted to the package index.
+//! guarantees ADR 0007 mandates for every entry admitted to the package index.
 //!
 //! A [`PackageItem`] is either an Ipê dependency (`[dependencies]`) or a native
 //! Rust crate (`[rust.dependencies]`). Columns that do not apply to one kind
@@ -32,7 +32,7 @@
 //!   Tier-2 enforcement in `ipe package audit` is the authoritative gate).
 //! - **provenance-scanned** — the resolved dep's cached source still hashes to
 //!   the pin recorded in `ipe.lock`, re-asserting the verify-before-trust
-//!   boundary from ADR 0044. Computed once for all index/git-escape deps and
+//!   boundary from ADR 0007. Computed once for all index/git-escape deps and
 //!   shared across the column's per-item checks. A path-escape dep is
 //!   [`Cell::NotApplicable`] (no lockfile hash to re-assert).
 
@@ -177,7 +177,7 @@ fn lockfile_by_name(lf: &Lockfile) -> BTreeMap<&str, &crate::lockfile::LockedDep
 
 /// Column **pinned-and-hashed**: the lockfile entry for this dep carries a
 /// non-local revision and a non-empty sha256 — the reproducibility and
-/// tamper-detection anchors from ADR 0044.
+/// tamper-detection anchors from ADR 0007.
 ///
 /// - Path-escape Ipê dep → [`Cell::NotApplicable`] (no lockfile pin exists by
 ///   design; the path dep's integrity is the working-tree content).
@@ -358,7 +358,7 @@ impl AspectCheck<PackageItem> for CapabilityDeclaredColumn {
 
 /// Column **provenance-scanned**: the locked dep's cached source still hashes
 /// to the sha256 recorded in `ipe.lock`, re-asserting the verify-before-trust
-/// boundary from ADR 0044.
+/// boundary from ADR 0007.
 ///
 /// The hash check is computed once (the first call walks the cache for all
 /// deps) and shared across every per-item call via [`OnceLock`], so the tree

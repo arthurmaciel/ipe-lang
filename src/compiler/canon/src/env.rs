@@ -131,7 +131,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // `Ipe.Html` / `Ipe.Html.Attributes` are compiled-source (see exclusion table
     // above); `Ipe.Html.Events` is a kernel qualifier and stays in this table.
     (&["Ipe", "Html", "Events"], "Event"),
-    // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0048) ────────────────
+    // ── Ipe.Tea.<Shape> managed-update-loop shapes (ADR 0005) ────────────────
     // The TEA shapes live under `Ipe.Tea.*`; the canonical short qualifier
     // ("Web"/"Tui"/…) is preserved so every lower.rs kernel match arm is
     // unchanged. Importing any `Ipe.Tea.*` module marks the module a TEA app —
@@ -399,7 +399,7 @@ pub struct Env {
     ///
     /// Every canonical stdlib qualifier that carries kernel members in
     /// [`Self::qual_vars`] at initial build, MINUS the Tier-A `Basics`
-    /// qualifier — i.e. exactly the Tier-C qualifiers of ADR 0047 (`String`,
+    /// qualifier — i.e. exactly the Tier-C qualifiers of ADR 0001 (`String`,
     /// `List`, `Dict`, `Http`, `Json.Decode`, …). A qualifier in this set
     /// resolves ONLY when the module was imported (recorded in
     /// [`Self::imported_stdlib_quals`]); a use of one that was NOT imported is
@@ -1247,7 +1247,7 @@ impl Env {
         env.install_builtin_vars(interner)?;
         // Freeze the Tier-C import gate: every qualifier now in `qual_vars` is an
         // ambient stdlib catalog entry. All of them EXCEPT Tier-A `Basics` require
-        // an explicit import to be used (ADR 0047), so record them (each with the
+        // an explicit import to be used (ADR 0001), so record them (each with the
         // canonical `Ipe.*` path a diagnostic tells the user to import) here, before
         // any user import is processed.
         env.freeze_stdlib_import_gate(interner)?;
@@ -1627,7 +1627,7 @@ impl Env {
             // native serialiser via `Kernel.kernel "Ui_*"` / `"Html_*"` / `"Attr_*"`.
             // The `Ipe.Ui.*` sub-module aliases stay below.
             ("Ipe.Html.Events", "Event"),
-            // ── Ipe.Tea.<Shape> shape aliases (ADR 0048) ──────────────────────
+            // ── Ipe.Tea.<Shape> shape aliases (ADR 0005) ──────────────────────
             ("Ipe.Tea.Web", "Web"),
             // `Tui` / `Cli` carry their `tea` member from the QUALIFIERS catalog.
             // `Ipe.Tea.Terminal` (the bare app surface) is retired in favour of

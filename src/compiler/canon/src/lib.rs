@@ -789,7 +789,7 @@ mod tests {
         );
     }
 
-    /// ADR 0047 Tier A (`Ipe.Basics`) and Tier B (core type vocabulary) are
+    /// ADR 0001 Tier A (`Ipe.Basics`) and Tier B (core type vocabulary) are
     /// ambient: a module reaches for `identity` / `always` / `not`, the type
     /// names `Maybe` / `Result` / `List`, and the constructors `Just` /
     /// `Nothing` / `Ok` / `Err` / `True` / `False` with NO import line. This is
@@ -817,7 +817,7 @@ mod tests {
         );
     }
 
-    /// ADR 0047 Tier B allows a local definition to shadow a core-vocabulary
+    /// ADR 0001 Tier B allows a local definition to shadow a core-vocabulary
     /// name without a diagnostic — a user `map` binds locally.
     #[test]
     fn tier_b_name_may_be_shadowed_locally() {
@@ -832,7 +832,7 @@ mod tests {
         );
     }
 
-    /// ADR 0047 Tier C: a qualified reference to a module the compiler does not
+    /// ADR 0001 Tier C: a qualified reference to a module the compiler does not
     /// place in ambient scope fails to resolve (IPE-N0004) at its use site,
     /// never a silent success — the import list stays a complete inventory of a
     /// file's capabilities.
@@ -850,7 +850,7 @@ mod tests {
         assert_eq!(&*qualifier, "Widgets");
     }
 
-    /// ADR 0047 Tier C: a KNOWN stdlib qualifier (`Crypto`) used with no
+    /// ADR 0001 Tier C: a KNOWN stdlib qualifier (`Crypto`) used with no
     /// `import Ipe.Crypto` fires the teachable must-import diagnostic (IPE-N0034)
     /// naming the exact module to add — NOT a silent resolve against the
     /// pre-installed catalog, and NOT the generic unknown-module error.
@@ -1301,7 +1301,7 @@ mod tests {
 
     #[test]
     fn prelude_module_alias_is_removed() {
-        // ADR 0047: `Ipe.Prelude` is REMOVED — not a retained alias for
+        // ADR 0001: `Ipe.Prelude` is REMOVED — not a retained alias for
         // `Ipe.Basics`. It names no kernel qualifier and no embedded source, so
         // the import itself fails closed with ModuleNotFound (IPE-N0020), exactly
         // like any other nonexistent `Ipe.*` module. This proves the old
@@ -2180,7 +2180,7 @@ mod tests {
     // A LOCAL `type X` / `type alias X` shadowing a dep-imported `X`
     // must be rejected at the declaration with IPE-N0012 (`DuplicateType`),
     // not a downstream IPE-T0001. See `canonicalise_with_env`'s dep-shadow
-    // pre-pass and docs/adr/0010-pattern-and-lowering-completeness.md
+    // pre-pass and docs/adr/0002-codegen-soundness-and-the-seal.md
     // (item D).
     // ---------------------------------------------------------------------
 
@@ -3173,7 +3173,7 @@ mod tests {
 
     #[test]
     fn program_importing_ipe_html_is_not_a_tea_app() {
-        // ADR 0048: a module is a TEA app iff it imports something under
+        // ADR 0005: a module is a TEA app iff it imports something under
         // `Ipe.Tea.*`. Importing the shape-neutral `Ipe.Html` (where the static
         // render bridge `renderStatic` lives, next to `render`) must NOT be
         // rejected as a Program-importing-a-shape contradiction (IPE-N0033). The
@@ -4119,7 +4119,7 @@ mod tests {
     // another stdlib module must not fire IPE-N0034 on its OWN import.
     //
     // Ipe.Money imports `Ipe.String as String` and uses `String.*` in its body.
-    // The Tier-C import gate (ADR 0047) must see that import as satisfied —
+    // The Tier-C import gate (ADR 0001) must see that import as satisfied —
     // `register_stdlib_import_aliases` marks the qualifier imported BEFORE
     // `resolve_qual_var` consults `stdlib_import_required`. If that ordering
     // were broken (e.g. the gate were checked before alias registration),

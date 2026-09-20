@@ -19,7 +19,7 @@
 //!    type-checks and lowers to `(req).path.clone()`, reading
 //!    `ipe_runtime::dom::req::WebReq` directly — no synthesised record.
 //!
-//! Full design: `docs/adr/0021-tea-state-engine-and-prescriptive-init.md`;
+//! Full design: `docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md`;
 //! Sanctioned divergence B24.
 //!
 //! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated and

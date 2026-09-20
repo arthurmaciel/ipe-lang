@@ -462,7 +462,7 @@ pub enum NameError {
         suggestions: Box<[Box<str>]>,
     },
     /// A KNOWN Tier-C stdlib qualifier is used without importing its module
-    /// (ADR 0047): `String.join` with no `import Ipe.String`. Distinct from
+    /// (ADR 0001): `String.join` with no `import Ipe.String`. Distinct from
     /// [`Self::UnknownModule`] (a genuinely unknown qualifier): here the module
     /// exists and the fix is deterministic — add the named import. `qualifier` is
     /// the short-name at the use site; `import_path` is the exact

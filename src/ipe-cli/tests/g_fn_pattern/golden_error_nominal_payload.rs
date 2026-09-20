@@ -1,4 +1,4 @@
-//! SEAL fix (`docs/adr/0017-error-payload-nominal-identity.md`) — positive
+//! SEAL fix (`docs/adr/0001-language-semantics-and-types.md`) — positive
 //! golden for the NOMINAL `PanicInfo` / `TypeInfo` / `ErrorInfo` payload types.
 //!
 //! Pins the coherence half (the negative half lives in

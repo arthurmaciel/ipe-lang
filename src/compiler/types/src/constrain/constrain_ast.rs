@@ -870,7 +870,7 @@ impl Builder<'_> {
             }
             // Higher-order-kernel callback-result obligation
             // (primary/Tier-2 mechanism — see
-            // `docs/adr/0016-andmap-arity-gate-type-obligation.md`).
+            // `docs/adr/0001-language-semantics-and-types.md`).
             // Every `Maybe`/`Result` higher-order kernel FULLY APPLIES its
             // callback at runtime (`FnOnce(..) -> R` with an exact arity),
             // while the IR flattens a curried Ipê function into one
@@ -1469,7 +1469,7 @@ impl Builder<'_> {
                         // already does (identical precedent in `constrain_lambda`, the
                         // `regions.insert` on every lambda-parameter span below).
                         // Class 4 item C —
-                        // docs/adr/0010-pattern-and-lowering-completeness.md.
+                        // docs/adr/0002-codegen-soundness-and-the-seal.md.
                         self.regions
                             .insert((self.current_home.clone(), sub.span), av);
                     }

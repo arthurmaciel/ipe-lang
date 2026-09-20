@@ -30,7 +30,7 @@ Only the `Web` shape has these axes. A `tui`, `cli`, `server`, or `script` app
 builds one way, so it has no runtime or host to choose.
 
 The full rationale — why webview is a host and not a shape, why `live` is never
-spelled out — is [ADR 0069](../adr/0069-runtime-host-delivery-model.md).
+spelled out — is [ADR 0005](../adr/0005-delivery-shapes-runtimes-hosts-targets.md).
 
 ## The `delivery` record
 
@@ -162,7 +162,7 @@ path selects a project other than the current directory.
 
 ## Where to go next
 
-- [ADR 0069](../adr/0069-runtime-host-delivery-model.md) — the two-axis delivery
+- [ADR 0005](../adr/0005-delivery-shapes-runtimes-hosts-targets.md) — the two-axis delivery
   model in full: the five shapes, the two web runtimes, and why each is where it
   is.
 - `ipe doc Ipe.Package` — every `delivery`, `wasm`, and `capabilities` field.

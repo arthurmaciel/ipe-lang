@@ -397,7 +397,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     "ErrorKind",
     "ErrorDetails",
     // `Ipe.Error`'s NOMINAL payload types (see
-    // `docs/adr/0017-error-payload-nominal-identity.md`).
+    // `docs/adr/0001-language-semantics-and-types.md`).
     // Opaque nominal Cons backed
     // by `ipe_runtime::error::{IpePanicInfo, IpeTypeInfo, IpeErrorInfo}`, so
     // annotations such as `describePanic : PanicInfo -> String` must resolve.
@@ -1435,7 +1435,7 @@ pub fn canonicalise_module_in_project(
     }
     exports.scope_aliases = scope_aliases;
 
-    // IPE-N0033 (ADR 0048): a Program importing any `Ipe.Tea.*` shape is a
+    // IPE-N0033 (ADR 0005): a Program importing any `Ipe.Tea.*` shape is a
     // contradiction. Skip stdlib origins — the embedded `Ipe.Web.Head` /
     // `Ipe.Web.Console` helpers are static and never import a shape, and only
     // USER modules are subject to the Program/TEA distinction.
@@ -1878,7 +1878,7 @@ fn branch_head_reaches_tea_entry(branch: &canon::Expr, interner: &Interner) -> b
 /// IPE-N0033: reject a Program (plain-`main` module) that imports any
 /// `Ipe.Tea.*` shape module.
 ///
-/// The rule is exactly ADR 0048's structural marker: importing anything under
+/// The rule is exactly ADR 0005's structural marker: importing anything under
 /// `Ipe.Tea.*` marks a module a TEA app. A module is a TEA app iff its `main`
 /// head-calls one of [`TEA_APP_ENTRIES`]; every other `main` is a Program. So a
 /// module that imports a `Ipe.Tea.*` shape but whose `main` is not a shape entry
@@ -2384,7 +2384,7 @@ fn register_stdlib_import_aliases(
             }
             explicit_alias_canonical.insert(explicit, (canonical, import.name.span));
         }
-        // Tier-C import gate (ADR 0047): this `import Ipe.X [as Alias]` brings the
+        // Tier-C import gate (ADR 0001): this `import Ipe.X [as Alias]` brings the
         // qualifier into scope under the name the user will type. Mark that name
         // (the alias, or — via the fall-through below — the canonical) so a later
         // `Alias.member` / `X.member` resolves instead of raising N0034. An
@@ -3050,7 +3050,7 @@ fn canonicalise_with_env(
     // cleanly but this one silently mis-registered the environment (the local
     // ctors won, but the type-home map kept pointing at the dep's home),
     // surfacing three functions later as an unrelated IPE-T0001 type mismatch
-    // (docs/adr/0010-pattern-and-lowering-completeness.md, item D).
+    // (docs/adr/0002-codegen-soundness-and-the-seal.md, item D).
     //
     // This standalone pre-pass READS `type_home_map` but does NOT yet write this
     // module's own entries — the two loops below still own that. Running it first
@@ -5912,7 +5912,7 @@ fn resolve_qual_var(
             name,
         });
     }
-    // Tier-C import gate (ADR 0047): a known stdlib qualifier used WITHOUT its
+    // Tier-C import gate (ADR 0001): a known stdlib qualifier used WITHOUT its
     // import is the teachable must-import diagnostic (IPE-N0034), naming the exact
     // `Ipe.*` module to add — NOT a silent resolve against the pre-installed
     // catalog, and NOT the generic "unknown module" (the module is known; the
@@ -6513,7 +6513,7 @@ fn canonicalise_type(
                 "ipe_canon::canonicalise_type::qualifier",
             )?;
             if !qualifier_str.is_empty() {
-                // Tier-C import gate (ADR 0047): a KNOWN stdlib module qualifier on
+                // Tier-C import gate (ADR 0001): a KNOWN stdlib module qualifier on
                 // a type (`Dict.Dict`, `JsonDec.Decoder`) used without importing it
                 // is the teachable IPE-N0034, naming the module to add — checked
                 // before the unknown-qualifier fallback, since the catalog

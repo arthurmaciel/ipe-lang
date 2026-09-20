@@ -570,7 +570,7 @@ pub fn emit_expr_at(
             // misparsed; the field ident is keyword-mangled to match the struct.
             //
             // Type-directed Copy elision (AUD-09 — see
-            // `docs/adr/0011-emitter-clone-borrow-discipline.md`
+            // `docs/adr/0002-codegen-soundness-and-the-seal.md`
             // §3): Ipê is a purely-functional language with value semantics,
             // so every field read is logically a copy.  A field whose solved
             // type is UNCONDITIONALLY `Copy` in the emitted Rust (Int / Float

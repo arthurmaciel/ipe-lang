@@ -2247,7 +2247,7 @@ pub enum StdlibKernel {
     /// `web::style_inject::apply_style_injections` (`build_mq`) into a
     /// ipe-id-scoped `<style data-ipe-mq="<sid>">@media <q> {
     /// [ipe-id="<sid>"] { <rules> } }</style>` block. See
-    /// `docs/adr/0019-ui-mediaquery-safe-boundary.md`.
+    /// `docs/adr/0003-security-render-and-data-access-invariants.md`.
     UiMediaQuery,
     UiMobile,        // Breakpoint constant: "(max-width: 767px)"
     UiTablet,        // Breakpoint constant: "(min-width: 768px) and (max-width: 1023px)"
@@ -13137,7 +13137,7 @@ pub enum KernelId {
 /// unless [`StdlibKernel::available_on`] explicitly allows it (default-deny —
 /// a newly added kernel is unrepresentable client-side until audited and
 /// allowed, so the forgotten state is the safe state; see
-/// `docs/adr/0042-wasm-client-target.md` Q5 Layer 1).
+/// `docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md` Q5 Layer 1).
 ///
 /// `WasmWasi` is the co-located portable WASI target (`wasm32-wasip1`): a
 /// native-ish target whose effects run through WASI (stdio, the WASI clock, the
@@ -13172,7 +13172,7 @@ impl StdlibKernel {
     ///
     /// Everything is available natively. The `WasmClient` arm is the
     /// default-deny allowlist over the capability matrix
-    /// (`docs/adr/0042-wasm-client-target.md` Q3): the pure/fallible-pure
+    /// (`docs/adr/0005-delivery-shapes-runtimes-hosts-targets.md` Q3): the pure/fallible-pure
     /// families plus the whole `Ipe.Ui`/`Ipe.Html`/`Ipe.Css` render surface
     /// compile wholesale; effect kernels appear here ONLY once their browser
     /// substitute exists in the runtime `wasm` module (tagging earlier would
