@@ -838,6 +838,21 @@ fn body_broken_forces_flat(body: &Doc, cfg: RenderConfig, indent: usize, start_c
 /// (column-independent), so the decision is a function of the flat leaf widths.
 const SINGLE_LINE_IF_ELSE_MAX_WIDTH: usize = 50;
 
+/// The single-line width of an `if`/`else` construct WITHOUT the outer parens:
+/// `if ` + cond + ` { ` + then + ` } else { ` + else + ` }`, from the flat leaf
+/// widths (absolute, column-independent). One source of truth for BOTH the
+/// render decision and `has_hard_break`, so the two cannot disagree about whether
+/// an `IfElse` renders block-form.
+fn if_else_construct_width(cond: &Doc, then_: &Doc, else_: &Doc) -> usize {
+    "if ".len()
+        + cond.normalized_leaves().len()
+        + " { ".len()
+        + then_.normalized_leaves().len()
+        + " } else { ".len()
+        + else_.normalized_leaves().len()
+        + " }".len()
+}
+
 /// Render a [`Doc::IfElse`] with `rustfmt`'s `single_line_if_else_max_width` rule.
 /// The single-line construct width WITHOUT the outer parens (the `if cond { then }
 /// else { else }` text) is measured from the branches' flat leaves; when it is at
@@ -860,16 +875,7 @@ fn render_if_else(
     flat: bool,
     out: &mut String,
 ) {
-    // The single-line construct width, WITHOUT the outer parens:
-    // `if ` + cond + ` { ` + then + ` } else { ` + else + ` }`, from the flat
-    // leaf widths. The threshold is absolute (column-independent).
-    let construct_width = "if ".len()
-        + cond.normalized_leaves().len()
-        + " { ".len()
-        + then_.normalized_leaves().len()
-        + " } else { ".len()
-        + else_.normalized_leaves().len()
-        + " }".len();
+    let construct_width = if_else_construct_width(cond, then_, else_);
 
     let start_col = eff_col(out, col);
     if construct_width <= SINGLE_LINE_IF_ELSE_MAX_WIDTH {
@@ -1256,11 +1262,16 @@ fn has_hard_break(doc: &Doc) -> bool {
         | Doc::MethodChain { .. }
         // An `OrPattern` decides its own flat-vs-vertical layout independently
         // and carries only text alternatives — never a hard break.
-        | Doc::OrPattern { .. }
-        // An `IfElse` decides its own inline-vs-block layout independently (its
-        // absolute `single_line_if_else_max_width` re-test), so it hides its own
-        // breaks from the enclosing group like `Group` / `BraceBody` / `CallArgs`.
-        | Doc::IfElse { .. } => false,
+        | Doc::OrPattern { .. } => false,
+        // An `IfElse` hides its own breaks ONLY when it renders inline. A
+        // block-form `IfElse` (wider than the absolute
+        // `single_line_if_else_max_width`) DOES carry hard breaks the enclosing
+        // `BraceBody` must see — otherwise `fits` (which measures only the short
+        // first line `(if cond {`) would inline a tall body into a closure/CAF
+        // brace-body and drop its braces. Same width test as `render_if_else`.
+        Doc::IfElse { cond, then_, else_ } => {
+            if_else_construct_width(cond, then_, else_) > SINGLE_LINE_IF_ELSE_MAX_WIDTH
+        }
         Doc::Concat(docs) => docs.iter().any(has_hard_break),
         // `Nest` is pure indentation and `ElidableParen` pure wrapping: each forwards
         // its break behavior to its inner (a paren-block carries the statement
@@ -2667,6 +2678,31 @@ mod p0_tests {
         assert_eq!(
             render(&doc, RenderConfig::default()),
             "move |_| {\n    let y = 1;\n    y\n}"
+        );
+    }
+
+    #[test]
+    fn brace_body_with_wide_if_else_stays_braced() {
+        // A WIDE (block-form) `IfElse` as a closure/CAF brace-body body must keep
+        // its braces. `fits` measures only the short first line (`(if cond {`), so
+        // without `has_hard_break` reporting the block-form `IfElse` as breaking,
+        // the `BraceBody` would inline a tall body and DROP the braces — a SEAL
+        // divergence (`move |_| (if …` instead of `move |_| { (if … } `). Pins the
+        // `has_hard_break(Doc::IfElse)` block-form test against regression.
+        let wide = Doc::if_else(
+            Doc::text("condition_wide_enough_to_force_block_form_layout_xxxxx"),
+            Doc::text("then_branch_value"),
+            Doc::text("else_branch_value"),
+        );
+        let doc = Doc::concat(vec![Doc::text("move |_| "), Doc::brace_body(wide)]);
+        let got = render(&doc, RenderConfig::default());
+        assert!(
+            got.starts_with("move |_| {\n"),
+            "a wide if-else brace-body must render as a braced block, got:\n{got}"
+        );
+        assert!(
+            got.trim_end().ends_with('}'),
+            "the braced block must close with `}}`, got:\n{got}"
         );
     }
 
