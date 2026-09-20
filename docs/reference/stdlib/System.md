@@ -88,9 +88,12 @@ Alias for `cwd` -- kept for backward compatibility.
 loadEnv : () -> Task Error ()
 ```
 
-Load environment variables from a `.env`-formatted file at the
-given path.  Already-set vars take precedence (standard godotenv
-semantics).
+Load environment variables from `./.env` (the `.env` file in the
+process's current working directory).  Each `KEY=VALUE` line is
+parsed; `#` lines and empty lines are skipped; optional surrounding
+single or double quotes are stripped.  Already-set variables take
+precedence — the process environment wins.  A missing or unreadable
+`.env` is silently a no-op.
 
 ## `exit`
 
