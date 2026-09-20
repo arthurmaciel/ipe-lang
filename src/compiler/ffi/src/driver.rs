@@ -2168,6 +2168,32 @@ mod tests {
     }
 
     #[test]
+    fn primary_line_preserves_a_dashed_package_name_verbatim() {
+        // A published crate whose real package name carries a dash (`handle-demo`)
+        // must key the Cargo `[dependencies]` line with that verbatim dashed name,
+        // not a dash-to-underscore normalisation. Cargo maps the dashed KEY to the
+        // `handle_demo` extern ident on its own, so the emitted bindings' `use
+        // ::handle_demo::` resolves against a `handle-demo = "=..."` dependency.
+        // A `PackageName` preserves both `-` and `_`, so the dep KEY is the real
+        // registry name and the dependency resolves.
+        let pkg = PkgInfo::decode_json(
+            &json!({
+                "pkg": "handle_demo",
+                "name": "handle-demo",
+                "version": "0.1.0",
+                "functions": [],
+                "errors": []
+            })
+            .to_string(),
+        )
+        .expect("decodes");
+        assert_eq!(
+            cargo_dep_lines(&pkg).expect("renders"),
+            vec!["handle-demo = \"=0.1.0\""]
+        );
+    }
+
+    #[test]
     fn an_injection_bearing_version_never_reaches_a_manifest_line() {
         // An inspection whose resolved version carries a TOML-string-breakout
         // payload must be REFUSED at decode — the version can never reach

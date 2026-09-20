@@ -28,10 +28,13 @@ const fn false_marker() -> bool {
 }
 
 /// Seed the project's FFI cache with a hand-crafted inspection document for a
-/// non-`Clone` foreign crate `handle_demo`: an opaque `Widget` handle, a `new`
+/// non-`Clone` foreign crate published as `handle-demo` (its Rust extern ident
+/// is the dash-normalised `handle_demo`): an opaque `Widget` handle, a `new`
 /// constructor, and a `&self` reader `slot_count(&self) -> usize` (binds as
-/// `Widget -> Result Error Int`). Returns false if the cache could not be
-/// written.
+/// `Widget -> Result Error Int`). The wire `name` is the verbatim package name
+/// `handle-demo`, so the emitted Cargo dependency KEY is `handle-demo` while the
+/// generated code imports `::handle_demo::`. Returns false if the cache could
+/// not be written.
 fn seed_nonclone_ffi_cache(project_root: &Path) -> bool {
     let cache = FfiCache::at_project_root(project_root);
     // Mirrors the inspector wire shape (see `ipe_ffi` bindings fixtures): a
@@ -40,7 +43,7 @@ fn seed_nonclone_ffi_cache(project_root: &Path) -> bool {
     // by-borrow; the wrapper today takes the handle by value.
     let doc = serde_json::json!({
         "pkg": "handle_demo",
-        "name": "handle_demo",
+        "name": "handle-demo",
         "version": "0.1.0",
         "functions": [
             {
