@@ -2,8 +2,11 @@
 --
 -- A first-party proof of the per-capability web mechanism spanning BOTH port
 -- directions: outbound `JsCmd`s (`requestPermission` / `notify`) request a
--- notification operation, and an inbound `JsMsg` carries the permission outcome or
--- a display acknowledgement. Both cross the same seal codec and fail-closed port
+-- notification operation, and an inbound frame carries a permission reply
+-- (`PermissionReply`, correlated to `requestPermission`) or a display
+-- acknowledgement (`JsMsg`, over the `outcomes` subscription). The two reply
+-- vocabularies are separate types so a display ack has no representation as a
+-- permission outcome. Both cross the same seal codec and fail-closed port
 -- discipline as every other port; there is no second transport.
 --
 -- Importing this reserved `Ipe.Browser.<Api>` module discloses
@@ -30,7 +33,7 @@ module Ipe.Browser.Notification exposing
     , outcomes
     )
 
-import Ipe.Browser.Notification.Internals as Internals exposing (JsMsg(..))
+import Ipe.Browser.Notification.Internals as Internals exposing (JsMsg(..), PermissionReply(..))
 import Ipe.Error as Error exposing (Error)
 import Ipe.Task as Task
 import Ipe.Tea.Web.Cmd as Cmd
@@ -81,21 +84,20 @@ outcomes toMsg =
     Internals.subscribe (\inbound -> toMsg (toResult inbound))
 
 
--- | Fold a `requestPermission` reply into a `Task Error ()`. The `case` is
--- exhaustive over every published inbound variant; only `Granted` succeeds.
-foldPermission : Internals.JsMsg -> Task Error ()
-foldPermission msg =
-    case msg of
-        Granted ->
+-- | Fold a `requestPermission` reply into a `Task Error ()`. The reply type
+-- (`PermissionReply`) has NO display-ack variant, so a `Show` acknowledgement
+-- cannot be represented as a permission outcome at all — only `PermGranted`
+-- succeeds. The `case` is exhaustive over every permission-reply variant.
+foldPermission : Internals.PermissionReply -> Task Error ()
+foldPermission reply =
+    case reply of
+        PermGranted ->
             Task.succeed ()
 
-        Shown ->
-            Task.succeed ()
-
-        Denied ->
+        PermDenied ->
             Task.fail Error.permissionDenied
 
-        Unavailable ->
+        PermUnavailable ->
             Task.fail (Error.unavailable "notifications unavailable")
 
 

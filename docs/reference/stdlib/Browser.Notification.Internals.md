@@ -44,15 +44,31 @@ auditable object.
 
 ## `JsMsg`
 
-The NARROW closed INBOUND port type — deliberately NOT the app's internal
-`Msg`. Every variant the browser can push is enumerated, so the fold in the
-high-level layer is EXHAUSTIVE and a permission denial can never be silently
-dropped: it becomes a typed `Err`.
+The NARROW closed INBOUND port type for the `outcomes` subscription —
+deliberately NOT the app's internal `Msg`. Every variant the browser can push
+on the display path is enumerated, so the fold in the high-level layer is
+EXHAUSTIVE and a denial can never be silently dropped: it becomes a typed
+`Err`. The correlated `requestPermission` reply uses the separate
+`PermissionReply` type, so `Shown` cannot stand in for a permission grant.
 
   * `Granted` — the host granted notification permission.
   * `Denied` — the host refused notification permission.
   * `Shown` — a notification was displayed.
   * `Unavailable` — the Notification API is absent in this context.
+
+## `PermissionReply`
+
+The closed reply vocabulary of a `RequestPermission` request — a SEPARATE
+type from `JsMsg` so a display acknowledgement (`Shown`) has NO representation
+as a permission outcome. A permission request resolves to exactly one of:
+
+  * `PermGranted` — the host granted notification permission.
+  * `PermDenied` — the host refused notification permission.
+  * `PermUnavailable` — the Notification API is absent in this context.
+
+Because the type omits any display-ack variant, the permission fold cannot map
+a `Shown` frame to a grant even if the first-party glue misroutes one: an
+unrecognised reply fails the correlated decode closed (the frame is dropped).
 
 ## `request`
 
@@ -67,12 +83,14 @@ arrives inbound as a `JsMsg`.
 ## `requestOne`
 
 ```ipe
-requestOne : JsCmd -> Task Error JsMsg
+requestOne : JsCmd -> Task Error PermissionReply
 ```
 
-`requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
-Routes through `Js.request` with the `inbound` decoder so the correlated
-reply is decoded fail-closed by the same gate the `subscribe` path uses.
+`requestOne cmd` — correlated one-shot permission `JsCmd` → `Task Error
+PermissionReply`. Routes through `Js.request` with the `permissionInbound`
+decoder, whose closed vocabulary omits the display-ack event: a `shown` frame
+misrouted onto a permission reply is decoded closed (the frame is dropped),
+never a grant.
 
 ## `subscribe`
 
@@ -94,4 +112,16 @@ The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a
 true flag decodes a `permission` grant or a `shown` acknowledgement by its
 `event`; a false flag decodes the closed `error` vocabulary into a denial
 variant. An unrecognised token fails the decode closed (the frame is dropped).
+
+## `permissionInbound`
+
+```ipe
+permissionInbound : Decode.Decoder PermissionReply
+```
+
+The total, fail-closed decoder for a `RequestPermission` reply. Structurally
+distinct from `inbound`: its only success event is `granted`, so a `shown`
+display acknowledgement fails the decode closed (the frame is dropped) rather
+than crossing as a permission outcome. A false `ok` decodes the closed error
+vocabulary into a denial variant.
 

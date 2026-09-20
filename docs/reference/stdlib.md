@@ -606,11 +606,13 @@ Ipe.Browser.Notification.Internals — the low-level notification port surface:
 | `Options` | The `Notification` display payload, mirroring the Web API `Notification` |
 | `defaults` | The default payload for a bare `notify title`: the given title, no body, no |
 | `JsCmd` | The ONE closed OUTBOUND port type: the whole outbound surface as a single |
-| `JsMsg` | The NARROW closed INBOUND port type — deliberately NOT the app's internal |
+| `JsMsg` | The NARROW closed INBOUND port type for the `outcomes` subscription — |
+| `PermissionReply` | The closed reply vocabulary of a `RequestPermission` request — a SEPARATE |
 | `request` | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport. |
-| `requestOne` | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`. |
+| `requestOne` | `requestOne cmd` — correlated one-shot permission `JsCmd` → `Task Error |
 | `subscribe` | `subscribe toMsg` — the inbound subscription over the fail-closed seal |
 | `inbound` | The total, fail-closed decoder for the inbound `JsMsg`. It reads `ok` first: a |
+| `permissionInbound` | The total, fail-closed decoder for a `RequestPermission` reply. Structurally |
 
 ## Browser.Orientation
 
