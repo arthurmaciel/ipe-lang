@@ -108,6 +108,278 @@ pub fn bundle_delivery(
     }
 }
 
+// ── Pure gate layer ──────────────────────────────────────────────────────────
+//
+// These functions carry the fail-closed security gates (shape + permission
+// validation) that must fire BEFORE any cargo build or I/O. They accept only
+// typed values already parsed from the manifest, so they are exercisable in
+// unit tests without a real project on disk.
+
+/// Classify an app's [`pack::desktop::AppShape`] from its manifest-declared
+/// shape (when present) or by inspecting the entry source (when absent).
+///
+/// The shape classification is a pure function of its inputs: no build, no I/O
+/// beyond the entry-source read that `classify_entry_shape` performs when no
+/// declared shape is available.
+///
+/// # Errors
+/// [`CliError`] forwarded from [`classify_entry_shape`] when entry-source
+/// classification is needed and the source cannot be read or parsed.
+pub fn classify_desktop_shape(
+    declared: Option<project::EntryShape>,
+    root: &Path,
+) -> Result<pack::desktop::AppShape, CliError> {
+    match declared {
+        Some(project::EntryShape::Web) => Ok(pack::desktop::AppShape::Web),
+        Some(project::EntryShape::WebView) => Ok(pack::desktop::AppShape::WebView),
+        Some(project::EntryShape::Terminal) => Ok(pack::desktop::AppShape::Terminal),
+        Some(project::EntryShape::Program) => Ok(pack::desktop::AppShape::Program),
+        None => match classify_entry_shape(root)? {
+            delivery::Shape::Web => Ok(pack::desktop::AppShape::WebView),
+            delivery::Shape::Tui | delivery::Shape::Cli => Ok(pack::desktop::AppShape::Terminal),
+            // A `script` renders nothing and a `server` main renders http, not a
+            // desktop window; both classify as a plain program so the webview
+            // gate refuses them by name.
+            delivery::Shape::Script | delivery::Shape::Server => {
+                Ok(pack::desktop::AppShape::Program)
+            }
+        },
+    }
+}
+
+/// Gate the desktop bundle's app shape: refuse any shape that is not a
+/// webview-capable `Web` or `WebView` app.
+///
+/// This is the principle-1 fail-closed gate that fires BEFORE any cargo build.
+/// It delegates to [`pack::desktop::require_webview`], which is the single
+/// source of truth for the webview requirement.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] wrapping [`pack::desktop::DesktopRefusal`] when the
+/// shape is not webview-capable.
+pub fn validate_desktop_shape(
+    declared: Option<project::EntryShape>,
+    root: &Path,
+) -> Result<(), CliError> {
+    let shape = classify_desktop_shape(declared, root)?;
+    pack::desktop::require_webview(shape).map_err(|r| CliError::UsageOwned(r.to_string()))
+}
+
+/// Build the [`pack::mobile::WebSpaCapability`] from the manifest's declared
+/// shape (when present) or by classifying the entry source.
+///
+/// # Errors
+/// [`CliError`] forwarded from [`classify_entry_shape`] when entry-source
+/// classification is needed and the source cannot be read or parsed.
+pub fn classify_mobile_spa_cap(
+    declared: Option<project::EntryShape>,
+    root: &Path,
+    wasm: &project::WasmConfig,
+) -> Result<pack::mobile::WebSpaCapability, CliError> {
+    let shape_is_web = match declared {
+        Some(s) => s == project::EntryShape::Web,
+        None => classify_entry_shape(root)? == delivery::Shape::Web,
+    };
+    Ok(pack::mobile::WebSpaCapability {
+        shape_is_web,
+        wasm_enabled: wasm.implies_wasm_target(),
+    })
+}
+
+/// Gate the mobile bundle's web-SPA capability: refuse any shape that is not a
+/// wasm-enabled `Web` app.
+///
+/// This is the principle-1 fail-closed gate that fires BEFORE any wasm build.
+/// It delegates to [`pack::mobile::require_web_spa`], the single source of
+/// truth for the web-SPA requirement.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] wrapping [`pack::mobile::MobileRefusal`] when the
+/// shape is not a wasm-enabled `Web` app.
+pub fn validate_mobile_shape(
+    declared: Option<project::EntryShape>,
+    root: &Path,
+    wasm: &project::WasmConfig,
+) -> Result<(), CliError> {
+    let cap = classify_mobile_spa_cap(declared, root, wasm)?;
+    pack::mobile::require_web_spa(cap).map_err(|r| CliError::UsageOwned(r.to_string()))
+}
+
+// ── Assembly seam ─────────────────────────────────────────────────────────────
+//
+// `BundleAssembler` owns the cargo-spawn and filesystem I/O that must happen
+// after the pure gates pass. `pack_desktop` and `pack_mobile` are thin wrappers
+// that parse the manifest, run the gates, then delegate here.
+
+/// Owns the cargo-build and filesystem materialisation steps for a bundle.
+///
+/// Constructed once per invocation from the resolved OS, profile, and parsed
+/// manifest. The pure gates ([`validate_desktop_shape`] /
+/// [`validate_mobile_shape`]) must pass before any method is called — this
+/// type is the I/O half of the seam, not the validation half.
+pub struct BundleAssembler<'a> {
+    manifest: &'a project::ProjectManifest,
+    manifest_path: &'a Path,
+    profile: BundleProfile,
+}
+
+impl<'a> BundleAssembler<'a> {
+    /// Construct an assembler for `manifest` at the given profile.
+    pub const fn new(
+        manifest: &'a project::ProjectManifest,
+        manifest_path: &'a Path,
+        profile: BundleProfile,
+    ) -> Self {
+        Self {
+            manifest,
+            manifest_path,
+            profile,
+        }
+    }
+
+    /// Emit + compile the app to a binary, generate the desktop bundle layout,
+    /// and materialise (Linux) or describe (macOS/Windows) the bundle on disk.
+    ///
+    /// Callers must have already run [`validate_desktop_shape`] — this method
+    /// does not re-check the shape gate.
+    ///
+    /// # Errors
+    /// Build/emit errors from the underlying compile; [`CliError::Io`] on any
+    /// filesystem failure while materialising the bundle.
+    pub fn assemble_desktop(&self, os: pack::desktop::DesktopOs) -> Result<(), CliError> {
+        let manifest = self.manifest;
+        let identity = pack::desktop::BundleIdentity::new(
+            &manifest.name,
+            manifest
+                .version
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            None,
+        );
+        let accepts = &manifest.capabilities_accept;
+        let icon = manifest.icon.as_deref();
+
+        let layout = pack::desktop::layout(os, &identity, accepts, icon)?;
+
+        // Emit + compile the project to a binary. A webview app carries the
+        // system webview as a dynamic dependency, so this is a plain
+        // (non-static) native build.
+        let build_dir = manifest.root.join("out").join("rust");
+        let runtime_dir = resolve_vendored_runtime_dir(None, false)?;
+        build_project(self.manifest_path, &build_dir, &runtime_dir)?;
+
+        let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
+        let mut cargo = std::process::Command::new(cargo_bin.path());
+        cargo.arg("build").current_dir(&build_dir);
+        // A `release web desktop` bundle carries an optimised binary; the
+        // `build` dev bundle carries a plain debug one.
+        if self.profile.cargo_release() {
+            cargo.arg("--release");
+        }
+        force_cargo_terminal_ui(&mut cargo);
+        build_emitted_project(&mut cargo, "the desktop app", None, &build_dir)?;
+
+        // Locate the compiled binary via cargo metadata (the target dir may be
+        // a global CARGO_TARGET_DIR), then materialise (Linux) or describe
+        // (macOS/Windows).
+        let target_dir = cargo_target_directory(&build_dir)?;
+        let bin_name = emitted_bin_name(&build_dir);
+        let binary = target_dir
+            .join(self.profile.target_subdir())
+            .join(&bin_name);
+        if !binary.is_file() {
+            return Err(CliError::UsageOwned(format!(
+                "expected app binary at {} — cargo build succeeded but the binary is missing",
+                binary.display()
+            )));
+        }
+
+        let dist = manifest.root.join("dist").join(os.as_str());
+        pack::desktop::materialise(&layout, &binary, icon, &dist)
+            .map_err(|e| io_err(&e.path, e.source))?;
+
+        println!(
+            "packaged `{}` for {} → {}",
+            manifest.name,
+            os.as_str(),
+            dist.join(&layout.root_name).display()
+        );
+        println!("  {}", os.webview_runtime_note());
+        if os != pack::desktop::DesktopOs::Linux {
+            println!(
+                "  note: the {} bundle layout is written here, but a signed, runnable {} \
+                 artifact must be produced on a {} runner (unsigned; cross-tooling out of scope).",
+                os.as_str(),
+                os.as_str(),
+                os.as_str()
+            );
+        }
+        Ok(())
+    }
+
+    /// Build the wasm SPA, collect its `www/` tree, generate the mobile shell
+    /// layout, and materialise the shell on disk.
+    ///
+    /// Callers must have already run [`validate_mobile_shape`] — this method
+    /// does not re-check the shape or wasm-capability gate.
+    ///
+    /// # Errors
+    /// The wasm build's own errors; [`CliError::Io`] on any filesystem failure
+    /// while collecting the bundle or materialising the shell.
+    pub fn assemble_mobile(&self, os: pack::mobile::MobileOs) -> Result<(), CliError> {
+        let manifest = self.manifest;
+        let identity = pack::desktop::BundleIdentity::new(
+            &manifest.name,
+            manifest
+                .version
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            None,
+        );
+        let accepts = &manifest.capabilities_accept;
+        let icon = manifest.icon.as_deref();
+
+        // Build the `--target wasm` SPA into the project's `out/rust`, then
+        // collect its `www/` tree. The wasm bundle pipeline (emit + cargo +
+        // wasm-bindgen) is the single source of the hostable bundle; invoking
+        // it through this binary keeps that pipeline authoritative rather than
+        // re-implemented here.
+        let build_dir = manifest.root.join("out").join("rust");
+        build_wasm_for_mobile(self.manifest_path, &build_dir, self.profile)?;
+        let www_dir = build_dir.join("www");
+        let bundle = pack::mobile::SpaBundle::from_www_dir(&www_dir)
+            .map_err(|e| CliError::UsageOwned(e.to_string()))?;
+
+        let layout = pack::mobile::layout(os, &identity, accepts, &bundle, icon)?;
+
+        let dist = manifest.root.join("dist").join(os.as_str());
+        let shell_root = pack::mobile::materialise(&layout, icon, &dist)
+            .map_err(|e| io_err(&e.path, e.source))?;
+
+        println!(
+            "packaged `{}` for {} → {}",
+            manifest.name,
+            os.as_str(),
+            shell_root.display()
+        );
+        if os.build_runs_on_linux() {
+            println!(
+                "  note: an Android shell project is written here; run `./gradlew assembleDebug` \
+                 inside it with the Android SDK to produce an APK."
+            );
+        } else {
+            println!(
+                "  note: the iOS shell project layout is written here, but a signed, runnable \
+                 .ipa must be produced on a macOS runner with Xcode + a signing identity \
+                 (out of scope)."
+            );
+        }
+        Ok(())
+    }
+}
+
 /// `build|release web desktop [<path>]` — build the app and lay out a
 /// self-contained desktop bundle for the host OS.
 ///
@@ -137,18 +409,6 @@ pub fn pack_desktop(profile: BundleProfile, path: Option<&str>) -> Result<(), Cl
     ))?;
     let manifest = project::parse_manifest(&manifest_path)?;
 
-    let identity = pack::desktop::BundleIdentity::new(
-        &manifest.name,
-        manifest
-            .version
-            .as_ref()
-            .map(ToString::to_string)
-            .as_deref(),
-        None,
-    );
-    let accepts = manifest.capabilities_accept.clone();
-    let icon = manifest.icon.clone();
-
     // Gate the app shape BEFORE any build. The desktop packager is the
     // webview-native host of the DOM `web` shape (`web desktop`): the shape is
     // pinned by `main` (the delivery SSOT), so it is classified from the entry
@@ -156,77 +416,9 @@ pub fn pack_desktop(profile: BundleProfile, path: Option<&str>) -> Result<(), Cl
     // as an explicit override for the rare app that declares one; otherwise the
     // main-classified shape decides. A non-web `main` is refused up front,
     // naming its shape.
-    let shape = match manifest.default_program().and_then(|p| p.shape) {
-        Some(declared) => match declared {
-            project::EntryShape::Web => pack::desktop::AppShape::Web,
-            project::EntryShape::Terminal => pack::desktop::AppShape::Terminal,
-            project::EntryShape::WebView => pack::desktop::AppShape::WebView,
-            project::EntryShape::Program => pack::desktop::AppShape::Program,
-        },
-        None => match classify_entry_shape(&root)? {
-            delivery::Shape::Web => pack::desktop::AppShape::WebView,
-            delivery::Shape::Tui | delivery::Shape::Cli => pack::desktop::AppShape::Terminal,
-            // A `script` renders nothing and a `server` main renders http, not a
-            // desktop window; both classify as a plain program so the webview
-            // gate refuses them by name.
-            delivery::Shape::Script | delivery::Shape::Server => pack::desktop::AppShape::Program,
-        },
-    };
-    pack::desktop::require_webview(shape).map_err(|r| CliError::UsageOwned(r.to_string()))?;
+    validate_desktop_shape(manifest.default_program().and_then(|p| p.shape), &root)?;
 
-    let layout = pack::desktop::layout(os, &identity, &accepts, icon.as_deref())?;
-
-    // Emit + compile the project to a binary. A webview app carries the system
-    // webview as a dynamic dependency, so this is a plain (non-static) native
-    // build.
-    let build_dir = manifest.root.join("out").join("rust");
-    let runtime_dir = resolve_vendored_runtime_dir(None, false)?;
-    build_project(&manifest_path, &build_dir, &runtime_dir)?;
-
-    let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
-    let mut cargo = std::process::Command::new(cargo_bin.path());
-    cargo.arg("build").current_dir(&build_dir);
-    // A `release web desktop` bundle carries an optimised binary; the `build`
-    // dev bundle carries a plain debug one.
-    if profile.cargo_release() {
-        cargo.arg("--release");
-    }
-    force_cargo_terminal_ui(&mut cargo);
-    build_emitted_project(&mut cargo, "the desktop app", None, &build_dir)?;
-
-    // Locate the compiled binary via cargo metadata (the target dir may be a
-    // global CARGO_TARGET_DIR), then materialise (Linux) or describe (mac/Windows).
-    let target_dir = cargo_target_directory(&build_dir)?;
-    let bin_name = emitted_bin_name(&build_dir);
-    let binary = target_dir.join(profile.target_subdir()).join(&bin_name);
-    if !binary.is_file() {
-        return Err(CliError::UsageOwned(format!(
-            "expected app binary at {} — cargo build succeeded but the binary is missing",
-            binary.display()
-        )));
-    }
-
-    let dist = manifest.root.join("dist").join(os.as_str());
-    pack::desktop::materialise(&layout, &binary, icon.as_deref(), &dist)
-        .map_err(|e| io_err(&e.path, e.source))?;
-
-    println!(
-        "packaged `{}` for {} → {}",
-        manifest.name,
-        os.as_str(),
-        dist.join(&layout.root_name).display()
-    );
-    println!("  {}", os.webview_runtime_note());
-    if os != pack::desktop::DesktopOs::Linux {
-        println!(
-            "  note: the {} bundle layout is written here, but a signed, runnable {} artifact \
-             must be produced on a {} runner (unsigned; cross-tooling out of scope).",
-            os.as_str(),
-            os.as_str(),
-            os.as_str()
-        );
-    }
-    Ok(())
+    BundleAssembler::new(&manifest, &manifest_path, profile).assemble_desktop(os)
 }
 
 /// `build|release web spa <os> [<path>]` — build the client-wasm SPA and lay out
@@ -267,62 +459,13 @@ pub fn pack_mobile(
     // pinned by `main`. Honour an explicit declared shape when present, else
     // classify `main` — a non-web `main` fails the `require_web_spa` gate by
     // name rather than silently packaging a terminal or script app as an SPA.
-    let shape_is_web = match manifest.default_program().and_then(|p| p.shape) {
-        Some(declared) => declared == project::EntryShape::Web,
-        None => classify_entry_shape(&root)? == delivery::Shape::Web,
-    };
-    let cap = pack::mobile::WebSpaCapability {
-        shape_is_web,
-        wasm_enabled: manifest.wasm.implies_wasm_target(),
-    };
-    pack::mobile::require_web_spa(cap).map_err(|r| CliError::UsageOwned(r.to_string()))?;
+    validate_mobile_shape(
+        manifest.default_program().and_then(|p| p.shape),
+        &root,
+        &manifest.wasm,
+    )?;
 
-    let identity = pack::desktop::BundleIdentity::new(
-        &manifest.name,
-        manifest
-            .version
-            .as_ref()
-            .map(ToString::to_string)
-            .as_deref(),
-        None,
-    );
-    let accepts = manifest.capabilities_accept.clone();
-    let icon = manifest.icon.clone();
-
-    // Build the `--target wasm` SPA into the project's `out/rust`, then collect
-    // its `www/` tree. The wasm bundle pipeline (emit + cargo + wasm-bindgen) is
-    // the single source of the hostable bundle; invoking it through this binary
-    // keeps that pipeline authoritative rather than re-implemented here.
-    let build_dir = manifest.root.join("out").join("rust");
-    build_wasm_for_mobile(&manifest_path, &build_dir, profile)?;
-    let www_dir = build_dir.join("www");
-    let bundle = pack::mobile::SpaBundle::from_www_dir(&www_dir)
-        .map_err(|e| CliError::UsageOwned(e.to_string()))?;
-
-    let layout = pack::mobile::layout(os, &identity, &accepts, &bundle, icon.as_deref())?;
-
-    let dist = manifest.root.join("dist").join(os.as_str());
-    let shell_root = pack::mobile::materialise(&layout, icon.as_deref(), &dist)
-        .map_err(|e| io_err(&e.path, e.source))?;
-
-    println!(
-        "packaged `{}` for {} → {}",
-        manifest.name,
-        os.as_str(),
-        shell_root.display()
-    );
-    if os.build_runs_on_linux() {
-        println!(
-            "  note: an Android shell project is written here; run `./gradlew assembleDebug` \
-             inside it with the Android SDK to produce an APK."
-        );
-    } else {
-        println!(
-            "  note: the iOS shell project layout is written here, but a signed, runnable .ipa \
-             must be produced on a macOS runner with Xcode + a signing identity (out of scope)."
-        );
-    }
-    Ok(())
+    BundleAssembler::new(&manifest, &manifest_path, profile).assemble_mobile(os)
 }
 
 /// Build the hostable SPA bundle at `build_dir/www/` through this binary —
@@ -2203,5 +2346,258 @@ pub const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
         | Diagnostic::Sandbox { .. }
         | Diagnostic::Consent { .. }
         | Diagnostic::RegistryUnreachable { .. } => ipe_diagnostics::Span::DUMMY,
+    }
+}
+
+// ── Refusal gate unit tests ───────────────────────────────────────────────────
+//
+// These tests drive the fail-closed shape/permission gates WITHOUT a real
+// project on disk: they pass `Some(declared)` so `classify_entry_shape` (which
+// reads source files) is bypassed. Any rejected path that no test drives is one
+// edit away from silently passing — pin them here.
+
+#[cfg(test)]
+mod pack_gate_tests {
+    use super::*;
+
+    // ── Desktop gate refusals ─────────────────────────────────────────────────
+
+    /// A declared `Terminal` shape must be refused for desktop packaging — a
+    /// terminal app is not a webview-capable host.
+    #[test]
+    fn desktop_gate_refuses_terminal_shape() {
+        let err = validate_desktop_shape(Some(project::EntryShape::Terminal), Path::new("."))
+            .expect_err("Terminal shape must be refused");
+        assert!(
+            matches!(&err, CliError::UsageOwned(_)),
+            "expected UsageOwned, got {err:?}"
+        );
+        let CliError::UsageOwned(msg) = err else {
+            return;
+        };
+        assert!(
+            msg.contains("Terminal") || msg.contains("terminal"),
+            "refusal names the rejected shape: {msg}"
+        );
+    }
+
+    /// A declared `Program` shape must be refused for desktop packaging — a
+    /// plain program produces no desktop window.
+    #[test]
+    fn desktop_gate_refuses_program_shape() {
+        let err = validate_desktop_shape(Some(project::EntryShape::Program), Path::new("."))
+            .expect_err("Program shape must be refused");
+        assert!(
+            matches!(&err, CliError::UsageOwned(_)),
+            "expected UsageOwned, got {err:?}"
+        );
+        let CliError::UsageOwned(msg) = err else {
+            return;
+        };
+        assert!(
+            msg.contains("Program") || msg.contains("program"),
+            "refusal names the rejected shape: {msg}"
+        );
+    }
+
+    /// A declared `WebView` shape passes the desktop gate — the desktop
+    /// packager is the webview-native host.
+    #[test]
+    fn desktop_gate_accepts_webview_shape() {
+        validate_desktop_shape(Some(project::EntryShape::WebView), Path::new("."))
+            .expect("WebView shape must pass the desktop gate");
+    }
+
+    /// A declared `Web` shape is refused for desktop packaging — `Web` is a
+    /// server/SPA shape, not a native-window shape; only `WebView` can be
+    /// desktop-bundled.
+    #[test]
+    fn desktop_gate_refuses_web_shape() {
+        let err = validate_desktop_shape(Some(project::EntryShape::Web), Path::new("."))
+            .expect_err("Web shape must be refused for desktop");
+        assert!(
+            matches!(&err, CliError::UsageOwned(_)),
+            "expected UsageOwned, got {err:?}"
+        );
+        let CliError::UsageOwned(msg) = err else {
+            return;
+        };
+        assert!(
+            msg.contains("web") || msg.contains("Web"),
+            "refusal names the rejected shape: {msg}"
+        );
+    }
+
+    // ── Desktop shape classification ──────────────────────────────────────────
+
+    /// `EntryShape::Terminal` classifies to `AppShape::Terminal`.
+    #[test]
+    fn classify_terminal_declared_shape() {
+        let shape = classify_desktop_shape(Some(project::EntryShape::Terminal), Path::new("."))
+            .expect("classification must not fail for a declared shape");
+        assert_eq!(shape, pack::desktop::AppShape::Terminal);
+    }
+
+    /// `EntryShape::Program` classifies to `AppShape::Program`.
+    #[test]
+    fn classify_program_declared_shape() {
+        let shape = classify_desktop_shape(Some(project::EntryShape::Program), Path::new("."))
+            .expect("classification must not fail for a declared shape");
+        assert_eq!(shape, pack::desktop::AppShape::Program);
+    }
+
+    /// `EntryShape::WebView` classifies to `AppShape::WebView`.
+    #[test]
+    fn classify_webview_declared_shape() {
+        let shape = classify_desktop_shape(Some(project::EntryShape::WebView), Path::new("."))
+            .expect("classification must not fail for a declared shape");
+        assert_eq!(shape, pack::desktop::AppShape::WebView);
+    }
+
+    /// `EntryShape::Web` classifies to `AppShape::Web`.
+    #[test]
+    fn classify_web_declared_shape() {
+        let shape = classify_desktop_shape(Some(project::EntryShape::Web), Path::new("."))
+            .expect("classification must not fail for a declared shape");
+        assert_eq!(shape, pack::desktop::AppShape::Web);
+    }
+
+    // ── Mobile gate refusals ──────────────────────────────────────────────────
+
+    /// A declared non-`Web` shape must be refused for mobile packaging — the
+    /// mobile SPA shell only hosts `Web` apps.
+    #[test]
+    fn mobile_gate_refuses_terminal_shape() {
+        let wasm_on = project::WasmConfig {
+            mode: Some("spa".to_owned()),
+            ..Default::default()
+        };
+        let err = validate_mobile_shape(
+            Some(project::EntryShape::Terminal),
+            Path::new("."),
+            &wasm_on,
+        )
+        .expect_err("Terminal shape must be refused for mobile");
+        assert!(
+            matches!(&err, CliError::UsageOwned(_)),
+            "expected UsageOwned, got {err:?}"
+        );
+        let CliError::UsageOwned(msg) = err else {
+            return;
+        };
+        assert!(
+            msg.contains("Terminal") || msg.contains("terminal") || msg.contains("Web"),
+            "refusal names the shape or the required type: {msg}"
+        );
+    }
+
+    /// A declared `Program` shape must be refused for mobile packaging.
+    #[test]
+    fn mobile_gate_refuses_program_shape() {
+        let wasm_on = project::WasmConfig {
+            mode: Some("spa".to_owned()),
+            ..Default::default()
+        };
+        let err =
+            validate_mobile_shape(Some(project::EntryShape::Program), Path::new("."), &wasm_on)
+                .expect_err("Program shape must be refused for mobile");
+        assert!(
+            matches!(&err, CliError::UsageOwned(_)),
+            "expected UsageOwned, got {err:?}"
+        );
+        let CliError::UsageOwned(msg) = err else {
+            return;
+        };
+        assert!(
+            msg.contains("Program") || msg.contains("program") || msg.contains("Web"),
+            "refusal names the shape or the required type: {msg}"
+        );
+    }
+
+    /// A `Web` shape with wasm mode `off` must be refused — the mobile shell
+    /// requires `[wasm] mode` set to `spa` or `hydrate`.
+    #[test]
+    fn mobile_gate_refuses_web_shape_without_wasm() {
+        let wasm_off = project::WasmConfig::default(); // mode = None -> off
+        let err = validate_mobile_shape(Some(project::EntryShape::Web), Path::new("."), &wasm_off)
+            .expect_err("Web shape without wasm must be refused for mobile");
+        assert!(
+            matches!(&err, CliError::UsageOwned(_)),
+            "expected UsageOwned, got {err:?}"
+        );
+        let CliError::UsageOwned(msg) = err else {
+            return;
+        };
+        assert!(
+            msg.contains("wasm") || msg.contains("Wasm") || msg.contains("spa"),
+            "refusal names the missing wasm capability: {msg}"
+        );
+    }
+
+    /// A `Web` shape with wasm mode `spa` passes the mobile gate.
+    #[test]
+    fn mobile_gate_accepts_web_shape_with_wasm_spa() {
+        let wasm_on = project::WasmConfig {
+            mode: Some("spa".to_owned()),
+            ..Default::default()
+        };
+        validate_mobile_shape(Some(project::EntryShape::Web), Path::new("."), &wasm_on)
+            .expect("Web + wasm=spa must pass the mobile gate");
+    }
+
+    /// A `Web` shape with wasm mode `hydrate` also passes the mobile gate.
+    #[test]
+    fn mobile_gate_accepts_web_shape_with_wasm_hydrate() {
+        let wasm_on = project::WasmConfig {
+            mode: Some("hydrate".to_owned()),
+            ..Default::default()
+        };
+        validate_mobile_shape(Some(project::EntryShape::Web), Path::new("."), &wasm_on)
+            .expect("Web + wasm=hydrate must pass the mobile gate");
+    }
+
+    // ── Mobile capability classification ──────────────────────────────────────
+
+    /// `Web` + wasm enabled -> `shape_is_web=true`, `wasm_enabled=true`.
+    #[test]
+    fn classify_mobile_cap_web_wasm_on() {
+        let wasm_on = project::WasmConfig {
+            mode: Some("spa".to_owned()),
+            ..Default::default()
+        };
+        let cap = classify_mobile_spa_cap(Some(project::EntryShape::Web), Path::new("."), &wasm_on)
+            .expect("classification must succeed");
+        assert!(cap.shape_is_web, "Web shape must set shape_is_web");
+        assert!(cap.wasm_enabled, "spa mode must set wasm_enabled");
+    }
+
+    /// `Terminal` + wasm enabled -> `shape_is_web=false`.
+    #[test]
+    fn classify_mobile_cap_terminal_wasm_on() {
+        let wasm_on = project::WasmConfig {
+            mode: Some("spa".to_owned()),
+            ..Default::default()
+        };
+        let cap = classify_mobile_spa_cap(
+            Some(project::EntryShape::Terminal),
+            Path::new("."),
+            &wasm_on,
+        )
+        .expect("classification must succeed");
+        assert!(
+            !cap.shape_is_web,
+            "Terminal shape must set shape_is_web=false"
+        );
+    }
+
+    /// `Web` + wasm off -> `wasm_enabled=false`.
+    #[test]
+    fn classify_mobile_cap_web_wasm_off() {
+        let wasm_off = project::WasmConfig::default();
+        let cap =
+            classify_mobile_spa_cap(Some(project::EntryShape::Web), Path::new("."), &wasm_off)
+                .expect("classification must succeed");
+        assert!(cap.shape_is_web, "Web shape must set shape_is_web");
+        assert!(!cap.wasm_enabled, "mode=None must set wasm_enabled=false");
     }
 }
