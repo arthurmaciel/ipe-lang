@@ -25175,7 +25175,8 @@ impl<'a> Lowerer<'a> {
                 KernelFn::CacheNewRaw
                 | KernelFn::CacheClear
                 | KernelFn::CacheSize
-                | KernelFn::CacheStats,
+                | KernelFn::CacheStats
+                | KernelFn::CacheDestroyRaw,
             ) => Ok(1),
             Callee::Kernel(KernelFn::CacheGet | KernelFn::CacheRemove) => Ok(2),
             Callee::Kernel(KernelFn::CachePut) => Ok(3),
@@ -29344,6 +29345,7 @@ mod tests {
         KernelFn::CacheClear,
         KernelFn::CacheSize,
         KernelFn::CacheStats,
+        KernelFn::CacheDestroyRaw,
         // Ipe.Config
         KernelFn::ConfigString,
         KernelFn::ConfigInt,

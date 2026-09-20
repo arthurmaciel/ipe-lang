@@ -993,6 +993,7 @@ Ipe.Cache — in-memory LRU + TTL cache.
 | `clear` | `clear cache` — purge every entry.  Stats counters keep their |
 | `size` | `size cache` — current entry count (after lazy expiration). |
 | `stats` | `stats cache` — running totals of `{ hits, misses, evictions }` |
+| `destroy` | `destroy cache` — reclaim the cache, freeing its handle.  The registry |
 
 ## Char
 

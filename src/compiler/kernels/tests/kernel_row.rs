@@ -162,6 +162,7 @@ fn source_display_name_matches_known_exceptions() {
         (CacheClear, "Cache.clearRaw"),
         (CacheSize, "Cache.sizeRaw"),
         (CacheStats, "Cache.statsRaw"),
+        (CacheDestroyRaw, "Cache.destroyRaw"),
     ];
     for &(k, expected) in cases {
         assert_eq!(
@@ -194,6 +195,7 @@ fn source_display_name_default_is_qualifier_dot_name() {
         CacheClear,
         CacheSize,
         CacheStats,
+        CacheDestroyRaw,
     ];
     for &k in StdlibKernel::ALL {
         if exceptions.contains(&k) {
