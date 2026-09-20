@@ -396,23 +396,44 @@ impl WasmConfig {
 /// The `[wasm].publicEnv` secret-name denylist (spec Q5 "Config: default-deny
 /// allowlist (+ layered secret denylist)").
 ///
-/// Denies `*_SECRET`, `*_TOKEN`, `*_KEY`, `*_PASSWORD`, `DATABASE_URL`, and
-/// the internal `IPE_*` namespace. An allowlisted name matching this is a
+/// Denies `DATABASE_URL`, the internal `IPE_*` namespace, and any name whose
+/// underscore-delimited components — or whose bare (single-component) name —
+/// carry a secret word: `SECRET`, `TOKEN`, `KEY`, `PASSWORD`, `PASSWD`,
+/// `CREDENTIAL`, `AUTH`, or `APIKEY`. An allowlisted name matching this is a
 /// BUILD error (parse time), forcing the author to confirm — never a silent
-/// drop, never a runtime-only refusal. Case-insensitive (manifest authors may
-/// write either case; the runtime env-var namespace itself is
-/// case-sensitive POSIX convention, but a same-name-different-case entry is
-/// exactly the kind of "did they mean the secret" ambiguity this gate exists
-/// to catch).
+/// drop, never a runtime-only refusal.
+///
+/// The gate matches on word boundaries (each `_`-delimited component), not raw
+/// substring: `SECRET`, `APIKEY`, and `STRIPE_SECRET_KEY` all reject, while a
+/// name that merely embeds a secret word inside a larger word — `AUTHOR`,
+/// `KEYBOARD`, `TOKENIZER` — stays allowed. This fails closed on the secret
+/// word regardless of separator (bare `SECRET` and `_SECRET` alike) while not
+/// over-blocking a legitimate public name.
+///
+/// Case-insensitive (manifest authors may write either case; the runtime
+/// env-var namespace itself is case-sensitive POSIX convention, but a
+/// same-name-different-case entry is exactly the kind of "did they mean the
+/// secret" ambiguity this gate exists to catch).
 #[must_use]
 pub fn is_denylisted_public_env_name(name: &str) -> bool {
+    /// The secret words whose presence as a whole `_`-delimited component (or
+    /// as the bare name) marks a name as secret-bearing.
+    const SECRET_WORDS: [&str; 8] = [
+        "SECRET",
+        "TOKEN",
+        "KEY",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "AUTH",
+        "APIKEY",
+    ];
     let upper = name.to_ascii_uppercase();
     upper == "DATABASE_URL"
         || upper.starts_with("IPE_")
-        || upper.ends_with("_SECRET")
-        || upper.ends_with("_TOKEN")
-        || upper.ends_with("_KEY")
-        || upper.ends_with("_PASSWORD")
+        || upper
+            .split('_')
+            .any(|component| SECRET_WORDS.contains(&component))
 }
 
 /// A discovered Ipê source file with its resolved module path.
@@ -1124,6 +1145,15 @@ import String
             "API_KEY",
             "ADMIN_PASSWORD",
             "IPE_ANYTHING",
+            // Bare / no-underscore secret words: the separator-less forms the
+            // old `ends_with("_…")` gate let slip through.
+            "SECRET",
+            "TOKEN",
+            "PASSWORD",
+            "PASSWD",
+            "APIKEY",
+            "AUTH",
+            "CREDENTIAL",
         ] {
             assert!(
                 is_denylisted_public_env_name(denied),
@@ -1134,7 +1164,18 @@ import String
 
     #[test]
     fn public_env_allows_ordinary_config_names() {
-        for allowed in ["API_BASE_URL", "APP_VERSION", "FEATURE_FLAG_X"] {
+        for allowed in [
+            "API_BASE_URL",
+            "APP_VERSION",
+            "FEATURE_FLAG_X",
+            "PUBLIC_API_BASE_URL",
+            "APP_REGION",
+            // Words that merely embed a secret word as a substring stay
+            // allowed — the gate matches whole `_`-delimited components.
+            "AUTHOR",
+            "KEYBOARD",
+            "TOKENIZER",
+        ] {
             assert!(
                 !is_denylisted_public_env_name(allowed),
                 "{allowed} must NOT match the secret-name denylist"

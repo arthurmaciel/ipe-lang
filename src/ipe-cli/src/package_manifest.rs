@@ -1133,9 +1133,9 @@ impl Reader<'_> {
                     span,
                     &format!(
                         "`publicEnv` lists {name:?}, which matches the secret-name denylist \
-                         (*_SECRET / *_TOKEN / *_KEY / *_PASSWORD / DATABASE_URL / the internal \
-                         IPE_* namespace) — a secret environment variable can never be \
-                         allowlisted into the public wasm bundle"
+                         (a SECRET / TOKEN / KEY / PASSWORD / PASSWD / CREDENTIAL / AUTH / APIKEY \
+                         word, DATABASE_URL, or the internal IPE_* namespace) — a secret \
+                         environment variable can never be allowlisted into the public wasm bundle"
                     ),
                 ));
             }
