@@ -10,10 +10,12 @@ module Ipe.Browser.Notification.Internals exposing
     , defaults
     , JsCmd(..)
     , JsMsg(..)
+    , PermissionReply(..)
     , request
     , requestOne
     , subscribe
     , inbound
+    , permissionInbound
     )
 
 import Ipe.Error as Error exposing (Error)
@@ -60,10 +62,12 @@ type JsCmd
     | Show Options
 
 
--- | The NARROW closed INBOUND port type — deliberately NOT the app's internal
--- `Msg`. Every variant the browser can push is enumerated, so the fold in the
--- high-level layer is EXHAUSTIVE and a permission denial can never be silently
--- dropped: it becomes a typed `Err`.
+-- | The NARROW closed INBOUND port type for the `outcomes` subscription —
+-- deliberately NOT the app's internal `Msg`. Every variant the browser can push
+-- on the display path is enumerated, so the fold in the high-level layer is
+-- EXHAUSTIVE and a denial can never be silently dropped: it becomes a typed
+-- `Err`. The correlated `requestPermission` reply uses the separate
+-- `PermissionReply` type, so `Shown` cannot stand in for a permission grant.
 --
 --   * `Granted` — the host granted notification permission.
 --   * `Denied` — the host refused notification permission.
@@ -76,6 +80,23 @@ type JsMsg
     | Unavailable
 
 
+-- | The closed reply vocabulary of a `RequestPermission` request — a SEPARATE
+-- type from `JsMsg` so a display acknowledgement (`Shown`) has NO representation
+-- as a permission outcome. A permission request resolves to exactly one of:
+--
+--   * `PermGranted` — the host granted notification permission.
+--   * `PermDenied` — the host refused notification permission.
+--   * `PermUnavailable` — the Notification API is absent in this context.
+--
+-- Because the type omits any display-ack variant, the permission fold cannot map
+-- a `Shown` frame to a grant even if the first-party glue misroutes one: an
+-- unrecognised reply fails the correlated decode closed (the frame is dropped).
+type PermissionReply
+    = PermGranted
+    | PermDenied
+    | PermUnavailable
+
+
 -- | `request cmd` — hand a closed outbound `JsCmd` to the raw port transport.
 -- The served first-party JS sink reaches the `Notification` API; the reply
 -- arrives inbound as a `JsMsg`.
@@ -84,12 +105,14 @@ request cmd =
     Js.send cmd
 
 
--- | `requestOne cmd` — correlated one-shot `JsCmd` → `Task Error JsMsg`.
--- Routes through `Js.request` with the `inbound` decoder so the correlated
--- reply is decoded fail-closed by the same gate the `subscribe` path uses.
-requestOne : JsCmd -> Task Error JsMsg
+-- | `requestOne cmd` — correlated one-shot permission `JsCmd` → `Task Error
+-- PermissionReply`. Routes through `Js.request` with the `permissionInbound`
+-- decoder, whose closed vocabulary omits the display-ack event: a `shown` frame
+-- misrouted onto a permission reply is decoded closed (the frame is dropped),
+-- never a grant.
+requestOne : JsCmd -> Task Error PermissionReply
 requestOne cmd =
-    Js.request cmd inbound
+    Js.request cmd permissionInbound
 
 
 -- | `subscribe toMsg` — the inbound subscription over the fail-closed seal
@@ -139,6 +162,48 @@ decodeError token =
 
         "unavailable" ->
             Decode.succeed Unavailable
+
+        _ ->
+            Decode.fail ("unknown notification error variant: " ++ token)
+
+
+-- | The total, fail-closed decoder for a `RequestPermission` reply. Structurally
+-- distinct from `inbound`: its only success event is `granted`, so a `shown`
+-- display acknowledgement fails the decode closed (the frame is dropped) rather
+-- than crossing as a permission outcome. A false `ok` decodes the closed error
+-- vocabulary into a denial variant.
+permissionInbound : Decode.Decoder PermissionReply
+permissionInbound =
+    Decode.andThen decodePermissionByOk (Decode.field "ok" Decode.bool)
+
+
+decodePermissionByOk : Bool -> Decode.Decoder PermissionReply
+decodePermissionByOk ok =
+    if ok then
+        Decode.andThen decodePermissionEvent (Decode.field "event" Decode.string)
+
+    else
+        Decode.andThen decodePermissionError (Decode.field "error" Decode.string)
+
+
+decodePermissionEvent : String -> Decode.Decoder PermissionReply
+decodePermissionEvent event =
+    case event of
+        "granted" ->
+            Decode.succeed PermGranted
+
+        _ ->
+            Decode.fail ("unexpected notification permission event: " ++ event)
+
+
+decodePermissionError : String -> Decode.Decoder PermissionReply
+decodePermissionError token =
+    case token of
+        "denied" ->
+            Decode.succeed PermDenied
+
+        "unavailable" ->
+            Decode.succeed PermUnavailable
 
         _ ->
             Decode.fail ("unknown notification error variant: " ++ token)

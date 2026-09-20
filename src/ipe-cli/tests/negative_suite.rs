@@ -1720,6 +1720,28 @@ fn notification_inbound_fold_missing_a_denial_is_non_exhaustive() {
     assert_rejected("notification_inbound_missing_denied", &src, "IPE-T0010");
 }
 
+/// The `RequestPermission` reply vocabulary (`PermissionReply`) is a SEPARATE
+/// type from the display-path `JsMsg`, so a `Shown` display acknowledgement has
+/// NO representation as a permission outcome: a fold over `PermissionReply` that
+/// names `Shown` is an unknown constructor (IPE-N0003), not a silently accepted
+/// grant. This is the fail-closed-by-construction half of #2635 — a display ack
+/// cannot be treated as a permission grant because the type cannot express it.
+#[test]
+fn notification_permission_reply_cannot_name_the_display_ack() {
+    let src = format!(
+        "{HEAD}import Ipe.Io as Io\n\
+         import Ipe.Browser.Notification.Internals as Note exposing (PermissionReply(..))\n\
+         describe : PermissionReply -> String\n\
+         describe r =\n    case r of\n        \
+         PermGranted     -> \"granted\"\n        \
+         PermDenied      -> \"denied\"\n        \
+         PermUnavailable -> \"unavailable\"\n        \
+         Shown           -> \"shown\"\n\n\
+         main = Io.println (describe PermGranted)\n"
+    );
+    assert_rejected("notification_permission_reply_no_shown", &src, "IPE-N0003");
+}
+
 /// A fold over the inbound `Ipe.Browser.Storage.Internals` `JsMsg` that omits the
 /// `Unavailable` variant is non-exhaustive (IPE-T0010) — the compiler-level
 /// guarantee that a storage unavailability can never be silently swallowed.
