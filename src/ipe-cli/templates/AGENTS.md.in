@@ -1078,8 +1078,9 @@ explicit flag. Precedence (highest first): `--target wasm` CLI flag >
 absent `wasm` field (or `wasm = Off`) keeps the native default.
 
 `Wasm.publicEnv` is a default-deny allowlist gated by a secret-name denylist
-(`*_SECRET`/`*_TOKEN`/`*_KEY`/`*_PASSWORD`/`DATABASE_URL`/the `IPE_*`
-namespace) enforced at manifest PARSE time — listing `IPE_AUTH_TOKEN_SECRET`
+(any `_`-delimited component that is a secret word — `SECRET`/`TOKEN`/`KEY`/
+`PASSWORD`/`PASSWD`/`CREDENTIAL`/`AUTH`/`APIKEY` — plus `DATABASE_URL` and the
+`IPE_*` namespace) enforced at manifest PARSE time — listing `SESSION_TOKEN`
 (or any denylisted pattern) in `publicEnv` is a build error, never a silently
 dropped entry and never a runtime-only refusal. `System.getenv` stays a
 DOES-NOT-exist-for-wasm kernel regardless (Layer 1) — public build-time
