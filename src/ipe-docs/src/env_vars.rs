@@ -730,6 +730,25 @@ pub static ENV_VARS: &[EnvVar] = &[
         subsystem: Subsystem::Http,
         class: Class::Tunable,
     },
+    EnvVar {
+        name: "IPE_HTTP_MAX_INFLIGHT",
+        default: "1024",
+        purpose: "Global cap on simultaneously in-flight HTTP requests at the \
+                  `Server.listen` front door. Bounds task/worker fan-out; requests \
+                  beyond the cap are backpressured and, with the request timeout \
+                  outermost, shed as a timeout rather than queued unboundedly.",
+        subsystem: Subsystem::Http,
+        class: Class::SecurityTunable,
+    },
+    EnvVar {
+        name: "IPE_HTTP_REQUEST_TIMEOUT",
+        default: "30 (seconds)",
+        purpose: "Per-request deadline (seconds) at the `Server.listen` front door. \
+                  A request — headers or body — that does not complete within the \
+                  window is dropped with 408, closing the slowloris hold-open vector.",
+        subsystem: Subsystem::Http,
+        class: Class::SecurityTunable,
+    },
     // ── Observability ─────────────────────────────────────────────────────────
     EnvVar {
         name: "IPE_ENV",
@@ -1138,6 +1157,16 @@ pub static ENV_VARS: &[EnvVar] = &[
                   within two intervals is considered dead and disconnected.",
         subsystem: Subsystem::Ws,
         class: Class::Tunable,
+    },
+    EnvVar {
+        name: "IPE_WS_MAX_CONNECTIONS",
+        default: "1024",
+        purpose: "Ceiling on simultaneously live server WebSocket peers. Each peer \
+                  pins a registry slot, an mpsc channel, and a heartbeat task; an \
+                  upgrade beyond the ceiling is refused with 503 before any slot is \
+                  allocated, bounding FD/memory exhaustion by construction.",
+        subsystem: Subsystem::Ws,
+        class: Class::SecurityTunable,
     },
     EnvVar {
         name: "IPE_WS_MAX_MESSAGE_BYTES",

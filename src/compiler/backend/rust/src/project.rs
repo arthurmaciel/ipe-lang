@@ -3864,7 +3864,10 @@ fn db_cargo_toml(base: &str, driver: crate::DbDriver) -> DResult<String> {
 /// 1. Adding `"server"` to the `default` feature list.
 /// 2. Extending the `tokio` dependency line with the `"net"` and `"sync"`
 ///    features (required by `server.rs`'s `TcpListener` and `mpsc` usage).
-/// 3. Appending `axum` and `tower-http` dependency lines before `[profile.dev]`.
+/// 3. Appending `axum`, `tower-http` (with `timeout`), and `tower` (with
+///    `limit`) dependency lines before `[profile.dev]` — the latter two back
+///    the front-door denial-of-service ceilings (`TimeoutLayer` +
+///    `GlobalConcurrencyLimitLayer`).
 ///
 /// Takes the current manifest string so it can be composed with
 /// [`db_cargo_toml`] when a program uses both Db and Server kernels.
@@ -3893,13 +3896,23 @@ fn server_cargo_toml(base: &str) -> DResult<String> {
         crate_specs::TOKIO.name,
         crate_specs::TOKIO.version,
     );
+    // `tower` (`limit`) backs the front-door concurrency cap
+    // (`GlobalConcurrencyLimitLayer`); `tower-http`'s `timeout` backs the
+    // per-request slowloris timeout (`TimeoutLayer`). Both are referenced in
+    // the vendored `server.rs` non-test code, so the emitted native project
+    // must declare them — the `util` feature (`ServiceExt`) is test-only in the
+    // runtime crate, so it is omitted here (the vendored module's `#[cfg(test)]`
+    // blocks never compile in the app crate build).
     let server_deps = format!(
         "{} = {{ version = \"{}\", features = [\"ws\"] }}\n\
-         {} = {{ version = \"{}\", features = [\"fs\", \"catch-panic\"] }}\n\n",
+         {} = {{ version = \"{}\", features = [\"fs\", \"catch-panic\", \"timeout\"] }}\n\
+         {} = {{ version = \"{}\", features = [\"limit\"] }}\n\n",
         crate_specs::AXUM.name,
         crate_specs::AXUM.version,
         crate_specs::TOWER_HTTP.name,
         crate_specs::TOWER_HTTP.version,
+        crate_specs::TOWER.name,
+        crate_specs::TOWER.version,
     );
 
     // Step 1a — insert `"server"` as the LAST element of the `default = [...]`
@@ -5643,11 +5656,20 @@ mod tests {
             out.contains(r#""net""#) && out.contains(r#""sync""#),
             "tokio must gain net + sync features: {out}"
         );
-        // axum + tower-http deps must be present.
+        // axum + tower-http + tower deps must be present. The front-door DoS
+        // ceilings need `tower-http`'s `timeout` (per-request `TimeoutLayer`)
+        // and `tower`'s `limit` (`GlobalConcurrencyLimitLayer`); without both
+        // the vendored `server.rs` fails to compile in the emitted project.
         assert!(out.contains("axum"), "axum dep must be present: {out}");
         assert!(
-            out.contains("tower-http"),
-            "tower-http dep must be present: {out}"
+            out.contains(
+                r#"tower-http = { version = "0.5", features = ["fs", "catch-panic", "timeout"] }"#
+            ),
+            "tower-http dep with timeout must be present: {out}"
+        );
+        assert!(
+            out.contains(r#"tower = { version = "0.5", features = ["limit"] }"#),
+            "tower dep with limit must be present: {out}"
         );
     }
 

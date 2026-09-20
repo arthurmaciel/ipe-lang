@@ -770,6 +770,30 @@ fn max_body() -> usize {
         .unwrap_or(DEFAULT_MAX_BODY)
 }
 
+const DEFAULT_HTTP_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// Per-request deadline (slowloris ceiling). Overridable via
+/// `IPE_HTTP_REQUEST_TIMEOUT` (seconds); falls back to 30s.
+fn http_request_timeout_secs() -> u64 {
+    crate::system::read_env_var("IPE_HTTP_REQUEST_TIMEOUT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_HTTP_REQUEST_TIMEOUT_SECS)
+}
+
+const DEFAULT_HTTP_MAX_INFLIGHT: usize = 1024;
+
+/// Global in-flight request cap. Overridable via `IPE_HTTP_MAX_INFLIGHT`; falls
+/// back to 1024.
+fn http_max_inflight() -> usize {
+    crate::system::read_env_var("IPE_HTTP_MAX_INFLIGHT")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_HTTP_MAX_INFLIGHT)
+}
+
 fn parse_query(q: Option<&str>) -> HashMap<String, String> {
     let mut out = HashMap::new();
     if let Some(q) = q {
@@ -1128,6 +1152,20 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                     .into_response()
             },
         ));
+        // DoS ceilings (fail-closed, present by construction): the global
+        // in-flight concurrency cap bounds fan-out; the per-request timeout
+        // bounds how long any single connection can pin a worker (slowloris).
+        // `.layer` wraps outer-last, so applying the timeout AFTER the
+        // concurrency limit puts it OUTERMOST — a request that cannot acquire a
+        // concurrency permit still resolves to a timeout rather than parking
+        // forever behind the cap.
+        let app = app
+            .layer(tower::limit::GlobalConcurrencyLimitLayer::new(
+                http_max_inflight(),
+            ))
+            .layer(tower_http::timeout::TimeoutLayer::new(
+                std::time::Duration::from_secs(http_request_timeout_secs()),
+            ));
         // Bind host obeys the one runtime-config precedence: `IPE_HTTP_BIND`
         // (env) > the app's `Host.bind` setting > the build-profile fallback
         // (loopback in debug, all interfaces in release). The conservative
@@ -1223,6 +1261,20 @@ fn ws_send_buffer() -> usize {
         .unwrap_or(256)
 }
 
+const DEFAULT_WS_MAX_CONNECTIONS: usize = 1024;
+
+/// Live-peer ceiling. Each accepted upgrade pins a registry slot, an mpsc
+/// channel, and a heartbeat task; without a ceiling a peer can open connections
+/// until FD/memory exhaustion. Override via `IPE_WS_MAX_CONNECTIONS`; default
+/// 1024, mirroring `http_stream`'s `CLIENT_STREAMS_MAX`.
+fn ws_max_connections() -> usize {
+    crate::system::read_env_var("IPE_WS_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_WS_MAX_CONNECTIONS)
+}
+
 /// Heartbeat interval for WebSocket Ping frames.  Mirrors
 /// `wsDefaultPingInterval = 30s` (``).
 /// Override via `IPE_WS_HEARTBEAT` (seconds, must be > 0).
@@ -1279,10 +1331,26 @@ async fn ws_loop<E: From<String> + Send + 'static>(
     // size checks below are application-layer defense in depth (belt-and-braces
     // against a future axum/tungstenite version silently dropping the cap).
     let (tx, mut rx) = tokio::sync::mpsc::channel::<WsOut>(ws_send_buffer());
-    ws_registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(id, tx);
+    // Live-peer ceiling, application-layer defense in depth: the upgrade gate in
+    // `server_web_socket_upgrade` is the primary check, but under high
+    // concurrency the check-then-insert is a TOCTOU window. Re-check under the
+    // same lock that inserts, so the count that admits the peer is the count that
+    // grows — never insert past the ceiling. On overflow drop the socket with a
+    // Close frame instead of registering it (no `onConnect`, no slot held).
+    let admitted = {
+        let mut reg = ws_registry().lock().unwrap_or_else(|e| e.into_inner());
+        if reg.len() >= ws_max_connections() {
+            false
+        } else {
+            reg.insert(id, tx);
+            true
+        }
+        // guard dropped here — never held across the awaits below.
+    };
+    if !admitted {
+        let _ = socket.send(Message::Close(None)).await;
+        return;
+    }
     let _ = (cfg.onConnect)(WsHandle::WebSocketServer(id)).await;
     // Heartbeat: send a Ping every `ws_heartbeat_secs()` seconds to keep the
     // connection alive through proxies and detect silent drops.  Mirrors
@@ -1484,6 +1552,20 @@ pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
                 403,
                 "websocket: cross-origin request rejected (set Ws.withOriginPatterns to allow)",
             ));
+        }
+        // Live-peer ceiling (fail-closed). Checked after the origin checks and
+        // before the upgrader is taken, so it runs on EVERY path and before any
+        // id/channel/task is minted — "allocated slot without a capacity check"
+        // is unrepresentable. A race between this check and the registry insert
+        // is closed by a re-check at the insert site in `ws_loop`.
+        {
+            let live = ws_registry()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len();
+            if live >= ws_max_connections() {
+                return ok_res(ws_resp(503, "websocket: server at connection capacity"));
+            }
         }
         let upgrader = WS_UPGRADER.try_with(|c| c.take()).ok().flatten();
         match upgrader {
@@ -2607,6 +2689,150 @@ mod tests {
             ),
             IpeResult::Err(e) => panic!("expected Ok(400), got Err({e})"),
         }
+    }
+
+    #[tokio::test]
+    async fn ws_upgrade_rejects_when_at_capacity() {
+        // Pre-fill the live-peer registry to the ceiling, then a valid
+        // same-origin upgrade must be turned away with 503 BEFORE any id/channel
+        // is minted — distinguished from the `400 no-upgrader` fall-through the
+        // same-origin path would otherwise hit in a unit test.
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WS_MAX_CONNECTIONS") };
+        let ceiling = ws_max_connections();
+        {
+            let mut reg = ws_registry().lock().unwrap_or_else(|e| e.into_inner());
+            reg.clear();
+            for i in 0..ceiling as i64 {
+                let (tx, _rx) = tokio::sync::mpsc::channel::<WsOut>(1);
+                reg.insert(i, tx);
+            }
+        }
+        let cfg = ws_server_default_cfg::<String>();
+        let req = mk_ws_req(&[
+            ("origin", "https://victim.example"),
+            ("host", "victim.example"),
+        ]);
+        let result = server_web_socket_upgrade::<String>(req, cfg).await;
+        // teardown FIRST: never leave dummy peers pinned for sibling tests,
+        // even if the assertion below fails.
+        ws_registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        let IpeResult::Ok(r) = result else {
+            panic!("expected Ok(503) at capacity, got Err");
+        };
+        assert_eq!(
+            r.status, 503,
+            "WS upgrade at capacity must be rejected with 503 before minting a slot"
+        );
+    }
+
+    #[test]
+    fn ws_max_connections_default_is_1024() {
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WS_MAX_CONNECTIONS") };
+        assert_eq!(ws_max_connections(), DEFAULT_WS_MAX_CONNECTIONS);
+    }
+
+    #[test]
+    fn ws_max_connections_env_override() {
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_WS_MAX_CONNECTIONS", "7") };
+        assert_eq!(ws_max_connections(), 7);
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WS_MAX_CONNECTIONS") };
+    }
+
+    #[test]
+    fn ws_max_connections_zero_falls_back_to_default() {
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_WS_MAX_CONNECTIONS", "0") };
+        assert_eq!(ws_max_connections(), DEFAULT_WS_MAX_CONNECTIONS);
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_WS_MAX_CONNECTIONS") };
+    }
+
+    #[test]
+    fn http_request_timeout_default_is_30() {
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_HTTP_REQUEST_TIMEOUT") };
+        assert_eq!(
+            http_request_timeout_secs(),
+            DEFAULT_HTTP_REQUEST_TIMEOUT_SECS
+        );
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_HTTP_REQUEST_TIMEOUT", "5") };
+        assert_eq!(http_request_timeout_secs(), 5);
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_HTTP_REQUEST_TIMEOUT", "0") }; // invalid → default
+        assert_eq!(
+            http_request_timeout_secs(),
+            DEFAULT_HTTP_REQUEST_TIMEOUT_SECS
+        );
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_HTTP_REQUEST_TIMEOUT") };
+    }
+
+    #[test]
+    fn http_max_inflight_default_is_1024() {
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_HTTP_MAX_INFLIGHT") };
+        assert_eq!(http_max_inflight(), DEFAULT_HTTP_MAX_INFLIGHT);
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_HTTP_MAX_INFLIGHT", "16") };
+        assert_eq!(http_max_inflight(), 16);
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_HTTP_MAX_INFLIGHT", "0") }; // invalid → default
+        assert_eq!(http_max_inflight(), DEFAULT_HTTP_MAX_INFLIGHT);
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_HTTP_MAX_INFLIGHT") };
+    }
+
+    #[tokio::test]
+    async fn serve_times_out_slow_handler() {
+        // The same layer stack `server_listen` applies must turn a handler that
+        // sleeps past the deadline into a timeout (408), proving the slowloris
+        // ceiling is on the served path — not merely configured.
+        use tower::ServiceExt;
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::set_var("IPE_HTTP_REQUEST_TIMEOUT", "1") };
+        let timeout = http_request_timeout_secs();
+        let inflight = http_max_inflight();
+        let app: axum::Router = axum::Router::new()
+            .route(
+                "/slow",
+                axum::routing::get(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    "never"
+                }),
+            )
+            .layer(tower::limit::GlobalConcurrencyLimitLayer::new(inflight))
+            .layer(tower_http::timeout::TimeoutLayer::new(
+                std::time::Duration::from_secs(timeout),
+            ));
+        let req = axum::http::Request::builder()
+            .uri("/slow")
+            .body(axum::body::Body::empty());
+        let Ok(req) = req else {
+            // SAFETY: test-only env mutation.
+            unsafe { std::env::remove_var("IPE_HTTP_REQUEST_TIMEOUT") };
+            panic!("failed to build test request");
+        };
+        // `Router`'s `Service` error is `Infallible`, so the call is total.
+        let served = app.oneshot(req).await;
+        // SAFETY: test-only env mutation.
+        unsafe { std::env::remove_var("IPE_HTTP_REQUEST_TIMEOUT") };
+        let resp = match served {
+            Ok(r) => r,
+            Err(e) => match e {},
+        };
+        assert_eq!(
+            resp.status(),
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            "a handler slower than the deadline must resolve to 408"
+        );
     }
 
     #[test]

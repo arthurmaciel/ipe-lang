@@ -38,6 +38,14 @@ pub const TOWER_HTTP: CrateSpec = CrateSpec {
     name: "tower-http",
     version: "0.5",
 };
+// `tower` (the `limit` layer) backs the server front-door DoS ceiling:
+// `GlobalConcurrencyLimitLayer` bounds in-flight requests. The vendored server
+// module (`server.rs`) references it in non-test code, so the emitted native
+// project must declare the crate alongside `tower-http`.
+pub const TOWER: CrateSpec = CrateSpec {
+    name: "tower",
+    version: "0.5",
+};
 pub const ASYNC_TRAIT: CrateSpec = CrateSpec {
     name: "async-trait",
     version: "0.1",
@@ -185,6 +193,7 @@ pub const ALL: &[CrateSpec] = &[
     SQLX,
     AXUM,
     TOWER_HTTP,
+    TOWER,
     ASYNC_TRAIT,
     LIBC,
     CROSSTERM,
@@ -230,7 +239,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 33, "expected 33 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 34, "expected 34 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or
