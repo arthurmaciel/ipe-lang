@@ -4,8 +4,8 @@ mod registry_phase_c_tests {
         Builder, Builtins, Content, Diagnostic, Feature, LowerError, Ty, UnionFind,
     };
     use ipe_diagnostics::Span;
-    use ipe_intern::{Interner, Symbol};
-    use ipe_kernels::{StdlibKernel, TyShape};
+    use ipe_intern::Interner;
+    use ipe_kernels::StdlibKernel;
 
     /// Kernels RELOCATED into `stdlib_scheme` from the legacy `kernel_ty` table
     /// (String / List / Math plus the remaining backed families). Each carries
