@@ -494,6 +494,9 @@ pub struct Generated {
 mod builder_core;
 mod builtins;
 mod constrain_ast;
+mod constrain_expr;
+mod constrain_pattern;
+mod normalize_ty;
 mod scheme_table;
 #[cfg(test)]
 mod tests;
