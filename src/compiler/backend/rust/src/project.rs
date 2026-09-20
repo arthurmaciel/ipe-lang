@@ -1624,6 +1624,15 @@ fn native_runtime_bindings(reach: PreludeReach) -> DResult<String> {
 /// Emit the complete project for `program`.
 #[allow(clippy::too_many_lines)]
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
+    // Hydration serde-safety gate, enforced BEFORE the single-file/split branch
+    // so BOTH emitted layouts funnel through the one check: a `HydrationState`
+    // island that could carry a server-surface type (Db, Secret, Task, function
+    // types) is rejected here, never serialised into the client JSON island.
+    // `emit_spine` re-runs the same gate (defend-in-depth for the demanded split
+    // path that renders the spine directly); the check is a no-op unless
+    // `ctx.wasm_hydrate_mode` is set.
+    check_hydration_state_fields(ctx, program)?;
+
     // Partition every user item by the Rust file it belongs in. The
     // number of DISTINCT `RustFileId::IpeModule` buckets — NEVER counting the
     // always-possible `Spine` bucket (§3.3: "counts `IpeModule` buckets only,
@@ -3477,10 +3486,12 @@ fn hydration_target_field_types<'p>(
 /// rule [`emit_program`] already established (user types then `SqlValue` then
 /// `SqlField` then record structs then the DB-projection impls).
 ///
-/// **This function is NOT on the public emission path** — [`emit_program`]
-/// (still single-file) does not call it. It is an additive rendering entry
-/// point kept separate so `emit_program` stays byte-for-byte unchanged while
-/// this output tier is proven in isolation (`tests/split_emit.rs`).
+/// [`emit_program`]'s per-module split branch (2+ distinct `IpeModule`
+/// buckets) calls this to render `main.rs`'s Spine tier; the demanded
+/// per-file emit path renders it directly and feeds the text to
+/// [`assemble_split_manifest`]. It also runs the hydration serde-safety gate
+/// ([`check_hydration_state_fields`]) so the demanded path enforces it too —
+/// defence in depth alongside `emit_program`'s own up-front call.
 ///
 /// # Errors
 ///
