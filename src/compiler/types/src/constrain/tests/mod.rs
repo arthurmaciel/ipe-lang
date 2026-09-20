@@ -1457,7 +1457,7 @@ mod registry_phase_c_tests {
                 "{k:?} is KNOWN-UNBACKED and must not be in RELOCATED/FIRST_SCHEMED",
             );
             assert!(
-                builder.stdlib_scheme(k).is_none(),
+                builder.resolve_scheme(k.def().scheme).is_none(),
                 "{k:?} is KNOWN-UNBACKED (no runtime fn, qualifier not in \
                  qual_vars) and must NOT be schemed — a scheme forges an exit-0 \
                  path to an unbacked kernel.",
@@ -1473,7 +1473,7 @@ mod registry_phase_c_tests {
                 "{k:?} must be in ALL to carry a registry index",
             );
             assert!(
-                builder.stdlib_scheme(k).is_none(),
+                builder.resolve_scheme(k.def().scheme).is_none(),
                 "{k:?} is REACHABLE_BUT_UNLOWERED and must NOT be schemed until \
                  its lowering lands (a caller must fail closed, not type-check).",
             );
@@ -1606,13 +1606,9 @@ mod registry_phase_c_tests {
     /// EXACTLY `RELOCATED ∪ FIRST_SCHEMED` and `None` for every other variant.
     /// Pins the migrated set so an accidental over- or under-migration is caught.
     ///
-    /// Resolution is read through [`Builder::resolve_scheme`], NOT
-    /// [`Builder::stdlib_scheme`] directly: a kernel migrated to a structural
-    /// `TyShape` has NO table arm (it resolves by interpreting its shape), so
-    /// reading the table alone would see `None` and falsely report it
-    /// un-migrated. `resolve_scheme` unions both routes — the same adapter
-    /// inference and [`kernel_type_table`] use — so the burndown tracks the true
-    /// schemed set regardless of which route a family takes.
+    /// Resolution is read through [`Builder::resolve_scheme`] — the same adapter
+    /// inference and [`kernel_type_table`] use, which interprets each schemed
+    /// kernel's `TyShape` — so the burndown tracks the true schemed set.
     #[test]
     fn migrated_set_burndown() {
         let mut interner = Interner::new();
@@ -1737,357 +1733,6 @@ mod registry_phase_c_tests {
         );
     }
 
-    /// The load-bearing byte-identity guarantee: for every kernel that carries a
-    /// structural [`TyShape`], interpreting its shape yields a `Ty`
-    /// BYTE-IDENTICAL to the type its (now-removed) `stdlib_scheme` arm produced.
-    /// This is belt-and-braces beyond the golden suite — it pins the interpreter
-    /// directly against an INDEPENDENT reference, so a shape or interpreter that
-    /// disagrees with it is caught here, pre-cargo, rather than as a golden-diff.
-    ///
-    /// # Where the oracle lives
-    ///
-    /// The reference each shape is checked against depends on the kernel's class,
-    /// and both references are INDEPENDENT of the shape and its interpreter:
-    ///
-    /// - A **primitive monomorphic** shape-migrated family has NO `stdlib_scheme`
-    ///   arm (its scheme lives once, on the descriptor), so there is no table `Ty`
-    ///   to compare against. Its reference is [`expected_primitive_scheme`] below:
-    ///   a per-kernel hand-built `Ty` authored from the published signature over
-    ///   the primitive constructors.
-    /// - A family whose scheme `expected_primitive_scheme` cannot express — the
-    ///   `List` / `Maybe` / `Result` / `Set` / `Dict` combinators, the `Basics`
-    ///   arrow-only arms, the `Bytes` decoders, and the tuple-shaped slice
-    ///   (`zip`/`unzip`/`partition`, `fst`/`snd`, `toList`/`fromList`, the
-    ///   `Random` seeded generators) — KEEPS its `stdlib_scheme` arm (that
-    ///   retained hand-built arm — over `let var = Ty::Var`, the
-    ///   `list`/`maybe`/`result`/`set`/`dict`/`order` closures, and the `tuple2`
-    ///   builder — is the byte-identity witness). Its reference is that arm,
-    ///   `stdlib_scheme(k)`, which `expected_primitive_scheme` cannot express.
-    ///
-    /// Selecting the reference by "does the kernel still have a table arm" keeps
-    /// each shaped kernel checked against a genuine second source, so a wrong
-    /// shape or a wrong interpreter arm makes the `assert_eq!` fire here.
-    #[test]
-    fn interpreted_shape_matches_legacy() {
-        let mut interner = Interner::new();
-        let builtins = make_builder(&mut interner);
-        let mut uf = UnionFind::<Content>::new();
-        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
-
-        let mut migrated = 0usize;
-        for &k in StdlibKernel::ALL {
-            let Some(shape) = k.def().shape else { continue };
-            migrated += 1;
-            let interpreted = builder.interpret_shape(shape);
-            // Monomorphic families dropped their arm → the primitive oracle is
-            // their only reference. Polymorphic `List` families kept their arm →
-            // it is the reference (the primitive oracle has no `Ty` for them).
-            let expected =
-                expected_primitive_scheme(&builder, k).or_else(|| builder.stdlib_scheme(k));
-            assert!(
-                expected.is_some(),
-                "kernel {k:?} carries a TyShape but neither the primitive oracle \
-                 `expected_primitive_scheme` nor the retained `stdlib_scheme` arm \
-                 provides a reference `Ty` for it — add one so byte-identity \
-                 stays proven",
-            );
-            assert_eq!(
-                Some(interpreted),
-                expected,
-                "interpreted TyShape for {k:?} is NOT byte-identical to its \
-                 reference Ty — the structural encoding disagrees with the \
-                 hand-authored signature",
-            );
-            // Field ORDER tripwire. `interpret_shape` builds the record via a
-            // `BTreeMap`, which re-sorts by resolved symbol — so a reordered
-            // declared field slice yields the SAME `Ty` and the byte-identity
-            // `assert_eq!` above cannot catch it. Assert every record shape's
-            // declared fields are in strictly-ascending resolved-symbol order
-            // (matching the `BTreeMap` iteration order): a field reorder OR a
-            // duplicate field now fails here.
-            assert_record_fields_ordered(&builder, shape, k);
-        }
-        // Guard against a silently-empty sweep. The migrated set spans the
-        // primitive-monomorphic kernels, the core `List` combinators, the
-        // arrow-only / tuple-shaped / arrow-scalar polymorphic slices, and the
-        // effect / scalar-opaque families now expressible with the `Unit` node
-        // and the opaque/parametric `Con` tags: the `Task` / `Cmd` / `Sub` /
-        // `PubSub` combinators, the `() -> …` and `… -> Task ()` effect kernels
-        // (`Io` / `File` / `System` / `Time` / `Random` / `Process` / `Log` /
-        // `Uuid` v4·v7 / `Trace`), the shared `Decoder a` families
-        // (`Json.Decode` / `Db.Decode` / `Config`), the `JsonEnc` encoders, the
-        // `Error` / `ErrorKind` / `ErrorDetails` ADT surface, the scalar-opaque
-        // families (`Secret` / `Regex` / `Path` / `Url` / `Locale` / `Decimal`
-        // via `Db.Decode.money` / `Crypto` typed-key / `EmailAddress` / `Sql`
-        // fragment builders / `Jwt` builder / `Auth` / `Compression` /
-        // `Encoding` decoders / `HttpMethod` / `Env`), the opaque-`Db`-handle
-        // operations, the opaque `StreamWriter` / `StreamId` / `WsServer(Cfg)` /
-        // `ServerRoute` / `ServerCookie` / `ServerRequest` handle kernels, and
-        // the raw-`Int`-handle `WebSocket` client.
-        //
-        // The `Ui` / `Html` / style builder families — layout / element / event
-        // / attribute builders, the `Html` node and `Html.Attributes` /
-        // `Html.Events` builders, the `Font` / `Border` / `Background` / `Region`
-        // attribute builders, the `Length` / `Color` / `Description` /
-        // `PseudoClass` value builders, the non-record `Input` constructors
-        // (`label*` / `labelHidden` / `placeholder` / `option`), `Ui.Keyed`,
-        // `Ui.Lazy`, `Ui.breakpoint` / `mediaQuery` / `onPseudo`, and
-        // `Server.listen` — via the `Attribute` / `Element` / `Html` / `Length` /
-        // `Color` / `Description` / `PseudoClass` / `Label` / `Placeholder` /
-        // `RadioOption` `Con` tags. The `Ipe.Html.Attribute` cons are
-        // module-qualified (the `HtmlAttribute` tag carries the `Html` module
-        // path — see `builtin_con_module`), byte-identical to the
-        // `stdlib_scheme` `html_attr` builder.
-        //
-        // The closed-record / open-row families via the `Record` node: the
-        // app-entry cfg records (`Web.tea` open-row, `Tui.tea` open-row /
-        // `Cli.tea`), `HttpRequest` /
-        // `HttpResponse` / server `Response`, `Migration`, `Csv` / `CacheCfg` /
-        // `CacheStats` / `WebSocketCfg` / `EmailMessage` (+ nested attachment),
-        // `RetryPolicy` (incl. the `Error`-channel `retryWith`), the
-        // record-carrying `Input` (`text` / `multiline` / `checkbox` / `slider` /
-        // `radio` / `radioRow`), `Border` (`widthEach` / `shadow` /
-        // `innerShadow`), `Ui.button` / `Ui.layoutWith` / `Ui.paddingEach` /
-        // `Ui.link` / `Ui.image`, and the record-producing `Server` route-handler
-        // kernels — each byte-identical to its retained `stdlib_scheme` arm.
-        assert!(
-            migrated >= 863,
-            "expected at least the primitive + core-List + arrow-only + \
-             tuple-shaped + arrow-scalar polymorphic kernels plus the migrated \
-             effect / scalar-opaque / Ui / Html / style builder families, the \
-             closed-record / open-row families, and the arrow-over-record \
-             server kernels (`Server.withCookie`, the `Middleware` wrappers, \
-             `Stream.stream`, `HttpStream.open`, `Ws.upgrade`) — 863 total — to \
-             carry a TyShape, found only {migrated}",
-        );
-    }
-
-    /// Assert every [`TyShape::Record`] reachable from `shape` declares its
-    /// fields in strictly-ascending resolved-symbol order — the order a
-    /// `BTreeMap` iterates, so the declared slice mirrors the materialised
-    /// `Ty::Record`'s key order. A reordered slice, or a duplicated field name,
-    /// fails here even though `interpret_shape`'s `BTreeMap` re-sort hides both
-    /// from the byte-identity `assert_eq!`.
-    fn assert_record_fields_ordered(builder: &Builder, shape: &TyShape, k: StdlibKernel) {
-        match shape {
-            TyShape::Fun(a, b) => {
-                assert_record_fields_ordered(builder, a, k);
-                assert_record_fields_ordered(builder, b, k);
-            }
-            TyShape::Con(_, args) | TyShape::Tuple(args) => {
-                for a in *args {
-                    assert_record_fields_ordered(builder, a, k);
-                }
-            }
-            TyShape::Record { fields, .. } => {
-                let mut prev: Option<Symbol> = None;
-                for (name, field) in *fields {
-                    let sym = builder.field_symbol(*name);
-                    if let Some(p) = prev {
-                        assert!(
-                            p < sym,
-                            "record TyShape for {k:?} declares field {name:?} \
-                             out of ascending resolved-symbol order (or a \
-                             duplicate) — declare record fields sorted by \
-                             resolved symbol so the slice mirrors the BTreeMap",
-                        );
-                    }
-                    prev = Some(sym);
-                    assert_record_fields_ordered(builder, field, k);
-                }
-            }
-            TyShape::Unit | TyShape::Var(_) => {}
-        }
-    }
-
-    /// Independent byte-identity oracle for the shape-migrated primitive
-    /// families: the exact `Ty` each kernel's removed `stdlib_scheme` arm built,
-    /// re-authored here from the kernel's published signature over the six
-    /// primitive constructors. Returns `None` for a kernel that carries no
-    /// primitive shape (so a future non-primitive migration is flagged loudly by
-    /// [`interpreted_shape_matches_legacy`] rather than silently unproven).
-    ///
-    /// Deliberately built with LOCAL closures (not by calling `stdlib_scheme`,
-    /// which carries no arm for a shape-migrated family) so it is a second,
-    /// independent source — the whole point of an oracle.
-    #[allow(clippy::too_many_lines)] // declarative reference table — mirrors the removed arms
-    #[allow(clippy::match_same_arms)] // family-grouped; coincidentally-equal signatures across families stay separate for readability
-    fn expected_primitive_scheme(builder: &Builder, k: StdlibKernel) -> Option<Ty> {
-        use StdlibKernel as K;
-        let b = &builder.builtins;
-        let int = || Ty::Con {
-            module: Vec::new(),
-            name: b.int,
-            args: Vec::new(),
-        };
-        let float = || Ty::Con {
-            module: Vec::new(),
-            name: b.float,
-            args: Vec::new(),
-        };
-        let bool_ty = || Ty::Con {
-            module: Vec::new(),
-            name: b.bool,
-            args: Vec::new(),
-        };
-        let string = || Ty::Con {
-            module: Vec::new(),
-            name: b.string,
-            args: Vec::new(),
-        };
-        let char = || Ty::Con {
-            module: Vec::new(),
-            name: b.char,
-            args: Vec::new(),
-        };
-        let bytes = || Ty::Con {
-            module: Vec::new(),
-            name: b.bytes,
-            args: Vec::new(),
-        };
-        let fun = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b));
-        Some(match k {
-            // ── Bitwise / Math.abs. ──
-            K::BitwiseAnd
-            | K::BitwiseOr
-            | K::BitwiseXor
-            | K::BitwiseShiftLeftBy
-            | K::BitwiseShiftRightBy
-            | K::BitwiseShiftRightZfBy => fun(int(), fun(int(), int())),
-            K::BitwiseComplement | K::MathAbs => fun(int(), int()),
-
-            // ── Math (monomorphic arms). ──
-            K::MathPi | K::MathE | K::MathPhi | K::MathSqrt2 | K::MathInf | K::MathNan => float(),
-            K::MathIsNaN => fun(float(), bool_ty()),
-            K::MathSqrt
-            | K::MathCbrt
-            | K::MathExp
-            | K::MathExp2
-            | K::MathLog
-            | K::MathLog2
-            | K::MathLog10
-            | K::MathSin
-            | K::MathCos
-            | K::MathTan
-            | K::MathAsin
-            | K::MathAcos
-            | K::MathAtan
-            | K::MathSinh
-            | K::MathCosh
-            | K::MathTanh
-            | K::MathAsinh
-            | K::MathAcosh
-            | K::MathAtanh
-            | K::BasicsSqrt => fun(float(), float()),
-            K::MathFloor | K::MathCeil | K::MathRound | K::MathTrunc => fun(float(), int()),
-            K::MathPow | K::MathHypot | K::MathAtan2 | K::MathMod | K::MathRemainder => {
-                fun(float(), fun(float(), float()))
-            }
-
-            // ── Basics. ──
-            K::BasicsNot => fun(bool_ty(), bool_ty()),
-
-            // ── String / Money / Time primitive shapes. ──
-            K::StringFromInt
-            | K::TimeTimeString
-            | K::TimeFormatHTTP
-            | K::TimeFormatISO8601
-            | K::TimeFormatRFC3339 => fun(int(), string()),
-            K::StringFromFloat => fun(float(), string()),
-            // `Money.minorUnits : String -> Int` (the ISO-code-taking kernel).
-            K::StringLength | K::MoneyMinorUnits => fun(string(), int()),
-            K::StringIsEmpty | K::StringIsEmail | K::StringIsUrl | K::MoneyIsKnownCurrency => {
-                fun(string(), bool_ty())
-            }
-            K::StringReverse
-            | K::StringToUpper
-            | K::StringToLower
-            | K::StringCasefold
-            | K::StringTrim
-            | K::StringTrimStart
-            | K::StringTrimEnd
-            | K::CryptoSha256
-            | K::CryptoSha512
-            | K::CryptoSha1
-            | K::CryptoMd5
-            | K::EncodingBase64Encode
-            | K::EncodingUrlEncode
-            | K::EncodingHexEncode
-            | K::HtmlEscapeText
-            | K::HtmlEscapeAttr
-            | K::CssSafetyStripStyleClose
-            | K::MoneySymbol
-            | K::MoneyCurrencyName => fun(string(), string()),
-            K::StringFromChar | K::CharToLower | K::CharToUpper => fun(char(), string()),
-            K::StringAppend | K::SystemGetenvOr => fun(string(), fun(string(), string())),
-            K::StringContains
-            | K::StringStartsWith
-            | K::StringEndsWith
-            | K::StringEqualFold
-            | K::StringContainsIn
-            | K::StringStartsWithIn
-            | K::StringEndsWithIn
-            | K::CryptoConstantTimeEqual
-            | K::MoneyHasRate => fun(string(), fun(string(), bool_ty())),
-            K::StringReplace => fun(string(), fun(string(), fun(string(), string()))),
-            K::CryptoRsaSha256Verify => fun(string(), fun(string(), fun(string(), bool_ty()))),
-            K::StringRepeat
-            | K::StringDropLeft
-            | K::StringDropRight
-            | K::StringLeft
-            | K::StringRight => fun(int(), fun(string(), string())),
-            K::StringSlice => fun(int(), fun(int(), fun(string(), string()))),
-            K::StringPadLeft | K::StringPadRight | K::StringPad => {
-                fun(int(), fun(char(), fun(string(), string())))
-            }
-            K::StringCons => fun(char(), fun(string(), string())),
-            K::StringMap => fun(fun(char(), char()), fun(string(), string())),
-            K::StringFilter => fun(fun(char(), bool_ty()), fun(string(), string())),
-            K::StringAny | K::StringAll => fun(fun(char(), bool_ty()), fun(string(), bool_ty())),
-
-            // ── Char. ──
-            K::CharIsAlpha
-            | K::CharIsDigit
-            | K::CharIsLower
-            | K::CharIsUpper
-            | K::CharIsAlphaNum
-            | K::CharIsHexDigit
-            | K::CharIsOctDigit => fun(char(), bool_ty()),
-            K::CharToCode => fun(char(), int()),
-            K::CharFromCode => fun(int(), char()),
-
-            // ── Bytes. ──
-            K::BytesEmpty => bytes(),
-            K::BytesLength => fun(bytes(), int()),
-            K::BytesIsEmpty => fun(bytes(), bool_ty()),
-            K::BytesFromString => fun(string(), bytes()),
-            K::BytesToHex | K::BytesToBase64 => fun(bytes(), string()),
-            K::BytesAppend => fun(bytes(), fun(bytes(), bytes())),
-            K::BytesSlice => fun(int(), fun(int(), fun(bytes(), bytes()))),
-
-            // ── Time calendar helpers. ──
-            K::TimeIsLeapYear => fun(int(), bool_ty()),
-            K::TimeDaysInMonth | K::TimeAddMillis | K::TimeDiffMillis => {
-                fun(int(), fun(int(), int()))
-            }
-            K::TimeFormat => fun(string(), fun(int(), string())),
-
-            // ── RateLimit / string constants. ──
-            K::RateLimitAllow => fun(string(), fun(string(), fun(int(), fun(int(), bool_ty())))),
-            K::FontSansSerif
-            | K::FontSerif
-            | K::FontMonospace
-            | K::UiMobile
-            | K::UiTablet
-            | K::UiDesktop
-            | K::UiDarkMode
-            | K::UiLightMode
-            | K::UiReducedMotion => string(),
-
-            _ => return None,
-        })
-    }
-
     /// Totality gate. Scheme resolution is TOTAL over the reachable set:
     /// every `StdlibKernel` except the explicit `KNOWN_UNBACKED` exclusions has a
     /// concrete scheme. This is the load-bearing precondition for deleting the
@@ -2095,10 +1740,8 @@ mod registry_phase_c_tests {
     /// silently riding it. If this fails, it prints the un-schemed variants;
     /// they must be schemed (or classified `KNOWN_UNBACKED`).
     ///
-    /// Read through [`Builder::resolve_scheme`], not [`Builder::stdlib_scheme`]:
-    /// a shape-migrated kernel has no table arm and is schemed by interpreting
-    /// its `TyShape`, so the totality check must union both routes exactly as
-    /// inference does.
+    /// Read through [`Builder::resolve_scheme`], which interprets each schemed
+    /// kernel's `TyShape` — exactly as inference does.
     #[test]
     fn stdlib_scheme_total_over_reachable() {
         let mut interner = Interner::new();
@@ -2206,8 +1849,8 @@ mod registry_phase_c_tests {
     }
 
     /// The [`Builder::hof_result_slot_for`] table
-    /// cannot drift from the scheme shapes in [`Builder::stdlib_scheme`]: for
-    /// every table entry, the slot's raw var must be exactly the FINAL RESULT
+    /// cannot drift from the kernel scheme shapes ([`Builder::resolve_scheme`]):
+    /// for every table entry, the slot's raw var must be exactly the FINAL RESULT
     /// of the kernel's callback arrow (the arrow the runtime kernel fully
     /// applies). A drifted slot would tie the obligation to the WRONG scheme
     /// variable — silently unsound (the hazard var escapes unchecked while an
@@ -2233,7 +1876,7 @@ mod registry_phase_c_tests {
                 continue;
             };
             covered += 1;
-            let scheme = builder.stdlib_scheme(k);
+            let scheme = builder.resolve_scheme(k.def().scheme);
             assert!(
                 scheme.is_some(),
                 "{k:?} carries a hof_kernel_result obligation and must be schemed",

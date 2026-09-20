@@ -593,7 +593,7 @@ impl Builder<'_> {
     /// higher-order kernel — the variable that must not itself instantiate to
     /// a function ([`TyBounds::hof_kernel_result`]).
     ///
-    /// Slot ids follow each kernel's scheme in [`Self::stdlib_scheme`] and are
+    /// Slot ids follow each kernel's scheme (its [`ipe_kernels::TyShape`]) and are
     /// asserted against those schemes by
     /// `hof_result_slots_match_scheme_shapes` (this module's tests): `map`'s
     /// `(a -> b)` result `b` is `var(1)`; `mapError`'s `(e -> f)` result `f`
@@ -632,7 +632,7 @@ impl Builder<'_> {
 
     /// The type of a kernel reference (`Math.min`, `Set.insert`, …).
     ///
-    /// Most kernels take the declarative scheme from [`Self::stdlib_scheme`] via
+    /// Most kernels take the declarative scheme from [`Self::resolve_scheme`] via
     /// `instantiate`. Two families instead mint super-typed obligations so a
     /// generic use lifts the matching Rust trait bound onto its annotation
     /// skolem and a non-comparable argument fails closed at type-check:
@@ -644,8 +644,8 @@ impl Builder<'_> {
     ///   emitting an unbounded `math_min<T>(…)` that `cargo` rejects.
     /// * `Set` / `Dict` kernels — the element / key (raw scheme-variable 0 in
     ///   every Set / Dict kernel) carries the Ipê `comparable`-key obligation
-    ///   ([`Self::key_obligation_for`]). The base scheme (now in
-    ///   [`Self::stdlib_scheme`]) is instantiated, then variable 0 is tied to a
+    ///   ([`Self::key_obligation_for`]). The base scheme (from
+    ///   [`Self::resolve_scheme`]) is instantiated, then variable 0 is tied to a
     ///   fresh super-typed variable carrying that obligation, so a
     ///   non-comparable element / key (record, ADT, function) fails closed
     ///   instead of emitting an unbounded `set_insert::<T>` / `dict_insert::<T>`
@@ -805,7 +805,7 @@ impl Builder<'_> {
             // key-position `var(0)` carries the bound, so this is `stdlib_scheme`
             // + a tie (unlike min/max's direct-build shape above).
             if let Some(bound) = Self::key_obligation_for(k) {
-                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
@@ -857,7 +857,7 @@ impl Builder<'_> {
                     k,
                     StdlibKernel::DbQueryDecode | StdlibKernel::DbConnQueryDecode
                 ));
-                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
@@ -889,7 +889,7 @@ impl Builder<'_> {
             // mints for THIS kernel reference, not to any particular AST
             // shape a later use might take.
             if let Some(slot) = Self::hof_result_slot_for(k) {
-                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
@@ -912,7 +912,7 @@ impl Builder<'_> {
                     | StdlibKernel::LogWarnWith
                     | StdlibKernel::LogErrorWith
             ) {
-                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
@@ -932,7 +932,7 @@ impl Builder<'_> {
             // accepted while a bare-function value fails closed — no spurious
             // IPE-L0108 for a well-typed showable value.
             if matches!(k, StdlibKernel::DebugLog) {
-                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
@@ -957,7 +957,7 @@ impl Builder<'_> {
             // push a `RoutedWebCheck` so `resolve_routed_web_checks` can run
             // the gate after the HM solver settles.
             if matches!(k, StdlibKernel::WebApp | StdlibKernel::WebEmbed) {
-                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
@@ -984,7 +984,7 @@ impl Builder<'_> {
             // builder's settled leading arrows and unifies the resulting page
             // type with var(0) after the main solve.
             if matches!(k, StdlibKernel::WebRoute) {
-                let ty = self.stdlib_scheme(k).ok_or(Diagnostic::Lower {
+                let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
