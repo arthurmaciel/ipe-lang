@@ -2222,9 +2222,10 @@ fn check_library_ssot_import_gate(m: &src::Module, interner: &Interner) -> DResu
 }
 
 /// The human placement phrase to name in an IPE-N0047 message. For a non-Web
-/// shape the phrase is unambiguous (`script` / `terminal` / `server`). For the
-/// Web shape a shape-fixed rejection holds in both runtimes, so the bare `web`
-/// word names the shape without over-committing to `live` or `spa`.
+/// shape the phrase is unambiguous (`script` / `terminal` / `worker` /
+/// `server`). For the Web shape a shape-fixed rejection holds in both runtimes,
+/// so the bare `web` word names the shape without over-committing to `live` or
+/// `spa`.
 const fn placement_phrase(
     shape: crate::shape_runtime::Shape,
     _runtimes: &[crate::shape_runtime::Runtime],
@@ -2233,6 +2234,7 @@ const fn placement_phrase(
     match shape {
         Shape::Script => "script",
         Shape::Tui | Shape::Cli => "terminal",
+        Shape::Worker => "worker",
         Shape::Server => "server",
         Shape::Web => "web",
     }

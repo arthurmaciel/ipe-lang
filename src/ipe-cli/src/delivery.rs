@@ -32,6 +32,9 @@ pub enum Shape {
     Tui,
     /// `main = Cli.tea …` — line-oriented terminal output.
     Cli,
+    /// `main = Worker.tea …` — the view-less TEA loop; renders nothing, a native
+    /// co-located binary with no runtime or host axis.
+    Worker,
     /// `main = Server.listen …` — an HTTP server.
     Server,
     /// `main = Web.tea …` — a DOM app, the only shape with a runtime choice.
@@ -47,6 +50,7 @@ impl Shape {
             Self::Script => "script",
             Self::Tui => "tui",
             Self::Cli => "cli",
+            Self::Worker => "worker",
             Self::Server => "server",
             Self::Web => "web",
         }
@@ -61,6 +65,7 @@ impl Shape {
             "script" => Self::Script,
             "tui" => Self::Tui,
             "cli" => Self::Cli,
+            "worker" => Self::Worker,
             "server" => Self::Server,
             "web" => Self::Web,
             _ => return None,
@@ -97,6 +102,7 @@ impl Shape {
             Self::Script => MainShape::Script,
             Self::Tui => MainShape::Tui,
             Self::Cli => MainShape::Cli,
+            Self::Worker => MainShape::Worker,
             Self::Server => MainShape::Server,
             Self::Web => MainShape::Web,
         }
@@ -113,6 +119,7 @@ impl Shape {
             MainShape::Script => Self::Script,
             MainShape::Tui => Self::Tui,
             MainShape::Cli => Self::Cli,
+            MainShape::Worker => Self::Worker,
             MainShape::Server => Self::Server,
             MainShape::Web => Self::Web,
         }
@@ -342,7 +349,7 @@ impl Delivery {
     #[must_use]
     pub const fn allows_static(self) -> bool {
         match self.shape {
-            Shape::Script | Shape::Tui | Shape::Cli | Shape::Server => true,
+            Shape::Script | Shape::Tui | Shape::Cli | Shape::Worker | Shape::Server => true,
             Shape::Web => matches!(
                 self,
                 Self {
@@ -935,7 +942,13 @@ mod tests {
 
     #[test]
     fn runtime_or_host_on_non_web_is_refused() {
-        for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Server] {
+        for shape in [
+            Shape::Script,
+            Shape::Tui,
+            Shape::Cli,
+            Shape::Worker,
+            Shape::Server,
+        ] {
             assert_eq!(
                 Delivery::resolve(shape, Some(Runtime::Spa), Host::Default).unwrap_err(),
                 DeliveryError::RuntimeOnNonWeb { shape }
@@ -952,7 +965,13 @@ mod tests {
 
     #[test]
     fn non_web_shapes_are_static_capable() {
-        for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Server] {
+        for shape in [
+            Shape::Script,
+            Shape::Tui,
+            Shape::Cli,
+            Shape::Worker,
+            Shape::Server,
+        ] {
             let d = Delivery::resolve(shape, None, Host::Default).unwrap();
             assert_eq!(d.runtime(), None);
             assert!(d.allows_static());
@@ -983,6 +1002,9 @@ mod tests {
         assert_eq!(Shape::Web.control_model(), ControlModel::Tea);
         assert_eq!(Shape::Tui.control_model(), ControlModel::Tea);
         assert_eq!(Shape::Cli.control_model(), ControlModel::Tea);
+        // A worker is the view-less corner of the same managed loop — Tea, never
+        // a run-to-completion Direct program.
+        assert_eq!(Shape::Worker.control_model(), ControlModel::Tea);
         assert_eq!(Shape::Server.control_model(), ControlModel::Server);
         assert_eq!(Shape::Script.control_model(), ControlModel::Direct);
         // Every model has a stable, distinct word.
@@ -1020,6 +1042,7 @@ mod tests {
             Shape::Script,
             Shape::Tui,
             Shape::Cli,
+            Shape::Worker,
             Shape::Server,
             Shape::Web,
         ] {
@@ -1132,7 +1155,7 @@ mod tests {
         // floor — its spine pulls tokio/axum, which do not build on wasip1.
         // Fail-closed with a typed diagnostic so the unbuildable shape never
         // reaches the wasip1 `cargo build`.
-        for shape in [Shape::Tui, Shape::Cli, Shape::Server] {
+        for shape in [Shape::Tui, Shape::Cli, Shape::Worker, Shape::Server] {
             let d = Delivery::resolve(shape, None, Host::Default).unwrap();
             assert_eq!(
                 d.admit_triple(Engine::WasmWasi, TargetTriple::Wasm32Wasip1),
@@ -1275,6 +1298,7 @@ mod tests {
             Delivery::resolve(Shape::Script, None, Host::Default).unwrap(),
             Delivery::resolve(Shape::Tui, None, Host::Default).unwrap(),
             Delivery::resolve(Shape::Cli, None, Host::Default).unwrap(),
+            Delivery::resolve(Shape::Worker, None, Host::Default).unwrap(),
             Delivery::resolve(Shape::Server, None, Host::Default).unwrap(),
             served_live(),
         ] {

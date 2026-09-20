@@ -46,6 +46,10 @@ pub enum Shape {
     Tui,
     /// `main = Cli.tea …` — line-oriented terminal output.
     Cli,
+    /// `main = Worker.tea …` — the view-less TEA loop; renders nothing, a native
+    /// binary. Co-located, capability-gated (no view sink → no browser, no
+    /// sandbox).
+    Worker,
     /// `main = Server.listen …` — an HTTP server.
     Server,
     /// `main = Web.tea …` — a DOM app, the only shape with a runtime choice.
@@ -61,6 +65,7 @@ impl Shape {
             MainShape::Script => Self::Script,
             MainShape::Tui => Self::Tui,
             MainShape::Cli => Self::Cli,
+            MainShape::Worker => Self::Worker,
             MainShape::Server => Self::Server,
             MainShape::Web => Self::Web,
         }
@@ -74,6 +79,7 @@ impl Shape {
             Self::Script => "script",
             Self::Tui => "tui",
             Self::Cli => "cli",
+            Self::Worker => "worker",
             Self::Server => "server",
             Self::Web => "web",
         }
@@ -112,7 +118,7 @@ impl Placement {
     #[must_use]
     pub const fn sole_for(shape: Shape) -> Option<Self> {
         match shape {
-            Shape::Script | Shape::Tui | Shape::Cli | Shape::Server => Some(Self {
+            Shape::Script | Shape::Tui | Shape::Cli | Shape::Worker | Shape::Server => Some(Self {
                 shape,
                 runtime: Runtime::CoLocated,
             }),
@@ -121,12 +127,14 @@ impl Placement {
     }
 
     /// The canonical placement phrase for a diagnostic — `script`, `terminal`,
-    /// `server`, `web live`, or `web spa`. One vocabulary with the CLI grammar.
+    /// `worker`, `server`, `web live`, or `web spa`. One vocabulary with the CLI
+    /// grammar.
     #[must_use]
     pub const fn phrase(self) -> &'static str {
         match (self.shape, self.runtime) {
             (Shape::Script, _) => "script",
             (Shape::Tui | Shape::Cli, _) => "terminal",
+            (Shape::Worker, _) => "worker",
             (Shape::Server, _) => "server",
             (Shape::Web, Runtime::CoLocated) => "web live",
             (Shape::Web, Runtime::Spa) => "web spa",
@@ -286,7 +294,7 @@ pub const fn allowed_in(class: ModuleClass, placement: Placement) -> Admissibili
         // not a mis-placed live capability.
         ModuleClass::BrowserHost => match placement.shape {
             Shape::Web | Shape::Script => Allow,
-            Shape::Tui | Shape::Cli | Shape::Server => {
+            Shape::Tui | Shape::Cli | Shape::Worker | Shape::Server => {
                 Deny(DenyReason::BrowserOutsideBrowserHost { placement })
             }
         },
@@ -336,6 +344,7 @@ mod tests {
             co(Shape::Script),
             co(Shape::Tui),
             co(Shape::Cli),
+            co(Shape::Worker),
             co(Shape::Server),
             web(Runtime::CoLocated),
             web(Runtime::Spa),
@@ -381,11 +390,13 @@ mod tests {
             allowed_in(ModuleClass::NativeEffect, web(Runtime::Spa)),
             Admissibility::Deny(DenyReason::NativeEffectInSandbox)
         );
-        // Admissible in every co-located placement.
+        // Admissible in every co-located placement — including a worker, whose
+        // co-located native effects (DB, file, secret) are allowed.
         for p in [
             co(Shape::Script),
             co(Shape::Tui),
             co(Shape::Cli),
+            co(Shape::Worker),
             co(Shape::Server),
             web(Runtime::CoLocated),
         ] {
@@ -425,8 +436,8 @@ mod tests {
             allowed_in(ModuleClass::BrowserHost, co(Shape::Script)),
             Admissibility::Allow
         );
-        // No browser in the live-rendering terminal and server shapes.
-        for shape in [Shape::Tui, Shape::Cli, Shape::Server] {
+        // No browser in the terminal, worker, and server shapes.
+        for shape in [Shape::Tui, Shape::Cli, Shape::Worker, Shape::Server] {
             assert_eq!(
                 allowed_in(ModuleClass::BrowserHost, co(shape)),
                 Admissibility::Deny(DenyReason::BrowserOutsideBrowserHost {
@@ -439,7 +450,13 @@ mod tests {
     #[test]
     fn sole_placement_is_none_for_web_some_otherwise() {
         assert_eq!(Placement::sole_for(Shape::Web), None);
-        for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Server] {
+        for shape in [
+            Shape::Script,
+            Shape::Tui,
+            Shape::Cli,
+            Shape::Worker,
+            Shape::Server,
+        ] {
             assert_eq!(
                 Placement::sole_for(shape),
                 Some(Placement {

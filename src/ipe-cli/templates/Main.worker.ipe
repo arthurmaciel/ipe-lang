@@ -1,0 +1,55 @@
+module Main exposing (main)
+
+import Ipe.String as String
+import Ipe.Io as Io
+import Ipe.Task as Task
+import Ipe.Tea.Worker
+import Ipe.Tea.Worker.Cmd as Cmd
+import Ipe.Tea.Worker.Sub as Sub
+
+
+type Msg
+    = Tick
+    | Logged
+
+
+type alias Model =
+    { ticks : Int }
+
+
+init : () -> ( Model, Cmd Msg )
+init _unit =
+    ( { ticks = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            let
+                next =
+                    model.ticks + 1
+            in
+            ( { ticks = next }
+            , Task.attempt (\_result -> Logged) (Io.println ("tick " ++ String.fromInt next))
+            )
+
+        Logged ->
+            ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    if model.ticks >= 3 then
+        Sub.none
+
+    else
+        Sub.every 50 Tick
+
+
+main =
+    Worker.tea
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }

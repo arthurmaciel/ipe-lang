@@ -25,6 +25,10 @@ pub enum MainShape {
     Tui,
     /// `main = Cli.tea …` — terminal lines.
     Cli,
+    /// `main = Worker.tea …` — the view-less TEA loop (Elm `Platform.worker`):
+    /// `init` / `update` / `subscriptions` with no `view`. Co-located and
+    /// capability-gated; renders nothing.
+    Worker,
     /// `main = Server.listen …` — an HTTP server.
     Server,
     /// `main = Web.tea …` / `appRouted` / `appWith` — the DOM shape. A webview is
@@ -42,7 +46,8 @@ pub enum MainShape {
 /// re-inspects `main` on its own; each projects this from [`classify_main_shape`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ControlModel {
-    /// The Elm-style model/update/view loop — a `Web`/`Tui`/`Cli` shape.
+    /// The Elm-style model/update/(view) loop — a `Web`/`Tui`/`Cli`/`Worker`
+    /// shape. The `Worker` corner runs the same managed loop with no `view`.
     Tea,
     /// The declarative request/response model — a `Server` shape.
     Server,
@@ -54,13 +59,13 @@ pub enum ControlModel {
 impl ControlModel {
     /// The control model a compiler-pinned [`MainShape`] runs under. A projection
     /// of the shape the compiler already pinned, never a second derivation: a
-    /// view-ful shape (`Web`/`Tui`/`Cli`) runs the Elm-style model/update/view
-    /// loop; a `Server` runs the declarative request/response model; a `Script`
-    /// (a plain `Task Error ()`) runs directly to completion.
+    /// view-ful shape (`Web`/`Tui`/`Cli`) and the view-less `Worker` run the
+    /// Elm-style managed loop; a `Server` runs the declarative request/response
+    /// model; a `Script` (a plain `Task Error ()`) runs directly to completion.
     #[must_use]
     pub const fn from_shape(shape: MainShape) -> Self {
         match shape {
-            MainShape::Web | MainShape::Tui | MainShape::Cli => Self::Tea,
+            MainShape::Web | MainShape::Tui | MainShape::Cli | MainShape::Worker => Self::Tea,
             MainShape::Server => Self::Server,
             MainShape::Script => Self::Direct,
         }
@@ -126,13 +131,13 @@ pub(crate) const SHAPE_ENTRIES: &[(&[&str], &str, MainShape)] = &[
     (&["Ipe", "Tea", "Tui"], "tea", MainShape::Tui),
     (&["Ipe", "Tea", "Cli"], "tea", MainShape::Cli),
     (&["Ipe", "Http", "Server"], "listen", MainShape::Server),
-    // `Ipe.Tea.Worker.tea` — the view-less worker app-entry. A worker renders no
-    // view and is co-located + capability-gated, so it classifies as `Script`: the
-    // co-located delivery posture whose runtime is fixed to `CoLocated`, never the
-    // sandboxed `Spa`. This is guard 9 — an OPEN `Ipe.Tea` program is `Script` and
-    // can never reach the Spa/wasm bundle path (which is behind the closed
-    // `Ipe.Tea.Web` shape entry).
-    (&["Ipe", "Tea", "Worker"], "tea", MainShape::Script),
+    // `Ipe.Tea.Worker.tea` — the view-less worker app-entry: the no-view corner
+    // of the TEA loop. It pins the first-class `MainShape::Worker`, whose control
+    // model discloses as `Tea` (a managed `init`/`update`/`subscriptions` loop),
+    // not `Direct`. A worker is co-located and capability-gated: its runtime is
+    // fixed to `CoLocated` (never the sandboxed `Spa` — no view sink, no wasm
+    // bundle path, which stays behind the closed `Ipe.Tea.Web` shape entry).
+    (&["Ipe", "Tea", "Worker"], "tea", MainShape::Worker),
 ];
 
 /// Classify a parsed module's `main` into its pinned [`MainShape`].
@@ -675,6 +680,10 @@ mod tests {
         assert_eq!(ControlModel::from_shape(MainShape::Tui), ControlModel::Tea);
         assert_eq!(ControlModel::from_shape(MainShape::Cli), ControlModel::Tea);
         assert_eq!(
+            ControlModel::from_shape(MainShape::Worker),
+            ControlModel::Tea
+        );
+        assert_eq!(
             ControlModel::from_shape(MainShape::Server),
             ControlModel::Server
         );
@@ -705,36 +714,42 @@ mod tests {
     }
 
     #[test]
-    fn worker_head_classifies_script_never_web() {
+    fn worker_head_classifies_worker_and_discloses_tea_never_web() {
         use crate::shape_runtime::{Placement, Runtime, Shape};
-        // A `Worker.tea { … }` head classifies `Script` — the co-located,
-        // capability-gated posture. This is guard 9: a view-less worker is never
-        // Web, so it can never reach the Spa/wasm sandbox path (which is gated
-        // behind the closed `Ipe.Tea.Web` shape entry). The refusal is
-        // structural: NO `SHAPE_ENTRIES` row maps a worker to `MainShape::Web`.
+        // A `Worker.tea { … }` head pins the first-class `Worker` shape — the
+        // view-less corner of the TEA loop. Its control model discloses as `Tea`
+        // (a managed `init`/`update`/`subscriptions` loop), NOT `Direct`. A worker
+        // is never Web, so it can never reach the Spa/wasm sandbox path (gated
+        // behind the closed `Ipe.Tea.Web` shape entry): NO `SHAPE_ENTRIES` row maps
+        // a worker to `MainShape::Web`.
         let shape = classify(
             "module Main exposing (..)\n\nimport Ipe.Tea.Worker\n\nmain = Worker.tea cfg\n",
         );
-        assert_eq!(shape, MainShape::Script);
+        assert_eq!(shape, MainShape::Worker);
         assert_ne!(shape, MainShape::Web);
-        // The co-located placement is the ONLY one a Script (worker) can hold:
-        // `sole_for` fixes its runtime to `CoLocated`, so `Runtime::Spa` — the
-        // sandbox — is unrepresentable for a worker (guard 8).
+        assert_eq!(
+            ControlModel::from_shape(shape),
+            ControlModel::Tea,
+            "a worker discloses as the managed TEA loop, not a run-to-completion program"
+        );
+        // The co-located placement is the ONLY one a worker can hold: `sole_for`
+        // fixes its runtime to `CoLocated`, so `Runtime::Spa` — the sandbox — is
+        // unrepresentable for a worker (no view sink, no wasm bundle path).
         let placement = Placement::sole_for(Shape::from_main(shape))
-            .expect("a worker (Script) has a sole co-located placement");
+            .expect("a worker has a sole co-located placement");
         assert_eq!(placement.runtime, Runtime::CoLocated);
         assert_ne!(placement.runtime, Runtime::Spa);
     }
 
     #[test]
-    fn aliased_worker_head_classifies_script() {
+    fn aliased_worker_head_classifies_worker() {
         // Resolve-not-spell (#2142) applies to the worker entry too: an `as W`
-        // alias resolving to `Ipe.Tea.Worker` classifies Script.
+        // alias resolving to `Ipe.Tea.Worker` classifies the `Worker` shape.
         assert_eq!(
             classify(
                 "module Main exposing (..)\n\nimport Ipe.Tea.Worker as W\n\nmain = W.tea cfg\n"
             ),
-            MainShape::Script
+            MainShape::Worker
         );
     }
 

@@ -379,6 +379,7 @@ mod tests {
             Shape::Script,
             Shape::Tui,
             Shape::Cli,
+            Shape::Worker,
             Shape::Server,
             Shape::Web,
         ] {
@@ -405,7 +406,13 @@ mod tests {
 
     #[test]
     fn web_entry_on_non_web_shape_is_pedagogical() {
-        for shape in [Shape::Script, Shape::Tui, Shape::Cli, Shape::Server] {
+        for shape in [
+            Shape::Script,
+            Shape::Tui,
+            Shape::Cli,
+            Shape::Worker,
+            Shape::Server,
+        ] {
             let err = DeliverySet::resolve(shape, &[ShipEntry::SpaIos]).unwrap_err();
             let CliError::UsageOwned(msg) = err else {
                 panic!("expected a named rejection, got {err:?}");
