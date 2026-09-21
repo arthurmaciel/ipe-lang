@@ -12,9 +12,17 @@
 //! bespoke second grammar. Comments — which the parser discards as trivia — are
 //! recovered by a separate source scan ([`scan_comments`]) that reuses the same
 //! comment shapes the lexer's `skip_trivia` recognises (`--` line comments and
-//! nestable `{- -}` block comments), and are re-attached to the top-level
-//! declaration whose span they immediately precede (leading comments) or to the
-//! end of the module (trailing comments).
+//! nestable `{- -}` block comments), and are re-attached to:
+//! * the top-level declaration whose span they immediately precede (leading
+//!   comments) or to the end of the module (trailing comments);
+//! * the annotation↔definition gap in a `Value` (between the type annotation
+//!   and the binding name);
+//! * `case` arms, `let` bindings, and `type alias` bodies (comments in the
+//!   inter-node gaps inside each construct).
+//!
+//! A comment-count guard in [`format_source`] catches any regression: if the
+//! formatted output contains fewer comments than the input, the formatter fails
+//! closed with [`FmtError::RoundTrip`] rather than silently dropping them.
 //!
 //! # Guarantees
 //!
@@ -505,8 +513,24 @@ pub fn format_source(src: &str) -> Result<String, FmtError> {
         interner: &interner,
         comments: &comments,
         src: Some(src),
+        emitted: std::cell::RefCell::new(std::collections::HashSet::new()),
     };
     let out = p.module(&module);
+
+    // Comment-count guard: the formatted output must not drop any comments.
+    // This fires BEFORE the AST equivalence check so a comment-dropping bug
+    // surfaces as a clear "comment lost" message rather than an AST mismatch.
+    let input_count = comments.len();
+    let output_comments = scan_comments(&out);
+    let output_count = output_comments.len();
+    if output_count < input_count {
+        return Err(FmtError::RoundTrip {
+            file: PathBuf::from("<source>"),
+            detail: format!(
+                "formatter dropped comments: input had {input_count}, output has {output_count}"
+            ),
+        });
+    }
 
     // Semantics guard: the formatted output must re-parse to the same AST.
     let mut verify_interner = Interner::new();
@@ -545,6 +569,7 @@ pub(crate) fn format_source_unchecked(src: &str) -> Result<String, FmtError> {
         interner: &interner,
         comments: &comments,
         src: Some(src),
+        emitted: std::cell::RefCell::new(std::collections::HashSet::new()),
     };
     Ok(p.module(&module))
 }
@@ -574,6 +599,7 @@ impl ModuleText {
             interner: i,
             comments: &no_comments,
             src: None,
+            emitted: std::cell::RefCell::new(std::collections::HashSet::new()),
         };
         Self(p.module(m))
     }
@@ -593,6 +619,13 @@ struct Printer<'a> {
     /// equivalence guard, where a purely width-driven canonical form is wanted
     /// (the guard compares STRUCTURE, so it must not depend on original layout).
     src: Option<&'a str>,
+    /// Start offsets of comments already emitted. A comment recovered in an
+    /// inner gap (a `let`/`case`/annotation node) must never be re-emitted by an
+    /// overlapping outer range (the module-trailing pass claims everything after
+    /// the last declaration's span, which underestimates a body that ends in a
+    /// nested comment). Consuming on emit makes the print-each-comment-exactly-once
+    /// invariant hold by construction rather than by span accuracy.
+    emitted: std::cell::RefCell<std::collections::HashSet<usize>>,
 }
 
 impl Printer<'_> {
@@ -740,11 +773,18 @@ impl Printer<'_> {
         out
     }
 
-    /// Comments whose start offset lies in the half-open range `(after, before)`.
+    /// Comments whose start offset lies in the half-open range `[after, before)`
+    /// and have not already been emitted. Returned comments are marked emitted,
+    /// so a later overlapping range (the module-trailing pass over everything
+    /// after the last declaration span) cannot print them a second time — the
+    /// print-each-comment-exactly-once invariant. Inner gaps are visited before
+    /// the trailing pass, so a comment nested in a `let`/`case` body is claimed
+    /// at its correct site and skipped by the outer range.
     fn comments_before(&self, after: usize, before: usize) -> Vec<&Comment> {
+        let mut emitted = self.emitted.borrow_mut();
         self.comments
             .iter()
-            .filter(|c| c.lo >= after && c.lo < before)
+            .filter(|c| c.lo >= after && c.lo < before && emitted.insert(c.lo))
             .collect()
     }
 
@@ -913,10 +953,24 @@ impl Printer<'_> {
             }
             other => self.type_annotation(other, 1),
         };
+        // Comments written between the `=` sign and the body type live in the
+        // gap [head_hi, body.span.lo), where `head_hi` is the end of the last
+        // type-variable token (or the name itself when there are no vars).
+        // Using the last var's hi rather than the name's hi avoids accidentally
+        // pulling in a comment that sits between two var tokens.
+        let head_hi = a.vars.last().map_or(a.name.span.hi, |v| v.span.hi) as usize;
+        let body_lo = a.body.span.lo as usize;
+        let mut pre_body = String::new();
+        for c in self.comments_before(head_hi, body_lo) {
+            pre_body.push_str(&c.text);
+            pre_body.push('\n');
+            pre_body.push_str("    ");
+        }
         format!(
-            "type alias {}{} =\n    {}",
+            "type alias {}{} =\n    {}{}",
             self.sym(a.name.value),
             vars,
+            pre_body,
             body
         )
     }
@@ -927,6 +981,16 @@ impl Printer<'_> {
         if let Some(ann) = &v.type_annotation {
             s.push_str(&self.signature(v.name.value, &ann.value, self.was_multiline(ann.span)));
             s.push('\n');
+            // A comment written between the type annotation and the binding
+            // name (e.g. `-- c` in `main : Int\n-- c\nmain = 42`) lives in
+            // the byte gap [ann.span.hi, name.span.lo). Emit it here so it
+            // is not silently dropped.
+            let ann_hi = ann.span.hi as usize;
+            let name_lo = v.name.span.lo as usize;
+            for c in self.comments_before(ann_hi, name_lo) {
+                s.push_str(&c.text);
+                s.push('\n');
+            }
         }
         // The definition head: `name p0 p1 …`. Parameters are in ARGUMENT
         // position, so a constructor-with-arguments / cons / alias pattern must
@@ -1507,9 +1571,25 @@ impl Printer<'_> {
         let arm_pad = pad(indent + 1);
         let body_pad = pad(indent + 2);
         let mut out = format!("case {scrut_s} of");
-        for (i, (pat, body)) in arms.iter().enumerate() {
-            if i > 0 {
+        // Track the hi of the previous arm's body to detect comments written
+        // between consecutive arms (e.g. `-- separates arm 0 and arm 1`).
+        let mut prev_hi: Option<usize> = None;
+        for (pat, body) in arms {
+            // Blank line between arms, plus any inter-arm comments.
+            if let Some(hi) = prev_hi {
+                let arm_lo = pat.span.lo as usize;
+                // The blank line before the next arm is always emitted; when
+                // there are inter-arm comments they each get their own
+                // arm-indented line followed by an additional blank line so
+                // the next arm is still visually separated.
                 out.push('\n');
+                for c in self.comments_before(hi, arm_lo) {
+                    // Each inter-arm comment sits on its own arm-indented
+                    // line, matching elm-format's convention for section
+                    // comments inside a `case`.
+                    let _ = write!(out, "\n{arm_pad}{}", c.text);
+                    out.push('\n');
+                }
             }
             let body_s = self.expr(body, indent + 2);
             let _ = write!(
@@ -1517,6 +1597,7 @@ impl Printer<'_> {
                 "\n{arm_pad}{} ->\n{body_pad}{body_s}",
                 self.pattern(&pat.value)
             );
+            prev_hi = Some(body.span.hi as usize);
         }
         out
     }
@@ -1525,10 +1606,22 @@ impl Printer<'_> {
         let bind_pad = pad(indent + 1);
         let body_val_pad = pad(indent + 2);
         let mut out = String::from("let");
-        for (i, b) in bindings.iter().enumerate() {
-            // elm-format separates successive `let` bindings with a blank line.
-            if i > 0 {
-                out.push('\n');
+        // Track the hi of the previous binding's body to detect comments
+        // written between consecutive `let` bindings.
+        let mut prev_hi: Option<usize> = None;
+        for b in bindings {
+            // elm-format separates successive `let` bindings with a blank
+            // line; any inter-binding comments replace that blank line.
+            if let Some(hi) = prev_hi {
+                let next_lo = b.pat.span.lo as usize;
+                let between = self.comments_before(hi, next_lo);
+                if between.is_empty() {
+                    out.push('\n');
+                } else {
+                    for c in between {
+                        let _ = write!(out, "\n{bind_pad}{}", c.text);
+                    }
+                }
             }
             // A `let` binder that destructures with a constructor pattern must
             // stay parenthesised — `(Decoder d) = …`. Without the parens the
@@ -1538,6 +1631,7 @@ impl Printer<'_> {
             // four-space-indented line, however short — `x =\n    1`.
             let val = self.expr(&b.body, indent + 2);
             let _ = write!(out, "\n{bind_pad}{binder} =\n{body_val_pad}{val}");
+            prev_hi = Some(b.body.span.hi as usize);
         }
         let in_pad = pad(indent);
         let _ = write!(out, "\n{in_pad}in\n{in_pad}{}", self.expr(body, indent));
@@ -2001,5 +2095,128 @@ mod tests {
             format_source(src).unwrap(),
             format_source_unchecked(src).unwrap()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Comment-preservation tests — each proves a specific comment site
+    // -----------------------------------------------------------------------
+
+    /// The minimal repro from the issue: a comment between a type annotation
+    /// and the binding name must survive. `main : Int\n-- c\nmain = 42`.
+    #[test]
+    fn comment_between_annotation_and_definition_survives() {
+        let src = "module M exposing (main)\n\n\nmain : Int\n-- c\nmain =\n    42\n";
+        let out = format_source(src).expect("formats");
+        assert!(
+            out.contains("-- c"),
+            "comment between annotation and definition was dropped:\n{out}"
+        );
+        // Idempotent.
+        let twice = format_source(&out).expect("second pass");
+        assert_eq!(out, twice, "not idempotent:\n{out}");
+    }
+
+    /// A block comment between annotation and definition also survives.
+    #[test]
+    fn block_comment_between_annotation_and_definition_survives() {
+        let src = "module M exposing (f)\n\n\nf : Int\n{- block -}\nf =\n    1\n";
+        let out = format_source(src).expect("formats");
+        assert!(
+            out.contains("{- block -}"),
+            "block comment between annotation and definition was dropped:\n{out}"
+        );
+        let twice = format_source(&out).expect("second pass");
+        assert_eq!(out, twice, "not idempotent:\n{out}");
+    }
+
+    /// A comment written between two `case` arms survives at the arm indent.
+    #[test]
+    fn comment_between_case_arms_survives() {
+        let src = "module M exposing (f)\n\n\nf x =\n    case x of\n        0 ->\n            \"zero\"\n\n        -- separates arms\n        _ ->\n            \"other\"\n";
+        let out = format_source(src).expect("formats");
+        assert!(
+            out.contains("-- separates arms"),
+            "inter-arm comment was dropped:\n{out}"
+        );
+        let twice = format_source(&out).expect("second pass");
+        assert_eq!(out, twice, "not idempotent:\n{out}");
+    }
+
+    /// A comment written between two `let` bindings survives at the binding
+    /// indent.
+    #[test]
+    fn comment_between_let_bindings_survives() {
+        let src = "module M exposing (f)\n\n\nf =\n    let\n        x =\n            1\n\n        -- between bindings\n        y =\n            2\n    in\n    x\n";
+        let out = format_source(src).expect("formats");
+        assert!(
+            out.contains("-- between bindings"),
+            "inter-binding comment was dropped:\n{out}"
+        );
+        let twice = format_source(&out).expect("second pass");
+        assert_eq!(out, twice, "not idempotent:\n{out}");
+    }
+
+    /// A comment between the `type alias` head and the body type survives.
+    #[test]
+    fn comment_between_alias_head_and_body_survives() {
+        let src = "module M exposing (A)\n\n\ntype alias A =\n    -- body comment\n    Int\n";
+        let out = format_source(src).expect("formats");
+        assert!(
+            out.contains("-- body comment"),
+            "alias body comment was dropped:\n{out}"
+        );
+        let twice = format_source(&out).expect("second pass");
+        assert_eq!(out, twice, "not idempotent:\n{out}");
+    }
+
+    /// `fmt` never reduces the comment count: the output comment count must be
+    /// >= the input comment count for every construct with inline comments.
+    #[test]
+    fn comment_count_never_decreases() {
+        let cases = [
+            // annotation gap
+            "module M exposing (main)\n\n\nmain : Int\n-- c\nmain =\n    42\n",
+            // case arm gap
+            "module M exposing (f)\n\n\nf x =\n    case x of\n        0 ->\n            \"z\"\n\n        -- arm sep\n        _ ->\n            \"n\"\n",
+            // let binding gap
+            "module M exposing (f)\n\n\nf =\n    let\n        x =\n            1\n\n        -- bind sep\n        y =\n            2\n    in\n    x\n",
+            // top-level leading comment
+            "module M exposing (x)\n\n\n-- top\nx =\n    1\n",
+            // trailing comment
+            "module M exposing (x)\n\n\nx =\n    1\n\n-- trail\n",
+        ];
+        for src in cases {
+            let input_count = scan_comments(src).len();
+            let out = format_source(src).expect("formats");
+            let output_count = scan_comments(&out).len();
+            assert!(
+                output_count >= input_count,
+                "comment count decreased from {input_count} to {output_count} for:\n{src}\noutput:\n{out}"
+            );
+        }
+    }
+
+    /// `fmt(fmt(x)) == fmt(x)` AND both passes preserve every comment — the
+    /// combined idempotency + comment-preservation fixed-point assertion.
+    #[test]
+    fn idempotent_and_comment_preserving() {
+        let cases = [
+            "module M exposing (main)\n\n\nmain : Int\n-- c\nmain =\n    42\n",
+            "module M exposing (f)\n\n\nf x =\n    case x of\n        0 ->\n            \"z\"\n\n        -- arm comment\n        _ ->\n            \"n\"\n",
+            "module M exposing (f)\n\n\nf =\n    let\n        x =\n            1\n\n        -- bind comment\n        y =\n            2\n    in\n    x\n",
+        ];
+        for src in cases {
+            let once = format_source(src).expect("first pass");
+            let twice = format_source(&once).expect("second pass");
+            assert_eq!(once, twice, "not idempotent for:\n{src}");
+            // Every comment present in the input is present in the output.
+            for c in scan_comments(src) {
+                assert!(
+                    once.contains(&c.text),
+                    "comment {:?} lost after fmt for:\n{src}\noutput:\n{once}",
+                    c.text
+                );
+            }
+        }
     }
 }
