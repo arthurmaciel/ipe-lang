@@ -17,7 +17,7 @@ use ipe_diagnostics::{DResult, Feature, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{Expr, IrType, ModPath, Pat};
 
-use super::force_shared_capture_clones;
+use super::capture_rewrite::force_shared_capture_clones;
 
 // ── Capture-clone classification ──────────────────────────────────────
 //
@@ -34,7 +34,7 @@ use super::force_shared_capture_clones;
 // silent cargo failure).
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum CloneClass {
+pub(super) enum CloneClass {
     CopyLeaf,
     CloneOk,
     NonClone,
@@ -45,7 +45,7 @@ pub(crate) enum CloneClass {
 /// `Clone`-ness is the foreign crate's decision — not Ipe's — so it is treated
 /// as non-`Clone` for the multi-use clone rewrite. Mirrors the backend's
 /// `is_foreign_interface_home` (`ipe_backend_rust` `lib.rs`).
-pub(crate) fn enum_home_is_ffi_foreign(interner: &Interner, home: &ModPath) -> bool {
+pub(super) fn enum_home_is_ffi_foreign(interner: &Interner, home: &ModPath) -> bool {
     home.0
         .first()
         .and_then(|s| interner.resolve(*s))
@@ -57,19 +57,19 @@ pub(crate) fn enum_home_is_ffi_foreign(interner: &Interner, home: &ModPath) -> b
 /// real app enum (deriving `Clone` like any user enum); only the REMAINING
 /// `Rust.*`-home enums are opaque handles onto real foreign types.
 #[derive(Clone, Copy)]
-pub(crate) struct CloneEnv<'a> {
-    pub(crate) interner: &'a Interner,
-    pub(crate) transparent_ffi: &'a BTreeSet<(ModPath, Symbol)>,
+pub(super) struct CloneEnv<'a> {
+    pub(super) interner: &'a Interner,
+    pub(super) transparent_ffi: &'a BTreeSet<(ModPath, Symbol)>,
 }
 
 /// Is `(home, name)` an OPAQUE FFI foreign handle — a `Rust.*`-home enum that
 /// is not a transparent import?
-pub(crate) fn enum_is_opaque_ffi_handle(env: CloneEnv<'_>, home: &ModPath, name: Symbol) -> bool {
+pub(super) fn enum_is_opaque_ffi_handle(env: CloneEnv<'_>, home: &ModPath, name: Symbol) -> bool {
     enum_home_is_ffi_foreign(env.interner, home)
         && !env.transparent_ffi.contains(&(home.clone(), name))
 }
 
-pub(crate) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
+pub(super) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
     match t {
         // Scalars — primitive Copy types.
         // `Decimal` is `#[derive(Copy)]` — treat as CopyLeaf.
@@ -257,7 +257,7 @@ pub(crate) fn clone_class(env: CloneEnv<'_>, t: &IrType) -> CloneClass {
 /// A bare `Generic` param already makes [`reject_fn_value_reuse`] a
 /// no-op (`ir_contains_fun(Generic) == false`), so admitting it here loses no
 /// diagnostic — it only closes the silent double-move.
-pub(crate) fn param_is_multiuse_clonable(env: CloneEnv<'_>, ir_ty: &IrType) -> bool {
+pub(super) fn param_is_multiuse_clonable(env: CloneEnv<'_>, ir_ty: &IrType) -> bool {
     matches!(clone_class(env, ir_ty), CloneClass::CloneOk) || matches!(ir_ty, IrType::Generic(_))
 }
 
@@ -273,7 +273,7 @@ pub(crate) fn param_is_multiuse_clonable(env: CloneEnv<'_>, ir_ty: &IrType) -> b
 /// at the CALLER by that bound before the clone is reached. SINGLE SOURCE OF
 /// TRUTH with `param_is_multiuse_clonable` — both admit a bare `Generic` on the
 /// same emitted `with_clone` bound; if one changes the other must.
-pub(crate) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: Option<&IrType>) -> Option<bool> {
+pub(super) fn classify_capture_clone(env: CloneEnv<'_>, ir_ty: Option<&IrType>) -> Option<bool> {
     match ir_ty {
         Some(IrType::Generic(_)) => Some(true),
         Some(t) => match clone_class(env, t) {
@@ -393,7 +393,7 @@ fn pat_binds_any_in_either(pat: &Pat, a: &BTreeSet<Symbol>, b: &BTreeSet<Symbol>
 // `move` closure which steals it from the outer env on the first call →
 // outer closure becomes `FnOnce` (E0525).  The exemption is therefore only
 // sound at depth 0.
-pub(crate) fn rewrite_captured_clones(
+pub(super) fn rewrite_captured_clones(
     clone_set: &BTreeSet<Symbol>,
     noncl_set: &BTreeSet<Symbol>,
     lambda_span: Span,
@@ -879,7 +879,7 @@ pub(crate) fn rewrite_captured_clones(
     }
 }
 
-pub(crate) fn reject_nonclone_value_reuse(
+pub(super) fn reject_nonclone_value_reuse(
     env: CloneEnv<'_>,
     sym: Symbol,
     ir_ty: &IrType,
@@ -947,7 +947,7 @@ fn match_arm_peak_uses(sym: Symbol, m: &ipe_ir::Match) -> usize {
 ///
 /// Shadow discipline and Lambda-body descent mirror `count_var_uses`.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Expr {
+pub(super) fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Expr {
     if *remaining == 0 {
         return expr;
     }
