@@ -6264,6 +6264,7 @@ fn combine_binop(
         span,
         canon::Expr_::Binop {
             op: op.value,
+            op_span: op.span,
             home: basics,
             func,
             lhs: Box::new(lhs),
@@ -7912,10 +7913,14 @@ fn desugar_multiline(
             let mut acc = first;
             for part in iter {
                 let merged_span = Span::new(acc.span.lo, part.span.hi);
+                // Synthetic desugared `++`: no real operator glyph in source.
+                // Zero-width span at the join point — the token walker drops it.
+                let synthetic_op_span = Span::new(acc.span.hi, acc.span.hi);
                 acc = Located::new(
                     merged_span,
                     canon::Expr_::Binop {
                         op: op_sym,
+                        op_span: synthetic_op_span,
                         home: home_sym,
                         func: func_sym,
                         lhs: Box::new(acc),
