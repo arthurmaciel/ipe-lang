@@ -1,9 +1,9 @@
 use super::{
-    ArgPlan, Callee, DResult, Diagnostic, Expr, GenericScope, Guard, IrType, KernelFn, LitKind,
-    LowerError, NativeUiEmit, Span, Symbol, UiDelegate, UiEmitPlan, appearance_literal_args,
-    appearance_literal_record_fields, callee_name, emit_expr_at, emit_lambda_unboxed,
-    emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name, render_type,
-    ui_call_shape,
+    ArgPlan, Callee, DResult, Diagnostic, Expr, GenericScope, Guard, IrType, KernelClass, KernelFn,
+    LitKind, LowerError, NativeUiEmit, Span, Symbol, UiDelegate, UiEmitPlan,
+    appearance_literal_args, appearance_literal_record_fields, callee_name, emit_expr_at,
+    emit_lambda_unboxed, emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name,
+    render_type, ui_call_shape,
 };
 use crate::EmitCtx;
 use core::fmt::Write as _;
@@ -67,52 +67,76 @@ pub fn call_has_kernel_special_case(
     generics: GenericScope,
 ) -> DResult<bool> {
     // Only kernels have special cases; every probe would gate out immediately.
-    if !matches!(callee, Callee::Kernel(_)) {
+    let Callee::Kernel(k) = callee else {
         return Ok(false);
-    }
+    };
     // These `emit_*_call` invocations are discard-only *probes* — their emitted
     // text is thrown away; only whether they fire matters. Suppress style-literal
     // hoisting for the duration so a probe does not append a literal the real
     // emit will append again (which would double-count it in the view's table).
+    //
+    // Routed on `KernelFn::def().class` in the SAME wildcard-free shape as the
+    // real dispatcher (`emit_expr_at`'s `Expr::Call` arm), so this predicate can
+    // never drift from it: each arm probes only the emitters that arm dispatches,
+    // and a new `KernelClass` variant is a compile error here too. (The two
+    // `Ipe.Ui`/`Ipe.Html` hot-swap template probes the real dispatcher runs
+    // before `emit_ui_call` are omitted: they only fire under
+    // `IPE_WATCH_HOT_APPEARANCE`, which the Doc emitter never has armed, so they
+    // return `None` and cannot change this predicate's answer.)
     ctx.enter_probe();
     let probe: DResult<bool> = (|| {
-        Ok(
-            emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_http_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_process_run_with_call(ctx, callee, args, indent, child, generics)?
-                    .is_some()
-                || emit_process_run_in_pty_call(ctx, callee, args, indent, child, generics)?
-                    .is_some()
-                || emit_http_builder_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_tea_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_server_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some()
-                || emit_css_value_call(ctx, callee, args, indent, child, generics)?.is_some(),
-        )
+        Ok(match k.def().class {
+            KernelClass::Db => emit_db_call(ctx, callee, args, indent, child, generics)?.is_some(),
+            KernelClass::Server => {
+                emit_server_call(ctx, callee, args, indent, child, generics)?.is_some()
+            }
+            KernelClass::Tea => {
+                emit_tea_call(ctx, callee, args, indent, child, generics)?.is_some()
+            }
+            KernelClass::Ui | KernelClass::Web => {
+                emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some()
+            }
+            // No bespoke emitter — the generic delimited tail covers it.
+            KernelClass::Terminal => false,
+            // Reserved tier: no kernel is classed Ffi. Present (not a wildcard) so
+            // adding one without a decision here breaks the build rather than
+            // silently reporting "no special case".
+            KernelClass::Ffi => {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::call_has_kernel_special_case",
+                    detail: "reached KernelClass::Ffi probe arm; no kernel is classed Ffi, \
+                         so this call site should be unreachable — a new FFI kernel needs \
+                         an explicit probe decision here"
+                        .to_owned(),
+                });
+            }
+            KernelClass::Pure => {
+                emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    || emit_http_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    || emit_process_run_with_call(ctx, callee, args, indent, child, generics)?
+                        .is_some()
+                    || emit_process_run_in_pty_call(ctx, callee, args, indent, child, generics)?
+                        .is_some()
+                    || emit_http_builder_call(ctx, callee, args, indent, child, generics)?
+                        .is_some()
+                    || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    || emit_config_ctor_call(callee).is_some()
+                    || emit_css_value_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    // `PubSub.topic` is the identity function — `Topic a` erases to
+                    // `Str`, so the call renders as its argument directly (the
+                    // `KernelFn::PubSubTopic` arm in `emit_expr_at`). No `pubsub_topic`
+                    // runtime fn exists to route the generic tail to; routing this
+                    // through `leaf` keeps the erasure uniform across the direct-call
+                    // and CAF/`OnceLock` paths.
+                    || matches!(k, KernelFn::PubSubTopic)
+                    // `Dict.get` clones its dict arg — the generic tail would drop the
+                    // `.clone()`.
+                    || matches!(k, KernelFn::DictGet)
+            }
+        })
     })();
     ctx.exit_probe();
-    if probe? {
-        return Ok(true);
-    }
-    // `Dict.get` clones its dict arg — the generic tail would drop the `.clone()`.
-    if matches!(callee, Callee::Kernel(KernelFn::DictGet)) {
-        return Ok(true);
-    }
-    // `PubSub.topic` is the identity function — `Topic a` erases to `Str`, so the
-    // call renders as its argument directly (the `KernelFn::PubSubTopic` arm in
-    // `emit_expr_at`). No `pubsub_topic` runtime fn exists to route the generic
-    // tail to; routing this through `leaf` keeps the erasure uniform across the
-    // direct-call and CAF/`OnceLock` paths.
-    if matches!(callee, Callee::Kernel(KernelFn::PubSubTopic)) {
-        return Ok(true);
-    }
-    // Config-tag ADT constructors emit their raw `Int` tag inline (no runtime fn).
-    if emit_config_ctor_call(callee).is_some() {
-        return Ok(true);
-    }
-    Ok(false)
+    probe
 }
 
 /// Handle Http kernel calls that require custom argument wrapping.
