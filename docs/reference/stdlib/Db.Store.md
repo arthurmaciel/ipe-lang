@@ -465,9 +465,13 @@ defaultText : (row -> String) -> String -> Draft row -> Draft row
 ```
 
 `defaultText accessor value store` — give the accessor-named column a
-DB-level `DEFAULT` of the text `value`. The literal is emitted through the
-same single-quote-doubling escape SQL string literals require, so no caller
-text escapes the literal — a `value` containing a quote cannot break out into SQL.
+DB-level `DEFAULT` of the text `value`. `value` is a fixed schema literal
+embedded directly in the `CREATE TABLE` DDL (a DDL DEFAULT admits no bound
+parameter), so building the DDL rejects — with a typed `Err` — any `value`
+carrying a control byte, newline, NUL, or backslash; an accepted `value` is
+emitted through single-quote doubling, and with those bytes already refused
+the literal cannot be broken out of under any backend's string-quoting mode.
+A plain text default (`"active"`) is unaffected.
 
 Example:
 
