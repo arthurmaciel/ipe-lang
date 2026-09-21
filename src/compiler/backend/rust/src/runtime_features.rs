@@ -180,9 +180,13 @@ pub enum RuntimeFeature {
 impl RuntimeFeature {
     /// Every variant, once. The exhaustive universe the capability-table drift
     /// assert ([`crate::capabilities`]) folds over to prove every feature has a
-    /// row. Adding a variant without listing it here leaves the drift assert
-    /// under-covered, and the `index` match below fails to compile until the new
-    /// variant is handled — so the universe cannot silently grow.
+    /// row. A companion `ALL`-coverage seal in that module proves this list
+    /// covers every [`Self::index`] below [`Self::index_domain_size`]: because
+    /// the `index` match is exhaustive and wildcard-free, a new variant is forced
+    /// into it (and so into the domain size), and the coverage seal then fails
+    /// the build until the variant is listed here too — so a variant present in
+    /// `index` but missing from `ALL` cannot slip through, and the universe
+    /// cannot silently grow.
     pub(crate) const ALL: &'static [Self] = &[
         Self::Json,
         Self::Async,
@@ -263,6 +267,23 @@ impl RuntimeFeature {
     /// is not `const`).
     pub(crate) const fn const_eq(self, other: Self) -> bool {
         self.index() == other.index()
+    }
+
+    /// One past the greatest [`Self::index`] — the size of the index domain,
+    /// derived from the exhaustive `index` match rather than from
+    /// [`Self::ALL`]'s length. The `ALL`-coverage seal ([`crate::capabilities`])
+    /// checks `ALL` against this domain; deriving the size from `ALL.len()`
+    /// instead would be circular, since a variant missing from `ALL` shrinks both
+    /// the size and the coverage domain together, hiding the very gap the seal
+    /// exists to catch.
+    ///
+    /// The anchor is the last-declared variant, whose `index` is the greatest.
+    /// A new variant declared after it becomes the new anchor here (and the
+    /// `index` match refuses to compile until the variant is indexed), so the
+    /// domain size grows in lockstep with the variant set and the seal then
+    /// forces the variant into `ALL` too.
+    pub(crate) const fn index_domain_size() -> usize {
+        Self::Debugger.index() + 1
     }
 
     /// The exact cargo feature name in `src/runtime/rust/Cargo.toml`.

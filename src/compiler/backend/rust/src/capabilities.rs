@@ -33,26 +33,26 @@ use crate::runtime_features::RuntimeFeature;
 /// when `gate` returns `true`. `covers` names every feature `select` can return,
 /// so the drift assert can prove coverage without evaluating the (ctx-reading)
 /// closure in a `const` context.
-pub(crate) struct RuntimeCapability {
+pub struct RuntimeCapability {
     /// Whether the program reaches this capability. The same `reaches_*` /
     /// `uses_*` union the hand-written walks keyed on, so the derivation is
     /// byte-identical to the pre-table sequences.
-    pub(crate) gate: fn(&EmitCtx) -> bool,
+    pub gate: fn(&EmitCtx) -> bool,
     /// The concrete feature this capability selects when `gate` holds. A closure
     /// rather than a value so the `Db` driver split (sqlite vs postgres) lives in
     /// one row instead of forking the table.
-    pub(crate) select: fn(&EmitCtx) -> RuntimeFeature,
+    pub select: fn(&EmitCtx) -> RuntimeFeature,
     /// Every feature `select` can return — one element for a fixed row, both
     /// driver aliases for the `Db` row. The drift assert folds this over the whole
     /// table and checks it equals [`RuntimeFeature::ALL`].
-    pub(crate) covers: &'static [RuntimeFeature],
+    pub covers: &'static [RuntimeFeature],
     /// `true` when the feature is part of the `wasm32-wasip1` sealed-floor
     /// closure — the pure families plus the always-on effect floor. The tokio/
     /// axum/reqwest/sqlx stacks do NOT build on wasip1, so their rows are
     /// `false`: the wasip1 builder filters on this flag, giving the positive,
     /// closed legal subset as defense in depth even if an upstream gate mis-set a
     /// flag (see [`crate::runtime_features::runtime_features`]).
-    pub(crate) wasip1_legal: bool,
+    pub wasip1_legal: bool,
 }
 
 /// Every runtime capability, one row per capability the feature-set walks select.
@@ -63,7 +63,7 @@ pub(crate) struct RuntimeCapability {
 /// Row order is irrelevant to correctness: the feature set is a sorted
 /// [`std::collections::BTreeSet`], so the emitted `features = [...]` list is
 /// canonical regardless of iteration order.
-pub(crate) const CAPABILITIES: &[RuntimeCapability] = &[
+pub const CAPABILITIES: &[RuntimeCapability] = &[
     RuntimeCapability {
         gate: |ctx| ctx.reaches_json(),
         select: |_| RuntimeFeature::Json,
@@ -257,41 +257,76 @@ pub(crate) const CAPABILITIES: &[RuntimeCapability] = &[
 
 /// `true` when `feature` appears in some [`CAPABILITIES`] row's `covers`.
 const fn feature_has_a_row(feature: RuntimeFeature) -> bool {
-    let mut i = 0;
-    while i < CAPABILITIES.len() {
-        let covers = CAPABILITIES[i].covers;
-        let mut j = 0;
-        while j < covers.len() {
-            if covers[j].const_eq(feature) {
+    let mut rows = CAPABILITIES;
+    while let [row, rest @ ..] = rows {
+        let mut covers = row.covers;
+        while let [covered, tail @ ..] = covers {
+            if covered.const_eq(feature) {
                 return true;
             }
-            j += 1;
+            covers = tail;
         }
-        i += 1;
+        rows = rest;
     }
     false
 }
 
 /// `true` when every [`RuntimeFeature`] variant has a [`CAPABILITIES`] row.
 const fn every_feature_has_a_row() -> bool {
-    let all = RuntimeFeature::ALL;
-    let mut i = 0;
-    while i < all.len() {
-        if !feature_has_a_row(all[i]) {
+    let mut rest = RuntimeFeature::ALL;
+    while let [first, tail @ ..] = rest {
+        if !feature_has_a_row(*first) {
             return false;
         }
-        i += 1;
+        rest = tail;
     }
     true
 }
 
-// IPE-RUST-AUDIT:ACCEPTED — build-time drift tripwire, not a runtime panic. This
-// `assert!` is evaluated in a `const` context, so it fires at COMPILE time: a
-// `RuntimeFeature` variant lacking a capability row breaks the build. A row with
-// no feature would otherwise silently drop from every runtime feature set (SEAL:
-// table drifted from its callee table).
+/// `true` when some [`RuntimeFeature::ALL`] entry has the given `index`.
+const fn all_contains_index(index: usize) -> bool {
+    let mut rest = RuntimeFeature::ALL;
+    while let [first, tail @ ..] = rest {
+        if first.index() == index {
+            return true;
+        }
+        rest = tail;
+    }
+    false
+}
+
+/// `true` when [`RuntimeFeature::ALL`] covers every index in the
+/// [`RuntimeFeature::index`] domain.
+///
+/// The domain size comes from the exhaustive `index` match
+/// ([`RuntimeFeature::index_domain_size`]), never from `ALL.len()`: a variant
+/// present in `index` but missing from `ALL` leaves its index uncovered here, so
+/// the build breaks. This is what forces a newly added variant — already forced
+/// into the exhaustive `index` match — into `ALL` as well, keeping the drift
+/// assert above non-vacuous.
+const fn all_covers_index_domain() -> bool {
+    let mut index = 0;
+    while index < RuntimeFeature::index_domain_size() {
+        if !all_contains_index(index) {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+// IPE-RUST-AUDIT:ACCEPTED — build-time drift tripwire, not a runtime panic. Both
+// conjuncts are evaluated in a `const` context, so they fire at COMPILE time.
+// `every_feature_has_a_row`: a `RuntimeFeature` variant lacking a capability row
+// breaks the build (a row with no feature would otherwise silently drop from
+// every runtime feature set — SEAL: table drifted from its callee table).
+// `all_covers_index_domain`: `ALL` must cover the whole `index` domain, so a
+// variant added to the exhaustive `index` match but forgotten in `ALL` breaks
+// the build instead of leaving the drift assert vacuously true over a short
+// `ALL`.
 #[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
 const _: () = assert!(
-    every_feature_has_a_row(),
-    "every RuntimeFeature variant must have a CAPABILITIES row"
+    every_feature_has_a_row() && all_covers_index_domain(),
+    "every RuntimeFeature variant must have a CAPABILITIES row, and \
+     RuntimeFeature::ALL must cover the whole RuntimeFeature::index domain"
 );
