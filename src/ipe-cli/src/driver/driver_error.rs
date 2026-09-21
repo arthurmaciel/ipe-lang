@@ -449,11 +449,75 @@ pub fn emit_machine_error(
         CliError::Pipeline { file, src, diag } if format == OutputFormat::Json => {
             render_json(diag, &file.to_string_lossy(), src)
         }
-        _ => machine_output::machine_error(format, command, &err.to_string()),
+        _ => machine_output::machine_error(format, command, err.machine_kind(), &err.to_string()),
     };
     // Best-effort write; if stderr is closed we still exit non-zero.
     let _ = std::io::stderr().write_all(rendered.as_bytes());
     CliError::DiagnosticJsonEmitted
+}
+
+impl CliError {
+    /// The stable machine `kind` tag for this error — the fixed vocabulary word a
+    /// `--json` consumer branches on, carried under `payload.kind` alongside the
+    /// prose `message`.
+    ///
+    /// The match is exhaustive with NO wildcard arm ON PURPOSE: it is the single
+    /// place the format→error schema is defined, so a newly-added `CliError`
+    /// variant fails the BUILD here until it is given a `kind`, rather than
+    /// silently escaping to a generic envelope (or, worse, the human banner) in a
+    /// machine stream. This is make-invalid-states-unrepresentable applied to the
+    /// machine-output contract.
+    ///
+    /// A `kind` is a compile-time constant per variant, never user input, so it
+    /// leaks nothing: no path, no identifier, no secret rides in it.
+    #[must_use]
+    pub const fn machine_kind(&self) -> &'static str {
+        match self {
+            Self::Usage(_) => "usage",
+            Self::UnknownCommand { .. } => "unknown-command",
+            Self::UsageOwned(_) => "usage",
+            Self::Io { .. } => "io",
+            Self::Pipeline { .. } => "pipeline",
+            Self::RuntimeNotFound => "runtime-not-found",
+            Self::RuntimeDirInvalid { .. } => "runtime-dir-invalid",
+            Self::RuntimeHomeUnknown => "runtime-home-unknown",
+            Self::RuntimeMaterializeFailed { .. } => "runtime-materialize-failed",
+            Self::RuntimeVersionMismatch { .. } => "runtime-version-mismatch",
+            Self::EmittedBuildFailed { .. } => "emitted-build-failed",
+            Self::UnknownCode { .. } => "unknown-code",
+            Self::StaticRefusal(_) => "static-refusal",
+            Self::CapabilityMismatch { .. } => "capability-mismatch",
+            Self::Resolve(_) => "resolve",
+            Self::HashMismatch { .. } => "hash-mismatch",
+            Self::Diff(_) => "diff",
+            Self::SemverRejected { .. } => "semver-rejected",
+            Self::PackageAudit(_) => "package-audit",
+            Self::Publish(_) => "publish",
+            Self::DocCoverage(_) => "doc-coverage",
+            Self::DocExamplesFailed(_) => "doc-examples-failed",
+            Self::CommandUsage { .. } => "command-usage",
+            Self::UnknownGroupSub { .. } => "unknown-group-sub",
+            Self::VerifyFailed { .. } => "verify-failed",
+            Self::TestFailed { .. } => "test-failed",
+            Self::UpgradeNoPrebuilt { .. } => "upgrade-no-prebuilt",
+            Self::ToolchainMissing(_) => "toolchain-missing",
+            Self::HealthCritical => "health-critical",
+            Self::LintGateFailed => "lint-gate-failed",
+            Self::EjectUnsupported { .. } => "eject-unsupported",
+            Self::DiagnosticJsonEmitted => "diagnostic-json-emitted",
+            Self::FileTooLarge { .. } => "file-too-large",
+            Self::PathEscape { .. } => "path-escape",
+            Self::DiscoveryLimitReached { .. } => "discovery-limit-reached",
+            Self::UpgradeFeedUnreachable => "upgrade-feed-unreachable",
+            Self::UpgradeCheckExit { .. } => "upgrade-check-exit",
+            Self::AdvisoryVulnerable(_) => "advisory-vulnerable",
+            Self::AdvisoryDbUnreachable { .. } => "advisory-db-unreachable",
+            Self::AdvisoryDbMalformed { .. } => "advisory-db-malformed",
+            Self::WasiRunFeatureDisabled => "wasi-run-feature-disabled",
+            Self::WasiRunFailed { .. } => "wasi-run-failed",
+            Self::WasiRunExited { .. } => "wasi-run-exited",
+        }
+    }
 }
 
 /// The one-line stderr verdict for a failed test run, guttered and glyphed so
@@ -929,3 +993,108 @@ impl std::error::Error for CliError {}
 pub const CLI_ERROR_MAX_BYTES: usize = 128;
 // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); it fails the build if a future `CliError` variant exceeds the size bound rather than boxing its payload [ledger #boundary]
 const _: () = assert!(std::mem::size_of::<CliError>() <= CLI_ERROR_MAX_BYTES);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli_args::OutputFormat;
+
+    /// A non-`Pipeline` refusal under `--json` reaches the machine stream as the
+    /// documented schema object — a parseable `{status,kind,message}` — never a
+    /// raw variant dump and never the human banner. This is the disclosure
+    /// contract every failure class now honours, not just `Pipeline`.
+    #[test]
+    fn non_pipeline_json_renders_the_documented_schema_object() {
+        let err = CliError::CapabilityMismatch {
+            missing: vec!["net"],
+            extra: vec![],
+        };
+        let line = machine_output::machine_error(
+            OutputFormat::Json,
+            "build",
+            err.machine_kind(),
+            &err.to_string(),
+        );
+        assert!(
+            line.starts_with("{\"schema\":\"ipe.cli.error/1\""),
+            "the documented error envelope, not a human banner: {line:?}"
+        );
+        assert!(
+            line.contains("\"status\":\"error\""),
+            "status=error: {line:?}"
+        );
+        assert!(
+            line.contains("\"kind\":\"capability-mismatch\""),
+            "a stable kind per variant: {line:?}"
+        );
+        assert!(line.contains("\"message\":"), "a message field: {line:?}");
+        assert!(
+            !line.contains("Ipê lang"),
+            "the human banner must never reach a --json stream: {line:?}"
+        );
+    }
+
+    /// The same non-`Pipeline` refusal under `--plain` renders the terse
+    /// flush-left record — the pipe-friendly one-record-per-line form, not a
+    /// framed human banner.
+    #[test]
+    fn non_pipeline_plain_renders_the_terse_flush_left_record() {
+        let err = CliError::RuntimeNotFound;
+        let line = machine_output::machine_error(
+            OutputFormat::Plain,
+            "build",
+            err.machine_kind(),
+            &err.to_string(),
+        );
+        assert!(
+            !line.starts_with(' ') && !line.starts_with('\n'),
+            "flush-left, unframed: {line:?}"
+        );
+        assert!(line.ends_with('\n'), "one record per line: {line:?}");
+        assert!(
+            !line.starts_with('{'),
+            "--plain is the bare reason, not the JSON envelope: {line:?}"
+        );
+        assert!(
+            !line.contains("Ipê lang"),
+            "no human banner in a --plain stream: {line:?}"
+        );
+    }
+
+    /// `Pipeline` keeps its distinct rich diagnostic kind — the boundary still
+    /// routes it through the full diagnostic JSON schema (`code`, spans, hints),
+    /// never collapsing it into the terse envelope.
+    #[test]
+    fn pipeline_keeps_its_own_kind() {
+        assert_eq!(
+            CliError::Pipeline {
+                file: PathBuf::from("Main.ipe"),
+                src: String::new(),
+                diag: Box::new(Diagnostic::CompilerBug {
+                    where_: "test",
+                    detail: String::new(),
+                }),
+            }
+            .machine_kind(),
+            "pipeline"
+        );
+    }
+
+    /// The `kind` tags are stable, distinct words — a consumer's branch keys.
+    #[test]
+    fn kinds_are_stable_and_distinct_per_named_refusal() {
+        assert_eq!(
+            CliError::RuntimeNotFound.machine_kind(),
+            "runtime-not-found"
+        );
+        assert_eq!(
+            CliError::CapabilityMismatch {
+                missing: vec![],
+                extra: vec![]
+            }
+            .machine_kind(),
+            "capability-mismatch"
+        );
+        assert_eq!(CliError::HealthCritical.machine_kind(), "health-critical");
+    }
+}
