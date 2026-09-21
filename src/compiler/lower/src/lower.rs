@@ -28515,9 +28515,10 @@ mod tests {
     fn ffi_foreign_opaque_handle_is_non_clone() {
         use ipe_ir::{IrType, ModPath};
 
+        use super::clone_class::enum_home_is_ffi_foreign;
         use super::{
-            CloneClass, CloneEnv, clone_class, enum_home_is_ffi_foreign,
-            ir_type_has_ffi_foreign_handle, param_is_multiuse_clonable,
+            CloneClass, CloneEnv, clone_class, ir_type_has_ffi_foreign_handle,
+            param_is_multiuse_clonable,
         };
 
         let mut interner = Interner::new();
