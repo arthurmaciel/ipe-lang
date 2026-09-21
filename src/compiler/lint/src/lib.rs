@@ -824,6 +824,20 @@ mod tests {
     }
 
     #[test]
+    fn marker_inside_string_literal_does_not_suppress() {
+        // The suppression bytes appear inside a STRING literal (the `doc`
+        // value), directly above a genuine adjacent-bools violation. A
+        // context-free substring match would silence the finding — a fail-OPEN
+        // hole. The marker is data, not a comment, so the finding must stand.
+        let src = "module Main exposing (render)\n\ndoc =\n    \"see -- ipe-lint: allow adjacent-bools \"\nrender : Bool -> Bool -> String\nrender a b =\n    \"x\"\n";
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report.findings.iter().any(|f| f.rule == "adjacent-bools"),
+            "a marker inside a string literal must NOT suppress a real finding"
+        );
+    }
+
+    #[test]
     fn fixes_are_idempotent() {
         // A nested call the prefer-pipeline rule rewrites; re-running finds none.
         let src =

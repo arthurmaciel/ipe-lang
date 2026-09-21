@@ -13,11 +13,44 @@ mod layout;
 mod lexer;
 mod parser;
 
-use ipe_diagnostics::DResult;
+use ipe_diagnostics::{DResult, Span};
 use ipe_intern::Interner;
 use ipe_syntax::{Module, TypeAnnotation};
 
 pub use parser::MAX_DEPTH;
+
+/// The byte spans of every string, triple-string, char, and doc-comment literal
+/// in `src`, exactly as the lexer delimits them.
+///
+/// These are the only source regions whose bytes are literal content. Line and
+/// block comments are lexer trivia — never a token — so a byte covered by none
+/// of the returned spans is not inside a literal. A consumer deciding whether a
+/// textual marker (e.g. an inline lint-suppression directive) is a real comment
+/// or mere string data checks membership here: the lexer is the single source
+/// of truth for what is literal, so the check cannot be fooled by a marker
+/// embedded in a string.
+///
+/// An unlexable source yields no spans; the caller must treat that as "cannot
+/// prove any marker is a comment" rather than "everything is a comment".
+#[must_use]
+pub fn literal_source_spans(src: &str) -> Vec<Span> {
+    let Ok(tokens) = lexer::lex(src) else {
+        return Vec::new();
+    };
+    tokens
+        .iter()
+        .filter(|t| {
+            matches!(
+                t.kind,
+                lexer::Tok::Str(_)
+                    | lexer::Tok::TripleStr { .. }
+                    | lexer::Tok::Char(_)
+                    | lexer::Tok::DocComment(_)
+            )
+        })
+        .map(|t| t.span)
+        .collect()
+}
 
 /// Return `true` when `s` is a reserved keyword.
 ///

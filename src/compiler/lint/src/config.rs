@@ -359,15 +359,45 @@ enum RuleSet {
 /// The marker introducing an inline suppression comment.
 const MARKER: &str = "-- ipe-lint: allow ";
 
+/// True when byte offset `at` lies within any half-open `[lo, hi)` span.
+fn byte_in_any_span(at: usize, spans: &[Span]) -> bool {
+    spans
+        .iter()
+        .any(|s| at >= s.lo as usize && at < s.hi as usize)
+}
+
 impl Suppressions {
     /// Scan `src` for inline suppression comments.
+    ///
+    /// A marker is honoured ONLY when its bytes fall inside an actual line
+    /// comment — never when the identical bytes appear inside a string, triple
+    /// string, char, or doc-comment literal. The lexer is the single source of
+    /// truth for what is literal content: it records a span for every literal
+    /// token and discards line comments as trivia, so a byte covered by no
+    /// literal-token span is not string data. A marker whose leading `--` lies
+    /// within a literal span is that literal's content and cannot suppress —
+    /// fail-closed, so string data never silences a genuine finding.
+    ///
+    /// If the source does not lex, no suppression is recognised: absent proof a
+    /// marker is a real comment, the finding stands.
     #[must_use]
     pub fn scan(src: &str) -> Self {
+        let literal_spans = ipe_parse::literal_source_spans(src);
         let mut by_line: BTreeMap<usize, RuleSet> = BTreeMap::new();
+        let mut line_start: usize = 0;
         for (line_no, line) in src.lines().enumerate() {
             let Some(idx) = line.find(MARKER) else {
+                line_start += line.len() + 1;
                 continue;
             };
+            // Byte offset of the marker's leading `-` within the whole source.
+            let marker_at = line_start + idx;
+            line_start += line.len() + 1;
+            if byte_in_any_span(marker_at, &literal_spans) {
+                // The marker is inside a string/char/doc-comment literal — data,
+                // not a directive. It cannot suppress.
+                continue;
+            }
             let rest = line.get(idx + MARKER.len()..).unwrap_or("").trim();
             if rest == "all" {
                 by_line.insert(line_no, RuleSet::All);
