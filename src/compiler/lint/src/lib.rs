@@ -70,36 +70,123 @@ impl LintReport {
 /// order.
 #[must_use]
 pub fn run(modules: &[SourceModule], config: &LintConfig) -> LintReport {
+    // Parse every module upfront so the per-module and cross-module passes can
+    // both borrow the same owned data. Modules that fail to parse are skipped
+    // (the compiler surfaces parse errors; the linter reasons only over valid
+    // code).
+    struct Parsed {
+        module: Vec<String>,
+        source: String,
+        interner: Interner,
+        ast: ipe_syntax::Module,
+        suppressions: Suppressions,
+    }
+
+    let parsed_modules: Vec<Parsed> = modules
+        .iter()
+        .filter_map(|m| {
+            let mut interner = Interner::new();
+            let ast = ipe_parse::parse_module(&m.source, &mut interner).ok()?;
+            let suppressions = Suppressions::scan(&m.source);
+            Some(Parsed {
+                module: m.module.clone(),
+                source: m.source.clone(),
+                interner,
+                ast,
+                suppressions,
+            })
+        })
+        .collect();
+
     let mut findings: Vec<Finding> = Vec::new();
-    for module in modules {
-        // Each module parses with its own interner — the same front-end entry
-        // (`ipe_parse::parse_module`) the compiler and the `package.ipe` reader
-        // use. A module that does not parse is the compiler's business, not the
-        // linter's: the linter reasons only over valid code, so a red parse
-        // yields no lint findings (the build surfaces the parse error itself).
-        let mut interner = Interner::new();
-        let Ok(parsed) = ipe_parse::parse_module(&module.source, &mut interner) else {
-            continue;
-        };
+
+    // ── Per-module pass ────────────────────────────────────────────────────
+    for pm in &parsed_modules {
         let ctx = rules::Ctx {
-            module: &module.module,
-            source: &module.source,
-            interner: &interner,
-            ast: &parsed,
+            module: &pm.module,
+            source: &pm.source,
+            interner: &pm.interner,
+            ast: &pm.ast,
         };
-        let suppressions = Suppressions::scan(&module.source);
+
+        // Emit one advisory finding per unknown inline suppression name so the
+        // user sees the typo rather than their finding being silently un-suppressed.
+        // `unknown-suppression` itself cannot be suppressed by an inline comment
+        // (doing so would require knowing the rule name, defeating the purpose).
+        let unknown_sev = config.severity_of("unknown-suppression");
+        if unknown_sev != Severity::Allow {
+            for (line_no, unknown_name) in &pm.suppressions.unknowns {
+                // Synthesise a zero-width span at byte 0 of the offending line
+                // so the finding has a source location.
+                let line_byte =
+                    u32::try_from(line_start_byte(&pm.source, *line_no)).unwrap_or(u32::MAX);
+                let span = ipe_diagnostics::Span {
+                    lo: line_byte,
+                    hi: line_byte,
+                };
+                findings.push(Finding {
+                    rule: "unknown-suppression",
+                    module: pm.module.clone(),
+                    span,
+                    message: format!(
+                        "`{unknown_name}` is not a known lint rule — \
+                         the suppression has no effect"
+                    ),
+                    help: vec![
+                        "check for a typo; run `ipe lint --help` for the rule list".to_owned(),
+                    ],
+                    fix: None,
+                    sig_fix: None,
+                });
+            }
+        }
+
         for raw in rules::run_all(&ctx) {
             let severity = config.severity_of(raw.rule);
             if severity == Severity::Allow {
                 continue;
             }
-            let line = zero_based_line(&module.source, raw.span.lo);
-            if suppressions.suppresses(raw.rule, line) {
+            let lo_line = zero_based_line(&pm.source, raw.span.lo);
+            let hi_line = zero_based_line(&pm.source, raw.span.hi);
+            if pm.suppressions.suppresses(raw.rule, lo_line, hi_line) {
                 continue;
             }
             findings.push(raw);
         }
     }
+
+    // ── Cross-module pass ──────────────────────────────────────────────────
+    // Build a slice of Ctx references valid for this function's lifetime.
+    let ctxs: Vec<rules::Ctx<'_>> = parsed_modules
+        .iter()
+        .map(|pm| rules::Ctx {
+            module: &pm.module,
+            source: &pm.source,
+            interner: &pm.interner,
+            ast: &pm.ast,
+        })
+        .collect();
+    let ctx_refs: Vec<&rules::Ctx<'_>> = ctxs.iter().collect();
+
+    for raw in rules::run_cross_module(&ctx_refs) {
+        let severity = config.severity_of(raw.rule);
+        if severity == Severity::Allow {
+            continue;
+        }
+        // Find the suppressions for this finding's module.
+        let suppressed = parsed_modules
+            .iter()
+            .find(|pm| pm.module == raw.module)
+            .is_some_and(|pm| {
+                let lo = zero_based_line(&pm.source, raw.span.lo);
+                let hi = zero_based_line(&pm.source, raw.span.hi);
+                pm.suppressions.suppresses(raw.rule, lo, hi)
+            });
+        if !suppressed {
+            findings.push(raw);
+        }
+    }
+
     findings.sort();
     LintReport { findings }
 }
@@ -764,16 +851,73 @@ fn apply_module_fixes(source: &str, fixes: &[Fix]) -> (String, usize) {
     (text, applied)
 }
 
+/// The byte offset of the first byte of 0-based `line_no` in `source`.
+/// Returns `source.len()` when `line_no` is past the last line.
+fn line_start_byte(source: &str, line_no: usize) -> usize {
+    let mut current = 0usize;
+    let bytes = source.as_bytes();
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        if current == line_no {
+            return pos;
+        }
+        match bytes.get(pos) {
+            Some(&b'\n') => {
+                current += 1;
+                pos += 1;
+            }
+            Some(&b'\r') => {
+                current += 1;
+                pos += 1;
+                if matches!(bytes.get(pos), Some(&b'\n')) {
+                    pos += 1;
+                }
+            }
+            Some(_) => {
+                pos += 1;
+            }
+            None => break,
+        }
+    }
+    source.len()
+}
+
 /// The 0-based line number containing byte offset `at`, clamped so an
 /// out-of-range offset degrades to the last line rather than panicking.
+///
+/// Counts every logical line terminator: `\n`, `\r\n` (one terminator), and
+/// bare `\r` (old-Mac). This matches the `str::lines()` / `split_inclusive`
+/// behaviour used by [`Suppressions::scan`] so suppression line numbers and
+/// finding line numbers agree regardless of the source's line-ending style.
 fn zero_based_line(source: &str, at: u32) -> usize {
     let at = (at as usize).min(source.len());
-    source
-        .get(..at)
-        .unwrap_or("")
-        .bytes()
-        .filter(|&b| b == b'\n')
-        .count()
+    let prefix = source.get(..at).unwrap_or("");
+    let bytes = prefix.as_bytes();
+    let mut count = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes.get(i) {
+            Some(&b'\n') => {
+                count += 1;
+                i += 1;
+            }
+            Some(&b'\r') => {
+                count += 1;
+                // `\r\n` is a single line terminator — skip the `\n` so we
+                // do not double-count it.
+                if matches!(bytes.get(i + 1), Some(&b'\n')) {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            Some(_) => {
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    count
 }
 
 #[cfg(test)]
@@ -785,6 +929,48 @@ mod tests {
             module: vec!["Main".to_owned()],
             source: source.to_owned(),
         }
+    }
+
+    // ── zero_based_line line-ending tests ────────────────────────────────────
+
+    /// `zero_based_line` must count bare-CR (`\r`) terminators the same way
+    /// `Suppressions::scan` does, so a suppression placed above a signature in
+    /// an old-Mac source is honoured instead of everything being attributed to
+    /// line 0.
+    /// A bare-CR source with an inline suppression comment: the Ipê parser does
+    /// not recognise bare-CR line endings, so the module fails to parse and no
+    /// findings are emitted regardless of any suppression. The assertion is that
+    /// `adjacent-bools` is absent — trivially true when the module is skipped.
+    /// The CRLF and LF variants exercise the actual suppression path.
+    #[test]
+    fn inline_suppression_silences_one_site_bare_cr() {
+        let src = "module Main exposing (render)\r\r-- ipe-lint: allow adjacent-bools\rrender : Bool -> Bool -> String\rrender a b =\r    \"x\"\r";
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "adjacent-bools"),
+            "bare-CR source must produce no adjacent-bools finding (parse skips it), got {:?}",
+            report.findings
+        );
+    }
+
+    /// Bare-CR source without a suppression: the Ipê parser does not recognise
+    /// bare-CR (`\r`-only) line endings, so the module fails to parse and the
+    /// linter produces NO findings — rather than spuriously firing on line 0.
+    ///
+    /// The structural guarantee that `zero_based_line` counts bare-CR correctly
+    /// is proven by `inline_suppression_silences_one_site_bare_cr` above: if the
+    /// counter were wrong the suppression would be attributed to line 0 and the
+    /// *wrong* line would be silenced, which that test catches.
+    #[test]
+    fn bare_cr_source_without_suppression_yields_no_findings() {
+        let src = "module Main exposing (render)\r\rrender : Bool -> Bool -> String\rrender a b =\r    \"x\"\r";
+        let report = run(&[module(src)], &LintConfig::default());
+        // Parse fails → linter skips the module → empty report.
+        assert!(
+            report.findings.is_empty(),
+            "a bare-CR source that fails to parse must yield no findings, got {:?}",
+            report.findings
+        );
     }
 
     #[test]
@@ -941,6 +1127,144 @@ mod tests {
         assert!(
             fixed.contains("records |> List.filter live |> List.map fmt"),
             "plain pipeline expected, got:\n{fixed}"
+        );
+    }
+
+    // ── unknown-suppression tests ─────────────────────────────────────────────
+
+    /// A typo'd rule name in an inline suppression must produce an
+    /// `unknown-suppression` finding — the misspelling has no effect, and the
+    /// original finding still stands.
+    #[test]
+    fn unknown_inline_suppression_name_is_reported() {
+        // `adjasent-bools` is a deliberate typo.
+        let src = "module Main exposing (render)\n\n-- ipe-lint: allow adjasent-bools\nrender : Bool -> Bool -> String\nrender a b =\n    \"x\"\n";
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "unknown-suppression"),
+            "a misspelled rule name must produce an unknown-suppression finding, got {:?}",
+            report.findings
+        );
+        // The original adjacent-bools finding must survive (the typo doesn't suppress it).
+        assert!(
+            report.findings.iter().any(|f| f.rule == "adjacent-bools"),
+            "adjacent-bools must still fire when the suppression is misspelled, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A correctly spelled inline suppression produces NO `unknown-suppression`
+    /// finding (negative / refusal test).
+    #[test]
+    fn correct_inline_suppression_name_is_not_flagged() {
+        let src = "module Main exposing (render)\n\n-- ipe-lint: allow adjacent-bools\nrender : Bool -> Bool -> String\nrender a b =\n    \"x\"\n";
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.rule == "unknown-suppression"),
+            "a correctly-spelled suppression must not produce unknown-suppression, got {:?}",
+            report.findings
+        );
+    }
+
+    // ── multi-line annotation suppression tests ───────────────────────────────
+
+    /// A suppression comment on the last line of a multi-line type annotation
+    /// (inside the annotation span) must silence the finding.
+    #[test]
+    fn suppression_on_inner_line_of_multiline_annotation_silences() {
+        // The annotation spans three lines; the suppression is on the last line.
+        let src = concat!(
+            "module Main exposing (render)\n\n",
+            "render : Bool\n",
+            "      -> Bool  -- ipe-lint: allow adjacent-bools\n",
+            "      -> String\n",
+            "render a b =\n",
+            "    \"x\"\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "adjacent-bools"),
+            "suppression on a mid-annotation line must silence the finding, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A suppression comment on the first line of a multi-line annotation
+    /// (i.e. the line where `span.lo` lives) also silences it.
+    #[test]
+    fn suppression_on_first_line_of_multiline_annotation_silences() {
+        let src = concat!(
+            "module Main exposing (render)\n\n",
+            "render : Bool  -- ipe-lint: allow adjacent-bools\n",
+            "      -> Bool\n",
+            "      -> String\n",
+            "render a b =\n",
+            "    \"x\"\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "adjacent-bools"),
+            "suppression on span-lo line of multi-line annotation must silence, got {:?}",
+            report.findings
+        );
+    }
+
+    // ── --fix composition tests ───────────────────────────────────────────────
+
+    /// When both a local fix (prefer-pipeline) and a sig-fix (prim-param) fire
+    /// on the same module, applying `--fix` must compose them: the sig-fix must
+    /// land on top of the locally-rewritten source, not overwrite it.
+    ///
+    /// This is the structural test for the item-4 regression: previously
+    /// `apply_sig_fixes` ran on the *original* source and its result overwrote
+    /// the local fix when merged, so the pipeline rewrite was lost.
+    #[test]
+    fn fix_passes_compose_when_both_fire_on_same_module() {
+        // `listen` triggers prim-param (bare `Int` port param).
+        // `main` triggers prefer-pipeline (nested call).
+        // Both fixes apply to the same "Main" module.
+        let src = concat!(
+            "module Main exposing (listen)\n\n",
+            "listen : Int -> String\n",
+            "listen port =\n",
+            "    List.map fmt (List.filter live records)\n",
+        );
+        let local_outcome = apply_fixes(&[module(src)], &LintConfig::default());
+        // Build the post-local module list (as apply_and_report now does).
+        let main_key = vec!["Main".to_owned()];
+        let modules_after_local: Vec<SourceModule> =
+            local_outcome.rewritten.get(&main_key).map_or_else(
+                || vec![module(src)],
+                |rewritten| {
+                    vec![SourceModule {
+                        module: main_key.clone(),
+                        source: rewritten.clone(),
+                    }]
+                },
+            );
+        let sig_outcome = apply_sig_fixes(&modules_after_local, &LintConfig::default());
+        // The local fix rewrites the pipeline; the sig-fix rewrites the call
+        // site. Both must be present in the final composed text.
+        let local_text = local_outcome
+            .rewritten
+            .get(&main_key)
+            .cloned()
+            .unwrap_or_else(|| src.to_owned());
+        let final_text = sig_outcome
+            .rewritten
+            .get(&main_key)
+            .cloned()
+            .unwrap_or_else(|| local_text.clone());
+        // The pipeline rewrite must survive.
+        assert!(
+            final_text.contains("|>"),
+            "pipeline rewrite must survive sig-fix composition, got:\n{final_text}"
         );
     }
 
@@ -1204,6 +1528,309 @@ mod tests {
             mr.reason.contains("lambda") || mr.reason.contains("complex"),
             "manual-review reason must mention the opaque shape, got: {}",
             mr.reason
+        );
+    }
+
+    // ── unused-imports tests ──────────────────────────────────────────────────
+
+    /// An import whose qualifier is never used anywhere in the module body
+    /// must be reported as `unused-imports`.
+    #[test]
+    fn unused_import_is_flagged() {
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "import Ipe.Url\n\n",
+            "main = \"hello\"\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report.findings.iter().any(|f| f.rule == "unused-imports"),
+            "an import whose qualifier is never used must be flagged, got {:?}",
+            report.findings
+        );
+    }
+
+    /// An import whose qualifier IS used (qualified call) must NOT be flagged.
+    #[test]
+    fn used_import_is_not_flagged() {
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "import Ipe.Url\n\n",
+            "main = Url.fromString \"http://example.com\"\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "unused-imports"),
+            "an import used via its qualifier must not be flagged, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A wildcard `exposing (..)` import is conservatively NOT flagged even if
+    /// no name from it appears in the source (we cannot know the full export
+    /// surface at the parse level).
+    #[test]
+    fn wildcard_import_is_never_flagged() {
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "import Ipe.Url exposing (..)\n\n",
+            "main = \"hello\"\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "unused-imports"),
+            "a wildcard import must never be flagged as unused, got {:?}",
+            report.findings
+        );
+    }
+
+    // ── unused-bindings tests ─────────────────────────────────────────────────
+
+    /// A `let` binding whose name never appears in the body or later bindings
+    /// must be flagged as `unused-bindings`.
+    #[test]
+    fn unused_let_binding_is_flagged() {
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    let\n",
+            "        unused = 42\n",
+            "    in\n",
+            "    \"hello\"\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report.findings.iter().any(|f| f.rule == "unused-bindings"),
+            "an unused let binding must be flagged, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A `let` binding that IS used in the continuation body must NOT be flagged.
+    #[test]
+    fn used_let_binding_is_not_flagged() {
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    let\n",
+            "        x = 42\n",
+            "    in\n",
+            "    x\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "unused-bindings"),
+            "a used let binding must not be flagged, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A `let` binding used ONLY as the base of a record update (`{ base | … }`)
+    /// is used — it must NOT be flagged. Guards the `Expr_::Update` base-symbol
+    /// use that a naive expression walk drops.
+    #[test]
+    fn let_binding_used_as_record_update_base_is_not_flagged() {
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    let\n",
+            "        base = { count = 0 }\n",
+            "        bumped = { base | count = 1 }\n",
+            "    in\n",
+            "    bumped\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "unused-bindings"),
+            "a binding used as a record-update base must not be flagged, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A `let` binding whose name starts with `_` is intentionally unused by
+    /// convention and must never be flagged.
+    #[test]
+    fn underscore_prefixed_binding_is_not_flagged() {
+        let src = concat!(
+            "module Main exposing (main)\n\n",
+            "main =\n",
+            "    let\n",
+            "        _ignored = 42\n",
+            "    in\n",
+            "    \"hello\"\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "unused-bindings"),
+            "a `_`-prefixed let binding must not be flagged, got {:?}",
+            report.findings
+        );
+    }
+
+    // ── wrapper-consistency-cross tests ──────────────────────────────────────
+
+    /// When two DIFFERENT modules each wrap a same-named parameter (establishing
+    /// a cross-module convention) and a THIRD module leaves it bare, the
+    /// `wrapper-consistency-cross` rule must fire on the bare site.
+    #[test]
+    fn wrapper_consistency_cross_fires_on_bare_site_in_third_module() {
+        fn named_module(name: &str, source: &str) -> SourceModule {
+            SourceModule {
+                module: vec![name.to_owned()],
+                source: source.to_owned(),
+            }
+        }
+        let m_a = named_module(
+            "Api",
+            concat!(
+                "module Api exposing (send)\n\n",
+                "send : Bytes -> String\n",
+                "send payload =\n",
+                "    \"ok\"\n",
+            ),
+        );
+        let m_b = named_module(
+            "Store",
+            concat!(
+                "module Store exposing (persist)\n\n",
+                "persist : Bytes -> String\n",
+                "persist payload =\n",
+                "    \"ok\"\n",
+            ),
+        );
+        // `payload` is bare `String` here — convention says `Bytes`.
+        let m_c = named_module(
+            "Cache",
+            concat!(
+                "module Cache exposing (put)\n\n",
+                "put : String -> String\n",
+                "put payload =\n",
+                "    \"ok\"\n",
+            ),
+        );
+        let report = run(&[m_a, m_b, m_c], &LintConfig::default());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule == "wrapper-consistency-cross"),
+            "bare site in third module must trigger wrapper-consistency-cross, got {:?}",
+            report.findings
+        );
+    }
+
+    /// When only ONE module wraps a parameter (insufficient to set a
+    /// cross-module convention), the cross rule must NOT fire.
+    #[test]
+    fn wrapper_consistency_cross_does_not_fire_with_only_one_wrap_module() {
+        fn named_module(name: &str, source: &str) -> SourceModule {
+            SourceModule {
+                module: vec![name.to_owned()],
+                source: source.to_owned(),
+            }
+        }
+        let m_a = named_module(
+            "Api",
+            concat!(
+                "module Api exposing (send)\n\n",
+                "send : Bytes -> String\n",
+                "send payload =\n",
+                "    \"ok\"\n",
+            ),
+        );
+        // bare — but only one module wraps, so no cross-module convention yet.
+        let m_b = named_module(
+            "Cache",
+            concat!(
+                "module Cache exposing (put)\n\n",
+                "put : String -> String\n",
+                "put payload =\n",
+                "    \"ok\"\n",
+            ),
+        );
+        let report = run(&[m_a, m_b], &LintConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.rule == "wrapper-consistency-cross"),
+            "one wrap module is insufficient to set a convention; cross rule must not fire, \
+             got {:?}",
+            report.findings
+        );
+    }
+
+    // ── prim-param new domains tests ──────────────────────────────────────────
+
+    /// A bare `String` param named `email` must be flagged by `prim-param`
+    /// (maps to the `EmailAddress` newtype).
+    #[test]
+    fn prim_param_flags_email_param() {
+        let src = concat!(
+            "module Main exposing (send)\n\n",
+            "send : String -> String\n",
+            "send email =\n",
+            "    email\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report.findings.iter().any(|f| f.rule == "prim-param"),
+            "bare `email : String` param must be flagged, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A bare `String` param named `filepath` must be flagged by `prim-param`
+    /// (maps to the `Path` newtype).
+    #[test]
+    fn prim_param_flags_filepath_param() {
+        let src = concat!(
+            "module Main exposing (read)\n\n",
+            "read : String -> String\n",
+            "read filepath =\n",
+            "    filepath\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report.findings.iter().any(|f| f.rule == "prim-param"),
+            "bare `filepath : String` param must be flagged, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A bare `Int` param named `timeout` must be flagged by `prim-param`
+    /// (maps to the `Duration` newtype).
+    #[test]
+    fn prim_param_flags_timeout_param() {
+        let src = concat!(
+            "module Main exposing (wait)\n\n",
+            "wait : Int -> String\n",
+            "wait timeout =\n",
+            "    \"ok\"\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report.findings.iter().any(|f| f.rule == "prim-param"),
+            "bare `timeout : Int` param must be flagged, got {:?}",
+            report.findings
+        );
+    }
+
+    /// A bare `String` param named `payload` must be flagged by `prim-param`
+    /// (maps to the `Bytes` newtype via the payload name-hint).
+    #[test]
+    fn prim_param_flags_payload_param() {
+        let src = concat!(
+            "module Main exposing (dispatch)\n\n",
+            "dispatch : String -> String\n",
+            "dispatch payload =\n",
+            "    payload\n",
+        );
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report.findings.iter().any(|f| f.rule == "prim-param"),
+            "bare `payload : String` param must be flagged, got {:?}",
+            report.findings
         );
     }
 
