@@ -141,7 +141,7 @@ fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
 /// pre-fix lowering.
 // A recursive tree-walk over a large enum — necessarily long and linear.
 #[allow(clippy::too_many_lines)]
-pub(super) fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
+pub(crate) fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
     match expr {
         Expr::Var(_)
         | Expr::CloneVar(_)

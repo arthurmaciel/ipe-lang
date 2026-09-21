@@ -1241,10 +1241,6 @@ fn canon_collect_free_locals(
     }
 }
 
-/// Does `pat` bind ANY symbol in `a` OR `b`? One walk of `pat` tests each bound
-/// name against both sets at once — a bound name is caught iff it is in either
-/// set, so this is the `pat`-binds-any-in-the-union predicate the clone/non-clone
-/// capture split needs, in a single traversal rather than one walk per set.
 // ── Multi-use-clone rewrite, T5 ────────────────────────────────
 //
 // A `CloneOk` local used more than once in a BY-VALUE consuming position causes

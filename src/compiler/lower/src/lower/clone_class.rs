@@ -349,6 +349,10 @@ fn clone_class_named_composite<'a>(
     }
 }
 
+/// Does `pat` bind ANY symbol in `a` OR `b`? One walk of `pat` tests each bound
+/// name against both sets at once — a bound name is caught iff it is in either
+/// set, so this is the `pat`-binds-any-in-the-union predicate the clone/non-clone
+/// capture split needs, in a single traversal rather than one walk per set.
 fn pat_binds_any_in_either(pat: &Pat, a: &BTreeSet<Symbol>, b: &BTreeSet<Symbol>) -> bool {
     let in_either = |s: &Symbol| a.contains(s) || b.contains(s);
     match pat {
