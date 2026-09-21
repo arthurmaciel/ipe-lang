@@ -2073,6 +2073,40 @@ mod elm_behaviour_verdicts {
         ));
     }
 
+    // `JsonDec.nullable` (backing `Decode.nullable` in the browser-sensor
+    // whole-frame decoders): a JSON `null` yields `Nothing`, a well-typed value
+    // yields `Just`, and a present-but-wrong-type value fails the decode CLOSED
+    // rather than coercing to `Nothing` — so a type-mismatched field drops the
+    // whole frame instead of fabricating a plausible-but-wrong partial reading.
+    #[test]
+    fn json_nullable_null_is_nothing() {
+        let dec = decode_nullable::<String, f64>(json_decode_float());
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(null)),
+            IpeResult::Ok(IpeMaybe::Nothing)
+        ));
+    }
+    #[test]
+    fn json_nullable_number_is_just() {
+        let dec = decode_nullable::<String, f64>(json_decode_float());
+        assert!(matches!(
+            (dec.run)(&serde_json::json!(1.5)),
+            IpeResult::Ok(IpeMaybe::Just(_))
+        ));
+    }
+    #[test]
+    fn json_nullable_wrong_type_fails_closed() {
+        let dec = decode_nullable::<String, f64>(json_decode_float());
+        assert!(matches!(
+            (dec.run)(&serde_json::json!("fast")),
+            IpeResult::Err(_)
+        ));
+        assert!(matches!(
+            (dec.run)(&serde_json::json!({})),
+            IpeResult::Err(_)
+        ));
+    }
+
     // Verdict: keep-Elm (already matches). `oneOf` returns the first branch that
     // succeeds; an empty branch list (or all-failing) is an `Err`, never a panic.
     #[test]
