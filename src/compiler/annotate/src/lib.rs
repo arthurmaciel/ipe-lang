@@ -401,7 +401,7 @@ mod tests {
         // Byte offset of `+`: 28(blank)+11(ann)+7(decl)+6("    1 ") = 52.
         let plus_byte: u32 = src
             .find(" + ")
-            .map(|i| i as u32 + 1)
+            .map(|i| u32::try_from(i + 1).expect("byte offset fits u32"))
             .expect("` + ` present in source");
 
         let (syntax, mut interner) = parse(src);
@@ -411,7 +411,7 @@ mod tests {
         let ops = by_class(&tokens, TokenClass::Operator);
         assert!(!ops.is_empty(), "binop `+` must produce an Operator token");
 
-        let op = ops[0];
+        let op = ops.first().expect("checked non-empty above");
         assert_eq!(
             op.byte_start, plus_byte,
             "Operator token must start at the `+` glyph (byte {plus_byte}), got {}",
@@ -430,7 +430,7 @@ mod tests {
             !syn_ops.is_empty(),
             "syntax-only walker must also emit Operator token"
         );
-        let syn_op = syn_ops[0];
+        let syn_op = syn_ops.first().expect("checked non-empty above");
         assert_eq!(
             (syn_op.byte_start, syn_op.byte_len),
             (op.byte_start, op.byte_len),
