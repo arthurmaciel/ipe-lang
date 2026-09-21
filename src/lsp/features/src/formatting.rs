@@ -431,7 +431,7 @@ fn push_type_annotation(
                 if i > 0 {
                     out.push_str(", ");
                 }
-                out.push_str(resolve(*name));
+                out.push_str(resolve(name.value));
                 out.push_str(" : ");
                 push_type_annotation(out, ty, interner);
             }
@@ -445,7 +445,7 @@ fn push_type_annotation(
                 if i > 0 {
                     out.push_str(", ");
                 }
-                out.push_str(resolve(*name));
+                out.push_str(resolve(name.value));
                 out.push_str(" : ");
                 push_type_annotation(out, ty, interner);
             }

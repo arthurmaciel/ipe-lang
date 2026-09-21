@@ -188,7 +188,7 @@ fn normalize_annotation(ann: &TypeAnnotation, ctx: &mut AlphaCtx<'_>) -> Normali
             let mut norm: Vec<(Box<str>, NormalizedType)> = fields
                 .iter()
                 .map(|(sym, ty)| {
-                    let name = ctx.interner.resolve(*sym).unwrap_or("?");
+                    let name = ctx.interner.resolve(sym.value).unwrap_or("?");
                     (name.into(), normalize_annotation(ty, ctx))
                 })
                 .collect();
@@ -200,7 +200,7 @@ fn normalize_annotation(ann: &TypeAnnotation, ctx: &mut AlphaCtx<'_>) -> Normali
             let mut norm: Vec<(Box<str>, NormalizedType)> = fields
                 .iter()
                 .map(|(sym, ty)| {
-                    let name = ctx.interner.resolve(*sym).unwrap_or("?");
+                    let name = ctx.interner.resolve(sym.value).unwrap_or("?");
                     (name.into(), normalize_annotation(ty, ctx))
                 })
                 .collect();

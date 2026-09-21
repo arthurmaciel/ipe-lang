@@ -3604,7 +3604,8 @@ fn witness_record_fields(
     // The source-level fields to canonicalise, and the alias name (if any) to
     // seed `visited` for a self-referential field — mirroring the alias-ctor
     // synthesis, so the two expand a record annotation identically.
-    let (src_fields, seed): (&Vec<(Symbol, src::TypeAnnotation)>, Vec<Symbol>) = match ann {
+    let (src_fields, seed): (&Vec<(Located<Symbol>, src::TypeAnnotation)>, Vec<Symbol>) = match ann
+    {
         src::TypeAnnotation::TRecord(fields) => (fields, Vec::new()),
         src::TypeAnnotation::TType(_, segments, args) if args.is_empty() => {
             let Some(name) = segments.last().copied() else {
@@ -3650,7 +3651,7 @@ fn witness_record_fields(
             &mut budget,
             0,
         )?;
-        can_fields.push((*fname, cty));
+        can_fields.push((fname.value, cty));
     }
     Ok(Some(can_fields))
 }
@@ -4299,7 +4300,7 @@ fn synthesize_record_alias_ctors(
                 &mut budget,
                 0,
             )?;
-            can_fields.push((*fname, cty));
+            can_fields.push((fname.value, cty));
         }
 
         // Data-record gate. DECLINE synthesis when ANY field type is
@@ -6479,7 +6480,7 @@ fn canonicalise_type(
             let mut can_fields = Vec::with_capacity(fields.len());
             for (name, fty) in fields {
                 can_fields.push((
-                    *name,
+                    name.value,
                     canonicalise_type(
                         fty,
                         ctx,
@@ -6506,7 +6507,7 @@ fn canonicalise_type(
             let mut can_fields = Vec::with_capacity(fields.len());
             for (name, fty) in fields {
                 can_fields.push((
-                    *name,
+                    name.value,
                     canonicalise_type(
                         fty,
                         ctx,
