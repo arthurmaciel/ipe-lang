@@ -812,6 +812,8 @@ fn parse_query(q: Option<&str>) -> HashMap<String, String> {
     out
 }
 
+// Lenient by design — see `encoding::form_url_decode` doc. Result feeds
+// `ServerRequest.query` (app-logic Dict only; not a path, SQL, or re-encode sink).
 fn urldecode(s: &str) -> String {
     form_url_decode(s)
 }
