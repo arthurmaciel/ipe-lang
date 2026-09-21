@@ -1,18 +1,22 @@
 //! Inlay hints: `textDocument/inlayHint`.
 //!
-//! Produces type-annotation inlay hints for top-level value bindings that
-//! lack an explicit type annotation, using the solved type from `typecheck`.
+//! Produces type-annotation inlay hints for:
 //!
-//! Each hint appears at the end of the binding's name token in the form
+//! - Top-level value bindings without an explicit type annotation.
+//! - Local `let` bindings (pattern binders) whose type is solved.
+//! - Lambda parameters whose type is solved.
+//!
+//! Each hint appears just after the binding's name (or pattern) in the form
 //! `: Type`, matching the style of an explicit annotation.
 //!
-//! Bindings that already have a type annotation are skipped — the annotation
-//! is already visible in source.
+//! Top-level bindings that already have a type annotation are skipped — the
+//! annotation is already visible in source.
 
-use ipe_db::{Db as _, IpeDatabase, SourceRoot};
+use ipe_db::{Db as _, IpeDatabase, ModuleTypes, SourceRoot};
 use ipe_diagnostics::Span;
 use ipe_intern::Symbol;
-use ipe_types::{VarNamer, ty_to_doc};
+use ipe_syntax::{Expr_, Pattern_};
+use ipe_types::{Ty, VarNamer, ty_to_doc};
 use lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Range};
 
 use crate::offset::{PositionEncoding, offset_to_position, span_to_range};
@@ -112,9 +116,180 @@ pub fn inlay_hints(
             padding_right: None,
             data: None,
         });
+
+        // Walk the binding's body for local `let` and lambda hints.
+        walk_expr_hints(
+            &value.value.body,
+            text,
+            &range,
+            &solved,
+            db,
+            encoding,
+            &mut hints,
+        );
     }
 
     hints
+}
+
+/// Recursively walk `expr`, emitting inlay hints for:
+///
+/// - Each `let x = rhs in …` binder where `x` is a plain variable (`PVar`)
+///   and the region map holds a type for `rhs`.
+/// - Each lambda parameter that is a plain variable (`PVar`) and whose type
+///   is recoverable by peeling the lambda's own solved function type.
+fn walk_expr_hints(
+    expr: &ipe_diagnostics::Located<Expr_>,
+    text: &str,
+    range: &Range,
+    solved: &ModuleTypes,
+    db: &IpeDatabase,
+    encoding: PositionEncoding,
+    hints: &mut Vec<InlayHint>,
+) {
+    match &expr.value {
+        Expr_::Let(bindings, body) => {
+            for binding in bindings {
+                // Only plain `PVar` binders get a hint — tuple/record
+                // destructures have no single name to attach to.
+                if let Pattern_::PVar(_) = &binding.pat.value {
+                    let hint_span = binding.pat.span;
+                    let span_range = span_to_range(text, hint_span, encoding);
+                    let in_range = span_range.end >= range.start && span_range.start <= range.end;
+                    if in_range {
+                        // The binder's type equals the body expression's type.
+                        if let Some(ty) = solved.regions.get(&binding.body.span) {
+                            if let Some(label) = render_ty_label(ty, db) {
+                                let position =
+                                    offset_to_position(text, hint_span.hi as usize, encoding);
+                                hints.push(InlayHint {
+                                    position,
+                                    label: InlayHintLabel::String(label),
+                                    kind: Some(InlayHintKind::TYPE),
+                                    text_edits: None,
+                                    tooltip: None,
+                                    padding_left: Some(true),
+                                    padding_right: None,
+                                    data: None,
+                                });
+                            }
+                        }
+                    }
+                    // Recurse into the binding's RHS.
+                    walk_expr_hints(&binding.body, text, range, solved, db, encoding, hints);
+                }
+            }
+            walk_expr_hints(body, text, range, solved, db, encoding, hints);
+        }
+        Expr_::Lambda(params, body) => {
+            // Recover the lambda's own function type from the region map so
+            // each parameter's type can be read by peeling arrows.
+            let mut cur_ty: Option<&Ty> = solved.regions.get(&expr.span);
+            for param in params {
+                let param_ty = cur_ty.and_then(|t| match t {
+                    Ty::Fun(p, _) => Some(p.as_ref()),
+                    _ => None,
+                });
+                // Advance to the return type for the next param.
+                cur_ty = cur_ty.and_then(|t| match t {
+                    Ty::Fun(_, ret) => Some(ret.as_ref()),
+                    _ => None,
+                });
+
+                if let Pattern_::PVar(_) = &param.value {
+                    let hint_span = param.span;
+                    let span_range = span_to_range(text, hint_span, encoding);
+                    let in_range = span_range.end >= range.start && span_range.start <= range.end;
+                    if in_range {
+                        if let Some(ty) = param_ty {
+                            if let Some(label) = render_ty_label(ty, db) {
+                                let position =
+                                    offset_to_position(text, hint_span.hi as usize, encoding);
+                                hints.push(InlayHint {
+                                    position,
+                                    label: InlayHintLabel::String(label),
+                                    kind: Some(InlayHintKind::TYPE),
+                                    text_edits: None,
+                                    tooltip: None,
+                                    padding_left: Some(true),
+                                    padding_right: None,
+                                    data: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            walk_expr_hints(body, text, range, solved, db, encoding, hints);
+        }
+        // Recurse into all other compound expressions — no hints emitted here,
+        // but sub-expressions may contain let/lambda nodes.
+        Expr_::Call(callee, args) => {
+            walk_expr_hints(callee, text, range, solved, db, encoding, hints);
+            for a in args {
+                walk_expr_hints(a, text, range, solved, db, encoding, hints);
+            }
+        }
+        Expr_::Case(scrutinee, arms) => {
+            walk_expr_hints(scrutinee, text, range, solved, db, encoding, hints);
+            for (_, arm_body) in arms {
+                walk_expr_hints(arm_body, text, range, solved, db, encoding, hints);
+            }
+        }
+        Expr_::If(branches, else_expr) => {
+            for (cond, then_) in branches {
+                walk_expr_hints(cond, text, range, solved, db, encoding, hints);
+                walk_expr_hints(then_, text, range, solved, db, encoding, hints);
+            }
+            walk_expr_hints(else_expr, text, range, solved, db, encoding, hints);
+        }
+        Expr_::Binops(pairs, last) => {
+            for (operand, _) in pairs {
+                walk_expr_hints(operand, text, range, solved, db, encoding, hints);
+            }
+            walk_expr_hints(last, text, range, solved, db, encoding, hints);
+        }
+        Expr_::Tuple(elems) | Expr_::List(elems) => {
+            for e in elems {
+                walk_expr_hints(e, text, range, solved, db, encoding, hints);
+            }
+        }
+        Expr_::Record(fields) => {
+            for (_, v) in fields {
+                walk_expr_hints(v, text, range, solved, db, encoding, hints);
+            }
+        }
+        Expr_::Access(base, _) => {
+            walk_expr_hints(base, text, range, solved, db, encoding, hints);
+        }
+        // `Update(Located<Symbol>, fields)` — the base is a bare name reference,
+        // not a sub-expression; only the field values need recursion.
+        Expr_::Update(_, fields) => {
+            for (_, v) in fields {
+                walk_expr_hints(v, text, range, solved, db, encoding, hints);
+            }
+        }
+        // Leaves: no sub-expressions to recurse into.
+        Expr_::VarLocal(_)
+        | Expr_::VarQual(_, _)
+        | Expr_::Int(_)
+        | Expr_::Float(_)
+        | Expr_::Str(_)
+        | Expr_::MultilineStr { .. }
+        | Expr_::Char(_)
+        | Expr_::PathLit(_)
+        | Expr_::Unit => {}
+    }
+}
+
+/// Render a solved `Ty` to a `: Type` hint label string, or `None` if the
+/// type cannot be rendered (interner miss, doc error).
+fn render_ty_label(ty: &Ty, db: &IpeDatabase) -> Option<String> {
+    let interner = db.interner().lock();
+    let mut namer = VarNamer::new();
+    let doc = ty_to_doc(ty, &interner, &mut namer).ok()?;
+    drop(interner);
+    Some(format!(": {}", ipe_diagnostics::render_ty(&doc)))
 }
 
 // Suppress unused import warning — `Span` is referenced in the attribute path
@@ -225,5 +400,77 @@ mod tests {
             PositionEncoding::Utf16,
         );
         assert!(hints.is_empty());
+    }
+
+    /// A `let x = 42 in x` binding inside a typed function must produce an
+    /// inlay hint for `x` with `: Int`.
+    #[test]
+    fn let_binding_gets_type_hint() {
+        let db = IpeDatabase::new();
+        // `answer` is typed, so inference can solve `x = 42 : Int`.
+        let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    let x = 42 in\n    x\n";
+        let entry = file(&db, &["Main"], src);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        let hints = inlay_hints(
+            &db,
+            root,
+            entry,
+            &["Main".to_owned()],
+            full_range(),
+            PositionEncoding::Utf16,
+        );
+        let labels: Vec<&str> = hints
+            .iter()
+            .filter_map(|h| {
+                if let lsp_types::InlayHintLabel::String(s) = &h.label {
+                    Some(s.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            labels.iter().any(|l| *l == ": Int"),
+            "let binding `x = 42` must have a `: Int` hint; got: {labels:?}"
+        );
+    }
+
+    /// Lambda parameters inside a typed binding must get inlay hints.
+    #[test]
+    fn lambda_params_get_type_hints() {
+        let db = IpeDatabase::new();
+        // `apply` is typed; its body `\f x -> f x` has lambda params `f` and `x`
+        // whose types are fully determined by the annotation.
+        let src = "module Main exposing (main)\n\napply : (Int -> Int) -> Int -> Int\napply =\n    \\f x -> f x\n\nmain : Int\nmain =\n    apply (\\n -> n) 0\n";
+        let entry = file(&db, &["Main"], src);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        let hints = inlay_hints(
+            &db,
+            root,
+            entry,
+            &["Main".to_owned()],
+            full_range(),
+            PositionEncoding::Utf16,
+        );
+        let labels: Vec<&str> = hints
+            .iter()
+            .filter_map(|h| {
+                if let lsp_types::InlayHintLabel::String(s) = &h.label {
+                    Some(s.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // `f : Int -> Int` and `x : Int` must appear among the hints.
+        assert!(
+            labels.iter().any(|l| l.contains("Int")),
+            "lambda params inside a typed binding must get type hints; got: {labels:?}"
+        );
+        // Must have at least 2 hints (one per lambda param).
+        assert!(
+            labels.len() >= 2,
+            "expected hints for both lambda params; got: {labels:?}"
+        );
     }
 }

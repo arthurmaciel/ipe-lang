@@ -70,7 +70,106 @@ fn push_range(
             end_line: end.line,
             end_character: None,
             kind,
-            collapsed_text: None,
+            collapsed_text: Some(first_line_preview(text, lo as usize)),
         });
+    }
+}
+
+/// A short preview string for the folded region — the first non-empty line
+/// starting at `offset`, truncated to 40 characters. Editors display this
+/// inline when the region is collapsed so the user can see what is hidden.
+fn first_line_preview(text: &str, offset: usize) -> String {
+    let slice = text.get(offset..).unwrap_or("");
+    let first_line = slice.lines().next().unwrap_or("").trim_end();
+    if first_line.len() <= 40 {
+        first_line.to_owned()
+    } else {
+        // Truncate at a character boundary ≤ 40 bytes, append ellipsis.
+        let mut end = 40;
+        while !first_line.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &first_line[..end])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
+
+    use super::folding_ranges;
+    use crate::offset::PositionEncoding;
+
+    fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
+        SourceFile::new(
+            db,
+            path.iter().map(|s| (*s).to_owned()).collect(),
+            text.to_owned(),
+            ModuleOrigin::User,
+        )
+    }
+
+    fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+        SourceRoot::new(
+            db,
+            files
+                .iter()
+                .map(|(path, f)| (path.iter().map(|s| (*s).to_owned()).collect(), *f))
+                .collect(),
+        )
+    }
+
+    /// Every folding range for a multi-line declaration must carry a non-empty
+    /// `collapsed_text` preview.
+    #[test]
+    fn collapsed_text_is_set_on_multi_line_decl() {
+        const SRC: &str = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
+        let db = IpeDatabase::new();
+        let f = file(&db, &["Main"], SRC);
+        let _root = root_of(&db, &[(&["Main"], f)]);
+        let ranges = folding_ranges(&db, f, PositionEncoding::Utf16);
+        assert!(
+            !ranges.is_empty(),
+            "a multi-line binding must produce at least one folding range"
+        );
+        for r in &ranges {
+            let text = r
+                .collapsed_text
+                .as_deref()
+                .expect("collapsed_text must be Some on every folding range");
+            assert!(
+                !text.is_empty(),
+                "collapsed_text must be non-empty; got empty string for range {r:?}"
+            );
+        }
+        // The preview for `main` starts with `main`.
+        let main_preview = ranges.iter().find(|r| {
+            r.collapsed_text
+                .as_deref()
+                .is_some_and(|t| t.starts_with("main"))
+        });
+        assert!(
+            main_preview.is_some(),
+            "collapsed_text for `main` binding must start with \"main\"; ranges: {ranges:?}"
+        );
+    }
+
+    /// Long first lines are truncated and end with `…`.
+    #[test]
+    fn collapsed_text_truncates_long_lines() {
+        use super::first_line_preview;
+        let long = "a".repeat(50);
+        let preview = first_line_preview(&long, 0);
+        assert!(
+            preview.ends_with('…'),
+            "preview of a 50-char line must end with …: {preview:?}"
+        );
+        // The prefix before `…` is at most 40 bytes.
+        let without_ellipsis: &str = preview.trim_end_matches('…');
+        assert!(
+            without_ellipsis.len() <= 40,
+            "truncated prefix must be ≤ 40 bytes: {}",
+            without_ellipsis.len()
+        );
     }
 }
