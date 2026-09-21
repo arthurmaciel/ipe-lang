@@ -6,6 +6,8 @@
 -- `Kernel.kernel` aliases (`html_named_attr_` / `html_bool_named_attr_` /
 -- `html_no_attr_`). The attribute VALUE is escaped at the native render sink
 -- (`escape_attr`), so no escaping happens here; the fixed keys are literals.
+
+
 module Ipe.Html.Attributes exposing
     ( Attribute
     , attribute, boolAttribute, noAttr
@@ -15,8 +17,14 @@ module Ipe.Html.Attributes exposing
     , type_, for_, style, title, autocomplete
     , checked, disabled, readonly, required, multiple, selected, autofocus
     , tabindex, rows
+    , Role(..), role
+    , AriaLive(..), AriaCurrent(..), AriaTristate(..), AriaHaspopup(..), AriaInvalid(..)
+    , ariaLabel, ariaLabelledby, ariaDescribedby, ariaControls
+    , ariaHidden, ariaExpanded, ariaDisabled, ariaSelected, ariaRequired
+    , ariaPressed, ariaModal, ariaBusy, ariaChecked, ariaInvalid
+    , ariaLive, ariaCurrent, ariaHaspopup
+    , ariaValuemin, ariaValuemax, ariaValuenow, ariaValuetext
     )
-
 
 import Ipe.Error exposing (Error)
 import Ipe.Ffi.Kernel as Kernel
@@ -29,7 +37,8 @@ import Ipe.Url as Url exposing (Relative, Url)
 -- string-valued `Attribute` constructor every fixed-key string builder below
 -- specialises.
 attribute : String -> String -> Attribute msg
-attribute = Kernel.kernel "Attr_attribute"
+attribute =
+    Kernel.kernel "Attr_attribute"
 
 
 -- | `boolAttribute key on` — a boolean HTML attribute. When `on` is `True`,
@@ -37,23 +46,26 @@ attribute = Kernel.kernel "Attr_attribute"
 -- The one bool-valued `Attribute` constructor every fixed-key bool builder
 -- below specialises.
 boolAttribute : String -> Bool -> Attribute msg
-boolAttribute = Kernel.kernel "Attr_boolAttribute"
+boolAttribute =
+    Kernel.kernel "Attr_boolAttribute"
 
 
 -- | `noAttr` — the identity attribute (renders nothing). Makes "no attribute" a
 -- first-class value rather than a `Maybe`/sentinel.
 noAttr : Attribute msg
-noAttr = Kernel.kernel "Attr_noAttr"
+noAttr =
+    Kernel.kernel "Attr_noAttr"
 
 
 -- ── String fixed-key attributes ──────────────────────────────────────────────
-
 class : String -> Attribute msg
-class = attribute "class"
+class =
+    attribute "class"
 
 
 id : String -> Attribute msg
-id = attribute "id"
+id =
+    attribute "id"
 
 
 -- | The schemes a `link` may target: `http`/`https` for web plus the two safe
@@ -173,75 +185,89 @@ src target =
 
 
 alt : String -> Attribute msg
-alt = attribute "alt"
+alt =
+    attribute "alt"
 
 
 value : String -> Attribute msg
-value = attribute "value"
+value =
+    attribute "value"
 
 
 name : String -> Attribute msg
-name = attribute "name"
+name =
+    attribute "name"
 
 
 placeholder : String -> Attribute msg
-placeholder = attribute "placeholder"
+placeholder =
+    attribute "placeholder"
 
 
 -- | `type_` — the `type` attribute (`type` is an Ipê keyword-adjacent spelling).
 type_ : String -> Attribute msg
-type_ = attribute "type"
+type_ =
+    attribute "type"
 
 
 -- | `for_` — the `for` attribute (`for` is an Ipê keyword).
 for_ : String -> Attribute msg
-for_ = attribute "for"
+for_ =
+    attribute "for"
 
 
 style : String -> Attribute msg
-style = attribute "style"
+style =
+    attribute "style"
 
 
 title : String -> Attribute msg
-title = attribute "title"
+title =
+    attribute "title"
 
 
 autocomplete : String -> Attribute msg
-autocomplete = attribute "autocomplete"
+autocomplete =
+    attribute "autocomplete"
 
 
 -- ── Bool fixed-key attributes ────────────────────────────────────────────────
-
 checked : Bool -> Attribute msg
-checked = boolAttribute "checked"
+checked =
+    boolAttribute "checked"
 
 
 disabled : Bool -> Attribute msg
-disabled = boolAttribute "disabled"
+disabled =
+    boolAttribute "disabled"
 
 
 readonly : Bool -> Attribute msg
-readonly = boolAttribute "readonly"
+readonly =
+    boolAttribute "readonly"
 
 
 required : Bool -> Attribute msg
-required = boolAttribute "required"
+required =
+    boolAttribute "required"
 
 
 multiple : Bool -> Attribute msg
-multiple = boolAttribute "multiple"
+multiple =
+    boolAttribute "multiple"
 
 
 selected : Bool -> Attribute msg
-selected = boolAttribute "selected"
+selected =
+    boolAttribute "selected"
 
 
 autofocus : Bool -> Attribute msg
-autofocus = boolAttribute "autofocus"
+autofocus =
+    boolAttribute "autofocus"
 
 
 -- ── Int fixed-key attributes ─────────────────────────────────────────────────
-
 -- | `tabindex n` — the `tabindex` attribute, rendered as its decimal string.
 tabindex : Int -> Attribute msg
 tabindex n =
@@ -253,3 +279,610 @@ tabindex n =
 rows : Int -> Attribute msg
 rows n =
     attribute "rows" (String.fromInt n)
+
+
+-- ── Typed ARIA / role vocabulary ─────────────────────────────────────────────
+--
+-- WAI-ARIA `role` and the `aria-*` state/property attributes are a CLOSED
+-- vocabulary — the browser and assistive tech recognise a fixed set of names and
+-- value shapes. Modelling them as `attribute "role" "buton"` (an open `String`)
+-- is parse-don't-validate violated at the a11y boundary: a typo, an invalid
+-- role, or an aria attr with the wrong-shaped value all type-check and ship
+-- silently. Encoding the vocabulary in closed sums makes each of those
+-- unrepresentable — an invalid role has no `Role` value to build from.
+--
+-- Enumerated aria STATES (`aria-expanded`, `aria-pressed`, `aria-checked`, …)
+-- are rendered with an EXPLICIT `"true"`/`"false"` string, not the omit-on-false
+-- `boolAttribute`: for an aria state the absent attribute and the literal
+-- `"false"` mean DIFFERENT things to assistive tech (unsupported vs. supported
+-- and currently off), so the state is always written out rather than dropped.
+-- | The WAI-ARIA role vocabulary — a closed sum over the roles an author sets on
+-- an element. An invalid or misspelled role is unrepresentable: there is no
+-- `Role` value for it, so `role (Buton)` is a type error, not a silent ship.
+-- Prefer a semantic element (`<nav>`, `<main>`, `<button>`) where one exists;
+-- reach for `role` when overriding an element's implicit semantics.
+type Role
+    = Alert
+    | AlertDialog
+    | Application
+    | Article
+    | Banner
+    | Button
+    | Cell
+    | Checkbox
+    | Columnheader
+    | Combobox
+    | Complementary
+    | ContentInfo
+    | Definition
+    | Dialog
+    | Directory
+    | Document
+    | Feed
+    | Figure
+    | Form
+    | Grid
+    | Gridcell
+    | Group
+    | Heading
+    | Img
+    | Link
+    | List
+    | Listbox
+    | Listitem
+    | Log
+    | Main
+    | Marquee
+    | Math
+    | Menu
+    | Menubar
+    | Menuitem
+    | MenuitemCheckbox
+    | MenuitemRadio
+    | Navigation
+    | None
+    | Note
+    | Option
+    | Presentation
+    | Progressbar
+    | Radio
+    | Radiogroup
+    | Region
+    | Row
+    | Rowgroup
+    | Rowheader
+    | Scrollbar
+    | Search
+    | Searchbox
+    | Separator
+    | Slider
+    | Spinbutton
+    | Status
+    | Switch
+    | Tab
+    | Table
+    | Tablist
+    | Tabpanel
+    | Term
+    | Textbox
+    | Timer
+    | Toolbar
+    | Tooltip
+    | Tree
+    | Treegrid
+    | Treeitem
+
+
+-- | `roleName r` — the canonical wire string for a `Role`. The `case` is
+-- exhaustive over every variant — no wildcard, so a new role cannot be added
+-- without its string.
+roleName : Role -> String
+roleName r =
+    case r of
+        Alert ->
+            "alert"
+
+        AlertDialog ->
+            "alertdialog"
+
+        Application ->
+            "application"
+
+        Article ->
+            "article"
+
+        Banner ->
+            "banner"
+
+        Button ->
+            "button"
+
+        Cell ->
+            "cell"
+
+        Checkbox ->
+            "checkbox"
+
+        Columnheader ->
+            "columnheader"
+
+        Combobox ->
+            "combobox"
+
+        Complementary ->
+            "complementary"
+
+        ContentInfo ->
+            "contentinfo"
+
+        Definition ->
+            "definition"
+
+        Dialog ->
+            "dialog"
+
+        Directory ->
+            "directory"
+
+        Document ->
+            "document"
+
+        Feed ->
+            "feed"
+
+        Figure ->
+            "figure"
+
+        Form ->
+            "form"
+
+        Grid ->
+            "grid"
+
+        Gridcell ->
+            "gridcell"
+
+        Group ->
+            "group"
+
+        Heading ->
+            "heading"
+
+        Img ->
+            "img"
+
+        Link ->
+            "link"
+
+        List ->
+            "list"
+
+        Listbox ->
+            "listbox"
+
+        Listitem ->
+            "listitem"
+
+        Log ->
+            "log"
+
+        Main ->
+            "main"
+
+        Marquee ->
+            "marquee"
+
+        Math ->
+            "math"
+
+        Menu ->
+            "menu"
+
+        Menubar ->
+            "menubar"
+
+        Menuitem ->
+            "menuitem"
+
+        MenuitemCheckbox ->
+            "menuitemcheckbox"
+
+        MenuitemRadio ->
+            "menuitemradio"
+
+        Navigation ->
+            "navigation"
+
+        None ->
+            "none"
+
+        Note ->
+            "note"
+
+        Option ->
+            "option"
+
+        Presentation ->
+            "presentation"
+
+        Progressbar ->
+            "progressbar"
+
+        Radio ->
+            "radio"
+
+        Radiogroup ->
+            "radiogroup"
+
+        Region ->
+            "region"
+
+        Row ->
+            "row"
+
+        Rowgroup ->
+            "rowgroup"
+
+        Rowheader ->
+            "rowheader"
+
+        Scrollbar ->
+            "scrollbar"
+
+        Search ->
+            "search"
+
+        Searchbox ->
+            "searchbox"
+
+        Separator ->
+            "separator"
+
+        Slider ->
+            "slider"
+
+        Spinbutton ->
+            "spinbutton"
+
+        Status ->
+            "status"
+
+        Switch ->
+            "switch"
+
+        Tab ->
+            "tab"
+
+        Table ->
+            "table"
+
+        Tablist ->
+            "tablist"
+
+        Tabpanel ->
+            "tabpanel"
+
+        Term ->
+            "term"
+
+        Textbox ->
+            "textbox"
+
+        Timer ->
+            "timer"
+
+        Toolbar ->
+            "toolbar"
+
+        Tooltip ->
+            "tooltip"
+
+        Tree ->
+            "tree"
+
+        Treegrid ->
+            "treegrid"
+
+        Treeitem ->
+            "treeitem"
+
+
+-- | `role r` — the `role` attribute over the closed `Role` vocabulary. A raw
+-- `String` role is a type error, so a typo like `"buton"` cannot ship.
+role : Role -> Attribute msg
+role r =
+    attribute "role" (roleName r)
+
+
+-- | The closed value set for `aria-live` — how urgently a live region's updates
+-- are announced. `Off` suppresses announcements, `Polite` waits for a pause,
+-- `Assertive` interrupts.
+type AriaLive
+    = LiveOff
+    | LivePolite
+    | LiveAssertive
+
+
+ariaLiveName : AriaLive -> String
+ariaLiveName v =
+    case v of
+        LiveOff ->
+            "off"
+
+        LivePolite ->
+            "polite"
+
+        LiveAssertive ->
+            "assertive"
+
+
+-- | The closed value set for `aria-current` — which item in a set is the current
+-- one. A page/step/location/date/time current, `CurrentTrue` for the generic
+-- current, or `CurrentFalse` for none.
+type AriaCurrent
+    = CurrentFalse
+    | CurrentTrue
+    | CurrentPage
+    | CurrentStep
+    | CurrentLocation
+    | CurrentDate
+    | CurrentTime
+
+
+ariaCurrentName : AriaCurrent -> String
+ariaCurrentName v =
+    case v of
+        CurrentFalse ->
+            "false"
+
+        CurrentTrue ->
+            "true"
+
+        CurrentPage ->
+            "page"
+
+        CurrentStep ->
+            "step"
+
+        CurrentLocation ->
+            "location"
+
+        CurrentDate ->
+            "date"
+
+        CurrentTime ->
+            "time"
+
+
+-- | The closed tri-state for `aria-checked` / `aria-pressed` — a toggle that is
+-- on, off, or partially on (`Mixed`, e.g. a tri-state checkbox).
+type AriaTristate
+    = TriTrue
+    | TriFalse
+    | TriMixed
+
+
+ariaTristateName : AriaTristate -> String
+ariaTristateName v =
+    case v of
+        TriTrue ->
+            "true"
+
+        TriFalse ->
+            "false"
+
+        TriMixed ->
+            "mixed"
+
+
+-- | The closed value set for `aria-haspopup` — the kind of popup an element
+-- triggers.
+type AriaHaspopup
+    = HaspopupFalse
+    | HaspopupTrue
+    | HaspopupMenu
+    | HaspopupListbox
+    | HaspopupTree
+    | HaspopupGrid
+    | HaspopupDialog
+
+
+ariaHaspopupName : AriaHaspopup -> String
+ariaHaspopupName v =
+    case v of
+        HaspopupFalse ->
+            "false"
+
+        HaspopupTrue ->
+            "true"
+
+        HaspopupMenu ->
+            "menu"
+
+        HaspopupListbox ->
+            "listbox"
+
+        HaspopupTree ->
+            "tree"
+
+        HaspopupGrid ->
+            "grid"
+
+        HaspopupDialog ->
+            "dialog"
+
+
+-- | The closed value set for `aria-invalid` — whether a field's value fails
+-- validation, and if so how.
+type AriaInvalid
+    = InvalidFalse
+    | InvalidTrue
+    | InvalidGrammar
+    | InvalidSpelling
+
+
+ariaInvalidName : AriaInvalid -> String
+ariaInvalidName v =
+    case v of
+        InvalidFalse ->
+            "false"
+
+        InvalidTrue ->
+            "true"
+
+        InvalidGrammar ->
+            "grammar"
+
+        InvalidSpelling ->
+            "spelling"
+
+
+-- | `ariaBool value` — the explicit `"true"`/`"false"` string an aria STATE
+-- boolean renders to. Unlike `boolAttribute`, the `False` case is written out,
+-- because an absent aria state and an explicit `"false"` are semantically
+-- distinct to assistive tech.
+ariaBool : Bool -> String
+ariaBool on =
+    if on then
+        "true"
+
+    else
+        "false"
+
+
+-- ── aria string properties ──
+-- | `ariaLabel s` — a short accessible name for an element that has no visible
+-- text label (an icon-only control, a graphic). The name a screen reader
+-- announces.
+ariaLabel : String -> Attribute msg
+ariaLabel =
+    attribute "aria-label"
+
+
+-- | `ariaLabelledby ids` — the accessible name sourced from other element(s) by
+-- their `id` (space-separated). Pair with `id` on the label element.
+ariaLabelledby : String -> Attribute msg
+ariaLabelledby =
+    attribute "aria-labelledby"
+
+
+-- | `ariaDescribedby ids` — a longer description sourced from other element(s)
+-- by their `id` (space-separated).
+ariaDescribedby : String -> Attribute msg
+ariaDescribedby =
+    attribute "aria-describedby"
+
+
+-- | `ariaControls ids` — the element(s) this control governs, by `id`
+-- (space-separated) — e.g. a toggle button and the panel it expands.
+ariaControls : String -> Attribute msg
+ariaControls =
+    attribute "aria-controls"
+
+
+-- | `ariaValuetext s` — a human-readable text alternative for a range widget's
+-- current value (e.g. `"medium"` for a slider at `2`).
+ariaValuetext : String -> Attribute msg
+ariaValuetext =
+    attribute "aria-valuetext"
+
+
+-- ── aria state booleans (explicit true/false) ──
+-- | `ariaHidden on` — hides an element (and its subtree) from assistive tech
+-- when `True`, e.g. a purely decorative icon whose meaning is carried elsewhere.
+ariaHidden : Bool -> Attribute msg
+ariaHidden on =
+    attribute "aria-hidden" (ariaBool on)
+
+
+-- | `ariaExpanded on` — whether a disclosure control's target is expanded.
+ariaExpanded : Bool -> Attribute msg
+ariaExpanded on =
+    attribute "aria-expanded" (ariaBool on)
+
+
+-- | `ariaDisabled on` — whether an element is perceivable but disabled.
+ariaDisabled : Bool -> Attribute msg
+ariaDisabled on =
+    attribute "aria-disabled" (ariaBool on)
+
+
+-- | `ariaSelected on` — whether a selectable item (tab, option) is selected.
+ariaSelected : Bool -> Attribute msg
+ariaSelected on =
+    attribute "aria-selected" (ariaBool on)
+
+
+-- | `ariaRequired on` — whether user input is required before submission.
+ariaRequired : Bool -> Attribute msg
+ariaRequired on =
+    attribute "aria-required" (ariaBool on)
+
+
+-- | `ariaModal on` — whether a dialog is modal (content outside it is inert).
+ariaModal : Bool -> Attribute msg
+ariaModal on =
+    attribute "aria-modal" (ariaBool on)
+
+
+-- | `ariaBusy on` — whether an element is being updated and not yet stable.
+ariaBusy : Bool -> Attribute msg
+ariaBusy on =
+    attribute "aria-busy" (ariaBool on)
+
+
+-- ── aria enumerated states ──
+-- | `ariaPressed state` — a toggle button's pressed state (on/off/mixed).
+ariaPressed : AriaTristate -> Attribute msg
+ariaPressed state =
+    attribute "aria-pressed" (ariaTristateName state)
+
+
+-- | `ariaChecked state` — a checkbox/radio/switch checked state (on/off/mixed).
+ariaChecked : AriaTristate -> Attribute msg
+ariaChecked state =
+    attribute "aria-checked" (ariaTristateName state)
+
+
+-- | `ariaLive urgency` — how a live region's updates are announced
+-- (off/polite/assertive).
+ariaLive : AriaLive -> Attribute msg
+ariaLive urgency =
+    attribute "aria-live" (ariaLiveName urgency)
+
+
+-- | `ariaCurrent which` — which item in a set is the current one.
+ariaCurrent : AriaCurrent -> Attribute msg
+ariaCurrent which =
+    attribute "aria-current" (ariaCurrentName which)
+
+
+-- | `ariaHaspopup kind` — the kind of popup an element triggers.
+ariaHaspopup : AriaHaspopup -> Attribute msg
+ariaHaspopup kind =
+    attribute "aria-haspopup" (ariaHaspopupName kind)
+
+
+-- | `ariaInvalid state` — whether a field's value fails validation.
+ariaInvalid : AriaInvalid -> Attribute msg
+ariaInvalid state =
+    attribute "aria-invalid" (ariaInvalidName state)
+
+
+-- ── aria numeric range properties ──
+-- | `ariaValuemin n` — the minimum value of a range widget (slider, spinbutton).
+ariaValuemin : Int -> Attribute msg
+ariaValuemin n =
+    attribute "aria-valuemin" (String.fromInt n)
+
+
+-- | `ariaValuemax n` — the maximum value of a range widget.
+ariaValuemax : Int -> Attribute msg
+ariaValuemax n =
+    attribute "aria-valuemax" (String.fromInt n)
+
+
+-- | `ariaValuenow n` — the current value of a range widget.
+ariaValuenow : Int -> Attribute msg
+ariaValuenow n =
+    attribute "aria-valuenow" (String.fromInt n)

@@ -4,43 +4,11 @@
 
 [Back to stdlib index](../stdlib.md)
 
-Ipe.Ui — element / attribute / colour / layout surface.
-
-The layout builders (`el` / `row` / `column` / `wrappedRow` / `grid` /
-`paragraph` / `textColumn` / `form` / `input`) are ordinary Ipê over two
-retained native primitives: `node` (a container `Element`) and `taggedNode`
-(a tag-fixed `Element`). Those two, plus every other member (`layout` /
-`spacing` / `button` / `link` / `image` / the `on*` events / the
-security-gated `mediaQuery` / `breakpoint` / `onPseudo` / the `desc*` roles /
-…), are point-free `Kernel.kernel "Ui_*"` aliases resolving to their unchanged
-native kernels, so each bespoke emit arm is preserved. The `Ipe.Ui.*`
-sub-modules (Background / Border / Font / Region / Input / Lazy / Keyed) are
-separate native qualifiers, untouched here.
-
-`image` takes an `ImageValue` — either a typed `MediaTarget` (a URL narrowed
-to `http`/`https` only, or a same-origin path, built with `imageSrc`) via
-`imageUrl`, or an inline `data:` image via `imageData { mime, base64 }` —
-never a raw `String`. A media `src` fetches a resource, so it rejects the
-`mailto:`/`tel:` anchor schemes a navigation `LinkTarget` allows.
-
-Gradients: `Background.linearGradient deg [(pos, color)]` is Ipê's gradient —
-you give a CSS angle in degrees and an explicit list of `(position, colour)`
-stops, so it maps 1:1 onto CSS `linear-gradient(<deg>deg, <colour> <pos>%, …)`
-and you control every stop. Coming from elm-ui's
-`gradient { angle = <radians>, steps = [<colour>, …] }`: convert the angle
-with `degrees` (elm's angle is in radians) and turn the evenly-weighted
-`steps` into explicit positions — N steps become positions
-`0%, 100/(N-1)%, …, 100%` — e.g. elm `gradient { angle = pi/2, steps = [red,
-blue] }` is Ipê `Background.linearGradient (degrees 90) [(0, red), (100, blue)]`.
-
 ## `node`
 
 ```ipe
 node : Description -> List (Attribute msg) -> List (Element msg) -> Element msg
 ```
-
-`node desc attrs children` — a container `Element` carrying a role
-`Description`, attributes, and children verbatim.
 
 ## `taggedNode`
 
@@ -55,8 +23,6 @@ taggedNode : String -> Description -> List (Attribute msg) -> List (Element msg)
 ```ipe
 layout : List (Attribute msg) -> Element msg -> Html msg
 ```
-
-`layout attrs element` — render a root `Element` to `Html`.
 
 ## `layoutWith`
 
@@ -104,8 +70,6 @@ cells : List (List Char) -> Element msg
 ```ipe
 el : List (Attribute msg) -> Element msg -> Element msg
 ```
-
-`el attrs child` — a single-child container.
 
 ## `row`
 
@@ -790,5 +754,176 @@ descHeading : Int -> Description
 
 ```ipe
 descLabel : String -> Description
+```
+
+## `iconButton`
+
+```ipe
+iconButton : List (Attribute msg) -> { icon : Element msg, label : String, onPress : Maybe msg } -> Element msg
+```
+
+## `Role`
+
+## `role`
+
+```ipe
+role : Role -> Attribute msg
+```
+
+`role r` — the `role` attribute over the closed `Role` vocabulary.
+
+## `AriaLive`
+
+The closed value set for `aria-live` (off/polite/assertive).
+
+## `AriaCurrent`
+
+The closed value set for `aria-current`.
+
+## `AriaTristate`
+
+The closed tri-state for `aria-checked` / `aria-pressed` (on/off/mixed).
+
+## `AriaHaspopup`
+
+The closed value set for `aria-haspopup`.
+
+## `AriaInvalid`
+
+The closed value set for `aria-invalid`.
+
+## `ariaLabel`
+
+```ipe
+ariaLabel : String -> Attribute msg
+```
+
+## `ariaLabelledby`
+
+```ipe
+ariaLabelledby : String -> Attribute msg
+```
+
+## `ariaDescribedby`
+
+```ipe
+ariaDescribedby : String -> Attribute msg
+```
+
+## `ariaControls`
+
+```ipe
+ariaControls : String -> Attribute msg
+```
+
+## `id`
+
+```ipe
+id : String -> Attribute msg
+```
+
+`id s` — the `id` attribute, the anchor an `ariaLabelledby` / `ariaDescribedby`
+points at.
+
+## `ariaHidden`
+
+```ipe
+ariaHidden : Bool -> Attribute msg
+```
+
+## `ariaExpanded`
+
+```ipe
+ariaExpanded : Bool -> Attribute msg
+```
+
+## `ariaDisabled`
+
+```ipe
+ariaDisabled : Bool -> Attribute msg
+```
+
+## `ariaSelected`
+
+```ipe
+ariaSelected : Bool -> Attribute msg
+```
+
+## `ariaRequired`
+
+```ipe
+ariaRequired : Bool -> Attribute msg
+```
+
+## `ariaPressed`
+
+```ipe
+ariaPressed : AriaTristate -> Attribute msg
+```
+
+## `ariaModal`
+
+```ipe
+ariaModal : Bool -> Attribute msg
+```
+
+## `ariaBusy`
+
+```ipe
+ariaBusy : Bool -> Attribute msg
+```
+
+## `ariaChecked`
+
+```ipe
+ariaChecked : AriaTristate -> Attribute msg
+```
+
+## `ariaInvalid`
+
+```ipe
+ariaInvalid : AriaInvalid -> Attribute msg
+```
+
+## `ariaLive`
+
+```ipe
+ariaLive : AriaLive -> Attribute msg
+```
+
+## `ariaCurrent`
+
+```ipe
+ariaCurrent : AriaCurrent -> Attribute msg
+```
+
+## `ariaHaspopup`
+
+```ipe
+ariaHaspopup : AriaHaspopup -> Attribute msg
+```
+
+## `ariaValuemin`
+
+```ipe
+ariaValuemin : Int -> Attribute msg
+```
+
+## `ariaValuemax`
+
+```ipe
+ariaValuemax : Int -> Attribute msg
+```
+
+## `ariaValuenow`
+
+```ipe
+ariaValuenow : Int -> Attribute msg
+```
+
+## `ariaValuetext`
+
+```ipe
+ariaValuetext : String -> Attribute msg
 ```
 

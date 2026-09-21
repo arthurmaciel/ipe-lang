@@ -15,12 +15,11 @@ module Main exposing (main)
 --   • Events carry your `Msg`. `Ui.onClick Increment` attaches a typed message to
 --     a button; when it fires, the TEA loop routes it through `update`.
 
-
+import Ipe.String as String
 import Ipe.Tea.Web as Web
-import Ipe.Ui as Ui
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
-import Ipe.String as String
+import Ipe.Ui as Ui
 
 
 type Msg
@@ -40,7 +39,6 @@ init _req =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-
         Increment ->
             ( { model | count = model.count + 1 }, Cmd.none )
 
@@ -57,6 +55,11 @@ subscriptions _model =
 -- counter row with `spacing`; the inner `row` places the two buttons and the
 -- live count side by side. Colours and padding are typed attributes, not raw
 -- CSS. Each button carries a typed `Msg` via `onClick`.
+--
+-- Accessibility rides along for free: the `-`/`+` glyphs read as nothing to a
+-- screen reader, so each button carries a typed `ariaLabel`; and the count is a
+-- status that updates in place, so its `el` is an `ariaLive` polite region — the
+-- new value is announced without stealing focus.
 view : Model -> Element Msg
 view model =
     Ui.column
@@ -64,18 +67,20 @@ view model =
         , Ui.padding 24
         ]
         [ Ui.el
-            [ Ui.style "font-weight" "bold" ]
+            [ Ui.style "font-weight" "bold", Ui.describe (Ui.descHeading 1) ]
             (Ui.text "Counter")
         , Ui.row
             [ Ui.spacing 12 ]
             [ Ui.button
-                [ Ui.padding 8, Ui.onClick Decrement ]
+                [ Ui.padding 8, Ui.onClick Decrement, Ui.ariaLabel "Decrement" ]
                 { onPress = Just Decrement, label = Ui.text "-" }
             , Ui.el
-                [ Ui.style "color" (Ui.colorCss (Ui.rgb 30 30 60)) ]
+                [ Ui.style "color" (Ui.colorCss (Ui.rgb 30 30 60))
+                , Ui.ariaLive Ui.LivePolite
+                ]
                 (Ui.text (String.fromInt model.count))
             , Ui.button
-                [ Ui.padding 8, Ui.onClick Increment ]
+                [ Ui.padding 8, Ui.onClick Increment, Ui.ariaLabel "Increment" ]
                 { onPress = Just Increment, label = Ui.text "+" }
             ]
         ]

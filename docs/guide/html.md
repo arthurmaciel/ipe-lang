@@ -77,10 +77,11 @@ built with these builders can skip them.
   serialisers. `ipe doc Ipe.Html.render` / `ipe doc Ipe.Html.renderStatic` cover
   the string and static-page render; `ipe doc Ipe.Html.Attributes` the attribute
   builders (`class`, `href`, `id`, `src`).
-- **Sibling guides:** [Markdown](markdown.md) — renders to a typed tree with the
-  same no-raw-HTML guarantee, for chat-grade content. [Strings](string.md) — the
-  text the builders wrap. [Tasks](task.md) — `renderStatic` renders a view to a
-  file as a `Task`.
+- **Sibling guides:** [Accessibility](accessibility.md) — typed `role` / `aria-*`
+  and the accessible-by-default `Ipe.Ui` surface. [Markdown](markdown.md) —
+  renders to a typed tree with the same no-raw-HTML guarantee, for chat-grade
+  content. [Strings](string.md) — the text the builders wrap. [Tasks](task.md) —
+  `renderStatic` renders a view to a file as a `Task`.
 - **Concepts:** [Types and inference](types.md) — how an `Html msg` tree is typed.
   [Make invalid states unrepresentable](../../PRINCIPLES.md) — the principle the
   tree structure embodies.
