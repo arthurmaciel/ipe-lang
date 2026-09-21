@@ -19,10 +19,11 @@ use ipe_canon::sig_delta::ShapeDelta;
 use crate::finding::{Finding, SigFix};
 use crate::rules::{self, Ctx};
 
-/// One curated correspondence: a parameter-name substring, the bare primitive it
+/// One curated correspondence: a parameter-name token, the bare primitive it
 /// is typically (mis)typed as, the newtype that fits, and the parse to reach it.
 struct Domain {
-    /// A lower-cased parameter-name substring that signals the domain (`port`).
+    /// A lower-cased whole-token name that signals the domain (`port`). Matched
+    /// against a tokenized parameter name, never as a raw substring.
     name_hint: &'static str,
     /// The bare primitive constructor the parameter is annotated with (`Int`).
     bare: &'static str,
@@ -172,9 +173,10 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
             let Some(bare) = rules::con_head_name(ctx, param_ty) else {
                 continue;
             };
-            let lower = param_name.to_ascii_lowercase();
+            let tokens = tokenize_name(param_name);
+            let head = head_noun(&tokens);
             for domain in DOMAINS {
-                if bare == domain.bare && lower.contains(domain.name_hint) {
+                if bare == domain.bare && head == Some(domain.name_hint) {
                     let name = ctx.text(value.value.name.value);
                     // The parse constructor name is the unqualified part after
                     // the dot, e.g. `Port.fromInt` → `Port`. This is the
@@ -214,6 +216,66 @@ pub fn check(ctx: &Ctx) -> Vec<Finding> {
         }
     }
     findings
+}
+
+/// Split a parameter name into lower-cased segments on token boundaries, so a
+/// `name_hint` is matched against a whole token (the head noun, via
+/// [`head_noun`]), never a raw substring — `ttl` must not match inside
+/// `throttle`. Boundaries: `_`, a camelCase hump (lower→upper), a letter↔digit
+/// transition, and the end of an acronym run (`HTTPTimeout` → `HTTP` |
+/// `Timeout`, so the fused acronym does not swallow the `timeout` hint). Total
+/// and bounded — one linear pass, no panic on empty, all-digit, or unicode names.
+///
+/// `httpTimeout` → [`http`, `timeout`]; `read_ttl` → [`read`, `ttl`];
+/// `HTTPTimeout` → [`http`, `timeout`]; `readTtl2` → [`read`, `ttl`, `2`].
+fn tokenize_name(name: &str) -> Vec<String> {
+    let chars: Vec<char> = name.chars().collect();
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch == '_' {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        let boundary = match (i.checked_sub(1).and_then(|j| chars.get(j).copied()), ch) {
+            (Some(p), _) => {
+                // camelCase hump (lower→upper), letter↔digit, or the end of an
+                // acronym run: an UPPER preceded by an UPPER but followed by a
+                // lower starts a new word (`HTTPTimeout` → `HTTP` | `Timeout`),
+                // so a fused acronym does not swallow the next word's hint.
+                (p.is_ascii_lowercase() && ch.is_ascii_uppercase())
+                    || (p.is_ascii_alphabetic() && ch.is_ascii_digit())
+                    || (p.is_ascii_digit() && ch.is_ascii_alphabetic())
+                    || (p.is_ascii_uppercase()
+                        && ch.is_ascii_uppercase()
+                        && chars.get(i + 1).is_some_and(char::is_ascii_lowercase))
+            }
+            (None, _) => false,
+        };
+        if boundary && !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+        current.extend(ch.to_lowercase());
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// The head-noun token of a parameter name: the last token that is not a pure
+/// numeric suffix. A domain hint matches only the head, so `userEmail`/`readTtl`
+/// (head `email`/`ttl`) flag but `emailBody`/`pathSegment` (head `body`/`segment`
+/// — the value is a body/segment, not an email/path) do not. A trailing numeric
+/// disambiguator (`readTtl2`) is skipped so it does not mask the real head.
+fn head_noun(tokens: &[String]) -> Option<&str> {
+    tokens
+        .iter()
+        .rev()
+        .find(|t| !t.bytes().all(|b| b.is_ascii_digit()))
+        .map(String::as_str)
 }
 
 /// The name of the `idx`-th parameter of `value`, when that parameter is a plain

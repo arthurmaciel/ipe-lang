@@ -1874,4 +1874,132 @@ mod tests {
             mr.reason
         );
     }
+
+    // ── prim-param token-boundary matching ────────────────────────────────────
+    // A `name_hint` matches a WHOLE tokenized segment, never a raw substring, so
+    // short hints (`ttl`, `email`, `port`) no longer collide inside longer names.
+
+    /// Build a single-param module whose exported binding takes `ty` named `pname`.
+    fn prim_param_module(pname: &str, ty: &str) -> String {
+        format!(
+            "module Main exposing (f)\n\n\
+             f : {ty} -> String\n\
+             f {pname} =\n\
+             \x20   \"ok\"\n"
+        )
+    }
+
+    fn flags_prim_param(pname: &str, ty: &str) -> bool {
+        let src = prim_param_module(pname, ty);
+        let report = run(&[module(&src)], &LintConfig::default());
+        report.findings.iter().any(|f| f.rule == "prim-param")
+    }
+
+    /// `ttl ⊂ throttle` must NOT fire — `throttle` tokenizes to [`throttle`].
+    #[test]
+    fn prim_param_does_not_flag_throttle() {
+        assert!(
+            !flags_prim_param("throttle", "Int"),
+            "`throttle : Int` must not be flagged (ttl is a substring, not a token)"
+        );
+    }
+
+    /// `ttl ⊂ settling` must NOT fire — `settling` tokenizes to [`settling`].
+    #[test]
+    fn prim_param_does_not_flag_settling() {
+        assert!(
+            !flags_prim_param("settling", "Int"),
+            "`settling : Int` must not be flagged (ttl is a substring, not a token)"
+        );
+    }
+
+    /// `email ⊂ emailBody` must NOT fire — `emailBody` → [`email`, `body`] and
+    /// there is no `body : String` domain, so no whole-token hint matches.
+    #[test]
+    fn prim_param_does_not_flag_email_body() {
+        // `emailBody` → [`email`, `body`]; the head noun is `body`, not `email` —
+        // the value is the body OF an email, not an email address. Matching the
+        // head (not any token) is what distinguishes it from `userEmail`.
+        assert!(
+            !flags_prim_param("emailBody", "String"),
+            "`emailBody : String` must not be flagged; its head noun is `body`, not `email`"
+        );
+    }
+
+    /// A compound whose hint is only a MODIFIER, not the head, is not flagged:
+    /// `pathSegment` → head `segment` — a segment is not a full path.
+    #[test]
+    fn prim_param_does_not_flag_path_segment() {
+        assert!(
+            !flags_prim_param("pathSegment", "String"),
+            "`pathSegment : String` must not be flagged; head noun is `segment`, not `path`"
+        );
+    }
+
+    /// camelCase: `httpTimeout` → [`http`, `timeout`] matches the `timeout` hint.
+    #[test]
+    fn prim_param_flags_http_timeout_camel() {
+        assert!(
+            flags_prim_param("httpTimeout", "Int"),
+            "`httpTimeout : Int` must be flagged (timeout token)"
+        );
+    }
+
+    /// Acronym run inside a (lowercase-first, so valid) param name:
+    /// `myHTTPTimeout` → [`my`, `http`, `timeout`] — the fused acronym splits
+    /// before the word that follows it, so `timeout` is still the head noun. A
+    /// leading acronym (`HTTPTimeout`) can't occur: params are lowercase-first.
+    #[test]
+    fn prim_param_flags_acronym_run_head() {
+        assert!(
+            flags_prim_param("myHTTPTimeout", "Int"),
+            "`myHTTPTimeout : Int` must be flagged (acronym run splits to head `timeout`)"
+        );
+    }
+
+    /// camelCase: `readTtl` → [`read`, `ttl`] matches the re-enabled `ttl` hint.
+    #[test]
+    fn prim_param_flags_read_ttl_camel() {
+        assert!(
+            flags_prim_param("readTtl", "Int"),
+            "`readTtl : Int` must be flagged (ttl token, short hint re-enabled)"
+        );
+    }
+
+    /// `snake_case`: `read_ttl` → [`read`, `ttl`] matches the `ttl` hint.
+    #[test]
+    fn prim_param_flags_read_ttl_snake() {
+        assert!(
+            flags_prim_param("read_ttl", "Int"),
+            "`read_ttl : Int` must be flagged (ttl token, snake_case)"
+        );
+    }
+
+    /// camelCase: `userEmail` → [`user`, `email`] matches the `email` hint.
+    #[test]
+    fn prim_param_flags_user_email_camel() {
+        assert!(
+            flags_prim_param("userEmail", "String"),
+            "`userEmail : String` must be flagged (email token)"
+        );
+    }
+
+    /// Trailing-digit boundary: `timeout2` → [`timeout`, `2`] still matches
+    /// `timeout` (the digit boundary splits the token but keeps the word whole).
+    #[test]
+    fn prim_param_flags_timeout_trailing_digit() {
+        assert!(
+            flags_prim_param("timeout2", "Int"),
+            "`timeout2 : Int` must be flagged (timeout token before digit boundary)"
+        );
+    }
+
+    /// `snake_case` with a trailing digit: `http_timeout_2` → [`http`,`timeout`,`2`].
+    #[test]
+    fn prim_param_flags_snake_trailing_digit() {
+        assert!(
+            flags_prim_param("http_timeout_2", "Int"),
+            "`http_timeout_2 : Int` must be flagged (timeout token, snake + digit)"
+        );
+    }
 }
