@@ -651,6 +651,7 @@ fn def_name_at(parsed: &ipe_syntax::Module, byte: u32, db: &IpeDatabase) -> Opti
             }
         }
     }
+    drop(interner);
     None
 }
 
