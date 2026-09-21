@@ -1,0 +1,7 @@
+safe-plain:ok
+safe-quote:ok
+backslash:rejected
+backslash-quote:rejected
+newline:rejected
+nul:rejected
+control:rejected

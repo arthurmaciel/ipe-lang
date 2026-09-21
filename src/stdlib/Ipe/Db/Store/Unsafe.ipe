@@ -189,9 +189,11 @@ touchOnUpdate col draft =
 
 
 -- | `defaultText col value draft` — give the string-named `col` a DB-level
--- `DEFAULT` of the text `value`. The literal is emitted through the same
--- single-quote-doubling escape SQL string literals require, so `value` cannot
--- break out of the literal.
+-- `DEFAULT` of the text `value`. `value` is a fixed schema literal embedded in
+-- the `CREATE TABLE` DDL: building the DDL rejects with a typed `Err` any
+-- `value` carrying a control byte, newline, NUL, or backslash, and an accepted
+-- `value` is single-quote escaped so it cannot break out of the literal under
+-- any backend's string-quoting mode.
 defaultText : String -> String -> Draft row -> Draft row
 defaultText col value draft =
     Store.defaultTextNamed col value draft

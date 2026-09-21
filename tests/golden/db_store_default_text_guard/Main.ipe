@@ -1,0 +1,90 @@
+module Main exposing (main)
+
+-- Regression anchor: a DEFAULT text value that could break out of the DDL
+-- string literal — or embed a control byte verbatim into the CREATE TABLE text
+-- — is rejected by `createSql` with a typed `Err` before any SQL is built.
+--
+-- A schema DEFAULT is a fixed literal interpolated directly into the DDL (a DDL
+-- DEFAULT admits no bound `?` parameter). Single-quote doubling alone closes
+-- the quote-breakout only while the backend treats a backslash as a literal
+-- byte (always so for SQLite; for Postgres only while
+-- `standard_conforming_strings` is on — a session flag this runtime never
+-- asserts). So the construction site refuses, fail-closed, any value carrying a
+-- control byte, newline, NUL, or backslash, and single-quote escapes the rest.
+--
+-- Checks (pure, no DB connection) — every hostile value must be REJECTED and
+-- the two legitimate defaults must still build:
+--   1. safe-plain:      `"active"`               -> Ok, literal `'active'`.
+--   2. safe-quote:      `"O'Brien"`              -> Ok, quote doubled `''`.
+--   3. backslash:       a lone `\`               -> Err (mode-dependent escape).
+--   4. backslash-quote: `\` then `'`             -> Err.
+--   5. newline:         a `\n` byte              -> Err.
+--   6. nul:             a NUL byte               -> Err.
+--   7. control:         a C0 control (code 7)    -> Err.
+
+import Ipe.Io as Io
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store.Unsafe as StoreU
+import Ipe.String as String
+import Ipe.Char as Char
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Error as Error exposing (Error)
+import Ipe.Task as Task
+
+
+-- Build the `CREATE TABLE` DDL for a one-text-column store whose column carries
+-- `value` as its DEFAULT, driving the real Store -> createSql path.
+defaultDdl : String -> Result Error String
+defaultDdl value =
+    case Store.fromColumns "settings" [ Store.textColumn "status" ] of
+        Err e ->
+            Err e
+
+        Ok s ->
+            Store.createSql (Store.public (StoreU.defaultText "status" value s))
+
+
+-- A byte from its code point, for building hostile values without relying on
+-- source-literal escape handling.
+byte : Int -> String
+byte code =
+    String.fromChar (Char.fromCode code)
+
+
+okLine : String -> String -> String -> String
+okLine label needle value =
+    case defaultDdl value of
+        Err _ ->
+            String.concat [ label, ":FAIL-rejected" ]
+
+        Ok ddl ->
+            if String.contains "DEFAULT " ddl && String.contains needle ddl then
+                String.concat [ label, ":ok" ]
+
+            else
+                String.concat [ label, ":FAIL-bad-ddl:", ddl ]
+
+
+rejectLine : String -> String -> String
+rejectLine label value =
+    case defaultDdl value of
+        Err _ ->
+            String.concat [ label, ":rejected" ]
+
+        Ok ddl ->
+            String.concat [ label, ":FAIL-accepted:", ddl ]
+
+
+main : Task Error ()
+main =
+    Io.println
+        (String.join "\n"
+            [ okLine "safe-plain" "'active'" "active"
+            , okLine "safe-quote" "'O''Brien'" "O'Brien"
+            , rejectLine "backslash" (byte 92)
+            , rejectLine "backslash-quote" (String.concat [ byte 92, "'" ])
+            , rejectLine "newline" (String.concat [ "a", byte 10, "b" ])
+            , rejectLine "nul" (String.concat [ "a", byte 0, "b" ])
+            , rejectLine "control" (String.concat [ "a", byte 7, "b" ])
+            ]
+        )
