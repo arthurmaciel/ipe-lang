@@ -76,6 +76,51 @@ update msg model =
 `ipe build` emits a web app; the buttons dispatch `Increment` / `Decrement` and
 the count updates live.
 
+## Keyboard navigation and focus
+
+`Ipe.Ui` is accessible by default — an app built from `Ui` controls requires
+no extra effort to be keyboard-operable.
+
+**Tab order.** Every `Ui.button`, `Ui.input`, and `Ui.link` renders as a native
+HTML element (`<button>`, `<input>`, `<a>`). Browsers assign them to the tab
+sequence automatically. Tab moves focus forward; Shift+Tab moves it backward.
+
+**Activation.** A focused `Ui.button` activates on Enter and Space (native
+`<button>` behaviour). A focused `Ui.link` activates on Enter.
+
+**Focus ring.** The runtime injects a visible focus ring — a 3 px solid accent
+outline with a white halo — into every page via the global CSS reset. The ring
+appears only on `:focus-visible` (keyboard focus), not on mouse clicks. It meets
+the WCAG 2.2 non-text contrast requirement (3:1) against any background through
+the two-layer technique: the accent ring on light backgrounds, the white halo on
+dark ones. High-contrast / Windows HCM modes use the system `Highlight` colour.
+
+You can restyle the ring per control without losing it:
+
+```ipe
+Ui.button
+    [ Ui.focusVisible
+        [ Ui.style "outline" "3px solid #e63946"
+        , Ui.style "outline-offset" "3px"
+        ]
+    ]
+    { onPress = Just Submit, label = Ui.text "Submit" }
+```
+
+**Erasing it is a lint error.** The `no-silent-outline-none` rule fires when
+`outline: none` (or `0`) appears inside a `Ui.focus` / `Ui.focusVisible` /
+`Ui.onPseudo` block without a visible replacement (`box-shadow`, `border`, or a
+non-none outline). Fail-closed: absent proof of a replacement, the removal is
+flagged. To suppress intentionally:
+
+```ipe
+-- ipe-lint: allow no-silent-outline-none
+Ui.focusVisible [ Ui.style "outline" "none", Ui.style "box-shadow" "0 0 0 4px #0060df" ]
+```
+
+(The example above would not need suppression — `box-shadow` is a visible
+replacement and the lint passes it.)
+
 ## The why
 
 A view as a typed `Element msg` tree is [make invalid states

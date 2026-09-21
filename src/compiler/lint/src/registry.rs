@@ -80,6 +80,12 @@ pub const RULES: &[RuleInfo] = &[
         default_severity: Severity::Warn,
         fixable: true,
     },
+    RuleInfo {
+        name: "no-silent-outline-none",
+        summary: "outline:none in a focus pseudo-class removes the keyboard focus indicator without a visible replacement",
+        default_severity: Severity::Warn,
+        fixable: false,
+    },
 ];
 
 /// The metadata for `name`, or `None` when no such rule ships.
