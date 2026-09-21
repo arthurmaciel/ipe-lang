@@ -258,22 +258,22 @@ fn canon_expr(out: &mut Vec<Raw>, expr: &ipe_canon::ast::Expr, interner: &Intern
         }
         Expr_::Binop {
             op: _,
+            op_span,
             home,
             func,
             lhs,
             rhs,
         } => {
-            // Best-effort operator span: the op symbol lies between lhs and rhs.
-            // Span::new normalises lo > hi to a zero-width span, which Raw::push
-            // drops; the operator token is simply absent in that degenerate case.
-            let op_span = Span::new(lhs.span.hi, rhs.span.lo);
+            // Use the exact lexer span of the operator glyph carried on the
+            // node. Synthetic nodes (multiline-string desugar) carry a
+            // zero-width span, which Raw::push drops — no token emitted.
             let def = resolve_sym(*home, interner)
                 .zip(resolve_sym(*func, interner))
                 .map(|(module_str, name_str)| DefKey::Kernel {
                     module: module_str,
                     name: name_str,
                 });
-            Raw::push(out, op_span, TokenClass::Operator, def);
+            Raw::push(out, *op_span, TokenClass::Operator, def);
             canon_expr(out, lhs, interner);
             canon_expr(out, rhs, interner);
         }

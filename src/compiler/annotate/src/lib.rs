@@ -392,6 +392,53 @@ mod tests {
     }
 
     #[test]
+    fn operator_token_span_is_glyph_not_gap() {
+        // `1 + 2` — the Operator token must cover only `+` (1 byte),
+        // NOT the gap ` + ` (3 bytes) that the old gap reconstruction produced.
+        // This test is non-vacuous: on the old code (`Span::new(lhs.span.hi,
+        // rhs.span.lo)`) the token would span 3 bytes including whitespace.
+        let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    1 + 2\n";
+        // Byte offset of `+`: 28(blank)+11(ann)+7(decl)+6("    1 ") = 52.
+        let plus_byte: u32 = src
+            .find(" + ")
+            .map(|i| i as u32 + 1)
+            .expect("` + ` present in source");
+
+        let (syntax, mut interner) = parse(src);
+        let canon_mod = canon(&syntax, &mut interner);
+        let tokens = annotate(&syntax, &canon_mod, &interner);
+
+        let ops = by_class(&tokens, TokenClass::Operator);
+        assert!(!ops.is_empty(), "binop `+` must produce an Operator token");
+
+        let op = ops[0];
+        assert_eq!(
+            op.byte_start, plus_byte,
+            "Operator token must start at the `+` glyph (byte {plus_byte}), got {}",
+            op.byte_start
+        );
+        assert_eq!(
+            op.byte_len, 1,
+            "Operator token must be 1 byte (just `+`), got {} — whitespace included",
+            op.byte_len
+        );
+
+        // The syntax-only walker must agree on the same span.
+        let syn_tokens = annotate_syntax_only(&syntax, &interner);
+        let syn_ops = by_class(&syn_tokens, TokenClass::Operator);
+        assert!(
+            !syn_ops.is_empty(),
+            "syntax-only walker must also emit Operator token"
+        );
+        let syn_op = syn_ops[0];
+        assert_eq!(
+            (syn_op.byte_start, syn_op.byte_len),
+            (op.byte_start, op.byte_len),
+            "canon and syntax-only walker must agree on operator span"
+        );
+    }
+
+    #[test]
     fn kernel_vs_user_function_distinct() {
         // `seed` is a top-level user function; `Crypto.sha256` calls a kernel.
         // (A security module stays kernel-qualifier; a compiled-source stdlib
