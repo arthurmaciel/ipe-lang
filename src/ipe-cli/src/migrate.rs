@@ -621,8 +621,13 @@ fn read_legacy_toml(text: &str, root: &Path) -> Result<ProjectManifest, CliError
     // recognised set has no home in the record form, so reject it by name
     // rather than default it away silently.
     if let Some(root_table) = table.as_table() {
-        const RECOGNISED: [&str; 5] =
-            ["project", "database", "dependencies", "capabilities", "wasm"];
+        const RECOGNISED: [&str; 5] = [
+            "project",
+            "database",
+            "dependencies",
+            "capabilities",
+            "wasm",
+        ];
         for key in root_table.keys() {
             if !RECOGNISED.contains(&key.as_str()) {
                 return Err(oops(&format!(
@@ -750,9 +755,18 @@ fn read_toml_wasm(
                 let mode = value
                     .as_str()
                     .ok_or_else(|| oops("`[wasm] mode` must be a string"))?;
+                // Accept only the known mode words (mirrors `read_wasm`); an
+                // unknown mode (e.g. a legacy `"off"`) must fail closed rather
+                // than fall through to `render_wasm`'s `Solo` default, which
+                // would silently flip a disabled bundle on.
                 let wire = match mode {
-                    "spa" => "solo",
-                    other => other,
+                    "spa" | "solo" => "solo",
+                    "hydrate" => "hydrate",
+                    other => {
+                        return Err(oops(&format!(
+                            "`[wasm] mode` must be `spa`, `solo`, or `hydrate`, found {other:?}"
+                        )));
+                    }
                 };
                 wasm.mode = Some(wire.to_owned());
             }
@@ -799,9 +813,7 @@ fn read_toml_wasm(
                 wasm.public_env = names;
             }
             other => {
-                return Err(oops(&format!(
-                    "`[wasm]` has an unknown key `{other}`"
-                )));
+                return Err(oops(&format!("`[wasm]` has an unknown key `{other}`")));
             }
         }
     }
@@ -928,10 +940,7 @@ mod tests {
         let err = migrate_config(&root, OutputFormat::Human)
             .expect_err("a denylisted publicEnv name must fail migration");
         let msg = err.to_string();
-        assert!(
-            msg.contains("secret denylist"),
-            "unexpected error: {msg}"
-        );
+        assert!(msg.contains("secret denylist"), "unexpected error: {msg}");
         // Fail closed: no `package.ipe` is written on a rejected migration.
         assert!(!root.join(PACKAGE_IPE).exists());
         let _ = std::fs::remove_dir_all(&root);
@@ -952,6 +961,30 @@ mod tests {
             msg.contains("[bogus]") && msg.contains("no automatic migration"),
             "unexpected error: {msg}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_toml_unknown_wasm_mode_is_rejected() {
+        // An unknown `[wasm] mode` (e.g. a legacy `"off"`) must fail closed, not
+        // fall through to the `Solo` default and silently flip a disabled bundle
+        // on. Only `spa`/`solo`/`hydrate` are accepted.
+        let root = fresh("toml_wasm_badmode");
+        std::fs::write(
+            root.join(IPE_TOML),
+            "[project]\nname = \"legacy\"\n\n[wasm]\nmode = \"off\"\n",
+        )
+        .expect("write toml");
+        let err = migrate_config(&root, OutputFormat::Human)
+            .expect_err("an unknown wasm mode must fail migration");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("mode") && msg.contains("off"),
+            "unexpected error: {msg}"
+        );
+        // Fail closed: no `package.ipe` is written, so a disabled bundle is never
+        // silently migrated to an active one.
+        assert!(!root.join(PACKAGE_IPE).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
