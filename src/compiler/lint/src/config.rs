@@ -382,23 +382,33 @@ impl Suppressions {
     /// marker is a real comment, the finding stands.
     #[must_use]
     pub fn scan(src: &str) -> Self {
-        let literal_spans = ipe_parse::literal_source_spans(src);
+        // Fail closed on an unlexable source: with no literal-span proof, no
+        // byte can be shown to be a comment, so recognise NO suppression — a
+        // marker on a source the lexer refuses must never silence a finding.
+        let Some(literal_spans) = ipe_parse::try_literal_source_spans(src) else {
+            return Self::default();
+        };
         let mut by_line: BTreeMap<usize, RuleSet> = BTreeMap::new();
+        // `split_inclusive('\n')` keeps each line's terminator — its `\n` and any
+        // preceding `\r` — so `piece.len()` counts every source byte. Summing it
+        // yields the same whole-source byte offset the lexer's literal spans
+        // count; `src.lines()` strips the trailing `\r`, undercounting one byte
+        // per CRLF line and drifting the offset out of the literal spans.
         let mut line_start: usize = 0;
-        for (line_no, line) in src.lines().enumerate() {
-            let Some(idx) = line.find(MARKER) else {
-                line_start += line.len() + 1;
+        for (line_no, piece) in src.split_inclusive('\n').enumerate() {
+            let Some(idx) = piece.find(MARKER) else {
+                line_start += piece.len();
                 continue;
             };
             // Byte offset of the marker's leading `-` within the whole source.
             let marker_at = line_start + idx;
-            line_start += line.len() + 1;
+            line_start += piece.len();
             if byte_in_any_span(marker_at, &literal_spans) {
                 // The marker is inside a string/char/doc-comment literal — data,
                 // not a directive. It cannot suppress.
                 continue;
             }
-            let rest = line.get(idx + MARKER.len()..).unwrap_or("").trim();
+            let rest = piece.get(idx + MARKER.len()..).unwrap_or("").trim();
             if rest == "all" {
                 by_line.insert(line_no, RuleSet::All);
                 continue;
