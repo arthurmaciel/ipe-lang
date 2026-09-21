@@ -668,7 +668,13 @@ pub fn http_request<E: From<String> + Send + 'static>(
     Box::pin(do_request(req))
 }
 
-/// Http.parseQuery : String -> Dict String String (pure; first value wins).
+/// `Http.parseQuery : String -> Dict String String` (pure; first value wins).
+///
+/// Decodes each key and value with `form_url_decode` — lenient by design
+/// (malformed `%`-escapes pass through as literal bytes; invalid UTF-8 →
+/// U+FFFD). Result is a plain app-logic Dict; it does not flow into any
+/// path, SQL, header, or re-encode sink. See `encoding::form_url_decode` doc
+/// for the full contract and the safety boundary that makes leniency safe.
 pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for pair in raw.trim_start_matches('?').split('&') {
