@@ -1594,6 +1594,7 @@ fn unsupported_binary_operator() -> DResult<()> {
         Span::new(112, 117),
         canon::Expr_::Binop {
             op,
+            op_span: Span::new(113, 115),
             home,
             func,
             lhs: Box::new(int(Span::new(112, 113), 1)),

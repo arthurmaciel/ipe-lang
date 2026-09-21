@@ -234,8 +234,13 @@ pub enum Expr_ {
     Lambda(Vec<Pattern>, Box<Expr>),
     /// A resolved binary operation. `op` is the source operator symbol;
     /// `home` / `func` is the kernel it resolves to (e.g. `Basics` / `add`).
+    /// `op_span` is the exact lexer span of the operator glyph (e.g. just `+`,
+    /// not the surrounding whitespace). Synthetic nodes (multiline string
+    /// desugar) carry a zero-width span at `lhs.span.hi`, which the token
+    /// walker drops rather than emitting a zero-length token.
     Binop {
         op: Symbol,
+        op_span: Span,
         home: Symbol,
         func: Symbol,
         lhs: Box<Expr>,
