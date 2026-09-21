@@ -162,6 +162,7 @@ pub(super) fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
 /// matching body occurrences default to `Unit` on their own because the same
 /// variable is withheld from `current_poly_tvars`, so every UI-msg slot lowering
 /// routes through [`Lowerer::ir_type_from_ty_ui_msg`]'s free-var to `Unit` arm.
+#[allow(clippy::too_many_lines)] // exhaustive leaf list, deliberately total
 pub(super) fn default_generics_to_unit(ty: IrType, targets: &BTreeSet<Symbol>) -> IrType {
     let recur = |t: IrType| default_generics_to_unit(t, targets);
     let boxed = |t: Box<IrType>| Box::new(default_generics_to_unit(*t, targets));
@@ -199,9 +200,149 @@ pub(super) fn default_generics_to_unit(ty: IrType, targets: &BTreeSet<Symbol>) -
             ctor,
             msg: boxed(msg),
         },
-        // Every remaining variant is either a non-target `Generic`, a
-        // `RowGeneric` (tracked in `Func::row_params`, never a `T{n}`), or a
-        // leaf carrying no nested `IrType` -- returned unchanged.
-        other => other,
+        // A custom-element handle nests a lowered type in BOTH slots; a defaulted
+        // msg var surviving into `down`/`up` must default to `Unit` here exactly
+        // as `collect_ir_generic_syms` quantifies it — otherwise it is quantified
+        // as a generic AND left as `IrType::Generic`, emitting an uninstantiable
+        // `T{n}` (E0283/E0308 SEAL break).
+        IrType::CustomElement { down, up } => IrType::CustomElement {
+            down: boxed(down),
+            up: boxed(up),
+        },
+        // Leaf types — a non-target `Generic`, a `RowGeneric` (tracked in
+        // `Func::row_params`, never a `T{n}`), or a variant carrying no nested
+        // `IrType`. Listed exhaustively (no wildcard, mirroring
+        // `collect_ir_generic_syms`) so a future nested-carrier variant without a
+        // recursion arm here is a compile error, not a silent no-op — keeping the
+        // three `IrType` walkers total by construction.
+        ty @ (IrType::Generic(_)
+        | IrType::RowGeneric(_)
+        | IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Db
+        | IrType::BackoffStrategy
+        | IrType::Order
+        | IrType::HttpMethod
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::Regex
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::UiPlain(_)
+        | IrType::Decimal
+        | IrType::WebReq
+        | IrType::SessionHandle
+        | IrType::SqlFragment
+        | IrType::Secret
+        | IrType::Path
+        | IrType::Url
+        | IrType::UrlRelative
+        | IrType::Dsn
+        | IrType::Connection
+        | IrType::ConnReadOnly
+        | IrType::ConnReadWrite
+        | IrType::Setting
+        | IrType::ShapeWeb
+        | IrType::ShapeWebView
+        | IrType::ShapeTerminal
+        | IrType::ProcessRunWithCfg
+        | IrType::ProcessRunInPtyCfg
+        | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
+        | IrType::CacheStats
+        | IrType::CsvDoc
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
+        | IrType::CryptoKey
+        | IrType::CryptoMac
+        | IrType::EmailAddress
+        | IrType::Locale
+        | IrType::Principal
+        | IrType::AuthConfig
+        | IrType::TokenSource
+        | IrType::WebApp
+        | IrType::TuiApp
+        | IrType::CliApp
+        | IrType::WorkerApp) => ty,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BTreeSet, IrType, Symbol, default_generics_to_unit};
+
+    /// A to-be-defaulted `Generic` nested inside a `CustomElement` slot must
+    /// become `Unit` — proving the walker recurses the carrier rather than
+    /// leaving an uninstantiable `IrType::Generic` (the E0283/E0308 SEAL break).
+    /// Fails on the old `other => other` catch-all, which returned the
+    /// `CustomElement` unchanged.
+    #[test]
+    fn defaults_generic_nested_in_custom_element_to_unit() {
+        let sym = Symbol::from_raw(0);
+        let mut targets = BTreeSet::new();
+        targets.insert(sym);
+
+        let ty = IrType::CustomElement {
+            down: Box::new(IrType::Generic(sym)),
+            up: Box::new(IrType::Maybe(Box::new(IrType::Generic(sym)))),
+        };
+
+        let out = default_generics_to_unit(ty, &targets);
+
+        assert!(
+            matches!(
+                &out,
+                IrType::CustomElement { down, up }
+                    if matches!(**down, IrType::Unit)
+                        && matches!(**up, IrType::Maybe(ref inner) if matches!(**inner, IrType::Unit))
+            ),
+            "nested target generics in both CustomElement slots must default to Unit, got {out:?}"
+        );
+    }
+
+    /// A non-target `Generic` inside a `CustomElement` slot is left intact — the
+    /// walker defaults only the `targets` set, and the exhaustive leaf list
+    /// returns a non-target `Generic` unchanged.
+    #[test]
+    fn preserves_non_target_generic_in_custom_element() {
+        let target = Symbol::from_raw(0);
+        let other = Symbol::from_raw(1);
+        let mut targets = BTreeSet::new();
+        targets.insert(target);
+
+        let ty = IrType::CustomElement {
+            down: Box::new(IrType::Generic(other)),
+            up: Box::new(IrType::Unit),
+        };
+
+        let out = default_generics_to_unit(ty, &targets);
+
+        assert!(
+            matches!(
+                &out,
+                IrType::CustomElement { down, .. }
+                    if matches!(**down, IrType::Generic(s) if s == other)
+            ),
+            "non-target generic in a CustomElement slot must be left unchanged, got {out:?}"
+        );
     }
 }
