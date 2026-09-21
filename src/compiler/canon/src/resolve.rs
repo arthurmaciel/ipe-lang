@@ -7878,27 +7878,16 @@ fn resolve_simple_interp_ref(
             ),
         ));
     }
-    // Bare identifier — look up in vars, then wildcard tier (mirrors
-    // `resolve_wildcard_var` but treats ambiguity as VarLocal rather
-    // than a hard error, since interpolation refs are best-effort).
+    // Bare identifier — resolve through the one canonical bare-name path
+    // (`resolve_var`): constructor first, then variable, then the wildcard
+    // tier, and an unknown name fails closed with the ordinary IPE-N0001
+    // `ValueNotFound` diagnostic. A bare nullary constructor (`{{Nothing}}`)
+    // thus references its constructor value exactly as it would outside an
+    // interpolation. Emitting `VarLocal` for an unbound/unknown name would
+    // leak it past canonicalisation and fire the `constrain` unbound-local
+    // ICE, so every name this path emits as `VarLocal` is provably bound.
     let sym = interner.intern(s)?;
-    let expr = match (
-        env.vars.get(&sym),
-        env.wildcard_vars.get(&sym).filter(|o| !o.is_empty()),
-    ) {
-        (Some(h), _) => var_home_to_expr(sym, h),
-        // Unambiguous wildcard import — resolve to its one origin.
-        (None, Some(origins)) if origins.len() == 1 => origins
-            .values()
-            .next()
-            .map_or(canon::Expr_::VarLocal(sym), |origin| {
-                var_home_to_expr(sym, &origin.home)
-            }),
-        // Ambiguous wildcard or unknown — fall back to VarLocal; the type
-        // checker will catch genuine errors later.
-        _ => canon::Expr_::VarLocal(sym),
-    };
-    Ok(Located::new(span, expr))
+    Ok(Located::new(span, resolve_var(sym, span, env, interner)?))
 }
 
 /// Desugar a triple-quoted string into a `++`-chained canonical expression.

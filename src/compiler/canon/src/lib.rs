@@ -4414,6 +4414,95 @@ mod tests {
         );
     }
 
+    /// A bare nullary constructor inside a triple-quoted interpolation
+    /// (`{{Nothing}}`) resolves to its constructor value, exactly as the same
+    /// bare name resolves outside an interpolation — never a blind `VarLocal`
+    /// that would leak an unbound local past canonicalisation into `constrain`.
+    #[test]
+    fn interp_bare_ctor_resolves_to_the_constructor_value() {
+        let mut i = Interner::new();
+        let body = canon_body(
+            &mut i,
+            "module Main exposing (main)\n\
+             main =\n    \"\"\"{{Nothing}}\"\"\"\n",
+            "main",
+        );
+        // A triple-quoted interpolation `{{Nothing}}` desugars to
+        // `Basics.toString Nothing`, so the canonical body is a `Call` whose one
+        // argument is the resolved reference. The fix must make that argument the
+        // `Nothing` `VarCtor` value, never an unbound `VarLocal`.
+        let Some(Expr_::Call(_, args)) = body else {
+            assert!(
+                false_marker(),
+                "`{{{{Nothing}}}}` must desugar to a `Basics.toString` Call, got {body:?}"
+            );
+            return;
+        };
+        let Some(arg) = args.into_iter().next() else {
+            assert!(
+                false_marker(),
+                "the interpolation Call must carry one argument"
+            );
+            return;
+        };
+        let Expr_::VarCtor { name, .. } = arg.value else {
+            assert!(
+                false_marker(),
+                "`{{{{Nothing}}}}`'s interpolated ref must be the `Nothing` VarCtor, got {:?}",
+                arg.value
+            );
+            return;
+        };
+        assert_eq!(
+            i.resolve(name),
+            Some("Nothing"),
+            "resolved constructor is `Nothing`"
+        );
+    }
+
+    /// An UNKNOWN bare name inside an interpolation (`{{typoo}}`) fails closed
+    /// at the resolver with the ordinary IPE-N0001 `ValueNotFound` diagnostic —
+    /// NOT a silent `VarLocal` that reaches `constrain` as a violated invariant
+    /// (the unbound-local ICE this fix closes).
+    #[test]
+    fn interp_unknown_bare_name_is_a_typed_name_error_not_an_ice() {
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             main =\n    \"\"\"{{typoo}}\"\"\"\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::ValueNotFound { .. },
+                    ..
+                })
+            ),
+            "an unknown interpolation name must be a typed ValueNotFound, got {err:?}"
+        );
+    }
+
+    /// A bare constructor spelling that names no constructor in scope
+    /// (`{{Nope}}`) is likewise turned back with the typed unknown-name
+    /// diagnostic rather than resolving or ICE-ing downstream.
+    #[test]
+    fn interp_unknown_bare_ctor_is_a_typed_name_error() {
+        let err = canon_err(
+            "module Main exposing (main)\n\
+             main =\n    \"\"\"{{Nope}}\"\"\"\n",
+        );
+        assert!(
+            matches!(
+                err,
+                Some(Diagnostic::Name {
+                    msg: NameError::ValueNotFound { .. } | NameError::ConstructorNotFound { .. },
+                    ..
+                })
+            ),
+            "an unknown interpolation constructor must be a typed name error, got {err:?}"
+        );
+    }
+
     /// An explicit `import Ipe.Http exposing (HttpMethod(..))` brings the
     /// union's constructors into UNQUALIFIED scope: a bare `Post` resolves to
     /// the `HttpMethod` verb `VarCtor`, the whole meaning of open-import.
