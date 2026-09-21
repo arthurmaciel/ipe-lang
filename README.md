@@ -19,9 +19,11 @@
 > 3–4 months. Please consider [supporting the project](#support) so it is ready sooner.
 
 **Ipê** (pronounced [/ip'e/](https://ipa-reader.com/?text=%09ip%E2%80%B2e&voice=Vitoria)) is a
-pure-functional language with [Elm](https://elm-lang.org/)'s syntax and a batteries-included
-standard library — the effect system and application framework that make it full-stack. It
-compiles to readable Rust. It is community-centered — see [PRINCIPLES.md](PRINCIPLES.md).
+pure-functional language with that extends [Elm](https://elm-lang.org/)'s syntax, partially implement
+[Sky lang](https://sky-lang.org/) standard library and compiles to Rust. 
+
+It aims to be a community-centered programming language — check out our [principles](PRINCIPLES.md)
+to learn more abou it.
 
 ## Install
 
