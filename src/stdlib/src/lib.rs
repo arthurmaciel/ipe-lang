@@ -2655,4 +2655,141 @@ mod tests {
             failures.join("\n")
         );
     }
+
+    /// The Browser-capability family maps an inbound permission `Denied` to the
+    /// distinct `Error.permissionDenied` kind, never to the generic
+    /// `Error.unavailable`. `Fullscreen` folds a `Denied` reply in both
+    /// `foldOutcome` (a `Task Error ()`) and `toResult` (a `Result Error Bool`);
+    /// a caller matching on the error kind must be able to tell a permission
+    /// refusal from a genuinely-absent API, so both arms carry
+    /// `Error.permissionDenied`, matching every sibling module in the cluster
+    /// (`Camera`, `FilePicker`, `Geolocation`, `Microphone`).
+    #[test]
+    fn fullscreen_denial_is_permission_denied_not_unavailable() {
+        let src = IPE_BROWSER_FULLSCREEN;
+        // Both folds must route `Denied` to the distinct permission kind: one
+        // occurrence in `foldOutcome`, one in `toResult`.
+        let denied_arms = src.match_indices("Denied ->").count();
+        assert_eq!(
+            denied_arms, 2,
+            "Fullscreen should fold `Denied` in exactly two places (foldOutcome + toResult), \
+             found {denied_arms}"
+        );
+        assert_eq!(
+            src.match_indices("Task.fail Error.permissionDenied")
+                .count(),
+            1,
+            "foldOutcome's `Denied` arm must fail with the distinct `Error.permissionDenied` kind"
+        );
+        assert_eq!(
+            src.match_indices("Err Error.permissionDenied").count(),
+            1,
+            "toResult's `Denied` arm must yield the distinct `Error.permissionDenied` kind"
+        );
+        // A denial must NOT be downgraded to the generic `unavailable` kind, the
+        // regression this pins: `unavailable` may only describe an absent API.
+        assert!(
+            !src.contains("Error.unavailable \"fullscreen request denied\""),
+            "a fullscreen permission denial must not fold to `Error.unavailable` \
+             (it is indistinguishable from an absent API)"
+        );
+    }
+
+    /// Fail-closed second boundary (issue #2651): `ScreenOrientation.foldOutcome`
+    /// folds the correlated reply to `lock`/`unlock`. The shared inbound `JsMsg`
+    /// spans all three commands' replies, so a `Query`'s `Orientation` frame can
+    /// arrive on a lock/unlock correlation id. Only the genuine `Ok_` (a lock or
+    /// unlock completed) may fold to success; an `Orientation` reply — a query
+    /// answer — must fold to a typed failure, mirroring `foldOrientation`, which
+    /// rejects `Ok_` as "query returned no type". A regression that maps
+    /// `Orientation _` back to `Task.succeed ()` fails open: a query answer would
+    /// be reported as a lock success though no lock was ever confirmed.
+    #[test]
+    fn screen_orientation_lock_fold_rejects_query_reply() {
+        use ipe_syntax::{Expr_, Pattern_};
+
+        let mut interner = Interner::new();
+        let parsed = ipe_parse::parse_module(IPE_BROWSER_SCREEN_ORIENTATION, &mut interner)
+            .expect("ScreenOrientation must parse");
+
+        let orientation_ctor = interner
+            .intern("Orientation")
+            .expect("intern `Orientation`");
+        let ok_ctor = interner.intern("Ok_").expect("intern `Ok_`");
+        let task_qual = interner.intern("Task").expect("intern `Task`");
+        let fail_name = interner.intern("fail").expect("intern `fail`");
+        let succeed_name = interner.intern("succeed").expect("intern `succeed`");
+
+        // The RHS of a `case` arm is a `Task.fail (...)` call.
+        let calls_task = |body: &ipe_syntax::Expr, member| -> bool {
+            let Expr_::Call(callee, _) = &body.value else {
+                return false;
+            };
+            matches!(
+                &callee.value,
+                Expr_::VarQual(q, m) if *q == task_qual && *m == member
+            )
+        };
+
+        // Find the single arm of `fold`'s `case` whose head constructor is `ctor`.
+        // Returns `None` if the binding, its `case` shape, or the arm is absent;
+        // the call sites `expect` it so a missing arm fails the test loudly
+        // without the `panic!` macro (banned repo-wide, tests included).
+        let mut arm_rhs = |fold_name: &str, ctor| -> Option<ipe_syntax::Expr> {
+            let sym = interner.intern(fold_name).ok()?;
+            let value = parsed.values.iter().find(|v| v.value.name.value == sym)?;
+            let Expr_::Case(_, arms) = &value.value.body.value else {
+                return None;
+            };
+            arms.iter().find_map(|(pat, rhs)| match &pat.value {
+                Pattern_::PCtor(name, _, _) if *name == ctor => Some(rhs.clone()),
+                _ => None,
+            })
+        };
+
+        // The lock/unlock fold rejects a query (`Orientation`) reply: fail, not succeed.
+        let lock_orientation = arm_rhs("foldOutcome", orientation_ctor)
+            .expect("foldOutcome must have an `Orientation` case arm");
+        assert!(
+            calls_task(&lock_orientation, fail_name),
+            "foldOutcome's `Orientation _` arm must fold to `Task.fail` — a query \
+             reply is not a lock/unlock success (fail-closed second boundary)",
+        );
+        assert!(
+            !calls_task(&lock_orientation, succeed_name),
+            "foldOutcome's `Orientation _` arm must NOT fold to `Task.succeed` — \
+             that is the fail-open boundary of issue #2651",
+        );
+
+        // Defend-in-depth mirror: the query fold rejects a lock/unlock (`Ok_`) reply.
+        let query_ok = arm_rhs("foldOrientation", ok_ctor)
+            .expect("foldOrientation must have an `Ok_` case arm");
+        assert!(
+            calls_task(&query_ok, fail_name),
+            "foldOrientation's `Ok_` arm must fold to `Task.fail` — a lock/unlock \
+             completion is not a query answer",
+        );
+    }
+
+    /// Fail-closed axis decode (issue #2692, sibling of #2650): the
+    /// `DeviceOrientation` reading decoder must read each axis with
+    /// `Decode.nullable`, which distinguishes JSON null (→ `Nothing`) from a
+    /// wrong-type value (→ decode error, whole frame dropped). The regression
+    /// this pins is `Decode.oneOf [ Decode.map Just Decode.float, Decode.succeed
+    /// Nothing ]`: its `succeed Nothing` fallback swallows a present-but-wrong-type
+    /// axis into `Nothing`, fabricating a plausible reading (fail-open).
+    #[test]
+    fn device_orientation_axes_decode_fail_closed_on_wrong_type() {
+        let src = IPE_BROWSER_ORIENTATION_INTERNALS;
+        assert_eq!(
+            src.matches("Decode.nullable Decode.float").count(),
+            3,
+            "each of the three axes (alpha/beta/gamma) must decode with `Decode.nullable`",
+        );
+        assert!(
+            !src.contains("Decode.succeed Nothing"),
+            "no axis may fall back to `Decode.succeed Nothing` — it swallows a \
+             wrong-type value into `Nothing`, the fail-open boundary of #2692",
+        );
+    }
 }

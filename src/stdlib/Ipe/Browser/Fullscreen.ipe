@@ -90,7 +90,7 @@ foldOutcome msg =
             Task.fail (Error.unavailable "fullscreen unavailable")
 
         Denied ->
-            Task.fail (Error.unavailable "fullscreen request denied")
+            Task.fail Error.permissionDenied
 
         Changed isFullscreen ->
             Task.succeed ()
@@ -111,4 +111,4 @@ toResult inbound =
             Err (Error.unavailable "fullscreen unavailable")
 
         Denied ->
-            Err (Error.unavailable "fullscreen request denied")
+            Err Error.permissionDenied

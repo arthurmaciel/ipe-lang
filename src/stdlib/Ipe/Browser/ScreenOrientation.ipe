@@ -99,8 +99,12 @@ toOrientationString orientation =
             "landscape-secondary"
 
 
--- | Fold a one-shot reply into a `Task Error ()`. The `case` is exhaustive over
--- every published inbound variant.
+-- | Fold a lock/unlock reply into a `Task Error ()`. The `case` is exhaustive
+-- over every published inbound variant, and fail-closed: ONLY `Ok_` (a lock or
+-- unlock completed) is a success. A query's `Orientation` reply — which the
+-- shared inbound decoder can deliver on a lock/unlock correlation id — is turned
+-- away, mirroring `foldOrientation`'s rejection of `Ok_`; a reply that does not
+-- belong to the ceremony is never reported as its success.
 foldOutcome : Internals.JsMsg -> Task Error ()
 foldOutcome msg =
     case msg of
@@ -108,7 +112,7 @@ foldOutcome msg =
             Task.succeed ()
 
         Orientation _ ->
-            Task.succeed ()
+            Task.fail (Error.unavailable "screen orientation lock returned an unexpected reply")
 
         Unavailable ->
             Task.fail (Error.unavailable "screen orientation API unavailable")
