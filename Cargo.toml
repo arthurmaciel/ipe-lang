@@ -24,6 +24,7 @@ members = [
     "src/wasm",
     "src/lsp/features",
     "src/lsp/server",
+    "src/ipe-fmt",
     "src/ipe-cli",
     "src/ipe-docs",
     "tools/e2e-support",
