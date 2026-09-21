@@ -107,11 +107,45 @@ pub fn url_encode(s: String) -> String {
         .replace("%20", "+")
 }
 
+/// True when every `%` in `s` is followed by exactly two hex digits — the only
+/// well-formed percent-escape shape (`%XX`, RFC 3986 §2.1). A stray `%`, a
+/// truncated `%A`, or a non-hex `%ZZ` is malformed. The `percent-encoding`
+/// decoder passes such input through as literal bytes and never errors, so
+/// `urlDecode` scans FIRST and rejects malformed input at this untrusted
+/// boundary (fail-closed) rather than silently returning the raw text.
+fn is_well_formed_percent(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        if c == b'%' {
+            // Both trailing bytes must exist AND be ASCII hex digits.
+            match (b.get(i + 1), b.get(i + 2)) {
+                (Some(h1), Some(h2)) if h1.is_ascii_hexdigit() && h2.is_ascii_hexdigit() => {
+                    i += 3;
+                    continue;
+                }
+                _ => return false,
+            }
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Ipê `urlDecode : String -> Result Error String` — `QueryUnescape`: `+` -> space,
-/// then percent-decode (so a literal `%2B` round-trips back to `+`).
+/// then percent-decode (so a literal `%2B` round-trips back to `+`). Fails closed
+/// with `Err` on a malformed percent-escape (a `%` not followed by two hex
+/// digits) and on a decode that is not valid UTF-8.
 #[must_use]
 pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     let spaced = s.replace('+', " ");
+    if !is_well_formed_percent(&spaced) {
+        return IpeResult::Err(
+            "urlDecode: malformed percent-escape (a '%' must be followed by two hex digits)"
+                .to_string()
+                .into(),
+        );
+    }
     match percent_decode_str(&spaced).decode_utf8() {
         Ok(cow) => IpeResult::Ok(cow.into_owned()),
         Err(e) => IpeResult::Err(format!("urlDecode: {e}").into()),
@@ -279,10 +313,44 @@ mod tests {
         assert!(matches!(decoded, IpeResult::Ok(ref s) if s == "hello world/foo?bar=baz&q=á"));
     }
 
+    // A malformed percent-escape (a `%` not followed by two hex digits) is
+    // turned away at the boundary — the documented fail-closed contract. The
+    // stray/truncated/non-hex cases are the ones the raw `percent-encoding`
+    // decoder passes through as literal bytes, so they must be caught by the
+    // pre-scan, not the decoder.
     #[test]
-    fn test_url_decode_invalid() {
+    fn test_url_decode_malformed_escape() {
+        for bad in ["a%ZZb", "100%done", "trailing%", "%A", "%G0", "%2"] {
+            let got: IpeResult<String, String> = url_decode(bad.to_string());
+            assert!(
+                matches!(got, IpeResult::Err(_)),
+                "malformed percent-escape {bad:?} must be rejected"
+            );
+        }
+    }
+
+    // The non-UTF-8 decode path stays an `Err` (a well-formed `%C0` escape whose
+    // decoded byte is not valid UTF-8).
+    #[test]
+    fn test_url_decode_invalid_utf8() {
         let bad: IpeResult<String, String> = url_decode("bad-utf8-%C0".to_string());
         assert!(matches!(bad, IpeResult::Err(_)));
+    }
+
+    // Well-formed input — plain ASCII, `%XX` (any case), and a literal `+` —
+    // must NOT be rejected by the strict scan.
+    #[test]
+    fn test_url_decode_well_formed_ok() {
+        let space: IpeResult<String, String> = url_decode("%20".to_string());
+        assert!(matches!(space, IpeResult::Ok(ref s) if s == " "));
+        let plus: IpeResult<String, String> = url_decode("a+b".to_string());
+        assert!(matches!(plus, IpeResult::Ok(ref s) if s == "a b"));
+        let slash_lower: IpeResult<String, String> = url_decode("%2f".to_string());
+        assert!(matches!(slash_lower, IpeResult::Ok(ref s) if s == "/"));
+        let slash_upper: IpeResult<String, String> = url_decode("%2F".to_string());
+        assert!(matches!(slash_upper, IpeResult::Ok(ref s) if s == "/"));
+        let ascii: IpeResult<String, String> = url_decode("plain-ascii_1.0~".to_string());
+        assert!(matches!(ascii, IpeResult::Ok(ref s) if s == "plain-ascii_1.0~"));
     }
 
     #[test]

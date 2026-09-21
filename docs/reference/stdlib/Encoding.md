@@ -47,7 +47,9 @@ urlDecode : String -> Result Error String
 
 Percent-decode a URL-encoded string.
 
-Returns `Err` when the input contains a malformed percent-escape sequence.
+Returns `Err` when the input contains a malformed percent-escape sequence
+(a `%` not followed by two hex digits) or when the decoded bytes are not
+valid UTF-8.
 
 ## `hexEncode`
 

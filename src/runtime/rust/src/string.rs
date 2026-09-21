@@ -318,17 +318,31 @@ pub fn string_ends_with_in(haystack: String, suffix: String) -> bool {
 }
 
 /// Ipê `repeat : Int -> String -> String`. Non-positive `n` returns "".
+///
+/// `n` is caller-controlled; `n * s.len()` can overflow or exhaust memory, so
+/// the result is bounded at a 64 MiB ceiling. Past the ceiling the count is
+/// clamped to the whole copies that fit rather than collapsed to "": the output
+/// stays a genuine prefix of the requested repetition, never a silent empty
+/// string that a caller could not tell apart from a legitimate `repeat 0 s`.
 #[must_use]
 pub fn string_repeat(n: i64, s: String) -> String {
-    if n <= 0 {
+    if n <= 0 || s.is_empty() {
         return String::new();
     }
-    // Bound the result: n is caller-controlled; n * s.len() can overflow / OOM.
-    // Cap at 64 MiB (any real repeated string is far smaller).
-    if (n as u64).saturating_mul(s.len() as u64) > 64 * 1024 * 1024 {
-        return String::new();
-    }
-    s.repeat(n as usize)
+    const CAP: u64 = 64 * 1024 * 1024;
+    let len = s.len() as u64;
+    let want = n as u64;
+    // Whole copies that fit under the cap; `len > 0` here, so no divide-by-zero.
+    let max_fit = CAP / len;
+    // At least one whole copy for a non-empty `s` with `n > 0` — never collapse to
+    // "" (indistinguishable from `repeat 0 s`). When a single copy already exceeds
+    // the 64 MiB repetition ceiling, emit exactly that one copy: `s` is already
+    // materialised at `len`, so this is a bounded ~2x transient, not an
+    // input-dictated blowup. The cap bounds repetition, not the size of `s` itself.
+    let copies = want.min(max_fit).max(1);
+    // `copies` is `1` (single-copy case) or `<= max_fit` (so `copies * len <= CAP`);
+    // either way it fits `usize` on a 64-bit target, so the cast cannot truncate.
+    s.repeat(copies as usize)
 }
 
 /// `String.concat : List String -> String`
@@ -721,6 +735,43 @@ mod tests {
     #[test]
     fn test_repeat_negative() {
         assert_eq!(string_repeat(-1, "ab".into()), "");
+    }
+    #[test]
+    fn test_repeat_empty_string() {
+        assert_eq!(string_repeat(1_000, String::new()), "");
+    }
+    #[test]
+    fn test_repeat_over_cap_clamps_to_prefix_not_empty() {
+        // A request whose n * len(s) blows past the 64 MiB ceiling must not
+        // collapse to "" for a non-empty s (that would be indistinguishable
+        // from a legitimate `repeat 0 s`). It clamps to the whole copies that
+        // fit, so the output stays a genuine prefix of the requested string.
+        const CAP: usize = 64 * 1024 * 1024;
+        let s = "ab"; // len 2
+        let n: i64 = 100_000_000; // 2 * 1e8 = 200 MB, far past the cap
+        let out = string_repeat(n, s.into());
+        assert!(
+            !out.is_empty(),
+            "over-cap repeat of a non-empty string must not return \"\""
+        );
+        assert!(out.len() <= CAP, "clamped output must respect the ceiling");
+        // The clamped output is exactly the whole copies that fit — a prefix.
+        let fit = CAP / s.len();
+        assert_eq!(out, s.repeat(fit));
+        assert!(out.starts_with(s), "clamped output is a prefix of s*");
+    }
+    #[test]
+    fn test_repeat_single_copy_exceeds_cap_still_emits_one_copy() {
+        // When a SINGLE copy of `s` already exceeds the 64 MiB repetition
+        // ceiling, `n > 0` must still yield exactly one whole copy — never "".
+        // (`s` is already materialised, so one copy is a bounded transient.)
+        const CAP: usize = 64 * 1024 * 1024;
+        let big = "a".repeat(CAP + 1); // one copy already over the ceiling
+        let out = string_repeat(5, big.clone());
+        assert_eq!(
+            out, big,
+            "a non-empty s larger than the cap must repeat to exactly one copy, not \"\""
+        );
     }
 
     // string_from_float — `'g'`-mode shortest-round-trip (FormatFloat 'g' -1 64
