@@ -736,9 +736,13 @@ defaultNow =
 
 
 -- | `defaultText accessor value store` — give the accessor-named column a
--- DB-level `DEFAULT` of the text `value`. The literal is emitted through the
--- same single-quote-doubling escape SQL string literals require, so no caller
--- text escapes the literal — a `value` containing a quote cannot break out into SQL.
+-- DB-level `DEFAULT` of the text `value`. `value` is a fixed schema literal
+-- embedded directly in the `CREATE TABLE` DDL (a DDL DEFAULT admits no bound
+-- parameter), so building the DDL rejects — with a typed `Err` — any `value`
+-- carrying a control byte, newline, NUL, or backslash; an accepted `value` is
+-- emitted through single-quote doubling, and with those bytes already refused
+-- the literal cannot be broken out of under any backend's string-quoting mode.
+-- A plain text default (`"active"`) is unaffected.
 --
 -- Example:
 --
@@ -3944,6 +3948,9 @@ columnDef specs col =
     else if List.any (\s -> specIsSerial s name) specs && Basics.not (List.any (\s -> specIsPrimaryKey s name) specs) then
         Err (serialWithoutPkError name)
 
+    else if List.any (\s -> specHasUnsafeDefaultText s name) specs then
+        Err (invalidDefaultTextError name)
+
     else
         Ok
             (String.concat
@@ -4185,11 +4192,78 @@ specDefaultLiteral spec name =
             Nothing
 
 
+-- `True` when `spec` sets a DEFAULT text literal on `name` whose value is not
+-- safe to embed verbatim in DDL — see `defaultTextByteSafe`. Drives the
+-- fail-closed rejection in `columnDef`, so an unsafe value never reaches
+-- `sqlTextLiteral`.
+specHasUnsafeDefaultText : ColumnSpec -> String -> Bool
+specHasUnsafeDefaultText spec name =
+    case spec of
+        DefaultText c value ->
+            c == name && Basics.not (defaultTextByteSafe value)
+
+        DefaultInt _ _ ->
+            False
+
+        PrimaryKey _ ->
+            False
+
+        Serial _ ->
+            False
+
+        Unique _ ->
+            False
+
+        DefaultNow _ ->
+            False
+
+        TouchOnUpdate _ ->
+            False
+
+
+-- `True` when every byte of a DEFAULT text value is safe to embed in a
+-- single-quoted DDL literal, independent of the backend's quoting mode. A
+-- schema DEFAULT is a fixed compile-time constant, so it has no legitimate need
+-- for a control byte, a newline, a NUL, or a backslash — and each of those is a
+-- literal-breakout or injection hazard the single-quote-doubling escape does not
+-- close on its own:
+--   * a control byte / newline / NUL would be embedded verbatim into the
+--     emitted `CREATE TABLE` text (no bound parameter guards a DDL DEFAULT),
+--     the same class the DSN parser refuses at its own boundary;
+--   * a backslash makes `''`-doubling complete ONLY when the backend treats `\`
+--     as a literal byte — always true for SQLite, but for Postgres only while
+--     `standard_conforming_strings` is on (a session setting this runtime never
+--     asserts). With it off, a trailing `\` before a doubled quote can consume
+--     one quote as an escape and break out of the literal. Refusing the
+--     backslash removes that single-point dependence rather than trusting the
+--     session flag (defend in depth).
+-- Rejecting these values is fail-closed at the construction site: with no proof
+-- the value is safe under every backend, the representable outcome is rejection.
+defaultTextByteSafe : String -> Bool
+defaultTextByteSafe value =
+    String.all defaultTextCharSafe value
+
+
+-- `True` when a single character is safe in a DDL DEFAULT text literal: a
+-- printable, non-backslash character. Rejects every C0 control (code < 32,
+-- which includes newline `\n` and NUL), the DEL control (code 127), and the
+-- backslash (code 92).
+defaultTextCharSafe : Char -> Bool
+defaultTextCharSafe c =
+    let
+        code =
+            Char.toCode c
+    in
+    code >= 32 && code /= 127 && code /= 92
+
+
 -- Render `value` as a single-quoted SQL string literal, doubling every embedded
--- single quote. This is the standard SQL literal escape: a `value` containing a
--- quote becomes `''` inside the literal, so it can never terminate the literal
--- and start new SQL. Used only for the DDL `DEFAULT` clause, where a bound
--- parameter is not permitted.
+-- single quote. `columnDef` has already rejected any `value` carrying a
+-- control byte, newline, NUL, or backslash (see `defaultTextByteSafe`), so the
+-- doubled-quote escape here is complete under every backend quoting mode: the
+-- only remaining metacharacter is the single quote, and a doubled `''` can
+-- neither terminate the literal nor start new SQL. Used only for the DDL
+-- `DEFAULT` clause, where a bound parameter is not permitted.
 sqlTextLiteral : String -> String
 sqlTextLiteral value =
     String.concat [ "'", String.replace "'" "''" value, "'" ]
@@ -4704,6 +4778,17 @@ missingKeyBindError keyCol =
     Error.invalidInput
         (String.concat
             [ "Ipe.Db.Store: update needs the primary-key column \"", keyCol, "\" in the record's codec projection, but it is absent" ]
+        )
+
+
+invalidDefaultTextError : String -> Error
+invalidDefaultTextError name =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: column \""
+            , name
+            , "\" has a DEFAULT text value containing a control byte, newline, NUL, or backslash — a schema default is a fixed literal embedded directly in the CREATE TABLE DDL, so it must be printable ASCII/text with no backslash to stay safe under every backend's string-quoting mode"
+            ]
         )
 
 
