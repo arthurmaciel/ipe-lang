@@ -2303,6 +2303,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dep_import_clash_duplicate_type_carries_non_dummy_first_span() {
+        // Two distinct dep modules both expose a type under the same unqualified
+        // name. `DuplicateType::first` must point at the FIRST import's span, not
+        // `Span::DUMMY` — the user needs both sites to resolve the clash.
+        // Non-vacuous: fails on the pre-fix `Span::DUMMY` path in `inject_dep_type`.
+        let mut i = Interner::new();
+        let mod_a_src = "module ModA exposing (Color(..))\ntype Color = Warm | Cool\n";
+        let mod_b_src = "module ModB exposing (Color(..))\ntype Color = Red | Blue\n";
+        let empty: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+
+        let mod_a_parsed = ipe_parse::parse_module(mod_a_src, &mut i).expect("ModA parse");
+        let mod_a_path = mod_a_parsed.name.value.clone();
+        let (_mod_a, mod_a_exports) =
+            canonicalise_module(&mod_a_parsed, &mod_a_path, &empty, &mut i).expect("ModA canon");
+
+        let mod_b_parsed = ipe_parse::parse_module(mod_b_src, &mut i).expect("ModB parse");
+        let mod_b_path = mod_b_parsed.name.value.clone();
+        let (_mod_b, mod_b_exports) =
+            canonicalise_module(&mod_b_parsed, &mod_b_path, &empty, &mut i).expect("ModB canon");
+
+        let mut deps: BTreeMap<Vec<Symbol>, ModuleExports> = BTreeMap::new();
+        deps.insert(mod_a_exports.path.clone(), mod_a_exports);
+        deps.insert(mod_b_exports.path.clone(), mod_b_exports);
+
+        // Main imports both — second `exposing (Color(..))` clashes with first.
+        let main_src = "module Main exposing (main)\n\
+                        import ModA exposing (Color(..))\n\
+                        import ModB exposing (Color(..))\n\n\
+                        main =\n    Io.println \"hi\"\n";
+        let main_parsed = ipe_parse::parse_module(main_src, &mut i).expect("Main parse");
+        let main_path = main_parsed.name.value.clone();
+        let err = canonicalise_module(&main_parsed, &main_path, &deps, &mut i).err();
+
+        let Some(Diagnostic::Name {
+            msg: NameError::DuplicateType { first, .. },
+            ..
+        }) = err
+        else {
+            assert!(
+                false_marker(),
+                "expected DuplicateType from two-dep type clash, got {err:?}"
+            );
+            return;
+        };
+        assert_ne!(
+            first,
+            ipe_diagnostics::Span::DUMMY,
+            "DuplicateType from dep import clash must carry the first import span, not DUMMY"
+        );
+    }
+
     /// **Tripwire: registry ↔ canon parity.**
     ///
     /// Forward direction (registry → canon): for every

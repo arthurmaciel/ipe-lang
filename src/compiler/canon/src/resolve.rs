@@ -1147,6 +1147,9 @@ pub fn canonicalise_module_in_project(
     // module's own unions in canonicalise_with_env. Having deps in the map first
     // means this module can reference imported types in its own type annotations.
     let mut type_home_map: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
+    // Mirrors `qualifier_first_span`: first-seen import span for each dep type
+    // name so a duplicate injection can point `DuplicateType::first` at it.
+    let mut type_first_span: BTreeMap<Symbol, Span> = BTreeMap::new();
     // Aliases from dep modules (injected via `import … exposing (..)`).
     let mut injected_aliases: BTreeMap<Symbol, AliasDef> = BTreeMap::new();
     // Tracks which names have been brought into unqualified scope and from which
@@ -1203,6 +1206,7 @@ pub fn canonicalise_module_in_project(
             dep,
             &mut env,
             &mut type_home_map,
+            &mut type_first_span,
             &mut injected_aliases,
             &mut unqual_origins,
             &mut unqual_ctor_origins,
@@ -1256,6 +1260,7 @@ pub fn canonicalise_module_in_project(
                     rust_ffi_dep,
                     &mut env,
                     &mut type_home_map,
+                    &mut type_first_span,
                     &mut injected_aliases,
                     &mut unqual_origins,
                     &mut unqual_ctor_origins,
@@ -4409,6 +4414,7 @@ fn synthesize_record_alias_ctors(
 /// is idempotent and accepted.
 fn inject_dep_type(
     type_home_map: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    type_first_span: &mut BTreeMap<Symbol, Span>,
     type_name: Symbol,
     home: &[Symbol],
     span: Span,
@@ -4417,15 +4423,20 @@ fn inject_dep_type(
     if let Some(existing) = type_home_map.get(&type_name)
         && existing.as_slice() != home
     {
+        let first = type_first_span
+            .get(&type_name)
+            .copied()
+            .unwrap_or(Span::DUMMY);
         return Err(Diagnostic::Name {
             span,
             msg: NameError::DuplicateType {
                 name: name_str(interner, type_name)?,
-                first: Span::DUMMY,
+                first,
             },
         });
     }
     type_home_map.insert(type_name, home.to_vec());
+    type_first_span.entry(type_name).or_insert(span);
     Ok(())
 }
 
@@ -4451,6 +4462,7 @@ fn inject_dep_exports(
     dep: &crate::ModuleExports,
     env: &mut Env,
     type_home_map: &mut BTreeMap<Symbol, Vec<Symbol>>,
+    type_first_span: &mut BTreeMap<Symbol, Span>,
     injected_aliases: &mut BTreeMap<Symbol, AliasDef>,
     unqual_origins: &mut BTreeMap<Symbol, Vec<Symbol>>,
     unqual_ctor_origins: &mut BTreeMap<Symbol, Vec<Symbol>>,
@@ -4495,7 +4507,14 @@ fn inject_dep_exports(
             // value-only, and a reserved builtin type (`Attribute`) resolves to the
             // same home from either module, so `inject_dep_type` is idempotent.
             for (&type_name, home) in &dep.types {
-                inject_dep_type(type_home_map, type_name, home, import.name.span, interner)?;
+                inject_dep_type(
+                    type_home_map,
+                    type_first_span,
+                    type_name,
+                    home,
+                    import.name.span,
+                    interner,
+                )?;
                 inject_ctors_for_type(
                     type_name,
                     &CtorFilter::All,
@@ -4532,7 +4551,14 @@ fn inject_dep_exports(
             }
             // Inject all dep types (union homes) + all ctors.
             for (&type_name, home) in &dep.types {
-                inject_dep_type(type_home_map, type_name, home, import.name.span, interner)?;
+                inject_dep_type(
+                    type_home_map,
+                    type_first_span,
+                    type_name,
+                    home,
+                    import.name.span,
+                    interner,
+                )?;
                 inject_ctors_for_type(
                     type_name,
                     &CtorFilter::All,
@@ -4606,6 +4632,7 @@ fn inject_dep_exports(
                             if let Some(home) = dep.types.get(type_name) {
                                 inject_dep_type(
                                     type_home_map,
+                                    type_first_span,
                                     *type_name,
                                     home,
                                     item.span,
