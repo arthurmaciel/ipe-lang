@@ -179,11 +179,6 @@ const ALLOWLIST: &[(&str, &str, &str)] = &[
     ),
     (
         "refusal-tested",
-        "IPE-N0036",
-        "removed surface gate not yet reached by any constant assertion or wire literal",
-    ),
-    (
-        "refusal-tested",
         "IPE-N0041",
         "Ipe.Codec.auto derivation gate not yet reached by any constant assertion or wire literal",
     ),
