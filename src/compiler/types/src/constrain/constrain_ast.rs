@@ -4,6 +4,89 @@ use super::{
     TyBounds, TypeError, VarId, canon, canon_type_to_doc, from_canon,
 };
 
+/// The role a pinned kernel-obligation slot plays in its kernel's scheme.
+///
+/// Each variant identifies WHICH scheme variable a `constrain_var_kernel` tie
+/// site must bound; the concrete raw index lives in [`OBLIGATION_SLOTS`] (the
+/// `SqlParam` index differs across the `Db` family — var 0 for `exec`/`query`,
+/// var 1 for the `queryDecode` shapes that carry a decoder var ahead of the
+/// params list — so the index cannot live on the kind alone).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ObligationKind {
+    /// Dict/Set element-key or `Ipe.Cache` key (`comparable` / `PartialEq`).
+    Key,
+    /// `Set.map` result element (also backs a `BTreeSet`, so also `Ord`).
+    SetMapResult,
+    /// `Db.*` params-list element carrying the SQL-bind-parameter bound.
+    SqlParam,
+    /// `Log.*With` / `Debug.log` stringified value (Show).
+    Show,
+    /// `Web.tea` / `Web.embed` Model var (routed-Web page-field check).
+    WebModel,
+    /// `Web.tea` / `Web.embed` notFound var (routed-Web page-field check).
+    WebNotFound,
+    /// `Web.route` result page var (per-route page witness).
+    WebPage,
+    /// `Web.route` page-builder var (per-route page witness).
+    WebBuilder,
+}
+
+/// Single source of truth for every pinned kernel-obligation slot: the
+/// `(kernel, raw-scheme-var, role)` each `constrain_var_kernel` tie site
+/// bounds. The tie sites read the slot index from here (never an inline
+/// literal), and `obligation_slots_match_scheme_shapes` asserts every entry's
+/// scheme literally contains `Ty::Var(slot)` — so a scheme-var reorder that
+/// would silently drop a `comparable` / SQL-param / Show bound (or a Web
+/// witness) breaks the build instead. The `Key` family is qualifier-selected by
+/// [`Builder::key_obligation_for`] over the WHOLE `Set`/`Dict`/`Cache` module —
+/// a superset of the keyed kernels pinned here. The non-keyed majority
+/// (`Dict.size`, `Set.toList`, `Cache.clear`, …) carry no bindable key var and
+/// are DELIBERATELY absent; for them the tie site treats a missing `Key` slot as
+/// the legitimate no-obligation case, returning the scheme unbounded.
+pub const OBLIGATION_SLOTS: &[(StdlibKernel, u32, ObligationKind)] = {
+    use ObligationKind as O;
+    use StdlibKernel as K;
+    &[
+        // Dict/Set/Cache key — raw scheme-var 0 in every keyed kernel.
+        (K::SetInsert, 0, O::Key),
+        (K::SetMap, 0, O::Key),
+        (K::DictInsert, 0, O::Key),
+        (K::DictGet, 0, O::Key),
+        (K::DictRemove, 0, O::Key),
+        (K::CacheGet, 0, O::Key),
+        (K::CachePut, 0, O::Key),
+        (K::CacheRemove, 0, O::Key),
+        // `Set.map` result element — raw scheme-var 1.
+        (K::SetMap, 1, O::SetMapResult),
+        // `Db.*` params-list element — var 0 (exec/query), var 1 (queryDecode).
+        (K::DbExec, 0, O::SqlParam),
+        (K::DbQuery, 0, O::SqlParam),
+        (K::DbQueryDecode, 1, O::SqlParam),
+        (K::DbConnQueryDecode, 1, O::SqlParam),
+        // `Log.*With` list element / `Debug.log` value — Show, raw var 0.
+        (K::LogInfoWith, 0, O::Show),
+        (K::LogDebugWith, 0, O::Show),
+        (K::LogWarnWith, 0, O::Show),
+        (K::LogErrorWith, 0, O::Show),
+        (K::DebugLog, 0, O::Show),
+        // `Web.tea` / `Web.embed` — Model var 0, notFound var 2.
+        (K::WebApp, 0, O::WebModel),
+        (K::WebApp, 2, O::WebNotFound),
+        (K::WebEmbed, 0, O::WebModel),
+        (K::WebEmbed, 2, O::WebNotFound),
+        // `Web.route` — page var 0, builder var 1.
+        (K::WebRoute, 0, O::WebPage),
+        (K::WebRoute, 1, O::WebBuilder),
+    ]
+};
+
+/// The frozen size of [`OBLIGATION_SLOTS`], pinned by
+/// `obligation_slots_match_scheme_shapes` so adding/removing a pinned slot must
+/// update this count — a silently dropped entry (obligation removed → hazard
+/// reopened) fails the build.
+#[cfg(test)]
+pub const EXPECTED_OBLIGATION_SLOT_COUNT: usize = 24;
+
 impl Builder<'_> {
     #[allow(clippy::too_many_lines)] // Handler expansion block (E-12) pushes it over 100
     pub fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
@@ -310,6 +393,19 @@ impl Builder<'_> {
         }
     }
 
+    /// The raw scheme-var slot of a kernel obligation, read from the
+    /// [`OBLIGATION_SLOTS`] SSOT rather than an inline literal at the tie site —
+    /// so a scheme-var reorder cannot leave the tie index and the scheme shape
+    /// disagreeing. `None` iff the `(k, kind)` pair is not a pinned obligation —
+    /// a fail-closed miss for the exact-domain selectors (SQL-param, Web), and
+    /// the benign no-obligation case for the broad `Key` module selector.
+    fn obligation_slot(k: StdlibKernel, kind: ObligationKind) -> Option<u32> {
+        OBLIGATION_SLOTS
+            .iter()
+            .find(|(kk, _, kd)| *kk == k && *kd == kind)
+            .map(|(_, slot, _)| *slot)
+    }
+
     /// The raw scheme-var id of the CALLBACK-RESULT slot of a `Maybe`/`Result`
     /// higher-order kernel — the variable that must not itself instantiate to
     /// a function ([`TyBounds::hof_kernel_result`]).
@@ -531,6 +627,24 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
+                // The key qualifier (`Set`/`Dict`/`Cache` in `key_obligation_for`)
+                // selects the WHOLE module. The key/element is raw scheme-var 0 by
+                // construction across every kernel in it — the convention the
+                // `OBLIGATION_SLOTS` `Key` entries assert (each has `Ty::Var(0)`,
+                // checked by `obligation_slots_match_scheme_shapes`). Bind that var
+                // WHENEVER the instantiated scheme carries it, reading slot 0
+                // directly rather than the pinned table: this is what makes key
+                // coverage COMPLETE. Every key-BEARING kernel — `insert`/`get`/
+                // `remove` AND `singleton`/`member`/`update`/`fromList`/… , a
+                // superset of the pinned rows — thus fails closed on a
+                // non-`comparable` key. The genuinely key-LESS kernels (`Dict.size`,
+                // `Set.toList`, `Cache.newRaw`/`clear`/`size`/`stats`) have no
+                // scheme-var 0, so this is a correct no-op for them; a reader like
+                // `Dict.values` whose var 0 IS the key takes the (already-satisfied)
+                // bound harmlessly, since a `Dict k v` value can only exist for a
+                // `comparable k`. A table lookup here (the prior shape) fails OPEN
+                // the instant a keyed kernel is unpinned — the `Dict.singleton`
+                // hole this closes; slot 0 cannot drift out of coverage.
                 if let Some(&key_var) = vars.get(&0) {
                     let s = self.super_var(bound, span)?;
                     self.eq(span, key_var, s);
@@ -540,9 +654,17 @@ impl Builder<'_> {
                 // carries the same `set_elem` (Ord) obligation as the source
                 // element. Without this a generic `Set.map` would emit an
                 // unbounded `set_map::<A, B>` that `cargo` rejects (B: Ord unmet).
-                if matches!(k, StdlibKernel::SetMap)
-                    && let Some(&res_var) = vars.get(&1)
-                {
+                if matches!(k, StdlibKernel::SetMap) {
+                    let res_slot = Self::obligation_slot(k, ObligationKind::SetMapResult).ok_or(
+                        Diagnostic::Lower {
+                            span,
+                            msg: LowerError::Unsupported(Feature::Kernels),
+                        },
+                    )?;
+                    let res_var = *vars.get(&res_slot).ok_or(Diagnostic::Lower {
+                        span,
+                        msg: LowerError::Unsupported(Feature::Kernels),
+                    })?;
                     let s = self.super_var(bound, span)?;
                     self.eq(span, res_var, s);
                 }
@@ -573,20 +695,24 @@ impl Builder<'_> {
             ) {
                 // The params-list element var is index 1 for both `queryDecode`
                 // shapes (they carry a decoder var 0 ahead of it), index 0 for the
-                // bare `exec`/`query`.
-                let raw_idx = u32::from(matches!(
-                    k,
-                    StdlibKernel::DbQueryDecode | StdlibKernel::DbConnQueryDecode
-                ));
+                // bare `exec`/`query` — read from `OBLIGATION_SLOTS`, not inlined.
+                let raw_idx = Self::obligation_slot(k, ObligationKind::SqlParam).ok_or(
+                    Diagnostic::Lower {
+                        span,
+                        msg: LowerError::Unsupported(Feature::Kernels),
+                    },
+                )?;
                 let ty = self.resolve_scheme(SchemeKey(k)).ok_or(Diagnostic::Lower {
                     span,
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let Some(&params_var) = vars.get(&raw_idx) {
-                    let s = self.super_var(TyBounds::sql_param(), span)?;
-                    self.eq(span, params_var, s);
-                }
+                let params_var = *vars.get(&raw_idx).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let s = self.super_var(TyBounds::sql_param(), span)?;
+                self.eq(span, params_var, s);
                 return Ok(var);
             }
             // Higher-order-kernel callback-result obligation
@@ -638,10 +764,17 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let Some(&elem_var) = vars.get(&0) {
-                    let s = self.super_var(TyBounds::show(), span)?;
-                    self.eq(span, elem_var, s);
-                }
+                let slot =
+                    Self::obligation_slot(k, ObligationKind::Show).ok_or(Diagnostic::Lower {
+                        span,
+                        msg: LowerError::Unsupported(Feature::Kernels),
+                    })?;
+                let elem_var = *vars.get(&slot).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let s = self.super_var(TyBounds::show(), span)?;
+                self.eq(span, elem_var, s);
                 return Ok(var);
             }
             // `Debug.log : String -> a -> a` — the value `a` (shared by the
@@ -658,10 +791,17 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let Some(&value_var) = vars.get(&0) {
-                    let s = self.super_var(TyBounds::show(), span)?;
-                    self.eq(span, value_var, s);
-                }
+                let slot =
+                    Self::obligation_slot(k, ObligationKind::Show).ok_or(Diagnostic::Lower {
+                        span,
+                        msg: LowerError::Unsupported(Feature::Kernels),
+                    })?;
+                let value_var = *vars.get(&slot).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let s = self.super_var(TyBounds::show(), span)?;
+                self.eq(span, value_var, s);
                 return Ok(var);
             }
             // `Web.tea` — post-solve routed-Web check.
@@ -683,13 +823,31 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let (Some(&model_var), Some(&not_found_var)) = (vars.get(&0), vars.get(&2)) {
-                    self.routed_web_checks.push(RoutedWebCheck {
-                        model_var,
-                        not_found_var,
+                let model_slot = Self::obligation_slot(k, ObligationKind::WebModel).ok_or(
+                    Diagnostic::Lower {
                         span,
-                    });
-                }
+                        msg: LowerError::Unsupported(Feature::Kernels),
+                    },
+                )?;
+                let not_found_slot = Self::obligation_slot(k, ObligationKind::WebNotFound).ok_or(
+                    Diagnostic::Lower {
+                        span,
+                        msg: LowerError::Unsupported(Feature::Kernels),
+                    },
+                )?;
+                let model_var = *vars.get(&model_slot).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let not_found_var = *vars.get(&not_found_slot).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                self.routed_web_checks.push(RoutedWebCheck {
+                    model_var,
+                    not_found_var,
+                    span,
+                });
                 return Ok(var);
             }
             // `Web.route` — per-route page witness.
@@ -710,13 +868,30 @@ impl Builder<'_> {
                     msg: LowerError::Unsupported(Feature::Kernels),
                 })?;
                 let (var, vars) = self.instantiate_tracked(&ty)?;
-                if let (Some(&page_var), Some(&builder_var)) = (vars.get(&0), vars.get(&1)) {
-                    self.route_witness_checks.push(RouteWitnessCheck {
-                        builder_var,
-                        page_var,
+                let page_slot =
+                    Self::obligation_slot(k, ObligationKind::WebPage).ok_or(Diagnostic::Lower {
                         span,
-                    });
-                }
+                        msg: LowerError::Unsupported(Feature::Kernels),
+                    })?;
+                let builder_slot = Self::obligation_slot(k, ObligationKind::WebBuilder).ok_or(
+                    Diagnostic::Lower {
+                        span,
+                        msg: LowerError::Unsupported(Feature::Kernels),
+                    },
+                )?;
+                let page_var = *vars.get(&page_slot).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                let builder_var = *vars.get(&builder_slot).ok_or(Diagnostic::Lower {
+                    span,
+                    msg: LowerError::Unsupported(Feature::Kernels),
+                })?;
+                self.route_witness_checks.push(RouteWitnessCheck {
+                    builder_var,
+                    page_var,
+                    span,
+                });
                 return Ok(var);
             }
         }

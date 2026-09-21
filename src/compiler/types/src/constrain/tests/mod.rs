@@ -1849,6 +1849,62 @@ mod registry_phase_c_tests {
         );
     }
 
+    /// The `Key` obligation qualifier (`Set`/`Dict`/`Cache`) selects the WHOLE
+    /// module in `key_obligation_for`, a SUPERSET of the keyed kernels pinned in
+    /// `OBLIGATION_SLOTS`. A non-keyed member (`Dict.size`, `Set.toList`,
+    /// `Cache.clear`, …) has no pinned `Key` slot, so it must reach the
+    /// no-obligation return and type-check — NOT be turned away with IPE-L0108.
+    /// This drives the real `constrain_var_kernel` tie site (not a synthetic
+    /// scheme), the exact path a `f d = Dict.size d` reference walks, so a
+    /// regression that fails these closed (making the whole Set/Dict stdlib stop
+    /// type-checking) breaks the build here. The keyed members must still resolve
+    /// too — their `Ord`/`Hash` bound is layered without error.
+    #[test]
+    fn non_keyed_set_dict_kernels_type_check() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        // `module`/`name` are retained only for diagnostics at the tie site.
+        let dummy = interner.intern("_").expect("intern placeholder symbol");
+        let mut uf = UnionFind::<Content>::new();
+        let mut builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
+
+        // Non-keyed Set/Dict/Cache kernels: selected by the module qualifier but
+        // absent from OBLIGATION_SLOTS → must return Ok (no key bound), not L0108.
+        for k in [
+            StdlibKernel::DictSize,
+            StdlibKernel::DictMember,
+            StdlibKernel::DictKeys,
+            StdlibKernel::DictMap,
+            StdlibKernel::SetToList,
+            StdlibKernel::SetFoldl,
+            StdlibKernel::CacheClear,
+            StdlibKernel::CacheSize,
+        ] {
+            let r = builder.constrain_var_kernel(Some(k), dummy, dummy, Span::DUMMY);
+            assert!(
+                r.is_ok(),
+                "{k:?}: non-keyed Set/Dict/Cache kernel must type-check (no pinned \
+                 Key slot = no-obligation), got {r:?}",
+            );
+        }
+
+        // Keyed kernels still resolve — the Ord/Hash key bound is layered without
+        // error (its refusal of a non-comparable key is a solve-time property,
+        // pinned at the CLI/pipeline level).
+        for k in [
+            StdlibKernel::DictInsert,
+            StdlibKernel::DictGet,
+            StdlibKernel::SetInsert,
+            StdlibKernel::SetMap,
+        ] {
+            let r = builder.constrain_var_kernel(Some(k), dummy, dummy, Span::DUMMY);
+            assert!(
+                r.is_ok(),
+                "{k:?}: keyed kernel must still resolve, got {r:?}"
+            );
+        }
+    }
+
     /// The [`Builder::hof_result_slot_for`] table
     /// cannot drift from the kernel scheme shapes ([`Builder::resolve_scheme`]):
     /// for every table entry, the slot's raw var must be exactly the FINAL RESULT
@@ -1929,6 +1985,83 @@ mod registry_phase_c_tests {
              higher-order kernels (map ×2, map2..5 ×8, mapError ×1, andMap \
              ×2); adding/removing a member must update this pin AND the \
              fixtures",
+        );
+    }
+
+    /// Every pinned kernel-obligation slot's scheme literally contains its
+    /// `Ty::Var(slot)` — the coherence tripwire mirroring
+    /// `hof_result_slots_match_scheme_shapes` for the shape-(B) obligations
+    /// (Dict/Set/Cache key, `Set.map` result, `Db.*` SQL-param, `Log.*With`/
+    /// `Debug.log` Show, `Web.tea`/`Web.embed` Model+notFound, `Web.route`
+    /// page+builder). The `constrain_var_kernel` tie sites now fail closed on a
+    /// missing slot, so a scheme-var reorder that drops the slot would surface
+    /// as a loud IPE-L0108 at type-check; this test is the SECOND, independent
+    /// boundary (defend-in-depth) that turns the same drift into a build break.
+    /// Freezes the covered count so silently removing an entry (obligation
+    /// gone → hazard reopened) fails here.
+    #[test]
+    fn obligation_slots_match_scheme_shapes() {
+        use super::super::constrain_ast::{EXPECTED_OBLIGATION_SLOT_COUNT, OBLIGATION_SLOTS};
+
+        // Collect every raw `Ty::Var(n)` id reachable in a scheme (a scheme
+        // never carries a solver-space tagged var, so a plain structural walk
+        // suffices — the row-tail `Open(n)` carries a var id too).
+        fn collect_scheme_var_ids(t: &Ty, out: &mut std::collections::BTreeSet<u32>) {
+            match t {
+                Ty::Var(n) => {
+                    out.insert(*n);
+                }
+                Ty::Fun(a, b) => {
+                    collect_scheme_var_ids(a, out);
+                    collect_scheme_var_ids(b, out);
+                }
+                Ty::Con { args, .. } | Ty::Tuple(args) => {
+                    for a in args {
+                        collect_scheme_var_ids(a, out);
+                    }
+                }
+                Ty::Record(fields, tail) => {
+                    for f in fields.values() {
+                        collect_scheme_var_ids(f, out);
+                    }
+                    if let super::super::RowTail::Open(n) = tail {
+                        out.insert(*n);
+                    }
+                }
+                Ty::Unit => {}
+            }
+        }
+
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
+
+        let mut covered = 0;
+        for &(k, slot, kind) in OBLIGATION_SLOTS {
+            covered += 1;
+            let scheme = builder.resolve_scheme(k.def().scheme);
+            assert!(
+                scheme.is_some(),
+                "{k:?} carries a {kind:?} obligation slot and must be schemed",
+            );
+            let Some(scheme) = scheme else { continue };
+
+            let mut vars = std::collections::BTreeSet::new();
+            collect_scheme_var_ids(&scheme, &mut vars);
+            assert!(
+                vars.contains(&slot),
+                "{k:?} ({kind:?}): OBLIGATION_SLOTS pins raw var {slot} but the \
+                 scheme has no Ty::Var({slot}) — a scheme-var reorder would drop \
+                 the obligation; re-derive the slot from scheme_table.rs",
+            );
+        }
+        // Freeze the covered count so silently dropping a pinned slot (its
+        // obligation removed → hazard reopened) fails loudly here.
+        assert_eq!(
+            covered, EXPECTED_OBLIGATION_SLOT_COUNT,
+            "OBLIGATION_SLOTS must pin exactly {EXPECTED_OBLIGATION_SLOT_COUNT} \
+             obligation slots; adding/removing one must update this pin",
         );
     }
 
