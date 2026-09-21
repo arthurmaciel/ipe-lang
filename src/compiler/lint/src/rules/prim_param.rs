@@ -34,6 +34,8 @@ struct Domain {
 
 /// The curated table, seeded from the stdlib newtypes that exist today. Kept
 /// small and specific — every entry names a real newtype with a real parser.
+/// Each entry has been verified against the stdlib source before being added:
+/// a domain is only added when a newtype AND a parse constructor both exist.
 const DOMAINS: &[Domain] = &[
     Domain {
         name_hint: "port",
@@ -53,15 +55,104 @@ const DOMAINS: &[Domain] = &[
         newtype: "Ipe.Url.Url",
         parse: "Url.fromString",
     },
+    // `email`/`emailAddress` — `Ipe.Email.EmailAddress` with `Email.parseAddress`.
+    // Verified: `Ipe.Email` exports `EmailAddress` and `parseAddress : String ->
+    // Maybe EmailAddress`.
+    Domain {
+        name_hint: "email",
+        bare: "String",
+        newtype: "Ipe.Email.EmailAddress",
+        parse: "Email.parseAddress",
+    },
+    // `path`/`filePath` — `Ipe.Path.Path` with `Path.fromString`.
+    // Verified: `Ipe.Path` exports `Path` and `fromString : String ->
+    // Result Error Path`.
+    Domain {
+        name_hint: "path",
+        bare: "String",
+        newtype: "Ipe.Path.Path",
+        parse: "Path.fromString",
+    },
+    Domain {
+        name_hint: "filepath",
+        bare: "String",
+        newtype: "Ipe.Path.Path",
+        parse: "Path.fromString",
+    },
+    // `timeout`/`delay`/`interval`/`ttl`/`duration` — `Ipe.Duration.Duration`
+    // with `Duration.millis` as the most general constructor.
+    // Verified: `Ipe.Duration` exports `Duration` and `millis : Int -> Duration`.
+    Domain {
+        name_hint: "timeout",
+        bare: "Int",
+        newtype: "Ipe.Duration.Duration",
+        parse: "Duration.millis",
+    },
+    Domain {
+        name_hint: "delay",
+        bare: "Int",
+        newtype: "Ipe.Duration.Duration",
+        parse: "Duration.millis",
+    },
+    Domain {
+        name_hint: "interval",
+        bare: "Int",
+        newtype: "Ipe.Duration.Duration",
+        parse: "Duration.millis",
+    },
+    Domain {
+        name_hint: "ttl",
+        bare: "Int",
+        newtype: "Ipe.Duration.Duration",
+        parse: "Duration.millis",
+    },
+    Domain {
+        name_hint: "duration",
+        bare: "Int",
+        newtype: "Ipe.Duration.Duration",
+        parse: "Duration.millis",
+    },
+    // `imageTarget`/`mediaSrc`/`mediaTarget` — `Ipe.Ui.MediaTarget` with
+    // `Ui.imageSrc`. Verified: `Ipe.Ui` exports `MediaTarget` and
+    // `imageSrc : String -> Result Error MediaTarget`.
+    // NOTE: bare `src` is NOT added — see the comment below.
+    Domain {
+        name_hint: "imagetarget",
+        bare: "String",
+        newtype: "Ipe.Ui.MediaTarget",
+        parse: "Ui.imageSrc",
+    },
+    Domain {
+        name_hint: "mediasrc",
+        bare: "String",
+        newtype: "Ipe.Ui.MediaTarget",
+        parse: "Ui.imageSrc",
+    },
+    Domain {
+        name_hint: "mediatarget",
+        bare: "String",
+        newtype: "Ipe.Ui.MediaTarget",
+        parse: "Ui.imageSrc",
+    },
     // A media `src` is deliberately NOT a domain here. Unlike `url`/`href`, the
     // name `src` is overloaded — it reads equally as a media source (an
-    // `Ipe.Html.Attributes.MediaTarget` fetch sink) or as source text (a parser
-    // input `String`, e.g. `Parser.run parser src`). A name-only heuristic cannot
+    // `Ipe.Ui.MediaTarget` fetch sink) or as source text (a parser input
+    // `String`, e.g. `Parser.run parser src`). A name-only heuristic cannot
     // tell them apart, so steering every `src : String` to `MediaTarget` would
     // misfire on legitimate source-text params — the false positive this rule's
     // conservative contract forbids. The media-`src` boundary is instead closed
     // in the type surface (`Html.Attributes.src`/`Ui.image` take a `MediaTarget`,
     // never a bare `String`).
+    //
+    // `data`/`payload`/`body` for `Bytes` — `Ipe.Bytes.Bytes` with
+    // `Bytes.fromString`. Verified: `Ipe.Bytes` exports `Bytes` and
+    // `fromString : String -> Bytes`.
+    Domain {
+        name_hint: "payload",
+        bare: "String",
+        newtype: "Ipe.Bytes.Bytes",
+        parse: "Bytes.fromString",
+    },
 ];
 
 pub fn check(ctx: &Ctx) -> Vec<Finding> {

@@ -345,6 +345,10 @@ fn line_col(src: &str, byte: u32) -> (usize, usize) {
 pub struct Suppressions {
     /// 0-based line number → rule names suppressed for that line's findings.
     by_line: BTreeMap<usize, RuleSet>,
+    /// Unknown rule names seen in inline suppressions: `(0-based line, name)`.
+    /// An unknown name is never honoured (fail-closed); the caller turns each
+    /// entry into an `unknown-suppression` finding so the user sees a typo.
+    pub unknowns: Vec<(usize, String)>,
 }
 
 /// The rules suppressed at one line: an explicit set, or everything (`all`).
@@ -358,6 +362,50 @@ enum RuleSet {
 
 /// The marker introducing an inline suppression comment.
 const MARKER: &str = "-- ipe-lint: allow ";
+
+/// Iterate over every logical line of `src`, yielding
+/// `(line_no, line_start, piece)` where:
+/// - `line_no` is the 0-based line index, agreeing with `zero_based_line`,
+/// - `line_start` is the byte offset of the line's first byte in `src`,
+/// - `piece` is the line's text INCLUDING its terminator (`\n`, `\r\n`, or
+///   bare `\r`).
+///
+/// Handles all three line-ending styles so suppression scanning and line
+/// attribution agree on bare-CR (old-Mac), CRLF (Windows), and LF (Unix)
+/// sources.
+fn lines_with_offsets(src: &str) -> impl Iterator<Item = (usize, usize, &str)> {
+    let bytes = src.as_bytes();
+    let mut pos: usize = 0;
+    let mut line_no: usize = 0;
+    std::iter::from_fn(move || {
+        if pos >= bytes.len() {
+            return None;
+        }
+        let line_start = pos;
+        // Scan forward to the next line terminator.
+        while matches!(bytes.get(pos), Some(&b) if b != b'\n' && b != b'\r') {
+            pos += 1;
+        }
+        // Consume the terminator(s): `\r\n` counts as one line.
+        match bytes.get(pos) {
+            Some(&b'\r') => {
+                pos += 1;
+                if matches!(bytes.get(pos), Some(&b'\n')) {
+                    pos += 1;
+                }
+            }
+            Some(_) => {
+                // b'\n'
+                pos += 1;
+            }
+            None => {}
+        }
+        let piece = src.get(line_start..pos).unwrap_or("");
+        let current_line = line_no;
+        line_no += 1;
+        Some((current_line, line_start, piece))
+    })
+}
 
 /// True when byte offset `at` lies within any half-open `[lo, hi)` span.
 fn byte_in_any_span(at: usize, spans: &[Span]) -> bool {
@@ -389,51 +437,92 @@ impl Suppressions {
             return Self::default();
         };
         let mut by_line: BTreeMap<usize, RuleSet> = BTreeMap::new();
-        // `split_inclusive('\n')` keeps each line's terminator — its `\n` and any
-        // preceding `\r` — so `piece.len()` counts every source byte. Summing it
-        // yields the same whole-source byte offset the lexer's literal spans
-        // count; `src.lines()` strips the trailing `\r`, undercounting one byte
-        // per CRLF line and drifting the offset out of the literal spans.
-        let mut line_start: usize = 0;
-        for (line_no, piece) in src.split_inclusive('\n').enumerate() {
+        let mut unknowns: Vec<(usize, String)> = Vec::new();
+        // Iterate over every logical line, handling all three line-ending
+        // styles (`\n`, `\r\n`, bare `\r`). Each iteration yields:
+        //   line_no   — 0-based logical line index (matches `zero_based_line`)
+        //   line_start — byte offset of the line's first byte in `src`
+        //   piece      — the line's bytes, INCLUDING the terminator(s)
+        // Using the raw byte loop (rather than `split_inclusive('\n')`) keeps
+        // the byte-offset accounting exact for the literal-span check: we need
+        // `marker_at` to be a true whole-source byte offset so it can be
+        // compared against the lexer's literal spans.
+        for (line_no, line_start, piece) in lines_with_offsets(src) {
             let Some(idx) = piece.find(MARKER) else {
-                line_start += piece.len();
                 continue;
             };
             // Byte offset of the marker's leading `-` within the whole source.
             let marker_at = line_start + idx;
-            line_start += piece.len();
             if byte_in_any_span(marker_at, &literal_spans) {
                 // The marker is inside a string/char/doc-comment literal — data,
                 // not a directive. It cannot suppress.
                 continue;
             }
-            let rest = piece.get(idx + MARKER.len()..).unwrap_or("").trim();
+            let rest = piece
+                .get(idx + MARKER.len()..)
+                .unwrap_or("")
+                .trim_matches(|c: char| c == '\r' || c == '\n' || c == ' ');
             if rest == "all" {
                 by_line.insert(line_no, RuleSet::All);
                 continue;
             }
             // Comma- or space-separated rule names after the marker.
-            let names: std::collections::BTreeSet<String> = rest
-                .split(|c: char| c == ',' || c.is_whitespace())
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect();
-            if !names.is_empty() {
-                by_line.insert(line_no, RuleSet::Named(names));
+            // Each name is validated against the registry: an unknown name is
+            // collected as a typo rather than silently accepted (fail-closed —
+            // a misspelled suppression must never silently pass a real finding).
+            let mut known_names: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            let mut unknown_names: Vec<String> = Vec::new();
+            for token in rest.split(|c: char| c == ',' || c.is_whitespace()) {
+                if token.is_empty() {
+                    continue;
+                }
+                if registry::is_known(token) {
+                    known_names.insert(token.to_owned());
+                } else {
+                    unknown_names.push(token.to_owned());
+                }
+            }
+            for name in unknown_names {
+                unknowns.push((line_no, name));
+            }
+            if !known_names.is_empty() {
+                by_line.insert(line_no, RuleSet::Named(known_names));
             }
         }
-        Self { by_line }
+        Self { by_line, unknowns }
     }
 
-    /// True when a finding for `rule` at 0-based `line` is suppressed — by a
-    /// comment on that line or on the line immediately above it.
+    /// True when a finding for `rule` whose source span covers
+    /// `lo_line..=hi_line` (0-based) is suppressed.
+    ///
+    /// A suppression comment silences a finding when it appears:
+    /// - on the line immediately above the span's first line (`lo_line - 1`),
+    /// - on any line within the span (`lo_line ..= hi_line`), including
+    ///   suppression comments embedded inside a multi-line type annotation.
+    ///
+    /// This covers the common patterns:
+    /// ```text
+    /// -- ipe-lint: allow prim-param   ← above the annotation
+    /// connect : String -> Int -> Task Error Conn
+    /// ```
+    /// and
+    /// ```text
+    /// connect : String
+    ///        -> Int  -- ipe-lint: allow prim-param   ← inside the annotation
+    ///        -> Task Error Conn
+    /// ```
     #[must_use]
-    pub fn suppresses(&self, rule: &str, line: usize) -> bool {
-        self.line_suppresses(rule, line)
-            || line
-                .checked_sub(1)
-                .is_some_and(|above| self.line_suppresses(rule, above))
+    pub fn suppresses(&self, rule: &str, lo_line: usize, hi_line: usize) -> bool {
+        // Line above the span start.
+        if lo_line
+            .checked_sub(1)
+            .is_some_and(|above| self.line_suppresses(rule, above))
+        {
+            return true;
+        }
+        // Any line within the span.
+        (lo_line..=hi_line).any(|l| self.line_suppresses(rule, l))
     }
 
     fn line_suppresses(&self, rule: &str, line: usize) -> bool {

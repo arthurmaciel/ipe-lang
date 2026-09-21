@@ -10,7 +10,10 @@ mod adjacent_bools;
 mod prefer_pipeline;
 mod prim_param;
 mod unsafe_convention;
+mod unused_bindings;
+mod unused_imports;
 mod wrapper_consistency;
+mod wrapper_consistency_cross;
 
 use ipe_diagnostics::{Located, Span};
 use ipe_intern::{Interner, Symbol};
@@ -90,7 +93,7 @@ impl Ctx<'_> {
     }
 }
 
-/// Run every shipped rule over `ctx`, in registry order.
+/// Run every shipped single-module rule over `ctx`, in registry order.
 pub fn run_all(ctx: &Ctx) -> Vec<Finding> {
     let mut findings = Vec::new();
     findings.extend(prim_param::check(ctx));
@@ -98,7 +101,15 @@ pub fn run_all(ctx: &Ctx) -> Vec<Finding> {
     findings.extend(wrapper_consistency::check(ctx));
     findings.extend(unsafe_convention::check(ctx));
     findings.extend(prefer_pipeline::check(ctx));
+    findings.extend(unused_imports::check(ctx));
+    findings.extend(unused_bindings::check(ctx));
     findings
+}
+
+/// Run cross-module rules that require all modules simultaneously.
+/// Called once per lint run after all per-module passes complete.
+pub fn run_cross_module<'a>(ctxs: &[&'a Ctx<'a>]) -> Vec<Finding> {
+    wrapper_consistency_cross::check_cross(ctxs)
 }
 
 /// True when `name` appears in the module's `exposing (...)` list (or the list

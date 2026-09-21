@@ -293,9 +293,11 @@ fn byte_to_line_col(source: &str, offset: u32) -> (usize, usize) {
 /// Local fixes (single-module, semantics-preserving rewrites such as pipeline
 /// style) are applied first via [`ipe_lint::apply_fixes`]. Cross-module
 /// signature fixes (call-site rewrites for `prim-param`, `adjacent-bools`) are
-/// applied next via [`ipe_lint::apply_sig_fixes`]. When both produce edits for
-/// the same module the signature-fix result wins: it is applied to the
-/// already-locally-fixed source so the two passes compose.
+/// applied next via [`ipe_lint::apply_sig_fixes`], but crucially fed the
+/// already-locally-fixed source for any module that changed. This composes the
+/// two passes: sig-fix edits land on top of local edits rather than on the
+/// original source, so neither pass's work is lost when both fire on the same
+/// module.
 ///
 /// Call sites the change-signature engine cannot rewrite mechanically are
 /// printed as manual-review notices — fail-closed.
@@ -305,7 +307,23 @@ fn apply_and_report(
     paths: &BTreeMap<Vec<String>, PathBuf>,
 ) -> Result<(), CliError> {
     let local_outcome = ipe_lint::apply_fixes(modules, config);
-    let sig_outcome = ipe_lint::apply_sig_fixes(modules, config);
+
+    // Build the post-local-fix module list: substitute locally-rewritten
+    // sources so sig-fix sees the already-improved text.
+    let modules_after_local: Vec<SourceModule> = modules
+        .iter()
+        .map(|m| {
+            local_outcome.rewritten.get(&m.module).map_or_else(
+                || m.clone(),
+                |rewritten| SourceModule {
+                    module: m.module.clone(),
+                    source: rewritten.clone(),
+                },
+            )
+        })
+        .collect();
+
+    let sig_outcome = ipe_lint::apply_sig_fixes(&modules_after_local, config);
 
     let total = local_outcome.applied + sig_outcome.applied;
     if total == 0 && sig_outcome.manual_reviews.is_empty() {
@@ -316,7 +334,9 @@ fn apply_and_report(
         return Ok(());
     }
 
-    // Merge: start with local rewrites; sig-fix rewrites override per module.
+    // Merge: start with local rewrites; compose sig-fix rewrites on top.
+    // Sig-fixes were already applied to the locally-fixed source, so inserting
+    // them directly gives the fully-composed result per module.
     let mut merged: BTreeMap<Vec<String>, String> = local_outcome.rewritten;
     for (module, rewritten) in sig_outcome.rewritten {
         merged.insert(module, rewritten);

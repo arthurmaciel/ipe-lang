@@ -56,6 +56,30 @@ pub const RULES: &[RuleInfo] = &[
         default_severity: Severity::Warn,
         fixable: true,
     },
+    RuleInfo {
+        name: "unknown-suppression",
+        summary: "an inline `-- ipe-lint: allow` comment names a rule that does not exist",
+        default_severity: Severity::Warn,
+        fixable: false,
+    },
+    RuleInfo {
+        name: "unused-imports",
+        summary: "an import declaration whose bound names never appear in the module body",
+        default_severity: Severity::Warn,
+        fixable: false,
+    },
+    RuleInfo {
+        name: "unused-bindings",
+        summary: "a `let` binding whose name is never referenced in the enclosing scope",
+        default_severity: Severity::Warn,
+        fixable: false,
+    },
+    RuleInfo {
+        name: "wrapper-consistency-cross",
+        summary: "a shape wrapped as a newtype by APIs in other modules is left bare here",
+        default_severity: Severity::Warn,
+        fixable: true,
+    },
 ];
 
 /// The metadata for `name`, or `None` when no such rule ships.
