@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{DbDriver, EmitCtx};
+use crate::EmitCtx;
 
 /// One runtime-crate cargo feature. Every variant maps to a feature declared in
 /// `src/runtime/rust/Cargo.toml`'s `[features]` table; [`Self::as_str`] is that
@@ -178,6 +178,93 @@ pub enum RuntimeFeature {
 }
 
 impl RuntimeFeature {
+    /// Every variant, once. The exhaustive universe the capability-table drift
+    /// assert ([`crate::capabilities`]) folds over to prove every feature has a
+    /// row. Adding a variant without listing it here leaves the drift assert
+    /// under-covered, and the `index` match below fails to compile until the new
+    /// variant is handled — so the universe cannot silently grow.
+    pub(crate) const ALL: &'static [Self] = &[
+        Self::Json,
+        Self::Async,
+        Self::DbSqlite,
+        Self::DbPostgres,
+        Self::Server,
+        Self::Web,
+        Self::Tui,
+        Self::Webview,
+        Self::WebsocketClient,
+        Self::Email,
+        Self::Locale,
+        Self::HttpClient,
+        Self::Url,
+        Self::Config,
+        Self::Compression,
+        Self::CsvKernel,
+        Self::CacheKernel,
+        Self::Time,
+        Self::Encoding,
+        Self::Regex,
+        Self::Uuid,
+        Self::Random,
+        Self::Log,
+        Self::TimeCore,
+        Self::Decimal,
+        Self::CharCategory,
+        Self::CryptoCore,
+        Self::Secret,
+        Self::Crypto,
+        Self::Jwt,
+        Self::WasmClient,
+        Self::Debugger,
+    ];
+
+    /// A stable per-variant index for `const`-context identity. The exhaustive,
+    /// wildcard-free match makes a new variant a compile error here until it is
+    /// given an index — so [`Self::const_eq`] and the drift assert cannot be
+    /// fooled by an unhandled variant.
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::Json => 0,
+            Self::Async => 1,
+            Self::DbSqlite => 2,
+            Self::DbPostgres => 3,
+            Self::Server => 4,
+            Self::Web => 5,
+            Self::Tui => 6,
+            Self::Webview => 7,
+            Self::WebsocketClient => 8,
+            Self::Email => 9,
+            Self::Locale => 10,
+            Self::HttpClient => 11,
+            Self::Url => 12,
+            Self::Config => 13,
+            Self::Compression => 14,
+            Self::CsvKernel => 15,
+            Self::CacheKernel => 16,
+            Self::Time => 17,
+            Self::Encoding => 18,
+            Self::Regex => 19,
+            Self::Uuid => 20,
+            Self::Random => 21,
+            Self::Log => 22,
+            Self::TimeCore => 23,
+            Self::Decimal => 24,
+            Self::CharCategory => 25,
+            Self::CryptoCore => 26,
+            Self::Secret => 27,
+            Self::Crypto => 28,
+            Self::Jwt => 29,
+            Self::WasmClient => 30,
+            Self::Debugger => 31,
+        }
+    }
+
+    /// Variant equality usable in a `const` context (the derived [`PartialEq`]
+    /// is not `const`).
+    pub(crate) const fn const_eq(self, other: Self) -> bool {
+        self.index() == other.index()
+    }
+
     /// The exact cargo feature name in `src/runtime/rust/Cargo.toml`.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -238,7 +325,6 @@ impl RuntimeFeatureSet {
 /// `assemble_project_files`, keyed to the SAME predicate — so the SSOT and the
 /// emitter can never disagree once the emit path reads this (the closure SEAL
 /// enforces that the referenced modules are covered).
-#[allow(clippy::too_many_lines)] // one insert per surface feature — the table is the point
 pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     // Browser-WASM: the feature set is EXACTLY the `wasm-client` floor — nothing
     // unioned. This is the genuine wasm-specific divergence from the native
@@ -294,272 +380,36 @@ pub fn runtime_features(ctx: &EmitCtx) -> RuntimeFeatureSet {
     // the std-only `block_on` (no tokio), and `tokio` is `not(wasm32)`-gated in
     // the runtime manifest, so selecting it would be inert at best.
     if ctx.target == ipe_ir::Target::WasmWasi {
-        let mut set = BTreeSet::new();
-        if ctx.reaches_json() {
-            set.insert(RuntimeFeature::Json);
-        }
-        if ctx.uses_time {
-            set.insert(RuntimeFeature::Time);
-        }
-        if ctx.reaches_encoding() {
-            set.insert(RuntimeFeature::Encoding);
-        }
-        if ctx.uses_regex {
-            set.insert(RuntimeFeature::Regex);
-        }
-        if ctx.reaches_uuid() {
-            set.insert(RuntimeFeature::Uuid);
-        }
-        if ctx.reaches_random() {
-            set.insert(RuntimeFeature::Random);
-        }
-        if ctx.reaches_log() {
-            set.insert(RuntimeFeature::Log);
-        }
-        if ctx.reaches_time_core() {
-            set.insert(RuntimeFeature::TimeCore);
-        }
-        if ctx.reaches_decimal() {
-            set.insert(RuntimeFeature::Decimal);
-        }
-        if ctx.reaches_char_category() {
-            set.insert(RuntimeFeature::CharCategory);
-        }
-        // The crypto FLOOR (sha2/hmac/subtle/getrandom) — `Crypto.randomBytes`/
-        // `randomToken` and `Secret` live here; the heavy crypto surface
-        // (`Crypto`/`Jwt`) is NOT part of the sealed floor and stays unselected.
-        if ctx.reaches_crypto_core() {
-            set.insert(RuntimeFeature::CryptoCore);
-        }
-        if ctx.reaches_secret() {
-            set.insert(RuntimeFeature::Secret);
-        }
+        // The wasip1 sealed-floor legal subset: iterate the ONE capability table
+        // and keep only the rows a program reaches whose feature is legal on
+        // wasip1. Every excluded family (`Server`/`Web`/`Db`/`Async`/…) maps to a
+        // stack that does not build on wasip1 and is marked `wasip1_legal: false`,
+        // so this filter is the positive, closed legal subset — defense in depth
+        // even if an upstream gate mis-set a flag. The `Async` feature is
+        // deliberately excluded (`wasip1_legal: false`): the reactor spine on
+        // wasip1 is the std-only `block_on`, and `tokio` is `not(wasm32)`-gated.
+        let set = crate::capabilities::CAPABILITIES
+            .iter()
+            .filter(|c| c.wasip1_legal && (c.gate)(ctx))
+            .map(|c| (c.select)(ctx))
+            .collect();
         return RuntimeFeatureSet(set);
     }
 
-    let mut set = BTreeSet::new();
-
-    // JSON codec (`serde_json`, and via `json = […, "serde"]` the serde stack).
-    // Selected only when the program NAMES the `Value`/`Decoder`
-    // type (`reaches_json`: a `Json`-building kernel, a `Json`/`Decoder`
-    // type-mention, or a db/config/jwt surface whose decoders spell `Decoder` and
-    // whose crate feature implies `json`). A program that reaches none drops the
-    // two prelude aliases + `serde_json` + the whole serde proc-macro stack. The
-    // `jwt` split keeps `jsonwebtoken` off this feature.
-    if ctx.reaches_json() {
-        set.insert(RuntimeFeature::Json);
-    }
-
-    // Reactor spine — the tokio-bound halves of the floor + every async surface.
-    if ctx.uses_async_runtime {
-        set.insert(RuntimeFeature::Async);
-    }
-
-    // Database: exactly one driver alias set, chosen by the project's driver.
-    // Both aliases imply `db`; the emitter never selects both (a program targets
-    // one driver), which the crate's `compile_error!` guards fail-closed.
-    if ctx.uses_db {
-        set.insert(match ctx.db_driver {
-            DbDriver::Sqlite => RuntimeFeature::DbSqlite,
-            DbDriver::Postgres => RuntimeFeature::DbPostgres,
-        });
-    }
-
-    // Server (axum): the served surface, plus the Live web app whose runtime
-    // modules import it. NOT webview: the desktop-webview delivery renders over a
-    // local IPC bridge and runs no HTTP server, so it selects only the
-    // server-free `web-core` render core (via `Webview` below), never axum.
-    if ctx.uses_server || ctx.uses_web {
-        set.insert(RuntimeFeature::Server);
-    }
-    // Web app runtime (the full axum-backed Live surface). NOT forced by webview:
-    // the native backend reuses the server-free render core (`web-core`, pulled by
-    // the `Webview` feature), not the HTTP `web` surface.
-    if ctx.uses_web {
-        set.insert(RuntimeFeature::Web);
-    }
-    // Both terminal drive axes select the `tui` Cargo feature: `Tui.tea`
-    // (full-screen `Screen`) and `Cli.tea` (line-oriented `Lines`) share the
-    // one terminal runtime module. A `Cli.tea` view returns `Lines msg`, whose
-    // runtime renderer (`ipe_runtime::tui::render_lines_view`) and builder
-    // symbols (`cli_text_`/`cli_line_`/`cli_lines_`) live behind `feature =
-    // "tui"`, so a line-oriented program needs the feature just as a
-    // full-screen one does.
-    if ctx.uses_tui || ctx.uses_console {
-        set.insert(RuntimeFeature::Tui);
-    }
-    if ctx.uses_webview {
-        set.insert(RuntimeFeature::Webview);
-    }
-    if ctx.uses_websocket {
-        set.insert(RuntimeFeature::WebsocketClient);
-    }
-    if ctx.uses_email {
-        set.insert(RuntimeFeature::Email);
-    }
-    // Locale: ICU4X BCP-47 parse + locale-aware case mapping. Without this
-    // feature `locale_from_tag` compiles but always returns `Nothing`.
-    if ctx.uses_locale {
-        set.insert(RuntimeFeature::Locale);
-    }
-
-    // Outbound HTTP client (reqwest): an HTTP kernel (`uses_http`) or the email
-    // surface (`email.rs` calls `http_client::ssrf_apply`). `http_stream.rs`
-    // (which calls `ssrf_apply` + `method_to_reqwest`) is declared alongside
-    // `http_client` by the emitter — server/web apps with no outbound HTTP omit
-    // reqwest entirely.
-    if ctx.reaches_http_client() {
-        set.insert(RuntimeFeature::HttpClient);
-    }
-    // `url` crate + idna/ICU4X subtree — a URL kernel or a surface that parses
-    // with `url` (the HTTP or WebSocket client).
-    if ctx.reaches_url() {
-        set.insert(RuntimeFeature::Url);
-    }
-
-    if ctx.uses_config {
-        set.insert(RuntimeFeature::Config);
-    }
-    if ctx.uses_compression {
-        set.insert(RuntimeFeature::Compression);
-    }
-    if ctx.uses_csv {
-        set.insert(RuntimeFeature::CsvKernel);
-    }
-    // Ipe.Cache (`cache.rs`): the handle-based LRU cache module. A standalone leaf
-    // — no surface implies it. `uses_cache` folds an `Ipe.Cache` kernel with a
-    // `CacheCfg` / `CacheStats` type-mention (the pure-Ipê `defaultCfg` / `with*`
-    // builders construct a `CacheCfg` with no kernel call). A program that reaches
-    // none drops the module and its `cache_kernel`-gated deps.
-    if ctx.uses_cache {
-        set.insert(RuntimeFeature::CacheKernel);
-    }
-    if ctx.uses_time {
-        set.insert(RuntimeFeature::Time);
-    }
-
-    // Encoding codecs (base64/hex/percent-encoding) + the `encoding`/`bytes`
-    // modules. `reaches_encoding()` folds the direct encoding/bytes kernels with
-    // every surface whose runtime module uses the raw codec crates — crypto/db/
-    // server/email/jwt/web. The crate-side feature implications (crypto/db/server/
-    // email/jwt/web each list `encoding`) carry the same closure, so this insertion
-    // and the graph agree even at `--no-default-features`.
-    if ctx.reaches_encoding() {
-        set.insert(RuntimeFeature::Encoding);
-    }
-
-    // Regex (`regex` crate + its aho-corasick/regex-automata/regex-syntax subtree)
-    // + the `regex_kernel.rs` module. A standalone leaf: `uses_regex` folds an
-    // `Ipe.Regex` kernel with `String.isUrl` (its body relocated into
-    // `regex_kernel.rs`); no surface implies it.
-    if ctx.uses_regex {
-        set.insert(RuntimeFeature::Regex);
-    }
-
-    // Uuid (`uuid` crate) + the `uuid_kernel.rs` module. `reaches_uuid()` folds
-    // the direct `Ipe.Uuid` kernels with the server/web surfaces (whose runtime
-    // modules mint ids via `uuid::new_v4`) AND the jwt/auth surface (`auth.rs` is
-    // compiled under `#[cfg(feature = "jwt")]` and calls `uuid::Uuid::new_v4()` to
-    // mint per-session `jti` ids). The crate-side implications (server/web each list
-    // `uuid`; `jwt` now lists `uuid`) carry the same closure at
-    // `--no-default-features`.
-    if ctx.reaches_uuid() {
-        set.insert(RuntimeFeature::Uuid);
-    }
-
-    // Random (`random.rs` module). `reaches_random()` folds the direct
-    // `Ipe.Random` kernels with the async runtime — `task.rs`'s tokio retry-jitter
-    // path draws from `random`'s LCG, so any tokio program needs the module. The
-    // crate-side `async`/`db`/`server`/… features (which enable `tokio`) each list
-    // `random`, carrying the same closure at `--no-default-features`. The feature
-    // gates the MODULE only; `getrandom` is enabled by `random || crypto-core`
-    // (shared with the crypto floor), so a bare (sync) Program that reaches
-    // neither drops both `getrandom` and `random.rs`.
-    if ctx.reaches_random() {
-        set.insert(RuntimeFeature::Random);
-    }
-
-    // Log (`log.rs` module + base `chrono`). A standalone leaf: `reaches_log()`
-    // is exactly `uses_log` (an `Ipe.Log` kernel). Selecting `log` enables
-    // `chrono` via `log = ["dep:chrono"]`; the `time-core` insertion below folds
-    // `log` into the broader `chrono`-keeping union so the manifest and this SSOT
-    // agree even at `--no-default-features`.
-    if ctx.reaches_log() {
-        set.insert(RuntimeFeature::Log);
-    }
-
-    // Time-core (base `chrono` + the `time.rs` module). `reaches_time_core()`
-    // folds `log` with every timestamp-rendering surface — any `Ipe.Time` kernel
-    // and the db/web/webview modules. This is the single selector for whether the
-    // emitted crate keeps `chrono`. The IANA zone DB (`chrono-tz`) rides the
-    // separate `Time` feature below, which the crate graph makes imply
-    // `time-core`. FAIL-CLOSED: any uncertain `chrono` consumer keeps it on.
-    if ctx.reaches_time_core() {
-        set.insert(RuntimeFeature::TimeCore);
-    }
-
-    // Decimal (`decimal.rs`/`money.rs` modules + `rust_decimal`).
-    // `reaches_decimal()` folds a `Decimal.*`/`Money.*` kernel with the `Db`
-    // surface, which decodes numeric SQL columns through `rust_decimal`. The
-    // crate-side `db` feature lists `decimal`, carrying the same closure at
-    // `--no-default-features`. FAIL-CLOSED: any uncertain `rust_decimal` consumer
-    // keeps it on.
-    if ctx.reaches_decimal() {
-        set.insert(RuntimeFeature::Decimal);
-    }
-
-    // Char-category (`char_category.rs` module + `unicode-general-category`). A
-    // standalone leaf: `reaches_char_category()` is exactly `uses_char_category`
-    // (an `Ipe.Char` General_Category predicate). The std-only `Ipe.Char` kernels
-    // stay in the always-compiled `char_kernel.rs`, so a program using only them
-    // drops the crate.
-    if ctx.reaches_char_category() {
-        set.insert(RuntimeFeature::CharCategory);
-    }
-
-    // Heavy crypto (rsa/bcrypt/AEAD/pbkdf2). The `crypto_core` floor
-    // (sha2/hmac/entropy) stays unconditional in the base manifest; only the
-    // heavy surface is a feature. `reaches_crypto_core_heavy()` (crypto ∪ jwt)
-    // is covered because `jwt` implies `crypto` in the crate graph, so selecting
-    // `jwt` alone already enables the RSA arm the JWT RS256 path needs.
-    if ctx.uses_crypto {
-        set.insert(RuntimeFeature::Crypto);
-    }
-
-    // Crypto floor (`crypto_core.rs` + `sha2`/`hmac`/`subtle`/`getrandom`).
-    // `reaches_crypto_core()` folds a direct crypto-floor kernel with every
-    // surface whose runtime module reaches the floor: crypto (re-export/reveal),
-    // jwt (HMAC/RSA sign + `secret::Secret` Algorithm), db (migration-checksum
-    // SHA-256), web/webview (client-JS SRI SHA-256 + CSRF `subtle` compare), email
-    // (SMTP-auth HMAC-SHA-256), server (session-id `subtle` compare). Each is
-    // verified against the runtime source. The crate-side implications (crypto/jwt/
-    // db/web/email/server each list `crypto-core`) carry the same closure at
-    // `--no-default-features`. FAIL-CLOSED: any uncertain floor consumer keeps it.
-    if ctx.reaches_crypto_core() {
-        set.insert(RuntimeFeature::CryptoCore);
-    }
-    // Secret (`secret.rs` + `zeroize`). `reaches_secret()` folds a direct
-    // `Secret.*` kernel / `Secret`-typed value with the JWT/Auth surface (whose
-    // `Algorithm` is a `secret::Secret`). `secret` implies `crypto-core` (shared
-    // `subtle`) in the crate graph, so the two selections agree at
-    // `--no-default-features`.
-    if ctx.reaches_secret() {
-        set.insert(RuntimeFeature::Secret);
-    }
-
-    // JWT surface (`jsonwebtoken`) — a JWT kernel or the `Ipe.Auth` surface.
-    if ctx.reaches_jwt() {
-        set.insert(RuntimeFeature::Jwt);
-    }
-
-    // Development-only time-travelling debugger (`ipe build/run --debugger`).
-    // Orthogonal to reachability — a build-mode opt-in, not a kernel/surface. It
-    // implies `json`/`serde`/`async` in the crate graph, all already present for
-    // any TEA program the recorder wraps. `ipe release` never sets the flag.
-    if ctx.debugger {
-        set.insert(RuntimeFeature::Debugger);
-    }
-
+    // Native target: iterate the ONE capability table and select every feature a
+    // program reaches. Each row's gate is the SAME `reaches_*` / `uses_*` union
+    // the per-surface manifest augmenter and `mod.rs` append in [`crate::project`]
+    // key on, so this SSOT and the emitter can never disagree (the closure SEAL
+    // enforces the referenced modules are covered). The `Db` row resolves its
+    // driver alias (sqlite/postgres) in its `select` closure; the `WasmClient` row
+    // never fires here (its gate is the wasm target, handled above). The set is a
+    // sorted `BTreeSet`, so the emitted `features = [...]` order is canonical
+    // regardless of row order.
+    let set = crate::capabilities::CAPABILITIES
+        .iter()
+        .filter(|c| (c.gate)(ctx))
+        .map(|c| (c.select)(ctx))
+        .collect();
     RuntimeFeatureSet(set)
 }
 

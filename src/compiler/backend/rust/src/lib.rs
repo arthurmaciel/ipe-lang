@@ -15,6 +15,7 @@
 //! backend resolves them through the [`ipe_intern::Interner`] it is constructed
 //! with. The [`ipe_backend::Backend`] trait stays string-free.
 
+mod capabilities;
 mod const_fold;
 pub use const_fold::fold_program;
 mod crate_specs;
@@ -969,6 +970,10 @@ impl ScopeState {
 /// Shared emission context: the interner plus the precomputed Ipê → Rust name
 /// maps so each emit site is a `O(log n)` lookup rather than recomputing the
 /// naming rules. Built once per [`RustBackend::emit`].
+// The `uses_*` bools are frozen reachability inputs, computed once in `build`
+// and read-only thereafter; the `reaches_*` unions over them are the gates the
+// real interface — [`crate::capabilities::CAPABILITIES`] — reads to drive the
+// runtime feature-set walks. The bool count is incidental, not a design smell.
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct EmitCtx<'a> {
     interner: &'a Interner,
