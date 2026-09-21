@@ -11,497 +11,109 @@
 [![Static binaries](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/static.yml)
 [![No-panic](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/panic-scan.yml)
 [![Docs deploy](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/docs-pages.yml)
-[![Manifest guard](https://github.com/arthurmaciel/ipe-lang/actions/workflows/manifest-guard.yml/badge.svg?branch=main)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/manifest-guard.yml)
 
 # Ipê language
 
 > [!CAUTION]
->
-> Although most of the features are working, the
-> code is under a thorough review that may last 3 to 4 months.
->
-> Please consider
-> [supporting our project](https://github.com/arthurmaciel/ipe-lang#support) so we get ready soon :)
+> Although most features work, the code is under a thorough review that may last
+> 3–4 months. Please consider [supporting the project](#support) so it is ready sooner.
 
-**Ipê**, pronounced [/ip'e/](https://ipa-reader.com/?text=%09ip%E2%80%B2e&voice=Vitoria), is a "thick-barked" [tree](https://en.wikipedia.org/wiki/Handroanthus_serratifolius) native from South and Central Americas. 
+**Ipê** (pronounced [/ip'e/](https://ipa-reader.com/?text=%09ip%E2%80%B2e&voice=Vitoria)) is a
+pure-functional language with [Elm](https://elm-lang.org/)'s syntax and a batteries-included
+standard library — the effect system and application framework that make it full-stack. It
+compiles to readable Rust. It is community-centered — see [PRINCIPLES.md](PRINCIPLES.md).
 
-The Ipê programming language pairs [Elm](https://elm-lang.org/)'s syntax with part of [Sky lang](https://sky-lang.org/)'s batteries-included
-standard library - the effect system and application framework that turn a pure-functional language into a full-stack one.
-It compiles to Rust.
+## Install
 
-Ipê aims to be community-centered. Check out our [principles](https://github.com/arthurmaciel/ipe-lang/blob/main/PRINCIPLES.md) to understand more about our social and technical values.
-
-Installation:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh | sh
 ```
 
+## Quickstart
+
 ```sh
-ipe init counter          # or `ipe init .` to scaffold in the current directory
+ipe init counter        # scaffolds a served web app — the default shape
 cd counter
-ipe run                   # serves the counter at http://localhost:8000
+ipe run                 # serves at http://localhost:8000 (server-rendered HTML + live SSE)
 ```
 
-On a terminal, `ipe init` runs a short wizard: it asks what kind of program you
-are building — `web`, `tui`, `cli`, `server`, or `script` — and, for a web app,
-whether it runs `served` (a co-located server) or as a `solo` (a wasm bundle in the
-browser) client. Each choice scaffolds the matching `src/Main.ipe` and a `package.ipe`;
-picking `solo` records an explicit `delivery = { ships = [ solo ] }` so
-`ipe release` builds the wasm bundle. You can skip the prompts by naming the shape
-(and, for web, the runtime) directly — handy in scripts:
+On a TTY `ipe init` asks the shape (`web` / `tui` / `cli` / `server` / `script`) and, for web, the
+runtime — `served` (a co-located SSR + SSE server) or `solo` (a wasm client); name them to skip
+the wizard: `ipe init myapp web solo`. → [getting started](docs/guide/getting-started.md)
 
-```sh
-ipe init myapp web solo    # web solo client, no prompts
-ipe init mytool script     # a plain-task program, no prompts
-```
+## Performance (dev loop)
 
-Prefer to start from scratch? A minimal script program is just:
+Wall-clock, measured by [`tools/scripts/perf/bench.sh`](tools/scripts/perf) on the reference
+served counter with the released binary:
+
+- **App recompilation:** ≈ 10 seconds — needed only for a **type** change (a `Model` field, a signature).
+- **Dev watch hot reload:** ≈ 500 **milliseconds** — every other edit (text, `init`, `update`, subscriptions, styles) hot-swaps into the running app, no `cargo`.
+- Cold build ≈ 18 s · release binary 7.0 MB · peak RAM 7.8 MB. → [faster builds](docs/topics/faster-builds.md)
+
+## Shapes
+
+One language; the shape is pinned by the head of `main`, never by config. **Web — served
+SSR + SSE — is the default**, tuned for fast web development, and the same `Ipe.Ui` view renders
+on the terminal too.
+
+| Shape | Entry | For |
+|---|---|---|
+| **Web** *(default)* | `Web.tea` | Server-rendered HTML + live SSE patches; a `solo` wasm client is opt-in |
+| Tui | `Tui.tea` | Full-screen terminal UIs |
+| Cli | `Cli.tea` | Line-oriented CLIs and REPLs |
+| Worker | `Worker.tea` | A view-less TEA loop |
+| Script | bare `main : Task Error ()` | Scripts, one-shot tools, cron — and where you call `Server.listen` |
+
+Web / Tui / Cli / Worker follow [The Elm Architecture](https://guide.elm-lang.org/architecture/);
+Web, Tui, and Cli share one `view : Model -> Element Msg`. → [examples](examples/), `ipe doc Ui`
+
+A server is not its own runtime shape — you mount a web TEA app and hand-written endpoints into
+one `Ipe.Http.Server` on a single port (the `ipe init … server` scaffold seeds exactly this):
 
 ```elm
--- src/Main.ipe
-module Main exposing (main)
-import Ipe.Io as Io
-
 main =
-    Io.println "Hello from Ipê!"
+    Server.listen 8080
+        [ Server.get "/api/health" health
+        , Server.mountApp "/app"
+            (Web.embed
+                -- the same six fields as `Web.tea`, written inline
+                { init = init, update = update, view = view
+                , subscriptions = subscriptions, routes = [], notFound = NoOp
+                }
+            )
+        ]
 ```
-
-```sh
-ipe run src/Main.ipe        # compile + run in one step
-ipe type-check src/Main.ipe # type-check only — no build, no run
-ipe verify                  # the whole project gate: format, type-check, build
-```
-
-Two build postures split the CLI along a security axis. The development loop —
-`ipe dev build`, `ipe dev run`, `ipe dev watch` — leaves the `Debug.*` escape
-hatch on, ships unsigned, and allows hot-reload; `build`, `run`, and `watch`
-stay valid as bare shortcuts for the same dev posture. `ipe release` is the
-shipping posture: optimised, `Debug.*` rejected, native code jailed. Hot-reload
-belongs only to development, so there is no way to `watch` a release — it is not
-in the grammar. Run `ipe dev` (or any group with no verb) to see its verbs.
-
-Prefer building from source? 
-
-```sh
-git clone --branch v<VERSION_NUMBER> --single-branch https://github.com/arthurmaciel/ipe-lang
-cd ipe-lang
-cargo build --release
-
-```
-
-## Contents
-
-- [Features](#features)
-- [Code shapes](#code-shapes)
-- [Capabilities](#capabilities)
-<!-- - [Dependencies](#dependencies)-->
-- [Editor setup (LSP)](#editor-setup-lsp)
-- [Static compilation](#static-compilation)
-- [Support](#support)
 
 ## Features
 
-- **Elm syntax** — pure functions, Hindley–Milner type inference, exhaustive
-  `case`, immutable data. No `null`, no runtime exceptions.
-- **Batteries-included standard library** — Web live applications (SSR + real-time), typed HTTP,
-  typed SQL, auth, email, cache, pub/sub, and WebSockets, all behind a
-  single `Task Error a` effect boundary. `Error` is a typed, classified value
-  you construct and inspect — see `ipe doc Error` or `ipe explain IPE-T0001`.
-- **Rust compiler** — the compiler itself is written in Rust: fast, parallel,
-  memory-safe.
-- **Rust backend** — emits readable Rust.
-- **Incremental compilation** — a salsa-backed query engine; `ipe watch`
-  recompiles only what changed.
-- **Static compilation** — `ipe build --static` produces a fully-static musl
-  single binary. Copy it anywhere and run — no runtime, no dependencies.
-- **No authored abrupt failure** — the compiler's and runtime's own Rust carries
-  no `panic!`, `unwrap`, `expect`, `assert!`, or indexing panic. Every failure is
-  a typed `Result` or a diagnostic.
-
-## Code shapes
-
-One language, five shapes. The shape is pinned by the head of `main` — never by config.
-
-| Shape | Entry point | Use it for | TEA |
-|---|---|---|---|
-| `Ipe.Tea.Web` | `Web.tea` | Web apps — server-rendered HTML, real-time SSE patches, sessions | ✓ |
-| `Ipe.Tea.Tui` | `Tui.tea` | Full-screen terminal UIs | ✓ |
-| `Ipe.Tea.Cli` | `Cli.tea` | Line-oriented CLIs and REPLs | ✓ |
-| `Ipe.Http.Server` | `Server.listen` | HTTP servers | |
-| Direct | a bare `main : Task Error ()` | Scripts, one-shot tools, cron jobs, batch jobs | |
-
-The four ✓ shapes follow [The Elm Architecture](https://guide.elm-lang.org/architecture/)
-(`init` / `update` / `view` / `subscriptions`) — and Web, Tui, and Cli share the
-**same `Ipe.Ui` view code**, so one `view : Model -> Element Msg` renders on web
-and terminal alike. Desktop-webview delivery (`web desktop`) is a host of the Web
-shape, not a distinct shape.
-See [`examples/`](examples/) for runnable programs.
-
-Views are built from two vocabularies — the portable `Ipe.Ui` layout language
-and the raw-DOM `Ipe.Html` — plus the security-gated `Ipe.Css`. Run `ipe doc Ui`
-for the layout reference.
-
-## Capabilities
-
-Every effect in Ipê flows through a capability-tagged kernel, so the compiler can
-tell you exactly what a program is allowed to do — network, filesystem, env,
-subprocess, clock, random, native-ffi, custom-element — from its code alone, with
-nothing to declare. 
-
-`ipe capabilities <entry>` prints that inferred set as a human report by
-default; `--plain` gives the bare names, one per line, for a script:
-
-```
-$ ipe capabilities --plain examples/shapes/script/release-preflight/src/Main.ipe
-network
-clock
-```
-
-The set is generated, not hand-written, and cannot drift: a program that reaches
-a new effectful kernel gains the matching capability automatically. 
-
-`native-ffi`
-appears whenever the program crosses into `Rust.` code, which is opaque to the
-inference and the one place effects can escape the model. `custom-element` appears
-whenever the program ships a browser widget (`CustomElement.node`): the served JavaScript is
-SRI-pinned and CSP-constrained, but the sandbox protects the server, not
-third-party browser JS — a widget is declared trust in the package author.
-
-Run `ipe capabilities --help` for the full model. See [docs/reference/capabilities.md](docs/reference/capabilities.md) for the complete capability reference.
-
-When you package an app for a native shell, the OS-permission declarations it
-needs are *derived* from the web capabilities the app accepts, never hand-written.
-`ipe pack --emit-permissions <ios|macos|android>` prints them as a dry run:
-
-```
-$ ipe pack --emit-permissions ios examples/shapes/web/geo-clipboard
-OS permissions for `geo-clipboard` on ios
-  js-port:clipboard → (no OS permission on this platform)
-  js-port:geolocation → NSLocationWhenInUseUsageDescription
-  js-port:raw → (no OS permission on this platform)
-
-Info.plist entries:
-  NSLocationWhenInUseUsageDescription = "This app uses your location to provide location-based features."
-```
-
-The derivation is the single source of truth: an accepted capability that needs
-an OS permission always contributes it, and a manifest can never declare a
-permission the app has not accepted — an unbacked permission is a hard, named
-refusal.
-
-### Desktop bundles
-
-`ipe pack --target desktop[:<linux|macos|windows>]` turns an `Ipe.WebView` app
-into a self-contained desktop bundle (the host OS is the default target):
-
-```
-$ ipe pack --target desktop:linux
-packaged `my-app` for linux → dist/linux/my-app
-  This app requires WebKitGTK at runtime (Debian/Ubuntu: libwebkit2gtk-4.1-0).
-```
-
-Each OS gets a runnable layout: a **Linux** tarball (binary + `.desktop`
-launcher + icon, carrying its WebKitGTK runtime-dependency note); a **macOS**
-`.app` bundle whose `Info.plist` permission keys are derived from the accepted
-web capabilities exactly as above (never hand-written); and a **Windows** `.exe`
-+ portable zip with its WebView2 runtime-dependency note. A single `icon` field
-in `package.ipe` is the source for every per-OS icon format. Only a webview app
-is packageable — any other shape is a named refusal.
-
-The Linux bundle is built on the host; a macOS/Windows bundle's layout is written
-for inspection and finished (signed, packaged) on that OS's runner. Bundles are
-unsigned.
-
-### Mobile shells
-
-`ipe pack --target mobile:<ios|android>` wraps a client-wasm `Web` SPA (the
-`ipe build --target wasm` bundle) in a thin native system-webview shell that loads
-it **offline** from app assets:
-
-```
-$ ipe pack --target mobile:android examples/wasm/spa
-packaged `wasm-spa` for mobile:android → dist/android/wasm-spa-android
-  note: an Android shell project is written here; run `./gradlew assembleDebug` inside it with the Android SDK to produce an APK.
-```
-
-The SPA bundle is built on the host, then hosted from local app assets — never a
-remote URL. **Android** gets a Gradle project whose `WebView` +
-`WebViewAssetLoader` serve `index.html` from a same-origin local URL, with an
-`AndroidManifest.xml` whose `<uses-permission>` lines are derived from the accepted
-web capabilities exactly as above (never hand-written). **iOS** gets an Xcode
-project whose `WKWebView` + `WKURLSchemeHandler` serve the bundle under a custom
-scheme with correct MIME (so `.wasm` loads cleanly), with an `Info.plist` whose
-usage-description keys are derived the same way. The `[wasm]` mode must be on and
-the app must be a `Web` shape — any other combination is a named refusal.
-
-The Android app can be finished with the Android SDK; the iOS app is finished on a
-macOS + Xcode runner with a signing identity. Shells are unsigned.
-
-<!--
-## Dependencies
-
-A project declares its dependencies in `package.ipe` — an inert typed record
-bound to `package : Package`. Each field is optional:
-
-```elm
-package : Package
-package =
-    { name = "my-app"
-    , dependencies =                             -- Ipê packages
-        [ dep "http" "^1.2"                       -- from the package index, by semver requirement
-        , depGitRev "mylib" "https://example.com/mylib.git" "abc123"
-        , depPath "local" "../local"
-        ]
-    , rustDependencies =                         -- Rust crates, bound as a foreign-function interface
-        [ rustDep "uuid" "1.10" ]
-    , capabilities =                             -- the capabilities you declare the program exercises
-        { declares = [ Network, Clock ] }
-    }
-```
-
-**Rust crates** are managed by the `ipe rust` command group:
-
-```
-$ ipe rust add uuid@1.10        # inspect and cache a crate
-$ ipe rust remove uuid          # drop it
-$ ipe rust install              # (re)inspect every rustDependencies crate
-```
-
-Each crate is inspected inside a sandbox before it is trusted, and its
-`Rust.<Crate>` interface is generated for you — no hand-written bindings.
-
-**Ipê packages** are managed by `ipe add` / `ipe remove`:
-
-```
-$ ipe add http-extras           # resolve the latest published version
-$ ipe add http-extras@^1.2       # or pin a semver requirement
-$ ipe remove http-extras         # drop it from package.ipe and ipe.lock
-```
-
-`ipe add` resolves the package through the **curated index** (a git repository):
-it reads the package's entry, picks the highest published version satisfying your
-requirement, fetches that version's source at its pinned revision, and **verifies
-the fetched source's sha256 against the hash the index pinned** before trusting
-it — a mismatch is a hard error, never a warning, and nothing is written. It then
-records the exact pins in `ipe.lock` and the requirement in `package.ipe`, and prints
-the resolved version and its capability set (loudly, when a package uses
-`native-ffi`).
-
-`ipe.lock` pins the resolved version, source, revision, and content hash of every
-dependency, so a build is reproducible from the lock even when the index is
-unreachable, and a later build re-verifies the same source.
-
-The `{ git = … }` and `{ path = … }` escapes bypass the index (for a private repo
-or a local checkout) but still carry lockfile integrity — the fetched or copied
-tree is hashed and locked exactly as an index dependency is.
-
-The index checkout defaults to a standard per-user location; set `IPE_INDEX_DIR`
-to point at a different checkout (a local fixture index, for offline testing).
-
-## Auditing a package before you publish
-
-`ipe package audit` runs the package **quality gate** on your working package and
-exits non-zero with a single diagnostic naming exactly what is wrong. It is the
-same gate the curated index re-runs when it accepts a version, so a green audit
-means a green submission. Four checks, each a hard reject (never a warning that
-lets an unsafe or dishonest version through):
-
-- **Provenance** — no authored `panic!`/`unwrap`/`expect`/`assert` in the
-  package's own FFI wrapper Rust (that code compiles unsandboxed into the shipped
-  artifact, so an abrupt failure there is a soundness hole).
-- **Capability honesty** — the `[capabilities]` you declare must be *exactly* the
-  set the compiler infers: a capability you use but did not declare is a hidden
-  effect (reject), and one you declared but never use is an over-broad claim
-  (reject).
-- **Enforced semver** — the public-API delta against the previous published
-  version must clear the required bump; a breaking change under a mere patch bump
-  is rejected. A first version has no predecessor and skips this check.
-- **Supply chain** — `cargo-deny` (advisories, bans, sources) over the package's
-  Rust dependency graph, plus a re-verification that every locked Ipê dependency
-  still hashes to its pin.
-
-```
-$ ipe package audit                 # audit the current project
-$ ipe package audit path/to/pkg     # or a specific package directory
-```
-
-A clean package prints `all Tier-1 checks passed`; a failing one names the check
-and the offending line, capability, version, or dependency.
--->
-
-## Documenting a package
-
-`ipe doc` generates reference documentation from source. It works with or
-without a project: run it in an empty directory to document the full stdlib.
-
-Each rendering lands in its own subfolder of the output base (`doc/` by
-default): `doc/json/docs.json`, `doc/markdown/`, and `doc/html/`. The module
-listing in HTML and Markdown is a namespace tree — `Ipe.Db.Codec` nests under
-`Ipe.Db`, not in a flat alphabetical list. Your own project modules appear
-first, under a **Project modules** heading, ahead of the **Standard library**.
-
-<!-- The commands below are verified against the released binary. -->
-```sh
-# Document the stdlib (works in any directory, no project needed):
-ipe doc --write-format html
-
-# Document a specific project package to a chosen directory:
-ipe doc path/to/pkg --out site
-
-# Write only one rendering (json | markdown | html | all; default: all):
-ipe doc --write-format markdown
-
-# Build the HTML site and preview it on loopback:
-ipe doc serve
-
-# CI coverage gate — exit non-zero when a binding lacks a doc-comment:
-ipe doc check
-```
-
-## Linting
-
-`ipe lint` runs extensible static analysis over your source — the idiom and
-consistency checks that keep code "invalid states unrepresentable" in every
-corner. The compiler enforces what *must* be true (soundness); the linter
-suggests what *should* be true by convention on code that already type-checks,
-so every finding is advisory and suppressible. The same rules surface three
-ways: on the CLI, live in the editor through the LSP, and in CI (a surviving
-denied finding exits non-zero).
-
-<!-- The commands below are verified against the released binary. -->
-```sh
-# Lint the current project (or a file / directory):
-ipe lint
-ipe lint src/Main.ipe
-
-# Apply every machine-applicable, semantics-preserving fix:
-ipe lint --fix
-```
-
-Configuration is Ipê-native — a `lint.ipe` next to `package.ipe`, written in the
-same builder style as the manifest (not TOML):
-
-```ipe
-module Lint exposing (lint)
-
-lint =
-    Lint.config
-        |> Lint.deny "adjacent-bools"
-        |> Lint.allow "prim-param"
-        |> Lint.gate "deny"
-```
-
-Suppress a single site with a source comment: `-- ipe-lint: allow <rule>` on the
-line (or the line above). Run `ipe lint --help` for the shipped rule set. See
-[the lint guide](docs/guide/lint.md) for the full rule reference.
-
-## Editor setup (LSP)
-
-`ipe lsp` speaks JSON-RPC over stdio — type-directed completion, go-to-definition,
-find-references, rename, formatting, code actions, semantic tokens, and more.
-See [editor integration documentation](docs/topics/editor-integration.md) for setup
-instructions covering Helix, Neovim, VS Code, Emacs (lsp-mode and Doom Emacs),
-and Zed.
-
-## Ejecting to plain Rust
-
-`ipe eject` emits a self-contained Rust Cargo project you can `cargo build` with
-no `ipe` toolchain installed — the escape hatch from the runtime-crate model.
-
-
-Unlike `ipe build`, which emits a project that names the Ipê runtime as a
-dependency, `ipe eject` **vendors** the runtime source into the output and **tree-shakes**
-it to only the modules your program reaches. 
-
-The result is small, offline-buildable,
-and auditable: plain, reviewable Rust with no external runtime path — ideal for a
-Rust-only shop that must comply with a "Rust only" rule.
-
-```sh
-# Eject the program-shape example into a standalone project:
-ipe eject examples/shapes/script/release-preflight/package.ipe --out /tmp/eject-demo
-
-# Build it with plain cargo — no ipe toolchain required:
-cd /tmp/eject-demo
-cargo build --release
-```
-
-A program that binds a foreign Rust crate
-(FFI) **cannot** be ejected (its external crates would need a registry fetch, which
-the source-only contract forbids).
+- **Elm syntax** — Hindley–Milner inference, exhaustive `case`, immutable data; no `null`, no runtime exceptions.
+- **Batteries-included stdlib** — web (SSR + SSE), typed HTTP and SQL, auth, email, cache, pub/sub, WebSockets — all behind one `Task Error a` boundary with a typed `Error`. → `ipe doc`
+- **Compiles to readable Rust**, incrementally (salsa); `ipe watch` hot-swaps most edits and recompiles only on a type change. → [faster builds](docs/topics/faster-builds.md)
+- **No authored abrupt failure** — the compiler and runtime carry no `panic!` / `unwrap` / `expect` / index panic; every failure is a typed `Result` or diagnostic. → [PRINCIPLES.md](PRINCIPLES.md)
+- **Capabilities are inferred, not declared** — `ipe capabilities <entry>` reports exactly what a program may do (network, fs, env, ffi, …). → [capabilities](docs/reference/capabilities.md)
+- **Accessible by default** — real `<button>`s, semantic landmarks, a contrast-safe focus ring, and reduced-motion honored out of the box. → `ipe doc Ui`
+- **Rust FFI** — `ipe rust add <crate>` binds a crate as a generated `Rust.<Crate>` interface (sandbox-inspected; discloses the `native-ffi` capability). → [dependencies](docs/guide/getting-started.md)
+- **Delivery grammar** (replaces the retired `ipe pack`) — `ipe build web desktop|ios|android` for a fast dev bundle, `ipe release web desktop|ios|android` for a production distributable (desktop-webview or mobile system-webview shell).
+- **Eject to plain Rust** — `ipe eject` vendors and tree-shakes the runtime into a standalone Cargo project you build with no `ipe` toolchain.
+- **Static binary** — `ipe build --static` produces a fully-static musl single binary — copy and run anywhere. → [static compilation](#static-compilation)
+
+## Tooling
+
+- `ipe doc` — reference documentation from source (json / markdown / html; runs with or without a project).
+- `ipe lint` / `ipe lint --fix` — advisory static analysis, configured by a `lint.ipe`. → [lint guide](docs/guide/lint.md)
+- `ipe lsp` — completion, go-to-definition, find-references, rename, code actions, semantic tokens over stdio. → [editor setup](docs/topics/editor-integration.md)
+- `ipe fmt` · `ipe test` · `ipe verify` · `ipe migrate` · `ipe package audit` — format, test, whole-project gate, migration, and the publish quality gate.
 
 ## Static compilation
 
-`ipe build --static` produces a fully-static musl binary — zero runtime
-dependencies, copy and run anywhere.
-
-Prerequisite (once): add the musl target with
-`rustup target add x86_64-unknown-linux-musl` and install `musl-tools` from
-your distro's package manager.
-
-To build a static binary from `examples/shapes/non-tea/hello-world`:
-run `ipe build package.ipe --out out/rust --static` inside that directory,
-then `cargo build --release --target x86_64-unknown-linux-musl` inside
-`out/rust/`.
-
-The emitted `.cargo/config.toml` sets `+crt-static` automatically; no extra
-`RUSTFLAGS` are needed.
-
-**Allocator options** (`--allocator <name>`):
-
-| Name | Default | Notes |
-|---|---|---|
-| `dlmalloc` | yes | pure Rust, no C toolchain beyond musl |
-| `mimalloc` | | C opt-in; needs a musl-capable C compiler |
-| `system` | | musl's malloc; requires `--allow-slow-allocator` |
-
-**Supported targets:**
-
-| Target | Status |
-|---|---|
-| `x86_64-unknown-linux-musl` | fully supported, CI-verified |
-| `aarch64-unknown-linux-musl` | wired, pending toolchain confirmation (CI: `continue-on-error`) |
-
-## Faster builds
-
-`ipe build` / `ipe run` compile an emitted Rust project, so most of the time is
-`rustc` + linking. 
-
-A failed emitted-crate compile is a non-zero `ipe` exit with a
-named build-failure diagnostic, never a silent success.
-
-Pass `-q` / `--quiet` to `ipe build`, `ipe run`, or `ipe watch` to suppress
-progress chatter and only print warnings and errors (useful in scripts and CI).
-
-Optional per-machine tools — a compilation cache
-([sccache](https://github.com/mozilla/sccache)), a fast linker
-([mold](https://github.com/rui314/mold) / [lld](https://lld.llvm.org/)), and a
-fast debug codegen backend
-([cranelift](https://github.com/rust-lang/rustc_codegen_cranelift)) — cut that
-substantially. See [rust performance improvement](docs/topics/faster-builds.md)
-for per-platform install and `~/.cargo/config.toml` recipes.
+`ipe build --static` produces a fully-static musl binary (zero runtime dependencies). Once:
+`rustup target add x86_64-unknown-linux-musl` and install `musl-tools`. `x86_64` is CI-verified;
+`aarch64` is wired pending toolchain confirmation. → [faster builds](docs/topics/faster-builds.md)
 
 ## Support
 
-Contributions are **very** welcome!
+Contributions are **very** welcome, in order of current need:
 
-There are 3 main forms to support our project. They are listed in order
-of need at the current moment:
-
-### Donations
-
-I'd love to spend more time developing and battle testing Ipê. If you like the project, please 
-[support Ipê's development](https://ko-fi.com/arthur_maciel??g=1). Thank you!
-
-
-### Pull requests
-The most valuable [pull requests](https://github.com/arthurmaciel/ipe-lang/pulls) are
-**security/soundness fixes** — a mis-compilation, 
-a panic on valid input, an unsound emit or security brech. 
-
-Every `PR` must be human-reviewed before submitted please! Unfortunately there is not enough time to 
-review unsupervised AI code :/
-
-### Bug reports
-Even if you can't propose any code yet, please [report](https://github.com/arthurmaciel/ipe-lang/issues)
- any bugs you find!
+- **Donations** — [support Ipê's development](https://ko-fi.com/arthur_maciel??g=1). Thank you!
+- **Pull requests** — most valuable are security / soundness fixes (a mis-compilation, a panic on valid input, an unsound emit). Every PR must be human-reviewed before submission — there is not enough time to review unsupervised AI code.
+- **Bug reports** — [report any bug you find](https://github.com/arthurmaciel/ipe-lang/issues).
