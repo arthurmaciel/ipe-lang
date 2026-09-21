@@ -182,48 +182,67 @@ fn seeded_int_wide_range_reaches_upper_half() {
     );
 }
 
-// ── #2641 — no modulo bias on a range that does not divide the sample space ──
-// Naive `% range` over-represents the low residues when `range` does not divide
-// the 2^64 draw space evenly. Deterministically draw many seeded values into a
-// small range and assert every bucket is hit at a near-uniform frequency — a
-// chi-square-lite bound a biased `%` reduction fails (its low buckets bulge and
-// its high buckets starve past the tolerance).
+// ── #2641 — no modulo bias on a range comparable to the sample space ─────────
+// (function name kept for tracker continuity — the range is now large, not small)
+// Modulo bias only shows measurably when `width` is a large fraction of the
+// 2^64 draw space (for a small width the skew is ~width/2^64 — negligible). Use
+// width = 3·2^62 = 0xC000_0000_0000_0000: since 2^64 = 1·width + 2^62, naive
+// `sample % width` maps two distinct samples onto every residue in the low third
+// [0, 2^62) but only one onto every residue in the upper two-thirds — so the low
+// third is hit ~2× as often as it should be. The production rejection sampler
+// discards the biasing tail and keeps all three thirds equiprobable. The OLD
+// `(next >> 33) % width` code is even worse: a 31-bit sample is always < width,
+// so `% width` is a no-op and every draw lands far inside the low third — the
+// upper thirds get ~zero. Bucket the draws into thirds and assert each third is
+// within tolerance of 1/3; the naive-`%` and the `>> 33` reductions both fail it.
 #[cfg(feature = "random")]
 #[test]
 fn seeded_int_no_modulo_bias_over_small_range() {
-    let lo = 0i64;
-    let hi = 6i64; // 7 buckets — 2^64 % 7 != 0, so naive `%` biases residues 0..(2^64 % 7)
-    let buckets = (hi - lo + 1) as usize;
-    let draws = 70_000usize;
-    let mut counts = vec![0usize; buckets];
+    // width = 3·2^62 needs a span past i64::MAX, so anchor at lo = i64::MIN and
+    // let hi land in the negative axis — the inclusive [lo, hi] width (computed in
+    // i128 by the kernel) is what governs the bias, not hi's sign. 2^64 % width =
+    // 2^62 ≠ 0, so the residues in the low third [0, 2^62) are the double-counted ones.
+    let lo = i64::MIN;
+    let width: i128 = 3i128 << 62; // 0xC000_0000_0000_0000
+    let hi = (i128::from(lo) + width - 1) as i64;
+    let third = (width / 3) as u128; // 2^62 — boundary between buckets
+    let draws = 60_000usize;
+    let mut counts = [0usize; 3]; // low / middle / high third
     for seed in 0..draws as i64 {
         let (v, _) = ipe_runtime_rust::random::random_seeded_int(seed, lo, hi);
-        assert!((lo..=hi).contains(&v));
-        let idx = (v - lo) as usize;
-        if let Some(c) = counts.get_mut(idx) {
+        assert!((lo..=hi).contains(&v), "draw {v} escaped [{lo}, {hi}]");
+        let off = (i128::from(v) - i128::from(lo)) as u128;
+        let bucket = (off / third).min(2) as usize;
+        if let Some(c) = counts.get_mut(bucket) {
             *c += 1;
         }
     }
-    let expected = draws as f64 / buckets as f64;
-    // 12% tolerance: comfortably wide for the sampling noise of 70k draws, yet far
-    // tighter than the skew a biased `%` induces across the whole span.
+    let expected = draws as f64 / 3.0;
+    // 12% tolerance: comfortably wide for the sampling noise of 60k seeded draws,
+    // yet far tighter than the ~2× skew naive `%` puts on the low third (and the
+    // ~all-in-low-third collapse of the `>> 33` reduction).
     for (i, &c) in counts.iter().enumerate() {
         let dev = (c as f64 - expected).abs() / expected;
         assert!(
             dev < 0.12,
-            "bucket {i} count {c} deviates {:.1}% from uniform {expected:.0} — modulo bias",
+            "third {i} count {c} deviates {:.1}% from uniform {expected:.0} — modulo bias",
             dev * 100.0
         );
     }
 }
 
-// ── #2642 — huge finite weights must stay proportional, degenerate total safe ─
-// `total = sum(weights)` can overflow to +inf for huge finite weights, making the
-// scaled `r` non-finite so `r < cum` never fires and every draw collapses to the
-// last entry — a silent non-proportional result. With a near-f64::MAX weight on
-// the FIRST entry, a proportional pick must return that first entry overwhelmingly
-// (not the last); an all-huge (inf-total) set must still return SOME entry (never
-// NaN-stuck, never always-last).
+// ── #2642 — an overflowing (inf-total) weight set must NOT collapse to last ───
+// `total = sum(weights)` overflows to +inf for huge finite weights, making the
+// scaled `r` non-finite so `r < cum` never fires: the pre-fix code then falls
+// through and returns the LAST entry on EVERY draw — a silent, non-proportional
+// result that always yields one fixed value. The production guard replaces that
+// with a uniform pick over the positive entries, so across many draws the
+// non-last entries appear too. Give three DISTINCT values whose weights each
+// overflow the sum to +inf and draw many times: a correct uniform fallback must
+// produce the two NON-LAST values (10 and 20) as well as the last (30); the
+// collapse bug produces ONLY 30, so seeing any non-last value falsifies it.
+// (The bug is data-independent — it returns last for every seed — so no run of
+// the reverted code can pass, however the wall-clock LCG happens to be seeded.)
 #[cfg(all(feature = "random", feature = "tokio"))]
 #[test]
 fn weighted_huge_weights_stay_proportional() {
@@ -236,34 +255,31 @@ fn weighted_huge_weights_stay_proportional() {
         assert!(r.is_ok(), "random_weighted is total — never Err");
         r.with_default(IpeMaybe::Nothing)
     }
-    // Dominant first weight: the vast majority of draws must be the first value.
-    // The pre-fix inf-total path would return the LAST value every time.
-    let dominant = f64::MAX / 4.0;
-    let mut first = 0usize;
-    let trials = 200usize;
+    // Every weight is f64::MAX, so the total overflows to +inf. The last entry is
+    // 30; the collapse-to-last bug would return 30 for every one of these draws.
+    let weights = vec![(f64::MAX, 10i64), (f64::MAX, 20i64), (f64::MAX, 30i64)];
+    let trials = 400usize;
+    let mut saw_10 = false;
+    let mut saw_20 = false;
+    let mut saw_30 = false;
     for _ in 0..trials {
-        if let IpeMaybe::Just(v) = draw(vec![(dominant, 1i64), (1.0, 2i64), (1.0, 3i64)]) {
-            if v == 1 {
-                first += 1;
-            }
+        let v = draw(weights.clone());
+        assert!(
+            matches!(v, IpeMaybe::Just(10 | 20 | 30)),
+            "inf-total weighted draw returned an invalid value: {v:?}"
+        );
+        match v {
+            IpeMaybe::Just(10) => saw_10 = true,
+            IpeMaybe::Just(20) => saw_20 = true,
+            _ => saw_30 = true,
         }
     }
+    // The two NON-LAST values must both appear — impossible under collapse-to-last,
+    // near-certain (each ~1/3) under the uniform fallback across 400 draws.
     assert!(
-        first * 2 > trials,
-        "a near-f64::MAX first weight should dominate the picks; got {first}/{trials} \
-         — collapsed to the last entry (non-finite total)"
-    );
-
-    // Degenerate: every weight is f64::MAX so the total overflows to +inf. The
-    // pick must still be one of the entries (uniform fallback), never NaN-stuck.
-    let m = draw(vec![
-        (f64::MAX, 10i64),
-        (f64::MAX, 20i64),
-        (f64::MAX, 30i64),
-    ]);
-    assert!(
-        matches!(m, IpeMaybe::Just(v) if v == 10 || v == 20 || v == 30),
-        "an inf-total weight set must fall back to a valid uniform pick, not NaN/none"
+        saw_10 && saw_20,
+        "inf-total weight set collapsed to the last entry: saw_10={saw_10} \
+         saw_20={saw_20} saw_30={saw_30} — the non-finite-total guard is not firing"
     );
 }
 
