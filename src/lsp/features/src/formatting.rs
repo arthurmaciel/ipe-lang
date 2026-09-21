@@ -1,23 +1,20 @@
 //! Document formatting: `textDocument/formatting` and
 //! `textDocument/rangeFormatting`.
 //!
-//! Formats by re-printing the parse AST: canonical whitespace, 4-space indent,
-//! sorted imports, blank lines between top-level declarations.
+//! `documentFormatting` routes through the shared `ipe_fmt` engine — the same
+//! comment-preserving, semantics-guarded formatter `ipe fmt` runs — so it
+//! formats any parseable file, comments and doc-strings included, and returns a
+//! single whole-document `TextEdit` (nothing when the source does not parse or
+//! the engine's own re-parse / comment-count guard trips).
 //!
-//! The feature never corrupts the buffer: no edit is returned when the source
-//! does not parse, when it carries comment or doc-string trivia the AST printer
-//! cannot reproduce, or when the formatted output would not itself re-parse.
-//! String, char, and multiline-string literals are reproduced verbatim from
-//! their original spans so escapes survive.
-//!
-//! `documentFormatting` returns a single whole-document `TextEdit`.
-//! `rangeFormatting` is confined to whole declarations: it reformats only the
-//! top-level declarations the request range fully contains, replacing each in
-//! place, and emits nothing for a declaration the range merely straddles — a
-//! partial edit could truncate a declaration into text that no longer parses.
-//! It fails closed twice over: a declaration whose source carries comment or
-//! doc trivia is skipped (the printer cannot reproduce it), and the whole
-//! edited buffer must still parse or no edit is returned at all.
+//! `rangeFormatting` re-prints the parse AST directly, one declaration at a
+//! time: it reformats only the top-level declarations the request range fully
+//! contains, replacing each in place, and emits nothing for a declaration the
+//! range merely straddles — a partial edit could truncate a declaration into
+//! text that no longer parses. It fails closed twice over: a declaration whose
+//! source carries comment or doc trivia is skipped (this AST path cannot
+//! reproduce it), and the whole edited buffer must still parse or no edit is
+//! returned at all.
 
 use std::fmt::Write as _;
 
@@ -34,27 +31,14 @@ pub fn format_document(
     file: SourceFile,
     encoding: PositionEncoding,
 ) -> Option<Vec<TextEdit>> {
-    let module = ipe_db::parse(db, file).ok()?;
     let text = file.text(db);
-    // This module's own AST printer carries no comment or doc-string trivia, so
-    // formatting a file that has any would silently delete it. Fail closed —
-    // leave the buffer untouched rather than drop the user's comments. (The
-    // comment-preserving `ipe fmt` engine lives in the `ipe` CLI crate, which
-    // depends on the LSP server and so cannot be reached from here without a
-    // dependency cycle; sharing it would take extracting it into a lower crate.)
-    if source_has_comment_or_doc(text) {
-        return None;
-    }
-    let formatted = format_module(db, &module, text);
+    // The shared `ipe_fmt` engine preserves comments and doc-strings and guards
+    // its own output with a re-parse + comment-count check, so a whole-document
+    // format is comment-safe. A parse failure — or the engine's round-trip guard
+    // tripping on a printer bug — yields no edit, leaving the buffer untouched.
+    let formatted = ipe_fmt::format_source(text).ok()?;
     if formatted == text.as_str() {
         return Some(Vec::new()); // already canonical — no edit
-    }
-    // Second gate: the formatted output must itself parse. A reformat that would
-    // not round-trip (a printer bug on some construct) is discarded rather than
-    // written over the user's file.
-    let mut check_interner = ipe_intern::Interner::new();
-    if ipe_parse::parse_module(&formatted, &mut check_interner).is_err() {
-        return None;
     }
     let start = offset_to_position(text, 0, encoding);
     let end = offset_to_position(text, text.len(), encoding);
@@ -325,164 +309,6 @@ fn escaped_string_literal(value: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Module printer
-// ---------------------------------------------------------------------------
-
-fn format_module(db: &IpeDatabase, module: &ipe_syntax::Module, original: &str) -> String {
-    let interner = db.interner().lock();
-    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
-
-    let mut out = String::new();
-
-    // Module header.
-    let mod_name = module
-        .name
-        .value
-        .iter()
-        .map(|&s| resolve(s))
-        .collect::<Vec<_>>()
-        .join(".");
-    out.push_str("module ");
-    out.push_str(&mod_name);
-    out.push_str(" exposing (");
-    push_exposing(&mut out, &module.exposing.value, &interner);
-    out.push_str(")\n");
-
-    push_imports(&mut out, module, &interner);
-    push_aliases(&mut out, module, &interner);
-    push_unions(&mut out, module, &interner);
-    push_values(&mut out, module, &interner, original);
-
-    // The module printer always ends with exactly one trailing newline.
-    while out.ends_with("\n\n") {
-        out.pop();
-    }
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
-}
-
-/// Print the module's imports, sorted alphabetically by dotted name.
-fn push_imports(out: &mut String, module: &ipe_syntax::Module, interner: &ipe_intern::Interner) {
-    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
-    if module.imports.is_empty() {
-        return;
-    }
-    out.push('\n');
-    let mut imports = module.imports.clone();
-    imports.sort_by(|a, b| {
-        let an: Vec<&str> = a.name.value.iter().map(|&s| resolve(s)).collect();
-        let bn: Vec<&str> = b.name.value.iter().map(|&s| resolve(s)).collect();
-        an.cmp(&bn)
-    });
-    for imp in &imports {
-        let imp_name = imp
-            .name
-            .value
-            .iter()
-            .map(|&s| resolve(s))
-            .collect::<Vec<_>>()
-            .join(".");
-        out.push_str("import ");
-        out.push_str(&imp_name);
-        if let Some(alias) = imp.alias {
-            out.push_str(" as ");
-            out.push_str(resolve(alias));
-        }
-        match &imp.exposing.value {
-            ipe_syntax::Exposing::All => {
-                out.push_str(" exposing (..)");
-            }
-            ipe_syntax::Exposing::List(list) if !list.is_empty() => {
-                out.push_str(" exposing (");
-                push_exposing(out, &imp.exposing.value, interner);
-                out.push(')');
-            }
-            ipe_syntax::Exposing::List(_) => {}
-        }
-        out.push('\n');
-    }
-}
-
-/// Print the module's type aliases.
-fn push_aliases(out: &mut String, module: &ipe_syntax::Module, interner: &ipe_intern::Interner) {
-    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
-    for alias in &module.aliases {
-        out.push('\n');
-        let name = resolve(alias.value.name.value);
-        out.push_str("type alias ");
-        out.push_str(name);
-        for var in &alias.value.vars {
-            out.push(' ');
-            out.push_str(resolve(var.value));
-        }
-        out.push_str(" =\n    ");
-        push_type_annotation(out, &alias.value.body.value, interner);
-        out.push('\n');
-    }
-}
-
-/// Print the module's union types.
-fn push_unions(out: &mut String, module: &ipe_syntax::Module, interner: &ipe_intern::Interner) {
-    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
-    for union in &module.unions {
-        out.push('\n');
-        let name = resolve(union.value.name.value);
-        out.push_str("type ");
-        out.push_str(name);
-        for var in &union.value.vars {
-            out.push(' ');
-            out.push_str(resolve(var.value));
-        }
-        out.push('\n');
-        for (i, ctor) in union.value.ctors.iter().enumerate() {
-            if i == 0 {
-                out.push_str("    = ");
-            } else {
-                out.push_str("    | ");
-            }
-            out.push_str(resolve(ctor.value.name));
-            for arg in &ctor.value.args {
-                out.push(' ');
-                push_type_annotation(out, arg, interner);
-            }
-            out.push('\n');
-        }
-    }
-}
-
-/// Print the module's value declarations (each optional type annotation
-/// followed by its equation).
-fn push_values(
-    out: &mut String,
-    module: &ipe_syntax::Module,
-    interner: &ipe_intern::Interner,
-    original: &str,
-) {
-    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
-    for value in &module.values {
-        out.push('\n');
-        let name = resolve(value.value.name.value);
-        // Type annotation.
-        if let Some(ann) = &value.value.type_annotation {
-            out.push_str(name);
-            out.push_str(" : ");
-            push_type_annotation(out, &ann.value, interner);
-            out.push('\n');
-        }
-        out.push_str(name);
-        for pat in &value.value.patterns {
-            out.push(' ');
-            push_pattern(out, pat, interner, original);
-        }
-        out.push_str(" =\n    ");
-        push_expr(out, &value.value.body, 1, interner, original);
-        out.push('\n');
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Single-declaration printers (used by `format_range`)
 // ---------------------------------------------------------------------------
 //
@@ -560,44 +386,6 @@ fn push_one_alias(
 // ---------------------------------------------------------------------------
 // Sub-printers
 // ---------------------------------------------------------------------------
-
-fn push_exposing(
-    out: &mut String,
-    exposing: &ipe_syntax::Exposing,
-    interner: &ipe_intern::Interner,
-) {
-    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
-    match exposing {
-        ipe_syntax::Exposing::All => out.push_str(".."),
-        ipe_syntax::Exposing::List(items) => {
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                match &item.value {
-                    ipe_syntax::Exposed::Value(sym) => out.push_str(resolve(*sym)),
-                    ipe_syntax::Exposed::Type(sym, privacy) => {
-                        out.push_str(resolve(*sym));
-                        match privacy {
-                            ipe_syntax::Privacy::Public => out.push_str("(..)"),
-                            ipe_syntax::Privacy::Private => {}
-                            ipe_syntax::Privacy::PublicCtors(ctors) => {
-                                out.push('(');
-                                for (j, c) in ctors.iter().enumerate() {
-                                    if j > 0 {
-                                        out.push_str(", ");
-                                    }
-                                    out.push_str(resolve(*c));
-                                }
-                                out.push(')');
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 fn push_type_annotation(
     out: &mut String,
@@ -1105,7 +893,10 @@ mod tests {
     #[test]
     fn already_formatted_produces_no_edit() {
         let db = IpeDatabase::new();
-        let f = file(&db, &["Main"], ALREADY_FORMATTED);
+        // Canonical form is whatever the engine emits; formatting it again is a
+        // no-op, so `format_document` returns an empty edit list.
+        let canonical = ipe_fmt::format_source(ALREADY_FORMATTED).expect("formats");
+        let f = file(&db, &["Main"], &canonical);
         let edits = format_document(&db, f, PositionEncoding::Utf16)
             .expect("parseable source returns Some");
         assert!(edits.is_empty(), "no edit when already canonical");
@@ -1385,18 +1176,23 @@ mod tests {
         assert!(source_has_comment_or_doc(src), "guard sees the comment");
     }
 
-    /// `documentFormatting` still fails closed on a commented file: the local
-    /// AST printer carries no comment trivia, so it returns no edit rather than
-    /// silently deleting the comment.
+    /// `documentFormatting` formats a commented file and PRESERVES the comment:
+    /// it routes through the shared `ipe_fmt` engine, which carries comment
+    /// trivia, so the LSP no longer fails closed on a `--`.
     #[test]
-    fn document_formatting_refuses_commented_file() {
+    fn document_formatting_preserves_comments() {
         let db = IpeDatabase::new();
-        let src = "module Main exposing (a)\n\na : Int\na =\n      1 -- keep\n";
+        // A leading comment, plus non-canonical spacing so a real edit is emitted.
+        let src = "module Main exposing (a)\n\n-- keep\na =\n  1\n";
         let f = file(&db, &["Main"], src);
-        let result = format_document(&db, f, PositionEncoding::Utf16);
+        let edits = format_document(&db, f, PositionEncoding::Utf16)
+            .expect("commented file formats, not refused");
+        let new_text = edits
+            .first()
+            .map_or_else(|| src.to_owned(), |e| e.new_text.clone());
         assert!(
-            result.is_none(),
-            "commented file must be refused, not silently stripped"
+            new_text.contains("-- keep"),
+            "comment must survive formatting: {new_text}"
         );
     }
 }

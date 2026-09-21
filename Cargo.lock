@@ -2989,6 +2989,7 @@ dependencies = [
  "ipe_diagnostics",
  "ipe_docs",
  "ipe_ffi",
+ "ipe_fmt",
  "ipe_intern",
  "ipe_ir",
  "ipe_kernels",
@@ -3221,6 +3222,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe_fmt"
+version = "0.1.85"
+dependencies = [
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_parse",
+ "ipe_syntax",
+]
+
+[[package]]
 name = "ipe_intern"
 version = "0.1.85"
 dependencies = [
@@ -3283,6 +3294,7 @@ dependencies = [
  "ipe_canon",
  "ipe_db",
  "ipe_diagnostics",
+ "ipe_fmt",
  "ipe_intern",
  "ipe_lint",
  "ipe_parse",

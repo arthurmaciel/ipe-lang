@@ -287,3 +287,15 @@ fn stdin_mode_uses_same_format_source() {
     let got = format_source(unformatted).unwrap();
     assert_eq!(got, expected, "stdin path must produce same output");
 }
+
+/// The scaffolded `ipe init` template is elm-format style already, so formatting
+/// it changes ONLY the import order (elm-format sorts imports) and is otherwise a
+/// fixed point. Lives here (not in `ipe_fmt`) because it reads the CLI's
+/// `templates/Main.ipe` asset.
+#[test]
+fn init_template_is_a_near_fixed_point() {
+    let src = include_str!("../templates/Main.ipe");
+    let out = format_source(src).expect("template formats");
+    let out2 = format_source(&out).expect("second pass formats");
+    assert_eq!(out, out2, "fmt must be idempotent on its own output");
+}
