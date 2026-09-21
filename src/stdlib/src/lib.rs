@@ -2732,28 +2732,24 @@ mod tests {
         };
 
         // Find the single arm of `fold`'s `case` whose head constructor is `ctor`.
-        let mut arm_rhs = |fold_name: &str, ctor| -> ipe_syntax::Expr {
-            let sym = interner
-                .intern(fold_name)
-                .expect("intern the fold binding name");
-            let value = parsed
-                .values
-                .iter()
-                .find(|v| v.value.name.value == sym)
-                .unwrap_or_else(|| panic!("`{fold_name}` must be a top-level binding"));
+        // Returns `None` if the binding, its `case` shape, or the arm is absent;
+        // the call sites `expect` it so a missing arm fails the test loudly
+        // without the `panic!` macro (banned repo-wide, tests included).
+        let mut arm_rhs = |fold_name: &str, ctor| -> Option<ipe_syntax::Expr> {
+            let sym = interner.intern(fold_name).ok()?;
+            let value = parsed.values.iter().find(|v| v.value.name.value == sym)?;
             let Expr_::Case(_, arms) = &value.value.body.value else {
-                panic!("`{fold_name}` body must be a `case`");
+                return None;
             };
-            arms.iter()
-                .find_map(|(pat, rhs)| match &pat.value {
-                    Pattern_::PCtor(name, _, _) if *name == ctor => Some(rhs.clone()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("`{fold_name}` must have an arm for the constructor"))
+            arms.iter().find_map(|(pat, rhs)| match &pat.value {
+                Pattern_::PCtor(name, _, _) if *name == ctor => Some(rhs.clone()),
+                _ => None,
+            })
         };
 
         // The lock/unlock fold rejects a query (`Orientation`) reply: fail, not succeed.
-        let lock_orientation = arm_rhs("foldOutcome", orientation_ctor);
+        let lock_orientation = arm_rhs("foldOutcome", orientation_ctor)
+            .expect("foldOutcome must have an `Orientation` case arm");
         assert!(
             calls_task(&lock_orientation, fail_name),
             "foldOutcome's `Orientation _` arm must fold to `Task.fail` — a query \
@@ -2766,7 +2762,8 @@ mod tests {
         );
 
         // Defend-in-depth mirror: the query fold rejects a lock/unlock (`Ok_`) reply.
-        let query_ok = arm_rhs("foldOrientation", ok_ctor);
+        let query_ok = arm_rhs("foldOrientation", ok_ctor)
+            .expect("foldOrientation must have an `Ok_` case arm");
         assert!(
             calls_task(&query_ok, fail_name),
             "foldOrientation's `Ok_` arm must fold to `Task.fail` — a lock/unlock \
