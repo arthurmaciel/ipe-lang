@@ -20,6 +20,11 @@ pub struct HoverInfo {
     /// and `ipe doc` disclose, read from [`ipe_canon::shape_source`], never a
     /// second derivation. `None` on any other hover target.
     pub control_model: Option<&'static str>,
+    /// The `{-| … -}` doc-string attached to the top-level binding whose solved
+    /// region the cursor is inside, if any. `None` when the hovered region does
+    /// not belong to a documented binding (e.g. a sub-expression inside an
+    /// unannotated lambda), or when the binding has no doc-string.
+    pub doc: Option<String>,
 }
 
 /// The type of the innermost solved region containing `byte` in `module_file`.
@@ -51,20 +56,36 @@ pub fn hover(
     }
     let (width, lo) = best?;
     let span = Span::new(lo, lo.saturating_add(width));
-    // Computed before the interner lock below: `parse` takes the interner lock
-    // itself, so classifying here (and releasing) avoids a re-entrant lock.
+    // `parse` and `control_model_at` both acquire the interner lock internally.
+    // Call them before the explicit lock below so we never hold nested locks.
+    let parsed = ipe_db::parse(db, module_file).ok();
     let control_model = control_model_at(db, module_file, byte);
+    // Find the doc-string of the top-level binding whose body span contains
+    // `byte`. The parsed `Value` carries the `{-| … -}` doc-string; the hover
+    // surfaces it so editors can show it alongside the type.
+    let doc: Option<String> = parsed.as_ref().and_then(|m| {
+        m.values
+            .iter()
+            .find(|v| {
+                let lo = v.value.name.span.lo;
+                let hi = v.value.body.span.hi.max(v.value.name.span.hi);
+                lo <= byte && byte < hi
+            })
+            .and_then(|v| v.value.doc.as_ref())
+            .map(|ds| ds.body.trim().to_owned())
+    });
     let interner = db.interner().lock();
     let mut namer = ipe_types::VarNamer::new();
-    let doc = types
+    let ty_doc = types
         .regions
         .get(&span)
         .and_then(|ty| ipe_types::ty_to_doc(ty, &interner, &mut namer).ok());
     drop(interner);
     Some(HoverInfo {
-        ty: ipe_diagnostics::render_ty(&doc?),
+        ty: ipe_diagnostics::render_ty(&ty_doc?),
         span,
         control_model,
+        doc,
     })
 }
 
@@ -108,4 +129,77 @@ fn control_model_at(
         return None;
     }
     Some(ipe_canon::shape_source::ControlModel::from_shape(shape).word())
+}
+
+#[cfg(test)]
+mod tests {
+    use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
+
+    use super::hover;
+
+    fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
+        ipe_db::SourceFile::new(
+            db,
+            path.iter().map(|s| (*s).to_owned()).collect(),
+            text.to_owned(),
+            ModuleOrigin::User,
+        )
+    }
+
+    fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+        ipe_db::SourceRoot::new(
+            db,
+            files
+                .iter()
+                .map(|(path, f)| (path.iter().map(|s| (*s).to_owned()).collect(), *f))
+                .collect(),
+        )
+    }
+
+    /// A doc-commented binding must surface its doc-string in `HoverInfo.doc`.
+    #[test]
+    fn hover_surfaces_doc_comment() {
+        const SRC: &str = "\
+module Main exposing (main)\n\
+\n\
+{-| The answer to everything. -}\n\
+main : Int\n\
+main =\n\
+    42\n";
+        let db = IpeDatabase::new();
+        let entry = file(&db, &["Main"], SRC);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        // Byte offset of `42` (inside the `main` body).
+        let byte = u32::try_from(SRC.find("42").expect("`42` in source")).expect("u32");
+        let info = hover(&db, root, entry, entry, byte)
+            .expect("hover on `42` in a typed binding must return Some");
+        assert_eq!(
+            info.ty, "Int",
+            "type of `42` must be `Int`, got: {}",
+            info.ty
+        );
+        let doc = info
+            .doc
+            .expect("a doc-commented binding must surface its doc");
+        assert!(
+            doc.contains("answer"),
+            "doc must contain the comment text; got: {doc:?}"
+        );
+    }
+
+    /// An undocumented binding must yield `doc: None`.
+    #[test]
+    fn hover_no_doc_when_no_comment() {
+        const SRC: &str = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
+        let db = IpeDatabase::new();
+        let entry = file(&db, &["Main"], SRC);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        let byte = u32::try_from(SRC.find("42").expect("`42`")).expect("u32");
+        let info = hover(&db, root, entry, entry, byte).expect("hover on `42` must return Some");
+        assert!(
+            info.doc.is_none(),
+            "binding without doc-comment must yield doc: None; got: {:?}",
+            info.doc
+        );
+    }
 }
