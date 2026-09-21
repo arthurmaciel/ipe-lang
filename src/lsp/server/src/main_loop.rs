@@ -275,6 +275,12 @@ fn dispatch(state: &State, request: &Request) -> Option<FeatureOutcome> {
         }
         "textDocument/signatureHelp" => Some(signature_help_result(state, &request.params)),
         "textDocument/inlayHint" => Some(inlay_hints_result(state, &request.params)),
+        "textDocument/documentHighlight" => Some(document_highlight_result(state, &request.params)),
+        "workspace/symbol" => Some(workspace_symbol_result(state, &request.params)),
+        "textDocument/selectionRange" => Some(selection_range_result(state, &request.params)),
+        "textDocument/semanticTokens/range" => {
+            Some(semantic_tokens_range_result(state, &request.params))
+        }
         _ => None,
     }
 }
@@ -311,15 +317,22 @@ fn hover_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
                 language: "ipe".to_owned(),
                 value: info.ty,
             });
-            // On `main`, disclose the compiler-derived control model beneath the
-            // type — the same signal `ipe audit`/`ipe doc` surface, so the editor
-            // reads one derivation.
-            let contents = match info.control_model {
-                Some(model) => lsp_types::HoverContents::Array(vec![
-                    ty_marked,
-                    lsp_types::MarkedString::String(format!("control model: {model}")),
-                ]),
-                None => lsp_types::HoverContents::Scalar(ty_marked),
+            // Beneath the type, disclose the compiler-derived control model — the
+            // same signal `ipe audit`/`ipe doc` surface, so the editor reads one
+            // derivation — then the binding's doc-string when it has one.
+            let mut parts = vec![ty_marked];
+            if let Some(model) = info.control_model {
+                parts.push(lsp_types::MarkedString::String(format!(
+                    "control model: {model}"
+                )));
+            }
+            if let Some(doc) = info.doc {
+                parts.push(lsp_types::MarkedString::String(doc));
+            }
+            let contents = if parts.len() == 1 {
+                lsp_types::HoverContents::Scalar(parts.remove(0))
+            } else {
+                lsp_types::HoverContents::Array(parts)
             };
             FeatureOutcome::payload(lsp_types::Hover { contents, range })
         },
@@ -1129,6 +1142,176 @@ fn inlay_hints_result(state: &State, params: &serde_json::Value) -> FeatureOutco
     FeatureOutcome::payload(hints)
 }
 
+/// `textDocument/documentHighlight` — all occurrences of the name under the
+/// cursor in the same document, as read/write/text highlight ranges.
+fn document_highlight_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
+    let Ok(params) = serde_json::from_value::<lsp_types::DocumentHighlightParams>(params.clone())
+    else {
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/documentHighlight".into(),
+        );
+    };
+    let position = params.text_document_position_params;
+    let Some((module, file)) = state.locate(&position.text_document.uri) else {
+        return FeatureOutcome::NoResult;
+    };
+    let text = file.text(&state.db);
+    let Some(root) = state.root else {
+        return FeatureOutcome::NoResult;
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return FeatureOutcome::NoResult;
+    };
+    let byte = offset::position_to_offset(text, position.position, state.encoding);
+    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
+    // Resolve to the canonical (home, name) pair via goto_definition.
+    let Some(def) =
+        ipe_lsp_features::navigation::goto_definition(&state.db, root, entry_file, &module, byte)
+    else {
+        return FeatureOutcome::NoResult;
+    };
+    let files = root.files(&state.db);
+    let text_of = |m: &[String]| files.get(m).map(|f| f.text(&state.db));
+    let Some(def_text) = text_of(&def.module) else {
+        return FeatureOutcome::NoResult;
+    };
+    let lo = def.span.lo as usize;
+    let hi = def.span.hi as usize;
+    let Some(def_name) = def_text.get(lo..hi) else {
+        return FeatureOutcome::NoResult;
+    };
+    // Collect references across all modules, then filter to the requested document.
+    let refs = ipe_lsp_features::navigation::find_references(
+        &state.db,
+        root,
+        entry_file,
+        &def.module,
+        def_name,
+    );
+    let mut highlights: Vec<lsp_types::DocumentHighlight> = Vec::new();
+    // Include the definition site when it is in the same document.
+    if def.module == module {
+        let range = ipe_lsp_features::offset::span_to_range(def_text, def.span, state.encoding);
+        highlights.push(lsp_types::DocumentHighlight {
+            range,
+            kind: Some(lsp_types::DocumentHighlightKind::TEXT),
+        });
+    }
+    for r in refs {
+        if r.module != module {
+            continue;
+        }
+        let Some(ref_text) = text_of(&r.module) else {
+            continue;
+        };
+        let range = ipe_lsp_features::offset::span_to_range(ref_text, r.span, state.encoding);
+        highlights.push(lsp_types::DocumentHighlight {
+            range,
+            kind: Some(lsp_types::DocumentHighlightKind::TEXT),
+        });
+    }
+    FeatureOutcome::payload(highlights)
+}
+
+/// `workspace/symbol` — project-wide symbol search filtered by `query`.
+///
+/// An empty query returns all symbols. A non-empty query performs a
+/// case-insensitive substring match on the symbol name.
+fn workspace_symbol_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
+    let Ok(params) = serde_json::from_value::<lsp_types::WorkspaceSymbolParams>(params.clone())
+    else {
+        return FeatureOutcome::InvalidParams("invalid params for workspace/symbol".into());
+    };
+    let Some(root) = state.root else {
+        return FeatureOutcome::NoResult;
+    };
+    let query = params.query.to_lowercase();
+    let files = root.files(&state.db);
+    let mut results: Vec<lsp_types::WorkspaceSymbol> = Vec::new();
+    // Iterate all modules with a known URI; skip modules with no on-disk path.
+    for (module_path, &file) in files {
+        let Some(uri) = state.uri_for_module(module_path) else {
+            continue;
+        };
+        let syms = ipe_lsp_features::symbols::document_symbols(&state.db, file, state.encoding);
+        for sym in syms {
+            if query.is_empty() || sym.name.to_lowercase().contains(&query) {
+                let location = lsp_types::OneOf::Left(lsp_types::Location {
+                    uri: uri.clone(),
+                    range: sym.range,
+                });
+                results.push(lsp_types::WorkspaceSymbol {
+                    name: sym.name,
+                    kind: sym.kind,
+                    tags: None,
+                    container_name: Some(module_path.join(".")),
+                    location,
+                    data: None,
+                });
+            }
+            // Include union constructor children as separate workspace symbols.
+            for child in sym.children.into_iter().flatten() {
+                if query.is_empty() || child.name.to_lowercase().contains(&query) {
+                    let location = lsp_types::OneOf::Left(lsp_types::Location {
+                        uri: uri.clone(),
+                        range: child.range,
+                    });
+                    results.push(lsp_types::WorkspaceSymbol {
+                        name: child.name,
+                        kind: child.kind,
+                        tags: None,
+                        container_name: Some(module_path.join(".")),
+                        location,
+                        data: None,
+                    });
+                }
+            }
+        }
+    }
+    FeatureOutcome::payload(results)
+}
+
+/// `textDocument/selectionRange` — syntactic expand-selection ranges.
+fn selection_range_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
+    let Ok(params) = serde_json::from_value::<lsp_types::SelectionRangeParams>(params.clone())
+    else {
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/selectionRange".into(),
+        );
+    };
+    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
+        return FeatureOutcome::NoResult;
+    };
+    let ranges = ipe_lsp_features::selection_range::selection_ranges(
+        &state.db,
+        file,
+        &params.positions,
+        state.encoding,
+    );
+    FeatureOutcome::payload(ranges)
+}
+
+/// `textDocument/semanticTokens/range` — semantic tokens for a sub-range of
+/// the document. Delta-encoded relative to the first token in the range.
+fn semantic_tokens_range_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
+    let Ok(params) = serde_json::from_value::<lsp_types::SemanticTokensRangeParams>(params.clone())
+    else {
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/semanticTokens/range".into(),
+        );
+    };
+    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
+        return FeatureOutcome::NoResult;
+    };
+    let result = ipe_lsp_features::semantic_tokens::semantic_tokens_range(
+        &state.db,
+        file,
+        params.range,
+        state.encoding,
+    );
+    FeatureOutcome::payload(result)
+}
+
 /// Latest-generation-wins publishing with change suppression: identical
 /// payloads are not re-sent, and a URI whose diagnostics healed (or whose
 /// module left the project) gets one clearing empty push.
@@ -1175,8 +1358,8 @@ mod tests {
     use super::{
         Connection, DiagnosticsBatch, FeatureOutcome, LoadedFile, LoadedProject, Message,
         ModuleOrigin, Path, PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics,
-        PublishDiagnosticsParams, State, Url, ensure_project_fresh, normalize, publish, recompute,
-        sync_inputs,
+        PublishDiagnosticsParams, State, Url, adopt, ensure_project_fresh, normalize, publish,
+        recompute, sync_inputs,
     };
     use crate::loader::LoadError;
     use lsp_types::notification::Notification as _;
@@ -1511,6 +1694,142 @@ mod tests {
             "found {count} encoding-to-null launder site(s); all encoding failures \
              must go through FeatureOutcome::payload"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // New handler tests
+    // -----------------------------------------------------------------------
+
+    /// Build a minimal two-module `State` (Helper + Main) from in-memory text.
+    fn two_module_state() -> (State, PathBuf, PathBuf) {
+        const HELPER: &str = "module Helper exposing (three)\n\nthree : Int\nthree = 3\n";
+        const MAIN_SRC: &str = "module Main exposing (main)\n\nimport Helper exposing (three)\n\nmain : Int\nmain = three\n";
+
+        let helper_path = normalize(Path::new("/test-proj/Helper.ipe"));
+        let main_path = normalize(Path::new("/test-proj/Main.ipe"));
+        let mut state = State::new(None, PositionEncoding::Utf8);
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            vec!["Helper".to_owned()],
+            LoadedFile {
+                path: helper_path.clone(),
+                text: HELPER.to_owned(),
+                origin: ModuleOrigin::User,
+            },
+        );
+        files.insert(
+            vec!["Main".to_owned()],
+            LoadedFile {
+                path: main_path.clone(),
+                text: MAIN_SRC.to_owned(),
+                origin: ModuleOrigin::User,
+            },
+        );
+        let project = LoadedProject {
+            files,
+            entry_module: vec!["Main".to_owned()],
+        };
+        adopt(&mut state, project);
+        sync_inputs(&mut state);
+        (state, helper_path, main_path)
+    }
+
+    /// `textDocument/documentHighlight` on the definition of `three` in
+    /// `Helper` returns at least one highlight range (the definition site).
+    #[test]
+    fn document_highlight_returns_highlights_for_symbol_use() {
+        let (state, _, main_path) = two_module_state();
+        let main_uri = Url::from_file_path(&main_path).expect("main uri");
+
+        // Cursor on the `three` use in `main = three` (Main line 5, col 7). A
+        // reference position is where goto-definition — and thus highlight —
+        // resolves the symbol; a definition name or annotation is not a
+        // reference and yields no result.
+        let params = serde_json::json!({
+            "textDocument": { "uri": main_uri.as_str() },
+            "position": { "line": 5, "character": 7 },
+            "context": { "includeDeclaration": true }
+        });
+
+        let outcome = super::document_highlight_result(&state, &params);
+        assert!(
+            matches!(outcome, FeatureOutcome::Payload(_)),
+            "expected Payload outcome from document_highlight_result"
+        );
+        let FeatureOutcome::Payload(json) = outcome else {
+            return;
+        };
+        let highlights: Vec<lsp_types::DocumentHighlight> =
+            serde_json::from_value(json).expect("valid highlights JSON");
+        assert!(
+            !highlights.is_empty(),
+            "cursor on a `three` use must return at least one highlight"
+        );
+        // Every highlight is in the Main document (same-document filter).
+        for h in &highlights {
+            assert!(
+                h.range.start.line >= 2,
+                "highlight range must be within the import/use spans"
+            );
+        }
+    }
+
+    /// `workspace/symbol` with an empty query returns symbols from every
+    /// module that has an on-disk path.
+    #[test]
+    fn workspace_symbol_empty_query_returns_all_symbols() {
+        let (state, _, _) = two_module_state();
+
+        let params = serde_json::json!({ "query": "" });
+        let outcome = super::workspace_symbol_result(&state, &params);
+        assert!(
+            matches!(outcome, FeatureOutcome::Payload(_)),
+            "expected Payload from workspace_symbol_result"
+        );
+        let FeatureOutcome::Payload(json) = outcome else {
+            return;
+        };
+        let symbols: Vec<lsp_types::WorkspaceSymbol> =
+            serde_json::from_value(json).expect("valid workspace symbols JSON");
+
+        // At minimum: `three` from Helper + `main` from Main.
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"three"),
+            "workspace symbols must include 'three' from Helper; got {names:?}"
+        );
+        assert!(
+            names.contains(&"main"),
+            "workspace symbols must include 'main' from Main; got {names:?}"
+        );
+    }
+
+    /// `workspace/symbol` with a non-empty query filters by case-insensitive
+    /// substring — `"thr"` matches `three` but not `main`.
+    #[test]
+    fn workspace_symbol_query_filters_by_name() {
+        let (state, _, _) = two_module_state();
+
+        let params = serde_json::json!({ "query": "thr" });
+        let outcome = super::workspace_symbol_result(&state, &params);
+        assert!(
+            matches!(outcome, FeatureOutcome::Payload(_)),
+            "expected Payload from workspace_symbol_result"
+        );
+        let FeatureOutcome::Payload(json) = outcome else {
+            return;
+        };
+        let symbols: Vec<lsp_types::WorkspaceSymbol> =
+            serde_json::from_value(json).expect("valid workspace symbols JSON");
+        assert!(
+            symbols
+                .iter()
+                .all(|s| s.name.to_lowercase().contains("thr")),
+            "all results must match query 'thr'; got {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(!symbols.is_empty(), "'thr' must match at least 'three'");
     }
 
     /// Asserts that no handler still carries a bare `-> serde_json::Value` return type.

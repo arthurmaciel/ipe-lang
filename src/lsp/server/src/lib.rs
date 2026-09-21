@@ -25,10 +25,10 @@ use lsp_server::Connection;
 use lsp_types::{
     CompletionOptions, DocumentLinkOptions, FoldingRangeProviderCapability,
     HoverProviderCapability, InitializeParams, InitializeResult, OneOf, PositionEncodingKind,
-    RenameOptions, SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions,
-    SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo, SignatureHelpOptions,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions,
+    RenameOptions, SaveOptions, SelectionRangeProviderCapability, SemanticTokensFullOptions,
+    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
+    SignatureHelpOptions, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
 };
 
 use ipe_lsp_features::PositionEncoding;
@@ -147,11 +147,14 @@ fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
         document_formatting_provider: Some(OneOf::Left(true)),
         document_range_formatting_provider: Some(OneOf::Left(true)),
         code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
+        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
             SemanticTokensOptions {
                 work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
                 legend: ipe_lsp_features::semantic_tokens::legend(),
-                range: Some(false),
+                range: Some(true),
                 full: Some(SemanticTokensFullOptions::Bool(true)),
             },
         )),

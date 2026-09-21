@@ -39,7 +39,7 @@ use std::collections::BTreeMap;
 use ipe_db::{Db as _, IpeDatabase, SourceRoot};
 use ipe_intern::Symbol;
 use ipe_types::Ty;
-use lsp_types::{CompletionItem, CompletionItemKind};
+use lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 use crate::expected_type::expected_type_at;
 
@@ -54,6 +54,10 @@ struct Candidate {
     /// solved env at render time. `None` when no head is determinable (e.g. a
     /// polymorphic or unsolved value). Drives type-directed classification.
     result_head: Option<(Vec<Symbol>, Symbol)>,
+    /// Payload arity of this constructor (0 for nullary). Used to generate
+    /// snippet tab-stops so editors insert the right number of argument
+    /// placeholders. Always 0 for non-`Ctor` kinds.
+    arity: usize,
 }
 
 enum CandidateKind {
@@ -256,6 +260,7 @@ fn build_candidates(
                 home: home_syms.to_vec(),
                 kind: CandidateKind::Value,
                 result_head: None, // resolved from the solved env at render time
+                arity: 0,
             });
         }
         for union in &canon.module.unions {
@@ -264,6 +269,7 @@ fn build_candidates(
                 home: home_syms.to_vec(),
                 kind: CandidateKind::Type,
                 result_head: None,
+                arity: 0,
             });
             for ctor in &union.ctors {
                 out.push(Candidate {
@@ -273,6 +279,7 @@ fn build_candidates(
                     // A constructor produces its owning union type — the head
                     // that makes it an ExactType match for an expected union.
                     result_head: Some((union.home.clone(), union.name)),
+                    arity: ctor.arity,
                 });
             }
         }
@@ -290,17 +297,20 @@ fn build_candidates(
                 home: dep_home.clone(),
                 kind: CandidateKind::Value,
                 result_head: None,
+                arity: 0,
             });
         }
         for &ctor_sym in dep_canon.exports.ctors.keys() {
             // A dep constructor's owning-union head is recoverable from the
             // dep's own unions (the export map records the ctor→type link).
             let head = dep_ctor_head(dep_canon, ctor_sym);
+            let arity = dep_ctor_arity(dep_canon, ctor_sym);
             out.push(Candidate {
                 name: ctor_sym,
                 home: dep_home.clone(),
                 kind: CandidateKind::Ctor,
                 result_head: head,
+                arity,
             });
         }
         for &type_sym in dep_canon.exports.types.keys() {
@@ -309,6 +319,7 @@ fn build_candidates(
                 home: dep_home.clone(),
                 kind: CandidateKind::Type,
                 result_head: None,
+                arity: 0,
             });
         }
     }
@@ -327,6 +338,19 @@ fn dep_ctor_head(
         }
     }
     None
+}
+
+/// The payload arity of a dep constructor, found by scanning the dep's unions.
+/// Returns 0 when the constructor is not found (nullary / unknown).
+fn dep_ctor_arity(dep_canon: &ipe_db::CanonicalModule, ctor: Symbol) -> usize {
+    for union in &dep_canon.module.unions {
+        for c in &union.ctors {
+            if c.name == ctor {
+                return c.arity;
+            }
+        }
+    }
+    0
 }
 
 /// Resolve each candidate to a `CompletionItem`, adding type detail for values
@@ -370,7 +394,7 @@ fn render_candidates(
         let sort_text = format!("{}{}", compat.rank(), name_str);
         items.push(match c.kind {
             CandidateKind::Value => value_item(name_str.to_owned(), detail, sort_text),
-            CandidateKind::Ctor => ctor_item(name_str.to_owned(), sort_text),
+            CandidateKind::Ctor => ctor_item(name_str.to_owned(), c.arity, sort_text),
             CandidateKind::Type => type_item(name_str.to_owned(), sort_text),
         });
     }
@@ -452,7 +476,11 @@ const fn con_head(ty: &Ty) -> Option<(&[Symbol], Symbol)> {
 }
 
 fn value_item(label: String, detail: Option<String>, sort_text: String) -> CompletionItem {
+    // `insert_text` mirrors the label so editors that do not verbatim-apply the
+    // label (e.g. those that strip a type suffix) still insert the bare name.
     CompletionItem {
+        insert_text: Some(label.clone()),
+        insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
         label,
         kind: Some(CompletionItemKind::FUNCTION),
         detail,
@@ -461,8 +489,30 @@ fn value_item(label: String, detail: Option<String>, sort_text: String) -> Compl
     }
 }
 
-fn ctor_item(label: String, sort_text: String) -> CompletionItem {
+/// Build a completion item for a data constructor.
+///
+/// When the constructor is nullary (`arity == 0`) the insert text is the bare
+/// name (plain text). When it carries payload fields (`arity > 0`) the insert
+/// text is a snippet with one tab-stop per field (`${1:arg1}`, `${2:arg2}`, …),
+/// so the editor positions the cursor inside the first argument and the user can
+/// tab through the rest.
+fn ctor_item(label: String, arity: usize, sort_text: String) -> CompletionItem {
+    let (insert_text, format) = if arity == 0 {
+        (label.clone(), InsertTextFormat::PLAIN_TEXT)
+    } else {
+        // Build `Name ${1:arg1} ${2:arg2} … ${N:argN}` — one space-separated
+        // tab-stop per payload field. The placeholder names are generic (`arg1`
+        // …) because the canonical AST does not carry field names for positional
+        // constructor arguments.
+        let stops: String = (1..=arity)
+            .map(|i| format!("${{{i}:arg{i}}}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        (format!("{label} {stops}"), InsertTextFormat::SNIPPET)
+    };
     CompletionItem {
+        insert_text: Some(insert_text),
+        insert_text_format: Some(format),
         label,
         kind: Some(CompletionItemKind::ENUM_MEMBER),
         sort_text: Some(sort_text),
@@ -472,6 +522,8 @@ fn ctor_item(label: String, sort_text: String) -> CompletionItem {
 
 fn type_item(label: String, sort_text: String) -> CompletionItem {
     CompletionItem {
+        insert_text: Some(label.clone()),
+        insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
         label,
         kind: Some(CompletionItemKind::CLASS),
         sort_text: Some(sort_text),
@@ -640,6 +692,57 @@ mod tests {
             red.sort_text.as_deref().is_some_and(|s| s.starts_with('0')),
             "Red must rank ExactType: {:?}",
             red.sort_text
+        );
+    }
+
+    /// Nullary constructors get `insert_text = label` (plain text). Payload
+    /// constructors get a snippet with one tab-stop per field.
+    #[test]
+    fn ctor_insert_text_matches_arity() {
+        use lsp_types::InsertTextFormat;
+        // `Rect Int` has arity 1; `Circle` has arity 0. Complete at a body
+        // position whose expected type is `Shape`, so both constructors are
+        // offered — a bare module-scope position (offset 0) offers none.
+        const SRC: &str = "module Main exposing (main)\n\ntype Shape = Circle | Rect Int\n\ns : Shape\ns = Circle\n\nmain = s\n";
+        let db = IpeDatabase::new();
+        let entry = file(&db, &["Main"], SRC);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        let byte = u32::try_from(SRC.find("s = Circle").expect("has body") + "s = ".len())
+            .expect("offset fits u32");
+        let items = completions(&db, root, entry, &["Main".to_owned()], byte);
+
+        let circle = items
+            .iter()
+            .find(|i| i.label == "Circle")
+            .expect("Circle present");
+        assert_eq!(
+            circle.insert_text.as_deref(),
+            Some("Circle"),
+            "nullary ctor insert_text must be the bare name"
+        );
+        assert_eq!(
+            circle.insert_text_format,
+            Some(InsertTextFormat::PLAIN_TEXT),
+            "nullary ctor must use PLAIN_TEXT"
+        );
+
+        let rect = items
+            .iter()
+            .find(|i| i.label == "Rect")
+            .expect("Rect present");
+        let rect_text = rect.insert_text.as_deref().expect("Rect has insert_text");
+        assert!(
+            rect_text.starts_with("Rect "),
+            "payload ctor insert_text must start with the name: {rect_text}"
+        );
+        assert!(
+            rect_text.contains("${1:"),
+            "payload ctor insert_text must contain a snippet tab-stop: {rect_text}"
+        );
+        assert_eq!(
+            rect.insert_text_format,
+            Some(InsertTextFormat::SNIPPET),
+            "payload ctor must use SNIPPET format"
         );
     }
 

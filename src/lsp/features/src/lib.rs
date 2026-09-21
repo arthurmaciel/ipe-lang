@@ -23,6 +23,7 @@ pub mod links;
 pub mod navigation;
 pub mod offset;
 pub mod rename;
+pub mod selection_range;
 pub mod semantic_tokens;
 pub mod signature_help;
 pub mod symbols;

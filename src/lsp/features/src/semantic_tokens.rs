@@ -27,9 +27,12 @@
 
 use ipe_annotate::TokenClass;
 use ipe_db::{Db as _, IpeDatabase, SourceFile};
-use lsp_types::{SemanticToken, SemanticTokens, SemanticTokensLegend, SemanticTokensResult};
+use lsp_types::{
+    Range, SemanticToken, SemanticTokens, SemanticTokensLegend, SemanticTokensRangeResult,
+    SemanticTokensResult,
+};
 
-use crate::offset::PositionEncoding;
+use crate::offset::{PositionEncoding, position_to_offset};
 
 // ---------------------------------------------------------------------------
 // Legend
@@ -88,6 +91,35 @@ pub fn semantic_tokens_full(
     })
 }
 
+/// Semantic tokens for the byte span that corresponds to `range`.
+///
+/// Only tokens whose start byte falls within `[range_lo, range_hi)` are
+/// returned; the delta encoding is reset so it is relative to the first
+/// token in the range, as the protocol requires.
+#[must_use]
+pub fn semantic_tokens_range(
+    db: &IpeDatabase,
+    file: SourceFile,
+    range: Range,
+    encoding: PositionEncoding,
+) -> SemanticTokensRangeResult {
+    let (raw, text) = collect_raw(db, file);
+    let range_lo = position_to_offset(text, range.start, encoding);
+    let range_hi = position_to_offset(text, range.end, encoding);
+    let filtered: Vec<RawToken> = raw
+        .into_iter()
+        .filter(|tok| {
+            let start = tok.byte as usize;
+            start >= range_lo && start < range_hi
+        })
+        .collect();
+    let tokens = encode(filtered, text, encoding);
+    SemanticTokensRangeResult::Tokens(SemanticTokens {
+        result_id: None,
+        data: tokens,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Token collection — thin projection over ipe_annotate::annotate
 // ---------------------------------------------------------------------------
@@ -103,24 +135,18 @@ struct RawToken {
     token_type: u32,
 }
 
-fn collect_tokens(
-    db: &IpeDatabase,
-    file: SourceFile,
-    encoding: PositionEncoding,
-) -> Vec<SemanticToken> {
-    let Ok(module) = ipe_db::parse(db, file) else {
-        return Vec::new();
-    };
+fn collect_raw(db: &IpeDatabase, file: SourceFile) -> (Vec<RawToken>, &str) {
     let text = file.text(db);
+    let Ok(module) = ipe_db::parse(db, file) else {
+        return (Vec::new(), text);
+    };
     let interner = db.interner().lock();
 
-    // The LSP path uses `annotate_syntax_only` (not the full canonicaliser) so a
-    // keypress stays cheap; it yields class-only tokens with no def keys.
+    // Uses `annotate_syntax_only` (not the full canonicaliser) — cheap on keypress;
+    // yields class-only tokens with no def keys.
     let annotated = ipe_annotate::annotate_syntax_only(&module, &interner);
-
     drop(interner);
 
-    // Project each AnnotatedToken to an LSP RawToken (class → legend index).
     let raw: Vec<RawToken> = annotated
         .into_iter()
         .filter_map(|tok| {
@@ -133,6 +159,15 @@ fn collect_tokens(
         })
         .collect();
 
+    (raw, text)
+}
+
+fn collect_tokens(
+    db: &IpeDatabase,
+    file: SourceFile,
+    encoding: PositionEncoding,
+) -> Vec<SemanticToken> {
+    let (raw, text) = collect_raw(db, file);
     encode(raw, text, encoding)
 }
 
@@ -253,8 +288,9 @@ fn encode(raw: Vec<RawToken>, text: &str, encoding: PositionEncoding) -> Vec<Sem
 #[cfg(test)]
 mod tests {
     use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile};
+    use lsp_types::{Position, Range};
 
-    use super::{legend, semantic_tokens_full};
+    use super::{legend, semantic_tokens_full, semantic_tokens_range};
     use crate::offset::PositionEncoding;
 
     fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
@@ -323,5 +359,69 @@ mod tests {
             }
         }
         let _ = line;
+    }
+
+    /// Range request covering only `main : Int` (line 2) returns a proper
+    /// subset of the full token list and the delta encoding is reset to be
+    /// relative to the first token in the range, not the file start.
+    #[test]
+    fn range_tokens_subset_of_full_and_delta_resets() {
+        let db = IpeDatabase::new();
+        // "module Main exposing (main)\n" — line 0
+        // "\n"                             — line 1
+        // "main : Int\n"                   — line 2  ← range covers this line only
+        // "main =\n"                       — line 3
+        // "    42\n"                        — line 4
+        let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
+        let f = file(&db, &["Main"], src);
+
+        // Cover the definition and its body (lines 3–4), which carry real
+        // expression tokens — the type-annotation line 2 is not tokenized.
+        let range = Range {
+            start: Position {
+                line: 3,
+                character: 0,
+            },
+            end: Position {
+                line: 9999,
+                character: 0,
+            },
+        };
+        let result = semantic_tokens_range(&db, f, range, PositionEncoding::Utf8);
+        let is_tokens = matches!(result, lsp_types::SemanticTokensRangeResult::Tokens(_));
+        assert!(
+            is_tokens,
+            "semantic_tokens_range must return Tokens variant, not Partial"
+        );
+        let lsp_types::SemanticTokensRangeResult::Tokens(range_tokens) = result else {
+            return; // unreachable — asserted above
+        };
+
+        // The definition body carries tokens.
+        assert!(
+            !range_tokens.data.is_empty(),
+            "range covering the definition body must yield tokens"
+        );
+
+        // The full result also covers the module header (line 0), so the range
+        // is a strict subset.
+        let full_tokens = tokens_of(semantic_tokens_full(&db, f, PositionEncoding::Utf8));
+        assert!(
+            range_tokens.data.len() < full_tokens.data.len(),
+            "range result must be a strict subset of the full result"
+        );
+
+        // Delta encoding is reset for the range: the first token's delta_line is
+        // its ABSOLUTE line (≥ 3, the range start), not a small delta relative to
+        // a token before the range.
+        let first = range_tokens
+            .data
+            .first()
+            .expect("range must yield at least one token");
+        assert!(
+            first.delta_line >= 3,
+            "first range token delta_line must be its absolute line (encoding reset to 0), got {}",
+            first.delta_line
+        );
     }
 }
