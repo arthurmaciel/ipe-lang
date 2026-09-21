@@ -38,6 +38,7 @@ mod ir_type_mentions;
 mod record_shapes;
 mod ty_templates;
 
+use capture_rewrite::force_shared_capture_clones;
 use clone_class::{
     CloneClass, CloneEnv, classify_capture_clone, clone_class, enum_is_opaque_ffi_handle,
     param_is_multiuse_clonable, reject_nonclone_value_reuse, rewrite_captured_clones,
