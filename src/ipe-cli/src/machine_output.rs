@@ -127,12 +127,18 @@ impl<'a> MachineOutput<'a> {
 /// flush-left machine text, never the human [`error_banner`].
 ///
 /// * `--json` yields the `{schema, status, command, payload}` error envelope,
-///   the message [`json::string`]-escaped under `payload.message`.
+///   the message [`json::string`]-escaped under `payload.message` and the stable
+///   per-variant `kind` tag under `payload.kind` so a consumer can branch on the
+///   failure class without parsing the prose message.
 /// * `--plain` yields the flush-left sanitised reason, one record per line — the
 ///   pipe-friendly form, matching `--plain` success output.
 /// * [`OutputFormat::Human`] is a caller bug (a human failure is the
 ///   [`error_banner`], not this module); it degrades to the plain form rather
 ///   than inventing a third shape or leaking the banner.
+///
+/// `kind` is the caller's stable classification of the error (the `CliError`
+/// variant word); it is a fixed vocabulary, never user-controlled input, so it
+/// carries no disclosure risk and is emitted verbatim.
 ///
 /// The returned string ends in a newline so a caller can write it straight to a
 /// stream. The caller writes it to **stderr** (a machine failure keeps stdout
@@ -142,7 +148,7 @@ impl<'a> MachineOutput<'a> {
 ///
 /// [`error_banner`]: crate::style::error_banner
 #[must_use]
-pub fn machine_error(format: OutputFormat, command: &str, message: &str) -> String {
+pub fn machine_error(format: OutputFormat, command: &str, kind: &str, message: &str) -> String {
     // Sanitise first: the Display text is trusted furniture, but a diagnostic can
     // interpolate user-controlled source (a file path, an identifier), so strip
     // any ANSI/control bytes before it enters the machine stream. Defence in
@@ -152,7 +158,10 @@ pub fn machine_error(format: OutputFormat, command: &str, message: &str) -> Stri
     let safe = TerminalSafe::sanitize(message);
     match format {
         OutputFormat::Json => {
-            let payload = json::object(&[("message", json::string(safe.as_str()))]);
+            let payload = json::object(&[
+                ("kind", json::string(kind)),
+                ("message", json::string(safe.as_str())),
+            ]);
             MachineOutput {
                 schema: ERROR_SCHEMA,
                 status: MachineStatus::Error,
@@ -194,7 +203,7 @@ mod tests {
         // lead-in must reach the machine stream with the escapes stripped and no
         // banner framing/gutter.
         let hostile = "boom \u{1b}[1;31mred\u{1b}[0m at \u{7}path";
-        let line = machine_error(OutputFormat::Json, "type-check", hostile);
+        let line = machine_error(OutputFormat::Json, "type-check", "pipeline", hostile);
         assert!(!line.contains('\x1b'), "no ESC survives: {line:?}");
         assert!(!line.contains('\u{7}'), "no bell survives: {line:?}");
         // Envelope shape, flush-left, no leading gutter/frame newline.
@@ -212,7 +221,12 @@ mod tests {
 
     #[test]
     fn json_machine_error_escapes_a_quote_in_the_message() {
-        let line = machine_error(OutputFormat::Json, "lint", "unexpected \"token\"");
+        let line = machine_error(
+            OutputFormat::Json,
+            "lint",
+            "pipeline",
+            "unexpected \"token\"",
+        );
         // The embedded quotes are JSON-escaped, keeping the envelope well-formed.
         assert!(
             line.contains("unexpected \\\"token\\\""),
@@ -221,11 +235,40 @@ mod tests {
     }
 
     #[test]
+    fn json_machine_error_carries_the_kind_tag_a_consumer_branches_on() {
+        // A non-pipeline failure class reaches the machine stream as a schema
+        // object carrying BOTH a stable `kind` and the prose `message` — the
+        // consumer branches on `kind` without parsing the sentence.
+        let line = machine_error(
+            OutputFormat::Json,
+            "build",
+            "static-refusal",
+            "static build refused",
+        );
+        assert!(
+            line.starts_with("{\"schema\":\"ipe.cli.error/1\""),
+            "the flush-left error envelope: {line:?}"
+        );
+        assert!(
+            line.contains("\"status\":\"error\""),
+            "status is error: {line:?}"
+        );
+        assert!(
+            line.contains("\"kind\":\"static-refusal\""),
+            "the stable kind tag is present: {line:?}"
+        );
+        assert!(
+            line.contains("\"message\":\"static build refused\""),
+            "the prose message is present: {line:?}"
+        );
+    }
+
+    #[test]
     fn plain_machine_error_is_the_flush_left_reason_with_no_banner_or_ansi() {
         // The `--plain` failure surface: the bare sanitised reason, flush-left,
         // one line — never the human banner, never an ANSI escape.
         let hostile = "boom \u{1b}[1;31mred\u{1b}[0m at path";
-        let line = machine_error(OutputFormat::Plain, "type-check", hostile);
+        let line = machine_error(OutputFormat::Plain, "type-check", "pipeline", hostile);
         assert!(!line.contains('\x1b'), "no ESC survives: {line:?}");
         assert!(
             !line.contains("Ipê lang"),
