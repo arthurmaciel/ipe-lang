@@ -565,11 +565,13 @@ fn interim_capability_wire(builder: &str) -> &str {
 
 /// Read a legacy `ipe.toml` into a [`ProjectManifest`] for re-serialisation.
 ///
-/// A deliberately small line/section scanner over the historical `ipe.toml`
-/// shape: `[project] name/version`, `[database] driver`, `[dependencies]`,
-/// `[capabilities] declared/accept`, `[wasm]`. It reads only the fields the
-/// record form can round-trip; a section it does not recognise is ignored (its
-/// keys are reported by the record reader on the next build if they mattered).
+/// A deliberately small section scanner over the historical `ipe.toml` shape:
+/// `[project] name/version`, `[database] driver`, `[dependencies]`,
+/// `[capabilities] declared/accept`, and `[wasm]` (mode/mount/entry/publicEnv/
+/// optLevel, with each `publicEnv` name re-validated against the secret
+/// denylist). It reads every field the record form can round-trip; a top-level
+/// section outside the recognised set is rejected by name so nothing is
+/// silently dropped on migration.
 fn read_legacy_toml(text: &str, root: &Path) -> Result<ProjectManifest, CliError> {
     let table: toml::Value = text.parse::<toml::Value>().map_err(|e| {
         CliError::UsageOwned(format!("migrate config: ipe.toml is not valid TOML: {e}"))
@@ -613,6 +615,23 @@ fn read_legacy_toml(text: &str, root: &Path) -> Result<ProjectManifest, CliError
     let dependencies = read_toml_deps(table.get("dependencies"), &oops)?;
     let capabilities = read_toml_caps(&table, "declared", &oops)?;
     let capabilities_accept = read_toml_caps(&table, "accept", &oops)?;
+    let wasm = read_toml_wasm(table.get("wasm"), &oops)?;
+
+    // Fail closed on any unmigrated section: a top-level key outside the
+    // recognised set has no home in the record form, so reject it by name
+    // rather than default it away silently.
+    if let Some(root_table) = table.as_table() {
+        const RECOGNISED: [&str; 5] =
+            ["project", "database", "dependencies", "capabilities", "wasm"];
+        for key in root_table.keys() {
+            if !RECOGNISED.contains(&key.as_str()) {
+                return Err(oops(&format!(
+                    "ipe.toml has a `[{key}]` section with no automatic migration — rewrite it \
+                     by hand into the `package.ipe` record"
+                )));
+            }
+        }
+    }
 
     Ok(ProjectManifest {
         name,
@@ -622,7 +641,7 @@ fn read_legacy_toml(text: &str, root: &Path) -> Result<ProjectManifest, CliError
         icon: None,
         driver,
         static_request: crate::build_plan::StaticRequestLayer::default(),
-        wasm: WasmConfig::default(),
+        wasm,
         dependencies,
         rust_dependencies: BTreeMap::new(),
         capabilities,
@@ -710,6 +729,85 @@ fn read_toml_caps(
     Ok(set)
 }
 
+/// Read the `[wasm]` table of a legacy `ipe.toml`.
+///
+/// Mirrors the interim builder's `read_wasm`: recognises `mode`
+/// (`"spa"` is the retired word for `"solo"`), `mount`, `entry`, `optLevel`,
+/// and a `publicEnv` list each of whose names is re-validated against the
+/// current secret denylist so a denylisted allowlist entry is a migration
+/// error, never a silent carry-over.
+fn read_toml_wasm(
+    section: Option<&toml::Value>,
+    oops: &impl Fn(&str) -> CliError,
+) -> Result<WasmConfig, CliError> {
+    let mut wasm = WasmConfig::default();
+    let Some(table) = section.and_then(toml::Value::as_table) else {
+        return Ok(wasm);
+    };
+    for (key, value) in table {
+        match key.as_str() {
+            "mode" => {
+                let mode = value
+                    .as_str()
+                    .ok_or_else(|| oops("`[wasm] mode` must be a string"))?;
+                let wire = match mode {
+                    "spa" => "solo",
+                    other => other,
+                };
+                wasm.mode = Some(wire.to_owned());
+            }
+            "entry" => {
+                wasm.entry = Some(
+                    value
+                        .as_str()
+                        .ok_or_else(|| oops("`[wasm] entry` must be a string"))?
+                        .to_owned(),
+                );
+            }
+            "mount" => {
+                wasm.mount = Some(
+                    value
+                        .as_str()
+                        .ok_or_else(|| oops("`[wasm] mount` must be a string"))?
+                        .to_owned(),
+                );
+            }
+            "optLevel" => {
+                wasm.opt_level = Some(
+                    value
+                        .as_str()
+                        .ok_or_else(|| oops("`[wasm] optLevel` must be a string"))?
+                        .to_owned(),
+                );
+            }
+            "publicEnv" => {
+                let list = value
+                    .as_array()
+                    .ok_or_else(|| oops("`[wasm] publicEnv` must be a list of strings"))?;
+                let mut names = Vec::with_capacity(list.len());
+                for item in list {
+                    let n = item
+                        .as_str()
+                        .ok_or_else(|| oops("`[wasm] publicEnv` must be a list of strings"))?;
+                    if is_denylisted_public_env_name(n) {
+                        return Err(oops(&format!(
+                            "`[wasm] publicEnv` lists {n:?}, which matches the secret denylist"
+                        )));
+                    }
+                    names.push(n.to_owned());
+                }
+                wasm.public_env = names;
+            }
+            other => {
+                return Err(oops(&format!(
+                    "`[wasm]` has an unknown key `{other}`"
+                )));
+            }
+        }
+    }
+    Ok(wasm)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,6 +893,65 @@ mod tests {
         assert_eq!(m.name, "legacy");
         assert_eq!(m.driver, ipe_backend_rust::DbDriver::Postgres);
         assert!(matches!(m.dependencies.get("http"), Some(IpeDep::Index(_))));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_toml_wasm_is_preserved_not_defaulted() {
+        let root = fresh("toml_wasm");
+        std::fs::write(
+            root.join(IPE_TOML),
+            "[project]\nname = \"legacy\"\n\n[wasm]\nmode = \"spa\"\nmount = \"#app\"\npublicEnv = [\"API_BASE_URL\"]\n",
+        )
+        .expect("write toml");
+        migrate_config(&root, OutputFormat::Human).expect("migrate");
+        let path = root.join(PACKAGE_IPE);
+        let out = std::fs::read_to_string(&path).expect("read back package.ipe");
+        let m = crate::package_manifest::read_package_manifest(&out, &root, &path)
+            .expect("record reads");
+        // The retired `spa` mode word migrates to the renamed `solo` wire mode;
+        // the wasm config must survive the migration, not fall back to default-off.
+        assert_eq!(m.wasm.mode.as_deref(), Some("solo"));
+        assert_eq!(m.wasm.mount.as_deref(), Some("#app"));
+        assert_eq!(m.wasm.public_env, vec!["API_BASE_URL".to_owned()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_toml_denylisted_public_env_is_rejected() {
+        let root = fresh("toml_wasm_denylist");
+        std::fs::write(
+            root.join(IPE_TOML),
+            "[project]\nname = \"legacy\"\n\n[wasm]\nmode = \"solo\"\npublicEnv = [\"SECRET\"]\n",
+        )
+        .expect("write toml");
+        let err = migrate_config(&root, OutputFormat::Human)
+            .expect_err("a denylisted publicEnv name must fail migration");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("secret denylist"),
+            "unexpected error: {msg}"
+        );
+        // Fail closed: no `package.ipe` is written on a rejected migration.
+        assert!(!root.join(PACKAGE_IPE).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_toml_unknown_section_is_rejected() {
+        let root = fresh("toml_unknown_section");
+        std::fs::write(
+            root.join(IPE_TOML),
+            "[project]\nname = \"legacy\"\n\n[bogus]\nfoo = \"bar\"\n",
+        )
+        .expect("write toml");
+        let err = migrate_config(&root, OutputFormat::Human)
+            .expect_err("an unrecognised section must fail migration");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("[bogus]") && msg.contains("no automatic migration"),
+            "unexpected error: {msg}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
