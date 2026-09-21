@@ -471,13 +471,13 @@ pub enum TypeAnnotation {
     /// in source order. The empty record `{}` is valid and produces an empty
     /// field list. Mirrors the reference compiler's `Src.TRecord`, narrowed to the
     /// closed-record subset (no row variable / extension form).
-    TRecord(Vec<(Symbol, Self)>),
+    TRecord(Vec<(Located<Symbol>, Self)>),
     /// A row-polymorphic (open) record type `{ r | field : T, ... }`. The row
     /// variable `r` names the unnamed tail of extra fields the record may
     /// carry; the named fields are the ones the annotation constrains. A value
     /// of this type is any record carrying *at least* the listed fields.
     /// Mirrors the reference compiler's `Src.TRecord fields (Just rowVar)`.
-    TRecordOpen(Symbol, Vec<(Symbol, Self)>),
+    TRecordOpen(Symbol, Vec<(Located<Symbol>, Self)>),
 }
 
 /// Strip the source indentation margin from a triple-quoted string body using

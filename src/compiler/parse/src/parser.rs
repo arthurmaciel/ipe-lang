@@ -1282,13 +1282,16 @@ impl<'a> Parser<'a> {
 
     /// Parse a non-empty, comma-separated `field : Type` list, stopping before
     /// the closing `}`. Shared by the closed and open record-type arms.
-    fn parse_record_type_fields(&mut self, depth: u32) -> DResult<Vec<(Symbol, TypeAnnotation)>> {
+    fn parse_record_type_fields(
+        &mut self,
+        depth: u32,
+    ) -> DResult<Vec<(Located<Symbol>, TypeAnnotation)>> {
         let mut fields = Vec::new();
         loop {
             let name = self.parse_record_field_name()?;
             self.expect_field_colon()?;
             let ty = self.parse_type(0, depth + 1)?;
-            fields.push((name.value, ty.value));
+            fields.push((name, ty.value));
             match self.peek() {
                 Some(t) if t.kind == Tok::Comma => {
                     self.bump(Construct::Type)?;
