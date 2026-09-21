@@ -317,15 +317,22 @@ fn hover_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
                 language: "ipe".to_owned(),
                 value: info.ty,
             });
-            // On `main`, disclose the compiler-derived control model beneath the
-            // type — the same signal `ipe audit`/`ipe doc` surface, so the editor
-            // reads one derivation.
-            let contents = match info.control_model {
-                Some(model) => lsp_types::HoverContents::Array(vec![
-                    ty_marked,
-                    lsp_types::MarkedString::String(format!("control model: {model}")),
-                ]),
-                None => lsp_types::HoverContents::Scalar(ty_marked),
+            // Beneath the type, disclose the compiler-derived control model — the
+            // same signal `ipe audit`/`ipe doc` surface, so the editor reads one
+            // derivation — then the binding's doc-string when it has one.
+            let mut parts = vec![ty_marked];
+            if let Some(model) = info.control_model {
+                parts.push(lsp_types::MarkedString::String(format!(
+                    "control model: {model}"
+                )));
+            }
+            if let Some(doc) = info.doc {
+                parts.push(lsp_types::MarkedString::String(doc));
+            }
+            let contents = if parts.len() == 1 {
+                lsp_types::HoverContents::Scalar(parts.remove(0))
+            } else {
+                lsp_types::HoverContents::Array(parts)
             };
             FeatureOutcome::payload(lsp_types::Hover { contents, range })
         },
