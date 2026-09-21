@@ -473,9 +473,8 @@ impl CliError {
     #[must_use]
     pub const fn machine_kind(&self) -> &'static str {
         match self {
-            Self::Usage(_) => "usage",
+            Self::Usage(_) | Self::UsageOwned(_) => "usage",
             Self::UnknownCommand { .. } => "unknown-command",
-            Self::UsageOwned(_) => "usage",
             Self::Io { .. } => "io",
             Self::Pipeline { .. } => "pipeline",
             Self::RuntimeNotFound => "runtime-not-found",
