@@ -266,7 +266,7 @@ pub fn format_range(
     // Final fail-closed gate: splice the edits into a scratch buffer (last
     // offset first, so earlier ones stay valid) and require the whole result to
     // re-parse. A single non-parsing outcome discards EVERY range edit.
-    splices.sort_by(|a, b| b.0.cmp(&a.0));
+    splices.sort_by_key(|s| std::cmp::Reverse(s.0));
     for (lo, hi, new_text) in &splices {
         match edited.get(*lo..*hi) {
             Some(_) => edited.replace_range(*lo..*hi, new_text),
@@ -1084,7 +1084,7 @@ fn push_atom(
 
 #[cfg(test)]
 mod tests {
-    use ipe_db::{Db as _, IpeDatabase, ModuleOrigin, SourceFile};
+    use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile};
 
     use lsp_types::{Position, Range};
 
@@ -1266,7 +1266,7 @@ mod tests {
                 (lo, hi, e.new_text.clone())
             })
             .collect();
-        spans.sort_by(|a, b| b.0.cmp(&a.0));
+        spans.sort_by_key(|s| std::cmp::Reverse(s.0));
         let mut out = src.to_owned();
         for (lo, hi, text) in spans {
             out.replace_range(lo..hi, &text);
