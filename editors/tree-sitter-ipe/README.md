@@ -39,13 +39,16 @@ declaration list:
 
 ```bash
 # from this directory
-tree-sitter generate          # regenerate src/parser.c from grammar.js
+tree-sitter generate --abi 14 # regenerate src/parser.c from grammar.js
 tree-sitter test              # run test/corpus/*.txt unit tests
 bash scripts/parity-check.sh  # parse the whole reference corpus, fail on ERROR
 ```
 
 The generated parser (`src/parser.c`, `src/tree_sitter/`) is committed so
-consumers build without regenerating.
+consumers build without regenerating. Always regenerate with `--abi 14`: editor
+hosts (Helix, Neovim, Zed, Emacs treesit) compile this committed `parser.c`, and
+their bundled tree-sitter loads at most ABI 14. A newer default ABI compiles but
+fails to load at parse time — the buffer stays unhighlighted with no error.
 
 ## Queries
 

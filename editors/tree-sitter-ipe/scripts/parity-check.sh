@@ -20,9 +20,11 @@ if ! command -v tree-sitter >/dev/null 2>&1; then
   exit 2
 fi
 
-# The grammar is loaded from its own directory.
+# The grammar is loaded from its own directory. Pin --abi 14: this regenerates
+# src/parser.c in place, and editor hosts load at most ABI 14 (a newer default
+# builds but fails to load at parse time — no highlighting).
 cd "$grammar_dir"
-tree-sitter generate >/dev/null
+tree-sitter generate --abi 14 >/dev/null
 
 # Collect every reference source.
 mapfile -d '' files < <(

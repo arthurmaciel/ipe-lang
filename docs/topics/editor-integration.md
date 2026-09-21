@@ -30,7 +30,12 @@ tree-sitter CLI (installed through the Rust toolchain — no JS toolchain needed
 
 ```bash
 cargo install tree-sitter-cli
-cd editors/tree-sitter-ipe && tree-sitter generate
+# --abi 14 is load-bearing. Editor hosts (Helix, Neovim, Zed, Emacs treesit)
+# compile the committed parser.c, and many bundle a tree-sitter runtime that
+# loads at most ABI 14. A newer default ABI compiles fine but the grammar then
+# fails to load at parse time — silently, with no highlighting. Keep it pinned
+# wherever the parser is regenerated.
+cd editors/tree-sitter-ipe && tree-sitter generate --abi 14
 ```
 
 The per-editor sections below point each host at this directory (or a checkout
@@ -57,16 +62,16 @@ indent = { tab-width = 4, unit = "    " }
 command = "ipe"
 args = ["lsp"]
 
-# Point Helix at the tree-sitter grammar. Use a local checkout of this repo's
-# grammar directory, or the git URL + a subpath.
+# Point Helix at the tree-sitter grammar over git — no local checkout needed.
 [[grammar]]
 name = "ipe"
-source = { path = "/path/to/ipe-lang/editors/tree-sitter-ipe" }
-# Or fetch from git instead of a local path:
-# source = { git = "https://github.com/arthurmaciel/ipe-lang", rev = "main", subpath = "editors/tree-sitter-ipe" }
+source = { git = "https://github.com/arthurmaciel/ipe-lang", rev = "main", subpath = "editors/tree-sitter-ipe" }
+# Or build from a local checkout instead:
+# source = { path = "/path/to/ipe-lang/editors/tree-sitter-ipe" }
 ```
 
-Fetch and build the grammar, then install the queries into Helix's runtime:
+Fetch and build the grammar, then install the queries into Helix's runtime.
+Fetch the query files straight from the repo — no clone needed:
 
 ```bash
 hx --grammar fetch
@@ -74,12 +79,23 @@ hx --grammar build
 
 # Helix looks up highlight queries under runtime/queries/<lang>/.
 mkdir -p ~/.config/helix/runtime/queries/ipe
-cp /path/to/ipe-lang/editors/tree-sitter-ipe/queries/*.scm \
-   ~/.config/helix/runtime/queries/ipe/
+base=https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/tree-sitter-ipe/queries
+for q in highlights injections locals tags; do
+  curl -fsSL "$base/$q.scm" -o ~/.config/helix/runtime/queries/ipe/"$q".scm
+done
 ```
 
-Verify with `hx --health ipe` — the *Highlight*, *Textobject*, and *Indent*
-rows should show the grammar and queries were found.
+Verify with `hx --health ipe` — the *Highlight*, *Textobject*, and *Indent* rows
+should all read `✓` once the query files are installed. That row reports only
+that the query *file* was found, **not** that the compiled grammar loaded: if a
+row shows `✓` yet a `.ipe` buffer is still unhighlighted, the grammar failed to
+load at parse time — almost always an ABI mismatch. Rebuild it with the
+`--abi 14` generate above, then `hx --grammar build`.
+
+Code actions surface on `<space>a` (Helix's default) with the cursor on a
+diagnostic — add a missing type annotation, add a missing import, repoint a
+wrong import, and more. Open the project directory (the folder holding
+`package.ipe`), not a loose single file, so cross-module analysis runs.
 
 ## Neovim (with `nvim-lspconfig`)
 
@@ -129,13 +145,15 @@ parsers.ipe = {
 }
 ```
 
-Then `:TSInstall ipe`. Copy the query files where nvim-treesitter looks them
-up (`queries/ipe/` on the runtimepath):
+Then `:TSInstall ipe`. Fetch the query files where nvim-treesitter looks them
+up (`queries/ipe/` on the runtimepath) — straight from the repo, no clone:
 
 ```bash
 mkdir -p ~/.config/nvim/queries/ipe
-cp /path/to/ipe-lang/editors/tree-sitter-ipe/queries/*.scm \
-   ~/.config/nvim/queries/ipe/
+base=https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/tree-sitter-ipe/queries
+for q in highlights injections locals tags; do
+  curl -fsSL "$base/$q.scm" -o ~/.config/nvim/queries/ipe/"$q".scm
+done
 ```
 
 Enable highlighting in the nvim-treesitter setup (`highlight = { enable = true }`)
