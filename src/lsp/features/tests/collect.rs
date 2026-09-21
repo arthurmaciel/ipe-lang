@@ -402,6 +402,336 @@ fn wrong_shape_cmd_quick_fix_repoints_the_import_and_clears_the_diagnostic() {
     );
 }
 
+// ── IPE-N0023 quick-fix ─────────────────────────────────────────────────────
+
+/// IPE-N0023 quick-fix: a module whose declaration (`module Foo`) does not match
+/// its source-root path (`Main`) yields a "Rename module declaration" action
+/// that rewrites the name token on line 0 to the expected name.
+#[test]
+fn n0023_quick_fix_renames_module_declaration_to_expected_name() {
+    // `module Foo` is registered under path `["Main"]` — the mismatch fires.
+    let src = "module Foo exposing (main)\n\nmain : Int\nmain = 1\n";
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    let all = collect(&db, root, entry);
+    let diag = diags_for(&all, &["Main"])
+        .diagnostics
+        .iter()
+        .find(|d| d.code().as_str() == "IPE-N0023")
+        .expect("IPE-N0023 fires for path/declaration mismatch");
+    let lsp_diag = to_lsp(diag, src, PositionEncoding::Utf16);
+
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("IPE-N0023 must offer a rename action");
+
+    assert!(
+        action.title.contains("Main"),
+        "action title must name the expected module, got: {:?}",
+        action.title
+    );
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+    // The edit must be on line 0 (the `module Foo` declaration).
+    assert_eq!(edit.range.start.line, 0, "edit must target line 0");
+    assert_eq!(
+        edit.new_text, "Main",
+        "must rename to the path-expected name"
+    );
+    let fixed = apply_edit(src, edit);
+    assert!(
+        fixed.starts_with("module Main"),
+        "fixed source starts with `module Main`: {fixed:?}"
+    );
+}
+
+// ── IPE-N0036 quick-fix ─────────────────────────────────────────────────────
+
+/// IPE-N0036 quick-fix: `Task.perform` (a removed stdlib surface with a known
+/// replacement) yields a "Replace with `Task.attempt`" action.
+#[test]
+fn n0036_quick_fix_replaces_removed_surface_with_migration_target() {
+    // `Task.perform` fires IPE-N0036 with replacement = "Task.attempt".
+    // We only need the name-resolution phase, so a single-file root is enough.
+    let src = "module Main exposing (x)\n\nx = Task.perform\n";
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    let all = collect(&db, root, entry);
+    let diag = diags_for(&all, &["Main"])
+        .diagnostics
+        .iter()
+        .find(|d| d.code().as_str() == "IPE-N0036")
+        .expect("IPE-N0036 fires for Task.perform");
+    let lsp_diag = to_lsp(diag, src, PositionEncoding::Utf16);
+
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("IPE-N0036 with a replacement must offer a replace action");
+
+    assert!(
+        action.title.contains("Task.attempt"),
+        "title must name the replacement, got: {:?}",
+        action.title
+    );
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+    assert_eq!(edit.new_text, "Task.attempt");
+}
+
+/// IPE-N0036 with no replacement (e.g. `Task.run`) must produce no action.
+#[test]
+fn n0036_no_replacement_produces_no_action() {
+    let src = "module Main exposing (x)\n\nx = Task.run\n";
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    let all = collect(&db, root, entry);
+    let diag = diags_for(&all, &["Main"])
+        .diagnostics
+        .iter()
+        .find(|d| d.code().as_str() == "IPE-N0036")
+        .expect("IPE-N0036 fires for Task.run");
+    let lsp_diag = to_lsp(diag, src, PositionEncoding::Utf16);
+
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    assert!(
+        actions.is_empty(),
+        "Task.run has no replacement — must produce no action, got: {actions:?}"
+    );
+}
+
+// ── IPE-T0020 quick-fix ─────────────────────────────────────────────────────
+
+/// IPE-T0020 quick-fix: a `WebView` `view` that returns `Html` instead of `View`
+/// yields a "Wrap in `Ui.html`" action that inserts `Ui.html (…)`.
+#[test]
+fn t0020_quick_fix_wraps_expression_in_ui_html() {
+    // We synthesise the diagnostic directly (no live compiler run) because
+    // triggering the real IPE-T0020 gate requires a full WebView shape — an
+    // expensive fixture. The action is keyed purely on the diagnostic code and
+    // the span text, both of which we control exactly here.
+    use lsp_types::{DiagnosticSeverity, NumberOrString, Position};
+
+    let src = "module Main exposing (view)\n\nview : Int -> Html msg\nview _ =\n    div [] []\n";
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    // The expression `div [] []` is on line 4, characters 4..14.
+    #[allow(deprecated)]
+    let lsp_diag = lsp_types::Diagnostic {
+        range: Range {
+            start: Position {
+                line: 4,
+                character: 4,
+            },
+            end: Position {
+                line: 4,
+                character: 14,
+            },
+        },
+        severity: Some(DiagnosticSeverity::ERROR),
+        code: Some(NumberOrString::String("IPE-T0020".to_owned())),
+        code_description: None,
+        source: Some("ipe".to_owned()),
+        message: "the view function returns Html instead of View".to_owned(),
+        related_information: None,
+        tags: None,
+        data: None,
+    };
+
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("IPE-T0020 must offer a Ui.html wrap action");
+
+    assert_eq!(action.title, "Wrap in `Ui.html`");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+    assert_eq!(edit.new_text, "Ui.html (div [] [])");
+}
+
+// ── `rewrite_two_step_decoder` unit tests (IPE-N0040) ───────────────────────
+
+/// Verify the pure decoder-pipeline rewrite function on isolated inputs.
+#[test]
+fn rewrite_two_step_decoder_produces_pipeline_form() {
+    // Import the private function via a re-export path — the function is
+    // module-private, so test it indirectly via `code_actions` by constructing
+    // a synthetic IPE-N0040 diagnostic pointing at the exact span.
+    use lsp_types::{DiagnosticSeverity, NumberOrString, Position};
+
+    // `required f2 (required f1 (succeed Ctor))` — a two-step nested pipeline.
+    let src = "module Main exposing (x)\n\nx =\n    required f2 (required f1 (succeed Ctor))\n";
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    // The span covers `required f2 (required f1 (succeed Ctor))` on line 3.
+    #[allow(deprecated)]
+    let lsp_diag = lsp_types::Diagnostic {
+        range: Range {
+            start: Position {
+                line: 3,
+                character: 4,
+            },
+            end: Position {
+                line: 3,
+                // The full expression `required f2 (required f1 (succeed Ctor))`
+                // ends at column 44 — the range must include the closing `))`,
+                // or the rewrite sees an unbalanced span and conservatively
+                // declines.
+                character: 44,
+            },
+        },
+        severity: Some(DiagnosticSeverity::ERROR),
+        code: Some(NumberOrString::String("IPE-N0040".to_owned())),
+        code_description: None,
+        source: Some("ipe".to_owned()),
+        message: "These decoder steps are nested, which would bind your fields in the wrong order."
+            .to_owned(),
+        related_information: None,
+        tags: None,
+        data: None,
+    };
+
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("IPE-N0040 must offer a pipeline-rewrite action");
+
+    assert_eq!(action.title, "Rewrite as `|>` pipeline");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+    // Must contain both pipeline steps in order.
+    assert!(
+        edit.new_text.contains("|> required f1"),
+        "missing inner step: {:?}",
+        edit.new_text
+    );
+    assert!(
+        edit.new_text.contains("|> required f2"),
+        "missing outer step: {:?}",
+        edit.new_text
+    );
+    // The seed must come first.
+    let f1_pos = edit.new_text.find("|> required f1").expect("f1 step");
+    let f2_pos = edit.new_text.find("|> required f2").expect("f2 step");
+    assert!(
+        f1_pos < f2_pos,
+        "inner step must precede outer step in pipeline: {:?}",
+        edit.new_text
+    );
+}
+
 #[test]
 fn edit_converges_error_then_clean() {
     let mut db = IpeDatabase::new();

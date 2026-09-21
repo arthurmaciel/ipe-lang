@@ -21,6 +21,7 @@ use ipe_canon::rename::{EditSet, RenameError, rename as canon_rename};
 use ipe_db::{Db as _, IpeDatabase, SourceRoot};
 use ipe_diagnostics::Span;
 use ipe_intern::Symbol;
+use ipe_syntax::{Exposed, Exposing};
 use lsp_types::{TextEdit, Url, WorkspaceEdit};
 
 use crate::navigation::goto_definition;
@@ -284,7 +285,21 @@ pub fn rename(
     };
     drop(interner);
 
-    edit_set_to_workspace_edit(db, &edit_set, resolver, req.encoding)
+    // Build the WorkspaceEdit from the canon edits, then patch in any
+    // `exposing (Name)` header and `import M exposing (Name)` sites that the
+    // canon engine does not reach (it only visits body-expression spans).
+    let mut ws_edit = edit_set_to_workspace_edit(db, &edit_set, resolver, req.encoding)?;
+    patch_exposing_headers(
+        db,
+        root,
+        &def_module_syms,
+        old_name_sym,
+        req.new_name,
+        resolver,
+        req.encoding,
+        &mut ws_edit,
+    );
+    Some(ws_edit)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -335,6 +350,153 @@ fn edit_set_to_workspace_edit(
         document_changes: None,
         change_annotations: None,
     })
+}
+
+/// Patch `exposing (Name)` in the defining module's header and every
+/// `import DefModule exposing (Name)` in consumer modules.
+///
+/// The canon rename engine operates on body-expression and binding-name spans;
+/// it never visits module headers or import clauses. This pass adds those edits
+/// to the already-built `WorkspaceEdit` so the rename stays syntactically valid.
+///
+/// Conservative: silently skips any module that does not parse, has no URI, or
+/// exposes via `(..)` — those need no edit and an error here must not corrupt
+/// the existing edits.
+#[allow(clippy::too_many_arguments)] // internal helper; extracting a struct adds ceremony without benefit
+fn patch_exposing_headers(
+    db: &IpeDatabase,
+    root: SourceRoot,
+    def_module: &[Symbol],
+    old_name: Symbol,
+    new_name: &str,
+    resolver: &ModuleResolver<'_>,
+    encoding: PositionEncoding,
+    ws_edit: &mut WorkspaceEdit,
+) {
+    let files = root.files(db);
+
+    // ── 1. Defining module: patch `module M exposing (old_name, …)` ──────────
+    {
+        let def_string_path: Option<Vec<String>> = {
+            let interner = db.interner().lock();
+            def_module
+                .iter()
+                .map(|&s| interner.resolve(s).map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        };
+        if let Some(def_string_path) = def_string_path
+            && let (Some(uri), Some(text), Some(&file)) = (
+                (resolver.uri_of_module)(&def_string_path),
+                (resolver.text_of_module)(&def_string_path),
+                files.get(&def_string_path),
+            )
+            && let Ok(parsed) = ipe_db::parse(db, file)
+            && let Some(edit) = exposed_name_edit(
+                &parsed.exposing.value,
+                old_name,
+                new_name,
+                &text,
+                encoding,
+                db,
+            )
+        {
+            add_edit(ws_edit, uri, edit);
+        }
+    }
+
+    // ── 2. Consumer modules: patch `import DefModule exposing (old_name, …)` ──
+    //
+    // Walk every file in the source root. For each file that has an import of
+    // the defining module with an explicit `exposing (…)` list, add an edit for
+    // the old-name token in that list.
+    let def_string_path: Option<Vec<String>> = {
+        let interner = db.interner().lock();
+        def_module
+            .iter()
+            .map(|&s| interner.resolve(s).map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+    };
+    let Some(def_string_path) = def_string_path else {
+        return;
+    };
+
+    for (module_path, &file) in files {
+        // Skip the defining module itself — already handled above.
+        if module_path == &def_string_path {
+            continue;
+        }
+        let (Some(uri), Some(text)) = (
+            (resolver.uri_of_module)(module_path),
+            (resolver.text_of_module)(module_path),
+        ) else {
+            continue;
+        };
+        let Ok(parsed) = ipe_db::parse(db, file) else {
+            continue;
+        };
+
+        // Find an import of the defining module with an explicit exposing list.
+        for imp in &parsed.imports {
+            let imp_path: Option<Vec<String>> = {
+                let interner = db.interner().lock();
+                imp.name
+                    .value
+                    .iter()
+                    .map(|&s| interner.resolve(s).map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()
+            };
+            if imp_path.as_deref() != Some(def_string_path.as_slice()) {
+                continue;
+            }
+            if let Some(edit) =
+                exposed_name_edit(&imp.exposing.value, old_name, new_name, &text, encoding, db)
+            {
+                add_edit(ws_edit, uri.clone(), edit);
+            }
+        }
+    }
+}
+
+/// Build a [`TextEdit`] that renames `old_name` inside an `Exposing::List`, or
+/// `None` when the exposing clause is `(..)` or does not mention `old_name`.
+fn exposed_name_edit(
+    exposing: &Exposing,
+    old_name: Symbol,
+    new_name: &str,
+    text: &str,
+    encoding: PositionEncoding,
+    _db: &IpeDatabase,
+) -> Option<TextEdit> {
+    let Exposing::List(items) = exposing else {
+        return None; // `(..)` exposes everything — no token to rename
+    };
+    for item in items {
+        let sym = match &item.value {
+            Exposed::Value(s) | Exposed::Type(s, _) => *s,
+        };
+        if sym == old_name {
+            let range = span_to_range(text, item.span, encoding);
+            // A `Type(Name, Privacy::Public)` exposes `Name(..)`. The span
+            // covers only the type name token (the `(..)` is separate), so
+            // replacing just the name span is correct.
+            return Some(TextEdit {
+                range,
+                new_text: new_name.to_owned(),
+            });
+        }
+    }
+    None
+}
+
+/// Insert `edit` for `uri` into an existing `WorkspaceEdit.changes` map,
+/// appending to any existing edits for that URI. Creates the entry when absent.
+fn add_edit(ws_edit: &mut WorkspaceEdit, uri: Url, edit: TextEdit) {
+    ws_edit
+        .changes
+        .get_or_insert_with(Default::default)
+        .entry(uri)
+        .or_default()
+        .push(edit);
 }
 
 fn def_span_lo_usize(span: Span) -> Option<usize> {
@@ -629,5 +791,70 @@ mod tests {
         for edit in &edits {
             assert_eq!(edit.new_text, "Crimson");
         }
+    }
+
+    // ── Exposing-header patching (issue #2709-D) ─────────────────────────────
+    //
+    // A rename must also rewrite the defining module's `exposing (Name)` header
+    // and every consumer's `import DefModule exposing (Name)` line. Before this
+    // fix the canon engine only touched body-expression spans and the `module
+    // … exposing` / `import … exposing` tokens were left stale.
+
+    #[test]
+    fn rename_also_updates_defining_module_exposing_header() {
+        // HELPER: `module Helper exposing (three)` — `three` must become `four`.
+        let ws_edit = do_rename("four").expect("rename returned Some");
+        let changes = ws_edit.changes.expect("has changes");
+
+        // Every text edit across all files must replace with "four".
+        for edits in changes.values() {
+            for edit in edits {
+                assert_eq!(edit.new_text, "four", "stale old name in edit: {edit:?}");
+            }
+        }
+
+        // The Helper file must have at least 2 edits: the definition-name token
+        // AND the exposing-header token.
+        let helper_uri = make_uri(&["Helper".to_owned()]).expect("helper uri");
+        let helper_edits = changes.get(&helper_uri).expect("Helper must have edits");
+        assert!(
+            helper_edits.len() >= 2,
+            "Helper must have ≥2 edits (definition + exposing header), got {}: {helper_edits:?}",
+            helper_edits.len()
+        );
+        // At least one edit must be on line 0 (the `module Helper exposing (three)` header).
+        let has_header_edit = helper_edits.iter().any(|e| e.range.start.line == 0);
+        assert!(
+            has_header_edit,
+            "no edit on line 0 (exposing header) in Helper: {helper_edits:?}"
+        );
+    }
+
+    #[test]
+    fn rename_also_updates_consumer_import_exposing_list() {
+        // MAIN imports `Helper exposing (three)` — `three` must become `four`.
+        let ws_edit = do_rename("four").expect("rename returned Some");
+        let changes = ws_edit.changes.expect("has changes");
+
+        let main_uri = make_uri(&["Main".to_owned()]).expect("main uri");
+        let main_edits = changes.get(&main_uri).expect("Main must have edits");
+
+        // Main has: the use-site `three` in `main = three` (line 5) AND the
+        // `import Helper exposing (three)` header (line 2). So ≥ 2 edits.
+        assert!(
+            main_edits.len() >= 2,
+            "Main must have ≥2 edits (use site + import exposing), got {}: {main_edits:?}",
+            main_edits.len()
+        );
+        // All new_text must be the new name.
+        for edit in main_edits {
+            assert_eq!(edit.new_text, "four", "stale old name: {edit:?}");
+        }
+        // At least one edit must be on line 2 (the `import Helper exposing (three)` line).
+        let has_import_edit = main_edits.iter().any(|e| e.range.start.line == 2);
+        assert!(
+            has_import_edit,
+            "no edit on line 2 (import exposing) in Main: {main_edits:?}"
+        );
     }
 }

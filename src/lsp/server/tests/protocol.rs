@@ -13,6 +13,160 @@ use lsp_types::notification::{Notification as _, PublishDiagnostics};
 
 use ipe_lsp_server::{LoadError, LoadedFile, LoadedProject, ModuleOrigin, ProjectLoader};
 
+// ---------------------------------------------------------------------------
+// lint.ipe workspace config test
+// ---------------------------------------------------------------------------
+
+/// A loader for the lint-config protocol test. The `lint.ipe` file is written
+/// to the workspace directory before the server starts; the server discovers it
+/// via the `workspaceFolders` URI passed in `InitializeParams`.
+struct WorkspaceLoader;
+
+impl ProjectLoader for WorkspaceLoader {
+    fn load(
+        &self,
+        _workspace_root: Option<&Path>,
+        open_file: &Path,
+        open_text: Option<&str>,
+    ) -> Result<LoadedProject, LoadError> {
+        let mut files = BTreeMap::new();
+        files.insert(
+            vec!["Main".to_owned()],
+            LoadedFile {
+                path: open_file.to_path_buf(),
+                text: open_text.unwrap_or("").to_owned(),
+                origin: ModuleOrigin::User,
+            },
+        );
+        for module in ipe_stdlib::COMPILED_STD_MODULES {
+            let path: Vec<String> = module.dotted.split('.').map(str::to_owned).collect();
+            files.insert(
+                path,
+                LoadedFile {
+                    path: std::path::PathBuf::from(format!(
+                        "<stdlib>/{}.ipe",
+                        module.dotted.replace('.', "/")
+                    )),
+                    text: module.source.to_owned(),
+                    origin: ModuleOrigin::EmbeddedStdlib,
+                },
+            );
+        }
+        Ok(LoadedProject {
+            files,
+            entry_module: vec!["Main".to_owned()],
+        })
+    }
+}
+
+/// The LSP server honours a workspace `lint.ipe`: a rule set to `deny` is
+/// surfaced as an ERROR-severity diagnostic; the same source with `allow`
+/// produces no lint diagnostic.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn lint_ipe_workspace_config_is_respected() {
+    // Source that triggers the `prefer-pipeline` lint. The rule fires only on a
+    // genuine transform chain `outer a (inner b subject)` where BOTH calls carry
+    // a leading argument (arity >= 2) — a single wrap `f (g x)` is deliberately
+    // exempt — so the fixture must use the two-argument-each shape.
+    const LINT_SRC: &str =
+        "module Main exposing (main)\n\nmain =\n    List.map fmt (List.filter live records)\n";
+    const VIRTUAL_LINT_PATH: &str = "/ipe-lsp-lint-test/Main.ipe";
+
+    // ── Round 1: deny severity → lint must appear as ERROR ────────────────
+    // Use a deterministic subdir under the OS temp dir (no external crate needed).
+    let ws_root = std::env::temp_dir().join("ipe-lsp-lint-test-workspace");
+    std::fs::create_dir_all(&ws_root).expect("create ws_root");
+    // A real `lint.ipe`: an Ipê module with a single `lint` binding threading
+    // the `Lint.*` vocabulary (parsed by `read_lint_config`, not a key=value
+    // file). `Lint.deny "prefer-pipeline"` raises that rule to ERROR severity.
+    let lint_deny = "module Lint exposing (lint)\n\nlint =\n    Lint.config\n        |> Lint.deny \"prefer-pipeline\"\n";
+    std::fs::write(ws_root.join("lint.ipe"), lint_deny).expect("write lint.ipe");
+
+    let loader = WorkspaceLoader;
+
+    let (server_side, client) = Connection::memory();
+    let server =
+        std::thread::spawn(move || ipe_lsp_server::run_with_connection(&server_side, &loader));
+
+    // Handshake — pass the workspace folder so the server sets workspace_root.
+    let ws_uri = lsp_types::Url::from_file_path(&ws_root).expect("ws uri");
+    client
+        .sender
+        .send(Message::Request(Request::new(
+            RequestId::from(1),
+            "initialize".to_owned(),
+            serde_json::json!({
+                "capabilities": {},
+                "workspaceFolders": [{ "uri": ws_uri.to_string(), "name": "test" }]
+            }),
+        )))
+        .expect("send initialize");
+    let _ = recv_response(&client, 1);
+    client
+        .sender
+        .send(Message::Notification(Notification::new(
+            "initialized".to_owned(),
+            serde_json::json!({}),
+        )))
+        .expect("send initialized");
+
+    let uri = format!("file://{VIRTUAL_LINT_PATH}");
+    client
+        .sender
+        .send(Message::Notification(Notification::new(
+            "textDocument/didOpen".to_owned(),
+            serde_json::json!({
+                "textDocument": {
+                    "uri": uri, "languageId": "ipe", "version": 1, "text": LINT_SRC
+                }
+            }),
+        )))
+        .expect("send didOpen");
+
+    let diags = await_diagnostics(&client, &uri, |d| {
+        d.iter().any(|diag| {
+            diag.get("code")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|c| c.starts_with("lint/"))
+        })
+    });
+    let lint_diag = diags
+        .iter()
+        .find(|d| {
+            d.get("code")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|c| c.starts_with("lint/"))
+        })
+        .expect("lint diagnostic present");
+    assert_eq!(
+        lint_diag.get("severity"),
+        Some(&serde_json::json!(1)), // 1 = ERROR
+        "deny severity must produce ERROR: {lint_diag}"
+    );
+
+    client
+        .sender
+        .send(Message::Request(Request::new(
+            RequestId::from(2),
+            "shutdown".to_owned(),
+            serde_json::Value::Null,
+        )))
+        .expect("send shutdown");
+    let _ = recv_response(&client, 2);
+    client
+        .sender
+        .send(Message::Notification(Notification::new(
+            "exit".to_owned(),
+            serde_json::Value::Null,
+        )))
+        .expect("send exit");
+    server
+        .join()
+        .expect("server thread joins")
+        .expect("server exits clean");
+}
+
 const VIRTUAL_PATH: &str = "/ipe-lsp-protocol-test/Main.ipe";
 const CLEAN: &str = "module Main exposing (main)\n\nimport Ipe.Io as Io\nimport Ipe.String as String\n\nmain : Task Error ()\nmain =\n    Io.println (String.fromInt 1)\n";
 const TYPE_ERROR: &str = "module Main exposing (main)\n\nmain : Int\nmain = \"nope\"\n";

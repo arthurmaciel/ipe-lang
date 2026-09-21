@@ -60,6 +60,25 @@ struct DiagnosticsBatch {
     per_uri: Vec<(Url, Vec<lsp_types::Diagnostic>)>,
 }
 
+/// The filename of the workspace lint-configuration file, mirroring the CLI
+/// constant (`src/ipe-cli/src/lint.rs`).
+const LINT_IPE: &str = "lint.ipe";
+
+/// Load a `LintConfig` from a `lint.ipe` file in the same directory as the
+/// `workspace_root`, falling back to the default when the file is absent or
+/// unreadable. This mirrors the CLI's `load_config` (in `src/ipe-cli/src/lint.rs`)
+/// but stays in-process rather than going through the CLI error type.
+fn load_lint_config(workspace_root: &Path) -> ipe_lint::LintConfig {
+    let lint_path = workspace_root.join(LINT_IPE);
+    let Ok(text) = std::fs::read_to_string(&lint_path) else {
+        return ipe_lint::LintConfig::default();
+    };
+    ipe_lint::read_lint_config(&text, &lint_path.display().to_string()).unwrap_or_else(|e| {
+        eprintln!("[ipe lsp] lint.ipe parse error: {e}");
+        ipe_lint::LintConfig::default()
+    })
+}
+
 struct State {
     workspace_root: Option<PathBuf>,
     encoding: PositionEncoding,
@@ -861,6 +880,14 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
             uri_of.insert(module.clone(), uri);
         }
     }
+    // Load the workspace lint.ipe once per recompute cycle, on the main thread
+    // where filesystem I/O is allowed. The worker receives the resolved config,
+    // not a path, so it never touches the filesystem.
+    let lint_config = state
+        .workspace_root
+        .as_deref()
+        .map(load_lint_config)
+        .unwrap_or_default();
     let cancel = Arc::new(AtomicBool::new(false));
     state.worker_cancel = Some(cancel.clone());
     let tx = diag_tx.clone();
@@ -875,6 +902,7 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
                     &entry_module,
                     encoding,
                     &cancel,
+                    &lint_config,
                 )
             }))
         }));
@@ -896,6 +924,7 @@ fn recompute(state: &mut State, diag_tx: &Sender<DiagnosticsBatch>) {
 /// Pure worker body: collect, attribute, and map diagnostics to URIs.
 /// A diagnostic owned by a module with no URI (injected stdlib) is
 /// re-attributed to the entry document rather than dropped.
+#[allow(clippy::too_many_arguments)] // all args are logically distinct; a struct wrapper adds ceremony
 fn compute_batch(
     db: &ipe_db::IpeDatabase,
     root: ipe_db::SourceRoot,
@@ -904,6 +933,7 @@ fn compute_batch(
     entry_module: &[String],
     encoding: PositionEncoding,
     cancel: &AtomicBool,
+    lint_config: &ipe_lint::LintConfig,
 ) -> Vec<(Url, Vec<lsp_types::Diagnostic>)> {
     let collected = diagnostics::collect(db, root, entry_file);
     let files = root.files(db);
@@ -962,8 +992,7 @@ fn compute_batch(
                 .map(|file| (module.clone(), file.text(db).clone()))
         })
         .collect();
-    let lint_config = ipe_lint::LintConfig::default();
-    for (module, lints) in diagnostics::collect_lint(&user_texts, &lint_config, encoding) {
+    for (module, lints) in diagnostics::collect_lint(&user_texts, lint_config, encoding) {
         if let Some(uri) = uri_of.get(&module) {
             per_uri.entry(uri.clone()).or_default().extend(lints);
         }
