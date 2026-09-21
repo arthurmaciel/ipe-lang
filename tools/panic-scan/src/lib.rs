@@ -49,15 +49,16 @@ const FNS: &[&str] = &["panic_any", "unreachable_unchecked"];
 const PROCESS_FNS: &[&str] = &["abort", "exit"];
 
 /// The per-site sanction marker. A hit is suppressed when this exact text
-/// appears in the contiguous block of source lines ending at the hit — i.e. on
-/// the hit line or any line above it up to the nearest blank line. That block is
-/// the construct plus its directly-attached annotations (`// …` audit rationale,
-/// `#[allow(…)]`, statement continuations), so a marker placed by convention
-/// just above the flagged construct sanctions it. The marker lives in a comment;
-/// the lexer drops comments, so the suppression is applied against the *raw
-/// source lines*, not the token stream. This is deliberately per-site and
-/// explicit: an unannotated new construct still fails, so the gate is never
-/// weakened.
+/// appears on the hit line itself, or on the contiguous run of comment/attribute
+/// lines directly above it — the annotation block *attached to that construct*.
+/// The block ends at the first line above that is neither a comment (`//`,
+/// `///`, `//!`) nor an attribute (`#[ … ]`): a marker on a preceding *code*
+/// statement is not part of the construct's annotation and never suppresses it.
+/// The marker lives in a comment; the lexer drops comments, so the suppression
+/// is applied against the *raw source lines*, not the token stream. This is
+/// deliberately per-site and explicit: an unannotated new construct still fails,
+/// and a marker written for an earlier statement cannot blanket the constructs
+/// beneath it, so the gate is never weakened.
 pub const AUDIT_MARKER: &str = "IPE-RUST-AUDIT:ACCEPTED";
 
 /// One flagged construct: its 1-based source line and a short token label.
@@ -86,17 +87,55 @@ pub fn scan_str(src: &str) -> Result<Vec<Hit>, String> {
     Ok(hits)
 }
 
-/// True when the [`AUDIT_MARKER`] appears on the 1-based `line` or on any
-/// preceding line back to (and stopping at) the nearest blank line — the
-/// annotation block directly attached to the construct. A blank line bounds the
-/// block so a marker on an unrelated earlier statement never leaks downward.
+/// True when the [`AUDIT_MARKER`] annotates the construct on the 1-based `line`.
+///
+/// The construct's statement may span several source lines (`let x =\n    e.expect(..)`),
+/// so the sanction attaches to any of those lines and to the contiguous comment/
+/// attribute block directly above the statement's *first* line. The walk:
+///
+/// 1. From the hit line, walk upward across the statement's own continuation
+///    lines — lines belonging to the same still-open statement as the hit. A
+///    marker on any of them suppresses the hit.
+/// 2. The statement's first line is the one just below the nearest *boundary*
+///    above the hit: a line whose code part ends a statement or block (ends in
+///    `;`, `{`, or `}`) or a blank line. The boundary line itself is NOT part of
+///    the statement, so a *prior terminated* statement's marker can never leak
+///    down.
+/// 3. Above that first line, keep walking only through the directly-attached
+///    annotation block (comment / attribute lines); the first non-annotation
+///    line ends it.
 fn is_sanctioned(lines: &[&str], line: usize) -> bool {
+    // Phase 1 + 2: the hit line and its statement-continuation lines. Stop just
+    // after crossing a boundary (a terminator/blank line above the statement).
     let mut idx = line; // 1-based; `lines[idx-1]` is the hit line.
+    while idx >= 1 {
+        let Some(text) = lines.get(idx - 1) else {
+            return false;
+        };
+        if text.contains(AUDIT_MARKER) {
+            return true;
+        }
+        // The line ABOVE the current one: if it's a boundary, the current line
+        // is the statement's first line — stop the statement walk here.
+        if idx == 1 {
+            return false;
+        }
+        let Some(above) = lines.get(idx - 2) else {
+            return false;
+        };
+        if is_statement_boundary(above) {
+            break;
+        }
+        idx -= 1;
+    }
+    // `idx` is now the statement's first line. Phase 3: walk the annotation
+    // block directly above it.
+    idx -= 1;
     while idx >= 1 {
         let Some(text) = lines.get(idx - 1) else {
             break;
         };
-        if idx != line && text.trim().is_empty() {
+        if !is_annotation_line(text) {
             break;
         }
         if text.contains(AUDIT_MARKER) {
@@ -105,6 +144,40 @@ fn is_sanctioned(lines: &[&str], line: usize) -> bool {
         idx -= 1;
     }
     false
+}
+
+/// True when a source line ends the statement/block above it — the boundary that
+/// closes the previous construct's scope. A blank line, or a line whose code part
+/// (its text with any trailing `// …` comment stripped) ends in `;`, `{`, or `}`,
+/// is a boundary; the line below such a boundary begins a fresh statement.
+fn is_statement_boundary(text: &str) -> bool {
+    let code = strip_trailing_line_comment(text);
+    let code = code.trim_end();
+    if code.is_empty() {
+        return true;
+    }
+    matches!(code.chars().last(), Some(';' | '{' | '}'))
+}
+
+/// A source line with a trailing `// …` line comment removed, so a terminator
+/// check inspects the code part only (`foo(); // note` ends in `;`). This is the
+/// common case; it does not attempt to parse `/* … */` block comments or `//`
+/// occurring inside a string literal — the terminator characters it looks for
+/// (`;`, `{`, `}`) after such a strip are still a sound over-approximation of a
+/// boundary for the marker walk.
+fn strip_trailing_line_comment(text: &str) -> &str {
+    match text.find("//") {
+        Some(pos) => text.get(..pos).unwrap_or(text),
+        None => text,
+    }
+}
+
+/// True when a trimmed source line is a comment (`//`, `///`, `//!`) or an
+/// attribute (`#[ … ]`) — the only line kinds that form a construct's
+/// directly-attached annotation block above it.
+fn is_annotation_line(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("//") || t.starts_with("#[")
 }
 
 /// True when an attribute's bracket body (the tokens inside `#[ … ]`) gates its
@@ -348,6 +421,123 @@ mod tests {
         let extra: Vec<_> = got.difference(&want).collect();
         assert!(missed.is_empty(), "FALSE NEGATIVES at lines {missed:?}");
         assert!(extra.is_empty(), "FALSE POSITIVES at lines {extra:?}");
+    }
+
+    /// A marker on an EARLIER code statement must NOT suppress a later, unmarked
+    /// banned construct in the same blank-line-free block: the sanction is scoped
+    /// to the construct's own attached annotation, never a blanket over what
+    /// follows. This is the exact fail-open repro the scoping fix closes.
+    #[test]
+    fn earlier_statement_marker_does_not_suppress_later_construct() {
+        let src = "\
+fn f() {
+    let a = compute(); // IPE-RUST-AUDIT:ACCEPTED — for something unrelated
+    let b = other();
+    let c = danger.unwrap();
+}
+";
+        let hits = scan_str(src).expect("fixture must lex");
+        let lines: Vec<usize> = hits.iter().map(|h| h.line).collect();
+        // The `.unwrap()` on line 4 is unannotated → it MUST be reported.
+        assert!(
+            lines.contains(&4),
+            "earlier marker leaked downward, suppressing an unmarked .unwrap(): {hits:?}"
+        );
+    }
+
+    /// A construct's statement can span several lines (`let x =\n    e.expect(..)`).
+    /// A marker in the comment/attribute block directly above the statement's
+    /// FIRST line must still suppress the hit on a *continuation* line — the
+    /// exact multi-line shape (marker + `#[allow]` above `let mut mac =` then the
+    /// `.expect(..)` below) that the production crypto sites use.
+    #[test]
+    fn multiline_statement_marker_suppresses_continuation_hit() {
+        let src = "\
+fn f() {
+    let x = other();
+    // IPE-RUST-AUDIT:ACCEPTED — reviewed, structurally-dead branch
+    #[allow(clippy::expect_used)]
+    let mut y =
+        maybe.expect(\"infallible here\");
+    consume(y);
+}
+";
+        let hits = scan_str(src).expect("fixture must lex");
+        assert!(
+            hits.is_empty(),
+            "multi-line-statement marker failed to suppress its continuation-line construct: {hits:?}"
+        );
+    }
+
+    /// Negative twin of the multi-line case: a marker attached to a PRIOR,
+    /// terminated statement must NOT reach into a later multi-line statement's
+    /// continuation-line construct. The `;` after the marked statement is a
+    /// boundary the walk stops at, so the `.expect(..)` below stays reported.
+    #[test]
+    fn prior_statement_marker_does_not_suppress_later_multiline_construct() {
+        let src = "\
+fn f() {
+    // IPE-RUST-AUDIT:ACCEPTED — meant for the statement right below
+    let a = safe();
+    let mut y =
+        maybe.expect(\"NOT covered by the marker above\");
+    consume(y);
+}
+";
+        let hits = scan_str(src).expect("fixture must lex");
+        let lines: Vec<usize> = hits.iter().map(|h| h.line).collect();
+        // The `.expect(..)` on line 5 is not the marked statement → MUST report.
+        assert!(
+            lines.contains(&5),
+            "prior-statement marker leaked into a later multi-line construct: {hits:?}"
+        );
+    }
+
+    /// The documented sanction form — a marker in the contiguous comment/
+    /// attribute block DIRECTLY above the construct — still suppresses it.
+    #[test]
+    fn adjacent_annotation_block_marker_suppresses() {
+        let src = "\
+fn f() {
+    // IPE-RUST-AUDIT:ACCEPTED — reviewed, provably-dead branch
+    let c = danger.unwrap();
+}
+";
+        let hits = scan_str(src).expect("fixture must lex");
+        assert!(
+            hits.is_empty(),
+            "adjacent-block marker failed to suppress its construct: {hits:?}"
+        );
+    }
+
+    /// A marker on the hit line itself suppresses that construct.
+    #[test]
+    fn same_line_marker_suppresses() {
+        let src = "fn f() { let c = danger.unwrap(); } // IPE-RUST-AUDIT:ACCEPTED — reviewed\n";
+        let hits = scan_str(src).expect("fixture must lex");
+        assert!(
+            hits.is_empty(),
+            "same-line marker failed to suppress: {hits:?}"
+        );
+    }
+
+    /// A blank line between the marker and the construct breaks the attached
+    /// block: the marker no longer applies.
+    #[test]
+    fn blank_line_breaks_annotation_block() {
+        let src = "\
+fn f() {
+    // IPE-RUST-AUDIT:ACCEPTED — meant for something now deleted
+
+    let c = danger.unwrap();
+}
+";
+        let hits = scan_str(src).expect("fixture must lex");
+        let lines: Vec<usize> = hits.iter().map(|h| h.line).collect();
+        assert!(
+            lines.contains(&4),
+            "marker separated by a blank line still suppressed the construct: {hits:?}"
+        );
     }
 
     #[test]
