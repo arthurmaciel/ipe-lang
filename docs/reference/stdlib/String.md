@@ -539,6 +539,11 @@ repeat : Int -> String -> String
 
 `repeat n s` — concatenate `s` with itself `n` times.
 
+The result is bounded at a 64 MiB ceiling. When `n * length s` would exceed it,
+the count is clamped to the whole copies that fit, so the output is always a
+genuine prefix of the requested repetition — never silently collapsed to "".
+A non-positive `n`, or an empty `s`, yields "".
+
 ```ipe
 repeat 3 "ab" --> "ababab"
 repeat 0 "abc" --> ""
