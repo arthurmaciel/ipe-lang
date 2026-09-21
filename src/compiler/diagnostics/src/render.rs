@@ -3136,10 +3136,8 @@ mod tests {
         let mut emitted: Vec<&str> = Vec::new();
         for json in &all_jsons {
             for role in documented {
-                if json.contains(&format!("\"role\":\"{role}\"")) {
-                    if !emitted.contains(role) {
-                        emitted.push(role);
-                    }
+                if json.contains(&format!("\"role\":\"{role}\"")) && !emitted.contains(role) {
+                    emitted.push(role);
                 }
             }
         }
