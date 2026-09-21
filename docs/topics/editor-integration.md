@@ -80,7 +80,7 @@ hx --grammar build
 # Helix looks up highlight queries under runtime/queries/<lang>/.
 mkdir -p ~/.config/helix/runtime/queries/ipe
 base=https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/tree-sitter-ipe/queries
-for q in highlights injections locals tags; do
+for q in highlights injections locals tags textobjects indents; do
   curl -fsSL "$base/$q.scm" -o ~/.config/helix/runtime/queries/ipe/"$q".scm
 done
 ```
@@ -151,7 +151,7 @@ up (`queries/ipe/` on the runtimepath) — straight from the repo, no clone:
 ```bash
 mkdir -p ~/.config/nvim/queries/ipe
 base=https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/tree-sitter-ipe/queries
-for q in highlights injections locals tags; do
+for q in highlights injections locals tags textobjects indents; do
   curl -fsSL "$base/$q.scm" -o ~/.config/nvim/queries/ipe/"$q".scm
 done
 ```
