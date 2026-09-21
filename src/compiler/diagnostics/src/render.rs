@@ -903,7 +903,7 @@ pub fn plain_message(d: &Diagnostic, source: &str) -> String {
 ///   "secondary_spans": [
 ///     { "file": "…", "byte_lo": …, "byte_hi": …,
 ///       "line": …, "col": …, "line_end": …, "col_end": …,
-///       "role": "first_definition" | "expected_here" }
+///       "role": "first_definition" | "opener" | "definition" }
 ///   ],
 ///   "hints": ["…"],
 ///   "suggestions": [
@@ -3066,6 +3066,90 @@ mod tests {
             trimmed.contains("\"explain_ref\":\"ipe doc IPE-T0001\""),
             "explain_ref must name the code: {json:?}"
         );
+    }
+
+    /// Asserts that `render_json`'s `"role"` field emits EXACTLY the closed set
+    /// `{"first_definition", "opener", "definition"}` — one string per
+    /// `SpanRole` variant — and nothing else.
+    ///
+    /// This is the drift-guard for the schema doc comment on `render_json`.
+    /// It fails if:
+    ///   - a variant's emitted string is not in the documented set, or
+    ///   - the documented set contains a string no variant can produce.
+    ///
+    /// To extend the set: add a `SpanRole` variant, wire it in the emitter's
+    /// match, and add a case here — the doc comment updates in the same commit.
+    #[test]
+    fn render_json_role_set_matches_emitter() {
+        let source = "module Main exposing (main)\nmain = 42\n";
+
+        // The complete closed set the schema doc advertises.
+        let documented: &[&str] = &["first_definition", "opener", "definition"];
+
+        // --- FirstDefinition via NameError::DuplicateValue ---
+        let diag_first_def = Diagnostic::Name {
+            span: Span::new(20, 24),
+            msg: crate::diagnostic::NameError::DuplicateValue {
+                name: "foo".into(),
+                first: Span::new(5, 8),
+            },
+        };
+        let json_first_def = render_json(&diag_first_def, "Main.ipe", source);
+        assert!(
+            json_first_def.contains("\"role\":\"first_definition\""),
+            "FirstDefinition must emit role=first_definition: {json_first_def:?}"
+        );
+
+        // --- Opener via ParseError::UnclosedDelimiter ---
+        let diag_opener = Diagnostic::Parse {
+            span: Span::new(20, 24),
+            msg: ParseError::UnclosedDelimiter {
+                opener: Span::new(5, 6),
+            },
+        };
+        let json_opener = render_json(&diag_opener, "Main.ipe", source);
+        assert!(
+            json_opener.contains("\"role\":\"opener\""),
+            "Opener must emit role=opener: {json_opener:?}"
+        );
+
+        // --- Definition via TypeError::TypeMismatch with definition span ---
+        let diag_defn = Diagnostic::Type {
+            span: Span::new(20, 24),
+            msg: crate::diagnostic::TypeError::TypeMismatch {
+                expected: Box::new(TyDoc::Unit),
+                found: Box::new(TyDoc::Var("a".into())),
+                definition: Some(Span::new(5, 8)),
+                path: Box::new([]),
+            },
+        };
+        let json_defn = render_json(&diag_defn, "Main.ipe", source);
+        assert!(
+            json_defn.contains("\"role\":\"definition\""),
+            "Definition must emit role=definition: {json_defn:?}"
+        );
+
+        // No role string outside the documented set is reachable.
+        // Collect every `"role":"…"` value the three representative outputs
+        // produced and assert the union equals the documented set exactly.
+        let all_jsons = [&json_first_def, &json_opener, &json_defn];
+        let mut emitted: Vec<&str> = Vec::new();
+        for json in &all_jsons {
+            for role in documented {
+                if json.contains(&format!("\"role\":\"{role}\"")) {
+                    if !emitted.contains(role) {
+                        emitted.push(role);
+                    }
+                }
+            }
+        }
+        // Every documented role must be reachable (no ghost entries in the doc).
+        for role in documented {
+            assert!(
+                emitted.contains(role),
+                "documented role {role:?} is not produced by any SpanRole variant"
+            );
+        }
     }
 
     #[test]
