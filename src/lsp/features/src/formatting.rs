@@ -10,17 +10,21 @@
 //! String, char, and multiline-string literals are reproduced verbatim from
 //! their original spans so escapes survive.
 //!
-//! The result is a single whole-document `TextEdit`. A `rangeFormatting`
-//! request degrades to a whole-document format: reformatting shifts line
-//! numbering, so splicing formatted lines back at the original line indices
-//! would overwrite unrelated declarations.
+//! `documentFormatting` returns a single whole-document `TextEdit`.
+//! `rangeFormatting` is confined to whole declarations: it reformats only the
+//! top-level declarations the request range fully contains, replacing each in
+//! place, and emits nothing for a declaration the range merely straddles — a
+//! partial edit could truncate a declaration into text that no longer parses.
+//! It fails closed twice over: a declaration whose source carries comment or
+//! doc trivia is skipped (the printer cannot reproduce it), and the whole
+//! edited buffer must still parse or no edit is returned at all.
 
 use std::fmt::Write as _;
 
 use ipe_db::{Db as _, IpeDatabase, SourceFile};
 use lsp_types::{Range, TextEdit};
 
-use crate::offset::{PositionEncoding, offset_to_position};
+use crate::offset::{PositionEncoding, offset_to_position, position_to_offset};
 
 /// Format the full text of `file`. Returns `None` when the file does not parse
 /// (the client should leave the buffer unchanged).
@@ -32,9 +36,12 @@ pub fn format_document(
 ) -> Option<Vec<TextEdit>> {
     let module = ipe_db::parse(db, file).ok()?;
     let text = file.text(db);
-    // The printer re-prints the AST, which does not carry comment or doc-string
-    // trivia; formatting a file that has any would silently delete it. Fail
-    // closed — leave the buffer untouched rather than drop the user's comments.
+    // This module's own AST printer carries no comment or doc-string trivia, so
+    // formatting a file that has any would silently delete it. Fail closed —
+    // leave the buffer untouched rather than drop the user's comments. (The
+    // comment-preserving `ipe fmt` engine lives in the `ipe` CLI crate, which
+    // depends on the LSP server and so cannot be reached from here without a
+    // dependency cycle; sharing it would take extracting it into a lower crate.)
     if source_has_comment_or_doc(text) {
         return None;
     }
@@ -104,23 +111,173 @@ fn source_has_comment_or_doc(text: &str) -> bool {
     false
 }
 
-/// Format the lines overlapping `range` in `file`. The replacement covers
-/// full lines (from the start of the first touched line to the end of the last).
-/// Returns `None` when the file does not parse.
+/// The full-line byte span of one top-level declaration, and the printer that
+/// re-emits it in canonical form. `lo`/`hi` bound the declaration's own source
+/// lines (from the start of its first line to just past its last newline) so a
+/// replacement never disturbs a neighbour.
+struct DeclBlock<'a> {
+    lo: usize,
+    hi: usize,
+    kind: DeclKind<'a>,
+}
+
+enum DeclKind<'a> {
+    Value(&'a ipe_syntax::Value),
+    Union(&'a ipe_syntax::Union),
+    Alias(&'a ipe_syntax::TypeAlias),
+}
+
+/// The byte offset of the start of the source line containing `pos`.
+fn line_start(text: &str, pos: usize) -> usize {
+    let pos = pos.min(text.len());
+    text.get(..pos)
+        .map_or(0, |p| p.rfind('\n').map_or(0, |i| i + 1))
+}
+
+/// The byte offset just past the newline ending the source line containing
+/// `pos` (or `text.len()` when the last line has no trailing newline).
+fn line_end_after(text: &str, pos: usize) -> usize {
+    let pos = pos.min(text.len());
+    text.get(pos..)
+        .and_then(|rest| rest.find('\n'))
+        .map_or(text.len(), |nl| pos + nl + 1)
+}
+
+/// Every top-level declaration of `module`, each widened to whole source lines.
+/// A `Value`'s node span covers only its binding name, so its block start is
+/// pulled back to any type annotation above it and its end pushed out to the
+/// body — otherwise the annotation or trailing equation lines would be left
+/// stranded by a replacement.
+fn decl_blocks<'a>(module: &'a ipe_syntax::Module, text: &str) -> Vec<DeclBlock<'a>> {
+    let mut blocks: Vec<DeclBlock<'a>> = Vec::new();
+    for v in &module.values {
+        let name_lo = v.value.name.span.lo as usize;
+        let ann_lo = v
+            .value
+            .type_annotation
+            .as_ref()
+            .map_or(name_lo, |a| a.span.lo as usize);
+        let lo = line_start(text, ann_lo.min(name_lo));
+        let hi = line_end_after(text, v.value.body.span.hi as usize);
+        blocks.push(DeclBlock {
+            lo,
+            hi,
+            kind: DeclKind::Value(&v.value),
+        });
+    }
+    for u in &module.unions {
+        blocks.push(DeclBlock {
+            lo: line_start(text, u.span.lo as usize),
+            hi: line_end_after(text, u.span.hi as usize),
+            kind: DeclKind::Union(&u.value),
+        });
+    }
+    for a in &module.aliases {
+        blocks.push(DeclBlock {
+            lo: line_start(text, a.span.lo as usize),
+            hi: line_end_after(text, a.span.hi as usize),
+            kind: DeclKind::Alias(&a.value),
+        });
+    }
+    blocks.sort_by_key(|b| b.lo);
+    blocks
+}
+
+/// Canonical text of ONE declaration, with the single trailing newline every
+/// full-line replacement needs. Reuses the same sub-printers the whole-document
+/// path uses, so a declaration formats identically whichever entry point drives
+/// it.
+fn format_decl(kind: &DeclKind<'_>, interner: &ipe_intern::Interner, original: &str) -> String {
+    let mut out = String::new();
+    match kind {
+        DeclKind::Value(v) => push_one_value(&mut out, v, interner, original),
+        DeclKind::Union(u) => push_one_union(&mut out, u, interner),
+        DeclKind::Alias(a) => push_one_alias(&mut out, a, interner),
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Format the top-level declarations that `range` fully contains in `file`,
+/// each in place. Returns `None` when the file does not parse.
+///
+/// **Fail closed.** Only a declaration the request range *fully contains* is
+/// reformatted; one the range merely straddles yields no edit, so an edit can
+/// never truncate a declaration into unparseable text. A declaration whose
+/// source carries comment or doc trivia the printer cannot reproduce is skipped
+/// too. As a final guard the whole buffer with every candidate edit applied
+/// must re-parse — otherwise no edit is returned at all.
 #[must_use]
 pub fn format_range(
     db: &IpeDatabase,
     file: SourceFile,
-    _range: Range,
+    range: Range,
     encoding: PositionEncoding,
 ) -> Option<Vec<TextEdit>> {
-    // Reformatting shifts line numbering (imports sort, blank lines are
-    // inserted, equations reflow), so replacing the selected line INDICES with
-    // the same indices of the formatted output would overwrite one declaration
-    // with another's text. The printer only produces a faithful whole-document
-    // result, so a range request degrades to a whole-document format — the one
-    // edit that is guaranteed correct.
-    format_document(db, file, encoding)
+    let module = ipe_db::parse(db, file).ok()?;
+    let text = file.text(db);
+
+    let req_lo = position_to_offset(text, range.start, encoding);
+    let req_hi = position_to_offset(text, range.end, encoding);
+    let (req_lo, req_hi) = (req_lo.min(req_hi), req_lo.max(req_hi));
+
+    let interner = db.interner().lock();
+    let blocks = decl_blocks(&module, text);
+
+    let mut edits: Vec<TextEdit> = Vec::new();
+    // Apply candidate edits to a scratch copy back-to-front so earlier byte
+    // offsets stay valid; the whole result must re-parse before any edit ships.
+    let mut edited = text.to_owned();
+    let mut splices: Vec<(usize, usize, String)> = Vec::new();
+    for block in &blocks {
+        // Confinement: the range must cover the whole declaration. A partial
+        // overlap (a straddled boundary) produces no edit for this block.
+        if !(req_lo <= block.lo && block.hi <= req_hi) {
+            continue;
+        }
+        let Some(slice) = text.get(block.lo..block.hi) else {
+            continue;
+        };
+        // The printer drops comment/doc trivia; skip any block that carries it
+        // rather than silently delete a comment.
+        if source_has_comment_or_doc(slice) {
+            continue;
+        }
+        let formatted = format_decl(&block.kind, &interner, text);
+        if formatted == slice {
+            continue; // already canonical — no edit for this declaration
+        }
+        let start = offset_to_position(text, block.lo, encoding);
+        let end = offset_to_position(text, block.hi, encoding);
+        edits.push(TextEdit {
+            range: Range { start, end },
+            new_text: formatted.clone(),
+        });
+        splices.push((block.lo, block.hi, formatted));
+    }
+    drop(interner);
+
+    if edits.is_empty() {
+        return Some(Vec::new());
+    }
+
+    // Final fail-closed gate: splice the edits into a scratch buffer (last
+    // offset first, so earlier ones stay valid) and require the whole result to
+    // re-parse. A single non-parsing outcome discards EVERY range edit.
+    splices.sort_by_key(|s| std::cmp::Reverse(s.0));
+    for (lo, hi, new_text) in &splices {
+        match edited.get(*lo..*hi) {
+            Some(_) => edited.replace_range(*lo..*hi, new_text),
+            None => return None,
+        }
+    }
+    let mut check_interner = ipe_intern::Interner::new();
+    if ipe_parse::parse_module(&edited, &mut check_interner).is_err() {
+        return None;
+    }
+    Some(edits)
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +480,81 @@ fn push_values(
         push_expr(out, &value.value.body, 1, interner, original);
         out.push('\n');
     }
+}
+
+// ---------------------------------------------------------------------------
+// Single-declaration printers (used by `format_range`)
+// ---------------------------------------------------------------------------
+//
+// Each prints ONE declaration with no surrounding blank lines, reusing the
+// same body sub-printers as the whole-document pass so a declaration formats
+// identically whichever entry point drives it.
+
+fn push_one_value(
+    out: &mut String,
+    value: &ipe_syntax::Value,
+    interner: &ipe_intern::Interner,
+    original: &str,
+) {
+    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
+    let name = resolve(value.name.value);
+    if let Some(ann) = &value.type_annotation {
+        out.push_str(name);
+        out.push_str(" : ");
+        push_type_annotation(out, &ann.value, interner);
+        out.push('\n');
+    }
+    out.push_str(name);
+    for pat in &value.patterns {
+        out.push(' ');
+        push_pattern(out, pat, interner, original);
+    }
+    out.push_str(" =\n    ");
+    push_expr(out, &value.body, 1, interner, original);
+    out.push('\n');
+}
+
+fn push_one_union(out: &mut String, union: &ipe_syntax::Union, interner: &ipe_intern::Interner) {
+    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
+    let name = resolve(union.name.value);
+    out.push_str("type ");
+    out.push_str(name);
+    for var in &union.vars {
+        out.push(' ');
+        out.push_str(resolve(var.value));
+    }
+    out.push('\n');
+    for (i, ctor) in union.ctors.iter().enumerate() {
+        if i == 0 {
+            out.push_str("    = ");
+        } else {
+            out.push_str("    | ");
+        }
+        out.push_str(resolve(ctor.value.name));
+        for arg in &ctor.value.args {
+            out.push(' ');
+            push_type_annotation(out, arg, interner);
+        }
+        out.push('\n');
+    }
+}
+
+fn push_one_alias(
+    out: &mut String,
+    alias: &ipe_syntax::TypeAlias,
+    interner: &ipe_intern::Interner,
+) {
+    let resolve = |sym: ipe_intern::Symbol| interner.resolve(sym).unwrap_or("?");
+    let name = resolve(alias.name.value);
+    out.push_str("type alias ");
+    out.push_str(name);
+    for var in &alias.vars {
+        out.push(' ');
+        out.push_str(resolve(var.value));
+    }
+    out.push_str(" =\n    ");
+    push_type_annotation(out, &alias.body.value, interner);
+    out.push('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -854,8 +1086,10 @@ fn push_atom(
 mod tests {
     use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile};
 
-    use super::format_document;
-    use crate::offset::PositionEncoding;
+    use lsp_types::{Position, Range};
+
+    use super::{format_document, format_range, source_has_comment_or_doc};
+    use crate::offset::{PositionEncoding, position_to_offset};
 
     fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
         SourceFile::new(
@@ -1015,6 +1249,154 @@ mod tests {
         assert_eq!(
             pass1, pass2,
             "formatter must be idempotent on POr cons head"
+        );
+    }
+
+    // -- rangeFormatting ----------------------------------------------------
+
+    /// Apply LSP `TextEdit`s to `src` and return the result. Edits from
+    /// `format_range` never overlap and cover whole lines, so applying them
+    /// back-to-front (highest offset first) keeps every earlier offset valid.
+    fn apply_edits(src: &str, edits: &[super::TextEdit]) -> String {
+        let mut spans: Vec<(usize, usize, String)> = edits
+            .iter()
+            .map(|e| {
+                let lo = position_to_offset(src, e.range.start, PositionEncoding::Utf16);
+                let hi = position_to_offset(src, e.range.end, PositionEncoding::Utf16);
+                (lo, hi, e.new_text.clone())
+            })
+            .collect();
+        spans.sort_by_key(|s| std::cmp::Reverse(s.0));
+        let mut out = src.to_owned();
+        for (lo, hi, text) in spans {
+            out.replace_range(lo..hi, &text);
+        }
+        out
+    }
+
+    /// A whole-line LSP range from the start of line `start_line` to the start
+    /// of line `end_line` (0-based, exclusive end).
+    fn line_range(start_line: u32, end_line: u32) -> Range {
+        Range {
+            start: Position {
+                line: start_line,
+                character: 0,
+            },
+            end: Position {
+                line: end_line,
+                character: 0,
+            },
+        }
+    }
+
+    /// Two over-indented declarations, no comments. Lines (0-based):
+    /// 0 `module Main exposing (a, b)` · 1 blank · 2 `a : Int` · 3 `a =` ·
+    /// 4 `      1` · 5 blank · 6 `b : Int` · 7 `b =` · 8 `      2`.
+    const TWO_DECLS: &str =
+        "module Main exposing (a, b)\n\na : Int\na =\n      1\n\nb : Int\nb =\n      2\n";
+
+    /// A range that fully contains exactly one declaration reformats only that
+    /// declaration; the untouched declaration keeps its original bytes.
+    #[test]
+    fn range_formatting_confines_to_whole_decl() {
+        let db = IpeDatabase::new();
+        let f = file(&db, &["Main"], TWO_DECLS);
+        // Lines 6..9 cover the whole `b` declaration and nothing of `a`.
+        let edits = format_range(&db, f, line_range(6, 9), PositionEncoding::Utf16)
+            .expect("parseable source returns Some");
+        let result = apply_edits(TWO_DECLS, &edits);
+        // `b`'s body de-indents to 4 spaces; `a`'s over-indent is left as-is.
+        assert!(
+            result.contains("b =\n    2\n"),
+            "the contained decl must reformat, got:\n{result}"
+        );
+        assert!(
+            result.contains("a =\n      1\n"),
+            "the untouched decl must keep its bytes, got:\n{result}"
+        );
+        // The whole edited buffer must still parse — the SEAL for a range edit.
+        let f2 = file(&db, &["Main"], &result);
+        assert!(
+            ipe_db::parse(&db, f2).is_ok(),
+            "edited buffer must re-parse"
+        );
+    }
+
+    /// A range whose boundaries fall STRICTLY inside declarations (it straddles
+    /// both `a` and `b`) must never emit a partial edit: it reformats neither,
+    /// so no returned edit can truncate a declaration into unparseable text.
+    #[test]
+    fn range_formatting_straddle_yields_no_truncated_decl() {
+        let db = IpeDatabase::new();
+        let f = file(&db, &["Main"], TWO_DECLS);
+        // Start on line 3 (`a =`, past `a`'s first line `a : Int`) and end on
+        // line 7 (`b =`, before `b`'s last line) — both decls are straddled.
+        let edits = format_range(&db, f, line_range(3, 8), PositionEncoding::Utf16)
+            .expect("parseable source returns Some");
+        assert!(
+            edits.is_empty(),
+            "a range that fully contains no decl yields no edit, got:\n{edits:?}"
+        );
+        // Applying the (empty) edit set leaves the source verbatim and parsing.
+        let result = apply_edits(TWO_DECLS, &edits);
+        assert_eq!(result, TWO_DECLS, "no edit ⇒ source is byte-identical");
+    }
+
+    /// Even a range that fully contains one decl and straddles another edits
+    /// only the contained one, and the applied result always re-parses.
+    #[test]
+    fn range_formatting_partial_overlap_edits_only_contained_decl() {
+        let db = IpeDatabase::new();
+        let f = file(&db, &["Main"], TWO_DECLS);
+        // Lines 2..8: fully contains `a` (lines 2,3,4) but ends inside `b`
+        // (before its last line 8). Only `a` may be reformatted.
+        let edits = format_range(&db, f, line_range(2, 8), PositionEncoding::Utf16)
+            .expect("parseable source returns Some");
+        let result = apply_edits(TWO_DECLS, &edits);
+        assert!(
+            result.contains("a =\n    1\n"),
+            "the fully-contained decl reformats, got:\n{result}"
+        );
+        assert!(
+            result.contains("b =\n      2\n"),
+            "the straddled decl is left untouched, got:\n{result}"
+        );
+        let f2 = file(&db, &["Main"], &result);
+        assert!(
+            ipe_db::parse(&db, f2).is_ok(),
+            "edited buffer must re-parse"
+        );
+    }
+
+    /// A declaration whose source carries a comment is skipped by range
+    /// formatting (the AST printer cannot reproduce it) — fail closed rather
+    /// than delete the comment.
+    #[test]
+    fn range_formatting_skips_commented_decl() {
+        let db = IpeDatabase::new();
+        let src = "module Main exposing (a)\n\na : Int\na =\n      1 -- keep me\n";
+        let f = file(&db, &["Main"], src);
+        let edits = format_range(&db, f, line_range(0, 5), PositionEncoding::Utf16)
+            .expect("parseable source returns Some");
+        assert!(
+            edits.is_empty(),
+            "a commented decl must not be reformatted, got:\n{edits:?}"
+        );
+        assert!(source_has_comment_or_doc(src), "guard sees the comment");
+    }
+
+    /// `documentFormatting` still fails closed on a commented file: the local
+    /// AST printer carries no comment trivia, so it returns no edit rather than
+    /// silently deleting the comment.
+    #[test]
+    fn document_formatting_refuses_commented_file() {
+        let db = IpeDatabase::new();
+        let src = "module Main exposing (a)\n\na : Int\na =\n      1 -- keep\n";
+        let f = file(&db, &["Main"], src);
+        let result = format_document(&db, f, PositionEncoding::Utf16);
+        assert!(
+            result.is_none(),
+            "commented file must be refused, not silently stripped"
         );
     }
 }
