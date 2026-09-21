@@ -71,10 +71,15 @@ printf '================================================================\n'
 printf '\n'
 
 # Print snippet with the actual query path interpolated.
-cat << ELISP_SNIPPET
+cat << 'ELISP_SNIPPET'
 ;; ── Ipê — treesit query path ─────────────────────────────────────────────────
 ;; Tell treesit where to find the query files installed by configure.sh.
-(add-to-list 'treesit-extra-load-path "$QUERIES_PARENT")
+ELISP_SNIPPET
+# The path is the only interpolated value; inject it via printf so the rest of
+# the snippet can stay in a QUOTED heredoc (an unquoted one would collapse the
+# `\\.ipe\\'` backslashes in the auto-mode-alist regexp into broken elisp).
+printf '(add-to-list '\''treesit-extra-load-path'\'' "%s")\n' "$QUERIES_PARENT"
+cat << 'ELISP_SNIPPET'
 
 ;; ── Ipê — grammar source (Emacs 29+) ─────────────────────────────────────────
 ;; After adding this, run: M-x treesit-install-language-grammar RET ipe RET
