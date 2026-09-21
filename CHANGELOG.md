@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.1.86](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.85...ipe-v0.1.86) (2026-09-21)
+
+
+### Features
+
+* **lsp:** editor-completeness — new LSP methods, richer completion/signature/hover/folding, fail-closed rangeFormatting ([#2729](https://github.com/arthurmaciel/ipe-lang/issues/2729)) ([1e62f7c](https://github.com/arthurmaciel/ipe-lang/commit/1e62f7c4c095aa696d18efbb40e61feaa925e460))
+
 ## [0.1.85](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.84...ipe-v0.1.85) (2026-09-21)
 
 
