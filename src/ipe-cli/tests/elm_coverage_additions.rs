@@ -90,9 +90,10 @@ fn e2e_runs_and_prints_deterministic_line() {
 
     let outcome = support::build_and_run_emitted("elm_coverage_additions", &out);
     // cleared = (1<<2 | 1) & ~1 = 5 & ~1 = 4; Tuple.first/second of the mapped
-    // ( 3, 4 ) = 4 / 8; the trailing number is the seed-fixed Generator sum.
+    // ( 3, 4 ) = 4 / 8; the trailing number is the seed-fixed Generator sum
+    // (the full-64-bit unbiased seeded reduction, #2639/#2641).
     assert_eq!(
-        outcome.stdout, "4 4 8 19\n",
+        outcome.stdout, "4 4 8 11\n",
         "the emitted binary must print the deterministic Bitwise/Tuple/Generator line"
     );
     assert_eq!(outcome.exit_code, Some(0), "exit 0");
