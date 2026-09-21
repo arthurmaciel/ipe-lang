@@ -5,6 +5,7 @@
 //! access on a qualified value). A rejection no test drives is one edit from
 //! silently vanishing.
 
+use ipe_diagnostics::Diagnostic;
 use ipe_intern::Interner;
 use ipe_parse::parse_module;
 use ipe_syntax::{Expr_, Pattern_};
@@ -105,4 +106,163 @@ fn parenthesised_pattern_span_covers_full_range() {
         pat.span.lo,
         pat.span.hi
     );
+}
+
+// ── Bounded-by-construction: deep-nesting refusals ───────────────────────────
+//
+// Each test builds an adversarially deep source fragment (50 000 levels, well
+// beyond MAX_DEPTH = 256) and asserts the parser returns `Err` carrying code
+// `IPE-P0003 NestingTooDeep` — NOT a stack overflow, NOT `Ok`.
+//
+// These pin every recursive-descent branch that carries a depth counter, so
+// removing or misthreading a `depth + 1` call causes at least one test to fail
+// (it would either panic/overflow, or produce `Ok` instead of the P0003 error).
+//
+// Depth chosen: 50 000 — identical to the binop-chain probe, far above MAX_DEPTH,
+// but small enough not to OOM the test runner.
+
+const DEPTH: usize = 50_000;
+
+/// Assert a parse `Err` carries `IPE-P0003`, failing the test otherwise. Uses
+/// `assert!`/`assert_eq!` (never the `panic!` macro, which the repo denies even
+/// in tests).
+fn assert_nesting_too_deep(result: Result<ipe_syntax::Module, Diagnostic>, label: &str) {
+    assert!(
+        result.is_err(),
+        "{label}: expected Err(NestingTooDeep) but parse succeeded"
+    );
+    let Err(diag) = result else {
+        return; // unreachable after the assert above — avoids `panic!`/`unreachable!`
+    };
+    assert_eq!(
+        diag.code().as_str(),
+        "IPE-P0003",
+        "{label}: expected IPE-P0003 NestingTooDeep, got {}",
+        diag.code().as_str()
+    );
+}
+
+/// A deeply-nested parenthesised expression `(((…)))` must be rejected with
+/// `IPE-P0003`. Guards `parse_paren_or_tuple` / `parse_atom` depth branch.
+#[test]
+fn deep_paren_expr_is_p0003() {
+    let hdr = "module Main exposing (main)\n\nmain =\n    ";
+    let mut src = String::with_capacity(hdr.len() + DEPTH * 2 + 10);
+    src.push_str(hdr);
+    for _ in 0..DEPTH {
+        src.push('(');
+    }
+    src.push('1');
+    for _ in 0..DEPTH {
+        src.push(')');
+    }
+    src.push('\n');
+
+    let mut i = Interner::new();
+    assert_nesting_too_deep(parse_module(&src, &mut i), "deep paren expr");
+}
+
+/// A deeply-nested list literal `[[[…]]]` must be rejected with `IPE-P0003`.
+/// Guards `parse_list` depth branch.
+#[test]
+fn deep_list_expr_is_p0003() {
+    let hdr = "module Main exposing (main)\n\nmain =\n    ";
+    let mut src = String::with_capacity(hdr.len() + DEPTH * 2 + 10);
+    src.push_str(hdr);
+    for _ in 0..DEPTH {
+        src.push('[');
+    }
+    src.push('1');
+    for _ in 0..DEPTH {
+        src.push(']');
+    }
+    src.push('\n');
+
+    let mut i = Interner::new();
+    assert_nesting_too_deep(parse_module(&src, &mut i), "deep list expr");
+}
+
+/// A deeply-parenthesised type annotation `f : (((Int)))` must be rejected with
+/// `IPE-P0003`. Guards `parse_type_atom` depth branch.
+#[test]
+fn deep_paren_type_is_p0003() {
+    let mut src = String::with_capacity(DEPTH * 2 + 64);
+    src.push_str("module Main exposing (f)\n\nf : ");
+    for _ in 0..DEPTH {
+        src.push('(');
+    }
+    src.push_str("Int");
+    for _ in 0..DEPTH {
+        src.push(')');
+    }
+    src.push_str("\nf = 1\n");
+
+    let mut i = Interner::new();
+    assert_nesting_too_deep(parse_module(&src, &mut i), "deep paren type");
+}
+
+/// A deeply-nested paren pattern `(((x)))` in a `case` arm must be rejected
+/// with `IPE-P0003`. Guards `parse_paren_pattern` / `parse_pattern` depth branch.
+#[test]
+fn deep_paren_pattern_is_p0003() {
+    // Build:  case 1 of\n    (((…x…))) -> 1
+    let hdr = "module Main exposing (main)\n\nmain =\n    case 1 of\n        ";
+    let tail = " -> 1\n";
+    let mut src = String::with_capacity(hdr.len() + DEPTH * 2 + 8 + tail.len());
+    src.push_str(hdr);
+    for _ in 0..DEPTH {
+        src.push('(');
+    }
+    src.push('x');
+    for _ in 0..DEPTH {
+        src.push(')');
+    }
+    src.push_str(tail);
+
+    let mut i = Interner::new();
+    assert_nesting_too_deep(parse_module(&src, &mut i), "deep paren pattern");
+}
+
+/// A deeply-nested list pattern `[[[x]]]` in a `case` arm must be rejected with
+/// `IPE-P0003`. Guards `parse_list_pattern` depth branch.
+#[test]
+fn deep_list_pattern_is_p0003() {
+    let hdr = "module Main exposing (main)\n\nmain =\n    case 1 of\n        ";
+    let tail = " -> 1\n";
+    let mut src = String::with_capacity(hdr.len() + DEPTH * 2 + 8 + tail.len());
+    src.push_str(hdr);
+    for _ in 0..DEPTH {
+        src.push('[');
+    }
+    src.push('1');
+    for _ in 0..DEPTH {
+        src.push(']');
+    }
+    src.push_str(tail);
+
+    let mut i = Interner::new();
+    assert_nesting_too_deep(parse_module(&src, &mut i), "deep list pattern");
+}
+
+/// A deeply-nested record literal `{ x = { x = … } }` must be rejected with
+/// `IPE-P0003`. Guards `parse_record` depth branch.
+#[test]
+fn deep_record_expr_is_p0003() {
+    // Each nesting level: "{ x = " … " }" — 7 chars open, 2 chars close.
+    let hdr = "module Main exposing (main)\n\nmain =\n    ";
+    let open = "{ x = ";
+    let close = " }";
+    let mut src = String::with_capacity(hdr.len() + DEPTH * (open.len() + close.len()) + 4);
+    src.push_str(hdr);
+    for _ in 0..DEPTH {
+        src.push_str(open);
+    }
+    src.push('1');
+    for _ in 0..DEPTH {
+        src.push_str(close);
+    }
+    src.push('\n');
+
+    let mut i = Interner::new();
+    assert_nesting_too_deep(parse_module(&src, &mut i), "deep record expr");
 }

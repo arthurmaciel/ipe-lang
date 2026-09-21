@@ -9,5 +9,9 @@ ipe_intern = { path = "../intern" }
 ipe_diagnostics = { path = "../diagnostics" }
 ipe_syntax = { path = "../syntax" }
 
+[dev-dependencies]
+ipe_diagnostics = { path = "../diagnostics" }
+ipe_intern = { path = "../intern" }
+
 [lints]
 workspace = true

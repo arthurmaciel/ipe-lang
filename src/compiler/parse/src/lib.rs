@@ -13,11 +13,61 @@ mod layout;
 mod lexer;
 mod parser;
 
-use ipe_diagnostics::DResult;
+use ipe_diagnostics::{DResult, Span};
 use ipe_intern::Interner;
 use ipe_syntax::{Module, TypeAnnotation};
 
 pub use parser::MAX_DEPTH;
+
+/// The byte spans of every string, triple-string, char, and doc-comment literal
+/// in `src`, exactly as the lexer delimits them.
+///
+/// These are the only source regions whose bytes are literal content. Line and
+/// block comments are lexer trivia — never a token — so a byte covered by none
+/// of the returned spans is not inside a literal. A consumer deciding whether a
+/// textual marker (e.g. an inline lint-suppression directive) is a real comment
+/// or mere string data checks membership here: the lexer is the single source
+/// of truth for what is literal, so the check cannot be fooled by a marker
+/// embedded in a string.
+///
+/// An unlexable source yields no spans; the caller must treat that as "cannot
+/// prove any marker is a comment" rather than "everything is a comment".
+///
+/// This flattens the lex-failure and no-literals cases into the same empty
+/// vector; a caller that must fail closed on lex failure — recognising nothing
+/// on a source it cannot parse — uses [`try_literal_source_spans`], which keeps
+/// the two apart.
+#[must_use]
+pub fn literal_source_spans(src: &str) -> Vec<Span> {
+    try_literal_source_spans(src).unwrap_or_default()
+}
+
+/// The byte spans of every literal in `src`, or `None` when `src` does not lex.
+///
+/// `Some(spans)` is a proof the source lexed: the spans (possibly empty) are the
+/// complete set of literal regions. `None` means the lexer refused the source,
+/// so no claim about any byte can be made — a caller deciding whether a textual
+/// marker is a real comment must recognise nothing rather than trust an empty
+/// span set that only *looks* like "no literals".
+#[must_use]
+pub fn try_literal_source_spans(src: &str) -> Option<Vec<Span>> {
+    let tokens = lexer::lex(src).ok()?;
+    Some(
+        tokens
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.kind,
+                    lexer::Tok::Str(_)
+                        | lexer::Tok::TripleStr { .. }
+                        | lexer::Tok::Char(_)
+                        | lexer::Tok::DocComment(_)
+                )
+            })
+            .map(|t| t.span)
+            .collect(),
+    )
+}
 
 /// Return `true` when `s` is a reserved keyword.
 ///
