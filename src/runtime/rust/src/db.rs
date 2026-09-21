@@ -217,6 +217,91 @@ fn current_txn_conn_for(pool: &Db) -> Option<TxnConn> {
 type DbQuery<'q> =
     sqlx::query::Query<'q, DbDatabase, <DbDatabase as sqlx::Database>::Arguments<'q>>;
 
+/// The one place that decides where a routed query runs. Either the pool (no
+/// transaction active on `pool`, or one active on a *different* pool that the
+/// `ptr_eq` identity gate turns away — AUD-03) or the dedicated transaction
+/// connection whose pool identity matches `pool`. Every `*_routed` helper below
+/// dispatches through exactly one of these, so the pool-vs-transaction choice —
+/// and the security-critical identity gate that makes it — lives at a single
+/// substitutable seam rather than being re-derived in four near-identical fns.
+enum QueryTarget<'a> {
+    Pool(&'a Db),
+    Txn(TxnConn),
+}
+
+/// Consult the ambient task-local for the connection a query on `pool` must
+/// ride. `current_txn_conn_for` enforces the `ptr_eq` pool-identity gate, so a
+/// transaction active on a different `Db` handle yields `Pool` (fall through),
+/// never that transaction's connection.
+fn route_for(pool: &Db) -> QueryTarget<'_> {
+    match current_txn_conn_for(pool) {
+        Some(conn) => QueryTarget::Txn(conn),
+        None => QueryTarget::Pool(pool),
+    }
+}
+
+impl QueryTarget<'_> {
+    /// Own the lock-and-run for the transaction arm so no caller re-derives it.
+    async fn execute<'q>(
+        &self,
+        query: DbQuery<'q>,
+    ) -> Result<<DbDatabase as sqlx::Database>::QueryResult, sqlx::Error> {
+        match self {
+            QueryTarget::Pool(pool) => query.execute(*pool).await,
+            QueryTarget::Txn(conn) => {
+                let mut guard = conn.lock().await;
+                query.execute(&mut **guard).await
+            }
+        }
+    }
+
+    async fn fetch_all<'q>(&self, query: DbQuery<'q>) -> Result<Vec<DbRow>, sqlx::Error> {
+        match self {
+            QueryTarget::Pool(pool) => query.fetch_all(*pool).await,
+            QueryTarget::Txn(conn) => {
+                let mut guard = conn.lock().await;
+                query.fetch_all(&mut **guard).await
+            }
+        }
+    }
+
+    async fn fetch_optional<'q>(&self, query: DbQuery<'q>) -> Result<Option<DbRow>, sqlx::Error> {
+        match self {
+            QueryTarget::Pool(pool) => query.fetch_optional(*pool).await,
+            QueryTarget::Txn(conn) => {
+                let mut guard = conn.lock().await;
+                query.fetch_optional(&mut **guard).await
+            }
+        }
+    }
+
+    async fn fetch_one<'q>(&self, query: DbQuery<'q>) -> Result<DbRow, sqlx::Error> {
+        match self {
+            QueryTarget::Pool(pool) => query.fetch_one(*pool).await,
+            QueryTarget::Txn(conn) => {
+                let mut guard = conn.lock().await;
+                query.fetch_one(&mut **guard).await
+            }
+        }
+    }
+
+    /// Test-only observer of the routing decision — lets a test drive the
+    /// ambient path (`with_recording_txn`) and assert which arm was chosen
+    /// without reaching past the seam into the task-local by hand.
+    #[cfg(test)]
+    fn rode_transaction(&self) -> bool {
+        matches!(self, QueryTarget::Txn(_))
+    }
+
+    /// Test-only: true when this target rode the SAME transaction connection as
+    /// `conn`. Lets a nested-flatten test prove the inner scope reused the outer
+    /// recording connection rather than opening a second one.
+    #[cfg(test)]
+    fn rode_same_txn_as(&self, conn: &TxnConn) -> bool {
+        matches!(self, QueryTarget::Txn(c) if std::sync::Arc::ptr_eq(c, conn))
+    }
+}
+
 /// Run a built query for its side effects, on the active transaction connection
 /// when one is present (so the statement shares the transaction), else on the
 /// pool. Returns the driver query result.
@@ -224,24 +309,12 @@ async fn exec_routed<'q>(
     pool: &Db,
     query: DbQuery<'q>,
 ) -> Result<<DbDatabase as sqlx::Database>::QueryResult, sqlx::Error> {
-    match current_txn_conn_for(pool) {
-        Some(conn) => {
-            let mut guard = conn.lock().await;
-            query.execute(&mut **guard).await
-        }
-        None => query.execute(pool).await,
-    }
+    route_for(pool).execute(query).await
 }
 
 /// `fetch_all` routed through the active transaction connection when present.
 async fn fetch_all_routed<'q>(pool: &Db, query: DbQuery<'q>) -> Result<Vec<DbRow>, sqlx::Error> {
-    match current_txn_conn_for(pool) {
-        Some(conn) => {
-            let mut guard = conn.lock().await;
-            query.fetch_all(&mut **guard).await
-        }
-        None => query.fetch_all(pool).await,
-    }
+    route_for(pool).fetch_all(query).await
 }
 
 /// `fetch_optional` routed through the active transaction connection when present.
@@ -249,24 +322,32 @@ async fn fetch_optional_routed<'q>(
     pool: &Db,
     query: DbQuery<'q>,
 ) -> Result<Option<DbRow>, sqlx::Error> {
-    match current_txn_conn_for(pool) {
-        Some(conn) => {
-            let mut guard = conn.lock().await;
-            query.fetch_optional(&mut **guard).await
-        }
-        None => query.fetch_optional(pool).await,
-    }
+    route_for(pool).fetch_optional(query).await
 }
 
 /// `fetch_one` routed through the active transaction connection when present.
 async fn fetch_one_routed<'q>(pool: &Db, query: DbQuery<'q>) -> Result<DbRow, sqlx::Error> {
-    match current_txn_conn_for(pool) {
-        Some(conn) => {
-            let mut guard = conn.lock().await;
-            query.fetch_one(&mut **guard).await
-        }
-        None => query.fetch_one(pool).await,
-    }
+    route_for(pool).fetch_one(query).await
+}
+
+/// Install `executor` as the ambient transaction connection for `pool` over the
+/// extent of `fut`, exactly as `db_with_transaction` does — same `TXN_CONN.scope`,
+/// same *real* `pool_identity(pool)` — so a test drives routing through the
+/// genuine ambient path and the `ptr_eq` identity gate, never a backdoor into the
+/// task-local. `executor` is a real `TxnConn` the caller opened on `pool` (via
+/// `pool.begin()`), so the identity gate has genuine material and the recording
+/// double stays a bona-fide transaction, not a mislabelled stand-in. The scope
+/// confines the installed connection to `fut`: it is neither cloned out nor
+/// leaked, preserving the sole-ownership invariant `db_with_transaction` relies
+/// on at commit.
+#[cfg(test)]
+async fn with_recording_txn<T>(
+    pool: &Db,
+    executor: TxnConn,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    let owner = pool_identity(pool);
+    TXN_CONN.scope(Some((owner, executor)), fut).await
 }
 
 /// True when column `i`'s runtime type is a genuine boolean, so the `bool`
@@ -5218,6 +5299,84 @@ mod tests {
 
         db.close().await;
         let _ = std::fs::remove_file(&path);
+    }
+
+    // Build a recording `TxnConn` — a real transaction opened on `pool` and
+    // wrapped exactly as `db_with_transaction` wraps its own. Handed to
+    // `with_recording_txn`, it installs into the ambient `TXN_CONN` under the
+    // real `pool_identity`, so a test observes routing through the genuine
+    // ambient path and the `ptr_eq` gate, not a task-local backdoor.
+    async fn recording_txn(pool: &Db) -> TxnConn {
+        let tx = pool.begin().await.expect("begin recording txn");
+        std::sync::Arc::new(tokio::sync::Mutex::new(tx))
+    }
+
+    // (a) An op inside a `withTransaction` scope lands on the txn connection:
+    // `route_for` chooses the Txn arm for the scope's own pool. Outside the
+    // scope the same pool routes back to the Pool arm — the task-local is
+    // scoped, not sticky.
+    #[tokio::test]
+    async fn test_route_inside_scope_rides_txn() {
+        let db = fresh_db().await;
+        let rec = recording_txn(&db).await;
+        assert!(
+            !route_for(&db).rode_transaction(),
+            "outside any scope, a query routes to the pool"
+        );
+        let rode = with_recording_txn(&db, rec, async { route_for(&db).rode_transaction() }).await;
+        assert!(
+            rode,
+            "inside the scope, a query on the scope's pool rides the txn conn"
+        );
+        assert!(
+            !route_for(&db).rode_transaction(),
+            "after the scope ends, the pool arm is chosen again"
+        );
+    }
+
+    // (b) THE AUD-03 REFUSAL. Inside a txn scope opened on `db_a`, a query on a
+    // DIFFERENT pool `db_b` must NOT ride `db_a`'s transaction connection — it
+    // falls through to `db_b`'s pool. This pins the `ptr_eq` pool-identity gate
+    // in `current_txn_conn_for`: with the gate removed (routing on presence
+    // alone), `db_b` would wrongly ride `db_a`'s open transaction — the exact
+    // cross-pool leak the gate closes.
+    #[tokio::test]
+    async fn test_route_cross_pool_inside_scope_falls_through_to_pool() {
+        let db_a = fresh_db().await;
+        let db_b = fresh_db().await;
+        let rec_a = recording_txn(&db_a).await;
+        let (a_rode, b_rode) = with_recording_txn(&db_a, rec_a, async {
+            (
+                route_for(&db_a).rode_transaction(),
+                route_for(&db_b).rode_transaction(),
+            )
+        })
+        .await;
+        assert!(a_rode, "the scope's own pool rides the txn conn");
+        assert!(
+            !b_rode,
+            "AUD-03: a query on a different pool must fall through to its own pool, \
+             never ride another pool's transaction connection"
+        );
+    }
+
+    // (c) Nested `withTransaction` on the SAME pool flattens: inside a scope on
+    // `db`, a query on `db` reuses the very connection installed by the outer
+    // scope (ptr-equal), never a second one — the flatten that
+    // `db_with_transaction` performs when `current_txn_conn_for` is already Some.
+    #[tokio::test]
+    async fn test_route_nested_same_pool_flattens_onto_outer_conn() {
+        let db = fresh_db().await;
+        let rec = recording_txn(&db).await;
+        let rec_probe = rec.clone();
+        let same = with_recording_txn(&db, rec, async {
+            route_for(&db).rode_same_txn_as(&rec_probe)
+        })
+        .await;
+        assert!(
+            same,
+            "a nested op on the same pool reuses the outer transaction connection, not a new one"
+        );
     }
 
     // AUD-03 regression: a nested `withTransaction` call for a DIFFERENT `Db`
