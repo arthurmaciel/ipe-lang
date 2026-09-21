@@ -80,6 +80,23 @@ fn seed_step(z_in: i64) -> i64 {
     z as i64
 }
 
+/// Reduce a splitmix64 draw uniformly into `[0, width)` by rejection sampling,
+/// re-stepping the seed on rejection. Returns `(offset, final_seed)` so callers
+/// can thread the advanced seed. `width` is always ≥ 1 at every call site.
+/// Bounded in expectation (< 2 iterations); each redraw advances the seed, so
+/// the loop cannot be driven unbounded by any input.
+fn seeded_reduce(mut sample: u64, width: u128, mut seed: i64) -> (u128, i64) {
+    // Largest multiple of `width` that fits the u64 sample space; samples at or
+    // above it would bias the low residues, so redraw them.
+    let space = 1u128 << 64;
+    let limit = space - (space % width);
+    while u128::from(sample) >= limit {
+        seed = seed_step(seed);
+        sample = seed as u64;
+    }
+    (u128::from(sample) % width, seed)
+}
+
 /// `Random.seededIntRaw : Int -> Int -> Int -> (Int, Int)` → (value, newSeed).
 #[must_use]
 pub fn random_seeded_int(s: i64, lo: i64, hi: i64) -> (i64, i64) {
@@ -89,7 +106,15 @@ pub fn random_seeded_int(s: i64, lo: i64, hi: i64) -> (i64, i64) {
     }
     // i128 width so `hi - lo + 1` never overflows i64 (hi=MAX, lo=MIN panicked).
     let width = (i128::from(hi) - i128::from(lo) + 1) as u128;
-    let off = u128::from(next as u64 >> 33) % width;
+    // Full 64 bits of the splitmix64 output feed the reduction: splitmix64 is
+    // well-distributed across every bit, so a high-bit shift would only shrink
+    // the reachable offset space (a width past 2^31 would leave its upper half
+    // unreachable). Rejection sampling removes modulo bias — the naive `% width`
+    // over-represents low residues when `width` does not divide the sample space
+    // evenly. The rejection loop is bounded in expectation (< 2 iterations: at
+    // least half of every `[0, k*width)` block is accepted) and each redraw
+    // advances the seed, so no input dictates unbounded work.
+    let (off, next) = seeded_reduce(next as u64, width, next);
     let v = (i128::from(lo) + off as i128) as i64; // in [lo, hi] -> fits i64
     (if v < lo { lo } else { v }, next)
 }
@@ -109,7 +134,12 @@ pub fn random_seeded_choice<T: Clone>(s: i64, items: Vec<T>) -> (IpeMaybe<T>, i6
     if items.is_empty() {
         return (IpeMaybe::Nothing, next);
     }
-    let idx = (next as u64 >> 33) as usize % items.len();
+    // Full 64 bits + rejection sampling, consistent with `random_seeded_int`
+    // (the `>> 33` reduction was harmless here — lists are never 2^31 long — but
+    // one reduction path is easier to reason about than two).
+    let width = items.len() as u128;
+    let (idx, _next) = seeded_reduce(next as u64, width, next);
+    let idx = idx as usize;
     match items.get(idx) {
         Some(x) => (IpeMaybe::Just(x.clone()), next),
         None => (IpeMaybe::Nothing, next), // unreachable (idx < len), but total
@@ -137,7 +167,17 @@ pub fn random_int<E: Send + 'static>(lo: i64, hi: i64) -> IpeTask<E, i64> {
             return ok_res(lo.wrapping_add(lcg_next() as i64));
         }
         let range = span.wrapping_add(1).max(1);
-        let v = lo.wrapping_add((lcg_next() % range) as i64);
+        // Rejection sampling removes modulo bias: reject the tail of the u64
+        // sample space that does not divide evenly by `range`, so every value in
+        // [lo, hi] is equiprobable. Bounded in expectation (< 2 iterations — at
+        // least half of every block is accepted) and each redraw advances the
+        // generator, so no input drives the loop unbounded.
+        let limit = u64::MAX - (u64::MAX % range);
+        let mut sample = lcg_next();
+        while sample >= limit {
+            sample = lcg_next();
+        }
+        let v = lo.wrapping_add((sample % range) as i64);
         ok_res(v)
     })
 }
@@ -241,6 +281,19 @@ pub fn random_weighted<E: Send + 'static, T: Clone + Send + 'static>(
             return ok_res(IpeMaybe::Nothing);
         }
         let total: f64 = positive.iter().map(|(w, _)| w).sum();
+        // A finite-but-huge set of weights can sum to `+inf` (or produce a NaN),
+        // which would make `r` non-finite so `r < cum` never fires and every draw
+        // collapses to the last entry — a silent non-proportional result. When
+        // the total is not a usable positive finite number, fall back to a uniform
+        // pick over the positive entries: still total, still a sensible draw, and
+        // never NaN/always-last.
+        if !total.is_finite() || total <= 0.0 {
+            let idx = lcg_next() as usize % positive.len();
+            return match positive.get(idx) {
+                Some((_, v)) => ok_res(IpeMaybe::Just((*v).clone())),
+                None => ok_res(IpeMaybe::Nothing), // unreachable: idx < len
+            };
+        }
         // Map LCG output to [0.0, 1.0) then scale.
         let r = (lcg_next() >> 11) as f64 * (1.0 / 9_007_199_254_740_992.0) * total;
         let mut cum = 0.0;
