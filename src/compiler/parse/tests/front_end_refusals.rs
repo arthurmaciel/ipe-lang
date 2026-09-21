@@ -127,18 +127,19 @@ const DEPTH: usize = 50_000;
 /// `assert!`/`assert_eq!` (never the `panic!` macro, which the repo denies even
 /// in tests).
 fn assert_nesting_too_deep(result: Result<ipe_syntax::Module, Diagnostic>, label: &str) {
-    match result {
-        Err(diag) => assert_eq!(
-            diag.code().as_str(),
-            "IPE-P0003",
-            "{label}: expected IPE-P0003 NestingTooDeep, got {}",
-            diag.code().as_str()
-        ),
-        Ok(_) => assert!(
-            false,
-            "{label}: expected Err(NestingTooDeep) but parse succeeded"
-        ),
-    }
+    assert!(
+        result.is_err(),
+        "{label}: expected Err(NestingTooDeep) but parse succeeded"
+    );
+    let Err(diag) = result else {
+        return; // unreachable after the assert above — avoids `panic!`/`unreachable!`
+    };
+    assert_eq!(
+        diag.code().as_str(),
+        "IPE-P0003",
+        "{label}: expected IPE-P0003 NestingTooDeep, got {}",
+        diag.code().as_str()
+    );
 }
 
 /// A deeply-nested parenthesised expression `(((…)))` must be rejected with
