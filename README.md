@@ -19,8 +19,8 @@
 > 3–4 months. Please consider [supporting the project](#support) so it is ready sooner.
 
 **Ipê** (pronounced [/ip'e/](https://ipa-reader.com/?text=%09ip%E2%80%B2e&voice=Vitoria)) is a
-pure-functional language with that extends [Elm](https://elm-lang.org/)'s syntax, partially implement
-[Sky lang](https://sky-lang.org/) standard library and compiles to Rust. 
+pure-functional language that compiles to Rust. It extends [Elm](https://elm-lang.org/)'s 
+syntax and partially implement [Sky lang](https://sky-lang.org/) standard library. 
 
 It aims to be a community-centered programming language — check out our [principles](PRINCIPLES.md)
 to learn more abou it.
@@ -39,9 +39,15 @@ cd counter
 ipe run                 # serves at http://localhost:8000 (server-rendered HTML + live SSE)
 ```
 
-On a TTY `ipe init` asks the shape (`web` / `tui` / `cli` / `server` / `script`) and, for web, the
-runtime — `served` (a co-located SSR + SSE server) or `solo` (a wasm client); name them to skip
-the wizard: `ipe init myapp web solo`. → [getting started](docs/guide/getting-started.md)
+On a TTY `ipe init` asks the shape (`web` / `tui` / `cli` / `server` / `script`) and, for web shape, 
+is asks which runtime is preferred — `served` (a co-located SSR + SSE server) or `solo` (a wasm client); 
+
+You can name `shape`, `runtime` and `host` to skip the wizard: 
+```sh
+ipe init myapp web solo android
+```
+
+Check our [getting started](docs/guide/getting-started.md) guide.
 
 ## Performance (dev loop)
 
