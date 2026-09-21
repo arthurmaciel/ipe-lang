@@ -86,6 +86,12 @@ pub const RULES: &[RuleInfo] = &[
         default_severity: Severity::Warn,
         fixable: false,
     },
+    RuleInfo {
+        name: "no-empty-icon-button-label",
+        summary: "a Ui.iconButton label that is empty or whitespace-only leaves the control nameless to assistive tech",
+        default_severity: Severity::Warn,
+        fixable: false,
+    },
 ];
 
 /// The metadata for `name`, or `None` when no such rule ships.

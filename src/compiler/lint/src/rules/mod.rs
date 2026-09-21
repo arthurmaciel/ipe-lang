@@ -7,6 +7,7 @@
 //! only as a [`crate::Fix`] the engine applies later.
 
 mod adjacent_bools;
+mod no_empty_icon_button_label;
 mod no_silent_outline_none;
 mod prefer_pipeline;
 mod prim_param;
@@ -105,6 +106,7 @@ pub fn run_all(ctx: &Ctx) -> Vec<Finding> {
     findings.extend(unused_imports::check(ctx));
     findings.extend(unused_bindings::check(ctx));
     findings.extend(no_silent_outline_none::check(ctx));
+    findings.extend(no_empty_icon_button_label::check(ctx));
     findings
 }
 
