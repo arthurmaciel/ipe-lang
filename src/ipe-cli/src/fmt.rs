@@ -1231,7 +1231,9 @@ impl Printer<'_> {
                 let after = if i == 0 {
                     name.span.lo.saturating_sub(1) as usize
                 } else {
-                    fields[i - 1].0.span.hi as usize
+                    fields
+                        .get(i - 1)
+                        .map_or(0, |(prev, _)| prev.span.hi as usize)
                 };
                 self.comments_before(after, name.span.lo as usize)
             })
@@ -1249,13 +1251,13 @@ impl Printer<'_> {
         let pad = pad(indent);
         let inner = pad_in(indent);
         let mut out = String::from("{");
-        for (i, part) in parts.iter().enumerate() {
+        for (i, (part, lead)) in parts.iter().zip(&leading).enumerate() {
             // The comment block precedes the field it annotates, mirroring the
             // source where the comment sits above its field.
-            for c in &leading[i] {
+            for c in lead {
                 let _ = write!(out, "\n{inner}{}", c.text);
             }
-            if i == 0 && leading[i].is_empty() {
+            if i == 0 && lead.is_empty() {
                 let _ = write!(out, " {part}");
             } else if i == 0 {
                 let _ = write!(out, "\n{inner}  {part}");
@@ -2042,6 +2044,7 @@ mod tests {
             "module M exposing (r)\n\n\nr =\n    { a = 1, b = 2 }\n",
             "module M exposing (l)\n\n\nl =\n    [ 1, 2, 3 ]\n",
             "module M exposing (f)\n\n\nf x =\n    case x of\n        0 ->\n            \"z\"\n\n        _ ->\n            \"n\"\n",
+            "module M exposing (R)\n\n\ntype alias R =\n    { a : Int\n\n    -- mid\n    , b : Int\n    }\n",
         ];
         for src in inputs {
             let once = format_source(src).expect("first pass formats");
@@ -2065,6 +2068,58 @@ mod tests {
         assert!(
             out.contains("{- block before g -}"),
             "block comment lost:\n{out}"
+        );
+    }
+
+    /// A comment written between two fields of a record TYPE (a `type alias`
+    /// body) is preserved and the result is idempotent. This is the shipped
+    /// `file-browser` shape that previously ICE'd the comment-count guard,
+    /// because the record-type field name carried no span for the formatter to
+    /// place an inter-field comment against.
+    #[test]
+    fn record_type_field_comment_is_preserved() {
+        let src = "module M exposing (Model)\n\
+                   \n\
+                   \n\
+                   type alias Model =\n\
+                   \x20   { entries : List String\n\
+                   \x20   , selected : Int\n\
+                   \x20   , status : String\n\
+                   \n\
+                   \x20   -- The selected file's first bytes.\n\
+                   \x20   , bytes : List Int\n\
+                   \x20   }\n";
+        let out = format_source(src).expect("record-field comment formats (was an ICE)");
+        assert!(
+            out.contains("-- The selected file's first bytes."),
+            "inter-field record-type comment lost:\n{out}"
+        );
+        // The comment survives at its site AND the field ordering is intact.
+        assert!(out.contains(", bytes : List Int"), "field lost:\n{out}");
+        let twice = format_source(&out).expect("second pass formats");
+        assert_eq!(out, twice, "not idempotent:\n{out}");
+    }
+
+    /// The comment-count guard is satisfied for a record-type inter-field
+    /// comment: the output carries at least as many comments as the input, so
+    /// `format_source` does not reject it. Pins the gap directly.
+    #[test]
+    fn record_type_inter_field_comment_count_is_not_reduced() {
+        let src = "module M exposing (R)\n\
+                   \n\
+                   \n\
+                   type alias R =\n\
+                   \x20   { a : Int\n\
+                   \n\
+                   \x20   -- between a and b\n\
+                   \x20   , b : Int\n\
+                   \x20   }\n";
+        let input_count = scan_comments(src).len();
+        let out = format_source(src).expect("formats without dropping the comment");
+        let output_count = scan_comments(&out).len();
+        assert!(
+            output_count >= input_count,
+            "comment count fell from {input_count} to {output_count}:\n{out}"
         );
     }
 
