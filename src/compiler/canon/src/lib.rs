@@ -2304,6 +2304,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)] // parallel `mod_a_*`/`mod_b_*` fixtures for the two clashing dep modules
     fn dep_import_clash_duplicate_type_carries_non_dummy_first_span() {
         // Two distinct dep modules both expose a type under the same unqualified
         // name. `DuplicateType::first` must point at the FIRST import's span, not
