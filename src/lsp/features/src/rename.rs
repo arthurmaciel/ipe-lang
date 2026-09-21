@@ -140,44 +140,15 @@ pub fn prepare_rename(
     module: &[String],
     byte: u32,
 ) -> Option<PrepareRename> {
-    let files = root.files(db);
-    let &file = files.get(module)?;
-
-    // Try the position as a reference first (common case).
-    let canonical = crate::db_access::canonicalize_checked(db, root, entry, file)?;
-    let ref_hit = {
-        let interner = db.interner().lock();
-        crate::navigation::find_ref_at_pub(&canonical.module, byte, &interner).and_then(
-            |(_, name_sym)| {
-                let name = interner.resolve(name_sym).map(str::to_owned)?;
-                // Re-find the span for the PrepareRename range.
-                let span = crate::navigation::ref_span_at(&canonical.module, byte, &interner)?;
-                Some(PrepareRename { name, span })
-            },
-        )
-    };
-    if let Some(prepared) = ref_hit {
-        return Some(prepared);
-    }
-
-    // Try the position as a definition site.
-    let parsed = ipe_db::parse(db, file).ok()?;
-    for value in &parsed.values {
-        let name_span = value.value.name.span;
-        if name_span.lo <= byte && byte < name_span.hi {
-            let interner = db.interner().lock();
-            let name = interner
-                .resolve(value.value.name.value)
-                .map(str::to_owned)?;
-            drop(interner);
-            return Some(PrepareRename {
-                name,
-                span: name_span,
-            });
-        }
-    }
-
-    None
+    // The same "resolve the name under this position" query used by
+    // goto-definition and find-references, so all three agree about whether a
+    // position — use site or declaration name token — is resolvable. The token
+    // span it returns is exactly the range the client pre-fills.
+    let resolved = crate::navigation::resolve_name_at(db, root, entry, module, byte)?;
+    Some(PrepareRename {
+        name: resolved.name,
+        span: resolved.span,
+    })
 }
 
 /// Supplies URI and text for a module path, forwarded from the server layer
@@ -535,6 +506,30 @@ mod tests {
         let result = prepare_rename(&db, root, entry, &["Main".to_owned()], ref_byte());
         let r = result.expect("prepare_rename returned Some");
         assert_eq!(r.name, "three");
+    }
+
+    #[test]
+    fn prepare_rename_finds_identifier_at_definition_site() {
+        // The def-site path goes through the shared `resolve_name_at`; the cursor
+        // on the definition's own name token must still be renameable.
+        let db = IpeDatabase::new();
+        let helper = file(&db, &["Helper"], HELPER);
+        let entry = file(&db, &["Main"], MAIN);
+        let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
+
+        let sig = HELPER.find("three : Int").expect("signature");
+        let decl = HELPER[sig + 3..]
+            .find("three")
+            .map(|o| sig + 3 + o)
+            .expect("declaration follows the signature");
+        let byte = u32::try_from(decl).expect("fits u32");
+
+        let r = prepare_rename(&db, root, entry, &["Helper".to_owned()], byte)
+            .expect("prepare_rename resolves the definition name");
+        assert_eq!(r.name, "three");
+        let lo = r.span.lo as usize;
+        let hi = r.span.hi as usize;
+        assert_eq!(HELPER.get(lo..hi), Some("three"));
     }
 
     #[test]

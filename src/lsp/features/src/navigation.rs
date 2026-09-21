@@ -378,29 +378,12 @@ fn walk_pat_for_refs(
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers for the rename provider
+// Internal span lookup
 // ---------------------------------------------------------------------------
-
-/// Find the `(home_syms, name_sym)` of the innermost top-level / constructor
-/// reference containing `byte` in the canonical module `m`.
-///
-/// Exposed for the rename provider so it can resolve the current name at a
-/// reference site without re-running `goto_definition`.
-#[must_use]
-pub fn find_ref_at_pub(
-    m: &Module,
-    byte: u32,
-    interner: &Interner,
-) -> Option<(Vec<Symbol>, Symbol)> {
-    find_ref_at(m, byte, interner)
-}
 
 /// The identifier span of the innermost top-level / constructor reference
 /// containing `byte`.
-///
-/// Exposed for the rename provider's `prepare_rename` range.
-#[must_use]
-pub fn ref_span_at(m: &Module, byte: u32, interner: &Interner) -> Option<Span> {
+fn ref_span_at(m: &Module, byte: u32, interner: &Interner) -> Option<Span> {
     let mut best: Option<(u32, Span)> = None;
     for def in &m.defs {
         let body = match def {
@@ -561,14 +544,125 @@ fn walk_pat_for_span_at(
 }
 
 // ---------------------------------------------------------------------------
+// Name resolution at a position — shared by goto-definition, find-references,
+// and prepare-rename
+// ---------------------------------------------------------------------------
+
+/// The name-bearing identifier the cursor sits on: its home module, name, and
+/// the byte span of the token under the cursor.
+///
+/// Two positions resolve: a *use site* (a top-level value use, constructor
+/// value, or constructor pattern — via [`find_ref_at`]) whose `home` is the
+/// declaring module, and a *definition site* (the cursor is directly on a
+/// declaration's own name token — a top-level value binding or a `type` union
+/// constructor) whose `home` is the current module.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ResolvedName {
+    /// The declaring module of the name (its home).
+    pub module: Vec<String>,
+    /// The identifier name.
+    pub name: String,
+    /// The byte span of the identifier token under the cursor, in `module`'s
+    /// source when resolved at a definition site, or in the requesting module's
+    /// source when resolved at a use site.
+    pub span: Span,
+}
+
+/// Resolve the identifier the cursor sits on to its `(home module, name)`.
+///
+/// The single "what name is under this position" query shared by
+/// [`goto_definition`], the references handler, and `prepare_rename` — so the
+/// three features never disagree about whether a position is resolvable. It
+/// tries a use site first (the common case), then falls back to the definition
+/// site: the cursor directly on a declaration's own name token, which is not an
+/// expression node and so is invisible to [`find_ref_at`].
+///
+/// Returns `None` when the position is on neither a use nor a declaration name
+/// token (whitespace, a comment, a type annotation, a keyword).
+#[must_use]
+pub fn resolve_name_at(
+    db: &IpeDatabase,
+    root: SourceRoot,
+    entry: ipe_db::SourceFile,
+    module: &[String],
+    byte: u32,
+) -> Option<ResolvedName> {
+    let files = root.files(db);
+    let &file = files.get(module)?;
+
+    // Use site first (the common case): the cursor is on an expression or
+    // pattern reference, whose `home` is the declaring module.
+    let canonical = crate::db_access::canonicalize_checked(db, root, entry, file)?;
+    let use_hit = {
+        let interner = db.interner().lock();
+        find_ref_at(&canonical.module, byte, &interner).and_then(|(home_syms, name_sym)| {
+            let home: Vec<String> = home_syms
+                .iter()
+                .map(|&sym| interner.resolve(sym).map(str::to_owned))
+                .collect::<Option<Vec<_>>>()?;
+            let name = interner.resolve(name_sym).map(str::to_owned)?;
+            let span = ref_span_at(&canonical.module, byte, &interner)?;
+            Some(ResolvedName {
+                module: home,
+                name,
+                span,
+            })
+        })
+    };
+    if let Some(hit) = use_hit {
+        return Some(hit);
+    }
+
+    // Definition site: the cursor sits on a declaration's own name token. The
+    // name token is not an expression node, so `find_ref_at` never sees it; scan
+    // the parse tree's top-level `values` and `type` union constructors for a
+    // name-token span containing the cursor. The home is the current module.
+    let parsed = ipe_db::parse(db, file).ok()?;
+    def_name_at(&parsed, byte, db).map(|(name, span)| ResolvedName {
+        module: module.to_vec(),
+        name,
+        span,
+    })
+}
+
+/// The name and name-token span of a declaration whose own name token contains
+/// `byte` — a top-level value binding or a `type` union constructor. Returns
+/// `None` when the cursor is not on any declaration name token.
+fn def_name_at(parsed: &ipe_syntax::Module, byte: u32, db: &IpeDatabase) -> Option<(String, Span)> {
+    let interner = db.interner().lock();
+    for value in &parsed.values {
+        let name_span = value.value.name.span;
+        if name_span.lo <= byte && byte < name_span.hi {
+            let name = interner
+                .resolve(value.value.name.value)
+                .map(str::to_owned)?;
+            return Some((name, name_span));
+        }
+    }
+    for union in &parsed.unions {
+        for ctor in &union.value.ctors {
+            let Some(ctor_name) = interner.resolve(ctor.value.name) else {
+                continue;
+            };
+            let len = u32::try_from(ctor_name.len()).unwrap_or(0);
+            let name_span = Span::new(ctor.span.lo, ctor.span.lo.saturating_add(len));
+            if name_span.lo <= byte && byte < name_span.hi {
+                return Some((ctor_name.to_owned(), name_span));
+            }
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Go-to-definition
 // ---------------------------------------------------------------------------
 
 /// The definition site of the top-level name under `byte` in `module`, if any.
 ///
-/// Returns `None` when the byte position does not fall on a top-level
-/// reference, the module does not type-check, or the defining module is not
-/// part of the project (kernel / stdlib).
+/// Returns `None` when the byte position does not fall on a top-level reference
+/// or a declaration name token, the module does not type-check, or the defining
+/// module is not part of the project (kernel / stdlib).
 #[must_use]
 pub fn goto_definition(
     db: &IpeDatabase,
@@ -577,39 +671,16 @@ pub fn goto_definition(
     module: &[String],
     byte: u32,
 ) -> Option<Definition> {
-    let files = root.files(db);
-    let &file = files.get(module)?;
-
-    // Find the top-level / constructor reference whose span contains `byte`.
-    let canonical = crate::db_access::canonicalize_checked(db, root, entry, file)?;
-    let (def_home_syms, def_name_sym) = {
-        let interner = db.interner().lock();
-        find_ref_at(&canonical.module, byte, &interner)?
-    };
-
-    // Resolve the home module path to strings.
-    let def_module: Vec<String> = {
-        let interner = db.interner().lock();
-        def_home_syms
-            .iter()
-            .map(|&sym| interner.resolve(sym).map(str::to_owned))
-            .collect::<Option<Vec<_>>>()?
-    };
+    let resolved = resolve_name_at(db, root, entry, module, byte)?;
 
     // Find the name span in the defining module's parse tree.
-    let &def_file = files.get(&def_module)?;
+    let files = root.files(db);
+    let &def_file = files.get(&resolved.module)?;
     let parsed = ipe_db::parse(db, def_file).ok()?;
-
-    // Resolve `def_name_sym` to a string for comparison against parse-tree names.
-    let def_name_str: String = {
-        let interner = db.interner().lock();
-        interner.resolve(def_name_sym).map(str::to_owned)?
-    };
-
-    let span = definition_span_in_parse(&parsed, &def_name_str, db)?;
+    let span = definition_span_in_parse(&parsed, &resolved.name, db)?;
 
     Some(Definition {
-        module: def_module,
+        module: resolved.module,
         span,
     })
 }
@@ -729,7 +800,7 @@ pub fn find_references(
 mod tests {
     use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
-    use super::{find_references, goto_definition};
+    use super::{find_references, goto_definition, resolve_name_at};
 
     fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
         SourceFile::new(
@@ -887,6 +958,188 @@ mod tests {
         assert_eq!(
             lo, decl_off,
             "definition points at the declaration site, not the use"
+        );
+    }
+
+    // ── Definition-site resolution (issue #2655) ─────────────────────────────
+    //
+    // The most natural place a user invokes find-references and goto-definition
+    // is the cursor on the definition's OWN name token. That token is not an
+    // expression node, so the use-only walker never sees it; the shared
+    // `resolve_name_at` def-site fallback makes the position resolvable, and the
+    // references handler (goto_definition → def name → find_references) then
+    // returns the definition plus every use.
+
+    /// The `three` in `three : Int` / `three = 3` — the definition name token in
+    /// `Helper`, not any use of it.
+    fn helper_def_name_byte() -> u32 {
+        // The declaration `three = 3` (skip the `three : Int` signature).
+        let sig = HELPER.find("three : Int").expect("signature");
+        let decl = HELPER[sig + 3..]
+            .find("three")
+            .map(|o| sig + 3 + o)
+            .expect("declaration of three follows its signature");
+        u32::try_from(decl).expect("fits u32")
+    }
+
+    /// Mirror the references handler in `main_loop.rs`: resolve the definition,
+    /// recover its name from its own span, then collect every use site. Returns
+    /// `(def, references)` so a test can union them.
+    fn references_via_handler(
+        db: &IpeDatabase,
+        root: SourceRoot,
+        entry: SourceFile,
+        module: &[&str],
+        byte: u32,
+        def_text: &str,
+    ) -> Option<(super::Definition, Vec<super::NameRef>)> {
+        let module: Vec<String> = module.iter().map(|s| (*s).to_owned()).collect();
+        let def = goto_definition(db, root, entry, &module, byte)?;
+        let lo = def.span.lo as usize;
+        let hi = def.span.hi as usize;
+        let name = def_text.get(lo..hi)?;
+        let refs = find_references(db, root, entry, &def.module, name);
+        Some((def, refs))
+    }
+
+    #[test]
+    fn resolve_name_at_definition_name_token_resolves() {
+        let db = IpeDatabase::new();
+        let helper = file(&db, &["Helper"], HELPER);
+        let entry = file(&db, &["Main"], MAIN);
+        let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
+
+        let resolved = resolve_name_at(
+            &db,
+            root,
+            entry,
+            &["Helper".to_owned()],
+            helper_def_name_byte(),
+        )
+        .expect("cursor on the definition name resolves");
+        assert_eq!(resolved.name, "three");
+        assert_eq!(resolved.module, vec!["Helper".to_owned()]);
+        let lo = resolved.span.lo as usize;
+        let hi = resolved.span.hi as usize;
+        assert_eq!(HELPER.get(lo..hi), Some("three"));
+    }
+
+    #[test]
+    fn find_references_from_definition_name_returns_def_and_uses() {
+        let db = IpeDatabase::new();
+        let helper = file(&db, &["Helper"], HELPER);
+        let entry = file(&db, &["Main"], MAIN);
+        let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
+
+        let (def, refs) = references_via_handler(
+            &db,
+            root,
+            entry,
+            &["Helper"],
+            helper_def_name_byte(),
+            HELPER,
+        )
+        .expect("caret on the definition name resolves a target");
+
+        assert_eq!(def.module, vec!["Helper".to_owned()]);
+        // The use in `Main` (`main = three`) must be found from the def site.
+        assert_eq!(refs.len(), 1, "expected the one use site, got: {refs:?}");
+        let r = refs.first().expect("one reference");
+        assert_eq!(r.module, vec!["Main".to_owned()]);
+        // Union def + refs is non-empty (what the handler returns to the client).
+        assert!(
+            !refs.is_empty(),
+            "def-name find-references must be non-empty"
+        );
+    }
+
+    #[test]
+    fn goto_definition_from_definition_name_is_idempotent() {
+        let db = IpeDatabase::new();
+        let helper = file(&db, &["Helper"], HELPER);
+        let entry = file(&db, &["Main"], MAIN);
+        let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
+
+        let def = goto_definition(
+            &db,
+            root,
+            entry,
+            &["Helper".to_owned()],
+            helper_def_name_byte(),
+        )
+        .expect("goto-definition on the definition name resolves");
+        assert_eq!(def.module, vec!["Helper".to_owned()]);
+        let lo = def.span.lo as usize;
+        let hi = def.span.hi as usize;
+        assert_eq!(HELPER.get(lo..hi), Some("three"));
+    }
+
+    /// The `Red` in the union declaration `type Color = Red | Green`.
+    fn ctor_decl_name_byte() -> u32 {
+        let off = CTOR_MAIN.find("Red | Green").expect("union decl has Red");
+        u32::try_from(off).expect("fits u32")
+    }
+
+    #[test]
+    fn find_references_from_constructor_declaration_name() {
+        let db = IpeDatabase::new();
+        let entry = file(&db, &["Main"], CTOR_MAIN);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+
+        let (def, refs) = references_via_handler(
+            &db,
+            root,
+            entry,
+            &["Main"],
+            ctor_decl_name_byte(),
+            CTOR_MAIN,
+        )
+        .expect("caret on the constructor declaration name resolves");
+
+        assert_eq!(def.module, vec!["Main".to_owned()]);
+        // The value use in `pick` and the `case` pattern in `describe`.
+        assert_eq!(
+            refs.len(),
+            2,
+            "expected value use + pattern use from the ctor decl, got: {refs:?}"
+        );
+        for r in &refs {
+            let lo = r.span.lo as usize;
+            let hi = r.span.hi as usize;
+            assert_eq!(CTOR_MAIN.get(lo..hi), Some("Red"));
+        }
+    }
+
+    #[test]
+    fn use_site_references_still_resolve() {
+        // Regression: the use site path must keep working after the def-site
+        // fallback is added.
+        let db = IpeDatabase::new();
+        let helper = file(&db, &["Helper"], HELPER);
+        let entry = file(&db, &["Main"], MAIN);
+        let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
+
+        let (def, refs) = references_via_handler(&db, root, entry, &["Main"], ref_byte(), HELPER)
+            .expect("caret on a use site resolves");
+        assert_eq!(def.module, vec!["Helper".to_owned()]);
+        assert_eq!(refs.len(), 1, "the single use site, got: {refs:?}");
+    }
+
+    #[test]
+    fn cursor_on_nothing_resolves_to_none() {
+        let db = IpeDatabase::new();
+        let helper = file(&db, &["Helper"], HELPER);
+        let entry = file(&db, &["Main"], MAIN);
+        let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
+
+        // Byte 0 is the `m` of `module` — a keyword, on no name-bearing token.
+        assert!(
+            resolve_name_at(&db, root, entry, &["Main".to_owned()], 0).is_none(),
+            "keyword position must not resolve"
+        );
+        assert!(
+            goto_definition(&db, root, entry, &["Main".to_owned()], 0).is_none(),
+            "keyword position yields no definition"
         );
     }
 }
