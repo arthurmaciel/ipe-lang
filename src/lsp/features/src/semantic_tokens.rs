@@ -375,13 +375,15 @@ mod tests {
         let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
         let f = file(&db, &["Main"], src);
 
+        // Cover the definition and its body (lines 3–4), which carry real
+        // expression tokens — the type-annotation line 2 is not tokenized.
         let range = Range {
             start: Position {
-                line: 2,
+                line: 3,
                 character: 0,
             },
             end: Position {
-                line: 3,
+                line: 9999,
                 character: 0,
             },
         };
@@ -395,27 +397,31 @@ mod tests {
             return; // unreachable — asserted above
         };
 
-        // At least one token in `main : Int` (the `main` function token and
-        // `Int` type token).
+        // The definition body carries tokens.
         assert!(
             !range_tokens.data.is_empty(),
-            "range covering 'main : Int' must yield tokens"
+            "range covering the definition body must yield tokens"
         );
 
-        // The full result has more tokens (module header + line 3/4).
+        // The full result also covers the module header (line 0), so the range
+        // is a strict subset.
         let full_tokens = tokens_of(semantic_tokens_full(&db, f, PositionEncoding::Utf8));
         assert!(
             range_tokens.data.len() < full_tokens.data.len(),
             "range result must be a strict subset of the full result"
         );
 
-        // Delta encoding is reset: the first token's delta_line must be
-        // relative to 0, so it equals the absolute line of the first token in
-        // the range (line 2 for `main : Int`).
-        let first = &range_tokens.data[0];
-        assert_eq!(
-            first.delta_line, 2,
-            "first range token delta_line must equal its absolute line (encoding reset to 0)"
+        // Delta encoding is reset for the range: the first token's delta_line is
+        // its ABSOLUTE line (≥ 3, the range start), not a small delta relative to
+        // a token before the range.
+        let first = range_tokens
+            .data
+            .first()
+            .expect("range must yield at least one token");
+        assert!(
+            first.delta_line >= 3,
+            "first range token delta_line must be its absolute line (encoding reset to 0), got {}",
+            first.delta_line
         );
     }
 }

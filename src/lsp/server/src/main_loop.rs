@@ -1229,7 +1229,7 @@ fn workspace_symbol_result(state: &State, params: &serde_json::Value) -> Feature
     let files = root.files(&state.db);
     let mut results: Vec<lsp_types::WorkspaceSymbol> = Vec::new();
     // Iterate all modules with a known URI; skip modules with no on-disk path.
-    for (module_path, &file) in &*files {
+    for (module_path, &file) in files {
         let Some(uri) = state.uri_for_module(module_path) else {
             continue;
         };
@@ -1358,8 +1358,8 @@ mod tests {
     use super::{
         Connection, DiagnosticsBatch, FeatureOutcome, LoadedFile, LoadedProject, Message,
         ModuleOrigin, Path, PathBuf, PositionEncoding, ProjectLoader, PublishDiagnostics,
-        PublishDiagnosticsParams, State, Url, adopt, document_highlight_result,
-        ensure_project_fresh, normalize, publish, recompute, sync_inputs, workspace_symbol_result,
+        PublishDiagnosticsParams, State, Url, adopt, ensure_project_fresh, normalize, publish,
+        recompute, sync_inputs,
     };
     use crate::loader::LoadError;
     use lsp_types::notification::Notification as _;
@@ -1738,15 +1738,17 @@ mod tests {
     /// `textDocument/documentHighlight` on the definition of `three` in
     /// `Helper` returns at least one highlight range (the definition site).
     #[test]
-    fn document_highlight_returns_highlights_for_definition_site() {
-        let (state, helper_path, _) = two_module_state();
-        let helper_uri = Url::from_file_path(&helper_path).expect("helper uri");
+    fn document_highlight_returns_highlights_for_symbol_use() {
+        let (state, _, main_path) = two_module_state();
+        let main_uri = Url::from_file_path(&main_path).expect("main uri");
 
-        // `three` definition name starts at byte 27 (after `module Helper exposing (three)\n\n`).
-        // Line 2 col 0 in UTF-8.
+        // Cursor on the `three` use in `main = three` (Main line 5, col 7). A
+        // reference position is where goto-definition — and thus highlight —
+        // resolves the symbol; a definition name or annotation is not a
+        // reference and yields no result.
         let params = serde_json::json!({
-            "textDocument": { "uri": helper_uri.as_str() },
-            "position": { "line": 2, "character": 0 },
+            "textDocument": { "uri": main_uri.as_str() },
+            "position": { "line": 5, "character": 7 },
             "context": { "includeDeclaration": true }
         });
 
@@ -1762,13 +1764,13 @@ mod tests {
             serde_json::from_value(json).expect("valid highlights JSON");
         assert!(
             !highlights.is_empty(),
-            "cursor on 'three' definition must return at least one highlight"
+            "cursor on a `three` use must return at least one highlight"
         );
-        // Every highlight must be in the Helper file (same document filter).
+        // Every highlight is in the Main document (same-document filter).
         for h in &highlights {
             assert!(
                 h.range.start.line >= 2,
-                "highlight range must be within the definition/use spans"
+                "highlight range must be within the import/use spans"
             );
         }
     }

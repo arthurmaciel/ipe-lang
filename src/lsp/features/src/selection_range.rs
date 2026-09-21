@@ -5,16 +5,17 @@
 //! the tightest span containing the byte offset and walks up to the whole
 //! top-level declaration, then the entire module.
 
-use ipe_db::{Db as _, IpeDatabase, SourceFile};
+use ipe_db::{IpeDatabase, SourceFile};
 use ipe_diagnostics::Span;
 use ipe_syntax::{Expr_, Pattern_};
 use lsp_types::{Position, Range, SelectionRange};
 
 use crate::offset::{PositionEncoding, position_to_offset, span_to_range};
 
-/// Returns one [`SelectionRange`] per requested position. Each result is the
-/// innermost span enclosing the cursor, with `parent` chains walking outward
-/// through the parse tree to the top-level declaration boundary.
+/// Returns one [`SelectionRange`] per requested position.
+///
+/// Each result is the innermost span enclosing the cursor, with `parent` chains
+/// walking outward through the parse tree to the top-level declaration boundary.
 ///
 /// An empty file, a parse failure, or a position outside every span returns a
 /// single-node range equal to the cursor position (no expansion).
@@ -48,7 +49,14 @@ fn containing_spans(module: &ipe_syntax::Module, byte: u32) -> Vec<Span> {
 
     // Walk top-level values.
     for val in &module.values {
-        if !contains(val.span, byte) {
+        // A `Value`'s own span covers only its name token; the declaration runs
+        // from the name through the body. Synthesize the full-declaration span
+        // so a cursor anywhere in the body is claimed and expands out to it.
+        let decl_span = Span {
+            lo: val.value.name.span.lo,
+            hi: val.value.body.span.hi,
+        };
+        if !contains(decl_span, byte) {
             continue;
         }
         // Sub-expression spans within the body.
@@ -64,7 +72,7 @@ fn containing_spans(module: &ipe_syntax::Module, byte: u32) -> Vec<Span> {
             push_if_new(val.value.name.span, &mut spans);
         }
         // Full declaration span (outermost for this binding).
-        push_if_new(val.span, &mut spans);
+        push_if_new(decl_span, &mut spans);
     }
 
     // Walk top-level union declarations.
@@ -237,17 +245,17 @@ fn build_chain(
     chain.unwrap_or_else(|| point_range(pos))
 }
 
-fn contains(span: Span, byte: u32) -> bool {
+const fn contains(span: Span, byte: u32) -> bool {
     span.lo <= byte && byte < span.hi
 }
 
 fn push_if_new(span: Span, out: &mut Vec<Span>) {
-    if !out.iter().any(|&s| s == span) {
+    if !out.contains(&span) {
         out.push(span);
     }
 }
 
-fn point_range(pos: Position) -> SelectionRange {
+const fn point_range(pos: Position) -> SelectionRange {
     SelectionRange {
         range: Range {
             start: pos,
@@ -272,7 +280,7 @@ mod tests {
     }
 
     fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
-        let map: std::collections::HashMap<Vec<String>, SourceFile> = files
+        let map: std::collections::BTreeMap<Vec<String>, SourceFile> = files
             .iter()
             .map(|(p, f)| (p.iter().map(|s| (*s).to_owned()).collect(), *f))
             .collect();
@@ -295,7 +303,7 @@ mod tests {
         };
         let result = selection_ranges(&db, f, &[pos], PositionEncoding::Utf8);
         assert_eq!(result.len(), 1, "one result per position");
-        let sr = &result[0];
+        let sr = result.first().expect("one selection range per position");
         // Innermost range must not be a zero-width point (real span returned).
         assert!(
             sr.range.start != sr.range.end || sr.parent.is_some(),
@@ -321,7 +329,7 @@ mod tests {
         };
         let result = selection_ranges(&db, f, &[pos], PositionEncoding::Utf8);
         assert_eq!(result.len(), 1);
-        let sr = &result[0];
+        let sr = result.first().expect("one selection range per position");
         // Should be a point range or at least well-formed.
         assert_eq!(sr.range.start, sr.range.end, "whitespace pos → point range");
         assert!(sr.parent.is_none(), "point range has no parent");

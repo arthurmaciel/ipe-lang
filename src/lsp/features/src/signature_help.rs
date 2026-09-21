@@ -142,7 +142,7 @@ fn find_call_at(
 
 /// Extract the bare name symbol from a callee expression, when statically
 /// available. Used only for the human-readable signature label.
-fn callee_name(f: &Located<Expr_>) -> Option<Symbol> {
+const fn callee_name(f: &Located<Expr_>) -> Option<Symbol> {
     match &f.value {
         Expr_::VarTopLevel { name, .. }
         | Expr_::VarLocal(name)

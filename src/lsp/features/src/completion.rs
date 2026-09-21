@@ -505,7 +505,7 @@ fn ctor_item(label: String, arity: usize, sort_text: String) -> CompletionItem {
         // …) because the canonical AST does not carry field names for positional
         // constructor arguments.
         let stops: String = (1..=arity)
-            .map(|i| format!("${{{}:arg{}}}", i, i))
+            .map(|i| format!("${{{i}:arg{i}}}"))
             .collect::<Vec<_>>()
             .join(" ");
         (format!("{label} {stops}"), InsertTextFormat::SNIPPET)
@@ -700,44 +700,47 @@ mod tests {
     #[test]
     fn ctor_insert_text_matches_arity() {
         use lsp_types::InsertTextFormat;
-        // `Just a` has arity 1; `Nothing` has arity 0.
-        const SRC: &str =
-            "module Main exposing (main)\n\ntype Maybe a = Nothing | Just a\n\nmain = Nothing\n";
+        // `Rect Int` has arity 1; `Circle` has arity 0. Complete at a body
+        // position whose expected type is `Shape`, so both constructors are
+        // offered — a bare module-scope position (offset 0) offers none.
+        const SRC: &str = "module Main exposing (main)\n\ntype Shape = Circle | Rect Int\n\ns : Shape\ns = Circle\n\nmain = s\n";
         let db = IpeDatabase::new();
         let entry = file(&db, &["Main"], SRC);
         let root = root_of(&db, &[(&["Main"], entry)]);
-        let items = completions(&db, root, entry, &["Main".to_owned()], 0);
+        let byte = u32::try_from(SRC.find("s = Circle").expect("has body") + "s = ".len())
+            .expect("offset fits u32");
+        let items = completions(&db, root, entry, &["Main".to_owned()], byte);
 
-        let nothing = items
+        let circle = items
             .iter()
-            .find(|i| i.label == "Nothing")
-            .expect("Nothing present");
+            .find(|i| i.label == "Circle")
+            .expect("Circle present");
         assert_eq!(
-            nothing.insert_text.as_deref(),
-            Some("Nothing"),
+            circle.insert_text.as_deref(),
+            Some("Circle"),
             "nullary ctor insert_text must be the bare name"
         );
         assert_eq!(
-            nothing.insert_text_format,
+            circle.insert_text_format,
             Some(InsertTextFormat::PLAIN_TEXT),
             "nullary ctor must use PLAIN_TEXT"
         );
 
-        let just = items
+        let rect = items
             .iter()
-            .find(|i| i.label == "Just")
-            .expect("Just present");
-        let just_text = just.insert_text.as_deref().expect("Just has insert_text");
+            .find(|i| i.label == "Rect")
+            .expect("Rect present");
+        let rect_text = rect.insert_text.as_deref().expect("Rect has insert_text");
         assert!(
-            just_text.starts_with("Just "),
-            "payload ctor insert_text must start with the name: {just_text}"
+            rect_text.starts_with("Rect "),
+            "payload ctor insert_text must start with the name: {rect_text}"
         );
         assert!(
-            just_text.contains("${1:"),
-            "payload ctor insert_text must contain a snippet tab-stop: {just_text}"
+            rect_text.contains("${1:"),
+            "payload ctor insert_text must contain a snippet tab-stop: {rect_text}"
         );
         assert_eq!(
-            just.insert_text_format,
+            rect.insert_text_format,
             Some(InsertTextFormat::SNIPPET),
             "payload ctor must use SNIPPET format"
         );
