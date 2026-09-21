@@ -4,16 +4,6 @@
 
 [Back to stdlib index](../stdlib.md)
 
-Ipe.Ui.Chart — typed chart primitives for `Ipe.Ui`.
-
-`line / area / bar / sparkline / heatmap` accept typed `Series`
-records (`{ label, color, points : List Point }`) and render to
-inline-styled SVG.  Pair with `Ui.layoutWith` to embed in
-dashboards.  XSS-hardened: all axis ticks + tooltip labels
-HTML-escape through the same renderer as text content; no
-innerHTML, no `data-ipe-eval`.  Used by the bundled Ipe Console
-+ `examples/26-ui-showcase`.
-
 ## `Cfg`
 
 ## `defaultCfg`

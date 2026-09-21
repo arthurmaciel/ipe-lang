@@ -2012,8 +2012,6 @@ Ipe.Html — HTML element builders.
 
 [Full reference](stdlib/Html.Attributes.md)
 
-Ipe.Html.Attributes — HTML attribute builders.
-
 | Export | Summary |
 |--------|----------|
 | `attribute` | `attribute key value` — a plain `key="value"` HTML attribute. The one |
@@ -2043,8 +2041,36 @@ Ipe.Html.Attributes — HTML attribute builders.
 | `multiple` | (no summary) |
 | `selected` | (no summary) |
 | `autofocus` | (no summary) |
-| `tabindex` | `tabindex n` — the `tabindex` attribute, rendered as its decimal string. |
+| `tabindex` | (no summary) |
 | `rows` | `rows n` — the `<textarea>` `rows` attribute, rendered as its decimal |
+| `Role` | (no summary) |
+| `role` | `role r` — the `role` attribute over the closed `Role` vocabulary. A raw |
+| `AriaLive` | The closed value set for `aria-live` — how urgently a live region's updates |
+| `AriaCurrent` | The closed value set for `aria-current` — which item in a set is the current |
+| `AriaTristate` | The closed tri-state for `aria-checked` / `aria-pressed` — a toggle that is |
+| `AriaHaspopup` | The closed value set for `aria-haspopup` — the kind of popup an element |
+| `AriaInvalid` | The closed value set for `aria-invalid` — whether a field's value fails |
+| `ariaLabel` | (no summary) |
+| `ariaLabelledby` | `ariaLabelledby ids` — the accessible name sourced from other element(s) by |
+| `ariaDescribedby` | `ariaDescribedby ids` — a longer description sourced from other element(s) |
+| `ariaControls` | `ariaControls ids` — the element(s) this control governs, by `id` |
+| `ariaHidden` | (no summary) |
+| `ariaExpanded` | `ariaExpanded on` — whether a disclosure control's target is expanded. |
+| `ariaDisabled` | `ariaDisabled on` — whether an element is perceivable but disabled. |
+| `ariaSelected` | `ariaSelected on` — whether a selectable item (tab, option) is selected. |
+| `ariaRequired` | `ariaRequired on` — whether user input is required before submission. |
+| `ariaPressed` | (no summary) |
+| `ariaModal` | `ariaModal on` — whether a dialog is modal (content outside it is inert). |
+| `ariaBusy` | `ariaBusy on` — whether an element is being updated and not yet stable. |
+| `ariaChecked` | `ariaChecked state` — a checkbox/radio/switch checked state (on/off/mixed). |
+| `ariaInvalid` | `ariaInvalid state` — whether a field's value fails validation. |
+| `ariaLive` | `ariaLive urgency` — how a live region's updates are announced |
+| `ariaCurrent` | `ariaCurrent which` — which item in a set is the current one. |
+| `ariaHaspopup` | `ariaHaspopup kind` — the kind of popup an element triggers. |
+| `ariaValuemin` | (no summary) |
+| `ariaValuemax` | `ariaValuemax n` — the maximum value of a range widget. |
+| `ariaValuenow` | `ariaValuenow n` — the current value of a range widget. |
+| `ariaValuetext` | `ariaValuetext s` — a human-readable text alternative for a range widget's |
 
 ## Html.Unsafe
 
@@ -2798,19 +2824,17 @@ Ipe.Tuple — helpers for 2-tuples (pairs).
 
 [Full reference](stdlib/Ui.md)
 
-Ipe.Ui — element / attribute / colour / layout surface.
-
 | Export | Summary |
 |--------|----------|
-| `node` | `node desc attrs children` — a container `Element` carrying a role |
+| `node` | (no summary) |
 | `taggedNode` | `taggedNode tag desc attrs children` — a tag-fixed `Element`. |
-| `layout` | `layout attrs element` — render a root `Element` to `Html`. |
+| `layout` | (no summary) |
 | `layoutWith` | `layoutWith { wrapperAttrs, rootAttrs } element` — `layout` with explicit |
 | `none` | `none` — the empty `Element`. |
 | `text` | `text s` — a text `Element`. |
 | `html` | `html h` — embed raw `Html` inside a `Ui` view. |
 | `cells` | `cells grid` — a raw terminal cell grid (one inner list per row). |
-| `el` | `el attrs child` — a single-child container. |
+| `el` | (no summary) |
 | `row` | `row attrs children` — a horizontal container (`__row` marker). |
 | `column` | `column attrs children` — a vertical container (`__col` marker). |
 | `wrappedRow` | `wrappedRow attrs children` — a wrapping horizontal container. |
@@ -2916,6 +2940,36 @@ Ipe.Ui — element / attribute / colour / layout surface.
 | `descLiveAssertive` | (no summary) |
 | `descHeading` | (no summary) |
 | `descLabel` | (no summary) |
+| `iconButton` | (no summary) |
+| `Role` | (no summary) |
+| `role` | `role r` — the `role` attribute over the closed `Role` vocabulary. |
+| `AriaLive` | The closed value set for `aria-live` (off/polite/assertive). |
+| `AriaCurrent` | The closed value set for `aria-current`. |
+| `AriaTristate` | The closed tri-state for `aria-checked` / `aria-pressed` (on/off/mixed). |
+| `AriaHaspopup` | The closed value set for `aria-haspopup`. |
+| `AriaInvalid` | The closed value set for `aria-invalid`. |
+| `ariaLabel` | (no summary) |
+| `ariaLabelledby` | (no summary) |
+| `ariaDescribedby` | (no summary) |
+| `ariaControls` | (no summary) |
+| `id` | `id s` — the `id` attribute, the anchor an `ariaLabelledby` / `ariaDescribedby` |
+| `ariaHidden` | (no summary) |
+| `ariaExpanded` | (no summary) |
+| `ariaDisabled` | (no summary) |
+| `ariaSelected` | (no summary) |
+| `ariaRequired` | (no summary) |
+| `ariaPressed` | (no summary) |
+| `ariaModal` | (no summary) |
+| `ariaBusy` | (no summary) |
+| `ariaChecked` | (no summary) |
+| `ariaInvalid` | (no summary) |
+| `ariaLive` | (no summary) |
+| `ariaCurrent` | (no summary) |
+| `ariaHaspopup` | (no summary) |
+| `ariaValuemin` | (no summary) |
+| `ariaValuemax` | (no summary) |
+| `ariaValuenow` | (no summary) |
+| `ariaValuetext` | (no summary) |
 
 ## Ui.Animation
 
@@ -2973,8 +3027,6 @@ Ipe.Ui.Cells — retained alias for the Tui view surface.
 ## Ui.Chart
 
 [Full reference](stdlib/Ui.Chart.md)
-
-Ipe.Ui.Chart — typed chart primitives for `Ipe.Ui`.
 
 | Export | Summary |
 |--------|----------|

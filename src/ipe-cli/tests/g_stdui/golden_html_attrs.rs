@@ -104,5 +104,30 @@ fn html_attributes_family_renders_and_escapes() {
         "html_attrs: hostile `attribute \"onclick\"` must be neutralised\n--- actual ---\n{html}"
     );
 
+    // A11Y: the typed `role` / `aria-*` helpers render the exact canonical
+    // wire strings. Enumerated aria values come from closed sums, so a
+    // misspelling is a type error, not a silent bad string here.
+    for needle in [
+        "role=\"searchbox\"",
+        "aria-label=\"search\"",
+        "aria-live=\"polite\"",
+        "aria-current=\"page\"",
+        "aria-checked=\"mixed\"",
+        "aria-hidden=\"true\"",
+        "aria-valuenow=\"3\"",
+    ] {
+        assert!(
+            html.contains(needle),
+            "html_attrs: expected aria `{needle}`\n--- actual ---\n{html}"
+        );
+    }
+    // A11Y: an aria STATE boolean writes `false` OUT explicitly — unlike the
+    // omit-on-false `disabled`, `aria-expanded="false"` must be present, because
+    // an absent state and an explicit `"false"` differ to assistive tech.
+    assert!(
+        html.contains("aria-expanded=\"false\""),
+        "html_attrs: ariaExpanded False must render explicit false\n--- actual ---\n{html}"
+    );
+
     assert_eq!(outcome.exit_code, Some(0), "html_attrs: must exit 0");
 }

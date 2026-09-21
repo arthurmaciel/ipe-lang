@@ -18,12 +18,11 @@ module Main exposing (main)
 -- holds the raw strings and the seal runs in the view, on every render, where
 -- the parse cannot be tampered with.
 
-
+import Ipe.List as List
+import Ipe.Result exposing (Result(..))
 import Ipe.Tea.Web as Web
 import Ipe.Tea.Web.Cmd as Cmd
 import Ipe.Tea.Web.Sub as Sub
-import Ipe.List as List
-import Ipe.Result exposing (Result(..))
 import Ipe.Ui as Ui
 
 
@@ -44,13 +43,12 @@ rawLinks =
     , { label = "Docs", href = "/docs?section=intro#top" }
     , { label = "Ipê", href = "https://ipe-lang.org/docs" }
     , { label = "Contact", href = "mailto:hi@ipe-lang.org" }
-
-    -- These fail the boundary and are dropped — never rendered as an href.
     , { label = "XSS", href = "javascript:alert(1)" }
     , { label = "Evil", href = "//evil.com/x" }
     ]
 
 
+-- These fail the boundary and are dropped — never rendered as an href.
 init : WebReq -> ( Model, Cmd.Cmd Msg )
 init _req =
     ( { links = rawLinks }, Cmd.none )
@@ -79,10 +77,14 @@ navLink entry =
 
 
 -- | The view seals each raw href once, here, and places only the ones that pass
--- into an `href`. The rejected targets simply have no node.
+-- into an `href`. The rejected targets simply have no node. The list of links is
+-- a navigation landmark: `describe descNavigation` makes the runtime emit
+-- `role="navigation"`, and `ariaLabel` names it so a screen reader can tell this
+-- landmark apart from any other on the page.
 view : Model -> Element Msg
 view model =
-    Ui.column []
+    Ui.column
+        [ Ui.describe Ui.descNavigation, Ui.ariaLabel "Primary" ]
         (List.concatMap navLink model.links)
 
 

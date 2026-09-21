@@ -4,15 +4,6 @@
 
 [Back to stdlib index](../stdlib.md)
 
-Ipe.Html.Attributes — HTML attribute builders.
-
-Every fixed-key builder (`class` / `id` / `checked` / …) is ordinary Ipê over
-the three retained native primitives `attribute` / `boolAttribute` / `noAttr`,
-which are the irreducible `Attribute`-value constructors reached through
-`Kernel.kernel` aliases (`html_named_attr_` / `html_bool_named_attr_` /
-`html_no_attr_`). The attribute VALUE is escaped at the native render sink
-(`escape_attr`), so no escaping happens here; the fixed keys are literals.
-
 ## `attribute`
 
 ```ipe
@@ -226,8 +217,6 @@ autofocus : Bool -> Attribute msg
 tabindex : Int -> Attribute msg
 ```
 
-`tabindex n` — the `tabindex` attribute, rendered as its decimal string.
-
 ## `rows`
 
 ```ipe
@@ -236,4 +225,207 @@ rows : Int -> Attribute msg
 
 `rows n` — the `<textarea>` `rows` attribute, rendered as its decimal
 string.
+
+## `Role`
+
+## `role`
+
+```ipe
+role : Role -> Attribute msg
+```
+
+`role r` — the `role` attribute over the closed `Role` vocabulary. A raw
+`String` role is a type error, so a typo like `"buton"` cannot ship.
+
+## `AriaLive`
+
+The closed value set for `aria-live` — how urgently a live region's updates
+are announced. `Off` suppresses announcements, `Polite` waits for a pause,
+`Assertive` interrupts.
+
+## `AriaCurrent`
+
+The closed value set for `aria-current` — which item in a set is the current
+one. A page/step/location/date/time current, `CurrentTrue` for the generic
+current, or `CurrentFalse` for none.
+
+## `AriaTristate`
+
+The closed tri-state for `aria-checked` / `aria-pressed` — a toggle that is
+on, off, or partially on (`Mixed`, e.g. a tri-state checkbox).
+
+## `AriaHaspopup`
+
+The closed value set for `aria-haspopup` — the kind of popup an element
+triggers.
+
+## `AriaInvalid`
+
+The closed value set for `aria-invalid` — whether a field's value fails
+validation, and if so how.
+
+## `ariaLabel`
+
+```ipe
+ariaLabel : String -> Attribute msg
+```
+
+## `ariaLabelledby`
+
+```ipe
+ariaLabelledby : String -> Attribute msg
+```
+
+`ariaLabelledby ids` — the accessible name sourced from other element(s) by
+their `id` (space-separated). Pair with `id` on the label element.
+
+## `ariaDescribedby`
+
+```ipe
+ariaDescribedby : String -> Attribute msg
+```
+
+`ariaDescribedby ids` — a longer description sourced from other element(s)
+by their `id` (space-separated).
+
+## `ariaControls`
+
+```ipe
+ariaControls : String -> Attribute msg
+```
+
+`ariaControls ids` — the element(s) this control governs, by `id`
+(space-separated) — e.g. a toggle button and the panel it expands.
+
+## `ariaHidden`
+
+```ipe
+ariaHidden : Bool -> Attribute msg
+```
+
+## `ariaExpanded`
+
+```ipe
+ariaExpanded : Bool -> Attribute msg
+```
+
+`ariaExpanded on` — whether a disclosure control's target is expanded.
+
+## `ariaDisabled`
+
+```ipe
+ariaDisabled : Bool -> Attribute msg
+```
+
+`ariaDisabled on` — whether an element is perceivable but disabled.
+
+## `ariaSelected`
+
+```ipe
+ariaSelected : Bool -> Attribute msg
+```
+
+`ariaSelected on` — whether a selectable item (tab, option) is selected.
+
+## `ariaRequired`
+
+```ipe
+ariaRequired : Bool -> Attribute msg
+```
+
+`ariaRequired on` — whether user input is required before submission.
+
+## `ariaPressed`
+
+```ipe
+ariaPressed : AriaTristate -> Attribute msg
+```
+
+## `ariaModal`
+
+```ipe
+ariaModal : Bool -> Attribute msg
+```
+
+`ariaModal on` — whether a dialog is modal (content outside it is inert).
+
+## `ariaBusy`
+
+```ipe
+ariaBusy : Bool -> Attribute msg
+```
+
+`ariaBusy on` — whether an element is being updated and not yet stable.
+
+## `ariaChecked`
+
+```ipe
+ariaChecked : AriaTristate -> Attribute msg
+```
+
+`ariaChecked state` — a checkbox/radio/switch checked state (on/off/mixed).
+
+## `ariaInvalid`
+
+```ipe
+ariaInvalid : AriaInvalid -> Attribute msg
+```
+
+`ariaInvalid state` — whether a field's value fails validation.
+
+## `ariaLive`
+
+```ipe
+ariaLive : AriaLive -> Attribute msg
+```
+
+`ariaLive urgency` — how a live region's updates are announced
+(off/polite/assertive).
+
+## `ariaCurrent`
+
+```ipe
+ariaCurrent : AriaCurrent -> Attribute msg
+```
+
+`ariaCurrent which` — which item in a set is the current one.
+
+## `ariaHaspopup`
+
+```ipe
+ariaHaspopup : AriaHaspopup -> Attribute msg
+```
+
+`ariaHaspopup kind` — the kind of popup an element triggers.
+
+## `ariaValuemin`
+
+```ipe
+ariaValuemin : Int -> Attribute msg
+```
+
+## `ariaValuemax`
+
+```ipe
+ariaValuemax : Int -> Attribute msg
+```
+
+`ariaValuemax n` — the maximum value of a range widget.
+
+## `ariaValuenow`
+
+```ipe
+ariaValuenow : Int -> Attribute msg
+```
+
+`ariaValuenow n` — the current value of a range widget.
+
+## `ariaValuetext`
+
+```ipe
+ariaValuetext : String -> Attribute msg
+```
+
+`ariaValuetext s` — a human-readable text alternative for a range widget's
+current value (e.g. `"medium"` for a slider at `2`).
 

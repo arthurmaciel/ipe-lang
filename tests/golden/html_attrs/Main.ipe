@@ -15,8 +15,6 @@ import Ipe.Task as Task exposing (Task)
 -- unsafe value must be neutralised, never reflected verbatim). The `href`
 -- target is sealed ONCE at the boundary; an `Err` fails loud via `Task.fail`.
 -- oracle_divergence = true: pure Rust-backend HTML; asserted by substring.
-
-
 main : Task Error ()
 main =
     case linkTarget "/x?q='z" of
@@ -34,9 +32,19 @@ main =
                             , attribute "data-ok" "safe"
                             , attribute "onclick" "alert(1)"
                             , boolAttribute "hidden" True
+                            , role Searchbox
+                            , ariaLabel "search"
+                            , ariaExpanded False
+                            , ariaHidden True
+                            , ariaLive LivePolite
+                            , ariaCurrent CurrentPage
+                            , ariaChecked TriMixed
+                            , ariaValuenow 3
                             ]
                         , a [ href go ] [ text "go" ]
-                        ]))
+                        ]
+                    )
+                )
 
         Err e ->
             Task.fail e

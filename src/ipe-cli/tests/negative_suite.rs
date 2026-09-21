@@ -432,6 +432,51 @@ fn security_html_unsafe_raw_compiles() {
     assert_compiles("security_html_unsafe_raw", src);
 }
 
+/// A11Y (prove-the-refusals): the `role` attribute is over the CLOSED `Role`
+/// sum, so an invalid/misspelled role has no constructor to build from. A
+/// program reaching for a nonexistent role variant does not resolve — the typo
+/// cannot ship as a bad `role="…"` string.
+#[test]
+fn a11y_invalid_role_is_rejected() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Html.Attributes as Attr\n\
+               main = Attr.role Attr.Buton\n";
+    assert_rejected("a11y_invalid_role", src, "IPE-N0005");
+}
+
+/// A11Y (prove-the-refusals): enumerated aria values (`aria-live`, …) are over
+/// closed sums, so an out-of-vocabulary value is unrepresentable. A nonexistent
+/// `AriaLive` variant does not resolve.
+#[test]
+fn a11y_invalid_aria_live_is_rejected() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Html.Attributes as Attr\n\
+               main = Attr.ariaLive Attr.LiveShouty\n";
+    assert_rejected("a11y_invalid_aria_live", src, "IPE-N0005");
+}
+
+/// A11Y (contrapositive): the typed role / aria helpers compile — the floor is
+/// a real boundary, not a wall that also blocks the valid path.
+#[test]
+fn a11y_typed_role_and_aria_compile() {
+    let src = "module Main exposing (main)\n\
+               import Ipe.Io as Io\n\
+               import Ipe.Html exposing (div, text, render)\n\
+               import Ipe.Html.Attributes as Attr\n\
+               main : Task Error ()\n\
+               main =\n\
+               \x20   Io.println\n\
+               \x20       (render\n\
+               \x20           (div\n\
+               \x20               [ Attr.role Attr.Navigation\n\
+               \x20               , Attr.ariaLabel \"main\"\n\
+               \x20               , Attr.ariaExpanded True\n\
+               \x20               , Attr.ariaLive Attr.LivePolite\n\
+               \x20               ]\n\
+               \x20               [ text \"x\" ]))\n";
+    assert_compiles("a11y_typed_role_aria", src);
+}
+
 /// SECURITY: the inline-`<script>` hatch `unsafeScript` is homed ONLY in
 /// `Ipe.Html.Unsafe`, never on the plain `Ipe.Html` surface. A program that
 /// imports only `Ipe.Html` and reaches for `Html.unsafeScript` must be rejected,
