@@ -1,5 +1,30 @@
 # Editor integration
 
+## Quick start
+
+Run one command to configure your editor automatically:
+
+```bash
+# Helix (full auto — appends config, fetches grammar, installs queries)
+curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/helix/configure.sh | sh
+
+# Zed (full auto — merges settings.json; grammar install via GUI, see output)
+curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/zed/configure.sh | sh
+
+# Neovim (installs query files; prints Lua snippet to paste into init.lua)
+curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/neovim/configure.sh | sh
+
+# Emacs (installs treesit query files; prints Elisp snippet to paste into init.el)
+curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/emacs/configure.sh | sh
+```
+
+Each script is idempotent (safe to re-run), never overwrites existing config, and
+backs up any file it edits. The Neovim and Emacs scripts do not touch config files
+directly — Lua and Elisp config is code, so they print the exact snippet to paste.
+See `editors/<editor>/configure.sh` for the full source.
+
+---
+
 Two complementary pieces make an editor understand Ipê:
 
 - **`ipe lsp`** — semantics (completion, go-to-definition, rename, formatting,
@@ -42,6 +67,10 @@ The per-editor sections below point each host at this directory (or a checkout
 of it) and install the query files, alongside the LSP.
 
 ## Helix
+
+**Quick start:** `curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/helix/configure.sh | sh`
+
+The script appends the language + grammar block to `languages.toml`, fetches and builds the grammar, and installs the query files. Idempotent; backs up `languages.toml` before editing. Manual steps follow if you prefer.
 
 Add to `~/.config/helix/languages.toml`:
 
@@ -98,6 +127,10 @@ wrong import, and more. Open the project directory (the folder holding
 `package.ipe`), not a loose single file, so cross-module analysis runs.
 
 ## Neovim (with `nvim-lspconfig`)
+
+**Quick start:** `curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/neovim/configure.sh | sh`
+
+The script installs the tree-sitter query files and prints the Lua snippet to paste into `init.lua` (it does not edit your config directly — Lua config is code). Manual steps follow.
 
 ```lua
 local lspconfig = require("lspconfig")
@@ -248,6 +281,10 @@ The bundled extension handles the `ipe fmt --stdin` plumbing automatically.
 
 ## Emacs
 
+**Quick start:** `curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/emacs/configure.sh | sh`
+
+The script installs the treesit query files and prints the Elisp snippet to paste into `init.el` (it does not edit your config directly — Elisp config is code). Manual steps follow.
+
 ### lsp-mode
 
 Add the following to your `init.el` (requires [`lsp-mode`](https://github.com/emacs-lsp/lsp-mode)):
@@ -354,6 +391,10 @@ To enable format-on-save, install [`apheleia`](https://github.com/radian-softwar
 ```
 
 ## Zed
+
+**Quick start:** `curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/zed/configure.sh | sh`
+
+The script merges the Ipê language + LSP block into `settings.json` (idempotent; backs up before editing). Grammar/highlighting install requires the GUI — the script prints the one-step instruction. Manual steps follow.
 
 Add a custom language server entry to `~/.config/zed/settings.json` (or
 open the settings panel and edit the JSON directly):
