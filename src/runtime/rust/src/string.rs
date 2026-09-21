@@ -334,8 +334,14 @@ pub fn string_repeat(n: i64, s: String) -> String {
     let want = n as u64;
     // Whole copies that fit under the cap; `len > 0` here, so no divide-by-zero.
     let max_fit = CAP / len;
-    let copies = want.min(max_fit);
-    // `copies * len <= CAP <= usize::MAX`, so the cast cannot truncate.
+    // At least one whole copy for a non-empty `s` with `n > 0` — never collapse to
+    // "" (indistinguishable from `repeat 0 s`). When a single copy already exceeds
+    // the 64 MiB repetition ceiling, emit exactly that one copy: `s` is already
+    // materialised at `len`, so this is a bounded ~2x transient, not an
+    // input-dictated blowup. The cap bounds repetition, not the size of `s` itself.
+    let copies = want.min(max_fit).max(1);
+    // `copies` is `1` (single-copy case) or `<= max_fit` (so `copies * len <= CAP`);
+    // either way it fits `usize` on a 64-bit target, so the cast cannot truncate.
     s.repeat(copies as usize)
 }
 
@@ -753,6 +759,19 @@ mod tests {
         let fit = CAP / s.len();
         assert_eq!(out, s.repeat(fit));
         assert!(out.starts_with(s), "clamped output is a prefix of s*");
+    }
+    #[test]
+    fn test_repeat_single_copy_exceeds_cap_still_emits_one_copy() {
+        // When a SINGLE copy of `s` already exceeds the 64 MiB repetition
+        // ceiling, `n > 0` must still yield exactly one whole copy — never "".
+        // (`s` is already materialised, so one copy is a bounded transient.)
+        const CAP: usize = 64 * 1024 * 1024;
+        let big = "a".repeat(CAP + 1); // one copy already over the ceiling
+        let out = string_repeat(5, big.clone());
+        assert_eq!(
+            out, big,
+            "a non-empty s larger than the cap must repeat to exactly one copy, not \"\""
+        );
     }
 
     // string_from_float — `'g'`-mode shortest-round-trip (FormatFloat 'g' -1 64
