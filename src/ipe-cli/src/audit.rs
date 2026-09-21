@@ -1542,7 +1542,14 @@ fn advisory_check_with_base(
 ) -> Result<(), CliError> {
     let lockfile = crate::lockfile::Lockfile::read(&prepared.manifest.root)?;
     for dep in lockfile.packages() {
-        check_one_dep_advisories(db_root, &dep.name, &dep.version, base_url)?;
+        // The lockfile is re-read from disk here, an independent trust boundary
+        // from the resolver that wrote it: a hand-edited `ipe.lock` can carry a
+        // `name` the resolver would never emit (e.g. `../../x`), and that name
+        // flows into a registry URL segment and an advisory-DB path join. Parse
+        // it once, here, into the typed `PackageName` — a single non-traversing
+        // path component by construction — so no raw name reaches either sink.
+        let name = crate::package_name::PackageName::parse(&dep.name)?;
+        check_one_dep_advisories(db_root, &name, &dep.version, base_url)?;
     }
     Ok(())
 }
@@ -1563,10 +1570,11 @@ fn advisory_check_with_base(
 /// when the fallback DB is present but corrupt or unreadable.
 fn check_one_dep_advisories(
     db_root: &Path,
-    name: &str,
+    name: &crate::package_name::PackageName,
     version: &semver::Version,
     base_url: &str,
 ) -> Result<(), CliError> {
+    let name = name.as_str();
     let outcome = crate::registry::fetch_advisories_via_pages_with(
         name,
         base_url,
@@ -2533,6 +2541,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&db);
         assert!(result.is_ok(), "explicit opt-out must pass: {result:?}");
+    }
+
+    /// Defend-in-depth refusal: a hand-edited `ipe.lock` whose dep `name` is a
+    /// path-traversing value must be rejected at the audit boundary with a typed
+    /// error, before the name can reach a registry URL segment or the advisory-DB
+    /// path join. The lockfile is re-read from disk here, so it is untrusted even
+    /// though the resolver validates names on write.
+    #[test]
+    fn advisory_check_rejects_traversing_lockfile_name() {
+        for hostile in ["../../x", ".."] {
+            let dir = make_test_dir("adv-gate-traversal");
+            let db = make_test_dir("adv-gate-traversal-db");
+            write_lockfile(&dir, hostile, "1.0.0");
+            // Plant an advisory dir OUTSIDE the DB root that the unparsed join
+            // would resolve to, proving the parse — not a missing file — is what
+            // turns the read back.
+            write_high_advisory(db.parent().unwrap_or(&db), "x", ">=0.0.0");
+
+            let prepared = make_prepared(&dir);
+            let result = advisory_check_with_base(&prepared, &db, "");
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(&db);
+            assert!(
+                matches!(result, Err(CliError::Resolve(_))),
+                "a traversing lockfile name `{hostile}` must be rejected at the boundary: {result:?}"
+            );
+        }
+    }
+
+    /// The refusal is fail-closed but not over-broad: a legitimate `[a-z0-9-]`
+    /// lockfile name with no matching advisory still passes cleanly through the
+    /// same boundary.
+    #[test]
+    fn advisory_check_accepts_legit_lockfile_name() {
+        let dir = make_test_dir("adv-gate-legit");
+        let db = make_test_dir("adv-gate-legit-db");
+        write_lockfile(&dir, "http-extras", "1.0.0");
+
+        let prepared = make_prepared(&dir);
+        let result = advisory_check_with_base(&prepared, &db, "");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&db);
+        assert!(
+            result.is_ok(),
+            "a valid package name with no advisory must pass: {result:?}"
+        );
     }
 
     /// `--no-advisory-db` flag is parsed correctly.

@@ -22,10 +22,15 @@ Three knots.
   environment through this function. Because the result is a `Maybe`, a missing or
   non-allowlisted key is a value you handle, never a crash.
 - **Secret names are refused at build time.** The allowlist is validated against a
-  secret-name denylist (`*_SECRET`, `*_TOKEN`, `*_KEY`, `*_PASSWORD`,
-  `DATABASE_URL`, the `IPE_*` namespace) when the manifest is *parsed*.
-  Allowlisting a secret-shaped name is a build error, not a run-time refusal — so a
-  credential cannot be embedded into a shipped browser bundle even by mistake.
+  secret-name denylist when the manifest is *parsed*: the name is upper-cased and
+  rejected if it equals `DATABASE_URL`, begins with the `IPE_` namespace, or has any
+  `_`-separated component that is a secret word (`SECRET`, `TOKEN`, `KEY`,
+  `PASSWORD`, `PASSWD`, `CREDENTIAL`, `AUTH`, `APIKEY`). Component matching means a
+  bare `SECRET` or `APIKEY` is refused as surely as `DB_SECRET`, while an ordinary
+  name that merely embeds those letters (`AUTHOR`, `KEYBOARD`, `TOKENIZER`) stays
+  allowed. Allowlisting a secret-shaped name is a build error, not a run-time
+  refusal — so a credential cannot be embedded into a shipped browser bundle even by
+  mistake.
 
 ## A worked example: public config in a browser app
 
