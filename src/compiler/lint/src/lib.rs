@@ -824,6 +824,55 @@ mod tests {
     }
 
     #[test]
+    fn marker_inside_string_literal_does_not_suppress() {
+        // The suppression bytes appear inside a STRING literal (the `doc`
+        // value), directly above a genuine adjacent-bools violation. A
+        // context-free substring match would silence the finding — a fail-OPEN
+        // hole. The marker is data, not a comment, so the finding must stand.
+        let src = "module Main exposing (render)\n\ndoc =\n    \"see -- ipe-lint: allow adjacent-bools \"\nrender : Bool -> Bool -> String\nrender a b =\n    \"x\"\n";
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report.findings.iter().any(|f| f.rule == "adjacent-bools"),
+            "a marker inside a string literal must NOT suppress a real finding"
+        );
+    }
+
+    #[test]
+    fn marker_inside_string_literal_does_not_suppress_crlf() {
+        // Same probe as the LF case, but CRLF line endings, with enough blank
+        // lines above the string that the per-CRLF-line undercount is decisive.
+        // The marker's true whole-source byte offset counts every `\r`; deriving
+        // it from `src.lines()` (which strips `\r`) undercounts one byte per
+        // preceding CRLF line, drifting the computed offset BELOW the string
+        // literal's span `lo` — so the in-literal marker is mistaken for a real
+        // directive and fail-OPENs. The blank-line padding makes that drift
+        // exceed the marker's distance past the opening quote, so the old
+        // `line.len() + 1` accounting genuinely mis-classifies here (the shorter
+        // LF-style fixture would not drift far enough to prove it). The finding
+        // must stand.
+        let src = "module Main exposing (render)\r\n\r\n\r\n\r\n\r\n\r\n\r\ndoc =\r\n    \"see -- ipe-lint: allow adjacent-bools \"\r\nrender : Bool -> Bool -> String\r\nrender a b =\r\n    \"x\"\r\n";
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            report.findings.iter().any(|f| f.rule == "adjacent-bools"),
+            "a marker inside a string literal must NOT suppress on CRLF source, got {:?}",
+            report.findings
+        );
+    }
+
+    #[test]
+    fn inline_suppression_silences_one_site_crlf() {
+        // A genuine `-- ipe-lint: allow` comment above the signature, CRLF
+        // endings. The offset derivation must still place the marker OUTSIDE
+        // every literal span so the real directive is honoured on CRLF source.
+        let src = "module Main exposing (render)\r\n\r\n-- ipe-lint: allow adjacent-bools\r\nrender : Bool -> Bool -> String\r\nrender a b =\r\n    \"x\"\r\n";
+        let report = run(&[module(src)], &LintConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| f.rule == "adjacent-bools"),
+            "a real inline suppression must silence the site on CRLF source"
+        );
+    }
+
+    #[test]
     fn fixes_are_idempotent() {
         // A nested call the prefer-pipeline rule rewrites; re-running finds none.
         let src =
