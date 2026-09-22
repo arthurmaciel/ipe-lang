@@ -285,6 +285,55 @@ fn dispatch(state: &State, request: &Request) -> Option<FeatureOutcome> {
     }
 }
 
+/// Resolve a document URI to its module, file handle, and borrowed source
+/// text, or return `NoResult` when the document is unknown. Used by every
+/// handler that needs only a located file (groups B and C).
+fn locate_ctx(
+    state: &State,
+    uri: &Url,
+) -> Result<(Vec<String>, ipe_db::SourceFile), FeatureOutcome> {
+    state.locate(uri).ok_or(FeatureOutcome::NoResult)
+}
+
+/// Context for a position-bearing request (group A). Collapses: locate →
+/// `NoResult`, root-missing → `NoResult`, entry-file-missing → `NoResult`,
+/// UTF-16 → byte offset (saturating at `u32::MAX`).
+struct PosCtx<'db> {
+    module: Vec<String>,
+    file: ipe_db::SourceFile,
+    /// Source text borrowed from the salsa database for this request.
+    text: &'db str,
+    root: ipe_db::SourceRoot,
+    entry_file: ipe_db::SourceFile,
+    /// Byte offset of the cursor position, saturated to `u32::MAX`.
+    byte: u32,
+}
+
+fn position_ctx<'db>(
+    state: &'db State,
+    uri: &Url,
+    position: lsp_types::Position,
+) -> Result<PosCtx<'db>, FeatureOutcome> {
+    let (module, file) = locate_ctx(state, uri)?;
+    let text = file.text(&state.db);
+    let Some(root) = state.root else {
+        return Err(FeatureOutcome::NoResult);
+    };
+    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
+        return Err(FeatureOutcome::NoResult);
+    };
+    let byte = offset::position_to_offset(text, position, state.encoding);
+    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
+    Ok(PosCtx {
+        module,
+        file,
+        text,
+        root,
+        entry_file,
+        byte,
+    })
+}
+
 /// `textDocument/hover` — the solved type of the innermost expression at the
 /// cursor. `null` for an unknown document, an unsolvable program, or a
 /// position on no expression (never a guess).
@@ -293,23 +342,14 @@ fn hover_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
         return FeatureOutcome::InvalidParams("invalid params for textDocument/hover".into());
     };
     let position = params.text_document_position_params;
-    let Some((_module, file)) = state.locate(&position.text_document.uri) else {
+    let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
         return FeatureOutcome::NoResult;
     };
-    let text = file.text(&state.db);
-    let Some(root) = state.root else {
-        return FeatureOutcome::NoResult;
-    };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return FeatureOutcome::NoResult;
-    };
-    let byte = offset::position_to_offset(text, position.position, state.encoding);
-    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
-    ipe_lsp_features::hover::hover(&state.db, root, entry_file, file, byte).map_or(
+    ipe_lsp_features::hover::hover(&state.db, ctx.root, ctx.entry_file, ctx.file, ctx.byte).map_or(
         FeatureOutcome::NoResult,
         |info| {
             let range = Some(ipe_lsp_features::offset::span_to_range(
-                text,
+                ctx.text,
                 info.span,
                 state.encoding,
             ));
@@ -378,7 +418,7 @@ fn folding_ranges_result(state: &State, params: &serde_json::Value) -> FeatureOu
             "invalid params for textDocument/foldingRange".into(),
         );
     };
-    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
+    let Ok((_module, file)) = locate_ctx(state, &params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let ranges = ipe_lsp_features::folding::folding_ranges(&state.db, file, state.encoding);
@@ -393,7 +433,7 @@ fn document_symbols_result(state: &State, params: &serde_json::Value) -> Feature
             "invalid params for textDocument/documentSymbol".into(),
         );
     };
-    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
+    let Ok((_module, file)) = locate_ctx(state, &params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let symbols = ipe_lsp_features::symbols::document_symbols(&state.db, file, state.encoding);
@@ -406,22 +446,18 @@ fn completion_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
         return FeatureOutcome::InvalidParams("invalid params for textDocument/completion".into());
     };
     let position = params.text_document_position;
-    let Some((module, file)) = state.locate(&position.text_document.uri) else {
-        return FeatureOutcome::NoResult;
-    };
-    let Some(root) = state.root else {
-        return FeatureOutcome::NoResult;
-    };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return FeatureOutcome::NoResult;
-    };
     // Convert the UTF-16 cursor position to a byte offset so completion can read
     // the type the surrounding context expects there (type-directed ranking).
-    let text = file.text(&state.db);
-    let byte = offset::position_to_offset(text, position.position, state.encoding);
-    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
-    let items =
-        ipe_lsp_features::completion::completions(&state.db, root, entry_file, &module, byte);
+    let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
+        return FeatureOutcome::NoResult;
+    };
+    let items = ipe_lsp_features::completion::completions(
+        &state.db,
+        ctx.root,
+        ctx.entry_file,
+        &ctx.module,
+        ctx.byte,
+    );
     FeatureOutcome::payload(items)
 }
 
@@ -433,21 +469,16 @@ fn definition_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
         return FeatureOutcome::InvalidParams("invalid params for textDocument/definition".into());
     };
     let position = params.text_document_position_params;
-    let Some((module, file)) = state.locate(&position.text_document.uri) else {
+    let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
         return FeatureOutcome::NoResult;
     };
-    let text = file.text(&state.db);
-    let Some(root) = state.root else {
-        return FeatureOutcome::NoResult;
-    };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return FeatureOutcome::NoResult;
-    };
-    let byte = offset::position_to_offset(text, position.position, state.encoding);
-    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
-    let Some(def) =
-        ipe_lsp_features::navigation::goto_definition(&state.db, root, entry_file, &module, byte)
-    else {
+    let Some(def) = ipe_lsp_features::navigation::goto_definition(
+        &state.db,
+        ctx.root,
+        ctx.entry_file,
+        &ctx.module,
+        ctx.byte,
+    ) else {
         return FeatureOutcome::NoResult;
     };
     let Some(def_uri) = state.uri_for_module(&def.module) else {
@@ -455,7 +486,8 @@ fn definition_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
     };
     // Borrow the target text to convert the byte span to a range.
     let empty = String::new();
-    let def_text = root
+    let def_text = ctx
+        .root
         .files(&state.db)
         .get(&def.module)
         .map_or(&empty, |f| f.text(&state.db));
@@ -473,27 +505,22 @@ fn references_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
         return FeatureOutcome::InvalidParams("invalid params for textDocument/references".into());
     };
     let position = params.text_document_position;
-    let Some((module, file)) = state.locate(&position.text_document.uri) else {
+    let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
         return FeatureOutcome::NoResult;
     };
-    let text = file.text(&state.db);
-    let Some(root) = state.root else {
-        return FeatureOutcome::NoResult;
-    };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return FeatureOutcome::NoResult;
-    };
-    let byte = offset::position_to_offset(text, position.position, state.encoding);
-    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     // Resolve via goto_definition to get the canonical (home, name) pair.
-    let Some(def) =
-        ipe_lsp_features::navigation::goto_definition(&state.db, root, entry_file, &module, byte)
-    else {
+    let Some(def) = ipe_lsp_features::navigation::goto_definition(
+        &state.db,
+        ctx.root,
+        ctx.entry_file,
+        &ctx.module,
+        ctx.byte,
+    ) else {
         return FeatureOutcome::NoResult;
     };
     // Borrow each module's salsa-owned text rather than cloning the whole file:
     // once for the definition, and once per module a reference lands in.
-    let files = root.files(&state.db);
+    let files = ctx.root.files(&state.db);
     let text_of = |module: &[String]| files.get(module).map(|f| f.text(&state.db));
     let Some(def_text) = text_of(&def.module) else {
         return FeatureOutcome::NoResult;
@@ -505,8 +532,8 @@ fn references_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
     };
     let refs = ipe_lsp_features::navigation::find_references(
         &state.db,
-        root,
-        entry_file,
+        ctx.root,
+        ctx.entry_file,
         &def.module,
         def_name,
     );
@@ -547,24 +574,19 @@ fn prepare_rename_result(state: &State, params: &serde_json::Value) -> FeatureOu
             "invalid params for textDocument/prepareRename".into(),
         );
     };
-    let Some((module, file)) = state.locate(&params.text_document.uri) else {
+    let Ok(ctx) = position_ctx(state, &params.text_document.uri, params.position) else {
         return FeatureOutcome::NoResult;
     };
-    let text = file.text(&state.db);
-    let Some(root) = state.root else {
+    let Some(prep) = ipe_lsp_features::rename::prepare_rename(
+        &state.db,
+        ctx.root,
+        ctx.entry_file,
+        &ctx.module,
+        ctx.byte,
+    ) else {
         return FeatureOutcome::NoResult;
     };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return FeatureOutcome::NoResult;
-    };
-    let byte = offset::position_to_offset(text, params.position, state.encoding);
-    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
-    let Some(prep) =
-        ipe_lsp_features::rename::prepare_rename(&state.db, root, entry_file, &module, byte)
-    else {
-        return FeatureOutcome::NoResult;
-    };
-    let range = ipe_lsp_features::offset::span_to_range(text, prep.span, state.encoding);
+    let range = ipe_lsp_features::offset::span_to_range(ctx.text, prep.span, state.encoding);
     // Return `{ range, placeholder }` — the standard `PrepareRenameResponse`.
     let response = lsp_types::PrepareRenameResponse::RangeWithPlaceholder {
         range,
@@ -579,35 +601,30 @@ fn rename_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
         return FeatureOutcome::InvalidParams("invalid params for textDocument/rename".into());
     };
     let position = params.text_document_position;
-    let Some((module, file)) = state.locate(&position.text_document.uri) else {
+    let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
         return FeatureOutcome::NoResult;
     };
-    let text = file.text(&state.db);
-    let Some(root) = state.root else {
-        return FeatureOutcome::NoResult;
-    };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return FeatureOutcome::NoResult;
-    };
-    let byte = offset::position_to_offset(text, position.position, state.encoding);
-    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
-    let encoding = state.encoding;
     let db = &state.db;
     let uri_of = |m: &[String]| state.uri_for_module(m);
     let text_of =
-        |m: &[String]| -> Option<String> { root.files(db).get(m).map(|f| f.text(db).clone()) };
+        |m: &[String]| -> Option<String> { ctx.root.files(db).get(m).map(|f| f.text(db).clone()) };
     let req = ipe_lsp_features::rename::RenameRequest {
-        byte,
+        byte: ctx.byte,
         new_name: &params.new_name,
-        encoding,
+        encoding: state.encoding,
     };
     let resolver = ipe_lsp_features::rename::ModuleResolver {
         uri_of_module: &uri_of,
         text_of_module: &text_of,
     };
-    let Some(ws_edit) =
-        ipe_lsp_features::rename::rename(db, root, entry_file, &module, &req, &resolver)
-    else {
+    let Some(ws_edit) = ipe_lsp_features::rename::rename(
+        db,
+        ctx.root,
+        ctx.entry_file,
+        &ctx.module,
+        &req,
+        &resolver,
+    ) else {
         return FeatureOutcome::NoResult;
     };
     FeatureOutcome::payload(ws_edit)
@@ -1020,7 +1037,7 @@ fn formatting_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
     else {
         return FeatureOutcome::InvalidParams("invalid params for textDocument/formatting".into());
     };
-    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
+    let Ok((_module, file)) = locate_ctx(state, &params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let edits = ipe_lsp_features::formatting::format_document(&state.db, file, state.encoding);
@@ -1036,7 +1053,7 @@ fn range_formatting_result(state: &State, params: &serde_json::Value) -> Feature
             "invalid params for textDocument/rangeFormatting".into(),
         );
     };
-    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
+    let Ok((_module, file)) = locate_ctx(state, &params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let edits =
@@ -1083,7 +1100,7 @@ fn semantic_tokens_full_result(state: &State, params: &serde_json::Value) -> Fea
             "invalid params for textDocument/semanticTokens/full".into(),
         );
     };
-    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
+    let Ok((_module, file)) = locate_ctx(state, &params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let result =
@@ -1100,20 +1117,15 @@ fn signature_help_result(state: &State, params: &serde_json::Value) -> FeatureOu
         );
     };
     let position = params.text_document_position_params;
-    let Some((module, file)) = state.locate(&position.text_document.uri) else {
+    let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
         return FeatureOutcome::NoResult;
     };
-    let text = file.text(&state.db);
-    let Some(root) = state.root else {
-        return FeatureOutcome::NoResult;
-    };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return FeatureOutcome::NoResult;
-    };
-    let byte = offset::position_to_offset(text, position.position, state.encoding);
-    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     FeatureOutcome::maybe(ipe_lsp_features::signature_help::signature_help(
-        &state.db, root, entry_file, &module, byte,
+        &state.db,
+        ctx.root,
+        ctx.entry_file,
+        &ctx.module,
+        ctx.byte,
     ))
 }
 
@@ -1152,25 +1164,20 @@ fn document_highlight_result(state: &State, params: &serde_json::Value) -> Featu
         );
     };
     let position = params.text_document_position_params;
-    let Some((module, file)) = state.locate(&position.text_document.uri) else {
+    let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
         return FeatureOutcome::NoResult;
     };
-    let text = file.text(&state.db);
-    let Some(root) = state.root else {
-        return FeatureOutcome::NoResult;
-    };
-    let Some(entry_file) = root.files(&state.db).get(&state.entry_module).copied() else {
-        return FeatureOutcome::NoResult;
-    };
-    let byte = offset::position_to_offset(text, position.position, state.encoding);
-    let byte = u32::try_from(byte).unwrap_or(u32::MAX);
     // Resolve to the canonical (home, name) pair via goto_definition.
-    let Some(def) =
-        ipe_lsp_features::navigation::goto_definition(&state.db, root, entry_file, &module, byte)
-    else {
+    let Some(def) = ipe_lsp_features::navigation::goto_definition(
+        &state.db,
+        ctx.root,
+        ctx.entry_file,
+        &ctx.module,
+        ctx.byte,
+    ) else {
         return FeatureOutcome::NoResult;
     };
-    let files = root.files(&state.db);
+    let files = ctx.root.files(&state.db);
     let text_of = |m: &[String]| files.get(m).map(|f| f.text(&state.db));
     let Some(def_text) = text_of(&def.module) else {
         return FeatureOutcome::NoResult;
@@ -1183,14 +1190,14 @@ fn document_highlight_result(state: &State, params: &serde_json::Value) -> Featu
     // Collect references across all modules, then filter to the requested document.
     let refs = ipe_lsp_features::navigation::find_references(
         &state.db,
-        root,
-        entry_file,
+        ctx.root,
+        ctx.entry_file,
         &def.module,
         def_name,
     );
     let mut highlights: Vec<lsp_types::DocumentHighlight> = Vec::new();
     // Include the definition site when it is in the same document.
-    if def.module == module {
+    if def.module == ctx.module {
         let range = ipe_lsp_features::offset::span_to_range(def_text, def.span, state.encoding);
         highlights.push(lsp_types::DocumentHighlight {
             range,
@@ -1198,7 +1205,7 @@ fn document_highlight_result(state: &State, params: &serde_json::Value) -> Featu
         });
     }
     for r in refs {
-        if r.module != module {
+        if r.module != ctx.module {
             continue;
         }
         let Some(ref_text) = text_of(&r.module) else {
@@ -1279,7 +1286,7 @@ fn selection_range_result(state: &State, params: &serde_json::Value) -> FeatureO
             "invalid params for textDocument/selectionRange".into(),
         );
     };
-    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
+    let Ok((_module, file)) = locate_ctx(state, &params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let ranges = ipe_lsp_features::selection_range::selection_ranges(
@@ -1300,7 +1307,7 @@ fn semantic_tokens_range_result(state: &State, params: &serde_json::Value) -> Fe
             "invalid params for textDocument/semanticTokens/range".into(),
         );
     };
-    let Some((_module, file)) = state.locate(&params.text_document.uri) else {
+    let Ok((_module, file)) = locate_ctx(state, &params.text_document.uri) else {
         return FeatureOutcome::NoResult;
     };
     let result = ipe_lsp_features::semantic_tokens::semantic_tokens_range(
