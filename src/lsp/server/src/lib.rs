@@ -28,7 +28,7 @@ use lsp_types::{
     RenameOptions, SaveOptions, SelectionRangeProviderCapability, SemanticTokensFullOptions,
     SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
     SignatureHelpOptions, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TypeDefinitionProviderCapability,
 };
 
 use ipe_lsp_features::PositionEncoding;
@@ -139,6 +139,7 @@ fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             ..CompletionOptions::default()
         }),
         definition_provider: Some(OneOf::Left(true)),
+        type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         references_provider: Some(OneOf::Left(true)),
         rename_provider: Some(OneOf::Right(RenameOptions {
             prepare_provider: Some(true),

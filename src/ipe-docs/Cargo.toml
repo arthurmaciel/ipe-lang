@@ -21,8 +21,9 @@ name = "gen_site"
 path = "src/bin/gen_site.rs"
 
 [dependencies]
-ipe_annotate  = { path = "../compiler/annotate" }
-ipe_intern    = { path = "../compiler/intern" }
+ipe_annotate    = { path = "../compiler/annotate" }
+ipe_diagnostics = { path = "../compiler/diagnostics" }
+ipe_intern      = { path = "../compiler/intern" }
 ipe_kernels   = { path = "../compiler/kernels" }
 ipe_syntax    = { path = "../compiler/syntax" }
 ipe_parse     = { path = "../compiler/parse" }

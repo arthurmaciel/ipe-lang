@@ -1,14 +1,17 @@
 module Main exposing (main)
 
+import Ipe.String as String
 import Ipe.Tea.Tui exposing (tea)
 import Ipe.Tea.Tui.Cmd as Cmd
 import Ipe.Tea.Tui.Sub as Sub
 import Ipe.Ui.Tui as Ui
+import Ipe.Ui.Tui exposing (Screen)
 
 
 type Msg
     = Increment
     | Decrement
+    | NoOp
 
 
 type alias Model =
@@ -16,8 +19,8 @@ type alias Model =
     }
 
 
-init : ( Model, Cmd Msg )
-init =
+init : () -> ( Model, Cmd Msg )
+init _unit =
     ( { count = 0 }, Cmd.none )
 
 
@@ -30,6 +33,9 @@ update msg model =
         Decrement ->
             ( { model | count = model.count - 1 }, Cmd.none )
 
+        NoOp ->
+            ( model, Cmd.none )
+
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
@@ -39,10 +45,29 @@ subscriptions _model =
 view : Model -> Screen Msg
 view model =
     Ui.column
-        []
-        [ Ui.text "Ipê counter"
-        , Ui.text ("[+] count: " ++ String.fromInt model.count ++ " [-]")
+        [ Ui.spacing 1, Ui.padding 2 ]
+        [ Ui.el [ Ui.bold ] (Ui.text "Ipê counter")
+        , Ui.el [ Ui.reverse ] (Ui.text ("count = " ++ String.fromInt model.count))
+        , Ui.el [ Ui.dim ] (Ui.text "(Up +, Down -, q quit)")
         ]
+
+
+type alias KeyEvent =
+    { kind : String
+    , value : String
+    }
+
+
+onKey : KeyEvent -> Msg
+onKey key =
+    if key.kind == "up" then
+        Increment
+
+    else if key.kind == "down" then
+        Decrement
+
+    else
+        NoOp
 
 
 main =
@@ -51,4 +76,5 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
+        , onKey = onKey
         }

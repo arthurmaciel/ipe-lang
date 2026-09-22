@@ -41,13 +41,23 @@ fn hover_reports_the_solved_type_of_the_innermost_region() {
 
     // `three` inside `main = double three` (the last occurrence).
     let byte = u32::try_from(MAIN.rfind("three").expect("occurrence")).expect("fits");
-    let info = ipe_lsp_features::hover::hover(&db, root, entry, entry, byte).expect("hover hit");
+    let info =
+        ipe_lsp_features::hover::hover(&db, root, entry, entry, &["Main".to_owned()], byte, None)
+            .expect("hover hit");
     assert_eq!(info.ty, "Int");
 
     // Hover in the dep module works with the dep's own source file.
     let byte = u32::try_from(HELPER.rfind('3').expect("literal")).expect("fits");
-    let info =
-        ipe_lsp_features::hover::hover(&db, root, entry, helper, byte).expect("hover hit in dep");
+    let info = ipe_lsp_features::hover::hover(
+        &db,
+        root,
+        entry,
+        helper,
+        &["Helper".to_owned()],
+        byte,
+        None,
+    )
+    .expect("hover hit in dep");
     assert_eq!(info.ty, "Int");
     // A non-`main` hover discloses no control model — the disclosure is a `main`
     // fact only, never attached to an arbitrary expression.
@@ -67,7 +77,9 @@ fn hover_on_main_discloses_the_derived_control_model() {
     // never re-derived here. The cursor is on `three` in `main = double three`, a
     // type-solved region that also falls inside the `main` binding.
     let byte = u32::try_from(MAIN.rfind("three").expect("occurrence")).expect("fits");
-    let info = ipe_lsp_features::hover::hover(&db, root, entry, entry, byte).expect("hover hit");
+    let info =
+        ipe_lsp_features::hover::hover(&db, root, entry, entry, &["Main".to_owned()], byte, None)
+            .expect("hover hit");
     assert_eq!(info.ty, "Int");
     assert_eq!(info.control_model, Some("direct"));
 
@@ -75,7 +87,9 @@ fn hover_on_main_discloses_the_derived_control_model() {
     // `main`, so it discloses no control model — the disclosure is a `main`-only
     // fact, never attached to an arbitrary binding.
     let byte = u32::try_from(MAIN.rfind("n + n").expect("double body")).expect("fits");
-    let info = ipe_lsp_features::hover::hover(&db, root, entry, entry, byte).expect("hover hit");
+    let info =
+        ipe_lsp_features::hover::hover(&db, root, entry, entry, &["Main".to_owned()], byte, None)
+            .expect("hover hit");
     assert_eq!(info.control_model, None);
 }
 
@@ -142,5 +156,50 @@ fn folding_covers_multi_line_decls_and_the_union() {
             .iter()
             .any(|r| r.end_line > r.start_line && r.start_line >= 8),
         "{ranges:?}"
+    );
+}
+
+/// `type_definition` jumps to a user-declared type's declaration: a cursor on a
+/// value of type `Shade` resolves to the `type Shade` declaration name token.
+#[test]
+fn type_definition_jumps_to_the_union_declaration() {
+    const SRC: &str = "module Main exposing (main)\n\n\
+        type Shade\n    = Light\n    | Dark\n\n\
+        favorite : Shade\n\
+        favorite =\n    Light\n\n\
+        main = favorite\n";
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], SRC);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    // Cursor on `Light` in `favorite =\n    Light` — its solved type is `Shade`.
+    let byte = u32::try_from(SRC.rfind("    Light").expect("body") + 4).expect("fits");
+    let def =
+        ipe_lsp_features::navigation::type_definition(&db, root, entry, &["Main".to_owned()], byte)
+            .expect("cursor on a Shade-typed value resolves its type declaration");
+    assert_eq!(def.module, vec!["Main".to_owned()]);
+    let lo = def.span.lo as usize;
+    let hi = def.span.hi as usize;
+    assert_eq!(
+        SRC.get(lo..hi),
+        Some("Shade"),
+        "the span must cover the `Shade` type-name token"
+    );
+}
+
+/// The refusal: a cursor whose solved type is a builtin (`Int`) declared outside
+/// the project resolves to no type definition — never a guess, never a panic.
+#[test]
+fn type_definition_returns_none_for_a_non_project_type() {
+    const SRC: &str = "module Main exposing (main)\n\nmain : Int\nmain =\n    42\n";
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], SRC);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+    let byte = u32::try_from(SRC.find("42").expect("literal")).expect("fits");
+    let def =
+        ipe_lsp_features::navigation::type_definition(&db, root, entry, &["Main".to_owned()], byte);
+    assert!(
+        def.is_none(),
+        "a builtin `Int` has no in-project declaration to jump to: {def:?}"
     );
 }

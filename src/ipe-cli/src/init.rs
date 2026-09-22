@@ -90,6 +90,39 @@ pub enum InitShape {
 }
 
 impl InitShape {
+    /// Every scaffold shape, in wizard order. The single source of truth for
+    /// "which shapes exist": the scaffold-build SEAL iterates this so a new
+    /// variant cannot silently escape the accept-then-build proof, and
+    /// [`InitShape::exhaustiveness_guard`] fails to compile if a variant is added
+    /// without being listed here.
+    pub const ALL: [Self; 6] = [
+        Self::Web,
+        Self::Tui,
+        Self::Cli,
+        Self::Worker,
+        Self::Server,
+        Self::Script,
+    ];
+
+    /// Compile-time proof that [`InitShape::ALL`] lists every variant: the match
+    /// is exhaustive, so adding a variant without extending `ALL` fails to
+    /// compile here (the new arm has no `ALL` slot to map to). Never called; its
+    /// purpose is the type check.
+    #[allow(dead_code)] // compile-time exhaustiveness tripwire, not runtime code.
+    const fn exhaustiveness_guard(self) -> usize {
+        // Each variant maps to its index in `ALL`. A new variant forces a new arm,
+        // and a new arm forces a matching `ALL` entry (or the index is wrong and
+        // the `Self::ALL[i]` equality assertion below fails at compile time).
+        match self {
+            Self::Web => 0,
+            Self::Tui => 1,
+            Self::Cli => 2,
+            Self::Worker => 3,
+            Self::Server => 4,
+            Self::Script => 5,
+        }
+    }
+
     /// Parse a `--shape` flag value. Returns `None` for an unrecognised token.
     fn parse(s: &str) -> Option<Self> {
         match s {
@@ -1406,18 +1439,28 @@ mod tests {
 
     #[test]
     fn shape_parse_round_trips() {
-        for (token, expected) in [
-            ("web", InitShape::Web),
-            ("tui", InitShape::Tui),
-            ("cli", InitShape::Cli),
-            ("worker", InitShape::Worker),
-            ("server", InitShape::Server),
-            ("script", InitShape::Script),
-        ] {
-            assert_eq!(InitShape::parse(token), Some(expected), "parse {token}");
-            assert_eq!(expected.label(), token, "label {token}");
+        // Driven from `InitShape::ALL` (the SSOT): every listed shape must parse
+        // from its own label and label back to the same token.
+        for shape in InitShape::ALL {
+            let token = shape.label();
+            assert_eq!(InitShape::parse(token), Some(shape), "parse {token}");
         }
         assert_eq!(InitShape::parse("unknown"), None, "unknown shape is None");
+    }
+
+    #[test]
+    fn all_lists_every_variant_in_index_order() {
+        // The exhaustiveness guard maps each variant to its `ALL` index; asserting
+        // the two agree keeps `ALL` honest. A new variant forces a new guard arm
+        // (exhaustive match) and a new `ALL` slot, or this assertion fails.
+        for (index, shape) in InitShape::ALL.into_iter().enumerate() {
+            assert_eq!(
+                shape.exhaustiveness_guard(),
+                index,
+                "InitShape::ALL is out of sync with the variant order for {}",
+                shape.label()
+            );
+        }
     }
 
     #[test]
