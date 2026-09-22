@@ -1807,8 +1807,15 @@ fn emitted_is_web(emitted: &ipe_backend::EmittedProject) -> bool {
 /// rebuilds and restarts it directly rather than fronting a port it cannot
 /// discover or relocate.
 fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
+    // Match the FULLY-QUALIFIED emitted call path, not a bare token: the kernel
+    // emits `ipe_runtime::server::server_listen(` / `ipe_runtime::web::web_app(`.
+    // A bare `server_listen` would also match a user function named
+    // `serverListen` (emitted `server_listen`) or a string literal in user code
+    // — a false positive that would engage the proxy for a program binding no
+    // HTTP port, reviving the 502 (proxy holds the port, child never listens).
     emitted_main_rs(emitted).is_some_and(|text| {
-        text.contains("ipe_runtime::web::web_app") || text.contains("server_listen")
+        text.contains("ipe_runtime::web::web_app")
+            || text.contains("ipe_runtime::server::server_listen")
     })
 }
 
@@ -3011,7 +3018,7 @@ mod tests {
     }
 
     /// An `Ipe.Http.Server` emits `server_listen`: an HTTP binder, but NOT web —
-    /// so the proxy engages (T2) while readiness uses TcpConnect, not readyz (T3).
+    /// so the proxy engages (T2) while readiness uses `TcpConnect`, not readyz (T3).
     /// This holds regardless of program shape: a `Shape::Script main = Server.listen`
     /// emits `server_listen` and is detected by the emitted symbol, not the shape.
     #[test]
@@ -3021,6 +3028,28 @@ mod tests {
         assert!(
             emitted_binds_http(&p),
             "server_listen must engage the HTTP proxy"
+        );
+    }
+
+    /// Prove the refusal: detection matches the FULLY-QUALIFIED emitted call, so
+    /// a user-defined `serverListen` function (emitted `server_listen`) or the
+    /// bare token in a string literal is NOT mistaken for a first-party HTTP
+    /// bind — no spurious proxy engagement (which would revive the 502).
+    #[test]
+    fn unqualified_server_listen_token_does_not_engage_proxy() {
+        let user_fn = emitted_with_main(
+            "fn server_listen(x: i64) -> i64 { x } fn main() { let _ = server_listen(1i64); }",
+        );
+        assert!(
+            !emitted_binds_http(&user_fn),
+            "a user function named server_listen (no ipe_runtime::server:: path) must NOT engage \
+             the proxy"
+        );
+        let string_literal =
+            emitted_with_main("fn main() { let _ = \"server_listen is just text here\"; }");
+        assert!(
+            !emitted_binds_http(&string_literal),
+            "the bare token in a string literal must NOT engage the proxy"
         );
     }
 

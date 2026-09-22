@@ -147,6 +147,10 @@ fn render_command(out: &mut String, cmd: &CommandSpec) {
         let _ = writeln!(out, "**Arguments:** {}\n", cmd.args_desc);
     }
 
+    if !cmd.output_desc.is_empty() {
+        let _ = writeln!(out, "**Output:** {}\n", cmd.output_desc);
+    }
+
     if !cmd.options.is_empty() {
         out.push_str("**Flags:**\n\n");
         for opt in &cmd.options {

@@ -888,13 +888,12 @@ pub fn compile_and_finalize_native_build(
     build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, out_dir)?;
 
     // Copy the just-built binary into a stable per-project location. With the
-    // Ipê-recommended shared `CARGO_TARGET_DIR`, the artifact lands in the shared
-    // cache (`<shared-target>/<profile>/<name>`), not under the project — a user
-    // cannot find it there, and two projects that share the emitted crate name
-    // build to the SAME cache path. The copy runs WITHIN this build invocation,
-    // while cargo's advisory target-dir lock is still held, so same-target builds
-    // serialise and the byte we copy is always the binary THIS build produced.
-    // Copy (never hardlink): the shared target is often a different mount.
+    // Ipê-recommended shared `CARGO_TARGET_DIR`, the artifact lands in the
+    // shared cache (`<shared-target>/<profile>/<name>`), not under the project,
+    // where a user cannot readily find it. The copy runs immediately after this
+    // invocation's `cargo build` returns, resolving the artifact path from
+    // `cargo metadata`; a binary missing at that path fails closed (no stale
+    // copy). Copy (never hardlink): the shared target is often a different mount.
     let artifact = copy_native_artifact(out_dir, static_plan.as_ref())?;
 
     let manifest_parsed = match manifest {

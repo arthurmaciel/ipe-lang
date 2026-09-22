@@ -1085,16 +1085,16 @@ fn strip_trailing_slash(p: &str) -> String {
     }
 }
 
-/// Resolve the port `server_listen` binds: `IPE_SERVER_PORT` when it holds a
-/// parseable integer, else the `source` port the program passed to
-/// `Server.listen`. A missing OR malformed env value falls back to `source` —
-/// fail-closed, so a garbage env can never silently bind port `0` (an OS-chosen
-/// ephemeral port the caller could not reach). Pure over its inputs so the
-/// precedence is unit-testable without touching the process environment.
+/// Resolve the port `server_listen` binds: `IPE_SERVER_PORT` (injected by
+/// `ipe watch` to place the app on an internal loopback port BEHIND its
+/// blue-green proxy) when it is a valid port in `1..=65535`, else the `source`
+/// port the program passed to `Server.listen`. Delegates to
+/// [`crate::system::resolve_listen_port`] — the single fail-closed definition
+/// shared with `Ipe.Web`'s `IPE_WEB_PORT` precedence — so a missing, malformed,
+/// out-of-range, or `0` env value falls back to `source`, never a silently
+/// OS-chosen ephemeral port the caller could not reach.
 fn resolve_server_port(env_value: Option<String>, source: i64) -> i64 {
-    env_value
-        .and_then(|s| s.parse::<i64>().ok())
-        .unwrap_or(source)
+    crate::system::resolve_listen_port(env_value, source)
 }
 
 /// Server.listen : Int -> List Route -> Task Error ()  — serves via axum/tokio.
@@ -2483,18 +2483,38 @@ mod tests {
 
     #[test]
     fn malformed_ipe_server_port_falls_back_to_source_never_zero() {
-        // Prove the refusal: an empty or non-numeric env value must NOT bind 0 (a
-        // silent OS-ephemeral port the caller cannot reach) — it falls back to the
-        // source port the program passed. Fail-closed on garbage input.
-        for garbage in ["", "abc", "80a0", " ", "-"] {
+        // Prove the refusal: a value that is not a bindable port in `1..=65535`
+        // must NOT reach the socket — it falls back to the source port the
+        // program passed. Fail-closed. This pins EVERY off-boundary shape:
+        //  - garbage / non-numeric (parse fails),
+        //  - the literal "0" (parses, but 0 = an OS-chosen ephemeral port the
+        //    caller cannot reach — the case the plain `i64` parse let slip),
+        //  - out of u16 range, high and negative (rejected at the boundary,
+        //    not left to the socket layer).
+        for garbage in [
+            "",
+            "abc",
+            "80a0",
+            " ",
+            "-",
+            "0",
+            "-1",
+            "65536",
+            "70000",
+            "99999999999",
+        ] {
             assert_eq!(
                 resolve_server_port(Some(garbage.to_owned()), 8000),
                 8000,
-                "malformed IPE_SERVER_PORT {garbage:?} must fall back to the source port, not 0"
+                "IPE_SERVER_PORT {garbage:?} is not a valid 1..=65535 port; must fall back to \
+                 the source port, never bind 0 or an out-of-range value"
             );
         }
         // An absent env value also falls back to the source port.
         assert_eq!(resolve_server_port(None, 8000), 8000);
+        // A valid in-range value still wins.
+        assert_eq!(resolve_server_port(Some("1".to_owned()), 8000), 1);
+        assert_eq!(resolve_server_port(Some("65535".to_owned()), 8000), 65535);
     }
 
     #[test]

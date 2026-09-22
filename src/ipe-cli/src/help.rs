@@ -180,6 +180,10 @@ pub struct CommandSpec {
     /// The plain-English description of the positional argument, empty when
     /// there is none.
     pub args_desc: &'static str,
+    /// A plain-English note on where the command's primary output lands, shown
+    /// under `Output:` in the generated CLI reference. Empty when the command
+    /// has no notable output location to document.
+    pub output_desc: &'static str,
     /// Whether the command is withheld from the top-level `ipe --help` screen.
     pub hidden: bool,
     /// Every flag the command accepts, in table order.
@@ -223,6 +227,18 @@ pub fn all_command_specs() -> Vec<CommandSpec> {
             summary: c.summary,
             args: c.args,
             args_desc: c.args_desc,
+            // Where the command's primary artifact lands. A native `build` copies
+            // the runnable binary into the project's `out/bin/` within the build
+            // invocation, so it is findable even when a shared `CARGO_TARGET_DIR`
+            // holds cargo's own output outside the project.
+            output_desc: match c.name {
+                "build" => {
+                    "a native build lands the runnable binary at `out/bin/<project-name>` under \
+                     the project (copied there within the build), so it is findable even when a \
+                     shared `CARGO_TARGET_DIR` places cargo's own output outside the project."
+                }
+                _ => "",
+            },
             hidden: c.hidden,
             options: c
                 .options

@@ -57,12 +57,42 @@ pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
 /// redirected stderr (test harness, production log capture) stays flush-left so
 /// downstream `contains(...)` matchers see the bare line. The `is_terminal`
 /// decision is a parameter so the indent rule is testable without a pty.
+///
+/// Gated to `server`: the only callers are the `server::server_listen` and
+/// `web::serve_web` HTTP `listening on` banners, both `#[cfg(feature =
+/// "server")]` (`web` implies `server`), so a build without the server surface
+/// would otherwise carry this as dead code.
+#[cfg(feature = "server")]
 pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
     if is_terminal {
         format!("  {msg}")
     } else {
         msg.to_string()
     }
+}
+
+/// Resolve the port an HTTP listener binds: `env_value` (as injected by
+/// `ipe watch` — `IPE_SERVER_PORT` for `Ipe.Http.Server`, `IPE_WEB_PORT` for
+/// `Ipe.Web`) when it is a valid port number in `1..=65535`, else `fallback`.
+///
+/// Parsing to `u16` and rejecting `0` closes EVERY out-of-range and garbage
+/// value at the boundary: empty, non-numeric, negative, greater than 65535, or
+/// `0` all fall back to `fallback` — never a silently OS-chosen ephemeral port
+/// the caller cannot reach. Fail-closed by construction; the single definition
+/// keeps the two runtimes' port precedence from drifting. Pure over its inputs,
+/// so the precedence is unit-testable without touching the process environment.
+///
+/// Gated to `server`: the only callers — `server::server_listen`
+/// (`IPE_SERVER_PORT`) and `web::serve_web` (`IPE_WEB_PORT`, whose `web` feature
+/// implies `server`) — are both `#[cfg(feature = "server")]`, so a build without
+/// the server surface would otherwise carry this as dead code.
+#[cfg(feature = "server")]
+pub(crate) fn resolve_listen_port(env_value: Option<String>, fallback: i64) -> i64 {
+    env_value
+        .and_then(|s| s.parse::<u16>().ok())
+        .filter(|&p| p != 0)
+        .map(i64::from)
+        .unwrap_or(fallback)
 }
 
 /// Read an environment variable as an `OsString` — the `var_os` companion of
@@ -1110,7 +1140,7 @@ mod exit_hook_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod gutter_line_tests {
     use super::gutter_line;
 
