@@ -3200,6 +3200,7 @@ name = "ipe_docs"
 version = "0.1.86"
 dependencies = [
  "ipe_annotate",
+ "ipe_diagnostics",
  "ipe_intern",
  "ipe_kernels",
  "ipe_parse",
@@ -3294,6 +3295,7 @@ dependencies = [
  "ipe_canon",
  "ipe_db",
  "ipe_diagnostics",
+ "ipe_docs",
  "ipe_fmt",
  "ipe_intern",
  "ipe_lint",
@@ -3310,6 +3312,7 @@ dependencies = [
  "crossbeam-channel",
  "ipe_db",
  "ipe_diagnostics",
+ "ipe_docs",
  "ipe_lint",
  "ipe_lsp_features",
  "ipe_stdlib",

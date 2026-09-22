@@ -68,7 +68,7 @@ pub fn diagnostic_doc(index: &Index, code: &str) -> Option<String> {
 /// Wrap doc text as an LSP `Documentation` (Markdown) value for a completion
 /// item or a signature.
 #[must_use]
-pub fn as_documentation(text: String) -> Documentation {
+pub const fn as_documentation(text: String) -> Documentation {
     Documentation::MarkupContent(MarkupContent {
         kind: MarkupKind::Markdown,
         value: text,

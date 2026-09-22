@@ -576,7 +576,7 @@ const KEYWORDS: &[&str] = &[
 mod tests {
     use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
-    use super::{KEYWORDS, completions};
+    use super::{Candidate, CandidateKind, KEYWORDS, completions, render_candidates};
 
     /// Every completion keyword must be a real reserved word per the lexer's own
     /// table — no invented entry (a past list offered `alias`, which is not a

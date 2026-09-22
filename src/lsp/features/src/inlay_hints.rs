@@ -142,7 +142,7 @@ pub fn inlay_hints(
 }
 
 /// Build a `: Type` type-annotation inlay hint at `position`.
-fn type_hint(position: lsp_types::Position, label: String) -> InlayHint {
+const fn type_hint(position: lsp_types::Position, label: String) -> InlayHint {
     InlayHint {
         position,
         label: InlayHintLabel::String(label),
@@ -254,9 +254,8 @@ fn expr_children(expr: &Located<Expr_>) -> Vec<&Located<Expr_>> {
             v.extend(arms.iter().map(|a| &a.body));
             v
         }
-        Expr_::Lambda(_, body) => vec![body.as_ref()],
+        Expr_::Lambda(_, body) | Expr_::Let(_, body) => vec![body.as_ref()],
         Expr_::Binop { lhs, rhs, .. } => vec![lhs.as_ref(), rhs.as_ref()],
-        Expr_::Let(_, body) => vec![body.as_ref()],
         Expr_::If(pairs, els) => {
             let mut v = Vec::new();
             for (c, b) in pairs {
