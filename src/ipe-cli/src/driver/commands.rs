@@ -931,8 +931,8 @@ fn copy_native_artifact(
     // `<friendly>_<hash>` cargo actually produces); DELIVER it under the plain
     // friendly project name, so the user-facing artifact stays `out/bin/<name>`
     // regardless of the internal per-project identity hash.
-    let bin_name = emitted_bin_name(out_dir);
-    let friendly = friendly_artifact_name(manifest);
+    let bin_name = emitted_bin_filename(out_dir);
+    let friendly = friendly_artifact_filename(manifest);
     let mut src = target_dir;
     if let Some(plan) = static_plan {
         src.push(plan.triple.as_str());
@@ -1368,7 +1368,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         // identity; it is delivered under the plain FRIENDLY name so the hash the
         // crate carries only to own a unique shared-target slot never leaks into a
         // distributed filename.
-        let bin_name = emitted_bin_name(&out_dir);
+        let bin_name = emitted_bin_filename(&out_dir);
         let bin_path = app_target_dir
             .join(triple.as_str())
             .join("release")
@@ -1385,7 +1385,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             path: out_dir.clone(),
             source: e,
         })?;
-        let dest = out_dir.join(friendly_artifact_name(manifest_parsed.as_ref()));
+        let dest = out_dir.join(friendly_artifact_filename(manifest_parsed.as_ref()));
         std::fs::copy(&bin_path, &dest).map_err(|e| CliError::Io {
             path: dest.clone(),
             source: e,
@@ -1468,7 +1468,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
     // it via cargo metadata rather than assuming `app_out/target/`.
     let app_target_dir = cargo_target_directory(&app_out)?;
-    let release_bin_name = emitted_bin_name(&app_out);
+    let release_bin_name = emitted_bin_filename(&app_out);
     let app_binary = app_target_dir
         .join(triple.as_str())
         .join("release")
@@ -2523,7 +2523,7 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     // `CARGO_TARGET_DIR` env or a user-level `[build] target-dir` pin
     // relocates the artifact, so a hardcoded `<out>/target` would exec a
     // missing or stale binary.
-    let bin_name = emitted_bin_name(&out_dir);
+    let bin_name = emitted_bin_filename(&out_dir);
     let mut bin = cargo_target_directory(&out_dir)?;
     if let Some(plan) = &static_plan {
         bin.push(plan.triple.as_str());
@@ -2667,7 +2667,7 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // The binary name matches the emitted crate's `[package] name`, read from
     // the artifact dir's `Cargo.toml`. Falls back to `"ipe-app"` when the
     // manifest is absent or the name cannot be parsed.
-    let exec_bin_name = emitted_bin_name(&dir);
+    let exec_bin_name = emitted_bin_filename(&dir);
     let mut bin = cargo_target_directory(&dir)?;
     bin.push("debug");
     bin.push(&exec_bin_name);
@@ -2777,6 +2777,20 @@ pub fn emitted_bin_name(crate_dir: &Path) -> String {
     "ipe-app".to_owned()
 }
 
+/// The on-disk filename cargo gives the emitted crate's executable, ready to
+/// join onto a target-profile directory. It is [`emitted_bin_name`] (the crate
+/// identity) plus the host's executable extension: `.exe` on Windows, empty
+/// elsewhere. Locating the built artifact by the bare identity misses the file
+/// on Windows, where cargo appends `.exe`; every caller that resolves a built
+/// binary path uses this so the locate is host-correct on all targets.
+pub fn emitted_bin_filename(crate_dir: &Path) -> String {
+    format!(
+        "{}{}",
+        emitted_bin_name(crate_dir),
+        std::env::consts::EXE_SUFFIX
+    )
+}
+
 /// The user-facing artifact name for a project — the plain (sanitized) friendly
 /// name, NEVER carrying the crate-identity hash. Used for a distributed artifact
 /// filename or a "built X" message, so the hash the emitted crate uses to own a
@@ -2787,6 +2801,20 @@ fn friendly_artifact_name(manifest: Option<&project::ProjectManifest>) -> String
     manifest.map_or_else(
         || "ipe-app".to_owned(),
         |m| ipe_backend_rust::sanitize_cargo_name(&m.name),
+    )
+}
+
+/// The delivered artifact FILE name: the friendly name plus the platform
+/// executable suffix (`.exe` on Windows), so a copied `out/bin/<name>` or a
+/// released binary is runnable on the host that built it. Mirrors
+/// `emitted_bin_filename`'s suffix rule from the one `EXE_SUFFIX` source, so the
+/// located source file and the delivered file agree by construction rather than
+/// only on Unix — where the suffix is empty and the omission is invisible.
+fn friendly_artifact_filename(manifest: Option<&project::ProjectManifest>) -> String {
+    format!(
+        "{}{}",
+        friendly_artifact_name(manifest),
+        std::env::consts::EXE_SUFFIX
     )
 }
 
@@ -3419,4 +3447,24 @@ pub fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
         let linked = ipe_db::linked_program(db, root, file).map_err(|d| (d, Vec::new()))?;
         gate_decoder_pipelines(&linked.module)
     })
+}
+
+#[cfg(test)]
+mod artifact_name_tests {
+    use super::{friendly_artifact_filename, friendly_artifact_name};
+
+    // The delivered file name is the friendly name plus the host executable
+    // suffix. This is the invariant that keeps `out/bin/<name>` and a released
+    // binary runnable on Windows, where a suffix-less delivery is otherwise
+    // invisible on Unix CI (empty `EXE_SUFFIX`).
+    #[test]
+    fn delivered_filename_carries_the_platform_exe_suffix() {
+        let name = friendly_artifact_name(None);
+        let file = friendly_artifact_filename(None);
+        assert_eq!(file, format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        assert!(
+            file.starts_with(&name),
+            "the delivered file name extends the friendly name"
+        );
+    }
 }

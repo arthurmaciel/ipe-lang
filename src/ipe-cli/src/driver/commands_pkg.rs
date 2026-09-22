@@ -2,7 +2,7 @@ use super::{
     CliError, build_emitted_project, build_project, build_source_graph,
     build_test_with_project_sources, build_with_sibling_discovery,
     capabilities_including_served_widgets, cargo_target_directory, classify_entry_shape,
-    create_source_root, default_entry, discover_manifest, emit_machine_error, emitted_bin_name,
+    create_source_root, default_entry, discover_manifest, emit_machine_error, emitted_bin_filename,
     force_cargo_terminal_ui, resolve_runtime, resolve_vendored_runtime_dir, run_build,
     runtime_context_for_message, typecheck_entry_via_graph,
 };
@@ -364,7 +364,7 @@ impl<'a> BundleAssembler<'a> {
         // a global CARGO_TARGET_DIR), then materialise (Linux) or describe
         // (macOS/Windows).
         let target_dir = cargo_target_directory(&build_dir)?;
-        let bin_name = emitted_bin_name(&build_dir);
+        let bin_name = emitted_bin_filename(&build_dir);
         let binary = target_dir
             .join(self.profile.target_subdir())
             .join(&bin_name);
@@ -1292,7 +1292,7 @@ pub fn build_and_run_test_entry(
     // Locate the compiled binary via `cargo metadata` so a user-level
     // `CARGO_TARGET_DIR` pin or workspace override is respected. The binary
     // name matches the emitted crate's package name (read from `Cargo.toml`).
-    let test_bin_name = emitted_bin_name(out_dir);
+    let test_bin_name = emitted_bin_filename(out_dir);
     let mut bin = cargo_target_directory(out_dir)?;
     bin.push("debug");
     bin.push(&test_bin_name);
