@@ -1,6 +1,6 @@
 use super::{
-    BinOp, Callee, DResult, Diagnostic, Expr, GenericScope, IrType, KernelFn, LowerError,
-    MAX_EMIT_DEPTH, Match, ModPath, Span, Symbol, callee_name, clone_targets_in_expr,
+    BinOp, Callee, DResult, Diagnostic, Expr, GenericScope, IrType, KernelClass, KernelFn,
+    LowerError, MAX_EMIT_DEPTH, Match, ModPath, Span, Symbol, callee_name, clone_targets_in_expr,
     combine_guards, emit_apply, emit_arm_head, emit_binding_stmts, emit_config_ctor_call,
     emit_css_value_call, emit_db_call, emit_ffi_glued_call, emit_func_value, emit_html_template,
     emit_http_builder_call, emit_http_call, emit_json_decoder_call, emit_lambda,
@@ -233,131 +233,250 @@ pub fn emit_expr_at(
             // Gating once here skips eight non-inlined probe calls per
             // user-function call node (efficiency-audit §4 medium); kernel
             // calls still traverse the probes in the same order.
-            if matches!(callee, Callee::Kernel(_)) {
-                // JSON decoder kernel special cases are factored into a separate
-                // `#[inline(never)]` helper to keep the `emit_expr_at` stack frame
-                // small enough for the depth-guard test (IPE-L0200). The helper
-                // returns `None` when no special case applies.
-                if let Some(result) =
-                    emit_json_decoder_call(ctx, callee, args, indent, child, generics)?
-                {
-                    return Ok(result);
-                }
-                // Http network kernel special cases: Http.get / Http.post /
-                // Http.request need a task_map conversion closure (Design B).
-                // Http.parseQuery falls through (standard path is correct).
-                if let Some(result) = emit_http_call(ctx, callee, args, indent, child, generics)? {
-                    return Ok(result);
-                }
-                // Process.runWith returns `ProcessRunOutput` (runtime struct); a
-                // task_map closure converts it to the synthesised user record struct
-                // for `{ exitCode, stderr, stdout }` — same Design B as Http.get.
-                if let Some(result) =
-                    emit_process_run_with_call(ctx, callee, args, indent, child, generics)?
-                {
-                    return Ok(result);
-                }
-                // Process.runInPty returns `ProcessPtyOutput` (runtime struct); a
-                // task_map closure converts it to the synthesised user record struct
-                // for `{ exitCode, output }` — same Design B as Process.runWith.
-                if let Some(result) =
-                    emit_process_run_in_pty_call(ctx, callee, args, indent, child, generics)?
-                {
-                    return Ok(result);
-                }
-                // Http builder kernels: Http.defaultRequest / Http.withMethod /
-                // Http.withTimeout / Http.withBody / Http.withHeader emit inline
-                // struct construction or clone-and-reassign record updates.
-                if let Some(result) =
-                    emit_http_builder_call(ctx, callee, args, indent, child, generics)?
-                {
-                    return Ok(result);
-                }
-                // Task.RetryPolicy builders and Task.retryWith: inline struct
-                // construction / move-update / runtime call.
-                if let Some(result) =
-                    emit_task_retry_call(ctx, callee, args, indent, child, generics)?
-                {
-                    return Ok(result);
-                }
-                // Db projection kernels: DbExec / DbQuery / DbQueryDecode /
-                // DbInsertFields / DbUpdateFields / DbInsertFieldsReturning need
-                // `List SqlValue` / `List (String, SqlField)` projected to
-                // `Vec<SqlParam>` / `Vec<(String, Option<SqlParam>)>` at the call
-                // site via the generated `into_sql_param` / `into_field_param` methods.
-                if let Some(result) = emit_db_call(ctx, callee, args, indent, child, generics)? {
-                    return Ok(result);
-                }
-                if let Some(result) = emit_tea_call(ctx, callee, args, indent, child, generics)? {
-                    return Ok(result);
-                }
-                // Config-tag ADT constructors: nullary values emitted inline as the
-                // raw `Int` tag the setting builders consume.
-                if let Some(result) = emit_config_ctor_call(callee) {
-                    return Ok(result);
-                }
-                if let Some(result) = emit_server_call(ctx, callee, args, indent, child, generics)?
-                {
-                    return Ok(result);
-                }
-                // Structural hot-swap: under `hot_appearance`, a provably-static
-                // `Ipe.Html` subtree is hoisted whole as ONE serialized template
-                // into the per-view literal table and emitted as a
-                // `materialize_template_str` read, so a structural edit
-                // (add/remove/reorder a static element, static attribute, static
-                // text) becomes a zero-compile data patch. Off (release / `ipe
-                // build`) it never fires — the subtree falls through to the inline
-                // emit below and the output is byte-identical. `None` for any
-                // non-static subtree → keep it compiled.
-                if let Some(result) = emit_html_template(ctx, expr) {
-                    return Ok(result);
-                }
-                // Structural hot-swap for `Ipe.Ui`: under `hot_appearance`, a
-                // provably-static `Ipe.Ui` element subtree is hoisted whole as ONE
-                // serialized template and emitted as a `materialize_ui_template_str`
-                // read (returning an `Element`), so a structural edit becomes a
-                // zero-compile data patch. Off (release / `ipe build`) it never
-                // fires — the subtree falls through to the inline emit below and the
-                // output is byte-identical. `None` for any non-static subtree.
-                if let Some(result) = emit_ui_template(ctx, expr, indent, child, generics)? {
-                    return Ok(result);
-                }
-                // Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView kernels.
-                if let Some(result) =
-                    emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
-                {
-                    return Ok(result);
-                }
-                // Ipe.Css value sanitizer (`CssSafety.safeValue`): hoist a direct
-                // safe literal into the view's appearance literal table for the
-                // dev hot-swap, keeping the runtime `safe_value` wrapper so the
-                // slot is always re-sanitized. `None` for anything else → the
-                // generic tail emits `safe_value(<arg>)` unchanged.
-                if let Some(result) =
-                    emit_css_value_call(ctx, callee, args, indent, child, generics)?
-                {
-                    return Ok(result);
-                }
-                // `PubSub.topic : String -> Topic a` erases to the identity
-                // function at runtime — `Topic a` lowers to `Str`, so the
-                // call emits as the argument directly (no Rust runtime call needed).
-                if matches!(callee, Callee::Kernel(KernelFn::PubSubTopic))
-                    && let [name_arg] = args.as_slice()
-                {
-                    return emit_expr_at(ctx, name_arg, indent, child, generics);
-                }
-                // Dict.get borrows semantics: the runtime takes the HashMap by
-                // value, but Ipê dicts are persistent — the same dict binding may
-                // be passed to multiple Dict.get calls in one let-chain (e.g.
-                // `let a = Dict.get "a" d; let b = Dict.get "b" d`).  Cloning the
-                // dict arg before each call keeps the original binding alive and
-                // avoids the "use of moved value" Rust compile error.
-                if matches!(callee, Callee::Kernel(KernelFn::DictGet))
-                    && let [key_arg, dict_arg] = args.as_slice()
-                {
-                    let key_s = emit_expr_at(ctx, key_arg, indent, child, generics)?;
-                    let dict_s = emit_expr_at(ctx, dict_arg, indent, child, generics)?;
-                    return Ok(format!("dict_get({key_s}, {dict_s}.clone())"));
+            if let Callee::Kernel(k) = callee {
+                // Kernel-call emission is dispatched on the kernel's own
+                // emit-ownership class (`KernelDef::class`), a wildcard-free
+                // `match`: a new `KernelClass` variant with no arm here is a
+                // compile error, not a silent fall-through to the generic tail
+                // (which would ship an ipe-exit-0-then-cargo-fail SEAL breach or
+                // a wrong-emitter miscompile). Each arm calls only the emitters
+                // whose bespoke `KernelFn` gate can fire for that class, in the
+                // same relative order the former linear probe chain ran them —
+                // the probes overlap on `Callee::Kernel`, so their order decides
+                // which emitter wins and is load-bearing. Every emitter keeps its
+                // own internal `is_db()`/`is_tea()`/`is_server()`/`is_ui()` (or
+                // `KernelFn`-variant) gate as defence in depth: a kernel routed to
+                // the wrong arm returns `None` and does not miscompile.
+                match k.def().class {
+                    KernelClass::Db => {
+                        // `Db.Decode.succeed` (`DbDecSucceed`) is `class = Db` but
+                        // shares the `decode_succeed` special case with its `Json` /
+                        // `Config` siblings: `emit_json_decoder_call` curries a
+                        // function argument (`decode_succeed(curryN(f))`), which the
+                        // generic tail cannot reproduce. `emit_db_call` returns `None`
+                        // for it (it is a decoder combinator, not a projection
+                        // kernel), so probe the JSON-decoder emitter first, exactly
+                        // as the former linear chain did. Every other `Db` kernel is
+                        // not a decoder special case, so this probe returns `None`.
+                        if let Some(result) =
+                            emit_json_decoder_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // Db projection kernels: DbExec / DbQuery / DbQueryDecode /
+                        // DbInsertFields / DbUpdateFields / DbInsertFieldsReturning need
+                        // `List SqlValue` / `List (String, SqlField)` projected to
+                        // `Vec<SqlParam>` / `Vec<(String, Option<SqlParam>)>` at the call
+                        // site via the generated `into_sql_param` / `into_field_param` methods.
+                        if let Some(result) =
+                            emit_db_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                    }
+                    KernelClass::Server => {
+                        if let Some(result) =
+                            emit_server_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                    }
+                    KernelClass::Tea => {
+                        // `Ipe.Tea.Worker.tea` (`TeaWorker`) is `class = Tea` but
+                        // its emit path is the UI delegate chain
+                        // (`emit_ui_call` → `Delegate(Worker)` → `emit_worker_call`):
+                        // `ui_call_shape` classifies it, and `emit_tea_call` has no
+                        // arm for it. Probe `emit_ui_call` first so the worker
+                        // app-entry reaches its emitter; every other `Tea` kernel
+                        // is not UI-family, so `emit_ui_call` returns `None` and the
+                        // standard TEA emit runs.
+                        if let Some(result) =
+                            emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        if let Some(result) =
+                            emit_tea_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                    }
+                    // `Ui`/`Web` UI kernels and the `Terminal` app-entries
+                    // (`TerminalAppScreen` / `TerminalAppLines`) all emit through
+                    // `emit_ui_call`: `ui_call_shape` classifies each, and the
+                    // Terminal app-entries route to the Tui/Console delegate
+                    // emitters (`Delegate(Tui)` / `Delegate(Console)`) inside it.
+                    // The two hot-swap template probes fire only for provably-static
+                    // `Ipe.Html` / `Ipe.Ui` subtrees under `hot_appearance`; a
+                    // Terminal app-entry kernel never matches them, so they return
+                    // `None` and the shared arm stays byte-identical for Terminal.
+                    KernelClass::Ui | KernelClass::Web | KernelClass::Terminal => {
+                        // Structural hot-swap: under `hot_appearance`, a provably-static
+                        // `Ipe.Html` subtree is hoisted whole as ONE serialized template
+                        // into the per-view literal table and emitted as a
+                        // `materialize_template_str` read, so a structural edit
+                        // (add/remove/reorder a static element, static attribute, static
+                        // text) becomes a zero-compile data patch. Off (release / `ipe
+                        // build`) it never fires — the subtree falls through to the inline
+                        // emit below and the output is byte-identical. `None` for any
+                        // non-static subtree → keep it compiled.
+                        if let Some(result) = emit_html_template(ctx, expr) {
+                            return Ok(result);
+                        }
+                        // Structural hot-swap for `Ipe.Ui`: under `hot_appearance`, a
+                        // provably-static `Ipe.Ui` element subtree is hoisted whole as ONE
+                        // serialized template and emitted as a `materialize_ui_template_str`
+                        // read (returning an `Element`), so a structural edit becomes a
+                        // zero-compile data patch. Off (release / `ipe build`) it never
+                        // fires — the subtree falls through to the inline emit below and the
+                        // output is byte-identical. `None` for any non-static subtree.
+                        if let Some(result) = emit_ui_template(ctx, expr, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // Ipe.Ui / Ipe.Html / Ipe.Web / Ipe.Tui / Ipe.WebView kernels.
+                        if let Some(result) =
+                            emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                    }
+                    // The FFI kernel tier is reserved: no `KernelFn` carries
+                    // `class = Ffi`, so this arm is structurally unreachable. It is
+                    // present (rather than folded into a wildcard) so the exhaustive
+                    // `match` fails the build the moment an FFI kernel is added
+                    // without an emit path — fail closed rather than fall through to
+                    // the generic tail.
+                    KernelClass::Ffi => {
+                        return Err(Diagnostic::CompilerBug {
+                            where_: "ipe_backend_rust::emit_expr_at",
+                            detail: "reached KernelClass::Ffi dispatch arm; no kernel is \
+                                 classed Ffi, so this call site should be unreachable — a \
+                                 new FFI kernel needs an explicit emit path here"
+                                .to_owned(),
+                        });
+                    }
+                    KernelClass::Pure => {
+                        // JSON decoder kernel special cases are factored into a separate
+                        // `#[inline(never)]` helper to keep the `emit_expr_at` stack frame
+                        // small enough for the depth-guard test (IPE-L0200). The helper
+                        // returns `None` when no special case applies.
+                        if let Some(result) =
+                            emit_json_decoder_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // Http network kernel special cases: Http.get / Http.post /
+                        // Http.request need a task_map conversion closure (Design B).
+                        // Http.parseQuery falls through (standard path is correct).
+                        if let Some(result) =
+                            emit_http_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // Process.runWith returns `ProcessRunOutput` (runtime struct); a
+                        // task_map closure converts it to the synthesised user record struct
+                        // for `{ exitCode, stderr, stdout }` — same Design B as Http.get.
+                        if let Some(result) =
+                            emit_process_run_with_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // Process.runInPty returns `ProcessPtyOutput` (runtime struct); a
+                        // task_map closure converts it to the synthesised user record struct
+                        // for `{ exitCode, output }` — same Design B as Process.runWith.
+                        if let Some(result) = emit_process_run_in_pty_call(
+                            ctx, callee, args, indent, child, generics,
+                        )? {
+                            return Ok(result);
+                        }
+                        // Http builder kernels: Http.defaultRequest / Http.withMethod /
+                        // Http.withTimeout / Http.withBody / Http.withHeader emit inline
+                        // struct construction or clone-and-reassign record updates.
+                        if let Some(result) =
+                            emit_http_builder_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // Task.RetryPolicy builders and Task.retryWith: inline struct
+                        // construction / move-update / runtime call.
+                        if let Some(result) =
+                            emit_task_retry_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // `Db.defaultMigration` (`DbDefaultMigration`) is `class =
+                        // Pure` (a pure record builder that must not force the `db`
+                        // runtime feature) but `emit_db_call` synthesises its
+                        // `Migration` record literal (`{ name, sql }`) — the generic
+                        // tail cannot, and would ICE (IPE-I0001, no synthesised
+                        // struct for that record shape). Probe `emit_db_call` here,
+                        // as the former linear chain did. Every other Pure kernel is
+                        // not a Db kernel, so this probe returns `None`.
+                        if let Some(result) =
+                            emit_db_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // Config-tag ADT constructors: nullary values emitted inline as the
+                        // raw `Int` tag the setting builders consume.
+                        if let Some(result) = emit_config_ctor_call(callee) {
+                            return Ok(result);
+                        }
+                        // The `Ipe.Color.Ansi` palette constructors (`TermColor*`)
+                        // are `class = Pure` but classified by `ui_call_shape`: they
+                        // emit through `emit_ui_call` so their appearance literals
+                        // (`TermColor.rgb` / `rgba`) hoist into the per-view literal
+                        // table under `hot_appearance`, exactly as the former linear
+                        // probe chain routed them. The two hot-swap template probes
+                        // run first (they only fire under `hot_appearance` and return
+                        // `None` for a non-`Ipe.Html`/`Ipe.Ui` subtree — a palette
+                        // constructor never matches). Every other `Pure` kernel is not
+                        // UI-family, so `emit_ui_call` returns `None`.
+                        if let Some(result) = emit_html_template(ctx, expr) {
+                            return Ok(result);
+                        }
+                        if let Some(result) = emit_ui_template(ctx, expr, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        if let Some(result) =
+                            emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // Ipe.Css value sanitizer (`CssSafety.safeValue`): hoist a direct
+                        // safe literal into the view's appearance literal table for the
+                        // dev hot-swap, keeping the runtime `safe_value` wrapper so the
+                        // slot is always re-sanitized. `None` for anything else → the
+                        // generic tail emits `safe_value(<arg>)` unchanged.
+                        if let Some(result) =
+                            emit_css_value_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // `PubSub.topic : String -> Topic a` erases to the identity
+                        // function at runtime — `Topic a` lowers to `Str`, so the
+                        // call emits as the argument directly (no Rust runtime call needed).
+                        if matches!(k, KernelFn::PubSubTopic)
+                            && let [name_arg] = args.as_slice()
+                        {
+                            return emit_expr_at(ctx, name_arg, indent, child, generics);
+                        }
+                        // Dict.get borrows semantics: the runtime takes the HashMap by
+                        // value, but Ipê dicts are persistent — the same dict binding may
+                        // be passed to multiple Dict.get calls in one let-chain (e.g.
+                        // `let a = Dict.get "a" d; let b = Dict.get "b" d`).  Cloning the
+                        // dict arg before each call keeps the original binding alive and
+                        // avoids the "use of moved value" Rust compile error.
+                        if matches!(k, KernelFn::DictGet)
+                            && let [key_arg, dict_arg] = args.as_slice()
+                        {
+                            let key_s = emit_expr_at(ctx, key_arg, indent, child, generics)?;
+                            let dict_s = emit_expr_at(ctx, dict_arg, indent, child, generics)?;
+                            return Ok(format!("dict_get({key_s}, {dict_s}.clone())"));
+                        }
+                    }
                 }
             }
             // A transparent-typed FFI call converts at the seam: arguments

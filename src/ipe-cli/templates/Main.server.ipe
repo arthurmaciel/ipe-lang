@@ -1,16 +1,15 @@
 module Main exposing (main)
 
-import Ipe.Http.Server as Server
-import Ipe.Http.Response as Response
+import Ipe.Server.Http as Server
+import Ipe.Task
+
+
+handle : Server.Request -> Task Error Server.Response
+handle _req =
+    Task.succeed (Server.text "Hello, world!")
 
 
 main =
-    Server.listen
-        { port = 8000
-        , handler = handler
-        }
-
-
-handler : Server.Request -> Server.Response
-handler _req =
-    Response.text "Hello, world!"
+    Server.listen 8000
+        [ Server.get "/" handle
+        ]
