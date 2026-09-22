@@ -108,10 +108,16 @@ jobs:
             --static --allocator ${{ matrix.allocator }}
           cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
+          # Cargo names the binary after the emitted crate's `[package] name`,
+          # which carries a per-project identity hash (`ipe-app_<hash>`) so
+          # sibling projects never collide in a shared target dir. Resolve that
+          # name from the manifest cargo just built from — never assume `ipe-app`.
+          BIN_NAME="$(sed -n '/^\[package\]/,/^\[/{s/^name *= *"\(.*\)"/\1/p}' Cargo.toml | head -n1)"
+          echo "BIN_NAME=$BIN_NAME" >> "$GITHUB_ENV"
 
       - name: Assert static-ness (file + ldd)
         run: |
-          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
+          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/$BIN_NAME"
           file "$BIN"
           file "$BIN" | grep -Eq 'static-pie linked|statically linked'
           LDD_OUT="$(ldd "$BIN" 2>&1 || true)"
@@ -123,7 +129,7 @@ jobs:
       - name: Run in a scratch container
         run: |
           WORK="$(mktemp -d)"
-          cp "$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app" "$WORK/"
+          cp "$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/$BIN_NAME" "$WORK/ipe-app"
           printf 'FROM scratch\nCOPY ipe-app /ipe-app\nENTRYPOINT ["/ipe-app"]\n' > "$WORK/Dockerfile"
           docker build -t ipe-static-proof "$WORK"
           OUT="$(docker run --rm ipe-static-proof)"
@@ -204,19 +210,25 @@ jobs:
             --static --target aarch64-unknown-linux-musl --allocator dlmalloc
           cd out/rust
           cargo build --release --target "$STATIC_TRIPLE"
+          # Cargo names the binary after the emitted crate's `[package] name`,
+          # which carries a per-project identity hash (`ipe-app_<hash>`) so
+          # sibling projects never collide in a shared target dir. Resolve that
+          # name from the manifest cargo just built from — never assume `ipe-app`.
+          BIN_NAME="$(sed -n '/^\[package\]/,/^\[/{s/^name *= *"\(.*\)"/\1/p}' Cargo.toml | head -n1)"
+          echo "BIN_NAME=$BIN_NAME" >> "$GITHUB_ENV"
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_musl: aarch64-linux-gnu-gcc
 
       - name: Assert static-ness (file)
         run: |
-          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
+          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/$BIN_NAME"
           file "$BIN"
           file "$BIN" | grep -Eq 'static-pie linked|statically linked|ELF 64-bit LSB.*static'
 
       - name: Run via QEMU
         run: |
-          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/ipe-app"
+          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/$BIN_NAME"
           OUT="$(qemu-aarch64-static "$BIN")"
           echo "qemu output: $OUT"
           echo "$OUT" | grep -q 'Hello, Ipê!'
@@ -346,12 +358,19 @@ jobs:
         run: |
           cd "$REPO/examples/shapes/non-tea/hello-world/out/rust"
           cargo build --release --features alloc_dlmalloc
+          # Cargo names the binary after the emitted crate's `[package] name`,
+          # which carries a per-project identity hash (`ipe-app_<hash>`) so
+          # sibling projects never collide in a shared target dir; on Windows the
+          # artifact is `<name>.exe`. Resolve the name from the manifest cargo
+          # just built from — never assume `ipe-app`.
+          BIN_NAME="$(sed -n '/^\[package\]/,/^\[/{s/^name *= *"\(.*\)"/\1/p}' Cargo.toml | head -n1)"
+          echo "BIN_NAME=$BIN_NAME" >> "$GITHUB_ENV"
 
       # Verify the produced .exe runs and produces expected output.
       # The binary is in the host (x86_64-pc-windows-msvc) release dir.
       - name: Run emitted .exe
         run: |
-          EXE="$CARGO_TARGET_DIR/release/ipe-app.exe"
+          EXE="$CARGO_TARGET_DIR/release/${BIN_NAME}.exe"
           OUT="$("$EXE")"
           echo "emitted-binary output: $OUT"
           echo "$OUT" | grep -q 'Hello, Ipê!'

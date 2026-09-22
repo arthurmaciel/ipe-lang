@@ -931,7 +931,7 @@ fn copy_native_artifact(
     // `<friendly>_<hash>` cargo actually produces); DELIVER it under the plain
     // friendly project name, so the user-facing artifact stays `out/bin/<name>`
     // regardless of the internal per-project identity hash.
-    let bin_name = emitted_bin_name(out_dir);
+    let bin_name = emitted_bin_filename(out_dir);
     let friendly = friendly_artifact_name(manifest);
     let mut src = target_dir;
     if let Some(plan) = static_plan {
@@ -1368,7 +1368,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         // identity; it is delivered under the plain FRIENDLY name so the hash the
         // crate carries only to own a unique shared-target slot never leaks into a
         // distributed filename.
-        let bin_name = emitted_bin_name(&out_dir);
+        let bin_name = emitted_bin_filename(&out_dir);
         let bin_path = app_target_dir
             .join(triple.as_str())
             .join("release")
@@ -1468,7 +1468,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     // `CARGO_TARGET_DIR` (set by the user or the agent lane), so we resolve
     // it via cargo metadata rather than assuming `app_out/target/`.
     let app_target_dir = cargo_target_directory(&app_out)?;
-    let release_bin_name = emitted_bin_name(&app_out);
+    let release_bin_name = emitted_bin_filename(&app_out);
     let app_binary = app_target_dir
         .join(triple.as_str())
         .join("release")
@@ -2523,7 +2523,7 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     // `CARGO_TARGET_DIR` env or a user-level `[build] target-dir` pin
     // relocates the artifact, so a hardcoded `<out>/target` would exec a
     // missing or stale binary.
-    let bin_name = emitted_bin_name(&out_dir);
+    let bin_name = emitted_bin_filename(&out_dir);
     let mut bin = cargo_target_directory(&out_dir)?;
     if let Some(plan) = &static_plan {
         bin.push(plan.triple.as_str());
@@ -2667,7 +2667,7 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     // The binary name matches the emitted crate's `[package] name`, read from
     // the artifact dir's `Cargo.toml`. Falls back to `"ipe-app"` when the
     // manifest is absent or the name cannot be parsed.
-    let exec_bin_name = emitted_bin_name(&dir);
+    let exec_bin_name = emitted_bin_filename(&dir);
     let mut bin = cargo_target_directory(&dir)?;
     bin.push("debug");
     bin.push(&exec_bin_name);
@@ -2775,6 +2775,20 @@ pub fn emitted_bin_name(crate_dir: &Path) -> String {
         }
     }
     "ipe-app".to_owned()
+}
+
+/// The on-disk filename cargo gives the emitted crate's executable, ready to
+/// join onto a target-profile directory. It is [`emitted_bin_name`] (the crate
+/// identity) plus the host's executable extension: `.exe` on Windows, empty
+/// elsewhere. Locating the built artifact by the bare identity misses the file
+/// on Windows, where cargo appends `.exe`; every caller that resolves a built
+/// binary path uses this so the locate is host-correct on all targets.
+pub fn emitted_bin_filename(crate_dir: &Path) -> String {
+    format!(
+        "{}{}",
+        emitted_bin_name(crate_dir),
+        std::env::consts::EXE_SUFFIX
+    )
 }
 
 /// The user-facing artifact name for a project — the plain (sanitized) friendly
