@@ -10,6 +10,38 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.2.0](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.86...ipe-v0.2.0) (2026-09-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** version/capabilities/type-check --json now emit the shared envelope. Scripts that read the bare top-level field must read it under .payload (e.g. `jq -r '.payload.version'`, `jq '.payload.capabilities'`); type-check success is now the envelope, not {"status":"ok"}.
+
+### Features
+
+* **cli:** emit shared JSON envelope from version/capabilities/type-check --json ([1a003bc](https://github.com/arthurmaciel/ipe-lang/commit/1a003bc7be1cab9b8eccf2e7e517b5bf620e9e69))
+* **lsp:** typeDefinition, local let inlay hints, doc-backed enrichment, unused-import code action ([36fb533](https://github.com/arthurmaciel/ipe-lang/commit/36fb5337bb7d19c2d4bd6f2ff7c639c110dc7e7b))
+
+
+### Bug Fixes
+
+* **backend/emit:** route emit_ui_call/decoder/db over their full class domains ([d381cb0](https://github.com/arthurmaciel/ipe-lang/commit/d381cb01f4317424a92852e12dc9126484df65bd))
+* **backend:** backtick ipe_kernels in doc comment (clippy doc_markdown) ([5066057](https://github.com/arthurmaciel/ipe-lang/commit/506605779bae5662a8f4419ab5ef63542b5fa332))
+* **backend:** self-seal RuntimeFeature::ALL against the index() domain ([0b2aa13](https://github.com/arthurmaciel/ipe-lang/commit/0b2aa13184d5731b65ee0e452c7597796e18471d))
+* **backend:** slice-pattern str_eq to clear const-fn indexing_slicing ([c32726f](https://github.com/arthurmaciel/ipe-lang/commit/c32726f9b63406d0c1afd5eb8cfa3a26cce5ea8b))
+* **cli:** repair the ipe init server scaffold to the current server API ([2f62027](https://github.com/arthurmaciel/ipe-lang/commit/2f6202719d1e2af240039c06b3edf1b557b971ee))
+* **init:** correct the script scaffold error type to Task Error () ([d39c1c3](https://github.com/arthurmaciel/ipe-lang/commit/d39c1c3d8387948409a1f2b72f572c2c8e5a4cd7))
+* **init:** make the tui scaffold type-check against Tui.tea ([53b6e8b](https://github.com/arthurmaciel/ipe-lang/commit/53b6e8b12731d12a02b819583ecc9ad9bc28b2dd))
+* **kernels:** const-safe str_eq for is_ui TermColor check (E0658) ([a1368bf](https://github.com/arthurmaciel/ipe-lang/commit/a1368bf0000e995f715d320269eded2ee2ffc0ae))
+* **lower:** import enum_home_is_ffi_foreign from clone_class in the test ([0ff2a2a](https://github.com/arthurmaciel/ipe-lang/commit/0ff2a2a2e6d7ebaff2a8f322ba9b859c5a0dc7fe))
+* **lower:** restore force_shared_capture_clones import used by lower.rs ([10a3e26](https://github.com/arthurmaciel/ipe-lang/commit/10a3e2609fba5a7683d2cd7e0ed763745bfc7928))
+* **lower:** use pub(super) and a direct sibling import for clone_class ([93cacf8](https://github.com/arthurmaciel/ipe-lang/commit/93cacf8a5d09a8b757e6ab4a2968f1acd901d06f))
+* **lower:** widen force_shared_capture_clones to pub(crate); re-home moved doc ([0122187](https://github.com/arthurmaciel/ipe-lang/commit/012218788defb7e87e63818112933e40a730b316))
+* **lsp:** const fn for State::docs (clippy) ([cd84d0f](https://github.com/arthurmaciel/ipe-lang/commit/cd84d0fc866a7165bbb507f94641b5d7d2eb1264))
+* **lsp:** delete the whole import in the unused-import quick-fix ([fca05b7](https://github.com/arthurmaciel/ipe-lang/commit/fca05b75b9f5a886d7e4fa4c05f3b5a34a322b5c))
+* **lsp:** satisfy clippy nits + test imports; sync Cargo.lock for ipe_docs deps ([a93c8a1](https://github.com/arthurmaciel/ipe-lang/commit/a93c8a1c7c057a36e2eecb07c29de46286ac46a8))
+* **lsp:** use slice contains in inlay-hint test (clippy manual_contains) ([5ca57d8](https://github.com/arthurmaciel/ipe-lang/commit/5ca57d8b5db610e68902d257c90f21f2f291cff8))
+
 ## [0.1.86](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.85...ipe-v0.1.86) (2026-09-21)
 
 
