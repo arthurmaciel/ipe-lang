@@ -4,6 +4,6 @@ import Ipe.Task as Task
 import Ipe.Io as Io
 
 
-main : Task String ()
+main : Task Error ()
 main =
     Io.println "Hello, world!"
