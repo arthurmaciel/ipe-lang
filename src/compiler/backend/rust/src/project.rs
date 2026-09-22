@@ -2390,6 +2390,283 @@ fn apply_cargo_name(cargo_toml: &str, cargo_name: &SafeTomlString) -> String {
     }
 }
 
+/// One vendored `ipe_runtime/mod.rs` `pub mod` append: the gate that decides
+/// whether a program declares it, and the exact text pushed when the gate holds.
+///
+/// The text is one of the `RUNTIME_MOD_RS_*_APPEND` constants (whose doc-comments
+/// carry the per-module reachability + ordering rationale). This row pairs it with
+/// its predicate; [`MOD_APPENDS`] fixes the order.
+struct ModAppend {
+    /// Whether the program reaches this module — the same `reaches_*` / `uses_*`
+    /// union the hand-written walk keyed on, so the derivation is byte-identical
+    /// to the pre-table sequence.
+    gate: fn(&EmitCtx) -> bool,
+    /// The lines appended to `ipe_runtime/mod.rs` when `gate` holds.
+    append: &'static str,
+}
+
+/// The ordered vendored-runtime `pub mod` append walk, ONE row per module.
+///
+/// Slice order IS emit order: [`assemble_project_files`] pushes each row whose
+/// `gate` holds in this exact sequence, so the emitted `ipe_runtime/mod.rs` is
+/// byte-identical to the former hand-written `if <gate> { push }` cascade. The
+/// order is load-bearing — a module must be declared before any module that
+/// imports it (`url` before `http_client`; `seal_codec` before `css` before
+/// `ui`; `web_core` before `web`) — so it lives here as explicit data, not as
+/// source position scattered across a function body.
+///
+/// A new vendored module is one new row (plus its `RUNTIME_MOD_RS_*_APPEND`
+/// constant and an [`ALL_MOD_APPEND_TEXTS`] entry), inserted at the ordinal its
+/// dependencies require — not a hand-edit in a second walk.
+const MOD_APPENDS: &[ModAppend] = &[
+    ModAppend {
+        gate: |ctx| ctx.reaches_encoding(),
+        append: RUNTIME_MOD_RS_ENCODING_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_regex,
+        append: RUNTIME_MOD_RS_REGEX_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.reaches_uuid(),
+        append: RUNTIME_MOD_RS_UUID_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.reaches_random(),
+        append: RUNTIME_MOD_RS_RANDOM_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_db,
+        append: RUNTIME_MOD_RS_DB_APPEND,
+    },
+    // `url` before `http_client`/`ssrf`: both `use crate::url::…` / `use url::Url`.
+    ModAppend {
+        gate: |ctx| ctx.reaches_url(),
+        append: RUNTIME_MOD_RS_URL_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.reaches_http_client(),
+        append: RUNTIME_MOD_RS_HTTP_CLIENT_APPEND,
+    },
+    // `http_stream` after `http_client` (it calls `crate::http_client::…`).
+    ModAppend {
+        gate: |ctx| ctx.uses_http,
+        append: RUNTIME_MOD_RS_HTTP_STREAM_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.reaches_http_client() || ctx.uses_websocket || ctx.uses_db,
+        append: RUNTIME_MOD_RS_SSRF_APPEND,
+    },
+    // `db_dsn` after `ssrf`/`url` (`external_conn.rs` reaches both).
+    ModAppend {
+        gate: |ctx| ctx.uses_db,
+        append: RUNTIME_MOD_RS_DB_DSN_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_config,
+        append: RUNTIME_MOD_RS_CONFIG_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_compression,
+        append: RUNTIME_MOD_RS_COMPRESS_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_csv,
+        append: RUNTIME_MOD_RS_CSV_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_crypto,
+        append: RUNTIME_MOD_RS_CRYPTO_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.reaches_jwt(),
+        append: RUNTIME_MOD_RS_JWT_APPEND,
+    },
+    // `tea` before every render/effect surface whose module imports `IpeCmd`/`IpeSub`.
+    ModAppend {
+        gate: |ctx| {
+            ctx.uses_tea
+                || ctx.uses_http
+                || ctx.uses_server
+                || ctx.uses_websocket
+                || ctx.uses_web
+                || ctx.uses_tui
+                || ctx.uses_webview
+        },
+        append: RUNTIME_MOD_RS_TEA_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_server || ctx.uses_web,
+        append: RUNTIME_MOD_RS_SERVER_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_websocket,
+        append: RUNTIME_MOD_RS_WEBSOCKET_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_auth || ctx.reaches_jwt(),
+        append: RUNTIME_MOD_RS_AUTH_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| {
+            ctx.uses_principal
+                || ctx.uses_server
+                || ctx.uses_web
+                || ctx.uses_db
+                || ctx.reaches_jwt()
+        },
+        append: RUNTIME_MOD_RS_PRINCIPAL_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_principal || ctx.reaches_jwt(),
+        append: RUNTIME_MOD_RS_REVOCATION_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_email,
+        append: RUNTIME_MOD_RS_EMAIL_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_locale,
+        append: RUNTIME_MOD_RS_LOCALE_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_env_public,
+        append: RUNTIME_MOD_RS_ENV_PUBLIC_APPEND,
+    },
+    // Render stack, dependency order: `seal_codec` before `css` before `ui`.
+    ModAppend {
+        gate: |ctx| ctx.uses_ui || ctx.uses_tui || ctx.uses_web || ctx.uses_webview,
+        append: RUNTIME_MOD_RS_SEAL_CODEC_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_ui || ctx.uses_css || ctx.uses_tui || ctx.uses_web || ctx.uses_webview,
+        append: RUNTIME_MOD_RS_CSS_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_ui || ctx.uses_tui || ctx.uses_web || ctx.uses_webview,
+        append: RUNTIME_MOD_RS_UI_APPEND,
+    },
+    // `web_core` (the ONE real `web` module) before the served `web` surface.
+    ModAppend {
+        gate: |ctx| ctx.uses_web || ctx.uses_webview,
+        append: RUNTIME_MOD_RS_WEB_CORE_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_web,
+        append: RUNTIME_MOD_RS_WEB_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_tui || ctx.uses_console,
+        append: RUNTIME_MOD_RS_TUI_APPEND,
+    },
+    ModAppend {
+        gate: |ctx| ctx.uses_webview,
+        append: RUNTIME_MOD_RS_WEBVIEW_APPEND,
+    },
+];
+
+/// Every `RUNTIME_MOD_RS_*_APPEND` constant the vendored `mod.rs` walk emits —
+/// the coverage domain [`MOD_APPENDS`] must exhaust.
+///
+/// The build-time assert below proves each entry here appears in exactly one
+/// [`MOD_APPENDS`] row, so a newly added append constant that is listed here but
+/// never wired into the walk (or wired twice) breaks the BUILD rather than
+/// silently dropping a module from the emitted runtime at cargo time — the SEAL
+/// "a table drifted from its callee table" clause. `RUNTIME_MOD_RS_ENV_PUBLIC_APPEND`
+/// also feeds the wasm sealed-floor path (a one-off outside this ordered walk);
+/// it appears once here for its native-walk row.
+const ALL_MOD_APPEND_TEXTS: &[&str] = &[
+    RUNTIME_MOD_RS_ENCODING_APPEND,
+    RUNTIME_MOD_RS_REGEX_APPEND,
+    RUNTIME_MOD_RS_UUID_APPEND,
+    RUNTIME_MOD_RS_RANDOM_APPEND,
+    RUNTIME_MOD_RS_DB_APPEND,
+    RUNTIME_MOD_RS_URL_APPEND,
+    RUNTIME_MOD_RS_HTTP_CLIENT_APPEND,
+    RUNTIME_MOD_RS_HTTP_STREAM_APPEND,
+    RUNTIME_MOD_RS_SSRF_APPEND,
+    RUNTIME_MOD_RS_DB_DSN_APPEND,
+    RUNTIME_MOD_RS_CONFIG_APPEND,
+    RUNTIME_MOD_RS_COMPRESS_APPEND,
+    RUNTIME_MOD_RS_CSV_APPEND,
+    RUNTIME_MOD_RS_CRYPTO_APPEND,
+    RUNTIME_MOD_RS_JWT_APPEND,
+    RUNTIME_MOD_RS_TEA_APPEND,
+    RUNTIME_MOD_RS_SERVER_APPEND,
+    RUNTIME_MOD_RS_WEBSOCKET_APPEND,
+    RUNTIME_MOD_RS_AUTH_APPEND,
+    RUNTIME_MOD_RS_PRINCIPAL_APPEND,
+    RUNTIME_MOD_RS_REVOCATION_APPEND,
+    RUNTIME_MOD_RS_EMAIL_APPEND,
+    RUNTIME_MOD_RS_LOCALE_APPEND,
+    RUNTIME_MOD_RS_ENV_PUBLIC_APPEND,
+    RUNTIME_MOD_RS_SEAL_CODEC_APPEND,
+    RUNTIME_MOD_RS_CSS_APPEND,
+    RUNTIME_MOD_RS_UI_APPEND,
+    RUNTIME_MOD_RS_WEB_CORE_APPEND,
+    RUNTIME_MOD_RS_WEB_APPEND,
+    RUNTIME_MOD_RS_TUI_APPEND,
+    RUNTIME_MOD_RS_WEBVIEW_APPEND,
+];
+
+/// `true` when `a` and `b` are byte-identical (const-context `str` equality; the
+/// standard `==` is not `const` on `&str`).
+const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// The number of [`MOD_APPENDS`] rows whose `append` is byte-identical to `text`.
+const fn mod_append_row_count(text: &str) -> usize {
+    let mut rows = MOD_APPENDS;
+    let mut n = 0;
+    while let [row, rest @ ..] = rows {
+        if str_eq(row.append, text) {
+            n += 1;
+        }
+        rows = rest;
+    }
+    n
+}
+
+/// `true` when every [`ALL_MOD_APPEND_TEXTS`] entry is wired into exactly one
+/// [`MOD_APPENDS`] row.
+const fn every_append_text_has_one_row() -> bool {
+    let mut rest = ALL_MOD_APPEND_TEXTS;
+    while let [first, tail @ ..] = rest {
+        if mod_append_row_count(first) != 1 {
+            return false;
+        }
+        rest = tail;
+    }
+    true
+}
+
+// IPE-RUST-AUDIT:ACCEPTED — build-time drift tripwire, not a runtime panic. The
+// condition is evaluated in a `const` context, so it fires at COMPILE time. An
+// append constant listed in `ALL_MOD_APPEND_TEXTS` but missing from `MOD_APPENDS`
+// (or wired into it twice) breaks the build — the SEAL "a table drifted from its
+// callee table" clause — rather than silently dropping/duplicating a `pub mod`
+// line in the emitted runtime two steps downstream at cargo time. Counting rows
+// (== 1) also fails a copy-paste that reuses one append text for two rows, and,
+// with the equal lengths, proves `MOD_APPENDS` carries no un-listed append.
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    every_append_text_has_one_row() && MOD_APPENDS.len() == ALL_MOD_APPEND_TEXTS.len(),
+    "every ALL_MOD_APPEND_TEXTS entry must be wired into exactly one MOD_APPENDS row, \
+     and MOD_APPENDS must carry no append text absent from ALL_MOD_APPEND_TEXTS"
+);
+
 #[allow(clippy::too_many_lines)] // one linear manifest/runtime assembly pass
 fn assemble_project_files(
     ctx: &EmitCtx,
@@ -2809,299 +3086,15 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // mod.rs starts from the base default and gains extra `pub mod` lines for
-    // each kernel group the program uses.
+    // The vendored `ipe_runtime/mod.rs`: the base default plus one `pub mod`
+    // append per reached module, in the dependency order fixed by `MOD_APPENDS`
+    // (a module is declared before any module that imports it).
     let runtime_mod_rs = {
         let mut mod_rs = RUNTIME_MOD_RS.to_owned();
-        // Ipe.Encoding / Ipe.Bytes codecs. `encoding.rs` + `bytes.rs` (the sole
-        // consumers of `base64` / `hex` / `percent-encoding` as runtime modules)
-        // are declared when the program reaches the codec crates — an encoding/
-        // bytes kernel, or a crypto/db/server/email/jwt/web surface whose runtime
-        // module uses the raw crates (`reaches_encoding`). A pure-CLI program that
-        // touches none keeps both modules absent, dropping `base64` + `hex`.
-        if ctx.reaches_encoding() {
-            mod_rs.push_str(RUNTIME_MOD_RS_ENCODING_APPEND);
-        }
-        // Ipe.Regex / String.isUrl. `regex_kernel.rs` (the sole consumer of the
-        // `regex` crate) is declared when the program reaches an `Ipe.Regex`
-        // kernel or `String.isUrl`. A standalone leaf — a program that touches
-        // neither keeps it absent, dropping `regex` + its aho-corasick/
-        // regex-automata/regex-syntax subtree.
-        if ctx.uses_regex {
-            mod_rs.push_str(RUNTIME_MOD_RS_REGEX_APPEND);
-        }
-        // Ipe.Uuid. `uuid_kernel.rs` is declared when the program reaches the
-        // `uuid` crate: a direct `Ipe.Uuid` kernel, a server/web surface (whose
-        // runtime modules mint ids via `uuid::new_v4`), OR the jwt/auth surface
-        // (`auth.rs` is compiled under `#[cfg(feature = "jwt")]` and calls
-        // `uuid::Uuid::new_v4()` to mint per-session jti ids). All three paths
-        // imply the `uuid` dep; a bare Program that reaches none keeps the module
-        // absent, dropping `uuid`.
-        if ctx.reaches_uuid() {
-            mod_rs.push_str(RUNTIME_MOD_RS_UUID_APPEND);
-        }
-        // Ipe.Random. `random.rs` (the non-crypto PRNG) is declared when the
-        // program reaches an `Ipe.Random` kernel OR the async runtime (`task.rs`'s
-        // tokio retry-with-jitter path draws from `random`'s LCG). A bare (sync)
-        // program that never draws random keeps it absent. `getrandom` is
-        // unaffected here — `getrandom` is enabled by `random || crypto-core`.
-        if ctx.reaches_random() {
-            mod_rs.push_str(RUNTIME_MOD_RS_RANDOM_APPEND);
-        }
-        if ctx.uses_db {
-            mod_rs.push_str(RUNTIME_MOD_RS_DB_APPEND);
-        }
-        // Outbound HTTP client + its SSRF validators. `http_client` (the reqwest
-        // consumer) and `http_stream` (which calls `http_client::ssrf_apply` +
-        // `method_to_reqwest`) are declared together when the program reaches
-        // the outbound HTTP surface — an HTTP kernel (`uses_http`) or email.
-        // Server/web apps with no outbound HTTP calls omit both modules and
-        // reqwest. `ssrf.rs` (the reqwest-free URL validators) is declared
-        // alongside `http_client`, the
-        // WebSocket client, OR a Db program (`db.rs::build_pool` applies the SSRF
-        // host gate via `crate::ssrf::VettedDial::for_host` unconditionally in
-        // production code; a vendored Db build without this declaration fails
-        // E0425/E0433 — the SEAL class this gate closes).
-        // Ipe.Url typed-URL module (the `url` crate + its idna → ICU4X subtree).
-        // Declared when the program reaches it — directly (`uses_url`) or through
-        // a surface whose runtime module parses with the `url` crate
-        // (`http_client` targets a typed `crate::url::Url`; `ws_client` calls
-        // `::url::Url::parse`; `db.rs::build_pool` uses `::url::Url::parse` for
-        // SSRF host extraction; `ssrf.rs` itself uses `url::Url`). Pushed BEFORE
-        // `http_client`/`ssrf` (both of which do `use crate::url::…` / `use
-        // url::Url`) so the module they reference is already declared. A pure-CLI
-        // program keeps it absent, dropping the whole idna/ICU4X tree.
-        if ctx.reaches_url() {
-            mod_rs.push_str(RUNTIME_MOD_RS_URL_APPEND);
-        }
-        if uses_http_client {
-            mod_rs.push_str(RUNTIME_MOD_RS_HTTP_CLIENT_APPEND);
-        }
-        // `http_stream.rs` (the Ipe.Http.Stream surface: streaming response bodies +
-        // `sub_subscribe_stream`) calls `crate::http_client::ssrf_apply` and
-        // `method_to_reqwest`, so `http_client` must be declared first. But it is NOT
-        // needed by the email surface (`uses_email`) even though that also
-        // `reaches_http_client` — email only calls `http_client::ssrf_apply` from
-        // `email.rs`, not from `http_stream.rs`. Separating the two prevents
-        // `tea.rs`'s `IpeSub<M>` (pulled in via `http_stream`'s `use super::*`) from
-        // being compiled into email-only programs that have no TEA surface, which
-        // would require `tea.rs` itself to be declared and triggers an `IpeTask<A,()>`
-        // alias conflict in the vendored emit model.
-        if ctx.uses_http {
-            mod_rs.push_str(RUNTIME_MOD_RS_HTTP_STREAM_APPEND);
-        }
-        if uses_http_client || ctx.uses_websocket || ctx.uses_db {
-            mod_rs.push_str(RUNTIME_MOD_RS_SSRF_APPEND);
-        }
-        // Db DSN + external-connection pool: `dsn.rs` (the typed opaque `Ipe.Db.Dsn`
-        // descriptor) and `external_conn.rs` (the live pool for a database the app was
-        // not built against) are gated on `db` in the real runtime `mod.rs` — the
-        // vendored trimmed template must declare them under the same predicate.
-        // `external_conn.rs` calls `crate::dsn::{Dsn, DsnDriver}` and
-        // `crate::ssrf::VettedDial`; both modules require `ssrf` (declared above)
-        // and `url` (declared above via `reaches_url` which now includes `uses_db`).
-        if ctx.uses_db {
-            mod_rs.push_str(RUNTIME_MOD_RS_DB_DSN_APPEND);
-        }
-        // Ipe.Config TOML/YAML decoders. `config_decode` (the sole consumer of
-        // the `toml` + `serde_yaml` crates) is declared when the program reaches
-        // it directly — it is a leaf module no other surface calls into. A
-        // program that only reads env vars (`config`) or decodes JSON keeps it
-        // absent, dropping both crates.
-        if ctx.uses_config {
-            mod_rs.push_str(RUNTIME_MOD_RS_CONFIG_APPEND);
-        }
-        // Ipe.Compression. `compression` (the sole consumer of the `flate2` +
-        // `zstd` crates) is declared when the program reaches it directly — it is
-        // a leaf module no other surface calls into. A program that never
-        // compresses keeps it absent, dropping both crates.
-        if ctx.uses_compression {
-            mod_rs.push_str(RUNTIME_MOD_RS_COMPRESS_APPEND);
-        }
-        // Ipe.Csv. `csv` (the sole consumer of the `csv` crate) is declared when
-        // the program reaches it directly — it is a leaf module no other surface
-        // calls into. A program that never parses CSV keeps it absent, dropping
-        // the crate.
-        if ctx.uses_csv {
-            mod_rs.push_str(RUNTIME_MOD_RS_CSV_APPEND);
-        }
-        // Heavy Ipe.Crypto. `crypto` (the sole consumer of `sha1` + `md-5` +
-        // `aes-gcm` + `chacha20poly1305` + `pbkdf2`) is declared when the program
-        // uses a heavy `Ipe.Crypto` kernel. The `crypto_core` floor is
-        // in the base module set; nothing else reaches the heavy module, so the
-        // flag alone gates it. A program using only SHA-2/HMAC/RSA/entropy keeps
-        // it absent, dropping the five crates and their trees.
-        if ctx.uses_crypto {
-            mod_rs.push_str(RUNTIME_MOD_RS_CRYPTO_APPEND);
-        }
-        // Ipe.Jwt. `jwt` (the sole consumer of `jsonwebtoken`) is declared when
-        // the program reaches it — directly (`uses_jwt`) or through the `Ipe.Auth`
-        // surface (`auth.rs` calls `crate::jwt`). It reaches only the always-on
-        // `crypto_core` floor, so declaring it pulls no other gated module. A
-        // program using neither JWT nor Auth keeps it absent, dropping the crate.
-        if ctx.reaches_jwt() {
-            mod_rs.push_str(RUNTIME_MOD_RS_JWT_APPEND);
-        }
-        // `tea` must be declared whenever any included module's `use crate::tea`
-        // closure references it — NOT only when user code names a TEA kernel
-        // directly. Every appended module that imports `IpeCmd`/`IpeSub` forces it:
-        //   • `uses_http` → `http_stream.rs` (`use super::*;` pulls `IpeSub`
-        //     through the glob; `sub_subscribe_stream` returns `IpeSub<M>`);
-        //   • `uses_websocket` → `ws_client.rs`'s `sub_subscribe_ws_*` (`IpeSub<M>`);
-        //   • `uses_web` → `web/mod.rs` + `web/pubsub.rs` (`use crate::tea::{IpeCmd, IpeSub}`);
-        //   • `uses_tui` → `tui/app.rs` (`use super::super::tea::{…, IpeCmd, IpeSub, …}`);
-        //   • `uses_webview` → `webview.rs` (`use super::tea::{IpeCmd, IpeSub}`).
-        // These imports are unconditional in the runtime source (not feature-gated),
-        // so a live/tui/webview program with no explicit `Cmd`/`Sub` kernel (e.g.
-        // `Html.renderStatic` from a CLI) still needs `tea`. Guarded as ONE union so
-        // a program hitting several paths emits `pub mod tea;` exactly once (E0428).
-        // This is the transitive-closure invariant: any module a declared module
-        // depends on MUST itself be declared (same rule as `http_header`).
-        if ctx.uses_tea
-            || ctx.uses_http
-            || ctx.uses_server
-            || ctx.uses_websocket
-            || ctx.uses_web
-            || ctx.uses_tui
-            || ctx.uses_webview
-        {
-            mod_rs.push_str(RUNTIME_MOD_RS_TEA_APPEND);
-        }
-        // `web/csrf.rs` unconditionally re-exports `crate::server::csrf_*`
-        // (`csrf_gen_token`, `csrf_token_well_formed`, `csrf_pair_valid`), so
-        // `pub mod server;` must be emitted whenever the full `web` module is
-        // declared — not just for explicit `Ipe.Http.Server` use. NOT for
-        // webview: the lean render-core `web` shell reaches no `csrf`/`server`,
-        // and `server_cargo_toml` no longer selects `"server"` for webview.
-        if ctx.uses_server || ctx.uses_web {
-            mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
-        }
-        // Ipe.WebSocket client — declare `ws_client` (its `ssrf` dep is
-        // force-declared by the shared HTTP-client/SSRF guard above, its `tea`
-        // dep forced above).
-        if ctx.uses_websocket {
-            mod_rs.push_str(RUNTIME_MOD_RS_WEBSOCKET_APPEND);
-        }
-        // Ipe.Auth — append auth module when any Auth kernel is used, OR
-        // when the jwt feature is active. `server.rs`'s `authed_route` builder
-        // (gated `#[cfg(feature = "jwt")]`) calls `crate::auth::auth_verify_token`,
-        // `crate::auth::reissue_context_from_claims`, and
-        // `crate::auth::auth_reissue_token` — so the `auth` module must be
-        // declared whenever `jwt` is in the default feature set, even when the
-        // program uses no direct `Ipe.Auth.*` kernels (e.g. `Server.getAuthed`
-        // only).
-        if ctx.uses_auth || ctx.reaches_jwt() {
-            mod_rs.push_str(RUNTIME_MOD_RS_AUTH_APPEND);
-        }
-        // Ipe.Auth.Principal — append the `principal` module when `Auth.subject`
-        // (or another Principal-touching kernel) is used, OR when any surface whose
-        // runtime module references `crate::principal::Principal` is compiled in.
-        // `server.rs`'s `authed_route` builder names `crate::principal::Principal`
-        // at the module level, and `db.rs`/`jwt.rs` reach it too — the real crate
-        // gates `principal` on `any(server, db, jwt)`. The emitter must mirror that
-        // exact closure (server = `uses_server || uses_web`) or a server/db/jwt
-        // program with no direct `Principal` kernel fails E0433 (`crate::principal`
-        // not found) — the module-set SEAL breach pinned by
-        // `seal_modset::revoke_session_arity3_builds`. NOT webview: the lean
-        // render-core shell reaches no `crate::principal`.
-        if ctx.uses_principal || ctx.uses_server || ctx.uses_web || ctx.uses_db || ctx.reaches_jwt()
-        {
-            mod_rs.push_str(RUNTIME_MOD_RS_PRINCIPAL_APPEND);
-        }
-        // Ipe.Auth.Revocation — append the revocation store when the authed-route
-        // surface is active. `server.rs`'s `authed_route` middleware calls
-        // `crate::revocation::is_revoked` unconditionally at the module level, and
-        // the real crate gates `revocation` on `feature = "jwt"`, so the module
-        // must be declared whenever the jwt-authed surface is reachable (or a
-        // direct `Principal` kernel is used). `principal` is appended above under a
-        // superset gate, satisfying `revocation.rs`'s `crate::principal` import.
-        if ctx.uses_principal || ctx.reaches_jwt() {
-            mod_rs.push_str(RUNTIME_MOD_RS_REVOCATION_APPEND);
-        }
-        // Ipe.Email — append email module when any email kernel or type is used.
-        if ctx.uses_email {
-            mod_rs.push_str(RUNTIME_MOD_RS_EMAIL_APPEND);
-        }
-        // Ipe.Locale — append locale module when any locale kernel or type is used.
-        if ctx.uses_locale {
-            mod_rs.push_str(RUNTIME_MOD_RS_LOCALE_APPEND);
-        }
-        // Ipe.Env — append env_public module when `Env.public` is used. Not
-        // vendored from the source tree (its content is project-specific);
-        // the file itself is inserted separately below, alongside the module
-        // declaration here.
-        if ctx.uses_env_public {
-            mod_rs.push_str(RUNTIME_MOD_RS_ENV_PUBLIC_APPEND);
-        }
-        // `http_header` is part of the base `mod.rs` (the base `http_client`
-        // module depends on it), so it needs no conditional append here — see
-        // the note at the top of this file.
-        // `seal_codec` is a leaf dep of `ui/widget.rs` and `web/mod.rs`; must
-        // be declared before those modules are compiled. Guarded on the same
-        // condition as the UI append — any render-capable shape activates the
-        // imports. Appended AT MOST ONCE regardless of how many render surfaces
-        // are active (e.g. a Tui+Web program must not emit a duplicate
-        // `pub mod seal_codec;` — E0428).
-        if ctx.uses_ui || ctx.uses_tui || ctx.uses_web || ctx.uses_webview {
-            mod_rs.push_str(RUNTIME_MOD_RS_SEAL_CODEC_APPEND);
-        }
-        // Ipe.Css leaf security kernels — declared for any render-capable
-        // program (`uses_ui`, whose html/ui/live runtime modules import
-        // `css_safety`) OR a pure-`Ipe.Css` program (`uses_css`, no render
-        // kernel). Pushed BEFORE the UI append because `html.rs` /
-        // `ui/render.rs` / `live/style_inject.rs` import `css_safety` at the
-        // top level — it must be declared first. The single guard de-duplicates:
-        // a program using both emits `pub mod css_safety;` exactly once (E0428).
-        // Transitive closure: the `tui` runtime module unconditionally imports
-        // `super::ui` (tui/app.rs, tui/layout.rs) and `super::html`
-        // (tui/focus.rs), so a String-view Tui program (`uses_tui` without
-        // `uses_ui`) still needs the css/ui/html appends — same invariant as
-        // the `http_header` leaf above.
-        // `live/mod.rs` unconditionally does
-        // `pub use crate::ipe_runtime::html::*` and `html.rs` imports
-        // `css_safety`, so a `uses_web`-only program (e.g. PubSub-only, no
-        // Ipe.Ui kernels) still needs `css_safety` and `html` declared.
-        if ctx.uses_ui || ctx.uses_css || ctx.uses_tui || ctx.uses_web || ctx.uses_webview {
-            mod_rs.push_str(RUNTIME_MOD_RS_CSS_APPEND);
-        }
-        // Ipe.Ui / Ipe.Html render kernels (+ Tui + Web transitive dep).
-        // `live/mod.rs` unconditionally re-exports `crate::ipe_runtime::html::*`;
-        // `live/style_inject.rs` imports `super::html` — so `html` must be
-        // declared whenever live is enabled, even without explicit Ipe.Ui use.
-        if ctx.uses_ui || ctx.uses_tui || ctx.uses_web || ctx.uses_webview {
-            mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
-        }
-        // The server-free render core (`web_page_core` + the ONE real `web`
-        // module, which compiles to its render core alone under `web-core`) —
-        // declared for EVERY render host, served-web and desktop-webview alike.
-        if ctx.uses_web || ctx.uses_webview {
-            mod_rs.push_str(RUNTIME_MOD_RS_WEB_CORE_APPEND);
-        }
-        // Ipe.Web app-entry kernels — the full axum `web` server surface layered
-        // on top of the render core. `uses_web` only: a desktop-webview program
-        // runs no HTTP server, so the served entry points + widget/js-port modules
-        // stay absent (the `web` module's own server items are `#[cfg("server")]`).
-        if ctx.uses_web {
-            mod_rs.push_str(RUNTIME_MOD_RS_WEB_APPEND);
-        }
-        // Ipe.Tui / Ipe.Tui app-entry kernels, AND the `Cli.tea` lines-view path:
-        // its emitted `tea.rs` (Cli event loop) and `main.rs` (view fn) reach
-        // `crate::tui::{LinesView, render_lines_view, cli_text_}`, and a `Cli.tea`
-        // sets `uses_console` (not `uses_tui`). The `tui` Cargo feature is already
-        // selected for `uses_console` (see `runtime_features`) and the manifest
-        // augmenter gates on `uses_tui || uses_console`; the `mod.rs` declaration
-        // MUST use the same predicate or a `Cli.tea` program fails E0433
-        // (`crate::tui` not found) — the module-set SEAL breach `seal_modset::
-        // cli_app_lines_builds` pins.
-        if ctx.uses_tui || ctx.uses_console {
-            mod_rs.push_str(RUNTIME_MOD_RS_TUI_APPEND);
-        }
-        // Ipe.WebView app-entry kernel. The render core it draws through
-        // (`web_page_core` + the real `web` module) is already declared by
-        // `RUNTIME_MOD_RS_WEB_CORE_APPEND` above (fires on `uses_web ||
-        // uses_webview`), so this only adds the `webview` window module.
-        if ctx.uses_webview {
-            mod_rs.push_str(RUNTIME_MOD_RS_WEBVIEW_APPEND);
+        for append in MOD_APPENDS {
+            if (append.gate)(ctx) {
+                mod_rs.push_str(append.append);
+            }
         }
         mod_rs
     };
