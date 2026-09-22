@@ -208,8 +208,20 @@ pub fn decode_frame(bytes: &[u8]) -> Result<(ControlFrame, usize), FrameError> {
     let Some(body) = bytes.get(4..end) else {
         return Err(FrameError::Truncated);
     };
-    let frame = serde_json::from_slice(body).map_err(|_| FrameError::Malformed)?;
+    let frame = decode_frame_body(body)?;
     Ok((frame, end))
+}
+
+/// Decode a frame from a bare, already-de-framed body — the JSON payload with no
+/// length prefix. This is the one place a body becomes a [`ControlFrame`], shared
+/// by [`decode_frame`] (which strips the prefix first) and the stream server
+/// (whose `read_record` has already stripped it), so a wire byte is never framed
+/// twice nor parsed two different ways.
+///
+/// Fail-closed: a body that is not a valid frame is `Malformed` — no partial
+/// value, no panic.
+pub fn decode_frame_body(body: &[u8]) -> Result<ControlFrame, FrameError> {
+    serde_json::from_slice(body).map_err(|_| FrameError::Malformed)
 }
 
 /// The fail-closed security core of the tui/cli/worker loopback control
@@ -354,7 +366,9 @@ pub mod transport {
 ///   than parking the surface, and one slow peer cannot wedge the accept loop.
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub mod server {
-    use super::{ControlFrame, FrameError, MAX_FRAME_LEN, decode_frame, encode_frame, transport};
+    use super::{
+        ControlFrame, FrameError, MAX_FRAME_LEN, decode_frame_body, encode_frame, transport,
+    };
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -502,7 +516,10 @@ pub mod server {
             return Err(ServeError::Unauthorized);
         }
         let frame_bytes = read_record(stream).await?;
-        let (frame, _consumed) = decode_frame(&frame_bytes).map_err(ServeError::Frame)?;
+        // `read_record` has already stripped the length prefix, so the body is
+        // decoded directly — running it back through `decode_frame` would read the
+        // JSON's first bytes as a second length prefix.
+        let frame = decode_frame_body(&frame_bytes).map_err(ServeError::Frame)?;
         let reply = handler(frame);
         // A reply that exceeds the cap cannot be sent; drop the connection rather
         // than emit a record the peer would refuse (fail-closed, never partial).
@@ -601,7 +618,7 @@ pub mod server {
 
     #[cfg(test)]
     mod tests {
-        use super::super::AppearancePatch;
+        use super::super::{AppearancePatch, decode_frame};
         use super::*;
         use crate::system::locked_set_var;
         use std::net::{Ipv4Addr, SocketAddr};
