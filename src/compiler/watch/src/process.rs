@@ -950,4 +950,86 @@ mod tests {
         );
         state.shutdown(quick_timeouts());
     }
+
+    /// T3 (prove the refusal): `TcpConnect` readiness is "the port accepts a
+    /// connection", NOT merely "the child is alive". A candidate that stays
+    /// ALIVE but never binds the internal port must FAIL readiness — so the
+    /// proxy keeps the last-good binary and never cuts over to an upstream that
+    /// is still coming up. This is the race a bare alive-grace would lose (a
+    /// transient 502 on cutover).
+    #[cfg(unix)]
+    #[test]
+    fn tcp_connect_readiness_fails_for_an_alive_child_that_never_binds_the_port() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut state = SupervisorState::fresh();
+        let good_path = PathBuf::from("/bin/sleep");
+        let cut_calls = Arc::new(AtomicUsize::new(0));
+
+        // Establish a running old binary (alive-immediate, cuts over once).
+        let spawn_good = |_path: &Path, _port: u16| {
+            let mut c = Command::new("/bin/sleep");
+            c.arg("5");
+            c
+        };
+        let cc = Arc::clone(&cut_calls);
+        let first = state.apply_green_behind_proxy(
+            &good_path,
+            40010,
+            spawn_good,
+            ReadinessCheck::AliveImmediate,
+            quick_timeouts(),
+            move |_| {
+                cc.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        assert!(matches!(first, RestartOutcome::Spawned), "{first:?}");
+        assert_eq!(cut_calls.load(Ordering::SeqCst), 1);
+
+        // Reserve a free loopback port, then DROP the listener so nothing is
+        // listening on it — the candidate below will stay alive but never bind
+        // it, so TcpConnect readiness must time out.
+        let free_port = {
+            let l =
+                std::net::TcpListener::bind(("127.0.0.1", 0u16)).expect("bind an ephemeral port");
+            let p = l.local_addr().expect("read ephemeral port").port();
+            drop(l);
+            p
+        };
+
+        // A distinct-content candidate that spawns ALIVE (`/bin/sleep`) but never
+        // opens a socket. `TcpConnect { port: free_port }` can never connect, so
+        // readiness fails within the budget and the last-good binary is kept.
+        let dir = std::env::temp_dir().join(format!("ipe_watch_tcp_ready_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let candidate = dir.join("alive-but-silent");
+        std::fs::write(&candidate, b"tcp-readiness-distinct-bytes").unwrap();
+        let spawn_silent = |_path: &Path, _port: u16| {
+            let mut c = Command::new("/bin/sleep");
+            c.arg("5");
+            c
+        };
+        let cc2 = Arc::clone(&cut_calls);
+        let outcome = state.apply_green_behind_proxy(
+            &candidate,
+            free_port,
+            spawn_silent,
+            ReadinessCheck::TcpConnect { port: free_port },
+            quick_timeouts(),
+            move |_| {
+                cc2.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+        assert!(
+            matches!(outcome, RestartOutcome::RespawnedLastGood { .. }),
+            "an alive-but-not-listening candidate must fail TcpConnect readiness and keep last-good: {outcome:?}"
+        );
+        assert_eq!(
+            cut_calls.load(Ordering::SeqCst),
+            1,
+            "the proxy must NOT cut over to an upstream that never accepted a connection"
+        );
+        state.shutdown(quick_timeouts());
+    }
 }
