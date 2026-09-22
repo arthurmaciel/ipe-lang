@@ -248,12 +248,26 @@ pub fn emit_expr_at(
                 // `KernelFn`-variant) gate as defence in depth: a kernel routed to
                 // the wrong arm returns `None` and does not miscompile.
                 match k.def().class {
-                    // Db projection kernels: DbExec / DbQuery / DbQueryDecode /
-                    // DbInsertFields / DbUpdateFields / DbInsertFieldsReturning need
-                    // `List SqlValue` / `List (String, SqlField)` projected to
-                    // `Vec<SqlParam>` / `Vec<(String, Option<SqlParam>)>` at the call
-                    // site via the generated `into_sql_param` / `into_field_param` methods.
                     KernelClass::Db => {
+                        // `Db.Decode.succeed` (`DbDecSucceed`) is `class = Db` but
+                        // shares the `decode_succeed` special case with its `Json` /
+                        // `Config` siblings: `emit_json_decoder_call` curries a
+                        // function argument (`decode_succeed(curryN(f))`), which the
+                        // generic tail cannot reproduce. `emit_db_call` returns `None`
+                        // for it (it is a decoder combinator, not a projection
+                        // kernel), so probe the JSON-decoder emitter first, exactly
+                        // as the former linear chain did. Every other `Db` kernel is
+                        // not a decoder special case, so this probe returns `None`.
+                        if let Some(result) =
+                            emit_json_decoder_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        // Db projection kernels: DbExec / DbQuery / DbQueryDecode /
+                        // DbInsertFields / DbUpdateFields / DbInsertFieldsReturning need
+                        // `List SqlValue` / `List (String, SqlField)` projected to
+                        // `Vec<SqlParam>` / `Vec<(String, Option<SqlParam>)>` at the call
+                        // site via the generated `into_sql_param` / `into_field_param` methods.
                         if let Some(result) =
                             emit_db_call(ctx, callee, args, indent, child, generics)?
                         {
@@ -268,13 +282,35 @@ pub fn emit_expr_at(
                         }
                     }
                     KernelClass::Tea => {
+                        // `Ipe.Tea.Worker.tea` (`TeaWorker`) is `class = Tea` but
+                        // its emit path is the UI delegate chain
+                        // (`emit_ui_call` → `Delegate(Worker)` → `emit_worker_call`):
+                        // `ui_call_shape` classifies it, and `emit_tea_call` has no
+                        // arm for it. Probe `emit_ui_call` first so the worker
+                        // app-entry reaches its emitter; every other `Tea` kernel
+                        // is not UI-family, so `emit_ui_call` returns `None` and the
+                        // standard TEA emit runs.
+                        if let Some(result) =
+                            emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
                         if let Some(result) =
                             emit_tea_call(ctx, callee, args, indent, child, generics)?
                         {
                             return Ok(result);
                         }
                     }
-                    KernelClass::Ui | KernelClass::Web => {
+                    // `Ui`/`Web` UI kernels and the `Terminal` app-entries
+                    // (`TerminalAppScreen` / `TerminalAppLines`) all emit through
+                    // `emit_ui_call`: `ui_call_shape` classifies each, and the
+                    // Terminal app-entries route to the Tui/Console delegate
+                    // emitters (`Delegate(Tui)` / `Delegate(Console)`) inside it.
+                    // The two hot-swap template probes fire only for provably-static
+                    // `Ipe.Html` / `Ipe.Ui` subtrees under `hot_appearance`; a
+                    // Terminal app-entry kernel never matches them, so they return
+                    // `None` and the shared arm stays byte-identical for Terminal.
+                    KernelClass::Ui | KernelClass::Web | KernelClass::Terminal => {
                         // Structural hot-swap: under `hot_appearance`, a provably-static
                         // `Ipe.Html` subtree is hoisted whole as ONE serialized template
                         // into the per-view literal table and emitted as a
@@ -305,9 +341,6 @@ pub fn emit_expr_at(
                             return Ok(result);
                         }
                     }
-                    // Terminal app-entry kernels (`Tui.tea` / `Cli.tea` + `onKey` /
-                    // `onLine`) have no bespoke emitter — they take the generic tail.
-                    KernelClass::Terminal => {}
                     // The FFI kernel tier is reserved: no `KernelFn` carries
                     // `class = Ffi`, so this arm is structurally unreachable. It is
                     // present (rather than folded into a wildcard) so the exhaustive
@@ -372,9 +405,44 @@ pub fn emit_expr_at(
                         {
                             return Ok(result);
                         }
+                        // `Db.defaultMigration` (`DbDefaultMigration`) is `class =
+                        // Pure` (a pure record builder that must not force the `db`
+                        // runtime feature) but `emit_db_call` synthesises its
+                        // `Migration` record literal (`{ name, sql }`) — the generic
+                        // tail cannot, and would ICE (IPE-I0001, no synthesised
+                        // struct for that record shape). Probe `emit_db_call` here,
+                        // as the former linear chain did. Every other Pure kernel is
+                        // not a Db kernel, so this probe returns `None`.
+                        if let Some(result) =
+                            emit_db_call(ctx, callee, args, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
                         // Config-tag ADT constructors: nullary values emitted inline as the
                         // raw `Int` tag the setting builders consume.
                         if let Some(result) = emit_config_ctor_call(callee) {
+                            return Ok(result);
+                        }
+                        // The `Ipe.Color.Ansi` palette constructors (`TermColor*`)
+                        // are `class = Pure` but classified by `ui_call_shape`: they
+                        // emit through `emit_ui_call` so their appearance literals
+                        // (`TermColor.rgb` / `rgba`) hoist into the per-view literal
+                        // table under `hot_appearance`, exactly as the former linear
+                        // probe chain routed them. The two hot-swap template probes
+                        // run first (they only fire under `hot_appearance` and return
+                        // `None` for a non-`Ipe.Html`/`Ipe.Ui` subtree — a palette
+                        // constructor never matches). Every other `Pure` kernel is not
+                        // UI-family, so `emit_ui_call` returns `None`.
+                        if let Some(result) = emit_html_template(ctx, expr) {
+                            return Ok(result);
+                        }
+                        if let Some(result) = emit_ui_template(ctx, expr, indent, child, generics)?
+                        {
+                            return Ok(result);
+                        }
+                        if let Some(result) =
+                            emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
+                        {
                             return Ok(result);
                         }
                         // Ipe.Css value sanitizer (`CssSafety.safeValue`): hoist a direct
