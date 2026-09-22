@@ -982,36 +982,20 @@ fn run_inner(
     // mirrors how `ipe build` resolves it via `runtime_embed::resolve()`.
     let runtime_dep_root = crate::runtime_embed::resolve()?.root().to_path_buf();
 
-    // The DEV-ONLY blue-green front proxy. When enabled, it binds the user's
-    // port up front and holds it for the whole session; the app binaries run
-    // behind it on internal loopback ports and are cut over on readiness so a
-    // rebuild never drops the browser's connection. Bind failure is fatal here
-    // for the SAME reason a direct port-in-use is: the user asked for that
-    // port and it is unavailable.
-    let mut proxy: Option<ipe_watch::DevProxy> = if opts.bluegreen {
-        let bound = ipe_watch::DevProxy::bind(opts.port).map_err(|e| {
-            CliError::UsageOwned(format!(
-                "watch: cannot bind the blue-green proxy on port {}: {e}",
-                opts.port
-            ))
-        })?;
-        if !opts.quiet {
-            eprintln!(
-                "{}",
-                watch_line(
-                    &crate::style::TerminalSafe::sanitize(&format!(
-                        "[ipe watch] blue-green proxy holding port {} (rebuilds cut over with no \
-                         dropped connection)",
-                        opts.port
-                    )),
-                    WatchRole::Info
-                )
-            );
-        }
-        Some(bound)
-    } else {
-        None
-    };
+    // The DEV-ONLY blue-green front proxy. When engaged it binds the user's port
+    // up front and holds it for the whole session; the app binaries run behind it
+    // on internal loopback ports and are cut over on readiness so a rebuild never
+    // drops the browser's connection.
+    //
+    // Engagement is DEFERRED past the first build: the proxy is an HTTP L7 proxy
+    // and can only front a crate that binds a first-party HTTP listener
+    // (`web_app` / `server_listen`, detected on the emitted `main.rs`). Whether a
+    // crate binds one is not knowable before the first emit, so the proxy is
+    // bound lazily at the first green build (see `ensure_proxy_bound`) only when
+    // `current_binds_http && opts.bluegreen`. A CLI/TUI/worker or a
+    // third-party/non-HTTP server never engages it — watch rebuilds and restarts
+    // such a crate directly, binding no proxy on the user's port.
+    let mut proxy: Option<ipe_watch::DevProxy> = None;
 
     let mut db_main = ipe_db::IpeDatabase::new();
     let mut source_root: Option<ipe_db::SourceRoot> = None;
@@ -1025,6 +1009,12 @@ fn run_inner(
     // `Web.tea`?), decided once per generation right after emit, not
     // re-derived from the built executable (which carries no such marker).
     let mut current_is_web = false;
+    // Set alongside `current_is_web` at each emit: does the built crate bind a
+    // first-party HTTP listener (`web_app` OR `server_listen`)? This — not the
+    // program's shape — gates blue-green proxy engagement: a CLI/TUI/worker or a
+    // third-party/non-HTTP server emits neither and is rebuilt+restarted
+    // directly, never fronted by a proxy that cannot discover its port.
+    let mut current_binds_http = false;
     // The prominent "open this URL" line is printed once, after the first web
     // app settles into a running state — so the address the user must open is
     // the last thing on screen, not a line that scrolled away above the cargo
@@ -1442,7 +1432,8 @@ fn run_inner(
                         if appearance_active {
                             running_emitted = Some(emitted.clone());
                         }
-                        current_is_web = is_ipe_web_project(&emitted);
+                        current_is_web = emitted_is_web(&emitted);
+                        current_binds_http = emitted_binds_http(&emitted);
                         // Design doc "First-run vs warm-run UX": the cold
                         // (first) build pays the full dependency-compile
                         // cost and can take minutes; every subsequent
@@ -1545,6 +1536,33 @@ fn run_inner(
                     }
                     CargoOutcome::Green(exe_path) => {
                         let restart_started = Instant::now();
+                        // Deferred blue-green engagement: bind the proxy on the
+                        // user's port the first time a green build is known to bind
+                        // a first-party HTTP listener. A bind failure here is fatal
+                        // for the SAME reason a direct port-in-use is — the user
+                        // asked for that port and it is unavailable.
+                        if proxy.is_none() && opts.bluegreen && current_binds_http {
+                            let bound = ipe_watch::DevProxy::bind(opts.port).map_err(|e| {
+                                CliError::UsageOwned(format!(
+                                    "watch: cannot bind the blue-green proxy on port {}: {e}",
+                                    opts.port
+                                ))
+                            })?;
+                            if !opts.quiet {
+                                eprintln!(
+                                    "{}",
+                                    watch_line(
+                                        &crate::style::TerminalSafe::sanitize(&format!(
+                                            "[ipe watch] blue-green proxy holding port {} \
+                                             (rebuilds cut over with no dropped connection)",
+                                            opts.port
+                                        )),
+                                        WatchRole::Info
+                                    )
+                                );
+                            }
+                            proxy = Some(bound);
+                        }
                         let outcome = if let Some(proxy) = proxy.as_ref() {
                             // Blue-green: the new binary binds a FRESH internal
                             // port behind the proxy; readiness is probed on
@@ -1594,6 +1612,17 @@ fn run_inner(
                                 ipe_watch::ReadinessCheck::HttpReadyz {
                                     port: internal_port,
                                 }
+                            } else if current_binds_http {
+                                // A first-party HTTP server (Ipe.Http.Server) has
+                                // no `/_ipe/readyz`, but it DOES bind a TCP
+                                // listener on the internal port — so readiness is
+                                // "the port accepts a connection", not merely "the
+                                // child is still alive". A bare alive-grace could
+                                // cut the proxy over to an upstream that has not
+                                // finished binding, yielding a transient 502.
+                                ipe_watch::ReadinessCheck::TcpConnect {
+                                    port: internal_port,
+                                }
                             } else {
                                 ipe_watch::ReadinessCheck::AliveGrace {
                                     grace: Duration::from_millis(300),
@@ -1624,6 +1653,11 @@ fn run_inner(
                         } else {
                             let readiness = if current_is_web {
                                 ipe_watch::ReadinessCheck::HttpReadyz { port: opts.port }
+                            } else if current_binds_http {
+                                // Direct-bind HTTP server (blue-green off): the
+                                // app owns `opts.port` itself; readiness is the
+                                // port accepting a connection.
+                                ipe_watch::ReadinessCheck::TcpConnect { port: opts.port }
                             } else {
                                 ipe_watch::ReadinessCheck::AliveGrace {
                                     grace: Duration::from_millis(300),
@@ -1743,22 +1777,39 @@ fn free_loopback_port() -> std::io::Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-/// Detection heuristic for readiness strategy: the backend's Ipe.Web entry
-/// point emission always contains the literal `ipe_runtime::web::web_app`
-/// call (`crates/ipe_backend_rust/src/emit_web.rs`) — deterministic,
-/// compiler-controlled text, not user input, so a substring check is sound
-/// here (unlike parsing arbitrary user text). Ipe.Web apps get the
-/// precise `/_ipe/readyz` probe; every other shape (Ipe.Http.Server has no
-/// readiness endpoint yet, and its listen port is a Ipê-source-level
-/// argument this driver cannot statically know) falls back to
-/// `AliveGrace` — matching the design doc's own readiness bifurcation
-/// ("`/_ipe/readyz` for Ipe.Web; alive + optional health for CLI").
-fn is_ipe_web_project(emitted: &ipe_backend::EmittedProject) -> bool {
+/// The emitted `src/main.rs` text — the deterministic, compiler-controlled
+/// surface both HTTP-detection predicates scan. Not user input (the backend
+/// emits it), so a substring check is sound here (unlike parsing arbitrary
+/// user text).
+fn emitted_main_rs(emitted: &ipe_backend::EmittedProject) -> Option<&str> {
     emitted
         .files
         .iter()
         .find(|(rel, _)| rel.as_str() == "src/main.rs")
-        .is_some_and(|(_, text)| text.contains("ipe_runtime::web::web_app"))
+        .map(|(_, text)| text.as_str())
+}
+
+/// The emitted crate is a live Ipe.Web app — its entry emission always contains
+/// the literal `ipe_runtime::web::web_app` call
+/// (`crates/ipe_backend_rust/src/emit_web.rs`). Ipe.Web apps get the precise
+/// `/_ipe/readyz` readiness probe and appearance hot-swap.
+fn emitted_is_web(emitted: &ipe_backend::EmittedProject) -> bool {
+    emitted_main_rs(emitted).is_some_and(|text| text.contains("ipe_runtime::web::web_app"))
+}
+
+/// The emitted crate binds a FIRST-PARTY HTTP listener whose port `ipe`
+/// controls via the injected `IPE_*_PORT` env — exactly the two entrypoints an
+/// L7 proxy can front: `web_app` (Ipe.Web) or `server_listen` (Ipe.Http.Server).
+/// This — not the program's shape — decides whether the blue-green proxy
+/// engages: a `Shape::Script` `main = Server.listen …` binds an HTTP port and
+/// emits `server_listen`, so it too is proxied; a CLI/TUI/worker or a
+/// third-party/non-HTTP server (ftp/irc/raw socket) emits neither, so watch
+/// rebuilds and restarts it directly rather than fronting a port it cannot
+/// discover or relocate.
+fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
+    emitted_main_rs(emitted).is_some_and(|text| {
+        text.contains("ipe_runtime::web::web_app") || text.contains("server_listen")
+    })
 }
 
 /// Build the child process's environment.
