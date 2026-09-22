@@ -592,7 +592,7 @@ impl TuiSurface {
         Msg: Clone + IpeStringify,
         FView: Fn(Model) -> CellsView<Msg>,
     {
-        use crate::control::{ControlFrame, DebugCmd};
+        use crate::control::ControlFrame;
         match frame {
             ControlFrame::HotAppearance(patch) => {
                 // Register the appearance overlay only where the mechanism is
@@ -1290,9 +1290,15 @@ mod apply_seam_tests {
             &live,
             &mut dbg,
         );
-        let ControlFrame::ModelSnapshot { step, rendered } = out.reply else {
-            assert!(false, "InspectModel must reply ModelSnapshot");
-            return;
+        let (step, rendered) = match &out.reply {
+            ControlFrame::ModelSnapshot { step, rendered } => (*step, rendered.clone()),
+            other => {
+                assert!(
+                    matches!(other, ControlFrame::ModelSnapshot { .. }),
+                    "InspectModel must reply ModelSnapshot, got {other:?}"
+                );
+                return;
+            }
         };
         assert_eq!(step, 1, "the snapshot reflects the requested step");
         assert!(
