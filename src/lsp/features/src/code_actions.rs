@@ -27,6 +27,16 @@
 //! - `IPE-T0020` (`WebView` `view` returns `Html` instead of `View`): "Wrap in
 //!   `Ui.html`" — inserts `Ui.html (` before and `)` after the expression at the
 //!   diagnostic span.
+//! - `lint/unused-imports` (the `unused-imports` lint): "Remove unused import" —
+//!   deletes the whole `import` line. The lint has already proved no introduced
+//!   name is used (it is conservative), so the deletion is behavior-preserving.
+//!
+//! **Not offered — `IPE-N0048` (two definitions fold to one Rust name):** this
+//! diagnostic is raised at IR-level name mangling and carries NO source spans
+//! for either colliding definition, so no fail-closed rename edit can be
+//! constructed — a rename would also have to locate and update every reference
+//! the diagnostic cannot point at. Offering a guess would be a correctness bug,
+//! so no action is produced.
 //!
 //! The provider is deliberately conservative: it only acts on codes it can
 //! fix with a single-hunk text edit that it can prove correct. Unknown codes
@@ -152,6 +162,13 @@ pub fn code_actions(
                 // WebView `view` returns `Html` instead of `View Web msg` —
                 // wrap the expression at the diagnostic span in `Ui.html ( … )`.
                 if let Some(action) = wrap_in_ui_html_action(diag, uri, text, encoding) {
+                    actions.push(CodeActionOrCommand::CodeAction(action));
+                }
+            }
+            "lint/unused-imports" => {
+                // The `unused-imports` lint proved no introduced name is used —
+                // offer to delete the whole `import` line (behavior-preserving).
+                if let Some(action) = remove_unused_import_action(diag, uri, text, encoding) {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -586,6 +603,53 @@ fn wrap_in_ui_html_action(
     changes.insert(uri.clone(), vec![edit]);
     Some(CodeAction {
         title: "Wrap in `Ui.html`".to_owned(),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        is_preferred: Some(true),
+        disabled: None,
+        data: None,
+    })
+}
+
+/// Quick-fix for `lint/unused-imports`: delete the unused `import` line.
+///
+/// The `unused-imports` lint has already proved that no name the import
+/// introduces is referenced anywhere in the module (it is conservative — a
+/// wildcard `exposing (..)` or any use suppresses it), so deleting the line is
+/// behavior-preserving. The diagnostic range's start line is the `import`
+/// keyword line; the fix removes that whole physical line (including its
+/// trailing newline). A diagnostic that is not on an `import` line yields no
+/// action (fail-closed).
+fn remove_unused_import_action(
+    diag: &Diagnostic,
+    uri: &Url,
+    text: &str,
+    encoding: PositionEncoding,
+) -> Option<CodeAction> {
+    let line = diag.range.start.line as usize;
+    let (start_byte, end_byte) = line_byte_range(text, line);
+    // Guard: the flagged line must actually begin with the `import` keyword, so
+    // a mis-ranged diagnostic never deletes an unrelated line.
+    let line_text = text.get(start_byte..end_byte)?;
+    if !line_text.trim_start().starts_with("import ") {
+        return None;
+    }
+    let start = offset_to_position(text, start_byte, encoding);
+    let end = offset_to_position(text, end_byte, encoding);
+    let edit = TextEdit {
+        range: Range { start, end },
+        new_text: String::new(),
+    };
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    Some(CodeAction {
+        title: "Remove unused import".to_owned(),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
         edit: Some(WorkspaceEdit {

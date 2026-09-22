@@ -14,6 +14,7 @@ pub mod code_actions;
 pub mod completion;
 pub mod db_access;
 pub mod diagnostics;
+pub mod docs_lookup;
 pub mod expected_type;
 pub mod folding;
 pub mod formatting;

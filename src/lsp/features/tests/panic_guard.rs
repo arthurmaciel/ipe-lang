@@ -84,7 +84,8 @@ fn find_references_returns_empty_on_cyclic_graph() {
 #[test]
 fn completions_returns_empty_on_cyclic_graph() {
     let (db, root, entry_a, _b) = cyclic_project();
-    let items = ipe_lsp_features::completion::completions(&db, root, entry_a, &["A".to_owned()], 0);
+    let items =
+        ipe_lsp_features::completion::completions(&db, root, entry_a, &["A".to_owned()], 0, None);
     let _ = items;
 }
 
@@ -95,8 +96,14 @@ fn completions_returns_empty_on_cyclic_graph() {
 #[test]
 fn signature_help_returns_none_on_cyclic_graph() {
     let (db, root, entry_a, _b) = cyclic_project();
-    let result =
-        ipe_lsp_features::signature_help::signature_help(&db, root, entry_a, &["A".to_owned()], 0);
+    let result = ipe_lsp_features::signature_help::signature_help(
+        &db,
+        root,
+        entry_a,
+        &["A".to_owned()],
+        0,
+        None,
+    );
     assert!(
         result.is_none(),
         "expected None on cyclic graph, got {result:?}"

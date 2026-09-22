@@ -105,6 +105,7 @@ pub fn completions(
     entry: ipe_db::SourceFile,
     module: &[String],
     byte: u32,
+    docs: Option<&ipe_docs::Index>,
 ) -> Vec<CompletionItem> {
     let files = root.files(db);
     let Some(&file) = files.get(module) else {
@@ -160,8 +161,13 @@ pub fn completions(
         solved_env.entry(dep_home).or_default().extend(env);
     }
 
-    let mut items: Vec<CompletionItem> =
-        render_candidates(&candidates, Some(&solved_env), expected.as_ref(), &interner);
+    let mut items: Vec<CompletionItem> = render_candidates(
+        &candidates,
+        Some(&solved_env),
+        expected.as_ref(),
+        &interner,
+        docs,
+    );
 
     drop(interner);
 
@@ -361,6 +367,7 @@ fn render_candidates(
     solved_env: Option<&BTreeMap<Vec<Symbol>, BTreeMap<Symbol, Ty>>>,
     expected: Option<&Ty>,
     interner: &ipe_intern::Interner,
+    docs: Option<&ipe_docs::Index>,
 ) -> Vec<CompletionItem> {
     let mut items = Vec::new();
     for c in candidates {
@@ -392,11 +399,27 @@ fn render_candidates(
         });
 
         let sort_text = format!("{}{}", compat.rank(), name_str);
-        items.push(match c.kind {
+        let mut item = match c.kind {
             CandidateKind::Value => value_item(name_str.to_owned(), detail, sort_text),
             CandidateKind::Ctor => ctor_item(name_str.to_owned(), c.arity, sort_text),
             CandidateKind::Type => type_item(name_str.to_owned(), sort_text),
-        });
+        };
+        // Enrich with the symbol's real doc from the `ipe_docs` index, keyed on
+        // the candidate's exact home module + name. A user binding or an
+        // undocumented symbol resolves nothing and stays doc-less (fail-closed).
+        if let Some(index) = docs {
+            let home: Option<Vec<String>> = c
+                .home
+                .iter()
+                .map(|&s| interner.resolve(s).map(str::to_owned))
+                .collect();
+            if let Some(home) = home
+                && let Some(doc) = crate::docs_lookup::symbol_doc(index, &home, name_str)
+            {
+                item.documentation = Some(crate::docs_lookup::as_documentation(doc));
+            }
+        }
+        items.push(item);
     }
     items
 }
@@ -608,7 +631,7 @@ mod tests {
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
 
-        let items = completions(&db, root, entry, &["Main".to_owned()], 0);
+        let items = completions(&db, root, entry, &["Main".to_owned()], 0, None);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
 
         assert!(labels.contains(&"main"), "main missing: {labels:?}");
@@ -626,7 +649,7 @@ mod tests {
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
 
-        let items = completions(&db, root, entry, &["Main".to_owned()], 0);
+        let items = completions(&db, root, entry, &["Main".to_owned()], 0, None);
         let main_item = items
             .iter()
             .find(|i| i.label == "main")
@@ -647,7 +670,7 @@ mod tests {
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
 
-        let items = completions(&db, root, entry, &["Main".to_owned()], 0);
+        let items = completions(&db, root, entry, &["Main".to_owned()], 0, None);
         let mut seen = std::collections::BTreeSet::new();
         for item in &items {
             assert!(
@@ -674,7 +697,7 @@ mod tests {
         let byte =
             u32::try_from(SRC.find("favorite = Red").expect("has body") + "favorite = ".len())
                 .expect("offset fits u32");
-        let items = completions(&db, root, entry, &["Main".to_owned()], byte);
+        let items = completions(&db, root, entry, &["Main".to_owned()], byte, None);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
 
         // Constructors of the expected type are offered.
@@ -709,7 +732,7 @@ mod tests {
         let root = root_of(&db, &[(&["Main"], entry)]);
         let byte = u32::try_from(SRC.find("s = Circle").expect("has body") + "s = ".len())
             .expect("offset fits u32");
-        let items = completions(&db, root, entry, &["Main".to_owned()], byte);
+        let items = completions(&db, root, entry, &["Main".to_owned()], byte, None);
 
         let circle = items
             .iter()
@@ -762,7 +785,7 @@ mod tests {
         // A cursor inside the (type-erroring) `bad = Red` body.
         let byte = u32::try_from(SRC.find("bad = Red").expect("has body") + "bad = ".len())
             .expect("offset fits u32");
-        let items = completions(&db, root, entry, &["Main".to_owned()], byte);
+        let items = completions(&db, root, entry, &["Main".to_owned()], byte, None);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         // Names still surface (canonicalize succeeds even though typecheck fails);
         // no candidate is dropped because no expected type was inferable.
@@ -777,6 +800,57 @@ mod tests {
         assert!(
             labels.contains(&"main"),
             "main missing on type-error prog: {labels:?}"
+        );
+    }
+
+    /// A candidate whose home + name resolves in the `ipe_docs` index carries
+    /// that symbol's real documentation; a user-module candidate carries none.
+    /// Proves the doc-enrichment path both fires (stdlib) and refuses (user).
+    #[test]
+    fn render_attaches_doc_for_stdlib_and_not_for_user_symbol() {
+        let mut interner = ipe_intern::Interner::new();
+        let ipe = interner.intern("Ipe").expect("intern Ipe");
+        let maybe_mod = interner.intern("Maybe").expect("intern Maybe module");
+        let with_default = interner.intern("withDefault").expect("intern withDefault");
+        let user_mod = interner.intern("MyApp").expect("intern MyApp");
+        let handler = interner.intern("handler").expect("intern handler");
+
+        let candidates = vec![
+            Candidate {
+                name: with_default,
+                home: vec![ipe, maybe_mod],
+                kind: CandidateKind::Value,
+                result_head: None,
+                arity: 0,
+            },
+            Candidate {
+                name: handler,
+                home: vec![user_mod],
+                kind: CandidateKind::Value,
+                result_head: None,
+                arity: 0,
+            },
+        ];
+
+        let idx = ipe_docs::Index::build_embedded().expect("embedded docs index builds");
+        let items = render_candidates(&candidates, None, None, &interner, Some(&idx));
+
+        let std_item = items
+            .iter()
+            .find(|i| i.label == "withDefault")
+            .expect("stdlib candidate rendered");
+        assert!(
+            std_item.documentation.is_some(),
+            "a documented stdlib symbol must carry its doc"
+        );
+
+        let user_item = items
+            .iter()
+            .find(|i| i.label == "handler")
+            .expect("user candidate rendered");
+        assert!(
+            user_item.documentation.is_none(),
+            "a user-module symbol must carry no stdlib doc (fail-closed)"
         );
     }
 }

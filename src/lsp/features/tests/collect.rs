@@ -732,6 +732,107 @@ fn rewrite_two_step_decoder_produces_pipeline_form() {
     );
 }
 
+// ── lint/unused-imports quick-fix ───────────────────────────────────────────
+
+/// Build a bare LSP diagnostic (the shape `collect_lint` produces for a lint
+/// finding) carrying `code` on the given zero-based line.
+fn lint_diag_on_line(code: &str, line: u32) -> lsp_types::Diagnostic {
+    let range = Range {
+        start: lsp_types::Position { line, character: 0 },
+        end: lsp_types::Position { line, character: 6 },
+    };
+    lsp_types::Diagnostic {
+        range,
+        code: Some(lsp_types::NumberOrString::String(code.to_owned())),
+        source: Some("ipe-lint".to_owned()),
+        message: "unused import".to_owned(),
+        ..lsp_types::Diagnostic::default()
+    }
+}
+
+/// `lint/unused-imports` quick-fix: the action deletes the whole flagged
+/// `import` line, and the result no longer contains that import.
+#[test]
+fn unused_imports_quick_fix_removes_the_import_line() {
+    // Line 2 (0-based) is `import Unused`.
+    let src = "module Main exposing (main)\n\nimport Unused\n\nmain : Int\nmain = 1\n";
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    let lsp_diag = lint_diag_on_line("lint/unused-imports", 2);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("an unused-import diagnostic must offer a remove action");
+    assert_eq!(action.title, "Remove unused import");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+    let fixed = apply_edit(src, edit);
+    assert!(
+        !fixed.contains("import Unused"),
+        "the unused import must be gone: {fixed:?}"
+    );
+    assert!(
+        fixed.contains("main = 1"),
+        "the rest of the module is untouched: {fixed:?}"
+    );
+}
+
+/// The refusal: a `lint/unused-imports` diagnostic whose range lands on a line
+/// that is NOT an `import` line yields no action — the fix never deletes an
+/// unrelated line on a mis-ranged diagnostic (fail-closed).
+#[test]
+fn unused_imports_quick_fix_refuses_non_import_line() {
+    let src = "module Main exposing (main)\n\nimport Unused\n\nmain : Int\nmain = 1\n";
+    let db = IpeDatabase::new();
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Main"], entry)]);
+
+    // Line 5 is `main = 1` — not an import line.
+    let lsp_diag = lint_diag_on_line("lint/unused-imports", 5);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    assert!(
+        actions.is_empty(),
+        "a non-import line must yield no remove action: {actions:?}"
+    );
+}
+
 #[test]
 fn edit_converges_error_then_clean() {
     let mut db = IpeDatabase::new();
