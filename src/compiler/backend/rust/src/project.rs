@@ -2612,16 +2612,18 @@ const ALL_MOD_APPEND_TEXTS: &[&str] = &[
 /// `true` when `a` and `b` are byte-identical (const-context `str` equality; the
 /// standard `==` is not `const` on `&str`).
 const fn str_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
         return false;
     }
-    let mut i = 0;
-    while i < a.len() {
-        if a[i] != b[i] {
+    // Walk both slices in lockstep via slice patterns — no indexing (const-fn,
+    // `indexing_slicing`-clean). Equal lengths ⇒ they empty together ⇒ `true`.
+    while let ([first_a, rest_a @ ..], [first_b, rest_b @ ..]) = (a, b) {
+        if *first_a != *first_b {
             return false;
         }
-        i += 1;
+        a = rest_a;
+        b = rest_b;
     }
     true
 }
