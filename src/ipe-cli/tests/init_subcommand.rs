@@ -120,31 +120,35 @@ fn init_unknown_flag_returns_usage_error() {
     );
 }
 
-/// E2E (gated on `IPE_E2E=1`): the scaffold produced by `ipe init` compiles —
-/// `ipe::build` runs the full pipeline and emits a Rust project, then
-/// `cargo build` on that project must succeed (THE SEAL).
-#[test]
-fn init_scaffold_builds() {
-    if std::env::var("IPE_E2E").is_err() {
-        return;
-    }
+/// E2E (gated on `IPE_E2E=1`): scaffold, `ipe build`, and `cargo build` a fresh
+/// project of a single shape (or the `--lib` library), asserting THE SEAL —
+/// `ipe`-accepts must imply `cargo`-builds. `init_args` are the `ipe init` args
+/// after the target; `entry_rel` is the module entry the emitter starts from.
+fn assert_scaffold_builds(
+    runtime_dir: &std::path::Path,
+    tag: &str,
+    init_args: &[String],
+    entry_rel: &std::path::Path,
+) {
+    let dir = fresh_dir(tag);
+    let target = dir.join(tag);
 
-    let runtime = ipe::resolve_runtime();
-    let Ok(runtime_dir) = runtime else {
-        return;
-    };
+    let mut argv = vec!["init".to_owned(), target.to_string_lossy().into_owned()];
+    argv.extend(init_args.iter().cloned());
+    let init = ipe::run_cli(&argv);
+    assert!(init.is_ok(), "[{tag}] init must succeed: {init:?}");
 
-    let dir = fresh_dir("build");
-    let target = dir.join("counter");
-    let init = ipe::run_cli(&["init".to_owned(), target.to_string_lossy().into_owned()]);
-    assert!(init.is_ok(), "init must succeed: {init:?}");
-
-    let entry = target.join("src").join("Main.ipe");
+    let entry = target.join(entry_rel);
+    assert!(
+        entry.is_file(),
+        "[{tag}] scaffold must write the entry module {}",
+        entry.display()
+    );
     let out_dir = target.join("out");
-    let built = ipe::build(&entry, &out_dir, &runtime_dir);
+    let built = ipe::build(&entry, &out_dir, runtime_dir);
     assert!(
         built.is_ok(),
-        "ipe build on the scaffold must succeed: {built:?}"
+        "[{tag}] ipe build on the scaffold must succeed: {built:?}"
     );
 
     let cargo_status = std::process::Command::new("cargo")
@@ -154,9 +158,49 @@ fn init_scaffold_builds() {
         .status();
     assert!(
         matches!(&cargo_status, Ok(s) if s.success()),
-        "cargo build on the emitted scaffold must succeed: {cargo_status:?}"
+        "[{tag}] cargo build on the emitted scaffold must succeed (SEAL: \
+         ipe-accepts must imply cargo-builds): {cargo_status:?}"
     );
 
     let _ = fs::remove_dir_all(out_dir.join("target"));
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// E2E (gated on `IPE_E2E=1`): EVERY scaffold shape and the `--lib` library
+/// compile end to end — `ipe::build` emits a Rust project and `cargo build` on
+/// it must succeed (THE SEAL). Driven from [`ipe::init::InitShape::ALL`] so a
+/// newly added shape cannot silently escape the accept-then-build proof: the
+/// shape's own compile-time exhaustiveness guard forces it into `ALL`, and this
+/// loop then forces it through the SEAL.
+#[test]
+fn init_scaffold_builds() {
+    if std::env::var("IPE_E2E").is_err() {
+        return;
+    }
+
+    let Ok(runtime_dir) = ipe::resolve_runtime() else {
+        return;
+    };
+
+    // Every application shape: `ipe init <target> --shape <shape>`, entry is
+    // `src/Main.ipe`. The label doubles as the temp-dir tag.
+    let main_rel = PathBuf::from("src").join("Main.ipe");
+    for shape in ipe::init::InitShape::ALL {
+        assert_scaffold_builds(
+            &runtime_dir,
+            shape.label(),
+            &["--shape".to_owned(), shape.label().to_owned()],
+            &main_rel,
+        );
+    }
+
+    // The library scaffold: `ipe init <target> --lib`. The public module is
+    // derived from the project name (`libproj` → `Libproj`), so the entry is
+    // `src/Libproj.ipe`.
+    assert_scaffold_builds(
+        &runtime_dir,
+        "libproj",
+        &["--lib".to_owned()],
+        &PathBuf::from("src").join("Libproj.ipe"),
+    );
 }
