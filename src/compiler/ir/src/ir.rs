@@ -3141,6 +3141,12 @@ pub use ipe_kernels::HtmlEventShape;
 /// `ipe_kernels` dependency.
 pub use ipe_kernels::RuntimeModule;
 
+/// Re-export of the emit-ownership ADT carried by [`ipe_kernels::KernelDef`],
+/// so the backend can route kernel-call emission on `KernelFn::def().class` — a
+/// wildcard-free `match` whose exhaustiveness breaks the build the instant a new
+/// class lands without an emit arm — without a direct `ipe_kernels` dependency.
+pub use ipe_kernels::KernelClass;
+
 /// Binary operators.
 ///
 /// Covers the arithmetic, comparison, and boolean operators. `Append` (`++`)

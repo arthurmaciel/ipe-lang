@@ -2120,6 +2120,71 @@ mod tests {
         }
     }
 
+    /// The emit dispatcher (`emit_expr_at`'s `Expr::Call` arm and its
+    /// `call_has_kernel_special_case` mirror) routes `emit_ui_call` on the
+    /// kernel's `KernelClass`, but `ui_call_shape` — the function `emit_ui_call`
+    /// consults — classifies on the wider `is_ui() || is_web() || is_tui() ||
+    /// is_console() || is_worker()` predicate set, which spans four classes
+    /// (`Ui`, `Web`, `Terminal`, and `Tea` for the single `TeaWorker` app-entry).
+    /// This pins the exact class/emitter-domain relation the dispatcher relies on:
+    /// every kernel `ui_call_shape` classifies is reached by `emit_ui_call` under
+    /// class `Ui`, `Web`, or `Terminal`, or is `TeaWorker` (which the `Tea` arm
+    /// probes through `emit_ui_call` before `emit_tea_call`). Should a future UI
+    /// kernel land in another class, it would silently miss `emit_ui_call` and
+    /// ICE at emit; this test turns that drift into a red before it ships.
+    #[test]
+    fn ui_call_shape_domain_is_reached_by_the_dispatcher() {
+        use ipe_ir::KernelClass;
+        for &k in KernelFn::ALL {
+            if ui_call_shape(k).is_none() {
+                continue;
+            }
+            let class = k.def().class;
+            let reachable = match class {
+                // The bulk of the UI family. The dispatcher's `Ui | Web | Terminal`
+                // arm probes `emit_ui_call` directly.
+                KernelClass::Ui | KernelClass::Web | KernelClass::Terminal => true,
+                // `Ipe.Tea.Worker.tea` — the `Tea` arm probes `emit_ui_call`
+                // before `emit_tea_call`.
+                KernelClass::Tea => k == KernelFn::TeaWorker,
+                // The `Ipe.Color.Ansi` palette constructors (`TermColor*`) — the
+                // `Pure` arm probes `emit_ui_call` (between `emit_config_ctor_call`
+                // and `emit_css_value_call`) so their appearance literals hoist.
+                KernelClass::Pure => matches!(
+                    k,
+                    KernelFn::TermColorBlack
+                        | KernelFn::TermColorRed
+                        | KernelFn::TermColorGreen
+                        | KernelFn::TermColorYellow
+                        | KernelFn::TermColorBlue
+                        | KernelFn::TermColorMagenta
+                        | KernelFn::TermColorCyan
+                        | KernelFn::TermColorWhite
+                        | KernelFn::TermColorBrightBlack
+                        | KernelFn::TermColorBrightRed
+                        | KernelFn::TermColorBrightGreen
+                        | KernelFn::TermColorBrightYellow
+                        | KernelFn::TermColorBrightBlue
+                        | KernelFn::TermColorBrightMagenta
+                        | KernelFn::TermColorBrightCyan
+                        | KernelFn::TermColorBrightWhite
+                        | KernelFn::TermColorDefault
+                        | KernelFn::TermColorRgb
+                        | KernelFn::TermColorRgba
+                ),
+                KernelClass::Db | KernelClass::Server | KernelClass::Ffi => false,
+            };
+            assert!(
+                reachable,
+                "{k:?} is classified by ui_call_shape but has class {class:?}, \
+                 which the emit dispatcher does not route through emit_ui_call — \
+                 so this kernel would miss its emitter and either ICE or lose its \
+                 appearance-literal hoisting. Probe emit_ui_call in that class arm \
+                 (expr.rs + kernel_calls.rs) and add the kernel to this list.",
+            );
+        }
+    }
+
     /// Every positional plan's arity equals the kernel's authoritative arity in
     /// its [`KernelDef`] descriptor row — the single source of truth. A plan
     /// that drifts from the declared arity fails here at test time rather than

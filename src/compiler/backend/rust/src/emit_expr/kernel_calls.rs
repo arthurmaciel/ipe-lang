@@ -1,9 +1,9 @@
 use super::{
-    ArgPlan, Callee, DResult, Diagnostic, Expr, GenericScope, Guard, IrType, KernelFn, LitKind,
-    LowerError, NativeUiEmit, Span, Symbol, UiDelegate, UiEmitPlan, appearance_literal_args,
-    appearance_literal_record_fields, callee_name, emit_expr_at, emit_lambda_unboxed,
-    emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name, render_type,
-    ui_call_shape,
+    ArgPlan, Callee, DResult, Diagnostic, Expr, GenericScope, Guard, IrType, KernelClass, KernelFn,
+    LitKind, LowerError, NativeUiEmit, Span, Symbol, UiDelegate, UiEmitPlan,
+    appearance_literal_args, appearance_literal_record_fields, callee_name, emit_expr_at,
+    emit_lambda_unboxed, emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name,
+    render_type, ui_call_shape,
 };
 use crate::EmitCtx;
 use core::fmt::Write as _;
@@ -67,52 +67,101 @@ pub fn call_has_kernel_special_case(
     generics: GenericScope,
 ) -> DResult<bool> {
     // Only kernels have special cases; every probe would gate out immediately.
-    if !matches!(callee, Callee::Kernel(_)) {
+    let Callee::Kernel(k) = callee else {
         return Ok(false);
-    }
+    };
     // These `emit_*_call` invocations are discard-only *probes* — their emitted
     // text is thrown away; only whether they fire matters. Suppress style-literal
     // hoisting for the duration so a probe does not append a literal the real
     // emit will append again (which would double-count it in the view's table).
+    //
+    // Routed on `KernelFn::def().class` in the SAME wildcard-free shape as the
+    // real dispatcher (`emit_expr_at`'s `Expr::Call` arm), so this predicate can
+    // never drift from it: each arm probes only the emitters that arm dispatches,
+    // and a new `KernelClass` variant is a compile error here too. (The two
+    // `Ipe.Ui`/`Ipe.Html` hot-swap template probes the real dispatcher runs
+    // before `emit_ui_call` are omitted: they only fire under
+    // `IPE_WATCH_HOT_APPEARANCE`, which the Doc emitter never has armed, so they
+    // return `None` and cannot change this predicate's answer.)
     ctx.enter_probe();
     let probe: DResult<bool> = (|| {
-        Ok(
-            emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_http_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_process_run_with_call(ctx, callee, args, indent, child, generics)?
-                    .is_some()
-                || emit_process_run_in_pty_call(ctx, callee, args, indent, child, generics)?
-                    .is_some()
-                || emit_http_builder_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_tea_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_server_call(ctx, callee, args, indent, child, generics)?.is_some()
-                || emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some()
-                || emit_css_value_call(ctx, callee, args, indent, child, generics)?.is_some(),
-        )
+        Ok(match k.def().class {
+            // `DbDecSucceed` is `class = Db` but its special case lives in
+            // `emit_json_decoder_call` (shared `decode_succeed` currying), which
+            // `emit_db_call` returns `None` for — probe it first, as the real
+            // dispatcher does.
+            KernelClass::Db => {
+                emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
+            }
+            KernelClass::Server => {
+                emit_server_call(ctx, callee, args, indent, child, generics)?.is_some()
+            }
+            // `TeaWorker` is `class = Tea` but emits through the UI delegate
+            // chain (`emit_ui_call` → `Delegate(Worker)`); probe it first, exactly
+            // as the real dispatcher does, then fall back to the standard TEA emit.
+            KernelClass::Tea => {
+                emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some()
+                    || emit_tea_call(ctx, callee, args, indent, child, generics)?.is_some()
+            }
+            // `Ui`/`Web` kernels and the `Terminal` app-entries
+            // (`TerminalAppScreen` / `TerminalAppLines`, which route to the
+            // Tui/Console delegate emitters inside `emit_ui_call`) all have a
+            // bespoke special case.
+            KernelClass::Ui | KernelClass::Web | KernelClass::Terminal => {
+                emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some()
+            }
+            // Reserved tier: no kernel is classed Ffi. Present (not a wildcard) so
+            // adding one without a decision here breaks the build rather than
+            // silently reporting "no special case".
+            KernelClass::Ffi => {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "ipe_backend_rust::call_has_kernel_special_case",
+                    detail: "reached KernelClass::Ffi probe arm; no kernel is classed Ffi, \
+                         so this call site should be unreachable — a new FFI kernel needs \
+                         an explicit probe decision here"
+                        .to_owned(),
+                });
+            }
+            KernelClass::Pure => {
+                emit_json_decoder_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    || emit_http_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    || emit_process_run_with_call(ctx, callee, args, indent, child, generics)?
+                        .is_some()
+                    || emit_process_run_in_pty_call(ctx, callee, args, indent, child, generics)?
+                        .is_some()
+                    || emit_http_builder_call(ctx, callee, args, indent, child, generics)?
+                        .is_some()
+                    || emit_task_retry_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    // `Db.defaultMigration` is `class = Pure` but `emit_db_call`
+                    // synthesises its `Migration` record literal — probe it here, as
+                    // the real dispatcher does. Every other Pure kernel is not a Db
+                    // kernel and returns `None`.
+                    || emit_db_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    || emit_config_ctor_call(callee).is_some()
+                    // The `TermColor*` palette constructors are `class = Pure` but
+                    // classified by `ui_call_shape`, so `emit_ui_call` is their
+                    // special case (appearance-literal hoisting). Every other Pure
+                    // kernel is not UI-family and returns `None` here. (The two
+                    // hot-swap template probes are omitted for the same reason as in
+                    // the Ui/Web arm: the Doc emitter never arms `hot_appearance`.)
+                    || emit_ui_call(ctx, callee, args, on_form, indent, child, generics)?.is_some()
+                    || emit_css_value_call(ctx, callee, args, indent, child, generics)?.is_some()
+                    // `PubSub.topic` is the identity function — `Topic a` erases to
+                    // `Str`, so the call renders as its argument directly (the
+                    // `KernelFn::PubSubTopic` arm in `emit_expr_at`). No `pubsub_topic`
+                    // runtime fn exists to route the generic tail to; routing this
+                    // through `leaf` keeps the erasure uniform across the direct-call
+                    // and CAF/`OnceLock` paths.
+                    || matches!(k, KernelFn::PubSubTopic)
+                    // `Dict.get` clones its dict arg — the generic tail would drop the
+                    // `.clone()`.
+                    || matches!(k, KernelFn::DictGet)
+            }
+        })
     })();
     ctx.exit_probe();
-    if probe? {
-        return Ok(true);
-    }
-    // `Dict.get` clones its dict arg — the generic tail would drop the `.clone()`.
-    if matches!(callee, Callee::Kernel(KernelFn::DictGet)) {
-        return Ok(true);
-    }
-    // `PubSub.topic` is the identity function — `Topic a` erases to `Str`, so the
-    // call renders as its argument directly (the `KernelFn::PubSubTopic` arm in
-    // `emit_expr_at`). No `pubsub_topic` runtime fn exists to route the generic
-    // tail to; routing this through `leaf` keeps the erasure uniform across the
-    // direct-call and CAF/`OnceLock` paths.
-    if matches!(callee, Callee::Kernel(KernelFn::PubSubTopic)) {
-        return Ok(true);
-    }
-    // Config-tag ADT constructors emit their raw `Int` tag inline (no runtime fn).
-    if emit_config_ctor_call(callee).is_some() {
-        return Ok(true);
-    }
-    Ok(false)
+    probe
 }
 
 /// Handle Http kernel calls that require custom argument wrapping.
@@ -4278,4 +4327,78 @@ pub fn emit_json_decoder_call(
         return Ok(Some(format!("{name}({inner_s})")));
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use ipe_ir::{KernelClass, KernelFn};
+
+    /// The kernels `emit_json_decoder_call` special-cases (`decode_succeed`
+    /// currying, primitive-decoder turbofish, by-value element forwarding). The
+    /// class dispatcher (`emit_expr_at`'s `Expr::Call` arm and its
+    /// `call_has_kernel_special_case` mirror) reaches this emitter under the
+    /// `Pure` arm and, for the single `Db.Decode.succeed` app-entry, the `Db` arm.
+    const JSON_DECODER_DOMAIN: &[KernelFn] = &[
+        KernelFn::JsonDecString,
+        KernelFn::JsonDecInt,
+        KernelFn::JsonDecFloat,
+        KernelFn::JsonDecBool,
+        KernelFn::JsonDecValue,
+        KernelFn::JsonDecList,
+        KernelFn::JsonDecSucceed,
+        KernelFn::DbDecSucceed,
+        KernelFn::ConfigString,
+        KernelFn::ConfigInt,
+        KernelFn::ConfigFloat,
+        KernelFn::ConfigBool,
+        KernelFn::ConfigList,
+        KernelFn::ConfigSucceed,
+        KernelFn::ConfigKeyValuePairs,
+        KernelFn::ConfigDict,
+    ];
+
+    /// Every kernel `emit_json_decoder_call` special-cases is reached by the
+    /// class dispatcher: its class is `Pure`, or it is `DbDecSucceed` (`class =
+    /// Db`, probed in the `Db` arm before `emit_db_call`). A future decoder
+    /// special case landing in another class would silently miss this emitter and
+    /// fall through to the generic tail (a `decode_succeed(curryN(f))` becomes a
+    /// boxed `dyn Fn`, an emit divergence); this pins the class/emitter-domain
+    /// relation so that drift is a red, not a silent miscompile.
+    #[test]
+    fn json_decoder_domain_is_reached_by_the_dispatcher() {
+        for &k in JSON_DECODER_DOMAIN {
+            let class = k.def().class;
+            let reachable = class == KernelClass::Pure
+                || (class == KernelClass::Db && k == KernelFn::DbDecSucceed);
+            assert!(
+                reachable,
+                "{k:?} is special-cased by emit_json_decoder_call but has class \
+                 {class:?} — the dispatcher probes that emitter only under the \
+                 Pure arm (+ DbDecSucceed in the Db arm), so this kernel would \
+                 miss it and emit through the generic tail. Add its class to the \
+                 dispatch arms (expr.rs + kernel_calls.rs) and to this list.",
+            );
+        }
+    }
+
+    /// `Db.defaultMigration` (`DbDefaultMigration`) is the one kernel
+    /// `emit_db_call` synthesises a `Migration` record literal for that is NOT
+    /// `class = Db`: it is `class = Pure` (a pure record builder that must not
+    /// force the `db` runtime feature). The dispatcher therefore probes
+    /// `emit_db_call` in BOTH the `Db` arm (for the projection kernels) and the
+    /// `Pure` arm (for this builder). If it is ever reclassified to `Db`, the
+    /// `Pure`-arm probe becomes dead and this test flags it; if some other Db
+    /// emitter kernel becomes `Pure`, the same probe must cover it. Pinning the
+    /// class keeps the two-arm routing honest — the alternative is the IPE-I0001
+    /// ICE (no synthesised struct) the generic tail produces when this builder
+    /// misses its emitter.
+    #[test]
+    fn db_default_migration_is_pure_and_reached_in_the_pure_arm() {
+        assert_eq!(
+            KernelFn::DbDefaultMigration.def().class,
+            KernelClass::Pure,
+            "DbDefaultMigration's class changed; the dispatcher probes emit_db_call \
+             in the Pure arm for it — revisit that probe (expr.rs + kernel_calls.rs).",
+        );
+    }
 }
