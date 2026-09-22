@@ -190,6 +190,46 @@ where
         self.buf.reconstruct(idx, &|m, mdl| upd(m, mdl))
     }
 
+    /// Move the scrub cursor to step `n` (entering time-travel mode if live) and
+    /// return the reconstructed model at that step.
+    ///
+    /// `n` is clamped to `[0, len - 1]`, so an out-of-range target lands on the
+    /// nearest valid step rather than failing. Non-destructive: the tail is never
+    /// truncated — this is a viewing cursor move, not the recorder's fork. Returns
+    /// `None` on an empty history.
+    pub fn step_to(&mut self, n: usize) -> Option<Model> {
+        let len = self.buf.len();
+        if len == 0 {
+            return None;
+        }
+        let idx = n.min(len - 1);
+        self.scrub = Some(idx);
+        let upd = Arc::clone(&self.update);
+        self.buf.reconstruct(idx, &|m, mdl| upd(m, mdl))
+    }
+
+    /// Reconstruct the model at step `n` WITHOUT moving the scrub cursor (a
+    /// read-only inspection). `n` is clamped to `[0, len - 1]`. Returns the
+    /// clamped step index alongside the reconstructed model, or `None` on an
+    /// empty history.
+    pub fn reconstruct_at(&self, n: usize) -> Option<(usize, Model)> {
+        let len = self.buf.len();
+        if len == 0 {
+            return None;
+        }
+        let idx = n.min(len - 1);
+        let upd = Arc::clone(&self.update);
+        self.buf
+            .reconstruct(idx, &|m, mdl| upd(m, mdl))
+            .map(|m| (idx, m))
+    }
+
+    /// Leave time-travel mode and resume tailing the live head. Idempotent: a
+    /// call in live mode is a no-op.
+    pub fn live_tail(&mut self) {
+        self.scrub = None;
+    }
+
     /// Reset the debugger to a fresh `init` state (Ctrl-R action).
     ///
     /// Clears the step log, resets the base to `init`, and leaves live mode

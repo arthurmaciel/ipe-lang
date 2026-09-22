@@ -449,20 +449,20 @@ where
     fs2
 }
 
-/// Render a single debugger frame — the pinned/stepped past `model` laid out and
-/// painted with the debugger status line appended. Owns the `CellsView -> Element`
+/// Lay out `model` with the debugger status line appended, WITHOUT painting —
+/// the I/O-free core of a debugger frame. Owns the `CellsView -> Element`
 /// conversion so no time-travel render site can drift from the layout input
-/// contract (`render_with_focus` takes `&Element`). Returns the new focusables;
-/// the caller keeps its own control flow.
+/// contract (`render_with_focus` takes `&Element`). Returns the annotated frame
+/// string and the new focusables.
 #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
-fn render_debug_frame<Model, Msg, FView>(
+fn render_debug_annotated<Model, Msg, FView>(
     view: &FView,
     model: Model,
     dbg: &TuiDebugger<Msg, Model>,
     inputs: &mut InputRegistry,
     focus_idx: usize,
     scroll_y: usize,
-) -> Vec<Focusable<Msg>>
+) -> (String, Vec<Focusable<Msg>>)
 where
     Model: Clone,
     Msg: Clone + IpeStringify,
@@ -480,8 +480,291 @@ where
     let mut annotated = frame;
     annotated.push_str("\r\n");
     annotated.push_str(&dbg.status_line());
-    paint(&annotated);
-    fs
+    (annotated, fs)
+}
+
+/// The reply an [`apply_control_frame`] call yields, paired with the repaint it
+/// requests. Keeping the repaint out of the seam (the seam is I/O-free) lets a
+/// unit test observe both without touching a real terminal, and lets the live
+/// loop own the single `paint` call. `frame` is `None` when the recomputed
+/// surface is byte-identical to the last painted one — the minimal-repaint
+/// guard: an appearance patch that changes nothing (or a redundant scrub step)
+/// costs zero writes, never a full-screen redraw.
+///
+/// [`apply_control_frame`]: TuiSurface::apply_control_frame
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+pub struct ApplyOutcome<Msg> {
+    /// The child→parent reply frame (`Ack` or `ModelSnapshot`).
+    pub reply: crate::control::ControlFrame,
+    /// The annotated frame to paint, or `None` when nothing changed.
+    pub repaint: Option<String>,
+    /// The focusables of the freshly-rendered surface (unchanged when `repaint`
+    /// is `None`, so the caller keeps its current set in that case).
+    pub focusables: Option<Vec<Focusable<Msg>>>,
+}
+
+/// The mutable render surface of a running tui app — the input registry, the
+/// focus cursor, the scroll offset, and the last painted frame. It owns the ONE
+/// [`apply_control_frame`](Self::apply_control_frame) seam that realizes an
+/// incoming [`ControlFrame`](crate::control::ControlFrame) onto the surface, so
+/// the keyboard-driven scrub and the (later) wire-driven control both drive the
+/// identical path — a second apply path is a divergence waiting to happen (the
+/// `CellsView`-vs-`Element` drift that #2762 fixed).
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+pub struct TuiSurface {
+    inputs: InputRegistry,
+    focus_idx: usize,
+    scroll_y: usize,
+    /// The frame most recently handed out for painting — the diff baseline that
+    /// makes a no-op apply cost zero writes.
+    last_frame: Option<String>,
+}
+
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+impl TuiSurface {
+    fn new(inputs: InputRegistry, focus_idx: usize, scroll_y: usize) -> Self {
+        Self {
+            inputs,
+            focus_idx,
+            scroll_y,
+            last_frame: None,
+        }
+    }
+
+    /// The current focus cursor (test + caller observability).
+    #[must_use]
+    pub fn focus_idx(&self) -> usize {
+        self.focus_idx
+    }
+
+    /// The current scroll offset (test + caller observability).
+    #[must_use]
+    pub fn scroll_y(&self) -> usize {
+        self.scroll_y
+    }
+
+    /// The last frame handed out for painting, if any.
+    #[must_use]
+    pub fn last_frame(&self) -> Option<&str> {
+        self.last_frame.as_deref()
+    }
+
+    /// Turn a freshly-rendered annotated frame into a repaint request: `Some`
+    /// only when it differs from the last painted frame, and record it as the
+    /// new baseline in that case. This is the minimal-repaint guard.
+    fn diff_repaint(&mut self, annotated: String) -> Option<String> {
+        if self.last_frame.as_deref() == Some(annotated.as_str()) {
+            return None;
+        }
+        self.last_frame = Some(annotated.clone());
+        Some(annotated)
+    }
+
+    /// Realize an incoming control frame onto the surface — the ONE apply seam.
+    ///
+    /// Two parent→child arms, one shared repaint tail:
+    ///
+    /// - [`ControlFrame::HotAppearance`] — register the appearance patch in the
+    ///   dev overlay (where that mechanism is compiled in), then recompute the
+    ///   surface from the CURRENT `model` (never through `update` — an
+    ///   appearance-only edit changes literals, not state) and diff-repaint.
+    ///   Focus and scroll are preserved.
+    /// - [`ControlFrame::Debug`] — drive the recorder: `StepTo`/`Back`/`Forward`
+    ///   move the scrub cursor and reconstruct the model at that step;
+    ///   `InspectModel` reconstructs read-only and replies with a
+    ///   [`ModelSnapshot`](crate::control::ControlFrame::ModelSnapshot); `Reset`
+    ///   and `LiveTail` return to the live head. Every reconstruct re-folds
+    ///   `update` over the retained messages and re-fires no `Cmd`, so a scrub
+    ///   never perturbs the live model (determinism, principle 2).
+    ///
+    /// `model` is the live head model; the seam borrows it read-only and never
+    /// mutates it. The reply is an [`Ack`](crate::control::ControlFrame::Ack) for
+    /// every arm except `InspectModel`, which replies with the snapshot.
+    pub fn apply_control_frame<Model, Msg, FView>(
+        &mut self,
+        frame: crate::control::ControlFrame,
+        view: &FView,
+        model: &Model,
+        dbg: &mut TuiDebugger<Msg, Model>,
+    ) -> ApplyOutcome<Msg>
+    where
+        Model: Clone,
+        Msg: Clone + IpeStringify,
+        FView: Fn(Model) -> CellsView<Msg>,
+    {
+        use crate::control::ControlFrame;
+        match frame {
+            ControlFrame::HotAppearance(patch) => {
+                // Register the appearance overlay only where the mechanism is
+                // compiled in: the `LiteralTable` overlay lives in the `web-core`
+                // module, and a tui view routes its literals through it only when
+                // the emit shape uses web. Absent that, the recompute below still
+                // runs the contract (recompute-from-current-model + repaint) and
+                // is byte-identical — visually inert until a per-tui literal table
+                // lands, never a full rebuild.
+                #[cfg(feature = "web-core")]
+                crate::web::literal_table::register_dev_patch(&patch.defaults, patch.patch.clone());
+                #[cfg(not(feature = "web-core"))]
+                let _ = &patch; // no overlay mechanism in this build; recompute still runs
+
+                // Recompute the surface from the CURRENT model — NOT through
+                // `update`. The scrub cursor is untouched, so a hot-swap while
+                // time-travelling repaints the pinned step, not the live head.
+                let display = dbg.current_reconstructed().unwrap_or_else(|| model.clone());
+                let (annotated, fs) = render_debug_annotated(
+                    view,
+                    display,
+                    dbg,
+                    &mut self.inputs,
+                    self.focus_idx,
+                    self.scroll_y,
+                );
+                let repaint = self.diff_repaint(annotated);
+                ApplyOutcome {
+                    reply: ControlFrame::Ack {
+                        ok: true,
+                        detail: "hot-appearance applied".to_owned(),
+                    },
+                    focusables: repaint.as_ref().map(|_| fs),
+                    repaint,
+                }
+            }
+            ControlFrame::Debug(cmd) => self.apply_debug(cmd, view, model, dbg),
+            // `Ack` / `ModelSnapshot` are child→parent REPLIES, never a command
+            // the child applies. Receiving one is a malformed control exchange:
+            // fail closed with a rejecting `Ack` and no repaint (an exhaustive
+            // match — a new parent→child variant must be handled here, never
+            // silently swallowed).
+            ControlFrame::Ack { .. } | ControlFrame::ModelSnapshot { .. } => ApplyOutcome {
+                reply: ControlFrame::Ack {
+                    ok: false,
+                    detail: "not a parent-to-child command".to_owned(),
+                },
+                repaint: None,
+                focusables: None,
+            },
+        }
+    }
+
+    /// The `Debug` arm of the seam (split out for readability). Drives the
+    /// recorder's scrub cursor / inspection and shares the diff-repaint tail.
+    fn apply_debug<Model, Msg, FView>(
+        &mut self,
+        cmd: crate::control::DebugCmd,
+        view: &FView,
+        model: &Model,
+        dbg: &mut TuiDebugger<Msg, Model>,
+    ) -> ApplyOutcome<Msg>
+    where
+        Model: Clone,
+        Msg: Clone + IpeStringify,
+        FView: Fn(Model) -> CellsView<Msg>,
+    {
+        use crate::control::{ControlFrame, DebugCmd};
+
+        // `InspectModel` is read-only — it never moves the cursor and it renders
+        // its own reply frame rather than repainting the live surface.
+        if let DebugCmd::InspectModel(n) = cmd {
+            // An empty history has no step to reconstruct — reply with the live
+            // head at the requested index rather than fail.
+            let (step, mdl) = match dbg.reconstruct_at(n) {
+                Some(pair) => pair,
+                None => (n, model.clone()),
+            };
+            // Render the model at step `n` to its frame — the tui rendering of
+            // "the model at step n" (the surface has no `IpeStringify` bound on
+            // `Model`, so its view frame is the faithful, bound-free snapshot).
+            let (rendered, _fs) = render_debug_annotated(
+                view,
+                mdl,
+                dbg,
+                &mut self.inputs,
+                self.focus_idx,
+                self.scroll_y,
+            );
+            return ApplyOutcome {
+                reply: ControlFrame::ModelSnapshot { step, rendered },
+                repaint: None,
+                focusables: None,
+            };
+        }
+
+        // The cursor-moving / mode arms all reconstruct a model to display and
+        // share the repaint tail below.
+        let (display, detail) = match cmd {
+            DebugCmd::StepTo(n) => (dbg.step_to(n), "scrub: step-to"),
+            DebugCmd::Back => (dbg.step_back(), "scrub: back"),
+            DebugCmd::Forward => (dbg.step_fwd(), "scrub: forward"),
+            DebugCmd::Reset | DebugCmd::LiveTail => {
+                // Return to the live head: leave scrub mode and repaint the live
+                // model. (`Reset`'s recorder-fork semantics need the caller's
+                // `init` model and a live-driver reset, which the wire cannot
+                // carry; the in-process apply resolves both to "resume live".)
+                dbg.live_tail();
+                (None, "live-tail")
+            }
+            // `InspectModel` handled above.
+            DebugCmd::InspectModel(_) => (None, "inspect"),
+        };
+        // A cursor arm that reconstructed a step displays it; otherwise (live
+        // arms, or an empty history) display the live head.
+        let display = display.unwrap_or_else(|| model.clone());
+        let (annotated, fs) = render_debug_annotated(
+            view,
+            display,
+            dbg,
+            &mut self.inputs,
+            self.focus_idx,
+            self.scroll_y,
+        );
+        let repaint = self.diff_repaint(annotated);
+        ApplyOutcome {
+            reply: ControlFrame::Ack {
+                ok: true,
+                detail: detail.to_owned(),
+            },
+            focusables: repaint.as_ref().map(|_| fs),
+            repaint,
+        }
+    }
+}
+
+/// Drive a keyboard-derived debugger command through the ONE apply seam, then
+/// paint whatever repaint it requested. The keyboard scrub sites and the (later)
+/// wire handler both funnel through [`TuiSurface::apply_control_frame`], so there
+/// is exactly one apply path — never a keyboard path and a wire path that can
+/// drift. Returns the freshly-rendered focusables, or the caller's current set
+/// when the frame was unchanged.
+///
+/// The transient `TuiSurface` starts with an empty diff baseline, so a keyboard
+/// step always paints — matching the pre-seam per-keypress repaint exactly; the
+/// diff guard's dedup pays off on the wire path, where redundant frames recur.
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+#[allow(clippy::too_many_arguments)] // threads the loop's render surface + seam inputs
+fn keyboard_scrub<Model, Msg, FView>(
+    cmd: crate::control::DebugCmd,
+    view: &FView,
+    model: &Model,
+    dbg: &mut TuiDebugger<Msg, Model>,
+    inputs: &mut InputRegistry,
+    focus_idx: usize,
+    scroll_y: usize,
+    current: Vec<Focusable<Msg>>,
+) -> Vec<Focusable<Msg>>
+where
+    Model: Clone,
+    Msg: Clone + IpeStringify,
+    FView: Fn(Model) -> CellsView<Msg>,
+{
+    let mut surface = TuiSurface::new(std::mem::take(inputs), focus_idx, scroll_y);
+    let outcome =
+        surface.apply_control_frame(crate::control::ControlFrame::Debug(cmd), view, model, dbg);
+    // Restore the (possibly edited) input registry to the loop's owner.
+    *inputs = std::mem::take(&mut surface.inputs);
+    if let Some(frame) = outcome.repaint {
+        paint(&frame);
+    }
+    outcome.focusables.unwrap_or(current)
 }
 
 /// `Tui.tea` — terminal TEA driver for a `view : Model -> Cells msg`.
@@ -568,43 +851,51 @@ where
                     // Debugger key intercept — must come before any app key handling.
                     #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
                     {
-                        // Ctrl-T: toggle time-travel mode.
+                        // Ctrl-T: toggle time-travel mode — routed through the ONE
+                        // apply seam. Entering pins the head step (`StepTo` of the
+                        // last index, clamped); leaving resumes the live tail.
                         if kind == crate::debugger::tui::TOGGLE_KIND
                             && value == crate::debugger::tui::TOGGLE_VALUE
                         {
-                            let display_model = dbg.toggle().unwrap_or_else(|| model.clone());
-                            focusables = render_debug_frame(
+                            let cmd = if dbg.is_scrubbing() {
+                                crate::control::DebugCmd::LiveTail
+                            } else {
+                                crate::control::DebugCmd::StepTo(usize::MAX)
+                            };
+                            focusables = keyboard_scrub(
+                                cmd,
                                 &view,
-                                display_model,
-                                &dbg,
+                                &model,
+                                &mut dbg,
                                 &mut inputs,
                                 focus_idx,
                                 scroll_y,
+                                focusables,
                             );
                             continue;
                         }
-                        // Ctrl-Left / Ctrl-Right: step in time-travel mode.
+                        // Ctrl-Left / Ctrl-Right: step in time-travel mode — same
+                        // seam as Ctrl-T and (later) the wire, so a step can never
+                        // diverge from a wire-driven `Back`/`Forward`.
                         if dbg.is_scrubbing() {
-                            let stepped = if kind == crate::debugger::tui::STEP_BACK_KIND {
-                                dbg.step_back()
+                            let cmd = if kind == crate::debugger::tui::STEP_BACK_KIND {
+                                Some(crate::control::DebugCmd::Back)
                             } else if kind == crate::debugger::tui::STEP_FWD_KIND {
-                                dbg.step_fwd()
+                                Some(crate::control::DebugCmd::Forward)
                             } else {
                                 None
                             };
-                            if let Some(past) = stepped {
-                                focusables = render_debug_frame(
+                            if let Some(cmd) = cmd {
+                                focusables = keyboard_scrub(
+                                    cmd,
                                     &view,
-                                    past,
-                                    &dbg,
+                                    &model,
+                                    &mut dbg,
                                     &mut inputs,
                                     focus_idx,
                                     scroll_y,
+                                    focusables,
                                 );
-                                continue;
-                            } else if kind == crate::debugger::tui::STEP_BACK_KIND
-                                || kind == crate::debugger::tui::STEP_FWD_KIND
-                            {
                                 continue;
                             }
                         }
@@ -811,7 +1102,7 @@ where
                     // Toggle Ctrl-T to return to the live head.
                     let display_model =
                         dbg.current_reconstructed().unwrap_or_else(|| model.clone());
-                    focusables = render_debug_frame(
+                    let (annotated, fs) = render_debug_annotated(
                         &view,
                         display_model,
                         &dbg,
@@ -819,6 +1110,8 @@ where
                         focus_idx,
                         scroll_y,
                     );
+                    paint(&annotated);
+                    focusables = fs;
                 }
                 #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
                 {
@@ -830,4 +1123,267 @@ where
         submgr.stop_all();
         ok_res(())
     })
+}
+
+// ── The apply-seam tests ────────────────────────────────────────────────────
+//
+// Every test CONSTRUCTS `ControlFrame`s directly — no transport, no socket — so
+// it pins the in-process apply/scrub/inspect behavior and the single-seam
+// invariant independently of any wire.
+#[cfg(all(test, feature = "debugger", not(target_arch = "wasm32")))]
+mod apply_seam_tests {
+    use super::*;
+    use crate::control::{ControlFrame, DebugCmd};
+    use crate::tea::IpeCmd;
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum TMsg {
+        Add(i64),
+    }
+
+    impl IpeStringify for TMsg {
+        fn ipe_show(&self) -> String {
+            match self {
+                TMsg::Add(n) => format!("Add({n})"),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct TModel {
+        count: i64,
+    }
+
+    fn t_update(msg: TMsg, model: TModel) -> (TModel, IpeCmd<TMsg>) {
+        let TMsg::Add(n) = msg;
+        (
+            TModel {
+                count: model.count + n,
+            },
+            IpeCmd::None,
+        )
+    }
+
+    // The view renders the model's count as text, so distinct models produce
+    // distinct frames — the property the diff-repaint and reconstruct tests rely
+    // on.
+    fn t_view(model: TModel) -> CellsView<TMsg> {
+        super::super::cells_text_(format!("count={}", model.count))
+    }
+
+    // A debugger seeded with N recorded steps folded from `t_update`, plus the
+    // live head model. Step `i` records the msg and the model AFTER applying it.
+    fn seeded(msgs: &[i64]) -> (TuiDebugger<TMsg, TModel>, TModel) {
+        let mut dbg = TuiDebugger::new(TModel { count: 0 }, t_update);
+        let mut live = TModel { count: 0 };
+        for &n in msgs {
+            let (next, _) = t_update(TMsg::Add(n), live.clone());
+            dbg.record(TMsg::Add(n), next.clone());
+            live = next;
+        }
+        (dbg, live)
+    }
+
+    // (a) A HotAppearance frame recomputes from the CURRENT model and repaints via
+    // the diff guard — an inert patch (no literal-table mechanism in a tui build)
+    // reproduces the identical frame, so the SECOND apply requests NO repaint (not
+    // a full-screen redraw) — and focus/scroll are preserved across both.
+    #[test]
+    fn hot_appearance_diff_repaints_and_preserves_input_state() {
+        let (mut dbg, live) = seeded(&[10, 5]);
+        let mut surface = TuiSurface::new(InputRegistry::new(), 3, 7);
+
+        let patch = crate::control::AppearancePatch::default();
+        let first = surface.apply_control_frame(
+            ControlFrame::HotAppearance(patch.clone()),
+            &t_view,
+            &live,
+            &mut dbg,
+        );
+        assert!(
+            matches!(first.reply, ControlFrame::Ack { ok: true, .. }),
+            "hot-appearance replies Ack ok"
+        );
+        assert!(
+            first.repaint.is_some(),
+            "the first apply establishes the frame (a repaint)"
+        );
+
+        // Second identical apply: the recomputed frame equals the baseline, so the
+        // diff guard requests NO paint — minimal repaint, never a full redraw.
+        let second = surface.apply_control_frame(
+            ControlFrame::HotAppearance(patch),
+            &t_view,
+            &live,
+            &mut dbg,
+        );
+        assert!(
+            second.repaint.is_none(),
+            "an unchanged surface repaints nothing (no full-screen redraw)"
+        );
+        // Input state preserved across the appearance apply.
+        assert_eq!(surface.focus_idx(), 3, "focus preserved");
+        assert_eq!(surface.scroll_y(), 7, "scroll preserved");
+    }
+
+    // (b) StepTo / Back / Forward move the scrub cursor and reconstruct the model
+    // at that step; the reconstructed model equals the live model at step n.
+    #[test]
+    fn debug_scrub_reconstructs_the_step_model() {
+        let (mut dbg, live) = seeded(&[10, 5, 3]); // steps: 10, 15, 18
+        let mut surface = TuiSurface::new(InputRegistry::new(), 0, 0);
+
+        // StepTo(0) → model after the first msg (count = 10).
+        let out = surface.apply_control_frame(
+            ControlFrame::Debug(DebugCmd::StepTo(0)),
+            &t_view,
+            &live,
+            &mut dbg,
+        );
+        assert!(matches!(out.reply, ControlFrame::Ack { ok: true, .. }));
+        assert!(out.repaint.is_some(), "a scrub to a new step repaints");
+        // reconstruct(0) == the model at step 0.
+        assert_eq!(
+            dbg.current_reconstructed(),
+            Some(TModel { count: 10 }),
+            "StepTo(0) reconstructs the step-0 model"
+        );
+
+        // Forward → step 1 (count = 15).
+        let _ = surface.apply_control_frame(
+            ControlFrame::Debug(DebugCmd::Forward),
+            &t_view,
+            &live,
+            &mut dbg,
+        );
+        assert_eq!(dbg.current_reconstructed(), Some(TModel { count: 15 }));
+
+        // Back → step 0 (count = 10).
+        let _ = surface.apply_control_frame(
+            ControlFrame::Debug(DebugCmd::Back),
+            &t_view,
+            &live,
+            &mut dbg,
+        );
+        assert_eq!(dbg.current_reconstructed(), Some(TModel { count: 10 }));
+    }
+
+    // (c) InspectModel(n) returns the snapshot of the model at step n WITHOUT
+    // moving the cursor; LiveTail restores live mode.
+    #[test]
+    fn inspect_model_snapshots_and_live_tail_restores_live() {
+        let (mut dbg, live) = seeded(&[10, 5, 3]);
+        let mut surface = TuiSurface::new(InputRegistry::new(), 0, 0);
+
+        // Enter scrub at step 0 first, so we can prove Inspect does not move it.
+        let _ = surface.apply_control_frame(
+            ControlFrame::Debug(DebugCmd::StepTo(0)),
+            &t_view,
+            &live,
+            &mut dbg,
+        );
+        assert!(dbg.is_scrubbing());
+
+        let out = surface.apply_control_frame(
+            ControlFrame::Debug(DebugCmd::InspectModel(1)),
+            &t_view,
+            &live,
+            &mut dbg,
+        );
+        let (step, rendered) = match &out.reply {
+            ControlFrame::ModelSnapshot { step, rendered } => (*step, rendered.clone()),
+            other => {
+                assert!(
+                    matches!(other, ControlFrame::ModelSnapshot { .. }),
+                    "InspectModel must reply ModelSnapshot, got {other:?}"
+                );
+                return;
+            }
+        };
+        assert_eq!(step, 1, "the snapshot reflects the requested step");
+        assert!(
+            rendered.contains("count=15"),
+            "the snapshot renders the step-1 model (count=15); got: {rendered:?}"
+        );
+        assert!(
+            out.repaint.is_none(),
+            "an inspection is read-only — it does not repaint the live surface"
+        );
+        // Cursor unmoved by the inspection.
+        assert_eq!(
+            dbg.current_reconstructed(),
+            Some(TModel { count: 10 }),
+            "InspectModel must not move the scrub cursor"
+        );
+
+        // LiveTail leaves scrub mode.
+        let out = surface.apply_control_frame(
+            ControlFrame::Debug(DebugCmd::LiveTail),
+            &t_view,
+            &live,
+            &mut dbg,
+        );
+        assert!(matches!(out.reply, ControlFrame::Ack { ok: true, .. }));
+        assert!(!dbg.is_scrubbing(), "LiveTail restores live mode");
+    }
+
+    // (d) The keyboard path and the frame path drive the IDENTICAL seam: a
+    // Ctrl-Left keypress (folded to `Back`) and a directly-constructed
+    // `Debug(Back)` frame produce the same rendered frame and the same cursor.
+    #[test]
+    fn keyboard_path_equals_frame_path() {
+        // Frame path: seed, step to the tail, then Back one step.
+        let (mut dbg_f, live_f) = seeded(&[10, 5, 3]);
+        let mut surface_f = TuiSurface::new(InputRegistry::new(), 0, 0);
+        let _ = surface_f.apply_control_frame(
+            ControlFrame::Debug(DebugCmd::StepTo(2)),
+            &t_view,
+            &live_f,
+            &mut dbg_f,
+        );
+        let frame_out = surface_f.apply_control_frame(
+            ControlFrame::Debug(DebugCmd::Back),
+            &t_view,
+            &live_f,
+            &mut dbg_f,
+        );
+
+        // Keyboard path: same seeded state and cursor, driven through
+        // `keyboard_scrub` (the shared keyboard entry point).
+        let (mut dbg_k, live_k) = seeded(&[10, 5, 3]);
+        let mut inputs = InputRegistry::new();
+        let _ = dbg_k.step_to(2);
+        let kb_focusables = keyboard_scrub(
+            DebugCmd::Back,
+            &t_view,
+            &live_k,
+            &mut dbg_k,
+            &mut inputs,
+            0,
+            0,
+            Vec::new(),
+        );
+
+        // Same reconstructed cursor after the Back step.
+        assert_eq!(
+            dbg_f.current_reconstructed(),
+            dbg_k.current_reconstructed(),
+            "keyboard and frame paths land on the same scrub step"
+        );
+        // Same rendered frame (the seam is the sole frame producer).
+        let frame_frame = frame_out.repaint.expect("the frame path repaints");
+        let display_k = dbg_k
+            .current_reconstructed()
+            .unwrap_or_else(|| live_k.clone());
+        let (kb_frame, _) = render_debug_annotated(&t_view, display_k, &dbg_k, &mut inputs, 0, 0);
+        assert_eq!(
+            frame_frame, kb_frame,
+            "keyboard and frame paths render the identical frame"
+        );
+        assert_eq!(
+            kb_focusables.len(),
+            frame_out.focusables.map(|f| f.len()).unwrap_or(0),
+            "both paths yield the same focusable set"
+        );
+    }
 }
