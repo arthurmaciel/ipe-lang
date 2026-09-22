@@ -50,7 +50,9 @@ pub const MAX_FRAME_LEN: usize = 1 << 20;
 /// `(index, new_value)` deltas to overlay. The app is never recompiled, so it
 /// still bakes the old signature — the patch carries the OLD defaults, not the
 /// new. This is the runtime-owned single source of truth for the appearance wire;
-/// the classifier's `ViewPatch` is a type alias of it.
+/// the classifier's `ViewPatch` mirrors this shape. Collapsing `ViewPatch` into a
+/// type alias of this struct is pending the `ipe`-cli-side integration (the tui/
+/// cli/worker delivery + apply work), which lands separately.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct AppearancePatch {
     /// The PREVIOUS baked defaults, in emit order — the overlay's match key.
@@ -203,6 +205,123 @@ pub fn decode_frame(bytes: &[u8]) -> Result<(ControlFrame, usize), FrameError> {
     };
     let frame = serde_json::from_slice(body).map_err(|_| FrameError::Malformed)?;
     Ok((frame, end))
+}
+
+/// The fail-closed security core of the tui/cli/worker loopback control
+/// transport.
+///
+/// This is the SCEF-critical surface: a NEW parent→child control channel. Its
+/// guarantees are structural, not conventional —
+///
+/// - **Loopback only.** [`control_bind_addr`] can only ever produce a
+///   `127.0.0.1` address; there is no parameter through which a caller could
+///   ask it to bind a routable interface, so a LAN peer can never reach the
+///   channel.
+/// - **Token-gated, fail-closed.** [`is_authorized`] returns `true` only when a
+///   token was both minted (by `ipe watch`) and presented, and the two match in
+///   constant time. An absent expected token, an absent presented token, or a
+///   mismatch all yield `false` — the child then runs with no control surface
+///   and `ipe watch` falls back to a full rebuild, never a degraded path.
+/// - **Release-absent.** The whole `control` module is gated on a dev-loop
+///   feature, so this transport cannot be compiled into an `ipe release`
+///   artifact.
+pub mod transport {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    /// The env var carrying the loopback control-socket port `ipe watch`
+    /// allocated for the child (mirrors `IPE_SERVER_PORT` / `IPE_WEB_PORT`).
+    pub const CONTROL_PORT_ENV: &str = "IPE_CONTROL_PORT";
+
+    /// The env var carrying the per-session control token. Reuses the same
+    /// secret `ipe watch` already mints for the web hot-appearance endpoint, so
+    /// one token authenticates every shape's control surface.
+    pub const CONTROL_TOKEN_ENV: &str = "IPE_WATCH_HOT_TOKEN";
+
+    /// The loopback socket address the child binds its control listener to.
+    ///
+    /// Always `127.0.0.1:<port>` — the interface is fixed, so no input can steer
+    /// the bind onto a routable address. This is the make-invalid-states-
+    /// unrepresentable form of "loopback only": the non-loopback bind has no way
+    /// to be expressed.
+    #[must_use]
+    pub fn control_bind_addr(port: u16) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+    }
+
+    /// Whether an incoming control connection is authorized.
+    ///
+    /// Fail-closed: authorization requires that a token was minted (`expected`
+    /// is `Some` and non-empty) AND presented (`presented` is `Some`), and that
+    /// the two are byte-equal in constant time. Every other case — no token
+    /// minted, none presented, or a mismatch — is unauthorized.
+    #[must_use]
+    pub fn is_authorized(expected: Option<&str>, presented: Option<&str>) -> bool {
+        match (expected, presented) {
+            (Some(exp), Some(got)) if !exp.is_empty() => {
+                crate::ct_eq::ct_bytes_eq(exp.as_bytes(), got.as_bytes())
+            }
+            _ => false,
+        }
+    }
+
+    /// Read the control token this process was launched with, treating an empty
+    /// value as absent (fail-closed: an empty token never authorizes anything).
+    #[must_use]
+    pub fn control_token_from_env() -> Option<String> {
+        crate::system::read_env_var(CONTROL_TOKEN_ENV)
+            .ok()
+            .filter(|t| !t.is_empty())
+    }
+
+    /// Read the loopback control-socket port this process was launched with, if
+    /// any. Absent or unparseable ⇒ `None` ⇒ the child opens no control socket
+    /// (fail-closed to "no control surface").
+    #[must_use]
+    pub fn control_port_from_env() -> Option<u16> {
+        crate::system::read_env_var(CONTROL_PORT_ENV)
+            .ok()
+            .and_then(|p| p.parse().ok())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn bind_addr_is_always_loopback() {
+            for port in [0u16, 1, 8080, 65535] {
+                let addr = control_bind_addr(port);
+                assert!(
+                    addr.ip().is_loopback(),
+                    "the control socket must bind loopback only, got {addr}"
+                );
+                assert_eq!(addr.port(), port);
+            }
+        }
+
+        #[test]
+        fn no_token_minted_is_unauthorized() {
+            assert!(!is_authorized(None, Some("anything")));
+            assert!(!is_authorized(Some(""), Some("anything")));
+        }
+
+        #[test]
+        fn no_token_presented_is_unauthorized() {
+            assert!(!is_authorized(Some("secret"), None));
+        }
+
+        #[test]
+        fn wrong_token_is_unauthorized() {
+            assert!(!is_authorized(Some("secret"), Some("guess")));
+            // A prefix of the real token must not authorize.
+            assert!(!is_authorized(Some("secret"), Some("sec")));
+        }
+
+        #[test]
+        fn matching_token_is_authorized() {
+            assert!(is_authorized(Some("s3cr3t-hex"), Some("s3cr3t-hex")));
+        }
+    }
 }
 
 #[cfg(test)]

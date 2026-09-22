@@ -521,7 +521,11 @@ full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "cryp
 # its `record` and `reconstruct` signatures. The core module is unconditional on
 # target; the wasm-client hook into `wasm/mod.rs` is additionally target-cfg'd to
 # `wasm32` (and `wasm-client` implies `tea` independently via `wasm-client`).
-debugger = ["json", "serde", "async"]
+# Also implies `crypto-core`: the `control` module's loopback transport
+# authenticates its per-session token with the constant-time `ct_eq` predicate
+# (gated on `crypto-core`), so a debugger-only build still carries a timing-safe
+# token check. `web` already pulls `crypto-core`, so the wire is uniform.
+debugger = ["json", "serde", "async", "crypto-core"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.
