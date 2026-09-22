@@ -166,9 +166,43 @@ fn assert_scaffold_builds(
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// E2E (gated on `IPE_E2E=1`): EVERY scaffold shape and the `--lib` library
-/// compile end to end — `ipe::build` emits a Rust project and `cargo build` on
-/// it must succeed (THE SEAL). Driven from [`ipe::init::InitShape::ALL`] so a
+/// A library scaffold (`--lib`) has no runnable entry, so the compiler refuses
+/// to *build* it and directs the author to `type-check` (see
+/// `build_pipeline::build_project_with_options`). Its accept-side SEAL is
+/// therefore a clean `ipe type-check` of the public surface — there is no
+/// binary to `cargo build`.
+fn assert_library_type_checks(tag: &str, init_args: &[String], entry_rel: &std::path::Path) {
+    let dir = fresh_dir(tag);
+    let target = dir.join(tag);
+
+    let mut argv = vec!["init".to_owned(), target.to_string_lossy().into_owned()];
+    argv.extend(init_args.iter().cloned());
+    let init = ipe::run_cli(&argv);
+    assert!(init.is_ok(), "[{tag}] init must succeed: {init:?}");
+
+    let entry = target.join(entry_rel);
+    assert!(
+        entry.is_file(),
+        "[{tag}] scaffold must write the entry module {}",
+        entry.display()
+    );
+    let checked = ipe::run_cli(&[
+        "type-check".to_owned(),
+        entry.to_string_lossy().into_owned(),
+    ]);
+    assert!(
+        checked.is_ok(),
+        "[{tag}] ipe type-check on the library scaffold must succeed \
+         (SEAL: ipe-accepts the library's public surface): {checked:?}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// E2E (gated on `IPE_E2E=1`): EVERY application scaffold shape compiles end to
+/// end — `ipe::build` emits a Rust project and `cargo build` on it must succeed
+/// (THE SEAL) — and the `--lib` library type-checks (a library has no runnable
+/// entry to build). Driven from [`ipe::init::InitShape::ALL`] so a
 /// newly added shape cannot silently escape the accept-then-build proof: the
 /// shape's own compile-time exhaustiveness guard forces it into `ALL`, and this
 /// loop then forces it through the SEAL.
@@ -194,11 +228,12 @@ fn init_scaffold_builds() {
         );
     }
 
-    // The library scaffold: `ipe init <target> --lib`. The public module is
+    // The library scaffold: `ipe init <target> --lib`. A library has no runnable
+    // entry — the compiler refuses to build it and directs to `type-check` — so
+    // its SEAL is a clean type-check of the public surface. The public module is
     // derived from the project name (`libproj` → `Libproj`), so the entry is
     // `src/Libproj.ipe`.
-    assert_scaffold_builds(
-        &runtime_dir,
+    assert_library_type_checks(
         "libproj",
         &["--lib".to_owned()],
         &PathBuf::from("src").join("Libproj.ipe"),
