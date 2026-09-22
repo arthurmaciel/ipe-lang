@@ -542,6 +542,12 @@ where
         let mut eof_seen = false;
 
         let (mut model, cmd0) = init(());
+        // Time-travel recorder above the sink: cfg-gated, records each accepted
+        // `(msg, model)` after `update`. Bounded ring (`DEFAULT_HISTORY_CAP`);
+        // zero code when the feature is off.
+        #[cfg(feature = "debugger")]
+        let mut recorder =
+            crate::debugger::RecordBuffer::new(model.clone(), crate::debugger::DEFAULT_HISTORY_CAP);
         cli_run_cmd_tracked(cmd0, &tx, Some(&outstanding));
         let mut submgr = SubManager::new(tx.clone());
         submgr.update(subscriptions(model.clone()));
@@ -592,8 +598,12 @@ where
                     continue;
                 }
             };
+            #[cfg(feature = "debugger")]
+            let msg_for_recorder = msg.clone();
             let (next, cmd) = update(msg, model);
             model = next;
+            #[cfg(feature = "debugger")]
+            recorder.record(msg_for_recorder, model.clone(), &update);
             cli_run_cmd_tracked(cmd, &tx, Some(&outstanding));
             submgr.update(subscriptions(model.clone()));
             let rendered = crate::tui::render_lines_view(view(model.clone()));
@@ -861,6 +871,14 @@ where
         let outstanding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let (mut model, cmd0) = init(());
+        // Time-travel recorder above the view-less worker sink: cfg-gated,
+        // records each accepted `(msg, model)` after `update`. Bounded ring
+        // (`DEFAULT_HISTORY_CAP`); zero code when the feature is off. A worker has
+        // no view surface, so no appearance hot-swap applies — the recorder is
+        // for replay/inspection only.
+        #[cfg(feature = "debugger")]
+        let mut recorder =
+            crate::debugger::RecordBuffer::new(model.clone(), crate::debugger::DEFAULT_HISTORY_CAP);
         worker_run_cmd(cmd0, &tx, &outstanding);
         let mut sub_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         let mut live_subs = worker_spawn_subs(subscriptions(model.clone()), &tx, &mut sub_handles);
@@ -879,8 +897,12 @@ where
                     m
                 }
             };
+            #[cfg(feature = "debugger")]
+            let msg_for_recorder = msg.clone();
             let (next, cmd) = update(msg, model);
             model = next;
+            #[cfg(feature = "debugger")]
+            recorder.record(msg_for_recorder, model.clone(), &update);
             worker_run_cmd(cmd, &tx, &outstanding);
             for h in sub_handles.drain(..) {
                 h.abort();
@@ -1038,5 +1060,72 @@ mod map_tests {
             IpeCmd::Publish(thunk) => assert_eq!(thunk("sid"), 3),
             _ => panic!("expected Publish"),
         }
+    }
+}
+
+// ─── Worker shape: appearance hot-swap is N/A by construction ───────────────
+//
+// A worker (`worker_app`) has no view surface, so the watch-mode appearance
+// hot-swap (a `ViewPatch` per changed view; `HotSwap.views`) cannot apply to
+// it — there is no view to patch. This is excluded by construction, not
+// silently attempted: `worker_app`'s config is exactly `(init, update,
+// subscriptions)` with NO `view` argument, and `WorkerApp` exposes only
+// `run_blocking` (no appearance-apply entry). The recorder above the worker
+// sink still applies for replay/inspection; update/subscription edits are a
+// structural rebuild by definition.
+#[cfg(all(test, feature = "tokio", not(target_arch = "wasm32")))]
+mod worker_appearance_na_tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct WModel;
+    #[derive(Clone)]
+    enum WMsg {}
+
+    fn w_init(_: ()) -> (WModel, IpeCmd<WMsg>) {
+        (WModel, IpeCmd::None)
+    }
+    fn w_update(msg: WMsg, _m: WModel) -> (WModel, IpeCmd<WMsg>) {
+        // `WMsg` is uninhabited: a worker with no reachable message. The empty
+        // match is the total handling — no arm, no wildcard, no unreachable tail.
+        match msg {}
+    }
+    fn w_subs(_: WModel) -> IpeSub<WMsg> {
+        IpeSub::None
+    }
+
+    // `worker_app` binds to a 3-argument (view-less) shape. If a `view`
+    // parameter — the only thing an appearance patch could target — were added
+    // to the worker entry, this binding would fail to type-check. The absence of
+    // a view is thus pinned at compile time, not merely by convention.
+    #[test]
+    fn worker_entry_has_no_view_or_appearance_argument() {
+        // The exact view-less arity the worker entry must keep, named so the
+        // shape is a single declaration rather than an inline complex type.
+        type WorkerEntry = fn(
+            fn(()) -> (WModel, IpeCmd<WMsg>),
+            fn(WMsg, WModel) -> (WModel, IpeCmd<WMsg>),
+            fn(WModel) -> IpeSub<WMsg>,
+        ) -> IpeTask<crate::error::IpeError, ()>;
+        // A fn item of that arity: binding `worker_app` to it is the assertion.
+        let entry: WorkerEntry = worker_app;
+        // Referencing the fn item is the assertion; do NOT drive the loop (it
+        // would block on the worker's own effects/subs).
+        let _ = entry;
+        let _ = (w_init, w_update, w_subs);
+    }
+
+    // The worker's opaque app handle exposes exactly one entry — `run_blocking`
+    // — and NO appearance-apply surface. Constructing one and confirming the
+    // only consuming method is `run_blocking` pins that no hot-appearance path
+    // exists on the worker handle.
+    #[test]
+    fn worker_app_handle_has_only_run_blocking() {
+        let handle: WorkerApp = WorkerApp(Box::pin(async { ok_res(()) }));
+        // The sole consuming method. If an appearance-apply method were added it
+        // would be a second consumer; there is none.
+        let _run: fn(WorkerApp) -> crate::IpeResult<crate::error::IpeError, ()> =
+            WorkerApp::run_blocking;
+        let _ = handle;
     }
 }

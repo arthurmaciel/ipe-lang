@@ -210,6 +210,55 @@ impl<Msg: Clone, Model: Clone> RecordBuffer<Msg, Model> {
             .map(crate::stringify::IpeStringify::ipe_show)
             .collect()
     }
+
+    /// Render the reconstructed model at retained step `n` as a plain,
+    /// control-code-free string (the shape-neutral portable inspect surface).
+    ///
+    /// Reuses [`RecordBuffer::reconstruct`] — a pure re-fold, no `Cmd` fired —
+    /// then renders the model through `IpeStringify::ipe_show`, which is a
+    /// structural (`%v`-identical) rendering carrying no ANSI/control bytes and
+    /// redacting any `Secret`-bearing field. Returns `None` when `n` is out of
+    /// the retained window. A caller streaming this off a terminal emits it
+    /// verbatim: the string is plain by construction.
+    #[cfg(feature = "debugger")]
+    pub fn inspect_model<F>(&self, n: usize, update: &F) -> Option<String>
+    where
+        F: Fn(Msg, Model) -> (Model, IpeCmd<Msg>),
+        Model: crate::stringify::IpeStringify,
+    {
+        self.reconstruct(n, update)
+            .map(|m| crate::stringify::IpeStringify::ipe_show(&m))
+    }
+
+    /// The portable record/replay log: one `"<msg-label> => <model>"` line per
+    /// retained step, oldest first, in plain text with no control codes.
+    ///
+    /// Each line pairs the step's redacted message label (the message rendered
+    /// through `IpeStringify::ipe_show`, as [`RecordBuffer::labels`] does) with
+    /// the reconstructed post-step model (via [`RecordBuffer::inspect_model`]).
+    /// Both halves render through
+    /// `IpeStringify::ipe_show`, so `Secret`-bearing values stay redacted and no
+    /// ANSI/control byte can appear. This is the shape-neutral dump a caller can
+    /// print or persist to replay a session; it never mutates the log and fires
+    /// no `Cmd`.
+    #[cfg(feature = "debugger")]
+    pub fn replay_log<F>(&self, update: &F) -> Vec<String>
+    where
+        F: Fn(Msg, Model) -> (Model, IpeCmd<Msg>),
+        Msg: crate::stringify::IpeStringify,
+        Model: crate::stringify::IpeStringify,
+    {
+        (0..self.log.len())
+            .filter_map(|n| {
+                let msg_label = self
+                    .log
+                    .get(n)
+                    .map(|s| crate::stringify::IpeStringify::ipe_show(&s.msg))?;
+                let model = self.inspect_model(n, update)?;
+                Some(format!("{msg_label} => {model}"))
+            })
+            .collect()
+    }
 }
 
 // ── History — fn-pointer variant, self-contained ──────────────────────────
@@ -302,6 +351,34 @@ impl<Msg: Clone, Model: Clone> History<Msg, Model> {
     /// slate on the next `record` call. No `update` call is made; no `Cmd` fires.
     pub fn reset_to_init(&mut self, init: Model) {
         self.inner.reset_to_init(init);
+    }
+
+    /// Render the reconstructed model at step `n` as a plain, control-code-free
+    /// string. Delegates to [`RecordBuffer::inspect_model`] with the stored
+    /// `update` fn pointer; see that method for the plain-text/redaction
+    /// guarantees. Returns `None` when `n` is out of the retained window.
+    #[cfg(feature = "debugger")]
+    #[must_use]
+    pub fn inspect_model(&self, n: usize) -> Option<String>
+    where
+        Model: crate::stringify::IpeStringify,
+    {
+        let update = self.update;
+        self.inner.inspect_model(n, &move |m, mdl| update(m, mdl))
+    }
+
+    /// The portable record/replay log — one plain `"<msg> => <model>"` line per
+    /// retained step. Delegates to [`RecordBuffer::replay_log`] with the stored
+    /// `update` fn pointer.
+    #[cfg(feature = "debugger")]
+    #[must_use]
+    pub fn replay_log(&self) -> Vec<String>
+    where
+        Msg: crate::stringify::IpeStringify,
+        Model: crate::stringify::IpeStringify,
+    {
+        let update = self.update;
+        self.inner.replay_log(&move |m, mdl| update(m, mdl))
     }
 }
 
@@ -1045,6 +1122,141 @@ mod tests {
         assert!(
             history.step_to(1).is_none(),
             "step_to past last step must return None"
+        );
+    }
+
+    // ── Recorder-above-sink: cli + worker shapes ──────────────────────────────
+    //
+    // The cli (`console_app`) and worker (`worker_app`) run loops feed a
+    // `RecordBuffer` with `record(msg_after_update, model_after, &update)` after
+    // each accepted step — exactly the pattern these tests replay. Mirroring
+    // `reconstruct_matches_live_model` for both shapes pins the determinism
+    // guarantee (principle 2): the reconstructed model at each step equals the
+    // live model the loop held at that step.
+
+    // cli shape (console_app feed): reconstruct(n) == live model at step n.
+    #[test]
+    fn cli_recorder_reconstruct_matches_live_model() {
+        let init = TestModel { count: 0 };
+        let mut buf = RecordBuffer::new(init.clone(), DEFAULT_HISTORY_CAP);
+        let msgs = [TestMsg::Add(4), TestMsg::Add(8), TestMsg::Add(15)];
+        let mut live = init;
+        for msg in &msgs {
+            // The console_app loop clones the msg, folds it, then records the
+            // post-update model — reproduced here verbatim.
+            let msg_for_recorder = msg.clone();
+            let (next, _cmd) = test_update(msg.clone(), live.clone());
+            live = next.clone();
+            buf.record(msg_for_recorder, next, &test_update);
+        }
+        for (i, _msg) in msgs.iter().enumerate() {
+            let reconstructed = buf
+                .reconstruct(i, &test_update)
+                .expect("cli step must be in range");
+            let mut expected = TestModel { count: 0 };
+            for m in msgs.iter().take(i + 1) {
+                let (next, _) = test_update(m.clone(), expected.clone());
+                expected = next;
+            }
+            assert_eq!(
+                reconstructed, expected,
+                "cli reconstruct at step {i} must equal the live model"
+            );
+        }
+    }
+
+    // worker shape (worker_app feed): reconstruct(n) == live model at step n.
+    // A worker has no view/input stream; its steps come from Sub/Cmd messages,
+    // but the recorder feed is identical to the cli's.
+    #[test]
+    fn worker_recorder_reconstruct_matches_live_model() {
+        let init = TestModel { count: 0 };
+        let mut buf = RecordBuffer::new(init.clone(), DEFAULT_HISTORY_CAP);
+        let msgs = [TestMsg::Add(7), TestMsg::Add(-3), TestMsg::Add(100)];
+        let mut live = init;
+        for msg in &msgs {
+            let msg_for_recorder = msg.clone();
+            let (next, _cmd) = test_update(msg.clone(), live.clone());
+            live = next.clone();
+            buf.record(msg_for_recorder, next, &test_update);
+        }
+        let last = buf
+            .reconstruct(msgs.len() - 1, &test_update)
+            .expect("worker last step must be in range");
+        assert_eq!(
+            last, live,
+            "worker final reconstruct must equal the live model"
+        );
+    }
+
+    // Portable inspect surface: `inspect_model(n)` renders the reconstructed
+    // model at step n as a plain, control-code-free string, and `replay_log`
+    // dumps one plain line per step. Neither carries any ANSI/control byte —
+    // the shape-neutral portable form the off-TTY output boundary streams.
+    #[cfg(feature = "debugger")]
+    #[test]
+    fn inspect_and_replay_are_plain_text() {
+        use crate::stringify::IpeStringify;
+
+        #[derive(Clone, Debug, PartialEq)]
+        enum PMsg {
+            Bump(i64),
+        }
+        #[derive(Clone, Debug, PartialEq)]
+        struct PModel {
+            n: i64,
+        }
+        impl IpeStringify for PMsg {
+            fn ipe_show(&self) -> String {
+                let PMsg::Bump(v) = self;
+                format!("Bump({v})")
+            }
+        }
+        impl IpeStringify for PModel {
+            fn ipe_show(&self) -> String {
+                format!("PModel {{ n = {} }}", self.n)
+            }
+        }
+        fn p_update(msg: PMsg, m: PModel) -> (PModel, IpeCmd<PMsg>) {
+            let PMsg::Bump(v) = msg;
+            (PModel { n: m.n + v }, IpeCmd::None)
+        }
+
+        let init = PModel { n: 0 };
+        let mut buf = RecordBuffer::new(init.clone(), DEFAULT_HISTORY_CAP);
+        let msgs = [PMsg::Bump(2), PMsg::Bump(5)];
+        let mut live = init;
+        for msg in &msgs {
+            let (next, _) = p_update(msg.clone(), live.clone());
+            live = next.clone();
+            buf.record(msg.clone(), next, &p_update);
+        }
+
+        let step0 = buf.inspect_model(0, &p_update).expect("step 0");
+        let step1 = buf.inspect_model(1, &p_update).expect("step 1");
+        assert_eq!(step0, "PModel { n = 2 }");
+        assert_eq!(step1, "PModel { n = 7 }");
+
+        let log = buf.replay_log(&p_update);
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0], "Bump(2) => PModel { n = 2 }");
+        assert_eq!(log[1], "Bump(5) => PModel { n = 7 }");
+
+        // No control code anywhere in the portable form.
+        for line in std::iter::once(step0)
+            .chain(std::iter::once(step1))
+            .chain(log)
+        {
+            assert!(
+                !line.chars().any(|c| c.is_control()),
+                "portable inspect/replay output must carry no control code; got: {line:?}"
+            );
+        }
+
+        // Out-of-range inspect is None, never a panic.
+        assert!(
+            buf.inspect_model(99, &p_update).is_none(),
+            "out-of-range inspect_model must return None"
         );
     }
 }

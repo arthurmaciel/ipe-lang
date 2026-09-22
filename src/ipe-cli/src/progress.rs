@@ -125,6 +125,46 @@ fn outcome_line(mode: Mode, outcome: Outcome, msg: &str) -> String {
     }
 }
 
+/// Emit one line of debugger inspect / replay output, fail-closed to plain
+/// off-TTY.
+///
+/// The time-travel recorder's portable inspect/replay form is plain text by
+/// construction (`IpeStringify::ipe_show` renders no ANSI). This is the OUTPUT
+/// boundary that keeps it plain: in [`Mode::Plain`] (a pipe, redirect,
+/// `--plain`, or `NO_COLOR`) every control byte is stripped so a redirected log
+/// or file receives ZERO control codes — no ANSI escape, no carriage-return
+/// rewrite, no cursor motion — regardless of what the rendered body contained.
+/// The stripping is the fail-closed floor (principle 1): absent proof the body
+/// is control-free, the redirected sink still cannot be fed a control byte.
+///
+/// In [`Mode::Terminal`] the body passes through unchanged; a real TTY is the
+/// only surface where control bytes are legitimate, and the recorder body
+/// carries none anyway.
+///
+/// The guarantee is scoped to control codes (C0/C1/DEL — every ANSI-escape
+/// introducer, carriage return, and cursor-motion byte). It is not a
+/// bidi/zero-width sanitiser: `char::is_control` does not strip display-only
+/// scalars such as bidi overrides, which are not control-code injection. The
+/// producer (`IpeStringify::ipe_show`, a structural `%v`-style rendering)
+/// emits none of these regardless.
+///
+/// A trailing newline settles the line in both modes (an inspect dump is a
+/// committed transcript, never an animated in-place rewrite).
+#[must_use]
+pub fn inspect_line(mode: Mode, body: &str) -> String {
+    match mode {
+        Mode::Terminal => format!("{body}\n"),
+        // Off-TTY: strip every control char (newline included — one is
+        // re-added), so nothing a body carried can reach a pipe/file as a
+        // control code. `char::is_control` covers C0/C1 and DEL, i.e. every
+        // ANSI-escape introducer and cursor-motion byte.
+        Mode::Plain => {
+            let plain: String = body.chars().filter(|c| !c.is_control()).collect();
+            format!("{plain}\n")
+        }
+    }
+}
+
 /// The spinner frame at `frame_index`, wrapping around the frame count so any
 /// index is in range (no out-of-bounds on a raw tick counter).
 #[must_use]
@@ -333,6 +373,38 @@ mod tests {
             text,
             "  Checking for prebuilt binaries…\n  ✗ No prebuilt binary — build from source\n"
         );
+    }
+
+    #[test]
+    fn inspect_line_off_tty_is_plain_with_zero_control_bytes() {
+        // The fail-closed OUTPUT boundary (principle 1): off a TTY the inspect /
+        // replay line must carry NO control code, even when the body arrives
+        // laced with ANSI escapes and cursor-motion bytes. The redirected sink
+        // (pipe / file / log) is never fed a control byte.
+        let laced = "\x1b[31mModel { n = 7 }\x1b[0m\r\x1b[2K\x07";
+        let out = inspect_line(Mode::Plain, laced);
+        // Exactly one trailing newline; nothing else is a control char.
+        assert!(
+            out.ends_with('\n'),
+            "plain inspect line settles with a newline"
+        );
+        let body = out.strip_suffix('\n').expect("trailing newline");
+        assert!(
+            !body.chars().any(char::is_control),
+            "off-TTY inspect output must carry zero control bytes; got: {body:?}"
+        );
+        assert!(!body.contains('\x1b'), "no ANSI escape may survive off-TTY");
+        // The printable payload is preserved verbatim (only control bytes drop).
+        assert_eq!(body, "[31mModel { n = 7 }[0m[2K");
+    }
+
+    #[test]
+    fn inspect_line_on_tty_passes_body_through() {
+        // A real terminal is the one surface where control bytes are legitimate;
+        // the recorder body carries none, so Terminal mode is a pass-through
+        // plus a settling newline.
+        let out = inspect_line(Mode::Terminal, "Model { n = 7 }");
+        assert_eq!(out, "Model { n = 7 }\n");
     }
 
     #[test]
