@@ -1100,12 +1100,15 @@ mod worker_appearance_na_tests {
     // a view is thus pinned at compile time, not merely by convention.
     #[test]
     fn worker_entry_has_no_view_or_appearance_argument() {
-        // A fn item of the exact view-less arity the worker entry must keep.
-        let entry: fn(
+        // The exact view-less arity the worker entry must keep, named so the
+        // shape is a single declaration rather than an inline complex type.
+        type WorkerEntry = fn(
             fn(()) -> (WModel, IpeCmd<WMsg>),
             fn(WMsg, WModel) -> (WModel, IpeCmd<WMsg>),
             fn(WModel) -> IpeSub<WMsg>,
-        ) -> IpeTask<crate::error::IpeError, ()> = worker_app;
+        ) -> IpeTask<crate::error::IpeError, ()>;
+        // A fn item of that arity: binding `worker_app` to it is the assertion.
+        let entry: WorkerEntry = worker_app;
         // Referencing the fn item is the assertion; do NOT drive the loop (it
         // would block on the worker's own effects/subs).
         let _ = entry;
