@@ -1289,6 +1289,8 @@ mod tests {
             msg_tx: tx,
             #[cfg(feature = "debugger")]
             history: crate::debugger::RecordBuffer::new((), crate::debugger::DEFAULT_HISTORY_CAP),
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
         }))
     }
 
@@ -1320,6 +1322,8 @@ mod tests {
                 model,
                 crate::debugger::DEFAULT_HISTORY_CAP,
             ),
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
         }))
     }
 
@@ -2070,6 +2074,8 @@ mod tests {
                 model.clone(),
                 crate::debugger::DEFAULT_HISTORY_CAP,
             ),
+            #[cfg(feature = "debugger")]
+            debug_cursor: None,
             model,
             last_view: tree,
             index,
