@@ -566,12 +566,13 @@ pub mod server {
             return Ok(None);
         }
         let addr = transport::control_bind_addr(port);
-        // Defense in depth: the address type already forecloses a routable bind,
-        // but assert the invariant at the one place a socket is actually opened.
-        debug_assert!(
-            addr.ip().is_loopback(),
-            "the control listener must bind loopback only"
-        );
+        // Defense in depth: `control_bind_addr` can only produce a loopback
+        // address, but re-check at the one site a socket is opened and refuse to
+        // bind anything routable — fail closed to "no control surface" rather than
+        // ever expose the channel on a reachable interface.
+        if !addr.ip().is_loopback() {
+            return Ok(None);
+        }
         let listener = TcpListener::bind(addr).await?;
         let handler = Arc::new(handler);
         loop {
