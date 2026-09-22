@@ -60,12 +60,14 @@ network
 clock
 
 $ ipe capabilities --json <entry>
-{"capabilities":["network","clock"]}
+{"schema":"ipe.cli.capabilities/1","status":"ok","command":"capabilities","payload":{"capabilities":["network","clock"]}}
 ```
 
 `--plain` is the bare capability names, one per line — a pure program prints
-nothing, so `| wc -l` counts them. `--json` is `{"capabilities": [<name>, …]}`,
-the sorted name array (empty for a pure program).
+nothing, so `| wc -l` counts them. `--json` is the shared `{schema, status,
+command, payload}` machine envelope; the sorted name array (empty for a pure
+program) rides under `payload.capabilities`, so `jq '.payload.capabilities'`
+reads it.
 
 > **Migration.** `--plain` is byte-for-byte the old default `ipe capabilities`
 > output. A script that parsed the bare list adopts `--plain` with no other
@@ -78,8 +80,11 @@ $ ipe version --plain
 0.1.11
 
 $ ipe version --json
-{"version":"0.1.11"}
+{"schema":"ipe.cli.version/1","status":"ok","command":"version","payload":{"version":"0.1.11"}}
 ```
+
+`--json` is the shared `{schema, status, command, payload}` machine envelope; the
+version string rides under `payload.version` (`jq -r '.payload.version'`).
 
 ### `explain` (the code list)
 

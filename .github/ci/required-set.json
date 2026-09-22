@@ -2,6 +2,8 @@
   "artifact-guard",
   "capabilities-docs-drift",
   "cargo-deny",
+  "cli-docs-drift",
+  "cli-transcripts-drift",
   "clippy",
   "diagnostic-tone",
   "doc-string example gate",

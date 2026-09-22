@@ -1,0 +1,24 @@
+exit: 0
+---
+
+  Compile a program and run the resulting binary.
+
+  ipe run [<path>]
+
+  Arguments:
+    A source file, a project directory, or a package.ipe. Defaults to the current project.
+
+  Options:
+    [--out <dir>]                                       write the emitted project to <dir>
+    [--runtime <dir>]                                   vendor the Ipê runtime from <dir>
+    [--static]                                          produce a statically linked binary
+    [--target <triple>]                                 cross-compile to <triple>
+    [--allocator <auto|system|dlmalloc|talc|mimalloc>]  select the global allocator (default: auto)
+    [--allow-slow-allocator]                            permit an allocator known to be slow for the target
+    [--cfree]                                           build without linking any C code (incompatible with allocators that require C, e.g. mimalloc)
+    [--accept-risks]                                    accept every disclosed .Unsafe escape-hatch import and proceed without prompting
+    [--debugger]                                        compile the in-app time-travelling debugger overlay into the run app
+    [-q|--quiet]                                        suppress progress chatter; only warnings and errors
+    [--json]                                            emit each diagnostic as a stable JSON object (one per line) instead of the human layout
+    [-- <args>...]                                      forward <args> to the compiled program
+

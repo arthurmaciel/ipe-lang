@@ -76,6 +76,12 @@ checks:
   - context: capabilities-docs-drift
     disposition: gate
     producer: ci.yml
+  - context: cli-docs-drift
+    disposition: gate
+    producer: ci.yml
+  - context: cli-transcripts-drift
+    disposition: gate
+    producer: ci.yml
   - context: markdown-parity
     disposition: gate
     producer: ci.yml

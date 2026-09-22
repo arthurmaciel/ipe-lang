@@ -2122,65 +2122,61 @@ mod tests {
 
     /// The emit dispatcher (`emit_expr_at`'s `Expr::Call` arm and its
     /// `call_has_kernel_special_case` mirror) routes `emit_ui_call` on the
-    /// kernel's `KernelClass`, but `ui_call_shape` — the function `emit_ui_call`
-    /// consults — classifies on the wider `is_ui() || is_web() || is_tui() ||
-    /// is_console() || is_worker()` predicate set, which spans four classes
-    /// (`Ui`, `Web`, `Terminal`, and `Tea` for the single `TeaWorker` app-entry).
-    /// This pins the exact class/emitter-domain relation the dispatcher relies on:
-    /// every kernel `ui_call_shape` classifies is reached by `emit_ui_call` under
-    /// class `Ui`, `Web`, or `Terminal`, or is `TeaWorker` (which the `Tea` arm
-    /// probes through `emit_ui_call` before `emit_tea_call`). Should a future UI
-    /// kernel land in another class, it would silently miss `emit_ui_call` and
-    /// ICE at emit; this test turns that drift into a red before it ships.
+    /// kernel's `KernelClass`, but the UI emitter domain — the set `ui_call_shape`
+    /// (which `emit_ui_call` consults) classifies — is the single named predicate
+    /// `is_ui_family`, spanning five classes: `Ui` / `Web` / `Terminal`, plus the
+    /// `Tea` `TeaWorker` app-entry (`is_worker`) and the `Pure` `Ipe.Color.Ansi`
+    /// palette constructors (`is_ui` by `TermColor` qualifier carve-out). Each of
+    /// those predicates is now derived from `class` in `ipe_kernels` with its own
+    /// coherence assert, so this test pins the ONE remaining cross-class relation:
+    /// (a) every kernel `ui_call_shape` classifies is `is_ui_family`, and
+    /// (b) `is_ui_family` is EXACTLY the set the class-routed dispatcher reaches
+    /// through `emit_ui_call`. A UI kernel that lands in a class the dispatcher
+    /// does not route to `emit_ui_call` — or an emitter gated on a set spanning a
+    /// class the dispatcher splits — is a red here, not a silent emit ICE (#2733).
     #[test]
     fn ui_call_shape_domain_is_reached_by_the_dispatcher() {
         use ipe_ir::KernelClass;
         for &k in KernelFn::ALL {
-            if ui_call_shape(k).is_none() {
-                continue;
+            // (a) Every kernel `ui_call_shape` classifies is in the UI emitter
+            // domain — the single named predicate `is_ui_family`, itself derived
+            // from `is_ui` / `is_web` / `is_tui` / `is_console` / `is_worker`
+            // (each now derived from `class` + a coherence assert in ipe_kernels).
+            if ui_call_shape(k).is_some() {
+                assert!(
+                    is_ui_family(k),
+                    "{k:?} is classified by ui_call_shape but is not is_ui_family — \
+                     it would miss emit_ui_call and either ICE or lose its \
+                     appearance-literal hoisting. Its class predicate (is_ui/is_web/\
+                     is_tui/is_console/is_worker) must cover it.",
+                );
             }
+            // (b) The UI emitter domain is EXACTLY the set the class-routed
+            // dispatcher reaches through emit_ui_call — the `Ui | Web | Terminal`
+            // arm, the `Tea` arm for `TeaWorker`, and the `Pure` arm for the
+            // `Ipe.Color.Ansi` palette constructors (`TermColor*`, whose
+            // appearance literals hoist). Expressed once here, over `class`, so no
+            // emitter can be gated on a set that silently spans a class the
+            // dispatcher splits (the #2733 ICE class). A `TermColor` palette
+            // constructor is `class = Pure` yet `is_ui` by qualifier carve-out, so
+            // `is_ui_family` is true for it AND the `Pure` arm below reaches it.
             let class = k.def().class;
-            let reachable = match class {
-                // The bulk of the UI family. The dispatcher's `Ui | Web | Terminal`
-                // arm probes `emit_ui_call` directly.
+            let dispatcher_reaches_ui_call = match class {
                 KernelClass::Ui | KernelClass::Web | KernelClass::Terminal => true,
-                // `Ipe.Tea.Worker.tea` — the `Tea` arm probes `emit_ui_call`
-                // before `emit_tea_call`.
                 KernelClass::Tea => k == KernelFn::TeaWorker,
-                // The `Ipe.Color.Ansi` palette constructors (`TermColor*`) — the
-                // `Pure` arm probes `emit_ui_call` (between `emit_config_ctor_call`
-                // and `emit_css_value_call`) so their appearance literals hoist.
-                KernelClass::Pure => matches!(
-                    k,
-                    KernelFn::TermColorBlack
-                        | KernelFn::TermColorRed
-                        | KernelFn::TermColorGreen
-                        | KernelFn::TermColorYellow
-                        | KernelFn::TermColorBlue
-                        | KernelFn::TermColorMagenta
-                        | KernelFn::TermColorCyan
-                        | KernelFn::TermColorWhite
-                        | KernelFn::TermColorBrightBlack
-                        | KernelFn::TermColorBrightRed
-                        | KernelFn::TermColorBrightGreen
-                        | KernelFn::TermColorBrightYellow
-                        | KernelFn::TermColorBrightBlue
-                        | KernelFn::TermColorBrightMagenta
-                        | KernelFn::TermColorBrightCyan
-                        | KernelFn::TermColorBrightWhite
-                        | KernelFn::TermColorDefault
-                        | KernelFn::TermColorRgb
-                        | KernelFn::TermColorRgba
-                ),
+                KernelClass::Pure => k.def().qualifier == "TermColor",
                 KernelClass::Db | KernelClass::Server | KernelClass::Ffi => false,
             };
-            assert!(
-                reachable,
-                "{k:?} is classified by ui_call_shape but has class {class:?}, \
-                 which the emit dispatcher does not route through emit_ui_call — \
-                 so this kernel would miss its emitter and either ICE or lose its \
-                 appearance-literal hoisting. Probe emit_ui_call in that class arm \
-                 (expr.rs + kernel_calls.rs) and add the kernel to this list.",
+            assert_eq!(
+                is_ui_family(k),
+                dispatcher_reaches_ui_call,
+                "{k:?} (class={class:?}): is_ui_family={} but the emit dispatcher \
+                 reaches emit_ui_call for it={} — the UI emitter domain has drifted \
+                 from the class-routed dispatcher (the #2733 class↔domain split). \
+                 Align the class arm (expr.rs + kernel_calls.rs) with the derived \
+                 UI predicates.",
+                is_ui_family(k),
+                dispatcher_reaches_ui_call,
             );
         }
     }

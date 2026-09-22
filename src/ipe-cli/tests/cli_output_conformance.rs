@@ -403,6 +403,62 @@ fn machine_success_quadrants_route_through_the_ssot() {
     }
 }
 
+/// The machine-success *envelope schema* per driven `--json` command: beyond
+/// well-formedness, every success record must carry the invariant envelope
+/// fields the machine-output SSOT guarantees — `"schema":"ipe.cli.<x>/N"`,
+/// `"status":"ok"`, `"command":"<name>"`, and a `"payload"` key. The failure
+/// quadrant's envelope (`ipe.cli.error/1`, `status:error`) is already gated
+/// elsewhere; this pins the *success* shape per command, which was pinned only
+/// as "parses as JSON" before. A command that hand-rolled a subtly different
+/// success object — a missing `status`, a renamed `command`, no `payload` — is
+/// the drift this closes.
+#[test]
+fn machine_success_json_carries_the_envelope_schema_per_command() {
+    for entry in MACHINE_CONFORMANCE {
+        let cmd = entry.command;
+        let MachineSuccess::Drive(mk_args) = &entry.success else {
+            continue;
+        };
+        let Some(extra) = mk_args() else {
+            continue; // sparse checkout without the fixture — skip, never a false red
+        };
+
+        let mut args: Vec<&str> = vec![cmd];
+        for a in &extra {
+            args.push(a);
+        }
+        args.push("--json");
+        let r = run(&args);
+        assert!(r.ok, "`ipe {cmd} --json` must exit 0; stderr: {}", r.stderr);
+
+        let json = r.stdout.trim();
+        assert!(
+            is_well_formed_json(json),
+            "`ipe {cmd} --json` success must be well-formed JSON: {json:?}",
+        );
+        // status = ok: the success discriminant a consumer branches on.
+        assert!(
+            json.contains("\"status\":\"ok\""),
+            "`ipe {cmd} --json` success envelope must carry status=ok: {json:?}",
+        );
+        // command names the producing command (the exact name from the SSOT).
+        assert!(
+            json.contains(&format!("\"command\":\"{cmd}\"")),
+            "`ipe {cmd} --json` success envelope must name its command: {json:?}",
+        );
+        // A stable schema tag of the shape `ipe.cli.<x>/N` (the version-suffixed
+        // contract), and a `payload` key carrying the command's own result.
+        assert!(
+            json.contains("\"schema\":\"ipe.cli.") && json.contains('/'),
+            "`ipe {cmd} --json` success envelope must carry a versioned schema tag: {json:?}",
+        );
+        assert!(
+            json.contains("\"payload\":"),
+            "`ipe {cmd} --json` success envelope must carry a payload key: {json:?}",
+        );
+    }
+}
+
 /// A machine-mode operational failure that is NOT a compile diagnostic (here an
 /// I/O error: `type-check --json` on a path that does not exist) must render the
 /// shared machine-error envelope on stderr — never the human `Ipê lang` banner

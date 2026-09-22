@@ -1007,8 +1007,9 @@ pub fn analysis_root_of(parsed: &project::ProjectManifest) -> Result<PathBuf, Cl
 /// 0 with a friendly framed success line when the program type-checks, or
 /// non-zero carrying the first rendered diagnostic when it does not.
 ///
-/// With `--json`, each diagnostic is a JSON object on stderr, and success
-/// is `{"status":"ok"}` on stdout — both machine-parseable.
+/// With `--json`, each diagnostic is a JSON object on stderr, and success is the
+/// shared machine envelope (`ipe.cli.type-check/1`, `status:ok`, empty payload)
+/// on stdout — both machine-parseable.
 pub fn run_type_check(rest: &[String]) -> Result<(), CliError> {
     // First, infallible format pass before the body's fallible parse, so a parse
     // error (an unknown flag, a second positional) still renders through the
@@ -1037,7 +1038,18 @@ pub fn run_type_check_body(rest: &[String]) -> Result<(), CliError> {
     typecheck_entry_via_graph(&entry)?;
     match args.format {
         cli_args::OutputFormat::Json => {
-            println!("{{\"status\":\"ok\"}}");
+            // The shared machine envelope; a clean type-check carries an empty
+            // payload (the outcome is the `status`, there is no result data).
+            let payload = cli_args::json::object(&[]);
+            print!(
+                "{}",
+                crate::machine_output::MachineOutput::ok(
+                    "ipe.cli.type-check/1",
+                    "type-check",
+                    payload,
+                )
+                .render_json()
+            );
         }
         cli_args::OutputFormat::Plain => {
             println!("ok");
@@ -1555,8 +1567,9 @@ pub fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
 ///   capability, or a line saying the program is pure.
 /// - `--plain`: the bare capability names, one per line, flush-left (or nothing
 ///   at all for a pure program — the scriptable form pipelines already consume).
-/// - `--json`: `{"capabilities": ["network", …]}`, a stable object whose one
-///   `capabilities` field is the sorted name array (empty for a pure program).
+/// - `--json`: the shared `{schema, status, command, payload}` machine envelope
+///   (`ipe.cli.capabilities/1`), with the sorted capability name array under
+///   `payload.capabilities` (empty for a pure program).
 pub fn render_capabilities(
     names: &[&str],
     format: cli_args::OutputFormat,
@@ -1577,10 +1590,16 @@ pub fn render_capabilities(
             out
         }
         Json => {
-            format!(
-                "{}\n",
-                cli_args::json::object(&[("capabilities", cli_args::json::string_array(names),)])
+            // The shared machine envelope: a command may never hand-roll a bare
+            // success object. The capability list rides under `payload`.
+            let payload =
+                cli_args::json::object(&[("capabilities", cli_args::json::string_array(names))]);
+            crate::machine_output::MachineOutput::ok(
+                "ipe.cli.capabilities/1",
+                "capabilities",
+                payload,
             )
+            .render_json()
         }
         Human => {
             let p = style::Palette::for_stream(stream);
@@ -1969,7 +1988,8 @@ pub fn render_upgrade(
 ///
 /// - Human (default): a guttered `ipe <version>` line.
 /// - `--plain`: the bare version string, flush-left, nothing else.
-/// - `--json`: `{"version": "<x.y.z>"}`, a stable single-field object.
+/// - `--json`: the shared `{schema, status, command, payload}` machine envelope,
+///   with the version under `payload.version` (`ipe.cli.version/1`).
 pub fn render_version(
     format: cli_args::OutputFormat,
     _stream: &impl std::io::IsTerminal,
@@ -1978,7 +1998,14 @@ pub fn render_version(
     let version = env!("CARGO_PKG_VERSION");
     match format {
         Plain => format!("{version}\n"),
-        Json => format!("{{\"version\":{version:?}}}\n"),
+        // Route through the shared machine envelope so `version --json` carries the
+        // same `{schema, status, command, payload}` invariants as every other
+        // command — a command may never hand-roll a bare success object.
+        Json => {
+            let payload = cli_args::json::object(&[("version", cli_args::json::string(version))]);
+            crate::machine_output::MachineOutput::ok("ipe.cli.version/1", "version", payload)
+                .render_json()
+        }
         Human => style::frame(&style::gutter(&format!("ipe {version}\n"))),
     }
 }
