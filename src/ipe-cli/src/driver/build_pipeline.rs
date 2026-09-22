@@ -144,6 +144,21 @@ pub fn single_file_cargo_name_from_env() -> String {
         .unwrap_or_default()
 }
 
+/// The canonical directory that owns a project's manifest — the seed for the
+/// per-project crate identity ([`ipe_backend_rust::crate_identity`]).
+///
+/// Canonicalising resolves symlinks and `..` so two spellings of the same
+/// directory hash to the SAME crate identity (one cache slot, no needless
+/// rebuild); different real directories stay distinct (the anti-thrash key).
+/// Every fallback is total — a manifest with no parent, or an un-canonicalisable
+/// path (e.g. a not-yet-created dir), degrades to the plain parent then the
+/// manifest path itself, so this never panics and always yields a deterministic
+/// seed for a fixed input.
+fn canonical_project_dir(manifest_path: &Path) -> PathBuf {
+    let dir = manifest_path.parent().unwrap_or(manifest_path);
+    std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
+}
+
 /// Whether the dev-only appearance hot-swap emit is enabled for `ipe watch`.
 ///
 /// Default ON: `ipe watch` hot-swaps appearance-only edits (e.g. `Ui.spacing`)
@@ -2252,10 +2267,21 @@ pub fn build_project_with_options(
             height: i64::from(d.height),
         }
     });
+    // The emitted crate identity is uniquified per project so two projects that
+    // share a friendly name but live at different paths own SEPARATE slots in a
+    // shared CARGO_TARGET_DIR (no cross-project cargo-fingerprint thrash). The
+    // FRIENDLY name (`manifest.name`) is untouched — only this internal crate
+    // identity carries the path-derived suffix. The seed is the CANONICAL project
+    // directory so the identity is stable across runs (deterministic) yet distinct
+    // per real project location; a symlink/`..` alias resolves to the same slot.
+    let cargo_name = ipe_backend_rust::crate_identity(
+        &ipe_backend_rust::sanitize_cargo_name(&manifest.name),
+        &canonical_project_dir(manifest_path),
+    );
     let options = BuildOptions {
         wasm_public_env: manifest.wasm.public_env.clone(),
         wasm_hydrate_mode: manifest.wasm.mode.as_deref() == Some("hydrate"),
-        cargo_name: ipe_backend_rust::sanitize_cargo_name(&manifest.name),
+        cargo_name,
         webview_window,
         ..options
     };

@@ -354,6 +354,61 @@ pub fn sanitize_cargo_name(name: &str) -> String {
     result
 }
 
+/// The number of lowercase-hex characters of the path digest appended as the
+/// per-project crate-identity suffix. Four bytes (eight hex chars) give 2^32
+/// distinct slots — collision-negligible for the handful of same-named projects
+/// a single shared target dir ever holds, while keeping the emitted name short.
+const CRATE_IDENTITY_HEX_LEN: usize = 8;
+
+/// Derive the emitted crate's unique identity from its sanitized friendly name
+/// and the canonical project directory.
+///
+/// Ipê recommends a shared `CARGO_TARGET_DIR` for build speed. Cargo keys its
+/// build-cache fingerprints by crate name, so two projects that share a friendly
+/// name (both `test`) would occupy the SAME `<target>/<profile>/test` slot and
+/// thrash each other's fingerprints — forcing a full rebuild on every project
+/// switch, silently defeating the shared cache. Appending a stable suffix derived
+/// from the canonical project path gives each project its own slot:
+///
+/// * **Deterministic** — the suffix is a pure function of `canonical_dir`; the
+///   same project path yields the same crate name on every build.
+/// * **Distinct** — two projects sharing a friendly name but living at different
+///   canonical paths get different suffixes, so they never share a cache slot.
+///
+/// `base` is the already-[`sanitize_cargo_name`]d friendly name; the returned
+/// value is `"<base>_<hex>"`, re-truncated so it never exceeds Cargo's 64-char
+/// name limit. The suffix uses only `[0-9a-f]`, all Cargo-valid.
+///
+/// The FRIENDLY name is never derived from this — user-facing artifact names and
+/// messages keep the plain project name; only the internal crate identity carries
+/// the suffix.
+#[must_use]
+pub fn crate_identity(base: &str, canonical_dir: &std::path::Path) -> String {
+    use sha2::{Digest as _, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(canonical_dir.as_os_str().as_encoded_bytes());
+    let digest = hasher.finalize();
+
+    let mut hex = String::with_capacity(CRATE_IDENTITY_HEX_LEN);
+    for byte in digest.iter().take(CRATE_IDENTITY_HEX_LEN / 2) {
+        // `{byte:02x}` is exactly two lowercase-hex chars per byte — total width
+        // is `CRATE_IDENTITY_HEX_LEN`, both Cargo-valid.
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+
+    // Reserve room for `_<hex>` under the 64-char ceiling so the join never
+    // produces an over-long (Cargo-rejected) name; trim the base, never the hash.
+    let max_base = 64usize.saturating_sub(CRATE_IDENTITY_HEX_LEN + 1);
+    let mut base_trunc = base;
+    if base_trunc.len() > max_base {
+        base_trunc = base_trunc.get(..max_base).unwrap_or(base_trunc);
+    }
+    let base_trunc = base_trunc.trim_end_matches('-');
+    format!("{base_trunc}_{hex}")
+}
+
 /// The dependency-model emit selector.
 ///
 /// When present, the emitted project declares the runtime as a cargo dependency
@@ -5609,5 +5664,58 @@ mod sanitize_cargo_name_tests {
     fn consecutive_invalid_chars_become_one_hyphen() {
         assert_eq!(sanitize_cargo_name("a  b"), "a-b");
         assert_eq!(sanitize_cargo_name("a!!b"), "a-b");
+    }
+}
+
+#[cfg(test)]
+mod crate_identity_tests {
+    use super::{CRATE_IDENTITY_HEX_LEN, crate_identity};
+    use std::path::Path;
+
+    // Anti-thrash guarantee: same canonical project path → same crate identity
+    // every build (deterministic — PRINCIPLE 2 Correctness), so a shared
+    // CARGO_TARGET_DIR keeps one stable cache slot per project.
+    #[test]
+    fn same_path_yields_same_identity() {
+        let dir = Path::new("/home/user/projects/app");
+        assert_eq!(crate_identity("test", dir), crate_identity("test", dir));
+    }
+
+    // Anti-thrash guarantee: two projects sharing a friendly name but living at
+    // DIFFERENT canonical paths get DIFFERENT crate identities → separate cache
+    // slots → no cross-project fingerprint thrash (PRINCIPLE 4 Efficiency).
+    #[test]
+    fn same_name_different_paths_yield_distinct_identities() {
+        let a = crate_identity("test", Path::new("/home/alice/test"));
+        let b = crate_identity("test", Path::new("/home/bob/test"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn identity_keeps_the_friendly_base_as_prefix() {
+        let id = crate_identity("my-app", Path::new("/tmp/one"));
+        assert!(
+            id.starts_with("my-app_"),
+            "identity must keep the friendly base as its prefix, got {id:?}"
+        );
+        // Suffix is exactly the fixed-width lowercase-hex digest.
+        let suffix = id.rsplit('_').next().unwrap_or_default();
+        assert_eq!(suffix.len(), CRATE_IDENTITY_HEX_LEN);
+        assert!(
+            suffix
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+            "suffix must be lowercase hex, got {suffix:?}"
+        );
+    }
+
+    // The join must never exceed Cargo's 64-char name ceiling: the base is
+    // trimmed to make room, the hash is preserved whole (it is the disambiguator).
+    #[test]
+    fn over_long_base_is_truncated_under_the_cargo_ceiling() {
+        let long_base = "a".repeat(100);
+        let id = crate_identity(&long_base, Path::new("/tmp/x"));
+        assert!(id.len() <= 64, "identity {} chars exceeds 64", id.len());
+        assert!(id.ends_with(&format!("_{}", id.rsplit('_').next().unwrap_or_default())));
     }
 }
