@@ -2127,7 +2127,7 @@ mod tests {
     /// `is_ui_family`, spanning five classes: `Ui` / `Web` / `Terminal`, plus the
     /// `Tea` `TeaWorker` app-entry (`is_worker`) and the `Pure` `Ipe.Color.Ansi`
     /// palette constructors (`is_ui` by `TermColor` qualifier carve-out). Each of
-    /// those predicates is now derived from `class` in ipe_kernels with its own
+    /// those predicates is now derived from `class` in `ipe_kernels` with its own
     /// coherence assert, so this test pins the ONE remaining cross-class relation:
     /// (a) every kernel `ui_call_shape` classifies is `is_ui_family`, and
     /// (b) `is_ui_family` is EXACTLY the set the class-routed dispatcher reaches
