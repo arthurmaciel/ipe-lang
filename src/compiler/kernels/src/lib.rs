@@ -12942,7 +12942,24 @@ impl StdlibKernel {
         // The `Ipe.Color.Ansi` palette constructors are `class = Pure` but belong
         // to the UI emitter domain (their appearance literals hoist). Keyed on the
         // `TermColor` qualifier so a new palette constructor joins by construction.
-        matches!(self.decl().qualifier, "TermColor")
+        Self::str_eq(self.decl().qualifier, "TermColor")
+    }
+
+    /// Const-context `&str` equality — `==`/`matches!` on `str` is not `const`.
+    /// Lockstep slice-pattern walk, no indexing.
+    const fn str_eq(a: &str, b: &str) -> bool {
+        let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        while let ([x, xa @ ..], [y, yb @ ..]) = (a, b) {
+            if *x != *y {
+                return false;
+            }
+            a = xa;
+            b = yb;
+        }
+        true
     }
 
     /// The fixed wire event name for a `Ipe.Html.Events` builder (`onClick` →
