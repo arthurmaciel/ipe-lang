@@ -2832,17 +2832,10 @@ mod handlers {
             _ => return StatusCode::FORBIDDEN.into_response(),
         }
 
-        #[derive(serde::Deserialize)]
-        struct HotPatchBody {
-            /// The edited view's baked-defaults signature (its literals in emit
-            /// order) — routes the patch to exactly that view's table.
-            #[serde(default)]
-            defaults: Vec<String>,
-            /// The appearance delta: `(index, new_value)` pairs.
-            #[serde(default)]
-            patch: Vec<(usize, String)>,
-        }
-        let parsed: HotPatchBody = match serde_json::from_slice(&body) {
+        // The body is the shared control wire's appearance patch — one wire
+        // definition (`control::AppearancePatch`) for every dev-loop shape,
+        // parsed once at the boundary into its typed form.
+        let parsed: crate::control::AppearancePatch = match serde_json::from_slice(&body) {
             Ok(b) => b,
             Err(_) => return (StatusCode::BAD_REQUEST, "bad body").into_response(),
         };

@@ -84,6 +84,10 @@ pub mod core;
 // `release`, so production artifacts carry no recorder code.
 #[cfg(feature = "debugger")]
 pub mod debugger;
+// Shape-agnostic dev-loop control wire (hot-swap + time-travel debugger). Present
+// only under a dev-loop surface (`web` or `debugger`); absent from `ipe release`.
+#[cfg(any(feature = "web", feature = "debugger"))]
+pub mod control;
 // Constant-time byte equality — the SSOT predicate all secret/tag/key
 // newtypes use for `PartialEq`. Gated on `crypto-core` (which pulls `subtle`).
 // `secret` implies `crypto-core`, so this gate covers every caller.
