@@ -28,8 +28,6 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::help;
-
 /// One hermetic invocation to snapshot, beyond the per-command `--help` pages.
 pub struct Invocation {
     /// The golden basename under `tests/golden/cli/` (no extension).
@@ -256,6 +254,7 @@ pub fn help_golden_name(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::help;
 
     #[test]
     fn redacts_the_running_version() {

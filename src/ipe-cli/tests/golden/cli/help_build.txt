@@ -1,0 +1,26 @@
+exit: 0
+---
+
+  Compile a program to a native or WebAssembly artifact.
+
+  ipe build [<path>] [<shape>] [<runtime>] [<host>] [<target>]
+
+  Arguments:
+    path: a source file, a project directory, or a package.ipe (default: the current project). shape is derived from `main` and, if written, only cross-checked. runtime/host apply to `web` only: `web` = served (served is the unnamed default, never written), `web solo` = self-contained browser client, and a host is desktop/ios/android. A `desktop`/`ios`/`android` host lays out the app bundle for that host (a fast dev bundle; `release web <host>` produces the production distributable). With no delivery args, `build` builds the default delivery — the fast one-artifact inner loop; `release` builds every declared delivery. Delivery args select a subset or override for this invocation only and never edit package.ipe.
+
+  Options:
+    [--out <dir>]                                       write the emitted project to <dir>
+    [--runtime <dir>]                                   vendor the Ipê runtime from <dir>
+    [--emit-ir]                                         also emit the intermediate representation
+    [--fix]                                             apply machine-applicable fixes before building
+    [--accept-risks]                                    accept every disclosed .Unsafe escape-hatch import and proceed without prompting
+    [--static]                                          produce a statically linked binary
+    [--target <triple|wasm|wasi>]                       cross-compile to <triple>, the browser (`wasm`), or co-located WebAssembly/WASI (`wasi`, a wasm32-wasip1 module for a Direct script)
+    [--emit-permissions <ios|macos|android>]            read-only: print the OS-permission declarations the app's accepted web capabilities derive on the platform, and build nothing
+    [--allocator <auto|system|dlmalloc|talc|mimalloc>]  select the global allocator (default: auto)
+    [--allow-slow-allocator]                            permit an allocator known to be slow for the target
+    [--cfree]                                           build without linking any C code (incompatible with allocators that require C, e.g. mimalloc)
+    [--debugger]                                        compile the in-app time-travelling debugger overlay into the built app
+    [-q|--quiet]                                        suppress progress chatter; only warnings and errors
+    [--json]                                            emit each diagnostic as a stable JSON object (one per line) instead of the human layout
+

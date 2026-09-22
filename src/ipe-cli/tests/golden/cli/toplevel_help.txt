@@ -1,0 +1,40 @@
+exit: 0
+---
+
+  Ipê language - v<VERSION> - https://github.com/arthurmaciel/ipe-lang
+
+  Development
+    ipe init     --help
+    ipe dev      --help
+    ipe release  --help
+    ipe exec     --help
+
+  Quality
+    ipe type-check  --help
+    ipe lint        --help
+    ipe test        --help
+    ipe verify      --help
+
+  Package authoring
+    ipe login    --help
+    ipe package  --help
+
+  Foreign-function interface (FFI)
+    ipe rust  --help
+
+  Tools
+    ipe doc           --help
+    ipe fmt           --help
+    ipe lsp           --help
+    ipe clean         --help
+    ipe migrate       --help
+    ipe health        --help
+    ipe capabilities  --help
+    ipe diff          --help
+    ipe fix           --help
+    ipe eject         --help
+    ipe upgrade       --help
+    ipe version       --help
+
+  If you find any bugs, please report them at https://github.com/arthurmaciel/ipe-lang/issues.
+
