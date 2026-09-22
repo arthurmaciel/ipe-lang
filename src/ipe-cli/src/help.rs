@@ -174,8 +174,38 @@ pub struct CommandSpec {
     pub name: &'static str,
     /// The one-line description shown at the top of `ipe <command> --help`.
     pub summary: &'static str,
+    /// The positional-argument synopsis (e.g. `"[<path>]"`), empty when the
+    /// command takes no positional.
+    pub args: &'static str,
+    /// The plain-English description of the positional argument, empty when
+    /// there is none.
+    pub args_desc: &'static str,
+    /// Whether the command is withheld from the top-level `ipe --help` screen.
+    pub hidden: bool,
     /// Every flag the command accepts, in table order.
     pub options: Vec<FlagSpec>,
+}
+
+/// A top-level help section, projected from [`SECTIONS`] for the CLI reference
+/// generator. The command names are in display order and each names a
+/// [`CommandSpec`] entry (or a [`GroupSpec`]).
+#[derive(Clone, Debug)]
+pub struct SectionSpec {
+    /// The section heading (e.g. `"Development"`).
+    pub title: &'static str,
+    /// The command / group names in this section, in display order.
+    pub commands: Vec<&'static str>,
+}
+
+/// A command group, projected from [`GROUPS`] for the CLI reference generator.
+#[derive(Clone, Debug)]
+pub struct GroupSpec {
+    /// The group name (e.g. `"dev"`).
+    pub name: &'static str,
+    /// The one-line description shown on the group's subpage.
+    pub summary: &'static str,
+    /// The member subcommand names, in display order.
+    pub members: Vec<&'static str>,
 }
 
 /// Every `ipe` command's public metadata, projected from the canonical
@@ -191,6 +221,9 @@ pub fn all_command_specs() -> Vec<CommandSpec> {
         .map(|c| CommandSpec {
             name: c.name,
             summary: c.summary,
+            args: c.args,
+            args_desc: c.args_desc,
+            hidden: c.hidden,
             options: c
                 .options
                 .iter()
@@ -199,6 +232,35 @@ pub fn all_command_specs() -> Vec<CommandSpec> {
                     desc: o.desc,
                 })
                 .collect(),
+        })
+        .collect()
+}
+
+/// Every top-level help section, projected from the canonical [`SECTIONS`]
+/// table. The CLI reference generator reads this instead of the private table so
+/// the section grouping in `docs/reference/cli.md` cannot drift from the
+/// top-level `ipe --help` screen.
+#[must_use]
+pub fn all_section_specs() -> Vec<SectionSpec> {
+    SECTIONS
+        .iter()
+        .map(|s| SectionSpec {
+            title: s.title,
+            commands: s.commands.to_vec(),
+        })
+        .collect()
+}
+
+/// Every command group, projected from the canonical [`GROUPS`] table, for the
+/// CLI reference generator.
+#[must_use]
+pub fn all_group_specs() -> Vec<GroupSpec> {
+    GROUPS
+        .iter()
+        .map(|g| GroupSpec {
+            name: g.name,
+            summary: g.summary,
+            members: g.members.to_vec(),
         })
         .collect()
 }

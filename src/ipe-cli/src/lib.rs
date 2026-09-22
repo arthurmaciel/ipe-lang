@@ -23,6 +23,8 @@ pub mod build_plan;
 mod cache;
 pub mod clean;
 pub mod cli_args;
+pub mod cli_docs;
+pub mod cli_transcript;
 pub mod contained_path;
 pub mod control_model_consent;
 pub mod coverage;

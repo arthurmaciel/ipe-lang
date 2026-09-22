@@ -5400,6 +5400,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "regen-cli-transcripts"
+version = "0.1.86"
+dependencies = [
+ "ipe",
+]
+
+[[package]]
 name = "regen-goldens"
 version = "0.1.86"
 dependencies = [
