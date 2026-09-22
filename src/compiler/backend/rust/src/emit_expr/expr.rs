@@ -325,7 +325,7 @@ pub fn emit_expr_at(
                         }
                         // Structural hot-swap for `Ipe.Ui`: under `hot_appearance`, a
                         // provably-static `Ipe.Ui` element subtree is hoisted whole as ONE
-                        // serialized template and emitted as a `materialize_ui_template_str`
+                        // serialized template and emitted as a `materialize_str`
                         // read (returning an `Element`), so a structural edit becomes a
                         // zero-compile data patch. Off (release / `ipe build`) it never
                         // fires — the subtree falls through to the inline emit below and the

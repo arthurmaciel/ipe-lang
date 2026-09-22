@@ -2464,13 +2464,13 @@ pub fn emit_html_template(ctx: &EmitCtx, expr: &Expr) -> Option<String> {
 ///
 /// ## Holes
 ///
-/// A fully-static subtree emits the shipped `materialize_ui_template_str` read.
+/// A fully-static subtree emits `materialize_str(slot, TemplateFills::default())`.
 /// A subtree with `Model`-derived **holes** (a value leaf, an `if` / `case`
-/// control-flow result, or a `List.map` comprehension) emits
-/// `materialize_ui_template_str_with_holes(slot, vec![<element fills>], vec![<children fills>])`:
-/// the static skeleton (with numbered hole markers) rides the hoisted slot and
-/// hot-swaps on a structural edit, while each hole's fill is emitted here as
-/// ordinary compiled code and stays compiled.
+/// control-flow result, or a `List.map` comprehension) emits the same
+/// `materialize_str(slot, TemplateFills::default().with_*(…))` with one `with_*`
+/// builder per hole kind present: the static skeleton (with numbered hole markers)
+/// rides the hoisted slot and hot-swaps on a structural edit, while each hole's
+/// fill is emitted here as ordinary compiled code and stays compiled.
 ///
 /// Control-flow branches templatize by composition: a fill is emitted through the
 /// normal [`emit_expr_at`], so a static `Ipe.Ui` branch of the compiled `if`/`case`
@@ -2638,76 +2638,51 @@ pub struct CompiledFills<'a> {
     float_attr_fills: &'a [String],
 }
 
-/// Select and format the runtime materializer call, choosing the front door
-/// based on which fill vecs are non-empty.
+/// Format the one runtime materializer call: `materialize_str(slot, fills)` over
+/// a [`TemplateFills`] built from whichever fill kinds are present. Each non-empty
+/// fill vec appends one `with_*` builder; an absent kind is simply left at its
+/// `Default` empty. Every combination is representable and resolved in one pass —
+/// no fill kind is ever dropped for coexisting with another (the pre-fold
+/// materializer front doors silently excluded handler×list and float×other).
 pub fn select_ui_materializer_call(slot: usize, f: &CompiledFills<'_>) -> String {
-    // Float-attr fills are purely additive (attr-level); route to the float-attr
-    // front door when float fills are the ONLY non-base fills present. For the
-    // common case (float attrs alone, no other structural hole kinds), this is the
-    // correct single-call path. When float fills appear alongside other hole kinds
-    // (structurally unusual), the base materializer call is used — the float-attr
-    // holes resolve to `NoAttribute` (fail-closed), which is always safe.
-    let has_float = !f.float_attr_fills.is_empty();
-    let has_only_float = has_float
-        && f.list_fills.is_empty()
-        && f.cf_selectors.is_empty()
-        && f.handler_msgs.is_empty();
-    if has_only_float {
-        return format!(
-            "ipe_runtime::ui::template::materialize_ui_template_with_float_attr_holes_str(\
-             __ipe_lit.get({slot}), vec![{}], vec![{}], vec![{}])",
-            f.element_fills.join(", "),
-            f.children_fills.join(", "),
-            f.float_attr_fills.join(", "),
+    use std::fmt::Write as _;
+    let mut call = String::from("ipe_runtime::ui::template::TemplateFills::default()");
+    // `write!` into a `String` is infallible; the `Result` is discarded by design.
+    if !f.element_fills.is_empty() {
+        let _ = write!(call, ".with_elements(vec![{}])", f.element_fills.join(", "));
+    }
+    if !f.children_fills.is_empty() {
+        let _ = write!(
+            call,
+            ".with_children(vec![{}])",
+            f.children_fills.join(", ")
         );
     }
     if !f.list_fills.is_empty() {
-        format!(
-            "ipe_runtime::ui::template::materialize_ui_template_with_list_holes_str(\
-             __ipe_lit.get({slot}), vec![{}], vec![{}], vec![{}])",
-            f.element_fills.join(", "),
-            f.children_fills.join(", "),
-            f.list_fills.join(", "),
-        )
-    } else if !f.cf_selectors.is_empty() {
-        format!(
-            "ipe_runtime::ui::template::materialize_ui_template_str_with_control_flow(\
-             __ipe_lit.get({slot}), vec![{}], vec![{}], \
-             &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]), vec![{}])",
-            f.element_fills.join(", "),
-            f.children_fills.join(", "),
-            f.handler_msgs.join(", "),
-            f.cf_selectors.join(", "),
-        )
-    } else {
-        let has_holes = !f.element_fills.is_empty() || !f.children_fills.is_empty();
-        let has_handlers = !f.handler_msgs.is_empty();
-        match (has_holes, has_handlers) {
-            (true, true) => format!(
-                "ipe_runtime::ui::template::materialize_ui_template_str_with_holes_and_handlers(\
-                 __ipe_lit.get({slot}), vec![{}], vec![{}], \
-                 &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
-                f.element_fills.join(", "),
-                f.children_fills.join(", "),
-                f.handler_msgs.join(", "),
-            ),
-            (false, true) => format!(
-                "ipe_runtime::ui::template::materialize_ui_template_str_with_handlers(\
-                 __ipe_lit.get({slot}), \
-                 &ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
-                f.handler_msgs.join(", "),
-            ),
-            (true, false) => format!(
-                "ipe_runtime::ui::template::materialize_ui_template_str_with_holes(\
-                 __ipe_lit.get({slot}), vec![{}], vec![{}])",
-                f.element_fills.join(", "),
-                f.children_fills.join(", "),
-            ),
-            (false, false) => format!(
-                "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get({slot}))"
-            ),
-        }
+        let _ = write!(call, ".with_list_items(vec![{}])", f.list_fills.join(", "));
     }
+    if !f.cf_selectors.is_empty() {
+        let _ = write!(
+            call,
+            ".with_control_flow(vec![{}])",
+            f.cf_selectors.join(", ")
+        );
+    }
+    if !f.float_attr_fills.is_empty() {
+        let _ = write!(
+            call,
+            ".with_float_attrs(vec![{}])",
+            f.float_attr_fills.join(", ")
+        );
+    }
+    if !f.handler_msgs.is_empty() {
+        let _ = write!(
+            call,
+            ".with_handlers(ipe_runtime::ui::template::UiHandlerMap::from_msgs(vec![{}]))",
+            f.handler_msgs.join(", "),
+        );
+    }
+    format!("ipe_runtime::ui::template::materialize_str(__ipe_lit.get({slot}), {call})")
 }
 
 /// Returns `None` for any kernel that is not a `Ui` / `Web` / `Terminal` /

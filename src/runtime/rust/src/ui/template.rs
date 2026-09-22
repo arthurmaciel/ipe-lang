@@ -3,7 +3,7 @@
 //! The `Ipe.Ui` analogue of [`crate::web::template`]: a [`UiTemplate`] is a
 //! fully-static `Ipe.Ui` `Element` subtree reduced to data — the structural
 //! element variants (`Node` / `TaggedNode` / `Text` / `Empty`) and the inert,
-//! non-logic attribute variants only. [`materialize_ui_template`] rebuilds an
+//! non-logic attribute variants only. [`materialize`] rebuilds an
 //! [`Element`] tree from a [`UiTemplate`] through the SAME `Element` / `Attribute`
 //! constructors the normal render path builds, so a materialized template feeds
 //! the identical `render_element` chain and renders byte-identically to the
@@ -414,20 +414,22 @@ impl UiTemplateAttr {
     }
 
     /// Rebuild the [`Attribute`], resolving both a [`Self::HandlerHole`] against
-    /// the per-render `handlers` map AND an [`Self::AttrHoleFloat`] against the
-    /// per-render `float_fills` slice in a single pass.
+    /// the per-render `handlers` map (when one is present) AND an
+    /// [`Self::AttrHoleFloat`] against the per-render `float_fills` slice in a
+    /// single pass — the one attribute resolver the unified materializer uses.
     ///
-    /// Used by the combined materializer path (JSON front door with handler +
-    /// float-attr holes coexisting on the same node). Fail-closed: an unresolved
-    /// hole or unrecognised attr name → [`Attribute::NoAttribute`].
-    #[cfg(feature = "json")]
-    fn to_attr_combined<M: Clone>(
+    /// Fail-closed in every dimension: an unresolved handler hole, an absent
+    /// handler map (`None`), an out-of-range float hole, or an unrecognised attr
+    /// name all → [`Attribute::NoAttribute`], never a fabricated value or a panic.
+    fn to_attr_resolved<M: Clone>(
         &self,
-        handlers: &UiHandlerMap<M>,
+        handlers: Option<&UiHandlerMap<M>>,
         float_fills: &[Option<f64>],
     ) -> Attribute<M> {
         match self {
-            Self::HandlerHole { event, handler_id } => match handlers.resolve(*handler_id) {
+            Self::HandlerHole { event, handler_id } => match handlers
+                .and_then(|h| h.resolve(*handler_id))
+            {
                 Some(msg) => {
                     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(event.clone(), msg)))
                 }
@@ -532,54 +534,12 @@ impl UiTemplateAttr {
             }
             // A handler hole with NO resolution map cannot reconstruct a live
             // handler (it carries no `Msg`), so it drops to `NoAttribute` —
-            // fail-closed by construction. The map-aware [`Self::to_attr_with_handlers`]
-            // is the path that resolves a hole against a per-render map.
+            // fail-closed by construction. [`Self::to_attr_resolved`] is the path
+            // that resolves a hole against a per-render map.
             Self::HandlerHole { .. } => Attribute::NoAttribute,
             // A float-attr hole with no fills drops to `NoAttribute` — fail-closed.
-            // The fills-aware path is [`Self::to_attr_with_float_fills`].
+            // The fills-aware path is [`Self::to_attr_resolved`].
             Self::AttrHoleFloat { .. } => Attribute::NoAttribute,
-        }
-    }
-
-    /// Rebuild the [`Attribute`], resolving a [`Self::HandlerHole`] against the
-    /// per-render `handlers` map. Every non-hole variant is identical to
-    /// [`Self::to_attr`]; a hole becomes a live `AttrEvent(EventAttr(OnMsg(..)))`
-    /// bound to the map-resolved `Msg`, or `NoAttribute` when the hole id does
-    /// not resolve (fail-closed — never a fabricated or cross-render `Msg`).
-    fn to_attr_with_handlers<M: Clone>(&self, handlers: &UiHandlerMap<M>) -> Attribute<M> {
-        match self {
-            Self::HandlerHole { event, handler_id } => match handlers.resolve(*handler_id) {
-                Some(msg) => {
-                    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(event.clone(), msg)))
-                }
-                // Unknown / out-of-range hole id → no handler. The element still
-                // renders (its structure is intact); it simply carries no event
-                // marker for this hole. No Msg is invented.
-                None => Attribute::NoAttribute,
-            },
-            // A float-attr hole has no resolution path on the handler-only
-            // materializer; drop to `NoAttribute` — fail-closed.
-            Self::AttrHoleFloat { .. } => Attribute::NoAttribute,
-            // Every inert variant is `M`-free — reuse the map-less rebuild.
-            other => other.to_attr(),
-        }
-    }
-
-    /// Rebuild the [`Attribute`], resolving an [`Self::AttrHoleFloat`] against the
-    /// per-render `float_fills` slice. Every non-float-hole variant delegates to
-    /// [`Self::to_attr`]; a float hole becomes the matching `Attribute` variant
-    /// (e.g. `AttrFontLetterSpacing(v)`) when the hole id resolves, or
-    /// `NoAttribute` when it does not (fail-closed — no fabricated value).
-    fn to_attr_with_float_fills<M>(&self, float_fills: &[Option<f64>]) -> Attribute<M> {
-        match self {
-            Self::AttrHoleFloat { attr, hole_id } => {
-                let value = float_fills.get(*hole_id as usize).and_then(|v| *v);
-                match value {
-                    Some(v) => Self::resolve_float_attr(attr, v).unwrap_or(Attribute::NoAttribute),
-                    None => Attribute::NoAttribute,
-                }
-            }
-            other => other.to_attr(),
         }
     }
 }
@@ -772,7 +732,7 @@ impl UiTemplate {
     /// the stack in the check itself.
     ///
     /// Call this on any template that crossed an untrusted boundary (the dev
-    /// overlay transport) before handing it to [`materialize_ui_template`].
+    /// overlay transport) before handing it to [`materialize`].
     ///
     /// # Errors
     /// Returns [`UiTemplateError::TooDeep`] when the tree nests deeper than
@@ -809,59 +769,17 @@ impl UiTemplate {
     }
 }
 
-/// Rebuild an [`Element`] tree from a [`UiTemplate`], using the same `Element`
-/// and `Attribute` constructors the normal builders emit, so the result feeds
-/// the identical `render_element` chain and renders byte-identically to the
-/// original compiled subtree.
+/// Per-render fills for a hole-bearing [`UiTemplate`], one carrier over every
+/// hole kind the template can express. A fill kind absent from a given template
+/// stays empty; an out-of-range or already-consumed reference fails closed (the
+/// inert empty element, an empty run, or `NoAttribute`), never a panic.
 ///
-/// Bounded by construction: descent stops at [`MAX_UI_TEMPLATE_DEPTH`] (the
-/// render ceiling), so a deep template can never overflow the stack. A subtree
-/// at the cap materializes to an empty element — the same "stop, don't recurse
-/// further" posture the renderer takes at its own depth cap — never a panic.
-///
-/// The produced tree is inert by construction: no attribute is an `AttrEvent`,
-/// and no node is `Raw`/`Cells` — no input can make this emit a handler or raw
-/// markup.
-#[must_use]
-pub fn materialize_ui_template<M>(template: &UiTemplate) -> Element<M> {
-    // A fully-static template has no holes: an empty fill set is correct, and any
-    // stray hole (there should be none) fails closed to the inert empty element.
-    materialize_ui_at(template, 0, &mut HoleFills::empty())
-}
-
-/// Rebuild an [`Element`] tree from a hole-bearing [`UiTemplate`], splicing each
-/// hole with its per-render fill. `element_holes[n]` fills a [`UiTemplate::Hole`]
-/// with index `n`; `children_holes[n]` fills a [`UiTemplate::ChildrenHole`] with
-/// index `n`. Each fill is consumed at most once (a hole index appears at most
-/// once in a template); a missing or out-of-range fill materializes to the inert
-/// empty element (fail-closed), never a panic.
-///
-/// The static structure comes from the (inert) template; only the fills carry
-/// `Model`-derived content, and they are ordinary compiled `Element`s the caller
-/// already built — so dev == prod: the same fills feed a baked-default template
-/// (prod) and a patched-structure template (dev), and only the static skeleton
-/// hot-swaps.
-#[must_use]
-pub fn materialize_ui_template_with_holes<M>(
-    template: &UiTemplate,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-) -> Element<M> {
-    let mut fills = HoleFills {
-        elements: element_holes.into_iter().map(Some).collect(),
-        children: children_holes.into_iter().map(Some).collect(),
-        control_flow: Vec::new(),
-        list_items: Vec::new(),
-        wrapper_fills: Vec::new(),
-        float_attrs: Vec::new(),
-    };
-    materialize_ui_at(template, 0, &mut fills)
-}
-
-/// Per-render hole fills, each taken at most once. `None` marks a slot already
-/// consumed (or never provided) so a duplicate/out-of-range reference fails
-/// closed to the empty element rather than reusing or panicking.
-struct HoleFills<M> {
+/// Structural fills are consumed at most once (a hole index appears at most once
+/// in a template); `handlers`, when present, resolves each
+/// [`UiTemplateAttr::HandlerHole`] to a live `AttrEvent`. Construct with
+/// [`TemplateFills::default`] and the `with_*` builders, setting only the fill
+/// kinds a template carries.
+pub struct TemplateFills<M> {
     elements: Vec<Option<Element<M>>>,
     children: Vec<Option<Vec<Element<M>>>>,
     /// Per-render arm selectors for [`UiTemplate::ControlFlowHole`] nodes: index
@@ -885,10 +803,19 @@ struct HoleFills<M> {
     /// `None` marks a slot already consumed or never provided — resolves to
     /// `NoAttribute` (fail-closed).
     float_attrs: Vec<Option<f64>>,
+    /// Per-render handler map for [`UiTemplateAttr::HandlerHole`] attrs. `None`
+    /// carries no handler map, so every handler hole drops to `NoAttribute`
+    /// (fail-closed — the map-less pure path). The map is consulted only here, at
+    /// materialize, and only with the SERVER-assigned hole id — the untrusted
+    /// client never supplies it.
+    handlers: Option<UiHandlerMap<M>>,
 }
 
-impl<M> HoleFills<M> {
-    fn empty() -> Self {
+impl<M> Default for TemplateFills<M> {
+    /// An empty fill set: no structural fills and no handler map. A fully-static
+    /// template materializes correctly against it, and any stray hole fails
+    /// closed to the inert empty element.
+    fn default() -> Self {
         Self {
             elements: Vec::new(),
             children: Vec::new(),
@@ -896,7 +823,66 @@ impl<M> HoleFills<M> {
             list_items: Vec::new(),
             wrapper_fills: Vec::new(),
             float_attrs: Vec::new(),
+            handlers: None,
         }
+    }
+}
+
+impl<M> TemplateFills<M> {
+    /// Set the single-element fills: `elements[n]` fills a [`UiTemplate::Hole`]
+    /// with index `n`.
+    #[must_use]
+    pub fn with_elements(mut self, elements: Vec<Element<M>>) -> Self {
+        self.elements = elements.into_iter().map(Some).collect();
+        self
+    }
+
+    /// Set the children-run fills: `children[n]` fills a
+    /// [`UiTemplate::ChildrenHole`] with index `n`, spliced in place.
+    #[must_use]
+    pub fn with_children(mut self, children: Vec<Vec<Element<M>>>) -> Self {
+        self.children = children.into_iter().map(Some).collect();
+        self
+    }
+
+    /// Set the control-flow arm selectors: `selectors[n]` chooses the arm for the
+    /// [`UiTemplate::ControlFlowHole`] with `hole_id == n`.
+    #[must_use]
+    pub fn with_control_flow(mut self, selectors: Vec<usize>) -> Self {
+        self.control_flow = selectors.into_iter().map(Some).collect();
+        self
+    }
+
+    /// Set the list-item fills: `list_items[n]` is the per-item element-fill sets
+    /// for the [`UiTemplate::ListHole`] with `hole_id == n`.
+    #[must_use]
+    pub fn with_list_items(mut self, list_items: Vec<Vec<Vec<Element<M>>>>) -> Self {
+        self.list_items = list_items.into_iter().map(Some).collect();
+        self
+    }
+
+    /// Set the wrapper fills: `wrappers[n]` is the wrapper template for the
+    /// [`UiTemplate::WrapperHole`] with `hole_id == n`.
+    #[must_use]
+    pub fn with_wrappers(mut self, wrappers: Vec<UiTemplate>) -> Self {
+        self.wrapper_fills = wrappers.into_iter().map(Some).collect();
+        self
+    }
+
+    /// Set the float-attr fills: `float_attrs[n]` is the `f64` for the
+    /// [`UiTemplateAttr::AttrHoleFloat`] with `hole_id == n`.
+    #[must_use]
+    pub fn with_float_attrs(mut self, float_attrs: Vec<f64>) -> Self {
+        self.float_attrs = float_attrs.into_iter().map(Some).collect();
+        self
+    }
+
+    /// Set the per-render handler map, resolving each
+    /// [`UiTemplateAttr::HandlerHole`] to a live `AttrEvent`.
+    #[must_use]
+    pub fn with_handlers(mut self, handlers: UiHandlerMap<M>) -> Self {
+        self.handlers = Some(handlers);
+        self
     }
 
     /// Take the single-element fill at `idx`, or the inert empty element when the
@@ -950,10 +936,39 @@ impl<M> HoleFills<M> {
     }
 }
 
-fn materialize_ui_at<M>(
+/// Rebuild an [`Element`] tree from a [`UiTemplate`], splicing whichever holes
+/// the `fills` carry — value/children/list/wrapper/float-attr structural holes
+/// AND, when `fills.handlers` is present, handler-id attr holes — in a single
+/// walk. The one materializer: a fully-static template needs only
+/// `TemplateFills::default()`; a hole-bearing one adds the `with_*` fills for the
+/// kinds it uses, in any combination.
+///
+/// Uses the same `Element` and `Attribute` constructors the normal builders
+/// emit, so the result feeds the identical `render_element` chain and renders
+/// byte-identically to the original compiled subtree — dev == prod by
+/// construction: the same fills feed a baked-default template (prod) and a
+/// patched-structure template (dev); only the static skeleton hot-swaps.
+///
+/// Bounded by construction: descent stops at [`MAX_UI_TEMPLATE_DEPTH`] (the
+/// render ceiling), so a deep template can never overflow the stack. A subtree
+/// at the cap materializes to an empty element — the same "stop, don't recurse
+/// further" posture the renderer takes at its own depth cap — never a panic.
+/// Every out-of-range or already-consumed hole fails closed: the inert empty
+/// element, an empty run, or `NoAttribute`; an unresolved handler hole drops its
+/// event. No input makes this emit a fabricated handler or raw markup.
+#[must_use]
+pub fn materialize<M: Clone>(template: &UiTemplate, mut fills: TemplateFills<M>) -> Element<M> {
+    materialize_at(template, 0, &mut fills)
+}
+
+/// The one deep materializer walk: resolve whichever holes `fills` carries at
+/// every position, in a single descent. Handler holes resolve against
+/// `fills.handlers` (when present) and structural holes against the fill vecs —
+/// with no artificial exclusion between the two, so any combination materializes.
+fn materialize_at<M: Clone>(
     template: &UiTemplate,
     depth: usize,
-    fills: &mut HoleFills<M>,
+    fills: &mut TemplateFills<M>,
 ) -> Element<M> {
     if depth >= MAX_UI_TEMPLATE_DEPTH {
         // Same bounded-descent posture as the renderer at its cap: stop
@@ -970,7 +985,7 @@ fn materialize_ui_at<M>(
         UiTemplate::ChildrenHole(_) => Element::Empty,
         UiTemplate::ControlFlowHole { hole_id, arms } => {
             match fills.take_control_flow(*hole_id).and_then(|i| arms.get(i)) {
-                Some(arm) => materialize_ui_at(arm, depth, fills),
+                Some(arm) => materialize_at(arm, depth, fills),
                 // Out-of-range selector or already-consumed hole: fail-closed.
                 // The element structure is preserved at every other position;
                 // this hole alone is silent-empty rather than a panic.
@@ -989,13 +1004,13 @@ fn materialize_ui_at<M>(
             attrs,
             children,
         } => {
-            let float_snap = fills.float_attr_snapshot();
+            // Resolve attrs (an immutable read of `fills.handlers`) into an owned
+            // vec BEFORE descending into children (a mutable borrow of `fills`),
+            // so the two borrows never overlap.
+            let resolved_attrs = resolve_attrs(attrs, fills);
             Element::Node(
                 desc.to_desc(),
-                attrs
-                    .iter()
-                    .map(|a| a.to_attr_with_float_fills(&float_snap))
-                    .collect(),
+                resolved_attrs,
                 materialize_children(children, depth, fills),
             )
         }
@@ -1005,35 +1020,46 @@ fn materialize_ui_at<M>(
             attrs,
             children,
         } => {
-            let float_snap = fills.float_attr_snapshot();
+            let resolved_attrs = resolve_attrs(attrs, fills);
             Element::TaggedNode(
                 tag.clone(),
                 desc.to_desc(),
-                attrs
-                    .iter()
-                    .map(|a| a.to_attr_with_float_fills(&float_snap))
-                    .collect(),
+                resolved_attrs,
                 materialize_children(children, depth, fills),
             )
         }
     }
 }
 
+/// Resolve a node's inert attributes into live [`Attribute`]s, splicing float-attr
+/// and handler holes from `fills` in one pass — an owned vec, so the immutable
+/// read of `fills` ends before the caller mutably descends into children.
+fn resolve_attrs<M: Clone>(
+    attrs: &[UiTemplateAttr],
+    fills: &TemplateFills<M>,
+) -> Vec<Attribute<M>> {
+    let float_snap = fills.float_attr_snapshot();
+    let handlers = fills.handlers.as_ref();
+    attrs
+        .iter()
+        .map(|a| a.to_attr_resolved(handlers, &float_snap))
+        .collect()
+}
+
 /// Materialize a [`UiTemplate::WrapperHole`]: take the wrapper-fill template,
 /// extract its tag / desc / attrs, materialize `child`, and wrap it. Fail-closed:
 /// a missing fill, an already-consumed fill, or a fill whose top node is not a
 /// `TaggedNode` / `Node` all materialize `child` standalone — no panic.
-fn materialize_wrapper_hole<M>(
+fn materialize_wrapper_hole<M: Clone>(
     hole_id: usize,
     child: &UiTemplate,
     depth: usize,
-    fills: &mut HoleFills<M>,
+    fills: &mut TemplateFills<M>,
 ) -> Element<M> {
-    let materialized_child = materialize_ui_at(child, depth.saturating_add(1), fills);
-    // Extract tag/desc/attrs from the wrapper fill without partial-moving out of
-    // the Drop type. The Option is owned, so we inspect the discriminant first
-    // and then extract each field explicitly with clone/to_desc.
-    let float_snap = fills.float_attr_snapshot();
+    let materialized_child = materialize_at(child, depth.saturating_add(1), fills);
+    // Take the wrapper fill (a mutable read) FIRST, so the immutable attr
+    // resolution that follows does not overlap it. The taken `wrapper` is owned,
+    // so its attrs no longer borrow `fills`.
     let wrapper = fills.take_wrapper(hole_id);
     match &wrapper {
         Some(UiTemplate::TaggedNode {
@@ -1041,18 +1067,12 @@ fn materialize_wrapper_hole<M>(
         }) => Element::TaggedNode(
             tag.clone(),
             desc.to_desc(),
-            attrs
-                .iter()
-                .map(|a| a.to_attr_with_float_fills(&float_snap))
-                .collect(),
+            resolve_attrs(attrs, fills),
             vec![materialized_child],
         ),
         Some(UiTemplate::Node { desc, attrs, .. }) => Element::Node(
             desc.to_desc(),
-            attrs
-                .iter()
-                .map(|a| a.to_attr_with_float_fills(&float_snap))
-                .collect(),
+            resolve_attrs(attrs, fills),
             vec![materialized_child],
         ),
         // Missing, consumed, or ill-shaped fill: render child standalone.
@@ -1061,12 +1081,13 @@ fn materialize_wrapper_hole<M>(
 }
 
 /// Materialize a node's children, splicing each [`UiTemplate::ChildrenHole`] run
-/// in place (a `List.map` comprehension expands to zero or more siblings) and
+/// in place (a `List.map` comprehension expands to zero or more siblings),
+/// expanding each [`UiTemplate::ListHole`] to its N materialized items, and
 /// materializing every other child as a single element.
-fn materialize_children<M>(
+fn materialize_children<M: Clone>(
     children: &[UiTemplate],
     depth: usize,
-    fills: &mut HoleFills<M>,
+    fills: &mut TemplateFills<M>,
 ) -> Vec<Element<M>> {
     let mut out = Vec::with_capacity(children.len());
     for child in children {
@@ -1080,587 +1101,62 @@ fn materialize_children<M>(
             // Expand the list hole: materialize item_template once per item,
             // substituting that item's element fills. Each item's fills are a
             // `Vec<Element<M>>` (element-fill slice) stored as a sub-vec in
-            // the list-items fill.
+            // the list-items fill. Handler resolution stays with the parent map:
+            // list-item element fills are compiled `Element`s, not templatized
+            // handler holes, so the per-item carrier needs no handler map.
             let item_fill_sets = fills.take_list_items(*hole_id);
             for item_element_fills in item_fill_sets {
-                let mut item_fills = HoleFills {
-                    elements: item_element_fills.into_iter().map(Some).collect(),
-                    children: Vec::new(),
-                    control_flow: Vec::new(),
-                    list_items: Vec::new(),
-                    wrapper_fills: Vec::new(),
-                    float_attrs: Vec::new(),
-                };
-                out.push(materialize_ui_at(
+                let mut item_fills = TemplateFills::default().with_elements(item_element_fills);
+                out.push(materialize_at(
                     item_template,
                     depth.saturating_add(1),
                     &mut item_fills,
                 ));
             }
         } else {
-            out.push(materialize_ui_at(child, depth.saturating_add(1), fills));
+            out.push(materialize_at(child, depth.saturating_add(1), fills));
         }
     }
     out
 }
 
-/// Decode a serialized [`UiTemplate`] and materialize it, through the dev
-/// overlay transport (a JSON string). The string front door to
-/// [`materialize_ui_template`]: the emitted `view` reads its per-view slot
-/// (`__ipe_lit.get(N)`) and hands the baked-default-or-patched JSON here, so
-/// prod (baked default) and dev (patched slot) run the SAME materialize path —
-/// dev == prod by construction.
+/// Decode a serialized [`UiTemplate`] and materialize it, splicing the supplied
+/// `fills` — the JSON string front door to [`materialize`], through the dev
+/// overlay transport. The emitted `view` reads its per-view slot
+/// (`__ipe_lit.get(N)`) and hands the baked-default-or-patched JSON here together
+/// with the fills it built, so prod (baked default) and dev (patched slot) run
+/// the SAME materialize path over the SAME fills — dev == prod by construction;
+/// only the static skeleton hot-swaps.
 ///
-/// Fail-closed on hostile input, never a panic (the slot value crosses the
-/// untrusted dev overlay boundary):
+/// This is the sole decode boundary: the slot value crosses the untrusted dev
+/// overlay boundary, so it fails closed on hostile input, never a panic. The
+/// guard is enforced ONCE here for every fill combination (parse, don't
+/// validate):
 /// - a decode failure returns the inert empty element (`Element::Empty`);
 /// - an over-deep decoded template ([`UiTemplate::check_bounds`]) returns the
-///   same inert empty element, so a decode cannot exhaust the stack at
-///   materialize.
+///   same inert empty element, so a decode can never exhaust the stack at
+///   materialize;
+/// - every out-of-range / already-consumed structural hole and every unresolved
+///   handler hole then fails closed inside [`materialize`].
 ///
 /// Inert by construction: the [`UiTemplate`] type has no handler and no raw
 /// variant, so no JSON — however adversarial — decodes into logic or unescaped
-/// markup.
+/// markup; the only handlers are those the SERVER-built `fills.handlers` map
+/// resolves, keyed by server-assigned hole id.
 #[cfg(feature = "json")]
 #[must_use]
-pub fn materialize_ui_template_str<M>(json: &str) -> Element<M> {
+pub fn materialize_str<M: Clone>(json: &str, fills: TemplateFills<M>) -> Element<M> {
     let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
         return Element::Empty;
     };
     if template.check_bounds().is_err() {
         return Element::Empty;
     }
-    materialize_ui_template(&template)
-}
-
-/// Rebuild an [`Element`] tree from a [`UiTemplate`], resolving each handler-id
-/// HOLE (issue #1668) against the per-render `handlers` map. Identical to
-/// [`materialize_ui_template`] on every inert node/attribute; a
-/// [`UiTemplateAttr::HandlerHole`] becomes a live `AttrEvent` bound to the
-/// map-resolved `Msg`, or drops (fail-closed) when its hole id does not resolve.
-///
-/// The reconstructed handler is a real `Event::OnMsg`, so the materialized tree
-/// feeds `assign_ipe_ids` + `build_index` exactly like a compiled subtree: the
-/// browser addresses it by DOM `ipe-id` and the live [`crate::dispatch::HandlerIndex`]
-/// resolves it server-side, unchanged. The hole map is consulted ONLY here, at
-/// materialize, and only with the SERVER-assigned hole id — the untrusted client
-/// never supplies it.
-#[must_use]
-pub fn materialize_ui_template_with_handlers<M: Clone>(
-    template: &UiTemplate,
-    handlers: &UiHandlerMap<M>,
-) -> Element<M> {
-    materialize_ui_at_with_handlers(template, handlers, 0)
-}
-
-fn materialize_ui_at_with_handlers<M: Clone>(
-    template: &UiTemplate,
-    handlers: &UiHandlerMap<M>,
-    depth: usize,
-) -> Element<M> {
-    if depth >= MAX_UI_TEMPLATE_DEPTH {
-        return Element::Empty;
-    }
-    match template {
-        UiTemplate::Empty => Element::Empty,
-        UiTemplate::Text(s) => Element::Text(s.clone()),
-        // The handler front door carries no value/children/control-flow/wrapper
-        // fills (its holes are the handler-id ATTR holes, resolved from
-        // `handlers`), so any structural hole is inert here — the empty element,
-        // fail-closed, never a panic.
-        UiTemplate::Hole(_)
-        | UiTemplate::ChildrenHole(_)
-        | UiTemplate::ControlFlowHole { .. }
-        | UiTemplate::ListHole { .. }
-        | UiTemplate::WrapperHole { .. } => Element::Empty,
-        UiTemplate::Node {
-            desc,
-            attrs,
-            children,
-        } => Element::Node(
-            desc.to_desc(),
-            attrs
-                .iter()
-                .map(|a| a.to_attr_with_handlers(handlers))
-                .collect(),
-            materialize_children_with_handlers(children, handlers, depth),
-        ),
-        UiTemplate::TaggedNode {
-            tag,
-            desc,
-            attrs,
-            children,
-        } => Element::TaggedNode(
-            tag.clone(),
-            desc.to_desc(),
-            attrs
-                .iter()
-                .map(|a| a.to_attr_with_handlers(handlers))
-                .collect(),
-            materialize_children_with_handlers(children, handlers, depth),
-        ),
-    }
-}
-
-/// Materialize a node's children on the handler-resolving path. A
-/// [`UiTemplate::ChildrenHole`] carries no fill here (the handler front door has
-/// no fills), so its run is empty — it splices nothing rather than a stray inert
-/// element; every other child materializes through
-/// [`materialize_ui_at_with_handlers`].
-fn materialize_children_with_handlers<M: Clone>(
-    children: &[UiTemplate],
-    handlers: &UiHandlerMap<M>,
-    depth: usize,
-) -> Vec<Element<M>> {
-    let mut out = Vec::with_capacity(children.len());
-    for child in children {
-        if matches!(
-            child,
-            UiTemplate::ChildrenHole(_)
-                | UiTemplate::ListHole { .. }
-                | UiTemplate::WrapperHole { .. }
-        ) {
-            // These holes have no fills on the handler-only path — skip.
-            continue;
-        }
-        out.push(materialize_ui_at_with_handlers(
-            child,
-            handlers,
-            depth.saturating_add(1),
-        ));
-    }
-    out
-}
-
-/// Decode a serialized [`UiTemplate`] and materialize it, resolving handler-id
-/// HOLES against the per-render `handlers` map — the handler-bearing counterpart
-/// of [`materialize_ui_template_str`]. The emitted `view` reads its per-view slot
-/// (`__ipe_lit.get(N)`) for the JSON and passes the freshly-built map (each
-/// model-dependent handler's `Msg` evaluated against the current model), so prod
-/// (baked default) and dev (patched slot) run the SAME materialize path — dev ==
-/// prod by construction.
-///
-/// Fail-closed on hostile input, never a panic (the slot value crosses the
-/// untrusted dev overlay boundary):
-/// - a decode failure returns the inert empty element (`Element::Empty`);
-/// - an over-deep decoded template returns the same inert empty element;
-/// - a hole whose id does not resolve against `handlers` drops its handler (no
-///   fabricated `Msg`, no cross-render `Msg`).
-#[cfg(feature = "json")]
-#[must_use]
-pub fn materialize_ui_template_str_with_handlers<M: Clone>(
-    json: &str,
-    handlers: &UiHandlerMap<M>,
-) -> Element<M> {
-    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
-        return Element::Empty;
-    };
-    if template.check_bounds().is_err() {
-        return Element::Empty;
-    }
-    materialize_ui_template_with_handlers(&template, handlers)
-}
-
-/// The hole-bearing string front door: decode the per-view slot JSON and
-/// materialize it, splicing the compiled hole fills. The `Ipe.Ui` analogue of
-/// [`materialize_ui_template_str`] for a mostly-static view with `Model`-derived
-/// holes — the emitted `view` reads its slot (`__ipe_lit.get(N)`) and hands the
-/// baked-default-or-patched template JSON here together with the compiled fills it
-/// built for each hole, so prod (baked default) and dev (patched slot) run the
-/// SAME materialize path over the SAME fills — dev == prod by construction; only
-/// the static skeleton hot-swaps, the fills stay compiled.
-///
-/// Fail-closed on hostile input, never a panic (the slot value crosses the
-/// untrusted dev overlay boundary): a decode failure or over-deep template
-/// returns the inert empty element, and any hole the patched template references
-/// beyond the supplied fills materializes to the empty element rather than
-/// panicking.
-#[cfg(feature = "json")]
-#[must_use]
-pub fn materialize_ui_template_str_with_holes<M>(
-    json: &str,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-) -> Element<M> {
-    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
-        return Element::Empty;
-    };
-    if template.check_bounds().is_err() {
-        return Element::Empty;
-    }
-    materialize_ui_template_with_holes(&template, element_holes, children_holes)
-}
-
-/// Decode a serialized [`UiTemplate`] and materialize it, resolving both
-/// numbered value/children **holes** (spliced from `element_holes` /
-/// `children_holes`) and model-dependent handler-id **holes** (resolved from
-/// `handlers`) in a single pass — the combined front door for a `Ui` subtree
-/// that carries both kinds in the same tree.
-///
-/// Each hole kind is resolved independently, exactly as its single-kind
-/// counterpart would:
-/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once, inert empty
-///   on a miss;
-/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
-/// - [`UiTemplateAttr::HandlerHole { handler_id }`] → `handlers.resolve(id)`,
-///   producing a live `AttrEvent`, or `NoAttribute` on a miss (fail-closed).
-///
-/// Fail-closed on hostile input in every dimension (never panics):
-/// - decode failure → `Element::Empty`;
-/// - over-deep template → `Element::Empty`;
-/// - out-of-range or already-consumed hole index → `Element::Empty` / empty run;
-/// - unresolved handler hole id → `NoAttribute` (event silently absent).
-#[cfg(feature = "json")]
-#[must_use]
-pub fn materialize_ui_template_str_with_holes_and_handlers<M: Clone>(
-    json: &str,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-    handlers: &UiHandlerMap<M>,
-) -> Element<M> {
-    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
-        return Element::Empty;
-    };
-    if template.check_bounds().is_err() {
-        return Element::Empty;
-    }
-    let mut fills = HoleFills {
-        elements: element_holes.into_iter().map(Some).collect(),
-        children: children_holes.into_iter().map(Some).collect(),
-        control_flow: Vec::new(),
-        list_items: Vec::new(),
-        wrapper_fills: Vec::new(),
-        float_attrs: Vec::new(),
-    };
-    materialize_ui_at_combined(&template, handlers, 0, &mut fills)
-}
-
-#[cfg(feature = "json")]
-fn materialize_ui_at_combined<M: Clone>(
-    template: &UiTemplate,
-    handlers: &UiHandlerMap<M>,
-    depth: usize,
-    fills: &mut HoleFills<M>,
-) -> Element<M> {
-    if depth >= MAX_UI_TEMPLATE_DEPTH {
-        return Element::Empty;
-    }
-    match template {
-        UiTemplate::Empty => Element::Empty,
-        UiTemplate::Text(s) => Element::Text(s.clone()),
-        UiTemplate::Hole(idx) => fills.take_element(*idx),
-        UiTemplate::ChildrenHole(_) => Element::Empty,
-        // A `ListHole` at the combined path: treat as standalone (no fills here).
-        UiTemplate::ListHole { .. } => Element::Empty,
-        UiTemplate::WrapperHole { hole_id, child } => {
-            // Materialize the child first (through the combined path so its own
-            // holes resolve), then apply the wrapper fill.
-            let materialized_child = materialize_ui_at_combined(child, handlers, depth, fills);
-            let float_snap = fills.float_attr_snapshot();
-            let wrapper = fills.take_wrapper(*hole_id);
-            match &wrapper {
-                Some(UiTemplate::TaggedNode {
-                    tag, desc, attrs, ..
-                }) => Element::TaggedNode(
-                    tag.clone(),
-                    desc.to_desc(),
-                    attrs
-                        .iter()
-                        .map(|a| a.to_attr_combined(handlers, &float_snap))
-                        .collect(),
-                    vec![materialized_child],
-                ),
-                Some(UiTemplate::Node { desc, attrs, .. }) => Element::Node(
-                    desc.to_desc(),
-                    attrs
-                        .iter()
-                        .map(|a| a.to_attr_combined(handlers, &float_snap))
-                        .collect(),
-                    vec![materialized_child],
-                ),
-                _ => materialized_child,
-            }
-        }
-        UiTemplate::ControlFlowHole { hole_id, arms } => {
-            match fills.take_control_flow(*hole_id).and_then(|i| arms.get(i)) {
-                Some(arm) => materialize_ui_at_combined(arm, handlers, depth, fills),
-                None => Element::Empty,
-            }
-        }
-        UiTemplate::Node {
-            desc,
-            attrs,
-            children,
-        } => {
-            let float_snap = fills.float_attr_snapshot();
-            Element::Node(
-                desc.to_desc(),
-                attrs
-                    .iter()
-                    .map(|a| a.to_attr_combined(handlers, &float_snap))
-                    .collect(),
-                materialize_children_combined(children, handlers, depth, fills),
-            )
-        }
-        UiTemplate::TaggedNode {
-            tag,
-            desc,
-            attrs,
-            children,
-        } => {
-            let float_snap = fills.float_attr_snapshot();
-            Element::TaggedNode(
-                tag.clone(),
-                desc.to_desc(),
-                attrs
-                    .iter()
-                    .map(|a| a.to_attr_combined(handlers, &float_snap))
-                    .collect(),
-                materialize_children_combined(children, handlers, depth, fills),
-            )
-        }
-    }
-}
-
-#[cfg(feature = "json")]
-fn materialize_children_combined<M: Clone>(
-    children: &[UiTemplate],
-    handlers: &UiHandlerMap<M>,
-    depth: usize,
-    fills: &mut HoleFills<M>,
-) -> Vec<Element<M>> {
-    let mut out = Vec::with_capacity(children.len());
-    for child in children {
-        if let UiTemplate::ChildrenHole(idx) = child {
-            out.extend(fills.take_children(*idx));
-        } else if matches!(child, UiTemplate::ListHole { .. }) {
-            // ListHole on the combined path: no list fills available here.
-            // The combined path does not carry list-item fills; skip the hole.
-        } else {
-            out.push(materialize_ui_at_combined(
-                child,
-                handlers,
-                depth.saturating_add(1),
-                fills,
-            ));
-        }
-    }
-    out
-}
-
-/// Decode a serialized [`UiTemplate`] and materialize it, resolving value/children
-/// **holes**, model-dependent handler-id **holes**, and control-flow **arm
-/// selectors** in a single pass — the full combined front door for a `Ui`
-/// subtree that carries any mix of the three hole kinds.
-///
-/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once;
-/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
-/// - [`UiTemplateAttr::HandlerHole { handler_id }`] → `handlers.resolve(id)`;
-/// - [`UiTemplate::ControlFlowHole { hole_id: n, arms }`] →
-///   `arms[cf_selectors[n]]`, recursively materialized with the same fills.
-///
-/// Fail-closed on hostile input in every dimension:
-/// - decode failure → `Element::Empty`;
-/// - over-deep template → `Element::Empty`;
-/// - out-of-range or already-consumed hole index → `Element::Empty` / empty run;
-/// - unresolved handler hole id → `NoAttribute`;
-/// - out-of-range or already-consumed control-flow selector → `Element::Empty`.
-#[cfg(feature = "json")]
-#[must_use]
-pub fn materialize_ui_template_str_with_control_flow<M: Clone>(
-    json: &str,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-    handlers: &UiHandlerMap<M>,
-    cf_selectors: Vec<usize>,
-) -> Element<M> {
-    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
-        return Element::Empty;
-    };
-    if template.check_bounds().is_err() {
-        return Element::Empty;
-    }
-    let mut fills = HoleFills {
-        elements: element_holes.into_iter().map(Some).collect(),
-        children: children_holes.into_iter().map(Some).collect(),
-        control_flow: cf_selectors.into_iter().map(Some).collect(),
-        list_items: Vec::new(),
-        wrapper_fills: Vec::new(),
-        float_attrs: Vec::new(),
-    };
-    materialize_ui_at_combined(&template, handlers, 0, &mut fills)
-}
-
-/// Rebuild an [`Element`] tree from a hole-bearing [`UiTemplate`], splicing list
-/// holes in addition to element and children holes.
-///
-/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once;
-/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
-/// - [`UiTemplate::ListHole { hole_id: n, item_template }`] →
-///   `list_item_fills[n]` is a `Vec<Vec<Element<M>>>` — one inner vec per item;
-///   `item_template` is materialized once per item with that item's element fills,
-///   and all resulting elements are spliced as siblings.
-///
-/// Fail-closed on every dimension: out-of-range or consumed holes yield the
-/// inert empty element / empty run, never a panic.
-#[must_use]
-pub fn materialize_ui_template_with_list_holes<M>(
-    template: &UiTemplate,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-    list_item_fills: Vec<Vec<Vec<Element<M>>>>,
-) -> Element<M> {
-    let mut fills = HoleFills {
-        elements: element_holes.into_iter().map(Some).collect(),
-        children: children_holes.into_iter().map(Some).collect(),
-        control_flow: Vec::new(),
-        list_items: list_item_fills.into_iter().map(Some).collect(),
-        wrapper_fills: Vec::new(),
-        float_attrs: Vec::new(),
-    };
-    materialize_ui_at(template, 0, &mut fills)
-}
-
-/// Decode a serialized [`UiTemplate`] and materialize it with list holes —
-/// the JSON front door to [`materialize_ui_template_with_list_holes`].
-///
-/// Fail-closed: decode failure or over-deep template → `Element::Empty`.
-#[cfg(feature = "json")]
-#[must_use]
-pub fn materialize_ui_template_with_list_holes_str<M>(
-    json: &str,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-    list_item_fills: Vec<Vec<Vec<Element<M>>>>,
-) -> Element<M> {
-    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
-        return Element::Empty;
-    };
-    if template.check_bounds().is_err() {
-        return Element::Empty;
-    }
-    materialize_ui_template_with_list_holes(
-        &template,
-        element_holes,
-        children_holes,
-        list_item_fills,
-    )
-}
-
-/// Rebuild an [`Element`] tree from a hole-bearing [`UiTemplate`], applying
-/// wrapper fills in addition to element and children holes.
-///
-/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once;
-/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
-/// - [`UiTemplate::WrapperHole { hole_id: n, child }`] →
-///   materialize `child`, then wrap it with the tag / desc / attrs from
-///   `wrapper_fills[n]` (a `UiTemplate::TaggedNode` or `UiTemplate::Node`
-///   with an empty `children` list). A missing or ill-shaped fill renders
-///   `child` standalone — fail-closed, never a panic.
-///
-/// Existing hole kinds remain byte-identical when no `WrapperHole` is present.
-#[must_use]
-pub fn materialize_ui_template_with_wrapper_holes<M>(
-    template: &UiTemplate,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-    wrapper_fills: Vec<UiTemplate>,
-) -> Element<M> {
-    let mut fills = HoleFills {
-        elements: element_holes.into_iter().map(Some).collect(),
-        children: children_holes.into_iter().map(Some).collect(),
-        control_flow: Vec::new(),
-        list_items: Vec::new(),
-        wrapper_fills: wrapper_fills.into_iter().map(Some).collect(),
-        float_attrs: Vec::new(),
-    };
-    materialize_ui_at(template, 0, &mut fills)
-}
-
-/// Decode a serialized [`UiTemplate`] and materialize it with wrapper holes —
-/// the JSON front door to [`materialize_ui_template_with_wrapper_holes`].
-///
-/// Fail-closed: decode failure or over-deep template → `Element::Empty`.
-#[cfg(feature = "json")]
-#[must_use]
-pub fn materialize_ui_template_with_wrapper_holes_str<M>(
-    json: &str,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-    wrapper_fills: Vec<UiTemplate>,
-) -> Element<M> {
-    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
-        return Element::Empty;
-    };
-    if template.check_bounds().is_err() {
-        return Element::Empty;
-    }
-    materialize_ui_template_with_wrapper_holes(
-        &template,
-        element_holes,
-        children_holes,
-        wrapper_fills,
-    )
-}
-
-/// Rebuild an [`Element`] tree from a hole-bearing [`UiTemplate`], resolving
-/// model-driven numeric attribute holes (`AttrHoleFloat`) from the per-render
-/// `float_attr_fills` slice in addition to element and children holes.
-///
-/// - [`UiTemplate::Hole(n)`] → `element_holes[n]`, consumed once;
-/// - [`UiTemplate::ChildrenHole(n)`] → `children_holes[n]`, spliced in place;
-/// - [`UiTemplateAttr::AttrHoleFloat { hole_id: n, attr }`] →
-///   the matching `Attribute` variant (`AttrFontLetterSpacing` etc.) built from
-///   `float_attr_fills[n]`, or `NoAttribute` on a miss (fail-closed).
-///
-/// Existing hole kinds are byte-identical when no `AttrHoleFloat` is present —
-/// this kind is purely additive.
-#[must_use]
-pub fn materialize_ui_template_with_float_attr_holes<M>(
-    template: &UiTemplate,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-    float_attr_fills: Vec<f64>,
-) -> Element<M> {
-    let mut fills = HoleFills {
-        elements: element_holes.into_iter().map(Some).collect(),
-        children: children_holes.into_iter().map(Some).collect(),
-        control_flow: Vec::new(),
-        list_items: Vec::new(),
-        wrapper_fills: Vec::new(),
-        float_attrs: float_attr_fills.into_iter().map(Some).collect(),
-    };
-    materialize_ui_at(template, 0, &mut fills)
-}
-
-/// Decode a serialized [`UiTemplate`] and materialize it with float-attr holes —
-/// the JSON front door to [`materialize_ui_template_with_float_attr_holes`].
-///
-/// Fail-closed: decode failure or over-deep template → `Element::Empty`.
-#[cfg(feature = "json")]
-#[must_use]
-pub fn materialize_ui_template_with_float_attr_holes_str<M>(
-    json: &str,
-    element_holes: Vec<Element<M>>,
-    children_holes: Vec<Vec<Element<M>>>,
-    float_attr_fills: Vec<f64>,
-) -> Element<M> {
-    let Ok(template) = serde_json::from_str::<UiTemplate>(json) else {
-        return Element::Empty;
-    };
-    if template.check_bounds().is_err() {
-        return Element::Empty;
-    }
-    materialize_ui_template_with_float_attr_holes(
-        &template,
-        element_holes,
-        children_holes,
-        float_attr_fills,
-    )
+    materialize(&template, fills)
 }
 
 /// Build a [`UiTemplate`] from a static [`Element`] subtree — the inverse of
-/// [`materialize_ui_template`]. Fail-closed (parse, don't validate): any node
+/// [`materialize`]. Fail-closed (parse, don't validate): any node
 /// that is NOT provably static returns `None`, so a template is only ever built
 /// from a subtree that materialize can reproduce byte-identically.
 ///
@@ -1812,9 +1308,8 @@ fn static_ui_children_holed<M: Clone>(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_UI_TEMPLATE_DEPTH, UiHandlerMap, UiTemplate, UiTemplateAttr, UiTemplateError,
-        materialize_ui_template, materialize_ui_template_with_handlers, ui_template_of,
-        ui_template_of_holed,
+        MAX_UI_TEMPLATE_DEPTH, TemplateFills, UiHandlerMap, UiTemplate, UiTemplateAttr,
+        UiTemplateError, materialize, ui_template_of, ui_template_of_holed,
     };
     use crate::color::Color;
     use crate::ui::element::{Attribute, Description, Element, Length};
@@ -1831,10 +1326,10 @@ mod tests {
     // The dev == prod soundness proof: round-tripping a static `Ipe.Ui` subtree
     // through a `UiTemplate` and its materializer produces an `Element` that
     // renders byte-identically to rendering the original. `ui_template_of` +
-    // `materialize_ui_template` compose to the identity on the rendered bytes.
+    // `materialize` compose to the identity on the rendered bytes.
     fn assert_round_trip_byte_identical(subtree: &Element<()>) {
         let template = ui_template_of(subtree).expect("static subtree must be templatable");
-        let materialized: Element<()> = materialize_ui_template(&template);
+        let materialized: Element<()> = materialize(&template, TemplateFills::default());
         // The rebuilt `Element` is value-equal to the original (a strictly
         // stronger property than byte-identity — the exact variants are
         // reconstructed), so the render must match.
@@ -1938,7 +1433,7 @@ mod tests {
         );
         assert_round_trip_byte_identical(&subtree);
         let template = ui_template_of(&subtree).expect("templatable");
-        let rendered = render(materialize_ui_template::<()>(&template));
+        let rendered = render(materialize::<()>(&template, TemplateFills::default()));
         assert!(
             !rendered.contains("<script>"),
             "escaped text must not yield a raw <script> tag: {rendered}"
@@ -2094,7 +1589,7 @@ mod tests {
                         children: vec![node],
                     };
                 }
-                let elem: Element<()> = materialize_ui_template(&node);
+                let elem: Element<()> = materialize(&node, TemplateFills::default());
                 element_depth(&elem)
             })
             .expect("spawn measuring thread");
@@ -2136,7 +1631,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn str_materialize_matches_direct_render() {
-        use super::materialize_ui_template_str;
+        use super::materialize_str;
         let subtree: Element<()> = Element::Node(
             Description::NoDescription,
             vec![Attribute::AttrStyle(
@@ -2150,18 +1645,18 @@ mod tests {
         );
         let template = ui_template_of(&subtree).expect("templatable");
         let json = serde_json::to_string(&template).expect("serialize");
-        let via_str: Element<()> = materialize_ui_template_str(&json);
+        let via_str: Element<()> = materialize_str(&json, TemplateFills::default());
         assert_eq!(
             render(via_str),
             render(subtree),
-            "materialize_ui_template_str over the baked default must render byte-identically"
+            "materialize_str over the baked default must render byte-identically"
         );
     }
 
     #[cfg(feature = "json")]
     #[test]
     fn str_materialize_reflects_a_structural_edit() {
-        use super::materialize_ui_template_str;
+        use super::materialize_str;
         let after: Element<()> = Element::Node(
             Description::NoDescription,
             vec![],
@@ -2177,10 +1672,10 @@ mod tests {
         );
         let json_after =
             serde_json::to_string(&ui_template_of(&after).expect("templatable")).unwrap();
-        let materialized: Element<()> = materialize_ui_template_str(&json_after);
+        let materialized: Element<()> = materialize_str(&json_after, TemplateFills::default());
         assert_eq!(render(materialized), render(after));
         assert_ne!(
-            render(materialize_ui_template_str::<()>(&json_after)),
+            render(materialize_str::<()>(&json_after, TemplateFills::default())),
             render(before)
         );
     }
@@ -2188,22 +1683,24 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn str_materialize_malformed_json_is_inert_empty() {
-        use super::materialize_ui_template_str;
-        let out: Element<()> = materialize_ui_template_str("this is not json");
+        use super::materialize_str;
+        let out: Element<()> = materialize_str("this is not json", TemplateFills::default());
         assert_eq!(out, Element::Empty);
         // A payload naming a handler/raw variant simply fails to decode — there
         // is no inert-data path to logic or raw markup.
-        let bogus: Element<()> =
-            materialize_ui_template_str(r#"{"Raw":"<script>evil()</script>"}"#);
+        let bogus: Element<()> = materialize_str(
+            r#"{"Raw":"<script>evil()</script>"}"#,
+            TemplateFills::default(),
+        );
         assert_eq!(out, bogus);
     }
 
     #[cfg(feature = "json")]
     #[test]
     fn str_materialize_keeps_text_escaped() {
-        use super::materialize_ui_template_str;
+        use super::materialize_str;
         let json = r#"{"Text":"<script>alert(1)</script>"}"#;
-        let out: Element<()> = materialize_ui_template_str(json);
+        let out: Element<()> = materialize_str(json, TemplateFills::default());
         let rendered = render(out);
         assert!(
             !rendered.contains("<script>"),
@@ -2334,7 +1831,7 @@ mod tests {
             let (template, captures) = ui_template_of_holed(&subtree).expect("templatizes");
             let handlers = UiHandlerMap::from_msgs(captures);
             let materialized: Element<Msg> =
-                materialize_ui_template_with_handlers(&template, &handlers);
+                materialize(&template, TemplateFills::default().with_handlers(handlers));
             assert_eq!(
                 materialized, subtree,
                 "materialize with the per-render map reconstructs the exact handler-bearing Element"
@@ -2360,7 +1857,7 @@ mod tests {
             let (template, captures) = ui_template_of_holed(&original).expect("templatizes");
             let handlers = UiHandlerMap::from_msgs(captures);
             let materialized: Element<()> =
-                materialize_ui_template_with_handlers(&template, &handlers);
+                materialize(&template, TemplateFills::default().with_handlers(handlers));
             assert_eq!(
                 render(materialized),
                 render(original),
@@ -2385,7 +1882,7 @@ mod tests {
             // A map with only id 0 populated — id 5 is out of range.
             let handlers = UiHandlerMap::from_msgs(vec![Msg::Save]);
             let materialized: Element<Msg> =
-                materialize_ui_template_with_handlers(&template, &handlers);
+                materialize(&template, TemplateFills::default().with_handlers(handlers));
             let Element::TaggedNode(_, _, attrs, _) = &materialized else {
                 panic!("expected a TaggedNode, got {materialized:?}");
             };
@@ -2406,7 +1903,7 @@ mod tests {
             // Materialize WITHOUT the handler map (empty map) — the hole drops.
             let empty: UiHandlerMap<Msg> = UiHandlerMap::new();
             let materialized: Element<Msg> =
-                materialize_ui_template_with_handlers(&template, &empty);
+                materialize(&template, TemplateFills::default().with_handlers(empty));
             let Element::TaggedNode(_, _, attrs, _) = &materialized else {
                 panic!("expected a TaggedNode, got {materialized:?}");
             };
@@ -2430,8 +1927,14 @@ mod tests {
             };
             let render_a = UiHandlerMap::from_msgs(vec![Msg::Select(1)]);
             let render_b = UiHandlerMap::from_msgs(vec![Msg::Select(2)]);
-            let a: Element<Msg> = materialize_ui_template_with_handlers(&template, &render_a);
-            let b: Element<Msg> = materialize_ui_template_with_handlers(&template, &render_b);
+            let a: Element<Msg> = materialize(
+                &template,
+                TemplateFills::default().with_handlers(render_a.clone()),
+            );
+            let b: Element<Msg> = materialize(
+                &template,
+                TemplateFills::default().with_handlers(render_b.clone()),
+            );
             // Compare the RESOLVED Msg directly (Element/Event PartialEq deliberately
             // ignores the Msg payload — two OnMsg("click", _) compare equal for diff
             // purposes — so the distinction must be read off the handler's Msg).
@@ -2452,8 +1955,10 @@ mod tests {
                 }],
                 children: vec![],
             };
-            let fa: Element<Msg> = materialize_ui_template_with_handlers(&forged, &render_a);
-            let fb: Element<Msg> = materialize_ui_template_with_handlers(&forged, &render_b);
+            let fa: Element<Msg> =
+                materialize(&forged, TemplateFills::default().with_handlers(render_a));
+            let fb: Element<Msg> =
+                materialize(&forged, TemplateFills::default().with_handlers(render_b));
             for e in [fa, fb] {
                 let Element::TaggedNode(_, _, attrs, _) = &e else {
                     panic!("expected a TaggedNode");
@@ -2528,12 +2033,14 @@ mod tests {
             // The templates differ (structure hot-swapped) …
             assert_ne!(t_before, t_after);
             // … but each resolves the hole to the SAME model-captured Msg.
-            let m_before: Element<Msg> = materialize_ui_template_with_handlers(
+            let m_before: Element<Msg> = materialize(
                 &t_before,
-                &UiHandlerMap::from_msgs(c_before),
+                TemplateFills::default().with_handlers(UiHandlerMap::from_msgs(c_before)),
             );
-            let m_after: Element<Msg> =
-                materialize_ui_template_with_handlers(&t_after, &UiHandlerMap::from_msgs(c_after));
+            let m_after: Element<Msg> = materialize(
+                &t_after,
+                TemplateFills::default().with_handlers(UiHandlerMap::from_msgs(c_after)),
+            );
             assert_eq!(m_before, before);
             assert_eq!(m_after, after);
         }
@@ -2576,9 +2083,7 @@ mod tests {
     // Nested in its own module so its `UiTemplate as T` / `UiTemplateAttr`
     // re-imports never collide with the parent suite or the handler-hole suite.
     mod value_holes {
-        use super::super::{
-            UiDescription, UiTemplate as T, UiTemplateAttr, materialize_ui_template_with_holes,
-        };
+        use super::super::{UiDescription, UiTemplate as T, UiTemplateAttr};
         use super::*;
 
         // A value hole: a mostly-static node whose single child is a `Hole(0)` filled
@@ -2591,10 +2096,9 @@ mod tests {
                 attrs: vec![UiTemplateAttr::Spacing(8)],
                 children: vec![T::Text("count: ".to_string()), T::Hole(0)],
             };
-            let got: Element<()> = materialize_ui_template_with_holes(
+            let got: Element<()> = materialize(
                 &template,
-                vec![Element::Text("42".to_string())],
-                vec![],
+                TemplateFills::default().with_elements(vec![Element::Text("42".to_string())]),
             );
             assert_eq!(
                 got,
@@ -2626,8 +2130,10 @@ mod tests {
                 vec![],
                 vec![Element::Text("on".to_string())],
             );
-            let got: Element<()> =
-                materialize_ui_template_with_holes(&template, vec![branch.clone()], vec![]);
+            let got: Element<()> = materialize(
+                &template,
+                TemplateFills::default().with_elements(vec![branch.clone()]),
+            );
             assert_eq!(
                 got,
                 Element::Node(
@@ -2656,8 +2162,10 @@ mod tests {
                 Element::Text("b".to_string()),
                 Element::Text("c".to_string()),
             ];
-            let got: Element<()> =
-                materialize_ui_template_with_holes(&template, vec![], vec![items]);
+            let got: Element<()> = materialize(
+                &template,
+                TemplateFills::default().with_children(vec![items]),
+            );
             assert_eq!(
                 got,
                 Element::Node(
@@ -2683,13 +2191,14 @@ mod tests {
                 attrs: vec![],
                 children: vec![T::Hole(0), T::ChildrenHole(0), T::Hole(1)],
             };
-            let got: Element<()> = materialize_ui_template_with_holes(
+            let got: Element<()> = materialize(
                 &template,
-                vec![
-                    Element::Text("first".to_string()),
-                    Element::Text("last".to_string()),
-                ],
-                vec![vec![Element::Text("mid".to_string())]],
+                TemplateFills::default()
+                    .with_elements(vec![
+                        Element::Text("first".to_string()),
+                        Element::Text("last".to_string()),
+                    ])
+                    .with_children(vec![vec![Element::Text("mid".to_string())]]),
             );
             assert_eq!(
                 got,
@@ -2714,7 +2223,7 @@ mod tests {
                 attrs: vec![],
                 children: vec![T::Hole(5), T::ChildrenHole(9)],
             };
-            let got: Element<()> = materialize_ui_template_with_holes(&template, vec![], vec![]);
+            let got: Element<()> = materialize(&template, TemplateFills::default());
             assert_eq!(
                 got,
                 Element::Node(Description::NoDescription, vec![], vec![Element::Empty]),
@@ -2726,8 +2235,10 @@ mod tests {
         // a children list) is inert — the empty element, never a panic.
         #[test]
         fn standalone_children_hole_is_inert_empty() {
-            let got: Element<()> =
-                materialize_ui_template_with_holes(&T::ChildrenHole(0), vec![], vec![vec![]]);
+            let got: Element<()> = materialize(
+                &T::ChildrenHole(0),
+                TemplateFills::default().with_children(vec![vec![]]),
+            );
             assert_eq!(got, Element::Empty);
         }
 
@@ -2745,12 +2256,9 @@ mod tests {
                     arms: vec![T::Text("on".to_string()), T::Text("off".to_string())],
                 }],
             };
-            let got: Element<()> = super::super::materialize_ui_template_str_with_control_flow(
+            let got: Element<()> = super::super::materialize_str(
                 &serde_json::to_string(&template).unwrap(),
-                vec![],
-                vec![],
-                &super::super::UiHandlerMap::new(),
-                vec![0], // select arm 0 = "on"
+                TemplateFills::default().with_control_flow(vec![0]), // select arm 0 = "on"
             );
             assert_eq!(
                 got,
@@ -2774,12 +2282,9 @@ mod tests {
                     arms: vec![T::Text("on".to_string()), T::Text("off".to_string())],
                 }],
             };
-            let got: Element<()> = super::super::materialize_ui_template_str_with_control_flow(
+            let got: Element<()> = super::super::materialize_str(
                 &serde_json::to_string(&template).unwrap(),
-                vec![],
-                vec![],
-                &super::super::UiHandlerMap::new(),
-                vec![1], // select arm 1 = "off"
+                TemplateFills::default().with_control_flow(vec![1]), // select arm 1 = "off"
             );
             assert_eq!(
                 got,
@@ -2799,18 +2304,15 @@ mod tests {
                 hole_id: 0,
                 arms: vec![T::Text("only".to_string())],
             };
-            let got: Element<()> = super::super::materialize_ui_template_str_with_control_flow(
+            let got: Element<()> = super::super::materialize_str(
                 &serde_json::to_string(&template).unwrap(),
-                vec![],
-                vec![],
-                &super::super::UiHandlerMap::new(),
-                vec![5], // out of range
+                TemplateFills::default().with_control_flow(vec![5]), // out of range
             );
             assert_eq!(got, Element::Empty);
         }
 
         // Mixed: a subtree with both a `ControlFlowHole` and a value `Hole`
-        // materializes both together through `materialize_ui_template_with_control_flow`.
+        // materializes both together through the one `materialize` core.
         #[cfg(feature = "json")]
         #[test]
         fn control_flow_hole_and_value_hole_materialize_together() {
@@ -2833,12 +2335,11 @@ mod tests {
                 ],
             };
             // Select arm 0 (the branch with the value hole); fill[0] = "42".
-            let got: Element<()> = super::super::materialize_ui_template_str_with_control_flow(
+            let got: Element<()> = super::super::materialize_str(
                 &serde_json::to_string(&template).unwrap(),
-                vec![Element::Text("42".to_string())],
-                vec![],
-                &super::super::UiHandlerMap::new(),
-                vec![0],
+                TemplateFills::default()
+                    .with_elements(vec![Element::Text("42".to_string())])
+                    .with_control_flow(vec![0]),
             );
             assert_eq!(
                 got,
@@ -2858,12 +2359,12 @@ mod tests {
         }
 
         // Combined: a subtree carrying both a value hole (Hole) and a handler hole
-        // (HandlerHole) materializes correctly through the combined fn — value fills
-        // are spliced and the handler resolves to the captured Msg.
+        // (HandlerHole) materializes correctly through the one `materialize` core —
+        // value fills are spliced and the handler resolves to the captured Msg.
         #[cfg(feature = "json")]
         #[test]
         fn combined_value_hole_and_handler_hole_materialize_together() {
-            use super::super::{UiHandlerMap, materialize_ui_template_str_with_holes_and_handlers};
+            use super::super::{UiHandlerMap, materialize_str};
             use crate::html::{Attribute as HtmlAttribute, Event};
 
             #[derive(Clone, Debug, PartialEq)]
@@ -2885,11 +2386,11 @@ mod tests {
             let fill: Element<Msg> = Element::Text("label text".to_string());
             let handlers = UiHandlerMap::from_msgs(vec![Msg::Submit]);
 
-            let got: Element<Msg> = materialize_ui_template_str_with_holes_and_handlers(
+            let got: Element<Msg> = materialize_str(
                 &json,
-                vec![fill.clone()],
-                vec![],
-                &handlers,
+                TemplateFills::default()
+                    .with_elements(vec![fill.clone()])
+                    .with_handlers(handlers),
             );
             assert_eq!(
                 got,
@@ -2910,7 +2411,7 @@ mod tests {
         #[cfg(feature = "json")]
         #[test]
         fn holes_str_reflects_structural_edit_with_same_fills() {
-            use super::super::materialize_ui_template_str_with_holes;
+            use super::super::materialize_str;
             // before: [Hole(0)] ; after: ["x", Hole(0)] — a static sibling added.
             let before = T::Node {
                 desc: UiDescription::NoDescription,
@@ -2926,16 +2427,15 @@ mod tests {
             let json_before = serde_json::to_string(&before).unwrap();
             let json_after = serde_json::to_string(&after).unwrap();
             let out_before: Element<()> =
-                materialize_ui_template_str_with_holes(&json_before, fill(), vec![]);
+                materialize_str(&json_before, TemplateFills::default().with_elements(fill()));
             let out_after: Element<()> =
-                materialize_ui_template_str_with_holes(&json_after, fill(), vec![]);
+                materialize_str(&json_after, TemplateFills::default().with_elements(fill()));
             let before_render = render(out_before);
             assert_eq!(
                 before_render,
-                render(materialize_ui_template_with_holes::<()>(
+                render(materialize::<()>(
                     &before,
-                    fill(),
-                    vec![]
+                    TemplateFills::default().with_elements(fill())
                 ))
             );
             assert_ne!(
@@ -2948,9 +2448,7 @@ mod tests {
 
     // ── list hole ─────────────────────────────────────────────────────────────
     mod list_holes {
-        use super::super::{
-            UiDescription, UiTemplate as T, materialize_ui_template_with_list_holes,
-        };
+        use super::super::{UiDescription, UiTemplate as T};
         use super::*;
 
         // A `ListHole` in children position: N items expand to N sibling elements,
@@ -2975,7 +2473,7 @@ mod tests {
                     vec![Element::Text("c".to_string())],
                 ],
             ];
-            let got = materialize_ui_template_with_list_holes(&template, vec![], vec![], items);
+            let got = materialize(&template, TemplateFills::default().with_list_items(items));
             assert_eq!(
                 got,
                 Element::Node(
@@ -3002,7 +2500,7 @@ mod tests {
                 }],
             };
             let items: Vec<Vec<Vec<Element<()>>>> = vec![vec![]]; // 0 items
-            let got = materialize_ui_template_with_list_holes(&template, vec![], vec![], items);
+            let got = materialize(&template, TemplateFills::default().with_list_items(items));
             assert_eq!(
                 got,
                 Element::Node(Description::NoDescription, vec![], vec![])
@@ -3023,7 +2521,7 @@ mod tests {
             };
             // 3 items, no element fills (static template)
             let items: Vec<Vec<Vec<Element<()>>>> = vec![vec![vec![], vec![], vec![]]];
-            let got = materialize_ui_template_with_list_holes(&template, vec![], vec![], items);
+            let got = materialize(&template, TemplateFills::default().with_list_items(items));
             assert_eq!(
                 got,
                 Element::Node(
@@ -3063,10 +2561,7 @@ mod tests {
     // desc / attrs — is selected at render from the per-render wrapper-fill slice;
     // the child subtree is fixed and may itself carry holes.
     mod wrapper_holes {
-        use super::super::{
-            UiDescription, UiTemplate as T, UiTemplateAttr,
-            materialize_ui_template_with_wrapper_holes,
-        };
+        use super::super::{UiDescription, UiTemplate as T, UiTemplateAttr};
         use super::*;
 
         // Build a wrapper fill: a `TaggedNode` with the given tag and attrs, no
@@ -3090,11 +2585,9 @@ mod tests {
                 child: Box::new(T::Text("label".to_string())),
             };
             let wrapper = tagged_wrapper("a", vec![UiTemplateAttr::Class("link".to_string())]);
-            let got: Element<()> = materialize_ui_template_with_wrapper_holes(
+            let got: Element<()> = materialize(
                 &template,
-                vec![],
-                vec![],
-                vec![wrapper],
+                TemplateFills::default().with_wrappers(vec![wrapper]),
             );
             assert_eq!(
                 got,
@@ -3117,17 +2610,13 @@ mod tests {
             };
             let wrapper_a = tagged_wrapper("a", vec![]);
             let wrapper_span = tagged_wrapper("span", vec![]);
-            let out_a: Element<()> = materialize_ui_template_with_wrapper_holes(
+            let out_a: Element<()> = materialize(
                 &template,
-                vec![],
-                vec![],
-                vec![wrapper_a],
+                TemplateFills::default().with_wrappers(vec![wrapper_a]),
             );
-            let out_span: Element<()> = materialize_ui_template_with_wrapper_holes(
+            let out_span: Element<()> = materialize(
                 &template,
-                vec![],
-                vec![],
-                vec![wrapper_span],
+                TemplateFills::default().with_wrappers(vec![wrapper_span]),
             );
             assert_ne!(render(out_a), render(out_span));
         }
@@ -3140,8 +2629,7 @@ mod tests {
                 hole_id: 0,
                 child: Box::new(T::Text("content".to_string())),
             };
-            let got: Element<()> =
-                materialize_ui_template_with_wrapper_holes(&template, vec![], vec![], vec![]);
+            let got: Element<()> = materialize(&template, TemplateFills::default());
             assert_eq!(got, Element::Text("content".to_string()));
         }
 
@@ -3153,11 +2641,9 @@ mod tests {
                 hole_id: 5,
                 child: Box::new(T::Text("content".to_string())),
             };
-            let got: Element<()> = materialize_ui_template_with_wrapper_holes(
+            let got: Element<()> = materialize(
                 &template,
-                vec![],
-                vec![],
-                vec![tagged_wrapper("a", vec![])], // only index 0 filled
+                TemplateFills::default().with_wrappers(vec![tagged_wrapper("a", vec![])]), // only index 0 filled
             );
             assert_eq!(got, Element::Text("content".to_string()));
         }
@@ -3176,11 +2662,11 @@ mod tests {
             };
             let wrapper = tagged_wrapper("section", vec![]);
             let fill = Element::Text("42".to_string());
-            let got: Element<()> = materialize_ui_template_with_wrapper_holes(
+            let got: Element<()> = materialize(
                 &template,
-                vec![fill.clone()],
-                vec![],
-                vec![wrapper],
+                TemplateFills::default()
+                    .with_elements(vec![fill.clone()])
+                    .with_wrappers(vec![wrapper]),
             );
             assert_eq!(
                 got,
@@ -3219,19 +2705,15 @@ mod tests {
         #[cfg(feature = "json")]
         #[test]
         fn wrapper_hole_str_materialize_works() {
-            use super::super::materialize_ui_template_with_wrapper_holes_str;
+            use super::super::materialize_str;
             let template = T::WrapperHole {
                 hole_id: 0,
                 child: Box::new(T::Text("label".to_string())),
             };
             let json = serde_json::to_string(&template).expect("serialize");
             let wrapper = tagged_wrapper("a", vec![]);
-            let got: Element<()> = materialize_ui_template_with_wrapper_holes_str(
-                &json,
-                vec![],
-                vec![],
-                vec![wrapper],
-            );
+            let got: Element<()> =
+                materialize_str(&json, TemplateFills::default().with_wrappers(vec![wrapper]));
             assert_eq!(
                 got,
                 Element::TaggedNode(
@@ -3252,13 +2734,9 @@ mod tests {
                 attrs: vec![UiTemplateAttr::Spacing(4)],
                 children: vec![T::Text("hi".to_string())],
             };
-            let with_empty_wrappers: Element<()> = materialize_ui_template_with_wrapper_holes(
-                &static_template,
-                vec![],
-                vec![],
-                vec![],
-            );
-            let without: Element<()> = super::super::materialize_ui_template(&static_template);
+            let with_empty_wrappers: Element<()> =
+                materialize(&static_template, TemplateFills::default());
+            let without: Element<()> = materialize(&static_template, TemplateFills::default());
             assert_eq!(
                 render(with_empty_wrappers),
                 render(without),
@@ -3274,10 +2752,7 @@ mod tests {
     // float_attr_fills slice. Purely additive — templates with no AttrHoleFloat
     // are byte-identical before and after this kind ships.
     mod float_attr_holes {
-        use super::super::{
-            UiDescription, UiTemplate as T, UiTemplateAttr,
-            materialize_ui_template_with_float_attr_holes,
-        };
+        use super::super::{UiDescription, UiTemplate as T, UiTemplateAttr};
         use super::*;
 
         // A node whose `font-letter-spacing` attr is a float hole: the template
@@ -3297,11 +2772,9 @@ mod tests {
                 ],
                 children: vec![T::Text("hi".to_string())],
             };
-            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
+            let got: Element<()> = materialize(
                 &template,
-                vec![],
-                vec![],
-                vec![1.5_f64],
+                TemplateFills::default().with_float_attrs(vec![1.5_f64]),
             );
             assert_eq!(
                 got,
@@ -3328,11 +2801,9 @@ mod tests {
                 }],
                 children: vec![],
             };
-            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
+            let got: Element<()> = materialize(
                 &template,
-                vec![],
-                vec![],
-                vec![0.5_f64],
+                TemplateFills::default().with_float_attrs(vec![0.5_f64]),
             );
             assert_eq!(
                 got,
@@ -3361,11 +2832,9 @@ mod tests {
                 ],
                 children: vec![],
             };
-            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
+            let got: Element<()> = materialize(
                 &template,
-                vec![],
-                vec![],
-                vec![1.5_f64, 0.25_f64],
+                TemplateFills::default().with_float_attrs(vec![1.5_f64, 0.25_f64]),
             );
             assert_eq!(
                 got,
@@ -3391,12 +2860,7 @@ mod tests {
                 }],
                 children: vec![],
             };
-            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
-                &template,
-                vec![],
-                vec![],
-                vec![], // no fills
-            );
+            let got: Element<()> = materialize(&template, TemplateFills::default()); // no fills
             assert_eq!(
                 got,
                 Element::Node(
@@ -3419,11 +2883,9 @@ mod tests {
                 }],
                 children: vec![],
             };
-            let got: Element<()> = materialize_ui_template_with_float_attr_holes(
+            let got: Element<()> = materialize(
                 &template,
-                vec![],
-                vec![],
-                vec![1.0_f64],
+                TemplateFills::default().with_float_attrs(vec![1.0_f64]),
             );
             assert_eq!(
                 got,
@@ -3456,7 +2918,7 @@ mod tests {
         #[cfg(feature = "json")]
         #[test]
         fn float_attr_hole_str_materialize_works() {
-            use super::super::materialize_ui_template_with_float_attr_holes_str;
+            use super::super::materialize_str;
             let template = T::Node {
                 desc: UiDescription::NoDescription,
                 attrs: vec![UiTemplateAttr::AttrHoleFloat {
@@ -3466,11 +2928,9 @@ mod tests {
                 children: vec![T::Text("hi".to_string())],
             };
             let json = serde_json::to_string(&template).expect("serialize");
-            let got: Element<()> = materialize_ui_template_with_float_attr_holes_str(
+            let got: Element<()> = materialize_str(
                 &json,
-                vec![],
-                vec![],
-                vec![2.0_f64],
+                TemplateFills::default().with_float_attrs(vec![2.0_f64]),
             );
             assert_eq!(
                 got,
@@ -3491,13 +2951,9 @@ mod tests {
                 attrs: vec![UiTemplateAttr::Spacing(4)],
                 children: vec![T::Text("hi".to_string())],
             };
-            let with_empty_floats: Element<()> = materialize_ui_template_with_float_attr_holes(
-                &static_template,
-                vec![],
-                vec![],
-                vec![],
-            );
-            let without: Element<()> = super::super::materialize_ui_template(&static_template);
+            let with_empty_floats: Element<()> =
+                materialize(&static_template, TemplateFills::default());
+            let without: Element<()> = materialize(&static_template, TemplateFills::default());
             assert_eq!(
                 render(with_empty_floats),
                 render(without),
