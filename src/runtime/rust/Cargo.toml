@@ -498,7 +498,7 @@ websocket_client = ["tokio", "tokio/net", "tokio/sync", "tokio-tungstenite", "fu
 # A web app with an HTTP kernel (`uses_http`) or email selects `http_client`
 # through `reaches_http_client()` in the backend — reqwest never enters a plain
 # web app.
-web = ["web-core", "widget-assets", "server", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "encoding", "uuid", "time-core", "crypto-core"]
+web = ["web-core", "widget-assets", "server", "dep:serde_json", "json", "serde", "dep:serde_urlencoded", "async-trait", "tokio/signal", "tokio/process", "tokio/io-util", "encoding", "uuid", "time-core", "crypto-core"]
 # The `CustomElement.node` custom-element glue generator + SRI-pinned asset addressing
 # (`widget_assets.rs`) as a STANDALONE surface, decoupled from the heavy `web`
 # server. `sha2` (content digest) rides `crypto-core`; `base64` (the SRI value)
@@ -525,7 +525,24 @@ full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "cryp
 # authenticates its per-session token with the constant-time `ct_eq` predicate
 # (gated on `crypto-core`), so a debugger-only build still carries a timing-safe
 # token check. `web` already pulls `crypto-core`, so the wire is uniform.
-debugger = ["json", "serde", "async", "crypto-core"]
+# `tokio/net` + `tokio/io-util`: the `control::server` loopback accept-loop
+# (bound only under a dev-loop surface) reads/writes length-delimited frames over
+# a `tokio::net::TcpStream`. `web` reaches the same server via its `server`
+# feature (which already pulls `tokio/net`); adding `io-util` to both keeps the
+# accept-loop's `AsyncRead`/`AsyncWrite` extension traits available in either
+# dev-loop build. Both are native-only surfaces; the wasm dev-loop carries no
+# control socket.
+# The dev-loop control WIRE alone — the `ControlFrame` codec + the loopback
+# `transport` primitives (bind addr, constant-time token check, env reads) —
+# WITHOUT the tokio-bound `control::server` accept-loop. `ipe watch` (the parent
+# sender) links this to build/parse frames over its own std sockets, reusing the
+# ONE wire definition (SSOT) without pulling tokio/async into the CLI. `web` and
+# `debugger` (the child-side surfaces) each imply it and add the server via their
+# tokio features. Implies `json` (the codec's serde_json body) + `crypto-core`
+# (the `is_authorized` constant-time compare); `json` pulls `serde` (the frame
+# derives).
+control-wire = ["json", "serde", "crypto-core"]
+debugger = ["control-wire", "async", "tokio/net", "tokio/io-util"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
 # builds never link the wasm glue.

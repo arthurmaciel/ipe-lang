@@ -1045,6 +1045,17 @@ fn run_inner(
         } else {
             None
         };
+    // The loopback control-socket port for the tui/cli/worker control channel,
+    // allocated once per session like the token above and injected into every
+    // spawned child via `child_env` as `IPE_CONTROL_PORT`. Allocated only when a
+    // token was minted (the two arm the child's control surface together); if the
+    // OS cannot lease an ephemeral loopback port, leave it unset — the child then
+    // opens no control socket (fail-closed), never a degraded path.
+    let control_port: Option<u16> = if hot_token.is_some() {
+        free_loopback_port().ok()
+    } else {
+        None
+    };
     // The appearance hot-swap classifier and its running-emit baseline are armed
     // ONLY by the appearance flag — never merely by the banner. The child's emit
     // carries a `LiteralTable` overlay only under `hot_appearance_enabled()`
@@ -1630,6 +1641,7 @@ fn run_inner(
                             };
                             let out_dir = opts.out_dir.clone();
                             let tok = hot_token.clone();
+                            let cp = control_port;
                             let reset_state = opts.reset_state;
                             supervisor.apply_green_behind_proxy(
                                 &exe_path,
@@ -1641,6 +1653,7 @@ fn run_inner(
                                             port,
                                             &out_dir,
                                             tok.as_deref(),
+                                            cp,
                                             true,
                                             reset_state,
                                         ),
@@ -1667,6 +1680,7 @@ fn run_inner(
                                 opts.port,
                                 &opts.out_dir,
                                 hot_token.as_deref(),
+                                control_port,
                                 false,
                                 opts.reset_state,
                             );
@@ -1838,6 +1852,7 @@ fn child_env(
     port: u16,
     out_dir: &Path,
     hot_token: Option<&str>,
+    control_port: Option<u16>,
     bluegreen: bool,
     reset_state: bool,
 ) -> Vec<(String, String)> {
@@ -1845,6 +1860,14 @@ fn child_env(
         ("IPE_WEB_PORT".to_owned(), port.to_string()),
         ("IPE_SERVER_PORT".to_owned(), port.to_string()),
     ];
+    // The loopback control-socket port for the shape-agnostic control channel
+    // (tui/cli/worker hot-swap + time-travel debugger). Allocated by `ipe watch`
+    // and injected like the port vars above; the child opens its control listener
+    // only when BOTH this and `IPE_WATCH_HOT_TOKEN` are present (fail-closed to no
+    // control surface). A release build's runtime never reads it.
+    if let Some(cp) = control_port {
+        env.push(("IPE_CONTROL_PORT".to_owned(), cp.to_string()));
+    }
     // Blue-green cutover: tell the emitted server it runs behind the watch
     // proxy so its client greets a reconnect with the positive "updated ✓"
     // toast instead of the "Reconnecting…" banner. Only the blue-green path
@@ -1999,6 +2022,77 @@ fn post_hot_appearance(port: u16, token: &str, body: &str) -> std::io::Result<bo
     }
     let head = String::from_utf8_lossy(&resp);
     Ok(head.starts_with("HTTP/1.1 200"))
+}
+
+/// Send one [`ControlFrame`] to the child's loopback control socket, presenting
+/// the session token, and read back the child's reply frame.
+///
+/// The parent end of the tui/cli/worker control transport, mirroring
+/// `post_hot_appearance`: a minimal blocking exchange over a raw std socket
+/// (loopback-only, dev-only), with a short connect/read timeout so a dead app
+/// cannot stall the watch loop. The wire is the runtime's ONE definition
+/// (`ipe_runtime_rust::control`) — the token is presented as its own
+/// length-delimited record ahead of the `encode_frame` body, exactly as the
+/// child's accept-loop expects.
+///
+/// Returns the decoded reply on success — a caller reads its
+/// [`ControlFrame::Ack`] to decide whether to proceed or fall back to a full
+/// rebuild.
+///
+/// # Errors
+/// An I/O error if the connection cannot be made, the exchange fails, or the
+/// frame cannot be encoded/decoded (a too-large frame or a malformed reply).
+#[allow(dead_code)] // the parent-send seam; per-shape watch callers land in later lanes
+fn send_control_frame(
+    port: u16,
+    token: &str,
+    frame: &ipe_runtime_rust::control::ControlFrame,
+) -> std::io::Result<ipe_runtime_rust::control::ControlFrame> {
+    use ipe_runtime_rust::control::{decode_frame, encode_frame};
+    use std::io::{Read as _, Write as _};
+    use std::net::{SocketAddr, TcpStream};
+    let body = encode_frame(frame).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "control frame exceeds the wire cap",
+        )
+    })?;
+    let token_bytes = token.as_bytes();
+    let token_len = u32::try_from(token_bytes.len()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "control token too long")
+    })?;
+    let addr = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500))?;
+    stream.set_read_timeout(Some(Duration::from_millis(1500)))?;
+    stream.set_write_timeout(Some(Duration::from_millis(1500)))?;
+    // The token record precedes the frame record: a 4-byte big-endian length
+    // prefix over the raw token bytes, matching the child's `read_record`.
+    stream.write_all(&token_len.to_be_bytes())?;
+    stream.write_all(token_bytes)?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+    // The reply is a single length-delimited frame; read the whole (small) record
+    // to EOF — the child closes after one reply. The cap bounds what a compromised
+    // child could make the parent buffer.
+    let mut resp = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                if let Some(head) = chunk.get(..n) {
+                    resp.extend_from_slice(head);
+                }
+                if resp.len() > ipe_runtime_rust::control::MAX_FRAME_LEN + 4 {
+                    break;
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let (reply, _consumed) = decode_frame(&resp)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    Ok(reply)
 }
 
 /// POST every edited `update` arm's transition patch to the running app's
@@ -2990,7 +3084,8 @@ mod tests {
         BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
         apply_build_accel_env, child_env, choose_build_accel, compile_failed_frame,
         dir_has_dep_rlib, emitted_binds_http, emitted_is_web, env_flag_on, first_error_line,
-        mint_hot_token, mpsc, schedule_resolve_retry, spawn_command, strip_ansi, watch_status_body,
+        mint_hot_token, mpsc, schedule_resolve_retry, send_control_frame, spawn_command,
+        strip_ansi, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3160,6 +3255,7 @@ mod tests {
             3000,
             Path::new("/tmp/ipe-out"),
             Some("deadbeef"),
+            Some(4567),
             false,
             false,
         );
@@ -3173,13 +3269,18 @@ mod tests {
                 .any(|(k, v)| k == "IPE_WATCH_HOT_APPEARANCE" && v == "1"),
             "a hot token present must activate the child's overlay via IPE_WATCH_HOT_APPEARANCE=1"
         );
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == "IPE_CONTROL_PORT" && v == "4567"),
+            "an allocated control port must be handed to the child as IPE_CONTROL_PORT"
+        );
     }
 
     /// No hot token (hot-swap off) means no overlay-activating flag reaches the
     /// child — the emitted app stays inert.
     #[test]
     fn child_env_omits_hot_appearance_without_token() {
-        let env = child_env(3000, Path::new("/tmp/ipe-out"), None, false, false);
+        let env = child_env(3000, Path::new("/tmp/ipe-out"), None, None, false, false);
         assert!(
             !env.iter().any(|(k, _)| k == "IPE_WATCH_HOT_APPEARANCE"),
             "without a hot token the child must not be told to activate the overlay"
@@ -3187,6 +3288,10 @@ mod tests {
         assert!(
             !env.iter().any(|(k, _)| k == "IPE_WATCH_HOT_TOKEN"),
             "without a hot token no control token is handed to the child"
+        );
+        assert!(
+            !env.iter().any(|(k, _)| k == "IPE_CONTROL_PORT"),
+            "without an allocated control port the child opens no control socket"
         );
     }
 
@@ -3375,6 +3480,65 @@ mod tests {
             serde_json::from_str(&watch_status_body(true, "")).expect("valid JSON");
         assert_eq!(parsed.get("ok"), Some(&serde_json::Value::Bool(true)));
         assert!(parsed.get("error").is_none());
+    }
+
+    /// The parent sender presents its token as a length-delimited record ahead of
+    /// the `encode_frame` body, then reads back one reply frame. Stand up a std
+    /// loopback listener that reflects the child's accept-loop contract (token
+    /// record, then frame record) and replies with an `Ack`; assert the round-trip
+    /// yields that `Ack` and that the token bytes arrived verbatim.
+    #[test]
+    fn send_control_frame_presents_token_then_reads_ack() {
+        use ipe_runtime_rust::control::{ControlFrame, decode_frame, encode_frame};
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .expect("bind an ephemeral loopback listener");
+        let port = listener.local_addr().expect("local addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept the sender");
+            // Read the token record: 4-byte length prefix then the token bytes.
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).expect("read token length");
+            let token_len = u32::from_be_bytes(len_buf) as usize;
+            let mut token = vec![0u8; token_len];
+            stream.read_exact(&mut token).expect("read token body");
+            // Drain the frame record (prefix + body) so the sender's write completes.
+            stream.read_exact(&mut len_buf).expect("read frame length");
+            let frame_len = u32::from_be_bytes(len_buf) as usize;
+            let mut frame = vec![0u8; frame_len];
+            stream.read_exact(&mut frame).expect("read frame body");
+            // Reply with a positive Ack, mirroring the child's ack stub.
+            let ack = ControlFrame::Ack {
+                ok: true,
+                detail: "ack".to_string(),
+            };
+            let out = encode_frame(&ack).expect("encode the ack");
+            stream.write_all(&out).expect("write the ack");
+            stream.flush().expect("flush the ack");
+            String::from_utf8(token).expect("token is utf8")
+        });
+
+        let frame = ControlFrame::Ack {
+            ok: true,
+            detail: "ping".to_string(),
+        };
+        let reply = send_control_frame(port, "session-secret", &frame)
+            .expect("the sender completes the exchange");
+        assert!(
+            matches!(reply, ControlFrame::Ack { ok: true, .. }),
+            "the sender reads back the child's positive Ack, got {reply:?}"
+        );
+        let seen_token = server.join().expect("server thread joins");
+        assert_eq!(
+            seen_token, "session-secret",
+            "the token record carried the presented token verbatim"
+        );
+        // Sanity: the reply bytes decode as the same frame the sender parsed.
+        let out = encode_frame(&reply).expect("re-encode the reply");
+        let (again, _) = decode_frame(&out).expect("the reply round-trips");
+        assert_eq!(again, reply);
     }
 
     /// ANSI colour and CSI sequences are removed while the surrounding text is
