@@ -158,7 +158,7 @@ impl State {
     }
 
     /// The cached documentation index, when it built successfully.
-    fn docs(&self) -> Option<&ipe_docs::Index> {
+    const fn docs(&self) -> Option<&ipe_docs::Index> {
         self.docs.as_ref()
     }
 }
