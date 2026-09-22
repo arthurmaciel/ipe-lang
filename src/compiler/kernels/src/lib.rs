@@ -11970,104 +11970,55 @@ impl StdlibKernel {
         matches!(self, Self::DebugLog | Self::DebugTodo | Self::DebugExplain)
     }
 
-    /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` / `Time.every`)
-    /// subsystem, including reserved pub/sub variants.
+    /// `true` when this variant is emitted through the TEA (`Cmd` / `Sub` /
+    /// `Time.every`) dispatch arm — every `class = Tea` wiring kernel EXCEPT the
+    /// view-less `Ipe.Tea.Worker.tea` app-entry (which routes through the UI
+    /// delegate chain, see [`Self::is_worker`]), PLUS the `class = Pure`
+    /// `HttpStream.chunks` `Sub` builder (a stream subscription emitted as a
+    /// `Sub`, whose `sub_subscribe_stream` symbol lives in `http_stream`).
+    ///
+    /// Derived from the [`Self::decl`] class column with those two named
+    /// carve-outs rather than a hand-mirrored variant set — like [`Self::is_db`]
+    /// / [`Self::is_web`]. The `TeaWorker` exclusion is exactly the boundary the
+    /// UI emitter domain owns; `tea_predicate_tracks_tea_class` pins both
+    /// carve-outs so any class/predicate drift fails the build.
     #[must_use]
     pub const fn is_tea(self) -> bool {
-        matches!(
-            self,
-            Self::CmdNone
-                | Self::CmdBatch
-                | Self::CmdPerform
-                | Self::CmdMap
-                | Self::TaskAttempt
-                | Self::SubNone
-                | Self::SubBatch
-                | Self::SubEvery
-                | Self::SubMap
-                | Self::TimeEvery
-                | Self::CmdPublish
-                | Self::CmdPublishNoEcho
-                | Self::SubSubscribeTopic
-                | Self::HttpStreamChunks
-                | Self::SubSubscribeWebSocket
-                | Self::JsSend
-                | Self::JsSubscribe
-                | Self::JsRequest
-                | Self::JsOpenSession
-                | Self::JsSessionFrames
-                | Self::JsSendToSession
-                | Self::JsCloseSession
-        )
+        // `HttpStream.chunks` is a `Sub`-shaped client stream — `class = Pure`
+        // (it must not force a TEA-only feature) but emitted through the TEA arm.
+        if matches!(self, Self::HttpStreamChunks) {
+            return true;
+        }
+        // Every other TEA kernel is `class = Tea`, save the view-less worker
+        // app-entry, which the UI delegate chain owns (`is_worker`).
+        matches!(self.decl().class, KernelClass::Tea) && !self.is_worker()
     }
 
-    /// `true` when this variant belongs to the `Ipe.Http.Server` / Middleware
-    /// / `RateLimit` subsystem.
+    /// `true` when this variant is emitted through the `Ipe.Http.Server` /
+    /// Middleware / `RateLimit` dispatch arm — every `class = Server` kernel,
+    /// PLUS the three `class = Pure` `Ipe.Http.Stream` client-relay builders
+    /// (`open` / `forEachChunk` / `close`) whose `http_stream` symbols the server
+    /// module append declares.
+    ///
+    /// Derived from the [`Self::decl`] class column with that one named
+    /// `HttpStream*` carve-out rather than a hand-mirrored variant set — like
+    /// [`Self::is_db`] / [`Self::is_web`]. `server_predicate_tracks_server_module_residency`
+    /// pins the carve-out, so a `class = Server` kernel a hand list forgot — or a
+    /// drift in the carve-out — fails the build rather than emitting `server::*`
+    /// with no module declaration (E0425/E0412).
     #[must_use]
     pub const fn is_server(self) -> bool {
+        if matches!(self.decl().class, KernelClass::Server) {
+            return true;
+        }
+        // The `Ipe.Http.Stream` client-relay builders are `class = Pure` (they
+        // must not force the server feature) but their `http_stream` symbols live
+        // in the module set the server append declares, so they route through the
+        // server emit arm. `HttpStream.chunks` is deliberately NOT here — it is a
+        // `Sub`-shaped stream handled via the TEA arm (see [`Self::is_tea`]).
         matches!(
             self,
-            Self::ServerGet
-                | Self::ServerPost
-                | Self::ServerPut
-                | Self::ServerDelete
-                | Self::ServerAny
-                | Self::ServerApi
-                | Self::ServerStatic
-                | Self::ServerMountApp
-                | Self::ServerListen
-                | Self::ServerText
-                | Self::ServerJson
-                | Self::ServerHtml
-                | Self::ServerWithStatus
-                | Self::ServerWithHeader
-                | Self::ServerRedirect
-                | Self::ServerParam
-                | Self::ServerQueryParam
-                | Self::ServerHeader
-                | Self::ServerGetCookie
-                | Self::ServerBody
-                | Self::ServerPath
-                | Self::ServerMethod
-                | Self::ServerCookieNew
-                | Self::ServerWithCookie
-                // ── Ipe.Server authed routes (fail-closed Principal mint) ──
-                | Self::ServerAuthConfig
-                | Self::ServerTokenBearer
-                | Self::ServerCookieToken
-                | Self::ServerWithRevocation
-                | Self::ServerGetAuthed
-                | Self::ServerPostAuthed
-                | Self::ServerPutAuthed
-                | Self::ServerDeleteAuthed
-                | Self::MiddlewareWithCors
-                | Self::MiddlewareWithLogging
-                | Self::MiddlewareWithBasicAuth
-                | Self::MiddlewareWithRateLimit
-                | Self::MiddlewareWithCsrf
-                | Self::RateLimitAllow
-                // ── Ipe.Http.Server.Stream (server-side) ───────────────────
-                | Self::StreamStream
-                | Self::StreamEmit
-                | Self::StreamFinish
-                | Self::StreamWithContentType
-                // ── Ipe.Http.Stream (client-side relay) ───────────────
-                | Self::HttpStreamOpen
-                | Self::HttpStreamForEachChunk
-                | Self::HttpStreamClose
-                // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────
-                | Self::WsDefaultCfg
-                | Self::WsWithOnConnect
-                | Self::WsWithOnMessage
-                | Self::WsWithOnClose
-                | Self::WsWithOnError
-                | Self::WsWithMaxMessageBytes
-                | Self::WsWithOriginPatterns
-                | Self::WsUpgrade
-                | Self::WsSendToClient
-                | Self::WsSendBinaryToClient
-                | Self::WsBroadcast
-                | Self::WsCloseClient
+            Self::HttpStreamOpen | Self::HttpStreamForEachChunk | Self::HttpStreamClose
         )
     }
 
@@ -12968,281 +12919,30 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` when this variant belongs to the `Ipe.Ui` / `Ipe.Html`
-    /// subsystem.
+    /// `true` when this variant belongs to the `Ipe.Ui` / `Ipe.Html` subsystem
+    /// — every `class = Ui` element/attribute builder, plus the `Ipe.Color.Ansi`
+    /// palette constructors (`qualifier = "TermColor"`), which are `class = Pure`
+    /// (they must not force a UI runtime feature) yet the UI emitter hoists their
+    /// appearance literals.
+    ///
+    /// Derived from the [`Self::decl`] class column plus that one named
+    /// `qualifier` carve-out rather than a hand-mirrored variant set — like
+    /// [`Self::is_db`] / [`Self::is_web`]. The `TermColor` carve-out is the sole
+    /// off-class member of the UI *emitter domain*; `ui_predicate_tracks_ui_class_plus_termcolor`
+    /// pins this predicate to its class/qualifier oracle, and the backend's
+    /// `ui_call_shape_domain_is_reached_by_the_dispatcher` pins the whole domain
+    /// (Ui/Web/Terminal + `TeaWorker` + `TermColor*`) to the class-routed
+    /// dispatcher so no emitter can be gated on a set that silently spans classes
+    /// the dispatcher separates.
     #[must_use]
-    #[allow(clippy::too_many_lines)] // exhaustive Ui/Html kernel enumeration
     pub const fn is_ui(self) -> bool {
-        matches!(
-            self,
-            Self::UiLayout
-                | Self::UiLayoutWith
-                | Self::HtmlRender
-                | Self::HtmlEscapeText
-                | Self::HtmlEscapeAttr
-                | Self::HtmlAttrToString
-                | Self::UiNone
-                | Self::UiText
-                | Self::UiHtml
-                | Self::UiCells
-                | Self::UiCellsNone
-                | Self::UiCellsText
-                | Self::UiCellsEl
-                | Self::UiCellsRow
-                | Self::UiCellsColumn
-                | Self::UiCellsCells
-                | Self::TuiUiSpacing
-                | Self::TuiUiPadding
-                | Self::TuiUiAlignLeft
-                | Self::TuiUiAlignRight
-                | Self::TuiUiCenter
-                | Self::TuiUiBold
-                | Self::TuiUiUnderline
-                | Self::TuiUiDim
-                | Self::TuiUiReverse
-                | Self::TuiUiColor
-                | Self::TuiUiBg
-                | Self::CliUiNone
-                | Self::CliUiText
-                | Self::CliUiLine
-                | Self::CliUiLines
-                | Self::CliUiBold
-                | Self::CliUiUnderline
-                | Self::CliUiDim
-                | Self::CliUiReverse
-                | Self::CliUiColor
-                | Self::CliUiBg
-                | Self::TermColorBlack
-                | Self::TermColorRed
-                | Self::TermColorGreen
-                | Self::TermColorYellow
-                | Self::TermColorBlue
-                | Self::TermColorMagenta
-                | Self::TermColorCyan
-                | Self::TermColorWhite
-                | Self::TermColorBrightBlack
-                | Self::TermColorBrightRed
-                | Self::TermColorBrightGreen
-                | Self::TermColorBrightYellow
-                | Self::TermColorBrightBlue
-                | Self::TermColorBrightMagenta
-                | Self::TermColorBrightCyan
-                | Self::TermColorBrightWhite
-                | Self::TermColorDefault
-                | Self::TermColorRgb
-                | Self::TermColorRgba
-                | Self::UiWidget
-                | Self::UiNode
-                | Self::UiTaggedNode
-                | Self::UiButton
-                | Self::UiLink
-                | Self::UiImage
-                | Self::UiAbove
-                | Self::UiBelow
-                | Self::UiOnLeft
-                | Self::UiOnRight
-                | Self::UiInFront
-                | Self::UiBehind
-                | Self::UiSpacing
-                | Self::UiPadding
-                | Self::UiPaddingXY
-                | Self::UiPaddingEach
-                | Self::UiWidth
-                | Self::UiHeight
-                | Self::UiCenterX
-                | Self::UiCenterY
-                | Self::UiAlignLeft
-                | Self::UiAlignRight
-                | Self::UiAlignTop
-                | Self::UiAlignBottom
-                | Self::UiPointer
-                | Self::UiClip
-                | Self::UiClipX
-                | Self::UiClipY
-                | Self::UiScrollbars
-                | Self::UiScrollbarX
-                | Self::UiScrollbarY
-                | Self::UiGridColumns
-                | Self::UiPx
-                | Self::UiFill
-                | Self::UiContent
-                | Self::UiShrink
-                | Self::UiFillPortion
-                | Self::UiVh
-                | Self::UiVw
-                | Self::UiMinimum
-                | Self::UiMaximum
-                | Self::UiRgb
-                | Self::UiRgba
-                | Self::UiWhite
-                | Self::UiBlack
-                | Self::UiTransparent
-                | Self::UiColorCss
-                | Self::BackgroundColor
-                | Self::BackgroundImage
-                | Self::BackgroundLinearGradient
-                | Self::BorderWidth
-                | Self::BorderRounded
-                | Self::BorderColor
-                | Self::BorderWidthEach
-                | Self::BorderShadow
-                | Self::BorderGlow
-                | Self::BorderInnerShadow
-                | Self::FontSize
-                | Self::FontColor
-                | Self::FontFamily
-                | Self::FontBold
-                | Self::FontItalic
-                | Self::HtmlTextNode
-                | Self::HtmlRawNode
-                | Self::HtmlNode
-                | Self::HtmlVoidNode
-                | Self::HtmlDoctype
-                | Self::HtmlTitleNode
-                | Self::HtmlToString
-                | Self::HtmlStyleNode
-                | Self::HtmlScriptNode
-                | Self::HtmlAttribute
-                | Self::HtmlBoolAttribute
-                | Self::HtmlNoAttr
-                | Self::UiOnClick
-                | Self::UiOnFocus
-                | Self::UiOnBlur
-                | Self::UiOnMouseOver
-                | Self::UiOnMouseOut
-                | Self::UiOnInput
-                | Self::UiOnChange
-                | Self::UiOnKeyDown
-                | Self::UiOnKeyUp
-                | Self::UiOnBool
-                | Self::UiOnSubmit
-                | Self::UiOnFile
-                | Self::HtmlOnClick
-                | Self::HtmlOnFocus
-                | Self::HtmlOnBlur
-                | Self::HtmlOnMouseOver
-                | Self::HtmlOnMouseOut
-                | Self::HtmlOnSubmit
-                | Self::HtmlOnInput
-                | Self::HtmlOnChange
-                | Self::HtmlOnKeyDown
-                | Self::HtmlOnKeyUp
-                | Self::HtmlOnBool
-                | Self::UiSquare
-                | Self::UiWidescreen
-                | Self::UiCinemascope
-                | Self::UiAspectRatio
-                | Self::UiAspectRatioWH
-                | Self::UiHtmlAttribute
-                | Self::UiName
-                | Self::UiStyle
-                | Self::UiTransitionRaw
-                | Self::UiGridTracksRaw
-                | Self::UiAnimateRaw
-                // ── Breakpoint ──────────────────────────────────────────
-                | Self::UiBreakpoint
-                | Self::UiMediaQuery
-                | Self::UiMobile
-                | Self::UiTablet
-                | Self::UiDesktop
-                | Self::UiDarkMode
-                | Self::UiLightMode
-                | Self::UiReducedMotion
-                // ── PseudoClass opaque constants + Ui.onPseudo ────────────
-                | Self::UiOnPseudo
-                | Self::UiHover
-                | Self::UiFocus
-                | Self::UiFocusVisible
-                | Self::UiActive
-                | Self::UiDisabled
-                | Self::BackgroundHoverColor
-                | Self::BackgroundFocusColor
-                | Self::BackgroundActiveColor
-                | Self::BackgroundDisabledColor
-                | Self::BorderSolid
-                | Self::BorderDashed
-                | Self::BorderDotted
-                | Self::BorderHoverColor
-                | Self::BorderFocusColor
-                | Self::BorderActiveColor
-                | Self::BorderHoverWidth
-                | Self::BorderHoverRounded
-                | Self::FontWeight
-                | Self::FontSemiBold
-                | Self::FontRegular
-                | Self::FontLight
-                | Self::FontExtraBold
-                | Self::FontBlack
-                | Self::FontUnderline
-                | Self::FontNoDecoration
-                | Self::FontLineThrough
-                | Self::FontLetterSpacing
-                | Self::FontWordSpacing
-                | Self::FontAlignLeft
-                | Self::FontAlignRight
-                | Self::FontAlignCenter
-                | Self::FontCenter
-                | Self::FontJustify
-                | Self::FontSansSerif
-                | Self::FontSerif
-                | Self::FontMonospace
-                | Self::FontHoverColor
-                | Self::FontFocusColor
-                | Self::FontActiveColor
-                | Self::FontDisabledColor
-                | Self::FontHoverSize
-                // ── Ipe.Ui.Region ──────────────────────────────────────
-                | Self::RegionMainContent
-                | Self::RegionNavigation
-                | Self::RegionFooter
-                | Self::RegionAside
-                | Self::RegionHeading
-                | Self::RegionLabel
-                | Self::RegionAnnounce
-                | Self::RegionAnnounceUrgently
-                // ── Ui.describe + desc* constructors ─────────────────────
-                | Self::UiDescribe
-                | Self::UiDescNone
-                | Self::UiDescParagraph
-                | Self::UiDescMain
-                | Self::UiDescNavigation
-                | Self::UiDescContentInfo
-                | Self::UiDescComplementary
-                | Self::UiDescLivePolite
-                | Self::UiDescLiveAssertive
-                | Self::UiDescHeading
-                | Self::UiDescLabel
-                // ── Ipe.Ui.Input ───────────────────────────────────────
-                | Self::InputLabelAbove
-                | Self::InputLabelBelow
-                | Self::InputLabelLeft
-                | Self::InputLabelRight
-                | Self::InputLabelHidden
-                | Self::InputPlaceholder
-                | Self::InputText
-                | Self::InputMultiline
-                | Self::InputEmail
-                | Self::InputUsername
-                | Self::InputSearch
-                | Self::InputCurrentPassword
-                | Self::InputNewPassword
-                | Self::InputCheckbox
-                | Self::InputSlider
-                | Self::InputOption
-                | Self::InputRadio
-                | Self::InputRadioRow
-                // ── Ipe.Ui.Lazy ────────────────────────────────────────
-                | Self::LazyLazy
-                | Self::LazyLazy2
-                | Self::LazyLazy3
-                | Self::LazyLazy4
-                | Self::LazyLazy5
-                // ── Ipe.Ui.Keyed ────────────────────────────────────────────
-                | Self::KeyedColumn
-                | Self::KeyedRow
-                // ── Debug.explain — dev-only, Ui class ──────────────────
-                | Self::DebugExplain
-        )
+        if matches!(self.decl().class, KernelClass::Ui) {
+            return true;
+        }
+        // The `Ipe.Color.Ansi` palette constructors are `class = Pure` but belong
+        // to the UI emitter domain (their appearance literals hoist). Keyed on the
+        // `TermColor` qualifier so a new palette constructor joins by construction.
+        matches!(self.decl().qualifier, "TermColor")
     }
 
     /// The fixed wire event name for a `Ipe.Html.Events` builder (`onClick` →
@@ -13352,26 +13052,20 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` when this variant belongs to the `Ipe.Web` app-entry subsystem.
+    /// `true` when this variant belongs to the `Ipe.Web` subsystem — the
+    /// `Ipe.Web` app-entry kernels plus the Task-shaped `PubSub.publish` /
+    /// `publishNoEcho`, all of which are `class = Web` and whose symbols live in
+    /// `ipe_runtime::web` (gated by the `web` Cargo feature).
+    ///
+    /// Derived from the [`Self::decl`] class column (const, so this predicate
+    /// stays const) rather than hand-mirroring the variant set — exactly like
+    /// [`Self::is_db`]. `is_web` is the SOLE selector that fires the `live`
+    /// feature-module append; a `class = Web` kernel a hand list forgot would
+    /// leave `web::*` out of scope in the emitted crate (E0425). Reading the
+    /// class makes that drift unrepresentable, not merely test-detectable.
     #[must_use]
     pub const fn is_web(self) -> bool {
-        matches!(
-            self,
-            Self::WebApp
-                | Self::WebEmbed
-                | Self::WebAppRouted
-                | Self::WebAppWith
-                | Self::WebRoute
-                | Self::WebRenderStatic
-                // The Task-shaped `PubSub.publish` / `publishNoEcho` are not
-                // app-entry kernels, but they share the `web` module: their
-                // symbols live in `ipe_runtime::web::pubsub` (gated by the `web`
-                // Cargo feature). A program that uses either — even without a
-                // Web.tea — must have the `live` feature enabled so
-                // `pubsub_publish` / `pubsub_publish_no_echo` are in scope.
-                | Self::PubSubPublish
-                | Self::PubSubPublishNoEcho
-        )
+        matches!(self.decl().class, KernelClass::Web)
     }
 
     /// `true` when this variant is the `Ipe.Terminal` full-screen app-entry.
@@ -15132,43 +14826,53 @@ mod tests {
         }
     }
 
-    /// `is_web()` MUST be true for exactly the kernels whose emitted symbols live
-    /// in the `web` runtime module. The oracle is: `class == Web` OR
-    /// `required_runtime_module() == Some(RuntimeModule::Web)`.
-    /// `PubSubPublish` / `PubSubPublishNoEcho` are `class = Tea` but their symbols
-    /// live in `ipe_runtime::web::pubsub` — both the predicate and
-    /// `required_runtime_module` cover them, so the oracle naturally includes them.
-    /// Both directions are asserted: a forgotten `class = Web` kernel → the `live`
+    /// `is_web()` is derived from `class == Web` (like `is_db`). This pins that
+    /// derivation to an INDEPENDENT residency oracle: the `web` runtime module
+    /// hosts exactly the `Ipe.Web` app-entry family and the Task-shaped
+    /// `PubSub.publish` / `publishNoEcho` — all `class = Web`, all carrying
+    /// `required_runtime_module() == Some(Web)`. `CmdPublish` / `CmdPublishNoEcho`
+    /// / `SubSubscribeTopic` also carry `required_runtime_module=Some(Web)` but
+    /// are `class = Tea` and NOT `is_web` — the lowerer sets `uses_web` for them
+    /// through the `required_runtime_module` scan, not via `is_web`. Both
+    /// directions are asserted: a forgotten `class = Web` kernel → the `live`
     /// feature-module append never fires → `web::*` out of scope (E0425).
     #[test]
     fn web_predicate_tracks_web_module_residency() {
         use super::KernelClass;
         for k in StdlibKernel::ALL {
             let decl = k.decl();
-            // Primary oracle: class=Web (the Ipe.Web app-entry family).
-            // Additional carve-outs: `PubSubPublish` / `PubSubPublishNoEcho`
-            // have `class=Tea` but their symbols live in `ipe_runtime::web::pubsub`
-            // — they are listed in `is_web` so the `live` append fires, and they
-            // also carry `required_runtime_module=Some(Web)` so both paths agree.
-            // `CmdPublish` / `CmdPublishNoEcho` / `SubSubscribeTopic` also carry
-            // `required_runtime_module=Some(Web)` but are NOT `is_web` — the
-            // lowerer sets `uses_web` for them through the `required_runtime_module`
-            // scan, not via `is_web`. Both directions are asserted so a new
-            // class=Web kernel forgotten in the predicate fails RED.
-            let expected = decl.class == KernelClass::Web
-                || matches!(
-                    k,
-                    StdlibKernel::PubSubPublish | StdlibKernel::PubSubPublishNoEcho
-                );
+            // Independent residency oracle: the kernels whose symbols the `web`
+            // append declares are exactly the `Ipe.Web` app-entry family and the
+            // two `PubSub.publish*` builders. Named by variant, not by reading the
+            // class column, so it is a genuine second statement of the fact.
+            let web_resident = matches!(
+                k,
+                StdlibKernel::WebApp
+                    | StdlibKernel::WebEmbed
+                    | StdlibKernel::WebAppRouted
+                    | StdlibKernel::WebAppWith
+                    | StdlibKernel::WebRoute
+                    | StdlibKernel::WebRenderStatic
+                    | StdlibKernel::PubSubPublish
+                    | StdlibKernel::PubSubPublishNoEcho
+            );
             assert_eq!(
                 k.is_web(),
-                expected,
+                web_resident,
                 "{k:?} (class={:?}): is_web()={} but web-module residency oracle={} \
                  — a forgotten class=Web kernel causes the emitted crate to reference \
                  web::* with no module declaration (E0425)",
                 decl.class,
                 k.is_web(),
-                expected,
+                web_resident,
+            );
+            assert_eq!(
+                k.is_web(),
+                decl.class == KernelClass::Web,
+                "{k:?}: is_web()={} disagrees with class==Web ({}) — is_web is \
+                 derived from the class column and must equal it exactly",
+                k.is_web(),
+                decl.class == KernelClass::Web,
             );
         }
     }
@@ -15310,6 +15014,87 @@ mod tests {
                     k.decl().class
                 );
             }
+        }
+    }
+
+    /// `is_worker()` MUST be true for exactly the view-less `Ipe.Tea.Worker.tea`
+    /// app-entry — a `class = Tea` kernel that the UI delegate chain owns rather
+    /// than the TEA dispatch arm. It is load-bearing in [`super::StdlibKernel::is_tea`]
+    /// (which excludes it) and gates the `worker` runtime module. The oracle names
+    /// the qualifier/name pair independently of the predicate; both directions are
+    /// asserted, so a second worker entry, or a drift in the single one, fails.
+    #[test]
+    fn worker_predicate_tracks_tea_worker() {
+        for k in StdlibKernel::ALL {
+            let decl = k.decl();
+            let expected = decl.qualifier == "Worker" && decl.name == "tea";
+            assert_eq!(
+                k.is_worker(),
+                expected,
+                "{k:?} (qualifier={:?}, name={:?}): is_worker()={} but the \
+                 `Worker.tea` oracle={} — is_worker selects the view-less TEA \
+                 app-entry the UI delegate chain owns; a drift here silently moves \
+                 the is_tea/UI-domain boundary (IPE-I0001 ICE class)",
+                decl.qualifier,
+                decl.name,
+                k.is_worker(),
+                expected,
+            );
+        }
+    }
+
+    /// `is_tea()` is derived from `class == Tea`, minus the worker app-entry the
+    /// UI delegate chain owns, plus the `class = Pure` `HttpStream.chunks` `Sub`.
+    /// This pins that derivation to an INDEPENDENT oracle stated over the class
+    /// column and named carve-outs. Both directions are asserted, so any drift —
+    /// a new `class = Tea` kernel, a reclassified worker, or a moved `chunks` —
+    /// fails the build rather than dispatching a TEA kernel through the wrong arm.
+    #[test]
+    fn tea_predicate_tracks_tea_class() {
+        use super::KernelClass;
+        for k in StdlibKernel::ALL {
+            let decl = k.decl();
+            // Independent oracle: every Tea-class kernel except the worker
+            // app-entry, plus the one Pure `HttpStream.chunks` Sub builder.
+            let tea_dispatched = (decl.class == KernelClass::Tea && !k.is_worker())
+                || matches!(k, StdlibKernel::HttpStreamChunks);
+            assert_eq!(
+                k.is_tea(),
+                tea_dispatched,
+                "{k:?} (class={:?}): is_tea()={} but the TEA-dispatch oracle={} — \
+                 a drift routes a TEA kernel through the wrong emit arm (or misses \
+                 its arm), the IPE-I0001 ICE class the class↔predicate split caused",
+                decl.class,
+                k.is_tea(),
+                tea_dispatched,
+            );
+        }
+    }
+
+    /// `is_ui()` is derived from `class == Ui`, plus the `Ipe.Color.Ansi` palette
+    /// constructors (`qualifier == "TermColor"`, which are `class = Pure`). This
+    /// pins that derivation to an INDEPENDENT oracle over the class column and the
+    /// named `TermColor` qualifier carve-out. Both directions are asserted, so a
+    /// new `class = Ui` kernel, or a palette constructor whose qualifier drifts,
+    /// fails the build rather than missing the UI emitter (lost appearance-literal
+    /// hoisting — the divergence class #2733 patched).
+    #[test]
+    fn ui_predicate_tracks_ui_class_plus_termcolor() {
+        use super::KernelClass;
+        for k in StdlibKernel::ALL {
+            let decl = k.decl();
+            let ui_domain = decl.class == KernelClass::Ui || decl.qualifier == "TermColor";
+            assert_eq!(
+                k.is_ui(),
+                ui_domain,
+                "{k:?} (class={:?}, qualifier={:?}): is_ui()={} but the UI-domain \
+                 oracle={} — a drift drops a UI kernel from its emitter (lost \
+                 appearance-literal hoisting / IPE-I0001 ICE class)",
+                decl.class,
+                decl.qualifier,
+                k.is_ui(),
+                ui_domain,
+            );
         }
     }
 
