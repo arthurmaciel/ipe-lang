@@ -1,5 +1,5 @@
 <div align="center">
-    <img width="250" height="251" alt="Yellow Ipê (Handroanthus serratifolius)" src="https://github.com/user-attachments/assets/870f8739-69ab-4b05-af6a-b56c3e615e1c" />
+    <img width="180" height="180" alt="Yellow Ipê (Handroanthus serratifolius)" src="https://github.com/user-attachments/assets/870f8739-69ab-4b05-af6a-b56c3e615e1c" />
 </div>
 
 <br />
@@ -16,14 +16,14 @@
 
 > [!CAUTION]
 > Although most features work, the code is under a thorough review that may last
-> 3–4 months. Please consider [supporting the project](#support) so it is ready sooner.
+> 3–4 months. Please consider [supporting the project](#support) so it is ready sooner :)
 
 **Ipê** (pronounced [/ip'e/](https://ipa-reader.com/?text=%09ip%E2%80%B2e&voice=Vitoria)) is a
 pure-functional language that compiles to Rust. It extends [Elm](https://elm-lang.org/)'s 
-syntax and partially implement [Sky lang](https://sky-lang.org/) standard library. 
+syntax and partially implements [Sky lang](https://sky-lang.org/) standard library. 
 
 It aims to be a community-centered programming language — check out our [principles](PRINCIPLES.md)
-to learn more abou it.
+to learn more about it.
 
 ## Install
 
@@ -42,19 +42,20 @@ ipe run                 # serves at http://localhost:8000 (server-rendered HTML 
 On a TTY `ipe init` asks the shape (`web` / `tui` / `cli` / `server` / `script`) and, for web shape, 
 is asks which runtime is preferred — `served` (a co-located SSR + SSE server) or `solo` (a wasm client); 
 
+
 You can name `shape`, `runtime` and `host` to skip the wizard: 
 ```sh
 ipe init myapp web solo android
 ```
 
-Check our [getting started](docs/guide/getting-started.md) guide.
+Check [shapes](#shapes) bellow and our [getting started](docs/guide/getting-started.md) guide.
 
 ## Performance (dev loop)
 
-Wall-clock, measured by [`tools/scripts/perf/bench.sh`](tools/scripts/perf) on the reference
+Wall-clock, measured by [`tools/scripts/perf/bench.sh`](tools/scripts/perf) on the `web`
 served counter with the released binary:
 
-- **App recompilation:** ≈ 10 seconds — needed only for a **type** change (a `Model` field, a signature).
+- **App recompilation:** ≈ 10 seconds — needed only for a **type** change (a `Model` field, a function type signature).
 - **Dev watch hot reload:** ≈ 500 **milliseconds** — every other edit (text, `init`, `update`, subscriptions, styles) hot-swaps into the running app, no `cargo`.
 - Cold build ≈ 18 s · release binary 7.0 MB · peak RAM 7.8 MB. → [faster builds](docs/topics/faster-builds.md)
 
@@ -70,13 +71,13 @@ on the terminal too.
 | Tui | `Tui.tea` | Full-screen terminal UIs |
 | Cli | `Cli.tea` | Line-oriented CLIs and REPLs |
 | Worker | `Worker.tea` | A view-less TEA loop |
-| Script | bare `main : Task Error ()` | Scripts, one-shot tools, cron — and where you call `Server.listen` |
+| Direct | bare `main : Task Error ()` | Scripts, one-shot tools, cron, `Server.listen` and every other `Task` directly |
 
 Web / Tui / Cli / Worker follow [The Elm Architecture](https://guide.elm-lang.org/architecture/);
-Web, Tui, and Cli share one `view : Model -> Element Msg`. → [examples](examples/), `ipe doc Ui`
+Check out the [examples](examples/) or run `ipe doc Ui` in the terminal to learn more.
 
-A server is not its own runtime shape — you mount a web TEA app and hand-written endpoints into
-one `Ipe.Http.Server` on a single port (the `ipe init … server` scaffold seeds exactly this):
+It is interesting to know that you can run a `Server` with many endpoints and also mounting a `web`
+on a single port:
 
 ```elm
 main =
@@ -95,15 +96,15 @@ main =
 ## Features
 
 - **Elm syntax** — Hindley–Milner inference, exhaustive `case`, immutable data; no `null`, no runtime exceptions.
-- **Batteries-included stdlib** — web (SSR + SSE), typed HTTP and SQL, auth, email, cache, pub/sub, WebSockets — all behind one `Task Error a` boundary with a typed `Error`. → `ipe doc`
-- **Compiles to readable Rust**, incrementally (salsa); `ipe watch` hot-swaps most edits and recompiles only on a type change. → [faster builds](docs/topics/faster-builds.md)
-- **No authored abrupt failure** — the compiler and runtime carry no `panic!` / `unwrap` / `expect` / index panic; every failure is a typed `Result` or diagnostic. → [PRINCIPLES.md](PRINCIPLES.md)
+- **Comprehensive stdlib** — web (SSR + SSE), typed HTTP and SQL, auth, email, cache, pub/sub, WebSockets — all behind one `Task Error a` boundary with a typed `Error`.
+- **Compiles to readable Rust**, incrementally (salsa); `ipe watch` hot-swaps most edits and recompiles only on a type change.
+- **No authored abrupt failure** — the compiler and runtime carry no `panic!` / `unwrap` / `expect` / index panic; every failure is a typed `Result` or diagnostic.
 - **Capabilities are inferred, not declared** — `ipe capabilities <entry>` reports exactly what a program may do (network, fs, env, ffi, …). → [capabilities](docs/reference/capabilities.md)
 - **Accessible by default** — real `<button>`s, semantic landmarks, a contrast-safe focus ring, and reduced-motion honored out of the box. → `ipe doc Ui`
 - **Rust FFI** — `ipe rust add <crate>` binds a crate as a generated `Rust.<Crate>` interface (sandbox-inspected; discloses the `native-ffi` capability). → [dependencies](docs/guide/getting-started.md)
-- **Delivery grammar** (replaces the retired `ipe pack`) — `ipe build web desktop|ios|android` for a fast dev bundle, `ipe release web desktop|ios|android` for a production distributable (desktop-webview or mobile system-webview shell).
+- **Delivery grammar** — `ipe build web desktop|ios|android` for a fast dev bundle, `ipe release web desktop|ios|android` for a production distributable (desktop-webview or mobile system-webview shell).
 - **Eject to plain Rust** — `ipe eject` vendors and tree-shakes the runtime into a standalone Cargo project you build with no `ipe` toolchain.
-- **Static binary** — `ipe build --static` produces a fully-static musl single binary — copy and run anywhere. → [static compilation](#static-compilation)
+- **Static binary** — `ipe build --static` produces a fully-static musl single binary — copy and run anywhere.
 
 ## Tooling
 
@@ -114,14 +115,13 @@ main =
 
 ## Static compilation
 
-`ipe build --static` produces a fully-static musl binary (zero runtime dependencies). Once:
-`rustup target add x86_64-unknown-linux-musl` and install `musl-tools`. `x86_64` is CI-verified;
-`aarch64` is wired pending toolchain confirmation. → [faster builds](docs/topics/faster-builds.md)
+`ipe build --static` produces a fully-static musl binary (zero runtime dependencies), afer running
+`rustup target add x86_64-unknown-linux-musl`.
 
 ## Support
 
 Contributions are **very** welcome, in order of current need:
 
-- **Donations** — [support Ipê's development](https://ko-fi.com/arthur_maciel??g=1). Thank you!
-- **Pull requests** — most valuable are security / soundness fixes (a mis-compilation, a panic on valid input, an unsound emit). Every PR must be human-reviewed before submission — there is not enough time to review unsupervised AI code.
+- **Donations** — [support Ipê's development](https://ko-fi.com/arthur_maciel??g=1). Thank you! ❤️
+- **Pull requests** — most valuable are security / correctness / soundness fixes (a mis-compilation, a panic on valid input, an unsound emit). Every PR must be human-reviewed before submission — unfortunately there is not enough time to review unsupervised AI code.
 - **Bug reports** — [report any bug you find](https://github.com/arthurmaciel/ipe-lang/issues).
