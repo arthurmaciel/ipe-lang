@@ -1287,6 +1287,11 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         build_emitted_project(&mut app_cargo, "the release binary", None, &out_dir)?;
 
         let app_target_dir = cargo_target_directory(&out_dir)?;
+        // Cargo names the built binary after the emitted crate IDENTITY (the
+        // path-uniquified `<friendly>_<hash>`), so the artifact is LOCATED by that
+        // identity; it is delivered under the plain FRIENDLY name so the hash the
+        // crate carries only to own a unique shared-target slot never leaks into a
+        // distributed filename.
         let bin_name = emitted_bin_name(&out_dir);
         let bin_path = app_target_dir
             .join(triple.as_str())
@@ -1304,7 +1309,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             path: out_dir.clone(),
             source: e,
         })?;
-        let dest = out_dir.join(&bin_name);
+        let dest = out_dir.join(friendly_artifact_name(manifest_parsed.as_ref()));
         std::fs::copy(&bin_path, &dest).map_err(|e| CliError::Io {
             path: dest.clone(),
             source: e,
@@ -2669,9 +2674,13 @@ pub fn run_exec(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// Read the `[package] name` from an emitted project's `Cargo.toml` so
-/// `ipe run` / `ipe exec` / `ipe test` locate the correct binary. Falls back
-/// to `"ipe-app"` when the manifest is absent or unparseable — never panics.
+/// Read the emitted crate IDENTITY from an emitted project's `Cargo.toml`
+/// `[package] name` so `ipe run` / `ipe exec` / `ipe test` locate the correct
+/// built binary — cargo names the binary artifact after the crate, so this is
+/// the per-project path-uniquified identity (`<friendly>_<hash>`), NOT the
+/// user-facing friendly name. Falls back to `"ipe-app"` when the manifest is
+/// absent or unparseable — never panics. For a user-facing artifact filename or
+/// message use [`friendly_artifact_name`], which never carries the hash.
 pub fn emitted_bin_name(crate_dir: &Path) -> String {
     let manifest = crate_dir.join("Cargo.toml");
     let Ok(text) = std::fs::read_to_string(&manifest) else {
@@ -2690,6 +2699,19 @@ pub fn emitted_bin_name(crate_dir: &Path) -> String {
         }
     }
     "ipe-app".to_owned()
+}
+
+/// The user-facing artifact name for a project — the plain (sanitized) friendly
+/// name, NEVER carrying the crate-identity hash. Used for a distributed artifact
+/// filename or a "built X" message, so the hash the emitted crate uses to own a
+/// unique shared-target slot stays internal. A single-file (no-manifest) build
+/// has no project name and falls back to `"ipe-app"`, matching the emitted
+/// single-file default.
+fn friendly_artifact_name(manifest: Option<&project::ProjectManifest>) -> String {
+    manifest.map_or_else(
+        || "ipe-app".to_owned(),
+        |m| ipe_backend_rust::sanitize_cargo_name(&m.name),
+    )
 }
 
 /// The target directory cargo will use for a build with CWD = `crate_dir`,

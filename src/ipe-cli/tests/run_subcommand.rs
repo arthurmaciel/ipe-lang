@@ -185,11 +185,12 @@ fn emitted_cargo_toml_name_matches_binary_ipe_run_will_exec() {
         "single-file build must emit name = \"ipe-app\", got:\n{cargo_toml_text}"
     );
 
-    // --- Case 2: manifest build with a project name that sanitizes to a slug ---
-    // The manifest name "Crc32 Checksum" sanitizes to "crc32-checksum".
-    // After build_project the emitted Cargo.toml must carry that slug, and
-    // ipe run's binary lookup must find a file named "crc32-checksum" — not
-    // "ipe-app".
+    // --- Case 2: manifest build → name is the FRIENDLY slug + a path-derived
+    // crate-identity hash suffix. The manifest name "Crc32 Checksum" sanitizes to
+    // "crc32-checksum"; the emitted crate identity is "crc32-checksum_<hash>" so
+    // two same-named projects at different paths own separate shared-target slots.
+    // The `ipe run` binary lookup reads THIS emitted name (SSOT), so it locates
+    // the hashed binary cargo produces — never "ipe-app".
     let pkg_dir = dir.join("pkg");
     let src_dir = pkg_dir.join("src");
     let _ = fs::create_dir_all(&src_dir);
@@ -200,25 +201,73 @@ fn emitted_cargo_toml_name_matches_binary_ipe_run_will_exec() {
     .expect("write package.ipe");
     fs::write(src_dir.join("Main.ipe"), SRC).expect("write Main.ipe");
 
+    let emitted_pkg_name = |out: &std::path::Path| -> String {
+        let text =
+            fs::read_to_string(out.join("Cargo.toml")).expect("emitted Cargo.toml must exist");
+        text.lines()
+            .find_map(|l| {
+                let t = l.trim();
+                t.strip_prefix("name")
+                    .and_then(|r| r.trim_start().strip_prefix('='))
+                    .map(|r| r.trim().trim_matches('"').to_owned())
+            })
+            .filter(|n| !n.is_empty())
+            .expect("emitted Cargo.toml must carry a [package] name")
+    };
+
     let out_pkg = dir.join("out_pkg");
     let built = ipe::build_project(&pkg_dir.join("package.ipe"), &out_pkg, &runtime_dir);
     assert!(built.is_ok(), "project build must succeed: {built:?}");
+    let name_pkg = emitted_pkg_name(&out_pkg);
 
-    let cargo_toml_text =
-        fs::read_to_string(out_pkg.join("Cargo.toml")).expect("emitted Cargo.toml must exist");
+    // Friendly base preserved as the prefix; the crate identity carries a hash
+    // suffix so the plain slug never has to fight for a shared-target slot.
     assert!(
-        cargo_toml_text.contains("name = \"crc32-checksum\""),
-        "project build must emit name = \"crc32-checksum\" (sanitized from \
-         \"Crc32 Checksum\"), got:\n{cargo_toml_text}"
+        name_pkg.starts_with("crc32-checksum_"),
+        "project build must emit the friendly slug as the crate-identity prefix, got: {name_pkg}"
     );
-    // The SSOT guarantee: the name the binary-resolution reads equals the name
-    // cargo will produce as a binary artifact.  "ipe-app" must NOT appear as
-    // the package name — that would be the pre-fix bug.
+    assert_ne!(
+        name_pkg, "crc32-checksum",
+        "the emitted crate identity must carry a path-derived suffix"
+    );
+    assert_ne!(
+        name_pkg, "ipe-app",
+        "a manifest build must NOT collapse to the single-file default"
+    );
+
+    // Deterministic: re-emitting the SAME project (same canonical path) yields
+    // the SAME crate identity (PRINCIPLE 2 Correctness; reproducible goldens).
+    let out_pkg2 = dir.join("out_pkg2");
+    ipe::build_project(&pkg_dir.join("package.ipe"), &out_pkg2, &runtime_dir)
+        .expect("re-emit must succeed");
+    assert_eq!(
+        name_pkg,
+        emitted_pkg_name(&out_pkg2),
+        "the same project path must yield the same crate identity every build"
+    );
+
+    // Distinct: a project with the SAME friendly name at a DIFFERENT canonical
+    // path gets a DIFFERENT crate identity — the anti-thrash guarantee.
+    let pkg_dir_b = dir.join("pkg_b");
+    let src_dir_b = pkg_dir_b.join("src");
+    let _ = fs::create_dir_all(&src_dir_b);
+    fs::write(
+        pkg_dir_b.join("package.ipe"),
+        "module Package exposing (package)\n\n\npackage =\n    { name = \"Crc32 Checksum\", version = \"0.1.0\" }\n",
+    )
+    .expect("write package.ipe (b)");
+    fs::write(src_dir_b.join("Main.ipe"), SRC).expect("write Main.ipe (b)");
+    let out_pkg_b = dir.join("out_pkg_b");
+    ipe::build_project(&pkg_dir_b.join("package.ipe"), &out_pkg_b, &runtime_dir)
+        .expect("second project build must succeed");
+    let name_pkg_b = emitted_pkg_name(&out_pkg_b);
     assert!(
-        !cargo_toml_text
-            .lines()
-            .any(|l| l.trim() == "name = \"ipe-app\""),
-        "project build must NOT emit name = \"ipe-app\" as the package name"
+        name_pkg_b.starts_with("crc32-checksum_"),
+        "second project keeps the same friendly base, got: {name_pkg_b}"
+    );
+    assert_ne!(
+        name_pkg, name_pkg_b,
+        "two same-named projects at different paths must own DISTINCT crate identities"
     );
 
     let _ = fs::remove_dir_all(&dir);
