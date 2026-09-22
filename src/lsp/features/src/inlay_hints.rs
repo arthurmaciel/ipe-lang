@@ -424,7 +424,7 @@ mod tests {
             })
             .collect();
         assert!(
-            labels.iter().any(|l| *l == ": Int"),
+            labels.contains(&": Int"),
             "local `let x = 41` must yield a `: Int` hint; got {labels:?}"
         );
     }
