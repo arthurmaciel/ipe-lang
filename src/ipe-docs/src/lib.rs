@@ -150,6 +150,30 @@ impl Index {
         Ok(builder.finish())
     }
 
+    /// Build an index from sources that need no filesystem access.
+    ///
+    /// Aggregates the embedded stdlib symbol/module docs, the embedded
+    /// diagnostic explain pages ([`ipe_diagnostics::ALL_CODES`] +
+    /// [`ipe_diagnostics::explain_page`]), and the `IPE_*` env-var registry.
+    /// Constructs and CLI commands are omitted — those are read from the
+    /// filesystem / injected by the CLI and are not available to a tool (such
+    /// as the LSP server) that may run outside the compiler source tree.
+    ///
+    /// This is the entry point long-lived tools use to build the index once and
+    /// cache it, since it depends only on data compiled into the binary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if any embedded stdlib module fails to parse.
+    pub fn build_embedded() -> Result<Self, String> {
+        let mut builder = IndexBuilder::new();
+        builder.add_stdlib()?;
+        builder.add_compiled_stdlib()?;
+        builder.add_diagnostics_embedded();
+        builder.add_env_vars();
+        Ok(builder.finish())
+    }
+
     /// Resolve a documentation key to its entry, or `None` if no entry exists.
     ///
     /// Keys are matched case-sensitively. Accepted forms:
@@ -363,6 +387,28 @@ impl IndexBuilder {
             self.entries.insert(code, entry);
         }
         Ok(())
+    }
+
+    /// Index every diagnostic explain page compiled into the binary.
+    ///
+    /// Mirrors [`Self::add_diagnostics`] but reads the pages from
+    /// [`ipe_diagnostics::explain_page`] over [`ipe_diagnostics::ALL_CODES`]
+    /// rather than the filesystem, so it works in a tool running outside the
+    /// compiler source tree. A code whose page is absent is skipped (fail-closed
+    /// — no entry rather than an empty one).
+    pub fn add_diagnostics_embedded(&mut self) {
+        for &code in ipe_diagnostics::ALL_CODES {
+            let Some(text) = ipe_diagnostics::explain_page(code) else {
+                continue;
+            };
+            let key = code.as_str().to_owned();
+            let entry = Entry {
+                kind: EntryKind::Diagnostic,
+                source_key: key.clone(),
+                text: text.to_owned(),
+            };
+            self.entries.insert(key, entry);
+        }
     }
 
     /// Read and index all `.md` files from `content_dir` as construct entries.
@@ -620,6 +666,41 @@ mod tests {
         assert!(
             entry.text.contains("record field"),
             "explain page should discuss record fields"
+        );
+    }
+
+    /// The filesystem-free `build_embedded` index resolves stdlib symbols,
+    /// embedded diagnostic pages, and env vars — the sources a long-lived tool
+    /// (the LSP server) relies on when it runs outside the compiler tree.
+    #[test]
+    fn build_embedded_resolves_symbol_diagnostic_and_env_var() {
+        let idx = Index::build_embedded().expect("embedded index build must succeed");
+
+        let sym = idx
+            .resolve("Maybe.withDefault")
+            .expect("stdlib symbol must resolve in the embedded index");
+        assert_eq!(sym.kind, EntryKind::Symbol);
+
+        let diag = idx
+            .resolve("IPE-L0107")
+            .expect("embedded diagnostic page must resolve");
+        assert_eq!(diag.kind, EntryKind::Diagnostic);
+        assert!(!diag.text.is_empty(), "explain page text must be present");
+
+        let env = idx
+            .resolve("IPE_WEB_PORT")
+            .expect("env var must resolve in the embedded index");
+        assert_eq!(env.kind, EntryKind::EnvVar);
+    }
+
+    /// The embedded index carries no construct entries (constructs are
+    /// filesystem-sourced) — a fail-closed miss, never a wrong entry.
+    #[test]
+    fn build_embedded_omits_constructs() {
+        let idx = Index::build_embedded().expect("embedded index build must succeed");
+        assert!(
+            idx.resolve("case").is_none(),
+            "constructs are filesystem-only; the embedded index must not carry them"
         );
     }
 

@@ -686,6 +686,96 @@ pub fn goto_definition(
     })
 }
 
+/// The declaration site of the *type* of the expression under `byte`
+/// (`textDocument/typeDefinition`).
+///
+/// Reads the solved type of the innermost region at the cursor from the
+/// per-module region map — the same span-keyed types [`crate::hover`] shows —
+/// takes its constructor head `(module, name)`, and locates that type's `type`
+/// / `type alias` declaration name token in the declaring module's parse tree.
+///
+/// Returns `None` when the cursor is on no solved region, the type is not a
+/// named constructor (a function, tuple, record, unit, or type variable has no
+/// declaration to jump to), or the declaring module is not in the project
+/// (a kernel / stdlib type). Never a guess.
+#[must_use]
+pub fn type_definition(
+    db: &IpeDatabase,
+    root: SourceRoot,
+    entry: ipe_db::SourceFile,
+    module: &[String],
+    byte: u32,
+) -> Option<Definition> {
+    let files = root.files(db);
+    let &file = files.get(module)?;
+    let types = ipe_db::typecheck_module(db, root, entry, file).ok()?;
+
+    // Innermost solved region at the cursor — same resolution as hover.
+    let mut best: Option<(u32, u32)> = None; // (width, lo)
+    for span in types.regions.keys() {
+        if span.lo <= byte && byte < span.hi {
+            let width = span.hi.saturating_sub(span.lo);
+            if best.is_none_or(|(bw, blo)| width < bw || (width == bw && span.lo > blo)) {
+                best = Some((width, span.lo));
+            }
+        }
+    }
+    let (width, lo) = best?;
+    let region_span = Span::new(lo, lo.saturating_add(width));
+    let ty = types.regions.get(&region_span)?;
+
+    // The type must be a named constructor to have a declaration to jump to.
+    let ipe_types::Ty::Con {
+        module: ty_module,
+        name: ty_name,
+        ..
+    } = ty
+    else {
+        return None;
+    };
+
+    let (type_module, type_name): (Vec<String>, String) = {
+        let interner = db.interner().lock();
+        let m: Option<Vec<String>> = ty_module
+            .iter()
+            .map(|&s| interner.resolve(s).map(str::to_owned))
+            .collect();
+        let n = interner.resolve(*ty_name).map(str::to_owned);
+        drop(interner);
+        (m?, n?)
+    };
+
+    let &def_file = files.get(&type_module)?;
+    let parsed = ipe_db::parse(db, def_file).ok()?;
+    let span = type_decl_span_in_parse(&parsed, &type_name, db)?;
+    Some(Definition {
+        module: type_module,
+        span,
+    })
+}
+
+/// The name-token span of a `type` union or `type alias` declaration named
+/// `name` in one module's parse tree, or `None` when no such type is declared.
+fn type_decl_span_in_parse(
+    parsed: &ipe_syntax::Module,
+    name: &str,
+    db: &IpeDatabase,
+) -> Option<Span> {
+    let interner = db.interner().lock();
+    for union in &parsed.unions {
+        if interner.resolve(union.value.name.value) == Some(name) {
+            return Some(union.value.name.span);
+        }
+    }
+    for alias in &parsed.aliases {
+        if interner.resolve(alias.value.name.value) == Some(name) {
+            return Some(alias.value.name.span);
+        }
+    }
+    drop(interner);
+    None
+}
+
 fn find_ref_at(m: &Module, byte: u32, interner: &Interner) -> Option<(Vec<Symbol>, Symbol)> {
     let mut best: Option<(u32, Vec<Symbol>, Symbol)> = None;
     for def in &m.defs {

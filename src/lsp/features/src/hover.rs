@@ -39,7 +39,9 @@ pub fn hover(
     root: SourceRoot,
     entry: ipe_db::SourceFile,
     module_file: ipe_db::SourceFile,
+    module: &[String],
     byte: u32,
+    docs: Option<&ipe_docs::Index>,
 ) -> Option<HoverInfo> {
     let types = ipe_db::typecheck_module(db, root, entry, module_file).ok()?;
     // Innermost wins: narrowest containing span, latest start as tiebreaker.
@@ -73,6 +75,19 @@ pub fn hover(
             })
             .and_then(|v| v.value.doc.as_ref())
             .map(|ds| ds.body.trim().to_owned())
+    });
+    // When the hovered binding carries no `{-| … -}` doc of its own, fall back
+    // to the `ipe_docs` index: resolve the identifier under the cursor to its
+    // home + name and surface the stdlib symbol's or module's real doc. This
+    // never overrides a binding's own doc, and an identifier that resolves to
+    // no documented entry (a user binding) yields nothing — fail-closed.
+    // `resolve_name_at` acquires the interner internally, so it is called
+    // before the explicit lock below.
+    let doc = doc.or_else(|| {
+        let index = docs?;
+        let resolved = crate::navigation::resolve_name_at(db, root, entry, module, byte)?;
+        crate::docs_lookup::symbol_doc(index, &resolved.module, &resolved.name)
+            .or_else(|| crate::docs_lookup::module_doc(index, &resolved.module))
     });
     let interner = db.interner().lock();
     let mut namer = ipe_types::VarNamer::new();
@@ -171,7 +186,7 @@ main =\n\
         let root = root_of(&db, &[(&["Main"], entry)]);
         // Byte offset of `42` (inside the `main` body).
         let byte = u32::try_from(SRC.find("42").expect("`42` in source")).expect("u32");
-        let info = hover(&db, root, entry, entry, byte)
+        let info = hover(&db, root, entry, entry, &["Main".to_owned()], byte, None)
             .expect("hover on `42` in a typed binding must return Some");
         assert_eq!(
             info.ty, "Int",
@@ -195,7 +210,8 @@ main =\n\
         let entry = file(&db, &["Main"], SRC);
         let root = root_of(&db, &[(&["Main"], entry)]);
         let byte = u32::try_from(SRC.find("42").expect("`42`")).expect("u32");
-        let info = hover(&db, root, entry, entry, byte).expect("hover on `42` must return Some");
+        let info = hover(&db, root, entry, entry, &["Main".to_owned()], byte, None)
+            .expect("hover on `42` must return Some");
         assert!(
             info.doc.is_none(),
             "binding without doc-comment must yield doc: None; got: {:?}",

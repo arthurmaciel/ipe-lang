@@ -27,6 +27,18 @@
 //! - `IPE-T0020` (`WebView` `view` returns `Html` instead of `View`): "Wrap in
 //!   `Ui.html`" — inserts `Ui.html (` before and `)` after the expression at the
 //!   diagnostic span.
+//! - `lint/unused-imports` (the `unused-imports` lint): "Remove unused import" —
+//!   deletes the whole `import` declaration, including any `as Alias` /
+//!   `exposing (…)` continuation lines. The lint has already proved no
+//!   introduced name is used (it is conservative), so the deletion is
+//!   behavior-preserving.
+//!
+//! **Not offered — `IPE-N0048` (two definitions fold to one Rust name):** this
+//! diagnostic is raised at IR-level name mangling and carries NO source spans
+//! for either colliding definition, so no fail-closed rename edit can be
+//! constructed — a rename would also have to locate and update every reference
+//! the diagnostic cannot point at. Offering a guess would be a correctness bug,
+//! so no action is produced.
 //!
 //! The provider is deliberately conservative: it only acts on codes it can
 //! fix with a single-hunk text edit that it can prove correct. Unknown codes
@@ -152,6 +164,15 @@ pub fn code_actions(
                 // WebView `view` returns `Html` instead of `View Web msg` —
                 // wrap the expression at the diagnostic span in `Ui.html ( … )`.
                 if let Some(action) = wrap_in_ui_html_action(diag, uri, text, encoding) {
+                    actions.push(CodeActionOrCommand::CodeAction(action));
+                }
+            }
+            "lint/unused-imports" => {
+                // The `unused-imports` lint proved no introduced name is used —
+                // offer to delete the whole `import` line (behavior-preserving).
+                if let Some(action) =
+                    remove_unused_import_action(view, module, uri, diag, text, encoding)
+                {
                     actions.push(CodeActionOrCommand::CodeAction(action));
                 }
             }
@@ -598,6 +619,164 @@ fn wrap_in_ui_html_action(
         disabled: None,
         data: None,
     })
+}
+
+/// Quick-fix for `lint/unused-imports`: delete the whole unused `import`
+/// declaration.
+///
+/// The `unused-imports` lint has already proved that no name the import
+/// introduces is referenced anywhere in the module (it is conservative — a
+/// wildcard `exposing (..)` or any use suppresses it), so deleting the whole
+/// declaration is behavior-preserving.
+///
+/// The lint anchors its diagnostic on the `import` keyword token, but an
+/// `import` declaration may span several physical lines — its `as Alias` and
+/// `exposing (…)` clauses can each start a continuation line. Deleting only the
+/// keyword's line would strand the continuation and turn a compiling module
+/// into a parse error. The fix therefore locates the offending `Import` node in
+/// the parse tree, computes the declaration's true byte extent (keyword through
+/// the end of its last clause), and deletes the whole-line span that covers it —
+/// so no fragment of the declaration is left behind.
+///
+/// Fail-closed: the action is offered only when the diagnostic's start byte
+/// falls on the `import` keyword of a real parsed `Import`. A mis-ranged
+/// diagnostic, or one that does not land on an import, yields no action.
+fn remove_unused_import_action(
+    view: DbView<'_>,
+    module: &[String],
+    uri: &Url,
+    diag: &Diagnostic,
+    text: &str,
+    encoding: PositionEncoding,
+) -> Option<CodeAction> {
+    let DbView { db, root, .. } = view;
+    let files = root.files(db);
+    let &file = files.get(module)?;
+    let parsed = ipe_db::parse(db, file).ok()?;
+
+    // The diagnostic anchors on the `import` keyword token. Match its start byte
+    // against the `import_kw` span of a parsed import — the byte the lint used.
+    let diag_byte = u32::try_from(position_to_byte(text, diag.range.start, encoding)).ok()?;
+    let import = parsed
+        .imports
+        .iter()
+        .find(|imp| imp.import_kw.lo <= diag_byte && diag_byte < imp.import_kw.hi)?;
+
+    // Whole-line span covering the import's full extent: from the start of the
+    // line the keyword sits on through the end of the line its last clause ends
+    // on. The clause end is scanned from the source with `import_clause_end`,
+    // which handles `as Alias` / `exposing (…)` continuation lines the AST spans
+    // alone do not reach.
+    let clause_end = import_clause_end(text, import);
+    let start_line = offset_to_position(text, import.import_kw.lo as usize, encoding).line as usize;
+    let end_line = offset_to_position(text, clause_end, encoding).line as usize;
+    let (start_byte, _) = line_byte_range(text, start_line);
+    let (_, end_byte) = line_byte_range(text, end_line);
+
+    let start = offset_to_position(text, start_byte, encoding);
+    let end = offset_to_position(text, end_byte, encoding);
+    let edit = TextEdit {
+        range: Range { start, end },
+        new_text: String::new(),
+    };
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    Some(CodeAction {
+        title: "Remove unused import".to_owned(),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        is_preferred: Some(true),
+        disabled: None,
+        data: None,
+    })
+}
+
+/// The byte offset just past the end of an `import` declaration's last clause.
+///
+/// The parser records spans for the `import` keyword and the dotted module
+/// name, but the `as Alias` identifier and the `exposing (…)` clause carry no
+/// span that reaches their end — and each may sit on a continuation line below
+/// the keyword. This walks the source from just past the module name, following
+/// the import grammar tail (`[as Ident] [exposing ( … )]`), so the returned
+/// offset covers the whole declaration however it is wrapped across lines. The
+/// `exposing` list is consumed through its balanced closing paren, so even a
+/// list broken across several lines is covered in full.
+///
+/// The walk is bounded by the remaining source length and only ever advances,
+/// so it terminates. It never indexes: every read goes through `get`, so a
+/// malformed tail yields the best offset reached rather than a panic.
+fn import_clause_end(text: &str, import: &ipe_syntax::Import) -> usize {
+    // Start just past the module name — the grammar tail (`as`, `exposing`)
+    // begins there. The keyword span is a floor for a name-less malformed tail.
+    let mut pos = import.import_kw.hi.max(import.name.span.hi) as usize;
+
+    // Advance `pos` past `count` UTF-8 characters that satisfy `pred`, stopping
+    // at the first that does not (or at end of input). Char-boundary safe.
+    let skip_while = |src: &str, from: usize, pred: &dyn Fn(char) -> bool| -> usize {
+        let rest = src.get(from..).unwrap_or("");
+        let mut consumed = 0usize;
+        for ch in rest.chars() {
+            if pred(ch) {
+                consumed += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        from + consumed
+    };
+    // True when the source from `at` begins with `kw` followed by a
+    // non-identifier boundary (so `as` does not match inside `assets`).
+    let starts_kw = |src: &str, at: usize, kw: &str| -> bool {
+        let rest = src.get(at..).unwrap_or("");
+        rest.strip_prefix(kw).is_some_and(|after| {
+            after
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+        })
+    };
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+
+    // Optional `as Alias` (a single, dot-free identifier).
+    let after_ws = skip_while(text, pos, &char::is_whitespace);
+    if starts_kw(text, after_ws, "as") {
+        let alias_start = skip_while(text, after_ws + "as".len(), &char::is_whitespace);
+        let alias_end = skip_while(text, alias_start, &is_ident);
+        pos = pos.max(alias_end);
+    }
+
+    // Optional `exposing ( … )` — consume through the balanced closing paren so
+    // a wrapped list (`exposing (\n  a,\n  b\n)`) is covered in full.
+    let after_ws = skip_while(text, pos, &char::is_whitespace);
+    if starts_kw(text, after_ws, "exposing") {
+        let after_kw = skip_while(text, after_ws + "exposing".len(), &char::is_whitespace);
+        if text.get(after_kw..).unwrap_or("").starts_with('(') {
+            let mut depth = 0i32;
+            let mut cursor = after_kw;
+            for ch in text.get(after_kw..).unwrap_or("").chars() {
+                cursor += ch.len_utf8();
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            pos = pos.max(cursor);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    pos.min(text.len())
 }
 
 /// Extract the expected module name from an IPE-N0023 `plain_message`.

@@ -42,6 +42,7 @@ pub fn signature_help(
     entry: ipe_db::SourceFile,
     module: &[String],
     byte: u32,
+    docs: Option<&ipe_docs::Index>,
 ) -> Option<SignatureHelp> {
     let files = root.files(db);
     let &file = files.get(module)?;
@@ -62,6 +63,15 @@ pub fn signature_help(
     if params.is_empty() {
         return None;
     }
+
+    // Resolve the callee's documentation from the `ipe_docs` index, keyed on
+    // its home + name. `resolve_name_at` locks the interner internally, so it
+    // runs before the explicit lock below. A local, lambda, or undocumented
+    // callee resolves nothing — the signature then carries no doc (fail-closed).
+    let signature_doc: Option<String> = docs.and_then(|index| {
+        let resolved = crate::navigation::resolve_name_at(db, root, entry, module, callee_span.lo)?;
+        crate::docs_lookup::symbol_doc(index, &resolved.module, &resolved.name)
+    });
 
     // Render signature and parameters.
     let interner = db.interner().lock();
@@ -91,7 +101,12 @@ pub fn signature_help(
     Some(SignatureHelp {
         signatures: vec![SignatureInformation {
             label: sig_label,
-            documentation: None,
+            documentation: signature_doc.map(|text| {
+                lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
+                    kind: lsp_types::MarkupKind::Markdown,
+                    value: text,
+                })
+            }),
             parameters: Some(param_infos),
             active_parameter: Some(active),
         }],
@@ -271,7 +286,7 @@ mod tests {
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
         // Byte 0 is the `m` in `module` — not a call site.
-        let result = signature_help(&db, root, entry, &["Main".to_owned()], 0);
+        let result = signature_help(&db, root, entry, &["Main".to_owned()], 0, None);
         assert!(
             result.is_none(),
             "byte 0 is not inside a call; expected None, got {result:?}"
@@ -286,7 +301,14 @@ mod tests {
         let helper = file(&db, &["Helper"], HELPER);
         let entry = file(&db, &["Main"], MAIN);
         let root = root_of(&db, &[(&["Helper"], helper), (&["Main"], entry)]);
-        let result = signature_help(&db, root, entry, &["Main".to_owned()], call_arg_byte());
+        let result = signature_help(
+            &db,
+            root,
+            entry,
+            &["Main".to_owned()],
+            call_arg_byte(),
+            None,
+        );
         let help = result.expect("cursor inside `add 1 2` must yield Some");
         let sig = help.signatures.first().expect("at least one signature");
         assert!(
@@ -317,7 +339,7 @@ mod tests {
         let byte =
             u32::try_from(SRC.find("    f x").expect("`    f x` in apply body") + "    f ".len())
                 .expect("u32");
-        let result = signature_help(&db, root, entry, &["Main".to_owned()], byte);
+        let result = signature_help(&db, root, entry, &["Main".to_owned()], byte, None);
         let help = result.expect("cursor inside local-var call `f x` must yield Some");
         let sig = help.signatures.first().expect("signature present");
         // The resolved type of `f` is `Int -> Int` — 1 parameter.

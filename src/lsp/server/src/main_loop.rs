@@ -109,6 +109,12 @@ struct State {
     worker_cancel: Option<Arc<AtomicBool>>,
     /// Last non-empty payload per URI, for change-suppression and clearing.
     last_published: BTreeMap<Url, Vec<lsp_types::Diagnostic>>,
+    /// The documentation index (stdlib symbol/module docs, diagnostic explain
+    /// pages, env vars), built once at startup and reused across requests to
+    /// enrich hover / completion / signature help. `None` when the embedded
+    /// index fails to build — enrichment is then simply absent (fail-closed),
+    /// never a crash or a wrong doc.
+    docs: Option<ipe_docs::Index>,
 }
 
 impl State {
@@ -145,7 +151,15 @@ impl State {
             worker: None,
             worker_cancel: None,
             last_published: BTreeMap::new(),
+            // Built once from data compiled into the binary; a build failure
+            // leaves enrichment off rather than blocking the server.
+            docs: ipe_docs::Index::build_embedded().ok(),
         }
+    }
+
+    /// The cached documentation index, when it built successfully.
+    const fn docs(&self) -> Option<&ipe_docs::Index> {
+        self.docs.as_ref()
     }
 }
 
@@ -264,6 +278,7 @@ fn dispatch(state: &State, request: &Request) -> Option<FeatureOutcome> {
         "textDocument/foldingRange" => Some(folding_ranges_result(state, &request.params)),
         "textDocument/completion" => Some(completion_result(state, &request.params)),
         "textDocument/definition" => Some(definition_result(state, &request.params)),
+        "textDocument/typeDefinition" => Some(type_definition_result(state, &request.params)),
         "textDocument/references" => Some(references_result(state, &request.params)),
         "textDocument/prepareRename" => Some(prepare_rename_result(state, &request.params)),
         "textDocument/rename" => Some(rename_result(state, &request.params)),
@@ -345,38 +360,44 @@ fn hover_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
     let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
         return FeatureOutcome::NoResult;
     };
-    ipe_lsp_features::hover::hover(&state.db, ctx.root, ctx.entry_file, ctx.file, ctx.byte).map_or(
-        FeatureOutcome::NoResult,
-        |info| {
-            let range = Some(ipe_lsp_features::offset::span_to_range(
-                ctx.text,
-                info.span,
-                state.encoding,
-            ));
-            let ty_marked = lsp_types::MarkedString::LanguageString(lsp_types::LanguageString {
-                language: "ipe".to_owned(),
-                value: info.ty,
-            });
-            // Beneath the type, disclose the compiler-derived control model — the
-            // same signal `ipe audit`/`ipe doc` surface, so the editor reads one
-            // derivation — then the binding's doc-string when it has one.
-            let mut parts = vec![ty_marked];
-            if let Some(model) = info.control_model {
-                parts.push(lsp_types::MarkedString::String(format!(
-                    "control model: {model}"
-                )));
-            }
-            if let Some(doc) = info.doc {
-                parts.push(lsp_types::MarkedString::String(doc));
-            }
-            let contents = if parts.len() == 1 {
-                lsp_types::HoverContents::Scalar(parts.remove(0))
-            } else {
-                lsp_types::HoverContents::Array(parts)
-            };
-            FeatureOutcome::payload(lsp_types::Hover { contents, range })
-        },
+    ipe_lsp_features::hover::hover(
+        &state.db,
+        ctx.root,
+        ctx.entry_file,
+        ctx.file,
+        &ctx.module,
+        ctx.byte,
+        state.docs(),
     )
+    .map_or(FeatureOutcome::NoResult, |info| {
+        let range = Some(ipe_lsp_features::offset::span_to_range(
+            ctx.text,
+            info.span,
+            state.encoding,
+        ));
+        let ty_marked = lsp_types::MarkedString::LanguageString(lsp_types::LanguageString {
+            language: "ipe".to_owned(),
+            value: info.ty,
+        });
+        // Beneath the type, disclose the compiler-derived control model — the
+        // same signal `ipe audit`/`ipe doc` surface, so the editor reads one
+        // derivation — then the binding's doc-string when it has one.
+        let mut parts = vec![ty_marked];
+        if let Some(model) = info.control_model {
+            parts.push(lsp_types::MarkedString::String(format!(
+                "control model: {model}"
+            )));
+        }
+        if let Some(doc) = info.doc {
+            parts.push(lsp_types::MarkedString::String(doc));
+        }
+        let contents = if parts.len() == 1 {
+            lsp_types::HoverContents::Scalar(parts.remove(0))
+        } else {
+            lsp_types::HoverContents::Array(parts)
+        };
+        FeatureOutcome::payload(lsp_types::Hover { contents, range })
+    })
 }
 
 /// `textDocument/documentLink` — every resolved `import` as a link to the
@@ -457,6 +478,7 @@ fn completion_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
         ctx.entry_file,
         &ctx.module,
         ctx.byte,
+        state.docs(),
     );
     FeatureOutcome::payload(items)
 }
@@ -497,6 +519,46 @@ fn definition_result(state: &State, params: &serde_json::Value) -> FeatureOutcom
         range,
     };
     FeatureOutcome::payload(location)
+}
+
+/// `textDocument/typeDefinition` — jump to the declaration of the *type* of the
+/// expression under the cursor. `null` when the cursor is on no solved region,
+/// the type is not a named type (a function / tuple / record / variable), or
+/// the type is declared outside the project (a kernel / stdlib type).
+fn type_definition_result(state: &State, params: &serde_json::Value) -> FeatureOutcome {
+    let Ok(params) = serde_json::from_value::<lsp_types::GotoDefinitionParams>(params.clone())
+    else {
+        return FeatureOutcome::InvalidParams(
+            "invalid params for textDocument/typeDefinition".into(),
+        );
+    };
+    let position = params.text_document_position_params;
+    let Ok(ctx) = position_ctx(state, &position.text_document.uri, position.position) else {
+        return FeatureOutcome::NoResult;
+    };
+    let Some(def) = ipe_lsp_features::navigation::type_definition(
+        &state.db,
+        ctx.root,
+        ctx.entry_file,
+        &ctx.module,
+        ctx.byte,
+    ) else {
+        return FeatureOutcome::NoResult;
+    };
+    let Some(def_uri) = state.uri_for_module(&def.module) else {
+        return FeatureOutcome::NoResult;
+    };
+    let empty = String::new();
+    let def_text = ctx
+        .root
+        .files(&state.db)
+        .get(&def.module)
+        .map_or(&empty, |f| f.text(&state.db));
+    let range = ipe_lsp_features::offset::span_to_range(def_text, def.span, state.encoding);
+    FeatureOutcome::payload(lsp_types::Location {
+        uri: def_uri,
+        range,
+    })
 }
 
 /// `textDocument/references` — every use site of the name under the cursor.
@@ -1126,6 +1188,7 @@ fn signature_help_result(state: &State, params: &serde_json::Value) -> FeatureOu
         ctx.entry_file,
         &ctx.module,
         ctx.byte,
+        state.docs(),
     ))
 }
 

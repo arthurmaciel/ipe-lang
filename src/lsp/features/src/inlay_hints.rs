@@ -1,18 +1,26 @@
 //! Inlay hints: `textDocument/inlayHint`.
 //!
-//! Produces type-annotation inlay hints for top-level value bindings that
-//! lack an explicit type annotation, using the solved type from `typecheck`.
+//! Produces type-annotation inlay hints in the form `: Type` at the end of a
+//! binder's name token, matching the style of an explicit annotation. Two
+//! families of binder are hinted:
 //!
-//! Each hint appears at the end of the binding's name token in the form
-//! `: Type`, matching the style of an explicit annotation.
+//! - **Top-level value bindings** without an explicit type annotation, typed
+//!   from the solved `typecheck` env.
+//! - **Local `let` bindings** (`let x = …`) inside any binding body, typed from
+//!   the per-module region map — the SAME span-keyed solved types a hover
+//!   reads, so an inlay type can never disagree with a hover at the same spot.
 //!
-//! Bindings that already have a type annotation are skipped — the annotation
-//! is already visible in source.
+//! A binder is typed by the innermost solved region that contains its
+//! right-hand side, exactly as [`crate::hover`] resolves a type at a position.
+//! A binder whose type cannot be resolved (an unsolved region, an ambiguous
+//! inference) is skipped — a hint is emitted only for a type the compiler
+//! actually solved, never a guess.
 
+use ipe_canon::ast::{Expr_, Pattern_};
 use ipe_db::{Db as _, IpeDatabase, SourceRoot};
-use ipe_diagnostics::Span;
+use ipe_diagnostics::{Located, Span};
 use ipe_intern::Symbol;
-use ipe_types::{VarNamer, ty_to_doc};
+use ipe_types::{Ty, VarNamer, ty_to_doc};
 use lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Range};
 
 use crate::offset::{PositionEncoding, offset_to_position, span_to_range};
@@ -102,19 +110,183 @@ pub fn inlay_hints(
         // Place the hint just after the name token.
         let position = offset_to_position(text, name_span.hi as usize, encoding);
 
-        hints.push(InlayHint {
-            position,
-            label: InlayHintLabel::String(hint_label),
-            kind: Some(InlayHintKind::TYPE),
-            text_edits: None,
-            tooltip: None,
-            padding_left: Some(true),
-            padding_right: None,
-            data: None,
-        });
+        hints.push(type_hint(position, hint_label));
+    }
+
+    // Local `let` binder hints, typed from the per-module region map — the same
+    // span-keyed solved types a hover reads. A binder is skipped unless its RHS
+    // sits in a solved region and renders to a concrete type (fail-closed).
+    if let Some(canonical) = crate::db_access::canonicalize_checked(db, root, entry, file)
+        && let Ok(types) = ipe_db::typecheck_module(db, root, entry, file)
+    {
+        let interner = db.interner().lock();
+        for def in &canonical.module.defs {
+            let body = match def {
+                ipe_canon::ast::Def::Untyped { body, .. }
+                | ipe_canon::ast::Def::Typed { body, .. } => body,
+            };
+            collect_let_hints(
+                body,
+                &types.regions,
+                text,
+                range,
+                encoding,
+                &interner,
+                &mut hints,
+            );
+        }
+        drop(interner);
     }
 
     hints
+}
+
+/// Build a `: Type` type-annotation inlay hint at `position`.
+const fn type_hint(position: lsp_types::Position, label: String) -> InlayHint {
+    InlayHint {
+        position,
+        label: InlayHintLabel::String(label),
+        kind: Some(InlayHintKind::TYPE),
+        text_edits: None,
+        tooltip: None,
+        padding_left: Some(true),
+        padding_right: None,
+        data: None,
+    }
+}
+
+/// The type of the innermost solved region containing `byte`, rendered in Ipê
+/// surface syntax. `None` when no region contains the byte or the type does not
+/// render — mirrors [`crate::hover`]'s innermost-region resolution so an inlay
+/// type is exactly what a hover at that spot would show.
+fn ty_at_byte(
+    regions: &std::collections::BTreeMap<Span, Ty>,
+    byte: u32,
+    interner: &ipe_intern::Interner,
+) -> Option<String> {
+    let mut best: Option<(u32, u32)> = None; // (width, lo)
+    for span in regions.keys() {
+        if span.lo <= byte && byte < span.hi {
+            let width = span.hi.saturating_sub(span.lo);
+            if best.is_none_or(|(best_width, best_lo)| {
+                width < best_width || (width == best_width && span.lo > best_lo)
+            }) {
+                best = Some((width, span.lo));
+            }
+        }
+    }
+    let (width, lo) = best?;
+    let span = Span::new(lo, lo.saturating_add(width));
+    let ty = regions.get(&span)?;
+    let mut namer = VarNamer::new();
+    let doc = ty_to_doc(ty, interner, &mut namer).ok()?;
+    Some(ipe_diagnostics::render_ty(&doc))
+}
+
+/// Walk an expression, emitting a `: Type` hint at each `let x = …` binder whose
+/// right-hand side sits in a solved region. Recurses into every sub-expression
+/// so a binder at any nesting depth is covered.
+fn collect_let_hints(
+    expr: &Located<Expr_>,
+    regions: &std::collections::BTreeMap<Span, Ty>,
+    text: &str,
+    range: Range,
+    encoding: PositionEncoding,
+    interner: &ipe_intern::Interner,
+    hints: &mut Vec<InlayHint>,
+) {
+    if let Expr_::Let(bindings, body) = &expr.value {
+        for binding in bindings {
+            // Only plain `name = …` binders — a destructure has no single name
+            // token to hang the annotation on.
+            let Pattern_::PVar(_name) = &binding.pat.value else {
+                collect_let_hints(
+                    &binding.body,
+                    regions,
+                    text,
+                    range,
+                    encoding,
+                    interner,
+                    hints,
+                );
+                continue;
+            };
+            let name_span = binding.pat.span;
+            let span_range = span_to_range(text, name_span, encoding);
+            let in_range = span_range.end >= range.start && span_range.start <= range.end;
+            if in_range && let Some(rendered) = ty_at_byte(regions, binding.body.span.lo, interner)
+            {
+                let position = offset_to_position(text, name_span.hi as usize, encoding);
+                hints.push(type_hint(position, format!(": {rendered}")));
+            }
+            // A binder's own RHS may nest further `let`s.
+            collect_let_hints(
+                &binding.body,
+                regions,
+                text,
+                range,
+                encoding,
+                interner,
+                hints,
+            );
+        }
+        collect_let_hints(body, regions, text, range, encoding, interner, hints);
+        return;
+    }
+    for child in expr_children(expr) {
+        collect_let_hints(child, regions, text, range, encoding, interner, hints);
+    }
+}
+
+/// The direct sub-expressions of a canonical expression, for the local-hint
+/// walk. An exhaustive match (no wildcard) so a new `Expr_` variant forces a
+/// compile-time decision here rather than silently dropping its `let`s.
+fn expr_children(expr: &Located<Expr_>) -> Vec<&Located<Expr_>> {
+    match &expr.value {
+        Expr_::Call(callee, args) => {
+            let mut v = vec![callee.as_ref()];
+            v.extend(args.iter());
+            v
+        }
+        Expr_::ForeignCall { args, .. } => args.iter().collect(),
+        Expr_::Case(scrut, arms) => {
+            let mut v = vec![scrut.as_ref()];
+            v.extend(arms.iter().map(|a| &a.body));
+            v
+        }
+        Expr_::Lambda(_, body) | Expr_::Let(_, body) => vec![body.as_ref()],
+        Expr_::Binop { lhs, rhs, .. } => vec![lhs.as_ref(), rhs.as_ref()],
+        Expr_::If(pairs, els) => {
+            let mut v = Vec::new();
+            for (c, b) in pairs {
+                v.push(c);
+                v.push(b);
+            }
+            v.push(els.as_ref());
+            v
+        }
+        Expr_::Tuple(items) | Expr_::List(items) => items.iter().collect(),
+        Expr_::Cons(head, tail) => vec![head.as_ref(), tail.as_ref()],
+        Expr_::Record(fields) => fields.iter().map(|(_, e)| e).collect(),
+        Expr_::Access(base, _) => vec![base.as_ref()],
+        Expr_::Update(base, fields) => {
+            let mut v = vec![base.as_ref()];
+            v.extend(fields.iter().map(|(_, e)| e));
+            v
+        }
+        // Leaf expressions introduce no sub-expressions and so no nested `let`.
+        Expr_::VarLocal(_)
+        | Expr_::VarTopLevel { .. }
+        | Expr_::VarKernel { .. }
+        | Expr_::VarCtor { .. }
+        | Expr_::Int(_)
+        | Expr_::Float(_)
+        | Expr_::Str(_)
+        | Expr_::Char(_)
+        | Expr_::PathLit(_)
+        | Expr_::CustomElementCtor(_)
+        | Expr_::Unit => Vec::new(),
+    }
 }
 
 // Suppress unused import warning — `Span` is referenced in the attribute path
@@ -225,5 +397,61 @@ mod tests {
             PositionEncoding::Utf16,
         );
         assert!(hints.is_empty());
+    }
+
+    /// A local `let x = <int>` binder gets a `: Int` type-annotation hint whose
+    /// span sits on the binder's name token — proving local-binding inlay hints
+    /// fire and carry the compiler-solved type.
+    #[test]
+    fn local_let_binder_gets_type_hint() {
+        let db = IpeDatabase::new();
+        let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    let\n        x = 41\n    in\n    x\n";
+        let entry = file(&db, &["Main"], src);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        let hints = inlay_hints(
+            &db,
+            root,
+            entry,
+            &["Main".to_owned()],
+            full_range(),
+            PositionEncoding::Utf16,
+        );
+        let labels: Vec<&str> = hints
+            .iter()
+            .filter_map(|h| match &h.label {
+                lsp_types::InlayHintLabel::String(s) => Some(s.as_str()),
+                lsp_types::InlayHintLabel::LabelParts(_) => None,
+            })
+            .collect();
+        assert!(
+            labels.contains(&": Int"),
+            "local `let x = 41` must yield a `: Int` hint; got {labels:?}"
+        );
+    }
+
+    /// The refusal: a `let` binder with an explicit destructure (no single name
+    /// token) yields no local hint — the walk only annotates plain `name = …`
+    /// binders, never guessing a placement.
+    #[test]
+    fn destructure_let_binder_gets_no_local_hint() {
+        let db = IpeDatabase::new();
+        // `(a, b) = (1, 2)` is a tuple destructure — not a single-name binder.
+        let src = "module Main exposing (main)\n\nmain : Int\nmain =\n    let\n        (a, b) = (1, 2)\n    in\n    a + b\n";
+        let entry = file(&db, &["Main"], src);
+        let root = root_of(&db, &[(&["Main"], entry)]);
+        let hints = inlay_hints(
+            &db,
+            root,
+            entry,
+            &["Main".to_owned()],
+            full_range(),
+            PositionEncoding::Utf16,
+        );
+        // `main` is annotated, so any hint present would have to be a local one;
+        // the destructure binder must produce none.
+        assert!(
+            hints.is_empty(),
+            "a destructure `let` binder must yield no local inlay hint; got {hints:?}"
+        );
     }
 }

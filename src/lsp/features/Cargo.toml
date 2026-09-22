@@ -13,6 +13,7 @@ ipe_parse = { path = "../../compiler/parse" }
 ipe_syntax = { path = "../../compiler/syntax" }
 ipe_types = { path = "../../compiler/types" }
 ipe_annotate = { path = "../../compiler/annotate" }
+ipe_docs = { path = "../../ipe-docs" }
 ipe_lint = { path = "../../compiler/lint" }
 ipe_fmt = { path = "../../ipe-fmt" }
 lsp-types = "0.95"
