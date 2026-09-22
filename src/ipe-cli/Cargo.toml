@@ -72,7 +72,11 @@ ipe_watch = { path = "../compiler/watch" }
 # serves (one glue, no drift) over the widget manifest. Only the lean
 # `widget-assets` feature (sha2 + base64 + the shared wire constants) — NOT the
 # heavy `web`/server surface, and never linked into an emitted program.
-ipe-runtime-rust = { path = "../runtime/rust", default-features = false, features = ["widget-assets"] }
+# `control-wire`: the dev-loop control-channel CODEC (`ControlFrame` +
+# `encode_frame`/`decode_frame`), so `ipe watch`'s `send_control_frame` builds
+# and parses frames from the ONE wire definition (SSOT) over its own std sockets
+# — no tokio server pulled into the CLI.
+ipe-runtime-rust = { path = "../runtime/rust", default-features = false, features = ["widget-assets", "control-wire"] }
 salsa = "=0.27.2"
 notify = "8"
 # On-disk build cache (`src/cache.rs`) — content hashing of the whole-project

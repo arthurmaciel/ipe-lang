@@ -14,10 +14,15 @@
 //! ## Availability
 //!
 //! Compiled only when a dev-loop surface is present: the `web` feature (the
-//! existing hot-appearance endpoints) or the `debugger` feature (the recorder).
-//! Both imply `serde`, so the frame's derives are unconditional here. A pure
-//! `ipe release` artifact carries neither feature, so this module — and every
-//! control surface built on it — is absent from production by construction.
+//! existing hot-appearance endpoints), the `debugger` feature (the recorder), or
+//! `control-wire` (the parent-side `ipe watch` sender, which links the codec +
+//! `transport` primitives ALONE — no `server` accept-loop). Each implies
+//! `serde` + `crypto-core`, so the frame's derives and the constant-time token
+//! check are unconditional here. A pure `ipe release` artifact carries none of
+//! them, so this module — and every control surface built on it — is absent from
+//! production by construction. The tokio `server` accept-loop compiles under
+//! the child-side surfaces (`web`/`debugger`) on a native target only, and even
+//! then it is inert unless launched with both a control port and a token.
 //!
 //! ## Bounded by construction
 //!
@@ -203,8 +208,20 @@ pub fn decode_frame(bytes: &[u8]) -> Result<(ControlFrame, usize), FrameError> {
     let Some(body) = bytes.get(4..end) else {
         return Err(FrameError::Truncated);
     };
-    let frame = serde_json::from_slice(body).map_err(|_| FrameError::Malformed)?;
+    let frame = decode_frame_body(body)?;
     Ok((frame, end))
+}
+
+/// Decode a frame from a bare, already-de-framed body — the JSON payload with no
+/// length prefix. This is the one place a body becomes a [`ControlFrame`], shared
+/// by [`decode_frame`] (which strips the prefix first) and the stream server
+/// (whose `read_record` has already stripped it), so a wire byte is never framed
+/// twice nor parsed two different ways.
+///
+/// Fail-closed: a body that is not a valid frame is `Malformed` — no partial
+/// value, no panic.
+pub fn decode_frame_body(body: &[u8]) -> Result<ControlFrame, FrameError> {
+    serde_json::from_slice(body).map_err(|_| FrameError::Malformed)
 }
 
 /// The fail-closed security core of the tui/cli/worker loopback control
@@ -284,7 +301,7 @@ pub mod transport {
     }
 
     #[cfg(test)]
-    mod tests {
+    mod transport_tests {
         use super::*;
 
         #[test]
@@ -320,6 +337,483 @@ pub mod transport {
         #[test]
         fn matching_token_is_authorized() {
             assert!(is_authorized(Some("s3cr3t-hex"), Some("s3cr3t-hex")));
+        }
+    }
+}
+
+/// The child-side loopback accept-loop: the moving end of the control transport.
+///
+/// Compiled only on a native dev-loop build (`tokio` present, non-wasm) under the
+/// same `web`/`debugger` gate as the wire itself, so a pure `ipe release` build —
+/// which selects none of those features — carries no accept-loop at all. Where
+/// the code is present it is inert unless launched with both a control port and a
+/// token, so a child with no `ipe watch` parent opens no socket. Every guarantee
+/// is fail-closed:
+///
+/// - **Bind is loopback-only** — the listener address comes from
+///   [`transport::control_bind_addr`], which admits no routable interface.
+/// - **No surface without a session** — [`serve_control`] returns cleanly (binds
+///   nothing) unless BOTH the port and the token env vars are present, so a child
+///   with no `ipe watch` parent runs with no control socket at all.
+/// - **Every frame is token-checked** — a connection presents its token as a
+///   length-delimited record ahead of the frame; a frame whose token is absent,
+///   empty, or mismatched is dropped before the handler ever sees it.
+/// - **Bounded reads** — each record's declared length is refused past
+///   [`MAX_FRAME_LEN`] before a single body byte is allocated, so no remote length
+///   prefix drives an unbounded allocation.
+/// - **Bounded connections** — each connection is served on its own task under a
+///   read deadline, so a peer that connects but never sends is dropped rather
+///   than parking the surface, and one slow peer cannot wedge the accept loop.
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+pub mod server {
+    use super::{
+        ControlFrame, FrameError, MAX_FRAME_LEN, decode_frame_body, encode_frame, transport,
+    };
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// The ceiling on how long one connection may take to present its token and
+    /// frame before it is dropped.
+    ///
+    /// A peer that connects but never completes a record holds a task under this
+    /// deadline and no longer; the surface stays live for the next peer. The
+    /// dev-loop's records are tiny and loopback-local, so this is a generous
+    /// ceiling that only ever fires on a stalled or hostile peer.
+    const CONN_DEADLINE: Duration = Duration::from_secs(10);
+
+    /// The ceiling on how long the clean-teardown drain waits for a peer to close
+    /// after it has been sent a FIN.
+    ///
+    /// A well-behaved peer closes promptly once its `read_to_end` returns; this
+    /// bounds the wait so a peer that holds the connection open cannot park the
+    /// teardown, without so short a window that a loopback peer's normal close is
+    /// missed.
+    const DRAIN_DEADLINE: Duration = Duration::from_secs(2);
+
+    /// Why a connection could not be served to a dispatchable frame.
+    ///
+    /// A typed channel (never a bare `String`): the untrusted byte stream is
+    /// parsed to a `(token, frame)` pair at exactly one point, and every rejection
+    /// is one of these named, fail-closed outcomes. `Unauthorized` and `Frame` are
+    /// distinct so the accept loop can drop an unauthorized peer without ever
+    /// decoding — let alone dispatching — its frame.
+    #[derive(Debug)]
+    pub enum ServeError {
+        /// The socket read failed or closed mid-record.
+        Io(std::io::Error),
+        /// A record's declared length exceeded [`MAX_FRAME_LEN`], refused before
+        /// the body was read.
+        TooLong {
+            /// The declared length that was refused.
+            declared: usize,
+        },
+        /// The presented token was absent, empty, or did not match the session
+        /// token in constant time — the frame is never decoded.
+        Unauthorized,
+        /// The frame body was read and authorized but is not a valid
+        /// [`ControlFrame`].
+        Frame(FrameError),
+    }
+
+    impl From<std::io::Error> for ServeError {
+        fn from(e: std::io::Error) -> Self {
+            ServeError::Io(e)
+        }
+    }
+
+    /// Read one length-delimited record's body off `stream`, refusing an
+    /// over-[`MAX_FRAME_LEN`] declared length BEFORE allocating the body.
+    ///
+    /// The 4-byte big-endian length prefix is read first and checked against the
+    /// cap; only a within-cap length reaches the allocation, so no remote prefix
+    /// can drive an unbounded read — the same ceiling [`decode_frame`] enforces,
+    /// applied one boundary earlier (defense in depth).
+    async fn read_record(stream: &mut TcpStream) -> Result<Vec<u8>, ServeError> {
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).await?;
+        // u32 → usize is a widening conversion on every supported target.
+        let declared = u32::from_be_bytes(len_buf) as usize;
+        if declared > MAX_FRAME_LEN {
+            return Err(ServeError::TooLong { declared });
+        }
+        let mut body = vec![0u8; declared];
+        stream.read_exact(&mut body).await?;
+        Ok(body)
+    }
+
+    /// Cleanly half-close a connection the peer can always read to EOF.
+    ///
+    /// A `TcpStream` finally dropped with bytes still unread in its receive buffer
+    /// closes with an RST, which the peer observes as a transport error rather than
+    /// a clean end-of-stream. This shuts the write half down first — sending the
+    /// peer a FIN, so its `read_to_end` returns exactly the reply already written
+    /// (or nothing, on a refusal) and then closes its own side — and only then
+    /// drains the receive buffer to that peer FIN, so the final drop finds no
+    /// unread bytes and closes cleanly. Shutting down first is what breaks the
+    /// otherwise-deadlocking "each side waits for the other's EOF" symmetry.
+    ///
+    /// The drain is bounded on both size and time: it reads into a fixed scratch
+    /// buffer and stops at the peer's EOF, any read error, or a short deadline — so
+    /// it can neither be steered into an unbounded read nor block on a peer that
+    /// holds the connection open without ever closing.
+    async fn finish_conn(stream: &mut TcpStream) -> std::io::Result<()> {
+        // FIN first: let the peer read our reply to EOF and close its side.
+        stream.shutdown().await?;
+        let mut scratch = [0u8; 1024];
+        // A well-behaved peer closes promptly once it has read the reply; a peer
+        // that instead holds the connection open is dropped at this deadline (a
+        // reset there is acceptable — it is the peer that refused to close).
+        let _ = tokio::time::timeout(DRAIN_DEADLINE, async {
+            loop {
+                match stream.read(&mut scratch).await {
+                    Ok(0) => break,
+                    Ok(_) => continue,
+                    Err(_) => break,
+                }
+            }
+        })
+        .await;
+        Ok(())
+    }
+
+    /// Serve one connection: read the presented-token record, authorize it against
+    /// the session token, read the frame record, and — only if authorized — decode
+    /// and dispatch it, writing the handler's reply frame back.
+    ///
+    /// Fail-closed: an unauthorized token short-circuits to [`ServeError::Unauthorized`]
+    /// before the frame is decoded, so an attacker's frame is never parsed or
+    /// dispatched. The token is presented as its own record, kept off the
+    /// [`ControlFrame`] enum — a presented credential is a separate typed input,
+    /// not a wire payload.
+    ///
+    /// However the connection ends — served, refused, or malformed — the write half
+    /// is cleanly half-closed via [`finish_conn`] so the peer reads a deterministic
+    /// EOF (exactly the reply written, or none) rather than an RST.
+    async fn serve_conn<H>(mut stream: TcpStream, handler: &H) -> Result<(), ServeError>
+    where
+        H: Fn(ControlFrame) -> ControlFrame,
+    {
+        let outcome = dispatch_conn(&mut stream, handler).await;
+        // Half-close regardless of outcome: a refused/malformed peer still gets a
+        // clean EOF, and a served peer's reply is followed by FIN, not a reset.
+        let _ = finish_conn(&mut stream).await;
+        outcome
+    }
+
+    /// The dispatch core of [`serve_conn`]: read + authorize + dispatch, writing
+    /// the reply. Kept separate so [`serve_conn`] can always half-close the stream
+    /// afterward, whatever this returns.
+    async fn dispatch_conn<H>(stream: &mut TcpStream, handler: &H) -> Result<(), ServeError>
+    where
+        H: Fn(ControlFrame) -> ControlFrame,
+    {
+        let token_bytes = read_record(stream).await?;
+        let presented = String::from_utf8(token_bytes).ok();
+        let expected = transport::control_token_from_env();
+        if !transport::is_authorized(expected.as_deref(), presented.as_deref()) {
+            return Err(ServeError::Unauthorized);
+        }
+        let frame_bytes = read_record(stream).await?;
+        // `read_record` has already stripped the length prefix, so the body is
+        // decoded directly — running it back through `decode_frame` would read the
+        // JSON's first bytes as a second length prefix.
+        let frame = decode_frame_body(&frame_bytes).map_err(ServeError::Frame)?;
+        let reply = handler(frame);
+        // A reply that exceeds the cap cannot be sent; drop the connection rather
+        // than emit a record the peer would refuse (fail-closed, never partial).
+        if let Some(out) = encode_frame(&reply) {
+            stream.write_all(&out).await?;
+            stream.flush().await?;
+        }
+        Ok(())
+    }
+
+    /// Bind the loopback control listener and serve connections until the process
+    /// exits, dispatching every authorized frame through `handler`.
+    ///
+    /// Returns `Ok(None)` — binding nothing — when the child was not launched with
+    /// both a control port and a token (the no-parent case: the child runs with no
+    /// control surface). Otherwise it binds `127.0.0.1:<port>` and loops; a
+    /// per-connection error is logged-and-dropped, never fatal, so one malformed or
+    /// unauthorized peer cannot take the surface down.
+    ///
+    /// `handler` maps an authorized [`ControlFrame`] to its reply. For the shared
+    /// transport this is the seam the per-shape lanes plug into (tui apply /
+    /// recorder inspect); a caller with no shape-specific behaviour can pass the
+    /// [`ack_handler`] echo stub.
+    ///
+    /// Each accepted connection is served on its own task, so one slow or hung
+    /// peer never blocks the loop from accepting the next; the handler is shared
+    /// across those tasks behind an `Arc` (`Fn + Send + Sync`), so per-connection
+    /// reply logic is a pure mapping and any shared state the caller needs lives
+    /// behind the handler's own interior mutability — never a `dyn Any`. Each
+    /// per-connection read runs under [`CONN_DEADLINE`], so a peer that connects
+    /// but never sends a complete record is dropped at the deadline rather than
+    /// holding a task forever.
+    ///
+    /// # Errors
+    /// An I/O error if the listener cannot bind the loopback port.
+    pub async fn serve_control<H>(handler: H) -> std::io::Result<Option<()>>
+    where
+        H: Fn(ControlFrame) -> ControlFrame + Send + Sync + 'static,
+    {
+        let Some(port) = transport::control_port_from_env() else {
+            return Ok(None);
+        };
+        if transport::control_token_from_env().is_none() {
+            return Ok(None);
+        }
+        let addr = transport::control_bind_addr(port);
+        // Defense in depth: `control_bind_addr` can only produce a loopback
+        // address, but re-check at the one site a socket is opened and refuse to
+        // bind anything routable — fail closed to "no control surface" rather than
+        // ever expose the channel on a reachable interface.
+        if !addr.ip().is_loopback() {
+            return Ok(None);
+        }
+        let listener = TcpListener::bind(addr).await?;
+        let handler = Arc::new(handler);
+        loop {
+            match listener.accept().await {
+                Ok((stream, _peer)) => {
+                    // A single connection is served on its own task under a read
+                    // deadline: one slow or hung peer never blocks the accept loop,
+                    // and a peer that stalls mid-record is dropped at the deadline.
+                    // Its failure is isolated — logged-and-dropped, never fatal.
+                    spawn_conn(stream, Arc::clone(&handler), CONN_DEADLINE);
+                }
+                // An accept error (fd exhaustion, transient) must not kill the loop.
+                Err(_) => continue,
+            }
+        }
+    }
+
+    /// Serve one accepted connection on its own task, bounded by `deadline`.
+    ///
+    /// The single source of truth for per-connection isolation: the task is
+    /// detached (one peer never blocks the accept loop), the serve runs under a
+    /// read deadline (a peer that connects but never completes a record is dropped
+    /// when it fires), and any outcome is discarded (a bad peer never propagates a
+    /// failure into the loop). The handler is shared across tasks behind an `Arc`.
+    fn spawn_conn<H>(stream: TcpStream, handler: Arc<H>, deadline: Duration)
+    where
+        H: Fn(ControlFrame) -> ControlFrame + Send + Sync + 'static,
+    {
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(deadline, serve_conn(stream, &*handler)).await;
+        });
+    }
+
+    /// The echo/ack handler: reply to every frame with a positive
+    /// [`ControlFrame::Ack`]. The shared transport's default seam — the per-shape
+    /// handlers (tui apply / recorder inspect) replace it in their own lanes.
+    #[must_use]
+    pub fn ack_handler(_frame: ControlFrame) -> ControlFrame {
+        ControlFrame::Ack {
+            ok: true,
+            detail: "ack".to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::{AppearancePatch, decode_frame};
+        use super::*;
+        use crate::system::locked_set_var;
+        use std::net::{Ipv4Addr, SocketAddr};
+
+        // A frame record framed exactly as the wire expects: a 4-byte big-endian
+        // length prefix over the JSON body.
+        #[allow(clippy::expect_used)] // test helper — an unencodable frame is a test failure
+        fn frame_record(frame: &ControlFrame) -> Vec<u8> {
+            encode_frame(frame).expect("a small frame must encode")
+        }
+
+        // A token record: the same length-delimited framing over the raw token
+        // bytes the parent presents ahead of its frame.
+        #[allow(clippy::cast_possible_truncation)] // test — a short token fits u32
+        fn token_record(token: &str) -> Vec<u8> {
+            let body = token.as_bytes();
+            let mut out = (body.len() as u32).to_be_bytes().to_vec();
+            out.extend_from_slice(body);
+            out
+        }
+
+        // Drive one connection against `serve_conn` with the ack stub, returning
+        // the raw reply bytes (empty when the connection was dropped unanswered).
+        async fn round_trip_conn(session_token: &str, wire: Vec<u8>) -> Vec<u8> {
+            locked_set_var(transport::CONTROL_TOKEN_ENV, session_token);
+            let listener = TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0))
+                .await
+                .expect("bind an ephemeral loopback listener");
+            let addr = listener.local_addr().expect("listener has a local addr");
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("accept the test client");
+                serve_conn(stream, &(ack_handler as fn(ControlFrame) -> ControlFrame)).await
+            });
+            let mut client = TcpStream::connect(addr)
+                .await
+                .expect("connect to the listener");
+            client.write_all(&wire).await.expect("write the wire");
+            client.flush().await.expect("flush the wire");
+            let mut reply = Vec::new();
+            client
+                .read_to_end(&mut reply)
+                .await
+                .expect("read the reply to EOF");
+            let _ = server.await.expect("server task joins");
+            reply
+        }
+
+        #[tokio::test]
+        async fn authorized_frame_is_acked() {
+            let frame = ControlFrame::HotAppearance(AppearancePatch::default());
+            let mut wire = token_record("session-secret");
+            wire.extend_from_slice(&frame_record(&frame));
+            let reply = round_trip_conn("session-secret", wire).await;
+            let (decoded, _) = decode_frame(&reply).expect("an authorized frame is acked");
+            assert!(
+                matches!(decoded, ControlFrame::Ack { ok: true, .. }),
+                "the ack stub replies with a positive Ack, got {decoded:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn wrong_token_is_refused_not_dispatched() {
+            let frame = ControlFrame::HotAppearance(AppearancePatch::default());
+            let mut wire = token_record("guess");
+            wire.extend_from_slice(&frame_record(&frame));
+            let reply = round_trip_conn("session-secret", wire).await;
+            assert!(
+                reply.is_empty(),
+                "a wrong token is dropped with no reply, got {} bytes",
+                reply.len()
+            );
+        }
+
+        #[tokio::test]
+        async fn empty_token_is_refused() {
+            let frame = ControlFrame::HotAppearance(AppearancePatch::default());
+            let mut wire = token_record("");
+            wire.extend_from_slice(&frame_record(&frame));
+            let reply = round_trip_conn("session-secret", wire).await;
+            assert!(reply.is_empty(), "an empty token never authorizes");
+        }
+
+        #[tokio::test]
+        async fn over_cap_length_prefix_is_refused_before_the_body() {
+            // A hostile token-record length prefix claiming more than the cap must
+            // be turned back before any body byte is read.
+            let declared = MAX_FRAME_LEN + 1;
+            #[allow(clippy::cast_possible_truncation)] // test — cap + 1 fits u32
+            let prefix = (declared as u32).to_be_bytes();
+            // Only one real byte follows a prefix claiming `declared` bytes.
+            let wire = [prefix.as_slice(), b"x"].concat();
+            locked_set_var(transport::CONTROL_TOKEN_ENV, "session-secret");
+            let listener = TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0))
+                .await
+                .expect("bind an ephemeral loopback listener");
+            let addr = listener.local_addr().expect("listener has a local addr");
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("accept the test client");
+                serve_conn(stream, &(ack_handler as fn(ControlFrame) -> ControlFrame)).await
+            });
+            let mut client = TcpStream::connect(addr)
+                .await
+                .expect("connect to the listener");
+            client.write_all(&wire).await.expect("write the wire");
+            client.flush().await.expect("flush the wire");
+            // Read the refusal EOF like any peer would, then close — so the server's
+            // clean teardown drain sees this side close instead of waiting it out.
+            let mut reply = Vec::new();
+            client
+                .read_to_end(&mut reply)
+                .await
+                .expect("read the refusal EOF");
+            assert!(
+                reply.is_empty(),
+                "an over-cap prefix yields no frame reply, got {} bytes",
+                reply.len()
+            );
+            let outcome = server.await.expect("server task joins");
+            assert!(
+                matches!(outcome, Err(ServeError::TooLong { declared: d }) if d == declared),
+                "an over-cap length prefix is refused before the body, got {outcome:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn hung_peer_is_dropped_and_the_surface_stays_live() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            // A peer that connects but never sends its token/frame must be dropped
+            // at the deadline, and it must NOT prevent a second, well-formed
+            // authorized peer from being served on the same listener.
+            locked_set_var(transport::CONTROL_TOKEN_ENV, "session-secret");
+            let listener = TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0))
+                .await
+                .expect("bind an ephemeral loopback listener");
+            let addr = listener.local_addr().expect("listener has a local addr");
+
+            // The dispatch counter proves the hung peer never reaches the handler.
+            let dispatches = Arc::new(AtomicUsize::new(0));
+            let handler = {
+                let dispatches = Arc::clone(&dispatches);
+                Arc::new(move |_frame: ControlFrame| {
+                    dispatches.fetch_add(1, Ordering::SeqCst);
+                    ControlFrame::Ack {
+                        ok: true,
+                        detail: "ack".to_string(),
+                    }
+                })
+            };
+
+            // The accept loop under test: mirrors `serve_control`'s per-connection
+            // isolation via the shared `spawn_conn`, with a short deadline so the
+            // hung peer is dropped promptly.
+            let accept_handler = Arc::clone(&handler);
+            let accept = tokio::spawn(async move {
+                let deadline = Duration::from_millis(200);
+                loop {
+                    match listener.accept().await {
+                        Ok((stream, _)) => {
+                            spawn_conn(stream, Arc::clone(&accept_handler), deadline);
+                        }
+                        Err(_) => continue,
+                    }
+                }
+            });
+
+            // A hung peer: connects, sends nothing, holds the connection open.
+            let _hung = TcpStream::connect(addr).await.expect("hung peer connects");
+
+            // A well-formed authorized peer on the SAME listener must still be
+            // served — the hung peer never wedged the surface.
+            let frame = ControlFrame::HotAppearance(AppearancePatch::default());
+            let mut wire = token_record("session-secret");
+            wire.extend_from_slice(&frame_record(&frame));
+            let mut good = TcpStream::connect(addr).await.expect("good peer connects");
+            good.write_all(&wire).await.expect("write the good wire");
+            good.flush().await.expect("flush the good wire");
+            let mut reply = Vec::new();
+            good.read_to_end(&mut reply)
+                .await
+                .expect("read the good reply to EOF");
+            let (decoded, _) = decode_frame(&reply).expect("the good peer is acked");
+            assert!(
+                matches!(decoded, ControlFrame::Ack { ok: true, .. }),
+                "the live surface acks the good peer, got {decoded:?}"
+            );
+
+            // Exactly one dispatch: the good peer. The hung peer never dispatched.
+            assert_eq!(
+                dispatches.load(Ordering::SeqCst),
+                1,
+                "only the well-formed peer reaches the handler"
+            );
+            accept.abort();
         }
     }
 }

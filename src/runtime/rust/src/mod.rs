@@ -85,8 +85,10 @@ pub mod core;
 #[cfg(feature = "debugger")]
 pub mod debugger;
 // Shape-agnostic dev-loop control wire (hot-swap + time-travel debugger). Present
-// only under a dev-loop surface (`web` or `debugger`); absent from `ipe release`.
-#[cfg(any(feature = "web", feature = "debugger"))]
+// under any dev-loop surface: the child-side `web`/`debugger` builds (which also
+// compile `control::server`) and the parent-side `control-wire` (the `ipe watch`
+// sender, codec only — no tokio server). Absent from `ipe release`.
+#[cfg(any(feature = "web", feature = "debugger", feature = "control-wire"))]
 pub mod control;
 // Constant-time byte equality — the SSOT predicate all secret/tag/key
 // newtypes use for `PartialEq`. Gated on `crypto-core` (which pulls `subtle`).
@@ -760,3 +762,36 @@ const _WASI_TIME_FLOOR_SEAL: () = {
     let _ = crate::time::time_unix_millis::<E>;
     let _ = crate::time::time_sleep::<E>;
 };
+
+#[cfg(test)]
+mod control_surface_absence {
+    // The dev-loop control channel — the `control` module and its loopback
+    // `server` accept-loop — is present ONLY under a dev-loop surface (`web` or
+    // `debugger`) and never in an `ipe release` artifact, which carries neither
+    // feature. The `#[cfg(any(feature = "web", feature = "debugger"))]` on `mod
+    // control` (and the `tokio`/native gate on `control::server`) IS the
+    // compile-time absence proof — a release build cannot name either symbol.
+    // Pin the gate itself so a widening of it (e.g. dropping the feature guard)
+    // breaks this standing check rather than silently shipping the surface.
+    #[test]
+    fn control_surface_matches_the_dev_loop_gate() {
+        let control_present = cfg!(any(
+            feature = "web",
+            feature = "debugger",
+            feature = "control-wire"
+        ));
+        let server_present =
+            control_present && cfg!(feature = "tokio") && !cfg!(target_arch = "wasm32");
+        // A release build selects neither dev-loop feature, so both are absent.
+        if !control_present {
+            assert!(
+                !server_present,
+                "the control server cannot be present without the control module"
+            );
+        }
+        // The server is native-only: it can never be present on wasm.
+        if cfg!(target_arch = "wasm32") {
+            assert!(!server_present, "the control server is native-only");
+        }
+    }
+}

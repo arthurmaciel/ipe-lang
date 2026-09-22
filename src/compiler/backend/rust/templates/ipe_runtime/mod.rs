@@ -6,12 +6,14 @@ pub mod length;
 pub mod char_kernel;
 pub mod char_category;
 pub mod config;
-// The dev-loop control channel (`ControlFrame` wire + loopback transport).
+// The dev-loop control channel (`ControlFrame` wire + loopback `server`).
 // Gated to match its source declaration: present only under a dev-loop surface
-// (`web` references `control::AppearancePatch`; `debugger` drives it), absent
-// from a release build. Its serde/ct_eq dependencies are satisfied by exactly
-// those features.
-#[cfg(any(feature = "web", feature = "debugger"))]
+// (`web` references `control::AppearancePatch`; `debugger` drives it, and both
+// compile the tokio `control::server` accept-loop), absent from a release build.
+// The parent-side `control-wire` codec-only feature is a CLI concern, never
+// selected for an emitted project. Its serde/ct_eq dependencies are satisfied by
+// exactly those features.
+#[cfg(any(feature = "web", feature = "debugger", feature = "control-wire"))]
 pub mod control;
 pub mod core;
 pub mod ct_eq;
