@@ -92,8 +92,12 @@ fn version_json_carries_the_version_field() {
     let out = r.stdout.trim();
     assert_eq!(
         out,
-        format!("{{\"version\":\"{}\"}}", env!("CARGO_PKG_VERSION")),
-        "--json must be the stable single-field object"
+        format!(
+            "{{\"schema\":\"ipe.cli.version/1\",\"status\":\"ok\",\
+             \"command\":\"version\",\"payload\":{{\"version\":\"{}\"}}}}",
+            env!("CARGO_PKG_VERSION")
+        ),
+        "--json must be the shared machine envelope carrying the version payload"
     );
     assert!(!out.starts_with(' '), "--json must be flush-left");
 }
@@ -133,7 +137,8 @@ fn capabilities_json_is_a_stable_object() {
     assert!(r.ok, "stderr: {}", r.stderr);
     assert_eq!(
         r.stdout.trim(),
-        "{\"capabilities\":[\"network\",\"clock\"]}"
+        "{\"schema\":\"ipe.cli.capabilities/1\",\"status\":\"ok\",\
+         \"command\":\"capabilities\",\"payload\":{\"capabilities\":[\"network\",\"clock\"]}}"
     );
 }
 

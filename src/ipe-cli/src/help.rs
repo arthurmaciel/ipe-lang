@@ -236,10 +236,11 @@ pub fn all_command_specs() -> Vec<CommandSpec> {
         .collect()
 }
 
-/// Every top-level help section, projected from the canonical [`SECTIONS`]
-/// table. The CLI reference generator reads this instead of the private table so
-/// the section grouping in `docs/reference/cli.md` cannot drift from the
-/// top-level `ipe --help` screen.
+/// Every top-level help section, projected from the canonical [`SECTIONS`] table.
+///
+/// The CLI reference generator reads this instead of the private table so the
+/// section grouping in `docs/reference/cli.md` cannot drift from the top-level
+/// `ipe --help` screen.
 #[must_use]
 pub fn all_section_specs() -> Vec<SectionSpec> {
     SECTIONS
@@ -443,7 +444,7 @@ const COMMANDS: &[Command] = &[
         options: &[Opt {
             flag: "[--json]",
             desc: "emit each diagnostic as a stable JSON object (one per line) on stderr; \
-                   success is {\"status\":\"ok\"} on stdout",
+                   success is the shared JSON envelope on stdout",
         }],
         hidden: false,
     },
@@ -794,7 +795,7 @@ const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "[--json]",
-                desc: "print {\"capabilities\":[…]} for jq",
+                desc: "print the capability set as a stable JSON envelope for jq",
             },
         ],
         hidden: false,
@@ -933,7 +934,7 @@ const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "[--json]",
-                desc: "print {\"version\":\"…\"} for jq",
+                desc: "print the version as a stable JSON envelope for jq",
             },
         ],
         hidden: false,

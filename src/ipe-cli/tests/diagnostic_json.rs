@@ -4,8 +4,8 @@
 //! Verifies:
 //! - A failing compile under `--json` emits valid, schema-conforming JSON on
 //!   stderr and exits non-zero (fail-closed; SEAL unchanged).
-//! - A successful type-check under `--json` emits `{"status":"ok"}` on stdout
-//!   and exits zero.
+//! - A successful type-check under `--json` emits the shared machine envelope
+//!   (`ipe.cli.type-check/1`, `status:ok`, empty payload) on stdout and exits zero.
 //! - Two successive runs of the same failing compile are byte-identical
 //!   (determinism).
 //! - Without `--json`, the human layout is still rendered (not broken).
@@ -145,8 +145,9 @@ fn type_check_json_on_success_exits_zero_with_ok_object() {
 
     assert_eq!(
         r.stdout.trim(),
-        "{\"status\":\"ok\"}",
-        "--json success must emit {{\"status\":\"ok\"}}, got: {:?}",
+        "{\"schema\":\"ipe.cli.type-check/1\",\"status\":\"ok\",\
+         \"command\":\"type-check\",\"payload\":{}}",
+        "--json success must emit the shared machine envelope, got: {:?}",
         r.stdout
     );
 

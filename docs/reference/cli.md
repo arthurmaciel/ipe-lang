@@ -89,7 +89,7 @@ ipe type-check [<path>]
 
 **Flags:**
 
-- `[--json]` — emit each diagnostic as a stable JSON object (one per line) on stderr; success is {"status":"ok"} on stdout
+- `[--json]` — emit each diagnostic as a stable JSON object (one per line) on stderr; success is the shared JSON envelope on stdout
 
 ### `ipe lint`
 
@@ -287,7 +287,7 @@ ipe capabilities [<path>]
 **Flags:**
 
 - `[--plain]` — print the bare capability names, one per line, flush-left
-- `[--json]` — print {"capabilities":[…]} for jq
+- `[--json]` — print the capability set as a stable JSON envelope for jq
 
 ### `ipe diff`
 
@@ -361,7 +361,7 @@ ipe version
 **Flags:**
 
 - `[--plain]` — print the bare version string, flush-left
-- `[--json]` — print {"version":"…"} for jq
+- `[--json]` — print the version as a stable JSON envelope for jq
 
 ## Command groups
 

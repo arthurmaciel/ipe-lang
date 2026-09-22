@@ -37,9 +37,11 @@ pub struct Invocation {
     pub args: fn(&Path) -> Option<Vec<String>>,
 }
 
-/// The extra hermetic invocations (top-level help, group help, `version`, and
-/// the deterministic command bodies over committed fixtures). The per-command
-/// `--help` pages are enumerated separately from [`help::command_names`].
+/// The extra hermetic invocations: top-level help, group help, `version`, and
+/// the deterministic command bodies over committed fixtures.
+///
+/// The per-command `--help` pages are enumerated separately from
+/// [`help::command_names`].
 pub const INVOCATIONS: &[Invocation] = &[
     Invocation {
         golden: "toplevel_help",
@@ -113,10 +115,15 @@ pub fn classify(name: &str) -> Hermetic {
         }
 
         // Project-tree mutators / environment probes — output depends on a
-        // project or the host toolchain.
-        "lint" | "fmt" | "clean" | "migrate" | "fix" | "eject" | "rust" | "health" => {
+        // project or the host toolchain. `type-check` reads and compiles a
+        // project tree, so its diagnostics/paths are environment-dependent.
+        "type-check" | "lint" | "fmt" | "clean" | "migrate" | "fix" | "eject" | "rust"
+        | "health" => {
             Hermetic::Excluded("depends on a project tree / host toolchain — flaky transcript")
         }
+
+        // Scaffolds a new project on disk; its body echoes the created path.
+        "init" => Hermetic::Excluded("scaffolds a project on disk — path-dependent transcript"),
 
         // The language server speaks LSP over stdio, not a human transcript.
         "lsp" => Hermetic::Excluded("speaks LSP over stdio — no human transcript"),
@@ -131,9 +138,10 @@ pub fn classify(name: &str) -> Hermetic {
 pub const UNCLASSIFIED_SENTINEL: &str = "UNCLASSIFIED";
 
 /// The absolute path prefixes to redact to `<TMP>`, longest first so a nested
-/// prefix does not shadow a longer one. Derived from the workspace root, the OS
-/// temp dir, and `$HOME` — the machine/checkout-specific prefixes any path in
-/// the hermetic surface can carry.
+/// prefix does not shadow a longer one.
+///
+/// Derived from the workspace root, the OS temp dir, and `$HOME` — the
+/// machine/checkout-specific prefixes any path in the hermetic surface can carry.
 #[must_use]
 pub fn volatile_path_prefixes(repo_root: &Path) -> Vec<String> {
     let mut prefixes: Vec<String> = Vec::new();
@@ -183,12 +191,13 @@ fn redact_durations(input: &str) -> String {
         // A duration begins at a digit whose previous char is not alphanumeric,
         // so an identifier's embedded digits are never clobbered.
         let prev_alnum = i > 0 && chars.get(i - 1).is_some_and(|c| c.is_alphanumeric());
-        if !prev_alnum && chars.get(i).is_some_and(|c| c.is_ascii_digit()) {
-            if let Some(end) = duration_run(&chars, i) {
-                out.push_str("<DUR>");
-                i = end;
-                continue;
-            }
+        if !prev_alnum
+            && chars.get(i).is_some_and(char::is_ascii_digit)
+            && let Some(end) = duration_run(&chars, i)
+        {
+            out.push_str("<DUR>");
+            i = end;
+            continue;
         }
         if let Some(c) = chars.get(i) {
             out.push(*c);
@@ -202,13 +211,13 @@ fn redact_durations(input: &str) -> String {
 /// the index just past it; else `None`.
 fn duration_run(chars: &[char], start: usize) -> Option<usize> {
     let mut j = start;
-    while chars.get(j).is_some_and(|c| c.is_ascii_digit()) {
+    while chars.get(j).is_some_and(char::is_ascii_digit) {
         j += 1;
     }
     if chars.get(j) == Some(&'.') {
         j += 1;
         let mut saw = false;
-        while chars.get(j).is_some_and(|c| c.is_ascii_digit()) {
+        while chars.get(j).is_some_and(char::is_ascii_digit) {
             j += 1;
             saw = true;
         }
@@ -218,7 +227,10 @@ fn duration_run(chars: &[char], start: usize) -> Option<usize> {
     }
     for unit in ["ms", "µs", "us", "ns", "s", "m", "h"] {
         let unit_chars: Vec<char> = unit.chars().collect();
-        if chars[j..].starts_with(unit_chars.as_slice()) {
+        if chars
+            .get(j..)
+            .is_some_and(|rest| rest.starts_with(unit_chars.as_slice()))
+        {
             let after = j + unit_chars.len();
             let bleeds = chars.get(after).is_some_and(|c| c.is_alphanumeric());
             if !bleeds {
@@ -230,9 +242,10 @@ fn duration_run(chars: &[char], start: usize) -> Option<usize> {
 }
 
 /// The golden envelope for a transcript: the exit code on a header line, a `---`
-/// separator, then the redacted stdout. Identical shape on both the test's
-/// comparison side and the tool's write side, so a golden written by the tool is
-/// exactly what the test reads back.
+/// separator, then the redacted stdout.
+///
+/// Identical shape on both the test's comparison side and the tool's write side,
+/// so a golden written by the tool is exactly what the test reads back.
 #[must_use]
 pub fn golden_envelope(exit_code: Option<i32>, redacted_stdout: &str) -> String {
     let code = exit_code.map_or_else(|| "signal".to_owned(), |c| c.to_string());

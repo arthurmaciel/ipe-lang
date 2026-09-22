@@ -10,5 +10,5 @@ exit: 0
 
   Options:
     [--plain]  print the bare capability names, one per line, flush-left
-    [--json]   print {"capabilities":[…]} for jq
+    [--json]   print the capability set as a stable JSON envelope for jq
 

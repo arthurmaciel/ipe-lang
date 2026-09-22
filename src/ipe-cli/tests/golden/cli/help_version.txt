@@ -7,5 +7,5 @@ exit: 0
 
   Options:
     [--plain]  print the bare version string, flush-left
-    [--json]   print {"version":"…"} for jq
+    [--json]   print the version as a stable JSON envelope for jq
 

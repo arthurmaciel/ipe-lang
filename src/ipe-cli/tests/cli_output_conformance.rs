@@ -449,7 +449,7 @@ fn machine_success_json_carries_the_envelope_schema_per_command() {
         // A stable schema tag of the shape `ipe.cli.<x>/N` (the version-suffixed
         // contract), and a `payload` key carrying the command's own result.
         assert!(
-            json.contains("\"schema\":\"ipe.cli.") && json.contains("/"),
+            json.contains("\"schema\":\"ipe.cli.") && json.contains('/'),
             "`ipe {cmd} --json` success envelope must carry a versioned schema tag: {json:?}",
         );
         assert!(

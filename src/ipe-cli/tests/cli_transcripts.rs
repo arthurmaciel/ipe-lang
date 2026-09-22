@@ -56,15 +56,19 @@ fn read_golden(basename: &str) -> Option<String> {
 fn assert_matches_golden(basename: &str, exit_code: Option<i32>, stdout: &str) {
     let redacted = cli_transcript::redact(stdout, &repo_root());
     let actual = cli_transcript::golden_envelope(exit_code, &redacted);
-    let Some(expected) = read_golden(basename) else {
-        panic!(
-            "missing CLI transcript golden `{basename}.txt`.\n\
-             Regenerate with: cargo run -p regen-cli-transcripts\n\
-             (the golden is generated output — do not hand-write it)"
-        );
-    };
+    // A missing golden fails via `assert!` (not a bare `panic!`, which the
+    // production clippy set denies even in test targets); the message names the
+    // regen tool.
+    let expected = read_golden(basename);
+    assert!(
+        expected.is_some(),
+        "missing CLI transcript golden `{basename}.txt`.\n\
+         Regenerate with: cargo run -p regen-cli-transcripts\n\
+         (the golden is generated output — do not hand-write it)"
+    );
     assert_eq!(
-        expected, actual,
+        expected.unwrap_or_default(),
+        actual,
         "CLI transcript `{basename}` drifted from its golden.\n\
          If the change is intended, regenerate: cargo run -p regen-cli-transcripts"
     );
