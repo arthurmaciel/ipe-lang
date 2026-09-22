@@ -2982,11 +2982,59 @@ mod tests {
     use super::{
         BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
         apply_build_accel_env, child_env, choose_build_accel, compile_failed_frame,
-        dir_has_dep_rlib, env_flag_on, first_error_line, mint_hot_token, mpsc,
-        schedule_resolve_retry, spawn_command, strip_ansi, watch_status_body,
+        dir_has_dep_rlib, emitted_binds_http, emitted_is_web, env_flag_on, first_error_line,
+        mint_hot_token, mpsc, schedule_resolve_retry, spawn_command, strip_ansi, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
+
+    /// Build an `EmittedProject` whose `src/main.rs` carries `main_rs`, so the
+    /// HTTP-detection predicates can be tested on their real scan surface without
+    /// running the emitter.
+    fn emitted_with_main(main_rs: &str) -> ipe_backend::EmittedProject {
+        let mut files = std::collections::BTreeMap::new();
+        let rel = ipe_backend::RelPath::new("src/main.rs").expect("valid rel path");
+        files.insert(rel, main_rs.to_owned());
+        ipe_backend::EmittedProject {
+            files,
+            cargo_toml: String::new(),
+            uses_webview: false,
+        }
+    }
+
+    /// A live web app emits `web_app`: it is BOTH a web project and an HTTP binder.
+    #[test]
+    fn web_app_emit_is_web_and_binds_http() {
+        let p = emitted_with_main("fn main() { ipe_runtime::web::web_app(a, b, c, d, e); }");
+        assert!(emitted_is_web(&p), "web_app must classify as web");
+        assert!(emitted_binds_http(&p), "web_app must be an HTTP binder");
+    }
+
+    /// An `Ipe.Http.Server` emits `server_listen`: an HTTP binder, but NOT web —
+    /// so the proxy engages (T2) while readiness uses TcpConnect, not readyz (T3).
+    /// This holds regardless of program shape: a `Shape::Script main = Server.listen`
+    /// emits `server_listen` and is detected by the emitted symbol, not the shape.
+    #[test]
+    fn server_listen_emit_binds_http_but_is_not_web() {
+        let p = emitted_with_main("fn main() { ipe_runtime::server::server_listen(8000i64, rs); }");
+        assert!(!emitted_is_web(&p), "a bare server is not a web project");
+        assert!(
+            emitted_binds_http(&p),
+            "server_listen must engage the HTTP proxy"
+        );
+    }
+
+    /// A CLI/TUI/worker or a third-party/non-HTTP server emits neither
+    /// entrypoint: no proxy engages and watch takes the direct-restart path.
+    #[test]
+    fn non_http_emit_binds_no_first_party_listener() {
+        let p = emitted_with_main("fn main() { ipe_runtime::cli::run(update, view); }");
+        assert!(!emitted_is_web(&p));
+        assert!(
+            !emitted_binds_http(&p),
+            "a non-HTTP program must NOT engage the proxy — no spurious port bind"
+        );
+    }
 
     /// Collect a `Command`'s env overrides as owned strings, resolving the
     /// override VALUE (`None` means "remove from the child env"). Lets a test

@@ -1085,6 +1085,18 @@ fn strip_trailing_slash(p: &str) -> String {
     }
 }
 
+/// Resolve the port `server_listen` binds: `IPE_SERVER_PORT` when it holds a
+/// parseable integer, else the `source` port the program passed to
+/// `Server.listen`. A missing OR malformed env value falls back to `source` —
+/// fail-closed, so a garbage env can never silently bind port `0` (an OS-chosen
+/// ephemeral port the caller could not reach). Pure over its inputs so the
+/// precedence is unit-testable without touching the process environment.
+fn resolve_server_port(env_value: Option<String>, source: i64) -> i64 {
+    env_value
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(source)
+}
+
 /// Server.listen : Int -> List Route -> Task Error ()  — serves via axum/tokio.
 pub fn server_listen<E: From<String> + Send + 'static>(
     port: i64,
@@ -1175,10 +1187,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
         //   `serve_web`'s `IPE_WEB_PORT` precedence so both runtimes relocate
         //   identically under watch. A malformed value falls back to the source
         //   port — fail-closed, never a silent 0.
-        let port = crate::system::read_env_var("IPE_SERVER_PORT")
-            .ok()
-            .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or(port);
+        let port = resolve_server_port(crate::system::read_env_var("IPE_SERVER_PORT").ok(), port);
         // Bind host obeys the one runtime-config precedence: `IPE_HTTP_BIND`
         // (env) > the app's `Host.bind` setting > the build-profile fallback
         // (loopback in debug, all interfaces in release). The conservative
@@ -2465,6 +2474,28 @@ pub fn rate_limit_allow(name: String, key: String, capacity: i64, refill_per_sec
 mod tests {
     use super::*;
     use std::future::ready;
+
+    #[test]
+    fn ipe_server_port_env_overrides_the_source_port() {
+        // A valid env value wins over the port the program passed.
+        assert_eq!(resolve_server_port(Some("9123".to_owned()), 8000), 9123);
+    }
+
+    #[test]
+    fn malformed_ipe_server_port_falls_back_to_source_never_zero() {
+        // Prove the refusal: an empty or non-numeric env value must NOT bind 0 (a
+        // silent OS-ephemeral port the caller cannot reach) — it falls back to the
+        // source port the program passed. Fail-closed on garbage input.
+        for garbage in ["", "abc", "80a0", " ", "-"] {
+            assert_eq!(
+                resolve_server_port(Some(garbage.to_owned()), 8000),
+                8000,
+                "malformed IPE_SERVER_PORT {garbage:?} must fall back to the source port, not 0"
+            );
+        }
+        // An absent env value also falls back to the source port.
+        assert_eq!(resolve_server_port(None, 8000), 8000);
+    }
 
     #[test]
     fn server_header_is_case_insensitive_go_parity() {
