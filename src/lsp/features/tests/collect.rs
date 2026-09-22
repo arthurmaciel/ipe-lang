@@ -2,7 +2,7 @@
 //! Diagnostics collection over in-memory fixtures — no filesystem anywhere
 //! (the same structural proof as `ipe_db`'s own `lsp_seam.rs`).
 
-use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
+use ipe_db::{Db as _, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 use ipe_lsp_features::PositionEncoding;
 use ipe_lsp_features::code_actions::{DbView, code_actions};
 use ipe_lsp_features::diagnostics::{ModuleDiagnostics, collect, to_lsp};
@@ -830,6 +830,200 @@ fn unused_imports_quick_fix_refuses_non_import_line() {
     assert!(
         actions.is_empty(),
         "a non-import line must yield no remove action: {actions:?}"
+    );
+}
+
+/// A multi-line unused import whose `exposing (…)` clause wraps onto a
+/// continuation line. Deleting only the keyword's physical line would strand
+/// the `exposing (bar, baz)` continuation and turn a compiling module into a
+/// parse error. The fix must delete the WHOLE declaration, and the result must
+/// still parse (SEAL — the quick-fix keeps a compiling program compiling).
+#[test]
+fn unused_imports_quick_fix_removes_a_multiline_exposing_import() {
+    let db = IpeDatabase::new();
+    // `Foo` is registered in the root, exposing `bar`/`baz`; the import names
+    // them across two physical lines (2..=3) and never uses either → the
+    // conservative unused-imports lint would flag the `import` keyword.
+    let src = "module Main exposing (main)\n\nimport Foo\n    exposing (bar, baz)\n\nmain : Int\nmain = 1\n";
+    let foo = file(
+        &db,
+        &["Foo"],
+        "module Foo exposing (bar, baz)\n\nbar = 1\n\nbaz = 2\n",
+    );
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Foo"], foo), (&["Main"], entry)]);
+
+    // The diagnostic anchors on the `import` keyword (line 2, char 0).
+    let lsp_diag = lint_diag_on_line("lint/unused-imports", 2);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("a multi-line unused import must offer a remove action");
+    assert_eq!(action.title, "Remove unused import");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+
+    let fixed = apply_edit(src, edit);
+    assert!(
+        !fixed.contains("import Foo"),
+        "the keyword line is gone: {fixed:?}"
+    );
+    assert!(
+        !fixed.contains("exposing (bar, baz)"),
+        "the continuation line must NOT be stranded: {fixed:?}"
+    );
+    // SEAL: the fixed module still parses (no dangling `exposing` fragment).
+    let mut interner = db.interner().lock();
+    assert!(
+        ipe_parse::parse_module(&fixed, &mut interner).is_ok(),
+        "the fixed module must still parse: {fixed:?}"
+    );
+}
+
+/// An unused import whose `exposing (…)` list is broken across several lines,
+/// with the closing `)` on its own line below the last name. The clause end is
+/// found by balancing the parens, so the whole list — down to the trailing `)`
+/// — is removed and the module still parses.
+#[test]
+fn unused_imports_quick_fix_removes_a_wrapped_exposing_list() {
+    let db = IpeDatabase::new();
+    // The list spans lines 3..=6; the closing `)` is alone on line 6.
+    let src = "module Main exposing (main)\n\nimport Foo\n    exposing ( bar\n             , baz\n             )\n\nmain : Int\nmain = 1\n";
+    let foo = file(
+        &db,
+        &["Foo"],
+        "module Foo exposing (bar, baz)\n\nbar = 1\n\nbaz = 2\n",
+    );
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Foo"], foo), (&["Main"], entry)]);
+
+    let lsp_diag = lint_diag_on_line("lint/unused-imports", 2);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("a wrapped-list unused import must offer a remove action");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+
+    let fixed = apply_edit(src, edit);
+    assert!(
+        !fixed.contains("import Foo"),
+        "keyword line gone: {fixed:?}"
+    );
+    assert!(
+        !fixed.contains("bar") && !fixed.contains("baz"),
+        "the wrapped list contents must all be gone: {fixed:?}"
+    );
+    assert!(
+        fixed.contains("main = 1"),
+        "the rest of the module is untouched: {fixed:?}"
+    );
+    // SEAL: with the whole clause (incl. the lone closing paren) removed, the
+    // fixed module still parses — no dangling `)` fragment is left behind.
+    let mut interner = db.interner().lock();
+    assert!(
+        ipe_parse::parse_module(&fixed, &mut interner).is_ok(),
+        "the fixed module must still parse: {fixed:?}"
+    );
+}
+
+/// A multi-line unused import whose `as Alias` clause wraps onto a continuation
+/// line. Same SEAL: deleting only the keyword line would strand `as Bar`.
+#[test]
+fn unused_imports_quick_fix_removes_a_multiline_as_import() {
+    let db = IpeDatabase::new();
+    let src = "module Main exposing (main)\n\nimport Foo\n    as Bar\n\nmain : Int\nmain = 1\n";
+    let foo = file(&db, &["Foo"], "module Foo exposing (bar)\n\nbar = 1\n");
+    let entry = file(&db, &["Main"], src);
+    let root = root_of(&db, &[(&["Foo"], foo), (&["Main"], entry)]);
+
+    let lsp_diag = lint_diag_on_line("lint/unused-imports", 2);
+    let uri = Url::from_file_path("/fake/Main.ipe").expect("uri");
+    let actions = code_actions(
+        DbView {
+            db: &db,
+            root,
+            entry,
+        },
+        &["Main".to_owned()],
+        &uri,
+        lsp_diag.range,
+        std::slice::from_ref(&lsp_diag),
+        src,
+        PositionEncoding::Utf16,
+    );
+    let action = actions
+        .into_iter()
+        .find_map(|a| match a {
+            CodeActionOrCommand::CodeAction(ca) => Some(ca),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .expect("a multi-line `as` unused import must offer a remove action");
+    let edit = action
+        .edit
+        .as_ref()
+        .and_then(|e| e.changes.as_ref())
+        .and_then(|c| c.values().next())
+        .and_then(|v| v.first())
+        .expect("edit present");
+
+    let fixed = apply_edit(src, edit);
+    assert!(
+        !fixed.contains("import Foo"),
+        "the keyword line is gone: {fixed:?}"
+    );
+    assert!(
+        !fixed.contains("as Bar"),
+        "the `as Bar` continuation must NOT be stranded: {fixed:?}"
+    );
+    let mut interner = db.interner().lock();
+    assert!(
+        ipe_parse::parse_module(&fixed, &mut interner).is_ok(),
+        "the fixed module must still parse: {fixed:?}"
     );
 }
 
