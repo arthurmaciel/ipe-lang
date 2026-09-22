@@ -4097,7 +4097,14 @@ where
         Err(e) => return IpeResult::Err(format!("Web.tea: bind {addr}: {e}").into()),
     };
     // Bind-address line (stderr) — carries the resolved host:port.
-    eprintln!("[ipe.web] listening on http://{addr}");
+    {
+        use std::io::IsTerminal;
+        let msg = format!("[ipe.web] listening on http://{addr}");
+        eprintln!(
+            "{}",
+            crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
+        );
+    }
     // User-facing line on stdout.
     println!("Ipe.Web listening on :{port}");
     // Graceful shutdown: trap SIGINT/SIGTERM,

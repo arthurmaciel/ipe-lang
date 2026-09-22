@@ -1168,6 +1168,17 @@ pub fn server_listen<E: From<String> + Send + 'static>(
             .layer(tower_http::timeout::TimeoutLayer::new(
                 std::time::Duration::from_secs(http_request_timeout_secs()),
             ));
+        //   `IPE_SERVER_PORT` (env) overrides the port the program passed to
+        //   `Server.listen`. This is what lets `ipe watch` place the app on an
+        //   internal loopback port BEHIND its blue-green proxy (the proxy holds the
+        //   user-facing port and forwards to this internal one); it mirrors
+        //   `serve_web`'s `IPE_WEB_PORT` precedence so both runtimes relocate
+        //   identically under watch. A malformed value falls back to the source
+        //   port — fail-closed, never a silent 0.
+        let port = crate::system::read_env_var("IPE_SERVER_PORT")
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(port);
         // Bind host obeys the one runtime-config precedence: `IPE_HTTP_BIND`
         // (env) > the app's `Host.bind` setting > the build-profile fallback
         // (loopback in debug, all interfaces in release). The conservative
@@ -1180,15 +1191,22 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                 return IpeResult::Err(
                     format!(
                         "port {port} is already in use — another application is bound to it.\n\
-                         Set a different port with the IPE_WEB_PORT environment variable, e.g.:\n\
-                         IPE_WEB_PORT=8123 ipe run"
+                         Set a different port with the IPE_SERVER_PORT environment variable, e.g.:\n\
+                         IPE_SERVER_PORT=8123 ipe run"
                     )
                     .into(),
                 );
             }
             Err(e) => return IpeResult::Err(format!("Server.listen: bind {}: {}", addr, e).into()),
         };
-        eprintln!("[ipe.http.server] listening on http://{}", addr);
+        {
+            use std::io::IsTerminal;
+            let msg = format!("[ipe.http.server] listening on http://{addr}");
+            eprintln!(
+                "{}",
+                crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
+            );
+        }
         // with_connect_info so each request carries the peer SocketAddr —
         // populates ServerRequest.remoteAddr (also used by per-IP rate limiting).
         let svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();

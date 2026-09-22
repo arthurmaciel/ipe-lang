@@ -52,6 +52,19 @@ pub(crate) fn read_env_var(key: &str) -> Result<String, std::env::VarError> {
     }
 }
 
+/// Render a runtime status line (e.g. the HTTP `listening on` banner) with a
+/// 2-space left gutter ONLY when stderr is an interactive terminal; a piped or
+/// redirected stderr (test harness, production log capture) stays flush-left so
+/// downstream `contains(...)` matchers see the bare line. The `is_terminal`
+/// decision is a parameter so the indent rule is testable without a pty.
+pub(crate) fn gutter_line(msg: &str, is_terminal: bool) -> String {
+    if is_terminal {
+        format!("  {msg}")
+    } else {
+        msg.to_string()
+    }
+}
+
 /// Read an environment variable as an `OsString` — the `var_os` companion of
 /// `read_env_var` (same overlay-first semantics). `None` when unset (or masked by
 /// an overlay tombstone) or — unlike `read_env_var` — when the real value is not
@@ -1093,6 +1106,29 @@ mod exit_hook_tests {
         assert!(
             CALLS.load(Ordering::SeqCst) >= 1,
             "registered exit hook must run"
+        );
+    }
+}
+
+#[cfg(test)]
+mod gutter_line_tests {
+    use super::gutter_line;
+
+    #[test]
+    fn indents_only_under_a_terminal() {
+        // Terminal stderr → 2-space gutter for the human dev loop.
+        assert_eq!(
+            gutter_line("[ipe.http.server] listening on http://127.0.0.1:8000", true),
+            "  [ipe.http.server] listening on http://127.0.0.1:8000"
+        );
+        // Piped/redirected stderr (the E2E harness reads through a pipe) stays
+        // flush-left so `contains("[ipe.http.server] listening on")` matchers hold.
+        assert_eq!(
+            gutter_line(
+                "[ipe.http.server] listening on http://127.0.0.1:8000",
+                false
+            ),
+            "[ipe.http.server] listening on http://127.0.0.1:8000"
         );
     }
 }
