@@ -1536,7 +1536,7 @@ mod hot_appearance_tests {
         );
         assert!(
             out.contains(
-                "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get(0))"
+                "ipe_runtime::ui::template::materialize_str(__ipe_lit.get(0), ipe_runtime::ui::template::TemplateFills::default())"
             ),
             "the node emits as a single template read, got:\n{out}"
         );
@@ -1593,7 +1593,7 @@ mod hot_appearance_tests {
         // template, so the font leaf hoists individually (the shipped per-leaf
         // appearance path).
         assert!(
-            !out.contains("materialize_ui_template_str"),
+            !out.contains("materialize_str"),
             "a value-handler-bearing node must not whole-subtree template, got:\n{out}"
         );
         assert!(
@@ -3066,7 +3066,7 @@ mod hot_appearance_tests {
         let (program, view) = one_view_program(&mut interner, static_ui_subtree())?;
         let out = emit_view(&interner, &program, &view, false)?;
         assert!(
-            !out.contains("materialize_ui_template_str"),
+            !out.contains("materialize_str"),
             "flag-off emit must not template, got:\n{out}"
         );
         assert!(
@@ -3081,9 +3081,9 @@ mod hot_appearance_tests {
     }
 
     /// Flag ON: the whole static `Ipe.Ui` subtree hoists as ONE serialized
-    /// `UiTemplate` and the site reads it through `materialize_ui_template_str`.
-    /// The baked default is the template's JSON, byte-identical to the runtime
-    /// `UiTemplate` serde form (dev == prod).
+    /// `UiTemplate` and the site reads it through `materialize_str` with an empty
+    /// `TemplateFills`. The baked default is the template's JSON, byte-identical to
+    /// the runtime `UiTemplate` serde form (dev == prod).
     #[test]
     fn flag_on_static_ui_subtree_hoists_as_template() -> DResult<()> {
         let mut interner = Interner::new();
@@ -3091,7 +3091,7 @@ mod hot_appearance_tests {
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
             out.contains(
-                "ipe_runtime::ui::template::materialize_ui_template_str(__ipe_lit.get(0))"
+                "ipe_runtime::ui::template::materialize_str(__ipe_lit.get(0), ipe_runtime::ui::template::TemplateFills::default())"
             ),
             "flag-on emit must read the hoisted Ui template slot, got:\n{out}"
         );
@@ -3126,7 +3126,7 @@ mod hot_appearance_tests {
         let (program, view) = one_view_program(&mut interner, dynamic)?;
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
-            !out.contains("materialize_ui_template_str"),
+            !out.contains("materialize_str"),
             "a Model-dependent Ui subtree must not template, got:\n{out}"
         );
         assert!(
@@ -3163,7 +3163,7 @@ mod hot_appearance_tests {
         // whole-subtree templates through the handler-resolving front door, which
         // supplies a per-render `UiHandlerMap` carrying the captured `Msg`.
         assert!(
-            out.contains("materialize_ui_template_str_with_handlers"),
+            out.contains("materialize_str") && out.contains(".with_handlers("),
             "a model-dependent onClick must template via the handler map, got:\n{out}"
         );
         assert!(
@@ -3174,10 +3174,10 @@ mod hot_appearance_tests {
     }
 
     /// A `Ipe.Ui` subtree carrying BOTH a model-dependent `onClick` handler hole
-    /// and a model-derived text value hole templatizes via the combined materializer
-    /// (`materialize_ui_template_str_with_holes_and_handlers`), which resolves both
-    /// hole kinds in one pass. Previously this subtree was refused and stayed
-    /// compiled; now it templates correctly.
+    /// and a model-derived text value hole templatizes via the one `materialize_str`
+    /// core over a `TemplateFills` carrying both the value fill and the handler map,
+    /// which resolves both hole kinds in one pass. Previously this subtree was
+    /// refused and stayed compiled; now it templates correctly.
     #[test]
     fn mixed_value_hole_and_handler_hole_templatizes_via_combined_materializer() -> DResult<()> {
         let mut interner = Interner::new();
@@ -3206,7 +3206,7 @@ mod hot_appearance_tests {
         let (program, view) = one_view_program(&mut interner, mixed)?;
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
-            out.contains("materialize_ui_template_str_with_holes_and_handlers"),
+            out.contains("materialize_str") && out.contains(".with_handlers("),
             "a subtree with both a value hole and a handler hole must use \
              the combined materializer, got:\n{out}"
         );
@@ -3237,7 +3237,7 @@ mod hot_appearance_tests {
         }
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
-            !out.contains("materialize_ui_template_str"),
+            !out.contains("materialize_str"),
             "a non-web shape must not template, got:\n{out}"
         );
         Ok(())
