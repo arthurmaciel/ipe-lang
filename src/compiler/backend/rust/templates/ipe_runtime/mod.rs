@@ -6,6 +6,13 @@ pub mod length;
 pub mod char_kernel;
 pub mod char_category;
 pub mod config;
+// The dev-loop control channel (`ControlFrame` wire + loopback transport).
+// Gated to match its source declaration: present only under a dev-loop surface
+// (`web` references `control::AppearancePatch`; `debugger` drives it), absent
+// from a release build. Its serde/ct_eq dependencies are satisfied by exactly
+// those features.
+#[cfg(any(feature = "web", feature = "debugger"))]
+pub mod control;
 pub mod core;
 pub mod ct_eq;
 pub mod crypto_core;

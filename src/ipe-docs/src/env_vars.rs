@@ -1257,6 +1257,10 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     "IPE_LIVE_TTL",
     // Test-only server port var — set by the watch driver in tests.
     "IPE_SERVER_PORT",
+    // Dev-loop-internal control-channel port — allocated and injected by
+    // `ipe watch` into the spawned child (never operator-set), like the port
+    // vars above. Present only in a dev-loop (web/debugger) build.
+    "IPE_CONTROL_PORT",
 ];
 
 #[cfg(test)]
