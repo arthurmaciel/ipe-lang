@@ -449,6 +449,41 @@ where
     fs2
 }
 
+/// Render a single debugger frame — the pinned/stepped past `model` laid out and
+/// painted with the debugger status line appended. Owns the `CellsView -> Element`
+/// conversion so no time-travel render site can drift from the layout input
+/// contract (`render_with_focus` takes `&Element`). Returns the new focusables;
+/// the caller keeps its own control flow.
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+fn render_debug_frame<Model, Msg, FView>(
+    view: &FView,
+    model: Model,
+    dbg: &TuiDebugger<Msg, Model>,
+    inputs: &mut InputRegistry,
+    focus_idx: usize,
+    scroll_y: usize,
+) -> Vec<Focusable<Msg>>
+where
+    Model: Clone,
+    Msg: Clone + IpeStringify,
+    FView: Fn(Model) -> CellsView<Msg>,
+{
+    let (cols, rows) = term_size();
+    let (frame, fs, _) = render_with_focus(
+        &view(model).into_element(),
+        cols,
+        rows,
+        focus_idx,
+        inputs,
+        scroll_y,
+    );
+    let mut annotated = frame;
+    annotated.push_str("\r\n");
+    annotated.push_str(&dbg.status_line());
+    paint(&annotated);
+    fs
+}
+
 /// `Tui.tea` — terminal TEA driver for a `view : Model -> Cells msg`.
 /// The `Cells msg` value wraps the same structured `Element` tree that `Ipe.Web`
 /// renders; here it is laid out to ANSI cells by walking the typed attributes
@@ -538,20 +573,14 @@ where
                             && value == crate::debugger::tui::TOGGLE_VALUE
                         {
                             let display_model = dbg.toggle().unwrap_or_else(|| model.clone());
-                            let (cols, rows) = term_size();
-                            let (frame, fs, _) = render_with_focus(
-                                &view(display_model.clone()),
-                                cols,
-                                rows,
-                                focus_idx,
+                            focusables = render_debug_frame(
+                                &view,
+                                display_model,
+                                &dbg,
                                 &mut inputs,
+                                focus_idx,
                                 scroll_y,
                             );
-                            let mut annotated = frame;
-                            annotated.push_str("\r\n");
-                            annotated.push_str(&dbg.status_line());
-                            paint(&annotated);
-                            focusables = fs;
                             continue;
                         }
                         // Ctrl-Left / Ctrl-Right: step in time-travel mode.
@@ -564,20 +593,14 @@ where
                                 None
                             };
                             if let Some(past) = stepped {
-                                let (cols, rows) = term_size();
-                                let (frame, fs, _) = render_with_focus(
-                                    &view(past),
-                                    cols,
-                                    rows,
-                                    focus_idx,
+                                focusables = render_debug_frame(
+                                    &view,
+                                    past,
+                                    &dbg,
                                     &mut inputs,
+                                    focus_idx,
                                     scroll_y,
                                 );
-                                let mut annotated = frame;
-                                annotated.push_str("\r\n");
-                                annotated.push_str(&dbg.status_line());
-                                paint(&annotated);
-                                focusables = fs;
                                 continue;
                             } else if kind == crate::debugger::tui::STEP_BACK_KIND
                                 || kind == crate::debugger::tui::STEP_FWD_KIND
@@ -788,20 +811,14 @@ where
                     // Toggle Ctrl-T to return to the live head.
                     let display_model =
                         dbg.current_reconstructed().unwrap_or_else(|| model.clone());
-                    let (cols, rows) = term_size();
-                    let (frame, fs, _) = render_with_focus(
-                        &view(display_model),
-                        cols,
-                        rows,
-                        focus_idx,
+                    focusables = render_debug_frame(
+                        &view,
+                        display_model,
+                        &dbg,
                         &mut inputs,
+                        focus_idx,
                         scroll_y,
                     );
-                    let mut annotated = frame;
-                    annotated.push_str("\r\n");
-                    annotated.push_str(&dbg.status_line());
-                    paint(&annotated);
-                    focusables = fs;
                 }
                 #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
                 {

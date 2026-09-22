@@ -332,6 +332,11 @@ jobs:
       - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
       # db WITH web — the pair must also stay co-buildable.
       - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db,web --all-targets -- -D warnings
+      # The dev-loop time-travel debugger over each frontend — the debugger render
+      # sites live only under these combos, so CI must build them or the combo can
+      # break while main stays green.
+      - run: cargo clippy -p ipe-runtime-rust --features debugger,tui --all-targets -- -D warnings
+      - run: cargo clippy -p ipe-runtime-rust --features debugger,web --all-targets -- -D warnings
 
   # WASM floor: the pure kernel set (incl. the whole Ipe.Ui render surface) and
   # the json leg must keep compiling to wasm32-unknown-unknown — the substrate

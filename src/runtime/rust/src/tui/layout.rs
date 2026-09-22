@@ -736,7 +736,7 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
                     .max(1);
                 sides = (*t > 0, *r > 0, *b > 0, *l > 0);
             }
-            Attribute::AttrBorderColor(c) => border_color = Some(c.clone()),
+            Attribute::AttrBorderColor(c) => border_color = Some(*c),
             Attribute::AttrBorderStyle(s) => border_style = s.clone(),
             // Border.rounded → rounded corner glyphs (╭╮╰╯) on a solid frame
             // (audit #18). Shadow/glow/inset-shadow can't render in cells and are
@@ -1307,7 +1307,7 @@ fn render_input<M: Clone>(
                     .saturating_add(*l)
                     .max(1)
             }
-            Attribute::AttrBorderColor(c) => bcolor = Some(c.clone()),
+            Attribute::AttrBorderColor(c) => bcolor = Some(*c),
             Attribute::AttrBorderStyle(s) => bsty = s.clone(),
             _ => {}
         }
