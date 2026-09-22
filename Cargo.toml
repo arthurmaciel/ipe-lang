@@ -31,6 +31,7 @@ members = [
     "src/runtime/rust",
     "tools/ipe-ffi-inspector",
     "tools/regen-goldens",
+    "tools/regen-cli-transcripts",
     "examples/wasm/language-playground/jail-runner",
     "src/ipe-wrapper",
 ]

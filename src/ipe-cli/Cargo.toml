@@ -12,6 +12,13 @@ path = "src/lib.rs"
 name = "ipe"
 path = "src/main.rs"
 
+# Generator for docs/reference/cli.md — renders the CLI surface from the
+# `help::COMMANDS` SSOT. A CI drift gate (regen + `git diff --exit-code`) keeps
+# the committed reference honest, mirroring gen-stdlib-docs / gen-env-docs.
+[[bin]]
+name = "gen-cli-docs"
+path = "src/bin/gen_cli_docs.rs"
+
 [features]
 # Publisher-identity provenance over the index-pinned `sha256` (keyless
 # Sigstore: Fulcio-issued ephemeral cert + Rekor inclusion proof). The typed
