@@ -379,6 +379,8 @@ ipe build [<path>] [<shape>] [<runtime>] [<host>] [<target>]
 
 **Arguments:** path: a source file, a project directory, or a package.ipe (default: the current project). shape is derived from `main` and, if written, only cross-checked. runtime/host apply to `web` only: `web` = served (served is the unnamed default, never written), `web solo` = self-contained browser client, and a host is desktop/ios/android. A `desktop`/`ios`/`android` host lays out the app bundle for that host (a fast dev bundle; `release web <host>` produces the production distributable). With no delivery args, `build` builds the default delivery — the fast one-artifact inner loop; `release` builds every declared delivery. Delivery args select a subset or override for this invocation only and never edit package.ipe.
 
+**Output:** a native build lands the runnable binary at `out/bin/<project-name>` under the project (copied there within the build), so it is findable even when a shared `CARGO_TARGET_DIR` places cargo's own output outside the project.
+
 **Flags:**
 
 - `[--out <dir>]` — write the emitted project to <dir>

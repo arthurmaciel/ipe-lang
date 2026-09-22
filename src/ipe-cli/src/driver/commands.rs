@@ -790,12 +790,16 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
-    match compile_target {
-        CompileTarget::WasmClient => bundle_wasm(&out_dir)?,
+    let native_artifact = match compile_target {
+        CompileTarget::WasmClient => {
+            bundle_wasm(&out_dir)?;
+            None
+        }
         CompileTarget::WasmWasi => {
             bundle_wasi(&out_dir)?;
+            None
         }
-        CompileTarget::Native => compile_and_finalize_native_build(
+        CompileTarget::Native => Some(compile_and_finalize_native_build(
             &out_dir,
             native_cargo,
             static_plan,
@@ -803,16 +807,22 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
             manifest.as_deref(),
             &entry_path,
             args.quiet,
-        )?,
-    }
+        )?),
+    };
 
     if show_progress {
+        // A native build reports the runnable binary's project-local path (the
+        // `out/bin` copy); a wasm bundle reports the emitted output directory.
+        let destination = native_artifact.as_ref().map_or_else(
+            || out_dir.display().to_string(),
+            |p| p.display().to_string(),
+        );
         eprintln!(
             "{}",
             style::gutter(&format!(
                 "{} built → {}",
                 style::outcome_glyph(style::Outcome::Success),
-                out_dir.display()
+                destination
             ))
         );
     }
@@ -835,8 +845,13 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
 /// binary — so the jail travels with a copied-off-host artifact (ADR 0004). A
 /// pure Ipê artifact is structurally bounded and needs neither profile nor floor.
 ///
+/// Returns the path the built binary was copied to under the project
+/// (`<project>/out/bin/<name>`), so the artifact is findable regardless of a
+/// shared `CARGO_TARGET_DIR`.
+///
 /// # Errors
 /// - [`CliError::EmittedBuildFailed`] when the emitted crate fails to compile.
+/// - [`CliError::Io`] when the artifact cannot be copied into the project.
 /// - The toolchain, manifest-parse, and capability-resolution errors of the
 ///   steps it composes.
 pub fn compile_and_finalize_native_build(
@@ -847,7 +862,7 @@ pub fn compile_and_finalize_native_build(
     manifest: Option<&Path>,
     entry_path: &Path,
     quiet: bool,
-) -> Result<(), CliError> {
+) -> Result<PathBuf, CliError> {
     // `native_cargo` is `Some` on every native path (the caller's wasm branch
     // returns before here); the fallback re-resolves rather than unwrapping so
     // the toolchain error stays typed even if that invariant ever changes.
@@ -876,6 +891,15 @@ pub fn compile_and_finalize_native_build(
         Some(m) => Some(project::parse_manifest(m)?),
         None => None,
     };
+
+    // Copy the just-built binary into a stable per-project location. With the
+    // Ipê-recommended shared `CARGO_TARGET_DIR`, the artifact lands in the
+    // shared cache (`<shared-target>/<profile>/<name>`), not under the project,
+    // where a user cannot readily find it. The copy runs immediately after this
+    // invocation's `cargo build` returns, resolving the artifact path from
+    // `cargo metadata`; a binary missing at that path fails closed (no stale
+    // copy). Copy (never hardlink): the shared target is often a different mount.
+    let artifact = copy_native_artifact(out_dir, static_plan.as_ref(), manifest_parsed.as_ref())?;
     let driver = manifest_parsed
         .as_ref()
         .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
@@ -884,7 +908,59 @@ pub fn compile_and_finalize_native_build(
         let profile = run_sandbox::build_profile(&resolved, driver)?;
         run_sandbox::write_build_artifacts(out_dir, &profile)?;
     }
-    Ok(())
+    Ok(artifact)
+}
+
+/// Copy the freshly built native debug binary out of the (possibly shared)
+/// cargo target directory into `<project>/out/bin/<name>`, a stable path under
+/// the project the user can find and run regardless of `CARGO_TARGET_DIR`.
+///
+/// The source path is resolved through `cargo metadata`'s authoritative
+/// `target_directory` (never a guess at where cargo put it) plus the `debug`
+/// profile and — under a static plan — the explicit target triple, exactly as
+/// the `release` path resolves its own artifact. Returns the destination path so
+/// the caller can report it. Copy (not hardlink): the shared target is often on
+/// a different mount.
+fn copy_native_artifact(
+    out_dir: &Path,
+    static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
+    manifest: Option<&project::ProjectManifest>,
+) -> Result<PathBuf, CliError> {
+    let target_dir = cargo_target_directory(out_dir)?;
+    // LOCATE the built binary by its emitted crate identity (the hashed
+    // `<friendly>_<hash>` cargo actually produces); DELIVER it under the plain
+    // friendly project name, so the user-facing artifact stays `out/bin/<name>`
+    // regardless of the internal per-project identity hash.
+    let bin_name = emitted_bin_name(out_dir);
+    let friendly = friendly_artifact_name(manifest);
+    let mut src = target_dir;
+    if let Some(plan) = static_plan {
+        src.push(plan.triple.as_str());
+    }
+    src.push("debug");
+    src.push(&bin_name);
+    if !src.is_file() {
+        return Err(CliError::UsageOwned(format!(
+            "ipe build: expected binary at {} — cargo build succeeded but the binary is missing",
+            src.display()
+        )));
+    }
+    // `out_dir` is the emitted crate dir (default `out/rust`); the artifact copy
+    // lands in a sibling `bin/` so it sits at `<project>/out/bin/<name>`. Fall
+    // back to `out_dir` itself when it has no parent.
+    let bin_dir = out_dir.parent().unwrap_or(out_dir).join("bin");
+    std::fs::create_dir_all(&bin_dir).map_err(|e| CliError::Io {
+        path: bin_dir.clone(),
+        source: e,
+    })?;
+    let dest = bin_dir.join(&friendly);
+    std::fs::copy(&src, &dest).map_err(|e| CliError::Io {
+        path: dest.clone(),
+        source: e,
+    })?;
+    #[cfg(unix)]
+    set_executable(&dest)?;
+    Ok(dest)
 }
 
 /// `ipe eject [<path>] --out <dir>` — emit a self-contained Rust Cargo project a

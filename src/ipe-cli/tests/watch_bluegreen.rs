@@ -28,7 +28,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// A minimal `Ipe.Web` (TEA) app whose rendered page carries `marker` in its
 /// heading, so a `GET /` can observe which binary is live. Uses `Web.tea`, so
 /// the emitted entry contains `ipe_runtime::web::web_app` — the marker
-/// `watch::is_ipe_web_project` keys the `/_ipe/readyz` readiness probe on.
+/// `watch::emitted_is_web` keys the `/_ipe/readyz` readiness probe on.
 fn web_fixture(marker: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\

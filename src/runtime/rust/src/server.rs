@@ -1085,6 +1085,18 @@ fn strip_trailing_slash(p: &str) -> String {
     }
 }
 
+/// Resolve the port `server_listen` binds: `IPE_SERVER_PORT` (injected by
+/// `ipe watch` to place the app on an internal loopback port BEHIND its
+/// blue-green proxy) when it is a valid port in `1..=65535`, else the `source`
+/// port the program passed to `Server.listen`. Delegates to
+/// [`crate::system::resolve_listen_port`] — the single fail-closed definition
+/// shared with `Ipe.Web`'s `IPE_WEB_PORT` precedence — so a missing, malformed,
+/// out-of-range, or `0` env value falls back to `source`, never a silently
+/// OS-chosen ephemeral port the caller could not reach.
+fn resolve_server_port(env_value: Option<String>, source: i64) -> i64 {
+    crate::system::resolve_listen_port(env_value, source)
+}
+
 /// Server.listen : Int -> List Route -> Task Error ()  — serves via axum/tokio.
 pub fn server_listen<E: From<String> + Send + 'static>(
     port: i64,
@@ -1168,6 +1180,14 @@ pub fn server_listen<E: From<String> + Send + 'static>(
             .layer(tower_http::timeout::TimeoutLayer::new(
                 std::time::Duration::from_secs(http_request_timeout_secs()),
             ));
+        //   `IPE_SERVER_PORT` (env) overrides the port the program passed to
+        //   `Server.listen`. This is what lets `ipe watch` place the app on an
+        //   internal loopback port BEHIND its blue-green proxy (the proxy holds the
+        //   user-facing port and forwards to this internal one); it mirrors
+        //   `serve_web`'s `IPE_WEB_PORT` precedence so both runtimes relocate
+        //   identically under watch. A malformed value falls back to the source
+        //   port — fail-closed, never a silent 0.
+        let port = resolve_server_port(crate::system::read_env_var("IPE_SERVER_PORT").ok(), port);
         // Bind host obeys the one runtime-config precedence: `IPE_HTTP_BIND`
         // (env) > the app's `Host.bind` setting > the build-profile fallback
         // (loopback in debug, all interfaces in release). The conservative
@@ -1180,15 +1200,22 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                 return IpeResult::Err(
                     format!(
                         "port {port} is already in use — another application is bound to it.\n\
-                         Set a different port with the IPE_WEB_PORT environment variable, e.g.:\n\
-                         IPE_WEB_PORT=8123 ipe run"
+                         Set a different port with the IPE_SERVER_PORT environment variable, e.g.:\n\
+                         IPE_SERVER_PORT=8123 ipe run"
                     )
                     .into(),
                 );
             }
             Err(e) => return IpeResult::Err(format!("Server.listen: bind {}: {}", addr, e).into()),
         };
-        eprintln!("[ipe.http.server] listening on http://{}", addr);
+        {
+            use std::io::IsTerminal;
+            let msg = format!("[ipe.http.server] listening on http://{addr}");
+            eprintln!(
+                "{}",
+                crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
+            );
+        }
         // with_connect_info so each request carries the peer SocketAddr —
         // populates ServerRequest.remoteAddr (also used by per-IP rate limiting).
         let svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
@@ -2447,6 +2474,48 @@ pub fn rate_limit_allow(name: String, key: String, capacity: i64, refill_per_sec
 mod tests {
     use super::*;
     use std::future::ready;
+
+    #[test]
+    fn ipe_server_port_env_overrides_the_source_port() {
+        // A valid env value wins over the port the program passed.
+        assert_eq!(resolve_server_port(Some("9123".to_owned()), 8000), 9123);
+    }
+
+    #[test]
+    fn malformed_ipe_server_port_falls_back_to_source_never_zero() {
+        // Prove the refusal: a value that is not a bindable port in `1..=65535`
+        // must NOT reach the socket — it falls back to the source port the
+        // program passed. Fail-closed. This pins EVERY off-boundary shape:
+        //  - garbage / non-numeric (parse fails),
+        //  - the literal "0" (parses, but 0 = an OS-chosen ephemeral port the
+        //    caller cannot reach — the case the plain `i64` parse let slip),
+        //  - out of u16 range, high and negative (rejected at the boundary,
+        //    not left to the socket layer).
+        for garbage in [
+            "",
+            "abc",
+            "80a0",
+            " ",
+            "-",
+            "0",
+            "-1",
+            "65536",
+            "70000",
+            "99999999999",
+        ] {
+            assert_eq!(
+                resolve_server_port(Some(garbage.to_owned()), 8000),
+                8000,
+                "IPE_SERVER_PORT {garbage:?} is not a valid 1..=65535 port; must fall back to \
+                 the source port, never bind 0 or an out-of-range value"
+            );
+        }
+        // An absent env value also falls back to the source port.
+        assert_eq!(resolve_server_port(None, 8000), 8000);
+        // A valid in-range value still wins.
+        assert_eq!(resolve_server_port(Some("1".to_owned()), 8000), 1);
+        assert_eq!(resolve_server_port(Some("65535".to_owned()), 8000), 65535);
+    }
 
     #[test]
     fn server_header_is_case_insensitive_go_parity() {

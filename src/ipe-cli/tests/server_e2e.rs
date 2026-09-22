@@ -1108,3 +1108,52 @@ fn server_mounts_web_app_and_api_on_one_port() -> Result<(), BoxError> {
 
     Ok(())
 }
+
+/// A server whose source hardcodes a LITERAL port and never reads the
+/// environment. Under `ipe watch`'s blue-green proxy the app must relocate to an
+/// internal port dictated only by `IPE_SERVER_PORT` — so the runtime, not the
+/// program, must honour that env. This is the T1 regression fixture: `8000` is a
+/// bare literal, so if `server_listen` ignored `IPE_SERVER_PORT` the app would
+/// bind `8000`, never the ephemeral port the test connects to.
+const IPE_SERVER_HARDCODED_PORT_PROGRAM: &str = r#"module Main exposing (main)
+
+import Ipe.Http.Server as Server
+import Ipe.Task
+
+main =
+    Server.listen 8000
+        [ Server.get "/" (\req -> Task.succeed (Server.text "hardcoded ok"))
+        ]
+"#;
+
+/// T1 (prove the refusal): `IPE_SERVER_PORT` overrides a HARDCODED literal port
+/// in `server_listen`. The program passes `8000` literally; the runtime must
+/// bind the ephemeral `IPE_SERVER_PORT` value instead, so the ephemeral port —
+/// not `8000` — answers. Guards the permanent `502 no upstream ready`
+/// regression: watch places the app on an internal port only the env names.
+///
+/// # Errors
+///
+/// Propagates any pipeline, build, spawn, or HTTP error as a test error.
+#[test]
+fn server_honours_ipe_server_port_over_a_hardcoded_literal() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+    let test_name = "server_honours_ipe_server_port_over_a_hardcoded_literal";
+
+    let exe = compile_and_build(test_name, IPE_SERVER_HARDCODED_PORT_PROGRAM)?;
+    let port = pick_ephemeral_port()?;
+    // `spawn_and_wait_ready` sets `IPE_SERVER_PORT=<port>`; the ready line only
+    // appears once the socket binds. It binding at all — on a port the source
+    // never mentions — is the proof the env override took effect.
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+
+    let addr = format!("127.0.0.1:{port}");
+    let body = http_get(test_name, &addr, "/")?;
+    assert_eq!(
+        body, "hardcoded ok",
+        "{test_name}: the ephemeral IPE_SERVER_PORT must answer even though the source hardcodes 8000\n--- actual ---\n{body}"
+    );
+    Ok(())
+}

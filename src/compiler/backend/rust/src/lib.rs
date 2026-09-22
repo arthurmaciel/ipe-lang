@@ -2298,7 +2298,20 @@ impl<'a> EmitCtx<'a> {
             record_structs,
             record_by_fieldset,
             cargo_name,
-            hot_appearance,
+            // Appearance hot-swap routes literals through the web-only
+            // `LiteralTable` (`ipe_runtime::web`, gated `web-core`), so it is a
+            // web-VIEW concern: a viewless shape (worker/cli/script) has no
+            // appearance to hot-swap. Gating on `uses_web` keeps a non-web emit
+            // byte-identical to the direct-literal form — otherwise `ipe watch`
+            // (which enables `hot_appearance` by default for every shape) would
+            // emit a `LiteralTable` reference the shape's feature set does not
+            // provide, so `ipe`-accepts would not `cargo`-build (SEAL breach).
+            // A pure webview shape (`uses_webview && !uses_web`) is also gated
+            // off here: it ships `web-core` (so `LiteralTable` would build), but
+            // appearance hot-swap is delivered over the app's HTTP control port,
+            // which a webview desktop app does not run — so there is nothing to
+            // push to. Non-web appearance hot-swap is tracked separately.
+            hot_appearance: hot_appearance && uses_web,
             ui_structural_wrappers,
             scope: ScopeState::default(),
             web_capabilities: program.imported_web_capabilities.clone(),

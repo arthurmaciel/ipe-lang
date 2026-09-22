@@ -46,6 +46,23 @@ fn server_fixture(body: &str) -> String {
     )
 }
 
+/// A server whose port is a HARDCODED literal (`8000`) — it never reads the
+/// environment. Under blue-green the app must relocate to an internal port
+/// dictated only by `IPE_SERVER_PORT` (T1), and the proxy must front it on
+/// `opts.port` (T2). If the runtime ignored the env, the app would bind `8000`
+/// and collide with the proxy → the permanent `502 no upstream ready` this
+/// guards against.
+fn server_fixture_hardcoded_port(body: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Http.Server as Server\n\
+         import Ipe.Task\n\n\
+         main =\n    \
+             Server.listen 8000\n        \
+                 [ Server.get \"/\" (\\req -> Task.succeed (Server.text \"{body}\")) ]\n"
+    )
+}
+
 /// A DELIBERATELY unparseable `.ipe` file — a dangling `let` with no `in`,
 /// which fails at parse time (never reaches type-check, let alone emit).
 const BROKEN_SOURCE: &str = "module Main exposing (main)\n\nmain =\n    let x = 1\n";
@@ -125,6 +142,15 @@ impl EventSink {
             .count()
     }
 
+    fn count_restarted(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|e| matches!(e, WatchEvent::Restarted { .. }))
+            .count()
+    }
+
     fn as_callback(&self) -> Arc<dyn Fn(WatchEvent) + Send + Sync> {
         let this = self.clone();
         Arc::new(move |e| this.push(e))
@@ -160,6 +186,70 @@ fn start_watch(
     };
     opts.on_event = Some(sink.as_callback());
     Ok(ipe::watch::spawn(opts))
+}
+
+/// Same as [`start_watch`] but with the blue-green proxy turned ON, so proxy
+/// ENGAGEMENT (T2) is exercised: the proxy binds `port` IFF the emitted crate
+/// binds a first-party HTTP listener; a non-HTTP shape takes the direct path.
+fn start_watch_bluegreen(
+    entry: &Path,
+    out_dir: &Path,
+    port: u16,
+    sink: &EventSink,
+) -> Result<
+    (
+        std::thread::JoinHandle<Result<(), ipe::CliError>>,
+        WatchHandle,
+    ),
+    BoxError,
+> {
+    let runtime_dir = ipe::resolve_runtime()
+        .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
+    let mut opts = WatchOptions::new(entry.to_path_buf(), out_dir.to_path_buf(), runtime_dir);
+    opts.port = port;
+    opts.bluegreen = true;
+    opts.target_dir = e2e_support::child_shared_target_from_env().map(PathBuf::from);
+    opts.debounce = ipe_watch::DebounceConfig {
+        quiescence: Duration::from_millis(120),
+        hard_cap: Duration::from_millis(600),
+    };
+    opts.on_event = Some(sink.as_callback());
+    Ok(ipe::watch::spawn(opts))
+}
+
+/// A view-less worker that ticks forever — a LONG-LIVED non-HTTP shape. It emits
+/// neither `web_app` nor `server_listen`, so under blue-green the proxy must NOT
+/// engage (no bind on `opts.port`) and watch takes the direct-restart path. The
+/// `marker` in the printed line lets a test observe that it is running.
+fn worker_fixture(marker: &str) -> String {
+    format!(
+        "module Main exposing (main)\n\n\
+         import Ipe.Io as Io\n\
+         import Ipe.Task as Task\n\
+         import Ipe.Tea.Worker\n\
+         import Ipe.Tea.Worker.Cmd as Cmd\n\
+         import Ipe.Tea.Worker.Sub as Sub\n\n\
+         type Msg = Tick\n\n\
+         type alias Model = {{ ticks : Int }}\n\n\
+         init : () -> ( Model, Cmd Msg )\n\
+         init _unit = ( {{ ticks = 0 }}, Task.attempt (\\_r -> Tick) (Io.println \"{marker}\") )\n\n\
+         update : Msg -> Model -> ( Model, Cmd Msg )\n\
+         update _msg model =\n    \
+             ( {{ ticks = model.ticks + 1 }}\n    \
+             , Task.attempt (\\_r -> Tick) (Io.println \"{marker}\")\n    \
+             )\n\n\
+         subscriptions : Model -> Sub Msg\n\
+         subscriptions _model = Sub.every 100 Tick\n\n\
+         main =\n    \
+             Worker.tea {{ init = init, update = update, subscriptions = subscriptions }}\n"
+    )
+}
+
+/// Try to bind `port` on loopback: `true` means the port is FREE (nothing — no
+/// proxy — is holding it). Used to prove the proxy did NOT engage for a
+/// non-HTTP shape under blue-green.
+fn port_is_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
 fn write_main(ipe_dir: &Path, source: &str) -> Result<(), BoxError> {
@@ -407,4 +497,111 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
         |_| Err("watch thread panicked".into()),
         |result| result.map_err(|e| -> BoxError { e.to_string().into() }),
     )
+}
+
+/// T2 (prove the refusal): a non-HTTP shape (a worker) under blue-green must NOT
+/// bind a proxy on `opts.port`. Proxy engagement keys on the emitted crate
+/// binding a first-party HTTP listener; a worker emits neither `web_app` nor
+/// `server_listen`, so watch takes the direct-restart path and leaves the port
+/// FREE. A rebuild still restarts the worker (direct path). Guards against the
+/// spurious `:port` bind a shape-blind proxy would create.
+#[cfg(target_os = "linux")]
+#[test]
+fn watch_does_not_bind_a_proxy_for_a_non_http_shape() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    let (ipe_dir, out_dir) = fresh_dirs("no_proxy_non_http")?;
+    write_main(&ipe_dir, &worker_fixture("WORKER-V1"))?;
+
+    let sink = EventSink::default();
+    let port = 19156;
+    let (join, handle) = start_watch_bluegreen(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    // Wait for the cold build to spawn the worker (its child carries the
+    // injected IPE_WEB_PORT/IPE_SERVER_PORT — discoverable via /proc).
+    let deadline = Instant::now() + Duration::from_mins(4);
+    let child_pid = loop {
+        if let Some(pid) = find_pid_by_environ_kv("IPE_SERVER_PORT", &port.to_string()) {
+            break pid;
+        }
+        if Instant::now() > deadline {
+            let _ = stop_and_join(&handle, join);
+            return Err("worker child must spawn within the cold-build budget".into());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert!(pid_is_alive(child_pid), "the worker child must be alive");
+
+    // THE REFUSAL: no proxy engaged, so nothing holds `opts.port`. A shape-blind
+    // proxy would have bound it up front. (The worker does not bind it either.)
+    assert!(
+        port_is_free(port),
+        "no proxy may bind opts.port for a non-HTTP shape — the port must be free"
+    );
+
+    // A rebuild still drives the direct-restart path.
+    let restarts_before = sink.count_restarted();
+    write_main(&ipe_dir, &worker_fixture("WORKER-V2"))?;
+    assert!(
+        wait_for(Duration::from_mins(3), || {
+            sink.count_restarted() > restarts_before
+        }),
+        "a rebuild of a non-HTTP shape must restart it via the direct path"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// T2 (proxy engages for a first-party HTTP server) + T1 (the app relocates off
+/// its hardcoded port): a `Server.listen 8000` with a HARDCODED literal port,
+/// under blue-green, must (a) have the proxy answer on `opts.port`, and (b) run
+/// the app on a DIFFERENT internal port — never colliding on 8000. Proves the
+/// permanent-502 regression is fixed and detection is by emitted `server_listen`,
+/// not by shape (a `Server.listen` main is `Shape::Script`).
+#[test]
+fn watch_proxies_a_hardcoded_port_server_on_an_internal_port() -> Result<(), BoxError> {
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    let (ipe_dir, out_dir) = fresh_dirs("proxy_hardcoded_server")?;
+    write_main(&ipe_dir, &server_fixture_hardcoded_port("v1"))?;
+
+    let sink = EventSink::default();
+    // Deliberately NOT 8000: the app source hardcodes 8000, so the proxy holding
+    // opts.port must be a different port — proving the app relocated (T1) and the
+    // proxy fronts it (T2).
+    let port = 19157;
+    let (join, handle) = start_watch_bluegreen(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
+
+    // The proxy answers on opts.port with the app's body — the app came up on an
+    // internal port BEHIND the proxy despite hardcoding 8000. (Were the 502
+    // regression present, the app would collide on 8000 and never be ready.)
+    assert!(
+        wait_for_body(port, "v1", Duration::from_mins(4)),
+        "the blue-green proxy must front the hardcoded-port server on opts.port (no 502)"
+    );
+
+    // A rebuild cuts over to the new binary behind the same proxy port.
+    write_main(&ipe_dir, &server_fixture_hardcoded_port("v2"))?;
+    assert!(
+        wait_for_body(port, "v2", Duration::from_mins(3)),
+        "a rebuild must cut over to v2 behind the proxy"
+    );
+
+    stop_and_join(&handle, join)
+}
+
+/// Poll `cond` until it is true or `timeout` elapses.
+fn wait_for(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if cond() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
 }

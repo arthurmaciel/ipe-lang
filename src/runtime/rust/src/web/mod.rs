@@ -4072,11 +4072,12 @@ where
     let app =
         build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(state, console_proxy_flag);
 
-    // IPE_WEB_PORT: default 8000.
-    let port: i64 = crate::system::read_env_var("IPE_WEB_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8000);
+    // IPE_WEB_PORT: default 8000. Resolved through the shared fail-closed
+    // helper (same precedence as `Ipe.Http.Server`'s `IPE_SERVER_PORT`): a
+    // malformed, out-of-range, or `0` value falls back to 8000, never a
+    // silently OS-chosen ephemeral port.
+    let port: i64 =
+        crate::system::resolve_listen_port(crate::system::read_env_var("IPE_WEB_PORT").ok(), 8000);
     // Honour the same host-bind precedence as the Ipe.Http.Server path
     // (`IPE_HTTP_BIND` > `Host.bind` setting > loopback-unless-production), so
     // an explicit loopback setting is never overridden into all-interfaces.
@@ -4097,7 +4098,14 @@ where
         Err(e) => return IpeResult::Err(format!("Web.tea: bind {addr}: {e}").into()),
     };
     // Bind-address line (stderr) — carries the resolved host:port.
-    eprintln!("[ipe.web] listening on http://{addr}");
+    {
+        use std::io::IsTerminal;
+        let msg = format!("[ipe.web] listening on http://{addr}");
+        eprintln!(
+            "{}",
+            crate::system::gutter_line(&msg, std::io::stderr().is_terminal())
+        );
+    }
     // User-facing line on stdout.
     println!("Ipe.Web listening on :{port}");
     // Graceful shutdown: trap SIGINT/SIGTERM,
