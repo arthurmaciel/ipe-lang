@@ -61,8 +61,13 @@ fn build_into_shared_target(
         return Err(format!("[{tag}] ipe build must succeed, got {status:?}").into());
     }
 
-    // The artifact lands at `<project>/out/bin/<name>` (sibling of `out/rust`).
-    Ok(project.join("out").join("bin").join("app"))
+    // The artifact lands at `<project>/out/bin/<friendly>` (sibling of
+    // `out/rust`). The DELIVERED name is the friendly project name — for a
+    // single-file build (no manifest) that is `ipe-app`, independent of the
+    // internal emitted crate name (`IPE_EMIT_PACKAGE_NAME=app`, which only pins
+    // the shared-target CACHE slot to force the collision this test defends).
+    // Locate-by-emitted-name, deliver-by-friendly-name mirrors the release path.
+    Ok(project.join("out").join("bin").join("ipe-app"))
 }
 
 /// The copied binary exists, is executable, and byte-matches the artifact cargo
@@ -71,6 +76,13 @@ fn build_into_shared_target(
 fn build_copies_the_artifact_into_project_out_bin() -> Result<(), BoxError> {
     if std::env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    // The `env!`-baked binary path may not resolve when the test runs from a
+    // nextest archive shipped to another host (the CI e2e shards); skip then,
+    // matching the other `CARGO_BIN_EXE_ipe` build tests.
+    if !Path::new(env!("CARGO_BIN_EXE_ipe")).exists() {
+        eprintln!("skipping (ipe binary not present — nextest archive on another host)");
         return Ok(());
     }
     let shared = std::env::temp_dir().join("ipe_build_artifact_copy_sharedA");
@@ -112,6 +124,10 @@ fn build_copies_the_artifact_into_project_out_bin() -> Result<(), BoxError> {
 fn a_second_same_named_project_does_not_clobber_the_first_out_bin() -> Result<(), BoxError> {
     if std::env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
+        return Ok(());
+    }
+    if !Path::new(env!("CARGO_BIN_EXE_ipe")).exists() {
+        eprintln!("skipping (ipe binary not present — nextest archive on another host)");
         return Ok(());
     }
     let shared = std::env::temp_dir().join("ipe_build_artifact_copy_sharedAB");

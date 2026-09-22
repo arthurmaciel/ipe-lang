@@ -887,6 +887,11 @@ pub fn compile_and_finalize_native_build(
     };
     build_emitted_project(&mut cargo, "the emitted program", runtime_ctx, out_dir)?;
 
+    let manifest_parsed = match manifest {
+        Some(m) => Some(project::parse_manifest(m)?),
+        None => None,
+    };
+
     // Copy the just-built binary into a stable per-project location. With the
     // Ipê-recommended shared `CARGO_TARGET_DIR`, the artifact lands in the
     // shared cache (`<shared-target>/<profile>/<name>`), not under the project,
@@ -894,12 +899,7 @@ pub fn compile_and_finalize_native_build(
     // invocation's `cargo build` returns, resolving the artifact path from
     // `cargo metadata`; a binary missing at that path fails closed (no stale
     // copy). Copy (never hardlink): the shared target is often a different mount.
-    let artifact = copy_native_artifact(out_dir, static_plan.as_ref())?;
-
-    let manifest_parsed = match manifest {
-        Some(m) => Some(project::parse_manifest(m)?),
-        None => None,
-    };
+    let artifact = copy_native_artifact(out_dir, static_plan.as_ref(), manifest_parsed.as_ref())?;
     let driver = manifest_parsed
         .as_ref()
         .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
@@ -924,9 +924,15 @@ pub fn compile_and_finalize_native_build(
 fn copy_native_artifact(
     out_dir: &Path,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
+    manifest: Option<&project::ProjectManifest>,
 ) -> Result<PathBuf, CliError> {
     let target_dir = cargo_target_directory(out_dir)?;
+    // LOCATE the built binary by its emitted crate identity (the hashed
+    // `<friendly>_<hash>` cargo actually produces); DELIVER it under the plain
+    // friendly project name, so the user-facing artifact stays `out/bin/<name>`
+    // regardless of the internal per-project identity hash.
     let bin_name = emitted_bin_name(out_dir);
+    let friendly = friendly_artifact_name(manifest);
     let mut src = target_dir;
     if let Some(plan) = static_plan {
         src.push(plan.triple.as_str());
@@ -947,7 +953,7 @@ fn copy_native_artifact(
         path: bin_dir.clone(),
         source: e,
     })?;
-    let dest = bin_dir.join(&bin_name);
+    let dest = bin_dir.join(&friendly);
     std::fs::copy(&src, &dest).map_err(|e| CliError::Io {
         path: dest.clone(),
         source: e,
