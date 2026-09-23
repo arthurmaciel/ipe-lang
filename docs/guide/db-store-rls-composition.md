@@ -40,18 +40,23 @@ puts each pattern in its own `Rls.*` sub-module of composition helpers, and its
 `Main` exercises all four. The sealed, self-contained twin is
 [`tests/golden/db_store_rls_composition_builders_seal`](../../tests/golden/db_store_rls_composition_builders_seal/Main.ipe).
 
-**Owner** — a row belongs to the caller when its owner column equals the caller's
-subject; `ownerColumn` scopes all four operations to `column = $subject` and forces
-that column on writes, so a caller can never write a row it could not read back.
-Compose `immutable` to pin a column at insert:
+**Owner** — the simplest pattern: every row is private to the user who created it,
+and no one else can see or change it (think a personal notes or drafts table). A row
+belongs to the caller when its owner column equals the caller's subject; `ownerColumn`
+scopes all four operations to `column = $subject` and forces that column on writes, so
+a caller can never write a row it could not read back. Compose `immutable` to pin a
+column at insert:
 
 ```ipe
 Store.ownerColumn .author
     |> Store.andPolicy (Store.immutable .createdAt)
 ```
 
-**RBAC** — the fail-closed caller leaves, alone or in a disjunction with a row
-match. "Only an admin may read"; "the owner-value row OR any admin may read":
+**RBAC** — *role-based access control*: who may see or change a row is decided by
+the **role** the caller was granted (`admin`, `editor`, `viewer`, …), not by who
+owns the row. One admin sees every row; a viewer only reads. It is built from the
+fail-closed caller leaves, alone or in a disjunction with a row match. "Only an admin
+may read"; "the owner-value row OR any admin may read":
 
 ```ipe
 Store.readOnly (Store.role "admin")
@@ -64,18 +69,24 @@ Store.readOnly
     )
 ```
 
-**Tenant** — `claimEquals` gates the whole table to one tenant (fail-closed on an
-absent or mismatched claim). For per-row isolation across many tenants, correlate
-each row against a caller-scoped memberships store with `existsIn` instead:
+**Tenant** — in a multi-tenant application one deployment serves many independent
+customers (each company or organization is a *tenant*), and every tenant's rows must
+be completely invisible to every other tenant — the hard data-isolation boundary a
+SaaS depends on. `claimEquals` gates the whole table to one tenant, keyed on the
+caller's verified `tenant` claim (fail-closed on an absent or mismatched claim, so a
+caller with no tenant sees nothing). For per-row isolation across many tenants,
+correlate each row against a caller-scoped memberships store with `existsIn` instead:
 
 ```ipe
 Store.readOnly (Store.claimEquals "tenant" "acme")
 ```
 
-**Sharing** — a row is visible when a SECURED shares store holds a share row that
-correlates to it. Because the shares store is itself secured to the caller, its own
-read policy composes into the `EXISTS` subquery — defence in depth: a share the
-caller cannot read cannot open a row:
+**Sharing** — one user explicitly grants another user (or a team) access to a
+*specific* record — a shared document, a delegated folder. Access is per-record and
+recorded in a separate `shares` table, not global like a role. A row is visible when
+that SECURED shares store holds a share row that correlates to it. Because the shares
+store is itself secured to the caller, its own read policy composes into the `EXISTS`
+subquery — defence in depth: a share the caller cannot read cannot open a row:
 
 ```ipe
 Store.readOnly
