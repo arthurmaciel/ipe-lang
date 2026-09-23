@@ -1,4 +1,13 @@
-module Rls.Tenant exposing (staticTenant, staticTenantClaim, dynamicTenant)
+module Rls.Tenant exposing
+    ( Doc
+    , blankDoc
+    , docCodec
+    , Membership
+    , blankMembership
+    , membershipCodec
+    , staticPolicy
+    , dynamicPolicy
+    )
 
 -- The TENANT-isolation row-security pattern, composed over the existing
 -- `Ipe.Db.Store` surface — no core edit, no new kernel. Two contrasting shapes:
@@ -6,44 +15,71 @@ module Rls.Tenant exposing (staticTenant, staticTenantClaim, dynamicTenant)
 --   * STATIC — `Store.claimEquals "tenant" value` gates the whole table to one
 --     tenant: it admits every row only when the caller's verified `tenant` claim
 --     equals `value`, and denies every row otherwise. Fail-closed on BOTH an
---     absent claim (`Nothing`) and a mismatched value. Use it when a table holds
---     exactly one tenant's rows and the tenant is fixed for the caller.
+--     absent claim and a mismatched value. Use it when a table holds exactly one
+--     tenant's rows and the tenant is fixed for the caller.
 --
 --   * DYNAMIC — `Store.existsIn` over a caller-scoped memberships store isolates
 --     PER ROW: a row is visible only when a membership row correlates the caller's
---     tenant to the row's tenant column. The memberships store carries its OWN
---     read policy, which composes into the EXISTS subquery (defence in depth).
---     Use it when one table holds many tenants' rows and visibility follows the
---     caller's memberships rather than a single fixed claim.
+--     memberships to the row's `tenant` column. The memberships store carries its
+--     OWN read policy (owner-scoped on `.member`), which composes into the EXISTS
+--     subquery (defence in depth). Use it when one table holds many tenants' rows
+--     and visibility follows the caller's memberships rather than a fixed claim.
 
+import Ipe.Codec as Codec exposing (Codec)
 import Ipe.Db.Store as Store exposing (Policy, Secured)
 
 
--- | `staticTenant value` — a read-only policy admitting rows only when the
--- caller's verified `tenant` claim equals `value`. The claim gates on the caller,
--- names no row column, and is fail-closed: an absent or mismatched claim denies.
-staticTenant : String -> Policy row
-staticTenant value =
-    Store.readOnly (Store.claimEquals "tenant" value)
+type alias Doc =
+    { id : String
+    , tenant : String
+    }
 
 
--- | `staticTenantClaim key value` — the same gate over an arbitrary claim `key`,
--- for a table keyed on a claim other than `tenant`.
-staticTenantClaim : String -> String -> Policy row
-staticTenantClaim key value =
-    Store.readOnly (Store.claimEquals key value)
+blankDoc : Doc
+blankDoc =
+    { id = "", tenant = "" }
 
 
--- | `dynamicTenant memberships correlation` — a read-only policy admitting a row
--- only when a row of the caller-scoped `memberships` store satisfies BOTH the
--- `correlation` (the row's tenant column matched against a membership column) AND
--- the memberships store's OWN read policy, composed into the subquery. Per-row
--- isolation: the caller sees only the rows whose tenant they belong to. Built
--- from `existsIn`, which validates both correlation columns against their own
--- store.
-dynamicTenant :
-    Secured membership
-    -> (membership -> row -> Store.Pred membership)
-    -> Policy row
-dynamicTenant memberships correlation =
-    Store.readOnly (Store.existsIn memberships correlation)
+docCodec : Codec Doc
+docCodec =
+    Codec.auto blankDoc
+
+
+-- A membership row records which tenant a member may see. Its `Codec.auto`
+-- columns are `tenant` / `member`; secured owner-scoped on `.member`, its own
+-- read policy scopes it to the caller.
+type alias Membership =
+    { tenant : String
+    , member : String
+    }
+
+
+blankMembership : Membership
+blankMembership =
+    { tenant = "", member = "" }
+
+
+membershipCodec : Codec Membership
+membershipCodec =
+    Codec.auto blankMembership
+
+
+-- | The static gate: read-only, admitting rows only when the caller's verified
+-- `tenant` claim equals `acme`. The claim gates on the caller, names no row
+-- column, and is fail-closed.
+staticPolicy : Policy Doc
+staticPolicy =
+    Store.readOnly (Store.claimEquals "tenant" "acme")
+
+
+-- | The dynamic gate: read-only, admitting a row only when a row of the
+-- caller-secured `memberships` store correlates its `tenant` to the doc's
+-- `tenant` AND satisfies the memberships store's own read policy. The correlation
+-- lambda holds the two accessors as `.field` literals, so each column is derived
+-- and validated on its own side.
+dynamicPolicy : Secured Membership -> Policy Doc
+dynamicPolicy memberships =
+    Store.readOnly
+        (Store.existsIn memberships
+            (\membership doc -> Store.correlate membership.tenant doc.tenant)
+        )
