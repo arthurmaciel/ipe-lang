@@ -1297,6 +1297,30 @@ pub fn emit_db_call(
                 "{fn_name}({conn_s}.clone(), {table_s}, {frag_s})"
             )))
         }
+        // ── Db.findWhereMasked: (conn, table, List SqlFragment, frag, decoder) ─
+        //
+        // The NULL-preserving projected masked read. `projections` is a
+        // `List SqlFragment` (each a validated `Sql.column`/`Sql.maskedColumn`
+        // term), emitted as a `vec![…]` of bare `SqlFragment` structs — no `List
+        // SqlValue` projection is involved; `frag` is the bare WHERE struct and
+        // `decoder` a `Decoder` value. Only the `conn.clone()` treatment is
+        // special (shared with every Db kernel).
+        KernelFn::DbFindWhereMasked => {
+            let conn_e = arg!(0, "conn")?;
+            let table_e = arg!(1, "table")?;
+            let projections_e = arg!(2, "projections")?;
+            let frag_e = arg!(3, "frag")?;
+            let dec_e = arg!(4, "decoder")?;
+            let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
+            let table_s = emit_expr_at(ctx, table_e, indent, child, generics)?;
+            let projections_s = emit_expr_at(ctx, projections_e, indent, child, generics)?;
+            let frag_s = emit_expr_at(ctx, frag_e, indent, child, generics)?;
+            let dec_s = emit_expr_at(ctx, dec_e, indent, child, generics)?;
+            let fn_name = crate::naming::kernel_name(*k);
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {table_s}, {projections_s}, {frag_s}, {dec_s})"
+            )))
+        }
         // ── Db.findJoin: (conn, lt, la, lcols, rt, ra, rcols, frag) ──────────
         //
         // Eight flat args, one per validated identifier group. The two `List
@@ -1516,7 +1540,11 @@ pub fn emit_db_call(
         // `Sql.exists : String -> SqlFragment -> SqlFragment` takes a plain
         // `String` table name and a `SqlFragment` — no `Db` handle, no List
         // projection, so the standard call path emits it correctly.
-        | KernelFn::SqlExists => Ok(None),
+        | KernelFn::SqlExists
+        // `Sql.maskedColumn : SqlFragment -> String -> SqlFragment` takes a
+        // `SqlFragment` predicate and a plain `String` column — no `Db` handle,
+        // no List projection, so the standard call path emits it correctly.
+        | KernelFn::SqlMaskedColumn => Ok(None),
         // A Db kernel that reached this arm is a compiler bug: either add a
         // custom projection arm above, or add it to the standard-path list.
         // This arm is unreachable for any KernelFn variant listed above, so

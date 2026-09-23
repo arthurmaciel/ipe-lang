@@ -39,6 +39,23 @@ module Main exposing (main)
 --   existsinexplain:exists in shares where shares.doc_ref = author and its read policy: (member = caller subject)
 --   existsinouter:err
 --   existsinshare:err
+--   maskok:ok
+--   maskexplain:ssn when (a column condition)
+--   masknonnull:err
+--   maskmissing:err
+--
+-- Column-masking (`mask` / `secured` CNull SEAL), all pure `secured`-outcome +
+-- `explain` checks:
+--
+--   * `maskCodec`'s shape names `owner` (`CText`) and `ssn` (`CNull CText`).
+--     Masking the nullable `ssn` on a store that has it → `Ok` → `maskok:ok`.
+--   * `explain` renders the mask rule as transparent text →
+--     `maskexplain:ssn when (a column condition)`.
+--   * Masking the NON-nullable `owner` column fails closed at `secured` (a masked
+--     column must be nullable to carry NULL for an unauthorized row) →
+--     `masknonnull:err` (the soundness SEAL).
+--   * Masking `ssn` on a thin store whose shape lacks it → `maskmissing:err`
+--     (a masked column absent from the store is re-validated and refused).
 
 
 import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
@@ -141,6 +158,49 @@ thinShareCodec =
         }
 
 
+-- ── Column-masking fixtures ────────────────────────────────────────────────
+--
+-- A `MaskDoc` records an owner and an optional-in-the-DB `ssn`. Its codec shape
+-- names `owner` (non-nullable `CText`) and `ssn` (nullable `CNull CText`) — the
+-- SSN column is masked, so it MUST be nullable (an unauthorized row projects
+-- NULL). A hand-assembled codec pins the shape so the SEAL's nullability check is
+-- exercised precisely.
+type alias MaskDoc =
+    { owner : String
+    , ssn : String
+    }
+
+
+maskCodec : Codec MaskDoc
+maskCodec =
+    Codec
+        { enc =
+            \d ->
+                Encode.object
+                    [ ( "owner", Encode.string d.owner )
+                    , ( "ssn", Encode.string d.ssn )
+                    ]
+        , mkDec =
+            \_ ->
+                Decode.map2 (\o s -> { owner = o, ssn = s })
+                    (Decode.field "owner" Decode.string)
+                    (Decode.field "ssn" Decode.string)
+        , shp = SRecord [ ( "owner", CText ), ( "ssn", CNull CText ) ]
+        }
+
+
+-- A mask policy: owner-scoped on `.owner`, masking the nullable `.ssn` column so
+-- it is visible only when the caller's `role` is admin (the predicate names a
+-- real column of the store).
+maskPolicy : Store.Policy MaskDoc
+maskPolicy =
+    Store.ownerColumn .owner
+        |> Store.andPolicy
+            (Store.readOnly Store.always
+                |> Store.mask .ssn (Store.matchWhere (Store.eq .owner "admin"))
+            )
+
+
 -- Build the secured share store from `codec`, or `Nothing` on any build/classify
 -- failure (the caller lines turn that into a fail marker).
 securedShareFrom : Codec Share -> Maybe (Store.Secured Share)
@@ -174,6 +234,10 @@ main =
             , existsInExplainLine
             , existsInOuterErrLine
             , existsInShareErrLine
+            , maskOkLine
+            , maskExplainLine
+            , maskNonNullLine
+            , maskMissingLine
             ]
         )
 
@@ -316,6 +380,104 @@ existsInShareErrLine =
 
         _ ->
             "existsinshare:build-err"
+
+
+-- `secured` over a `MaskDoc` store: the masked `ssn` column is nullable
+-- (`CNull CText`) and every policy column exists → `Ok`.
+maskOkLine : String
+maskOkLine =
+    case Store.fromCodec "mdocs" maskCodec of
+        Err _ ->
+            "maskok:build-err"
+
+        Ok store ->
+            case Store.secured maskPolicy store of
+                Ok _ ->
+                    "maskok:ok"
+
+                Err _ ->
+                    "maskok:err"
+
+
+-- The `masked columns:` clause of the mask policy's `explain`, proving the mask
+-- rule renders as transparent text.
+maskExplainLine : String
+maskExplainLine =
+    String.concat [ "maskexplain:", maskedExplanation maskPolicy ]
+
+
+-- Masking a NON-nullable column fails closed at `secured`: `.owner` is `CText`
+-- (not `CNull`), so masking it would NULL a value the decoder cannot represent →
+-- typed `Err` (the soundness SEAL).
+maskNonNullLine : String
+maskNonNullLine =
+    case Store.fromCodec "mdocs2" maskCodec of
+        Err _ ->
+            "masknonnull:build-err"
+
+        Ok store ->
+            case
+                Store.secured
+                    (Store.readOnly Store.always
+                        |> Store.mask .owner Store.always
+                    )
+                    store
+            of
+                Ok _ ->
+                    "masknonnull:ok"
+
+                Err _ ->
+                    "masknonnull:err"
+
+
+-- Masking a column ABSENT from the store's derived columns fails closed at
+-- `secured`: the thin `MaskDoc` store's shape names only `owner`, so masking
+-- `.ssn` (not a column) is a typed `Err`.
+maskMissingLine : String
+maskMissingLine =
+    case Store.fromCodec "mdocs3" thinMaskCodec of
+        Err _ ->
+            "maskmissing:build-err"
+
+        Ok store ->
+            case
+                Store.secured
+                    (Store.readOnly Store.always
+                        |> Store.mask .ssn Store.always
+                    )
+                    store
+            of
+                Ok _ ->
+                    "maskmissing:ok"
+
+                Err _ ->
+                    "maskmissing:err"
+
+
+-- A `MaskDoc` codec whose shape names ONLY `owner`, so a store built from it has
+-- no `ssn` column — used to prove a masked column absent from the store is
+-- re-validated and refused.
+thinMaskCodec : Codec MaskDoc
+thinMaskCodec =
+    Codec
+        { enc = \d -> Encode.object [ ( "owner", Encode.string d.owner ) ]
+        , mkDec =
+            \_ ->
+                Decode.map (\o -> { owner = o, ssn = "" })
+                    (Decode.field "owner" Decode.string)
+        , shp = SRecord [ ( "owner", CText ) ]
+        }
+
+
+-- The `masked columns:` clause of a mask policy's `explain`, reduced to its value.
+maskedExplanation : Store.Policy MaskDoc -> String
+maskedExplanation policy =
+    case List.head (List.filter (String.startsWith "masked columns:") (String.lines (Store.explain policy))) of
+        Just line ->
+            String.trim (afterColon line)
+
+        Nothing ->
+            ""
 
 
 -- The `read:` clause of a policy's `explain`, reduced to its value.

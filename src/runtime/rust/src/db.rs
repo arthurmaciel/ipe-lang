@@ -2557,6 +2557,49 @@ pub fn sql_exists(table: String, inner: SqlFragment) -> SqlFragment {
     }
 }
 
+/// `Sql.maskedColumn : SqlFragment -> String -> SqlFragment` — a column-masking
+/// projection term: `CASE WHEN (<pred>) THEN <col> ELSE NULL END AS <col>`. An
+/// authorized row (the predicate holds) projects the column's real value; an
+/// unauthorized row projects SQL `NULL`, which the NULL-preserving masked read
+/// (`db_find_where_masked`) decodes to `Nothing` — never the empty string.
+///
+/// The single site that embeds a column name into a `CASE` SELECT term, so it
+/// applies the same fail-closed discipline as the rest of the surface:
+///
+///   * The column name is validated through [`SqlIdent::parse_dotted`] — the SAME
+///     gate [`sql_column`] applies — so an invalid identifier poisons the fragment
+///     (empty `sql`, an `invalid` marker) rather than interpolating unchecked
+///     text. There is no unvalidated column path.
+///   * `pred` was itself built only through the audited `Sql.*` combinators, so
+///     its `sql` is `?`-placeholder text with a matching `binds` list. Those binds
+///     propagate positionally into the masked read before the WHERE binds.
+///   * `pred`'s poison propagates first-wins: an upstream invalid column inside
+///     the predicate is never swallowed by a valid masked column name.
+///
+/// Total and panic-free: no indexing, no unwrap, no fallible step beyond the
+/// checked column parse whose `None` branch poisons.
+pub fn sql_masked_column(pred: SqlFragment, col: String) -> SqlFragment {
+    match SqlIdent::parse_dotted(&col) {
+        None => SqlFragment {
+            sql: String::new(),
+            binds: Vec::new(),
+            invalid: pred
+                .invalid
+                .or_else(|| Some(format!("Sql.maskedColumn: invalid column {col:?}"))),
+        },
+        Some(qcol) => SqlFragment {
+            sql: format!(
+                "CASE WHEN ({}) THEN {} ELSE NULL END AS {}",
+                pred.sql,
+                qcol.as_str(),
+                qcol.as_str()
+            ),
+            binds: pred.binds,
+            invalid: pred.invalid,
+        },
+    }
+}
+
 /// `Db.findWhere : Db -> String -> SqlFragment -> Task Error (List (Dict String String))`
 /// — the `SqlFragment`-typed replacement for the removed `unsafeFindWhere`.
 /// The WHERE clause can only be built through the `Sql.*` combinators above,
@@ -2591,6 +2634,99 @@ pub fn db_find_where<E: Send + From<String> + 'static>(
             Ok(rows) => ok_res(rows.iter().map(row_to_map).collect()),
             Err(e) => IpeResult::Err(ipe_err(&e)),
         }
+    })
+}
+
+/// `Db.findWhereMasked : Db -> String -> List SqlFragment -> SqlFragment
+///                        -> Decoder a -> Task Error (List a)` — the
+/// NULL-preserving projected read the secured row-masking path routes through.
+///
+/// It is `db_find_where`'s column-masking counterpart. Where `db_find_where`
+/// emits `SELECT * … ` and returns cells via `row_to_map` (which collapses SQL
+/// NULL → `""`, so a masked cell would decode `Just ""`), this builds an
+/// EXPLICIT projection from the caller's validated `projections` fragments — each
+/// a plain `Sql.column col AS col` for an unmasked column, or a
+/// `CASE WHEN (<pred>) THEN col ELSE NULL END AS col` from [`sql_masked_column`]
+/// for a masked one — and decodes each row through the threaded `Decoder` over
+/// the NULL-preserving [`row_to_json`] bridge, exactly as [`db_query_decode`]
+/// does. So an unauthorized (masked) cell arrives as `JsonVal::Null` and the
+/// codec's `CNull` arm decodes it to `Nothing`, never the empty string.
+///
+/// Injection-safe by construction: the table passes the same `SqlIdent::parse_plain`
+/// gate as `db_find_where`; every projection fragment and the WHERE fragment were
+/// built only through the audited `Sql.*` combinators (validated identifiers +
+/// bound `?` params), so the assembled statement holds no interpolated value. A
+/// poisoned projection or WHERE fragment fails the whole read closed. The masked
+/// `CASE` predicates carry their `$subject` binds; those bind FIRST (SELECT terms
+/// precede the WHERE), mirroring `db_find_projection`'s literal-then-where order,
+/// so placeholders and binds stay in lockstep.
+pub fn db_find_where_masked<E: Send + From<String> + 'static, A: Send + 'static>(
+    conn: Db,
+    table: String,
+    projections: Vec<SqlFragment>,
+    frag: SqlFragment,
+    decoder: Decoder<E, A>,
+) -> IpeTask<E, Vec<A>> {
+    Box::pin(async move {
+        if let Some(reason) = frag.invalid {
+            return IpeResult::Err(format!("db.findWhereMasked: {reason}").into());
+        }
+        // First-poison-wins across every projection fragment.
+        for p in &projections {
+            if let Some(reason) = &p.invalid {
+                return IpeResult::Err(format!("db.findWhereMasked: {reason}").into());
+            }
+        }
+        if projections.is_empty() {
+            return IpeResult::Err(
+                "db.findWhereMasked: a masked read must project at least one column".into(),
+            );
+        }
+        let qtable = match SqlIdent::parse_plain(&table) {
+            Some(t) => t,
+            None => {
+                return IpeResult::Err(
+                    format!("db.findWhereMasked: invalid table {:?}", table).into(),
+                );
+            }
+        };
+        let select_terms = projections
+            .iter()
+            .map(|p| p.sql.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = db_format_sql(format!(
+            "SELECT {} FROM {} WHERE {}",
+            select_terms,
+            qtable.as_str(),
+            frag.sql
+        ));
+        let mut q = sqlx::query(&sql);
+        // Projection (SELECT `?`) binds first — they precede the WHERE `?` binds.
+        for p in projections {
+            for b in p.binds {
+                q = bind_sql_param(q, b);
+            }
+        }
+        for b in frag.binds {
+            q = bind_sql_param(q, b);
+        }
+        let rows = match fetch_all_routed(&conn, q).await {
+            Ok(r) => r,
+            Err(e) => return IpeResult::Err(ipe_err(&e)),
+        };
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let jv = match row_to_json(row) {
+                Ok(v) => v,
+                Err(e) => return IpeResult::Err(ipe_err(&e)),
+            };
+            match (decoder.run)(&jv) {
+                IpeResult::Ok(a) => out.push(a),
+                IpeResult::Err(e) => return IpeResult::Err(e),
+            }
+        }
+        ok_res(out)
     })
 }
 

@@ -13,10 +13,13 @@ module Main exposing (main)
 -- this program (exit 0) must imply a buildable emitted crate.
 
 import Ipe.Auth as Auth
-import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
 import Ipe.Db as Db exposing (Db)
 import Ipe.Db.Store as Store exposing (Store, Secured)
 import Ipe.Error exposing (Error)
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Encode as Encode
+import Ipe.Maybe as Maybe exposing (Maybe(..))
 import Ipe.Http.Server as Server
 import Ipe.Http.Server exposing (Request, Response)
 import Ipe.Io as Io
@@ -179,6 +182,101 @@ handleMyDocs req principal =
         )
 
 
+-- ── Column-masking read path ───────────────────────────────────────────────
+--
+-- A `MaskDoc` has an `owner` and a DB-optional `ssn` (a `Maybe String`, decoded
+-- through a nullable column so a masked-out cell reads back as `Nothing`). The
+-- policy is owner-scoped AND masks the nullable `ssn` so it is projected only for
+-- an authorized row: `allAs` routes through `Db.findWhereMasked`, emitting an
+-- explicit `SELECT owner, CASE WHEN (…) THEN ssn ELSE NULL END AS ssn` and
+-- decoding each row (NULL-preserving) through the store's codec. The SEAL is that
+-- this `cargo build`s under `IPE_E2E=1`.
+type alias MaskDoc =
+    { owner : String
+    , ssn : Maybe String
+    }
+
+
+-- A hand-assembled codec pinning `ssn` to a nullable (`CNull CText`) column, so
+-- the mask on `.ssn` passes `secured`'s nullability SEAL and an unauthorized row
+-- decodes `ssn` to `Nothing`.
+maskCodec : Codec MaskDoc
+maskCodec =
+    Codec
+        { enc =
+            \d ->
+                Encode.object
+                    [ ( "owner", Encode.string d.owner )
+                    , ( "ssn", encodeMaybeString d.ssn )
+                    ]
+        , mkDec =
+            \_ ->
+                Decode.map2 (\o s -> { owner = o, ssn = s })
+                    (Decode.field "owner" Decode.string)
+                    (Decode.field "ssn" (Decode.nullable Decode.string))
+        , shp = SRecord [ ( "owner", CText ), ( "ssn", CNull CText ) ]
+        }
+
+
+encodeMaybeString : Maybe String -> Encode.Value
+encodeMaybeString m =
+    case m of
+        Just s ->
+            Encode.string s
+
+        Nothing ->
+            Encode.null
+
+
+-- Owner-scoped, with `ssn` masked to admins: an owner reads their rows, but the
+-- `ssn` value is projected only when the caller's `owner` is `"admin"` — every
+-- other row yields `Nothing` for `ssn`.
+maskPolicy : Store.Policy MaskDoc
+maskPolicy =
+    Store.ownerColumn .owner
+        |> Store.andPolicy
+            (Store.readOnly Store.always
+                |> Store.mask .ssn (Store.matchWhere (Store.eq .owner "admin"))
+            )
+
+
+securedMaskDocs : Result Error (Secured MaskDoc)
+securedMaskDocs =
+    case Store.fromCodec "mask_docs" maskCodec of
+        Err e ->
+            Err e
+
+        Ok store ->
+            Store.secured maskPolicy store
+
+
+-- The authed handler for the masked read: `allAs` over the masked secured store.
+-- Emits the `db_find_where_masked` projected read; the SEAL is that this
+-- `cargo build`s under `IPE_E2E=1`.
+handleMaskDocs : Request -> Auth.Principal -> Task Error Response
+handleMaskDocs req principal =
+    Task.onError
+        (\_ -> Task.succeed (Server.text "none"))
+        (Task.andThen
+            (\db ->
+                case securedMaskDocs of
+                    Err _ ->
+                        Task.succeed (Server.text "policy-error")
+
+                    Ok secured ->
+                        Task.andThen
+                            (\docs ->
+                                Task.succeed
+                                    (Server.text
+                                        (String.join "\n" (List.map (\d -> Maybe.withDefault "•" d.ssn) docs))
+                                    )
+                            )
+                            (Store.allAs principal db secured)
+            )
+            (Db.connect ())
+        )
+
+
 authCfg : Server.AuthConfig
 authCfg =
     Server.authConfig
@@ -196,6 +294,7 @@ main =
                 8000
                 [ Server.getAuthed "/my/docs" authCfg handleMyDocs
                 , Server.getAuthed "/shared/docs" authCfg handleSharedDocs
+                , Server.getAuthed "/mask/docs" authCfg handleMaskDocs
                 ]
             )
         )

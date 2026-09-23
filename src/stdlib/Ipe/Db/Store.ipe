@@ -237,8 +237,8 @@ module Ipe.Db.Store exposing
     , always, never, allOf, anyOf, notPred, matchWhere
     , correlate, existsIn, existsInNamed
     , readOnly, alsoInsert, alsoUpdate, alsoDelete
-    , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
-    , ownerColumnNamed, immutableNamed
+    , unrestricted, publicRead, ownerColumn, immutable, mask, andPolicy, secured
+    , ownerColumnNamed, immutableNamed, maskNamed
     , explain
     , allAs, getAs, insertAs, updateAs, deleteAs
     )
@@ -4962,6 +4962,7 @@ type Policy row
         , delete : Pred row
         , owners : List String
         , immutables : List String
+        , masks : List ( String, Pred row )
         }
 
 
@@ -4992,6 +4993,7 @@ denyAll =
         , delete = PNever
         , owners = []
         , immutables = []
+        , masks = []
         }
 
 
@@ -5012,6 +5014,7 @@ allowAll =
         , delete = PAlways
         , owners = []
         , immutables = []
+        , masks = []
         }
 
 
@@ -5054,6 +5057,7 @@ readOnly p =
                 , delete = r.delete
                 , owners = r.owners
                 , immutables = r.immutables
+                , masks = r.masks
                 }
 
 
@@ -5094,6 +5098,34 @@ immutable =
     Kernel.kernel "Store_immutable"
 
 
+-- | `mask accessor pred policy` — refine `policy` so the accessor-named column
+-- is column-masked on every secured read: a row for which `pred` holds projects
+-- the column's real value, a row for which it does not projects SQL `NULL`, which
+-- the secured read decodes to `Nothing` (never `Just ""`). Masking a
+-- non-nullable column is a typed `Err` at `secured` (the codec models
+-- nullability, so a masked column MUST be `CNull _`). Composable: it only ADDS a
+-- projection rule, restricting no operation, so it AND-composes with any policy.
+--
+-- The column is named by an accessor literal (`.ssn`), checked against the row
+-- type at compile time and snake_cased at lowering, then delegated to
+-- `maskNamed`. `pred` is a `Pred row` built from the same audited leaves as any
+-- policy predicate (e.g. `Store.matchWhere (Store.eq .role "admin")`,
+-- `Store.always` for an owner-only visibility rule composed elsewhere) — it
+-- lowers through the ONE audited `predFragmentIn` path, so masking adds no
+-- injection surface.
+--
+-- Example (an SSN is visible only to an admin caller):
+--
+--     Store.ownerColumn .owner
+--         |> Store.andPolicy
+--             (Store.readOnly Store.always
+--                 |> Store.mask .ssn (Store.matchWhere (Store.eq .role "admin"))
+--             )
+mask : (row -> t) -> Pred row -> Policy row -> Policy row
+mask =
+    Kernel.kernel "Store_mask"
+
+
 -- The stringly forms reached by the accessor-typed policy-builder intercepts
 -- above. The accessor `.field` has already been turned into the validated,
 -- snake_cased column name `col`. Exported only so the intercepts can name them; a
@@ -5109,6 +5141,7 @@ ownerColumnNamed col =
                 , delete = POwner col
                 , owners = [ col ]
                 , immutables = r.immutables
+                , masks = r.masks
                 }
 
 
@@ -5123,6 +5156,27 @@ immutableNamed col =
                 , delete = r.delete
                 , owners = r.owners
                 , immutables = [ col ]
+                , masks = r.masks
+                }
+
+
+-- The stringly form the `mask` accessor intercept builds: the accessor `.field`
+-- has already been turned into the validated, snake_cased column name `col`.
+-- Records the `(col, pred)` mask on the policy through a full record literal (no
+-- generic record update). Exported only so the intercept can name it; a caller
+-- writes `mask` with an accessor.
+maskNamed : String -> Pred row -> Policy row -> Policy row
+maskNamed col pred policy =
+    case policy of
+        Policy r ->
+            Policy
+                { read = r.read
+                , insert = r.insert
+                , update = r.update
+                , delete = r.delete
+                , owners = r.owners
+                , immutables = r.immutables
+                , masks = r.masks ++ [ ( col, pred ) ]
                 }
 
 
@@ -5153,6 +5207,7 @@ andPolicy extra base =
                         , delete = PAll [ b.delete, e.delete ]
                         , owners = b.owners ++ e.owners
                         , immutables = b.immutables ++ e.immutables
+                        , masks = b.masks ++ e.masks
                         }
 
 
@@ -5169,6 +5224,7 @@ alsoInsert p base =
                 , delete = r.delete
                 , owners = r.owners
                 , immutables = r.immutables
+                , masks = r.masks
                 }
 
 
@@ -5184,6 +5240,7 @@ alsoUpdate p base =
                 , delete = r.delete
                 , owners = r.owners
                 , immutables = r.immutables
+                , masks = r.masks
                 }
 
 
@@ -5199,6 +5256,7 @@ alsoDelete p base =
                 , delete = p
                 , owners = r.owners
                 , immutables = r.immutables
+                , masks = r.masks
                 }
 
 
@@ -5219,7 +5277,28 @@ explain policy =
                 , explainOp "update" r.update
                 , explainOp "delete" r.delete
                 , explainImmutables r.immutables
+                , explainMasks r.masks
                 ]
+
+
+explainMasks : List ( String, Pred row ) -> String
+explainMasks masks =
+    if List.isEmpty masks then
+        "masked columns: none"
+
+    else
+        String.concat
+            [ "masked columns: "
+            , String.join ", " (List.map explainMask masks)
+            ]
+
+
+explainMask : ( String, Pred row ) -> String
+explainMask pair =
+    case pair of
+        ( col, pred ) ->
+            String.concat
+                [ col, " when (", explainPred (simplify pred), ")" ]
 
 
 explainOp : String -> Pred row -> String
@@ -5317,7 +5396,85 @@ secured policy draft =
                             Err (unknownColumnError bad)
 
                         Nothing ->
-                            Ok (Secured (public draft) policy)
+                            -- A masked column MUST be nullable (`CNull _`): the
+                            -- unauthorized row projects SQL `NULL`, which only a
+                            -- nullable codec column can decode (to `Nothing`).
+                            -- Masking a non-nullable column would NULL a value the
+                            -- decoder cannot represent — a fail-closed typed `Err`
+                            -- at classification, never a decode panic at read time
+                            -- (the soundness SEAL).
+                            case firstNonNullableMaskColumn r.currentColumns policy of
+                                Just bad ->
+                                    Err (nonNullableMaskError bad)
+
+                                Nothing ->
+                                    Ok (Secured (public draft) policy)
+
+
+-- The first masked column of `policy` whose store column type is NOT nullable
+-- (`CNull _`), or `Nothing` when every masked column is nullable. A masked column
+-- absent from the store is already rejected by the `policyColumns` check, so a
+-- column reaching here is present; only its nullability is in question.
+firstNonNullableMaskColumn : List Column -> Policy a -> Maybe String
+firstNonNullableMaskColumn columns policy =
+    case policy of
+        Policy r ->
+            firstNonNullableMaskColumnIn columns (List.map maskColumn r.masks)
+
+
+firstNonNullableMaskColumnIn : List Column -> List String -> Maybe String
+firstNonNullableMaskColumnIn columns cols =
+    case cols of
+        [] ->
+            Nothing
+
+        col :: rest ->
+            if columnIsNullable columns col then
+                firstNonNullableMaskColumnIn columns rest
+
+            else
+                Just col
+
+
+-- Whether `name`'s store column type is nullable (`CNull _`). A column absent
+-- from the store is treated as non-nullable (fail-closed), though `secured`'s
+-- earlier column-existence check makes that case unreachable for a real policy.
+columnIsNullable : List Column -> String -> Bool
+columnIsNullable columns name =
+    case columnColTypeByName columns name of
+        Just (CNull _) ->
+            True
+
+        Just CText ->
+            False
+
+        Just CInt ->
+            False
+
+        Just CReal ->
+            False
+
+        Just CBool ->
+            False
+
+        Nothing ->
+            False
+
+
+-- The `ColType` of the store column named `name`, or `Nothing` when no such
+-- column exists.
+columnColTypeByName : List Column -> String -> Maybe ColType
+columnColTypeByName columns name =
+    case columns of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            if columnName first == name then
+                Just (columnColType first)
+
+            else
+                columnColTypeByName rest name
 
 
 -- The first share-side column any `existsIn` in `policy` names that is absent
@@ -5327,7 +5484,9 @@ firstUnknownPolicyExistsShareColumn policy =
     case policy of
         Policy r ->
             firstUnknownExistsShareColumnIn
-                [ r.read, r.insert, r.update, r.delete ]
+                ([ r.read, r.insert, r.update, r.delete ]
+                    ++ List.map maskPred r.masks
+                )
 
 
 -- Every column a policy names, across all four predicates and the write-projection
@@ -5343,7 +5502,25 @@ policyColumns policy =
                 , predColumns r.delete
                 , r.owners
                 , r.immutables
+                , List.map maskColumn r.masks
+                , List.concatMap (\pair -> predColumns (maskPred pair)) r.masks
                 ]
+
+
+-- The masked column name of a `(column, pred)` mask entry.
+maskColumn : ( String, Pred row ) -> String
+maskColumn pair =
+    case pair of
+        ( col, _ ) ->
+            col
+
+
+-- The authorization predicate of a `(column, pred)` mask entry.
+maskPred : ( String, Pred row ) -> Pred row
+maskPred pair =
+    case pair of
+        ( _, pred ) ->
+            pred
 
 
 -- The first column in `names` that is not one of the store's columns, or
@@ -5399,6 +5576,93 @@ readPred policy =
             r.read
 
 
+-- | `maskedRead principal conn store policy whereFrag` — the shared secured-read
+-- core for `allAs` / `getAs`. It builds the explicit column projection from the
+-- store's current columns — each column projected as-is, except a policy-masked
+-- column projected as `CASE WHEN (<pred>) THEN col ELSE NULL END` — and reads
+-- through the NULL-preserving `Db.findWhereMasked`, decoding each row through the
+-- store's own codec. A policy with NO masks projects every column verbatim, which
+-- is the former `SELECT *` semantics decoded through the same codec (backward
+-- compatible). An unauthorized masked cell arrives as SQL `NULL` and the codec's
+-- `CNull` arm decodes it to `Nothing` — never `Just ""`.
+maskedRead : Auth.Principal -> Db -> Store a -> Policy a -> SqlFragment -> Task Error (List a)
+maskedRead principal conn store policy whereFrag =
+    case store of
+        Store r ->
+            case r.codec of
+                Codec codecR ->
+                    Db.findWhereMasked conn
+                        r.table
+                        (projectionTerms principal store policy r.currentColumns)
+                        whereFrag
+                        (codecR.mkDec {})
+
+
+-- Build the ordered projection `SqlFragment` list for a secured read: each store
+-- column becomes a bare `Sql.column` reference, unless the policy masks it — then
+-- it becomes an `Sql.maskedColumn` `CASE` term guarded by the mask predicate
+-- lowered against the store's columns. The mask predicate reaches SQL only
+-- through the ONE audited `predFragmentIn` path; a predicate that fails to lower
+-- (an unreachable column mismatch, already refused at `secured`) falls back to the
+-- always-FALSE fragment, so the column masks for EVERY row (fail-closed — a mask
+-- that cannot be validated hides the value, never reveals it).
+projectionTerms : Auth.Principal -> Store a -> Policy a -> List Column -> List SqlFragment
+projectionTerms principal store policy columns =
+    List.map (\col -> projectionTerm principal store policy (columnName col)) columns
+
+
+projectionTerm : Auth.Principal -> Store a -> Policy a -> String -> SqlFragment
+projectionTerm principal store policy col =
+    case maskPredForColumn policy col of
+        Nothing ->
+            Sql.column col
+
+        Just pred ->
+            Sql.maskedColumn (maskPredFragment principal store pred) col
+
+
+-- The mask predicate for `col` if the policy masks it, else `Nothing`. First
+-- mask wins (a column masked twice uses its first predicate; `secured` validates
+-- every mask column regardless).
+maskPredForColumn : Policy a -> String -> Maybe (Pred a)
+maskPredForColumn policy col =
+    case policy of
+        Policy r ->
+            firstMaskPred r.masks col
+
+
+firstMaskPred : List ( String, Pred a ) -> String -> Maybe (Pred a)
+firstMaskPred masks col =
+    case masks of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            case first of
+                ( name, pred ) ->
+                    if name == col then
+                        Just pred
+
+                    else
+                        firstMaskPred rest col
+
+
+-- Lower a mask predicate to its guarding `SqlFragment` through the SAME audited
+-- path secured WHERE fragments use, validated against the store's own columns.
+-- Fail-closed: a predicate that cannot lower falls back to the always-FALSE
+-- fragment, so the masked column yields NULL for every row rather than leaking.
+maskPredFragment : Auth.Principal -> Store a -> Pred a -> SqlFragment
+maskPredFragment principal store pred =
+    case store of
+        Store s ->
+            case predFragmentIn principal s.table s.currentColumns (simplify pred) of
+                Ok fragment ->
+                    fragment
+
+                Err _ ->
+                    falseFragment
+
+
 updatePred : Policy a -> Pred a
 updatePred policy =
     case policy of
@@ -5422,9 +5686,8 @@ allAs principal conn secured =
         Secured store policy ->
             case store of
                 Store r ->
-                    Task.andThen
-                        (\rows -> decodeRows r.codec rows)
-                        (Db.findWhere conn r.table (policyFragment principal readPred store policy))
+                    maskedRead principal conn store policy
+                        (policyFragment principal readPred store policy)
 
 
 -- | `getAs principal db secured keyValue` — read the single row whose primary
@@ -5442,10 +5705,8 @@ getAs principal conn secured keyValue =
                             Task.fail noPrimaryKeyError
 
                         Just keyCol ->
-                            Task.andThen
-                                (\rows -> firstDecoded r.codec rows)
-                                (Db.findWhere conn
-                                    r.table
+                            Task.map List.head
+                                (maskedRead principal conn store policy
                                     (Sql.and
                                         (keyEquals keyCol keyValue)
                                         (policyFragment principal readPred store policy)
@@ -5619,6 +5880,17 @@ unknownColumnError name =
     Error.invalidInput
         (String.concat
             [ "Ipe.Db.Store: \"", name, "\" is not a column of this store — a query may only reference the store's own derived columns" ]
+        )
+
+
+nonNullableMaskError : String -> Error
+nonNullableMaskError name =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: cannot mask non-nullable column \""
+            , name
+            , "\" — a masked column yields NULL for an unauthorized row, so it must be nullable (its codec column type must be `CNull _`, i.e. a `Maybe`-typed field). Make the field optional, or drop the mask on this column"
+            ]
         )
 
 
