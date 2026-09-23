@@ -491,9 +491,13 @@ pub mod server {
     /// However the connection ends — served, refused, or malformed — the write half
     /// is cleanly half-closed via [`finish_conn`] so the peer reads a deterministic
     /// EOF (exactly the reply written, or none) rather than an RST.
-    async fn serve_conn<H>(mut stream: TcpStream, handler: &H) -> Result<(), ServeError>
+    pub(crate) async fn serve_conn<H, Fut>(
+        mut stream: TcpStream,
+        handler: &H,
+    ) -> Result<(), ServeError>
     where
-        H: Fn(ControlFrame) -> ControlFrame,
+        H: Fn(ControlFrame) -> Fut,
+        Fut: core::future::Future<Output = ControlFrame>,
     {
         let outcome = dispatch_conn(&mut stream, handler).await;
         // Half-close regardless of outcome: a refused/malformed peer still gets a
@@ -505,9 +509,10 @@ pub mod server {
     /// The dispatch core of [`serve_conn`]: read + authorize + dispatch, writing
     /// the reply. Kept separate so [`serve_conn`] can always half-close the stream
     /// afterward, whatever this returns.
-    async fn dispatch_conn<H>(stream: &mut TcpStream, handler: &H) -> Result<(), ServeError>
+    async fn dispatch_conn<H, Fut>(stream: &mut TcpStream, handler: &H) -> Result<(), ServeError>
     where
-        H: Fn(ControlFrame) -> ControlFrame,
+        H: Fn(ControlFrame) -> Fut,
+        Fut: core::future::Future<Output = ControlFrame>,
     {
         let token_bytes = read_record(stream).await?;
         let presented = String::from_utf8(token_bytes).ok();
@@ -520,7 +525,12 @@ pub mod server {
         // decoded directly — running it back through `decode_frame` would read the
         // JSON's first bytes as a second length prefix.
         let frame = decode_frame_body(&frame_bytes).map_err(ServeError::Frame)?;
-        let reply = handler(frame);
+        // The handler is async: for the tui shape it enqueues the frame onto the
+        // run loop and AWAITS the run loop's reply one-shot. Awaiting (never a
+        // `blocking_recv`) keeps the dispatch flavor-independent — it never blocks
+        // a runtime worker, so it is sound whether the child runs on a
+        // multi-thread or a current-thread runtime.
+        let reply = handler(frame).await;
         // A reply that exceeds the cap cannot be sent; drop the connection rather
         // than emit a record the peer would refuse (fail-closed, never partial).
         if let Some(out) = encode_frame(&reply) {
@@ -555,9 +565,10 @@ pub mod server {
     ///
     /// # Errors
     /// An I/O error if the listener cannot bind the loopback port.
-    pub async fn serve_control<H>(handler: H) -> std::io::Result<Option<()>>
+    pub async fn serve_control<H, Fut>(handler: H) -> std::io::Result<Option<()>>
     where
-        H: Fn(ControlFrame) -> ControlFrame + Send + Sync + 'static,
+        H: Fn(ControlFrame) -> Fut + Send + Sync + 'static,
+        Fut: core::future::Future<Output = ControlFrame> + Send,
     {
         let Some(port) = transport::control_port_from_env() else {
             return Ok(None);
@@ -597,9 +608,10 @@ pub mod server {
     /// read deadline (a peer that connects but never completes a record is dropped
     /// when it fires), and any outcome is discarded (a bad peer never propagates a
     /// failure into the loop). The handler is shared across tasks behind an `Arc`.
-    fn spawn_conn<H>(stream: TcpStream, handler: Arc<H>, deadline: Duration)
+    fn spawn_conn<H, Fut>(stream: TcpStream, handler: Arc<H>, deadline: Duration)
     where
-        H: Fn(ControlFrame) -> ControlFrame + Send + Sync + 'static,
+        H: Fn(ControlFrame) -> Fut + Send + Sync + 'static,
+        Fut: core::future::Future<Output = ControlFrame> + Send,
     {
         tokio::spawn(async move {
             let _ = tokio::time::timeout(deadline, serve_conn(stream, &*handler)).await;
@@ -609,8 +621,7 @@ pub mod server {
     /// The echo/ack handler: reply to every frame with a positive
     /// [`ControlFrame::Ack`]. The shared transport's default seam — the per-shape
     /// handlers (tui apply / recorder inspect) replace it in their own lanes.
-    #[must_use]
-    pub fn ack_handler(_frame: ControlFrame) -> ControlFrame {
+    pub async fn ack_handler(_frame: ControlFrame) -> ControlFrame {
         ControlFrame::Ack {
             ok: true,
             detail: "ack".to_string(),
@@ -651,7 +662,7 @@ pub mod server {
             let addr = listener.local_addr().expect("listener has a local addr");
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.expect("accept the test client");
-                serve_conn(stream, &(ack_handler as fn(ControlFrame) -> ControlFrame)).await
+                serve_conn(stream, &ack_handler).await
             });
             let mut client = TcpStream::connect(addr)
                 .await
@@ -718,7 +729,7 @@ pub mod server {
             let addr = listener.local_addr().expect("listener has a local addr");
             let server = tokio::spawn(async move {
                 let (stream, _) = listener.accept().await.expect("accept the test client");
-                serve_conn(stream, &(ack_handler as fn(ControlFrame) -> ControlFrame)).await
+                serve_conn(stream, &ack_handler).await
             });
             let mut client = TcpStream::connect(addr)
                 .await
@@ -762,10 +773,13 @@ pub mod server {
             let handler = {
                 let dispatches = Arc::clone(&dispatches);
                 Arc::new(move |_frame: ControlFrame| {
-                    dispatches.fetch_add(1, Ordering::SeqCst);
-                    ControlFrame::Ack {
-                        ok: true,
-                        detail: "ack".to_string(),
+                    let dispatches = Arc::clone(&dispatches);
+                    async move {
+                        dispatches.fetch_add(1, Ordering::SeqCst);
+                        ControlFrame::Ack {
+                            ok: true,
+                            detail: "ack".to_string(),
+                        }
                     }
                 })
             };
