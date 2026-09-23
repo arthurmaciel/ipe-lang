@@ -19931,15 +19931,22 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
 
-        // Flatten a curried call spine before the accessor intercept. A piped
-        // final argument (`base |> Store.mask .ssn pred`) desugars to
-        // `Call(Call(Store.mask, [.ssn, pred]), [base])`; the accessor intercept
-        // keys on a bare `VarKernel` callee applied to ALL its arguments, so the
-        // nested shape must collapse to `Call(Store.mask, [.ssn, pred, base])`
-        // first — otherwise the kernel is seen only partially applied, reified
-        // point-free, and rejected (IPE-L0146). `(k a) b ≡ k a b` in a curried
-        // language, so this is beta-equivalent for every callee.
-        if let canon::Expr_::Call(inner_callee, inner_args) = &callee.value {
+        // Flatten a curried call spine ONLY when its head is an accessor-intercept
+        // placeholder kernel used with a piped final argument
+        // (`base |> Store.mask .col pred` desugars to
+        // `Call(Call(Store.mask, [.col, pred]), [base])`): the accessor intercept
+        // keys on a bare `VarKernel` callee saturated to ALL its arguments, so the
+        // nested spine must collapse to `Call(Store.mask, [.col, pred, base])`,
+        // else the kernel is seen only partially applied, reified point-free, and
+        // rejected (IPE-L0146). Restricted to that head on purpose: a GENERAL
+        // flatten reshapes the call tree the downstream multi-use / last-use
+        // ownership pass reads to decide moves vs clones, mis-placing a move where
+        // a later use still needs the value (E0382). Every non-accessor spine is
+        // left intact, so ordinary currying (`m |> Maybe.andThen f`) lowers
+        // exactly as before.
+        if let canon::Expr_::Call(inner_callee, inner_args) = &callee.value
+            && self.spine_head_is_accessor_intercept_placeholder(inner_callee)
+        {
             let mut merged = inner_args.clone();
             merged.extend_from_slice(args);
             return self.lower_call(inner_callee, &merged, call_span);
@@ -19952,6 +19959,22 @@ impl<'a> Lowerer<'a> {
                 self.lower_call_uniform(callee, args, call_span, peeked)
             }
         }
+    }
+
+    /// Whether the head of a (possibly curried) call spine resolves to an
+    /// accessor-intercept placeholder kernel (`Store.mask`, `Store.eq`, …). Gates
+    /// the spine-flatten in [`Self::lower_call`] to exactly the kernels whose
+    /// saturated accessor intercept must observe every argument — never a general
+    /// currying reshape (which would disturb the ownership/last-use pass).
+    fn spine_head_is_accessor_intercept_placeholder(&self, callee: &canon::Expr) -> bool {
+        let mut head = callee;
+        while let canon::Expr_::Call(inner, _) = &head.value {
+            head = inner;
+        }
+        matches!(
+            self.lower_callee(head),
+            Ok(Callee::Kernel(k)) if k.is_accessor_intercept_placeholder()
+        )
     }
 
     /// Kernel-call intercepts that must run BEFORE the uniform arg lowering
