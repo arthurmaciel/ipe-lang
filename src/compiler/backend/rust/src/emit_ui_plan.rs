@@ -973,6 +973,8 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::StoreDefaultInt
         | KernelFn::StoreOwnerColumn
         | KernelFn::StoreImmutable
+        | KernelFn::StoreCorrelate
+        | KernelFn::StoreExistsIn
         | KernelFn::StoreOrderByLeft
         | KernelFn::StoreOrderByRight
         | KernelFn::DbDecString
@@ -1414,6 +1416,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::SqlIsNotNull
         | KernelFn::SqlInList
         | KernelFn::SqlLike
+        | KernelFn::SqlExists
         | KernelFn::DbFindWhere
         | KernelFn::DbFindJoin
         | KernelFn::DbFindProjection

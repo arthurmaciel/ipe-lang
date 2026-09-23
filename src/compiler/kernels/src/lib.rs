@@ -538,6 +538,15 @@ pub enum BuiltinTag {
     /// `Cond` — the typed `WHERE`-predicate `Cond row`, applied to the store's
     /// row type. Homed at `Ipe.Db.Store`.
     DbCond,
+    /// `Pred` — the row-security predicate algebra `Pred row`, applied to its
+    /// phantom row type. The result of the `StoreCorrelate` scheme and the
+    /// lambda result the `StoreExistsIn` scheme expects. Homed at `Ipe.Db.Store`.
+    DbPred,
+    /// `Secured` — the classified, policy-attached table `Secured row`, applied
+    /// to its row type. The first argument of the `StoreExistsIn` scheme (the
+    /// referenced share store whose own read policy composes into the subquery).
+    /// Homed at `Ipe.Db.Store`.
+    DbSecured,
     /// `Order` — the `Ipe.Db.Store.Order` nullary sort-direction ADT
     /// (`Asc | Desc`), the second argument of `orderByLeft` / `orderByRight`.
     /// Empty-module, distinct from [`Self::Order`] (the three-way comparison
@@ -1752,6 +1761,26 @@ pub enum StdlibKernel {
     /// one immutable-column rule over the accessor-named column. The intercept
     /// extracts the column name and delegates to the `immutableNamed` helper.
     StoreImmutable,
+    /// `Store.correlate : (share -> t) -> (row -> t) -> Pred share` — the
+    /// column=column correlation leaf of a `Store.existsIn` predicate: it equates
+    /// a `share`-side column with an OUTER-`row`-side column (`shares.doc =
+    /// docs.id`), the one comparison `Cond`/`matchWhere` cannot express (their RHS
+    /// is always a bound value). Both accessors name validated columns pinned to
+    /// their own record types by the shared `t`. Valid ONLY as the body (or an
+    /// `allOf` element) of an `existsIn` lambda; the intercept reads both
+    /// accessors structurally. A point-free or standalone use is a fail-closed
+    /// IPE-L0149. An accessor-intercept placeholder.
+    StoreCorrelate,
+    /// `Store.existsIn : Secured share -> (share -> row -> Pred share) -> Pred row`
+    /// — a correlated-subquery row-security predicate: the outer row is admitted
+    /// when a row of the referenced `share` store satisfies both the lambda's
+    /// correlation (via `Store.correlate`) AND the share store's OWN read policy
+    /// (composed in, defence in depth). Lowered by a two-binder walker that reads
+    /// the `\share row -> …` lambda into a `PExists` data leaf carrying the share
+    /// table, the two correlation columns, and the share read policy. The share's
+    /// columns and the outer row's columns are both re-validated by `secured`. An
+    /// accessor-intercept placeholder.
+    StoreExistsIn,
     /// `Store.orderByLeft : (a -> k) -> Order -> Joined a b -> Joined a b` —
     /// sort a join result by a column on the LEFT side (`a0`), ascending or
     /// descending. The accessor names the column (validated at lowering, the same
@@ -2710,6 +2739,13 @@ pub enum StdlibKernel {
     /// `Sql.like : SqlFragment -> String -> SqlFragment` — the pattern is
     /// always a bound param, never interpolated.
     SqlLike,
+    /// `Sql.exists : String -> SqlFragment -> SqlFragment` — a correlated-
+    /// subquery existence test `EXISTS (SELECT 1 FROM <table> WHERE <inner>)`.
+    /// The table is validated through the same bare-identifier gate as
+    /// `Db.findWhere`'s table (never `unsafeFragment`); `inner` was built only
+    /// through the audited `Sql.*` combinators, so the subquery adds no injection
+    /// surface. The single site that embeds a table name and a nested `SELECT`.
+    SqlExists,
     /// `Db.findWhere : Db -> String -> SqlFragment -> Task Error (List Row)` —
     /// the `SqlFragment`-typed replacement for the removed `unsafeFindWhere`.
     DbFindWhere,
@@ -3964,6 +4000,11 @@ impl StdlibKernel {
             Self::StoreOrderByLeft => d("Store", "orderByLeft", 3, Pure, "store_order_by_left"),
             Self::StoreOrderByRight => d("Store", "orderByRight", 3, Pure, "store_order_by_right"),
             Self::StoreImmutable => d("Store", "immutable", 1, Pure, "store_immutable"),
+            // Correlated-subquery row-security — accessor-intercepted at lowering
+            // (walked into a `PExists` data leaf / a correlation); the runtime-fn
+            // names are never-called placeholders like `store_owner_column`.
+            Self::StoreCorrelate => d("Store", "correlate", 2, Pure, "store_correlate"),
+            Self::StoreExistsIn => d("Store", "existsIn", 2, Pure, "store_exists_in"),
             // ── Db.Decode ───────────────────────────────────────────────────
             Self::DbDecString => d("Db.Decode", "string", 1, Db, "db_decode_string"),
             Self::DbDecInt => d("Db.Decode", "int", 1, Db, "db_decode_int"),
@@ -4898,6 +4939,7 @@ impl StdlibKernel {
             Self::SqlIsNotNull => d("Sql", "isNotNull", 1, Db, "sql_is_not_null"),
             Self::SqlInList => d("Sql", "inList", 2, Db, "sql_in_list"),
             Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
+            Self::SqlExists => d("Sql", "exists", 2, Db, "sql_exists"),
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
             Self::DbFindJoin => d("Db", "findJoin", 8, Db, "db_find_join"),
             Self::DbFindProjection => d("Db", "findProjection", 8, Db, "db_find_projection"),
@@ -5665,6 +5707,8 @@ impl StdlibKernel {
         // Row-security policy builders (accessor-typed).
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
+        Self::StoreCorrelate,
+        Self::StoreExistsIn,
         // orderBy modifiers (accessor-typed).
         Self::StoreOrderByLeft,
         Self::StoreOrderByRight,
@@ -6243,6 +6287,7 @@ impl StdlibKernel {
         Self::SqlIsNotNull,
         Self::SqlInList,
         Self::SqlLike,
+        Self::SqlExists,
         Self::DbFindWhere,
         Self::DbFindJoin,
         Self::DbFindProjection,
@@ -7906,6 +7951,10 @@ impl StdlibKernel {
         const SQL_IN_LIST: TyShape =
             TyShape::Fun(&SQLFRAGMENT, &TyShape::Fun(&LIST_SQLVALUE, &SQLFRAGMENT));
         const SQL_LIKE: TyShape = TyShape::Fun(&SQLFRAGMENT, &TyShape::Fun(&STRING, &SQLFRAGMENT));
+        // `exists : String -> SqlFragment -> SqlFragment` — table name + inner
+        // fragment to a correlated-subquery existence test.
+        const SQL_EXISTS: TyShape =
+            TyShape::Fun(&STRING, &TyShape::Fun(&SQLFRAGMENT, &SQLFRAGMENT));
         // Server-side stream (opaque `StreamWriter` handle).
         // `emit : String -> StreamWriter -> Task ()`.
         const SW_TO_TASK_UNIT: TyShape = TyShape::Fun(&STREAM_WRITER, &TASK_UNIT);
@@ -9162,6 +9211,26 @@ impl StdlibKernel {
             TyShape::Fun(&A_TO_INT_GETTER, &INT_TO_DRAFT_A_TO_DRAFT_A);
         // Policy builders: `(row -> t) -> Policy row`.
         const STORE_POLICY_BUILDER: TyShape = TyShape::Fun(&A_TO_B_GETTER, &POLICY_A);
+        // Correlated-subquery row-security ADTs (phantom in the row type).
+        const PRED_A: TyShape = TyShape::Con(BuiltinTag::DbPred, &[A]);
+        const PRED_B: TyShape = TyShape::Con(BuiltinTag::DbPred, &[B]);
+        const SECURED_A: TyShape = TyShape::Con(BuiltinTag::DbSecured, &[A]);
+        // `correlate : (share -> t) -> (row -> t) -> Pred share`
+        // (share = var(0) = A, t = var(1) = B, row = var(2) = C).
+        const STORE_CORRELATE: TyShape = {
+            const SHARE_TO_T: TyShape = TyShape::Fun(&A, &B);
+            const ROW_TO_T: TyShape = TyShape::Fun(&C, &B);
+            const ROW_TO_T_TO_PRED: TyShape = TyShape::Fun(&ROW_TO_T, &PRED_A);
+            TyShape::Fun(&SHARE_TO_T, &ROW_TO_T_TO_PRED)
+        };
+        // `existsIn : Secured share -> (share -> row -> Pred share) -> Pred row`
+        // (share = var(0) = A, row = var(1) = B).
+        const STORE_EXISTS_IN: TyShape = {
+            const ROW_TO_PRED_SHARE: TyShape = TyShape::Fun(&B, &PRED_A);
+            const SHARE_TO_ROW_TO_PRED_SHARE: TyShape = TyShape::Fun(&A, &ROW_TO_PRED_SHARE);
+            const LAMBDA_TO_PRED_ROW: TyShape = TyShape::Fun(&SHARE_TO_ROW_TO_PRED_SHARE, &PRED_B);
+            TyShape::Fun(&SECURED_A, &LAMBDA_TO_PRED_ROW)
+        };
         // `orderByLeft : (a -> k) -> Order -> Joined a b -> Joined a b` (k = var(2)).
         const JOINED_TO_JOINED: TyShape = TyShape::Fun(&JOINED_A_B, &JOINED_A_B);
         const ORDER_TO_JOINED_TO_JOINED: TyShape = TyShape::Fun(&DB_ORDER, &JOINED_TO_JOINED);
@@ -9886,6 +9955,7 @@ impl StdlibKernel {
             }
             Self::SqlInList => Some(&SQL_IN_LIST),
             Self::SqlLike => Some(&SQL_LIKE),
+            Self::SqlExists => Some(&SQL_EXISTS),
 
             // ── Ipe.Ui layout / element / container. ──
             Self::UiLayout => Some(&UI_LAYOUT),
@@ -10387,6 +10457,8 @@ impl StdlibKernel {
             Self::StoreDefaultText => Some(&STORE_DEFAULT_TEXT),
             Self::StoreDefaultInt => Some(&STORE_DEFAULT_INT),
             Self::StoreOwnerColumn | Self::StoreImmutable => Some(&STORE_POLICY_BUILDER),
+            Self::StoreCorrelate => Some(&STORE_CORRELATE),
+            Self::StoreExistsIn => Some(&STORE_EXISTS_IN),
             Self::StoreOrderByLeft => Some(&STORE_ORDER_BY_LEFT),
             Self::StoreOrderByRight => Some(&STORE_ORDER_BY_RIGHT),
 
@@ -10481,6 +10553,12 @@ impl StdlibKernel {
         // ── Row-security policy builders — arity-1 (accessor only) ───────────
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
+        // ── Correlated-subquery row-security — arity-2 ───────────────────────
+        // `correlate` (two accessors) and `existsIn` (Secured + a two-binder
+        // lambda) are both walked structurally at lowering, never emitted as a
+        // runtime call.
+        Self::StoreCorrelate,
+        Self::StoreExistsIn,
         // ── orderBy modifiers — arity-3 (accessor + Order + Joined) ──────────
         Self::StoreOrderByLeft,
         Self::StoreOrderByRight,
@@ -10943,6 +11021,8 @@ impl StdlibKernel {
             | Self::StoreDefaultInt
             | Self::StoreOwnerColumn
             | Self::StoreImmutable
+            | Self::StoreCorrelate
+            | Self::StoreExistsIn
             | Self::StoreOrderByLeft
             | Self::StoreOrderByRight
             | Self::ListMap
@@ -11674,6 +11754,7 @@ impl StdlibKernel {
             | Self::SqlIsNotNull
             | Self::SqlInList
             | Self::SqlLike
+            | Self::SqlExists
             | Self::SecretFromString
             | Self::SecretReveal
             | Self::SecretUse

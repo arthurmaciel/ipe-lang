@@ -22745,6 +22745,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StoreLteCol
                 | KernelFn::StoreLike
                 | KernelFn::StoreInListCol
+                // Correlated-subquery row-security (arity 2). `correlate` (two
+                // accessors) and `existsIn` (Secured + a two-binder lambda) are
+                // intercepted at lowering; this is the defensive fallback count.
+                | KernelFn::StoreCorrelate
+                | KernelFn::StoreExistsIn
                 // Accessor-typed column-spec builders (arity 2: accessor + store).
                 | KernelFn::StorePrimaryKey
                 | KernelFn::StoreSerial
@@ -23865,7 +23870,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SqlAnd
                 | KernelFn::SqlOr
                 | KernelFn::SqlInList
-                | KernelFn::SqlLike,
+                | KernelFn::SqlLike
+                // `exists : String -> SqlFragment -> SqlFragment`.
+                | KernelFn::SqlExists,
             ) => Ok(2),
             // ── Db.findWhere / Db.deleteWhere — arity 3 ─────────
             // `findWhere : Db -> String -> SqlFragment -> Task Error (List Row)`
@@ -24780,6 +24787,7 @@ impl<'a> Lowerer<'a> {
                     ("Sql", "isNotNull") => Ok(Callee::Kernel(KernelFn::SqlIsNotNull)),
                     ("Sql", "inList") => Ok(Callee::Kernel(KernelFn::SqlInList)),
                     ("Sql", "like") => Ok(Callee::Kernel(KernelFn::SqlLike)),
+                    ("Sql", "exists") => Ok(Callee::Kernel(KernelFn::SqlExists)),
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
                     ("Db", "findJoin") => Ok(Callee::Kernel(KernelFn::DbFindJoin)),
                     ("Db", "findProjection") => Ok(Callee::Kernel(KernelFn::DbFindProjection)),
@@ -24821,6 +24829,9 @@ impl<'a> Lowerer<'a> {
                     // Row-security policy builders — intercepted at lowering.
                     ("Store", "ownerColumn") => Ok(Callee::Kernel(KernelFn::StoreOwnerColumn)),
                     ("Store", "immutable") => Ok(Callee::Kernel(KernelFn::StoreImmutable)),
+                    // Correlated-subquery row-security — intercepted at lowering.
+                    ("Store", "correlate") => Ok(Callee::Kernel(KernelFn::StoreCorrelate)),
+                    ("Store", "existsIn") => Ok(Callee::Kernel(KernelFn::StoreExistsIn)),
                     // orderBy modifiers — intercepted at lowering.
                     ("Store", "orderByLeft") => Ok(Callee::Kernel(KernelFn::StoreOrderByLeft)),
                     ("Store", "orderByRight") => Ok(Callee::Kernel(KernelFn::StoreOrderByRight)),

@@ -1512,7 +1512,11 @@ pub fn emit_db_call(
         | KernelFn::SqlNot
         | KernelFn::SqlIsNull
         | KernelFn::SqlIsNotNull
-        | KernelFn::SqlLike => Ok(None),
+        | KernelFn::SqlLike
+        // `Sql.exists : String -> SqlFragment -> SqlFragment` takes a plain
+        // `String` table name and a `SqlFragment` — no `Db` handle, no List
+        // projection, so the standard call path emits it correctly.
+        | KernelFn::SqlExists => Ok(None),
         // A Db kernel that reached this arm is a compiler bug: either add a
         // custom projection arm above, or add it to the standard-path list.
         // This arm is unreachable for any KernelFn variant listed above, so
