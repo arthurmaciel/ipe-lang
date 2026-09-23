@@ -247,20 +247,25 @@ pub const CAPABILITIES: &[RuntimeCapability] = &[
         covers: &[RuntimeFeature::Debugger],
         wasip1_legal: false,
     },
-    // The loopback dev-loop control channel for a TERMINAL shape. A `Tui.tea` /
-    // `Cli.tea` app has no HTTP control port, so its appearance hot-swap (and, on
-    // `--debugger`, its time-travel commands) ride the `control-wire` loopback
-    // socket instead. Selected ONLY for a dev-loop build of a terminal shape:
-    // `hot_appearance` (armed by `ipe watch`) or `debugger` (armed by `ipe
-    // build/run --debugger`), AND a terminal view (`uses_tui || uses_console`).
-    // A plain `ipe build` / `ipe release` arms neither dev-loop flag, so a
-    // production terminal artifact selects it not — the control server is absent
-    // from production by construction (dev == prod by absence). The web shape
-    // reaches the control module through its `server` feature and `debugger`
-    // implies `control-wire` in the crate graph, so this row is the terminal
-    // shape's ONLY selector — never double-counted (the feature set is a set).
+    // The loopback dev-loop control channel for a repaintable TERMINAL shape. A
+    // `Tui.tea` app has no HTTP control port, so its appearance hot-swap rides the
+    // `control-wire` loopback socket instead. Selected ONLY for an `ipe watch`
+    // build of a tui view: `hot_appearance` AND `uses_tui`. A plain `ipe build` /
+    // `ipe release` arms no dev-loop flag, so a production terminal artifact
+    // selects it not — the control server is absent from production by
+    // construction (dev == prod by absence).
+    //
+    // A cli (`uses_console`) is excluded: it has no repaintable appearance
+    // surface to hot-swap, and its dev-loop debugger records to the
+    // `IPE_DEBUGGER_RECORD` dump at loop exit rather than driving the control
+    // socket accept-loop. The `debugger` flag is likewise NOT a disjunct here:
+    // the `debugger` Cargo feature already implies `control-wire` in the crate
+    // graph (`debugger = ["control-wire", …]`), so a `--debugger` build pulls the
+    // control codec transitively without this row — this row is the pure-
+    // `hot_appearance` tui selector, never double-counting (the feature set is a
+    // set). The web shape reaches the control module through its `server` feature.
     RuntimeCapability {
-        gate: |ctx| (ctx.hot_appearance || ctx.debugger) && (ctx.uses_tui || ctx.uses_console),
+        gate: |ctx| ctx.hot_appearance && ctx.uses_tui,
         select: |_| RuntimeFeature::ControlWire,
         covers: &[RuntimeFeature::ControlWire],
         wasip1_legal: false,

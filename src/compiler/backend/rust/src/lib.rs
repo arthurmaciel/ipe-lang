@@ -2301,22 +2301,26 @@ impl<'a> EmitCtx<'a> {
             // Appearance hot-swap routes literals through the crate-root
             // `LiteralTable` (`ipe_runtime::literal_table`), a pure module a
             // dev-loop build compiles under either `web-core` (the served render
-            // host) or `control-wire` (the loopback tui/cli socket). It is a
-            // VIEW concern: a viewless shape (worker/script) has no appearance to
-            // hot-swap, so hoisting stays fenced to the view-bearing shapes.
+            // host) or `control-wire` (the loopback tui socket). It is a
+            // repaintable-VIEW concern: a shape with no appearance surface to
+            // repaint (worker/script, and a line-oriented `Cli.tea` — a cli emits
+            // a transcript, not a repaintable frame) has nothing to hot-swap, so
+            // hoisting stays fenced to the repaintable view shapes.
             //   • `uses_web` — the served web app, patched over its HTTP control
             //     port.
-            //   • `uses_tui || uses_console` — the terminal `Tui.tea` /
-            //     line-oriented `Cli.tea` app, patched over the loopback control
-            //     socket (no HTTP endpoint); the same `tui` runtime module backs
-            //     both drive axes.
-            // A pure webview shape (`uses_webview && !uses_web`) is gated off: it
-            // ships `web-core` (so the table would build) but runs no control
-            // port to push to. With the flag off (`ipe build`/`ipe release`) the
-            // whole hoist is inert and the emit is byte-identical to the
-            // direct-literal form — so a release artifact never references the
-            // dev-loop table. `emit_view_shape_selects_hoist` pins each shape.
-            hot_appearance: hot_appearance && (uses_web || uses_tui || uses_console),
+            //   • `uses_tui` — the terminal `Tui.tea` app, patched over the
+            //     loopback control socket (no HTTP endpoint).
+            // A cli (`uses_console`) is excluded: it has no repaintable
+            // appearance surface, and its dev-loop debugger uses the
+            // `IPE_DEBUGGER_RECORD` dump at loop exit, not the control socket. A
+            // pure webview shape (`uses_webview && !uses_web`) is likewise gated
+            // off: it ships `web-core` (so the table would build) but runs no
+            // control port to push to. With the flag off (`ipe build`/`ipe
+            // release`) the whole hoist is inert and the emit is byte-identical to
+            // the direct-literal form — so a release artifact never references the
+            // dev-loop table. `tui_shape_hoists`, `pure_webview_shape_does_not_hoist`,
+            // and `web_content_kernel_does_not_hoist_on_tui_shape` pin the shapes.
+            hot_appearance: hot_appearance && (uses_web || uses_tui),
             ui_structural_wrappers,
             scope: ScopeState::default(),
             web_capabilities: program.imported_web_capabilities.clone(),
