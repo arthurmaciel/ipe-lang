@@ -105,7 +105,7 @@ pub fn classify(name: &str) -> Hermetic {
         "version" | "capabilities" | "doc" | "diff" => Hermetic::Snapshot,
 
         // Cargo / build / run / execute — heavy, environment-dependent output.
-        "build" | "run" | "release" | "test" | "verify" | "exec" | "watch" => {
+        "build" | "run" | "release" | "test" | "verify" | "exec" | "watch" | "debugger" => {
             Hermetic::Excluded("runs cargo / builds / executes — flaky transcript")
         }
 

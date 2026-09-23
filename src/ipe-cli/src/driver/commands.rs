@@ -2351,6 +2351,7 @@ fn run_debugger_record(tail: &[String]) -> Result<(), CliError> {
 /// `ipe debugger replay <log>` — re-emit a recorded session's steps through the
 /// fail-closed plain output boundary.
 fn run_debugger_replay(tail: &[String]) -> Result<(), CliError> {
+    use std::io::Write as _;
     let [log] = tail else {
         return Err(CliError::Usage(
             "ipe debugger replay: expected exactly one <log> path",
