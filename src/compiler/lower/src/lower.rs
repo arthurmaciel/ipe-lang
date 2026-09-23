@@ -14342,6 +14342,26 @@ impl<'a> Lowerer<'a> {
             )
     }
 
+    /// is `(module, name)` the `Ipe.Db.Store.ExistsRef` correlated-subquery leaf —
+    /// module `["Ipe", "Db", "Store"]`, name `ExistsRef`? Its `row` argument is a
+    /// PHANTOM: the `ExistsRef` constructor holds only transparent data (column
+    /// strings and a `shareRead : Pred row`, itself phantom-dropped) — never a
+    /// `row` value. It is dropped at lowering so the emitted struct is the
+    /// non-generic `IpeDbStoreExistsRef`; otherwise the `PExists (ExistsRef row)`
+    /// field reintroduces the phantom `row` as a live generic that the enclosing
+    /// (phantom-dropped, non-generic) `Pred` no longer quantifies — an
+    /// unquantified type variable at emit (`GenericScope::rust_name`), the twin of
+    /// the `Cond` / `Pred` / `Select` erasure.
+    fn is_exists_ref_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("ExistsRef")
+            && matches!(
+                module,
+                [a, b, c] if self.interner.resolve(*a) == Some("Ipe")
+                    && self.interner.resolve(*b) == Some("Db")
+                    && self.interner.resolve(*c) == Some("Store")
+            )
+    }
+
     /// is `(module, name)` the `Ipe.Db.Store.Select` column-projection ADT —
     /// module `["Ipe", "Db", "Store"]`, name `Select`? Its `row` argument is a
     /// PHANTOM: no `Select` constructor carries a `row` value (the parameter
@@ -14457,6 +14477,7 @@ impl<'a> Lowerer<'a> {
         let cond_phantom = self.is_cond_con(&u.home, u.name)
             || self.is_policy_con(&u.home, u.name)
             || self.is_pred_con(&u.home, u.name)
+            || self.is_exists_ref_con(&u.home, u.name)
             || self.is_select_con(&u.home, u.name);
         let type_params = if cond_phantom {
             Vec::new()
@@ -16465,6 +16486,7 @@ impl<'a> Lowerer<'a> {
                         || self.is_cond_con(home, *name)
                         || self.is_policy_con(home, *name)
                         || self.is_pred_con(home, *name)
+                        || self.is_exists_ref_con(home, *name)
                         || self.is_select_con(home, *name)
                     {
                         Vec::new()
@@ -17796,6 +17818,7 @@ impl<'a> Lowerer<'a> {
                         || self.is_cond_con(module, *name)
                         || self.is_policy_con(module, *name)
                         || self.is_pred_con(module, *name)
+                        || self.is_exists_ref_con(module, *name)
                         || self.is_select_con(module, *name)
                     {
                         Vec::new()
