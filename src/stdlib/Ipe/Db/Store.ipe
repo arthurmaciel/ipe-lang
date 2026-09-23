@@ -4752,7 +4752,14 @@ readOnly : Pred row -> Policy row
 readOnly p =
     case denyAll of
         Policy r ->
-            Policy { r | read = p }
+            Policy
+                { read = p
+                , insert = r.insert
+                , update = r.update
+                , delete = r.delete
+                , owners = r.owners
+                , immutables = r.immutables
+                }
 
 
 -- | `ownerColumn accessor` — the owner-scoped policy: all four operations are
@@ -4801,12 +4808,12 @@ ownerColumnNamed col =
     case denyAll of
         Policy r ->
             Policy
-                { r
-                    | read = POwner col
-                    , insert = POwner col
-                    , update = POwner col
-                    , delete = POwner col
-                    , owners = [ col ]
+                { read = POwner col
+                , insert = POwner col
+                , update = POwner col
+                , delete = POwner col
+                , owners = [ col ]
+                , immutables = r.immutables
                 }
 
 
@@ -4814,7 +4821,14 @@ immutableNamed : String -> Policy row
 immutableNamed col =
     case allowAll of
         Policy r ->
-            Policy { r | immutables = [ col ] }
+            Policy
+                { read = r.read
+                , insert = r.insert
+                , update = r.update
+                , delete = r.delete
+                , owners = r.owners
+                , immutables = [ col ]
+                }
 
 
 -- | `andPolicy extra base` — compose two policies: conjoin each operation's
@@ -4853,7 +4867,14 @@ alsoInsert : Pred row -> Policy row -> Policy row
 alsoInsert p base =
     case base of
         Policy r ->
-            Policy { r | insert = p }
+            Policy
+                { read = r.read
+                , insert = p
+                , update = r.update
+                , delete = r.delete
+                , owners = r.owners
+                , immutables = r.immutables
+                }
 
 
 -- | `alsoUpdate p base` — open the update path of `base` to `p`.
@@ -4861,7 +4882,14 @@ alsoUpdate : Pred row -> Policy row -> Policy row
 alsoUpdate p base =
     case base of
         Policy r ->
-            Policy { r | update = p }
+            Policy
+                { read = r.read
+                , insert = r.insert
+                , update = p
+                , delete = r.delete
+                , owners = r.owners
+                , immutables = r.immutables
+                }
 
 
 -- | `alsoDelete p base` — open the delete path of `base` to `p`.
@@ -4869,7 +4897,14 @@ alsoDelete : Pred row -> Policy row -> Policy row
 alsoDelete p base =
     case base of
         Policy r ->
-            Policy { r | delete = p }
+            Policy
+                { read = r.read
+                , insert = r.insert
+                , update = r.update
+                , delete = p
+                , owners = r.owners
+                , immutables = r.immutables
+                }
 
 
 -- ─── `explain` — render a policy as English (emitted above the SQL) ──
