@@ -1,24 +1,40 @@
 module Main exposing (main)
 
--- SEAL smoke for the row-security Policy algebra + `secured` constructor
--- (DB Pillar D, slice 1). Two stores exercise both the happy path and the
--- fail-closed re-validation:
+-- SEAL smoke for the row-security `Pred` / `Policy` algebra + `secured`
+-- constructor + simplifier + `explain`. Every line is a pure check (no DB), so
+-- the emitted project builds and runs deterministically under `IPE_E2E=1`.
+--
+-- Happy path + fail-closed re-validation + the algebra's documented identities:
 --
 --   * `goodStore` is a `Codec.auto`-derived store over `Doc`, so its columns are
---     `author` / `created_at` / `body` (the accessor `.createdAt` snake_cases to
---     `created_at`, matching `Codec.auto`). The policy
+--     `author` / `created_at` / `body`. The re-expressed conjoined policy
 --     `ownerColumn .author |> andPolicy (immutable .createdAt)` names only real
---     columns, so `secured` returns `Ok` → prints `good:ok`.
---   * `thinStore` is built from a hand-assembled codec whose SRecord shape names
---     only `body`, so `author` is NOT one of its columns even though the record
---     has an `author` field. `secured (ownerColumn .author) thinStore`
---     re-validates the policy column against the store's columns and returns a
---     typed `Err` → prints `thin:err` (deny-by-default: a policy over a
---     non-existent column is never a silent no-op).
+--     columns, so `secured` returns `Ok` → `good:ok`.
+--   * `thinStore` is built from a hand-assembled codec whose shape names only
+--     `body`, so `author` is NOT one of its columns. `secured (ownerColumn
+--     .author)` re-validates the policy column and returns a typed `Err` →
+--     `thin:err` (deny-by-default: a policy over a non-existent column is never a
+--     silent no-op).
+--   * `secured` re-validates a column named DEEP in the algebra, not only at the
+--     top level: an `anyOf [ matchWhere (eq .author …), matchWhere (eq .body …) ]`
+--     over `thinStore` (which lacks `author`) still fails closed → `deep:err`.
+--   * Simplifier identities, observed through `explain`:
+--       `anyOf []` ⇒ `never`             → `emptyany:no row (denied)`
+--       `allOf []` ⇒ `always`            → `emptyall:every row`
+--       `anyOf [ p, always ]` ⇒ `always` → `anyalways:every row`
+--       `allOf [ p, never ]` ⇒ `never`   → `allnever:no row (denied)`
+--   * `readOnly always` leaves every write `never` (fail-closed): its update
+--     predicate explains as `no row (denied)` → `readonly:no row (denied)`.
 --
 -- Expected output:
 --   good:ok
 --   thin:err
+--   deep:err
+--   emptyany:no row (denied)
+--   emptyall:every row
+--   anyalways:every row
+--   allnever:no row (denied)
+--   readonly:no row (denied)
 
 
 import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
@@ -27,8 +43,9 @@ import Ipe.Error as Error exposing (Error)
 import Ipe.Io as Io
 import Ipe.Json.Decode as Decode
 import Ipe.Json.Encode as Encode
-import Ipe.Result as Result exposing (Result(..))
+import Ipe.List as List
 import Ipe.String as String
+import Ipe.Result as Result exposing (Result(..))
 import Ipe.Task as Task
 
 
@@ -64,17 +81,40 @@ thinCodec =
         }
 
 
--- The conjoined policy: an owner-column rule over `.author` AND an
--- immutable-column rule over `.createdAt`.
+-- The re-expressed conjoined policy: owner-scoped on `.author`, `.createdAt`
+-- immutable.
 docPolicy : Store.Policy Doc
 docPolicy =
     Store.ownerColumn .author
         |> Store.andPolicy (Store.immutable .createdAt)
 
 
+-- A predicate naming `author` buried inside a disjunction, to prove `secured`
+-- re-validates columns across the whole algebra rather than only at the top.
+deepPolicy : Store.Policy Doc
+deepPolicy =
+    Store.readOnly
+        (Store.anyOf
+            [ Store.matchWhere (Store.eq .author "a")
+            , Store.matchWhere (Store.eq .body "b")
+            ]
+        )
+
+
 main : Task Error ()
 main =
-    Io.println (String.join "\n" [ goodLine, thinLine ])
+    Io.println
+        (String.join "\n"
+            [ goodLine
+            , thinLine
+            , deepLine
+            , identityLine "emptyany" (Store.anyOf [])
+            , identityLine "emptyall" (Store.allOf [])
+            , identityLine "anyalways" (Store.anyOf [ Store.matchWhere (Store.eq .body "b"), Store.always ])
+            , identityLine "allnever" (Store.allOf [ Store.matchWhere (Store.eq .body "b"), Store.never ])
+            , readOnlyLine
+            ]
+        )
 
 
 -- `secured` over a store whose columns include every policy column → `Ok`.
@@ -94,7 +134,7 @@ goodLine =
 
 
 -- `secured (ownerColumn .author)` over a store whose columns lack `author` →
--- fail-closed typed `Err` (deny-by-default re-validation).
+-- fail-closed typed `Err`.
 thinLine : String
 thinLine =
     case Store.fromCodec "docs2" thinCodec of
@@ -108,3 +148,67 @@ thinLine =
 
                 Err _ ->
                     "thin:err"
+
+
+-- `secured` must reject a column named deep in the algebra, not only top-level.
+deepLine : String
+deepLine =
+    case Store.fromCodec "docs3" thinCodec of
+        Err _ ->
+            "deep:build-err"
+
+        Ok store ->
+            case Store.secured deepPolicy store of
+                Ok _ ->
+                    "deep:ok"
+
+                Err _ ->
+                    "deep:err"
+
+
+-- Render a bare read predicate through `explain`, extracting the read line so a
+-- simplifier identity is observable as text.
+identityLine : String -> Store.Pred Doc -> String
+identityLine label pred =
+    String.concat [ label, ":", readExplanation (Store.readOnly pred) ]
+
+
+-- `readOnly always` leaves the update path at its fail-closed `never` default.
+readOnlyLine : String
+readOnlyLine =
+    String.concat [ "readonly:", updateExplanation (Store.readOnly Store.always) ]
+
+
+-- The `read:` clause of a policy's `explain`, reduced to its value.
+readExplanation : Store.Policy Doc -> String
+readExplanation policy =
+    clauseValue "read" policy
+
+
+-- The `update:` clause of a policy's `explain`, reduced to its value.
+updateExplanation : Store.Policy Doc -> String
+updateExplanation policy =
+    clauseValue "update" policy
+
+
+-- The value of the `explain` clause labelled `<label>` — the text after the
+-- label's colon, trimmed — or `""` when the clause is absent.
+clauseValue : String -> Store.Policy Doc -> String
+clauseValue label policy =
+    case List.head (List.filter (String.startsWith (String.append label ":")) (String.lines (Store.explain policy))) of
+        Just line ->
+            String.trim (afterColon line)
+
+        Nothing ->
+            ""
+
+
+-- Everything after the first `:` in `s`, or `s` unchanged when it has none.
+afterColon : String -> String
+afterColon s =
+    case String.split ":" s of
+        _ :: rest ->
+            String.join ":" rest
+
+        [] ->
+            s

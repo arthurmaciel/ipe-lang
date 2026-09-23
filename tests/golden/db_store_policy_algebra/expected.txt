@@ -1,2 +1,8 @@
 good:ok
 thin:err
+deep:err
+emptyany:no row (denied)
+emptyall:every row
+anyalways:every row
+allnever:no row (denied)
+readonly:no row (denied)

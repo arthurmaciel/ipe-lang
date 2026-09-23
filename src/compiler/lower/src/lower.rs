@@ -14191,6 +14191,24 @@ impl<'a> Lowerer<'a> {
             )
     }
 
+    /// is `(module, name)` the `Ipe.Db.Store.Pred` row-security predicate ADT —
+    /// module `["Ipe", "Db", "Store"]`, name `Pred`? Its `row` argument is a
+    /// PHANTOM: no `Pred` constructor carries a `row` value (`PMatch` holds a
+    /// `Cond`, itself phantom-dropped; `POwner` a `String`; the boolean nodes only
+    /// nested `Pred`s). It is dropped at lowering so the emitted enum is the
+    /// non-generic `IpeDbStorePred`; otherwise every construction (`PMatch …`,
+    /// `PAll …`) leaves the enum's type argument unconstrained — an uninferrable
+    /// `T` (E0283/E0392), exactly as for `Cond` / `Policy` / `Select`.
+    fn is_pred_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("Pred")
+            && matches!(
+                module,
+                [a, b, c] if self.interner.resolve(*a) == Some("Ipe")
+                    && self.interner.resolve(*b) == Some("Db")
+                    && self.interner.resolve(*c) == Some("Store")
+            )
+    }
+
     /// is `(module, name)` the `Ipe.Db.Store.Select` column-projection ADT —
     /// module `["Ipe", "Db", "Store"]`, name `Select`? Its `row` argument is a
     /// PHANTOM: no `Select` constructor carries a `row` value (the parameter
@@ -14305,6 +14323,7 @@ impl<'a> Lowerer<'a> {
         // so the decl and the references agree.
         let cond_phantom = self.is_cond_con(&u.home, u.name)
             || self.is_policy_con(&u.home, u.name)
+            || self.is_pred_con(&u.home, u.name)
             || self.is_select_con(&u.home, u.name);
         let type_params = if cond_phantom {
             Vec::new()
@@ -16312,6 +16331,7 @@ impl<'a> Lowerer<'a> {
                     let ir_args = if self.is_cache_handle_con(home, *name)
                         || self.is_cond_con(home, *name)
                         || self.is_policy_con(home, *name)
+                        || self.is_pred_con(home, *name)
                         || self.is_select_con(home, *name)
                     {
                         Vec::new()
@@ -17642,6 +17662,7 @@ impl<'a> Lowerer<'a> {
                     let ir_args = if self.is_cache_handle_con(module, *name)
                         || self.is_cond_con(module, *name)
                         || self.is_policy_con(module, *name)
+                        || self.is_pred_con(module, *name)
                         || self.is_select_con(module, *name)
                     {
                         Vec::new()
