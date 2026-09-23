@@ -5457,6 +5457,18 @@ columnIsNullable columns name =
         Just CBool ->
             False
 
+        Just CTime ->
+            False
+
+        Just CDecimal ->
+            False
+
+        Just CMoney ->
+            False
+
+        Just CBlob ->
+            False
+
         Nothing ->
             False
 
