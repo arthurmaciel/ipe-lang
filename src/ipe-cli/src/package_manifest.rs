@@ -1699,6 +1699,365 @@ const fn allocator_ctor_name(alloc: crate::build_plan::AllocatorChoice) -> &'sta
     }
 }
 
+// ── manifest writer: `ipe add` records an index dependency in package.ipe ─────
+//
+// `ipe add <name>@<ver>` must record the requirement in `package.ipe`, not only
+// in `ipe.lock`, or a fresh clone + resolve loses the dependency. The rewrite
+// upholds the reader's INERT-RECORD invariant: it edits the `dependencies = [ …
+// ]` list literal in place, never emitting code that would need evaluation. It
+// is a *located* textual splice, not a whole-file re-render: the manifest is
+// parsed once (the reader's own evaluation-free `parse_module`) to locate the
+// exact byte span of the `dependencies` list and its `dep "…" "…"` entries, then
+// the minimal edit is applied to those bytes so a hand-authored manifest keeps
+// its formatting, comments, and sibling entries. A full re-render is avoided
+// deliberately — it would reflow the entire file.
+
+/// Upsert an INDEX dependency `dep "<name>" "<req>"` into a `package.ipe`'s
+/// `dependencies` list, preserving the author's formatting.
+///
+/// Idempotent by construction: an absent `dependencies` field gains one holding
+/// the entry; an existing list gains the entry appended; a re-add of the same
+/// package updates its version requirement in place with no duplicate. A
+/// `depGit` / `depGitRev` / `depPath` escape already bearing the same name is
+/// NEVER overwritten or converted — the escape is author-owned and lockfile-only
+/// by design, so `ipe add` for an index dep that collides with an escape is a
+/// typed refusal rather than a silent corruption. The emitted entry re-parses
+/// through [`read_package_manifest`] (the round-trip SEAL).
+///
+/// # Errors
+/// [`CliError::Io`] if the manifest cannot be read or written;
+/// [`CliError::Pipeline`] if the manifest does not parse; [`CliError::UsageOwned`]
+/// if the manifest shape is unexpected (no `package` record, a non-list
+/// `dependencies`) or the name collides with an author-written escape entry.
+pub fn upsert_index_dependency(
+    manifest_path: &Path,
+    name: &str,
+    req: &semver::VersionReq,
+) -> Result<(), CliError> {
+    let text = crate::io_bounded::read_to_string_capped(
+        manifest_path,
+        crate::io_bounded::MANIFEST_READ_CAP,
+    )?;
+    let entry = format!("dep {} {}", quote(name), quote(&req.to_string()));
+    let updated = edit_dependencies_list(&text, manifest_path, name, Some(&entry))?;
+    write_manifest_file(manifest_path, &updated)
+}
+
+/// Remove an index (or escape) dependency entry named `name` from a
+/// `package.ipe`'s `dependencies` list, preserving the rest of the file. A name
+/// that is not present is a no-op (the file is rewritten unchanged), so an
+/// add→remove cycle leaves the manifest as it began.
+///
+/// # Errors
+/// As [`upsert_index_dependency`], minus the escape-collision refusal (a remove
+/// legitimately drops any matching entry, escape or index).
+pub fn remove_manifest_dependency(manifest_path: &Path, name: &str) -> Result<(), CliError> {
+    let text = crate::io_bounded::read_to_string_capped(
+        manifest_path,
+        crate::io_bounded::MANIFEST_READ_CAP,
+    )?;
+    let updated = edit_dependencies_list(&text, manifest_path, name, None)?;
+    write_manifest_file(manifest_path, &updated)
+}
+
+/// Write `text` to `manifest_path`, mapping an IO failure to [`CliError::Io`].
+fn write_manifest_file(manifest_path: &Path, text: &str) -> Result<(), CliError> {
+    std::fs::write(manifest_path, text).map_err(|e| CliError::Io {
+        path: manifest_path.to_path_buf(),
+        source: e,
+    })
+}
+
+/// The located byte span of a dependency entry inside the `dependencies` list,
+/// alongside whether it is an author-written escape (`depGit`/`depGitRev`/
+/// `depPath`) — the reader's own dependency-builder vocabulary, mirrored here so
+/// the writer never invents a shape the reader would reject.
+struct LocatedDep {
+    /// The whole `dep "…" "…"` entry expression span (used by remove/replace).
+    entry: Span,
+    /// Whether this entry is an author-written escape (`depGit`/`depGitRev`/
+    /// `depPath`) rather than an index `dep` — an escape is never index-rewritten.
+    is_escape: bool,
+}
+
+impl LocatedDep {
+    /// Whether this located entry is an author-written git/path escape.
+    const fn is_escape(&self) -> bool {
+        self.is_escape
+    }
+}
+
+/// Apply the located edit to a `package.ipe`'s `dependencies` list.
+///
+/// `Some(entry)` upserts the index `entry` text (`dep "…" "…"`); `None` removes
+/// any entry named `name`. The manifest is parsed once (evaluation-free) to
+/// locate the record, the list, and any same-named entry; the returned string is
+/// the original bytes with the one minimal splice applied.
+fn edit_dependencies_list(
+    text: &str,
+    manifest_path: &Path,
+    name: &str,
+    entry: Option<&str>,
+) -> Result<String, CliError> {
+    let mut interner = Interner::new();
+    let module =
+        ipe_parse::parse_module(text, &mut interner).map_err(|diag| CliError::Pipeline {
+            file: manifest_path.to_path_buf(),
+            src: text.to_owned(),
+            diag: Box::new(diag),
+        })?;
+
+    let record = locate_package_record(&module, &interner, manifest_path)?;
+    let deps_field = record.iter().find(|(fname, _)| {
+        interner
+            .resolve(fname.value)
+            .is_some_and(|n| n == "dependencies")
+    });
+
+    // No `dependencies` field yet: a remove is a no-op; an add inserts a new
+    // field before the top-level record's closing brace.
+    let Some((_, deps_expr)) = deps_field else {
+        return match entry {
+            Some(entry) => insert_new_dependencies_field(text, record, name, entry, manifest_path),
+            None => Ok(text.to_owned()),
+        };
+    };
+
+    let Expr_::List(items) = &deps_expr.value else {
+        return Err(usage(
+            "package.ipe: `dependencies` must be a list literal `[ … ]` for `ipe add` to edit it",
+        ));
+    };
+
+    let existing = locate_dep_entry(items, &interner, name);
+    match (entry, existing) {
+        // Update in place: an index entry is rewritten to the canonical
+        // `dep "…" "…"`; an escape is author-owned and never overwritten.
+        (Some(entry), Some(found)) => {
+            if found.is_escape() {
+                return Err(usage_owned(format!(
+                    "package.ipe: `{name}` is already a git/path escape dependency — `ipe add` \
+                     records only an index requirement and never rewrites an author-written \
+                     `depGit`/`depGitRev`/`depPath` entry. Edit the escape by hand, or remove it \
+                     first."
+                )));
+            }
+            Ok(splice(text, found.entry, entry))
+        }
+        // Append a new entry before the list's closing `]`.
+        (Some(entry), None) => Ok(append_into_list(text, deps_expr.span, items, entry)),
+        // Remove the matched entry (escape or index).
+        (None, Some(found)) => Ok(remove_from_list(text, items, &found)),
+        // Remove of an absent entry is a no-op.
+        (None, None) => Ok(text.to_owned()),
+    }
+}
+
+/// Locate the top-level `package = { … }` record's field list, reusing the
+/// reader's module-shape expectations (a single `package` value bound to a
+/// record literal). Any other shape is a typed refusal.
+fn locate_package_record<'m>(
+    module: &'m Module,
+    interner: &Interner,
+    _manifest_path: &Path,
+) -> Result<&'m [(Located<ipe_intern::Symbol>, Expr)], CliError> {
+    let package = module
+        .values
+        .iter()
+        .find(|v| interner.resolve(v.value.name.value) == Some("package"))
+        .ok_or_else(|| usage("package.ipe: no top-level `package = …` binding to edit"))?;
+    match &package.value.body.value {
+        Expr_::Record(fields) => Ok(fields.as_slice()),
+        _ => Err(usage(
+            "package.ipe: the `package` value must be a record literal `{ … }` for `ipe add` to \
+             edit it",
+        )),
+    }
+}
+
+/// Find the dependency entry named `name` in the `dependencies` list items,
+/// classifying it as an index `dep` or an author-written escape. A malformed
+/// entry is skipped — the reader validates entries at read time; the writer only
+/// needs to find the same-named one to edit.
+fn locate_dep_entry(items: &[Expr], interner: &Interner, name: &str) -> Option<LocatedDep> {
+    for item in items {
+        let Expr_::Call(callee, args) = &item.value else {
+            continue;
+        };
+        let builder = match &callee.value {
+            Expr_::VarLocal(n) | Expr_::VarQual(_, n) => interner.resolve(*n),
+            _ => None,
+        };
+        let Some(builder) = builder else { continue };
+        // The dependency name is the first string-literal argument of every
+        // builder (`dep`/`depGit`/`depGitRev`/`depPath`).
+        let entry_name = match args.first().map(|a| &a.value) {
+            Some(Expr_::Str(s)) => s.as_str(),
+            _ => continue,
+        };
+        if entry_name != name {
+            continue;
+        }
+        // The index `dep` builder carries a version requirement; the escapes
+        // (`depGit`/`depGitRev`/`depPath`) carry a url/path/rev and are never
+        // index-rewritten. Any non-`dep` builder is treated as an escape.
+        return Some(LocatedDep {
+            entry: item.span,
+            is_escape: builder != "dep",
+        });
+    }
+    None
+}
+
+/// Splice `replacement` in for the byte range `[span.lo, span.hi)` of `text`.
+/// A span whose bounds fall outside the source degrades to returning `text`
+/// unchanged (totality — the parser produced the span from this same source, so
+/// out-of-range is not expected, but the writer never panics on a splice).
+fn splice(text: &str, span: Span, replacement: &str) -> String {
+    let lo = span.lo as usize;
+    let hi = span.hi as usize;
+    let (Some(before), Some(after)) = (text.get(..lo), text.get(hi..)) else {
+        return text.to_owned();
+    };
+    format!("{before}{replacement}{after}")
+}
+
+/// Append `entry` as a new element before the closing `]` of the `dependencies`
+/// list, matching the surrounding entry indentation so the edit blends in. An
+/// empty list becomes `[ entry ]`; a populated list gains a new `, entry` line
+/// aligned to the last entry's column.
+fn append_into_list(text: &str, list_span: Span, items: &[Expr], entry: &str) -> String {
+    let hi = list_span.hi as usize;
+    // Insert just before the list's closing bracket. `list_span.hi` is the
+    // exclusive end (past `]`), so step back to the `]` byte.
+    let Some(close_idx) = text.get(..hi).and_then(|s| s.rfind(']')) else {
+        return text.to_owned();
+    };
+    let (Some(before), Some(after)) = (text.get(..close_idx), text.get(close_idx..)) else {
+        return text.to_owned();
+    };
+    if items.is_empty() {
+        // `[]` / `[  ]` → `[ dep "…" "…" ]`, collapsing any interior whitespace.
+        let head = before.trim_end_matches(|c: char| c.is_whitespace());
+        let head = head.strip_suffix('[').unwrap_or(head);
+        return format!("{head}[ {entry} ]{}", after.trim_start_matches(']'));
+    }
+    // Reuse the leading whitespace of the last entry's line as the new entry's
+    // indentation, so the appended `, entry` aligns with its siblings.
+    let last_lo = items
+        .last()
+        .map_or(close_idx, |last| last.span.lo as usize)
+        .min(before.len());
+    let indent = entry_line_indent(text, last_lo);
+    format!(
+        "{}, {entry}\n{indent}{after}",
+        ensure_trailing_newline(before, &indent)
+    )
+}
+
+/// The leading whitespace of the source line containing byte offset `at` — the
+/// indentation to reuse for a newly appended list entry.
+fn entry_line_indent(text: &str, at: usize) -> String {
+    let line_start = text
+        .get(..at)
+        .map_or(0, |s| s.rfind('\n').map_or(0, |i| i + 1));
+    text.get(line_start..at)
+        .unwrap_or("")
+        .chars()
+        .take_while(|c| c.is_whitespace() && *c != '\n')
+        .collect()
+}
+
+/// Ensure `before` ends with a newline + `indent` so the appended `, entry`
+/// begins on its own aligned line. When `before` already ends at a line's
+/// indentation (the common multi-line list case) it is returned unchanged.
+fn ensure_trailing_newline(before: &str, indent: &str) -> String {
+    if before.ends_with('\n') {
+        format!("{before}{indent}")
+    } else if before.ends_with(|c: char| c.is_whitespace()) {
+        before.to_owned()
+    } else {
+        format!("{before}\n{indent}")
+    }
+}
+
+/// Remove the located entry from the `dependencies` list, also dropping the
+/// separator (`,`) and surrounding blank so no dangling comma remains. The
+/// removal spans from the end of the previous sibling (or the opening `[`) to the
+/// end of this entry when it is not the last, else back to the previous sibling.
+fn remove_from_list(text: &str, items: &[Expr], found: &LocatedDep) -> String {
+    let lo = found.entry.lo as usize;
+    let hi = found.entry.hi as usize;
+    // Find this entry's position and its neighbours to absorb one separator.
+    let idx = items.iter().position(|i| i.span.lo == found.entry.lo);
+    let Some(idx) = idx else {
+        return splice(text, found.entry, "");
+    };
+    // Prefer to consume the separator + whitespace BEFORE this entry (back to the
+    // previous sibling's end); for the first entry, consume the separator AFTER
+    // it instead so the list opener stays clean.
+    let (cut_lo, cut_hi) = if idx > 0 {
+        let prev_hi = items.get(idx - 1).map_or(lo, |p| p.span.hi as usize);
+        (prev_hi, hi)
+    } else if let Some(next) = items.get(idx + 1) {
+        (lo, next.span.lo as usize)
+    } else {
+        (lo, hi)
+    };
+    let (Some(before), Some(after)) = (text.get(..cut_lo), text.get(cut_hi..)) else {
+        return splice(text, found.entry, "");
+    };
+    format!("{before}{after}")
+}
+
+/// Insert a brand-new `dependencies = [ dep "…" "…" ]` field before the closing
+/// `}` of the top-level `package` record, when no `dependencies` field exists.
+/// The field is added as a new `, dependencies = [ … ]` line aligned to the
+/// record's field indentation, so a `{ name = "x" }` gains the block without any
+/// existing field being touched.
+fn insert_new_dependencies_field(
+    text: &str,
+    record: &[(Located<ipe_intern::Symbol>, Expr)],
+    _name: &str,
+    entry: &str,
+    _manifest_path: &Path,
+) -> Result<String, CliError> {
+    // The record's own closing brace: the last field's value ends before it, so
+    // find the first `}` at or after the last field's end.
+    let after_last = record
+        .last()
+        .map_or(0, |(_, v)| v.span.hi as usize)
+        .min(text.len());
+    let Some(rel_close) = text.get(after_last..).and_then(|s| s.find('}')) else {
+        return Err(usage(
+            "package.ipe: could not locate the `package` record's closing `}` to add a dependency",
+        ));
+    };
+    let close_idx = after_last + rel_close;
+    let (Some(before), Some(after)) = (text.get(..close_idx), text.get(close_idx..)) else {
+        return Err(usage(
+            "package.ipe: the `package` record's closing `}` is out of range",
+        ));
+    };
+    // Align the new field to the last field's indentation. Elm-style manifests
+    // indent record fields and the closing brace to a common column; reuse the
+    // brace's own indentation for the `,` opener.
+    let field = format!("dependencies =\n        [ {entry} ]");
+    let indent = entry_line_indent(text, close_idx);
+    let opener = ensure_trailing_newline(before, &indent);
+    Ok(format!("{opener}, {field}\n{indent}{after}"))
+}
+
+/// A fixed-message manifest-write usage refusal.
+fn usage(message: &'static str) -> CliError {
+    CliError::Usage(message)
+}
+
+/// An owned-message manifest-write usage refusal.
+fn usage_owned(message: String) -> CliError {
+    CliError::UsageOwned(message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2472,5 +2831,176 @@ mod tests {
         );
         let reparsed = read("ships_render_out", &rendered).expect("rendered manifest re-parses");
         assert_eq!(reparsed.delivery.ships, m.delivery.ships);
+    }
+
+    // ── manifest writer: `ipe add` records a dependency in package.ipe ────────
+
+    /// Write `source` into a fresh project's `package.ipe`, run `edit`, and
+    /// return the rewritten source text. The project root carries a `src/` so
+    /// [`parse_package_manifest`] (used by callers) would find its source root.
+    fn write_and_read_manifest(
+        test_name: &str,
+        source: &str,
+        edit: impl FnOnce(&Path) -> Result<(), CliError>,
+    ) -> (String, Result<ProjectManifest, CliError>) {
+        let root = fresh_project(test_name);
+        let path = root.join(PACKAGE_IPE);
+        std::fs::write(&path, source).expect("write package.ipe");
+        let edit_result = edit(&path);
+        let text = std::fs::read_to_string(&path).expect("read back");
+        // Re-parse the rewritten manifest through the reader — the round-trip SEAL.
+        let reparsed = parse_package_manifest(&path);
+        let _ = std::fs::remove_dir_all(&root);
+        edit_result.expect("the edit itself must succeed for these fixtures");
+        (text, reparsed)
+    }
+
+    fn req(s: &str) -> semver::VersionReq {
+        s.parse().expect("valid version requirement")
+    }
+
+    const MANIFEST_HEADER: &str =
+        "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\n";
+
+    #[test]
+    fn add_creates_a_dependencies_block_when_absent() {
+        let source =
+            format!("{MANIFEST_HEADER}package : Package\npackage =\n    {{ name = \"app\" }}\n");
+        let (text, reparsed) = write_and_read_manifest("writer_create", &source, |p| {
+            upsert_index_dependency(p, "http-extras", &req("^1"))
+        });
+        assert!(
+            text.contains("dep \"http-extras\""),
+            "a dependencies block with the entry is created: {text}"
+        );
+        let m = reparsed.expect("the created block re-parses");
+        assert!(m.dependencies.contains_key("http-extras"));
+        assert_eq!(m.name, "app", "the existing name field is preserved");
+    }
+
+    #[test]
+    fn add_appends_without_disturbing_siblings() {
+        let source = format!(
+            "{MANIFEST_HEADER}package : Package\npackage =\n    {{ name = \"app\"\n\
+             \x20   , dependencies =\n\
+             \x20       [ dep \"alpha\" \"^1\"\n\
+             \x20       , dep \"beta\" \"^2\"\n\
+             \x20       ]\n    }}\n"
+        );
+        let (text, reparsed) = write_and_read_manifest("writer_append", &source, |p| {
+            upsert_index_dependency(p, "gamma", &req("^3"))
+        });
+        assert!(text.contains("dep \"alpha\" \"^1\""), "alpha kept: {text}");
+        assert!(text.contains("dep \"beta\" \"^2\""), "beta kept: {text}");
+        assert!(text.contains("dep \"gamma\""), "gamma appended: {text}");
+        let m = reparsed.expect("re-parses");
+        assert_eq!(m.dependencies.len(), 3);
+    }
+
+    #[test]
+    fn re_add_updates_the_requirement_in_place() {
+        let source = format!(
+            "{MANIFEST_HEADER}package : Package\npackage =\n    {{ name = \"app\"\n\
+             \x20   , dependencies =\n\
+             \x20       [ dep \"http-extras\" \"^1\"\n\
+             \x20       ]\n    }}\n"
+        );
+        let (text, reparsed) = write_and_read_manifest("writer_update", &source, |p| {
+            upsert_index_dependency(p, "http-extras", &req("^1.5"))
+        });
+        assert_eq!(
+            text.matches("dep \"http-extras\"").count(),
+            1,
+            "no duplicate entry after re-add: {text}"
+        );
+        let m = reparsed.expect("re-parses");
+        assert_eq!(m.dependencies.len(), 1, "still a single dependency");
+        assert!(
+            matches!(
+                m.dependencies.get("http-extras"),
+                Some(IpeDep::Index(got)) if *got == req("^1.5")
+            ),
+            "http-extras must remain an index dependency with the updated requirement: {:?}",
+            m.dependencies.get("http-extras")
+        );
+    }
+
+    #[test]
+    fn add_over_an_escape_is_refused_and_leaves_it_untouched() {
+        // The prove-the-refusal: an index add whose name collides with an
+        // author-written escape must be refused, never overwriting the escape.
+        let source = format!(
+            "{MANIFEST_HEADER}package : Package\npackage =\n    {{ name = \"app\"\n\
+             \x20   , dependencies =\n\
+             \x20       [ depPath \"locallib\" \"../locallib\"\n\
+             \x20       ]\n    }}\n"
+        );
+        let root = fresh_project("writer_escape_refuse");
+        let path = root.join(PACKAGE_IPE);
+        std::fs::write(&path, &source).expect("write");
+        let err = upsert_index_dependency(&path, "locallib", &req("^1"))
+            .expect_err("an index add over an escape name must be refused");
+        let after = std::fs::read_to_string(&path).expect("read back");
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
+            "the refusal is a usage error: {err:?}"
+        );
+        assert_eq!(
+            after, source,
+            "a refused add must leave the manifest byte-identical"
+        );
+    }
+
+    #[test]
+    fn remove_drops_only_the_named_entry_and_re_parses() {
+        let source = format!(
+            "{MANIFEST_HEADER}package : Package\npackage =\n    {{ name = \"app\"\n\
+             \x20   , dependencies =\n\
+             \x20       [ dep \"keep\" \"^1\"\n\
+             \x20       , dep \"drop\" \"^2\"\n\
+             \x20       ]\n    }}\n"
+        );
+        let (text, reparsed) = write_and_read_manifest("writer_remove", &source, |p| {
+            remove_manifest_dependency(p, "drop")
+        });
+        assert!(text.contains("dep \"keep\" \"^1\""), "sibling kept: {text}");
+        assert!(!text.contains("\"drop\""), "the entry is gone: {text}");
+        let m = reparsed.expect("re-parses after remove");
+        assert_eq!(m.dependencies.len(), 1);
+        assert!(m.dependencies.contains_key("keep"));
+    }
+
+    #[test]
+    fn remove_of_an_absent_dep_is_a_no_op() {
+        let source = format!(
+            "{MANIFEST_HEADER}package : Package\npackage =\n    {{ name = \"app\"\n\
+             \x20   , dependencies =\n\
+             \x20       [ dep \"present\" \"^1\"\n\
+             \x20       ]\n    }}\n"
+        );
+        let (text, reparsed) = write_and_read_manifest("writer_remove_absent", &source, |p| {
+            remove_manifest_dependency(p, "missing")
+        });
+        assert_eq!(text, source, "removing an absent dep changes nothing");
+        let m = reparsed.expect("re-parses");
+        assert_eq!(m.dependencies.len(), 1);
+    }
+
+    #[test]
+    fn add_into_an_empty_list_round_trips() {
+        let source = format!(
+            "{MANIFEST_HEADER}package : Package\npackage =\n    {{ name = \"app\"\n\
+             \x20   , dependencies = []\n    }}\n"
+        );
+        let (text, reparsed) = write_and_read_manifest("writer_empty_list", &source, |p| {
+            upsert_index_dependency(p, "solo", &req("^1"))
+        });
+        assert!(
+            text.contains("dep \"solo\""),
+            "entry added into empty list: {text}"
+        );
+        let m = reparsed.expect("re-parses");
+        assert_eq!(m.dependencies.len(), 1);
     }
 }

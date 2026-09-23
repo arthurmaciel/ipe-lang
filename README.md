@@ -117,6 +117,12 @@ main =
   ipe debugger record src/Main.ipe        # runs the app, writes src/Main.ipelog on exit
   ipe debugger replay src/Main.ipelog     # one "<msg> => <model>" line per step
   ```
+- `ipe add <pkg>[@<req>]` / `ipe remove <pkg>` — add or remove an Ipê package dependency. `add` resolves the requirement through the index (fetch, hash-verify), records the exact pin in `ipe.lock`, and writes the requirement into `package.ipe`'s `dependencies` block so a fresh clone re-resolves the same dependency; `remove` drops it from both. Author-written `depGit`/`depPath` escapes are left untouched — `add` never overwrites one.
+
+  ```sh
+  ipe add http-extras@^1.2   # → dependencies = [ dep "http-extras" "^1.2" ] in package.ipe + ipe.lock pin
+  ipe remove http-extras     # drops it from both files
+  ```
 - `ipe fmt` · `ipe test` · `ipe verify` · `ipe migrate` · `ipe package audit` — format, test, whole-project gate, migration, and the publish quality gate.
 - `ipe package publish` — run the quality gate, compute the package's index entry, and open the index pull request. One-time setup: run `ipe login` (a GitHub device-code flow), so publish can author the index-PR commit under your account's verified GitHub identity, and set `IPE_PUBLISH_SIGNING_KEY` to the path of an SSH signing key (its `.pub` registered as a *signing* key on your GitHub account) so the commit is signed. The curated index requires signed, verified commits; absent either precondition publish fails closed with a typed refusal rather than push a commit that could never merge. `--dry-run` prints the computed entry and intended PR without touching the network.
 

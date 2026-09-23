@@ -25,7 +25,7 @@ use ipe_ir::Capability;
 use crate::index::{self, CommitId, EntryVersion, PinnedRev, SourceUrl};
 use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
 use crate::package_name::PackageName;
-use crate::project::{self, IpeDep};
+use crate::project::IpeDep;
 use crate::{CliError, cache};
 
 /// The environment variable overriding the index checkout root; tests point it
@@ -118,7 +118,7 @@ pub fn resolve_and_add(
         sha256: version.sha256.clone(),
         kind: DepKind::Index,
     };
-    write_records(project_root, name, &locked, &IpeDep::Index(req.clone()))?;
+    write_records(project_root, name, &locked, req)?;
 
     report_added(name, &version.version.to_string(), &version.capabilities);
     Ok(())
@@ -218,7 +218,7 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
 /// # Errors
 /// [`CliError::Io`] if the manifest or lockfile cannot be read or written.
 pub fn resolve_and_remove(project_root: &Path, name: &str) -> Result<(), CliError> {
-    project::remove_dependency(&manifest_path(project_root), name)?;
+    crate::package_manifest::remove_manifest_dependency(&manifest_path(project_root), name)?;
     let mut lock = Lockfile::read(project_root)?;
     let was_locked = lock.remove(name);
     lock.write(project_root)?;
@@ -343,9 +343,13 @@ fn signature_verifier() -> Box<dyn crate::signing::SignatureVerifier> {
     Box::new(crate::signing::UnavailableVerifier)
 }
 
-/// The manifest path for a project root.
+/// The manifest path for a project root — the `package.ipe` the toolchain reads.
+///
+/// `ipe add` must record the requirement in this file (not a legacy `ipe.toml`),
+/// or a fresh clone + resolve would lose the dependency: the lockfile pins an
+/// exact version but is regenerated from the manifest's requirements.
 fn manifest_path(project_root: &Path) -> PathBuf {
-    project_root.join("ipe.toml")
+    project_root.join(crate::package_manifest::PACKAGE_IPE)
 }
 
 /// The package cache directory for one resolved `(name, version)` under the
@@ -523,12 +527,19 @@ fn write_records(
     project_root: &Path,
     name: &str,
     locked: &LockedDep,
-    dep: &IpeDep,
+    req: &semver::VersionReq,
 ) -> Result<(), CliError> {
+    // Write the manifest FIRST: the rewrite fails closed (e.g. an index add
+    // that collides with an author-written escape is refused), and doing it
+    // before the lockfile keeps the two files consistent — a refusal leaves
+    // BOTH untouched rather than a lockfile pin with no manifest requirement.
+    // Only an INDEX requirement is written into the manifest: an escape
+    // (`{git=}`/`{path=}`) is author-written and lockfile-only by design, so
+    // `resolve_escape` never routes through here.
+    crate::package_manifest::upsert_index_dependency(&manifest_path(project_root), name, req)?;
     let mut lock = Lockfile::read(project_root)?;
     lock.upsert(locked.clone());
-    lock.write(project_root)?;
-    project::upsert_dependency(&manifest_path(project_root), name, dep)
+    lock.write(project_root)
 }
 
 /// Print the resolved version and its capability set for consent.
