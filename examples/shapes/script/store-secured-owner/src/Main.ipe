@@ -1,0 +1,152 @@
+module Main exposing (main)
+
+-- A per-owner SECURED store, end to end. A `Store` derives its schema, reads,
+-- and writes from ONE `Codec`; `secured` attaches a row-security `Policy` and
+-- yields a `Secured a` that is read and written ONLY through the authenticated
+-- `…As` operations, each of which takes a `Principal`.
+--
+-- The security model, made structural:
+--   • Deny-by-default. `fromCodec` returns a `Draft` with no read or write
+--     operation. `secured` (like `public`) is the only promotion to a queryable
+--     value; a table nobody classified is unqueryable by construction.
+--   • Owner-scoped. `ownerColumn .author` scopes every operation to
+--     `author = $subject` AND forces the owner column to the caller on write, so
+--     a caller can never read — or write — a row it does not own.
+--   • Immutable columns. `andPolicy (immutable .createdAt)` drops `.createdAt`
+--     from every update SET, so its insert-time value cannot change later.
+--   • The `Principal` is minted only by the fail-closed auth middleware
+--     (`Server.postAuthed` / `getAuthed`), never by application code, so an
+--     unauthenticated request can reach neither `insertAs` nor `allAs`.
+--
+-- The owner filter compiles to a BOUND-PARAM `WHERE` (`Sql.column` for the
+-- validated column, `Sql.param` for the subject) — never string interpolation —
+-- so the database never returns, nor writes, an out-of-policy row.
+--
+-- No live database or network is needed to prove the model: `Task.onError`
+-- catches the connection failure and the route builder is only assembled, never
+-- served. The SEAL is that the emitted crate `cargo build`s under `IPE_E2E=1` —
+-- `ipe` accepting this program (exit 0) must imply a buildable emitted crate.
+
+import Ipe.Auth as Auth
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store, Secured)
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Secret as Secret
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Note =
+    { author : String
+    , createdAt : String
+    , body : String
+    }
+
+
+blankNote : Note
+blankNote =
+    { author = "", createdAt = "", body = "" }
+
+
+-- `Codec.auto` reads the columns from a named, annotated record witness: the
+-- field names become the column names (`author` / `created_at` / `body`).
+noteCodec : Codec Note
+noteCodec =
+    Codec.auto blankNote
+
+
+-- Each row is owned by its `.author` (which the write path binds to the
+-- authenticated subject) and its `.createdAt` is immutable — fixed at insert,
+-- never rewritten by a later update.
+notePolicy : Store.Policy Note
+notePolicy =
+    Store.ownerColumn .author
+        |> Store.andPolicy (Store.immutable .createdAt)
+
+
+-- Build the secured store once, failing closed if the policy names a column the
+-- store does not have. `.body` is the primary key so `getAs` / `updateAs` /
+-- `deleteAs` can key on it.
+securedNotes : Result Error (Secured Note)
+securedNotes =
+    case Store.fromCodec "notes" noteCodec of
+        Err e ->
+            Err e
+
+        Ok store ->
+            Store.secured notePolicy (Store.primaryKey .body store)
+
+
+-- Write-then-read as the caller. `insertAs` FORCES the `author` column to the
+-- principal's subject (the record's `author` here is ignored), so a caller can
+-- never write a row it could not read back; `allAs` then returns only the rows
+-- the owner filter admits for that same caller. `do` chains the `Task`s: each
+-- `x <- task` line desugars to `Task.andThen`.
+handleAddNote : Request -> Auth.Principal -> Task Error Response
+handleAddNote _ principal =
+    Task.onError (\_ -> Task.succeed (Server.text "none"))
+        (case securedNotes of
+            Err _ ->
+                Task.succeed (Server.text "policy-error")
+
+            Ok secured ->
+                do
+                    db <- Db.connect ()
+                    _ <- Store.insertAs principal db secured newNote
+                    notes <- Store.allAs principal db secured
+                    Task.succeed
+                        (Server.text (String.join "\n" (List.map .body notes)))
+        )
+
+
+-- The record a caller submits: its `author` is IGNORED (the owner column is
+-- forced to the authenticated subject on insert), so no caller can forge
+-- authorship.
+newNote : Note
+newNote =
+    { author = "ignored", createdAt = "2024-01-01", body = "hello" }
+
+
+-- Read-only "my notes" as the caller: `allAs` returns only the rows whose
+-- `author` equals the caller's subject.
+handleMyNotes : Request -> Auth.Principal -> Task Error Response
+handleMyNotes _ principal =
+    Task.onError (\_ -> Task.succeed (Server.text "none"))
+        (case securedNotes of
+            Err _ ->
+                Task.succeed (Server.text "policy-error")
+
+            Ok secured ->
+                Task.map
+                    (\notes -> Server.text (String.join "\n" (List.map .body notes)))
+                    (Task.andThen (\db -> Store.allAs principal db secured) (Db.connect ()))
+        )
+
+
+authCfg : Server.AuthConfig
+authCfg =
+    Server.authConfig
+        (Secret.fromString (System.getenvOr "SIGNING_KEY" "this-is-a-32-byte-or-longer-secret-key-value"))
+        Server.bearerToken
+
+
+main : Task Error ()
+main =
+    Task.onError
+        (\_ -> Io.println "store-secured-owner")
+        (Task.andThen
+            (\_ -> Io.println "store-secured-owner")
+            (Server.listen
+                8000
+                [ Server.postAuthed "/notes" authCfg handleAddNote
+                , Server.getAuthed "/my/notes" authCfg handleMyNotes
+                ]
+            )
+        )

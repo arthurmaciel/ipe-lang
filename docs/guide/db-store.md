@@ -2,91 +2,182 @@
 
 A `Store a` is one typed database table whose schema, reads, and writes all derive
 from a single `Codec a`. The codec is the one source of truth: its shape names the
-columns, its encoder writes a row, its decoder reads one back. The safe surface
-cannot express SQL injection — every identifier is validated once at construction,
-and every value binds as a parameter.
+columns, its encoder writes a row, its decoder reads one back. A `Store` is *deny-by-default*:
+`fromCodec` yields a `Draft` with no read or write operation, and only an explicit
+classification — `public` (world-open) or `secured` (policy-guarded) — turns it
+into something queryable. This guide is about the secured half: attaching a
+row-security `Policy` so the database itself never returns, nor writes, a row the
+caller is not entitled to.
 
 ## The mental model
 
-Three ideas.
+Four ideas carry the whole security model.
 
-- **Identifiers are parsed, not validated.** `fromCodec` runs the table name and
-  every derived column name through `validSqlIdent` and returns `Err` on the first
-  one that isn't a plain identifier. A built `Store` therefore carries only
-  accepted names, so nothing downstream re-checks — an injection attempt in a name
-  never reaches SQL, because a `Store` holding a bad name has no representation.
-- **Columns derive from the codec.** The column list, the `CREATE TABLE` DDL, the
-  insert binds, and the row decode are one derivation from one codec. A field added
-  or retyped changes exactly one place, so the schema and the round-trip cannot
-  drift apart.
-- **Access is deny-by-default.** `fromCodec` returns a `Draft a` — a table whose
-  schema is known but whose access intent is not, and which has *no* read or write
-  operation. Only `public` (an explicit, greppable, world-open declaration) or
-  `secured` (policy-guarded) promotes a `Draft` to a queryable `Store`. A table
-  nobody classified is unqueryable by construction — "which tables are world-open?"
-  is a code search for `Store.public`, not an audit of every table.
+- **Classification is the only door, and it is closed by default.** `fromCodec`
+  returns a `Draft a` — schema known, access intent unknown, no operation attached.
+  `public` promotes it to a world-open `Store a` (read and written by `all` / `get`
+  / `insert` / …); `secured policy` promotes it to a `Secured a` (read and written
+  *only* through the authenticated `allAs` / `getAs` / `insertAs` / `updateAs` /
+  `deleteAs` operations, each of which takes a `Principal`). A table nobody
+  classified has no read or write function that will accept it — an unguarded table
+  is not a review you might skip, it is a value that does not exist.
+- **The `Principal` is minted only by the auth middleware.** Application code cannot
+  fabricate one; it arrives as the second argument of an authenticated route handler
+  (`Server.getAuthed` / `postAuthed` / `putAuthed` / `deleteAuthed`), after the
+  fail-closed middleware has verified the token. So an unauthenticated request can
+  reach none of the `…As` operations — there is no `Principal` to pass them.
+- **A `Policy` is per-operation, and every operation it does not open is `never`.**
+  `ownerColumn .author` scopes read, get, update, and delete to `author = $subject`
+  and forces the owner column to the caller on write, so a caller can neither read
+  nor write a row it does not own. `readOnly p` opens reads to `p` and leaves every
+  write at `never`; a write path is opened deliberately with `alsoInsert` /
+  `alsoUpdate` / `alsoDelete`, never by omission. The unspecified operation fails
+  closed because its predicate is `never`, which has no representation as an open one.
+- **The policy compiles to a bound-param `WHERE`, never interpolation.** The owner
+  filter lowers through `Sql.column` (for the validated column) and `Sql.param` (for
+  the subject); the caller-side leaves — `role` / `memberOf` / `claimEquals` — read
+  the principal's *verified* claims through fail-closed accessors (an absent role,
+  group, or claim DENIES) and fold to an always-true or always-false fragment. No
+  caller value is ever concatenated into SQL text.
 
-## A worked example: the schema surface
+For composing owner, tenant, RBAC, and sharing rules into reusable policy helpers —
+the deep predicate algebra (`allOf` / `anyOf` / `notPred` / `existsIn` / `correlate`) —
+see the sibling guide [Composing row-security policies](db-store-rls-composition.md).
 
-The reads and writes are `Task`s that need a live database, but the *schema*
-surface is pure — enough to show the security model without a connection. The
-example under
-[`examples/shapes/script/store-schema`](../../examples/shapes/script/store-schema/src/Main.ipe)
-builds a `Store` from a record codec, reads back its columns, and shows identifier
-validation.
+## A worked example: store-secured-owner
 
-The table is built from the codec, its primary key named by accessor (checked
-against the row type at compile time), then classified world-open:
+A per-owner secured store, end to end. The example under
+[`examples/shapes/script/store-secured-owner`](../../examples/shapes/script/store-secured-owner/src/Main.ipe)
+builds a `Note` table from a codec, secures it with an owner policy, and both writes
+and reads it as the authenticated caller through `insertAs` and `allAs`.
+
+The row type and codec — the field names become the columns (`author`,
+`created_at`, `body`):
 
 ```ipe
-users : Result Error (Store User)
-users =
-    Store.fromCodec "users" userCodec
-        |> Result.map (\draft -> Store.primaryKey .id draft)
-        |> Result.map Store.public
+type alias Note =
+    { author : String
+    , createdAt : String
+    , body : String
+    }
+
+
+noteCodec : Codec Note
+noteCodec =
+    Codec.auto blankNote
 ```
 
-The primary-key builder reads its column from a `.field` accessor at compile time,
-so it is applied directly (here inside a lambda for `Result.map`), never passed
-point-free — the compiler rejects `Result.map (Store.primaryKey .id)` with a
-diagnostic that tells you to wrap it.
+The policy: each row is owned by its `.author`, and `.createdAt` is immutable —
+fixed at insert, dropped from every update SET so a later write cannot change it:
 
-Running it (`ipe run`):
-
-```
-columns: id, name, age
-validSqlIdent "users" -> True ; validSqlIdent "users; drop table x" -> False
+```ipe
+notePolicy : Store.Policy Note
+notePolicy =
+    Store.ownerColumn .author
+        |> Store.andPolicy (Store.immutable .createdAt)
 ```
 
-The column names come straight from the codec, and the injection attempt in a
-table name is rejected before any SQL is built.
+`secured` attaches the policy and yields a `Secured Note`, failing closed if the
+policy names a column the store does not have:
+
+```ipe
+securedNotes : Result Error (Secured Note)
+securedNotes =
+    case Store.fromCodec "notes" noteCodec of
+        Err e ->
+            Err e
+
+        Ok store ->
+            Store.secured notePolicy (Store.primaryKey .body store)
+```
+
+The authenticated write-then-read handler. `insertAs` *forces* the `author` column
+to the principal's subject (the record's `author` is ignored), so no caller can
+forge authorship; `allAs` then returns only the rows the owner filter admits for
+that same caller. The `do` block chains the `Task`s — each `x <- task` line desugars
+to `Task.andThen`:
+
+```ipe
+handleAddNote : Request -> Auth.Principal -> Task Error Response
+handleAddNote _ principal =
+    Task.onError (\_ -> Task.succeed (Server.text "none"))
+        (case securedNotes of
+            Err _ ->
+                Task.succeed (Server.text "policy-error")
+
+            Ok secured ->
+                do
+                    db <- Db.connect ()
+                    _ <- Store.insertAs principal db secured newNote
+                    notes <- Store.allAs principal db secured
+                    Task.succeed
+                        (Server.text (String.join "\n" (List.map .body notes)))
+        )
+```
+
+The handler is reachable only behind an authenticated route, where the middleware
+mints the `principal`:
+
+```ipe
+main =
+    ...
+        (Server.listen
+            8000
+            [ Server.postAuthed "/notes" authCfg handleAddNote
+            , Server.getAuthed "/my/notes" authCfg handleMyNotes
+            ]
+        )
+```
+
+Running it (`ipe run`) prints its name — the store is assembled and the route wired,
+but the never-served `listen` is caught by `Task.onError`, so no live database or
+network is needed to prove the model compiles and the security path type-checks:
+
+```
+store-secured-owner
+```
+
+The load-bearing proof is the SEAL: this program is built and run under `IPE_E2E=1`,
+so a language change that broke the secured path — the policy builders, the `…As`
+operations, or the principal-threading — would fail CI here.
 
 ## The why
 
 A `Draft` with no read or write operation, promoted only through a named
-classification, is [make invalid states unrepresentable][principles]: an
-unclassified table is not a runtime check you might forget, it is a value the read
-and write functions won't accept. Validating identifiers once at construction and
-binding every value as a parameter is [security][principles]'s fail-closed rule at
-the SQL boundary — an identifier that isn't a plain name, or a value that would
-have to be interpolated, never reaches the query text. And deriving columns,
-inserts, and reads from one codec is [soundness][principles]: schema drift between
-the write path and the read path is impossible when both are one derivation.
+classification, is [make invalid states unrepresentable][principles]: an unguarded
+table is not a runtime check you might forget, it is a value the `…As` functions will
+not accept. Scoping every unspecified operation to `never`, and reading absent
+roles/groups/claims as denials, is [security][principles]'s fail-closed rule — with
+no proof the caller is entitled, the reachable outcome is refusal, not access.
+Forcing the owner column to the subject on write, and compiling the owner filter to
+a bound-param `WHERE`, is [security][principles] again at the SQL boundary: a caller
+can neither forge a row it could not read back nor smuggle a value into the query
+text. And enforcing the filter *in the emitted SQL* — not merely in a post-fetch
+check — is [defence in depth][principles]: the database never hands back an
+out-of-policy row for application code to mishandle.
 
-The escape hatch — a dynamic table with no record type, whose columns are named by
-bare strings — lives in the capability-gated [`Ipe.Db.Store.Unsafe`](db-store-unsafe.md).
+The `Principal` being mintable only by the auth middleware, never by application
+code, keeps the trust boundary in one place: the `…As` operations cannot be called
+without an authenticated caller, so authentication is a structural precondition of
+every secured read and write, not a convention.
 
 [principles]: ../../PRINCIPLES.md
 
 ## References
 
 - **Per-symbol reference:** `ipe doc Ipe.Db.Store` — `fromCodec`, `public`,
-  `secured`, `primaryKey`, `insert`, `all`, `get`, `findWhere`, `create`, and the
-  query and join combinators, each with its signature.
-- **Sibling guides:** [Codec](codec.md) — the single source of truth a store
-  derives from. [Database codecs](db-codec.md) — that codec as a raw row and back.
+  `secured`, `explain`, the `Policy` builders (`ownerColumn` / `readOnly` /
+  `immutable` / `andPolicy` / `alsoInsert` / `alsoUpdate` / `alsoDelete` / `mask`),
+  the predicate leaves (`always` / `never` / `allOf` / `anyOf` / `notPred` /
+  `matchWhere` / `role` / `memberOf` / `claimEquals` / `existsIn` / `correlate`), and
+  the authenticated operations (`allAs` / `getAs` / `insertAs` / `updateAs` /
+  `deleteAs`), each with its signature.
+- **Sibling guides:** [Composing row-security policies](db-store-rls-composition.md)
+  — the deep predicate algebra for owner / tenant / RBAC / sharing rules as
+  composable helpers. [Codec](codec.md) — the single source of truth a store derives
+  from. [Database codecs](db-codec.md) — that codec as a raw row and back.
   [Connection descriptors](dsn.md) — the typed `Dsn` that opens the connection.
   [The unsafe database surface](db-unsafe.md) — raw SQL and untyped reads.
-  [Result](result.md) — the failure type construction returns.
-- **Concepts:** [The parse-don't-validate idiom](../idioms/parse-dont-validate.md)
+- **Concepts:** [The `do` idiom](../idioms/do-notation.md) — the `Task`-chaining
+  notation the handler uses. [The parse-don't-validate idiom](../idioms/parse-dont-validate.md)
   — identifier validation as a construction-time parse.
