@@ -2048,7 +2048,7 @@ mod tests {
             "the refusal names the fix so it is discoverable: {rendered}"
         );
         assert!(
-            rendered.contains("nothing was published"),
+            rendered.to_lowercase().contains("nothing was published"),
             "the refusal states no commit was authored: {rendered}"
         );
         assert!(
