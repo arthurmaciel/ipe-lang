@@ -54,16 +54,6 @@ pub mod record_sink;
 /// The default message-log capacity when none is configured.
 pub const DEFAULT_HISTORY_CAP: usize = 512;
 
-/// The environment variable naming where `ipe debugger record` wants the
-/// recorded session's replay log written. Set by the CLI on the executed
-/// child; read by [`record_sink::dump_replay_log`] at the cli/worker run loop's
-/// exit. A value of `-` selects stderr; any other value is a filesystem path.
-///
-/// Defined ungated here (not behind `feature = "debugger"`) so the CLI — which
-/// depends on the runtime crate without that feature — imports the same name
-/// rather than hand-duplicating the literal (single source of truth).
-pub const RECORD_ENV: &str = "IPE_DEBUGGER_RECORD";
-
 // ── Internal shared step type ──────────────────────────────────────────────
 
 /// One step: the dispatched message and the model that followed it.

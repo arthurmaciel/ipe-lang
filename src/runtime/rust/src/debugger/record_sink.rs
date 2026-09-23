@@ -23,7 +23,8 @@
 
 use std::io::Write;
 
-use crate::debugger::{RECORD_ENV, RecordBuffer};
+use crate::RECORD_ENV;
+use crate::debugger::RecordBuffer;
 use crate::stringify::IpeStringify;
 use crate::tea::IpeCmd;
 

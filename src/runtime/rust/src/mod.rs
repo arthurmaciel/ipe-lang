@@ -77,6 +77,12 @@ pub mod config_decode;
 #[cfg(all(test, feature = "db"))]
 mod config_postgres_test;
 pub mod core;
+/// Env var naming the destination for the time-travel recorder's replay-log
+/// dump on the cli/worker run loop's exit (`-` = stderr, any other value a
+/// filesystem path). Ungated so the `ipe` CLI — which links the runtime WITHOUT
+/// the `debugger` feature and injects this var on the executed child — and the
+/// gated recorder that reads it share ONE wire name (single source of truth).
+pub const RECORD_ENV: &str = "IPE_DEBUGGER_RECORD";
 // Development-only TEA time-travelling debugger core. Only present when the
 // `debugger` feature is active (`ipe build/run --debugger`). Zero code emitted
 // for a non-`--debugger` build. NOT part of the emitted `mod.rs` template —

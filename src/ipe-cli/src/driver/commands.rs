@@ -2240,12 +2240,12 @@ fn wasi_artifact_path(messages: &str, out_dir: &Path) -> Result<PathBuf, CliErro
 /// run, so the emitted runtime dumps its bounded replay log to `dest` on exit.
 /// A no-op for an ordinary run (`dest` is `None`).
 ///
-/// The variable name is the runtime's own [`ipe_runtime_rust::debugger::RECORD_ENV`]
+/// The variable name is the runtime's own [`ipe_runtime_rust::RECORD_ENV`]
 /// constant — one source of truth for the wire name across the two crates, never
 /// a hand-duplicated literal.
 fn set_record_env(cmd: &mut std::process::Command, dest: Option<&Path>) {
     if let Some(path) = dest {
-        cmd.env(ipe_runtime_rust::debugger::RECORD_ENV, path.as_os_str());
+        cmd.env(ipe_runtime_rust::RECORD_ENV, path.as_os_str());
     }
 }
 
