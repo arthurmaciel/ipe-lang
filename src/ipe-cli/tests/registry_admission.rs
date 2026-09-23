@@ -101,7 +101,12 @@ fn scaffold_project(tag: &str) -> PathBuf {
     let proj = temp_dir(&format!("proj-{tag}"));
     std::fs::create_dir_all(proj.join("src")).expect("src");
     std::fs::write(proj.join("src").join("Main.ipe"), "module Main\n").expect("main");
-    std::fs::write(proj.join("ipe.toml"), "name = \"app\"\n").expect("manifest");
+    std::fs::write(
+        proj.join("package.ipe"),
+        "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\n\
+         package : Package\npackage =\n    { name = \"app\" }\n",
+    )
+    .expect("manifest");
     proj
 }
 
@@ -383,7 +388,7 @@ fn ephemeral_index_rejects_a_tampered_tree() {
 
     let lock = Lockfile::read(&proj).expect("lock");
     assert!(lock.packages().is_empty(), "a mismatch must lock nothing");
-    let manifest = std::fs::read_to_string(proj.join("ipe.toml")).expect("manifest");
+    let manifest = std::fs::read_to_string(proj.join("package.ipe")).expect("manifest");
     assert!(
         !manifest.contains("http-extras"),
         "a mismatch must add nothing: {manifest}"

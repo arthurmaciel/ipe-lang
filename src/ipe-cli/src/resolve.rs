@@ -6,8 +6,8 @@
 //! version's source at its pinned revision into the package cache, hash the
 //! fetched tree, and **verify the hash equals the one the index pinned before
 //! anything is written**. Only then is the resolution recorded — in `ipe.lock`
-//! (the exact pins) and in `ipe.toml`'s `[dependencies]` (the requirement) — and
-//! the resolved version and its capability set printed for consent.
+//! (the exact pins) and in `package.ipe`'s `dependencies` block (the requirement)
+//! — and the resolved version and its capability set printed for consent.
 //!
 //! The `{git=}` / `{path=}` escapes ([`resolve_escape`]) bypass the index by
 //! design but still carry lockfile integrity: the fetched (or copied) tree is
@@ -212,8 +212,8 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
     Ok(())
 }
 
-/// Remove a dependency: drop it from both `ipe.toml` `[dependencies]` and
-/// `ipe.lock`. A clean add→remove cycle leaves both files as they began.
+/// Remove a dependency: drop it from both `package.ipe`'s `dependencies` block
+/// and `ipe.lock`. A clean add→remove cycle leaves both files as they began.
 ///
 /// # Errors
 /// [`CliError::Io`] if the manifest or lockfile cannot be read or written.
@@ -609,7 +609,12 @@ mod tests {
     fn scaffold_project(root: &Path) {
         std::fs::create_dir_all(root.join("src")).expect("src dir");
         std::fs::write(root.join("src").join("Main.ipe"), "module Main\n").expect("main");
-        std::fs::write(root.join("ipe.toml"), "name = \"app\"\n").expect("manifest");
+        std::fs::write(
+            root.join("package.ipe"),
+            "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\n\
+             package : Package\npackage =\n    { name = \"app\" }\n",
+        )
+        .expect("manifest");
     }
 
     /// Create a git repo with one file at HEAD, returning its path.
@@ -949,7 +954,7 @@ mod tests {
         let proj = temp_dir("remove-absent");
         scaffold_project(&proj);
         resolve_and_remove(&proj, "nope").expect("removing an absent dep is not an error");
-        let manifest = std::fs::read_to_string(proj.join("ipe.toml")).expect("manifest");
+        let manifest = std::fs::read_to_string(proj.join("package.ipe")).expect("manifest");
         assert!(!manifest.contains("nope"));
         let _ = std::fs::remove_dir_all(&proj);
     }
