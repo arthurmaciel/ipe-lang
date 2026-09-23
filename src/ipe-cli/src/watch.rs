@@ -1885,7 +1885,7 @@ enum AppearanceRoute {
 /// Route an appearance-only hot-swap by the running shape. Tui and web each have
 /// a delivery channel; any other shape (cli, worker, a bare HTTP server) has
 /// none, so it rebuilds. Total over the two shape flags by construction — the
-/// `Rebuild` fallback is the fail-safe that keeps a HotSwappable classification
+/// `Rebuild` fallback is the fail-safe that keeps a `HotSwappable` classification
 /// from ever no-op'ing on a shape that cannot apply it.
 const fn appearance_route(is_tui: bool, is_web: bool) -> AppearanceRoute {
     if is_tui {
