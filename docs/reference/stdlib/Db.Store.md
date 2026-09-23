@@ -1998,26 +1998,141 @@ selectToMaybe : Db -> Select row -> Task Error (Maybe row)
 
 ## `Policy`
 
-An opaque row-security policy: a conjunction of `Rule`s over a store's
-validated columns. Phantom in `row` so an accessor-named policy column is
-checked against the store's row type when the policy is attached with
-`secured` (a cross-row policy column is a type error). The runtime value
-carries only the rule list — the `row` parameter is erased, exactly as the
-`Cond row` phantom is.
+An opaque, operation-scoped row-security policy: a `Pred row` per operation,
+plus the columns write operations must force to the caller's subject
+(`owners`) and the columns an update must never rewrite (`immutables`). The
+four predicates make the read/insert/update/delete split TOTAL — there is no
+unspecified operation, because every smart constructor scopes each field
+explicitly and the fail-closed default is `never`, so an open write has no
+representation. Phantom in `row`, so an accessor-named policy column is checked
+against the store's row type when the policy is attached with `secured`. The
+record shape is opaque (built only by the smart constructors below); `owners`
+and `immutables` are the write-projection side of the algebra (forcing the
+owner column on a write, dropping an immutable column from an update SET) that a
+pure WHERE `Pred` cannot express.
 
 ## `Secured`
 
 An opaque secured store: a `Store a` paired with a validated `Policy`. The
-ONLY value the future secured operations (`allAs` / `insertAs` / …) will
-accept, so a secured store is unreachable through the unsecured operations and
-cannot be read unfiltered by mistake (deny-by-default). Built only by
-`secured`, which re-validates every policy column against the store's columns,
-so a `Secured` holds only a policy whose columns all exist on the store.
+ONLY value the secured operations (`allAs` / `insertAs` / …) accept, so a
+secured store is unreachable through the unsecured operations and cannot be read
+unfiltered by mistake (deny-by-default). Built only by `secured`, which
+re-validates every policy column against the store's columns, so a `Secured`
+holds only a policy whose columns all exist on the store.
 
-Parametric in the row type `a` (it carries the store's `Codec a`) so the later
-secured reads can decode rows through the store's own codec — the appendix
-sketch wrote a bare `Secured`, but erasing `a` would lose the codec the
-secured reads need. A reasoned divergence recorded here.
+Parametric in the row type `a` (it carries the store's `Codec a`) so the secured
+reads can decode rows through the store's own codec.
+
+## `Pred`
+
+An opaque row-security predicate over a `Store row`'s rows. Boolean structure
+(`allOf` / `anyOf` / `notPred` / `always` / `never`) closes over a row-side leaf
+(`matchWhere`, embedding a validated `Cond row`) and the principal-side owner
+leaf `POwner` (the `column = $subject` term the owner-scoped policy builders
+produce, bound at lowering through `Auth.subject`). Phantom in `row`, exactly as
+`Cond row` is: the constructors carry only concrete data, so the runtime value
+is untyped data while the surface stays row-checked. Carries no functions, so
+structural `==` holds — the simplifier can dedupe leaves.
+
+## `always`
+
+```ipe
+always : Pred row
+```
+
+`always` — the predicate that matches every row (an explicit empty
+conjunction). The identity element of `allOf`.
+
+## `never`
+
+```ipe
+never : Pred row
+```
+
+`never` — the predicate that matches no row (an explicit empty disjunction).
+The identity element of `anyOf` and the fail-closed default: every operation a
+`Policy` builder does not open is scoped to `never`, so an unspecified write
+has no representation as an open write.
+
+## `allOf`
+
+```ipe
+allOf : List (Pred row) -> Pred row
+```
+
+`allOf preds` — the conjunction of `preds` (AND). `allOf []` is `always`
+(the empty conjunction matches every row — its documented identity element).
+
+## `anyOf`
+
+```ipe
+anyOf : List (Pred row) -> Pred row
+```
+
+`anyOf preds` — the disjunction of `preds` (OR). `anyOf []` is `never` (the
+empty disjunction matches no row — its documented identity element, so an empty
+set of alternatives fails closed rather than matching everything).
+
+## `notPred`
+
+```ipe
+notPred : Pred row -> Pred row
+```
+
+`notPred p` — the negation of `p`. Named `notPred` rather than `not` because
+`Store.not` is already the `Cond` connective; Ipê has no ad-hoc overloading.
+
+## `matchWhere`
+
+```ipe
+matchWhere : Cond row -> Pred row
+```
+
+`matchWhere cond` — a row-side leaf that lifts a validated `Cond row` (built
+from the store's own accessor leaves, e.g. `Store.eq .status "published"`) into
+the predicate algebra. Reuses the `Cond` path verbatim: the column is checked
+against the row type at compile time and validated again at lowering, and the
+value binds through `Sql.param` — one audit, no new SQL surface.
+
+Example:
+
+    Store.matchWhere (Store.eq .status "published")
+
+## `readOnly`
+
+```ipe
+readOnly : Pred row -> Policy row
+```
+
+`readOnly p` — a read-only policy: `read = p`, every write scoped to `never`
+(fail-closed). The explicit constructor for read-only intent — a caller who
+wants a write path opens it deliberately with `alsoInsert` / `alsoUpdate` /
+`alsoDelete`, so no write is ever left open by omission.
+
+## `alsoInsert`
+
+```ipe
+alsoInsert : Pred row -> Policy row -> Policy row
+```
+
+`alsoInsert p base` — open the insert path of `base` to `p` (deliberately
+lifting insert off its `never` default).
+
+## `alsoUpdate`
+
+```ipe
+alsoUpdate : Pred row -> Policy row -> Policy row
+```
+
+`alsoUpdate p base` — open the update path of `base` to `p`.
+
+## `alsoDelete`
+
+```ipe
+alsoDelete : Pred row -> Policy row -> Policy row
+```
+
+`alsoDelete p base` — open the delete path of `base` to `p`.
 
 ## `unrestricted`
 
@@ -2025,10 +2140,15 @@ secured reads need. A reasoned divergence recorded here.
 unrestricted : Policy row
 ```
 
-`unrestricted` — the policy that allows all rows (an explicit empty
-conjunction). A store secured with `unrestricted` filters nothing; it exists so
-"no restriction" is a deliberate, named choice rather than the absence of a
+`unrestricted` — the policy whose every operation matches every row (reads
+and writes are unfiltered; a secured store still routes writes through the
+authenticated `…As` operations). Re-expressed over the algebra as `allowAll`.
+"No restriction" is a deliberate, named choice rather than the absence of a
 policy (which, deny-by-default, is instead an unsecured store).
+
+Observable behaviour is unchanged from the former empty-conjunction form: every
+operation's WHERE simplifies to the always-true identity fragment, exactly as
+the former empty rule list produced.
 
 ## `publicRead`
 
@@ -2036,9 +2156,11 @@ policy (which, deny-by-default, is instead an unsecured store).
 publicRead : Policy row
 ```
 
-`publicRead` — a policy of one public-read rule: reads are unrestricted while
-writes still route through the secured operations. A plain value (it names no
-column, so it needs no accessor).
+`publicRead` — reads are unrestricted while writes route through the secured
+operations. Re-expressed as `allowAll`, preserving the former public-read rule's
+observable behaviour (it added no read filter and left the write path open under
+the secured operations). Kept distinct from `unrestricted` for the intent it
+documents.
 
 ## `ownerColumn`
 
@@ -2046,11 +2168,15 @@ column, so it needs no accessor).
 ownerColumn : (row -> t) -> Policy row
 ```
 
-`ownerColumn accessor` — a policy of one owner-column rule over the
-accessor-named column: rows are scoped to the principal that owns that column.
-The column is named by an accessor literal (`.author`), checked against the
-row type at compile time and snake_cased to the validated column name at
-lowering (the same derivation `Codec.auto` uses), then delegated to
+`ownerColumn accessor` — the owner-scoped policy: all four operations are
+scoped to `column = $subject`, and inserts/updates FORCE that column to the
+caller's subject (so a caller can never write a row it could not read back).
+Backward-compatible re-expression of the former single owner-column rule; its
+observable SQL is unchanged (the read/get/update/delete WHERE is still
+`column = $subject`, and writes still force the owner column).
+
+The column is named by an accessor literal (`.author`), checked against the row
+type at compile time and snake_cased at lowering, then delegated to
 `ownerColumnNamed`.
 
 Example:
@@ -2063,13 +2189,19 @@ Example:
 immutable : (row -> t) -> Policy row
 ```
 
-`immutable accessor` — a policy of one immutable-column rule over the
-accessor-named column: the column cannot be changed after insert. Named by an
-accessor literal, checked against the row type, delegated to `immutableNamed`.
+`immutable accessor` — a policy whose accessor-named column cannot change
+after insert: the column is dropped from every update SET (its stored value is
+fixed at insert), while no operation is otherwise restricted. Composable: AND it
+into an owner/read policy to add the update restriction without loosening any
+operation (`always` is the neutral element of the per-operation conjunction).
+Backward-compatible with the former immutable rule — it added no filter and only
+dropped the column from an update, which this preserves exactly. Delegated to
+`immutableNamed`.
 
 Example:
 
-    Store.immutable .createdAt
+    Store.ownerColumn .author
+        |> Store.andPolicy (Store.immutable .createdAt)
 
 ## `andPolicy`
 
@@ -2077,10 +2209,15 @@ Example:
 andPolicy : Policy row -> Policy row -> Policy row
 ```
 
-`andPolicy a b` — the conjunction of two policies (their rules concatenated).
-Named `andPolicy` rather than `and` because `Store.and` is already the `Cond`
-connective (`List (Cond row) -> Cond row`); Ipê has no ad-hoc overloading, so
-the policy conjunction takes a distinct name.
+`andPolicy extra base` — compose two policies: conjoin each operation's
+predicate (`allOf [ base.op, extra.op ]`) and union the forced-owner and
+immutable column sets. Named `andPolicy` rather than `and` because `Store.and`
+is already the `Cond` connective; Ipê has no ad-hoc overloading.
+
+Backward-compatible with the former rule-list concatenation: the former
+`Policy (a ++ b)` applied every rule as a conjunction to the read/write WHERE
+and unioned the owner/immutable rule sets, which conjoining the per-operation
+predicates and unioning the column sets reproduces exactly.
 
 Example:
 
@@ -2094,14 +2231,16 @@ secured : Policy a -> Draft a -> Result Error (Secured a)
 ```
 
 `secured policy draft` — classify `draft` by attaching `policy`, or fail
-closed. This is one of the two `Draft` → queryable promotions (`public` is the
-other): it yields an opaque `Secured a`, the only value the authenticated
-`…As` operations accept. Every column the policy names is re-validated against
-the draft's own codec-derived columns (the same `hasColumn` check the query
-leaves and `specsWithinColumns` use): a policy column absent from the draft is
-a typed `Err`, never a silently ineffective policy. Deny-by-default holds — a
-table is queryable only through a deliberate classification, and a `secured`
-table is reachable only with a `Principal` through the `…As` operations.
+closed. One of the two `Draft` → queryable promotions (`public` is the other):
+it yields an opaque `Secured a`, the only value the authenticated `…As`
+operations accept. Every column any predicate names — across read/insert/
+update/delete AND the forced-owner and immutable column sets, at every depth of
+the algebra — is re-validated against the draft's own codec-derived columns (the
+same `hasColumn` check the query leaves use): a policy column absent from the
+draft is a typed `Err`, never a silently ineffective policy. Deny-by-default
+holds — a table is queryable only through a deliberate classification, and a
+`secured` table is reachable only with a `Principal` through the `…As`
+operations.
 
 Example:
 
@@ -2122,6 +2261,17 @@ ownerColumnNamed : String -> Policy row
 ```ipe
 immutableNamed : String -> Policy row
 ```
+
+## `explain`
+
+```ipe
+explain : Policy row -> String
+```
+
+`explain policy` — a human-readable rendering of the (simplified) policy, one
+line per operation. Because a `Policy` is transparent data, its meaning can be
+explained in full; the emitted SQL carries this as a leading comment so a
+reviewer reads the intent beside the generated WHERE.
 
 ## `allAs`
 
@@ -2150,10 +2300,10 @@ bind as parameters. A store with no primary key fails closed.
 insertAs : Auth.Principal -> Db -> Secured a -> a -> Task Error Int
 ```
 
-`insertAs principal db secured row` — insert `row`, forcing every
-`OwnerColumn` to `principal`'s subject so a caller can never write a row it
-would not be allowed to read back. The owner value binds as a parameter. The
-inserted-row count is returned.
+`insertAs principal db secured row` — insert `row`, forcing every owner
+column the policy scopes to `principal`'s subject so a caller can never write a
+row it would not be allowed to read back. The owner value binds as a parameter.
+The inserted-row count is returned.
 
 ## `updateAs`
 
@@ -2162,13 +2312,13 @@ updateAs : Auth.Principal -> Db -> Secured a -> a -> Task Error Int
 ```
 
 `updateAs principal db secured row` — update the row whose primary key
-matches `row`, but only when the policy admits it for `principal`; the owner
-filter is AND-ed into the WHERE so a caller cannot update another principal's
-row. Columns marked `Serial` / `DefaultNow` are omitted from the SET, and so
-is every column the policy marks `Immutable`: an immutable column's client
-value is dropped from the SET, so the stored value cannot change after insert
-(the guarantee `immutable` promises). A store with no primary key, or a record
-missing its key column, fails closed.
+matches `row`, but only when the policy's update predicate admits it for
+`principal`; that predicate is AND-ed into the WHERE so a caller cannot update
+another principal's row. Columns marked `Serial` / `DefaultNow` are omitted from
+the SET, and so is every column the policy holds immutable: an immutable
+column's client value is dropped from the SET, so the stored value cannot change
+after insert (the guarantee `immutable` promises). A store with no primary key,
+or a record missing its key column, fails closed.
 
 ## `deleteAs`
 
