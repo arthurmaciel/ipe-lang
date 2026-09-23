@@ -10,3 +10,8 @@ existsinok:ok
 existsinexplain:exists in shares where shares.doc_ref = author and its read policy: (member = caller subject)
 existsinouter:err
 existsinshare:err
+role:caller holds role admin
+memberof:caller is member of group platform
+claimeq:caller claim tenant = acme
+notrole:not (caller holds role admin)
+principalleaf:ok
