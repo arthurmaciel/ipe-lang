@@ -2679,7 +2679,9 @@ pub fn db_find_where_masked<E: Send + From<String> + 'static, A: Send + 'static>
         }
         if projections.is_empty() {
             return IpeResult::Err(
-                "db.findWhereMasked: a masked read must project at least one column".into(),
+                "db.findWhereMasked: a masked read must project at least one column"
+                    .to_string()
+                    .into(),
             );
         }
         let qtable = match SqlIdent::parse_plain(&table) {
