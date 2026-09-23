@@ -9215,13 +9215,16 @@ impl StdlibKernel {
         const PRED_A: TyShape = TyShape::Con(BuiltinTag::DbPred, &[A]);
         const PRED_B: TyShape = TyShape::Con(BuiltinTag::DbPred, &[B]);
         const SECURED_A: TyShape = TyShape::Con(BuiltinTag::DbSecured, &[A]);
-        // `correlate : (share -> t) -> (row -> t) -> Pred share`
-        // (share = var(0) = A, t = var(1) = B, row = var(2) = C).
+        // `correlate : t -> t -> Pred share` (t = var(0) = A, share = var(1) = B).
+        // Both arguments are column VALUES read directly at the call site
+        // (`correlate share.docRef doc.author`), sharing one column type `t` so a
+        // share-side column and an outer-side column of unequal type cannot be
+        // equated. The lowering intercept reads each argument structurally as a
+        // `.field` access on its binder; `existsIn` ties this `Pred share` result
+        // to its lambda's share binder.
         const STORE_CORRELATE: TyShape = {
-            const SHARE_TO_T: TyShape = TyShape::Fun(&A, &B);
-            const ROW_TO_T: TyShape = TyShape::Fun(&C, &B);
-            const ROW_TO_T_TO_PRED: TyShape = TyShape::Fun(&ROW_TO_T, &PRED_A);
-            TyShape::Fun(&SHARE_TO_T, &ROW_TO_T_TO_PRED)
+            const T_TO_PRED_SHARE: TyShape = TyShape::Fun(&A, &PRED_B);
+            TyShape::Fun(&A, &T_TO_PRED_SHARE)
         };
         // `existsIn : Secured share -> (share -> row -> Pred share) -> Pred row`
         // (share = var(0) = A, row = var(1) = B).

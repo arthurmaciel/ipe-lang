@@ -2101,21 +2101,23 @@ Example:
 ## `correlate`
 
 ```ipe
-correlate : (share -> t) -> (row -> t) -> Pred share
+correlate : t -> t -> Pred share
 ```
 
-`correlate shareAccessor rowAccessor` — the column=column correlation leaf
-of an `existsIn` predicate. It equates a `share`-side column with the OUTER
-`row`-side column (`shares.doc = docs.id`) — the one comparison `matchWhere`
-cannot express, because a `Cond`'s right-hand side is always a bound value,
-never another row's column. Both accessors name validated columns pinned to
-their own record types by the shared value type; the intercept reads them
-structurally at lowering. Valid ONLY as the body (or an `allOf` element) of an
-`existsIn` lambda — a point-free or standalone use fails closed at lowering.
+`correlate shareColumn rowColumn` — the column=column correlation leaf of an
+`existsIn` predicate. It equates a `share`-side column with the OUTER `row`-side
+column (`shares.doc = docs.id`) — the one comparison `matchWhere` cannot
+express, because a `Cond`'s right-hand side is always a bound value, never
+another row's column. Each argument is a column read directly off its binder
+(`share.docId`, `doc.id`); the shared value type `t` keeps a share column and an
+outer column of unequal type from being equated, and the intercept reads each
+`.field` access structurally at lowering. Valid ONLY as the body (or an `allOf`
+element) of an `existsIn` lambda — a point-free or standalone use fails closed
+at lowering.
 
 Example:
 
-    Store.existsIn shares (\share doc -> Store.correlate .docId doc.id)
+    Store.existsIn shares (\share doc -> Store.correlate share.docId doc.id)
 
 ## `existsIn`
 
@@ -2138,7 +2140,7 @@ Example (a doc is readable when the caller has a share row for it):
 
     Store.readOnly
         (Store.existsIn securedShares
-            (\share doc -> Store.correlate .docId doc.id)
+            (\share doc -> Store.correlate share.docId doc.id)
         )
 
 ## `existsInNamed`

@@ -4427,19 +4427,21 @@ matchWhere cond =
     PMatch cond
 
 
--- | `correlate shareAccessor rowAccessor` — the column=column correlation leaf
--- of an `existsIn` predicate. It equates a `share`-side column with the OUTER
--- `row`-side column (`shares.doc = docs.id`) — the one comparison `matchWhere`
--- cannot express, because a `Cond`'s right-hand side is always a bound value,
--- never another row's column. Both accessors name validated columns pinned to
--- their own record types by the shared value type; the intercept reads them
--- structurally at lowering. Valid ONLY as the body (or an `allOf` element) of an
--- `existsIn` lambda — a point-free or standalone use fails closed at lowering.
+-- | `correlate shareColumn rowColumn` — the column=column correlation leaf of an
+-- `existsIn` predicate. It equates a `share`-side column with the OUTER `row`-side
+-- column (`shares.doc = docs.id`) — the one comparison `matchWhere` cannot
+-- express, because a `Cond`'s right-hand side is always a bound value, never
+-- another row's column. Each argument is a column read directly off its binder
+-- (`share.docId`, `doc.id`); the shared value type `t` keeps a share column and an
+-- outer column of unequal type from being equated, and the intercept reads each
+-- `.field` access structurally at lowering. Valid ONLY as the body (or an `allOf`
+-- element) of an `existsIn` lambda — a point-free or standalone use fails closed
+-- at lowering.
 --
 -- Example:
 --
---     Store.existsIn shares (\share doc -> Store.correlate .docId doc.id)
-correlate : (share -> t) -> (row -> t) -> Pred share
+--     Store.existsIn shares (\share doc -> Store.correlate share.docId doc.id)
+correlate : t -> t -> Pred share
 correlate =
     Kernel.kernel "Store_correlate"
 
@@ -4459,7 +4461,7 @@ correlate =
 --
 --     Store.readOnly
 --         (Store.existsIn securedShares
---             (\share doc -> Store.correlate .docId doc.id)
+--             (\share doc -> Store.correlate share.docId doc.id)
 --         )
 existsIn : Secured share -> (share -> row -> Pred share) -> Pred row
 existsIn =
@@ -4467,8 +4469,8 @@ existsIn =
 
 
 -- The stringly form the `existsIn` intercept builds: the intercept extracts the
--- two correlation columns from the `correlate` lambda (compile-time, from the
--- accessors) and passes the referenced share store's runtime `Secured` value
+-- two correlation columns from the `correlate` lambda (compile-time, from each
+-- `.field` access) and passes the referenced share store's runtime `Secured` value
 -- through; the share table, columns, and OWN read predicate are read from it
 -- HERE (runtime), so the `PExists` leaf carries transparent data with no closure.
 -- Exported only so the intercept can name it; a caller writes `existsIn` with a
