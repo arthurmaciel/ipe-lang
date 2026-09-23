@@ -2098,6 +2098,55 @@ Example:
 
     Store.matchWhere (Store.eq .status "published")
 
+## `correlate`
+
+```ipe
+correlate : (share -> t) -> (row -> t) -> Pred share
+```
+
+`correlate shareAccessor rowAccessor` — the column=column correlation leaf
+of an `existsIn` predicate. It equates a `share`-side column with the OUTER
+`row`-side column (`shares.doc = docs.id`) — the one comparison `matchWhere`
+cannot express, because a `Cond`'s right-hand side is always a bound value,
+never another row's column. Both accessors name validated columns pinned to
+their own record types by the shared value type; the intercept reads them
+structurally at lowering. Valid ONLY as the body (or an `allOf` element) of an
+`existsIn` lambda — a point-free or standalone use fails closed at lowering.
+
+Example:
+
+    Store.existsIn shares (\share doc -> Store.correlate .docId doc.id)
+
+## `existsIn`
+
+```ipe
+existsIn : Secured share -> (share -> row -> Pred share) -> Pred row
+```
+
+`existsIn shares lambda` — a correlated-subquery row-security predicate over
+the enclosing store: the outer row is admitted only when a row of the
+referenced `shares` store satisfies BOTH the lambda's `correlate` correlation
+AND `shares`'s OWN read policy (composed into the subquery's WHERE, defence in
+depth). Lowered to `EXISTS (SELECT 1 FROM <shares-table> WHERE <correlation>
+AND <shares read policy>)` through the audited `Sql.exists` / `Sql.column` /
+`Sql.and` path — the table is validated, both correlation columns are
+`Sql.column` references (never caller text), and no value is interpolated, so
+the subquery adds no injection surface. `secured` re-validates every column
+`existsIn` names on BOTH the share side and the outer side.
+
+Example (a doc is readable when the caller has a share row for it):
+
+    Store.readOnly
+        (Store.existsIn securedShares
+            (\share doc -> Store.correlate .docId doc.id)
+        )
+
+## `existsInNamed`
+
+```ipe
+existsInNamed : Secured share -> String -> String -> Pred row
+```
+
 ## `readOnly`
 
 ```ipe
