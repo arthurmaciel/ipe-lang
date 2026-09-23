@@ -262,7 +262,11 @@ where
 /// live model is only ever touched from one thread and determinism
 /// (`reconstruct(n) == live`) is preserved by construction: the seam borrows the
 /// model read-only and re-fires no `Cmd`.
-#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+///
+/// Gated on `control-wire` (a superset of `debugger`), so a DEFAULT `ipe watch`
+/// on a tui app mounts the bridge for the appearance hot-swap path; `--debugger`
+/// (which implies `control-wire`) additionally carries the scrub/inspect frames.
+#[cfg(all(feature = "control-wire", not(target_arch = "wasm32")))]
 struct ControlRequest {
     frame: crate::control::ControlFrame,
     reply: tokio::sync::oneshot::Sender<crate::control::ControlFrame>,
@@ -275,7 +279,7 @@ struct ControlRequest {
 /// (detached, per-connection) task until the run loop answers. A dropped run loop
 /// (child exiting) makes the enqueue or the `blocking_recv` fail, so the handler
 /// falls closed to a rejecting `Ack` rather than hanging.
-#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "control-wire", not(target_arch = "wasm32")))]
 fn control_bridge_channel() -> (
     impl Fn(crate::control::ControlFrame) -> crate::control::ControlFrame + Send + Sync + 'static,
     tokio::sync::mpsc::UnboundedReceiver<ControlRequest>,
@@ -317,9 +321,9 @@ fn control_bridge_channel() -> (
 /// itself binds nothing unless BOTH `IPE_CONTROL_PORT` and the session token env
 /// vars are present (a child with no `ipe watch` parent opens no socket), binds
 /// loopback only, and token-checks every connection before its frame is decoded.
-/// The whole surface is absent from a release build — the module is gated on the
-/// `debugger` dev-loop feature.
-#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+/// The whole surface is absent from a release build — the module is gated on a
+/// dev-loop feature (`control-wire`), which no `ipe release` artifact selects.
+#[cfg(all(feature = "control-wire", not(target_arch = "wasm32")))]
 fn spawn_control_bridge() -> tokio::sync::mpsc::UnboundedReceiver<ControlRequest> {
     let (handler, req_rx) = control_bridge_channel();
     tokio::spawn(async move {
@@ -572,7 +576,7 @@ where
 /// costs zero writes, never a full-screen redraw.
 ///
 /// [`apply_control_frame`]: TuiSurface::apply_control_frame
-#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "control-wire", not(target_arch = "wasm32")))]
 pub struct ApplyOutcome<Msg> {
     /// The child→parent reply frame (`Ack` or `ModelSnapshot`).
     pub reply: crate::control::ControlFrame,
@@ -590,7 +594,7 @@ pub struct ApplyOutcome<Msg> {
 /// the keyboard-driven scrub and the (later) wire-driven control both drive the
 /// identical path — a second apply path is a divergence waiting to happen (the
 /// `CellsView`-vs-`Element` drift that #2762 fixed).
-#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "control-wire", not(target_arch = "wasm32")))]
 pub struct TuiSurface {
     inputs: InputRegistry,
     focus_idx: usize,
@@ -600,7 +604,7 @@ pub struct TuiSurface {
     last_frame: Option<String>,
 }
 
-#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "control-wire", not(target_arch = "wasm32")))]
 impl TuiSurface {
     fn new(inputs: InputRegistry, focus_idx: usize, scroll_y: usize) -> Self {
         Self {
@@ -640,15 +644,120 @@ impl TuiSurface {
         Some(annotated)
     }
 
-    /// Realize an incoming control frame onto the surface — the ONE apply seam.
+    /// Lay out `display_model` at the surface's current focus/scroll WITHOUT the
+    /// debugger status line and WITHOUT painting — the debugger-free core of an
+    /// appearance repaint. Owns the `CellsView -> Element` conversion so the
+    /// appearance path never drifts from the layout input contract. Returns the
+    /// frame string and the freshly-rendered focusables.
     ///
-    /// Two parent→child arms, one shared repaint tail:
+    /// This is the render the `control-wire` (default-`ipe watch`) appearance
+    /// apply uses: no `TuiDebugger` in scope, so a hot-swap needs no recorder. A
+    /// `--debugger` build renders through `render_debug_annotated` instead so the
+    /// status-line overlay is preserved — the sole appearance path within each
+    /// build, never two ad-hoc ones.
+    #[cfg(not(feature = "debugger"))]
+    fn render_surface<Model, Msg, FView>(
+        &mut self,
+        view: &FView,
+        display_model: Model,
+    ) -> (String, Vec<Focusable<Msg>>)
+    where
+        Model: Clone,
+        Msg: Clone,
+        FView: Fn(Model) -> CellsView<Msg>,
+    {
+        let (cols, rows) = term_size();
+        let (frame, fs, _) = render_with_focus(
+            &view(display_model).into_element(),
+            cols,
+            rows,
+            self.focus_idx,
+            &mut self.inputs,
+            self.scroll_y,
+        );
+        (frame, fs)
+    }
+
+    /// Realize an incoming control frame onto the surface — the ONE apply seam
+    /// on a default `ipe watch` (no debugger).
+    ///
+    /// The single parent→child command a `control-wire`-only build carries is the
+    /// appearance hot-swap; the debugger's scrub/inspect frames are added by the
+    /// `#[cfg(feature = "debugger")]` variant of this method (which threads a
+    /// `TuiDebugger`). Splitting the signature this way lets the appearance path
+    /// apply with NO recorder in scope while the debugger path still gets one.
     ///
     /// - [`ControlFrame::HotAppearance`] — register the appearance patch in the
-    ///   dev overlay (where that mechanism is compiled in), then recompute the
-    ///   surface from the CURRENT `model` (never through `update` — an
-    ///   appearance-only edit changes literals, not state) and diff-repaint.
-    ///   Focus and scroll are preserved.
+    ///   dev overlay, then recompute the surface from the CURRENT `model` (never
+    ///   through `update` — an appearance-only edit changes literals, not state)
+    ///   and diff-repaint. Focus and scroll are preserved.
+    /// - `Ack` / `ModelSnapshot` are child→parent REPLIES: receiving one is a
+    ///   malformed exchange, failed closed with a rejecting `Ack` and no repaint.
+    ///
+    /// `model` is the live head model; the seam borrows it read-only and never
+    /// mutates it.
+    #[cfg(not(feature = "debugger"))]
+    pub fn apply_control_frame<Model, Msg, FView>(
+        &mut self,
+        frame: crate::control::ControlFrame,
+        view: &FView,
+        model: &Model,
+    ) -> ApplyOutcome<Msg>
+    where
+        Model: Clone,
+        Msg: Clone + IpeStringify,
+        FView: Fn(Model) -> CellsView<Msg>,
+    {
+        use crate::control::ControlFrame;
+        match frame {
+            ControlFrame::HotAppearance(patch) => {
+                // Register the appearance overlay in the crate-root
+                // `literal_table` module (present under `control-wire`). A tui
+                // view's hoisted literals route through this same overlay, so the
+                // recompute below reflects the edit.
+                crate::literal_table::register_dev_patch(&patch.defaults, patch.patch.clone());
+
+                // Recompute from the CURRENT model — NOT through `update` — with
+                // no recorder in scope: an appearance edit changes literals, not
+                // state, and a non-debugger watch has no scrub cursor to honour.
+                let (frame_str, fs) = self.render_surface(view, model.clone());
+                let repaint = self.diff_repaint(frame_str);
+                ApplyOutcome {
+                    reply: ControlFrame::Ack {
+                        ok: true,
+                        detail: "hot-appearance applied".to_owned(),
+                    },
+                    focusables: repaint.as_ref().map(|_| fs),
+                    repaint,
+                }
+            }
+            // Child→parent REPLIES are never a command the child applies. Fail
+            // closed with a rejecting `Ack` (an exhaustive match — a new
+            // parent→child variant must be handled, never silently swallowed).
+            ControlFrame::Ack { .. } | ControlFrame::ModelSnapshot { .. } => ApplyOutcome {
+                reply: ControlFrame::Ack {
+                    ok: false,
+                    detail: "not a parent-to-child command".to_owned(),
+                },
+                repaint: None,
+                focusables: None,
+            },
+        }
+    }
+}
+
+/// The debugger extensions of the apply seam: the recorder-driven scrub/inspect
+/// arms, threaded a `&mut TuiDebugger`. A `--debugger` build (which implies
+/// `control-wire`) carries these on top of the appearance apply above; the
+/// appearance arm here is the SAME single path, rendered through
+/// [`render_debug_annotated`] so the status-line overlay is preserved.
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+impl TuiSurface {
+    /// Realize an incoming control frame — the ONE apply seam under `--debugger`.
+    ///
+    /// - [`ControlFrame::HotAppearance`] — recompute from the CURRENT model (the
+    ///   scrub cursor is untouched, so a hot-swap while time-travelling repaints
+    ///   the pinned step, not the live head) and diff-repaint.
     /// - [`ControlFrame::Debug`] — drive the recorder: `StepTo`/`Back`/`Forward`
     ///   move the scrub cursor and reconstruct the model at that step;
     ///   `InspectModel` reconstructs read-only and replies with a
@@ -657,9 +766,8 @@ impl TuiSurface {
     ///   `update` over the retained messages and re-fires no `Cmd`, so a scrub
     ///   never perturbs the live model (determinism, principle 2).
     ///
-    /// `model` is the live head model; the seam borrows it read-only and never
-    /// mutates it. The reply is an [`Ack`](crate::control::ControlFrame::Ack) for
-    /// every arm except `InspectModel`, which replies with the snapshot.
+    /// The reply is an [`Ack`](crate::control::ControlFrame::Ack) for every arm
+    /// except `InspectModel`, which replies with the snapshot.
     pub fn apply_control_frame<Model, Msg, FView>(
         &mut self,
         frame: crate::control::ControlFrame,
@@ -675,17 +783,11 @@ impl TuiSurface {
         use crate::control::ControlFrame;
         match frame {
             ControlFrame::HotAppearance(patch) => {
-                // Register the appearance overlay in the crate-root
-                // `literal_table` module. It compiles under any dev-loop surface
-                // (`web-core` / `control-wire` / `debugger`); this seam is only
-                // reached under `debugger` (⇒ `control-wire`), so the module is
-                // always present here. A tui view's hoisted literals route through
-                // this same overlay, so the recompute below reflects the edit.
                 crate::literal_table::register_dev_patch(&patch.defaults, patch.patch.clone());
 
-                // Recompute the surface from the CURRENT model — NOT through
-                // `update`. The scrub cursor is untouched, so a hot-swap while
-                // time-travelling repaints the pinned step, not the live head.
+                // Recompute from the CURRENT model — NOT through `update`. The
+                // scrub cursor is untouched, so a hot-swap while time-travelling
+                // repaints the pinned step, not the live head.
                 let display = dbg.current_reconstructed().unwrap_or_else(|| model.clone());
                 let (annotated, fs) = render_debug_annotated(
                     view,
@@ -707,10 +809,9 @@ impl TuiSurface {
             }
             ControlFrame::Debug(cmd) => self.apply_debug(cmd, view, model, dbg),
             // `Ack` / `ModelSnapshot` are child→parent REPLIES, never a command
-            // the child applies. Receiving one is a malformed control exchange:
-            // fail closed with a rejecting `Ack` and no repaint (an exhaustive
-            // match — a new parent→child variant must be handled here, never
-            // silently swallowed).
+            // the child applies. Fail closed with a rejecting `Ack` and no repaint
+            // (an exhaustive match — a new parent→child variant must be handled
+            // here, never silently swallowed).
             ControlFrame::Ack { .. } | ControlFrame::ModelSnapshot { .. } => ApplyOutcome {
                 reply: ControlFrame::Ack {
                     ok: false,
@@ -912,10 +1013,12 @@ where
         };
 
         // The loopback control channel: `ipe watch` (parent) delivers hot-swap
-        // and time-travel frames here; the run loop applies each through the ONE
-        // apply seam on its own thread (below). Fail-closed and release-absent —
-        // `spawn_control_bridge` binds nothing without a port + token.
-        #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+        // (default watch) and time-travel (`--debugger`) frames here; the run loop
+        // applies each through the ONE apply seam on its own thread (below).
+        // Fail-closed and release-absent — `spawn_control_bridge` binds nothing
+        // without a port + token, and the whole surface is gated on `control-wire`
+        // (absent from every `ipe release` artifact).
+        #[cfg(all(feature = "control-wire", not(target_arch = "wasm32")))]
         let mut control_rx = spawn_control_bridge();
 
         let mut inputs = InputRegistry::new();
@@ -965,7 +1068,62 @@ where
                     None => break,
                 },
             };
-            #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
+            // Default `ipe watch` (control-wire, no debugger): drain the control
+            // channel for the appearance hot-swap only — the sole parent→child
+            // command a non-debugger build carries. Applied on THIS thread (the
+            // single writer of `model`/the render surface) through the ONE seam,
+            // so a keyboard event and a control frame never race the model.
+            #[cfg(all(
+                feature = "control-wire",
+                not(feature = "debugger"),
+                not(target_arch = "wasm32")
+            ))]
+            let ev = tokio::select! {
+                biased;
+                req = control_rx.recv() => match req {
+                    Some(req) => {
+                        let outcome = {
+                            let mut surface =
+                                TuiSurface::new(std::mem::take(&mut inputs), focus_idx, scroll_y);
+                            let outcome = surface.apply_control_frame(req.frame, &view, &model);
+                            inputs = std::mem::take(&mut surface.inputs);
+                            outcome
+                        };
+                        if let Some(frame) = outcome.repaint {
+                            paint(&frame);
+                        }
+                        if let Some(fs) = outcome.focusables {
+                            focusables = fs;
+                        }
+                        // Reply to the parent; a dropped receiver (parent gone) is
+                        // benign — the frame was still applied.
+                        let _ = req.reply.send(outcome.reply);
+                        continue;
+                    }
+                    // The bridge sender was dropped (accept loop gone): stop
+                    // draining control frames but keep serving app events.
+                    None => match rx.recv().await {
+                        Some(ev) => ev,
+                        None => break,
+                    },
+                },
+                ev = rx.recv() => match ev {
+                    Some(ev) => ev,
+                    None => break,
+                },
+            };
+            // Release / plain build: no control surface — serve app events only.
+            #[cfg(all(
+                not(feature = "control-wire"),
+                not(all(feature = "debugger", not(target_arch = "wasm32")))
+            ))]
+            let ev = match rx.recv().await {
+                Some(ev) => ev,
+                None => break,
+            };
+            // A wasm target under control-wire has no native control socket; the
+            // control_rx binding is native-only, so serve app events directly.
+            #[cfg(all(feature = "control-wire", target_arch = "wasm32"))]
             let ev = match rx.recv().await {
                 Some(ev) => ev,
                 None => break,
@@ -1571,6 +1729,116 @@ mod apply_seam_tests {
             handler(ControlFrame::HotAppearance(
                 crate::control::AppearancePatch::default(),
             ))
+        })
+        .await
+        .expect("the handler task joins");
+
+        assert!(
+            matches!(reply, ControlFrame::Ack { ok: false, .. }),
+            "a frame with no run loop to apply it is rejected, not silently accepted; \
+             got {reply:?}"
+        );
+    }
+}
+
+// ── The default-watch (control-wire, no debugger) apply-seam tests ───────────
+//
+// A default `ipe watch` on a tui app mounts the seam WITHOUT the recorder: the
+// only parent→child command it carries is the appearance hot-swap. These pin
+// that debugger-free path — the appearance apply, the minimal-repaint dedup, the
+// preserved input state, the fail-closed reply-frame rejection, and the bridge's
+// fail-closed behaviour when the run loop is gone — independently of any wire.
+#[cfg(all(
+    test,
+    feature = "control-wire",
+    not(feature = "debugger"),
+    not(target_arch = "wasm32")
+))]
+mod control_wire_seam_tests {
+    use super::*;
+    use crate::control::{AppearancePatch, ControlFrame};
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct TModel {
+        count: i64,
+    }
+
+    impl IpeStringify for TModel {
+        fn ipe_show(&self) -> String {
+            format!("count={}", self.count)
+        }
+    }
+
+    // Distinct models render distinct frames — the property the diff-repaint test
+    // relies on. (`Msg` is `()`: a default watch drives no scrub, so the seam
+    // never constructs one.)
+    fn t_view(model: TModel) -> CellsView<()> {
+        super::super::cells_text_(format!("count={}", model.count))
+    }
+
+    // (a) A HotAppearance frame recomputes from the CURRENT model with NO recorder
+    // in scope, replies `Ack ok`, and preserves focus/scroll; a second identical
+    // apply reproduces the frame, so the diff guard requests NO repaint (minimal
+    // repaint, never a full redraw).
+    #[test]
+    fn hot_appearance_applies_without_a_debugger_and_diffs() {
+        let live = TModel { count: 7 };
+        let mut surface = TuiSurface::new(InputRegistry::new(), 2, 5);
+        let patch = AppearancePatch::default();
+
+        let first =
+            surface.apply_control_frame(ControlFrame::HotAppearance(patch.clone()), &t_view, &live);
+        assert!(
+            matches!(first.reply, ControlFrame::Ack { ok: true, .. }),
+            "hot-appearance replies Ack ok"
+        );
+        assert!(
+            first.repaint.is_some(),
+            "the first apply establishes the frame (a repaint)"
+        );
+
+        let second =
+            surface.apply_control_frame(ControlFrame::HotAppearance(patch), &t_view, &live);
+        assert!(
+            second.repaint.is_none(),
+            "an unchanged surface repaints nothing (no full-screen redraw)"
+        );
+        assert_eq!(surface.focus_idx(), 2, "focus preserved");
+        assert_eq!(surface.scroll_y(), 5, "scroll preserved");
+    }
+
+    // (b) Fail closed: a child→parent REPLY frame arriving as a command is not a
+    // parent→child command — it is rejected with a non-ok `Ack` and no repaint,
+    // never silently applied.
+    #[test]
+    fn reply_frame_is_rejected_fail_closed() {
+        let live = TModel { count: 0 };
+        let mut surface = TuiSurface::new(InputRegistry::new(), 0, 0);
+        let out = surface.apply_control_frame(
+            ControlFrame::Ack {
+                ok: true,
+                detail: "not a command".to_owned(),
+            },
+            &t_view,
+            &live,
+        );
+        assert!(
+            matches!(out.reply, ControlFrame::Ack { ok: false, .. }),
+            "a reply frame is not a parent-to-child command — rejected fail-closed"
+        );
+        assert!(out.repaint.is_none(), "a rejected frame repaints nothing");
+    }
+
+    // (c) Fail closed: with the run loop's receiver dropped (child exiting), the
+    // bridge handler never hangs — it returns a REJECTING Ack so `ipe watch` falls
+    // back to a full rebuild rather than believe a frame applied.
+    #[tokio::test]
+    async fn bridge_fails_closed_when_the_run_loop_is_gone() {
+        let (handler, req_rx) = control_bridge_channel();
+        drop(req_rx); // the run loop is gone
+
+        let reply = tokio::task::spawn_blocking(move || {
+            handler(ControlFrame::HotAppearance(AppearancePatch::default()))
         })
         .await
         .expect("the handler task joins");
