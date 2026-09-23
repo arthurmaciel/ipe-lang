@@ -709,6 +709,86 @@ mod tests {
     }
 
     #[test]
+    fn dotted_user_module_type_in_annotation_resolves() {
+        // Regression pin: a bare `import Rls.Owner` (no `as`) registers the
+        // module under BOTH its leaf (`Owner`) and its full dotted path
+        // (`Rls.Owner`), so a fully-qualified TYPE reference `Rls.Owner.Doc`
+        // resolves the same as its expression use — neither is turned away as an
+        // unknown module. The type is a record alias, exercising the qualified
+        // alias-key expansion under the dotted qualifier.
+        let err = canon_main_with_dep(
+            "module Rls.Owner exposing (Doc, word)\n\
+             type alias Doc =\n    { body : String }\n\n\
+             word : String\n\
+             word =\n    \"w\"\n",
+            "module Main exposing (main)\n\
+             import Rls.Owner\n\n\
+             thing : Rls.Owner.Doc\n\
+             thing =\n    { body = \"x\" }\n\n\
+             main =\n    thing.body\n",
+        );
+        assert!(
+            err.is_none(),
+            "a dotted user module referenced by fully-qualified TYPE \
+             (`Rls.Owner.Doc`) must resolve, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dotted_user_module_value_in_expression_resolves() {
+        // Non-regression companion: the SAME dotted module referenced by
+        // fully-qualified VALUE (`Rls.Owner.word`) still resolves — the leaf and
+        // dotted qualifiers back the identical member table.
+        let err = canon_main_with_dep(
+            "module Rls.Owner exposing (Doc, word)\n\
+             type alias Doc =\n    { body : String }\n\n\
+             word : String\n\
+             word =\n    \"w\"\n",
+            "module Main exposing (main)\n\
+             import Rls.Owner\n\n\
+             main =\n    Rls.Owner.word\n",
+        );
+        assert!(
+            err.is_none(),
+            "a dotted user module referenced by fully-qualified VALUE \
+             (`Rls.Owner.word`) must resolve, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_dotted_qualifier_in_type_is_unknown_module() {
+        // Prove the refusal survives: opening the resolver to a dotted user
+        // module must NOT make a genuinely-unknown dotted qualifier silently
+        // resolve. `Rls.Ownr` (a typo of the imported `Rls.Owner`) names no
+        // registered qualifier, so a TYPE annotation over it is IPE-N0004
+        // UnknownModule — never a silent success.
+        let err = canon_main_with_dep(
+            "module Rls.Owner exposing (Doc, word)\n\
+             type alias Doc =\n    { body : String }\n\n\
+             word : String\n\
+             word =\n    \"w\"\n",
+            "module Main exposing (main)\n\
+             import Rls.Owner\n\n\
+             thing : Rls.Ownr.Doc\n\
+             thing =\n    { body = \"x\" }\n\n\
+             main =\n    thing.body\n",
+        );
+        let Some(Diagnostic::Name {
+            msg: NameError::UnknownModule { qualifier, .. },
+            ..
+        }) = err
+        else {
+            assert!(
+                false_marker(),
+                "an unknown dotted qualifier in TYPE position must be \
+                 UnknownModule (IPE-N0004), got {err:?}"
+            );
+            return;
+        };
+        assert_eq!(&*qualifier, "Rls.Ownr");
+    }
+
+    #[test]
     fn known_qualifier_missing_member_is_no_such_member() {
         // `sha25` is one deletion from the `Crypto` member `sha256`.
         let err =
