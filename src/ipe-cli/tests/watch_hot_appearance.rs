@@ -378,6 +378,18 @@ fn web_fixture_grid(cols: &str, rows: &str) -> String {
     )
 }
 
+/// E2E budget for an appearance hot-swap (no `cargo` build, no process restart).
+///
+/// Under normal conditions the pipeline completes in under a second: FS debounce
+/// quiesces (≤120 ms + 600 ms hard cap), the classifier runs in-process, the
+/// `/_ipe/hot-appearance` POST reaches the child, and the `AppearanceHotSwapped`
+/// event fires. Under CI CPU starvation (sccache down, many shards competing for
+/// the runner) every step can slow substantially. 90 s is the ceiling: generous
+/// enough to survive heavy contention (matched to the warm-rebuild budget used in
+/// `watch_integration.rs`) while proving no cargo build ran — any rebuild would
+/// fire `Restarted` and the test catches that separately.
+const E2E_HOT_SWAP_BUDGET: Duration = Duration::from_secs(90);
+
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
     let base = std::env::temp_dir().join(format!(
         "watch_hot_{tag}_{}_{}",
@@ -602,7 +614,7 @@ fn style_edit_hot_swaps_without_rebuild_and_structural_edit_recompiles() -> Resu
     // ── Style-value edit: padding 12 -> 16. Appearance-only ⇒ hot-swap. ──
     write_main(&ipe_dir, &web_fixture(16, ""))?;
     let swap_start = Instant::now();
-    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    let hot_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0);
     let swap_elapsed = swap_start.elapsed();
     assert!(
         hot_swapped,
@@ -704,7 +716,7 @@ fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
     let hot_before_attr = sink.count_hot_swapped();
     write_main(&ipe_dir, &web_fixture_attr_text("panel", "Hello"))?;
     let attr_start = Instant::now();
-    let attr_swapped = wait_for(Duration::from_secs(20), || {
+    let attr_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || {
         sink.count_hot_swapped() > hot_before_attr
     });
     let attr_elapsed = attr_start.elapsed();
@@ -733,7 +745,7 @@ fn attribute_and_text_edits_hot_swap_without_rebuild() -> Result<(), BoxError> {
     let hot_before_text = sink.count_hot_swapped();
     write_main(&ipe_dir, &web_fixture_attr_text("panel", "Goodbye"))?;
     let text_start = Instant::now();
-    let text_swapped = wait_for(Duration::from_secs(20), || {
+    let text_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || {
         sink.count_hot_swapped() > hot_before_text
     });
     let text_elapsed = text_start.elapsed();
@@ -830,7 +842,7 @@ fn numeric_weight_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     // ── Numeric edit: weight 400 -> 700. Appearance-only ⇒ hot-swap, no rebuild. ──
     write_main(&ipe_dir, &web_fixture_weight(700, ""))?;
     let swap_start = Instant::now();
-    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    let hot_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0);
     assert!(
         hot_swapped,
         "a Font.weight value edit must be hot-swapped (AppearanceHotSwapped), not recompiled"
@@ -930,7 +942,7 @@ fn animation_duration_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     //    confined to a hoisted LiteralTable slot ⇒ appearance-only hot-swap. ──
     write_main(&ipe_dir, &web_fixture_animation(600, ""))?;
     let swap_start = Instant::now();
-    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    let hot_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0);
     assert!(
         hot_swapped,
         "a folded animation `duration` edit must be hot-swapped (AppearanceHotSwapped), \
@@ -1023,7 +1035,7 @@ fn grid_tracks_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     // ── Raw-CSS value edit: cols "1fr 1fr" -> "2fr 1fr". Appearance-only. ──
     write_main(&ipe_dir, &web_fixture_grid("2fr 1fr", "auto"))?;
     let swap_start = Instant::now();
-    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    let hot_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0);
     assert!(
         hot_swapped,
         "a raw-CSS gridTracks value edit must be hot-swapped (AppearanceHotSwapped), \
@@ -1117,7 +1129,7 @@ fn image_alt_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     let hot_before_alt = sink.count_hot_swapped();
     write_main(&ipe_dir, &web_fixture_image("a dog"))?;
     let alt_start = Instant::now();
-    let alt_swapped = wait_for(Duration::from_secs(20), || {
+    let alt_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || {
         sink.count_hot_swapped() > hot_before_alt
     });
     let alt_elapsed = alt_start.elapsed();
@@ -1217,7 +1229,7 @@ fn css_value_edit_hot_swaps_and_is_byte_identical() -> Result<(), BoxError> {
     // ── Css-value edit: 16px -> 24px. Appearance-only ⇒ hot-swap, no rebuild. ──
     write_main(&ipe_dir, &web_fixture_css("24px"))?;
     let swap_start = Instant::now();
-    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    let hot_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0);
     assert!(
         hot_swapped,
         "a Css-value edit must be hot-swapped (AppearanceHotSwapped), not recompiled"
@@ -1322,7 +1334,7 @@ fn static_html_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(),
     write_main(&ipe_dir, &web_fixture_static_html("uno", ""))?;
     let swap_start = Instant::now();
     assert!(
-        wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0),
+        wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0),
         "a static-text edit inside a templated subtree must hot-swap, not recompile"
     );
     std::thread::sleep(Duration::from_secs(2));
@@ -1351,7 +1363,7 @@ fn static_html_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(),
     )?;
     let add_start = Instant::now();
     assert!(
-        wait_for(Duration::from_secs(20), || {
+        wait_for(E2E_HOT_SWAP_BUDGET, || {
             sink.count_hot_swapped() > hot_before_add
         }),
         "adding a fully-static child element must hot-swap (structural template edit), not recompile"
@@ -1433,7 +1445,7 @@ fn static_ui_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), B
     write_main(&ipe_dir, &web_fixture_static_ui("uno", ""))?;
     let swap_start = Instant::now();
     assert!(
-        wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0),
+        wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0),
         "a static-text edit inside a templated Ui subtree must hot-swap, not recompile"
     );
     std::thread::sleep(Duration::from_secs(2));
@@ -1457,7 +1469,7 @@ fn static_ui_subtree_structural_edit_hot_swaps_without_rebuild() -> Result<(), B
     write_main(&ipe_dir, &web_fixture_static_ui("uno", ", Ui.text \"two\""))?;
     let add_start = Instant::now();
     assert!(
-        wait_for(Duration::from_secs(20), || {
+        wait_for(E2E_HOT_SWAP_BUDGET, || {
             sink.count_hot_swapped() > hot_before_add
         }),
         "adding a fully-static Ui child must hot-swap (structural template edit), not recompile"
@@ -1570,7 +1582,7 @@ fn static_ui_subtree_wrapper_hot_swaps_without_rebuild() -> Result<(), BoxError>
     write_main(&ipe_dir, &web_fixture_static_ui_wrappers("uno", ""))?;
     let swap_start = Instant::now();
     assert!(
-        wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0),
+        wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0),
         "a static-text edit inside a wrapper-based templated subtree must hot-swap, not recompile"
     );
     std::thread::sleep(Duration::from_secs(2));
@@ -1597,7 +1609,7 @@ fn static_ui_subtree_wrapper_hot_swaps_without_rebuild() -> Result<(), BoxError>
     )?;
     let add_start = Instant::now();
     assert!(
-        wait_for(Duration::from_secs(20), || {
+        wait_for(E2E_HOT_SWAP_BUDGET, || {
             sink.count_hot_swapped() > hot_before_add
         }),
         "adding a fully-static child to a wrapper subtree must hot-swap (structural template edit), not recompile"
@@ -1719,7 +1731,7 @@ fn value_hole_static_sibling_hot_swaps_without_rebuild() -> Result<(), BoxError>
     write_main(&ipe_dir, &web_fixture_value_hole("omega", ""))?;
     let swap_start = Instant::now();
     assert!(
-        wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0),
+        wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0),
         "editing the static sibling of a value-hole view must hot-swap, not recompile"
     );
     std::thread::sleep(Duration::from_secs(2));
@@ -1824,7 +1836,7 @@ fn update_arm_step_edit_hot_swaps_without_rebuild() -> Result<(), BoxError> {
     // update-arm edit: count + 1 -> count + 2. Transition-only => hot-swap.
     write_main(&ipe_dir, &web_fixture_counter(2, ""))?;
     let swap_start = Instant::now();
-    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    let hot_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0);
     assert!(
         hot_swapped,
         "a +1 -> +2 update-arm edit must be hot-swapped (transition patch), not recompiled"
@@ -2067,7 +2079,7 @@ fn subscriptions_interval_edit_hot_swaps_without_rebuild() -> Result<(), BoxErro
     // subscriptions edit: Time.every 1000 -> 500. Sub-description-only => hot-swap.
     write_main(&ipe_dir, &web_fixture_ticker(500, ""))?;
     let swap_start = Instant::now();
-    let hot_swapped = wait_for(Duration::from_secs(20), || sink.count_hot_swapped() > 0);
+    let hot_swapped = wait_for(E2E_HOT_SWAP_BUDGET, || sink.count_hot_swapped() > 0);
     assert!(
         hot_swapped,
         "a 1000 -> 500 interval edit must be hot-swapped (sub patch), not recompiled"
