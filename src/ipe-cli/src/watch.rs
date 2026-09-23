@@ -1897,16 +1897,30 @@ const fn appearance_route(is_tui: bool, is_web: bool) -> AppearanceRoute {
     }
 }
 
-/// The emitted `src/main.rs` text — the deterministic, compiler-controlled
-/// surface both HTTP-detection predicates scan. Not user input (the backend
-/// emits it), so a substring check is sound here (unlike parsing arbitrary
-/// user text).
-fn emitted_main_rs(emitted: &ipe_backend::EmittedProject) -> Option<&str> {
+/// Does any emitted `.rs` file contain `needle` — a FULLY-QUALIFIED runtime
+/// entry call (`ipe_runtime::web::web_app`, `…::server::server_listen`,
+/// `…::tui::tui_app_ui`) the backend emits ONLY at the app entry?
+///
+/// Scans the WHOLE emitted source, not just `src/main.rs`: the entry call lands
+/// in `src/main.rs` for a single-file app but in a module file
+/// (`src/ipe_mods/ipe_mod_main.rs`) for a multi-module project, where `src/main.rs`
+/// is only a generic `ipe_main()` shim. Scanning `src/main.rs` alone therefore
+/// misclassified every multi-module app as neither-web-nor-tui — routing its
+/// appearance hot-swaps to a full rebuild and leaving the blue-green proxy
+/// disengaged. The emitted tree is compiler-controlled and the needle is a
+/// fully-qualified path (never a bare token a user symbol could shadow — the
+/// `unqualified_*` refusal tests pin this), so a substring check across it is
+/// sound.
+fn emitted_source_contains(emitted: &ipe_backend::EmittedProject, needle: &str) -> bool {
     emitted
         .files
         .iter()
-        .find(|(rel, _)| rel.as_str() == "src/main.rs")
-        .map(|(_, text)| text.as_str())
+        .filter(|(rel, _)| {
+            std::path::Path::new(rel.as_str())
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+        })
+        .any(|(_, text)| text.contains(needle))
 }
 
 /// The emitted crate is a live Ipe.Web app — its entry emission always contains
@@ -1914,7 +1928,7 @@ fn emitted_main_rs(emitted: &ipe_backend::EmittedProject) -> Option<&str> {
 /// (`crates/ipe_backend_rust/src/emit_web.rs`). Ipe.Web apps get the precise
 /// `/_ipe/readyz` readiness probe and appearance hot-swap.
 fn emitted_is_web(emitted: &ipe_backend::EmittedProject) -> bool {
-    emitted_main_rs(emitted).is_some_and(|text| text.contains("ipe_runtime::web::web_app"))
+    emitted_source_contains(emitted, "ipe_runtime::web::web_app")
 }
 
 /// The emitted crate is a Ipe.Tui app — its entry emission always contains the
@@ -1924,7 +1938,7 @@ fn emitted_is_web(emitted: &ipe_backend::EmittedProject) -> bool {
 /// A match on the fully-qualified emitted path (not a bare token) so a user
 /// symbol or string literal cannot masquerade as the runtime entry.
 fn emitted_is_tui(emitted: &ipe_backend::EmittedProject) -> bool {
-    emitted_main_rs(emitted).is_some_and(|text| text.contains("ipe_runtime::tui::tui_app_ui"))
+    emitted_source_contains(emitted, "ipe_runtime::tui::tui_app_ui")
 }
 
 /// The emitted crate binds a FIRST-PARTY HTTP listener whose port `ipe`
@@ -1943,10 +1957,8 @@ fn emitted_binds_http(emitted: &ipe_backend::EmittedProject) -> bool {
     // `serverListen` (emitted `server_listen`) or a string literal in user code
     // — a false positive that would engage the proxy for a program binding no
     // HTTP port, reviving the 502 (proxy holds the port, child never listens).
-    emitted_main_rs(emitted).is_some_and(|text| {
-        text.contains("ipe_runtime::web::web_app")
-            || text.contains("ipe_runtime::server::server_listen")
-    })
+    emitted_source_contains(emitted, "ipe_runtime::web::web_app")
+        || emitted_source_contains(emitted, "ipe_runtime::server::server_listen")
 }
 
 /// Build the child process's environment.
@@ -3284,12 +3296,78 @@ mod tests {
         }
     }
 
+    /// Build a MULTI-MODULE `EmittedProject`: `src/main.rs` is only the generic
+    /// `ipe_main()` shim (no runtime entry call) and the real entry call lives in
+    /// a module file, exactly as the emitter lays out a multi-file project.
+    fn emitted_with_module_entry(module_rs: &str) -> ipe_backend::EmittedProject {
+        let mut files = std::collections::BTreeMap::new();
+        files.insert(
+            ipe_backend::RelPath::new("src/main.rs").expect("valid rel path"),
+            "fn main() { ipe_main().run_blocking(); }".to_owned(),
+        );
+        files.insert(
+            ipe_backend::RelPath::new("src/ipe_mods/ipe_mod_main.rs").expect("valid rel path"),
+            module_rs.to_owned(),
+        );
+        ipe_backend::EmittedProject {
+            files,
+            cargo_toml: String::new(),
+            uses_webview: false,
+        }
+    }
+
     /// A live web app emits `web_app`: it is BOTH a web project and an HTTP binder.
     #[test]
     fn web_app_emit_is_web_and_binds_http() {
         let p = emitted_with_main("fn main() { ipe_runtime::web::web_app(a, b, c, d, e); }");
         assert!(emitted_is_web(&p), "web_app must classify as web");
         assert!(emitted_binds_http(&p), "web_app must be an HTTP binder");
+    }
+
+    /// Prove the regression fix: a MULTI-MODULE web app emits its `web_app` entry
+    /// into `src/ipe_mods/ipe_mod_main.rs`, not `src/main.rs` (a bare shim). The
+    /// shape detectors must scan the whole emitted surface, not just `src/main.rs`
+    /// — otherwise every multi-module web app is misclassified as neither-web-nor-
+    /// tui, routing its appearance edits to a full rebuild (not `AppearanceHotSwapped`)
+    /// and leaving the blue-green proxy disengaged (the client socket dropped on
+    /// rebuild).
+    #[test]
+    fn multi_module_web_entry_is_detected_outside_main_rs() {
+        let p = emitted_with_module_entry(
+            "pub fn ipe_main() -> _ { ipe_runtime::tea::WebApp(ipe_runtime::web::web_app(a,b,c,d,e)) }",
+        );
+        assert!(
+            emitted_is_web(&p),
+            "a web_app entry in a module file must still classify as web"
+        );
+        assert!(
+            emitted_binds_http(&p),
+            "a web_app entry in a module file must still engage the blue-green proxy"
+        );
+        assert_eq!(
+            appearance_route(emitted_is_tui(&p), emitted_is_web(&p)),
+            AppearanceRoute::WebPost,
+            "a multi-module web app must route appearance edits to the hot POST, not a rebuild"
+        );
+    }
+
+    /// The tui counterpart: a multi-module tui app's `tui_app_ui` entry also lives
+    /// in a module file and must still be detected (control-socket route, not rebuild).
+    #[test]
+    fn multi_module_tui_entry_is_detected_outside_main_rs() {
+        let p = emitted_with_module_entry(
+            "pub fn ipe_main() -> _ { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d,e)) }",
+        );
+        assert!(
+            emitted_is_tui(&p),
+            "a tui entry in a module file must classify as tui"
+        );
+        assert!(!emitted_is_web(&p), "a tui app is not a web project");
+        assert_eq!(
+            appearance_route(emitted_is_tui(&p), emitted_is_web(&p)),
+            AppearanceRoute::ControlSocket,
+            "a multi-module tui app must route over the control socket, not a rebuild"
+        );
     }
 
     /// An `Ipe.Http.Server` emits `server_listen`: an HTTP binder, but NOT web —
