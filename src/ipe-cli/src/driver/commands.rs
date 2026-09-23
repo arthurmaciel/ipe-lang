@@ -2367,7 +2367,6 @@ fn run_debugger_replay(tail: &[String]) -> Result<(), CliError> {
     // through (the recorder body carries no control code regardless). This is the
     // load-bearing off-TTY-no-ANSI-leak refusal (principle 1) — the interactive
     // scrubber cannot be the cli default.
-    use std::io::Write as _;
     let stdout = std::io::stdout();
     let mode = crate::progress::Mode::for_stream(&stdout);
     let mut lock = stdout.lock();
