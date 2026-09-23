@@ -1289,26 +1289,9 @@ pub fn canonicalise_module_in_project(
         if dep_path.first().copied().is_some_and(|s| s == ipe_sym) && !deps.contains_key(dep_path) {
             continue;
         }
-        // The qualifier names a qualified type/alias annotation may spell. An
-        // explicit `as Alias` names exactly one; a BARE `import Rls.Owner` names
-        // TWO — the last path segment (`Owner`) AND the full dotted path
-        // (`Rls.Owner`) the parser produces from `Rls.Owner.Doc`, which no
-        // single-segment `as` alias can spell. Registering both keeps a
-        // fully-qualified type reference resolving IDENTICALLY to its expression
-        // use (both consult these maps), mirroring the `env.qual_vars` handling
-        // in `inject_dep_exports`.
-        let mut qualifiers: Vec<Symbol> = Vec::with_capacity(2);
-        match import.alias {
-            Some(alias) => qualifiers.push(alias),
-            None => {
-                qualifiers.push(dep_path.last().copied().unwrap_or_else(name_zero));
-                if dep_path.len() > 1 {
-                    let dotted = interner.intern(&path_to_dot_string(interner, dep_path))?;
-                    qualifiers.push(dotted);
-                }
-            }
-        }
-        for qualifier in qualifiers {
+        // Qualifiers this import is reachable under (see `import_qualifiers`).
+        let reachable_qualifiers = import_qualifiers(import.alias, dep_path, interner)?;
+        for qualifier in reachable_qualifiers {
             // AUD-14: `import App.Utils` + `import Lib.Utils` (both default to the
             // qualifier `Utils`), or an explicit `as` alias reused across two
             // distinct dep modules, previously overwrote silently here — every
@@ -4707,32 +4690,9 @@ fn inject_dep_exports(
         }
     }
 
-    // The qualifier names under which the dep's members become reachable. An
-    // explicit `as Alias` names exactly one, on purpose. A BARE `import Rls.Owner`
-    // registers TWO: the last path segment (`Owner` — Elm convention: `import
-    // Lib.Utils` makes `Utils.foo` available) AND the full dotted path
-    // (`Rls.Owner`), so a fully-qualified reference resolves too. The dotted form
-    // is the qualifier symbol the parser produces from `Rls.Owner.member` (which
-    // no single-segment `as` alias can spell), and it must resolve IDENTICALLY in
-    // expression and type-annotation position — both consult `qual_vars` — so a
-    // dotted user module referenced by type (`Rls.Owner.Doc`) is not turned away
-    // as an unknown module while its expression use resolves. This mirrors the
-    // dotted-canonical stdlib handling (`Ipe.Db.Decode` → `Db.Decode`).
-    let mut qualifiers: Vec<Symbol> = Vec::with_capacity(2);
-    match import.alias {
-        Some(alias) => qualifiers.push(alias),
-        None => {
-            qualifiers.push(dep_path.last().copied().unwrap_or_else(name_zero));
-            // Only a multi-segment path has a distinct dotted form; a
-            // single-segment `import Owner` already registered its sole qualifier
-            // above, so skip the redundant (identical) dotted key.
-            if dep_path.len() > 1 {
-                let dotted = interner.intern(&path_to_dot_string(interner, dep_path))?;
-                qualifiers.push(dotted);
-            }
-        }
-    }
-    for &qualifier in &qualifiers {
+    // Qualifiers this import is reachable under (see `import_qualifiers`).
+    let reachable_qualifiers = import_qualifiers(import.alias, dep_path, interner)?;
+    for &qualifier in &reachable_qualifiers {
         // A user dep module whose qualifier collides with a gated stdlib short-name
         // (e.g. a project-local `import Auth` over the stdlib `Auth`) shadows the
         // Tier-C import gate: its members now live in `qual_vars` under that
@@ -5050,6 +5010,35 @@ fn path_to_dot_string(interner: &Interner, path: &[Symbol]) -> Box<str> {
         .collect::<Vec<_>>()
         .join(".")
         .into()
+}
+
+/// The qualifier symbols under which a dep import becomes reachable. An explicit
+/// `as Alias` names exactly one, on purpose. A BARE `import Rls.Owner` names TWO:
+/// the last path segment (`Owner` — Elm convention, `import Lib.Utils` makes
+/// `Utils.foo` available) AND the full dotted path (`Rls.Owner`), the qualifier
+/// the parser produces from `Rls.Owner.member` / `Rls.Owner.Doc` which no
+/// single-segment `as` alias can spell. Registering both keeps a fully-qualified
+/// reference resolving IDENTICALLY in expression and type-annotation position —
+/// both consult the qualifier maps — mirroring the dotted-canonical stdlib
+/// handling (`Ipe.Db.Decode` → `Db.Decode`).
+fn import_qualifiers(
+    alias: Option<Symbol>,
+    dep_path: &[Symbol],
+    interner: &mut Interner,
+) -> DResult<Vec<Symbol>> {
+    let mut qualifiers = Vec::with_capacity(2);
+    if let Some(alias) = alias {
+        qualifiers.push(alias);
+    } else {
+        qualifiers.push(dep_path.last().copied().unwrap_or_else(name_zero));
+        // Only a multi-segment path has a distinct dotted form; a single-segment
+        // `import Owner` already registered its sole qualifier above.
+        if dep_path.len() > 1 {
+            let dotted = interner.intern(&path_to_dot_string(interner, dep_path))?;
+            qualifiers.push(dotted);
+        }
+    }
+    Ok(qualifiers)
 }
 
 /// Register a union's constructors into the environment.
