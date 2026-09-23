@@ -491,7 +491,7 @@ pub mod server {
     /// However the connection ends — served, refused, or malformed — the write half
     /// is cleanly half-closed via [`finish_conn`] so the peer reads a deterministic
     /// EOF (exactly the reply written, or none) rather than an RST.
-    async fn serve_conn<H>(mut stream: TcpStream, handler: &H) -> Result<(), ServeError>
+    pub(crate) async fn serve_conn<H>(mut stream: TcpStream, handler: &H) -> Result<(), ServeError>
     where
         H: Fn(ControlFrame) -> ControlFrame,
     {
