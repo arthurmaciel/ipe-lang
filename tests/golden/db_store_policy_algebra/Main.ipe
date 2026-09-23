@@ -35,6 +35,10 @@ module Main exposing (main)
 --   anyalways:every row
 --   allnever:no row (denied)
 --   readonly:no row (denied)
+--   existsinok:ok
+--   existsinexplain:exists in shares where shares.doc_ref = author and its read policy: (member = caller subject)
+--   existsinouter:err
+--   existsinshare:err
 
 
 import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
@@ -101,6 +105,59 @@ deepPolicy =
         )
 
 
+-- ── `existsIn` correlated-subquery fixtures ────────────────────────────────
+--
+-- A `Share` row records which member may see which document. Its `Codec.auto`
+-- columns are `doc_ref` / `member`. The secured share store is owner-scoped on
+-- `.member` (its OWN read policy), which composes into every `existsIn` subquery.
+type alias Share =
+    { docRef : String
+    , member : String
+    }
+
+
+blankShare : Share
+blankShare =
+    { docRef = "", member = "" }
+
+
+shareCodec : Codec Share
+shareCodec =
+    Codec.auto blankShare
+
+
+-- A share codec whose shape names ONLY `member`, so a share store built from it
+-- has no `doc_ref` column — used to prove the SHARE side of a correlation is
+-- re-validated against the SHARE store, not the outer store.
+thinShareCodec : Codec Share
+thinShareCodec =
+    Codec
+        { enc = \s -> Encode.object [ ( "member", Encode.string s.member ) ]
+        , mkDec =
+            \_ ->
+                Decode.map (\m -> { docRef = "", member = m })
+                    (Decode.field "member" Decode.string)
+        , shp = SRecord [ ( "member", CText ) ]
+        }
+
+
+-- Build the secured share store from `codec`, or `Nothing` on any build/classify
+-- failure (the caller lines turn that into a fail marker).
+securedShareFrom : Codec Share -> Maybe (Store.Secured Share)
+securedShareFrom codec =
+    case Store.fromCodec "shares" codec of
+        Err _ ->
+            Nothing
+
+        Ok store ->
+            case Store.secured (Store.ownerColumn .member) store of
+                Ok secured ->
+                    Just secured
+
+                Err _ ->
+                    Nothing
+
+
 main : Task Error ()
 main =
     Io.println
@@ -113,6 +170,10 @@ main =
             , identityLine "anyalways" (Store.anyOf [ Store.matchWhere (Store.eq .body "b"), Store.always ])
             , identityLine "allnever" (Store.allOf [ Store.matchWhere (Store.eq .body "b"), Store.never ])
             , readOnlyLine
+            , existsInOkLine
+            , existsInExplainLine
+            , existsInOuterErrLine
+            , existsInShareErrLine
             ]
         )
 
@@ -177,6 +238,84 @@ identityLine label pred =
 readOnlyLine : String
 readOnlyLine =
     String.concat [ "readonly:", updateExplanation (Store.readOnly Store.always) ]
+
+
+-- A read-only `existsIn` policy over the good `docs` store: a doc is readable
+-- when a share row exists whose `docRef` equals the doc's `author`. Both
+-- correlation columns exist on their own side, and the good share store's owner
+-- read policy composes in, so `secured` returns `Ok`.
+existsInPolicy : Store.Secured Share -> Store.Policy Doc
+existsInPolicy securedShare =
+    Store.readOnly
+        (Store.existsIn securedShare
+            (\share doc -> Store.correlate share.docRef doc.author)
+        )
+
+
+-- `secured` over the good `docs` store with an `existsIn` policy whose
+-- correlation columns exist on BOTH sides → `Ok`.
+existsInOkLine : String
+existsInOkLine =
+    case ( Store.fromCodec "docs" docCodec, securedShareFrom shareCodec ) of
+        ( Ok store, Just securedShare ) ->
+            case Store.secured (existsInPolicy securedShare) store of
+                Ok _ ->
+                    "existsinok:ok"
+
+                Err _ ->
+                    "existsinok:err"
+
+        _ ->
+            "existsinok:build-err"
+
+
+-- The `read:` clause of the `existsIn` policy, proving `explain` renders the
+-- correlation AND the composed share read policy as transparent text.
+existsInExplainLine : String
+existsInExplainLine =
+    case securedShareFrom shareCodec of
+        Just securedShare ->
+            String.concat [ "existsinexplain:", readExplanation (existsInPolicy securedShare) ]
+
+        Nothing ->
+            "existsinexplain:build-err"
+
+
+-- `secured` over the THIN `docs` store (only `body`): the correlation names
+-- `doc.author` on the OUTER side, absent from the thin store → fail-closed
+-- `Err` (the outer-side column is re-validated against the outer store).
+existsInOuterErrLine : String
+existsInOuterErrLine =
+    case ( Store.fromCodec "docs2" thinCodec, securedShareFrom shareCodec ) of
+        ( Ok store, Just securedShare ) ->
+            case Store.secured (existsInPolicy securedShare) store of
+                Ok _ ->
+                    "existsinouter:ok"
+
+                Err _ ->
+                    "existsinouter:err"
+
+        _ ->
+            "existsinouter:build-err"
+
+
+-- `secured` over the good `docs` store but a THIN share store (only `member`):
+-- the correlation names `share.docRef` on the SHARE side, absent from the thin
+-- share store → fail-closed `Err` (the share-side column is re-validated against
+-- the SHARE store, not the outer store).
+existsInShareErrLine : String
+existsInShareErrLine =
+    case ( Store.fromCodec "docs" docCodec, securedShareFrom thinShareCodec ) of
+        ( Ok store, Just securedShare ) ->
+            case Store.secured (existsInPolicy securedShare) store of
+                Ok _ ->
+                    "existsinshare:ok"
+
+                Err _ ->
+                    "existsinshare:err"
+
+        _ ->
+            "existsinshare:build-err"
 
 
 -- The `read:` clause of a policy's `explain`, reduced to its value.

@@ -64,6 +64,92 @@ securedDocs =
             Store.secured docPolicy store
 
 
+-- A `Share` row: which member may see which document. `Codec.auto` columns are
+-- `doc_ref` / `member`.
+type alias Share =
+    { docRef : String
+    , member : String
+    }
+
+
+blankShare : Share
+blankShare =
+    { docRef = "", member = "" }
+
+
+shareCodec : Codec Share
+shareCodec =
+    Codec.auto blankShare
+
+
+-- The share store's OWN policy: a member sees only their own share rows. This
+-- composes into every `existsIn` subquery over the share store (defence in
+-- depth), so a doc is admitted only when the caller has a share row FOR it.
+sharePolicy : Store.Policy Share
+sharePolicy =
+    Store.ownerColumn .member
+
+
+securedShares : Result Error (Secured Share)
+securedShares =
+    case Store.fromCodec "shares" shareCodec of
+        Err e ->
+            Err e
+
+        Ok store ->
+            Store.secured sharePolicy store
+
+
+-- The correlated-subquery policy over `docs`: a doc is readable when a share row
+-- exists whose `docRef` equals the doc's `author` (the correlation) AND which the
+-- share store's own policy admits for the caller. Lowers to
+-- `EXISTS (SELECT 1 FROM shares WHERE shares.doc_ref = docs.author AND …)`.
+sharedDocsPolicy : Secured Share -> Store.Policy Doc
+sharedDocsPolicy securedShare =
+    Store.readOnly
+        (Store.existsIn securedShare
+            (\share doc -> Store.correlate share.docRef doc.author)
+        )
+
+
+securedSharedDocs : Result Error (Secured Doc)
+securedSharedDocs =
+    case ( Store.fromCodec "docs" docCodec, securedShares ) of
+        ( Ok store, Ok securedShare ) ->
+            Store.secured (sharedDocsPolicy securedShare) store
+
+        ( Err e, _ ) ->
+            Err e
+
+        ( _, Err e ) ->
+            Err e
+
+
+-- The authed handler for the correlated-subquery read: `allAs` over the secured
+-- store whose read policy is `existsIn securedShares …`. Emits the `EXISTS`
+-- subquery WHERE; the SEAL is that this `cargo build`s under `IPE_E2E=1`.
+handleSharedDocs : Request -> Auth.Principal -> Task Error Response
+handleSharedDocs req principal =
+    Task.onError
+        (\_ -> Task.succeed (Server.text "none"))
+        (Task.andThen
+            (\db ->
+                case securedSharedDocs of
+                    Err _ ->
+                        Task.succeed (Server.text "policy-error")
+
+                    Ok secured ->
+                        Task.andThen
+                            (\docs ->
+                                Task.succeed
+                                    (Server.text (String.join "\n" (List.map .body docs)))
+                            )
+                            (Store.allAs principal db secured)
+            )
+            (Db.connect ())
+        )
+
+
 -- The authed handler. The middleware has already verified the token and minted
 -- `principal`; `allAs` reads only the rows the policy admits for that caller.
 handleMyDocs : Request -> Auth.Principal -> Task Error Response
@@ -108,6 +194,8 @@ main =
             (\_ -> Io.println "authed-store-query-seal")
             (Server.listen
                 8000
-                [ Server.getAuthed "/my/docs" authCfg handleMyDocs ]
+                [ Server.getAuthed "/my/docs" authCfg handleMyDocs
+                , Server.getAuthed "/shared/docs" authCfg handleSharedDocs
+                ]
             )
         )
