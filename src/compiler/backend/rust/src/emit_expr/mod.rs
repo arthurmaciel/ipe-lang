@@ -7,7 +7,7 @@
 pub use crate::doc::Doc;
 pub use crate::emit_types::{GenericScope, render_type};
 pub use crate::emit_ui_plan::{
-    ArgPlan, Guard, LitKind, NativeUiEmit, UiDelegate, UiEmitPlan, appearance_literal_args,
+    ArgPlan, Guard, LitKind, NativeUiEmit, UiDelegate, UiEmitPlan,
     appearance_literal_record_fields, shape_appearance_literal_args, ui_call_shape,
 };
 pub use crate::naming::kernel_name;
