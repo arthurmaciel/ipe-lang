@@ -519,12 +519,14 @@ fn print_dry_run(entry_toml: &str, plan: &PrPlan, identity: Option<&CommitIdenti
     } else {
         format!("{entry_toml}\n")
     };
-    let committer = match identity {
-        Some(id) => format!("{} <{}>", id.name, id.email),
-        None => "resolved from your logged-in GitHub account at publish time \
-                 (run `ipe login`)"
-            .to_owned(),
-    };
+    let committer = identity.map_or_else(
+        || {
+            "resolved from your logged-in GitHub account at publish time \
+             (run `ipe login`)"
+                .to_owned()
+        },
+        |id| format!("{} <{}>", id.name, id.email),
+    );
     let body = format!(
         "ipe package publish --dry-run: computed index entry\n\
          \n\
@@ -2035,9 +2037,7 @@ mod tests {
         let mapped: Option<CliError> = PublisherIdentity::from_user_json(&serde_json::json!({}))
             .map(|id| id.commit_identity())
             .map_or_else(|| Some(refuse(Refusal::UnresolvableIdentity)), |_| None);
-        let Some(err) = mapped else {
-            unreachable!("an empty /user response must not yield an identity")
-        };
+        let err = mapped.expect("an empty /user response must not yield an identity");
         assert!(matches!(
             err,
             CliError::Publish(Refusal::UnresolvableIdentity)

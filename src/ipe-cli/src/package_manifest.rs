@@ -1744,8 +1744,9 @@ pub fn upsert_index_dependency(
 }
 
 /// Remove an index (or escape) dependency entry named `name` from a
-/// `package.ipe`'s `dependencies` list, preserving the rest of the file. A name
-/// that is not present is a no-op (the file is rewritten unchanged), so an
+/// `package.ipe`'s `dependencies` list, preserving the rest of the file.
+///
+/// A name that is not present is a no-op (the file is rewritten unchanged), so an
 /// add→remove cycle leaves the manifest as it began.
 ///
 /// # Errors
@@ -1817,10 +1818,10 @@ fn edit_dependencies_list(
     // No `dependencies` field yet: a remove is a no-op; an add inserts a new
     // field before the top-level record's closing brace.
     let Some((_, deps_expr)) = deps_field else {
-        return match entry {
-            Some(entry) => insert_new_dependencies_field(text, record, name, entry, manifest_path),
-            None => Ok(text.to_owned()),
-        };
+        return entry.map_or_else(
+            || Ok(text.to_owned()),
+            |entry| insert_new_dependencies_field(text, record, name, entry, manifest_path),
+        );
     };
 
     let Expr_::List(items) = &deps_expr.value else {
@@ -2049,12 +2050,12 @@ fn insert_new_dependencies_field(
 }
 
 /// A fixed-message manifest-write usage refusal.
-fn usage(message: &'static str) -> CliError {
+const fn usage(message: &'static str) -> CliError {
     CliError::Usage(message)
 }
 
 /// An owned-message manifest-write usage refusal.
-fn usage_owned(message: String) -> CliError {
+const fn usage_owned(message: String) -> CliError {
     CliError::UsageOwned(message)
 }
 
