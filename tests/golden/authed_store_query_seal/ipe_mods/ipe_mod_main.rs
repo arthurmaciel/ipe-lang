@@ -24,12 +24,48 @@ pub(crate) fn main_doc_codec() -> IpeCodecCodec<RecAuthorBody> {
             let __ipe_fn: ::std::sync::Arc<
                 dyn Fn(Rec_) -> Decoder<RecAuthorBody> + Send + Sync + 'static,
             > = ::std::sync::Arc::new(move |arg_14: Rec_| -> Decoder<RecAuthorBody> {
-                decode_pipeline_required(
-                    "body".to_string(),
-                    json_decode_string::<IpeError>(),
-                    decode_pipeline_required(
-                        "author".to_string(),
-                        json_decode_string::<IpeError>(),
+                ({
+                    let cap_0 = "body".to_string();
+                    ({
+                        let cap_1 = json_decode_string::<IpeError>();
+                        {
+                            let __ipe_fn: Box<
+                                dyn Fn(Decoder<Box<dyn FnOnce(String) -> RecAuthorBody + Send + 'static>>) -> Decoder<RecAuthorBody>
+                                    + Send
+                                    + Sync
+                                    + 'static,
+                            > = Box::new(
+                                move |eta_1: Decoder<Box<dyn FnOnce(String) -> RecAuthorBody + Send + 'static>>| -> Decoder<RecAuthorBody> {
+                                    decode_pipeline_required(cap_0.clone(), cap_1.clone(), eta_1)
+                                },
+                            );
+                            __ipe_fn
+                        }
+                    })
+                })(
+                    ({
+                        let cap_0 = "author".to_string();
+                        ({
+                            let cap_1 = json_decode_string::<IpeError>();
+                            {
+                                let __ipe_fn: Box<
+                                    dyn Fn(Decoder<Box<dyn FnOnce(String) -> Box<dyn FnOnce(String) -> RecAuthorBody + Send + 'static> + Send + 'static>>) -> Decoder<Box<dyn FnOnce(String) -> RecAuthorBody + Send + 'static>>
+                                        + Send
+                                        + Sync
+                                        + 'static,
+                                > = Box::new(
+                                    move |eta_0: Decoder<Box<dyn FnOnce(String) -> Box<dyn FnOnce(String) -> RecAuthorBody + Send + 'static> + Send + 'static>>| -> Decoder<Box<dyn FnOnce(String) -> RecAuthorBody + Send + 'static>> {
+                                        decode_pipeline_required(
+                                            cap_0.clone(),
+                                            cap_1.clone(),
+                                            eta_0,
+                                        )
+                                    },
+                                );
+                                __ipe_fn
+                            }
+                        })
+                    })(
                         decode_succeed(curry2(move |author: String, body: String| -> RecAuthorBody { RecAuthorBody { author: author, body: body } })),
                     ),
                 )
@@ -79,12 +115,48 @@ pub(crate) fn main_share_codec() -> IpeCodecCodec<RecDocRefMember> {
             let __ipe_fn: ::std::sync::Arc<
                 dyn Fn(Rec_) -> Decoder<RecDocRefMember> + Send + Sync + 'static,
             > = ::std::sync::Arc::new(move |arg_15: Rec_| -> Decoder<RecDocRefMember> {
-                decode_pipeline_required(
-                    "member".to_string(),
-                    json_decode_string::<IpeError>(),
-                    decode_pipeline_required(
-                        "doc_ref".to_string(),
-                        json_decode_string::<IpeError>(),
+                ({
+                    let cap_0 = "member".to_string();
+                    ({
+                        let cap_1 = json_decode_string::<IpeError>();
+                        {
+                            let __ipe_fn: Box<
+                                dyn Fn(Decoder<Box<dyn FnOnce(String) -> RecDocRefMember + Send + 'static>>) -> Decoder<RecDocRefMember>
+                                    + Send
+                                    + Sync
+                                    + 'static,
+                            > = Box::new(
+                                move |eta_1: Decoder<Box<dyn FnOnce(String) -> RecDocRefMember + Send + 'static>>| -> Decoder<RecDocRefMember> {
+                                    decode_pipeline_required(cap_0.clone(), cap_1.clone(), eta_1)
+                                },
+                            );
+                            __ipe_fn
+                        }
+                    })
+                })(
+                    ({
+                        let cap_0 = "doc_ref".to_string();
+                        ({
+                            let cap_1 = json_decode_string::<IpeError>();
+                            {
+                                let __ipe_fn: Box<
+                                    dyn Fn(Decoder<Box<dyn FnOnce(String) -> Box<dyn FnOnce(String) -> RecDocRefMember + Send + 'static> + Send + 'static>>) -> Decoder<Box<dyn FnOnce(String) -> RecDocRefMember + Send + 'static>>
+                                        + Send
+                                        + Sync
+                                        + 'static,
+                                > = Box::new(
+                                    move |eta_0: Decoder<Box<dyn FnOnce(String) -> Box<dyn FnOnce(String) -> RecDocRefMember + Send + 'static> + Send + 'static>>| -> Decoder<Box<dyn FnOnce(String) -> RecDocRefMember + Send + 'static>> {
+                                        decode_pipeline_required(
+                                            cap_0.clone(),
+                                            cap_1.clone(),
+                                            eta_0,
+                                        )
+                                    },
+                                );
+                                __ipe_fn
+                            }
+                        })
+                    })(
                         decode_succeed(curry2(move |docRef: String, member: String| -> RecDocRefMember { RecDocRefMember { docRef: docRef, member: member } })),
                     ),
                 )
@@ -298,8 +370,8 @@ pub(crate) fn main_encode_maybe_string(m: IpeMaybe<String>) -> JsonVal {
 }
 pub(crate) fn main_mask_policy() -> IpeDbStorePolicy {
     let _ipe_recursion_guard = crate::recursion_guard();
-    crate::user_ipe_db_store_and_policy(
-        crate::user_ipe_db_store_mask_named(
+    ({
+        let cap_0 = crate::user_ipe_db_store_mask_named(
             "ssn".to_string(),
             crate::user_ipe_db_store_match_where(
                 IpeDbStoreCond::Compare(
@@ -309,9 +381,16 @@ pub(crate) fn main_mask_policy() -> IpeDbStorePolicy {
                 ),
             ),
             crate::user_ipe_db_store_read_only(crate::user_ipe_db_store_always()),
-        ),
-        crate::user_ipe_db_store_owner_column_named("owner".to_string()),
-    )
+        );
+        {
+            let __ipe_fn: Box<
+                dyn Fn(IpeDbStorePolicy) -> IpeDbStorePolicy + Send + Sync + 'static,
+            > = Box::new(move |eta_0: IpeDbStorePolicy| -> IpeDbStorePolicy {
+                crate::user_ipe_db_store_and_policy(cap_0.clone(), eta_0)
+            });
+            __ipe_fn
+        }
+    })(crate::user_ipe_db_store_owner_column_named("owner".to_string()))
 }
 pub(crate) fn main_secured_mask_docs() -> IpeResult<
     ipe_runtime::error::IpeError, IpeDbStoreSecured<RecOwnerSsn>,
