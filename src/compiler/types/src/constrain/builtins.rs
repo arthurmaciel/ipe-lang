@@ -666,9 +666,10 @@ pub struct Builtins {
     /// (`(( Cols a, Cols b ) -> row) -> Joined a b -> Select row`). Its `row`
     /// argument is the projected shape the lambda returns.
     pub select_con: Symbol,
-    /// `"Policy"` — the `Ipe.Db.Store.Policy row` row-security algebra ADT. The
-    /// `row` argument is phantom (the runtime `Policy` carries only rule data),
-    /// but it ties the accessor's record type to the store's row type in the
+    /// `"Policy"` — the `Ipe.Db.Store.Policy row` operation-scoped row-security
+    /// ADT. The `row` argument is phantom (the runtime `Policy` carries per-
+    /// operation `Pred` data and validated column names, no `row` value), but it
+    /// ties the accessor's record type to the store's row type in the
     /// `StoreOwnerColumn` / `StoreImmutable` kernel schemes, so `secured`
     /// (`Policy row -> Store row -> …`) pins the policy's columns to the store.
     pub policy_con: Symbol,

@@ -4292,21 +4292,25 @@ migrationName table =
     String.concat [ "create_", table ]
 
 
--- ─── Row-level security (Policy algebra + Secured constructor) ──────
+-- ─── Row-level security (Pred/Policy algebra + Secured constructor) ─
 --
--- Row security is DATA, not closures: a `Policy` is a small algebra over the
--- store's own validated column names, never a stored function (Ipê forbids
--- functions in records). A policy is a conjunction of `Rule`s — an owner-column
--- rule (rows are scoped to the principal that owns the accessor-named column), a
--- public-read rule, or an immutable-column rule. Each column-naming rule names
--- its column by an accessor literal (`.author`), checked against the row type at
--- compile time exactly like a query column, so a policy over a non-existent or
--- cross-row column is a build error.
+-- Row security is DATA, not closures: a `Policy` is a small predicate algebra
+-- (`Pred`) over the store's own validated column names, never a stored function
+-- (Ipê forbids functions in records — and transparent data can be simplified,
+-- explained, and its refusals generated, which an opaque predicate could not). A
+-- `Policy` scopes one `Pred` per operation (read/insert/update/delete), so the
+-- read/write split is total and fail-closed: an operation a builder does not open
+-- stays `never`. Each row-side leaf names its column by an accessor literal
+-- (`.author`), checked against the row type at compile time exactly like a query
+-- column, so a policy over a non-existent or cross-row column is a build error;
+-- every predicate lowers through the ONE audited `condFragmentIn` /
+-- `Sql.column` / `Sql.param` path, adding no new SQL-injection surface.
 --
 -- Deny-by-default: a `Draft` is unqueryable until classified. A `Secured` store
 -- is reachable only by attaching a policy through `secured`, and the
 -- authenticated `…As` operations accept only a `Secured`. `secured` re-validates
--- every policy column against the draft's codec-derived columns (the same
+-- every column any predicate names — across all four operations and at every
+-- depth of the algebra — against the draft's codec-derived columns (the same
 -- fail-closed check the query leaves use), so a policy that names a column the
 -- draft does not have is a typed `Err`, never a silently ineffective policy.
 
