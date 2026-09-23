@@ -2518,6 +2518,45 @@ pub fn sql_in_list(a: SqlFragment, values: Vec<SqlParam>) -> SqlFragment {
     }
 }
 
+/// `Sql.exists : String -> SqlFragment -> SqlFragment` — a correlated-subquery
+/// existence test: `EXISTS (SELECT 1 FROM <table> WHERE <inner>)`. The single
+/// site that embeds a table name AND a nested `SELECT` into SQL text, so it
+/// applies the same fail-closed discipline the rest of the surface does:
+///
+///   * The table name is validated through [`SqlIdent::parse_plain`] — the SAME
+///     bare-identifier gate `db_find_where` applies to its table argument — so an
+///     invalid table poisons the fragment (empty `sql`, an `invalid` marker)
+///     rather than interpolating unchecked text. There is no unvalidated table
+///     path; the caller cannot reach `sql_unsafe_fragment` from here.
+///   * `inner` was itself built only through the audited `Sql.*` combinators, so
+///     its `sql` is `?`-placeholder text with a matching `binds` list. Those
+///     binds propagate positionally, and the placeholder count stays in lockstep.
+///   * `inner`'s poison propagates first-wins: an upstream invalid column inside
+///     the subquery is never swallowed by a valid table name.
+///
+/// Total and panic-free: no indexing, no unwrap, no fallible step beyond the
+/// checked table parse whose `None` branch poisons.
+pub fn sql_exists(table: String, inner: SqlFragment) -> SqlFragment {
+    match SqlIdent::parse_plain(&table) {
+        None => SqlFragment {
+            sql: String::new(),
+            binds: Vec::new(),
+            invalid: inner
+                .invalid
+                .or_else(|| Some(format!("Sql.exists: invalid table {table:?}"))),
+        },
+        Some(qtable) => SqlFragment {
+            sql: format!(
+                "EXISTS (SELECT 1 FROM {} WHERE {})",
+                qtable.as_str(),
+                inner.sql
+            ),
+            binds: inner.binds,
+            invalid: inner.invalid,
+        },
+    }
+}
+
 /// `Db.findWhere : Db -> String -> SqlFragment -> Task Error (List (Dict String String))`
 /// — the `SqlFragment`-typed replacement for the removed `unsafeFindWhere`.
 /// The WHERE clause can only be built through the `Sql.*` combinators above,

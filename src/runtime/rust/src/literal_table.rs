@@ -332,6 +332,11 @@ mod tests {
     // appearance-hot-swap transform rests on — reading `get(idx)` on the baked
     // defaults is indistinguishable from the direct literal, so prod (which only
     // ever holds the defaults) renders exactly what a direct emit would.
+    //
+    // Uses the `html` render core, which only compiles under `web-core`; the
+    // table itself is pure and also compiles under a `control-wire`-only tui
+    // dev-loop build, where this render-conformance check does not apply.
+    #[cfg(feature = "web-core")]
     #[test]
     fn baked_default_table_renders_identically_to_direct_literals() {
         // Serialise against the overlay tests so their process-global override

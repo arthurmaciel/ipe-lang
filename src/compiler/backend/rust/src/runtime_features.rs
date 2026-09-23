@@ -175,6 +175,22 @@ pub enum RuntimeFeature {
     /// wasm TEA record hook. `ipe release` never sets the flag, so no production
     /// artifact carries recorder code.
     Debugger,
+    /// `control-wire` — the loopback dev-loop control channel WITHOUT the
+    /// debugger recorder: the `ControlFrame` codec, the loopback `transport`
+    /// primitives, and (with `tokio`, which the `tui` feature already pulls) the
+    /// `control::server` accept-loop and the crate-root `literal_table` overlay.
+    /// It is the terminal-shape analogue of the web app's HTTP hot-swap endpoint:
+    /// a `Tui.tea` app has no HTTP port, so its appearance hot-swap rides this
+    /// socket instead. Selected ONLY for an `ipe watch` build of a tui view
+    /// (`hot_appearance && uses_tui`); a plain `ipe build`/`ipe release` sets no
+    /// dev-loop flag, so a production terminal artifact selects it not and carries
+    /// no control server (dev == prod by absence). A cli (`uses_console`) is
+    /// excluded — no repaintable appearance surface, and its debugger records to
+    /// the `IPE_DEBUGGER_RECORD` dump, not this socket. Redundant under `web`
+    /// (which pulls the control module via its `server` feature) and under
+    /// `debugger` (whose Cargo feature implies `control-wire` directly), so those
+    /// shapes never need this row to fire.
+    ControlWire,
 }
 
 impl RuntimeFeature {
@@ -220,6 +236,7 @@ impl RuntimeFeature {
         Self::Jwt,
         Self::WasmClient,
         Self::Debugger,
+        Self::ControlWire,
     ];
 
     /// A stable per-variant index for `const`-context identity. The exhaustive,
@@ -260,6 +277,7 @@ impl RuntimeFeature {
             Self::Jwt => 29,
             Self::WasmClient => 30,
             Self::Debugger => 31,
+            Self::ControlWire => 32,
         }
     }
 
@@ -283,7 +301,7 @@ impl RuntimeFeature {
     /// domain size grows in lockstep with the variant set and the seal then
     /// forces the variant into `ALL` too.
     pub(crate) const fn index_domain_size() -> usize {
-        Self::Debugger.index() + 1
+        Self::ControlWire.index() + 1
     }
 
     /// The exact cargo feature name in `src/runtime/rust/Cargo.toml`.
@@ -321,6 +339,7 @@ impl RuntimeFeature {
             Self::Jwt => "jwt",
             Self::WasmClient => "wasm-client",
             Self::Debugger => "debugger",
+            Self::ControlWire => "control-wire",
         }
     }
 }
@@ -563,6 +582,73 @@ mod tests {
         assert!(
             !without.contains(&"debugger"),
             "a wasm build without `--debugger` must NOT select it: {without:?}"
+        );
+    }
+
+    /// Compute the selected feature names with the `hot_appearance` dev flag armed
+    /// (as `ipe watch` sets it) so the `control-wire` selection row is exercised
+    /// through the exact ctx a watch build produces.
+    fn features_for_hot(configure: impl FnOnce(&mut Module)) -> Vec<&'static str> {
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern Main");
+        let prog = Program {
+            imports_unsafe_submodule: false,
+            imported_web_capabilities: std::collections::BTreeSet::new(),
+            modules: vec![ctx_module(main, configure)],
+        };
+        let backend = RustBackend::new(&interner).with_hot_appearance(true);
+        let ctx = backend.emit_ctx_for_tests(&prog).expect("build EmitCtx");
+        runtime_features(&ctx).as_feature_names()
+    }
+
+    // A tui view under `ipe watch` (`hot_appearance` armed) selects `control-wire`
+    // so the loopback control server is present to push appearance patches to; a
+    // plain build (no dev flag) selects it not — the release-absence proof.
+    #[test]
+    fn watch_tui_selects_control_wire() {
+        let watch = features_for_hot(|m| {
+            m.uses_tui = true;
+            m.uses_ui = true;
+            m.uses_async_runtime = true;
+        });
+        assert!(
+            watch.contains(&"control-wire"),
+            "an `ipe watch` tui build must select `control-wire`: {watch:?}"
+        );
+    }
+
+    /// The release-absence proof: a plain `ipe build` / `ipe release` of the same
+    /// tui view arms no dev flag, so `control-wire` is absent — the control server
+    /// never ships in a production terminal artifact (dev == prod by absence).
+    #[test]
+    fn plain_build_tui_selects_no_control_wire() {
+        let plain = features_for(|m| {
+            m.uses_tui = true;
+            m.uses_ui = true;
+            m.uses_async_runtime = true;
+        });
+        assert!(
+            !plain.contains(&"control-wire"),
+            "a plain (non-watch) tui build must NOT select `control-wire`: {plain:?}"
+        );
+    }
+
+    /// A cli (`Cli.tea`, `uses_console`) under `ipe watch` selects `control-wire`
+    /// NOT: a line-oriented transcript has no repaintable appearance surface, and
+    /// its dev-loop debugger records to the `IPE_DEBUGGER_RECORD` dump rather than
+    /// driving the control socket. The row is the pure-`hot_appearance` tui
+    /// selector; console is excluded from it.
+    #[test]
+    fn watch_cli_selects_no_control_wire() {
+        let watch = features_for_hot(|m| {
+            m.uses_console = true;
+            m.uses_ui = true;
+            m.uses_async_runtime = true;
+        });
+        assert!(
+            !watch.contains(&"control-wire"),
+            "an `ipe watch` cli build must NOT select `control-wire` (no repaintable \
+             surface): {watch:?}"
         );
     }
 

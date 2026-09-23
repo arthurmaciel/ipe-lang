@@ -1124,6 +1124,8 @@ mod registry_phase_c_tests {
             K::SqlIsNotNull,
             K::SqlInList,
             K::SqlLike,
+            // Correlated-subquery existence test (Ipê-new, no legacy oracle).
+            K::SqlExists,
             K::DbFindWhere,
             K::DbFindJoin,
             K::DbFindProjection,
@@ -1176,6 +1178,9 @@ mod registry_phase_c_tests {
             // Row-security policy builders (Ipê-new).
             K::StoreOwnerColumn,
             K::StoreImmutable,
+            // Correlated-subquery row-security (Ipê-new, no legacy oracle).
+            K::StoreCorrelate,
+            K::StoreExistsIn,
             // ORDER BY modifiers (Ipê-new, no legacy oracle).
             K::StoreOrderByLeft,
             K::StoreOrderByRight,

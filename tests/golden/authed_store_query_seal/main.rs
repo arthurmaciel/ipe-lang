@@ -205,6 +205,20 @@ impl IpeStringify for RecDeleteImmutablesInsertOwnersReadUpdate {
         )
     }
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecDocRefMember {
+    docRef: String,
+    member: String,
+}
+impl IpeStringify for RecDocRefMember {
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.docRef)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.member)).dispatch()
+        )
+    }
+}
 pub struct RecEncMkDecShp<T1: 'static> {
     enc: ::std::sync::Arc<dyn Fn(T1) -> JsonVal + Send + Sync + 'static>,
     mkDec: ::std::sync::Arc<dyn Fn(Rec_) -> Decoder<T1> + Send + Sync + 'static>,
@@ -226,6 +240,26 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for RecEncMkDecS
             "<fn>",
             "<fn>",
             (&ipe_runtime::stringify::Wrap(&self.shp)).dispatch()
+        )
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecOuterColShareColShareColumnsShareReadShareTable {
+    outerCol: String,
+    shareCol: String,
+    shareColumns: Vec<IpeDbStoreColumn>,
+    shareRead: IpeDbStorePred,
+    shareTable: String,
+}
+impl IpeStringify for RecOuterColShareColShareColumnsShareReadShareTable {
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {} {} {} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.outerCol)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.shareCol)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.shareColumns)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.shareRead)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.shareTable)).dispatch()
         )
     }
 }

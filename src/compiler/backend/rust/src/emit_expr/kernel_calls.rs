@@ -1,9 +1,9 @@
 use super::{
     ArgPlan, Callee, DResult, Diagnostic, Expr, GenericScope, Guard, IrType, KernelClass, KernelFn,
     LitKind, LowerError, NativeUiEmit, Span, Symbol, UiDelegate, UiEmitPlan,
-    appearance_literal_args, appearance_literal_record_fields, callee_name, emit_expr_at,
-    emit_lambda_unboxed, emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name,
-    render_type, ui_call_shape,
+    appearance_literal_record_fields, callee_name, emit_expr_at, emit_lambda_unboxed,
+    emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name, render_type,
+    shape_appearance_literal_args, ui_call_shape,
 };
 use crate::EmitCtx;
 use core::fmt::Write as _;
@@ -1512,7 +1512,11 @@ pub fn emit_db_call(
         | KernelFn::SqlNot
         | KernelFn::SqlIsNull
         | KernelFn::SqlIsNotNull
-        | KernelFn::SqlLike => Ok(None),
+        | KernelFn::SqlLike
+        // `Sql.exists : String -> SqlFragment -> SqlFragment` takes a plain
+        // `String` table name and a `SqlFragment` — no `Db` handle, no List
+        // projection, so the standard call path emits it correctly.
+        | KernelFn::SqlExists => Ok(None),
         // A Db kernel that reached this arm is a compiler bug: either add a
         // custom projection arm above, or add it to the standard-path list.
         // This arm is unreachable for any KernelFn variant listed above, so
@@ -2805,8 +2809,20 @@ pub fn emit_ui_plan(
             // to the direct emit (dev == prod); the total `unwrap_or` fallback is
             // the original literal, so a stale or malformed patch can neither
             // panic nor change the built value.
-            let positions: &[(usize, LitKind)] = if ctx.uses_web {
-                appearance_literal_args(k)
+            // Gate on the shape-aware `hot_appearance` flag (armed for a web or
+            // tui view under `ipe watch`), NOT `uses_web`: the table now lives in
+            // `ipe_runtime::literal_table`, present for a terminal dev-loop build
+            // (`control-wire`) as well as a web one (`web-core`), so a `Tui.tea`
+            // appearance literal hoists too. WHICH kernels hoist is itself
+            // shape-aware: a web shape hoists every appearance literal, a terminal
+            // shape hoists only the terminal-appearance kernels
+            // (`shape_appearance_literal_args`), so a web-DOM / CSS literal
+            // (`Ui.text`, `Font.family`) reaching a tui shape emits inline — a tui
+            // view never routes a web-content construct through the table. With
+            // the flag off no position is marked, and every argument emits inline
+            // exactly as before (dev == prod by absence).
+            let positions: &[(usize, LitKind)] = if ctx.hot_appearance {
+                shape_appearance_literal_args(k, ctx.uses_web, ctx.uses_tui)
             } else {
                 &[]
             };

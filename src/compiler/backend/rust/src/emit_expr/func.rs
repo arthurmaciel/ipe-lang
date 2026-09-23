@@ -1042,7 +1042,7 @@ pub fn literal_table_prologue(defaults: &[String]) -> String {
     }
     let rendered: Vec<String> = defaults.iter().map(|d| format!("{d:?}")).collect();
     format!(
-        "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[{}]);\n    ",
+        "let __ipe_lit = ipe_runtime::literal_table::LiteralTable::from_defaults(&[{}]);\n    ",
         rendered.join(", ")
     )
 }

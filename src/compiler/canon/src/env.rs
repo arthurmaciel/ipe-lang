@@ -791,6 +791,7 @@ pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
                 "isNotNull",
                 "inList",
                 "like",
+                "exists",
             ],
         ),
         // `Ipe.Db.Decode` — row decoder combinators.

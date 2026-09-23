@@ -13029,6 +13029,139 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// Dispatch a `Store.existsIn` call intercepted at lowering (arity 2: a
+    /// `Secured share` and a `\share row -> Store.correlate share.col row.col`
+    /// lambda). The two correlation columns are read structurally from the
+    /// `correlate` body and validated against each binder's own solved record
+    /// type — the share side against the share row, the outer side against the
+    /// outer row — then the call is rewritten to
+    /// `existsInNamed <secured> <shareCol> <outerCol>`, which reads the share
+    /// table / columns / read-policy from the runtime `Secured`. Anything but a
+    /// two-binder lambda whose body is a single `Store.correlate` on a `.field`
+    /// of each binder fails closed (IPE-L0149).
+    fn lower_store_exists_in(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(secured), Some(lambda)) = (args.first(), args.get(1)) else {
+            return Err(bug(
+                "ipe_lower::lower_store_exists_in",
+                "Store.existsIn arity < 2",
+            ));
+        };
+        let (share_col, outer_col) = self.exists_correlation_columns(lambda)?;
+        let lowered_secured = self.lower_expr(secured)?;
+        let id = self.store_named_func_id("existsInNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![lowered_secured, Expr::Str(share_col), Expr::Str(outer_col)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Read the two correlation columns from an `existsIn` lambda
+    /// `\share row -> Store.correlate share.shareField row.outerField`. Returns
+    /// `(shareColumn, outerColumn)` snake-cased and SQL-validated, each confirmed
+    /// present on its binder's solved record type (the share side on `share`, the
+    /// outer side on `row`). Fails closed (IPE-L0149) for any other shape.
+    fn exists_correlation_columns(&self, lambda: &canon::Expr) -> DResult<(String, String)> {
+        let not_lambda = || {
+            unsupported_store_select(
+                lambda.span,
+                StoreSelectProjectionDefect::NotAProjectionLambda,
+            )
+        };
+        // `\share row -> body` — two plain-variable params, in order.
+        let canon::Expr_::Lambda(params, body) = &lambda.value else {
+            return Err(not_lambda());
+        };
+        let [share_param, row_param] = params.as_slice() else {
+            return Err(not_lambda());
+        };
+        let canon::Pattern_::PVar(share_sym) = &share_param.value else {
+            return Err(not_lambda());
+        };
+        let canon::Pattern_::PVar(row_sym) = &row_param.value else {
+            return Err(not_lambda());
+        };
+        // The body must be a single `Store.correlate shareAccess rowAccess`.
+        let canon::Expr_::Call(callee, corr_args) = &body.value else {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let is_correlate = matches!(
+            self.lower_callee(callee),
+            Ok(Callee::Kernel(KernelFn::StoreCorrelate))
+        );
+        if !is_correlate {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        }
+        let (Some(share_access), Some(outer_access)) = (corr_args.first(), corr_args.get(1)) else {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        // The share side reads a `.field` of the `share` binder; the outer side a
+        // `.field` of the `row` binder — each validated against its binder's own
+        // solved record type, so a column absent from EITHER side fails closed.
+        let share_col = self.correlation_column(share_access, *share_sym)?;
+        let outer_col = self.correlation_column(outer_access, *row_sym)?;
+        Ok((share_col, outer_col))
+    }
+
+    /// Read one correlation-side column: the argument must be a bare `.field`
+    /// access on `binder`, its field present on the binder's solved record type,
+    /// and its snake-cased name a valid SQL column. Fails closed (IPE-L0149)
+    /// otherwise. This is the share/outer twin of `select_single_projection`'s
+    /// column path, restricted to a single lambda binder.
+    fn correlation_column(&self, access: &canon::Expr, binder: Symbol) -> DResult<String> {
+        let canon::Expr_::Access(base, field) = &access.value else {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let canon::Expr_::VarLocal(base_sym) = &base.value else {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        if *base_sym != binder {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        }
+        let field_name = self.resolve(*field)?.to_string();
+        let field_present = matches!(
+            self.region_ty(base.span),
+            Some(Ty::Record(fields, _)) if fields.keys().any(|k| *k == *field)
+        );
+        if !field_present {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::UnknownField {
+                    field: field_name.into_boxed_str(),
+                },
+            ));
+        }
+        let column_name = ipe_canon::to_snake_case(&field_name);
+        if !is_valid_sql_column(&column_name) {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::InvalidColumn {
+                    column: column_name.into_boxed_str(),
+                },
+            ));
+        }
+        Ok(column_name)
+    }
+
     /// Build a single-parameter lambda `\v -> SqlXxx v` for the scalar field
     /// type `field_ty`. Used by `lower_store_inlist` to map a `List t` to a
     /// `List SqlValue` at the IR level. Fails closed (IPE-L0145) when `field_ty`
@@ -14209,6 +14342,26 @@ impl<'a> Lowerer<'a> {
             )
     }
 
+    /// is `(module, name)` the `Ipe.Db.Store.ExistsRef` correlated-subquery leaf —
+    /// module `["Ipe", "Db", "Store"]`, name `ExistsRef`? Its `row` argument is a
+    /// PHANTOM: the `ExistsRef` constructor holds only transparent data (column
+    /// strings and a `shareRead : Pred row`, itself phantom-dropped) — never a
+    /// `row` value. It is dropped at lowering so the emitted struct is the
+    /// non-generic `IpeDbStoreExistsRef`; otherwise the `PExists (ExistsRef row)`
+    /// field reintroduces the phantom `row` as a live generic that the enclosing
+    /// (phantom-dropped, non-generic) `Pred` no longer quantifies — an
+    /// unquantified type variable at emit (`GenericScope::rust_name`), the twin of
+    /// the `Cond` / `Pred` / `Select` erasure.
+    fn is_exists_ref_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("ExistsRef")
+            && matches!(
+                module,
+                [a, b, c] if self.interner.resolve(*a) == Some("Ipe")
+                    && self.interner.resolve(*b) == Some("Db")
+                    && self.interner.resolve(*c) == Some("Store")
+            )
+    }
+
     /// is `(module, name)` the `Ipe.Db.Store.Select` column-projection ADT —
     /// module `["Ipe", "Db", "Store"]`, name `Select`? Its `row` argument is a
     /// PHANTOM: no `Select` constructor carries a `row` value (the parameter
@@ -14324,6 +14477,7 @@ impl<'a> Lowerer<'a> {
         let cond_phantom = self.is_cond_con(&u.home, u.name)
             || self.is_policy_con(&u.home, u.name)
             || self.is_pred_con(&u.home, u.name)
+            || self.is_exists_ref_con(&u.home, u.name)
             || self.is_select_con(&u.home, u.name);
         let type_params = if cond_phantom {
             Vec::new()
@@ -16332,6 +16486,7 @@ impl<'a> Lowerer<'a> {
                         || self.is_cond_con(home, *name)
                         || self.is_policy_con(home, *name)
                         || self.is_pred_con(home, *name)
+                        || self.is_exists_ref_con(home, *name)
                         || self.is_select_con(home, *name)
                     {
                         Vec::new()
@@ -17663,6 +17818,7 @@ impl<'a> Lowerer<'a> {
                         || self.is_cond_con(module, *name)
                         || self.is_policy_con(module, *name)
                         || self.is_pred_con(module, *name)
+                        || self.is_exists_ref_con(module, *name)
                         || self.is_select_con(module, *name)
                     {
                         Vec::new()
@@ -20123,6 +20279,25 @@ impl<'a> Lowerer<'a> {
                 {
                     return Ok(Intercepted::Done(
                         self.lower_store_policy_rule(&peek, args)?,
+                    ));
+                }
+                // `Store.existsIn` — arity 2 (Secured share + a two-binder
+                // `\share row -> Store.correlate share.col row.col` lambda). The
+                // walker reads the two correlation columns structurally, validates
+                // each against its own binder's record type, and rewrites to
+                // `existsInNamed <secured> <shareCol> <outerCol>`; the share
+                // table/columns/read-policy are read from the runtime `Secured`.
+                Callee::Kernel(KernelFn::StoreExistsIn) if args.len() == 2 => {
+                    return Ok(Intercepted::Done(self.lower_store_exists_in(args)?));
+                }
+                // `Store.correlate` reaching here is a point-free or standalone use
+                // (outside an `existsIn` lambda) — fail closed, exactly as a bare
+                // `Store.literal`/`Store.upper` does.
+                Callee::Kernel(KernelFn::StoreCorrelate) => {
+                    let span = args.first().map_or(Span::DUMMY, |a| a.span);
+                    return Err(unsupported_store_select(
+                        span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
                     ));
                 }
                 // `Store.orderByLeft` / `Store.orderByRight` — arity 3 (accessor +
@@ -22745,6 +22920,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StoreLteCol
                 | KernelFn::StoreLike
                 | KernelFn::StoreInListCol
+                // Correlated-subquery row-security (arity 2). `correlate` (two
+                // accessors) and `existsIn` (Secured + a two-binder lambda) are
+                // intercepted at lowering; this is the defensive fallback count.
+                | KernelFn::StoreCorrelate
+                | KernelFn::StoreExistsIn
                 // Accessor-typed column-spec builders (arity 2: accessor + store).
                 | KernelFn::StorePrimaryKey
                 | KernelFn::StoreSerial
@@ -23865,7 +24045,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SqlAnd
                 | KernelFn::SqlOr
                 | KernelFn::SqlInList
-                | KernelFn::SqlLike,
+                | KernelFn::SqlLike
+                // `exists : String -> SqlFragment -> SqlFragment`.
+                | KernelFn::SqlExists,
             ) => Ok(2),
             // ── Db.findWhere / Db.deleteWhere — arity 3 ─────────
             // `findWhere : Db -> String -> SqlFragment -> Task Error (List Row)`
@@ -24780,6 +24962,7 @@ impl<'a> Lowerer<'a> {
                     ("Sql", "isNotNull") => Ok(Callee::Kernel(KernelFn::SqlIsNotNull)),
                     ("Sql", "inList") => Ok(Callee::Kernel(KernelFn::SqlInList)),
                     ("Sql", "like") => Ok(Callee::Kernel(KernelFn::SqlLike)),
+                    ("Sql", "exists") => Ok(Callee::Kernel(KernelFn::SqlExists)),
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
                     ("Db", "findJoin") => Ok(Callee::Kernel(KernelFn::DbFindJoin)),
                     ("Db", "findProjection") => Ok(Callee::Kernel(KernelFn::DbFindProjection)),
@@ -24821,6 +25004,9 @@ impl<'a> Lowerer<'a> {
                     // Row-security policy builders — intercepted at lowering.
                     ("Store", "ownerColumn") => Ok(Callee::Kernel(KernelFn::StoreOwnerColumn)),
                     ("Store", "immutable") => Ok(Callee::Kernel(KernelFn::StoreImmutable)),
+                    // Correlated-subquery row-security — intercepted at lowering.
+                    ("Store", "correlate") => Ok(Callee::Kernel(KernelFn::StoreCorrelate)),
+                    ("Store", "existsIn") => Ok(Callee::Kernel(KernelFn::StoreExistsIn)),
                     // orderBy modifiers — intercepted at lowering.
                     ("Store", "orderByLeft") => Ok(Callee::Kernel(KernelFn::StoreOrderByLeft)),
                     ("Store", "orderByRight") => Ok(Callee::Kernel(KernelFn::StoreOrderByRight)),

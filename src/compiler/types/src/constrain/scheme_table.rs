@@ -200,6 +200,8 @@ impl Builder<'_> {
             BuiltinTag::DbSelect => self.builtins.select_con,
             BuiltinTag::DbPolicy => self.builtins.policy_con,
             BuiltinTag::DbCond => self.builtins.cond_con,
+            BuiltinTag::DbPred => self.builtins.pred_con,
+            BuiltinTag::DbSecured => self.builtins.secured_con,
             BuiltinTag::DbOrder => self.builtins.order_con,
             BuiltinTag::Codec => self.builtins.codec_con,
         }
@@ -330,7 +332,9 @@ impl Builder<'_> {
             | BuiltinTag::DbJoined
             | BuiltinTag::DbSelect
             | BuiltinTag::DbPolicy
-            | BuiltinTag::DbCond => self.builtins.db_store_home.clone(),
+            | BuiltinTag::DbCond
+            | BuiltinTag::DbPred
+            | BuiltinTag::DbSecured => self.builtins.db_store_home.clone(),
             BuiltinTag::Codec => self.builtins.codec_home.clone(),
             _ => Vec::new(),
         }

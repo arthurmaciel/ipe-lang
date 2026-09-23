@@ -242,7 +242,7 @@ pub enum LitKind {
 /// node. Swapping it changes no node identity, no control flow, no handler, and
 /// no `Model`-dependent computation, so a value swap is a *complete* description
 /// of the edit. Under `IPE_WATCH_HOT_APPEARANCE` such a literal is hoisted into a
-/// per-view [`ipe_runtime::web::LiteralTable`] so a dev edit can swap it as data;
+/// per-view [`ipe_runtime::literal_table::LiteralTable`] so a dev edit can swap it as data;
 /// the baked default is exactly the source value, so a prod build (never patched)
 /// renders exactly as the direct emit — one render semantics, dev == prod.
 ///
@@ -973,6 +973,8 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::StoreDefaultInt
         | KernelFn::StoreOwnerColumn
         | KernelFn::StoreImmutable
+        | KernelFn::StoreCorrelate
+        | KernelFn::StoreExistsIn
         | KernelFn::StoreOrderByLeft
         | KernelFn::StoreOrderByRight
         | KernelFn::DbDecString
@@ -1414,6 +1416,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::SqlIsNotNull
         | KernelFn::SqlInList
         | KernelFn::SqlLike
+        | KernelFn::SqlExists
         | KernelFn::DbFindWhere
         | KernelFn::DbFindJoin
         | KernelFn::DbFindProjection
@@ -1565,6 +1568,61 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
     }
 }
 
+/// Whether a kernel's appearance literal is a **terminal** appearance value — a
+/// `Ipe.Ui.Tui.*` / `Ipe.Color.Ansi.*` literal a genuine `Tui.tea` / `Cli.tea`
+/// view paints — as opposed to a web-DOM / CSS appearance value (`Ui.text`,
+/// `Font.family`, `Ui.style`, every `Ipe.Html` / `Ipe.Css` value) that only a
+/// web view emits.
+///
+/// This is the shape half of the hoist boundary: a web shape hoists every
+/// appearance literal in [`appearance_literal_args`]; a terminal shape hoists
+/// **only** the terminal-appearance kernels below, so a `Ui.*` web-content or
+/// CSS literal reaching a tui shape emits directly and never routes through the
+/// per-view table. The set is closed by construction — the terminal palette /
+/// layout kernels are `Ipe.Ui.Tui` spacing/padding (cells) and the truecolour
+/// `TermColor.rgb/rgba` channels; no web-DOM kernel appears, and a web view never
+/// resolves these tui-only kernels — so the two shapes partition cleanly.
+pub const fn is_tui_appearance_kernel(k: KernelFn) -> bool {
+    matches!(
+        k,
+        KernelFn::TuiUiSpacing
+            | KernelFn::TuiUiPadding
+            | KernelFn::TermColorRgb
+            | KernelFn::TermColorRgba
+    )
+}
+
+/// The appearance-hoist-eligible positions for a kernel **in the current emit
+/// shape** — the shape-aware wrapper over [`appearance_literal_args`].
+///
+/// * **Web shape** (`uses_web`) — every appearance literal hoists: the full
+///   [`appearance_literal_args`] set, unchanged.
+/// * **Terminal shape** (`uses_tui`, not web) — only a terminal-appearance kernel
+///   ([`is_tui_appearance_kernel`]) hoists; a web-DOM / CSS literal that happens
+///   to reach a tui shape returns `&[]` and emits its literal inline. A tui
+///   appearance edit therefore hot-swaps its `Tui`/`TermColor` value while a
+///   `Ui.text` content literal stays direct (dev == prod at the tui boundary).
+/// * **Neither** — `&[]`: no dev-loop repaint surface, so nothing hoists.
+///
+/// The hoist itself is still additionally gated on `EmitCtx::hot_appearance`
+/// (armed only under `ipe watch`) and on `hoist_style_literal`'s top-level /
+/// direct-literal fences; this function only narrows *which kernels* are
+/// hoist-eligible per shape.
+pub const fn shape_appearance_literal_args(
+    k: KernelFn,
+    uses_web: bool,
+    uses_tui: bool,
+) -> &'static [(usize, LitKind)] {
+    // A web shape hoists every appearance literal; a terminal shape hoists only a
+    // terminal-appearance kernel; neither shape → nothing hoists.
+    let hoist_eligible = uses_web || (uses_tui && is_tui_appearance_kernel(k));
+    if hoist_eligible {
+        appearance_literal_args(k)
+    } else {
+        &[]
+    }
+}
+
 /// The appearance-hoist-eligible **record-config fields** of a record-native UI
 /// kernel — the same declarative registry as [`appearance_literal_args`], but
 /// keyed by config-record *field name* rather than positional argument index.
@@ -1575,7 +1633,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
 /// This companion table names, per kernel, which config fields carry an inert
 /// **appearance value** the compiled view consumes without branching on it — so a
 /// *direct literal* in that field can be hoisted into the per-view
-/// [`ipe_runtime::web::LiteralTable`] and swapped as data, exactly as a positional
+/// [`ipe_runtime::literal_table::LiteralTable`] and swapped as data, exactly as a positional
 /// appearance literal is.
 ///
 /// **Safe by construction, identically to the positional registry.** An arm fires

@@ -1593,6 +1593,9 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `anyOf` | `anyOf preds` — the disjunction of `preds` (OR). `anyOf []` is `never` (the |
 | `notPred` | `notPred p` — the negation of `p`. Named `notPred` rather than `not` because |
 | `matchWhere` | `matchWhere cond` — a row-side leaf that lifts a validated `Cond row` (built |
+| `correlate` | `correlate shareColumn rowColumn` — the column=column correlation leaf of an |
+| `existsIn` | `existsIn shares lambda` — a correlated-subquery row-security predicate over |
+| `existsInNamed` | (no summary) |
 | `readOnly` | `readOnly p` — a read-only policy: `read = p`, every write scoped to `never` |
 | `alsoInsert` | `alsoInsert p base` — open the insert path of `base` to `p` (deliberately |
 | `alsoUpdate` | `alsoUpdate p base` — open the update path of `base` to `p`. |

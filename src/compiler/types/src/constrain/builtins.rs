@@ -640,6 +640,18 @@ pub struct Builtins {
     /// query leaves. Used as the result type of the `StoreEqCol` kernel scheme;
     /// its constructors (`Compare` / …) lower normally as an emitted enum.
     pub cond_con: Symbol,
+    /// `"Pred"` — the `Ipe.Db.Store.Pred row` row-security predicate algebra ADT.
+    /// The `row` argument is phantom (the runtime `Pred` carries only data). It is
+    /// the result of the `StoreCorrelate` kernel scheme and the lambda result the
+    /// `StoreExistsIn` kernel scheme requires, so a correlated-subquery predicate's
+    /// share and outer row types stay pinned to their stores.
+    pub pred_con: Symbol,
+    /// `"Secured"` — the `Ipe.Db.Store.Secured row` classified, policy-attached
+    /// table ADT. The first argument of the `StoreExistsIn` kernel scheme: the
+    /// referenced share store whose own read policy composes into the `EXISTS`
+    /// subquery. Its `row` argument ties the share store's row type to the
+    /// correlation the `existsIn` lambda names.
+    pub secured_con: Symbol,
     /// `"Codec"` — the `Ipe.Codec` codec ADT. Used as the first parameter of the
     /// `StoreEqBy` kernel scheme (`Codec t -> …`), so an enum/newtype column's
     /// comparison value is projected to a bound `SqlValue` through its own codec.
@@ -1004,6 +1016,8 @@ impl Builtins {
             // ── Ipe.PubSub.Topic ────────────────────────────────────────────────
             topic_con: interner.intern("Topic")?,
             cond_con: interner.intern("Cond")?,
+            pred_con: interner.intern("Pred")?,
+            secured_con: interner.intern("Secured")?,
             store_con: interner.intern("Store")?,
             draft_con: interner.intern("Draft")?,
             joined_con: interner.intern("Joined")?,
