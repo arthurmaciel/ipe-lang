@@ -2027,12 +2027,23 @@ reads can decode rows through the store's own codec.
 
 An opaque row-security predicate over a `Store row`'s rows. Boolean structure
 (`allOf` / `anyOf` / `notPred` / `always` / `never`) closes over a row-side leaf
-(`matchWhere`, embedding a validated `Cond row`) and the principal-side owner
-leaf `POwner` (the `column = $subject` term the owner-scoped policy builders
-produce, bound at lowering through `Auth.subject`). Phantom in `row`, exactly as
-`Cond row` is: the constructors carry only concrete data, so the runtime value
-is untyped data while the surface stays row-checked. Carries no functions, so
-structural `==` holds — the simplifier can dedupe leaves.
+(`matchWhere`, embedding a validated `Cond row`) and the principal-side leaves:
+the owner leaf `POwner` (the `column = $subject` term the owner-scoped policy
+builders produce, bound at lowering through `Auth.subject`), and the
+caller-claim leaves `PRole` / `PMemberOf` / `PClaimEquals` (whether the
+authenticated caller holds a role, a group, or a claim value). Phantom in `row`,
+exactly as `Cond row` is: the constructors carry only concrete data, so the
+runtime value is untyped data while the surface stays row-checked. Carries no
+functions, so structural `==` holds — the simplifier can dedupe leaves.
+
+The caller-claim leaves name NO row column: they gate on WHO is asking, not on
+the row's contents. Their answer is fixed once the `Principal` is in hand (the
+verified claims travel with it), so `predFragmentIn` folds each to the always-
+true or always-false identity fragment at lowering — never a per-row column
+comparison. Fail-closed by construction: the fold consults the fail-closed
+`Auth.hasRole` / `Auth.memberOf` / `Auth.claim` accessors, so an absent role,
+group, or claim contributes the FALSE (deny) fragment, never the TRUE one — a
+caller the leaf cannot prove satisfies it is denied.
 
 ## `always`
 
@@ -2097,6 +2108,76 @@ value binds through `Sql.param` — one audit, no new SQL surface.
 Example:
 
     Store.matchWhere (Store.eq .status "published")
+
+## `role`
+
+```ipe
+role : String -> Pred row
+```
+
+`role name` — a principal-side leaf that admits every row when the
+authenticated caller holds the role `name`, and denies every row when it does
+not. It gates on WHO is asking, not on any row column, so unlike `matchWhere`
+it names no column and its answer is fixed the moment the `Principal` is in
+hand — `predFragmentIn` folds it to the always-true or always-false fragment at
+lowering (never a per-row comparison).
+
+Fail-closed: roles are read through the fail-closed `Auth.hasRole` accessor (the
+conventional space-separated `roles` claim), so a caller whose token carries no
+`roles` claim, or a `roles` claim without `name`, is DENIED — an absent role
+never admits a row. AND it into a read policy to restrict a table to a role, or
+`anyOf` it with an owner leaf to admit either the owner or a privileged role.
+
+Example (only an `admin` caller may read; others see no row):
+
+    Store.readOnly (Store.role "admin")
+
+Example (the owner, or any `admin`, may read):
+
+    Store.readOnly
+        (Store.anyOf [ Store.matchWhere (Store.eq .owner "…"), Store.role "admin" ])
+
+## `memberOf`
+
+```ipe
+memberOf : String -> Pred row
+```
+
+`memberOf group` — a principal-side leaf that admits every row when the
+authenticated caller belongs to `group`, and denies every row otherwise. Like
+`role`, it gates on the caller (not on a row column) and folds to the always-
+true or always-false fragment at lowering once the `Principal` is in hand.
+
+Fail-closed: group membership is read through the fail-closed `Auth.memberOf`
+accessor (the conventional space-separated `groups` claim), so a caller whose
+token carries no `groups` claim, or a `groups` claim without `group`, is
+DENIED — an absent group never admits a row.
+
+Example (only members of the `platform` group may read):
+
+    Store.readOnly (Store.memberOf "platform")
+
+## `claimEquals`
+
+```ipe
+claimEquals : String -> String -> Pred row
+```
+
+`claimEquals key value` — a principal-side leaf that admits every row when the
+authenticated caller's verified claim `key` equals `value`, and denies every row
+otherwise. Like `role` / `memberOf`, it gates on the caller (not on a row
+column) and folds to the always-true or always-false fragment at lowering.
+
+The test is claim-equals-a-required-value, not mere claim-presence: the leaf
+reads the claim through the fail-closed `Auth.claim` accessor (which is
+`Nothing` when the token carried no such claim) and admits ONLY when the claim
+is present AND its verified value equals `value`. Fail-closed on both counts —
+an absent claim (`Nothing`) and a claim whose value differs are each DENIED, so
+a caller the leaf cannot prove carries the exact claim value is turned away.
+
+Example (only a caller whose verified `tenant` claim is `"acme"` may read):
+
+    Store.readOnly (Store.claimEquals "tenant" "acme")
 
 ## `correlate`
 

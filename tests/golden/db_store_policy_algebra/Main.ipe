@@ -25,6 +25,12 @@ module Main exposing (main)
 --       `allOf [ p, never ]` ⇒ `never`   → `allnever:no row (denied)`
 --   * `readOnly always` leaves every write `never` (fail-closed): its update
 --     predicate explains as `no row (denied)` → `readonly:no row (denied)`.
+--   * The principal-side leaves `role` / `memberOf` / `claimEquals` gate on the
+--     caller (not on a row column), so they `explain` as caller-claim text
+--     (`role:…` / `memberof:…` / `claimeq:…`) and `notPred` over one negates it
+--     (`notrole:…`). Naming no row column, one classifies `Ok` even over the thin
+--     store that lacks `author` → `principalleaf:ok` (they smuggle no phantom
+--     column into `secured`'s column-validation surface).
 --
 -- Expected output:
 --   good:ok
@@ -43,6 +49,11 @@ module Main exposing (main)
 --   maskexplain:ssn when (a column condition)
 --   masknonnull:err
 --   maskmissing:err
+--   role:caller holds role admin
+--   memberof:caller is member of group platform
+--   claimeq:caller claim tenant = acme
+--   notrole:not (caller holds role admin)
+--   principalleaf:ok
 --
 -- Column-masking (`mask` / `secured` CNull SEAL), all pure `secured`-outcome +
 -- `explain` checks:
@@ -238,6 +249,11 @@ main =
             , maskExplainLine
             , maskNonNullLine
             , maskMissingLine
+            , identityLine "role" (Store.role "admin")
+            , identityLine "memberof" (Store.memberOf "platform")
+            , identityLine "claimeq" (Store.claimEquals "tenant" "acme")
+            , identityLine "notrole" (Store.notPred (Store.role "admin"))
+            , principalLeafSecuredLine
             ]
         )
 
@@ -478,6 +494,27 @@ maskedExplanation policy =
 
         Nothing ->
             ""
+
+
+-- A principal-side leaf (`role` / `memberOf` / `claimEquals`) names NO row
+-- column — it gates on WHO is asking, not on the row's contents. So a read
+-- policy built from one carries no column for `secured` to re-validate, and it
+-- classifies `Ok` even over the THIN store (which lacks `author` / `created_at`).
+-- This pins that the caller-claim leaves smuggle no phantom column into the
+-- column-validation surface.
+principalLeafSecuredLine : String
+principalLeafSecuredLine =
+    case Store.fromCodec "docs4" thinCodec of
+        Err _ ->
+            "principalleaf:build-err"
+
+        Ok store ->
+            case Store.secured (Store.readOnly (Store.role "admin")) store of
+                Ok _ ->
+                    "principalleaf:ok"
+
+                Err _ ->
+                    "principalleaf:err"
 
 
 -- The `read:` clause of a policy's `explain`, reduced to its value.
