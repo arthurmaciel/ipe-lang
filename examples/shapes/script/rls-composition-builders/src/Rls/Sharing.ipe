@@ -1,0 +1,45 @@
+module Rls.Sharing exposing (sharedVia, sharedOrOwned)
+
+-- The SHARING row-security pattern, composed over the existing `Ipe.Db.Store`
+-- surface — no core edit, no new kernel. A row is visible when a SECURED shares
+-- store holds a share row that correlates to it.
+--
+-- `Store.existsIn securedShares (\share row -> Store.correlate share.docId row.id)`
+-- lowers to a correlated `EXISTS` subquery whose WHERE is the correlation AND the
+-- shares store's OWN read policy. Because the shares store is itself secured to
+-- the caller, the subquery admits only the caller's own share rows — DEFENCE IN
+-- DEPTH: even if the correlation were broadened, a share the caller cannot read
+-- cannot open a row. The shares store must be a `Secured`, so a caller cannot
+-- pass an unsecured (world-open) shares table.
+
+import Ipe.Db.Store as Store exposing (Policy, Pred, Secured)
+
+
+-- | `sharedVia shares correlation` — a read-only policy admitting a row only when
+-- the caller-secured `shares` store holds a row satisfying `correlation` (e.g.
+-- `\share doc -> Store.correlate share.docId doc.id`) AND the shares store's own
+-- read policy. Writes stay `never` (deny-by-default): sharing grants read
+-- visibility, never a write path.
+sharedVia :
+    Secured share
+    -> (share -> row -> Pred share)
+    -> Policy row
+sharedVia shares correlation =
+    Store.readOnly (Store.existsIn shares correlation)
+
+
+-- | `sharedOrOwned shares correlation ownerAccessor ownerValue` — a row is
+-- readable when it is shared to the caller (the `existsIn` branch) OR its owner
+-- column equals `ownerValue` (the owner branch). `anyOf` admits on either; each
+-- branch is validated on its own side.
+sharedOrOwned :
+    Secured share
+    -> (share -> row -> Pred share)
+    -> (row -> String)
+    -> String
+    -> Pred row
+sharedOrOwned shares correlation ownerAccessor ownerValue =
+    Store.anyOf
+        [ Store.existsIn shares correlation
+        , Store.matchWhere (Store.eq ownerAccessor ownerValue)
+        ]
