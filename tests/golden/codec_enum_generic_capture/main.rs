@@ -218,22 +218,21 @@ pub fn main_enum_name<T1: 'static + Send + Sync + Clone>(
     v: T1,
 ) -> IpeMaybe<String> {
     let _ipe_recursion_guard = crate::recursion_guard();
-    ({
-        let eta_0: IpeMaybe<(T1, String)> =
-            list_find(
-                {
-                    let __ipe_fn: Box<dyn Fn((T1, String)) -> bool + Send + Sync + 'static> =
-                        Box::new(move |pair: (T1, String)| -> bool {
-                            ({
-                                let (c, _) = pair;
-                                (eq)(c, v.clone())
-                            })
-                        });
-                    __ipe_fn
-                },
-                pairs,
-            );
-        ipe_maybe_map(eta_0, {
+    ipe_maybe_map(
+        list_find(
+            {
+                let __ipe_fn: Box<dyn Fn((T1, String)) -> bool + Send + Sync + 'static> =
+                    Box::new(move |pair: (T1, String)| -> bool {
+                        ({
+                            let (c, _) = pair;
+                            (eq)(c, v.clone())
+                        })
+                    });
+                __ipe_fn
+            },
+            pairs,
+        ),
+        {
             let __ipe_fn: Box<dyn Fn((T1, String)) -> String + Send + Sync + 'static> =
                 Box::new(move |pair: (T1, String)| -> String {
                     ({
@@ -242,8 +241,8 @@ pub fn main_enum_name<T1: 'static + Send + Sync + Clone>(
                     })
                 });
             __ipe_fn
-        })
-    })
+        },
+    )
 }
 pub fn main_medal_eq(a: MainMedal, b: MainMedal) -> bool {
     let _ipe_recursion_guard = crate::recursion_guard();

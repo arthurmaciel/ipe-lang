@@ -184,21 +184,23 @@ impl IpeStringify for RecColTypeName {
     }
 }
 #[derive(Clone, Debug, PartialEq)]
-pub struct RecDeleteImmutablesInsertOwnersReadUpdate {
+pub struct RecDeleteImmutablesInsertMasksOwnersReadUpdate {
     delete: IpeDbStorePred,
     immutables: Vec<String>,
     insert: IpeDbStorePred,
+    masks: Vec<(String, IpeDbStorePred)>,
     owners: Vec<String>,
     read: IpeDbStorePred,
     update: IpeDbStorePred,
 }
-impl IpeStringify for RecDeleteImmutablesInsertOwnersReadUpdate {
+impl IpeStringify for RecDeleteImmutablesInsertMasksOwnersReadUpdate {
     fn ipe_show(&self) -> String {
         format!(
-            "{{{} {} {} {} {} {}}}",
+            "{{{} {} {} {} {} {} {}}}",
             (&ipe_runtime::stringify::Wrap(&self.delete)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.immutables)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.insert)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.masks)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.owners)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.read)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.update)).dispatch()
@@ -260,6 +262,20 @@ impl IpeStringify for RecOuterColShareColShareColumnsShareReadShareTable {
             (&ipe_runtime::stringify::Wrap(&self.shareColumns)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.shareRead)).dispatch(),
             (&ipe_runtime::stringify::Wrap(&self.shareTable)).dispatch()
+        )
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecOwnerSsn {
+    owner: String,
+    ssn: IpeMaybe<String>,
+}
+impl IpeStringify for RecOwnerSsn {
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.owner)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.ssn)).dispatch()
         )
     }
 }
@@ -542,9 +558,6 @@ pub(crate) use ipe_mod_ipe_codec::*;
 #[path = "ipe_mods/ipe_mod_ipe_db_store.rs"]
 mod ipe_mod_ipe_db_store;
 pub(crate) use ipe_mod_ipe_db_store::*;
-#[path = "ipe_mods/ipe_mod_ipe_db_codec.rs"]
-mod ipe_mod_ipe_db_codec;
-pub(crate) use ipe_mod_ipe_db_codec::*;
 #[path = "ipe_mods/ipe_mod_main.rs"]
 mod ipe_mod_main;
 pub(crate) use ipe_mod_main::*;
