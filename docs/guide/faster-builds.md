@@ -220,16 +220,38 @@ ipe watch
 salsa-aware pipeline, and restarts the process. The combination of `ipe watch`
 and the flags above gives you sub-second feedback on most edits.
 
-For a running web app, `ipe watch` goes further on edits that only change what the
-view *looks like*: a change to a static style value, attribute, or text — and to
-the static *structure* of a subtree, such as adding, removing, or reordering
-static elements or attributes — is hot-swapped into the live program with **no
-recompile and no restart**, so the browser updates in place while keeping its
-current state. This applies to any part of a view that does not depend on the
-model: an edit that reads the model, branches on it (`if` / `case`), or touches a
-handler is a change to the program's behaviour, so it recompiles as usual. The
-preview always runs the same code the shipped build does — a hot-swap shows
-exactly what a full rebuild of the same source would.
+For a running app **that has a view surface**, `ipe watch` goes further on edits
+that only change what the view *looks like*: a change to a static style value,
+attribute, or text — and to the static *structure* of a subtree, such as adding,
+removing, or reordering static elements or attributes — is hot-swapped into the
+live program with **no recompile and no restart**, so the app updates in place
+while keeping its current state. This applies to any part of a view that does not
+depend on the model: an edit that reads the model, branches on it (`if` / `case`),
+or touches a handler is a change to the program's behaviour, so it recompiles as
+usual. The preview always runs the same code the shipped build does — a hot-swap
+shows exactly what a full rebuild of the same source would.
+
+**Which shapes hot-swap.** Appearance hot-swap needs a live, addressable view to
+re-render into, so it is scoped to the two view-bearing shapes and delivered over
+each one's own channel:
+
+- **`Ipe.Tea.Web`** — over the app's `/_ipe/hot-appearance` endpoint; the browser
+  repaints in place.
+- **`Ipe.Tui`** — over the child's loopback control socket; the terminal UI
+  repaints in place.
+
+The two viewless / line-oriented shapes **rebuild instead** — appearance hot-swap
+is not applicable to them, by design:
+
+- **CLI** (`Ipe.Tea.Cli`) renders its line view synchronously as each line or
+  message is folded; its committed transcript is already written and its live
+  region is bounded, so there is no out-of-band region to repaint (and off-TTY it
+  must never write terminal control codes into a pipe or log).
+- **Worker** (`Ipe.Tea.Worker`) has no view at all.
+
+For these shapes every edit — appearance-only or not — takes a full structural
+rebuild. A rebuild-only shape never *skips* an edit: the change always lands, just
+via a recompile rather than an in-place patch.
 
 ### Build-status banner (dev only)
 
