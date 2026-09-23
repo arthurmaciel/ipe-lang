@@ -28,11 +28,9 @@ import Ipe.Task as Task exposing (Task)
 handleWhoami : Request -> Auth.Principal -> Task Error Response
 handleWhoami _ principal =
     let
-        email : String
         email =
             Maybe.withDefault "unknown" (Auth.claim "email" principal)
 
-        badge : String
         badge =
             if Auth.hasRole "admin" principal then
                 "admin"
