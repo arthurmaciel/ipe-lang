@@ -796,6 +796,13 @@ pub struct RunArgs {
     /// the emitted runtime loop. Absent from `ipe release` so the debugger can
     /// never ship in a production artifact.
     pub debugger: bool,
+    /// Where `ipe debugger record` wants the session's replay log written, if
+    /// this run is a debugger recording. `Some` forces `debugger` on and injects
+    /// `IPE_DEBUGGER_RECORD` into the executed child's environment so the
+    /// runtime dumps its bounded replay log there on exit. `None` for an ordinary
+    /// `ipe run` — never populated by [`parse_run`], only by the `debugger`
+    /// subcommand.
+    pub record_log: Option<std::path::PathBuf>,
     /// Arguments after `--`, forwarded verbatim to the compiled binary.
     pub bin_args: Vec<String>,
     /// `--json` — emit each diagnostic as a stable JSON object instead of the
@@ -918,6 +925,8 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
         wasm,
         accept_risks,
         debugger,
+        // A plain `ipe run` never records; only `ipe debugger record` sets this.
+        record_log: None,
         bin_args,
         format: format.unwrap_or_default(),
         quiet,

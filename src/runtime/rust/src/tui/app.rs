@@ -250,6 +250,86 @@ where
     let _ = tx.send(CliEvent::Eof);
 }
 
+/// One authorized control frame delivered from the loopback accept-loop to the
+/// synchronous TEA run loop, paired with the one-shot the run loop replies on.
+///
+/// This is the async→sync bridge. The accept-loop's handler (an async task) and
+/// the run loop (which OWNS `Model`/view/`dbg`) run on different execution
+/// contexts; rather than share `Model` behind a lock — which would open a
+/// data-race window and let a control apply interleave a live `update` mid-fold —
+/// the handler merely ENQUEUES a `ControlRequest` and the run loop folds it into
+/// its own event select, applying it single-threaded on its own task. So the
+/// live model is only ever touched from one thread and determinism
+/// (`reconstruct(n) == live`) is preserved by construction: the seam borrows the
+/// model read-only and re-fires no `Cmd`.
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+struct ControlRequest {
+    frame: crate::control::ControlFrame,
+    reply: tokio::sync::oneshot::Sender<crate::control::ControlFrame>,
+}
+
+/// The async→sync bridge's channel + handler, split out so it can be driven in a
+/// test without opening a socket. The handler is the pure
+/// `Fn(ControlFrame) -> ControlFrame` [`serve_control`](crate::control::server::serve_control)
+/// wants; it enqueues each frame with a fresh reply one-shot and blocks its
+/// (detached, per-connection) task until the run loop answers. A dropped run loop
+/// (child exiting) makes the enqueue or the `blocking_recv` fail, so the handler
+/// falls closed to a rejecting `Ack` rather than hanging.
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+fn control_bridge_channel() -> (
+    impl Fn(crate::control::ControlFrame) -> crate::control::ControlFrame + Send + Sync + 'static,
+    tokio::sync::mpsc::UnboundedReceiver<ControlRequest>,
+) {
+    let (req_tx, req_rx) = tokio::sync::mpsc::unbounded_channel::<ControlRequest>();
+    let handler = move |frame: crate::control::ControlFrame| -> crate::control::ControlFrame {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        // The run loop owns the receiver; if it has already exited, the send
+        // fails and we fall closed to a rejecting Ack rather than block forever.
+        if req_tx
+            .send(ControlRequest {
+                frame,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return crate::control::ControlFrame::Ack {
+                ok: false,
+                detail: "control run loop is not accepting frames".to_owned(),
+            };
+        }
+        match reply_rx.blocking_recv() {
+            Ok(reply) => reply,
+            // The run loop dropped the reply sender without answering (it is
+            // shutting down): fail closed, never a silent success.
+            Err(_) => crate::control::ControlFrame::Ack {
+                ok: false,
+                detail: "control run loop did not reply".to_owned(),
+            },
+        }
+    };
+    (handler, req_rx)
+}
+
+/// Spawn the loopback control accept-loop for this tui child, returning the
+/// receiver the run loop drains.
+///
+/// Fail-closed and dev-loop-only: [`serve_control`](crate::control::server::serve_control)
+/// itself binds nothing unless BOTH `IPE_CONTROL_PORT` and the session token env
+/// vars are present (a child with no `ipe watch` parent opens no socket), binds
+/// loopback only, and token-checks every connection before its frame is decoded.
+/// The whole surface is absent from a release build — the module is gated on the
+/// `debugger` dev-loop feature.
+#[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+fn spawn_control_bridge() -> tokio::sync::mpsc::UnboundedReceiver<ControlRequest> {
+    let (handler, req_rx) = control_bridge_channel();
+    tokio::spawn(async move {
+        // A bind failure (no port/token, or a lost race for the loopback port) is
+        // not fatal: the child simply runs with no control surface.
+        let _ = crate::control::server::serve_control(handler).await;
+    });
+    req_rx
+}
+
 /// `tui_app` — terminal TEA driver for a `view : Model -> String` (the raw
 /// frame is painted verbatim), the vehicle for the `Ui.cells` raw-cell escape.
 /// `on_key` receives the decoded key's
@@ -835,13 +915,65 @@ where
             TuiDebugger::new(model.clone(), move |msg, mdl| upd(msg, mdl))
         };
 
+        // The loopback control channel: `ipe watch` (parent) delivers hot-swap
+        // and time-travel frames here; the run loop applies each through the ONE
+        // apply seam on its own thread (below). Fail-closed and release-absent —
+        // `spawn_control_bridge` binds nothing without a port + token.
+        #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+        let mut control_rx = spawn_control_bridge();
+
         let mut inputs = InputRegistry::new();
         let mut focus_idx = 0usize;
         let mut scroll_y = 0usize;
         let mut focusables: Vec<Focusable<Msg>> =
             render_and_paint(&view, &model, &mut inputs, &mut focus_idx, &mut scroll_y);
 
-        while let Some(ev) = rx.recv().await {
+        loop {
+            // Fold the control channel into the run loop's event select so an
+            // incoming frame is applied on THIS thread — the only writer of
+            // `model`/`dbg`/the render surface. A keyboard event and a control
+            // frame can never race the model.
+            #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+            let ev = tokio::select! {
+                biased;
+                req = control_rx.recv() => match req {
+                    Some(req) => {
+                        let outcome = {
+                            let mut surface =
+                                TuiSurface::new(std::mem::take(&mut inputs), focus_idx, scroll_y);
+                            let outcome =
+                                surface.apply_control_frame(req.frame, &view, &model, &mut dbg);
+                            inputs = std::mem::take(&mut surface.inputs);
+                            outcome
+                        };
+                        if let Some(frame) = outcome.repaint {
+                            paint(&frame);
+                        }
+                        if let Some(fs) = outcome.focusables {
+                            focusables = fs;
+                        }
+                        // Reply to the parent; a dropped receiver (parent gone) is
+                        // benign — the frame was still applied.
+                        let _ = req.reply.send(outcome.reply);
+                        continue;
+                    }
+                    // The bridge sender was dropped (accept loop gone): stop
+                    // draining control frames but keep serving app events.
+                    None => match rx.recv().await {
+                        Some(ev) => ev,
+                        None => break,
+                    },
+                },
+                ev = rx.recv() => match ev {
+                    Some(ev) => ev,
+                    None => break,
+                },
+            };
+            #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
+            let ev = match rx.recv().await {
+                Some(ev) => ev,
+                None => break,
+            };
             let mut produced: Option<Msg> = None;
             match ev {
                 CliEvent::Msg(m) | CliEvent::PerformDone(m) => produced = Some(m),
@@ -1384,6 +1516,73 @@ mod apply_seam_tests {
             kb_focusables.len(),
             frame_out.focusables.map(|f| f.len()).unwrap_or(0),
             "both paths yield the same focusable set"
+        );
+    }
+
+    // (e) The async→sync bridge: a frame handed to the accept-loop HANDLER
+    // (the async side) is applied by a run-loop drain (the sync side that owns
+    // Model/dbg) through the ONE seam, and the handler receives the reply the
+    // run loop produced — never a bypass of the seam. Drives `control_bridge_channel`
+    // exactly as `spawn_control_bridge` + the `tui_app_ui` select loop do, minus
+    // the socket. `Debug(StepTo)` also proves determinism survives the bridge:
+    // the reconstructed cursor equals the direct-seam cursor.
+    #[tokio::test]
+    async fn bridge_applies_through_the_seam_and_returns_the_reply() {
+        let (handler, mut req_rx) = control_bridge_channel();
+
+        // The run-loop side: own the seam state, drain one request, apply it via
+        // `apply_control_frame`, and reply on the request's one-shot — mirroring
+        // the `tui_app_ui` select arm.
+        let run_loop = tokio::spawn(async move {
+            let (mut dbg, live) = seeded(&[10, 5, 3]); // steps 10,15,18
+            let mut surface = TuiSurface::new(InputRegistry::new(), 0, 0);
+            let req = req_rx.recv().await.expect("the bridge delivers the frame");
+            let outcome = surface.apply_control_frame(req.frame, &t_view, &live, &mut dbg);
+            let cursor = dbg.current_reconstructed();
+            let _ = req.reply.send(outcome.reply);
+            cursor
+        });
+
+        // The async handler side: `serve_control` calls this on a blocking task,
+        // so drive it on a blocking thread and await its reply.
+        let reply =
+            tokio::task::spawn_blocking(move || handler(ControlFrame::Debug(DebugCmd::StepTo(1))))
+                .await
+                .expect("the handler task joins");
+
+        assert!(
+            matches!(reply, ControlFrame::Ack { ok: true, .. }),
+            "the run loop's Ack reaches the handler, got {reply:?}"
+        );
+        let cursor = run_loop.await.expect("the run loop joins");
+        assert_eq!(
+            cursor,
+            Some(TModel { count: 15 }),
+            "StepTo(1) over the bridge reconstructs the step-1 model — determinism \
+             preserved across the async→sync hop"
+        );
+    }
+
+    // (f) Fail-closed: if the run loop has already dropped its receiver (the child
+    // is exiting), the handler never hangs — it returns a REJECTING Ack so the
+    // parent falls back to a full rebuild rather than believe a frame applied.
+    #[tokio::test]
+    async fn bridge_fails_closed_when_the_run_loop_is_gone() {
+        let (handler, req_rx) = control_bridge_channel();
+        drop(req_rx); // the run loop is gone
+
+        let reply = tokio::task::spawn_blocking(move || {
+            handler(ControlFrame::HotAppearance(
+                crate::control::AppearancePatch::default(),
+            ))
+        })
+        .await
+        .expect("the handler task joins");
+
+        assert!(
+            matches!(reply, ControlFrame::Ack { ok: false, .. }),
+            "a frame with no run loop to apply it is rejected, not silently accepted; \
+             got {reply:?}"
         );
     }
 }

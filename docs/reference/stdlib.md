@@ -1584,19 +1584,31 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `mul` | `mul left right` — multiplication counterpart to `add`: emits |
 | `selectToList` | `selectToList db sel` — run the projection and return the projected `row` |
 | `selectToMaybe` | `selectToMaybe db sel` — run the projection and return the FIRST projected |
-| `Policy` | An opaque row-security policy: a conjunction of `Rule`s over a store's |
+| `Policy` | An opaque, operation-scoped row-security policy: a `Pred row` per operation, |
 | `Secured` | An opaque secured store: a `Store a` paired with a validated `Policy`. The |
-| `unrestricted` | `unrestricted` — the policy that allows all rows (an explicit empty |
-| `publicRead` | `publicRead` — a policy of one public-read rule: reads are unrestricted while |
-| `ownerColumn` | `ownerColumn accessor` — a policy of one owner-column rule over the |
-| `immutable` | `immutable accessor` — a policy of one immutable-column rule over the |
-| `andPolicy` | `andPolicy a b` — the conjunction of two policies (their rules concatenated). |
+| `Pred` | An opaque row-security predicate over a `Store row`'s rows. Boolean structure |
+| `always` | `always` — the predicate that matches every row (an explicit empty |
+| `never` | `never` — the predicate that matches no row (an explicit empty disjunction). |
+| `allOf` | `allOf preds` — the conjunction of `preds` (AND). `allOf []` is `always` |
+| `anyOf` | `anyOf preds` — the disjunction of `preds` (OR). `anyOf []` is `never` (the |
+| `notPred` | `notPred p` — the negation of `p`. Named `notPred` rather than `not` because |
+| `matchWhere` | `matchWhere cond` — a row-side leaf that lifts a validated `Cond row` (built |
+| `readOnly` | `readOnly p` — a read-only policy: `read = p`, every write scoped to `never` |
+| `alsoInsert` | `alsoInsert p base` — open the insert path of `base` to `p` (deliberately |
+| `alsoUpdate` | `alsoUpdate p base` — open the update path of `base` to `p`. |
+| `alsoDelete` | `alsoDelete p base` — open the delete path of `base` to `p`. |
+| `unrestricted` | `unrestricted` — the policy whose every operation matches every row (reads |
+| `publicRead` | `publicRead` — reads are unrestricted while writes route through the secured |
+| `ownerColumn` | `ownerColumn accessor` — the owner-scoped policy: all four operations are |
+| `immutable` | `immutable accessor` — a policy whose accessor-named column cannot change |
+| `andPolicy` | `andPolicy extra base` — compose two policies: conjoin each operation's |
 | `secured` | `secured policy draft` — classify `draft` by attaching `policy`, or fail |
 | `ownerColumnNamed` | (no summary) |
 | `immutableNamed` | (no summary) |
+| `explain` | `explain policy` — a human-readable rendering of the (simplified) policy, one |
 | `allAs` | `allAs principal db secured` — read every row the policy admits for |
 | `getAs` | `getAs principal db secured keyValue` — read the single row whose primary |
-| `insertAs` | `insertAs principal db secured row` — insert `row`, forcing every |
+| `insertAs` | `insertAs principal db secured row` — insert `row`, forcing every owner |
 | `updateAs` | `updateAs principal db secured row` — update the row whose primary key |
 | `deleteAs` | `deleteAs principal db secured keyValue` — delete the row whose primary key |
 

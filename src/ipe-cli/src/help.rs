@@ -882,6 +882,23 @@ const COMMANDS: &[Command] = &[
         hidden: false,
     },
     Command {
+        name: "debugger",
+        run: crate::run_debugger,
+        summary: "Record a cli/worker app's TEA session and replay it as plain text.",
+        args: "<record <Main.ipe> | replay <log>>",
+        args_desc: "record: build the app with the time-travel debugger compiled in and run it, \
+                    capturing each (msg, model) step to a bounded log (default: `<Main>.ipelog` \
+                    beside the entry). replay: re-emit each recorded step as one plain line — \
+                    off a TTY every control byte is stripped, so a pipe/file receives clean text \
+                    only. A record/replay surface, not a live scrubber (which cannot be the cli \
+                    default: it must fail-closed to plain streaming off-TTY).",
+        options: &[Opt {
+            flag: "[--out <log>]",
+            desc: "record: write the session's replay log to <log> (default: `<Main>.ipelog`)",
+        }],
+        hidden: false,
+    },
+    Command {
         name: "upgrade",
         run: crate::run_upgrade,
         summary: "Self-update ipe to the latest release (re-runs the installer).",
@@ -982,6 +999,7 @@ const SECTIONS: &[Section] = &[
             "doc",
             "fmt",
             "lsp",
+            "debugger",
             "clean",
             "migrate",
             "health",

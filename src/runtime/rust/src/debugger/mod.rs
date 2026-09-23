@@ -46,6 +46,11 @@ pub mod server;
 // via the inner `#![cfg(...)]` in tui.rs — zero code on wasm32.
 pub mod tui;
 
+// Cli/worker record sink: dump the recorded session's portable replay log to
+// the `IPE_DEBUGGER_RECORD` destination, fail-closed to plain text.
+// Gated on `feature = "debugger"` via the inner `#![cfg(...)]`.
+pub mod record_sink;
+
 /// The default message-log capacity when none is configured.
 pub const DEFAULT_HISTORY_CAP: usize = 512;
 

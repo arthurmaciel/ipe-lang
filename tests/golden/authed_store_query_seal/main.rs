@@ -183,6 +183,28 @@ impl IpeStringify for RecColTypeName {
         )
     }
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecDeleteImmutablesInsertOwnersReadUpdate {
+    delete: IpeDbStorePred,
+    immutables: Vec<String>,
+    insert: IpeDbStorePred,
+    owners: Vec<String>,
+    read: IpeDbStorePred,
+    update: IpeDbStorePred,
+}
+impl IpeStringify for RecDeleteImmutablesInsertOwnersReadUpdate {
+    fn ipe_show(&self) -> String {
+        format!(
+            "{{{} {} {} {} {} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.delete)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.immutables)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.insert)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.owners)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.read)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.update)).dispatch()
+        )
+    }
+}
 pub struct RecEncMkDecShp<T1: 'static> {
     enc: ::std::sync::Arc<dyn Fn(T1) -> JsonVal + Send + Sync + 'static>,
     mkDec: ::std::sync::Arc<dyn Fn(Rec_) -> Decoder<T1> + Send + Sync + 'static>,

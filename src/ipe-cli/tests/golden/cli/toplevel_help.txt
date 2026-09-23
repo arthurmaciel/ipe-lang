@@ -26,6 +26,7 @@ exit: 0
     ipe doc           --help
     ipe fmt           --help
     ipe lsp           --help
+    ipe debugger      --help
     ipe clean         --help
     ipe migrate       --help
     ipe health        --help
