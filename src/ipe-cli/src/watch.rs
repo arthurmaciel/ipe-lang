@@ -1345,111 +1345,138 @@ fn run_inner(
                                 crate::hot_classify::Classification::HotSwappable(hot)
                                     if !hot.is_empty() =>
                                 {
-                                    // A Ipe.Tui child has no HTTP endpoint: its
-                                    // appearance hot-swap rides the loopback
-                                    // control socket, not the web POST path.
-                                    // Only an APPEARANCE-only swap is hot for tui
-                                    // (C3) — the logic legs (transitions/msg-sets/
-                                    // subs/inits/wirings) each need a rebuilt
-                                    // `update`, so a tui swap that carries any of
-                                    // them falls through to a full rebuild. On a
-                                    // clean delivery (every view Ack'd) skip cargo;
-                                    // any miss (no port, bad token, socket error)
-                                    // falls back to the rebuild below.
-                                    if current_is_tui {
-                                        let appearance_only = hot.transitions.is_empty()
-                                            && hot.msg_sets.is_empty()
-                                            && hot.subs.is_empty()
-                                            && hot.inits.is_empty()
-                                            && hot.wirings.is_empty();
-                                        if appearance_only
-                                            && push_control_appearance(
-                                                control_port,
-                                                tok,
-                                                &hot.views,
-                                                opts.quiet,
-                                            )
-                                        {
-                                            emit(
-                                                opts,
-                                                WatchEvent::AppearanceHotSwapped {
-                                                    generation: g,
-                                                    views: hot.views.len(),
-                                                },
-                                            );
-                                            timings.report(g);
-                                            continue;
-                                        }
-                                        // Not appearance-only, or delivery missed:
-                                        // fall through to the full rebuild below.
-                                    } else {
-                                        // The running binary is unchanged, so
-                                        // `running_emitted` stays the baseline. Push
-                                        // each edited view's appearance patch AND each
-                                        // edited arm's transition patch, then skip
-                                        // cargo. Both must reach the app for the swap
-                                        // to be complete; a failure of EITHER is a soft
-                                        // miss that falls through to a normal recompile
-                                        // so the edit still lands.
-                                        let views_ok = push_appearance_patches(
-                                            opts.port, tok, &hot.views, opts.quiet,
-                                        );
-                                        let transitions_ok = push_transition_patches(
-                                            opts.port,
-                                            tok,
-                                            &hot.transitions,
-                                            opts.quiet,
-                                        );
-                                        // The additive-`Msg`-set leg: the endpoint
-                                        // re-proves the superset and refuses a
-                                        // non-additive candidate, so a miss here (like
-                                        // a view/transition miss) falls back to a full
-                                        // recompile.
-                                        let msg_sets_ok = push_msg_set_patches(
-                                            opts.port,
-                                            tok,
-                                            &hot.msg_sets,
-                                            opts.quiet,
-                                        );
-                                        let subs_ok =
-                                            push_sub_patches(opts.port, tok, &hot.subs, opts.quiet);
-                                        let inits_ok = push_init_patches(
-                                            opts.port, tok, &hot.inits, opts.quiet,
-                                        );
-                                        let wirings_ok = push_wiring_patches(
-                                            opts.port,
-                                            tok,
-                                            &hot.wirings,
-                                            opts.quiet,
-                                        );
-                                        if views_ok
-                                            && transitions_ok
-                                            && msg_sets_ok
-                                            && subs_ok
-                                            && inits_ok
-                                            && wirings_ok
-                                        {
-                                            emit(
-                                                opts,
-                                                WatchEvent::AppearanceHotSwapped {
-                                                    generation: g,
-                                                    views: hot.views.len()
-                                                        + hot.transitions.len()
-                                                        + hot.msg_sets.len()
-                                                        + hot.subs.len()
-                                                        + hot.inits.len()
-                                                        + hot.wirings.len(),
-                                                },
-                                            );
-                                            if let Some(app_port) =
-                                                app_status_port(proxy.as_ref(), opts.port)
+                                    // The running shape decides where — or whether
+                                    // — an appearance swap can be delivered out of
+                                    // band. Each shape maps to exactly one route;
+                                    // the match is exhaustive so a shape can never
+                                    // silently skip the edit (see `appearance_route`).
+                                    match appearance_route(current_is_tui, current_is_web) {
+                                        // A Ipe.Tui child has no HTTP endpoint: its
+                                        // appearance hot-swap rides the loopback
+                                        // control socket, not the web POST path.
+                                        // Only an APPEARANCE-only swap is hot for tui
+                                        // (C3) — the logic legs (transitions/msg-sets/
+                                        // subs/inits/wirings) each need a rebuilt
+                                        // `update`, so a tui swap that carries any of
+                                        // them falls through to a full rebuild. On a
+                                        // clean delivery (every view Ack'd) skip cargo;
+                                        // any miss (no port, bad token, socket error)
+                                        // falls back to the rebuild below.
+                                        AppearanceRoute::ControlSocket => {
+                                            let appearance_only = hot.transitions.is_empty()
+                                                && hot.msg_sets.is_empty()
+                                                && hot.subs.is_empty()
+                                                && hot.inits.is_empty()
+                                                && hot.wirings.is_empty();
+                                            if appearance_only
+                                                && push_control_appearance(
+                                                    control_port,
+                                                    tok,
+                                                    &hot.views,
+                                                    opts.quiet,
+                                                )
                                             {
-                                                post_watch_status(app_port, tok, true, "");
+                                                emit(
+                                                    opts,
+                                                    WatchEvent::AppearanceHotSwapped {
+                                                        generation: g,
+                                                        views: hot.views.len(),
+                                                    },
+                                                );
+                                                timings.report(g);
+                                                continue;
                                             }
-                                            timings.report(g);
-                                            continue;
+                                            // Not appearance-only, or delivery missed:
+                                            // fall through to the full rebuild below.
                                         }
-                                    } // end web-child appearance push
+                                        AppearanceRoute::WebPost => {
+                                            // The running binary is unchanged, so
+                                            // `running_emitted` stays the baseline. Push
+                                            // each edited view's appearance patch AND each
+                                            // edited arm's transition patch, then skip
+                                            // cargo. Both must reach the app for the swap
+                                            // to be complete; a failure of EITHER is a soft
+                                            // miss that falls through to a normal recompile
+                                            // so the edit still lands.
+                                            let views_ok = push_appearance_patches(
+                                                opts.port, tok, &hot.views, opts.quiet,
+                                            );
+                                            let transitions_ok = push_transition_patches(
+                                                opts.port,
+                                                tok,
+                                                &hot.transitions,
+                                                opts.quiet,
+                                            );
+                                            // The additive-`Msg`-set leg: the endpoint
+                                            // re-proves the superset and refuses a
+                                            // non-additive candidate, so a miss here (like
+                                            // a view/transition miss) falls back to a full
+                                            // recompile.
+                                            let msg_sets_ok = push_msg_set_patches(
+                                                opts.port,
+                                                tok,
+                                                &hot.msg_sets,
+                                                opts.quiet,
+                                            );
+                                            let subs_ok = push_sub_patches(
+                                                opts.port, tok, &hot.subs, opts.quiet,
+                                            );
+                                            let inits_ok = push_init_patches(
+                                                opts.port, tok, &hot.inits, opts.quiet,
+                                            );
+                                            let wirings_ok = push_wiring_patches(
+                                                opts.port,
+                                                tok,
+                                                &hot.wirings,
+                                                opts.quiet,
+                                            );
+                                            if views_ok
+                                                && transitions_ok
+                                                && msg_sets_ok
+                                                && subs_ok
+                                                && inits_ok
+                                                && wirings_ok
+                                            {
+                                                emit(
+                                                    opts,
+                                                    WatchEvent::AppearanceHotSwapped {
+                                                        generation: g,
+                                                        views: hot.views.len()
+                                                            + hot.transitions.len()
+                                                            + hot.msg_sets.len()
+                                                            + hot.subs.len()
+                                                            + hot.inits.len()
+                                                            + hot.wirings.len(),
+                                                    },
+                                                );
+                                                if let Some(app_port) =
+                                                    app_status_port(proxy.as_ref(), opts.port)
+                                                {
+                                                    post_watch_status(app_port, tok, true, "");
+                                                }
+                                                timings.report(g);
+                                                continue;
+                                            }
+                                        }
+                                        AppearanceRoute::Rebuild => {
+                                            // Every other shape — cli (`console_app`)
+                                            // and worker (`worker_app`) — has NO out-of-
+                                            // band appearance-apply path: a worker has no
+                                            // view surface at all, and a cli renders its
+                                            // `LinesView` synchronously on the next line/
+                                            // msg fold (its committed transcript is
+                                            // already written and its live region is
+                                            // bounded), so an out-of-band repaint has no
+                                            // meaning and off-TTY must never spray ANSI
+                                            // into a pipe. Appearance hot-swap is N/A for
+                                            // these shapes; a HotSwappable classification
+                                            // here MUST fall to a full rebuild rather than
+                                            // silently skip the edit (which would leave the
+                                            // app running stale code — a correctness break
+                                            // worse than a rebuild). Falling through does
+                                            // exactly that.
+                                        }
+                                    } // end appearance-swap shape routing
                                 }
                                 // An empty hot-swap (byte-identical re-emit, guarded
                                 // out of the fast path above) and a `Logic` edit both
@@ -1836,6 +1863,38 @@ fn run_inner(
 fn free_loopback_port() -> std::io::Result<u16> {
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     Ok(listener.local_addr()?.port())
+}
+
+/// Where an appearance-only hot-swap is delivered for the running TEA shape —
+/// one variant per delivery mechanism, so a shape can never fall between the
+/// arms and silently drop an edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppearanceRoute {
+    /// Ipe.Tui: the child owns a loopback control socket; the swap rides a
+    /// `HotAppearance` control frame.
+    ControlSocket,
+    /// Ipe.Web: the child serves `/_ipe/hot-appearance`; the swap rides an HTTP
+    /// POST on the app port.
+    WebPost,
+    /// Every viewless-or-line-oriented shape — cli (`console_app`) and worker
+    /// (`worker_app`) — has no out-of-band apply path, so an appearance swap is
+    /// N/A: the edit takes a full structural rebuild. Never a silent skip.
+    Rebuild,
+}
+
+/// Route an appearance-only hot-swap by the running shape. Tui and web each have
+/// a delivery channel; any other shape (cli, worker, a bare HTTP server) has
+/// none, so it rebuilds. Total over the two shape flags by construction — the
+/// `Rebuild` fallback is the fail-safe that keeps a HotSwappable classification
+/// from ever no-op'ing on a shape that cannot apply it.
+const fn appearance_route(is_tui: bool, is_web: bool) -> AppearanceRoute {
+    if is_tui {
+        AppearanceRoute::ControlSocket
+    } else if is_web {
+        AppearanceRoute::WebPost
+    } else {
+        AppearanceRoute::Rebuild
+    }
 }
 
 /// The emitted `src/main.rs` text — the deterministic, compiler-controlled
@@ -3202,11 +3261,11 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
-        apply_build_accel_env, child_env, choose_build_accel, compile_failed_frame,
-        dir_has_dep_rlib, emitted_binds_http, emitted_is_tui, emitted_is_web, env_flag_on,
-        first_error_line, mint_hot_token, mpsc, push_control_appearance, schedule_resolve_retry,
-        send_control_frame, spawn_command, strip_ansi, watch_status_body,
+        AppearanceRoute, BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY,
+        RebuildTimings, appearance_route, apply_build_accel_env, child_env, choose_build_accel,
+        compile_failed_frame, dir_has_dep_rlib, emitted_binds_http, emitted_is_tui, emitted_is_web,
+        env_flag_on, first_error_line, mint_hot_token, mpsc, push_control_appearance,
+        schedule_resolve_retry, send_control_frame, spawn_command, strip_ansi, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3291,6 +3350,66 @@ mod tests {
         assert!(emitted_is_tui(&p), "tui_app_ui must classify as tui");
         assert!(!emitted_is_web(&p), "a tui app is not a web project");
         assert!(!emitted_binds_http(&p), "a tui app binds no HTTP listener");
+    }
+
+    /// A cli (`console_app`) app is neither tui nor web, so an appearance-only
+    /// edit routes to a full structural REBUILD, never an out-of-band swap: a cli
+    /// renders its `LinesView` synchronously on the next fold and has no control
+    /// socket or `/_ipe/hot-appearance` endpoint to deliver a patch to.
+    #[test]
+    fn cli_app_emit_is_neither_tui_nor_web() {
+        let p = emitted_with_main(
+            "fn main() { ipe_runtime::tea::CliApp(ipe_runtime::console_app(a,b,c,d,e)); }",
+        );
+        let (is_tui, is_web) = (emitted_is_tui(&p), emitted_is_web(&p));
+        assert!(!is_tui, "a cli app is not a tui app");
+        assert!(!is_web, "a cli app is not a web app");
+        assert_eq!(
+            appearance_route(is_tui, is_web),
+            AppearanceRoute::Rebuild,
+            "a cli appearance edit must rebuild — no out-of-band apply path exists"
+        );
+    }
+
+    /// A worker (`worker_app`) app has NO view surface at all, so appearance
+    /// hot-swap is genuinely N/A: every edit — appearance-classified or not —
+    /// routes to a full structural rebuild.
+    #[test]
+    fn worker_app_emit_is_neither_tui_nor_web() {
+        let p = emitted_with_main(
+            "fn main() { ipe_runtime::tea::WorkerApp(ipe_runtime::worker_app(a,b,c)); }",
+        );
+        let (is_tui, is_web) = (emitted_is_tui(&p), emitted_is_web(&p));
+        assert!(!is_tui, "a worker app is not a tui app");
+        assert!(!is_web, "a worker app is not a web app");
+        assert_eq!(
+            appearance_route(is_tui, is_web),
+            AppearanceRoute::Rebuild,
+            "a worker has no view surface — every edit rebuilds, never hot-swaps"
+        );
+    }
+
+    /// The full shape→route table, pinned exhaustively: only tui takes the
+    /// control socket, only web takes the HTTP POST, and every viewless/
+    /// line-oriented shape (the `false, false` case cli and worker both land on)
+    /// falls to a rebuild. This is the fail-safe: no shape silently skips an edit.
+    #[test]
+    fn appearance_route_covers_every_shape() {
+        assert_eq!(
+            appearance_route(true, false),
+            AppearanceRoute::ControlSocket,
+            "tui delivers over the loopback control socket"
+        );
+        assert_eq!(
+            appearance_route(false, true),
+            AppearanceRoute::WebPost,
+            "web delivers over the /_ipe/hot-appearance POST"
+        );
+        assert_eq!(
+            appearance_route(false, false),
+            AppearanceRoute::Rebuild,
+            "cli/worker/other rebuild — the fail-safe against a silent skip"
+        );
     }
 
     /// Prove the refusal: tui detection matches the FULLY-QUALIFIED emitted call,
