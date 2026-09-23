@@ -272,44 +272,62 @@ struct ControlRequest {
     reply: tokio::sync::oneshot::Sender<crate::control::ControlFrame>,
 }
 
+/// The reply future the bridge handler returns: it enqueues the frame and awaits
+/// the run loop's reply one-shot, resolving to the reply `ControlFrame`. Boxed
+/// (and `Send`) so the handler is a single nameable
+/// `Fn(ControlFrame) -> ControlReplyFuture` type, and awaited — never
+/// `blocking_recv`d — on the serving task, so the serve side never blocks a
+/// runtime worker on any flavor.
+#[cfg(all(feature = "control-wire", not(target_arch = "wasm32")))]
+type ControlReplyFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = crate::control::ControlFrame> + Send>>;
+
 /// The async→sync bridge's channel + handler, split out so it can be driven in a
-/// test without opening a socket. The handler is the pure
-/// `Fn(ControlFrame) -> ControlFrame` [`serve_control`](crate::control::server::serve_control)
-/// wants; it enqueues each frame with a fresh reply one-shot and blocks its
-/// (detached, per-connection) task until the run loop answers. A dropped run loop
-/// (child exiting) makes the enqueue or the `blocking_recv` fail, so the handler
-/// falls closed to a rejecting `Ack` rather than hanging.
+/// test without opening a socket. The handler is the async
+/// `Fn(ControlFrame) -> impl Future<Output = ControlFrame>`
+/// [`serve_control`](crate::control::server::serve_control) wants; it enqueues
+/// each frame with a fresh reply one-shot and AWAITS the run loop's answer on the
+/// serving (detached, per-connection) task. Awaiting the reply one-shot — never a
+/// `blocking_recv` — keeps the serve side flavor-independent: it yields the worker
+/// instead of blocking it, so it is sound on a multi-thread OR a current-thread
+/// runtime, and can never trip tokio's "cannot block the current thread from
+/// within a runtime" panic. A dropped run loop (child exiting) makes the enqueue
+/// or the reply await fail, so the handler falls closed to a rejecting `Ack`
+/// rather than hanging.
 #[cfg(all(feature = "control-wire", not(target_arch = "wasm32")))]
 fn control_bridge_channel() -> (
-    impl Fn(crate::control::ControlFrame) -> crate::control::ControlFrame + Send + Sync + 'static,
+    impl Fn(crate::control::ControlFrame) -> ControlReplyFuture + Send + Sync + 'static,
     tokio::sync::mpsc::UnboundedReceiver<ControlRequest>,
 ) {
     let (req_tx, req_rx) = tokio::sync::mpsc::unbounded_channel::<ControlRequest>();
-    let handler = move |frame: crate::control::ControlFrame| -> crate::control::ControlFrame {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        // The run loop owns the receiver; if it has already exited, the send
-        // fails and we fall closed to a rejecting Ack rather than block forever.
-        if req_tx
-            .send(ControlRequest {
-                frame,
-                reply: reply_tx,
-            })
-            .is_err()
-        {
-            return crate::control::ControlFrame::Ack {
-                ok: false,
-                detail: "control run loop is not accepting frames".to_owned(),
-            };
-        }
-        match reply_rx.blocking_recv() {
-            Ok(reply) => reply,
-            // The run loop dropped the reply sender without answering (it is
-            // shutting down): fail closed, never a silent success.
-            Err(_) => crate::control::ControlFrame::Ack {
-                ok: false,
-                detail: "control run loop did not reply".to_owned(),
-            },
-        }
+    let handler = move |frame: crate::control::ControlFrame| {
+        let req_tx = req_tx.clone();
+        Box::pin(async move {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            // The run loop owns the receiver; if it has already exited, the send
+            // fails and we fall closed to a rejecting Ack rather than block forever.
+            if req_tx
+                .send(ControlRequest {
+                    frame,
+                    reply: reply_tx,
+                })
+                .is_err()
+            {
+                return crate::control::ControlFrame::Ack {
+                    ok: false,
+                    detail: "control run loop is not accepting frames".to_owned(),
+                };
+            }
+            match reply_rx.await {
+                Ok(reply) => reply,
+                // The run loop dropped the reply sender without answering (it is
+                // shutting down): fail closed, never a silent success.
+                Err(_) => crate::control::ControlFrame::Ack {
+                    ok: false,
+                    detail: "control run loop did not reply".to_owned(),
+                },
+            }
+        }) as ControlReplyFuture
     };
     (handler, req_rx)
 }
@@ -1697,12 +1715,10 @@ mod apply_seam_tests {
             cursor
         });
 
-        // The async handler side: `serve_control` calls this on a blocking task,
-        // so drive it on a blocking thread and await its reply.
-        let reply =
-            tokio::task::spawn_blocking(move || handler(ControlFrame::Debug(DebugCmd::StepTo(1))))
-                .await
-                .expect("the handler task joins");
+        // The async handler side: `serve_control` awaits this handler on its
+        // per-connection task, so await it directly here — it never blocks the
+        // worker, so no `spawn_blocking` is needed.
+        let reply = handler(ControlFrame::Debug(DebugCmd::StepTo(1))).await;
 
         assert!(
             matches!(reply, ControlFrame::Ack { ok: true, .. }),
@@ -1725,13 +1741,10 @@ mod apply_seam_tests {
         let (handler, req_rx) = control_bridge_channel();
         drop(req_rx); // the run loop is gone
 
-        let reply = tokio::task::spawn_blocking(move || {
-            handler(ControlFrame::HotAppearance(
-                crate::control::AppearancePatch::default(),
-            ))
-        })
-        .await
-        .expect("the handler task joins");
+        let reply = handler(ControlFrame::HotAppearance(
+            crate::control::AppearancePatch::default(),
+        ))
+        .await;
 
         assert!(
             matches!(reply, ControlFrame::Ack { ok: false, .. }),
@@ -1753,10 +1766,11 @@ mod apply_seam_tests {
     // — with the live model, scrub cursor, and focus/scroll all preserved; and a
     // `Debug(StepTo)` frame replays the recorded Msg-log through the rebuilt
     // `update` over the wire, reconstructing the step model deterministically.
-    // Multi-thread flavor: the bridge handler blocks its serving task on
-    // `blocking_recv` while the run-loop drain task applies the frame — the two
-    // must run on distinct workers, exactly as `serve_control` + the run loop do in
-    // a spawned child (`blocking_recv` panics on a current-thread runtime).
+    // The bridge handler AWAITS the run loop's reply one-shot on its serving task
+    // (it never blocks the worker), so this is sound on any runtime flavor; a
+    // multi-thread flavor is used here so the accept-loop task, the serving task,
+    // and the run-loop drain task all make progress concurrently over the socket,
+    // mirroring a spawned child's `serve_control` + run loop.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn full_loopback_hot_swaps_and_replays_state_preserving() {
         use crate::control::server::serve_conn;
@@ -2004,11 +2018,7 @@ mod control_wire_seam_tests {
         let (handler, req_rx) = control_bridge_channel();
         drop(req_rx); // the run loop is gone
 
-        let reply = tokio::task::spawn_blocking(move || {
-            handler(ControlFrame::HotAppearance(AppearancePatch::default()))
-        })
-        .await
-        .expect("the handler task joins");
+        let reply = handler(ControlFrame::HotAppearance(AppearancePatch::default())).await;
 
         assert!(
             matches!(reply, ControlFrame::Ack { ok: false, .. }),
