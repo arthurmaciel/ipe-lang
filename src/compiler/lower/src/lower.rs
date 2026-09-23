@@ -7216,7 +7216,13 @@ impl KernelUsage {
         self.ui |= k.is_ui();
         self.css |= k.is_css();
         self.auth |= k.is_auth();
-        self.principal |= matches!(k, KernelFn::AuthSubject);
+        self.principal |= matches!(
+            k,
+            KernelFn::AuthSubject
+                | KernelFn::AuthClaim
+                | KernelFn::AuthHasRole
+                | KernelFn::AuthMemberOf
+        );
         self.web |= k.is_web();
         self.tui |= k.is_tui();
         self.console |= k.is_console();
@@ -23904,6 +23910,12 @@ impl<'a> Lowerer<'a> {
                 // ── Ipe.WebSocket client arity-2 ──────────────────
                 | KernelFn::WebSocketSend
                 | KernelFn::WebSocketSendBinary
+                // ── Ipe.Auth principal-read arity-2 ───────────
+                // `claim : String -> Principal -> Maybe String`
+                // `hasRole / memberOf : String -> Principal -> Bool`
+                | KernelFn::AuthClaim
+                | KernelFn::AuthHasRole
+                | KernelFn::AuthMemberOf
                 // ── Ipe.Auth.Revocation arity-2 ───────────────
                 | KernelFn::AuthRevocationRevokeUser
                 | KernelFn::AuthRevocationRestoreUser
@@ -25587,6 +25599,9 @@ impl<'a> Lowerer<'a> {
                     ("Auth", "login") => Ok(Callee::Kernel(KernelFn::AuthLogin)),
                     ("Auth", "setRole") => Ok(Callee::Kernel(KernelFn::AuthSetRole)),
                     ("Auth", "subject") => Ok(Callee::Kernel(KernelFn::AuthSubject)),
+                    ("Auth", "claim") => Ok(Callee::Kernel(KernelFn::AuthClaim)),
+                    ("Auth", "hasRole") => Ok(Callee::Kernel(KernelFn::AuthHasRole)),
+                    ("Auth", "memberOf") => Ok(Callee::Kernel(KernelFn::AuthMemberOf)),
                     // ── Ipe.Auth.Revocation — revocation gate ─────────────
                     ("Revocation", "revokeUser") => {
                         Ok(Callee::Kernel(KernelFn::AuthRevocationRevokeUser))

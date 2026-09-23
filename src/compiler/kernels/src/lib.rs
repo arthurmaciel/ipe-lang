@@ -2405,6 +2405,18 @@ pub enum StdlibKernel {
     AuthSetRole,
     /// `Ipe.Auth.subject : Principal -> String` — the verified subject claim.
     AuthSubject,
+    /// `Ipe.Auth.claim : String -> Principal -> Maybe String` — the verified
+    /// value of one claim, `Nothing` when the token carried no such claim
+    /// (fail-closed: an absent claim never fabricates a value).
+    AuthClaim,
+    /// `Ipe.Auth.hasRole : String -> Principal -> Bool` — whether the principal
+    /// holds a role, read from the conventional space-separated `roles` claim.
+    /// Fail-closed: an absent `roles` claim reads as `False`.
+    AuthHasRole,
+    /// `Ipe.Auth.memberOf : String -> Principal -> Bool` — whether the principal
+    /// belongs to a group, read from the conventional space-separated `groups`
+    /// claim. Fail-closed: an absent `groups` claim reads as `False`.
+    AuthMemberOf,
     // ── Ipe.Auth.Revocation — runtime revocation store (fail-closed) ──────
     /// `Auth.Revocation.revokeUser : Principal -> String -> Task Error ()` — mark
     /// every session of `subject` revoked. Requires an authenticated `Principal`.
@@ -4673,6 +4685,9 @@ impl StdlibKernel {
             Self::AuthLogin => d("Auth", "login", 3, Pure, "auth_login"),
             Self::AuthSetRole => d("Auth", "setRole", 3, Pure, "auth_set_role"),
             Self::AuthSubject => d("Auth", "subject", 1, Pure, "principal_subject"),
+            Self::AuthClaim => d("Auth", "claim", 2, Pure, "principal_claim"),
+            Self::AuthHasRole => d("Auth", "hasRole", 2, Pure, "principal_has_role"),
+            Self::AuthMemberOf => d("Auth", "memberOf", 2, Pure, "principal_member_of"),
             // Ipe.Http.Server.Stream (fail-closed: qual-registered only, no lower arm).
             Self::StreamStream => d("Stream", "stream", 2, Server, "server_stream_stream"),
             Self::StreamEmit => d("Stream", "emit", 2, Server, "server_stream_emit"),
@@ -6122,6 +6137,9 @@ impl StdlibKernel {
         Self::AuthLogin,
         Self::AuthSetRole,
         Self::AuthSubject,
+        Self::AuthClaim,
+        Self::AuthHasRole,
+        Self::AuthMemberOf,
         // Ipe.Auth.Revocation — runtime revocation store
         Self::AuthRevocationRevokeUser,
         Self::AuthRevocationRevokeSession,
@@ -7130,6 +7148,10 @@ impl StdlibKernel {
         const REVOCATION_MODE: TyShape = TyShape::Con(BuiltinTag::RevocationMode, &[]);
         const PRINCIPAL: TyShape = TyShape::Con(BuiltinTag::Principal, &[]);
         const PRINCIPAL_TO_STRING: TyShape = TyShape::Fun(&PRINCIPAL, &STRING);
+        const STRING_TO_PRINCIPAL_TO_MAYBE_STRING: TyShape =
+            TyShape::Fun(&STRING, &TyShape::Fun(&PRINCIPAL, &MAYBE_STRING));
+        const STRING_TO_PRINCIPAL_TO_BOOL: TyShape =
+            TyShape::Fun(&STRING, &TyShape::Fun(&PRINCIPAL, &BOOL));
         const ALGORITHM: TyShape = TyShape::Con(BuiltinTag::Algorithm, &[]);
         const JSON_VALUE: TyShape = TyShape::Con(BuiltinTag::JsonValue, &[]);
         const STREAM_ID: TyShape = TyShape::Con(BuiltinTag::StreamId, &[]);
@@ -9842,6 +9864,8 @@ impl StdlibKernel {
             Self::AuthRegister | Self::AuthLogin => Some(&DB_TO_STRING_TO_STRING_TO_TASK_INT),
             Self::AuthSetRole => Some(&DB_TO_INT_TO_STRING_TO_TASK_UNIT),
             Self::AuthSubject => Some(&PRINCIPAL_TO_STRING),
+            Self::AuthClaim => Some(&STRING_TO_PRINCIPAL_TO_MAYBE_STRING),
+            Self::AuthHasRole | Self::AuthMemberOf => Some(&STRING_TO_PRINCIPAL_TO_BOOL),
             // `revokeUser / restoreUser : Principal -> String -> Task ()`
             Self::AuthRevocationRevokeUser | Self::AuthRevocationRestoreUser => {
                 Some(&PRINCIPAL_TO_STRING_TO_TASK_UNIT)
@@ -11636,6 +11660,11 @@ impl StdlibKernel {
             | Self::AuthVerifyPassword
             | Self::AuthPasswordStrength
             | Self::AuthSubject
+            // Principal read accessors — pure reads of the verified claims the
+            // principal already carries; no isolatable capability.
+            | Self::AuthClaim
+            | Self::AuthHasRole
+            | Self::AuthMemberOf
             // Revocation store — writes/reads to a process-global in-memory set;
             // no network, DB, filesystem, or other isolatable capability.
             | Self::AuthRevocationRevokeUser

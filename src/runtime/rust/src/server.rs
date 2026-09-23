@@ -501,7 +501,16 @@ where
                 }
             }
 
-            let principal = crate::principal::principal_mint(subject.clone());
+            // Carry the verified claims into the principal so the Ipê read
+            // accessors (`Auth.claim` / `Auth.hasRole` / `Auth.memberOf`) can
+            // answer principal-side questions. These are the token's own
+            // verified payload — the same bearer-readable strings the caller
+            // presented — so nothing new is exposed. `BTreeMap` keeps the
+            // read-back deterministic.
+            let principal = crate::principal::principal_mint_with_claims(
+                subject.clone(),
+                claims.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            );
 
             // Sliding re-issue — cookie-source only (bearer tokens are API
             // credentials; the client manages re-issue itself via re-auth).

@@ -1,0 +1,65 @@
+module Main exposing (main)
+
+-- Proves that a program reading the principal's verified claims behind an
+-- authed route emits Rust that cargo-builds under the vendored emit model.
+--
+-- The SEAL: `Auth.claim` / `Auth.hasRole` / `Auth.memberOf` are compiler-backed
+-- reads over the opaque `Principal` (`crate::principal::principal_claim`,
+-- `principal_has_role`, `principal_member_of`). Their emitted call sites,
+-- arities, and the `pub mod principal;` append must all line up, or the emitted
+-- crate fails to build (E0425/E0308/E0433) despite `ipe` exiting 0 — the SEAL
+-- breach class this golden gates.
+
+import Ipe.Auth as Auth
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Io as Io
+import Ipe.Maybe as Maybe
+import Ipe.Secret as Secret
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task exposing (Task)
+
+
+-- Reads a claim, a role, and a group membership off the verified principal.
+-- Fail-closed by construction: an absent claim reads as `Nothing`; an absent
+-- role/group reads as `False` — no fabricated authority.
+handleWhoami : Request -> Auth.Principal -> Task Error Response
+handleWhoami _ principal =
+    let
+        email : String
+        email =
+            Maybe.withDefault "unknown" (Auth.claim "email" principal)
+
+        badge : String
+        badge =
+            if Auth.hasRole "admin" principal then
+                "admin"
+            else if Auth.memberOf "platform" principal then
+                "platform"
+            else
+                "member"
+    in
+    Task.succeed
+        (Server.text (String.append (String.append email ":") badge))
+
+
+authCfg : Server.AuthConfig
+authCfg =
+    Server.authConfig
+        (Secret.fromString (System.getenvOr "SIGNING_KEY" "this-is-a-32-byte-or-longer-secret-key-value"))
+        Server.bearerToken
+
+
+main : Task Error ()
+main =
+    Task.onError
+        (\_ -> Io.println "authed-principal-claims-seal")
+        (Task.andThen
+            (\_ -> Io.println "authed-principal-claims-seal")
+            (Server.listen
+                8000
+                [ Server.getAuthed "/whoami" authCfg handleWhoami ]
+            )
+        )

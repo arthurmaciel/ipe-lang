@@ -1262,6 +1262,9 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::AuthLogin
         | KernelFn::AuthSetRole
         | KernelFn::AuthSubject
+        | KernelFn::AuthClaim
+        | KernelFn::AuthHasRole
+        | KernelFn::AuthMemberOf
         | KernelFn::AuthRevocationRevokeUser
         | KernelFn::AuthRevocationRevokeSession
         | KernelFn::AuthRevocationRestoreUser

@@ -907,7 +907,7 @@ mod registry_phase_c_tests {
             K::TerminalAppLines,
             // Ipe.Tea view-less worker app-entry (const-schemed via `WORKER_APP`).
             K::TeaWorker,
-            // ── Ipe.Auth (10 kernels) — schemed + lowered ──
+            // ── Ipe.Auth (13 kernels) — schemed + lowered ──
             K::AuthHashPassword,
             K::AuthHashPasswordCost,
             K::AuthVerifyPassword,
@@ -918,6 +918,9 @@ mod registry_phase_c_tests {
             K::AuthLogin,
             K::AuthSetRole,
             K::AuthSubject,
+            K::AuthClaim,
+            K::AuthHasRole,
+            K::AuthMemberOf,
             // ── Ipe.Http.Server.Stream (4 kernels) ─────────────────────────
             K::StreamStream,
             K::StreamEmit,

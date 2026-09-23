@@ -703,11 +703,13 @@ pub use auth::*;
 // The authenticated `Principal`. Its subject is minted only by the server auth
 // middleware and consumed by the DB secured (`…As`) operations, so it is shared
 // by whichever of those surfaces a build enables. `principal_mint` stays
-// crate-internal; only `principal_subject` is exposed as a kernel.
+// crate-internal; the `principal_*` read accessors are the exposed kernels.
 #[cfg(any(feature = "server", feature = "db", feature = "jwt"))]
 pub mod principal;
 #[cfg(any(feature = "server", feature = "db", feature = "jwt"))]
-pub use principal::{Principal, principal_subject};
+pub use principal::{
+    Principal, principal_claim, principal_has_role, principal_member_of, principal_subject,
+};
 
 // The runtime revocation store — the session-layer fail-closed gate.
 // Gated on `jwt` (which gates the token-verifying `authed_route` that queries it).
