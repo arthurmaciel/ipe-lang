@@ -247,6 +247,24 @@ pub const CAPABILITIES: &[RuntimeCapability] = &[
         covers: &[RuntimeFeature::Debugger],
         wasip1_legal: false,
     },
+    // The loopback dev-loop control channel for a TERMINAL shape. A `Tui.tea` /
+    // `Cli.tea` app has no HTTP control port, so its appearance hot-swap (and, on
+    // `--debugger`, its time-travel commands) ride the `control-wire` loopback
+    // socket instead. Selected ONLY for a dev-loop build of a terminal shape:
+    // `hot_appearance` (armed by `ipe watch`) or `debugger` (armed by `ipe
+    // build/run --debugger`), AND a terminal view (`uses_tui || uses_console`).
+    // A plain `ipe build` / `ipe release` arms neither dev-loop flag, so a
+    // production terminal artifact selects it not — the control server is absent
+    // from production by construction (dev == prod by absence). The web shape
+    // reaches the control module through its `server` feature and `debugger`
+    // implies `control-wire` in the crate graph, so this row is the terminal
+    // shape's ONLY selector — never double-counted (the feature set is a set).
+    RuntimeCapability {
+        gate: |ctx| (ctx.hot_appearance || ctx.debugger) && (ctx.uses_tui || ctx.uses_console),
+        select: |_| RuntimeFeature::ControlWire,
+        covers: &[RuntimeFeature::ControlWire],
+        wasip1_legal: false,
+    },
     RuntimeCapability {
         gate: |ctx| ctx.target == ipe_ir::Target::WasmClient,
         select: |_| RuntimeFeature::WasmClient,

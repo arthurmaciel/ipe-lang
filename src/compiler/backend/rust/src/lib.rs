@@ -1478,7 +1478,7 @@ pub(crate) struct EmitCtx<'a> {
     /// when no project name is supplied.
     pub(crate) cargo_name: String,
     /// `true` when `IPE_WATCH_HOT_APPEARANCE` is set — the dev-only flag that
-    /// routes style-value literals through a per-view [`ipe_runtime::web::LiteralTable`]
+    /// routes style-value literals through a per-view [`ipe_runtime::literal_table::LiteralTable`]
     /// so a `view` appearance edit can hot-swap without recompiling. Default off:
     /// with the flag unset the emit is byte-identical to the direct-literal form.
     pub(crate) hot_appearance: bool,
@@ -2298,20 +2298,25 @@ impl<'a> EmitCtx<'a> {
             record_structs,
             record_by_fieldset,
             cargo_name,
-            // Appearance hot-swap routes literals through the web-only
-            // `LiteralTable` (`ipe_runtime::web`, gated `web-core`), so it is a
-            // web-VIEW concern: a viewless shape (worker/cli/script) has no
-            // appearance to hot-swap. Gating on `uses_web` keeps a non-web emit
-            // byte-identical to the direct-literal form — otherwise `ipe watch`
-            // (which enables `hot_appearance` by default for every shape) would
-            // emit a `LiteralTable` reference the shape's feature set does not
-            // provide, so `ipe`-accepts would not `cargo`-build (SEAL breach).
-            // A pure webview shape (`uses_webview && !uses_web`) is also gated
-            // off here: it ships `web-core` (so `LiteralTable` would build), but
-            // appearance hot-swap is delivered over the app's HTTP control port,
-            // which a webview desktop app does not run — so there is nothing to
-            // push to. Non-web appearance hot-swap is tracked separately.
-            hot_appearance: hot_appearance && uses_web,
+            // Appearance hot-swap routes literals through the crate-root
+            // `LiteralTable` (`ipe_runtime::literal_table`), a pure module a
+            // dev-loop build compiles under either `web-core` (the served render
+            // host) or `control-wire` (the loopback tui/cli socket). It is a
+            // VIEW concern: a viewless shape (worker/script) has no appearance to
+            // hot-swap, so hoisting stays fenced to the view-bearing shapes.
+            //   • `uses_web` — the served web app, patched over its HTTP control
+            //     port.
+            //   • `uses_tui || uses_console` — the terminal `Tui.tea` /
+            //     line-oriented `Cli.tea` app, patched over the loopback control
+            //     socket (no HTTP endpoint); the same `tui` runtime module backs
+            //     both drive axes.
+            // A pure webview shape (`uses_webview && !uses_web`) is gated off: it
+            // ships `web-core` (so the table would build) but runs no control
+            // port to push to. With the flag off (`ipe build`/`ipe release`) the
+            // whole hoist is inert and the emit is byte-identical to the
+            // direct-literal form — so a release artifact never references the
+            // dev-loop table. `emit_view_shape_selects_hoist` pins each shape.
+            hot_appearance: hot_appearance && (uses_web || uses_tui || uses_console),
             ui_structural_wrappers,
             scope: ScopeState::default(),
             web_capabilities: program.imported_web_capabilities.clone(),

@@ -96,6 +96,19 @@ pub mod debugger;
 // sender, codec only — no tokio server). Absent from `ipe release`.
 #[cfg(any(feature = "web", feature = "debugger", feature = "control-wire"))]
 pub mod control;
+// A `view`'s appearance literals as an indexed, dev-overlayable table — the
+// hot-appearance mechanism, shared by every render host. Pure `String` storage
+// with no web/serde/dom dependency, so it lives at the crate root rather than
+// under `web`: the served `web` surface reads it AND a `tui`/`cli` dev-loop
+// build (which links the loopback `control-wire`, not `web-core`) reads the SAME
+// module. Gated on any dev-loop surface — `web-core` (the served/webview/wasm
+// render host), `control-wire` (the loopback tui/cli/worker socket), or the
+// `debugger` recorder — so an `ipe release` artifact, which selects none of
+// them, carries no overlay code (dev == prod by absence). `web` re-exports it as
+// `web::LiteralTable` / `web::literal_table` so its existing paths are unchanged.
+#[cfg(any(feature = "web-core", feature = "control-wire", feature = "debugger"))]
+pub mod literal_table;
+
 // Constant-time byte equality — the SSOT predicate all secret/tag/key
 // newtypes use for `PartialEq`. Gated on `crypto-core` (which pulls `subtle`).
 // `secret` implies `crypto-core`, so this gate covers every caller.

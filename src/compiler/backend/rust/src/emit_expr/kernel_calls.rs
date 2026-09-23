@@ -2805,7 +2805,14 @@ pub fn emit_ui_plan(
             // to the direct emit (dev == prod); the total `unwrap_or` fallback is
             // the original literal, so a stale or malformed patch can neither
             // panic nor change the built value.
-            let positions: &[(usize, LitKind)] = if ctx.uses_web {
+            // Gate on the shape-aware `hot_appearance` flag (armed for a web,
+            // tui, or cli view under `ipe watch`), NOT `uses_web`: the table now
+            // lives in `ipe_runtime::literal_table`, present for a terminal
+            // dev-loop build (`control-wire`) as well as a web one (`web-core`),
+            // so a `Tui.tea` / `Cli.tea` appearance literal hoists too. With the
+            // flag off the flag is false, no position is marked, and every
+            // argument emits inline exactly as before (dev == prod by absence).
+            let positions: &[(usize, LitKind)] = if ctx.hot_appearance {
                 appearance_literal_args(k)
             } else {
                 &[]

@@ -242,7 +242,7 @@ pub enum LitKind {
 /// node. Swapping it changes no node identity, no control flow, no handler, and
 /// no `Model`-dependent computation, so a value swap is a *complete* description
 /// of the edit. Under `IPE_WATCH_HOT_APPEARANCE` such a literal is hoisted into a
-/// per-view [`ipe_runtime::web::LiteralTable`] so a dev edit can swap it as data;
+/// per-view [`ipe_runtime::literal_table::LiteralTable`] so a dev edit can swap it as data;
 /// the baked default is exactly the source value, so a prod build (never patched)
 /// renders exactly as the direct emit — one render semantics, dev == prod.
 ///
@@ -1575,7 +1575,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
 /// This companion table names, per kernel, which config fields carry an inert
 /// **appearance value** the compiled view consumes without branching on it — so a
 /// *direct literal* in that field can be hoisted into the per-view
-/// [`ipe_runtime::web::LiteralTable`] and swapped as data, exactly as a positional
+/// [`ipe_runtime::literal_table::LiteralTable`] and swapped as data, exactly as a positional
 /// appearance literal is.
 ///
 /// **Safe by construction, identically to the positional registry.** An arm fires

@@ -175,6 +175,20 @@ pub enum RuntimeFeature {
     /// wasm TEA record hook. `ipe release` never sets the flag, so no production
     /// artifact carries recorder code.
     Debugger,
+    /// `control-wire` — the loopback dev-loop control channel WITHOUT the
+    /// debugger recorder: the `ControlFrame` codec, the loopback `transport`
+    /// primitives, and (with `tokio`, which the `tui` feature already pulls) the
+    /// `control::server` accept-loop and the crate-root `literal_table` overlay.
+    /// It is the terminal-shape analogue of the web app's HTTP hot-swap endpoint:
+    /// a `Tui.tea` / `Cli.tea` app has no HTTP port, so its appearance hot-swap
+    /// rides this socket instead. Selected ONLY for a dev-loop terminal build
+    /// (`(hot_appearance || debugger) && (uses_tui || uses_console)`); a plain
+    /// `ipe build`/`ipe release` sets neither dev-loop flag, so a production
+    /// terminal artifact selects it not and carries no control server (dev == prod
+    /// by absence). Redundant under `web` (which pulls the control module via its
+    /// `server` feature) and under `debugger` (which implies `control-wire`
+    /// directly), so those shapes never need this row to fire.
+    ControlWire,
 }
 
 impl RuntimeFeature {
@@ -220,6 +234,7 @@ impl RuntimeFeature {
         Self::Jwt,
         Self::WasmClient,
         Self::Debugger,
+        Self::ControlWire,
     ];
 
     /// A stable per-variant index for `const`-context identity. The exhaustive,
@@ -260,6 +275,7 @@ impl RuntimeFeature {
             Self::Jwt => 29,
             Self::WasmClient => 30,
             Self::Debugger => 31,
+            Self::ControlWire => 32,
         }
     }
 
@@ -283,7 +299,7 @@ impl RuntimeFeature {
     /// domain size grows in lockstep with the variant set and the seal then
     /// forces the variant into `ALL` too.
     pub(crate) const fn index_domain_size() -> usize {
-        Self::Debugger.index() + 1
+        Self::ControlWire.index() + 1
     }
 
     /// The exact cargo feature name in `src/runtime/rust/Cargo.toml`.
@@ -321,6 +337,7 @@ impl RuntimeFeature {
             Self::Jwt => "jwt",
             Self::WasmClient => "wasm-client",
             Self::Debugger => "debugger",
+            Self::ControlWire => "control-wire",
         }
     }
 }
