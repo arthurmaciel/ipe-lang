@@ -973,12 +973,16 @@ const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses
 /// `Ipe.Auth.subject` (or another `Principal`-touching kernel).
 ///
-/// `principal.rs` (the opaque authenticated-subject newtype + its
-/// `principal_subject` accessor) is vendored into every emitted crate but
-/// declared only on demand — a pure-CLI program that never reads a `Principal`
-/// keeps it out of the module namespace (`dead_code`).
-const RUNTIME_MOD_RS_PRINCIPAL_APPEND: &str =
-    "pub mod principal;\npub use principal::{Principal, principal_subject};\n";
+/// `principal.rs` (the opaque authenticated-subject newtype + its read
+/// accessors `principal_subject` / `principal_claim` / `principal_has_role` /
+/// `principal_member_of`) is vendored into every emitted crate but declared only
+/// on demand — a pure-CLI program that never reads a `Principal` keeps it out of
+/// the module namespace (`dead_code`). Every accessor emitted as a bare kernel
+/// name (`kernel_name` → `def().runtime_fn`) must be re-exported here, or the
+/// emitted `main.rs` call fails E0425 despite `ipe` exit 0 (SEAL breach).
+const RUNTIME_MOD_RS_PRINCIPAL_APPEND: &str = "pub mod principal;\npub use principal::{\
+    Principal, principal_claim, principal_has_role, principal_member_of, principal_subject,\
+};\n";
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses authenticated
 /// routes (`Ipe.Auth.subject` / an `authed_route` surface).

@@ -1043,6 +1043,9 @@ pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
                 "login",
                 "setRole",
                 "subject",
+                "claim",
+                "hasRole",
+                "memberOf",
             ],
         ),
         // Ipe.Auth.Revocation — per-session and per-subject revocation gate.

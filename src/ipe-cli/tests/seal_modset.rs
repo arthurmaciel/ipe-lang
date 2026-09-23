@@ -254,6 +254,22 @@ const REVOKE_SESSION_ARITY3: &str = include_str!(concat!(
     "/../../tests/golden/revoke_session_arity3_seal/Main.ipe"
 ));
 
+/// Authed-route program that reads the principal's verified claims via
+/// `Auth.claim : String -> Principal -> Maybe String`,
+/// `Auth.hasRole : String -> Principal -> Bool`, and
+/// `Auth.memberOf : String -> Principal -> Bool`.
+///
+/// These are compiler-backed reads over the opaque `Principal`
+/// (`crate::principal::principal_claim` / `principal_has_role` /
+/// `principal_member_of`). A drift between the kernel arity table, the emitted
+/// call site, or the `pub mod principal;` append produces E0425/E0308/E0433 at
+/// `cargo build` despite `ipe` exit 0 — the SEAL breach class this test gates
+/// for the principal-read surface.
+const AUTHED_PRINCIPAL_CLAIMS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/golden/authed_principal_claims_seal/Main.ipe"
+));
+
 // ── The gate: every shape emits AND cargo-builds ────────────────────────────
 
 #[test]
@@ -351,6 +367,23 @@ fn authed_store_query_vendored_builds() {
     emit_and_build_vendored("authed_store_query_vendored", AUTHED_STORE_QUERY).expect(
         "authed store-query program must cargo-build under the vendored emit model \
          (ssrf + dsn + external_conn must be declared when uses_db)",
+    );
+}
+
+/// Under the vendored emit model an authed-route program that reads principal
+/// claims (`Auth.claim` / `Auth.hasRole` / `Auth.memberOf`) must cargo-build.
+/// The emitted call sites bind to `crate::principal::principal_claim` /
+/// `principal_has_role` / `principal_member_of` — a missing `pub mod principal;`
+/// append or an arity/return-type mismatch fails E0433/E0308/E0425 despite
+/// `ipe` exit 0 (the SEAL breach class for the principal-read surface).
+#[test]
+fn authed_principal_claims_vendored_builds() {
+    if skip() {
+        return;
+    }
+    emit_and_build_vendored("authed_principal_claims_vendored", AUTHED_PRINCIPAL_CLAIMS).expect(
+        "authed principal-claims program must cargo-build under the vendored emit model \
+         (Auth.claim/hasRole/memberOf bind to crate::principal::* reads)",
     );
 }
 
