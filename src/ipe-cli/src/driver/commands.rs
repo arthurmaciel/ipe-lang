@@ -2236,6 +2236,147 @@ fn wasi_artifact_path(messages: &str, out_dir: &Path) -> Result<PathBuf, CliErro
     )))
 }
 
+/// Inject `IPE_DEBUGGER_RECORD` into a child `Command` when this is a recording
+/// run, so the emitted runtime dumps its bounded replay log to `dest` on exit.
+/// A no-op for an ordinary run (`dest` is `None`).
+///
+/// The variable name is the runtime's own [`ipe_runtime_rust::RECORD_ENV`]
+/// constant — one source of truth for the wire name across the two crates, never
+/// a hand-duplicated literal.
+fn set_record_env(cmd: &mut std::process::Command, dest: Option<&Path>) {
+    if let Some(path) = dest {
+        cmd.env(ipe_runtime_rust::RECORD_ENV, path.as_os_str());
+    }
+}
+
+/// `ipe debugger <record|replay> …` — the shape-agnostic time-travel debugger's
+/// portable record/replay surface for cli and worker apps.
+///
+/// Two forms, both fail-closed to plain text off a TTY (principle 1 — no control
+/// codes into a redirected log/pipe, enforced at the OUTPUT boundary):
+///
+/// * `record <Main.ipe> [--out <log>]` — build the app with the debugger
+///   compiled in and run it, capturing each `(msg, model)` step to a **bounded**
+///   log (the recorder ring caps history). Delegates to the ordinary run
+///   pipeline with `record_log` set; the runtime dumps the plain replay log to
+///   `<log>` (default: `<Main>.ipelog` beside the entry) on exit.
+/// * `replay <log>` — re-emit each recorded step's `"<msg> => <model>"` line
+///   through [`crate::progress::inspect_line`], so off-TTY every control byte is
+///   stripped and a pipe/file receives plain lines only.
+///
+/// This is a record/replay surface, NOT a live scrubber: an interactive TTY
+/// scrubber cannot be the cli default — it must fail-closed to plain streaming
+/// off-TTY. Worker apps have no view surface, so appearance hot-swap is N/A for
+/// them; the recorder is their only debugger output (replay/inspection).
+///
+/// # Errors
+/// [`CliError::UsageOwned`] on a missing/unknown subcommand or a missing
+/// positional; the build/run errors of the record pipeline; the I/O errors of
+/// reading a replay log.
+pub fn run_debugger(rest: &[String]) -> Result<(), CliError> {
+    let Some((sub, tail)) = rest.split_first() else {
+        return Err(CliError::Usage(
+            "ipe debugger: expected a subcommand (record <Main.ipe> [--out <log>] | replay <log>)",
+        ));
+    };
+    match sub.as_str() {
+        "record" => run_debugger_record(tail),
+        "replay" => run_debugger_replay(tail),
+        other => Err(cli_args::usage_unknown_subcommand(
+            "debugger",
+            other,
+            "record | replay",
+        )),
+    }
+}
+
+/// `ipe debugger record <Main.ipe> [--out <log>]` — build+run with the debugger
+/// compiled in, capturing the session's replay log to `<log>`.
+fn run_debugger_record(tail: &[String]) -> Result<(), CliError> {
+    let mut entry: Option<String> = None;
+    let mut out: Option<String> = None;
+    let mut it = tail.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--out" => {
+                let value = it
+                    .next()
+                    .ok_or(CliError::Usage("ipe debugger record: --out needs a path"))?;
+                if out.replace(value.clone()).is_some() {
+                    return Err(CliError::Usage(
+                        "ipe debugger record: --out given more than once",
+                    ));
+                }
+            }
+            flag if flag.starts_with('-') => {
+                return Err(cli_args::usage_unknown_flag("debugger record", flag));
+            }
+            positional => {
+                if entry.replace(positional.to_owned()).is_some() {
+                    return Err(cli_args::usage_unexpected_argument(
+                        "debugger record",
+                        positional,
+                    ));
+                }
+            }
+        }
+    }
+    let entry = entry.ok_or(CliError::Usage(
+        "ipe debugger record: expected a <Main.ipe> entry",
+    ))?;
+
+    // The log destination: the explicit `--out`, else `<entry>.ipelog` beside the
+    // entry (a stable, discoverable default that `ipe debugger replay` can find).
+    let log_path = out.map_or_else(
+        || {
+            let mut p = PathBuf::from(&entry);
+            p.set_extension("ipelog");
+            p
+        },
+        PathBuf::from,
+    );
+
+    // Build the run through the ordinary pipeline with the debugger compiled in
+    // and the record destination set — the recorder above the cli/worker update
+    // loop dumps its bounded, plain replay log to `log_path` on exit.
+    let base = cli_args::parse_run(std::slice::from_ref(&entry))?;
+    let args = cli_args::RunArgs {
+        debugger: true,
+        record_log: Some(log_path),
+        ..base
+    };
+    run_run_with_args(args)
+}
+
+/// `ipe debugger replay <log>` — re-emit a recorded session's steps through the
+/// fail-closed plain output boundary.
+fn run_debugger_replay(tail: &[String]) -> Result<(), CliError> {
+    use std::io::Write as _;
+    let [log] = tail else {
+        return Err(CliError::Usage(
+            "ipe debugger replay: expected exactly one <log> path",
+        ));
+    };
+    let path = PathBuf::from(log);
+    // Bounded read: a replay log is a text dump, capped like any source read so a
+    // crafted enormous file cannot exhaust memory (principle 1 exhaustion floor).
+    let contents = io_bounded::read_to_string_capped(&path, io_bounded::SOURCE_READ_CAP)?;
+
+    // The OUTPUT boundary: off a TTY every control byte is stripped so a
+    // pipe/file/log receives plain lines only; on a TTY the plain body passes
+    // through (the recorder body carries no control code regardless). This is the
+    // load-bearing off-TTY-no-ANSI-leak refusal (principle 1) — the interactive
+    // scrubber cannot be the cli default.
+    let stdout = std::io::stdout();
+    let mode = crate::progress::Mode::for_stream(&stdout);
+    let mut lock = stdout.lock();
+    for line in contents.lines() {
+        let _ = lock.write_all(crate::progress::inspect_line(mode, line).as_bytes());
+    }
+    let _ = lock.flush();
+    Ok(())
+}
+
 /// `ipe run [<path>]` — compile a program and run the resulting binary.
 ///
 /// One-shot build + run: compiles the entry to `out_dir` (same routing as
@@ -2247,9 +2388,6 @@ fn wasi_artifact_path(messages: &str, out_dir: &Path) -> Result<PathBuf, CliErro
 /// [`CliError`] and print to stderr via the normal error path. The binary
 /// exec step replaces the current process (Unix) or propagates the child's
 /// exit code (all platforms) so the caller sees it as `ipe run`'s own exit.
-// A linear pipeline (compile → cargo build → resolve capabilities → jail →
-// exec); the steps share enough locals that splitting reads worse than the whole.
-#[allow(clippy::too_many_lines)]
 pub fn run_run(rest: &[String]) -> Result<(), CliError> {
     // First, infallible format pass before the body's fallible parse, so a parse
     // error honours the requested machine surface (see [`run_build`]).
@@ -2263,11 +2401,28 @@ pub fn run_run(rest: &[String]) -> Result<(), CliError> {
     })
 }
 
-/// Inner implementation of `run_run`, unaware of JSON formatting.
-#[allow(clippy::too_many_lines)]
+/// Inner implementation of `run_run`, unaware of JSON formatting: parse the
+/// argument tail into a typed [`cli_args::RunArgs`], then run it. The
+/// `debugger record` subcommand reuses [`run_run_with_args`] directly with a
+/// `record_log` set, so the parse and the execution are split.
 pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
+    run_run_with_args(args)
+}
+
+/// Execute a fully-parsed `ipe run`: compile → cargo build → jailed exec. Shared
+/// by the ordinary `run` command and by `ipe debugger record` (which sets
+/// `record_log` to inject `IPE_DEBUGGER_RECORD` into the executed child).
+// A linear pipeline (compile → cargo build → resolve capabilities → jail →
+// exec); the steps share enough locals that splitting reads worse than the whole.
+#[allow(clippy::too_many_lines)]
+pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     let output_format = args.format;
+    // A recording run compiles the debugger in unconditionally: the runtime
+    // recorder and its replay-log dump are `#[cfg(feature = "debugger")]`, so a
+    // record with the feature absent would silently produce no log.
+    let debugger = args.debugger || args.record_log.is_some();
+    let record_log = args.record_log;
     let bin_args = args.bin_args;
     let cli_layer = args.static_layer;
     // The CLI `--target` flavour (`--target wasi` selects the co-located WASI
@@ -2393,7 +2548,7 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         // value, defaulting to `ipe-app` unless `IPE_EMIT_PACKAGE_NAME` names a
         // unique per-build crate (the shared-target coverage harness).
         cargo_name: single_file_cargo_name_from_env(),
-        debugger: args.debugger,
+        debugger,
         // `ipe run` never emits appearance hot-swap scaffolding — that is a
         // `ipe watch`-only dev affordance.
         hot_appearance: false,
@@ -2582,6 +2737,7 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         // proceeded unconfined after the recorded-consent warning: run directly.
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(&bin_args);
+        set_record_env(&mut cmd, record_log.as_deref());
         let err = cmd.exec();
         Err(CliError::Io {
             path: bin,
@@ -2610,6 +2766,7 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
         }
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(&bin_args);
+        set_record_env(&mut cmd, record_log.as_deref());
         let status = cmd.status().map_err(|e| CliError::Io {
             path: bin,
             source: e,

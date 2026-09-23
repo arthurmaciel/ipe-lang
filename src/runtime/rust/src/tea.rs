@@ -495,8 +495,8 @@ pub fn console_app<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnLine>(
 ) -> IpeTask<E, ()>
 where
     E: Send + 'static,
-    Model: Clone + Send + 'static,
-    Msg: Clone + Send + 'static,
+    Model: Clone + Send + crate::stringify::IpeStringify + 'static,
+    Msg: Clone + Send + crate::stringify::IpeStringify + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FView: Fn(Model) -> crate::tui::LinesView<Msg> + Send + 'static,
@@ -617,6 +617,11 @@ where
         }
         submgr.stop_all();
         let _ = std::io::stdout().write_all(b"\n");
+        // Dump the recorded session's portable replay log to the
+        // `IPE_DEBUGGER_RECORD` destination (fail-closed to plain text), a no-op
+        // when that env var is unset. The recorder ring already bounds the log.
+        #[cfg(feature = "debugger")]
+        crate::debugger::record_sink::dump_replay_log(&recorder, &update);
         ok_res(())
     })
 }
@@ -860,8 +865,8 @@ pub fn worker_app<Model, Msg, E, FInit, FUpdate, FSubs>(
 ) -> IpeTask<E, ()>
 where
     E: Send + 'static,
-    Model: Clone + Send + 'static,
-    Msg: Clone + Send + 'static,
+    Model: Clone + Send + crate::stringify::IpeStringify + 'static,
+    Msg: Clone + Send + crate::stringify::IpeStringify + 'static,
     FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
@@ -886,6 +891,8 @@ where
         // Settled at start: `init` issued no effect and no subscription, so no
         // event can ever arrive — terminate rather than block forever on `recv`.
         if live_subs == 0 && outstanding.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            #[cfg(feature = "debugger")]
+            crate::debugger::record_sink::dump_replay_log(&recorder, &update);
             return ok_res(());
         }
 
@@ -918,6 +925,12 @@ where
         for h in sub_handles.drain(..) {
             h.abort();
         }
+        // Dump the recorded session's portable replay log to the
+        // `IPE_DEBUGGER_RECORD` destination (fail-closed to plain text), a no-op
+        // when that env var is unset. A worker has no view surface, so this
+        // replay/inspect dump is its only debugger output.
+        #[cfg(feature = "debugger")]
+        crate::debugger::record_sink::dump_replay_log(&recorder, &update);
         ok_res(())
     })
 }
@@ -1077,10 +1090,27 @@ mod map_tests {
 mod worker_appearance_na_tests {
     use super::*;
 
+    use crate::stringify::IpeStringify;
+
     #[derive(Clone)]
     struct WModel;
     #[derive(Clone)]
     enum WMsg {}
+
+    // The recorder above the worker sink renders `(msg, model)` through
+    // `IpeStringify::ipe_show` for its replay log, so both types carry the bound
+    // the emitter derives for every real worker's Model/Msg.
+    impl IpeStringify for WModel {
+        fn ipe_show(&self) -> String {
+            "WModel".to_owned()
+        }
+    }
+    impl IpeStringify for WMsg {
+        fn ipe_show(&self) -> String {
+            // `WMsg` is uninhabited: no value can reach this arm.
+            match *self {}
+        }
+    }
 
     fn w_init(_: ()) -> (WModel, IpeCmd<WMsg>) {
         (WModel, IpeCmd::None)

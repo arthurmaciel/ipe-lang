@@ -341,3 +341,33 @@ fn release_debugger_flag_rejected() {
         "`ipe release --debugger` must be rejected as unknown flag, got: {result:?}"
     );
 }
+
+// ===========================================================================
+// debugger (record / replay) — the fail-closed refusals, driven through
+// dispatch so the record/replay surface has standing coverage.
+// ===========================================================================
+
+/// `ipe debugger` with no subcommand is a usage error, never a silent no-op.
+#[test]
+fn debugger_without_subcommand_is_rejected() {
+    dispatch_rejects(&["debugger"]);
+}
+
+/// `ipe debugger <unknown>` names no known subcommand and is rejected.
+#[test]
+fn debugger_unknown_subcommand_is_rejected() {
+    dispatch_rejects(&["debugger", "frobnicate"]);
+}
+
+/// `ipe debugger replay` with no `<log>` path is a usage error (arity).
+#[test]
+fn debugger_replay_without_log_is_rejected() {
+    dispatch_rejects(&["debugger", "replay"]);
+}
+
+/// `ipe debugger replay <missing>` surfaces a typed error, never a panic — a
+/// log path that does not exist fails closed at the bounded read boundary.
+#[test]
+fn debugger_replay_missing_log_is_a_typed_error() {
+    dispatch_rejects(&["debugger", "replay", "/nonexistent/ipe-debugger-replay.log"]);
+}
