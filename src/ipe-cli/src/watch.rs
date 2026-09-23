@@ -1015,6 +1015,12 @@ fn run_inner(
     // third-party/non-HTTP server emits neither and is rebuilt+restarted
     // directly, never fronted by a proxy that cannot discover its port.
     let mut current_binds_http = false;
+    // Set alongside `current_is_web` at each emit: is the built crate a Ipe.Tui
+    // app? A tui child has no HTTP endpoint, so an appearance-only edit is
+    // delivered over the loopback CONTROL SOCKET (`send_control_frame`) rather
+    // than the web `/_ipe/hot-appearance` POST — the shape-agnostic control
+    // channel's tui delivery path.
+    let mut current_is_tui = false;
     // The prominent "open this URL" line is printed once, after the first web
     // app settles into a running state — so the address the user must open is
     // the last thing on screen, not a line that scrolled away above the cargo
@@ -1339,71 +1345,111 @@ fn run_inner(
                                 crate::hot_classify::Classification::HotSwappable(hot)
                                     if !hot.is_empty() =>
                                 {
-                                    // The running binary is unchanged, so
-                                    // `running_emitted` stays the baseline. Push
-                                    // each edited view's appearance patch AND each
-                                    // edited arm's transition patch, then skip
-                                    // cargo. Both must reach the app for the swap
-                                    // to be complete; a failure of EITHER is a soft
-                                    // miss that falls through to a normal recompile
-                                    // so the edit still lands.
-                                    let views_ok = push_appearance_patches(
-                                        opts.port, tok, &hot.views, opts.quiet,
-                                    );
-                                    let transitions_ok = push_transition_patches(
-                                        opts.port,
-                                        tok,
-                                        &hot.transitions,
-                                        opts.quiet,
-                                    );
-                                    // The additive-`Msg`-set leg: the endpoint
-                                    // re-proves the superset and refuses a
-                                    // non-additive candidate, so a miss here (like
-                                    // a view/transition miss) falls back to a full
-                                    // recompile.
-                                    let msg_sets_ok = push_msg_set_patches(
-                                        opts.port,
-                                        tok,
-                                        &hot.msg_sets,
-                                        opts.quiet,
-                                    );
-                                    let subs_ok =
-                                        push_sub_patches(opts.port, tok, &hot.subs, opts.quiet);
-                                    let inits_ok =
-                                        push_init_patches(opts.port, tok, &hot.inits, opts.quiet);
-                                    let wirings_ok = push_wiring_patches(
-                                        opts.port,
-                                        tok,
-                                        &hot.wirings,
-                                        opts.quiet,
-                                    );
-                                    if views_ok
-                                        && transitions_ok
-                                        && msg_sets_ok
-                                        && subs_ok
-                                        && inits_ok
-                                        && wirings_ok
-                                    {
-                                        emit(
-                                            opts,
-                                            WatchEvent::AppearanceHotSwapped {
-                                                generation: g,
-                                                views: hot.views.len()
-                                                    + hot.transitions.len()
-                                                    + hot.msg_sets.len()
-                                                    + hot.subs.len()
-                                                    + hot.inits.len()
-                                                    + hot.wirings.len(),
-                                            },
-                                        );
-                                        if let Some(app_port) =
-                                            app_status_port(proxy.as_ref(), opts.port)
+                                    // A Ipe.Tui child has no HTTP endpoint: its
+                                    // appearance hot-swap rides the loopback
+                                    // control socket, not the web POST path.
+                                    // Only an APPEARANCE-only swap is hot for tui
+                                    // (C3) — the logic legs (transitions/msg-sets/
+                                    // subs/inits/wirings) each need a rebuilt
+                                    // `update`, so a tui swap that carries any of
+                                    // them falls through to a full rebuild. On a
+                                    // clean delivery (every view Ack'd) skip cargo;
+                                    // any miss (no port, bad token, socket error)
+                                    // falls back to the rebuild below.
+                                    if current_is_tui {
+                                        let appearance_only = hot.transitions.is_empty()
+                                            && hot.msg_sets.is_empty()
+                                            && hot.subs.is_empty()
+                                            && hot.inits.is_empty()
+                                            && hot.wirings.is_empty();
+                                        if appearance_only
+                                            && push_control_appearance(
+                                                control_port,
+                                                tok,
+                                                &hot.views,
+                                                opts.quiet,
+                                            )
                                         {
-                                            post_watch_status(app_port, tok, true, "");
+                                            emit(
+                                                opts,
+                                                WatchEvent::AppearanceHotSwapped {
+                                                    generation: g,
+                                                    views: hot.views.len(),
+                                                },
+                                            );
+                                            timings.report(g);
+                                            continue;
                                         }
-                                        timings.report(g);
-                                        continue;
-                                    }
+                                        // Not appearance-only, or delivery missed:
+                                        // fall through to the full rebuild below.
+                                    } else {
+                                        // The running binary is unchanged, so
+                                        // `running_emitted` stays the baseline. Push
+                                        // each edited view's appearance patch AND each
+                                        // edited arm's transition patch, then skip
+                                        // cargo. Both must reach the app for the swap
+                                        // to be complete; a failure of EITHER is a soft
+                                        // miss that falls through to a normal recompile
+                                        // so the edit still lands.
+                                        let views_ok = push_appearance_patches(
+                                            opts.port, tok, &hot.views, opts.quiet,
+                                        );
+                                        let transitions_ok = push_transition_patches(
+                                            opts.port,
+                                            tok,
+                                            &hot.transitions,
+                                            opts.quiet,
+                                        );
+                                        // The additive-`Msg`-set leg: the endpoint
+                                        // re-proves the superset and refuses a
+                                        // non-additive candidate, so a miss here (like
+                                        // a view/transition miss) falls back to a full
+                                        // recompile.
+                                        let msg_sets_ok = push_msg_set_patches(
+                                            opts.port,
+                                            tok,
+                                            &hot.msg_sets,
+                                            opts.quiet,
+                                        );
+                                        let subs_ok =
+                                            push_sub_patches(opts.port, tok, &hot.subs, opts.quiet);
+                                        let inits_ok = push_init_patches(
+                                            opts.port, tok, &hot.inits, opts.quiet,
+                                        );
+                                        let wirings_ok = push_wiring_patches(
+                                            opts.port,
+                                            tok,
+                                            &hot.wirings,
+                                            opts.quiet,
+                                        );
+                                        if views_ok
+                                            && transitions_ok
+                                            && msg_sets_ok
+                                            && subs_ok
+                                            && inits_ok
+                                            && wirings_ok
+                                        {
+                                            emit(
+                                                opts,
+                                                WatchEvent::AppearanceHotSwapped {
+                                                    generation: g,
+                                                    views: hot.views.len()
+                                                        + hot.transitions.len()
+                                                        + hot.msg_sets.len()
+                                                        + hot.subs.len()
+                                                        + hot.inits.len()
+                                                        + hot.wirings.len(),
+                                                },
+                                            );
+                                            if let Some(app_port) =
+                                                app_status_port(proxy.as_ref(), opts.port)
+                                            {
+                                                post_watch_status(app_port, tok, true, "");
+                                            }
+                                            timings.report(g);
+                                            continue;
+                                        }
+                                    } // end web-child appearance push
                                 }
                                 // An empty hot-swap (byte-identical re-emit, guarded
                                 // out of the fast path above) and a `Logic` edit both
@@ -1445,6 +1491,7 @@ fn run_inner(
                         }
                         current_is_web = emitted_is_web(&emitted);
                         current_binds_http = emitted_binds_http(&emitted);
+                        current_is_tui = emitted_is_tui(&emitted);
                         // Design doc "First-run vs warm-run UX": the cold
                         // (first) build pays the full dependency-compile
                         // cost and can take minutes; every subsequent
@@ -1811,6 +1858,16 @@ fn emitted_is_web(emitted: &ipe_backend::EmittedProject) -> bool {
     emitted_main_rs(emitted).is_some_and(|text| text.contains("ipe_runtime::web::web_app"))
 }
 
+/// The emitted crate is a Ipe.Tui app — its entry emission always contains the
+/// literal `ipe_runtime::tui::tui_app_ui` call (`emit_tui.rs`). A tui child has
+/// no HTTP endpoint, so its appearance hot-swap rides the loopback CONTROL
+/// SOCKET (`send_control_frame`) rather than the web `/_ipe/hot-appearance` POST.
+/// A match on the fully-qualified emitted path (not a bare token) so a user
+/// symbol or string literal cannot masquerade as the runtime entry.
+fn emitted_is_tui(emitted: &ipe_backend::EmittedProject) -> bool {
+    emitted_main_rs(emitted).is_some_and(|text| text.contains("ipe_runtime::tui::tui_app_ui"))
+}
+
 /// The emitted crate binds a FIRST-PARTY HTTP listener whose port `ipe`
 /// controls via the injected `IPE_*_PORT` env — exactly the two entrypoints an
 /// L7 proxy can front: `web_app` (Ipe.Web) or `server_listen` (Ipe.Http.Server).
@@ -2042,7 +2099,6 @@ fn post_hot_appearance(port: u16, token: &str, body: &str) -> std::io::Result<bo
 /// # Errors
 /// An I/O error if the connection cannot be made, the exchange fails, or the
 /// frame cannot be encoded/decoded (a too-large frame or a malformed reply).
-#[allow(dead_code)] // the parent-send seam; per-shape watch callers land in later lanes
 fn send_control_frame(
     port: u16,
     token: &str,
@@ -2093,6 +2149,66 @@ fn send_control_frame(
     let (reply, _consumed) = decode_frame(&resp)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     Ok(reply)
+}
+
+/// Deliver each edited view's appearance patch to a running Ipe.Tui child over
+/// the loopback control socket as a [`ControlFrame::HotAppearance`], the tui
+/// analogue of [`push_appearance_patches`] (which uses the web HTTP endpoint).
+///
+/// Returns `true` only when EVERY patch was delivered AND the child replied with
+/// a positive [`ControlFrame::Ack`] — so any miss (no control port, a socket
+/// error, a rejecting ack, or an unexpected reply variant) falls the caller back
+/// to a full rebuild, never a silent partial apply. An empty patch list is a
+/// no-op success. `control_port` absent ⇒ `false` (no channel ⇒ full rebuild).
+fn push_control_appearance(
+    control_port: Option<u16>,
+    token: &str,
+    patches: &[crate::hot_classify::ViewPatch],
+    quiet: bool,
+) -> bool {
+    use ipe_runtime_rust::control::{AppearancePatch, ControlFrame};
+    let Some(port) = control_port else {
+        return false;
+    };
+    for vp in patches {
+        let frame = ControlFrame::HotAppearance(AppearancePatch {
+            defaults: vp.defaults.clone(),
+            patch: vp.patch.clone(),
+        });
+        // Fail closed on ANYTHING other than an explicit positive Ack: an I/O
+        // error, a rejecting Ack, or a non-Ack reply all fall back to a rebuild.
+        let applied = matches!(
+            send_control_frame(port, token, &frame),
+            Ok(ControlFrame::Ack { ok: true, .. })
+        );
+        if !applied {
+            if !quiet {
+                eprintln!(
+                    "{}",
+                    watch_line(
+                        &crate::style::TerminalSafe::sanitize(
+                            "[ipe watch] tui appearance hot-swap failed — falling back to a \
+                             full rebuild"
+                        ),
+                        WatchRole::Info
+                    )
+                );
+            }
+            return false;
+        }
+    }
+    if !quiet && !patches.is_empty() {
+        eprintln!(
+            "{}",
+            watch_line(
+                &crate::style::TerminalSafe::sanitize(
+                    "[ipe watch] tui appearance edit hot-swapped (no rebuild)"
+                ),
+                WatchRole::Info
+            )
+        );
+    }
+    true
 }
 
 /// POST every edited `update` arm's transition patch to the running app's
@@ -3083,9 +3199,9 @@ mod tests {
     use super::{
         BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY, RebuildTimings,
         apply_build_accel_env, child_env, choose_build_accel, compile_failed_frame,
-        dir_has_dep_rlib, emitted_binds_http, emitted_is_web, env_flag_on, first_error_line,
-        mint_hot_token, mpsc, schedule_resolve_retry, send_control_frame, spawn_command,
-        strip_ansi, watch_status_body,
+        dir_has_dep_rlib, emitted_binds_http, emitted_is_tui, emitted_is_web, env_flag_on,
+        first_error_line, mint_hot_token, mpsc, push_control_appearance, schedule_resolve_retry,
+        send_control_frame, spawn_command, strip_ansi, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3157,6 +3273,59 @@ mod tests {
         assert!(
             !emitted_binds_http(&p),
             "a non-HTTP program must NOT engage the proxy — no spurious port bind"
+        );
+    }
+
+    /// A Ipe.Tui app emits `tui_app_ui`: it is a tui child (control-socket
+    /// hot-swap) and NOT a web project nor an HTTP binder.
+    #[test]
+    fn tui_app_emit_is_tui_not_web_or_http() {
+        let p = emitted_with_main(
+            "fn main() { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d,e)); }",
+        );
+        assert!(emitted_is_tui(&p), "tui_app_ui must classify as tui");
+        assert!(!emitted_is_web(&p), "a tui app is not a web project");
+        assert!(!emitted_binds_http(&p), "a tui app binds no HTTP listener");
+    }
+
+    /// Prove the refusal: tui detection matches the FULLY-QUALIFIED emitted call,
+    /// so a user function or a string literal carrying the bare token is not
+    /// mistaken for the runtime tui entry (no spurious control-socket delivery).
+    #[test]
+    fn unqualified_tui_token_is_not_a_tui_app() {
+        let user_fn =
+            emitted_with_main("fn tui_app_ui() {} fn main() { let _ = \"tui_app_ui text\"; }");
+        assert!(
+            !emitted_is_tui(&user_fn),
+            "a user symbol / string literal is not the runtime tui entry"
+        );
+        let web = emitted_with_main("fn main() { ipe_runtime::web::web_app(a,b,c,d,e); }");
+        assert!(!emitted_is_tui(&web), "a web app is not a tui app");
+    }
+
+    /// Fail-closed: with NO control port allocated (the child opened no control
+    /// socket, or the OS could not lease a loopback port), a tui appearance
+    /// delivery reports failure so the caller falls back to a full rebuild —
+    /// never a silent "applied". A non-empty patch list makes the miss meaningful.
+    #[test]
+    fn control_appearance_without_a_port_fails_closed() {
+        let patches = vec![crate::hot_classify::ViewPatch {
+            defaults: vec!["padding: 12px".to_owned()],
+            patch: vec![(0, "padding: 16px".to_owned())],
+        }];
+        assert!(
+            !push_control_appearance(None, "session-secret", &patches, true),
+            "no control port must fall back to a full rebuild, never report applied"
+        );
+    }
+
+    /// An EMPTY patch list is a no-op success even with no port — nothing to
+    /// deliver means nothing to rebuild for.
+    #[test]
+    fn control_appearance_empty_is_a_noop_success() {
+        assert!(
+            push_control_appearance(None, "session-secret", &[], true),
+            "an empty patch list applies nothing and needs no rebuild"
         );
     }
 
