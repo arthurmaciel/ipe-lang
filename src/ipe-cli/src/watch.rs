@@ -2167,6 +2167,11 @@ fn push_control_appearance(
     quiet: bool,
 ) -> bool {
     use ipe_runtime_rust::control::{AppearancePatch, ControlFrame};
+    // An empty patch list is a no-op success: nothing to deliver means nothing
+    // to rebuild for, independent of whether a control port was leased.
+    if patches.is_empty() {
+        return true;
+    }
     let Some(port) = control_port else {
         return false;
     };
