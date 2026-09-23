@@ -118,6 +118,7 @@ main =
   ipe debugger replay src/Main.ipelog     # one "<msg> => <model>" line per step
   ```
 - `ipe fmt` · `ipe test` · `ipe verify` · `ipe migrate` · `ipe package audit` — format, test, whole-project gate, migration, and the publish quality gate.
+- `ipe package publish` — run the quality gate, compute the package's index entry, and open the index pull request. One-time setup: run `ipe login` (a GitHub device-code flow), so publish can author the index-PR commit under your account's verified GitHub identity, and set `IPE_PUBLISH_SIGNING_KEY` to the path of an SSH signing key (its `.pub` registered as a *signing* key on your GitHub account) so the commit is signed. The curated index requires signed, verified commits; absent either precondition publish fails closed with a typed refusal rather than push a commit that could never merge. `--dry-run` prints the computed entry and intended PR without touching the network.
 
 ## Static compilation
 

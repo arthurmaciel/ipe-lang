@@ -14,11 +14,20 @@
 //! merged entry always names an immutable, fetchable revision.
 //!
 //! The curated index enforces `required_signatures`, so the publish commit must
-//! be signed or it can never merge. Set `IPE_PUBLISH_SIGNING_KEY` to the path of
-//! an SSH signing key (the private-key file; its `.pub` must be registered as a
-//! *signing* key on the GitHub account that owns the fork) — publish signs the
-//! commit with it. Absent a usable key publish fails closed with a typed refusal
-//! rather than push an unsigned commit that would be rejected at merge.
+//! be signed AND marked "Verified" or it can never merge. Two preconditions,
+//! each fail-closed:
+//!  - Set `IPE_PUBLISH_SIGNING_KEY` to the path of an SSH signing key (the
+//!    private-key file; its `.pub` must be registered as a *signing* key on the
+//!    GitHub account that owns the fork) — publish signs the commit with it.
+//!  - Run `ipe login` (or set `GITHUB_TOKEN`): publish derives the committer
+//!    identity from the authenticated publishing account (`GET /user`) and
+//!    authors the commit under that account's verified GitHub noreply identity
+//!    (`<id>+<login>@users.noreply.github.com`), which GitHub marks "Verified"
+//!    by construction while leaking no real email.
+//!
+//! Absent either — no usable key, or an unresolvable identity — publish fails
+//! closed with a typed refusal rather than push a commit that would be rejected
+//! at merge (unsigned, or committed under a non-verifiable placeholder).
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -55,6 +64,13 @@ pub enum Refusal {
     /// and would refuse to merge an unsigned commit, so publish fails closed
     /// rather than push a commit that can never land.
     UnsignedCommit,
+    /// The publishing account's GitHub identity could not be resolved (no login
+    /// token, or `GET /user` failed / returned malformed JSON). The index
+    /// enforces `required_signatures`, so a commit whose committer is not the
+    /// authenticated account's verified GitHub identity could never be marked
+    /// "Verified" and would be rejected at merge — publish fails closed rather
+    /// than author the commit under a placeholder identity.
+    UnresolvableIdentity,
 }
 
 impl std::fmt::Display for Refusal {
@@ -90,6 +106,13 @@ impl std::fmt::Display for Refusal {
                  merge it, so nothing was published. Set `IPE_PUBLISH_SIGNING_KEY` to the path \
                  of an SSH signing key (the private key file; its `.pub` must be registered as \
                  a signing key on your GitHub account) and publish again.",
+            ),
+            Self::UnresolvableIdentity => f.write_str(
+                "could not resolve your GitHub identity for the index-PR commit — the curated \
+                 index requires signed commits marked \"Verified\", which is only possible when \
+                 the commit's committer is your authenticated GitHub account's verified noreply \
+                 identity. Run `ipe login` so publish can sign the index PR under your verified \
+                 GitHub identity, then publish again. Nothing was published.",
             ),
         }
     }
@@ -129,8 +152,8 @@ const DEFAULT_INDEX_REPO: &str = "arthurmaciel/ipe-registry";
 /// # Errors
 /// [`CliError::UsageOwned`] on argument misuse; [`CliError::PackageAudit`] when
 /// the local gate rejects the package; [`CliError::Publish`] on a publish
-/// precondition (dirty tree, unpushed HEAD, duplicate version); resolution / IO
-/// errors otherwise.
+/// precondition (dirty tree, unpushed HEAD, duplicate version, no signing key,
+/// or an unresolvable committer identity); resolution / IO errors otherwise.
 pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
     let args = parse_args(rest)?;
 
@@ -163,7 +186,10 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
     };
 
     if args.dry_run {
-        print_dry_run(&entry_toml, &plan);
+        // No network under --dry-run: the committer identity (an authenticated
+        // `GET /user`) is not resolved here; the plan states it is resolved at
+        // publish time.
+        print_dry_run(&entry_toml, &plan, None);
         return Ok(());
     }
 
@@ -481,11 +507,23 @@ struct PrPlan {
 }
 
 /// Print the computed entry and the intended PR, touching no network.
-fn print_dry_run(entry_toml: &str, plan: &PrPlan) {
+///
+/// `identity` is the committer the index-PR commit would be authored under, when
+/// it can be shown. It is `None` under the no-network dry-run (resolving it is an
+/// authenticated `GET /user`), in which case the plan states it is resolved from
+/// the logged-in account at publish time; when present (e.g. a caller that
+/// already holds one), the concrete `name <email>` is shown.
+fn print_dry_run(entry_toml: &str, plan: &PrPlan, identity: Option<&CommitIdentity>) {
     let toml_block = if entry_toml.ends_with('\n') {
         entry_toml.to_owned()
     } else {
         format!("{entry_toml}\n")
+    };
+    let committer = match identity {
+        Some(id) => format!("{} <{}>", id.name, id.email),
+        None => "resolved from your logged-in GitHub account at publish time \
+                 (run `ipe login`)"
+            .to_owned(),
     };
     let body = format!(
         "ipe package publish --dry-run: computed index entry\n\
@@ -498,9 +536,10 @@ fn print_dry_run(entry_toml: &str, plan: &PrPlan) {
            branch:      {}\n\
            file:        {}\n\
            title:       {}\n\
+           committer:   {}\n\
          \n\
          No network was touched (--dry-run).",
-        plan.entry_file, plan.index_repo, plan.branch, plan.entry_file, plan.title,
+        plan.entry_file, plan.index_repo, plan.branch, plan.entry_file, plan.title, committer,
     );
     print!("{}", crate::style::frame(&crate::style::gutter(&body)));
 }
@@ -570,6 +609,141 @@ impl SigningKey {
     }
 }
 
+/// The publishing account's GitHub identity, parsed once at the network boundary
+/// from the authenticated `GET /user` response.
+///
+/// `parse, don't validate`: the raw JSON is turned into this typed value exactly
+/// once, so downstream code (the commit-identity render) never re-encounters the
+/// untyped response. The identity comes from the authenticated account itself —
+/// the login (`String`) and numeric account id (`u64`) GitHub reports for the
+/// bearer token — so it cannot be spoofed by free-text configuration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublisherIdentity {
+    /// The account's GitHub login (its `@handle`).
+    login: String,
+    /// The account's immutable numeric id, which fronts the noreply email so the
+    /// address is verified-by-construction for exactly this account.
+    id: u64,
+}
+
+impl PublisherIdentity {
+    /// Parse the authenticated `GET /user` response into a typed identity.
+    ///
+    /// Fail-closed: a response missing `login`, missing `id`, carrying a
+    /// non-string login or a non-integer id, or an empty login yields `None`, so
+    /// a malformed response can never produce a usable committer identity.
+    fn from_user_json(json: &serde_json::Value) -> Option<Self> {
+        let login = json.get("login").and_then(serde_json::Value::as_str)?;
+        if login.is_empty() {
+            return None;
+        }
+        let id = json.get("id").and_then(serde_json::Value::as_u64)?;
+        Some(Self {
+            login: login.to_owned(),
+            id,
+        })
+    }
+
+    /// The committer identity `git commit` is invoked with: the account's login
+    /// as the name and its GitHub noreply email as the address.
+    fn commit_identity(&self) -> CommitIdentity {
+        CommitIdentity {
+            name: self.login.clone(),
+            email: format!("{}+{}@users.noreply.github.com", self.id, self.login),
+        }
+    }
+}
+
+/// The committer identity the index-PR commit is authored under, built once from
+/// a [`PublisherIdentity`]. The email is the account's GitHub noreply address,
+/// which is verified-by-construction for that account — so the signed commit is
+/// marked "Verified" for the index CI and every third party, while leaking no
+/// real email address.
+///
+/// A typed value so [`commit_and_push_steps`] cannot construct the commit without
+/// a resolved identity: there is no path from raw strings to the commit steps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CommitIdentity {
+    name: String,
+    email: String,
+}
+
+impl CommitIdentity {
+    /// The `-c user.name=… -c user.email=…` overrides that pin this committer
+    /// identity on the `git commit` invocation.
+    fn commit_config(&self) -> Vec<String> {
+        vec![
+            "-c".to_owned(),
+            format!("user.name={}", self.name),
+            "-c".to_owned(),
+            format!("user.email={}", self.email),
+        ]
+    }
+}
+
+/// Resolve the publishing account's GitHub identity from its authenticated
+/// `GET /user`, or fail closed with [`Refusal::UnresolvableIdentity`].
+///
+/// The token is the same one the PR-open path uses ([`publish_token`]); the HTTP
+/// call reuses the same secret-safe curl path as [`github_api_post`] (token on
+/// stdin, response to an `O_EXCL` scratch file read back through the retained
+/// handle). Any missing token, transport failure, non-200 status, or malformed
+/// JSON collapses to the one typed refusal — never a placeholder identity.
+fn resolve_publisher_identity() -> Result<PublisherIdentity, Refusal> {
+    let token = publish_token().ok_or(Refusal::UnresolvableIdentity)?;
+    let json = github_api_get_json("https://api.github.com/user", &token)
+        .ok_or(Refusal::UnresolvableIdentity)?;
+    PublisherIdentity::from_user_json(&json).ok_or(Refusal::UnresolvableIdentity)
+}
+
+/// `GET` a JSON resource from the GitHub API with the bearer token, returning the
+/// parsed body only on an HTTP 200. `None` on any transport failure, non-200
+/// status, or unparseable body — the caller turns that into a fail-closed
+/// refusal.
+///
+/// Mirrors [`github_api_post`]'s security shape exactly: the token travels on
+/// curl's stdin config (`--config -`), never argv, so it cannot be read from
+/// `/proc/<pid>/cmdline`; the arriving [`crate::login::PublishToken`] alphabet
+/// excludes the quote/newline that could inject a further curl directive; and the
+/// response is read back through the retained scratch handle, not by re-opening
+/// the path, so the bytes parsed are the bytes curl wrote to that inode.
+fn github_api_get_json(url: &str, token: &crate::login::PublishToken) -> Option<serde_json::Value> {
+    let mut scratch = ScratchFile::create("ipe-publish-user").ok()?;
+    let tmp_path = scratch.path().to_string_lossy().into_owned();
+
+    let mut child = Command::new("curl")
+        .args(["--silent", "--show-error"])
+        .args(["-H", "Accept: application/vnd.github+json"])
+        .args(["-H", "User-Agent: ipe-cli"])
+        // Token delivered via stdin config, never via argv.
+        .args(["--config", "-"])
+        .args(["-o", &tmp_path])
+        .args(["-w", "%{http_code}"])
+        .arg(url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = writeln!(
+            stdin,
+            r#"header = "Authorization: Bearer {}""#,
+            token.as_str()
+        );
+    }
+
+    let output = child.wait_with_output().ok()?;
+    let status_str = String::from_utf8_lossy(&output.stdout);
+    let http_status: u16 = status_str.trim().parse().unwrap_or(0);
+    if http_status != 200 {
+        return None;
+    }
+    let body_bytes = scratch.read_all().unwrap_or_default();
+    serde_json::from_slice(&body_bytes).ok()
+}
+
 /// Open the index PR the spec's default way: push the entry to the author's fork
 /// of the index over `git`, then open a browser at GitHub's pre-filled "create
 /// pull request" page.
@@ -590,6 +764,15 @@ fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliE
     // produce an unsigned commit, rather than clone, commit, and push a branch
     // that can never merge.
     let signing_key = SigningKey::from_env().ok_or_else(|| refuse(Refusal::UnsignedCommit))?;
+
+    // Resolve the committer identity from the authenticated publishing account.
+    // A `required_signatures` index only marks a commit "Verified" when its
+    // committer is the account's verified GitHub identity, so publish refuses up
+    // front when the identity is unresolvable rather than author the commit under
+    // a placeholder that can never be Verified.
+    let identity = resolve_publisher_identity()
+        .map_err(refuse)?
+        .commit_identity();
 
     let index_name = index_repo_name(&plan.index_repo);
     let fork_url = format!("https://github.com/{fork_owner}/{index_name}.git");
@@ -616,7 +799,7 @@ fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliE
     }
     std::fs::write(&entry_path, entry_toml).map_err(|e| scratch_io(&e))?;
 
-    for step in commit_and_push_steps(plan, &signing_key) {
+    for step in commit_and_push_steps(plan, &signing_key, &identity) {
         let refs: Vec<&str> = step.iter().map(String::as_str).collect();
         if let Err(git) = run_git_step(&clone, &refs) {
             return Err(push_failed(&fork_url, plan, fork_owner, &git));
@@ -648,10 +831,17 @@ fn open_pr(entry_toml: &str, plan: &PrPlan, fork_owner: &str) -> Result<(), CliE
 ///
 /// The commit step carries the signing-key `-c` overrides and `-S`, so a merged
 /// entry always descends from a signed commit — the shape a `required_signatures`
-/// index admits. Extracted from [`open_pr`] so the signed-commit invariant is
-/// checkable without a network: a caller can assert `-S` and the key overrides
-/// appear on the commit step.
-fn commit_and_push_steps(plan: &PrPlan, signing_key: &SigningKey) -> Vec<Vec<String>> {
+/// index admits. The committer identity is the resolved [`CommitIdentity`] (the
+/// authenticated account's verified GitHub noreply identity), taken as a
+/// parameter so a caller cannot construct the commit steps without one — there is
+/// no placeholder path. Extracted from [`open_pr`] so the signed-commit invariant
+/// is checkable without a network: a caller can assert `-S`, the key overrides,
+/// and the account identity appear on the commit step.
+fn commit_and_push_steps(
+    plan: &PrPlan,
+    signing_key: &SigningKey,
+    identity: &CommitIdentity,
+) -> Vec<Vec<String>> {
     let owned = |args: &[&str]| {
         args.iter()
             .map(|s| (*s).to_owned())
@@ -659,13 +849,8 @@ fn commit_and_push_steps(plan: &PrPlan, signing_key: &SigningKey) -> Vec<Vec<Str
     };
 
     let mut commit = signing_key.commit_prefix();
-    commit.extend(owned(&[
-        "-c",
-        "user.name=ipe",
-        "-c",
-        "user.email=ipe@localhost",
-        "commit",
-    ]));
+    commit.extend(identity.commit_config());
+    commit.push("commit".to_owned());
     commit.push("-S".to_owned());
     commit.extend(owned(&["--quiet", "-m", &plan.title]));
 
@@ -1309,7 +1494,26 @@ mod tests {
         assert!(toml.contains("version = \"1.2.0\""));
         assert_eq!(plan.index_repo, DEFAULT_INDEX_REPO);
         assert_eq!(plan.entry_file, "packages/http-extras.toml");
-        print_dry_run(&toml, &plan);
+        // A resolved identity is shown as `name <noreply-email>` in the plan:
+        // build the rendered body the printer produces and assert the identity
+        // (and no placeholder) appears.
+        let identity = sample_identity();
+        let rendered = crate::style::frame(&crate::style::gutter(&format!(
+            "committer:   {} <{}>",
+            identity.name, identity.email
+        )));
+        assert!(rendered.contains("octocat"), "{rendered}");
+        assert!(
+            rendered.contains("42+octocat@users.noreply.github.com"),
+            "the plan shows the resolved account noreply identity: {rendered}"
+        );
+        assert!(
+            !rendered.contains("ipe@localhost"),
+            "the plan never shows a placeholder identity: {rendered}"
+        );
+        // Exercise the printer on both the resolved and the no-network arms.
+        print_dry_run(&toml, &plan, Some(&identity));
+        print_dry_run(&toml, &plan, None);
     }
 
     /// The networked path refuses with a clear instruction when no token is set —
@@ -1703,7 +1907,8 @@ mod tests {
         let key = SigningKey::from_raw(Some(&key_path.display().to_string()))
             .expect("an existing regular file is a usable key");
 
-        let steps = commit_and_push_steps(&sample_plan(), &key);
+        let identity = sample_identity();
+        let steps = commit_and_push_steps(&sample_plan(), &key, &identity);
         let commit = steps
             .iter()
             .find(|s| s.iter().any(|a| a == "commit"))
@@ -1727,6 +1932,27 @@ mod tests {
             commit.iter().any(|a| a == "commit.gpgsign=true"),
             "the commit step forces signing regardless of ambient config: {commit:?}"
         );
+        // The committer identity is the authenticated account's verified GitHub
+        // noreply identity — the shape a `required_signatures` index marks
+        // "Verified" — never the old `ipe@localhost` placeholder.
+        assert!(
+            commit.iter().any(|a| a == "user.name=octocat"),
+            "the commit step sets the account login as the committer name: {commit:?}"
+        );
+        assert!(
+            commit
+                .iter()
+                .any(|a| a == "user.email=42+octocat@users.noreply.github.com"),
+            "the commit step uses the account's GitHub noreply email: {commit:?}"
+        );
+        assert!(
+            !commit.iter().any(|a| a.contains("ipe@localhost")),
+            "the placeholder email must never appear: {commit:?}"
+        );
+        assert!(
+            !commit.iter().any(|a| a == "user.name=ipe"),
+            "the placeholder name must never appear: {commit:?}"
+        );
         // The key's private bytes never travel on argv — only its path does.
         assert!(
             !commit.iter().any(|a| a.contains("fake-ssh-private-key")),
@@ -1734,5 +1960,100 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stable sample identity for the commit-step and dry-run tests: the
+    /// account `octocat` with numeric id `42`, whose noreply email is
+    /// `42+octocat@users.noreply.github.com`.
+    fn sample_identity() -> CommitIdentity {
+        PublisherIdentity {
+            login: "octocat".to_owned(),
+            id: 42,
+        }
+        .commit_identity()
+    }
+
+    /// The identity is built from the account's login and numeric id, and its
+    /// email is the GitHub noreply address for exactly that account — never a
+    /// real email, never a placeholder.
+    #[test]
+    fn identity_renders_the_account_noreply_email() {
+        let id = sample_identity();
+        assert_eq!(id.name, "octocat");
+        assert_eq!(id.email, "42+octocat@users.noreply.github.com");
+        assert!(!id.email.contains("localhost"));
+    }
+
+    /// The authenticated `GET /user` response is parsed once into a typed
+    /// identity; a response missing `login`/`id`, carrying an empty login, or a
+    /// non-integer id fails closed to `None` — never a partial or placeholder
+    /// identity.
+    #[test]
+    fn user_json_parses_login_and_id_and_fails_closed() {
+        let ok = serde_json::json!({"login": "octocat", "id": 42});
+        let parsed = PublisherIdentity::from_user_json(&ok).expect("well-formed /user parses");
+        assert_eq!(parsed.login, "octocat");
+        assert_eq!(parsed.id, 42);
+        assert_eq!(
+            parsed.commit_identity().email,
+            "42+octocat@users.noreply.github.com"
+        );
+
+        // Each malformed shape fails closed.
+        assert!(
+            PublisherIdentity::from_user_json(&serde_json::json!({"id": 42})).is_none(),
+            "a response with no login is unusable"
+        );
+        assert!(
+            PublisherIdentity::from_user_json(&serde_json::json!({"login": "octocat"})).is_none(),
+            "a response with no id is unusable"
+        );
+        assert!(
+            PublisherIdentity::from_user_json(&serde_json::json!({"login": "", "id": 42}))
+                .is_none(),
+            "an empty login is unusable"
+        );
+        assert!(
+            PublisherIdentity::from_user_json(&serde_json::json!({"login": "octocat", "id": "42"}))
+                .is_none(),
+            "a non-integer id is unusable"
+        );
+        assert!(
+            PublisherIdentity::from_user_json(&serde_json::json!({})).is_none(),
+            "an empty response is unusable"
+        );
+    }
+
+    /// Fail-closed: an unresolvable identity is the typed
+    /// [`Refusal::UnresolvableIdentity`], whose message names the fix
+    /// (`ipe login`), and it can never yield a placeholder committer — the
+    /// identity path only ever produces a real account identity or the refusal.
+    #[test]
+    fn unresolvable_identity_is_a_typed_refusal_naming_the_fix() {
+        // The refusal a malformed/absent `/user` response collapses to is the
+        // typed, closed variant.
+        let mapped: Option<CliError> = PublisherIdentity::from_user_json(&serde_json::json!({}))
+            .map(|id| id.commit_identity())
+            .map_or_else(|| Some(refuse(Refusal::UnresolvableIdentity)), |_| None);
+        let Some(err) = mapped else {
+            unreachable!("an empty /user response must not yield an identity")
+        };
+        assert!(matches!(
+            err,
+            CliError::Publish(Refusal::UnresolvableIdentity)
+        ));
+        let rendered = Refusal::UnresolvableIdentity.to_string();
+        assert!(
+            rendered.contains("ipe login"),
+            "the refusal names the fix so it is discoverable: {rendered}"
+        );
+        assert!(
+            rendered.contains("nothing was published"),
+            "the refusal states no commit was authored: {rendered}"
+        );
+        assert!(
+            !rendered.contains("localhost"),
+            "the refusal must not name a placeholder identity: {rendered}"
+        );
     }
 }
