@@ -1,0 +1,310 @@
+module Main exposing (main)
+
+-- SEAL smoke for the FOUR canonical RLS patterns (Owner, Rbac, Tenant, Sharing)
+-- built by COMPOSITION over the existing `Ipe.Db.Store` surface — no core edit,
+-- no new kernel. The runnable multi-module demonstration lives in
+-- `examples/shapes/script/rls-composition-builders/`; this golden is the SEAL:
+-- ipe-accepts ⇒ cargo-builds ⇒ runs ⇒ output matches `expected.txt`.
+--
+-- Every line is a PURE check — `Store.explain` over a composed policy, or a
+-- `Store.secured` classify outcome — so the emitted project builds and runs
+-- deterministically with no live DB and no `Principal`. The composition helpers
+-- are inlined here (the golden is self-contained), each a plain value over public
+-- exports: `ownerColumn`, `role` / `memberOf` / `claimEquals`, `existsIn` /
+-- `correlate`, `allOf` / `anyOf` / `andPolicy`, `readOnly`.
+--
+-- Happy path + the refusals that pin deny-by-default THROUGH the composition:
+--
+--   * Owner — `ownerColumn .author |> andPolicy (immutable .createdAt)` scopes
+--     all four operations to `author = caller subject` and holds `created_at`
+--     immutable → `owner-read:author = caller subject`, `owner-immutable:
+--     created_at`. Its writes open ONLY to the owner, never world-open →
+--     `owner-write:author = caller subject`. `secured` over the full store →
+--     `owner-classify:ok`; over a thin store lacking `author` → `owner-missing:
+--     err` (deny-by-default: a policy over a missing column is no silent no-op).
+--   * Rbac — the fail-closed caller leaves. `readOnly (role "admin")` reads for
+--     an admin and denies every write → `rbac-read:caller holds role admin`,
+--     `rbac-refuse-{insert,update,delete}:no row (denied)`. `memberOf` gates on a
+--     group; `anyOf [ matchWhere .., role .. ]` admits the owner OR a role.
+--   * Tenant — `claimEquals "tenant" value` gates the table to one tenant
+--     (fail-closed on an absent/mismatched claim) → `tenant-read:caller claim
+--     tenant = acme`; its writes stay `never` → `tenant-refuse-insert:no row
+--     (denied)`.
+--   * Sharing — `existsIn securedShares (\s d -> correlate s.docId d.id)` over a
+--     shares store secured to the caller: the correlation AND the shares store's
+--     OWN read policy compose into the EXISTS (defence in depth) → `sharing-read:
+--     exists in shares where shares.doc_id = id and its read policy: (member =
+--     caller subject)`; classify → `sharing-ok:ok`; unopened writes → `sharing-
+--     refuse-insert:no row (denied)`.
+--   * A caller-side leaf names no row column, so a policy over one classifies
+--     `Ok` even over the thin store → `principal-leaf:ok`.
+--
+-- Expected output:
+--   owner-read:author = caller subject
+--   owner-immutable:created_at
+--   rbac-read:caller holds role admin
+--   rbac-group:caller is member of group platform
+--   rbac-any:any of [a column condition, caller holds role admin]
+--   tenant-read:caller claim tenant = acme
+--   tenant-claim:caller claim org = beta
+--   sharing-read:exists in shares where shares.doc_id = id and its read policy: (member = caller subject)
+--   sharing-ok:ok
+--   owner-write:author = caller subject
+--   rbac-refuse-insert:no row (denied)
+--   rbac-refuse-update:no row (denied)
+--   rbac-refuse-delete:no row (denied)
+--   tenant-refuse-insert:no row (denied)
+--   sharing-refuse-insert:no row (denied)
+--   owner-missing:err
+--   owner-classify:ok
+--   principal-leaf:ok
+
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Encode as Encode
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task
+
+
+type alias Doc =
+    { id : String
+    , author : String
+    , region : String
+    , tenant : String
+    , createdAt : String
+    }
+
+
+blankDoc : Doc
+blankDoc =
+    { id = "", author = "", region = "", tenant = "", createdAt = "" }
+
+
+docCodec : Codec Doc
+docCodec =
+    Codec.auto blankDoc
+
+
+thinDocCodec : Codec Doc
+thinDocCodec =
+    Codec
+        { enc = \d -> Encode.object [ ( "id", Encode.string d.id ) ]
+        , mkDec =
+            \_ ->
+                Decode.map
+                    (\i -> { id = i, author = "", region = "", tenant = "", createdAt = "" })
+                    (Decode.field "id" Decode.string)
+        , shp = SRecord [ ( "id", CText ) ]
+        }
+
+
+type alias Share =
+    { docId : String
+    , member : String
+    }
+
+
+blankShare : Share
+blankShare =
+    { docId = "", member = "" }
+
+
+shareCodec : Codec Share
+shareCodec =
+    Codec.auto blankShare
+
+
+securedShares : Maybe (Store.Secured Share)
+securedShares =
+    case Store.fromCodec "shares" shareCodec of
+        Err _ ->
+            Nothing
+
+        Ok store ->
+            case Store.secured (Store.ownerColumn .member) store of
+                Ok secured ->
+                    Just secured
+
+                Err _ ->
+                    Nothing
+
+
+-- Owner: owner-scoped on `.author`, `.createdAt` immutable.
+ownerPolicy : Store.Policy Doc
+ownerPolicy =
+    Store.ownerColumn .author
+        |> Store.andPolicy (Store.immutable .createdAt)
+
+
+-- Rbac: read-only for an admin caller; every write stays `never`.
+rbacRolePolicy : Store.Policy Doc
+rbacRolePolicy =
+    Store.readOnly (Store.role "admin")
+
+
+-- Rbac: owner column matches a fixed value OR the caller holds a role.
+rbacAnyPolicy : Store.Policy Doc
+rbacAnyPolicy =
+    Store.readOnly
+        (Store.anyOf
+            [ Store.matchWhere (Store.eq .author "root")
+            , Store.role "admin"
+            ]
+        )
+
+
+-- Tenant: gate the whole table to one tenant via a fail-closed caller claim.
+tenantPolicy : Store.Policy Doc
+tenantPolicy =
+    Store.readOnly (Store.claimEquals "tenant" "acme")
+
+
+-- Sharing: readable when the caller-secured shares store correlates a share row
+-- to the doc; the shares store's own read policy composes into the subquery.
+sharingPolicy : Store.Secured Share -> Store.Policy Doc
+sharingPolicy shares =
+    Store.readOnly
+        (Store.existsIn shares
+            (\share doc -> Store.correlate share.docId doc.id)
+        )
+
+
+main : Task Error ()
+main =
+    Io.println
+        (String.join "\n"
+            [ clauseLine "owner-read" "read" ownerPolicy
+            , immutableLine "owner-immutable" ownerPolicy
+            , clauseLine "rbac-read" "read" rbacRolePolicy
+            , clauseLine "rbac-group" "read" (Store.readOnly (Store.memberOf "platform"))
+            , clauseLine "rbac-any" "read" rbacAnyPolicy
+            , clauseLine "tenant-read" "read" tenantPolicy
+            , clauseLine "tenant-claim" "read" (Store.readOnly (Store.claimEquals "org" "beta"))
+            , sharingReadLine
+            , sharingOkLine
+            , clauseLine "owner-write" "insert" ownerPolicy
+            , clauseLine "rbac-refuse-insert" "insert" rbacRolePolicy
+            , clauseLine "rbac-refuse-update" "update" rbacRolePolicy
+            , clauseLine "rbac-refuse-delete" "delete" rbacRolePolicy
+            , clauseLine "tenant-refuse-insert" "insert" tenantPolicy
+            , sharingRefuseInsertLine
+            , ownerMissingColumnLine
+            , goodClassifyLine
+            , principalLeafOkLine
+            ]
+        )
+
+
+sharingReadLine : String
+sharingReadLine =
+    case securedShares of
+        Just shares ->
+            clauseLine "sharing-read" "read" (sharingPolicy shares)
+
+        Nothing ->
+            "sharing-read:build-err"
+
+
+sharingOkLine : String
+sharingOkLine =
+    case ( Store.fromCodec "docs" docCodec, securedShares ) of
+        ( Ok store, Just shares ) ->
+            classifyMarker "sharing-ok" store (sharingPolicy shares)
+
+        _ ->
+            "sharing-ok:build-err"
+
+
+sharingRefuseInsertLine : String
+sharingRefuseInsertLine =
+    case securedShares of
+        Just shares ->
+            clauseLine "sharing-refuse-insert" "insert" (sharingPolicy shares)
+
+        Nothing ->
+            "sharing-refuse-insert:build-err"
+
+
+ownerMissingColumnLine : String
+ownerMissingColumnLine =
+    case Store.fromCodec "docs2" thinDocCodec of
+        Err _ ->
+            "owner-missing:build-err"
+
+        Ok store ->
+            classifyMarker "owner-missing" store (Store.ownerColumn .author)
+
+
+goodClassifyLine : String
+goodClassifyLine =
+    case Store.fromCodec "docs3" docCodec of
+        Err _ ->
+            "owner-classify:build-err"
+
+        Ok store ->
+            classifyMarker "owner-classify" store ownerPolicy
+
+
+principalLeafOkLine : String
+principalLeafOkLine =
+    case Store.fromCodec "docs4" thinDocCodec of
+        Err _ ->
+            "principal-leaf:build-err"
+
+        Ok store ->
+            classifyMarker "principal-leaf" store rbacRolePolicy
+
+
+clauseLine : String -> String -> Store.Policy row -> String
+clauseLine label clause policy =
+    String.concat [ label, ":", clauseValue clause policy ]
+
+
+immutableLine : String -> Store.Policy row -> String
+immutableLine label policy =
+    String.concat [ label, ":", immutableValue policy ]
+
+
+classifyMarker : String -> Store.Store row -> Store.Policy row -> String
+classifyMarker label store policy =
+    case Store.secured policy store of
+        Ok _ ->
+            String.concat [ label, ":ok" ]
+
+        Err _ ->
+            String.concat [ label, ":err" ]
+
+
+clauseValue : String -> Store.Policy row -> String
+clauseValue clause policy =
+    lineValue (String.append clause ":") (Store.explain policy)
+
+
+immutableValue : Store.Policy row -> String
+immutableValue policy =
+    lineValue "immutable columns:" (Store.explain policy)
+
+
+lineValue : String -> String -> String
+lineValue prefix text =
+    case List.head (List.filter (String.startsWith prefix) (String.lines text)) of
+        Just line ->
+            String.trim (afterColon line)
+
+        Nothing ->
+            ""
+
+
+afterColon : String -> String
+afterColon s =
+    case String.split ":" s of
+        _ :: rest ->
+            String.join ":" rest
+
+        [] ->
+            s

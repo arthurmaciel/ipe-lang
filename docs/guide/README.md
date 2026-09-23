@@ -119,7 +119,9 @@ cross-link where topics meet.
   assertions as results, exit-coded runs).
 - **Databases** — [Connection descriptors](dsn.md) (a typed, credential-safe
   `Dsn`; parse-don't-validate at the connection boundary), [Store](db-store.md)
-  (a typed table derived from one codec; injection-safe, deny-by-default access).
+  (a typed table derived from one codec; injection-safe, deny-by-default access),
+  [Composing row-level security](db-store-rls-composition.md) (Owner / RBAC /
+  Tenant / Sharing built by composition over the small policy core).
 
 ## Reference and lookup
 

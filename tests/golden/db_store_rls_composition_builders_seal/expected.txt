@@ -1,0 +1,18 @@
+owner-read:author = caller subject
+owner-immutable:created_at
+rbac-read:caller holds role admin
+rbac-group:caller is member of group platform
+rbac-any:any of [a column condition, caller holds role admin]
+tenant-read:caller claim tenant = acme
+tenant-claim:caller claim org = beta
+sharing-read:exists in shares where shares.doc_id = id and its read policy: (member = caller subject)
+sharing-ok:ok
+owner-write:author = caller subject
+rbac-refuse-insert:no row (denied)
+rbac-refuse-update:no row (denied)
+rbac-refuse-delete:no row (denied)
+tenant-refuse-insert:no row (denied)
+sharing-refuse-insert:no row (denied)
+owner-missing:err
+owner-classify:ok
+principal-leaf:ok
