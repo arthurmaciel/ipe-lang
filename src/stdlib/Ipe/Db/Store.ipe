@@ -4324,9 +4324,9 @@ migrationName table =
 
 -- | An opaque row-security predicate over a `Store row`'s rows. Boolean structure
 -- (`allOf` / `anyOf` / `notPred` / `always` / `never`) closes over a row-side leaf
--- (`matchWhere`, embedding a validated `Cond row`) and the one principal-side leaf
--- backed by the authenticated surface today (`ownerIs`, the subject-equals-column
--- term, bound at lowering through `Auth.subject`). Phantom in `row`, exactly as
+-- (`matchWhere`, embedding a validated `Cond row`) and the principal-side owner
+-- leaf `POwner` (the `column = $subject` term the owner-scoped policy builders
+-- produce, bound at lowering through `Auth.subject`). Phantom in `row`, exactly as
 -- `Cond row` is: the constructors carry only concrete data, so the runtime value
 -- is untyped data while the surface stays row-checked. Carries no functions, so
 -- structural `==` holds — the simplifier can dedupe leaves.
