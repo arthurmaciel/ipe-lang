@@ -255,7 +255,7 @@ clauseLine label clause policy =
     String.concat [ label, ":", clauseValue clause policy ]
 
 
-classifyMarker : String -> Store.Store row -> Store.Policy row -> String
+classifyMarker : String -> Store.Draft row -> Store.Policy row -> String
 classifyMarker label store policy =
     case Store.secured policy store of
         Ok _ ->
