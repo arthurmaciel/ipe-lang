@@ -14,3 +14,8 @@ maskok:ok
 maskexplain:ssn when (a column condition)
 masknonnull:err
 maskmissing:err
+role:caller holds role admin
+memberof:caller is member of group platform
+claimeq:caller claim tenant = acme
+notrole:not (caller holds role admin)
+principalleaf:ok
