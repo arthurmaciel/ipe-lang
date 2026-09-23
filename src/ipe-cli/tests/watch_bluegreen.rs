@@ -140,6 +140,16 @@ fn changed_model_fixture(marker: &str) -> String {
     )
 }
 
+/// Read timeout on the test's keep-alive socket.
+///
+/// This guards against a hanging `get_body_keepalive` call, not a slow server:
+/// `wait_for_marker` has already confirmed (on fresh connections) that the proxy
+/// is serving the expected binary before this socket sends its second request.
+/// 30 s is generous enough to survive CI CPU starvation (the proxy and the
+/// upstream are both local loopback; the round-trip is sub-millisecond when
+/// uncontended) while bounding the worst-case hang to an acceptable window.
+const E2E_KEEPALIVE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
     let base = std::env::temp_dir().join(format!(
         "watch_bg_{tag}_{}_{}",
@@ -192,19 +202,22 @@ fn start_watch(
 /// `Content-Length` (or, absent one, until the read times out). Crucially it
 /// does NOT open a new connection — the whole point is to prove the SAME
 /// socket survives a rebuild.
-fn get_body_keepalive(stream: &mut TcpStream) -> Option<String> {
-    stream
-        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n")
-        .ok()?;
-    let mut reader = BufReader::new(stream.try_clone().ok()?);
+///
+/// Returns `None` ONLY on a genuine EOF (the peer closed or reset the TCP
+/// connection). A read timeout returns `Err`, which callers distinguish from
+/// the "socket closed" failure this function exists to detect.
+fn get_body_keepalive(stream: &mut TcpStream) -> Result<Option<String>, std::io::Error> {
+    stream.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n")?;
+    let mut reader = BufReader::new(stream.try_clone()?);
     let mut content_length: Option<usize> = None;
     let mut status_ok = false;
     let mut first = true;
     loop {
         let mut line = String::new();
-        let n = reader.read_line(&mut line).ok()?;
+        let n = reader.read_line(&mut line)?;
         if n == 0 {
-            return None; // socket closed — the failure this test guards against
+            // Genuine EOF: the peer closed the connection.
+            return Ok(None);
         }
         if first {
             status_ok = line.starts_with("HTTP/1.1 2") || line.starts_with("HTTP/1.0 2");
@@ -217,12 +230,12 @@ fn get_body_keepalive(stream: &mut TcpStream) -> Option<String> {
         }
     }
     if !status_ok {
-        return Some(String::new());
+        return Ok(Some(String::new()));
     }
     if let Some(len) = content_length {
         let mut body = vec![0u8; len];
-        reader.read_exact(&mut body).ok()?;
-        Some(String::from_utf8_lossy(&body).into_owned())
+        reader.read_exact(&mut body)?;
+        Ok(Some(String::from_utf8_lossy(&body).into_owned()))
     } else {
         // No Content-Length: read what's buffered within a short window.
         let mut body = Vec::new();
@@ -230,7 +243,7 @@ fn get_body_keepalive(stream: &mut TcpStream) -> Option<String> {
             .get_ref()
             .set_read_timeout(Some(Duration::from_millis(500)));
         let _ = reader.read_to_end(&mut body);
-        Some(String::from_utf8_lossy(&body).into_owned())
+        Ok(Some(String::from_utf8_lossy(&body).into_owned()))
     }
 }
 
@@ -351,10 +364,17 @@ fn wait_for_marker(port: u16, want: &str, timeout: Duration) -> bool {
         return false;
     };
     while Instant::now() < deadline {
-        if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200))
-            && get_body_keepalive(&mut s).is_some_and(|b| b.contains(want))
-        {
-            return true;
+        if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
+            // A short per-sample read timeout: this is a polling probe; a
+            // timeout just means the server is not ready yet, so continue.
+            let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
+            if get_body_keepalive(&mut s)
+                .ok()
+                .flatten()
+                .is_some_and(|b| b.contains(want))
+            {
+                return true;
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -403,7 +423,10 @@ fn measure_rebuild_tail(
             .ok()
             .and_then(|mut s| {
                 let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
-                get_body_keepalive(&mut s)
+                // `.ok().flatten()`: a timeout (Err) and a genuine socket close
+                // (Ok(None)) both map to None, which the match below counts as
+                // a failed sample — the same observable outcome for this harness.
+                get_body_keepalive(&mut s).ok().flatten()
             });
         match served {
             Some(body) if body.contains(new_marker) => {
@@ -517,8 +540,12 @@ fn bluegreen_rebuild_keeps_the_client_connection_alive() -> Result<(), BoxError>
     // Open ONE keep-alive socket to the proxy port and confirm it serves v1.
     let mut client = TcpStream::connect(format!("127.0.0.1:{port}"))
         .map_err(|e| -> BoxError { format!("connect to proxy: {e}").into() })?;
-    client.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let first = get_body_keepalive(&mut client);
+    // The read timeout guards against a hung call, not a slow-but-correct
+    // response: `wait_for_marker` (below) confirms on fresh connections that the
+    // binary is serving before the socket sends its second request.
+    client.set_read_timeout(Some(E2E_KEEPALIVE_RESPONSE_TIMEOUT))?;
+    let first = get_body_keepalive(&mut client)
+        .map_err(|e| -> BoxError { format!("v1 response read failed: {e}").into() })?;
     assert!(
         first.as_deref().is_some_and(|b| b.contains("MARKER-V1")),
         "the kept-alive socket must serve v1 first: {first:?}"
@@ -534,8 +561,13 @@ fn bluegreen_rebuild_keeps_the_client_connection_alive() -> Result<(), BoxError>
 
     // THE ASSERTION: the SAME socket, never reconnected, still works and now
     // serves the new binary. A dropped connection (the pre-proxy behaviour)
-    // would make this `None` (socket closed) or an error.
-    let second = get_body_keepalive(&mut client);
+    // would make `get_body_keepalive` return `Ok(None)`. A read timeout
+    // (proxy alive but slow — never a correct "socket dropped" signal) returns
+    // `Err`; we propagate it so the failure message names the actual cause.
+    let second = get_body_keepalive(&mut client).map_err(|e| -> BoxError {
+        format!("v2 response read failed (timeout or I/O error — NOT a dropped connection): {e}")
+            .into()
+    })?;
     assert!(
         second.is_some(),
         "the client socket must SURVIVE the rebuild (not be dropped): got None (closed)"
