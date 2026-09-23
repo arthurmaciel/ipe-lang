@@ -76,8 +76,11 @@ pub fn principal_subject(p: Principal) -> String {
 /// value of one claim, or `Nothing` when the token carried no such claim.
 /// Fail-closed: an absent key is `None`, never a fabricated value.
 #[must_use]
-pub fn principal_claim(key: String, p: Principal) -> Option<String> {
-    p.claims.get(&key).cloned()
+pub fn principal_claim(key: String, p: Principal) -> crate::core::IpeMaybe<String> {
+    match p.claims.get(&key) {
+        Some(value) => crate::core::IpeMaybe::Just(value.clone()),
+        None => crate::core::IpeMaybe::Nothing,
+    }
 }
 
 /// Ipê `Ipe.Auth.hasRole : String -> Principal -> Bool` — whether the principal
@@ -141,20 +144,26 @@ mod tests {
         let p = with_claims("u1", &[("email", "u1@example.com")]);
         assert_eq!(
             principal_claim("email".to_string(), p),
-            Some("u1@example.com".to_string())
+            crate::core::IpeMaybe::Just("u1@example.com".to_string())
         );
     }
 
     #[test]
     fn claim_is_none_for_an_absent_key() {
         let p = with_claims("u1", &[("email", "u1@example.com")]);
-        assert_eq!(principal_claim("phone".to_string(), p), None);
+        assert_eq!(
+            principal_claim("phone".to_string(), p),
+            crate::core::IpeMaybe::Nothing
+        );
     }
 
     #[test]
     fn claim_on_a_claimless_principal_is_none() {
         let p = principal_mint("u1".to_string());
-        assert_eq!(principal_claim("email".to_string(), p), None);
+        assert_eq!(
+            principal_claim("email".to_string(), p),
+            crate::core::IpeMaybe::Nothing
+        );
     }
 
     #[test]
