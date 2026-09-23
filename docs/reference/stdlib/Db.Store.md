@@ -2254,6 +2254,36 @@ Example:
     Store.ownerColumn .author
         |> Store.andPolicy (Store.immutable .createdAt)
 
+## `mask`
+
+```ipe
+mask : (row -> t) -> Pred row -> Policy row -> Policy row
+```
+
+`mask accessor pred policy` — refine `policy` so the accessor-named column
+is column-masked on every secured read: a row for which `pred` holds projects
+the column's real value, a row for which it does not projects SQL `NULL`, which
+the secured read decodes to `Nothing` (never `Just ""`). Masking a
+non-nullable column is a typed `Err` at `secured` (the codec models
+nullability, so a masked column MUST be `CNull _`). Composable: it only ADDS a
+projection rule, restricting no operation, so it AND-composes with any policy.
+
+The column is named by an accessor literal (`.ssn`), checked against the row
+type at compile time and snake_cased at lowering, then delegated to
+`maskNamed`. `pred` is a `Pred row` built from the same audited leaves as any
+policy predicate (e.g. `Store.matchWhere (Store.eq .role "admin")`,
+`Store.always` for an owner-only visibility rule composed elsewhere) — it
+lowers through the ONE audited `predFragmentIn` path, so masking adds no
+injection surface.
+
+Example (an SSN is visible only to an admin caller):
+
+    Store.ownerColumn .owner
+        |> Store.andPolicy
+            (Store.readOnly Store.always
+                |> Store.mask .ssn (Store.matchWhere (Store.eq .role "admin"))
+            )
+
 ## `andPolicy`
 
 ```ipe
@@ -2311,6 +2341,12 @@ ownerColumnNamed : String -> Policy row
 
 ```ipe
 immutableNamed : String -> Policy row
+```
+
+## `maskNamed`
+
+```ipe
+maskNamed : String -> Pred row -> Policy row -> Policy row
 ```
 
 ## `explain`
