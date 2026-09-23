@@ -132,29 +132,110 @@ impl<T1: IpeStringify + std::fmt::Debug + 'static> IpeStringify for IpeDbStoreSt
     }
 }
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum IpeDbStoreRule {
-    OwnerColumn(String),
-    PublicRead,
-    Immutable(String),
+pub(crate) enum IpeDbStoreCompareOp {
+    OpEq,
+    OpNeq,
+    OpGt,
+    OpGte,
+    OpLt,
+    OpLte,
 }
-impl IpeStringify for IpeDbStoreRule {
+impl IpeStringify for IpeDbStoreCompareOp {
     fn ipe_show(&self) -> String {
         match self {
-            IpeDbStoreRule::OwnerColumn(p0) => format!(
-                "OwnerColumn {}",
-                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            IpeDbStoreCompareOp::OpEq => "OpEq".to_string(),
+            IpeDbStoreCompareOp::OpNeq => "OpNeq".to_string(),
+            IpeDbStoreCompareOp::OpGt => "OpGt".to_string(),
+            IpeDbStoreCompareOp::OpGte => "OpGte".to_string(),
+            IpeDbStoreCompareOp::OpLt => "OpLt".to_string(),
+            IpeDbStoreCompareOp::OpLte => "OpLte".to_string(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStoreCond {
+    Compare(IpeDbStoreCompareOp, String, MainSqlValue),
+    Like(String, String),
+    IsNull(String),
+    NotNull(String),
+    InList(String, Vec<MainSqlValue>),
+    AndList(Box<Vec<IpeDbStoreCond>>),
+    OrList(Box<Vec<IpeDbStoreCond>>),
+    NotCond(Box<IpeDbStoreCond>),
+}
+impl IpeStringify for IpeDbStoreCond {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStoreCond::Compare(p0, p1, p2) => format!(
+                "Compare {} {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p2)).dispatch()
             ),
-            IpeDbStoreRule::PublicRead => "PublicRead".to_string(),
-            IpeDbStoreRule::Immutable(p0) => format!(
-                "Immutable {}",
-                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            IpeDbStoreCond::Like(p0, p1) => format!(
+                "Like {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
             ),
+            IpeDbStoreCond::IsNull(p0) => {
+                format!("IsNull {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStoreCond::NotNull(p0) => {
+                format!("NotNull {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStoreCond::InList(p0, p1) => format!(
+                "InList {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
+            IpeDbStoreCond::AndList(p0) => {
+                format!("AndList {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStoreCond::OrList(p0) => {
+                format!("OrList {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStoreCond::NotCond(p0) => {
+                format!("NotCond {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum IpeDbStorePred {
+    PAll(Box<Vec<IpeDbStorePred>>),
+    PAny(Box<Vec<IpeDbStorePred>>),
+    PNotP(Box<IpeDbStorePred>),
+    PAlways,
+    PNever,
+    PMatch(IpeDbStoreCond),
+    POwner(String),
+}
+impl IpeStringify for IpeDbStorePred {
+    fn ipe_show(&self) -> String {
+        match self {
+            IpeDbStorePred::PAll(p0) => {
+                format!("PAll {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStorePred::PAny(p0) => {
+                format!("PAny {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStorePred::PNotP(p0) => {
+                format!("PNotP {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStorePred::PAlways => "PAlways".to_string(),
+            IpeDbStorePred::PNever => "PNever".to_string(),
+            IpeDbStorePred::PMatch(p0) => {
+                format!("PMatch {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStorePred::POwner(p0) => {
+                format!("POwner {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
         }
     }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum IpeDbStorePolicy {
-    Policy(Vec<IpeDbStoreRule>),
+    Policy(RecDeleteImmutablesInsertOwnersReadUpdate),
 }
 impl IpeStringify for IpeDbStorePolicy {
     fn ipe_show(&self) -> String {
@@ -370,13 +451,6 @@ pub(crate) fn user_ipe_db_store_has_column(columns: Vec<IpeDbStoreColumn>, name:
         columns,
     )
 }
-pub(crate) fn user_ipe_db_store_always_true() -> ipe_runtime::db::SqlFragment {
-    let _ipe_recursion_guard = crate::recursion_guard();
-    sql_eq(
-        sql_param(MainSqlValue::SqlInt(1i64)),
-        sql_param(MainSqlValue::SqlInt(1i64)),
-    )
-}
 pub(crate) fn user_ipe_db_store_decode_rows<T1: 'static + Send + Sync + Clone>(
     codec: IpeCodecCodec<T1>,
     rows: Vec<HashMap<String, String>>,
@@ -403,9 +477,629 @@ pub(crate) fn user_ipe_db_store_decode_rows<T1: 'static + Send + Sync + Clone>(
         }
     }
 }
+pub(crate) fn user_ipe_db_store_cond_fragment_in(
+    columns: Vec<IpeDbStoreColumn>,
+    cond: IpeDbStoreCond,
+) -> IpeResult<ipe_runtime::error::IpeError, ipe_runtime::db::SqlFragment> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match cond {
+        IpeDbStoreCond::Compare(op, col, value) => crate::user_ipe_db_store_check_column(
+            columns,
+            col.clone(),
+            crate::user_ipe_db_store_compare_fragment(op, col, value),
+        ),
+        IpeDbStoreCond::Like(col, pattern) => {
+            crate::user_ipe_db_store_check_column(
+                columns,
+                col.clone(),
+                sql_like(sql_column(col), pattern),
+            )
+        }
+        IpeDbStoreCond::IsNull(col) => {
+            crate::user_ipe_db_store_check_column(
+                columns,
+                col.clone(),
+                sql_is_null(sql_column(col)),
+            )
+        }
+        IpeDbStoreCond::NotNull(col) => {
+            crate::user_ipe_db_store_check_column(
+                columns,
+                col.clone(),
+                sql_is_not_null(sql_column(col)),
+            )
+        }
+        IpeDbStoreCond::InList(col, values) => crate::user_ipe_db_store_check_column(
+            columns,
+            col.clone(),
+            sql_in_list(sql_column(col), (values).into_iter().map(::core::convert::Into::into).collect::<Vec<ipe_runtime::db::SqlParam>>()),
+        ),
+        IpeDbStoreCond::AndList(conds) => {
+            let conds = *conds;
+            crate::user_ipe_db_store_fold_conds(
+                columns,
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(sql_and);
+                    __ipe_fn
+                },
+                crate::user_ipe_db_store_true_fragment(),
+                conds,
+            )
+        }
+        IpeDbStoreCond::OrList(conds) => {
+            let conds = *conds;
+            crate::user_ipe_db_store_fold_conds(
+                columns,
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(sql_or);
+                    __ipe_fn
+                },
+                crate::user_ipe_db_store_false_fragment(),
+                conds,
+            )
+        }
+        IpeDbStoreCond::NotCond(inner) => {
+            let inner = *inner;
+            ipe_result_map(
+                crate::user_ipe_db_store_cond_fragment_in(columns, inner),
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(sql_not);
+                    __ipe_fn
+                },
+            )
+        }
+    }
+}
+pub(crate) fn user_ipe_db_store_check_column(
+    columns: Vec<IpeDbStoreColumn>,
+    col: String,
+    built: ipe_runtime::db::SqlFragment,
+) -> IpeResult<ipe_runtime::error::IpeError, ipe_runtime::db::SqlFragment> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    (if crate::user_ipe_db_store_has_column(columns, col.clone()) {
+        IpeResult::Ok(built)
+    } else {
+        IpeResult::Err(crate::user_ipe_db_store_unknown_column_error(col))
+    })
+}
+pub(crate) fn user_ipe_db_store_compare_fragment(
+    op: IpeDbStoreCompareOp,
+    col: String,
+    value: MainSqlValue,
+) -> ipe_runtime::db::SqlFragment {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    ({
+        let lhs = sql_column(col);
+        ({
+            let rhs = sql_param(value);
+            match op {
+                IpeDbStoreCompareOp::OpEq => sql_eq(lhs, rhs),
+                IpeDbStoreCompareOp::OpNeq => sql_ne(lhs, rhs),
+                IpeDbStoreCompareOp::OpGt => sql_gt(lhs, rhs),
+                IpeDbStoreCompareOp::OpGte => sql_gte(lhs, rhs),
+                IpeDbStoreCompareOp::OpLt => sql_lt(lhs, rhs),
+                IpeDbStoreCompareOp::OpLte => sql_lte(lhs, rhs),
+            }
+        })
+    })
+}
+pub(crate) fn user_ipe_db_store_fold_conds(
+    columns: Vec<IpeDbStoreColumn>,
+    join: Box<dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static>,
+    emptyFragment: ipe_runtime::db::SqlFragment,
+    conds: Vec<IpeDbStoreCond>,
+) -> IpeResult<ipe_runtime::error::IpeError, ipe_runtime::db::SqlFragment> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    ({
+        let join = {
+            let __ipe_fn: ::std::sync::Arc<
+                dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                    + Send
+                    + Sync
+                    + 'static,
+            > = ::std::sync::Arc::new(
+                move |eta_0: ipe_runtime::db::SqlFragment, eta_1: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                    (join)(eta_0, eta_1)
+                },
+            );
+            __ipe_fn
+        };
+        match (conds).as_slice() {
+            [] => IpeResult::Ok(emptyFragment),
+            [single] => {
+                let single = single.clone();
+                crate::user_ipe_db_store_cond_fragment_in(columns, single)
+            }
+            [first, rest @ ..] => {
+                let first = first.clone();
+                let rest = rest.to_vec();
+                match crate::user_ipe_db_store_cond_fragment_in(columns.clone(), first) {
+                    IpeResult::Err(e) => IpeResult::Err(e),
+                    IpeResult::Ok(head) => {
+                        ipe_result_map(
+                            crate::user_ipe_db_store_fold_conds(
+                                columns,
+                                ({
+                                    let join = join.clone();
+                                    {
+                                        let __ipe_fn: Box<
+                                            dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                                                + Send
+                                                + Sync
+                                                + 'static,
+                                        > = Box::new(
+                                            move |eta_0: ipe_runtime::db::SqlFragment, eta_1: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                                                (join.clone())(eta_0, eta_1)
+                                            },
+                                        );
+                                        __ipe_fn
+                                    }
+                                }),
+                                emptyFragment,
+                                rest,
+                            ),
+                            ({
+                                let join = join.clone();
+                                {
+                                    let __ipe_fn: Box<
+                                        dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                                            + Send
+                                            + Sync
+                                            + 'static,
+                                    > = Box::new(
+                                        move |tail: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                                            (join)(head.clone(), tail)
+                                        },
+                                    );
+                                    __ipe_fn
+                                }
+                            }),
+                        )
+                    }
+                }
+            }
+        }
+    })
+}
+pub(crate) fn user_ipe_db_store_true_fragment() -> ipe_runtime::db::SqlFragment {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    sql_eq(
+        sql_param(MainSqlValue::SqlInt(1i64)),
+        sql_param(MainSqlValue::SqlInt(1i64)),
+    )
+}
+pub(crate) fn user_ipe_db_store_false_fragment() -> ipe_runtime::db::SqlFragment {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    sql_eq(
+        sql_param(MainSqlValue::SqlInt(1i64)),
+        sql_param(MainSqlValue::SqlInt(0i64)),
+    )
+}
+pub(crate) fn user_ipe_db_store_pred_columns(pred: IpeDbStorePred) -> Vec<String> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match pred {
+        IpeDbStorePred::PAll(preds) => {
+            let preds = *preds;
+            list_concat_map(
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(IpeDbStorePred) -> Vec<String> + Send + Sync + 'static,
+                    > = Box::new(crate::user_ipe_db_store_pred_columns);
+                    __ipe_fn
+                },
+                preds,
+            )
+        }
+        IpeDbStorePred::PAny(preds) => {
+            let preds = *preds;
+            list_concat_map(
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(IpeDbStorePred) -> Vec<String> + Send + Sync + 'static,
+                    > = Box::new(crate::user_ipe_db_store_pred_columns);
+                    __ipe_fn
+                },
+                preds,
+            )
+        }
+        IpeDbStorePred::PNotP(inner) => {
+            let inner = *inner;
+            crate::user_ipe_db_store_pred_columns(inner)
+        }
+        IpeDbStorePred::PAlways => Vec::<String>::new(),
+        IpeDbStorePred::PNever => Vec::<String>::new(),
+        IpeDbStorePred::PMatch(cond) => crate::user_ipe_db_store_cond_columns(cond),
+        IpeDbStorePred::POwner(col) => vec![col],
+    }
+}
+pub(crate) fn user_ipe_db_store_cond_columns(cond: IpeDbStoreCond) -> Vec<String> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match cond {
+        IpeDbStoreCond::Compare(_, col, _) => vec![col],
+        IpeDbStoreCond::Like(col, _) => vec![col],
+        IpeDbStoreCond::IsNull(col) => vec![col],
+        IpeDbStoreCond::NotNull(col) => vec![col],
+        IpeDbStoreCond::InList(col, _) => vec![col],
+        IpeDbStoreCond::AndList(conds) => {
+            let conds = *conds;
+            list_concat_map(
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(IpeDbStoreCond) -> Vec<String> + Send + Sync + 'static,
+                    > = Box::new(crate::user_ipe_db_store_cond_columns);
+                    __ipe_fn
+                },
+                conds,
+            )
+        }
+        IpeDbStoreCond::OrList(conds) => {
+            let conds = *conds;
+            list_concat_map(
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(IpeDbStoreCond) -> Vec<String> + Send + Sync + 'static,
+                    > = Box::new(crate::user_ipe_db_store_cond_columns);
+                    __ipe_fn
+                },
+                conds,
+            )
+        }
+        IpeDbStoreCond::NotCond(inner) => {
+            let inner = *inner;
+            crate::user_ipe_db_store_cond_columns(inner)
+        }
+    }
+}
+pub(crate) fn user_ipe_db_store_simplify(pred: IpeDbStorePred) -> IpeDbStorePred {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match pred {
+        IpeDbStorePred::PAll(preds) => {
+            let preds = *preds;
+            crate::user_ipe_db_store_simplify_all(
+                list_map_consume(
+                    {
+                        let __ipe_fn: Box<
+                            dyn Fn(IpeDbStorePred) -> IpeDbStorePred + Send + Sync + 'static,
+                        > = Box::new(crate::user_ipe_db_store_simplify);
+                        __ipe_fn
+                    },
+                    preds,
+                ),
+            )
+        }
+        IpeDbStorePred::PAny(preds) => {
+            let preds = *preds;
+            crate::user_ipe_db_store_simplify_any(
+                list_map_consume(
+                    {
+                        let __ipe_fn: Box<
+                            dyn Fn(IpeDbStorePred) -> IpeDbStorePred + Send + Sync + 'static,
+                        > = Box::new(crate::user_ipe_db_store_simplify);
+                        __ipe_fn
+                    },
+                    preds,
+                ),
+            )
+        }
+        IpeDbStorePred::PNotP(inner) => {
+            let inner = *inner;
+            crate::user_ipe_db_store_simplify_not(crate::user_ipe_db_store_simplify(inner))
+        }
+        IpeDbStorePred::PAlways => IpeDbStorePred::PAlways,
+        IpeDbStorePred::PNever => IpeDbStorePred::PNever,
+        IpeDbStorePred::PMatch(cond) => IpeDbStorePred::PMatch(cond),
+        IpeDbStorePred::POwner(col) => IpeDbStorePred::POwner(col),
+    }
+}
+pub(crate) fn user_ipe_db_store_simplify_all(preds: Vec<IpeDbStorePred>) -> IpeDbStorePred {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    (if list_any(
+        {
+            let __ipe_fn: Box<dyn Fn(IpeDbStorePred) -> bool + Send + Sync + 'static> =
+                Box::new(crate::user_ipe_db_store_pred_is_never);
+            __ipe_fn
+        },
+        preds.clone(),
+    ) {
+        IpeDbStorePred::PNever
+    } else {
+        match (crate::user_ipe_db_store_dedupe_preds(list_filter({ let __ipe_fn: Box<dyn Fn(IpeDbStorePred) -> bool + Send + Sync + 'static> = Box::new(move |p: IpeDbStorePred| -> bool { basics_not(crate::user_ipe_db_store_pred_is_always(p)) }); __ipe_fn }, preds))).as_slice()
+        {
+            [] => IpeDbStorePred::PAlways,
+            [single] => {
+                let single = single.clone();
+                single
+            }
+            kept => {
+                let kept = kept.to_vec();
+                IpeDbStorePred::PAll(Box::new(kept))
+            }
+        }
+    })
+}
+pub(crate) fn user_ipe_db_store_simplify_any(preds: Vec<IpeDbStorePred>) -> IpeDbStorePred {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    (if list_any(
+        {
+            let __ipe_fn: Box<dyn Fn(IpeDbStorePred) -> bool + Send + Sync + 'static> =
+                Box::new(crate::user_ipe_db_store_pred_is_always);
+            __ipe_fn
+        },
+        preds.clone(),
+    ) {
+        IpeDbStorePred::PAlways
+    } else {
+        match (crate::user_ipe_db_store_dedupe_preds(list_filter({ let __ipe_fn: Box<dyn Fn(IpeDbStorePred) -> bool + Send + Sync + 'static> = Box::new(move |p: IpeDbStorePred| -> bool { basics_not(crate::user_ipe_db_store_pred_is_never(p)) }); __ipe_fn }, preds))).as_slice()
+        {
+            [] => IpeDbStorePred::PNever,
+            [single] => {
+                let single = single.clone();
+                single
+            }
+            kept => {
+                let kept = kept.to_vec();
+                IpeDbStorePred::PAny(Box::new(kept))
+            }
+        }
+    })
+}
+pub(crate) fn user_ipe_db_store_simplify_not(inner: IpeDbStorePred) -> IpeDbStorePred {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match inner.clone() {
+        IpeDbStorePred::PAlways => IpeDbStorePred::PNever,
+        IpeDbStorePred::PNever => IpeDbStorePred::PAlways,
+        IpeDbStorePred::PNotP(again) => {
+            let again = *again;
+            again
+        }
+        IpeDbStorePred::PAll(_)
+        | IpeDbStorePred::PAny(_)
+        | IpeDbStorePred::PMatch(_)
+        | IpeDbStorePred::POwner(_) => IpeDbStorePred::PNotP(Box::new(inner)),
+    }
+}
+pub(crate) fn user_ipe_db_store_pred_is_always(pred: IpeDbStorePred) -> bool {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match pred {
+        IpeDbStorePred::PAlways => true,
+        IpeDbStorePred::PNever
+        | IpeDbStorePred::PNotP(_)
+        | IpeDbStorePred::PAll(_)
+        | IpeDbStorePred::PAny(_)
+        | IpeDbStorePred::PMatch(_)
+        | IpeDbStorePred::POwner(_) => false,
+    }
+}
+pub(crate) fn user_ipe_db_store_pred_is_never(pred: IpeDbStorePred) -> bool {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match pred {
+        IpeDbStorePred::PNever => true,
+        IpeDbStorePred::PAlways
+        | IpeDbStorePred::PNotP(_)
+        | IpeDbStorePred::PAll(_)
+        | IpeDbStorePred::PAny(_)
+        | IpeDbStorePred::PMatch(_)
+        | IpeDbStorePred::POwner(_) => false,
+    }
+}
+pub(crate) fn user_ipe_db_store_dedupe_preds(preds: Vec<IpeDbStorePred>) -> Vec<IpeDbStorePred> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    list_foldr(
+        {
+            let __ipe_fn: Box<
+                dyn Fn(IpeDbStorePred, Vec<IpeDbStorePred>) -> Vec<IpeDbStorePred>
+                    + Send
+                    + Sync
+                    + 'static,
+            > = Box::new(move |p: IpeDbStorePred, acc: Vec<IpeDbStorePred>| -> Vec<IpeDbStorePred> {
+                (if list_member(p.clone(), acc.clone()) {
+                    acc
+                } else {
+                    ipe_runtime::list::ipe_list_cons(p, acc)
+                })
+            });
+            __ipe_fn
+        },
+        Vec::<IpeDbStorePred>::new(),
+        preds,
+    )
+}
+pub(crate) fn user_ipe_db_store_pred_fragment_in(
+    principal: ipe_runtime::principal::Principal,
+    columns: Vec<IpeDbStoreColumn>,
+    pred: IpeDbStorePred,
+) -> IpeResult<ipe_runtime::error::IpeError, ipe_runtime::db::SqlFragment> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match pred {
+        IpeDbStorePred::PAlways => IpeResult::Ok(crate::user_ipe_db_store_true_fragment()),
+        IpeDbStorePred::PNever => IpeResult::Ok(crate::user_ipe_db_store_false_fragment()),
+        IpeDbStorePred::PMatch(cond) => crate::user_ipe_db_store_cond_fragment_in(columns, cond),
+        IpeDbStorePred::POwner(col) => crate::user_ipe_db_store_check_column(
+            columns,
+            col.clone(),
+            sql_eq(
+                sql_column(col),
+                sql_param(MainSqlValue::SqlString(principal_subject(principal))),
+            ),
+        ),
+        IpeDbStorePred::PNotP(inner) => {
+            let inner = *inner;
+            ipe_result_map(
+                crate::user_ipe_db_store_pred_fragment_in(principal, columns, inner),
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(sql_not);
+                    __ipe_fn
+                },
+            )
+        }
+        IpeDbStorePred::PAll(preds) => {
+            let preds = *preds;
+            crate::user_ipe_db_store_fold_preds(
+                principal,
+                columns,
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(sql_and);
+                    __ipe_fn
+                },
+                crate::user_ipe_db_store_true_fragment(),
+                preds,
+            )
+        }
+        IpeDbStorePred::PAny(preds) => {
+            let preds = *preds;
+            crate::user_ipe_db_store_fold_preds(
+                principal,
+                columns,
+                {
+                    let __ipe_fn: Box<
+                        dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                            + Send
+                            + Sync
+                            + 'static,
+                    > = Box::new(sql_or);
+                    __ipe_fn
+                },
+                crate::user_ipe_db_store_false_fragment(),
+                preds,
+            )
+        }
+    }
+}
+pub(crate) fn user_ipe_db_store_fold_preds(
+    principal: ipe_runtime::principal::Principal,
+    columns: Vec<IpeDbStoreColumn>,
+    join: Box<dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment + Send + Sync + 'static>,
+    emptyFragment: ipe_runtime::db::SqlFragment,
+    preds: Vec<IpeDbStorePred>,
+) -> IpeResult<ipe_runtime::error::IpeError, ipe_runtime::db::SqlFragment> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    ({
+        let join = {
+            let __ipe_fn: ::std::sync::Arc<
+                dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                    + Send
+                    + Sync
+                    + 'static,
+            > = ::std::sync::Arc::new(
+                move |eta_0: ipe_runtime::db::SqlFragment, eta_1: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                    (join)(eta_0, eta_1)
+                },
+            );
+            __ipe_fn
+        };
+        match (preds).as_slice() {
+            [] => IpeResult::Ok(emptyFragment),
+            [single] => {
+                let single = single.clone();
+                crate::user_ipe_db_store_pred_fragment_in(principal, columns, single)
+            }
+            [first, rest @ ..] => {
+                let first = first.clone();
+                let rest = rest.to_vec();
+                match crate::user_ipe_db_store_pred_fragment_in(principal.clone(), columns.clone(), first)
+                {
+                    IpeResult::Err(e) => IpeResult::Err(e),
+                    IpeResult::Ok(head) => {
+                        ipe_result_map(
+                            crate::user_ipe_db_store_fold_preds(
+                                principal,
+                                columns,
+                                ({
+                                    let join = join.clone();
+                                    {
+                                        let __ipe_fn: Box<
+                                            dyn Fn(ipe_runtime::db::SqlFragment, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                                                + Send
+                                                + Sync
+                                                + 'static,
+                                        > = Box::new(
+                                            move |eta_0: ipe_runtime::db::SqlFragment, eta_1: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                                                (join.clone())(eta_0, eta_1)
+                                            },
+                                        );
+                                        __ipe_fn
+                                    }
+                                }),
+                                emptyFragment,
+                                rest,
+                            ),
+                            ({
+                                let join = join.clone();
+                                {
+                                    let __ipe_fn: Box<
+                                        dyn Fn(ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
+                                            + Send
+                                            + Sync
+                                            + 'static,
+                                    > = Box::new(
+                                        move |tail: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
+                                            (join)(head.clone(), tail)
+                                        },
+                                    );
+                                    __ipe_fn
+                                }
+                            }),
+                        )
+                    }
+                }
+            }
+        }
+    })
+}
+pub(crate) fn user_ipe_db_store_deny_all() -> IpeDbStorePolicy {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    IpeDbStorePolicy::Policy(
+        RecDeleteImmutablesInsertOwnersReadUpdate {
+            delete: IpeDbStorePred::PNever,
+            immutables: Vec::<String>::new(),
+            insert: IpeDbStorePred::PNever,
+            owners: Vec::<String>::new(),
+            read: IpeDbStorePred::PNever,
+            update: IpeDbStorePred::PNever,
+        },
+    )
+}
 pub(crate) fn user_ipe_db_store_owner_column_named(col: String) -> IpeDbStorePolicy {
     let _ipe_recursion_guard = crate::recursion_guard();
-    IpeDbStorePolicy::Policy(vec![IpeDbStoreRule::OwnerColumn(col)])
+    match crate::user_ipe_db_store_deny_all() {
+        IpeDbStorePolicy::Policy(r) => {
+            IpeDbStorePolicy::Policy(
+                RecDeleteImmutablesInsertOwnersReadUpdate {
+                    delete: IpeDbStorePred::POwner(col.clone()),
+                    immutables: (r).immutables.clone(),
+                    insert: IpeDbStorePred::POwner(col.clone()),
+                    owners: vec![col.clone()],
+                    read: IpeDbStorePred::POwner(col.clone()),
+                    update: IpeDbStorePred::POwner(col),
+                },
+            )
+        }
+    }
 }
 pub(crate) fn user_ipe_db_store_secured<T1: Clone>(
     policy: IpeDbStorePolicy,
@@ -413,109 +1107,81 @@ pub(crate) fn user_ipe_db_store_secured<T1: Clone>(
 ) -> IpeResult<ipe_runtime::error::IpeError, IpeDbStoreSecured<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match draft.clone() {
-        IpeDbStoreDraft::Draft(r) => match policy.clone() {
-            IpeDbStorePolicy::Policy(rules) => match crate::user_ipe_db_store_first_unknown_policy_column((r).currentColumns.clone(), rules)
-            {
-                IpeMaybe::Just(bad) => {
-                    IpeResult::Err(crate::user_ipe_db_store_unknown_column_error(bad))
-                }
-                IpeMaybe::Nothing => IpeResult::Ok(IpeDbStoreSecured::Secured(
-                    crate::user_ipe_db_store_public(draft),
-                    policy,
-                )),
-            },
+        IpeDbStoreDraft::Draft(r) => match crate::user_ipe_db_store_first_unknown_policy_column((r).currentColumns.clone(), crate::user_ipe_db_store_policy_columns(policy.clone()))
+        {
+            IpeMaybe::Just(bad) => {
+                IpeResult::Err(crate::user_ipe_db_store_unknown_column_error(bad))
+            }
+            IpeMaybe::Nothing => IpeResult::Ok(IpeDbStoreSecured::Secured(
+                crate::user_ipe_db_store_public(draft),
+                policy,
+            )),
         },
+    }
+}
+pub(crate) fn user_ipe_db_store_policy_columns(policy: IpeDbStorePolicy) -> Vec<String> {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    match policy {
+        IpeDbStorePolicy::Policy(r) => list_concat(vec![
+            crate::user_ipe_db_store_pred_columns((r.clone()).read.clone()),
+            crate::user_ipe_db_store_pred_columns((r.clone()).insert.clone()),
+            crate::user_ipe_db_store_pred_columns((r.clone()).update.clone()),
+            crate::user_ipe_db_store_pred_columns((r.clone()).delete.clone()),
+            (r.clone()).owners.clone(),
+            (r).immutables.clone(),
+        ]),
     }
 }
 pub(crate) fn user_ipe_db_store_first_unknown_policy_column(
     columns: Vec<IpeDbStoreColumn>,
-    rules: Vec<IpeDbStoreRule>,
+    names: Vec<String>,
 ) -> IpeMaybe<String> {
     let _ipe_recursion_guard = crate::recursion_guard();
     let mut columns = columns;
-    let mut rules = rules;
+    let mut names = names;
     loop {
-        match (rules).as_slice() {
+        match (names).as_slice() {
             [] => {
                 return IpeMaybe::Nothing;
             }
-            [first, rest @ ..] => {
-                let first = first.clone();
+            [name, rest @ ..] => {
+                let name = name.clone();
                 let rest = rest.to_vec();
-                match crate::user_ipe_db_store_rule_column(first) {
-                    IpeMaybe::Just(name) => {
-                        if crate::user_ipe_db_store_has_column(columns.clone(), name.clone()) {
-                            let __tco_0 = columns;
-                            let __tco_1 = rest;
-                            columns = __tco_0;
-                            rules = __tco_1;
-                            continue;
-                        } else {
-                            return IpeMaybe::Just(name);
-                        }
-                    }
-                    IpeMaybe::Nothing => {
-                        let __tco_0 = columns;
-                        let __tco_1 = rest;
-                        columns = __tco_0;
-                        rules = __tco_1;
-                        continue;
-                    }
+                if crate::user_ipe_db_store_has_column(columns.clone(), name.clone()) {
+                    let __tco_0 = columns;
+                    let __tco_1 = rest;
+                    columns = __tco_0;
+                    names = __tco_1;
+                    continue;
+                } else {
+                    return IpeMaybe::Just(name);
                 }
             }
         }
     }
 }
-pub(crate) fn user_ipe_db_store_rule_column(rule: IpeDbStoreRule) -> IpeMaybe<String> {
-    let _ipe_recursion_guard = crate::recursion_guard();
-    match rule {
-        IpeDbStoreRule::OwnerColumn(c) => IpeMaybe::Just(c),
-        IpeDbStoreRule::Immutable(c) => IpeMaybe::Just(c),
-        IpeDbStoreRule::PublicRead => IpeMaybe::Nothing,
-    }
-}
-pub(crate) fn user_ipe_db_store_policy_fragment(
+pub(crate) fn user_ipe_db_store_policy_fragment<
+    T1: Clone,
+    FN1: Fn(IpeDbStorePolicy) -> IpeDbStorePred + Send + Sync + 'static,
+>(
     principal: ipe_runtime::principal::Principal,
+    op: FN1,
+    store: IpeDbStoreStore<T1>,
     policy: IpeDbStorePolicy,
 ) -> ipe_runtime::db::SqlFragment {
     let _ipe_recursion_guard = crate::recursion_guard();
-    match policy {
-        IpeDbStorePolicy::Policy(rules) => {
-            list_foldl(
-                {
-                    let __ipe_fn: Box<
-                        dyn Fn(IpeDbStoreRule, ipe_runtime::db::SqlFragment) -> ipe_runtime::db::SqlFragment
-                            + Send
-                            + Sync
-                            + 'static,
-                    > = Box::new(
-                        move |rule: IpeDbStoreRule, acc: ipe_runtime::db::SqlFragment| -> ipe_runtime::db::SqlFragment {
-                            sql_and(
-                                acc,
-                                crate::user_ipe_db_store_rule_fragment(principal.clone(), rule),
-                            )
-                        },
-                    );
-                    __ipe_fn
-                },
-                crate::user_ipe_db_store_always_true(),
-                rules,
-            )
-        }
+    match store {
+        IpeDbStoreStore::Store(s) => match crate::user_ipe_db_store_pred_fragment_in(principal, (s).currentColumns.clone(), crate::user_ipe_db_store_simplify((op)(policy)))
+        {
+            IpeResult::Ok(fragment) => fragment,
+            IpeResult::Err(_) => crate::user_ipe_db_store_false_fragment(),
+        },
     }
 }
-pub(crate) fn user_ipe_db_store_rule_fragment(
-    principal: ipe_runtime::principal::Principal,
-    rule: IpeDbStoreRule,
-) -> ipe_runtime::db::SqlFragment {
+pub(crate) fn user_ipe_db_store_read_pred(policy: IpeDbStorePolicy) -> IpeDbStorePred {
     let _ipe_recursion_guard = crate::recursion_guard();
-    match rule {
-        IpeDbStoreRule::OwnerColumn(col) => sql_eq(
-            sql_column(col),
-            sql_param(MainSqlValue::SqlString(principal_subject(principal))),
-        ),
-        IpeDbStoreRule::Immutable(_) => crate::user_ipe_db_store_always_true(),
-        IpeDbStoreRule::PublicRead => crate::user_ipe_db_store_always_true(),
+    match policy {
+        IpeDbStorePolicy::Policy(r) => (r).read.clone(),
     }
 }
 pub(crate) fn user_ipe_db_store_all_as<T1: 'static + Send + Sync + Clone>(
@@ -525,10 +1191,10 @@ pub(crate) fn user_ipe_db_store_all_as<T1: 'static + Send + Sync + Clone>(
 ) -> IpeTask<Vec<T1>> {
     let _ipe_recursion_guard = crate::recursion_guard();
     match secured {
-        IpeDbStoreSecured::Secured(store, policy) => match store {
+        IpeDbStoreSecured::Secured(store, policy) => match store.clone() {
             IpeDbStoreStore::Store(r) => {
                 task_and_then(
-                    db_find_where(conn.clone(), (r.clone()).table.clone(), crate::user_ipe_db_store_policy_fragment(principal, policy)),
+                    db_find_where(conn.clone(), (r.clone()).table.clone(), crate::user_ipe_db_store_policy_fragment(principal, { let __ipe_fn: Box<dyn Fn(IpeDbStorePolicy) -> IpeDbStorePred + Send + Sync + 'static> = Box::new(crate::user_ipe_db_store_read_pred); __ipe_fn }, store, policy)),
                     ({
                         let r = r.clone();
                         {
