@@ -4547,8 +4547,8 @@ simplifyNot inner =
         PNotP again ->
             again
 
-        other ->
-            PNotP other
+        PAll _ | PAny _ | PMatch _ | POwner _ ->
+            PNotP inner
 
 
 predIsAlways : Pred row -> Bool
@@ -4557,7 +4557,7 @@ predIsAlways pred =
         PAlways ->
             True
 
-        _ ->
+        PNever | PNotP _ | PAll _ | PAny _ | PMatch _ | POwner _ ->
             False
 
 
@@ -4567,7 +4567,7 @@ predIsNever pred =
         PNever ->
             True
 
-        _ ->
+        PAlways | PNotP _ | PAll _ | PAny _ | PMatch _ | POwner _ ->
             False
 
 
