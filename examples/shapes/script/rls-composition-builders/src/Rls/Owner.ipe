@@ -1,4 +1,4 @@
-module Rls.Owner exposing (ownedBy, ownedReadWrite)
+module Rls.Owner exposing (Doc, blankDoc, docCodec, policy)
 
 -- The OWNER row-security pattern, composed entirely over the existing
 -- `Ipe.Db.Store` surface — no core edit, no new kernel. A row belongs to the
@@ -8,27 +8,37 @@ module Rls.Owner exposing (ownedBy, ownedReadWrite)
 -- The whole pattern is `Store.ownerColumn`, which scopes all four operations to
 -- `column = $subject` AND forces that column to the caller's subject on every
 -- write (so a caller can never insert or update a row it could not read back).
--- These helpers only NAME that composition for the four canonical patterns to
--- read side by side; each is a plain `.ipe` value built from public exports.
+-- Composed with `andPolicy (immutable .createdAt)`, it also pins the created-at
+-- column at insert. The column accessors are `.field` literals AT the builder
+-- call site: the query and policy builders read the accessor there to derive and
+-- gate the column name (IPE-L0145), so a pattern is a value the module exports,
+-- not a helper the accessor is threaded through.
 
+import Ipe.Codec as Codec exposing (Codec)
 import Ipe.Db.Store as Store exposing (Policy)
 
 
--- | `ownedBy accessor` — the owner-scoped policy over the accessor-named column:
--- read/insert/update/delete are all `column = caller subject`, and writes force
--- the owner column to the caller. This IS `Store.ownerColumn`, named for the
--- pattern.
-ownedBy : (row -> t) -> Policy row
-ownedBy accessor =
-    Store.ownerColumn accessor
+type alias Doc =
+    { author : String
+    , createdAt : String
+    , body : String
+    }
 
 
--- | `ownedReadWrite accessor immutableAccessor` — owner-scoped, with the
--- immutable column pinned at insert (its stored value cannot change on update).
--- Composed from `ownerColumn` AND `immutable`; `always` is the neutral element of
--- the per-operation conjunction, so `immutable` adds the update restriction
--- without loosening any operation.
-ownedReadWrite : (row -> t) -> (row -> u) -> Policy row
-ownedReadWrite ownerAccessor immutableAccessor =
-    Store.ownerColumn ownerAccessor
-        |> Store.andPolicy (Store.immutable immutableAccessor)
+blankDoc : Doc
+blankDoc =
+    { author = "", createdAt = "", body = "" }
+
+
+docCodec : Codec Doc
+docCodec =
+    Codec.auto blankDoc
+
+
+-- | The owner policy: owner-scoped on `.author`, with `.createdAt` immutable.
+-- `always` is the neutral element of the per-operation conjunction, so
+-- `immutable` adds the update restriction without loosening any operation.
+policy : Policy Doc
+policy =
+    Store.ownerColumn .author
+        |> Store.andPolicy (Store.immutable .createdAt)

@@ -1,4 +1,4 @@
-module Rls.Rbac exposing (onlyRole, onlyGroup, ownerOrRole, readForRole)
+module Rls.Rbac exposing (Doc, blankDoc, docCodec, onlyRolePolicy, onlyGroupPolicy, ownerOrRolePolicy)
 
 -- The RBAC (role-based access control) row-security pattern, composed over the
 -- existing `Ipe.Db.Store` caller-side leaves — no core edit, no new kernel.
@@ -7,45 +7,56 @@ module Rls.Rbac exposing (onlyRole, onlyGroup, ownerOrRole, readForRole)
 -- `roles` / `groups` claim), not on any row column. They are FAIL-CLOSED: an
 -- absent role or group DENIES every row (the leaf folds to the deny fragment).
 -- Composed with `anyOf` / `allOf` / `andPolicy`, they express "only an admin",
--- "the owner OR an admin", and "restrict reads to a role" — each a `.ipe`
--- composition of public exports.
+-- "only a group", and "the owner-value row OR an admin". The row-side leaf's
+-- accessor is a `.field` literal at the `Store.eq` call site (IPE-L0145), so each
+-- pattern is a value the module exports, never a helper the accessor threads
+-- through.
 
-import Ipe.Db.Store as Store exposing (Policy, Pred)
-
-
--- | `onlyRole name` — a read-only policy admitting only a caller holding role
--- `name`; every other caller (and every unopened write) is denied. Fail-closed:
--- a token without the `roles` claim, or without `name` in it, reads no row.
-onlyRole : String -> Policy row
-onlyRole name =
-    Store.readOnly (Store.role name)
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db.Store as Store exposing (Policy)
 
 
--- | `onlyGroup group` — a read-only policy admitting only a caller in `group`.
--- Fail-closed on an absent `groups` claim exactly as `onlyRole` is.
-onlyGroup : String -> Policy row
-onlyGroup group =
-    Store.readOnly (Store.memberOf group)
+type alias Doc =
+    { author : String
+    , body : String
+    }
 
 
--- | `ownerOrRole ownerAccessor ownerValue name` — a row whose owner column
--- equals `ownerValue`, OR any caller holding role `name`, may read: a
--- disjunction of a row-side column match and the caller-side role leaf. `anyOf`
--- admits a row when EITHER holds, so a privileged role sees every row while an
--- ordinary caller sees only the rows the row predicate admits. The role leaf is
--- fail-closed, so an absent role contributes only the row-match branch.
-ownerOrRole : (row -> String) -> String -> String -> Pred row
-ownerOrRole ownerAccessor ownerValue name =
-    Store.anyOf
-        [ Store.matchWhere (Store.eq ownerAccessor ownerValue)
-        , Store.role name
-        ]
+blankDoc : Doc
+blankDoc =
+    { author = "", body = "" }
 
 
--- | `readForRole name rowPred` — restrict reads to callers holding role `name`
--- AND satisfying a row-side predicate: a conjunction of the fail-closed role leaf
--- and any row condition. A caller lacking the role reads nothing regardless of
--- the row predicate (deny-by-default through `allOf`).
-readForRole : String -> Pred row -> Policy row
-readForRole name rowPred =
-    Store.readOnly (Store.allOf [ Store.role name, rowPred ])
+docCodec : Codec Doc
+docCodec =
+    Codec.auto blankDoc
+
+
+-- | Read-only, admitting only a caller holding role `admin`; every other caller
+-- (and every unopened write) is denied. Fail-closed: a token without the `roles`
+-- claim, or without `admin` in it, reads no row.
+onlyRolePolicy : Policy Doc
+onlyRolePolicy =
+    Store.readOnly (Store.role "admin")
+
+
+-- | Read-only, admitting only a caller in the `platform` group. Fail-closed on an
+-- absent `groups` claim exactly as `onlyRolePolicy` is.
+onlyGroupPolicy : Policy Doc
+onlyGroupPolicy =
+    Store.readOnly (Store.memberOf "platform")
+
+
+-- | A row whose `author` equals `"root"`, OR any caller holding role `admin`, may
+-- read: a disjunction of a row-side column match and the caller-side role leaf.
+-- `anyOf` admits when EITHER holds, so a privileged role sees every row while an
+-- ordinary caller sees only the matching rows. The role leaf is fail-closed, so
+-- an absent role contributes only the row-match branch.
+ownerOrRolePolicy : Policy Doc
+ownerOrRolePolicy =
+    Store.readOnly
+        (Store.anyOf
+            [ Store.matchWhere (Store.eq .author "root")
+            , Store.role "admin"
+            ]
+        )
