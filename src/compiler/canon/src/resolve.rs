@@ -1289,53 +1289,71 @@ pub fn canonicalise_module_in_project(
         if dep_path.first().copied().is_some_and(|s| s == ipe_sym) && !deps.contains_key(dep_path) {
             continue;
         }
-        let qualifier = import
-            .alias
-            .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
-        // AUD-14: `import App.Utils` + `import Lib.Utils` (both default to the
-        // qualifier `Utils`), or an explicit `as` alias reused across two
-        // distinct dep modules, previously overwrote silently here — every
-        // `Utils.format` call downstream then resolved to whichever import
-        // came LAST in source order, with no diagnostic. Re-importing the
-        // SAME dep module under the same qualifier (a diamond dependency)
-        // stays a no-op, matching `inject_dep_type`'s identical-re-injection
-        // rule; only a clash between two DIFFERENT dep modules is rejected.
-        if let Some(existing_path) = qualifier_paths.get(&qualifier) {
-            if existing_path != dep_path {
-                let qualifier_s = name_str(interner, qualifier)?;
-                let first = qualifier_first_span
-                    .get(&qualifier)
-                    .copied()
-                    .unwrap_or(import.name.span);
-                return Err(Diagnostic::Name {
-                    span: import.name.span,
-                    msg: NameError::DuplicateQualifier {
-                        qualifier: qualifier_s,
-                        first,
-                    },
-                });
+        // The qualifier names a qualified type/alias annotation may spell. An
+        // explicit `as Alias` names exactly one; a BARE `import Rls.Owner` names
+        // TWO — the last path segment (`Owner`) AND the full dotted path
+        // (`Rls.Owner`) the parser produces from `Rls.Owner.Doc`, which no
+        // single-segment `as` alias can spell. Registering both keeps a
+        // fully-qualified type reference resolving IDENTICALLY to its expression
+        // use (both consult these maps), mirroring the `env.qual_vars` handling
+        // in `inject_dep_exports`.
+        let mut qualifiers: Vec<Symbol> = Vec::with_capacity(2);
+        match import.alias {
+            Some(alias) => qualifiers.push(alias),
+            None => {
+                qualifiers.push(dep_path.last().copied().unwrap_or_else(name_zero));
+                if dep_path.len() > 1 {
+                    let dotted = interner.intern(&path_to_dot_string(interner, dep_path))?;
+                    qualifiers.push(dotted);
+                }
             }
-            continue;
         }
-        qualifier_paths.insert(qualifier, dep_path.clone());
-        qualifier_first_span.insert(qualifier, import.name.span);
+        for qualifier in qualifiers {
+            // AUD-14: `import App.Utils` + `import Lib.Utils` (both default to the
+            // qualifier `Utils`), or an explicit `as` alias reused across two
+            // distinct dep modules, previously overwrote silently here — every
+            // `Utils.format` call downstream then resolved to whichever import
+            // came LAST in source order, with no diagnostic. Re-importing the
+            // SAME dep module under the same qualifier (a diamond dependency)
+            // stays a no-op, matching `inject_dep_type`'s identical-re-injection
+            // rule; only a clash between two DIFFERENT dep modules is rejected.
+            if let Some(existing_path) = qualifier_paths.get(&qualifier) {
+                if existing_path != dep_path {
+                    let qualifier_s = name_str(interner, qualifier)?;
+                    let first = qualifier_first_span
+                        .get(&qualifier)
+                        .copied()
+                        .unwrap_or(import.name.span);
+                    return Err(Diagnostic::Name {
+                        span: import.name.span,
+                        msg: NameError::DuplicateQualifier {
+                            qualifier: qualifier_s,
+                            first,
+                        },
+                    });
+                }
+                continue;
+            }
+            qualifier_paths.insert(qualifier, dep_path.clone());
+            qualifier_first_span.insert(qualifier, import.name.span);
 
-        // Register every exported alias of the dep under a synthetic
-        // `Qualifier.Name` key so a QUALIFIED annotation (`Money.Price`)
-        // expands the alias exactly as an `exposing`-injected one would —
-        // qualified access needs no exposure, and the qualified key can never
-        // collide with a bare local name (bare symbols carry no dot).
-        if let Some(dep) = deps.get(dep_path) {
-            let qualifier_s = name_str(interner, qualifier)?;
-            for (&alias_name, ea) in &dep.aliases {
-                let alias_s = name_str(interner, alias_name)?;
-                let key = interner.intern(&format!("{qualifier_s}.{alias_s}"))?;
-                injected_aliases.entry(key).or_insert_with(|| AliasDef {
-                    params: ea.params.clone(),
-                    body: ea.body.clone(),
-                    dep_scope_types: Some(dep.scope_types.clone()),
-                    dep_scope_aliases: Some(dep.scope_aliases.clone()),
-                });
+            // Register every exported alias of the dep under a synthetic
+            // `Qualifier.Name` key so a QUALIFIED annotation (`Money.Price`)
+            // expands the alias exactly as an `exposing`-injected one would —
+            // qualified access needs no exposure, and the qualified key can never
+            // collide with a bare local name (bare symbols carry no dot).
+            if let Some(dep) = deps.get(dep_path) {
+                let qualifier_s = name_str(interner, qualifier)?;
+                for (&alias_name, ea) in &dep.aliases {
+                    let alias_s = name_str(interner, alias_name)?;
+                    let key = interner.intern(&format!("{qualifier_s}.{alias_s}"))?;
+                    injected_aliases.entry(key).or_insert_with(|| AliasDef {
+                        params: ea.params.clone(),
+                        body: ea.body.clone(),
+                        dep_scope_types: Some(dep.scope_types.clone()),
+                        dep_scope_aliases: Some(dep.scope_aliases.clone()),
+                    });
+                }
             }
         }
     }
@@ -4467,7 +4485,7 @@ fn inject_dep_exports(
     injected_aliases: &mut BTreeMap<Symbol, AliasDef>,
     unqual_origins: &mut BTreeMap<Symbol, Vec<Symbol>>,
     unqual_ctor_origins: &mut BTreeMap<Symbol, Vec<Symbol>>,
-    interner: &Interner,
+    interner: &mut Interner,
 ) -> DResult<()> {
     let dep_path = &dep.path;
 
@@ -4689,46 +4707,67 @@ fn inject_dep_exports(
         }
     }
 
-    // Register the module qualifier. Explicit `as Alias` takes priority;
-    // otherwise the last segment of the module path is the default qualifier
-    // (Elm convention: `import Lib.Utils` makes `Utils.foo` available).
-    let qualifier = import
-        .alias
-        .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
-    // A user dep module whose qualifier collides with a gated stdlib short-name
-    // (e.g. a project-local `import Auth` over the stdlib `Auth`) shadows the
-    // Tier-C import gate: its members now live in `qual_vars` under that
-    // qualifier, so `Qualifier.member` must resolve against the imported local
-    // module rather than raise IPE-N0034 for the un-imported stdlib module of
-    // the same name. Marking the qualifier imported makes the gate defer here.
-    env.mark_stdlib_qualifier_imported(qualifier);
-    let qual_map = std::rc::Rc::make_mut(&mut env.qual_vars)
-        .entry(qualifier)
-        .or_default();
-    for &v in &dep.values {
-        // A dep value that is a Stage-4 kernel alias resolves as its kernel, so a
-        // qualified `Alias.f` routes straight to the kernel dispatch — never a
-        // `TopLevel(dep_path)` reference to a def the alias module never emits.
-        if let Some(alias) = dep.kernel_aliases.get(&v) {
-            qual_map.insert(v, VarHome::Kernel(alias.id, alias.module, alias.function));
-        } else {
-            qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
+    // The qualifier names under which the dep's members become reachable. An
+    // explicit `as Alias` names exactly one, on purpose. A BARE `import Rls.Owner`
+    // registers TWO: the last path segment (`Owner` — Elm convention: `import
+    // Lib.Utils` makes `Utils.foo` available) AND the full dotted path
+    // (`Rls.Owner`), so a fully-qualified reference resolves too. The dotted form
+    // is the qualifier symbol the parser produces from `Rls.Owner.member` (which
+    // no single-segment `as` alias can spell), and it must resolve IDENTICALLY in
+    // expression and type-annotation position — both consult `qual_vars` — so a
+    // dotted user module referenced by type (`Rls.Owner.Doc`) is not turned away
+    // as an unknown module while its expression use resolves. This mirrors the
+    // dotted-canonical stdlib handling (`Ipe.Db.Decode` → `Db.Decode`).
+    let mut qualifiers: Vec<Symbol> = Vec::with_capacity(2);
+    match import.alias {
+        Some(alias) => qualifiers.push(alias),
+        None => {
+            qualifiers.push(dep_path.last().copied().unwrap_or_else(name_zero));
+            // Only a multi-segment path has a distinct dotted form; a
+            // single-segment `import Owner` already registered its sole qualifier
+            // above, so skip the redundant (identical) dotted key.
+            if dep_path.len() > 1 {
+                let dotted = interner.intern(&path_to_dot_string(interner, dep_path))?;
+                qualifiers.push(dotted);
+            }
         }
     }
-    // Register qualified constructors so `Alias.CtorName` resolves correctly.
-    // Needed for compiled-source ADTs (e.g. `Money.USD` from `import Ipe.Money
-    // as Money`) where constructors are not stdlib kernels and never enter
-    // `qual_vars`.  We register ALL ctors from this dep regardless of the
-    // user's `exposing (...)` clause — qualified access does not require the
-    // name to be in the exposing list (only unqualified access does).
-    if !dep.ctors.is_empty() {
-        let qual_ctor_map = std::rc::Rc::make_mut(&mut env.qual_ctors)
+    for &qualifier in &qualifiers {
+        // A user dep module whose qualifier collides with a gated stdlib short-name
+        // (e.g. a project-local `import Auth` over the stdlib `Auth`) shadows the
+        // Tier-C import gate: its members now live in `qual_vars` under that
+        // qualifier, so `Qualifier.member` must resolve against the imported local
+        // module rather than raise IPE-N0034 for the un-imported stdlib module of
+        // the same name. Marking the qualifier imported makes the gate defer here.
+        env.mark_stdlib_qualifier_imported(qualifier);
+        let qual_map = std::rc::Rc::make_mut(&mut env.qual_vars)
             .entry(qualifier)
             .or_default();
-        for (ctor_sym, ctor_home) in &dep.ctors {
-            qual_ctor_map
-                .entry(*ctor_sym)
-                .or_insert_with(|| ctor_home.clone());
+        for &v in &dep.values {
+            // A dep value that is a Stage-4 kernel alias resolves as its kernel, so a
+            // qualified `Alias.f` routes straight to the kernel dispatch — never a
+            // `TopLevel(dep_path)` reference to a def the alias module never emits.
+            if let Some(alias) = dep.kernel_aliases.get(&v) {
+                qual_map.insert(v, VarHome::Kernel(alias.id, alias.module, alias.function));
+            } else {
+                qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
+            }
+        }
+        // Register qualified constructors so `Alias.CtorName` resolves correctly.
+        // Needed for compiled-source ADTs (e.g. `Money.USD` from `import Ipe.Money
+        // as Money`) where constructors are not stdlib kernels and never enter
+        // `qual_vars`.  We register ALL ctors from this dep regardless of the
+        // user's `exposing (...)` clause — qualified access does not require the
+        // name to be in the exposing list (only unqualified access does).
+        if !dep.ctors.is_empty() {
+            let qual_ctor_map = std::rc::Rc::make_mut(&mut env.qual_ctors)
+                .entry(qualifier)
+                .or_default();
+            for (ctor_sym, ctor_home) in &dep.ctors {
+                qual_ctor_map
+                    .entry(*ctor_sym)
+                    .or_insert_with(|| ctor_home.clone());
+            }
         }
     }
 
