@@ -6,3 +6,7 @@ emptyall:every row
 anyalways:every row
 allnever:no row (denied)
 readonly:no row (denied)
+existsinok:ok
+existsinexplain:exists in shares where shares.doc_ref = author and its read policy: (member = caller subject)
+existsinouter:err
+existsinshare:err
