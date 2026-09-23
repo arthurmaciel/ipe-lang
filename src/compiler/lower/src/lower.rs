@@ -13029,6 +13029,139 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// Dispatch a `Store.existsIn` call intercepted at lowering (arity 2: a
+    /// `Secured share` and a `\share row -> Store.correlate share.col row.col`
+    /// lambda). The two correlation columns are read structurally from the
+    /// `correlate` body and validated against each binder's own solved record
+    /// type — the share side against the share row, the outer side against the
+    /// outer row — then the call is rewritten to
+    /// `existsInNamed <secured> <shareCol> <outerCol>`, which reads the share
+    /// table / columns / read-policy from the runtime `Secured`. Anything but a
+    /// two-binder lambda whose body is a single `Store.correlate` on a `.field`
+    /// of each binder fails closed (IPE-L0149).
+    fn lower_store_exists_in(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(secured), Some(lambda)) = (args.first(), args.get(1)) else {
+            return Err(bug(
+                "ipe_lower::lower_store_exists_in",
+                "Store.existsIn arity < 2",
+            ));
+        };
+        let (share_col, outer_col) = self.exists_correlation_columns(lambda)?;
+        let lowered_secured = self.lower_expr(secured)?;
+        let id = self.store_named_func_id("existsInNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![lowered_secured, Expr::Str(share_col), Expr::Str(outer_col)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
+    /// Read the two correlation columns from an `existsIn` lambda
+    /// `\share row -> Store.correlate share.shareField row.outerField`. Returns
+    /// `(shareColumn, outerColumn)` snake-cased and SQL-validated, each confirmed
+    /// present on its binder's solved record type (the share side on `share`, the
+    /// outer side on `row`). Fails closed (IPE-L0149) for any other shape.
+    fn exists_correlation_columns(&self, lambda: &canon::Expr) -> DResult<(String, String)> {
+        let not_lambda = || {
+            unsupported_store_select(
+                lambda.span,
+                StoreSelectProjectionDefect::NotAProjectionLambda,
+            )
+        };
+        // `\share row -> body` — two plain-variable params, in order.
+        let canon::Expr_::Lambda(params, body) = &lambda.value else {
+            return Err(not_lambda());
+        };
+        let [share_param, row_param] = params.as_slice() else {
+            return Err(not_lambda());
+        };
+        let canon::Pattern_::PVar(share_sym) = &share_param.value else {
+            return Err(not_lambda());
+        };
+        let canon::Pattern_::PVar(row_sym) = &row_param.value else {
+            return Err(not_lambda());
+        };
+        // The body must be a single `Store.correlate shareAccess rowAccess`.
+        let canon::Expr_::Call(callee, corr_args) = &body.value else {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let is_correlate = matches!(
+            self.lower_callee(callee),
+            Ok(Callee::Kernel(KernelFn::StoreCorrelate))
+        );
+        if !is_correlate {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        }
+        let (Some(share_access), Some(outer_access)) = (corr_args.first(), corr_args.get(1)) else {
+            return Err(unsupported_store_select(
+                body.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        // The share side reads a `.field` of the `share` binder; the outer side a
+        // `.field` of the `row` binder — each validated against its binder's own
+        // solved record type, so a column absent from EITHER side fails closed.
+        let share_col = self.correlation_column(share_access, *share_sym)?;
+        let outer_col = self.correlation_column(outer_access, *row_sym)?;
+        Ok((share_col, outer_col))
+    }
+
+    /// Read one correlation-side column: the argument must be a bare `.field`
+    /// access on `binder`, its field present on the binder's solved record type,
+    /// and its snake-cased name a valid SQL column. Fails closed (IPE-L0149)
+    /// otherwise. This is the share/outer twin of `select_single_projection`'s
+    /// column path, restricted to a single lambda binder.
+    fn correlation_column(&self, access: &canon::Expr, binder: Symbol) -> DResult<String> {
+        let canon::Expr_::Access(base, field) = &access.value else {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        let canon::Expr_::VarLocal(base_sym) = &base.value else {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        };
+        if *base_sym != binder {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::UnsupportedProjectionBody,
+            ));
+        }
+        let field_name = self.resolve(*field)?.to_string();
+        let field_present = matches!(
+            self.region_ty(base.span),
+            Some(Ty::Record(fields, _)) if fields.keys().any(|k| *k == *field)
+        );
+        if !field_present {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::UnknownField {
+                    field: field_name.into_boxed_str(),
+                },
+            ));
+        }
+        let column_name = ipe_canon::to_snake_case(&field_name);
+        if !is_valid_sql_column(&column_name) {
+            return Err(unsupported_store_select(
+                access.span,
+                StoreSelectProjectionDefect::InvalidColumn {
+                    column: column_name.into_boxed_str(),
+                },
+            ));
+        }
+        Ok(column_name)
+    }
+
     /// Build a single-parameter lambda `\v -> SqlXxx v` for the scalar field
     /// type `field_ty`. Used by `lower_store_inlist` to map a `List t` to a
     /// `List SqlValue` at the IR level. Fails closed (IPE-L0145) when `field_ty`
@@ -20123,6 +20256,25 @@ impl<'a> Lowerer<'a> {
                 {
                     return Ok(Intercepted::Done(
                         self.lower_store_policy_rule(&peek, args)?,
+                    ));
+                }
+                // `Store.existsIn` — arity 2 (Secured share + a two-binder
+                // `\share row -> Store.correlate share.col row.col` lambda). The
+                // walker reads the two correlation columns structurally, validates
+                // each against its own binder's record type, and rewrites to
+                // `existsInNamed <secured> <shareCol> <outerCol>`; the share
+                // table/columns/read-policy are read from the runtime `Secured`.
+                Callee::Kernel(KernelFn::StoreExistsIn) if args.len() == 2 => {
+                    return Ok(Intercepted::Done(self.lower_store_exists_in(args)?));
+                }
+                // `Store.correlate` reaching here is a point-free or standalone use
+                // (outside an `existsIn` lambda) — fail closed, exactly as a bare
+                // `Store.literal`/`Store.upper` does.
+                Callee::Kernel(KernelFn::StoreCorrelate) => {
+                    let span = args.first().map_or(Span::DUMMY, |a| a.span);
+                    return Err(unsupported_store_select(
+                        span,
+                        StoreSelectProjectionDefect::UnsupportedProjectionBody,
                     ));
                 }
                 // `Store.orderByLeft` / `Store.orderByRight` — arity 3 (accessor +

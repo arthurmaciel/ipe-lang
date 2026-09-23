@@ -235,6 +235,7 @@ module Ipe.Db.Store exposing
     , selectToList, selectToMaybe
     , Policy, Secured, Pred
     , always, never, allOf, anyOf, notPred, matchWhere
+    , correlate, existsIn, existsInNamed
     , readOnly, alsoInsert, alsoUpdate, alsoDelete
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
     , ownerColumnNamed, immutableNamed
@@ -4342,6 +4343,36 @@ type Pred row
     | PNever
     | PMatch (Cond row)
     | POwner String
+    | PExists (ExistsRef row)
+
+
+-- | The transparent data an `existsIn` predicate lowers from: everything the
+-- correlated `EXISTS` subquery needs is captured HERE at `existsIn` time (the
+-- share store is in hand), so `predFragmentIn` builds the subquery with no
+-- closure and no deferred lookup. `shareTable` is the share store's validated
+-- table name; `shareColumns` are the share store's own columns (so the share
+-- read predicate and the correlation's share side are re-validated against
+-- them, never against the outer row's); `shareRead` is the share store's OWN
+-- read predicate, composed into the subquery's WHERE (defence in depth — a row
+-- the share's policy denies never satisfies the `EXISTS`); `shareCol` /
+-- `outerCol` are the two correlation columns (`shares.doc = docs.id`), the share
+-- side validated against `shareColumns`, the outer side against the enclosing
+-- store's columns. Carries no functions, so structural `==` holds and the
+-- simplifier can dedupe.
+--
+-- Phantom in `row` exactly as `Pred row` is: `shareRead`'s phantom is the
+-- share store's row type, but the phantom carries no runtime value, so it rides
+-- the enclosing `row` phantom here — the share side is kept honest by
+-- `shareColumns` (the real column strings), never by the phantom. `existsIn`'s
+-- scheme pins the surface types; `secured` re-validates BOTH sides' columns.
+type ExistsRef row
+    = ExistsRef
+        { shareTable : String
+        , shareColumns : List Column
+        , shareRead : Pred row
+        , shareCol : String
+        , outerCol : String
+        }
 
 
 -- | `always` — the predicate that matches every row (an explicit empty
@@ -4396,6 +4427,150 @@ matchWhere cond =
     PMatch cond
 
 
+-- | `correlate shareAccessor rowAccessor` — the column=column correlation leaf
+-- of an `existsIn` predicate. It equates a `share`-side column with the OUTER
+-- `row`-side column (`shares.doc = docs.id`) — the one comparison `matchWhere`
+-- cannot express, because a `Cond`'s right-hand side is always a bound value,
+-- never another row's column. Both accessors name validated columns pinned to
+-- their own record types by the shared value type; the intercept reads them
+-- structurally at lowering. Valid ONLY as the body (or an `allOf` element) of an
+-- `existsIn` lambda — a point-free or standalone use fails closed at lowering.
+--
+-- Example:
+--
+--     Store.existsIn shares (\share doc -> Store.correlate .docId doc.id)
+correlate : (share -> t) -> (row -> t) -> Pred share
+correlate =
+    Kernel.kernel "Store_correlate"
+
+
+-- | `existsIn shares lambda` — a correlated-subquery row-security predicate over
+-- the enclosing store: the outer row is admitted only when a row of the
+-- referenced `shares` store satisfies BOTH the lambda's `correlate` correlation
+-- AND `shares`'s OWN read policy (composed into the subquery's WHERE, defence in
+-- depth). Lowered to `EXISTS (SELECT 1 FROM <shares-table> WHERE <correlation>
+-- AND <shares read policy>)` through the audited `Sql.exists` / `Sql.column` /
+-- `Sql.and` path — the table is validated, both correlation columns are
+-- `Sql.column` references (never caller text), and no value is interpolated, so
+-- the subquery adds no injection surface. `secured` re-validates every column
+-- `existsIn` names on BOTH the share side and the outer side.
+--
+-- Example (a doc is readable when the caller has a share row for it):
+--
+--     Store.readOnly
+--         (Store.existsIn securedShares
+--             (\share doc -> Store.correlate .docId doc.id)
+--         )
+existsIn : Secured share -> (share -> row -> Pred share) -> Pred row
+existsIn =
+    Kernel.kernel "Store_existsIn"
+
+
+-- The stringly form the `existsIn` intercept builds: the intercept extracts the
+-- two correlation columns from the `correlate` lambda (compile-time, from the
+-- accessors) and passes the referenced share store's runtime `Secured` value
+-- through; the share table, columns, and OWN read predicate are read from it
+-- HERE (runtime), so the `PExists` leaf carries transparent data with no closure.
+-- Exported only so the intercept can name it; a caller writes `existsIn` with a
+-- `correlate` lambda.
+existsInNamed : Secured share -> String -> String -> Pred row
+existsInNamed shareSecured shareCol outerCol =
+    case shareSecured of
+        Secured shareStore sharePolicy ->
+            case shareStore of
+                Store s ->
+                    PExists
+                        (ExistsRef
+                            { shareTable = s.table
+                            , shareColumns = s.currentColumns
+                            , shareRead = recastPred (readPred sharePolicy)
+                            , shareCol = shareCol
+                            , outerCol = outerCol
+                            }
+                        )
+
+
+-- Recast a predicate's phantom row type. A `Pred` carries only transparent data
+-- (column-name strings, `Cond` leaves, nested `ExistsRef`s) — never a `row`
+-- value — so reinterpreting the phantom is a total structural identity rebuild,
+-- not a cast: the referenced share store's read predicate (`Pred share`) is
+-- carried inside a `PExists` leaf of the outer `Pred row`, where the two phantom
+-- rows differ but neither constrains the runtime data. The share side stays
+-- honest through `shareColumns` (the real column strings), never the phantom.
+recastPred : Pred a -> Pred b
+recastPred pred =
+    case pred of
+        PAll preds ->
+            PAll (List.map recastPred preds)
+
+        PAny preds ->
+            PAny (List.map recastPred preds)
+
+        PNotP inner ->
+            PNotP (recastPred inner)
+
+        PAlways ->
+            PAlways
+
+        PNever ->
+            PNever
+
+        PMatch cond ->
+            PMatch (recastCond cond)
+
+        POwner col ->
+            POwner col
+
+        PExists ref ->
+            PExists (recastExistsRef ref)
+
+
+-- Recast a `Cond`'s phantom row type — a total structural identity rebuild, the
+-- `Cond` twin of `recastPred` (a `Cond` carries only column strings and bound
+-- `SqlValue`s, never a `row` value).
+recastCond : Cond a -> Cond b
+recastCond cond =
+    case cond of
+        Compare op col value ->
+            Compare op col value
+
+        Like col pattern ->
+            Like col pattern
+
+        IsNull col ->
+            IsNull col
+
+        NotNull col ->
+            NotNull col
+
+        InList col values ->
+            InList col values
+
+        AndList conds ->
+            AndList (List.map recastCond conds)
+
+        OrList conds ->
+            OrList (List.map recastCond conds)
+
+        NotCond inner ->
+            NotCond (recastCond inner)
+
+
+-- Recast an `ExistsRef`'s phantom row type — its `shareRead` is itself a `Pred`,
+-- rebuilt through `recastPred`; every other field is transparent data.
+recastExistsRef : ExistsRef a -> ExistsRef b
+recastExistsRef ref =
+    case ref of
+        ExistsRef r ->
+            ExistsRef
+                { shareTable = r.shareTable
+                , shareColumns = r.shareColumns
+                , shareRead = recastPred r.shareRead
+                , shareCol = r.shareCol
+                , outerCol = r.outerCol
+                }
+
+
 -- The columns a predicate names, gathered across the whole algebra (not only the
 -- top level), so `secured` can re-validate EVERY column any branch references —
 -- a policy naming a missing column is a typed `Err`, never a silently ineffective
@@ -4423,6 +4598,71 @@ predColumns pred =
 
         POwner col ->
             [ col ]
+
+        PExists ref ->
+            -- Only the OUTER-side correlation column belongs to the enclosing
+            -- store, so it is the one `secured` re-validates here. The share-side
+            -- columns (the correlation's share side + every column the share read
+            -- predicate names) live in the DIFFERENT share table and are
+            -- re-validated against the share store's own columns by
+            -- `existsShareColumnsValid`, called from `secured` alongside this.
+            case ref of
+                ExistsRef r ->
+                    [ r.outerCol ]
+
+
+-- The share-side columns an `existsIn` predicate names — the correlation's share
+-- side plus every column the share read predicate names — each of which MUST be a
+-- real column of the SHARE store (`shareColumns`), never the outer store. Returns
+-- the first share-side column absent from `shareColumns`, or `Nothing` when every
+-- share-side column exists. `secured` walks this over the whole algebra so a
+-- correlation naming a missing column on the SHARE side fails closed exactly as a
+-- missing outer column does.
+firstUnknownExistsShareColumn : Pred row -> Maybe String
+firstUnknownExistsShareColumn pred =
+    case pred of
+        PAll preds ->
+            firstUnknownExistsShareColumnIn preds
+
+        PAny preds ->
+            firstUnknownExistsShareColumnIn preds
+
+        PNotP inner ->
+            firstUnknownExistsShareColumn inner
+
+        PAlways ->
+            Nothing
+
+        PNever ->
+            Nothing
+
+        PMatch _ ->
+            Nothing
+
+        POwner _ ->
+            Nothing
+
+        PExists ref ->
+            case ref of
+                ExistsRef r ->
+                    firstUnknownPolicyColumn r.shareColumns
+                        (r.shareCol :: predColumns r.shareRead)
+
+
+-- `firstUnknownExistsShareColumn` folded over a predicate list, first miss wins.
+firstUnknownExistsShareColumnIn : List (Pred row) -> Maybe String
+firstUnknownExistsShareColumnIn preds =
+    case preds of
+        [] ->
+            Nothing
+
+        first :: rest ->
+            case firstUnknownExistsShareColumn first of
+                Just bad ->
+                    Just bad
+
+                Nothing ->
+                    firstUnknownExistsShareColumnIn rest
 
 
 -- The columns a `Cond` names, gathered across its boolean structure. Mirrors the
@@ -4491,6 +4731,9 @@ simplify pred =
         POwner col ->
             POwner col
 
+        PExists ref ->
+            PExists ref
+
 
 -- A conjunction of already-simplified children: `always` is dropped (its
 -- identity), a single `never` short-circuits the whole conjunction to `never`,
@@ -4547,7 +4790,7 @@ simplifyNot inner =
         PNotP again ->
             again
 
-        PAll _ | PAny _ | PMatch _ | POwner _ ->
+        PAll _ | PAny _ | PMatch _ | POwner _ | PExists _ ->
             PNotP inner
 
 
@@ -4557,7 +4800,7 @@ predIsAlways pred =
         PAlways ->
             True
 
-        PNever | PNotP _ | PAll _ | PAny _ | PMatch _ | POwner _ ->
+        PNever | PNotP _ | PAll _ | PAny _ | PMatch _ | POwner _ | PExists _ ->
             False
 
 
@@ -4567,7 +4810,7 @@ predIsNever pred =
         PNever ->
             True
 
-        PAlways | PNotP _ | PAll _ | PAny _ | PMatch _ | POwner _ ->
+        PAlways | PNotP _ | PAll _ | PAny _ | PMatch _ | POwner _ | PExists _ ->
             False
 
 
@@ -4595,8 +4838,12 @@ dedupePreds preds =
 -- `falseFragment` identities; `PMatch` delegates to `condFragmentIn`; `POwner`
 -- binds the subject as a parameter against its validated column. A column absent
 -- from the store is a fail-closed `Err` (parse-don't-validate).
-predFragmentIn : Auth.Principal -> List Column -> Pred row -> Result Error SqlFragment
-predFragmentIn principal columns pred =
+--
+-- `outerTable` is the enclosing store's validated table name, used to qualify the
+-- OUTER correlation column of a `PExists` (`docs.id`) so it reaches out of the
+-- subquery unambiguously; the share side is qualified by its own table.
+predFragmentIn : Auth.Principal -> String -> List Column -> Pred row -> Result Error SqlFragment
+predFragmentIn principal outerTable columns pred =
     case pred of
         PAlways ->
             Ok trueFragment
@@ -4613,35 +4860,81 @@ predFragmentIn principal columns pred =
                 (Sql.eq (Sql.column col) (Sql.param (SqlString (Auth.subject principal))))
 
         PNotP inner ->
-            Result.map Sql.not (predFragmentIn principal columns inner)
+            Result.map Sql.not (predFragmentIn principal outerTable columns inner)
 
         PAll preds ->
-            foldPreds principal columns Sql.and trueFragment preds
+            foldPreds principal outerTable columns Sql.and trueFragment preds
 
         PAny preds ->
-            foldPreds principal columns Sql.or falseFragment preds
+            foldPreds principal outerTable columns Sql.or falseFragment preds
+
+        PExists ref ->
+            existsFragment principal outerTable ref
+
+
+-- Lower a `PExists` to `EXISTS (SELECT 1 FROM <share> WHERE <correlation> AND
+-- <share read policy>)` through the audited `Sql.exists` / `Sql.column` /
+-- `Sql.and` path. Injection-safe by construction: the share table is validated
+-- inside `Sql.exists` (the same bare-identifier gate `Db.findWhere` uses), both
+-- correlation columns are `Sql.column` references (validated, never caller text),
+-- and no value is interpolated. The correlation qualifies the share side with the
+-- share table and the outer side with the enclosing table so neither is
+-- ambiguous. The share store's OWN read predicate is composed into the subquery
+-- WHERE (defence in depth), lowered against the SHARE store's columns — a share
+-- column named by the correlation or the share read predicate that the share
+-- store lacks fails closed here as well as at `secured`.
+existsFragment : Auth.Principal -> String -> ExistsRef row -> Result Error SqlFragment
+existsFragment principal outerTable ref =
+    case ref of
+        ExistsRef r ->
+            if Basics.not (hasColumn r.shareColumns r.shareCol) then
+                Err (unknownColumnError r.shareCol)
+
+            else
+                let
+                    qualifiedShareCol =
+                        String.concat [ r.shareTable, ".", r.shareCol ]
+
+                    qualifiedOuterCol =
+                        String.concat [ outerTable, ".", r.outerCol ]
+
+                    correlation =
+                        Sql.eq (Sql.column qualifiedShareCol) (Sql.column qualifiedOuterCol)
+                in
+                -- The share read predicate is lowered against the SHARE store's
+                -- columns and its own table (its columns are bare inside the
+                -- single-FROM subquery), then AND-ed with the correlation. The
+                -- outer table qualifier is irrelevant to the share read pred (it
+                -- names no outer column), but threading the share table keeps a
+                -- nested `existsIn` correct.
+                case predFragmentIn principal r.shareTable r.shareColumns (simplify r.shareRead) of
+                    Err e ->
+                        Err e
+
+                    Ok shareReadFrag ->
+                        Ok (Sql.exists r.shareTable (Sql.and correlation shareReadFrag))
 
 
 -- Fold a list of predicates with a binary connective, using `emptyFragment` as
 -- the identity for the empty list. Each predicate is lowered (and column-checked)
 -- before it joins, so the first invalid column fails the whole fold closed.
-foldPreds : Auth.Principal -> List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Pred row) -> Result Error SqlFragment
-foldPreds principal columns join emptyFragment preds =
+foldPreds : Auth.Principal -> String -> List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Pred row) -> Result Error SqlFragment
+foldPreds principal outerTable columns join emptyFragment preds =
     case preds of
         [] ->
             Ok emptyFragment
 
         [ single ] ->
-            predFragmentIn principal columns single
+            predFragmentIn principal outerTable columns single
 
         first :: rest ->
-            case predFragmentIn principal columns first of
+            case predFragmentIn principal outerTable columns first of
                 Err e ->
                     Err e
 
                 Ok head ->
                     Result.map (\tail -> join head tail)
-                        (foldPreds principal columns join emptyFragment rest)
+                        (foldPreds principal outerTable columns join emptyFragment rest)
 
 
 -- ─── Operation-scoped policy ────────────────────────────────────────
@@ -4956,6 +5249,23 @@ explainPred pred =
         PAny preds ->
             String.concat [ "any of [", String.join ", " (List.map explainPred preds), "]" ]
 
+        PExists ref ->
+            case ref of
+                ExistsRef r ->
+                    String.concat
+                        [ "exists in "
+                        , r.shareTable
+                        , " where "
+                        , r.shareTable
+                        , "."
+                        , r.shareCol
+                        , " = "
+                        , r.outerCol
+                        , " and its read policy: ("
+                        , explainPred (simplify r.shareRead)
+                        , ")"
+                        ]
+
 
 explainImmutables : List String -> String
 explainImmutables cols =
@@ -4994,7 +5304,28 @@ secured policy draft =
                     Err (unknownColumnError bad)
 
                 Nothing ->
-                    Ok (Secured (public draft) policy)
+                    -- Defence in depth: the OUTER-side columns are re-validated
+                    -- above against the draft's columns; each `existsIn`'s
+                    -- SHARE-side columns are re-validated here against the share
+                    -- store's own columns (carried in the `PExists` leaf), so a
+                    -- correlation naming a missing column on EITHER side fails
+                    -- closed at classification.
+                    case firstUnknownPolicyExistsShareColumn policy of
+                        Just bad ->
+                            Err (unknownColumnError bad)
+
+                        Nothing ->
+                            Ok (Secured (public draft) policy)
+
+
+-- The first share-side column any `existsIn` in `policy` names that is absent
+-- from that `existsIn`'s share store, across all four operation predicates.
+firstUnknownPolicyExistsShareColumn : Policy a -> Maybe String
+firstUnknownPolicyExistsShareColumn policy =
+    case policy of
+        Policy r ->
+            firstUnknownExistsShareColumnIn
+                [ r.read, r.insert, r.update, r.delete ]
 
 
 -- Every column a policy names, across all four predicates and the write-projection
@@ -5051,7 +5382,7 @@ policyFragment : Auth.Principal -> (Policy a -> Pred a) -> Store a -> Policy a -
 policyFragment principal op store policy =
     case store of
         Store s ->
-            case predFragmentIn principal s.currentColumns (simplify (op policy)) of
+            case predFragmentIn principal s.table s.currentColumns (simplify (op policy)) of
                 Ok fragment ->
                     fragment
 
