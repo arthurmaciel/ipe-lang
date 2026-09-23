@@ -532,16 +532,24 @@ full = ["async", "json", "jwt", "url", "db", "db-postgres", "redis_store", "cryp
 # accept-loop's `AsyncRead`/`AsyncWrite` extension traits available in either
 # dev-loop build. Both are native-only surfaces; the wasm dev-loop carries no
 # control socket.
-# The dev-loop control WIRE alone — the `ControlFrame` codec + the loopback
-# `transport` primitives (bind addr, constant-time token check, env reads) —
-# WITHOUT the tokio-bound `control::server` accept-loop. `ipe watch` (the parent
-# sender) links this to build/parse frames over its own std sockets, reusing the
-# ONE wire definition (SSOT) without pulling tokio/async into the CLI. `web` and
-# `debugger` (the child-side surfaces) each imply it and add the server via their
-# tokio features. Implies `json` (the codec's serde_json body) + `crypto-core`
-# (the `is_authorized` constant-time compare); `json` pulls `serde` (the frame
-# derives).
-control-wire = ["json", "serde", "crypto-core"]
+# The dev-loop control WIRE + its loopback accept-loop when a tokio runtime is
+# already present. The `ControlFrame` codec + the `transport` primitives (bind
+# addr, constant-time token check, env reads) are always available; `ipe watch`
+# (the parent sender) links THIS ALONE to build/parse frames over its own std
+# sockets, reusing the ONE wire definition (SSOT) without pulling tokio/async
+# into the CLI. The `control::server` accept-loop is gated
+# `all(feature = "tokio", not(wasm32))` and reads/writes over `tokio::net` +
+# `tokio::io`, so the WEAK `tokio?/net` + `tokio?/io-util` add those tokio arms
+# ONLY when some other feature already enabled `tokio` — the tui/cli/worker
+# dev-loop child (`tui` ⇒ `tokio`), or `web`/`debugger` (which also imply
+# `control-wire`). The weak form is load-bearing: it keeps a bare `control-wire`
+# link (the tokio-free CLI) from activating the optional `tokio` dep, so the
+# parent still pulls no async runtime, while a default `ipe watch` tui child —
+# which selects `control-wire` alongside `tui` — compiles the accept-loop to
+# mount the appearance hot-swap socket. Implies `json` (the codec's serde_json
+# body) + `crypto-core` (the `is_authorized` constant-time compare); `json` pulls
+# `serde` (the frame derives).
+control-wire = ["json", "serde", "crypto-core", "tokio?/net", "tokio?/io-util"]
 debugger = ["control-wire", "async", "tokio/net", "tokio/io-util"]
 # Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
 # Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native

@@ -785,13 +785,14 @@ const _WASI_TIME_FLOOR_SEAL: () = {
 #[cfg(test)]
 mod control_surface_absence {
     // The dev-loop control channel — the `control` module and its loopback
-    // `server` accept-loop — is present ONLY under a dev-loop surface (`web` or
-    // `debugger`) and never in an `ipe release` artifact, which carries neither
-    // feature. The `#[cfg(any(feature = "web", feature = "debugger"))]` on `mod
-    // control` (and the `tokio`/native gate on `control::server`) IS the
-    // compile-time absence proof — a release build cannot name either symbol.
-    // Pin the gate itself so a widening of it (e.g. dropping the feature guard)
-    // breaks this standing check rather than silently shipping the surface.
+    // `server` accept-loop — is present ONLY under a dev-loop surface (`web`,
+    // `debugger`, or `control-wire`) and never in an `ipe release` artifact,
+    // which carries none of them. The `#[cfg(any(feature = "web", feature =
+    // "debugger", feature = "control-wire"))]` on `mod control` (and the native
+    // `tokio` gate on `control::server`) IS the compile-time absence proof — a
+    // release build cannot name either symbol. Pin the gate itself so a widening
+    // of it (e.g. dropping the feature guard) breaks this standing check rather
+    // than silently shipping the surface.
     #[test]
     fn control_surface_matches_the_dev_loop_gate() {
         let control_present = cfg!(any(
