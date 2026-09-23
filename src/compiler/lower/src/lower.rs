@@ -19931,6 +19931,20 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
 
+        // Flatten a curried call spine before the accessor intercept. A piped
+        // final argument (`base |> Store.mask .ssn pred`) desugars to
+        // `Call(Call(Store.mask, [.ssn, pred]), [base])`; the accessor intercept
+        // keys on a bare `VarKernel` callee applied to ALL its arguments, so the
+        // nested shape must collapse to `Call(Store.mask, [.ssn, pred, base])`
+        // first — otherwise the kernel is seen only partially applied, reified
+        // point-free, and rejected (IPE-L0146). `(k a) b ≡ k a b` in a curried
+        // language, so this is beta-equivalent for every callee.
+        if let canon::Expr_::Call(inner_callee, inner_args) = &callee.value {
+            let mut merged = inner_args.clone();
+            merged.extend_from_slice(args);
+            return self.lower_call(inner_callee, &merged, call_span);
+        }
+
         // App-entry / Web.route intercepts — see the helper.
         match self.intercept_web_kernel_call(callee, args, call_span)? {
             Intercepted::Done(e) => Ok(e),
