@@ -13063,6 +13063,27 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// Dispatch a `Store.mask` call intercepted at lowering (arity 3: accessor +
+    /// `Pred row` + `Policy row`). The accessor (`.field`) names the validated,
+    /// snake-cased masked column; the `Pred` and `Policy` arguments lower
+    /// normally. The call is rewritten to `maskNamed <col> pred policy`, which
+    /// records the `(col, pred)` mask on the policy through a full record literal.
+    fn lower_store_mask(&self, args: &[canon::Expr]) -> DResult<Expr> {
+        let (Some(acc), Some(pred), Some(policy)) = (args.first(), args.get(1), args.get(2)) else {
+            return Err(bug("ipe_lower::lower_store_mask", "Store.mask arity < 3"));
+        };
+        let (column, _field_ty) = self.accessor_column(acc)?;
+        let lowered_pred = self.lower_expr(pred)?;
+        let lowered_policy = self.lower_expr(policy)?;
+        let id = self.store_named_func_id("maskNamed")?;
+        Ok(Expr::Call {
+            callee: Callee::Func(id),
+            args: vec![Expr::Str(column), lowered_pred, lowered_policy],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        })
+    }
+
     /// Read the two correlation columns from an `existsIn` lambda
     /// `\share row -> Store.correlate share.shareField row.outerField`. Returns
     /// `(shareColumn, outerColumn)` snake-cased and SQL-validated, each confirmed
@@ -19910,6 +19931,27 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
 
+        // Flatten a curried call spine ONLY when its head is an accessor-intercept
+        // placeholder kernel used with a piped final argument
+        // (`base |> Store.mask .col pred` desugars to
+        // `Call(Call(Store.mask, [.col, pred]), [base])`): the accessor intercept
+        // keys on a bare `VarKernel` callee saturated to ALL its arguments, so the
+        // nested spine must collapse to `Call(Store.mask, [.col, pred, base])`,
+        // else the kernel is seen only partially applied, reified point-free, and
+        // rejected (IPE-L0146). Restricted to that head on purpose: a GENERAL
+        // flatten reshapes the call tree the downstream multi-use / last-use
+        // ownership pass reads to decide moves vs clones, mis-placing a move where
+        // a later use still needs the value (E0382). Every non-accessor spine is
+        // left intact, so ordinary currying (`m |> Maybe.andThen f`) lowers
+        // exactly as before.
+        if let canon::Expr_::Call(inner_callee, inner_args) = &callee.value
+            && self.spine_head_is_accessor_intercept_placeholder(inner_callee)
+        {
+            let mut merged = inner_args.clone();
+            merged.extend_from_slice(args);
+            return self.lower_call(inner_callee, &merged, call_span);
+        }
+
         // App-entry / Web.route intercepts — see the helper.
         match self.intercept_web_kernel_call(callee, args, call_span)? {
             Intercepted::Done(e) => Ok(e),
@@ -19917,6 +19959,22 @@ impl<'a> Lowerer<'a> {
                 self.lower_call_uniform(callee, args, call_span, peeked)
             }
         }
+    }
+
+    /// Whether the head of a (possibly curried) call spine resolves to an
+    /// accessor-intercept placeholder kernel (`Store.mask`, `Store.eq`, …). Gates
+    /// the spine-flatten in [`Self::lower_call`] to exactly the kernels whose
+    /// saturated accessor intercept must observe every argument — never a general
+    /// currying reshape (which would disturb the ownership/last-use pass).
+    fn spine_head_is_accessor_intercept_placeholder(&self, callee: &canon::Expr) -> bool {
+        let mut head = callee;
+        while let canon::Expr_::Call(inner, _) = &head.value {
+            head = inner;
+        }
+        matches!(
+            self.lower_callee(head),
+            Ok(Callee::Kernel(k)) if k.is_accessor_intercept_placeholder()
+        )
     }
 
     /// Kernel-call intercepts that must run BEFORE the uniform arg lowering
@@ -20286,6 +20344,13 @@ impl<'a> Lowerer<'a> {
                     return Ok(Intercepted::Done(
                         self.lower_store_policy_rule(&peek, args)?,
                     ));
+                }
+                // `Store.mask` — arity 3 (accessor + `Pred row` + `Policy row`).
+                // The intercept extracts the validated, snake-cased column name
+                // from the accessor and rewrites to `maskNamed <col> pred policy`;
+                // the `Pred` and `Policy` arguments lower normally.
+                Callee::Kernel(KernelFn::StoreMask) if args.len() == 3 => {
+                    return Ok(Intercepted::Done(self.lower_store_mask(args)?));
                 }
                 // `Store.existsIn` — arity 2 (Secured share + a two-binder
                 // `\share row -> Store.correlate share.col row.col` lambda). The
@@ -23293,6 +23358,9 @@ impl<'a> Lowerer<'a> {
                 // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
                 | KernelFn::StoreDefaultText
                 | KernelFn::StoreDefaultInt
+                // `Store.mask` — arity 3 (accessor + Pred + Policy). Intercepted at
+                // lowering; this is only the defensive fallback count.
+                | KernelFn::StoreMask
                 // `orderByLeft` / `orderByRight` — arity 3 (accessor + Order + Joined).
                 // Intercepted at lowering; this is only the defensive fallback count.
                 | KernelFn::StoreOrderByLeft
@@ -24059,12 +24127,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SqlInList
                 | KernelFn::SqlLike
                 // `exists : String -> SqlFragment -> SqlFragment`.
-                | KernelFn::SqlExists,
+                | KernelFn::SqlExists
+                // `maskedColumn : SqlFragment -> String -> SqlFragment`.
+                | KernelFn::SqlMaskedColumn,
             ) => Ok(2),
             // ── Db.findWhere / Db.deleteWhere — arity 3 ─────────
             // `findWhere : Db -> String -> SqlFragment -> Task Error (List Row)`
             // `deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
             Callee::Kernel(KernelFn::DbFindWhere | KernelFn::DbDeleteWhere) => Ok(3),
+            // ── Db.findWhereMasked — arity 5 ────────────────────
+            // `findWhereMasked : Db -> String -> List SqlFragment -> SqlFragment
+            //                     -> Decoder a -> Task Error (List a)`
+            Callee::Kernel(KernelFn::DbFindWhereMasked) => Ok(5),
             // ── Ipe.Secret — opaque secret-string wrapper, arity 1 ──
             // `fromString : String -> Secret`, `reveal : Secret -> String`,
             // `redacted : Secret -> String`.
@@ -24975,7 +25049,9 @@ impl<'a> Lowerer<'a> {
                     ("Sql", "inList") => Ok(Callee::Kernel(KernelFn::SqlInList)),
                     ("Sql", "like") => Ok(Callee::Kernel(KernelFn::SqlLike)),
                     ("Sql", "exists") => Ok(Callee::Kernel(KernelFn::SqlExists)),
+                    ("Sql", "maskedColumn") => Ok(Callee::Kernel(KernelFn::SqlMaskedColumn)),
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
+                    ("Db", "findWhereMasked") => Ok(Callee::Kernel(KernelFn::DbFindWhereMasked)),
                     ("Db", "findJoin") => Ok(Callee::Kernel(KernelFn::DbFindJoin)),
                     ("Db", "findProjection") => Ok(Callee::Kernel(KernelFn::DbFindProjection)),
                     ("Db", "findJoinOrdered") => Ok(Callee::Kernel(KernelFn::DbFindJoinOrdered)),
@@ -25016,6 +25092,8 @@ impl<'a> Lowerer<'a> {
                     // Row-security policy builders — intercepted at lowering.
                     ("Store", "ownerColumn") => Ok(Callee::Kernel(KernelFn::StoreOwnerColumn)),
                     ("Store", "immutable") => Ok(Callee::Kernel(KernelFn::StoreImmutable)),
+                    // Column masking — intercepted at lowering.
+                    ("Store", "mask") => Ok(Callee::Kernel(KernelFn::StoreMask)),
                     // Correlated-subquery row-security — intercepted at lowering.
                     ("Store", "correlate") => Ok(Callee::Kernel(KernelFn::StoreCorrelate)),
                     ("Store", "existsIn") => Ok(Callee::Kernel(KernelFn::StoreExistsIn)),

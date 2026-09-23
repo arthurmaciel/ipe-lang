@@ -1604,10 +1604,12 @@ Ipe.Db.Store — typed, injection-safe persistence over the audited `Ipe.Db`.
 | `publicRead` | `publicRead` — reads are unrestricted while writes route through the secured |
 | `ownerColumn` | `ownerColumn accessor` — the owner-scoped policy: all four operations are |
 | `immutable` | `immutable accessor` — a policy whose accessor-named column cannot change |
+| `mask` | `mask accessor pred policy` — refine `policy` so the accessor-named column |
 | `andPolicy` | `andPolicy extra base` — compose two policies: conjoin each operation's |
 | `secured` | `secured policy draft` — classify `draft` by attaching `policy`, or fail |
 | `ownerColumnNamed` | (no summary) |
 | `immutableNamed` | (no summary) |
+| `maskNamed` | (no summary) |
 | `explain` | `explain policy` — a human-readable rendering of the (simplified) policy, one |
 | `allAs` | `allAs principal db secured` — read every row the policy admits for |
 | `getAs` | `getAs principal db secured keyValue` — read the single row whose primary |

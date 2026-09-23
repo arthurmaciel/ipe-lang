@@ -1761,6 +1761,14 @@ pub enum StdlibKernel {
     /// one immutable-column rule over the accessor-named column. The intercept
     /// extracts the column name and delegates to the `immutableNamed` helper.
     StoreImmutable,
+    /// `Store.mask : (row -> t) -> Pred row -> Policy row -> Policy row` — a
+    /// column-masking policy refinement: the accessor-named column is projected
+    /// as `CASE WHEN (<pred>) THEN col ELSE NULL END` in every secured read, so an
+    /// unauthorized row yields `Nothing` for that column. The intercept extracts
+    /// the validated, snake-cased column name and delegates to the `maskNamed`
+    /// stdlib helper (`maskNamed col pred policy`). An accessor-intercept
+    /// placeholder; a non-nullable masked column fails closed at `secured`.
+    StoreMask,
     /// `Store.correlate : (share -> t) -> (row -> t) -> Pred share` — the
     /// column=column correlation leaf of a `Store.existsIn` predicate: it equates
     /// a `share`-side column with an OUTER-`row`-side column (`shares.doc =
@@ -2758,9 +2766,28 @@ pub enum StdlibKernel {
     /// through the audited `Sql.*` combinators, so the subquery adds no injection
     /// surface. The single site that embeds a table name and a nested `SELECT`.
     SqlExists,
+    /// `Sql.maskedColumn : SqlFragment -> String -> SqlFragment` — a column-masking
+    /// projection term `CASE WHEN (<pred>) THEN col ELSE NULL END AS col`. `pred`
+    /// was built only through the audited `Sql.*` combinators; `col` is validated
+    /// through the same dotted-identifier gate as `Sql.column` (never
+    /// `unsafeFragment`), so the term adds no injection surface. The unauthorized
+    /// (predicate-false) row projects SQL `NULL`, decoded to `Nothing` by the
+    /// NULL-preserving masked read.
+    SqlMaskedColumn,
     /// `Db.findWhere : Db -> String -> SqlFragment -> Task Error (List Row)` —
     /// the `SqlFragment`-typed replacement for the removed `unsafeFindWhere`.
     DbFindWhere,
+    /// `Db.findWhereMasked : Db -> String -> List SqlFragment -> SqlFragment
+    ///                        -> Decoder a -> Task Error (List a)` — the
+    /// NULL-preserving projected read the secured column-masking path routes
+    /// through. Unlike `Db.findWhere` (which emits `SELECT *` and collapses SQL
+    /// NULL → `""` via `row_to_map`), it emits an EXPLICIT projection from the
+    /// caller's validated `SqlFragment` terms (each an `Sql.column col AS col` or a
+    /// masked `Sql.maskedColumn`) and decodes each row through the threaded
+    /// `Decoder` over the NULL-preserving row→JSON bridge, so a masked cell arrives
+    /// as `Nothing`, never `Just ""`. Every identifier is combinator-validated and
+    /// every value is a bound parameter; a poisoned fragment fails the read closed.
+    DbFindWhereMasked,
     /// `Db.findJoin : Db -> String -> String -> List String -> String -> String
     ///                -> List String -> SqlFragment
     ///                -> Task Error (List (Row, Row))` — read an inner join of
@@ -4005,6 +4032,7 @@ impl StdlibKernel {
             // Row-security policy builders — arity 1 (accessor only), intercepted
             // inline (accessor becomes the validated column, then the stringly
             // `*Named` helper is called). Runtime-fn names are placeholders.
+            Self::StoreMask => d("Store", "mask", 3, Pure, "store_mask"),
             Self::StoreOwnerColumn => d("Store", "ownerColumn", 1, Pure, "store_owner_column"),
             // Accessor-intercepted at lowering (rewritten to `orderByLeftNamed`/
             // `orderByRightNamed`); the runtime-fn names are never-called
@@ -4955,7 +4983,9 @@ impl StdlibKernel {
             Self::SqlInList => d("Sql", "inList", 2, Db, "sql_in_list"),
             Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
             Self::SqlExists => d("Sql", "exists", 2, Db, "sql_exists"),
+            Self::SqlMaskedColumn => d("Sql", "maskedColumn", 2, Db, "sql_masked_column"),
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
+            Self::DbFindWhereMasked => d("Db", "findWhereMasked", 5, Db, "db_find_where_masked"),
             Self::DbFindJoin => d("Db", "findJoin", 8, Db, "db_find_join"),
             Self::DbFindProjection => d("Db", "findProjection", 8, Db, "db_find_projection"),
             Self::DbFindJoinOrdered => d("Db", "findJoinOrdered", 11, Db, "db_find_join_ordered"),
@@ -5722,6 +5752,7 @@ impl StdlibKernel {
         // Row-security policy builders (accessor-typed).
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
+        Self::StoreMask,
         Self::StoreCorrelate,
         Self::StoreExistsIn,
         // orderBy modifiers (accessor-typed).
@@ -6306,7 +6337,9 @@ impl StdlibKernel {
         Self::SqlInList,
         Self::SqlLike,
         Self::SqlExists,
+        Self::SqlMaskedColumn,
         Self::DbFindWhere,
+        Self::DbFindWhereMasked,
         Self::DbFindJoin,
         Self::DbFindProjection,
         Self::DbFindJoinOrdered,
@@ -7977,6 +8010,11 @@ impl StdlibKernel {
         // fragment to a correlated-subquery existence test.
         const SQL_EXISTS: TyShape =
             TyShape::Fun(&STRING, &TyShape::Fun(&SQLFRAGMENT, &SQLFRAGMENT));
+        // `maskedColumn : SqlFragment -> String -> SqlFragment` — a predicate
+        // fragment + a column name to a `CASE WHEN … THEN col ELSE NULL END AS col`
+        // masking projection term.
+        const SQL_MASKED_COLUMN: TyShape =
+            TyShape::Fun(&SQLFRAGMENT, &TyShape::Fun(&STRING, &SQLFRAGMENT));
         // Server-side stream (opaque `StreamWriter` handle).
         // `emit : String -> StreamWriter -> Task ()`.
         const SW_TO_TASK_UNIT: TyShape = TyShape::Fun(&STREAM_WRITER, &TASK_UNIT);
@@ -8032,6 +8070,20 @@ impl StdlibKernel {
         const STRING_TO_QUERY_DECODE: TyShape =
             TyShape::Fun(&STRING, &LIST_B_TO_DEC_A_TO_TASK_LIST_A);
         const DB_QUERY_DECODE: TyShape = TyShape::Fun(&DB, &STRING_TO_QUERY_DECODE);
+        // `Db.findWhereMasked : Db -> String -> List SqlFragment -> SqlFragment
+        //                        -> Decoder a -> Task (List a)`. The projection
+        // fragment list is the masked/unmasked SELECT terms; the trailing
+        // `SqlFragment` is the WHERE; the `Decoder a` reads each NULL-preserving
+        // row back to the store's row type.
+        const LIST_SQLFRAGMENT: TyShape = TyShape::Con(BuiltinTag::List, &[SQLFRAGMENT]);
+        const DEC_A_TO_TASK_LIST_A_MASKED: TyShape = TyShape::Fun(&DEC_A, &TASK_LIST_A);
+        const SQLFRAGMENT_TO_DEC_A_TO_FIND_MASKED: TyShape =
+            TyShape::Fun(&SQLFRAGMENT, &DEC_A_TO_TASK_LIST_A_MASKED);
+        const LIST_SQLFRAGMENT_TO_FIND_MASKED: TyShape =
+            TyShape::Fun(&LIST_SQLFRAGMENT, &SQLFRAGMENT_TO_DEC_A_TO_FIND_MASKED);
+        const STRING_TO_FIND_MASKED: TyShape =
+            TyShape::Fun(&STRING, &LIST_SQLFRAGMENT_TO_FIND_MASKED);
+        const DB_FIND_WHERE_MASKED: TyShape = TyShape::Fun(&DB, &STRING_TO_FIND_MASKED);
         // `Db.insertRow : Db -> String -> Dict String String -> Task Int`.
         const DICT_SS_TO_TASK_INT: TyShape = TyShape::Fun(&DICT_STRING_STRING, &TASK_INT);
         const STRING_TO_DICT_SS_TO_TASK_INT: TyShape = TyShape::Fun(&STRING, &DICT_SS_TO_TASK_INT);
@@ -9235,6 +9287,15 @@ impl StdlibKernel {
         const STORE_POLICY_BUILDER: TyShape = TyShape::Fun(&A_TO_B_GETTER, &POLICY_A);
         // Correlated-subquery row-security ADTs (phantom in the row type).
         const PRED_A: TyShape = TyShape::Con(BuiltinTag::DbPred, &[A]);
+        // `mask : (row -> t) -> Pred row -> Policy row -> Policy row` (row = A,
+        // t = B). The accessor names the masked column; the `Pred row` is the
+        // authorization predicate; the policy is refined with the masked column.
+        const STORE_MASK: TyShape = {
+            const POLICY_A_TO_POLICY_A: TyShape = TyShape::Fun(&POLICY_A, &POLICY_A);
+            const PRED_A_TO_POLICY_A_TO_POLICY_A: TyShape =
+                TyShape::Fun(&PRED_A, &POLICY_A_TO_POLICY_A);
+            TyShape::Fun(&A_TO_B_GETTER, &PRED_A_TO_POLICY_A_TO_POLICY_A)
+        };
         const PRED_B: TyShape = TyShape::Con(BuiltinTag::DbPred, &[B]);
         const SECURED_A: TyShape = TyShape::Con(BuiltinTag::DbSecured, &[A]);
         // `correlate : t -> t -> Pred share` (t = var(0) = A, share = var(1) = B).
@@ -9913,6 +9974,7 @@ impl StdlibKernel {
             Self::DbFindManyByField => Some(&DB_FIND_MANY_BY_FIELD),
             Self::DbFindByConditions => Some(&DB_FIND_BY_CONDITIONS),
             Self::DbFindWhere => Some(&DB_FIND_WHERE),
+            Self::DbFindWhereMasked => Some(&DB_FIND_WHERE_MASKED),
             Self::DbFindJoin => Some(&DB_FIND_JOIN),
             Self::DbFindProjection => Some(&DB_FIND_PROJECTION),
             Self::DbFindJoinOrdered => Some(&DB_FIND_JOIN_ORDERED),
@@ -9983,6 +10045,7 @@ impl StdlibKernel {
             Self::SqlInList => Some(&SQL_IN_LIST),
             Self::SqlLike => Some(&SQL_LIKE),
             Self::SqlExists => Some(&SQL_EXISTS),
+            Self::SqlMaskedColumn => Some(&SQL_MASKED_COLUMN),
 
             // ── Ipe.Ui layout / element / container. ──
             Self::UiLayout => Some(&UI_LAYOUT),
@@ -10484,6 +10547,7 @@ impl StdlibKernel {
             Self::StoreDefaultText => Some(&STORE_DEFAULT_TEXT),
             Self::StoreDefaultInt => Some(&STORE_DEFAULT_INT),
             Self::StoreOwnerColumn | Self::StoreImmutable => Some(&STORE_POLICY_BUILDER),
+            Self::StoreMask => Some(&STORE_MASK),
             Self::StoreCorrelate => Some(&STORE_CORRELATE),
             Self::StoreExistsIn => Some(&STORE_EXISTS_IN),
             Self::StoreOrderByLeft => Some(&STORE_ORDER_BY_LEFT),
@@ -10580,6 +10644,8 @@ impl StdlibKernel {
         // ── Row-security policy builders — arity-1 (accessor only) ───────────
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
+        // ── Column-masking policy refinement — arity-3 (accessor + Pred + Policy) ─
+        Self::StoreMask,
         // ── Correlated-subquery row-security — arity-2 ───────────────────────
         // `correlate` (two accessors) and `existsIn` (Secured + a two-binder
         // lambda) are both walked structurally at lowering, never emitted as a
@@ -10823,6 +10889,7 @@ impl StdlibKernel {
             | Self::DbWithTransaction
             | Self::DbMigrate
             | Self::DbFindWhere
+            | Self::DbFindWhereMasked
             | Self::DbFindJoin
             | Self::DbFindProjection
             | Self::DbFindJoinOrdered
@@ -11048,6 +11115,7 @@ impl StdlibKernel {
             | Self::StoreDefaultInt
             | Self::StoreOwnerColumn
             | Self::StoreImmutable
+            | Self::StoreMask
             | Self::StoreCorrelate
             | Self::StoreExistsIn
             | Self::StoreOrderByLeft
@@ -11787,6 +11855,7 @@ impl StdlibKernel {
             | Self::SqlInList
             | Self::SqlLike
             | Self::SqlExists
+            | Self::SqlMaskedColumn
             | Self::SecretFromString
             | Self::SecretReveal
             | Self::SecretUse

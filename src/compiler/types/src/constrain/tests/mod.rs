@@ -1129,7 +1129,11 @@ mod registry_phase_c_tests {
             K::SqlLike,
             // Correlated-subquery existence test (Ipê-new, no legacy oracle).
             K::SqlExists,
+            // Column-masking projection term (Ipê-new, no legacy oracle).
+            K::SqlMaskedColumn,
             K::DbFindWhere,
+            // NULL-preserving projected read for column masking (Ipê-new).
+            K::DbFindWhereMasked,
             K::DbFindJoin,
             K::DbFindProjection,
             K::DbFindJoinOrdered,
@@ -1181,6 +1185,8 @@ mod registry_phase_c_tests {
             // Row-security policy builders (Ipê-new).
             K::StoreOwnerColumn,
             K::StoreImmutable,
+            // Column-masking policy refinement (Ipê-new, no legacy oracle).
+            K::StoreMask,
             // Correlated-subquery row-security (Ipê-new, no legacy oracle).
             K::StoreCorrelate,
             K::StoreExistsIn,

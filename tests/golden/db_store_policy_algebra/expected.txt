@@ -10,3 +10,7 @@ existsinok:ok
 existsinexplain:exists in shares where shares.doc_ref = author and its read policy: (member = caller subject)
 existsinouter:err
 existsinshare:err
+maskok:ok
+maskexplain:ssn when (a column condition)
+masknonnull:err
+maskmissing:err

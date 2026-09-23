@@ -744,6 +744,7 @@ pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
                 "findManyByField",
                 "findByConditions",
                 "findWhere",
+                "findWhereMasked",
                 "findJoin",
                 "findProjection",
                 "findJoinOrdered",
@@ -773,6 +774,7 @@ pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
             "Sql",
             &[
                 "column",
+                "maskedColumn",
                 "param",
                 "int",
                 "string",
