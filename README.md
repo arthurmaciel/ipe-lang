@@ -111,6 +111,12 @@ main =
 - `ipe doc` — reference documentation from source (json / markdown / html; runs with or without a project).
 - `ipe lint` / `ipe lint --fix` — advisory static analysis, configured by a `lint.ipe`. → [lint guide](docs/guide/lint.md)
 - `ipe lsp` — completion, go-to-definition, find-references, rename, code actions, semantic tokens over stdio. → [editor setup](docs/topics/editor-integration.md)
+- `ipe debugger record <Main.ipe>` records a cli/worker app's TEA session (each `(msg, model)` step, bounded ring) to `<Main>.ipelog`; `ipe debugger replay <log>` re-emits it as plain text — off a TTY every control byte is stripped, so piping into a file or log stays clean. A record/replay surface, not a live scrubber (the interactive form can't be the cli default: it fails closed to plain streaming off-TTY).
+
+  ```sh
+  ipe debugger record src/Main.ipe        # runs the app, writes src/Main.ipelog on exit
+  ipe debugger replay src/Main.ipelog     # one "<msg> => <model>" line per step
+  ```
 - `ipe fmt` · `ipe test` · `ipe verify` · `ipe migrate` · `ipe package audit` — format, test, whole-project gate, migration, and the publish quality gate.
 
 ## Static compilation

@@ -2660,3 +2660,96 @@ fn artifact_size_bytes_surfaces_a_missing_artifact_as_a_typed_error() {
         "the missing-artifact probe must be a typed Io error, got: {err:?}",
     );
 }
+
+// ── `ipe debugger` — record/replay refusals ────────────────────────────────
+
+// A bare `ipe debugger` (no subcommand) is a usage error naming the two forms,
+// never a silent no-op.
+#[test]
+fn debugger_without_subcommand_is_usage_error() {
+    let err = run_debugger(&[]).expect_err("a bare `ipe debugger` must be a usage error");
+    assert!(
+        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
+        "expected a usage error, got: {err:?}"
+    );
+}
+
+// An unknown subcommand is refused, naming the accepted set.
+#[test]
+fn debugger_unknown_subcommand_is_refused() {
+    let err = run_debugger(&["scrub".to_owned()])
+        .expect_err("an unknown debugger subcommand must be refused");
+    assert!(
+        matches!(&err, CliError::UsageOwned(_)),
+        "expected a UsageOwned error, got: {err:?}"
+    );
+    let CliError::UsageOwned(msg) = &err else {
+        return;
+    };
+    assert!(
+        msg.contains("scrub") && msg.contains("record") && msg.contains("replay"),
+        "the refusal must name the offending token and the accepted set; got: {msg:?}"
+    );
+}
+
+// `record` with no entry is refused before any build starts (fail-closed on a
+// missing positional).
+#[test]
+fn debugger_record_without_entry_is_refused() {
+    let err =
+        run_debugger(&["record".to_owned()]).expect_err("`record` with no entry must be refused");
+    assert!(
+        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
+        "expected a usage error, got: {err:?}"
+    );
+}
+
+// `record` rejects a second `--out` value rather than silently last-writing.
+#[test]
+fn debugger_record_rejects_duplicate_out() {
+    let err = run_debugger(&[
+        "record".to_owned(),
+        "Main.ipe".to_owned(),
+        "--out".to_owned(),
+        "a.log".to_owned(),
+        "--out".to_owned(),
+        "b.log".to_owned(),
+    ])
+    .expect_err("a second --out must be refused");
+    assert!(
+        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
+        "expected a usage error, got: {err:?}"
+    );
+}
+
+// `replay` requires exactly one <log> positional — zero or two is refused.
+#[test]
+fn debugger_replay_wrong_arity_is_refused() {
+    assert!(
+        matches!(
+            run_debugger(&["replay".to_owned()]),
+            Err(CliError::Usage(_) | CliError::UsageOwned(_))
+        ),
+        "`replay` with no log must be refused"
+    );
+    assert!(
+        matches!(
+            run_debugger(&["replay".to_owned(), "a.log".to_owned(), "b.log".to_owned()]),
+            Err(CliError::Usage(_) | CliError::UsageOwned(_))
+        ),
+        "`replay` with two logs must be refused"
+    );
+}
+
+// `replay` on a missing log surfaces a typed Io error, never a panic.
+#[test]
+fn debugger_replay_missing_log_is_typed_io_error() {
+    let missing =
+        std::env::temp_dir().join(format!("ipe-replay-absent-{}.ipelog", std::process::id()));
+    let err = run_debugger(&["replay".to_owned(), missing.display().to_string()])
+        .expect_err("a missing replay log must be a typed error");
+    assert!(
+        matches!(err, CliError::Io { .. }),
+        "expected a typed Io error for a missing log, got: {err:?}"
+    );
+}
