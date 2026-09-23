@@ -209,6 +209,9 @@ pub(crate) enum IpeDbStorePred {
     PNever,
     PMatch(IpeDbStoreCond),
     POwner(String),
+    PRole(String),
+    PMemberOf(String),
+    PClaimEquals(String, String),
     PExists(Box<IpeDbStoreExistsRef>),
 }
 impl IpeStringify for IpeDbStorePred {
@@ -231,6 +234,18 @@ impl IpeStringify for IpeDbStorePred {
             IpeDbStorePred::POwner(p0) => {
                 format!("POwner {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
             }
+            IpeDbStorePred::PRole(p0) => {
+                format!("PRole {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            IpeDbStorePred::PMemberOf(p0) => format!(
+                "PMemberOf {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+            IpeDbStorePred::PClaimEquals(p0, p1) => format!(
+                "PClaimEquals {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
             IpeDbStorePred::PExists(p0) => {
                 format!("PExists {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
             }
@@ -688,6 +703,14 @@ pub(crate) fn user_ipe_db_store_false_fragment() -> ipe_runtime::db::SqlFragment
         sql_param(MainSqlValue::SqlInt(0i64)),
     )
 }
+pub(crate) fn user_ipe_db_store_admit_fragment(admit: bool) -> ipe_runtime::db::SqlFragment {
+    let _ipe_recursion_guard = crate::recursion_guard();
+    (if admit {
+        crate::user_ipe_db_store_true_fragment()
+    } else {
+        crate::user_ipe_db_store_false_fragment()
+    })
+}
 pub(crate) fn user_ipe_db_store_always() -> IpeDbStorePred {
     let _ipe_recursion_guard = crate::recursion_guard();
     IpeDbStorePred::PAlways
@@ -757,6 +780,9 @@ pub(crate) fn user_ipe_db_store_recast_pred(pred: IpeDbStorePred) -> IpeDbStoreP
             IpeDbStorePred::PMatch(crate::user_ipe_db_store_recast_cond(cond))
         }
         IpeDbStorePred::POwner(col) => IpeDbStorePred::POwner(col),
+        IpeDbStorePred::PRole(name) => IpeDbStorePred::PRole(name),
+        IpeDbStorePred::PMemberOf(group) => IpeDbStorePred::PMemberOf(group),
+        IpeDbStorePred::PClaimEquals(key, value) => IpeDbStorePred::PClaimEquals(key, value),
         IpeDbStorePred::PExists(ref_) => {
             let ref_ = *ref_;
             IpeDbStorePred::PExists(Box::new(crate::user_ipe_db_store_recast_exists_ref(ref_)))
@@ -855,6 +881,9 @@ pub(crate) fn user_ipe_db_store_pred_columns(pred: IpeDbStorePred) -> Vec<String
         IpeDbStorePred::PNever => Vec::<String>::new(),
         IpeDbStorePred::PMatch(cond) => crate::user_ipe_db_store_cond_columns(cond),
         IpeDbStorePred::POwner(col) => vec![col],
+        IpeDbStorePred::PRole(_) => Vec::<String>::new(),
+        IpeDbStorePred::PMemberOf(_) => Vec::<String>::new(),
+        IpeDbStorePred::PClaimEquals(_, _) => Vec::<String>::new(),
         IpeDbStorePred::PExists(ref_) => {
             let ref_ = *ref_;
             match ref_ {
@@ -897,6 +926,15 @@ pub(crate) fn user_ipe_db_store_first_unknown_exists_share_column(
                 return IpeMaybe::Nothing;
             }
             IpeDbStorePred::POwner(_) => {
+                return IpeMaybe::Nothing;
+            }
+            IpeDbStorePred::PRole(_) => {
+                return IpeMaybe::Nothing;
+            }
+            IpeDbStorePred::PMemberOf(_) => {
+                return IpeMaybe::Nothing;
+            }
+            IpeDbStorePred::PClaimEquals(_, _) => {
                 return IpeMaybe::Nothing;
             }
             IpeDbStorePred::PExists(ref_) => {
@@ -1015,6 +1053,9 @@ pub(crate) fn user_ipe_db_store_simplify(pred: IpeDbStorePred) -> IpeDbStorePred
         IpeDbStorePred::PNever => IpeDbStorePred::PNever,
         IpeDbStorePred::PMatch(cond) => IpeDbStorePred::PMatch(cond),
         IpeDbStorePred::POwner(col) => IpeDbStorePred::POwner(col),
+        IpeDbStorePred::PRole(name) => IpeDbStorePred::PRole(name),
+        IpeDbStorePred::PMemberOf(group) => IpeDbStorePred::PMemberOf(group),
+        IpeDbStorePred::PClaimEquals(key, value) => IpeDbStorePred::PClaimEquals(key, value),
         IpeDbStorePred::PExists(ref_) => {
             let ref_ = *ref_;
             IpeDbStorePred::PExists(Box::new(ref_))
@@ -1086,6 +1127,9 @@ pub(crate) fn user_ipe_db_store_simplify_not(inner: IpeDbStorePred) -> IpeDbStor
         | IpeDbStorePred::PAny(_)
         | IpeDbStorePred::PMatch(_)
         | IpeDbStorePred::POwner(_)
+        | IpeDbStorePred::PRole(_)
+        | IpeDbStorePred::PMemberOf(_)
+        | IpeDbStorePred::PClaimEquals(_, _)
         | IpeDbStorePred::PExists(_) => IpeDbStorePred::PNotP(Box::new(inner)),
     }
 }
@@ -1099,6 +1143,9 @@ pub(crate) fn user_ipe_db_store_pred_is_always(pred: IpeDbStorePred) -> bool {
         | IpeDbStorePred::PAny(_)
         | IpeDbStorePred::PMatch(_)
         | IpeDbStorePred::POwner(_)
+        | IpeDbStorePred::PRole(_)
+        | IpeDbStorePred::PMemberOf(_)
+        | IpeDbStorePred::PClaimEquals(_, _)
         | IpeDbStorePred::PExists(_) => false,
     }
 }
@@ -1112,6 +1159,9 @@ pub(crate) fn user_ipe_db_store_pred_is_never(pred: IpeDbStorePred) -> bool {
         | IpeDbStorePred::PAny(_)
         | IpeDbStorePred::PMatch(_)
         | IpeDbStorePred::POwner(_)
+        | IpeDbStorePred::PRole(_)
+        | IpeDbStorePred::PMemberOf(_)
+        | IpeDbStorePred::PClaimEquals(_, _)
         | IpeDbStorePred::PExists(_) => false,
     }
 }
@@ -1154,6 +1204,17 @@ pub(crate) fn user_ipe_db_store_pred_fragment_in(
             sql_eq(
                 sql_column(col),
                 sql_param(MainSqlValue::SqlString(principal_subject(principal))),
+            ),
+        ),
+        IpeDbStorePred::PRole(name) => IpeResult::Ok(
+            crate::user_ipe_db_store_admit_fragment(principal_has_role(name, principal)),
+        ),
+        IpeDbStorePred::PMemberOf(group) => IpeResult::Ok(
+            crate::user_ipe_db_store_admit_fragment(principal_member_of(group, principal)),
+        ),
+        IpeDbStorePred::PClaimEquals(key, value) => IpeResult::Ok(
+            crate::user_ipe_db_store_admit_fragment(
+                (principal_claim(key, principal) == IpeMaybe::Just(value)),
             ),
         ),
         IpeDbStorePred::PNotP(inner) => {
