@@ -83,12 +83,23 @@ wasm-external-cargo = { max-threads = 1 }
 # few minutes and a single retry is enough to let a rare transient teardown/serve
 # timeout self-heal without masking a real regression (a genuinely broken emit
 # fails both attempts). One retry, not more: a retry multiplies a HUNG test's
-# wall-clock by its per-test cap, so a single retry bounds a hang's blast radius
-# to 2 × the 300s cap while still absorbing a lone transient.
+# wall-clock by its per-test cap, so a single retry bounds a hang's blast radius.
+#
+# `slow-timeout` here (900s) is a wide OUTER net, deliberately NOT the fail-fast
+# hang guard: the emitted-build harness (`e2e_support::run_bounded_build`) now
+# kills a genuinely wedged build on a no-forward-progress *inactivity* watchdog
+# (silence ≥ 180s) — inside the test, returning a fast Err — so a real hang dies
+# in minutes regardless of this cap. That frees this ceiling to be wide enough
+# that a slow-but-PROGRESSING cold build (a missing dep cache / down sccache, up
+# to several minutes) is never terminated by wall-clock. A tighter cap here would
+# re-couple the SEAL verdict to runner load — the exact flake the watchdog fixes.
+# 900s stays under the harness's 1800s absolute backstop and the 30-min shard job
+# cap, so the layering is: idle watchdog (fast hang guard) < this net < backstop.
 [[profile.ci.overrides]]
 filter = 'binary(watch_sigterm) | binary(watch_integration) | binary(watch_hot_appearance) | binary(watch_bluegreen) | binary(server_e2e) | binary(live_e2e) | binary(http_e2e) | binary(g_http_live) | binary(webview_e2e) | binary(test_command) | binary(verify) | binary(stdlib_coverage_dynamic)'
 test-group = 'heavy-server-e2e'
 retries = 1
+slow-timeout = { period = "60s", terminate-after = 15 }
 
 [[profile.ci.overrides]]
 filter = 'binary(build_no_arg) | binary(release_subcommand)'

@@ -11,9 +11,11 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// The expected-output file name inside a golden directory.
@@ -21,29 +23,54 @@ pub const EXPECTED_FILE: &str = "expected.txt";
 /// The Ipê entry point inside every golden directory.
 pub const MAIN_IPE: &str = "Main.ipe";
 
-/// Fail-fast ceiling for the emitted-crate `cargo build`, in seconds.
+/// Absolute liveness backstop for the emitted-crate `cargo build`, in seconds.
 ///
-/// A hung or lock-contended build would otherwise spin to the outer nextest
-/// per-test cap (300s under `--profile ci`) and read as a whole-shard straggler.
-/// Every emitted app links against a warm shared dependency target, so even the
-/// heaviest axum/tokio SEAL crate finishes well inside this window; a genuine
-/// wedge fails here in minutes with a clear message instead. Overridable via
-/// `IPE_E2E_BUILD_TIMEOUT_SECS` for a cold, deps-not-yet-warm environment.
-const DEFAULT_EMITTED_BUILD_TIMEOUT_SECS: u64 = 240;
+/// NOT a performance assertion: a *progressing* build (cargo still emitting
+/// compile messages) is never killed by this ceiling — the inactivity watchdog
+/// below is what fails a genuine wedge fast. This exists only so a pathological
+/// build that emits a trickle of output forever cannot run unbounded. It is set
+/// wide because the SEAL verdict — "does the emitted crate build?" — must not
+/// depend on how many seconds a cold, contended runner needs; a slow-but-healthy
+/// build under a missing dep cache legitimately runs many minutes. Overridable
+/// via `IPE_E2E_BUILD_TIMEOUT_SECS`.
+const DEFAULT_EMITTED_BUILD_TIMEOUT_SECS: u64 = 1800;
 
-/// Resolve the emitted-build fail-fast ceiling from the environment, falling
-/// back to [`DEFAULT_EMITTED_BUILD_TIMEOUT_SECS`].
+/// No-forward-progress window for the emitted-crate `cargo build`, in seconds.
+///
+/// `cargo build` streams a compile message as each unit finishes, so a healthy
+/// build — however slow the runner — keeps that stream alive. Silence for this
+/// long means the build has wedged (a deadlock, a lock it will never get, a spun
+/// rustc), not merely that the runner is loaded, so the child is killed and the
+/// test fails fast. This is what makes the SEAL verdict load-INDEPENDENT: the
+/// build's own progress decides it, never wall-clock. Overridable via
+/// `IPE_E2E_BUILD_IDLE_SECS`.
+const DEFAULT_EMITTED_BUILD_IDLE_SECS: u64 = 180;
+
+/// Resolve a positive-seconds duration from `var`, falling back to `default`.
 ///
 /// A non-empty, parseable positive value wins; anything else (absent, empty,
 /// non-numeric, zero) uses the default — an unreadable override must never
-/// silently disable the cap.
-fn emitted_build_timeout() -> Duration {
-    let secs = std::env::var("IPE_E2E_BUILD_TIMEOUT_SECS")
+/// silently disable the guard.
+fn duration_env_or(var: &str, default_secs: u64) -> Duration {
+    let secs = std::env::var(var)
         .ok()
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|&s| s > 0)
-        .unwrap_or(DEFAULT_EMITTED_BUILD_TIMEOUT_SECS);
+        .unwrap_or(default_secs);
     Duration::from_secs(secs)
+}
+
+/// Resolve the emitted-build absolute backstop from the environment.
+fn emitted_build_timeout() -> Duration {
+    duration_env_or(
+        "IPE_E2E_BUILD_TIMEOUT_SECS",
+        DEFAULT_EMITTED_BUILD_TIMEOUT_SECS,
+    )
+}
+
+/// Resolve the emitted-build inactivity window from the environment.
+fn emitted_build_idle() -> Duration {
+    duration_env_or("IPE_E2E_BUILD_IDLE_SECS", DEFAULT_EMITTED_BUILD_IDLE_SECS)
 }
 
 /// Stable token stored in a portable golden `Cargo.toml` instead of the
@@ -370,7 +397,12 @@ fn build_emitted_binary(golden_name: &str, emitted_dir: &Path) -> Result<String,
     if let Some(p) = &target {
         cmd.env("CARGO_TARGET_DIR", p);
     }
-    let build = run_bounded_build(cmd, golden_name, emitted_build_timeout())?;
+    let build = run_bounded_build(
+        cmd,
+        golden_name,
+        emitted_build_timeout(),
+        emitted_build_idle(),
+    )?;
     if !build.status.success() {
         return Err(format!(
             "{golden_name}: emitted project must build\n--- cargo stderr ---\n{}",
@@ -403,7 +435,12 @@ fn lock_emitted_dependencies(
     if let Some(p) = target {
         cmd.env("CARGO_TARGET_DIR", p);
     }
-    let out = run_bounded_build(cmd, golden_name, emitted_build_timeout())?;
+    let out = run_bounded_build(
+        cmd,
+        golden_name,
+        emitted_build_timeout(),
+        emitted_build_idle(),
+    )?;
     if out.status.success() {
         return Ok(());
     }
@@ -423,9 +460,18 @@ struct BuildCapture {
 }
 
 /// Spawn `cmd`, draining stdout/stderr on reader threads, and wait for it to
-/// finish within `timeout`. On timeout the child is killed and an `Err` is
-/// returned naming the ceiling, so a wedged or lock-contended emitted build
-/// fails fast here instead of spinning to the outer nextest per-test cap.
+/// finish. The child is killed and an `Err` returned when EITHER guard trips:
+///   * `idle_window` — the streams have been silent this long (no compile
+///     message): a wedged build, killed fast. A *progressing* build resets the
+///     window on every line, so a slow-but-healthy build is never killed —
+///     that is what makes the SEAL verdict load-independent.
+///   * `max_total` — an absolute liveness backstop for a pathological
+///     trickle-forever build; a normal build finishes far sooner and a real
+///     hang already died on `idle_window`.
+///
+/// A build that FAILS (non-zero exit) returns its status immediately via
+/// `try_wait`, so neither guard can mask a real cargo-build failure — they only
+/// govern killing a *live* child, never a completed one.
 ///
 /// The streams are drained by dedicated threads because cargo's
 /// `--message-format=json` stdout can exceed the OS pipe buffer; polling
@@ -433,7 +479,8 @@ struct BuildCapture {
 fn run_bounded_build(
     mut cmd: Command,
     golden_name: &str,
-    timeout: Duration,
+    max_total: Duration,
+    idle_window: Duration,
 ) -> Result<BuildCapture, String> {
     let mut child = cmd
         .stdout(Stdio::piped())
@@ -441,21 +488,49 @@ fn run_bounded_build(
         .spawn()
         .map_err(|e| format!("{golden_name}: failed to spawn `cargo build`: {e}"))?;
 
-    let stdout_reader = child.stdout.take().map(drain_stream);
-    let stderr_reader = child.stderr.take().map(drain_stream);
+    let start = Instant::now();
+    // Millis-since-`start` of the most recent byte read from either stream. A
+    // progressing `cargo build` keeps bumping this; a wedged one leaves it
+    // frozen, so `elapsed - last_activity` is the build's current idle time.
+    // Seeded at 0 (= `start`), so a build that emits nothing at all is idle from
+    // the outset and trips `idle_window` on schedule.
+    let last_activity = Arc::new(AtomicU64::new(0));
 
-    let deadline = Instant::now() + timeout;
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|s| drain_stream(s, start, Arc::clone(&last_activity)));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|s| drain_stream(s, start, Arc::clone(&last_activity)));
+
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if Instant::now() >= deadline {
+                let elapsed = start.elapsed();
+                let idle = elapsed
+                    .saturating_sub(Duration::from_millis(last_activity.load(Ordering::Relaxed)));
+                if idle >= idle_window {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!(
-                        "{golden_name}: emitted `cargo build` exceeded {}s and was killed \
-                         (fail-fast cap; raise IPE_E2E_BUILD_TIMEOUT_SECS for a cold environment)",
-                        timeout.as_secs()
+                        "{golden_name}: emitted `cargo build` produced no output for {}s and was \
+                         killed (inactivity watchdog: a wedged build, not a slow one — a \
+                         progressing build resets the window on every compile message; \
+                         raise IPE_E2E_BUILD_IDLE_SECS if a single unit legitimately compiles \
+                         longer in silence)",
+                        idle_window.as_secs()
+                    ));
+                }
+                if elapsed >= max_total {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "{golden_name}: emitted `cargo build` exceeded the {}s absolute ceiling \
+                         and was killed (liveness backstop; raise IPE_E2E_BUILD_TIMEOUT_SECS)",
+                        max_total.as_secs()
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -479,11 +554,30 @@ fn run_bounded_build(
     })
 }
 
-/// Spawn a thread that reads a child stream to EOF, returning its join handle.
-fn drain_stream<R: Read + Send + 'static>(mut stream: R) -> std::thread::JoinHandle<Vec<u8>> {
+/// Spawn a thread that reads a child stream to EOF, stamping `last_activity`
+/// (millis since `start`) on every line so the parent can tell a progressing
+/// build (bytes still arriving) from a wedged one (stream gone silent). Reads
+/// line-granular — cargo's `--message-format=json` and human stderr are both
+/// newline-delimited, so each compile message is one activity tick.
+fn drain_stream<R: Read + Send + 'static>(
+    stream: R,
+    start: Instant,
+    last_activity: Arc<AtomicU64>,
+) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stream);
         let mut buf = Vec::new();
-        let _ = stream.read_to_end(&mut buf);
+        loop {
+            let mut line = Vec::new();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    buf.extend_from_slice(&line);
+                    let ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    last_activity.store(ms, Ordering::Relaxed);
+                }
+            }
+        }
         buf
     })
 }
@@ -544,7 +638,8 @@ pub fn read_expected(golden_dir: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CRATE_IDENTITY_HASH_PLACEHOLDER, DEFAULT_EMITTED_BUILD_TIMEOUT_SECS, emitted_build_timeout,
+        CRATE_IDENTITY_HASH_PLACEHOLDER, DEFAULT_EMITTED_BUILD_IDLE_SECS,
+        DEFAULT_EMITTED_BUILD_TIMEOUT_SECS, emitted_build_idle, emitted_build_timeout,
         normalize_crate_identity_hash, replace_package_name, resolve_emitted_target,
         run_bounded_build,
     };
@@ -552,36 +647,72 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn bounded_build_kills_a_hung_process_before_the_cap() {
-        // A process that sleeps far longer than the tight cap stands in for a
-        // wedged `cargo build`. The bounded wait must kill it and return the
-        // fail-fast error well before the sleep would finish — proving the cap
-        // fires, not the outer nextest terminate.
+    fn bounded_build_kills_a_silent_wedged_process() {
+        // A process that sleeps silently stands in for a wedged `cargo build`
+        // (a deadlock, a lock it never gets). It emits NO output, so the
+        // inactivity watchdog must kill it one idle-window after start — well
+        // before the sleep finishes and well under the wide absolute backstop.
         let mut cmd = Command::new("sleep");
         cmd.arg("120");
         let started = Instant::now();
-        let result = run_bounded_build(cmd, "hung_build_probe", Duration::from_millis(300));
+        let result = run_bounded_build(
+            cmd,
+            "hung_build_probe",
+            Duration::from_secs(3600), // absolute backstop — must NOT be what fires
+            Duration::from_millis(300), // idle window — this is what fires
+        );
         let elapsed = started.elapsed();
 
-        let err = result.expect_err("a 120s sleep under a 300ms cap must be killed");
+        let err = result.expect_err("a silent 120s sleep must be killed by the idle watchdog");
         assert!(
-            err.contains("exceeded") && err.contains("fail-fast cap"),
-            "the timeout error must name the fail-fast cap, got: {err}"
+            err.contains("no output") && err.contains("inactivity watchdog"),
+            "the error must name the inactivity watchdog, not the backstop, got: {err}"
         );
         assert!(
             elapsed < Duration::from_secs(5),
-            "the cap must fire promptly (killed the child), took {elapsed:?}"
+            "the idle watchdog must fire promptly (killed the child), took {elapsed:?}"
         );
     }
 
     #[test]
+    fn bounded_build_does_not_kill_a_slow_but_progressing_process() {
+        // THE load-independence property: a build that runs FAR longer than the
+        // idle window is NOT killed as long as it keeps emitting output. This is
+        // exactly the slow-cold-runner case the old total-wall-clock cap
+        // false-killed. Ten ticks 200ms apart run ~2s total — 4× the 500ms idle
+        // window — yet each tick resets the window, so the process completes.
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("i=0; while [ $i -lt 10 ]; do echo tick; sleep 0.2; i=$((i+1)); done");
+        let started = Instant::now();
+        let capture = run_bounded_build(
+            cmd,
+            "slow_progress_probe",
+            Duration::from_secs(3600),  // absolute backstop — far away
+            Duration::from_millis(500), // idle window — SMALLER than total runtime
+        )
+        .expect("a progressing process must never be killed by the idle window");
+        assert!(capture.status.success());
+        assert!(
+            started.elapsed() >= Duration::from_millis(500),
+            "the probe must have outlived the idle window to prove the point"
+        );
+        assert_eq!(capture.stdout.iter().filter(|&&b| b == b'\n').count(), 10);
+    }
+
+    #[test]
     fn bounded_build_returns_a_fast_process_output() {
-        // A process that finishes inside the cap must return its captured
-        // output normally — the cap only bites a genuine hang.
+        // A process that finishes inside both guards must return its captured
+        // output normally.
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg("printf hello; printf oops 1>&2");
-        let capture = run_bounded_build(cmd, "fast_build_probe", Duration::from_secs(30))
-            .expect("a fast process must return its output");
+        let capture = run_bounded_build(
+            cmd,
+            "fast_build_probe",
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        )
+        .expect("a fast process must return its output");
         assert!(capture.status.success());
         assert_eq!(capture.stdout, b"hello");
         assert_eq!(capture.stderr, b"oops");
@@ -595,6 +726,15 @@ mod tests {
         assert_eq!(
             emitted_build_timeout(),
             Duration::from_secs(DEFAULT_EMITTED_BUILD_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn build_idle_defaults_when_env_absent_or_invalid() {
+        // Same default-path assertion for the inactivity window.
+        assert_eq!(
+            emitted_build_idle(),
+            Duration::from_secs(DEFAULT_EMITTED_BUILD_IDLE_SECS)
         );
     }
 
