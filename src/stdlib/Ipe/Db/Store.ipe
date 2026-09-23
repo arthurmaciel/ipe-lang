@@ -233,9 +233,12 @@ module Ipe.Db.Store exposing
     , Select
     , select, selectNamed, literal, upper, lower, coalesce, add, sub, mul
     , selectToList, selectToMaybe
-    , Policy, Secured
+    , Policy, Secured, Pred
+    , always, never, allOf, anyOf, notPred, matchWhere
+    , readOnly, alsoInsert, alsoUpdate, alsoDelete
     , unrestricted, publicRead, ownerColumn, immutable, andPolicy, secured
     , ownerColumnNamed, immutableNamed
+    , explain
     , allAs, getAs, insertAs, updateAs, deleteAs
     )
 
@@ -4308,65 +4311,455 @@ migrationName table =
 -- draft does not have is a typed `Err`, never a silently ineffective policy.
 
 
--- | One row-security rule over a validated column name. Internal to this module:
--- a `Policy` is opaque, so a rule is never constructed or inspected by a caller —
--- it is built only by the accessor-typed policy builders and consumed only by the
--- module's own `secured` re-validation (and, in a later slice, the fragment
--- lowering). `PublicRead` names no column; the column-naming rules carry the
--- accessor-derived, snake_cased column name.
-type Rule
-    = OwnerColumn String
-    | PublicRead
-    | Immutable String
+-- ─── Row-security predicate algebra (`Pred`) ───────────────────────
+--
+-- A `Pred row` is the transparent-data predicate a policy is built from. It is
+-- NOT a closure (Ipê forbids functions in records, and an opaque
+-- `row -> Principal -> Bool` could be neither simplified, explained, nor its
+-- refusals generated). Every leaf is either a validated-column comparison
+-- (through the shared, audited `Cond` path) or a principal-bound term whose
+-- value is bound as a `Sql.param` at lowering — no leaf ever builds SQL text, so
+-- the algebra adds NO injection surface over the single `condFragmentIn` audit.
 
 
--- | An opaque row-security policy: a conjunction of `Rule`s over a store's
--- validated columns. Phantom in `row` so an accessor-named policy column is
--- checked against the store's row type when the policy is attached with
--- `secured` (a cross-row policy column is a type error). The runtime value
--- carries only the rule list — the `row` parameter is erased, exactly as the
--- `Cond row` phantom is.
+-- | An opaque row-security predicate over a `Store row`'s rows. Boolean structure
+-- (`allOf` / `anyOf` / `notPred` / `always` / `never`) closes over a row-side leaf
+-- (`matchWhere`, embedding a validated `Cond row`) and the one principal-side leaf
+-- backed by the authenticated surface today (`ownerIs`, the subject-equals-column
+-- term, bound at lowering through `Auth.subject`). Phantom in `row`, exactly as
+-- `Cond row` is: the constructors carry only concrete data, so the runtime value
+-- is untyped data while the surface stays row-checked. Carries no functions, so
+-- structural `==` holds — the simplifier can dedupe leaves.
+type Pred row
+    = PAll (List (Pred row))
+    | PAny (List (Pred row))
+    | PNotP (Pred row)
+    | PAlways
+    | PNever
+    | PMatch (Cond row)
+    | POwner String
+
+
+-- | `always` — the predicate that matches every row (an explicit empty
+-- conjunction). The identity element of `allOf`.
+always : Pred row
+always =
+    PAlways
+
+
+-- | `never` — the predicate that matches no row (an explicit empty disjunction).
+-- The identity element of `anyOf` and the fail-closed default: every operation a
+-- `Policy` builder does not open is scoped to `never`, so an unspecified write
+-- has no representation as an open write.
+never : Pred row
+never =
+    PNever
+
+
+-- | `allOf preds` — the conjunction of `preds` (AND). `allOf []` is `always`
+-- (the empty conjunction matches every row — its documented identity element).
+allOf : List (Pred row) -> Pred row
+allOf preds =
+    PAll preds
+
+
+-- | `anyOf preds` — the disjunction of `preds` (OR). `anyOf []` is `never` (the
+-- empty disjunction matches no row — its documented identity element, so an empty
+-- set of alternatives fails closed rather than matching everything).
+anyOf : List (Pred row) -> Pred row
+anyOf preds =
+    PAny preds
+
+
+-- | `notPred p` — the negation of `p`. Named `notPred` rather than `not` because
+-- `Store.not` is already the `Cond` connective; Ipê has no ad-hoc overloading.
+notPred : Pred row -> Pred row
+notPred p =
+    PNotP p
+
+
+-- | `matchWhere cond` — a row-side leaf that lifts a validated `Cond row` (built
+-- from the store's own accessor leaves, e.g. `Store.eq .status "published"`) into
+-- the predicate algebra. Reuses the `Cond` path verbatim: the column is checked
+-- against the row type at compile time and validated again at lowering, and the
+-- value binds through `Sql.param` — one audit, no new SQL surface.
+--
+-- Example:
+--
+--     Store.matchWhere (Store.eq .status "published")
+matchWhere : Cond row -> Pred row
+matchWhere cond =
+    PMatch cond
+
+
+-- The columns a predicate names, gathered across the whole algebra (not only the
+-- top level), so `secured` can re-validate EVERY column any branch references —
+-- a policy naming a missing column is a typed `Err`, never a silently ineffective
+-- filter. `always` / `never` name none.
+predColumns : Pred row -> List String
+predColumns pred =
+    case pred of
+        PAll preds ->
+            List.concatMap predColumns preds
+
+        PAny preds ->
+            List.concatMap predColumns preds
+
+        PNotP inner ->
+            predColumns inner
+
+        PAlways ->
+            []
+
+        PNever ->
+            []
+
+        PMatch cond ->
+            condColumns cond
+
+        POwner col ->
+            [ col ]
+
+
+-- The columns a `Cond` names, gathered across its boolean structure. Mirrors the
+-- `Cond` ADT so a column buried under an `AndList` / `OrList` / `NotCond` is still
+-- re-validated by `secured`.
+condColumns : Cond row -> List String
+condColumns cond =
+    case cond of
+        Compare _ col _ ->
+            [ col ]
+
+        Like col _ ->
+            [ col ]
+
+        IsNull col ->
+            [ col ]
+
+        NotNull col ->
+            [ col ]
+
+        InList col _ ->
+            [ col ]
+
+        AndList conds ->
+            List.concatMap condColumns conds
+
+        OrList conds ->
+            List.concatMap condColumns conds
+
+        NotCond inner ->
+            condColumns inner
+
+
+-- ─── Algebraic simplifier ──────────────────────────────────────────
+--
+-- Simplify the transparent predicate data before lowering, so the emitted WHERE
+-- is minimal and `explain` reads cleanly. Because a `Pred` is data (not a
+-- closure) these rewrites are decidable: `anyOf [_, always] → always`,
+-- `allOf [_, never] → never`, drop `always` from a conjunction and `never` from a
+-- disjunction, constant-fold `notPred`, collapse a singleton, and dedupe
+-- structurally-equal leaves (the ADT carries no functions, so `==` is total).
+
+
+-- | `simplify p` — the minimal predicate equivalent to `p`.
+simplify : Pred row -> Pred row
+simplify pred =
+    case pred of
+        PAll preds ->
+            simplifyAll (List.map simplify preds)
+
+        PAny preds ->
+            simplifyAny (List.map simplify preds)
+
+        PNotP inner ->
+            simplifyNot (simplify inner)
+
+        PAlways ->
+            PAlways
+
+        PNever ->
+            PNever
+
+        PMatch cond ->
+            PMatch cond
+
+        POwner col ->
+            POwner col
+
+
+-- A conjunction of already-simplified children: `always` is dropped (its
+-- identity), a single `never` short-circuits the whole conjunction to `never`,
+-- duplicate children collapse, an empty result is `always`, and a lone child
+-- unwraps.
+simplifyAll : List (Pred row) -> Pred row
+simplifyAll preds =
+    if List.any predIsNever preds then
+        PNever
+
+    else
+        case dedupePreds (List.filter (\p -> Basics.not (predIsAlways p)) preds) of
+            [] ->
+                PAlways
+
+            [ single ] ->
+                single
+
+            kept ->
+                PAll kept
+
+
+-- A disjunction of already-simplified children: `never` is dropped (its
+-- identity), a single `always` short-circuits to `always`, duplicates collapse,
+-- an empty result is `never`, and a lone child unwraps.
+simplifyAny : List (Pred row) -> Pred row
+simplifyAny preds =
+    if List.any predIsAlways preds then
+        PAlways
+
+    else
+        case dedupePreds (List.filter (\p -> Basics.not (predIsNever p)) preds) of
+            [] ->
+                PNever
+
+            [ single ] ->
+                single
+
+            kept ->
+                PAny kept
+
+
+-- Constant-fold a negation of an already-simplified predicate: `not always` is
+-- `never`, `not never` is `always`, and a double negation cancels.
+simplifyNot : Pred row -> Pred row
+simplifyNot inner =
+    case inner of
+        PAlways ->
+            PNever
+
+        PNever ->
+            PAlways
+
+        PNotP again ->
+            again
+
+        other ->
+            PNotP other
+
+
+predIsAlways : Pred row -> Bool
+predIsAlways pred =
+    case pred of
+        PAlways ->
+            True
+
+        _ ->
+            False
+
+
+predIsNever : Pred row -> Bool
+predIsNever pred =
+    case pred of
+        PNever ->
+            True
+
+        _ ->
+            False
+
+
+-- Drop structurally-equal duplicates, keeping first occurrence. `Pred` carries no
+-- functions, so `==` is a total structural comparison.
+dedupePreds : List (Pred row) -> List (Pred row)
+dedupePreds preds =
+    List.foldr
+        (\p acc ->
+            if List.member p acc then
+                acc
+
+            else
+                p :: acc
+        )
+        []
+        preds
+
+
+-- ─── Lowering `Pred` → `SqlFragment` (the SAME audited path) ────────
+--
+-- Every leaf reaches SQL only through the shared `condFragmentIn` / `Sql.column`
+-- / `Sql.param` machinery the query builder already audits — ONE injection audit
+-- for the whole module. `always` / `never` lower to the shared `trueFragment` /
+-- `falseFragment` identities; `PMatch` delegates to `condFragmentIn`; `POwner`
+-- binds the subject as a parameter against its validated column. A column absent
+-- from the store is a fail-closed `Err` (parse-don't-validate).
+predFragmentIn : Auth.Principal -> List Column -> Pred row -> Result Error SqlFragment
+predFragmentIn principal columns pred =
+    case pred of
+        PAlways ->
+            Ok trueFragment
+
+        PNever ->
+            Ok falseFragment
+
+        PMatch cond ->
+            condFragmentIn columns cond
+
+        POwner col ->
+            checkColumn columns
+                col
+                (Sql.eq (Sql.column col) (Sql.param (SqlString (Auth.subject principal))))
+
+        PNotP inner ->
+            Result.map Sql.not (predFragmentIn principal columns inner)
+
+        PAll preds ->
+            foldPreds principal columns Sql.and trueFragment preds
+
+        PAny preds ->
+            foldPreds principal columns Sql.or falseFragment preds
+
+
+-- Fold a list of predicates with a binary connective, using `emptyFragment` as
+-- the identity for the empty list. Each predicate is lowered (and column-checked)
+-- before it joins, so the first invalid column fails the whole fold closed.
+foldPreds : Auth.Principal -> List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Pred row) -> Result Error SqlFragment
+foldPreds principal columns join emptyFragment preds =
+    case preds of
+        [] ->
+            Ok emptyFragment
+
+        [ single ] ->
+            predFragmentIn principal columns single
+
+        first :: rest ->
+            case predFragmentIn principal columns first of
+                Err e ->
+                    Err e
+
+                Ok head ->
+                    Result.map (\tail -> join head tail)
+                        (foldPreds principal columns join emptyFragment rest)
+
+
+-- ─── Operation-scoped policy ────────────────────────────────────────
+
+
+-- | An opaque, operation-scoped row-security policy: a `Pred row` per operation,
+-- plus the columns write operations must force to the caller's subject
+-- (`owners`) and the columns an update must never rewrite (`immutables`). The
+-- four predicates make the read/insert/update/delete split TOTAL — there is no
+-- unspecified operation, because every smart constructor scopes each field
+-- explicitly and the fail-closed default is `never`, so an open write has no
+-- representation. Phantom in `row`, so an accessor-named policy column is checked
+-- against the store's row type when the policy is attached with `secured`. The
+-- record shape is opaque (built only by the smart constructors below); `owners`
+-- and `immutables` are the write-projection side of the algebra (forcing the
+-- owner column on a write, dropping an immutable column from an update SET) that a
+-- pure WHERE `Pred` cannot express.
 type Policy row
-    = Policy (List Rule)
+    = Policy
+        { read : Pred row
+        , insert : Pred row
+        , update : Pred row
+        , delete : Pred row
+        , owners : List String
+        , immutables : List String
+        }
 
 
 -- | An opaque secured store: a `Store a` paired with a validated `Policy`. The
--- ONLY value the future secured operations (`allAs` / `insertAs` / …) will
--- accept, so a secured store is unreachable through the unsecured operations and
--- cannot be read unfiltered by mistake (deny-by-default). Built only by
--- `secured`, which re-validates every policy column against the store's columns,
--- so a `Secured` holds only a policy whose columns all exist on the store.
+-- ONLY value the secured operations (`allAs` / `insertAs` / …) accept, so a
+-- secured store is unreachable through the unsecured operations and cannot be read
+-- unfiltered by mistake (deny-by-default). Built only by `secured`, which
+-- re-validates every policy column against the store's columns, so a `Secured`
+-- holds only a policy whose columns all exist on the store.
 --
--- Parametric in the row type `a` (it carries the store's `Codec a`) so the later
--- secured reads can decode rows through the store's own codec — the appendix
--- sketch wrote a bare `Secured`, but erasing `a` would lose the codec the
--- secured reads need. A reasoned divergence recorded here.
+-- Parametric in the row type `a` (it carries the store's `Codec a`) so the secured
+-- reads can decode rows through the store's own codec.
 type Secured a
     = Secured (Store a) (Policy a)
 
 
--- | `unrestricted` — the policy that allows all rows (an explicit empty
--- conjunction). A store secured with `unrestricted` filters nothing; it exists so
--- "no restriction" is a deliberate, named choice rather than the absence of a
+-- The empty policy: every operation scoped to `never` (deny-by-default), no forced
+-- owner column, no immutable column. The base the fail-closed constructors
+-- (`readOnly`) open from, so an operation such a builder does not open stays
+-- `never` — a hand-scoped policy that forgets a write has no open-write
+-- representation.
+denyAll : Policy row
+denyAll =
+    Policy
+        { read = PNever
+        , insert = PNever
+        , update = PNever
+        , delete = PNever
+        , owners = []
+        , immutables = []
+        }
+
+
+-- The fully-open policy: every operation scoped to `always` (matches every row),
+-- no forced owner column, no immutable column. The neutral base of `andPolicy`
+-- (`always` is the identity of the per-operation conjunction) and the backing of
+-- the legacy read-oriented builders, whose historical behaviour was to permit
+-- every operation on a secured store (filtered only by the rules a caller AND-ed
+-- in). Not exported: the fail-closed constructors are the caller surface for a
+-- fresh policy; `allowAll` exists only so `unrestricted` / `publicRead` /
+-- `immutable` preserve their observable behaviour.
+allowAll : Policy row
+allowAll =
+    Policy
+        { read = PAlways
+        , insert = PAlways
+        , update = PAlways
+        , delete = PAlways
+        , owners = []
+        , immutables = []
+        }
+
+
+-- | `unrestricted` — the policy whose every operation matches every row (reads
+-- and writes are unfiltered; a secured store still routes writes through the
+-- authenticated `…As` operations). Re-expressed over the algebra as `allowAll`.
+-- "No restriction" is a deliberate, named choice rather than the absence of a
 -- policy (which, deny-by-default, is instead an unsecured store).
+--
+-- Observable behaviour is unchanged from the former empty-conjunction form: every
+-- operation's WHERE simplifies to the always-true identity fragment, exactly as
+-- the former empty rule list produced.
 unrestricted : Policy row
 unrestricted =
-    Policy []
+    allowAll
 
 
--- | `publicRead` — a policy of one public-read rule: reads are unrestricted while
--- writes still route through the secured operations. A plain value (it names no
--- column, so it needs no accessor).
+-- | `publicRead` — reads are unrestricted while writes route through the secured
+-- operations. Re-expressed as `allowAll`, preserving the former public-read rule's
+-- observable behaviour (it added no read filter and left the write path open under
+-- the secured operations). Kept distinct from `unrestricted` for the intent it
+-- documents.
 publicRead : Policy row
 publicRead =
-    Policy [ PublicRead ]
+    allowAll
 
 
--- | `ownerColumn accessor` — a policy of one owner-column rule over the
--- accessor-named column: rows are scoped to the principal that owns that column.
--- The column is named by an accessor literal (`.author`), checked against the
--- row type at compile time and snake_cased to the validated column name at
--- lowering (the same derivation `Codec.auto` uses), then delegated to
+-- | `readOnly p` — a read-only policy: `read = p`, every write scoped to `never`
+-- (fail-closed). The explicit constructor for read-only intent — a caller who
+-- wants a write path opens it deliberately with `alsoInsert` / `alsoUpdate` /
+-- `alsoDelete`, so no write is ever left open by omission.
+readOnly : Pred row -> Policy row
+readOnly p =
+    case denyAll of
+        Policy r ->
+            Policy { r | read = p }
+
+
+-- | `ownerColumn accessor` — the owner-scoped policy: all four operations are
+-- scoped to `column = $subject`, and inserts/updates FORCE that column to the
+-- caller's subject (so a caller can never write a row it could not read back).
+-- Backward-compatible re-expression of the former single owner-column rule; its
+-- observable SQL is unchanged (the read/get/update/delete WHERE is still
+-- `column = $subject`, and writes still force the owner column).
+--
+-- The column is named by an accessor literal (`.author`), checked against the row
+-- type at compile time and snake_cased at lowering, then delegated to
 -- `ownerColumnNamed`.
 --
 -- Example:
@@ -4377,13 +4770,19 @@ ownerColumn =
     Kernel.kernel "Store_ownerColumn"
 
 
--- | `immutable accessor` — a policy of one immutable-column rule over the
--- accessor-named column: the column cannot be changed after insert. Named by an
--- accessor literal, checked against the row type, delegated to `immutableNamed`.
+-- | `immutable accessor` — a policy whose accessor-named column cannot change
+-- after insert: the column is dropped from every update SET (its stored value is
+-- fixed at insert), while no operation is otherwise restricted. Composable: AND it
+-- into an owner/read policy to add the update restriction without loosening any
+-- operation (`always` is the neutral element of the per-operation conjunction).
+-- Backward-compatible with the former immutable rule — it added no filter and only
+-- dropped the column from an update, which this preserves exactly. Delegated to
+-- `immutableNamed`.
 --
 -- Example:
 --
---     Store.immutable .createdAt
+--     Store.ownerColumn .author
+--         |> Store.andPolicy (Store.immutable .createdAt)
 immutable : (row -> t) -> Policy row
 immutable =
     Kernel.kernel "Store_immutable"
@@ -4391,23 +4790,38 @@ immutable =
 
 -- The stringly forms reached by the accessor-typed policy-builder intercepts
 -- above. The accessor `.field` has already been turned into the validated,
--- snake_cased column name `col`, so each builds a single-rule policy. Not part of
--- the caller surface for column naming (a caller writes the accessor); exported
--- only so the intercept can name them.
+-- snake_cased column name `col`. Exported only so the intercepts can name them; a
+-- caller writes the accessor.
 ownerColumnNamed : String -> Policy row
 ownerColumnNamed col =
-    Policy [ OwnerColumn col ]
+    case denyAll of
+        Policy r ->
+            Policy
+                { r
+                    | read = POwner col
+                    , insert = POwner col
+                    , update = POwner col
+                    , delete = POwner col
+                    , owners = [ col ]
+                }
 
 
 immutableNamed : String -> Policy row
 immutableNamed col =
-    Policy [ Immutable col ]
+    case allowAll of
+        Policy r ->
+            Policy { r | immutables = [ col ] }
 
 
--- | `andPolicy a b` — the conjunction of two policies (their rules concatenated).
--- Named `andPolicy` rather than `and` because `Store.and` is already the `Cond`
--- connective (`List (Cond row) -> Cond row`); Ipê has no ad-hoc overloading, so
--- the policy conjunction takes a distinct name.
+-- | `andPolicy extra base` — compose two policies: conjoin each operation's
+-- predicate (`allOf [ base.op, extra.op ]`) and union the forced-owner and
+-- immutable column sets. Named `andPolicy` rather than `and` because `Store.and`
+-- is already the `Cond` connective; Ipê has no ad-hoc overloading.
+--
+-- Backward-compatible with the former rule-list concatenation: the former
+-- `Policy (a ++ b)` applied every rule as a conjunction to the read/write WHERE
+-- and unioned the owner/immutable rule sets, which conjoining the per-operation
+-- predicates and unioning the column sets reproduces exactly.
 --
 -- Example:
 --
@@ -4416,21 +4830,114 @@ immutableNamed col =
 andPolicy : Policy row -> Policy row -> Policy row
 andPolicy extra base =
     case base of
-        Policy baseRules ->
+        Policy b ->
             case extra of
-                Policy extraRules ->
-                    Policy (baseRules ++ extraRules)
+                Policy e ->
+                    Policy
+                        { read = PAll [ b.read, e.read ]
+                        , insert = PAll [ b.insert, e.insert ]
+                        , update = PAll [ b.update, e.update ]
+                        , delete = PAll [ b.delete, e.delete ]
+                        , owners = b.owners ++ e.owners
+                        , immutables = b.immutables ++ e.immutables
+                        }
+
+
+-- | `alsoInsert p base` — open the insert path of `base` to `p` (deliberately
+-- lifting insert off its `never` default).
+alsoInsert : Pred row -> Policy row -> Policy row
+alsoInsert p base =
+    case base of
+        Policy r ->
+            Policy { r | insert = p }
+
+
+-- | `alsoUpdate p base` — open the update path of `base` to `p`.
+alsoUpdate : Pred row -> Policy row -> Policy row
+alsoUpdate p base =
+    case base of
+        Policy r ->
+            Policy { r | update = p }
+
+
+-- | `alsoDelete p base` — open the delete path of `base` to `p`.
+alsoDelete : Pred row -> Policy row -> Policy row
+alsoDelete p base =
+    case base of
+        Policy r ->
+            Policy { r | delete = p }
+
+
+-- ─── `explain` — render a policy as English (emitted above the SQL) ──
+
+
+-- | `explain policy` — a human-readable rendering of the (simplified) policy, one
+-- line per operation. Because a `Policy` is transparent data, its meaning can be
+-- explained in full; the emitted SQL carries this as a leading comment so a
+-- reviewer reads the intent beside the generated WHERE.
+explain : Policy row -> String
+explain policy =
+    case policy of
+        Policy r ->
+            String.join "\n"
+                [ explainOp "read" r.read
+                , explainOp "insert" r.insert
+                , explainOp "update" r.update
+                , explainOp "delete" r.delete
+                , explainImmutables r.immutables
+                ]
+
+
+explainOp : String -> Pred row -> String
+explainOp label pred =
+    String.concat [ label, ": ", explainPred (simplify pred) ]
+
+
+explainPred : Pred row -> String
+explainPred pred =
+    case pred of
+        PAlways ->
+            "every row"
+
+        PNever ->
+            "no row (denied)"
+
+        POwner col ->
+            String.concat [ col, " = caller subject" ]
+
+        PMatch _ ->
+            "a column condition"
+
+        PNotP inner ->
+            String.concat [ "not (", explainPred inner, ")" ]
+
+        PAll preds ->
+            String.concat [ "all of [", String.join ", " (List.map explainPred preds), "]" ]
+
+        PAny preds ->
+            String.concat [ "any of [", String.join ", " (List.map explainPred preds), "]" ]
+
+
+explainImmutables : List String -> String
+explainImmutables cols =
+    if List.isEmpty cols then
+        "immutable columns: none"
+
+    else
+        String.concat [ "immutable columns: ", String.join ", " cols ]
 
 
 -- | `secured policy draft` — classify `draft` by attaching `policy`, or fail
--- closed. This is one of the two `Draft` → queryable promotions (`public` is the
--- other): it yields an opaque `Secured a`, the only value the authenticated
--- `…As` operations accept. Every column the policy names is re-validated against
--- the draft's own codec-derived columns (the same `hasColumn` check the query
--- leaves and `specsWithinColumns` use): a policy column absent from the draft is
--- a typed `Err`, never a silently ineffective policy. Deny-by-default holds — a
--- table is queryable only through a deliberate classification, and a `secured`
--- table is reachable only with a `Principal` through the `…As` operations.
+-- closed. One of the two `Draft` → queryable promotions (`public` is the other):
+-- it yields an opaque `Secured a`, the only value the authenticated `…As`
+-- operations accept. Every column any predicate names — across read/insert/
+-- update/delete AND the forced-owner and immutable column sets, at every depth of
+-- the algebra — is re-validated against the draft's own codec-derived columns (the
+-- same `hasColumn` check the query leaves use): a policy column absent from the
+-- draft is a typed `Err`, never a silently ineffective policy. Deny-by-default
+-- holds — a table is queryable only through a deliberate classification, and a
+-- `secured` table is reachable only with a `Principal` through the `…As`
+-- operations.
 --
 -- Example:
 --
@@ -4443,94 +4950,95 @@ secured : Policy a -> Draft a -> Result Error (Secured a)
 secured policy draft =
     case draft of
         Draft r ->
-            case policy of
-                Policy rules ->
-                    case firstUnknownPolicyColumn r.currentColumns rules of
-                        Just bad ->
-                            Err (unknownColumnError bad)
+            case firstUnknownPolicyColumn r.currentColumns (policyColumns policy) of
+                Just bad ->
+                    Err (unknownColumnError bad)
 
-                        Nothing ->
-                            Ok (Secured (public draft) policy)
+                Nothing ->
+                    Ok (Secured (public draft) policy)
 
 
--- The first column named by a rule that is not one of the store's columns, or
--- `Nothing` when every column-naming rule names a real store column. `PublicRead`
--- names no column, so it is always in-policy.
-firstUnknownPolicyColumn : List Column -> List Rule -> Maybe String
-firstUnknownPolicyColumn columns rules =
-    case rules of
+-- Every column a policy names, across all four predicates and the write-projection
+-- column sets, so `secured` re-validates the whole algebra rather than a top level.
+policyColumns : Policy a -> List String
+policyColumns policy =
+    case policy of
+        Policy r ->
+            List.concat
+                [ predColumns r.read
+                , predColumns r.insert
+                , predColumns r.update
+                , predColumns r.delete
+                , r.owners
+                , r.immutables
+                ]
+
+
+-- The first column in `names` that is not one of the store's columns, or
+-- `Nothing` when every named column is a real store column.
+firstUnknownPolicyColumn : List Column -> List String -> Maybe String
+firstUnknownPolicyColumn columns names =
+    case names of
         [] ->
             Nothing
 
-        first :: rest ->
-            case ruleColumn first of
-                Just name ->
-                    if hasColumn columns name then
-                        firstUnknownPolicyColumn columns rest
+        name :: rest ->
+            if hasColumn columns name then
+                firstUnknownPolicyColumn columns rest
 
-                    else
-                        Just name
-
-                Nothing ->
-                    firstUnknownPolicyColumn columns rest
-
-
--- The column a rule constrains, or `Nothing` for a rule that names no column
--- (`PublicRead`).
-ruleColumn : Rule -> Maybe String
-ruleColumn rule =
-    case rule of
-        OwnerColumn c ->
-            Just c
-
-        Immutable c ->
-            Just c
-
-        PublicRead ->
-            Nothing
+            else
+                Just name
 
 
 -- ─── Secured operations (the ONLY ops that accept a `Secured`) ──────
 --
 -- Each `…As` op takes the authenticated `Principal` and a `Secured` store, and
--- ANDs the policy's owner filter into every read/write. The filter binds the
--- principal's subject as a SQL PARAMETER through `Sql.param` — never string
--- interpolation — so no caller identity can inject SQL. A `Secured` is reachable
--- only through `secured` (which re-validates the policy columns), and the
--- unsecured operations do not accept a `Secured`, so a secured store is
+-- ANDs the policy's per-operation predicate into every read/write. The predicate
+-- binds the principal's subject as a SQL PARAMETER through `Sql.param` — never
+-- string interpolation — so no caller identity can inject SQL. A `Secured` is
+-- reachable only through `secured` (which re-validates the policy columns), and
+-- the unsecured operations do not accept a `Secured`, so a secured store is
 -- unreadable and unwritable without a principal and its policy (deny-by-default).
 
 
--- | `policyFragment principal policy` — the `WHERE` fragment a policy compiles
--- to for `principal`: every `OwnerColumn` rule becomes `owner = $subject` (the
--- validated column through `Sql.column`, the subject BOUND through `Sql.param`),
--- all `AND`-ed together. `PublicRead` and `Immutable` add no read filter, so a
--- policy of only those matches every row (the read is unrestricted while the
--- write path stays secured). The empty conjunction is `alwaysTrue`.
-policyFragment : Auth.Principal -> Policy a -> SqlFragment
-policyFragment principal policy =
+-- | `policyFragment principal op store policy` — the `WHERE` fragment `policy`'s
+-- `op` predicate compiles to for `principal`, validated against `store`'s columns.
+-- The predicate is simplified first (minimal SQL), then lowered through the shared
+-- audited path. A predicate that names a column the store lacks would already have
+-- failed `secured`, so lowering here re-checks columns as defense in depth and
+-- falls back to the always-FALSE fragment on the (unreachable) mismatch —
+-- fail-closed: a policy that cannot be validated matches no row, never every row.
+policyFragment : Auth.Principal -> (Policy a -> Pred a) -> Store a -> Policy a -> SqlFragment
+policyFragment principal op store policy =
+    case store of
+        Store s ->
+            case predFragmentIn principal s.currentColumns (simplify (op policy)) of
+                Ok fragment ->
+                    fragment
+
+                Err _ ->
+                    falseFragment
+
+
+readPred : Policy a -> Pred a
+readPred policy =
     case policy of
-        Policy rules ->
-            List.foldl
-                (\rule acc -> Sql.and acc (ruleFragment principal rule))
-                alwaysTrue
-                rules
+        Policy r ->
+            r.read
 
 
--- The fragment a single rule contributes for `principal`. An `OwnerColumn` binds
--- the subject as a parameter against its validated column; `Immutable` and
--- `PublicRead` add no read constraint (`alwaysTrue`).
-ruleFragment : Auth.Principal -> Rule -> SqlFragment
-ruleFragment principal rule =
-    case rule of
-        OwnerColumn col ->
-            Sql.eq (Sql.column col) (Sql.param (SqlString (Auth.subject principal)))
+updatePred : Policy a -> Pred a
+updatePred policy =
+    case policy of
+        Policy r ->
+            r.update
 
-        Immutable _ ->
-            alwaysTrue
 
-        PublicRead ->
-            alwaysTrue
+deletePred : Policy a -> Pred a
+deletePred policy =
+    case policy of
+        Policy r ->
+            r.delete
 
 
 -- | `allAs principal db secured` — read every row the policy admits for
@@ -4544,7 +5052,7 @@ allAs principal conn secured =
                 Store r ->
                     Task.andThen
                         (\rows -> decodeRows r.codec rows)
-                        (Db.findWhere conn r.table (policyFragment principal policy))
+                        (Db.findWhere conn r.table (policyFragment principal readPred store policy))
 
 
 -- | `getAs principal db secured keyValue` — read the single row whose primary
@@ -4568,15 +5076,15 @@ getAs principal conn secured keyValue =
                                     r.table
                                     (Sql.and
                                         (keyEquals keyCol keyValue)
-                                        (policyFragment principal policy)
+                                        (policyFragment principal readPred store policy)
                                     )
                                 )
 
 
--- | `insertAs principal db secured row` — insert `row`, forcing every
--- `OwnerColumn` to `principal`'s subject so a caller can never write a row it
--- would not be allowed to read back. The owner value binds as a parameter. The
--- inserted-row count is returned.
+-- | `insertAs principal db secured row` — insert `row`, forcing every owner
+-- column the policy scopes to `principal`'s subject so a caller can never write a
+-- row it would not be allowed to read back. The owner value binds as a parameter.
+-- The inserted-row count is returned.
 insertAs : Auth.Principal -> Db -> Secured a -> a -> Task Error Int
 insertAs principal conn secured row =
     case secured of
@@ -4596,13 +5104,13 @@ insertAs principal conn secured row =
 
 
 -- | `updateAs principal db secured row` — update the row whose primary key
--- matches `row`, but only when the policy admits it for `principal`; the owner
--- filter is AND-ed into the WHERE so a caller cannot update another principal's
--- row. Columns marked `Serial` / `DefaultNow` are omitted from the SET, and so
--- is every column the policy marks `Immutable`: an immutable column's client
--- value is dropped from the SET, so the stored value cannot change after insert
--- (the guarantee `immutable` promises). A store with no primary key, or a record
--- missing its key column, fails closed.
+-- matches `row`, but only when the policy's update predicate admits it for
+-- `principal`; that predicate is AND-ed into the WHERE so a caller cannot update
+-- another principal's row. Columns marked `Serial` / `DefaultNow` are omitted from
+-- the SET, and so is every column the policy holds immutable: an immutable
+-- column's client value is dropped from the SET, so the stored value cannot change
+-- after insert (the guarantee `immutable` promises). A store with no primary key,
+-- or a record missing its key column, fails closed.
 updateAs : Auth.Principal -> Db -> Secured a -> a -> Task Error Int
 updateAs principal conn secured row =
     case secured of
@@ -4632,7 +5140,7 @@ updateAs principal conn secured row =
                                                 )
                                                 (Sql.and
                                                     (keyEquals keyCol keyValue)
-                                                    (policyFragment principal policy)
+                                                    (policyFragment principal updatePred store policy)
                                                 )
 
 
@@ -4655,66 +5163,41 @@ deleteAs principal conn secured keyValue =
                                 r.table
                                 (Sql.and
                                     (keyEquals keyCol keyValue)
-                                    (policyFragment principal policy)
+                                    (policyFragment principal deletePred store policy)
                                 )
 
 
--- Drop every column the policy marks `Immutable` from a codec projection, so an
+-- Drop every column the policy marks immutable from a codec projection, so an
 -- update never writes a new value into it — the stored value is fixed at insert.
 -- The bind is removed entirely (not set to its old value, which the update path
 -- does not have), so the column is absent from the SET and the database keeps its
--- current value. `OwnerColumn` and `PublicRead` leave the binds unchanged.
+-- current value. Non-immutable columns leave the binds unchanged.
 dropImmutableColumns : Policy a -> List ( String, SqlValue ) -> List ( String, SqlValue )
 dropImmutableColumns policy binds =
     case policy of
-        Policy rules ->
-            List.filter (\pair -> Basics.not (ruleImmutablyDrops rules pair)) binds
+        Policy r ->
+            List.filter (\pair -> Basics.not (bindIsImmutable r.immutables pair)) binds
 
 
--- True when some `Immutable` rule in `rules` names the column this bind sets.
-ruleImmutablyDrops : List Rule -> ( String, SqlValue ) -> Bool
-ruleImmutablyDrops rules pair =
+-- True when the policy's immutable-column set names the column this bind sets.
+bindIsImmutable : List String -> ( String, SqlValue ) -> Bool
+bindIsImmutable immutables pair =
     case pair of
         ( name, _ ) ->
-            List.any (\rule -> ruleImmobilizes rule name) rules
+            List.member name immutables
 
 
--- True when `rule` is an `Immutable` rule over `name`.
-ruleImmobilizes : Rule -> String -> Bool
-ruleImmobilizes rule name =
-    case rule of
-        Immutable col ->
-            col == name
-
-        OwnerColumn _ ->
-            False
-
-        PublicRead ->
-            False
-
-
--- Force every `OwnerColumn` named by the policy to `principal`'s subject in a
+-- Force every owner column named by the policy to `principal`'s subject in a
 -- codec projection, so an insert cannot set an owner other than the caller. A
--- rule that names no column (`PublicRead`) and `Immutable` leave the binds
--- unchanged.
+-- column the policy does not scope to the owner leaves the binds unchanged.
 forceOwnerColumns : Auth.Principal -> Policy a -> List ( String, SqlValue ) -> List ( String, SqlValue )
 forceOwnerColumns principal policy binds =
     case policy of
-        Policy rules ->
-            List.foldl (\rule acc -> forceOwnerColumn principal rule acc) binds rules
-
-
-forceOwnerColumn : Auth.Principal -> Rule -> List ( String, SqlValue ) -> List ( String, SqlValue )
-forceOwnerColumn principal rule binds =
-    case rule of
-        OwnerColumn col ->
-            setBind col (SqlString (Auth.subject principal)) binds
-
-        Immutable _ ->
-            binds
-
-        PublicRead ->
-            binds
+        Policy r ->
+            List.foldl
+                (\col acc -> setBind col (SqlString (Auth.subject principal)) acc)
+                binds
+                r.owners
 
 
 -- Set `col`'s value to `value` in a codec projection: replace the existing pair
