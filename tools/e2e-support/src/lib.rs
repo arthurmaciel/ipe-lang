@@ -697,7 +697,11 @@ mod tests {
             started.elapsed() >= Duration::from_millis(500),
             "the probe must have outlived the idle window to prove the point"
         );
-        assert_eq!(capture.stdout.iter().filter(|&&b| b == b'\n').count(), 10);
+        // Counting newlines across a few bytes of captured probe output; a SIMD
+        // `bytecount` dependency is unwarranted for a test probe.
+        #[allow(clippy::naive_bytecount)]
+        let newline_count = capture.stdout.iter().filter(|&&b| b == b'\n').count();
+        assert_eq!(newline_count, 10);
     }
 
     #[test]
