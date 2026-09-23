@@ -34,9 +34,11 @@ fn entry_path(root: &Path) -> PathBuf {
 }
 
 /// ipe-0: the compiler accepts the program AND does NOT mint the spurious
-/// depth-0 over-clone closure. The pipeline stage `eta_0` must be a plain
-/// `let` value binding (`let eta_0: IpeTask`), never a capturing
-/// `move |eta_0|` closure — the over-clone signature.
+/// depth-0 over-clone closure. The pipeline stage must never be a capturing
+/// `move |eta_0|` closure (the over-clone signature); the curried-spine flatten
+/// inlines the pipeline producer directly as the `andThen` argument — leaner
+/// still than an intermediate `let eta_0` binding — with the computation
+/// preserved, never elided.
 #[test]
 fn i225_depth0_no_overclone_ipec_accepts_lean() {
     let root = repo_root();
@@ -59,19 +61,20 @@ fn i225_depth0_no_overclone_ipec_accepts_lean() {
     let emitted = crate::support::read_all_emitted_src(&out);
 
     // The over-clone signature: a spurious depth-0 `move |eta_0|` closure that
-    // captured `msg`. Post-fix `eta_0` is a plain value binding, so no
-    // `move |eta_0` closure may appear.
+    // captured `msg`. No `move |eta_0` closure may appear — the last-use
+    // single-boundary capture stays a bare move.
     assert!(
         !emitted.contains("move |eta_0"),
-        "depth-0 pipeline stage must be a plain `let` value, not a spurious \
-         over-clone `move |eta_0|` closure; got emitted user source:\n{emitted}"
+        "depth-0 pipeline stage must not be a spurious over-clone `move |eta_0|` \
+         closure; got emitted user source:\n{emitted}"
     );
-    // `eta_0` still exists — but as a value binding, confirming the stage
-    // lowered leanly rather than being elided entirely.
+    // The pipeline producer is inlined directly as the `andThen` argument
+    // (leaner than an intermediate `let eta_0` binding), and the computation is
+    // preserved — the token is still produced, the stage never elided.
     assert!(
-        emitted.contains("let eta_0"),
-        "the pipeline stage should lower to a plain `let eta_0` value binding; \
-         got emitted user source:\n{emitted}"
+        emitted.contains("crypto_random_token(4i64)"),
+        "the pipeline producer must be emitted (computation preserved) and \
+         inlined as the andThen argument; got emitted user source:\n{emitted}"
     );
 }
 
