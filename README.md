@@ -117,6 +117,12 @@ main =
   ipe debugger record src/Main.ipe        # runs the app, writes src/Main.ipelog on exit
   ipe debugger replay src/Main.ipelog     # one "<msg> => <model>" line per step
   ```
+- `ipe add <pkg>[@<req>]` / `ipe remove <pkg>` — add or remove an Ipê package dependency. `add` resolves the requirement through the index (fetch, hash-verify), records the exact pin in `ipe.lock`, and writes the requirement into `package.ipe`'s `dependencies` block so a fresh clone re-resolves the same dependency; `remove` drops it from both. Author-written `depGit`/`depPath` escapes are left untouched — `add` never overwrites one.
+
+  ```sh
+  ipe add http-extras@^1.2   # → dependencies = [ dep "http-extras" "^1.2" ] in package.ipe + ipe.lock pin
+  ipe remove http-extras     # drops it from both files
+  ```
 - `ipe fmt` · `ipe test` · `ipe verify` · `ipe migrate` · `ipe package audit` — format, test, whole-project gate, migration, and the publish quality gate.
 
 ## Static compilation

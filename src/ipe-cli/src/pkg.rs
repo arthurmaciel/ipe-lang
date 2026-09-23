@@ -2,60 +2,58 @@
 //!
 //! These add and remove Ipê packages (not Rust crates — that is `ipe rust`).
 //! `ipe add <name>[@<req>]` resolves the package through the index (fetch,
-//! hash-verify, lock) and records the requirement in the project manifest;
-//! `ipe remove <name>` drops it. The resolution itself lives in
-//! [`crate::resolve`].
-//!
-//! Rewriting a `package.ipe`'s `Package.dependencies` list in place — preserving
-//! the author's formatting and comments — is a comment-preserving AST edit that
-//! is not yet implemented, so these commands report the manual step to take
-//! rather than corrupting the manifest source.
+//! hash-verify, lock) and records the requirement in the project's `package.ipe`
+//! manifest; `ipe remove <name>` drops it from both. The resolution and the
+//! manifest rewrite live in [`crate::resolve`] and
+//! [`crate::package_manifest::upsert_index_dependency`].
 
 use std::path::PathBuf;
 
 use crate::CliError;
 
-/// The clear message both commands surface until the `package.ipe`
-/// dependency-list AST rewrite is implemented: the resolution/lock machinery
-/// exists, but editing the manifest source is done by hand.
-const MANUAL_DEP_EDIT: &str = "ipe add/remove: editing a package.ipe `Package.dependencies` list is not yet automated — \
-     add or remove the `Package.dep \"<name>\" \"<req>\"` entry in package.ipe by hand";
-
 /// `ipe add <package>[@<req>]` — add an Ipê package dependency.
 ///
+/// Resolves the requirement through the index (verify-before-trust), records the
+/// exact pin in `ipe.lock`, and writes the `dep "<name>" "<req>"` entry into
+/// `package.ipe` so a fresh clone re-resolves the same dependency.
+///
 /// # Errors
-/// [`CliError::UsageOwned`] when no package is named, the requirement is
-/// malformed, there is no `package.ipe` here, or the manifest-source edit is not
-/// yet automated.
+/// [`CliError::UsageOwned`] when no package is named or the requirement is
+/// malformed; [`CliError::Usage`] when there is no `package.ipe` here;
+/// [`CliError::Resolve`] / [`CliError::HashMismatch`] on a resolution or
+/// integrity failure; [`CliError::Io`] on a filesystem failure.
 pub fn run_add(rest: &[String]) -> Result<(), CliError> {
-    let (_name, _req) = parse_add_arg(rest)?;
-    require_project_manifest()?;
-    Err(CliError::Usage(MANUAL_DEP_EDIT))
+    let (name, req) = parse_add_arg(rest)?;
+    let project_root = project_root()?;
+    crate::resolve::resolve_and_add(&project_root, name, &req, &crate::resolve::index_root())
 }
 
-/// `ipe remove <package>` — remove an Ipê package dependency.
+/// `ipe remove <package>` — remove an Ipê package dependency from both
+/// `package.ipe` and `ipe.lock`.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when no package is named, there is no `package.ipe`
-/// here, or the manifest-source edit is not yet automated.
+/// [`CliError::UsageOwned`] when no package is named; [`CliError::Usage`] when
+/// there is no `package.ipe` here; [`CliError::Io`] on a filesystem failure.
 pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
-    let _package = package_arg(rest, "remove")?;
-    require_project_manifest()?;
-    Err(CliError::Usage(MANUAL_DEP_EDIT))
+    let package = package_arg(rest, "remove")?;
+    let project_root = project_root()?;
+    crate::resolve::resolve_and_remove(&project_root, package)
 }
 
-/// Confirm the current directory is an Ipê project — it holds a `package.ipe`.
+/// The current directory, confirmed to be an Ipê project — it holds a
+/// `package.ipe`. The manifest reader/writer both key off this root.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] when there is no `package.ipe` here (with the
-/// migration hint when only a legacy `ipe.toml` is present).
-fn require_project_manifest() -> Result<(), CliError> {
+/// [`CliError::Io`] if the current directory cannot be read; [`CliError::Usage`]
+/// when there is no `package.ipe` here (with the migration hint when only a
+/// legacy `ipe.toml` is present).
+fn project_root() -> Result<PathBuf, CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::Io {
         path: PathBuf::from("."),
         source: e,
     })?;
     if crate::project::manifest_in_dir(&cwd).is_some() {
-        return Ok(());
+        return Ok(cwd);
     }
     if crate::project::migration_pending(&cwd) {
         return Err(CliError::Usage(crate::project::MIGRATE_CONFIG_HINT));
