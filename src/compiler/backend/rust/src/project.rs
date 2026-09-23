@@ -1250,6 +1250,14 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 const RUNTIME_MOD_RS_WEB_CORE_APPEND: &str = "#[cfg(feature = \"web-core\")]\npub mod web_page_core;\n\
      #[cfg(feature = \"web-core\")]\npub mod web;\n";
 
+/// `literal_table` (crate-root, gated `any(web-core, control-wire, debugger)`) is
+/// the per-view appearance-literal store the emitted hoist prologue reads and the
+/// `web` render core imports (`use crate::literal_table`). Declared top-level here —
+/// not a `web` submodule — so a terminal dev-loop build (`control-wire`, no
+/// `web-core`) that emits a hoist prologue still resolves `ipe_runtime::literal_table`,
+/// and so the module-set closure holds wherever `web`/`control` is declared.
+const RUNTIME_MOD_RS_LITERAL_TABLE_APPEND: &str = "#[cfg(any(feature = \"web-core\", feature = \"control-wire\", feature = \"debugger\"))]\npub mod literal_table;\n";
+
 // ── Ipe.Web / Ipe.Web ─────────────────────────────────────────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses Ipe.Web /
@@ -2546,6 +2554,11 @@ const MOD_APPENDS: &[ModAppend] = &[
         gate: |ctx| ctx.uses_ui || ctx.uses_tui || ctx.uses_web || ctx.uses_webview,
         append: RUNTIME_MOD_RS_UI_APPEND,
     },
+    // `literal_table` before the render/web modules that `use crate::literal_table`.
+    ModAppend {
+        gate: |ctx| ctx.uses_web || ctx.uses_webview || ctx.uses_tui || ctx.uses_console,
+        append: RUNTIME_MOD_RS_LITERAL_TABLE_APPEND,
+    },
     // `web_core` (the ONE real `web` module) before the served `web` surface.
     ModAppend {
         gate: |ctx| ctx.uses_web || ctx.uses_webview,
@@ -2603,6 +2616,7 @@ const ALL_MOD_APPEND_TEXTS: &[&str] = &[
     RUNTIME_MOD_RS_SEAL_CODEC_APPEND,
     RUNTIME_MOD_RS_CSS_APPEND,
     RUNTIME_MOD_RS_UI_APPEND,
+    RUNTIME_MOD_RS_LITERAL_TABLE_APPEND,
     RUNTIME_MOD_RS_WEB_CORE_APPEND,
     RUNTIME_MOD_RS_WEB_APPEND,
     RUNTIME_MOD_RS_TUI_APPEND,

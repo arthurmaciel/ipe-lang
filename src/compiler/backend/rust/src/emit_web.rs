@@ -1420,7 +1420,7 @@ mod hot_appearance_tests {
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
             out.contains(
-                "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[\"monospace\"]);"
+                "let __ipe_lit = ipe_runtime::literal_table::LiteralTable::from_defaults(&[\"monospace\"]);"
             ),
             "flag-on emit must bake the source value as the table default, got:\n{out}"
         );
@@ -1472,7 +1472,7 @@ mod hot_appearance_tests {
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
             out.contains(
-                "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[\"color\", \"red\"]);"
+                "let __ipe_lit = ipe_runtime::literal_table::LiteralTable::from_defaults(&[\"color\", \"red\"]);"
             ),
             "both style-string positions must bake as ordered defaults, got:\n{out}"
         );
@@ -1607,13 +1607,63 @@ mod hot_appearance_tests {
         Ok(())
     }
 
-    /// A non-web shape never hoists (the `LiteralTable` is a web-runtime type):
-    /// the emit stays the direct-literal form even with the flag on.
+    /// `Ipe.Ui.Tui.padding 2` — a genuine terminal-appearance literal (cells).
+    fn tui_padding_call(n: i64) -> Expr {
+        Expr::Call {
+            callee: Callee::Kernel(KernelFn::TuiUiPadding),
+            args: vec![Expr::Int(n)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        }
+    }
+
+    /// A TUI shape hoists a *terminal-appearance* literal: `Ipe.Ui.Tui.padding`
+    /// routes through the crate-root `LiteralTable` (present under `web-core` OR
+    /// the loopback `control-wire` a tui dev-loop build links) — the terminal
+    /// analogue of the web hoist, delivered over the control socket instead of the
+    /// HTTP port. This is the intended #2749 behavior: a tui appearance edit
+    /// produces a `from_defaults` array the classifier reads and an overlay the
+    /// child applies. The hoist set is the terminal-appearance kernels only
+    /// (`Ipe.Ui.Tui.*` spacing/padding, `TermColor.rgb/rgba`); a web-DOM / CSS
+    /// literal reaching a tui shape stays direct — pinned by
+    /// [`web_content_kernel_does_not_hoist_on_tui_shape`].
     #[test]
-    fn non_web_shape_does_not_hoist() -> DResult<()> {
+    fn tui_shape_hoists() -> DResult<()> {
         let mut interner = Interner::new();
-        let (mut program, view) = one_view_program(&mut interner, font_family_call())?;
-        // Flip the shape to a non-web build.
+        let (mut program, view) = one_view_program(&mut interner, tui_padding_call(2))?;
+        // Flip the shape to a terminal (tui) build — no web surface.
+        let module = program
+            .modules
+            .first_mut()
+            .expect("the one-view program has a module");
+        module.uses_web = false;
+        module.uses_tui = true;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            out.contains(
+                "let __ipe_lit = ipe_runtime::literal_table::LiteralTable::from_defaults(&[\"2\"]);"
+            ),
+            "a tui shape must hoist the terminal-appearance literal into the crate-root table, \
+             got:\n{out}"
+        );
+        assert!(
+            out.contains("__ipe_lit.get(0).parse::<i64>().unwrap_or(2i64)"),
+            "the hoisted tui site must read + parse its table slot, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// The complement of the hoist boundary: a *web-DOM / content* kernel
+    /// (`Ui.text`) reaching a terminal shape emits its literal directly — a tui
+    /// view never routes a web-content construct through the per-view table, even
+    /// with the flag armed. Only terminal-appearance kernels hoist on a tui shape;
+    /// this pins that a genuine tui program (which paints via `Ipe.Ui.Tui`, not
+    /// `Ui.*` web content) keeps a stray `Ui.text` literal inline (dev == prod).
+    #[test]
+    fn web_content_kernel_does_not_hoist_on_tui_shape() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (mut program, view) =
+            one_view_program(&mut interner, str_arg_call(KernelFn::UiText, "Hello"))?;
         let module = program
             .modules
             .first_mut()
@@ -1623,11 +1673,40 @@ mod hot_appearance_tests {
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
             !out.contains("__ipe_lit"),
-            "a non-web shape must not hoist, got:\n{out}"
+            "a web-content kernel must not hoist on a tui shape, got:\n{out}"
+        );
+        assert!(
+            out.contains("ui_text_(\"Hello\".to_string())"),
+            "the web-content literal stays direct on a tui shape, got:\n{out}"
+        );
+        Ok(())
+    }
+
+    /// A viewless / non-terminal render shape still never hoists: a pure webview
+    /// desktop app ships `web-core` (so the table WOULD build) but runs no control
+    /// port to push an appearance patch to, so hoisting stays fenced off and the
+    /// emit is the byte-identical direct-literal form. This pins the fence at the
+    /// exact shape boundary (`uses_web || uses_tui || uses_console`).
+    #[test]
+    fn pure_webview_shape_does_not_hoist() -> DResult<()> {
+        let mut interner = Interner::new();
+        let (mut program, view) = one_view_program(&mut interner, font_family_call())?;
+        let module = program
+            .modules
+            .first_mut()
+            .expect("the one-view program has a module");
+        module.uses_web = false;
+        module.uses_tui = false;
+        module.uses_console = false;
+        module.uses_webview = true;
+        let out = emit_view(&interner, &program, &view, true)?;
+        assert!(
+            !out.contains("__ipe_lit"),
+            "a pure webview shape must not hoist, got:\n{out}"
         );
         assert!(
             out.contains("\"monospace\".to_string()"),
-            "a non-web shape keeps the direct literal, got:\n{out}"
+            "a pure webview shape keeps the direct literal, got:\n{out}"
         );
         Ok(())
     }
@@ -1673,7 +1752,7 @@ mod hot_appearance_tests {
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
             out.contains(
-                "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[\"16\"]);"
+                "let __ipe_lit = ipe_runtime::literal_table::LiteralTable::from_defaults(&[\"16\"]);"
             ),
             "flag-on emit must bake the canonical decimal string as the default, got:\n{out}"
         );
@@ -1722,7 +1801,7 @@ mod hot_appearance_tests {
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
             out.contains(
-                "let __ipe_lit = ipe_runtime::web::LiteralTable::from_defaults(&[\"255\", \"0\", \"0\"]);"
+                "let __ipe_lit = ipe_runtime::literal_table::LiteralTable::from_defaults(&[\"255\", \"0\", \"0\"]);"
             ),
             "all three colour channels must bake as ordered canonical strings, got:\n{out}"
         );
@@ -1838,12 +1917,22 @@ mod hot_appearance_tests {
         Ok(())
     }
 
-    /// A non-web shape never hoists the typed path either (the `LiteralTable` is a
-    /// web-runtime type): a `padding` literal stays the direct `i64` emit.
+    /// A TUI shape hoists the typed terminal path: the truecolour
+    /// `Ipe.Color.Ansi.rgb 40 44 52` channels route through the crate-root
+    /// `LiteralTable`, each read back via the total
+    /// `parse::<i64>().unwrap_or(<literal>)` — the terminal analogue of the web
+    /// typed hoist, on a genuine terminal-appearance kernel (`TermColor.rgb`, not
+    /// a web-CSS one).
     #[test]
-    fn typed_style_non_web_shape_does_not_hoist() -> DResult<()> {
+    fn typed_style_tui_shape_hoists() -> DResult<()> {
         let mut interner = Interner::new();
-        let (mut program, view) = one_view_program(&mut interner, padding_call(16))?;
+        let call = Expr::Call {
+            callee: Callee::Kernel(KernelFn::TermColorRgb),
+            args: vec![Expr::Int(40), Expr::Int(44), Expr::Int(52)],
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let (mut program, view) = one_view_program(&mut interner, call)?;
         let module = program
             .modules
             .first_mut()
@@ -1852,12 +1941,16 @@ mod hot_appearance_tests {
         module.uses_tui = true;
         let out = emit_view(&interner, &program, &view, true)?;
         assert!(
-            !out.contains("__ipe_lit"),
-            "a non-web shape must not hoist the typed path, got:\n{out}"
+            out.contains(
+                "let __ipe_lit = ipe_runtime::literal_table::LiteralTable::from_defaults(&[\"40\", \"44\", \"52\"]);"
+            ),
+            "a tui shape must hoist the typed terminal-colour channels into the crate-root table, \
+             got:\n{out}"
         );
         assert!(
-            out.contains("ui_padding_(16i64)"),
-            "a non-web shape keeps the direct i64 literal, got:\n{out}"
+            out.contains("__ipe_lit.get(0).parse::<i64>().unwrap_or(40i64)")
+                && out.contains("__ipe_lit.get(2).parse::<i64>().unwrap_or(52i64)"),
+            "each hoisted channel must read + parse its table slot, got:\n{out}"
         );
         Ok(())
     }
@@ -2240,8 +2333,11 @@ mod hot_appearance_tests {
         Ok(())
     }
 
-    /// The widened surface never hoists in a non-web shape (the `LiteralTable` is
-    /// a web-runtime type): a `Ui.text` literal stays the direct string emit.
+    /// The widened `String` surface (web-DOM attribute / content values) never
+    /// hoists in a non-web shape: `Ui.text` is a web-content kernel, not a
+    /// terminal-appearance one, so on a tui shape its literal stays the direct
+    /// string emit (the shape half of the hoist boundary,
+    /// `shape_appearance_literal_args`).
     #[test]
     fn widened_value_non_web_shape_does_not_hoist() -> DResult<()> {
         let mut interner = Interner::new();

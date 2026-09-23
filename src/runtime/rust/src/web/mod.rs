@@ -13,8 +13,12 @@ pub use crate::dom::form;
 pub use form::*;
 #[cfg(feature = "server")]
 pub use sse::*;
-pub mod literal_table;
-pub use literal_table::LiteralTable;
+// The appearance-literal table now lives at the crate root (a pure, dev-loop
+// module shared with the loopback tui/cli hot-swap path, which links no
+// `web-core`). Re-exported here so `web::literal_table` / `web::LiteralTable`
+// paths stay valid for the served render host's callers.
+pub use crate::literal_table;
+pub use crate::literal_table::LiteralTable;
 pub mod template;
 pub use template::{Template, TemplateAttr, materialize_template, template_of};
 pub mod route;

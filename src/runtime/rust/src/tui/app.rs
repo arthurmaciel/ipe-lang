@@ -675,17 +675,13 @@ impl TuiSurface {
         use crate::control::ControlFrame;
         match frame {
             ControlFrame::HotAppearance(patch) => {
-                // Register the appearance overlay only where the mechanism is
-                // compiled in: the `LiteralTable` overlay lives in the `web-core`
-                // module, and a tui view routes its literals through it only when
-                // the emit shape uses web. Absent that, the recompute below still
-                // runs the contract (recompute-from-current-model + repaint) and
-                // is byte-identical — visually inert until a per-tui literal table
-                // lands, never a full rebuild.
-                #[cfg(feature = "web-core")]
-                crate::web::literal_table::register_dev_patch(&patch.defaults, patch.patch.clone());
-                #[cfg(not(feature = "web-core"))]
-                let _ = &patch; // no overlay mechanism in this build; recompute still runs
+                // Register the appearance overlay in the crate-root
+                // `literal_table` module. It compiles under any dev-loop surface
+                // (`web-core` / `control-wire` / `debugger`); this seam is only
+                // reached under `debugger` (⇒ `control-wire`), so the module is
+                // always present here. A tui view's hoisted literals route through
+                // this same overlay, so the recompute below reflects the edit.
+                crate::literal_table::register_dev_patch(&patch.defaults, patch.patch.clone());
 
                 // Recompute the surface from the CURRENT model — NOT through
                 // `update`. The scrub cursor is untouched, so a hot-swap while
