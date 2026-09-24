@@ -45,6 +45,12 @@ checks:
   - context: artifact-guard
     disposition: gate
     producer: ci.yml
+  - context: manifest-lock-consistency
+    disposition: gate
+    producer: ci.yml
+    guards: >-
+      Cargo.lock pins the first-party crates to the version Cargo.toml declares,
+      so a release can never ship a lock that fails `cargo build --locked`.
   - context: diagnostic-tone
     disposition: gate
     producer: ci.yml
