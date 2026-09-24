@@ -141,6 +141,7 @@ fn compile_inner(source: &str) -> Result<ipe_backend::EmittedProject, String> {
     // `emit_manifest` below re-demands the same memos. `topo_order` cycles /
     // canon errors render against the owning module.
     let topo = ipe_db::topo_order(&db, source_root, entry_file)
+        .clone()
         .map_err(|diag| render_for_module(&diag, &sources, &entry_path, source))?;
     for mod_path in topo.iter() {
         let (Some((path, src)), Some(file_handle)) = (
@@ -150,14 +151,16 @@ fn compile_inner(source: &str) -> Result<ipe_backend::EmittedProject, String> {
             return Err("internal: module in topo order missing from source map".to_owned());
         };
         ipe_db::canonicalize(&db, source_root, file_handle)
+            .clone()
             .map_err(|diag| ipe_diagnostics::render(&diag, &path.to_string_lossy(), src))?;
     }
 
     // The emit demand: transitively link → typecheck → lower → emit. Any error
     // carries the owning module `home`; render it against that module's source
     // (falling back to the entry file when the home is empty or unknown).
-    let emitted =
-        ipe_db::emit_manifest(&db, source_root, entry_file, config).map_err(|(diag, home)| {
+    let emitted = ipe_db::emit_manifest(&db, source_root, entry_file, config)
+        .clone()
+        .map_err(|(diag, home)| {
             render_for_home(&db, &diag, &home, &sources, &entry_path, source)
         })?;
     Ok((*emitted).clone())

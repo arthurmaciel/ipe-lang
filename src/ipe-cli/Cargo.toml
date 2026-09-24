@@ -77,7 +77,7 @@ ipe_watch = { path = "../compiler/watch" }
 # and parses frames from the ONE wire definition (SSOT) over its own std sockets
 # — no tokio server pulled into the CLI.
 ipe-runtime-rust = { path = "../runtime/rust", default-features = false, features = ["widget-assets", "control-wire"] }
-salsa = "=0.27.2"
+salsa = "=0.28.5"
 notify = "8"
 # On-disk build cache (`src/cache.rs`) — content hashing of the whole-project
 # key + the compiler/toolchain version-epoch, and JSON (de)serialization of the

@@ -144,7 +144,7 @@ fn collect_raw(db: &IpeDatabase, file: SourceFile) -> (Vec<RawToken>, &str) {
 
     // Uses `annotate_syntax_only` (not the full canonicaliser) — cheap on keypress;
     // yields class-only tokens with no def keys.
-    let annotated = ipe_annotate::annotate_syntax_only(&module, &interner);
+    let annotated = ipe_annotate::annotate_syntax_only(module, &interner);
     drop(interner);
 
     let raw: Vec<RawToken> = annotated

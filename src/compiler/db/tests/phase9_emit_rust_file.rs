@@ -124,7 +124,7 @@ fn rust_file_id_interns_distinct_homes_distinctly() {
     );
 
     // The stored field round-trips.
-    assert_eq!(id_lib.home(&db), mod_path(&db, &["Lib"]));
+    assert_eq!(*id_lib.home(&db), mod_path(&db, &["Lib"]));
 }
 
 // ---------------------------------------------------------------------------
@@ -168,8 +168,9 @@ fn file_id_for<'db>(
     segs: &[&str],
 ) -> RustFileId<'db> {
     let target = mod_path(db, segs);
-    let homes =
-        ipe_db::program_rust_file_ids(db, root, entry).expect("program must produce file ids");
+    let homes = ipe_db::program_rust_file_ids(db, root, entry)
+        .clone()
+        .expect("program must produce file ids");
     assert!(
         homes.contains(&target),
         "expected {segs:?} to be one of the program's emitted homes"
@@ -197,7 +198,9 @@ fn emit_spine_file_memoized_coarse_floor() {
         false,
     );
 
-    let spine = ipe_db::emit_spine_file(&db, root, main, config).expect("spine must render");
+    let spine = ipe_db::emit_spine_file(&db, root, main, config)
+        .clone()
+        .expect("spine must render");
     assert!(!spine.is_empty(), "spine text must be non-empty");
     assert_eq!(log.executions_of("emit_spine_file("), 1);
 
@@ -268,8 +271,10 @@ fn emit_rust_file_memoized_per_file() {
         let file_lib = file_id_for(&db, root, main, &["Lib"]);
         let file_main = file_id_for(&db, root, main, &["Main"]);
         let lib = ipe_db::emit_rust_file(&db, root, main, config, file_lib)
+            .clone()
             .expect("Lib file must render");
         let main = ipe_db::emit_rust_file(&db, root, main, config, file_main)
+            .clone()
             .expect("Main file must render");
         (lib, main)
     };
@@ -284,8 +289,10 @@ fn emit_rust_file_memoized_per_file() {
     let file_lib = file_id_for(&db, root, main, &["Lib"]);
     let file_main = file_id_for(&db, root, main, &["Main"]);
     let lib_after = ipe_db::emit_rust_file(&db, root, main, config, file_lib)
+        .clone()
         .expect("Lib re-renders after its own body edit");
     let main_after = ipe_db::emit_rust_file(&db, root, main, config, file_main)
+        .clone()
         .expect("Main re-renders (forced by lower_program) after Lib's edit");
 
     assert_ne!(
@@ -307,7 +314,9 @@ fn program_rust_file_ids_tracks_module_add_delete() {
     let main = file(&db, &["Main"], MAIN_IMPORTS_LIB);
 
     let root2 = root_of(&db, &[(&["Lib"], lib), (&["Main"], main)]);
-    let ids2 = ipe_db::program_rust_file_ids(&db, root2, main).expect("two-module program");
+    let ids2 = ipe_db::program_rust_file_ids(&db, root2, main)
+        .clone()
+        .expect("two-module program");
     assert_eq!(ids2.len(), 2, "two distinct homes -> two RustFileIds");
 
     // Add a third module `Extra` with a distinct home; wire `Main` to import
@@ -323,7 +332,9 @@ fn program_rust_file_ids_tracks_module_add_delete() {
         &[(&["Lib"], lib), (&["Main"], main), (&["Extra"], extra)],
     );
 
-    let ids3 = ipe_db::program_rust_file_ids(&db, root3, main).expect("three-module program");
+    let ids3 = ipe_db::program_rust_file_ids(&db, root3, main)
+        .clone()
+        .expect("three-module program");
     assert_eq!(
         ids3.len(),
         3,
@@ -372,10 +383,12 @@ fn emit_manifest_matches_emit_project_for_single_module() {
         false,
     );
 
-    let via_project =
-        ipe_db::emit_project(&db, root, main, config).expect("emit_project must succeed");
-    let via_manifest =
-        ipe_db::emit_manifest(&db, root, main, config).expect("emit_manifest must succeed");
+    let via_project = ipe_db::emit_project(&db, root, main, config)
+        .clone()
+        .expect("emit_project must succeed");
+    let via_manifest = ipe_db::emit_manifest(&db, root, main, config)
+        .clone()
+        .expect("emit_manifest must succeed");
 
     assert_eq!(
         via_manifest.cargo_toml, via_project.cargo_toml,
@@ -416,13 +429,17 @@ fn emit_manifest_matches_emit_project_for_two_modules() {
 
     // Precondition: this program genuinely splits (2 distinct homes), so
     // `emit_manifest` takes the assemble_split_manifest path, not the collapse.
-    let homes = ipe_db::program_rust_file_ids(&db, root, main).expect("homes");
+    let homes = ipe_db::program_rust_file_ids(&db, root, main)
+        .clone()
+        .expect("homes");
     assert_eq!(homes.len(), 2, "fixture must be a genuine 2-home split");
 
-    let via_project =
-        ipe_db::emit_project(&db, root, main, config).expect("emit_project must succeed");
-    let via_manifest =
-        ipe_db::emit_manifest(&db, root, main, config).expect("emit_manifest must succeed");
+    let via_project = ipe_db::emit_project(&db, root, main, config)
+        .clone()
+        .expect("emit_project must succeed");
+    let via_manifest = ipe_db::emit_manifest(&db, root, main, config)
+        .clone()
+        .expect("emit_manifest must succeed");
 
     assert_eq!(
         via_manifest.cargo_toml, via_project.cargo_toml,

@@ -36,7 +36,7 @@ pub fn selection_ranges(
         .map(|&pos| {
             let byte = position_to_offset(text, pos, encoding);
             let byte = u32::try_from(byte).unwrap_or(u32::MAX);
-            let spans = containing_spans(&module, byte);
+            let spans = containing_spans(module, byte);
             build_chain(&spans, text, encoding, pos)
         })
         .collect()
