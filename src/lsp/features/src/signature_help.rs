@@ -47,7 +47,9 @@ pub fn signature_help(
     let files = root.files(db);
     let &file = files.get(module)?;
     let canonical = crate::db_access::canonicalize_checked(db, root, entry, file)?;
-    let types = ipe_db::typecheck_module(db, root, entry, file).ok()?;
+    let types = ipe_db::typecheck_module(db, root, entry, file)
+        .as_ref()
+        .ok()?;
 
     // Find the innermost Call(…, …) containing `byte` — any callee kind.
     let (callee_span, callee_name_sym, active_param) = find_call_at(&canonical.module, byte)?;

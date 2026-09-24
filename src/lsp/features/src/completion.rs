@@ -121,6 +121,7 @@ pub fn completions(
     // This module's own binding types, from the per-module `typecheck_module`
     // projection (keyed by bare name — the home is fixed to this module).
     let module_env: Option<BTreeMap<Symbol, Ty>> = ipe_db::typecheck_module(db, root, entry, file)
+        .as_ref()
         .ok()
         .map(|types| types.env.clone());
     // Dep bindings' types come from the deps' own per-module projections, so a

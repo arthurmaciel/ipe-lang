@@ -87,7 +87,7 @@ fn joint_projection(
     entry: SourceFile,
     module: SourceFile,
 ) -> Option<ipe_db::ModuleTypes> {
-    let solved = ipe_db::typecheck(db, root, entry).ok()?;
+    let solved = ipe_db::typecheck(db, root, entry).clone().ok()?;
     let home: Vec<ipe_intern::Symbol> = {
         let mut interner = db.interner().lock();
         module
@@ -143,14 +143,15 @@ fn scoped_solve_engages_and_matches_projection() {
             return;
         };
         assert_eq!(
-            Some(&*types),
+            Some(&**types),
             joint_projection(&db, root, b, module).as_ref(),
             "scoped result must equal the normalized whole-program slice"
         );
         let via_query = ipe_db::typecheck_module(&db, root, b, module)
+            .clone()
             .expect("green program must project per module");
         assert_eq!(
-            *via_query, *types,
+            *via_query, **types,
             "typecheck_module serves the scoped result"
         );
     }
@@ -175,7 +176,9 @@ fn unrelated_sibling_edit_leaves_module_memo_untouched() {
     let entry = file(&db, &["Entry"], ENTRY_WITH_TWO_DEPS);
     let root = root_of(&db, &[(&["A"], a), (&["C"], c), (&["Entry"], entry)]);
 
-    let before = ipe_db::typecheck_module(&db, root, entry, a).expect("A type-checks");
+    let before = ipe_db::typecheck_module(&db, root, entry, a)
+        .clone()
+        .expect("A type-checks");
     assert_eq!(log.executions_of("typecheck_module("), 1);
     assert!(
         matches!(
@@ -193,7 +196,9 @@ fn unrelated_sibling_edit_leaves_module_memo_untouched() {
     // Edit ONLY C — a sibling dep of A under Entry, no edge to A at all.
     log.clear();
     assert!(ipe_db::set_text_if_changed(&mut db, c, DEP_C_BODY_EDIT));
-    let after = ipe_db::typecheck_module(&db, root, entry, a).expect("A still type-checks");
+    let after = ipe_db::typecheck_module(&db, root, entry, a)
+        .clone()
+        .expect("A still type-checks");
     assert_eq!(
         log.executions_of("typecheck_module("),
         0,
@@ -228,7 +233,9 @@ fn scheme_preserving_dep_edit_does_not_resolve_importers() {
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let before = ipe_db::typecheck_module(&db, root, b, b).expect("B type-checks");
+    let before = ipe_db::typecheck_module(&db, root, b, b)
+        .clone()
+        .expect("B type-checks");
     assert!(matches!(
         ipe_db::infer_module_scoped(&db, root, b),
         ScopedModuleTypes::PerModule { .. }
@@ -239,7 +246,9 @@ fn scheme_preserving_dep_edit_does_not_resolve_importers() {
     // exported schemes are untouched.
     log.clear();
     assert!(ipe_db::set_text_if_changed(&mut db, a, DEP_A_HIDDEN_GROWN));
-    let after = ipe_db::typecheck_module(&db, root, b, b).expect("B still type-checks");
+    let after = ipe_db::typecheck_module(&db, root, b, b)
+        .clone()
+        .expect("B still type-checks");
 
     assert_eq!(
         log.executions_of("infer_module_scoped("),
@@ -264,7 +273,9 @@ fn scheme_preserving_dep_edit_does_not_resolve_importers() {
     assert_eq!(before, after, "B's value is served unchanged");
 
     // And A's own per-module result DID change (the edit is real).
-    let a_after = ipe_db::typecheck_module(&db, root, b, a).expect("A type-checks");
+    let a_after = ipe_db::typecheck_module(&db, root, b, a)
+        .clone()
+        .expect("A type-checks");
     assert!(
         !a_after.regions.is_empty(),
         "A's re-solved regions are present"
@@ -310,13 +321,17 @@ fn open_interface_falls_back_to_the_joint_solve() {
     // Both modules serve exactly the joint slice — including the
     // against-import-direction Float pin on A's exported binding.
     for module in [a, b] {
-        let served = ipe_db::typecheck_module(&db, root, b, module).expect("program green");
+        let served = ipe_db::typecheck_module(&db, root, b, module)
+            .clone()
+            .expect("program green");
         assert_eq!(
             Some(&*served),
             joint_projection(&db, root, b, module).as_ref()
         );
     }
-    let float_pinned = ipe_db::typecheck_module(&db, root, b, a).expect("program green");
+    let float_pinned = ipe_db::typecheck_module(&db, root, b, a)
+        .clone()
+        .expect("program green");
     let double_sym = db
         .interner()
         .lock()
@@ -364,9 +379,11 @@ fn unrelated_module_keeps_types_while_sibling_is_red() {
         "A's scoped types survive C's red edit"
     );
     let program_err = ipe_db::typecheck(&db, root, entry)
+        .clone()
         .expect_err("C's annotation mismatch must be rejected")
         .0;
     let module_err = ipe_db::typecheck_module(&db, root, entry, c)
+        .clone()
         .expect_err("C's per-module query surfaces the failure")
         .0;
     assert_eq!(

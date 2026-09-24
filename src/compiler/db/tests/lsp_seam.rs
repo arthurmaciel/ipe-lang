@@ -100,8 +100,9 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
     // Diagnostics: `typecheck` is the same coarse per-program seam `ipe
     // watch` already consumes (§9 of the spec) — an LSP's
     // publishDiagnostics push would demand exactly this.
-    let solved =
-        ipe_db::typecheck(&db, root, entry).expect("well-typed buffer must type-check clean");
+    let solved = ipe_db::typecheck(&db, root, entry)
+        .clone()
+        .expect("well-typed buffer must type-check clean");
     assert!(
         !solved.env.is_empty(),
         "solved types must carry at least one binding"
@@ -110,10 +111,13 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
     // Navigation: `parse` (AST — outline/symbols) and `resolve_imports`
     // (import-edge resolution — go-to-def target) are both PER-FILE tracked
     // queries, unaffected by whole-program coarseness.
-    let parsed = ipe_db::parse(&db, entry).expect("buffer must parse");
+    let parsed = ipe_db::parse(&db, entry)
+        .clone()
+        .expect("buffer must parse");
     assert_eq!(parsed.imports.len(), 1, "one `import A` declaration");
-    let resolutions =
-        ipe_db::resolve_imports(&db, root, entry).expect("resolve_imports must succeed");
+    let resolutions = ipe_db::resolve_imports(&db, root, entry)
+        .clone()
+        .expect("resolve_imports must succeed");
     assert_eq!(resolutions.len(), 1);
     assert!(
         matches!(
@@ -135,6 +139,7 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
     // Re-demand: diagnostics reflect the edit immediately — no stale `Ok`
     // survives the keystroke.
     ipe_db::typecheck(&db, root, entry)
+        .clone()
         .expect_err("the edited buffer must now surface a type error");
 
     // A second keystroke fixes the buffer; diagnostics converge back to
@@ -143,6 +148,7 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
     // text.
     assert!(ipe_db::set_text_if_changed(&mut db, entry, ENTRY_OK));
     ipe_db::typecheck(&db, root, entry)
+        .clone()
         .expect("buffer fixed by a second keystroke must type-check clean again");
     assert!(ipe_db::parse(&db, entry).is_ok());
     assert!(ipe_db::resolve_imports(&db, root, entry).is_ok());
@@ -190,7 +196,7 @@ fn lsp_diagnostics_query_is_cancelled_by_the_next_keystroke_and_converges_to_lat
     let db_worker = db.clone();
     let worker = thread::spawn(move || {
         salsa::Cancelled::catch(AssertUnwindSafe(|| {
-            ipe_db::typecheck(&db_worker, root, entry)
+            ipe_db::typecheck(&db_worker, root, entry).clone()
         }))
     });
 
@@ -223,5 +229,6 @@ fn lsp_diagnostics_query_is_cancelled_by_the_next_keystroke_and_converges_to_lat
     // result was committed anywhere along the cancelled query's path: the db
     // converges to the latest input state; no stale result is committed.
     ipe_db::typecheck(&db, root, entry)
+        .clone()
         .expect_err("a fresh demand after the cancelling edit must see the edited buffer");
 }

@@ -25,6 +25,6 @@ pub fn canonicalize_checked(
     entry: SourceFile,
     file: SourceFile,
 ) -> Option<Arc<CanonicalModule>> {
-    ipe_db::topo_order(db, root, entry).ok()?; // cycle → None, no panic
-    ipe_db::canonicalize(db, root, file).ok()
+    ipe_db::topo_order(db, root, entry).as_ref().ok()?; // cycle → None, no panic
+    ipe_db::canonicalize(db, root, file).clone().ok()
 }

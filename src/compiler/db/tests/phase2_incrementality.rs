@@ -139,7 +139,7 @@ fn module_interface_firewall() {
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let warm = canonicalize(&db, root, b);
+    let warm = canonicalize(&db, root, b).clone();
     assert!(warm.is_ok(), "importer must canonicalise on the warm run");
     assert_eq!(
         log.executions_of("canonicalize("),
@@ -150,7 +150,7 @@ fn module_interface_firewall() {
     // Body-only edit to A: `hidden` (a PRIVATE, unexported binding) changes.
     log.clear();
     a.set_text(&mut db).to(DEP_A_BODY_EDIT.to_owned());
-    let after = canonicalize(&db, root, b);
+    let after = canonicalize(&db, root, b).clone();
     assert!(after.is_ok());
 
     // A re-canonicalises; its interface recomputes (and backdates on equality).
@@ -245,6 +245,7 @@ fn resolve_imports_add_module() {
 
     assert_eq!(
         resolve_imports(&db, root, b)
+            .clone()
             .ok()
             .and_then(|r| r.first().map(|(_, res)| *res)),
         Some(ImportResolution::Resolved(a)),
@@ -373,16 +374,16 @@ fn module_interface_value_stability() {
     let a = file(&db, &["A"], DEP_A);
     let root = root_of(&db, &[(&["A"], a)]);
 
-    let before = module_interface(&db, root, a);
+    let before = module_interface(&db, root, a).clone();
     a.set_text(&mut db).to(DEP_A_BODY_EDIT.to_owned());
-    let after = module_interface(&db, root, a);
+    let after = module_interface(&db, root, a).clone();
     assert_eq!(
         before, after,
         "a private-body edit must not change the module interface value"
     );
 
     a.set_text(&mut db).to(DEP_A_EXPORT_EDIT.to_owned());
-    let widened = module_interface(&db, root, a);
+    let widened = module_interface(&db, root, a).clone();
     assert_ne!(
         before, widened,
         "an export-surface change MUST change the interface value"

@@ -1194,7 +1194,7 @@ fn run_inner(
                 };
 
                 let cfg = if let Some(cfg) = config {
-                    if cfg.db_driver(&db_main) != resolved.db_driver {
+                    if *cfg.db_driver(&db_main) != resolved.db_driver {
                         use salsa::Setter as _;
                         cfg.set_db_driver(&mut db_main).to(resolved.db_driver);
                     }
