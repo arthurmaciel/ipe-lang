@@ -103,7 +103,7 @@ the code *says* which rounding it means and a reader cannot misread it.
 - **Per-symbol reference:** `ipe doc Ipe.Math` — every function and constant with
   a verified example. `ipe doc Ipe.Math.atan2` covers the quadrant-aware
   arctangent (two arguments, unlike unary `atan`).
-- **Sibling guides:** [Lists](../modules/Ipe.List.md) — `sum`, `map2`, and the
+- **Sibling guides:** [Lists](../reference/stdlib/List.md) — `sum`, `map2`, and the
   folds this example builds on. The everyday arithmetic operators live in
   `Ipe.Basics` (see `ipe doc Ipe.Basics`).
 - **Concepts:** [Types and inference](types.md) — how `Int` and `Float` are kept

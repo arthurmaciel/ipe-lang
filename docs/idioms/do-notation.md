@@ -69,7 +69,7 @@ the compiler will direct you to `let … in`.
 
 ## References
 
-- [`Ipe.Task`](../modules/Ipe.Task.md) — the combinators `do` sequences.
+- [`Ipe.Task`](../reference/stdlib/Task.md) — the combinators `do` sequences.
 - `ipe doc do` — the construct reference.
 - [The Elm Architecture](../guide/the-elm-architecture.md) — where a task's result
   returns as a `Msg` in an interactive program.

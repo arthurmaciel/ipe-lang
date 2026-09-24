@@ -47,6 +47,6 @@ that, a named intermediate (`let step = … in`) reads better than forcing the p
 ## References
 
 - `ipe doc |>` — the operator reference.
-- [`Ipe.List`](../modules/Ipe.List.md) — the pipeline stages in the example.
+- [`Ipe.List`](../reference/stdlib/List.md) — the pipeline stages in the example.
 - [Pure functions](../guide/pure-functions.md) — why each stage is a pure
   transformation of the last.

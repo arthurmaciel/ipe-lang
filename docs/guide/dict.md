@@ -129,7 +129,7 @@ that forgets to initialise a new key — the `Nothing` arm is required.
 - **Per-symbol reference:** `ipe doc Ipe.Dict` — every function with its signature
   and a verified example. `ipe doc Ipe.Dict.update` drills into the upsert verb.
 - **Sibling guides:** [Sets](set.md) — a `Set` is a `Dict` with no values; use it
-  when you only care whether a key is present. [Lists](../modules/Ipe.List.md) for
+  when you only care whether a key is present. [Lists](../reference/stdlib/List.md) for
   ordered, positional, possibly-duplicated data.
 - **Concepts:** [Types and inference](types.md) — how `Maybe` encodes a lookup
   that might miss. [Pure functions and immutability](pure-functions.md) — why
