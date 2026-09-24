@@ -1138,8 +1138,9 @@ pub fn attribute_canon_errors(
     entry_file: ipe_db::SourceFile,
     blame_path: &Path,
 ) -> Result<(), CliError> {
-    let topo =
-        ipe_db::topo_order(db, source_root, entry_file).map_err(|diag| CliError::Pipeline {
+    let topo = ipe_db::topo_order(db, source_root, entry_file)
+        .clone()
+        .map_err(|diag| CliError::Pipeline {
             file: blame_path.to_path_buf(),
             src: String::new(),
             diag: Box::new(diag),
@@ -1155,11 +1156,13 @@ pub fn attribute_canon_errors(
                 "internal: module in topo order not in source map",
             ));
         };
-        ipe_db::canonicalize(db, source_root, file_handle).map_err(|diag| CliError::Pipeline {
-            file: path.clone(),
-            src: src.clone(),
-            diag: Box::new(diag),
-        })?;
+        ipe_db::canonicalize(db, source_root, file_handle)
+            .clone()
+            .map_err(|diag| CliError::Pipeline {
+                file: path.clone(),
+                src: src.clone(),
+                diag: Box::new(diag),
+            })?;
     }
     Ok(())
 }
@@ -1278,8 +1281,9 @@ pub fn compile_prepared(
     // `canonicalize` demands above are memo hits here. The link step gates
     // cross-module type-identity duplicates `(home, name)`, blamed on
     // the entry file like every other post-link diagnostic.
-    let linked_program =
-        ipe_db::linked_program(db, source_root, entry_file).map_err(&pipeline_err)?;
+    let linked_program = ipe_db::linked_program(db, source_root, entry_file)
+        .clone()
+        .map_err(&pipeline_err)?;
     let linked = &linked_program.module;
 
     // The fresh-name collision universe for this build: the identifier words
@@ -1409,7 +1413,7 @@ pub fn compile_prepared(
     // single-entry `--target wasm` build (a distinct `[wasm].entry` module
     // takes the same role once the M6 integration wires a separate client
     // entry through).
-    if config.target(db) == ipe_ir::Target::WasmClient {
+    if *config.target(db) == ipe_ir::Target::WasmClient {
         let gate_result = {
             let interner = shared_interner.lock();
             ipe_canon::module_classify::check_client_reachability(linked, &linked.name, &interner)
@@ -1431,7 +1435,7 @@ pub fn compile_prepared(
     // a denied kernel anywhere would otherwise become a cargo failure — THE
     // SEAL — or a secret consumer in a public bundle). Blame via the same
     // span→file heuristic the type errors use.
-    if config.target(db) == ipe_ir::Target::WasmClient {
+    if *config.target(db) == ipe_ir::Target::WasmClient {
         let gate_result = {
             let interner = shared_interner.lock();
             ipe_canon::target_gate::check_wasm_client(linked, &interner)
@@ -1454,7 +1458,7 @@ pub fn compile_prepared(
     // symbol, so this refusal replaces a `cargo build --target wasm32-wasip1`
     // failure (THE SEAL). Defense in depth: even a kernel reached through a path
     // the shape gate does not model is turned back here at `ipe` time.
-    if config.target(db) == ipe_ir::Target::WasmWasi {
+    if *config.target(db) == ipe_ir::Target::WasmWasi {
         let gate_result = {
             let interner = shared_interner.lock();
             ipe_canon::target_gate::check_wasm_wasi(linked, &interner)
@@ -1485,9 +1489,11 @@ pub fn compile_prepared(
     // SEAM over `ipe_types::infer_attributed`: same whole-program computation,
     // skippable on a warm no-op rebuild. No interner guard is held across
     // this demand — the query takes its own lock internally.
-    let types = ipe_db::typecheck(db, source_root, entry_file).map_err(|(diag, home)| {
-        attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
-    })?;
+    let types = ipe_db::typecheck(db, source_root, entry_file)
+        .clone()
+        .map_err(|(diag, home)| {
+            attribute_post_link_error(linked, &home_to_source, &entry, diag, &home)
+        })?;
     // Print non-fatal warnings (e.g. IPE-T0011 RedundantCaseBranch) to stderr.
     // These are Severity::Warning: the build continues and exit code stays 0.
     for w in &types.warnings {
@@ -1538,7 +1544,9 @@ pub fn compile_prepared(
     // emitted bytes — the point is to put the query on the same path the
     // clean-vs-incremental parity gate drives, so a future divergence in this
     // analysis cannot go undetected.
-    ipe_db::program_metadata(db, source_root, entry_file).map_err(span_attributed_err)?;
+    ipe_db::program_metadata(db, source_root, entry_file)
+        .clone()
+        .map_err(span_attributed_err)?;
 
     // `ipe_db::emit_manifest` (design doc §4.4) — the top-level
     // emit demand, assembled from the per-`RustFileId` query graph:
@@ -1553,8 +1561,9 @@ pub fn compile_prepared(
     // need zero changes (§4.4). The no-op-rebuild + `db_driver`-only
     // memoization properties `phase6_build_config.rs` proves hold — the
     // config field flows through unchanged.
-    let emitted =
-        ipe_db::emit_manifest(db, source_root, entry_file, config).map_err(span_attributed_err)?;
+    let emitted = ipe_db::emit_manifest(db, source_root, entry_file, config)
+        .clone()
+        .map_err(span_attributed_err)?;
     let mut emitted = (*emitted).clone();
 
     // Thread the widget manifest into the emitted program. The emit query is a

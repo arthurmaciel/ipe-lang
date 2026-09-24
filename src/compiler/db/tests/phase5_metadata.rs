@@ -150,7 +150,9 @@ fn program_metadata_memoized_coarse_floor() {
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let meta = ipe_db::program_metadata(&db, root, b).expect("trivial int program must lower");
+    let meta = ipe_db::program_metadata(&db, root, b)
+        .clone()
+        .expect("trivial int program must lower");
     assert!(
         !meta.reachable_funcs.is_empty(),
         "a program with at least one def must report at least one reachable func \
@@ -200,9 +202,11 @@ fn program_metadata_short_circuits_on_lower_error() {
     let entry = file(&db, &["Entry"], RED_ENTRY);
     let root = root_of(&db, &[(&["Entry"], entry)]);
 
-    let lower_err =
-        ipe_db::lower_program(&db, root, entry).expect_err("ill-typed program must fail to lower");
+    let lower_err = ipe_db::lower_program(&db, root, entry)
+        .clone()
+        .expect_err("ill-typed program must fail to lower");
     let meta_err = ipe_db::program_metadata(&db, root, entry)
+        .clone()
         .expect_err("program_metadata must refuse to analyse an unlowered program");
     assert_eq!(
         lower_err, meta_err,
@@ -232,8 +236,12 @@ fn program_metadata_excludes_unreached_function() {
     let entry = file(&db, &["Entry"], ENTRY_WITH_DEAD_CODE);
     let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
-    let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
-    let meta = ipe_db::program_metadata(&db, root, entry).expect("must compute metadata");
+    let program = ipe_db::lower_program(&db, root, entry)
+        .clone()
+        .expect("must lower");
+    let meta = ipe_db::program_metadata(&db, root, entry)
+        .clone()
+        .expect("must compute metadata");
 
     let module = program
         .modules
@@ -276,8 +284,12 @@ fn program_metadata_reachability_is_transitive() {
     let entry = file(&db, &["Entry"], CHAIN);
     let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
-    let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
-    let meta = ipe_db::program_metadata(&db, root, entry).expect("must compute metadata");
+    let program = ipe_db::lower_program(&db, root, entry)
+        .clone()
+        .expect("must lower");
+    let meta = ipe_db::program_metadata(&db, root, entry)
+        .clone()
+        .expect("must compute metadata");
     let module = program
         .modules
         .first()
@@ -318,7 +330,9 @@ fn unreached_kernel_call_does_not_set_module_flag() {
     let entry = file(&db, &["Entry"], DEAD_TIME_CALL);
     let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
-    let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
+    let program = ipe_db::lower_program(&db, root, entry)
+        .clone()
+        .expect("must lower");
     let module = program
         .modules
         .first()
@@ -352,7 +366,9 @@ fn reached_kernel_call_sets_module_flag() {
     let entry = file(&db, &["Entry"], LIVE_TIME_CALL);
     let root = root_with_std(&db, &[(&["Entry"], entry)]);
 
-    let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
+    let program = ipe_db::lower_program(&db, root, entry)
+        .clone()
+        .expect("must lower");
     let module = program
         .modules
         .first()
@@ -400,8 +416,12 @@ fn program_metadata_no_entry_falls_back_to_conservative_reachable_everything() {
     let entry = file(&db, &["Lib"], NO_MAIN);
     let root = root_of(&db, &[(&["Lib"], entry)]);
 
-    let program = ipe_db::lower_program(&db, root, entry).expect("must lower");
-    let meta = ipe_db::program_metadata(&db, root, entry).expect("must compute metadata");
+    let program = ipe_db::lower_program(&db, root, entry)
+        .clone()
+        .expect("must lower");
+    let meta = ipe_db::program_metadata(&db, root, entry)
+        .clone()
+        .expect("must compute metadata");
     let module = program
         .modules
         .first()

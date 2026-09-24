@@ -496,7 +496,7 @@ fn extract_from_db(
                     Err((diag, _home)) => {
                         return Err(DiffError::Typecheck {
                             module: path.clone(),
-                            diag: Box::new(diag),
+                            diag: Box::new(diag.clone()),
                         });
                     }
                 }

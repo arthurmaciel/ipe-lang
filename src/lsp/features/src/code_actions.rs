@@ -207,7 +207,7 @@ fn add_type_annotation_action(
     let DbView { db, root, entry } = view;
     let files = root.files(db);
     let &file = files.get(module)?;
-    let parsed = ipe_db::parse(db, file).ok()?;
+    let parsed = ipe_db::parse(db, file).clone().ok()?;
     let byte = {
         let lo = diag.range.start;
         u32::try_from(crate::offset::position_to_offset(text, lo, encoding)).unwrap_or(u32::MAX)
@@ -229,7 +229,7 @@ fn add_type_annotation_action(
     let insert_line = annotation_line?;
 
     // Retrieve inferred type from the solved type environment.
-    let solved = ipe_db::typecheck(db, root, entry).ok()?;
+    let solved = ipe_db::typecheck(db, root, entry).clone().ok()?;
     let mut interner = db.interner().lock();
     let home: Vec<ipe_intern::Symbol> = module
         .iter()
@@ -298,7 +298,7 @@ fn add_import_action(
     let DbView { db, root, .. } = view;
     let files = root.files(db);
     let &file = files.get(module)?;
-    let parsed = ipe_db::parse(db, file).ok()?;
+    let parsed = ipe_db::parse(db, file).clone().ok()?;
 
     // Existing imports as (dotted-path, byte offset of the import declaration).
     // The import keyword starts at the beginning of the line that its module
@@ -652,7 +652,7 @@ fn remove_unused_import_action(
     let DbView { db, root, .. } = view;
     let files = root.files(db);
     let &file = files.get(module)?;
-    let parsed = ipe_db::parse(db, file).ok()?;
+    let parsed = ipe_db::parse(db, file).clone().ok()?;
 
     // The diagnostic anchors on the `import` keyword token. Match its start byte
     // against the `import_kw` span of a parsed import — the byte the lint used.

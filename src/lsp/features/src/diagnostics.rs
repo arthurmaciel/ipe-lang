@@ -56,7 +56,7 @@ pub fn collect(
     let mut failed: BTreeSet<Vec<String>> = BTreeSet::new();
     for (path, file) in &files {
         if let Err(diag) = ipe_db::parse(db, *file) {
-            push(&mut by_module, path, diag);
+            push(&mut by_module, path, diag.clone());
             failed.insert(path.clone());
         }
     }
@@ -65,7 +65,7 @@ pub fn collect(
     let order = match ipe_db::topo_order(db, root, entry) {
         Ok(order) => order,
         Err(diag) => {
-            push(&mut by_module, &entry_module, diag);
+            push(&mut by_module, &entry_module, diag.clone());
             return flatten(by_module);
         }
     };
@@ -80,17 +80,21 @@ pub fn collect(
         let Some(file) = files.get(path) else {
             continue;
         };
-        let dep_tainted = ipe_db::resolve_imports(db, root, *file).map_or(true, |resolutions| {
-            resolutions.iter().any(|(dep_path, resolution)| {
-                matches!(resolution, ImportResolution::Resolved(_)) && failed.contains(dep_path)
-            })
-        });
+        let dep_tainted =
+            ipe_db::resolve_imports(db, root, *file)
+                .as_ref()
+                .map_or(true, |resolutions| {
+                    resolutions.iter().any(|(dep_path, resolution)| {
+                        matches!(resolution, ImportResolution::Resolved(_))
+                            && failed.contains(dep_path)
+                    })
+                });
         if dep_tainted {
             failed.insert(path.clone());
             continue;
         }
         if let Err(diag) = ipe_db::canonicalize(db, root, *file) {
-            push(&mut by_module, path, diag);
+            push(&mut by_module, path, diag.clone());
             failed.insert(path.clone());
         }
     }
@@ -104,7 +108,7 @@ pub fn collect(
     match ipe_db::typecheck(db, root, entry) {
         Err((diag, home)) => {
             let owner = attribute(db, root, entry, &home, diag.primary_span(), &entry_module);
-            push(&mut by_module, &owner, diag);
+            push(&mut by_module, &owner, diag.clone());
         }
         Ok(solved) => {
             for warning in &solved.warnings {
@@ -113,7 +117,7 @@ pub fn collect(
             }
             if let Err((diag, home)) = ipe_db::lower_program(db, root, entry) {
                 let owner = attribute(db, root, entry, &home, diag.primary_span(), &entry_module);
-                push(&mut by_module, &owner, diag);
+                push(&mut by_module, &owner, diag.clone());
             }
         }
     }
@@ -152,6 +156,7 @@ fn attribute(
 ) -> Vec<String> {
     let home_syms: Option<Vec<Symbol>> = if home.is_empty() {
         ipe_db::linked_program(db, root, entry)
+            .clone()
             .ok()
             .and_then(|linked| home_for_span(&linked.module, span))
     } else {

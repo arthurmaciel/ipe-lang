@@ -617,7 +617,7 @@ pub fn resolve_name_at(
     // name token is not an expression node, so `find_ref_at` never sees it; scan
     // the parse tree's top-level `values` and `type` union constructors for a
     // name-token span containing the cursor. The home is the current module.
-    let parsed = ipe_db::parse(db, file).ok()?;
+    let parsed = ipe_db::parse(db, file).as_ref().ok()?;
     def_name_at(&parsed, byte, db).map(|(name, span)| ResolvedName {
         module: module.to_vec(),
         name,
@@ -677,7 +677,7 @@ pub fn goto_definition(
     // Find the name span in the defining module's parse tree.
     let files = root.files(db);
     let &def_file = files.get(&resolved.module)?;
-    let parsed = ipe_db::parse(db, def_file).ok()?;
+    let parsed = ipe_db::parse(db, def_file).as_ref().ok()?;
     let span = definition_span_in_parse(&parsed, &resolved.name, db)?;
 
     Some(Definition {
@@ -708,7 +708,9 @@ pub fn type_definition(
 ) -> Option<Definition> {
     let files = root.files(db);
     let &file = files.get(module)?;
-    let types = ipe_db::typecheck_module(db, root, entry, file).ok()?;
+    let types = ipe_db::typecheck_module(db, root, entry, file)
+        .as_ref()
+        .ok()?;
 
     // Innermost solved region at the cursor — same resolution as hover.
     let mut best: Option<(u32, u32)> = None; // (width, lo)
@@ -746,7 +748,7 @@ pub fn type_definition(
     };
 
     let &def_file = files.get(&type_module)?;
-    let parsed = ipe_db::parse(db, def_file).ok()?;
+    let parsed = ipe_db::parse(db, def_file).as_ref().ok()?;
     let span = type_decl_span_in_parse(&parsed, &type_name, db)?;
     Some(Definition {
         module: type_module,
@@ -860,7 +862,7 @@ pub fn find_references(
     let files = root.files(db);
     let mut refs: Vec<NameRef> = Vec::new();
 
-    for module_path in &*order {
+    for module_path in order.iter() {
         let Some(&file) = files.get(module_path) else {
             continue;
         };

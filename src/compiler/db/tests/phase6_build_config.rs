@@ -115,8 +115,9 @@ fn emit_project_memoized_coarse_floor() {
         false,
     );
 
-    let emitted =
-        ipe_db::emit_project(&db, root, b, config).expect("trivial int program must emit");
+    let emitted = ipe_db::emit_project(&db, root, b, config)
+        .clone()
+        .expect("trivial int program must emit");
     assert!(
         !emitted.cargo_toml.is_empty(),
         "emitted project must carry a Cargo.toml"
@@ -278,10 +279,12 @@ fn emit_project_short_circuits_on_lower_error() {
         false,
     );
 
-    let lower_err =
-        ipe_db::lower_program(&db, root, entry).expect_err("ill-typed program must fail to lower");
-    let emit_err =
-        ipe_db::emit_project(&db, root, entry, config).expect_err("must propagate lower's error");
+    let lower_err = ipe_db::lower_program(&db, root, entry)
+        .clone()
+        .expect_err("ill-typed program must fail to lower");
+    let emit_err = ipe_db::emit_project(&db, root, entry, config)
+        .clone()
+        .expect_err("must propagate lower's error");
     assert_eq!(
         lower_err, emit_err,
         "emit_project's error must be lower_program's own diagnostic, verbatim"

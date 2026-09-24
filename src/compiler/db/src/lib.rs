@@ -266,7 +266,7 @@ pub type ImportResolutions = Result<Arc<Vec<(Vec<String>, ImportResolution)>>, D
 /// unchanged results backdate and cut dependents.
 #[salsa::tracked]
 pub fn resolve_imports(db: &dyn Db, root: SourceRoot, file: SourceFile) -> ImportResolutions {
-    let module = parse(db, file)?;
+    let module = parse(db, file).clone()?;
     let files = root.files(db);
     let interner = db.interner().lock();
     let mut resolutions = Vec::with_capacity(module.imports.len());
@@ -321,8 +321,8 @@ pub type CanonResult = Result<Arc<CanonicalModule>, Diagnostic>;
 /// hits salsa's cycle panic — fail-loud, never a stale or fixpointed value.
 #[salsa::tracked]
 pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonResult {
-    let parsed = parse(db, file)?;
-    let resolutions = resolve_imports(db, root, file)?;
+    let parsed = parse(db, file).clone()?;
+    let resolutions = resolve_imports(db, root, file).clone()?;
 
     // Demand every dep interface BEFORE taking the interner lock: a cold
     // demand recurses into `canonicalize(dep)`, which locks the
@@ -339,7 +339,7 @@ pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonRes
     let mut imports_ipe_ffi_rust = false;
     for (path, resolution) in resolutions.iter() {
         if let ImportResolution::Resolved(dep) = resolution {
-            dep_interfaces.push((path.clone(), module_interface(db, root, *dep)?));
+            dep_interfaces.push((path.clone(), module_interface(db, root, *dep).clone()?));
         }
         if path.as_slice() == ["Ipe", "Ffi", "Rust"] {
             imports_ipe_ffi_rust = true;
@@ -356,7 +356,10 @@ pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonRes
                 .iter()
                 .any(|(p, _)| p.as_slice() == ["Rust", "Ffi"]);
             if !already_present {
-                dep_interfaces.push((rust_ffi_path, module_interface(db, root, *rust_ffi_file)?));
+                dep_interfaces.push((
+                    rust_ffi_path,
+                    module_interface(db, root, *rust_ffi_file).clone()?,
+                ));
             }
         }
     }
@@ -395,7 +398,7 @@ pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonRes
         &expected_path,
         &deps,
         &known_modules,
-        origin,
+        *origin,
         &mut interner,
     )?;
     Ok(Arc::new(CanonicalModule { module, exports }))
@@ -424,7 +427,7 @@ pub fn module_interface(
     root: SourceRoot,
     file: SourceFile,
 ) -> Result<Arc<ModuleExports>, Diagnostic> {
-    let canonical = canonicalize(db, root, file)?;
+    let canonical = canonicalize(db, root, file).clone()?;
     Ok(Arc::new(canonical.exports.clone()))
 }
 
@@ -606,7 +609,7 @@ pub fn topo_order(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> TopoOrder
     topological_order_paths(&module_paths, entry_path, |path| {
         files
             .get(path)
-            .map(|file| (*imports(db, *file)).clone())
+            .map(|file| (**imports(db, *file)).clone())
             .unwrap_or_default()
     })
     .map(Arc::new)
@@ -649,7 +652,7 @@ pub type LinkedProgramResult = Result<Arc<LinkedProgram>, Diagnostic>;
 /// dependency-cycle panic — even on a direct demand.
 #[salsa::tracked]
 pub fn linked_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LinkedProgramResult {
-    let order = topo_order(db, root, entry)?;
+    let order = topo_order(db, root, entry).clone()?;
     let files = root.files(db);
     let mut modules: Vec<ipe_canon::ast::Module> = Vec::with_capacity(order.len());
     for path in order.iter() {
@@ -661,7 +664,7 @@ pub fn linked_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> Linke
                 detail: format!("topo order names unknown module {}", path.join(".")),
             });
         };
-        let canonical = canonicalize(db, root, *file)?;
+        let canonical = canonicalize(db, root, *file).clone()?;
         modules.push(canonical.module.clone());
     }
 
@@ -739,7 +742,9 @@ pub type TypecheckResult = Result<Arc<ipe_types::SolvedTypes>, (Diagnostic, Vec<
 /// full analysis and the recorded follow-up scope.
 #[salsa::tracked]
 pub fn typecheck(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> TypecheckResult {
-    let linked = linked_program(db, root, entry).map_err(|d| (d, Vec::new()))?;
+    let linked = linked_program(db, root, entry)
+        .clone()
+        .map_err(|d| (d, Vec::new()))?;
     let mut interner = db.interner().lock();
     ipe_types::infer_attributed(&linked.module, &mut interner).map(Arc::new)
 }
@@ -968,7 +973,7 @@ pub fn infer_module_scoped(db: &dyn Db, root: SourceRoot, module: SourceFile) ->
             let Some(interface) = typed_interface(db, root, *dep) else {
                 return ScopedModuleTypes::WholeProgram;
             };
-            dep_interfaces.push((path.clone(), interface));
+            dep_interfaces.push((path.clone(), interface.clone()));
         }
     }
 
@@ -1023,7 +1028,7 @@ pub fn typed_interface(
     module: SourceFile,
 ) -> Option<Arc<ipe_types::TypedInterface>> {
     match infer_module_scoped(db, root, module) {
-        ScopedModuleTypes::PerModule { interface, .. } => Some(interface),
+        ScopedModuleTypes::PerModule { interface, .. } => Some(interface.clone()),
         ScopedModuleTypes::WholeProgram => None,
     }
 }
@@ -1057,9 +1062,9 @@ pub fn typecheck_module(
     module: SourceFile,
 ) -> ModuleTypesResult {
     match infer_module_scoped(db, root, module) {
-        ScopedModuleTypes::PerModule { types, .. } => Ok(types),
+        ScopedModuleTypes::PerModule { types, .. } => Ok(types.clone()),
         ScopedModuleTypes::WholeProgram => {
-            let solved = typecheck(db, root, entry)?;
+            let solved = typecheck(db, root, entry).clone()?;
             let home: Vec<Symbol> = {
                 let mut interner = db.interner().lock();
                 module
@@ -1100,8 +1105,10 @@ pub type LowerResult = Result<Arc<ipe_ir::Program>, (Diagnostic, Vec<Symbol>)>;
 /// (`lower::max_def_arity_per_module`).
 #[salsa::tracked]
 pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerResult {
-    let linked = linked_program(db, root, entry).map_err(|d| (d, Vec::new()))?;
-    let types = typecheck(db, root, entry)?;
+    let linked = linked_program(db, root, entry)
+        .clone()
+        .map_err(|d| (d, Vec::new()))?;
+    let types = typecheck(db, root, entry).clone()?;
     let mut interner = db.interner().lock();
     // Provide the entry file's display path and source text so the lowerer
     // can inject `<file>:<line>` into `Debug.todo` call sites.
@@ -1128,7 +1135,7 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
 /// split paths — the two paths render from the identical folded IR.
 #[salsa::tracked]
 pub fn folded_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerResult {
-    let lowered = lower_program(db, root, entry)?;
+    let lowered = lower_program(db, root, entry).clone()?;
     let mut program = (*lowered).clone();
     let interner = db.interner().lock();
     ipe_backend_rust::fold_program(&mut program, &interner);
@@ -1297,7 +1304,7 @@ fn reject_dev_only_in_production(
     program: &ipe_ir::Program,
     config: BuildConfig,
 ) -> Result<(), (Diagnostic, Vec<Symbol>)> {
-    if config.production(db)
+    if *config.production(db)
         && let Some(home) = program
             .modules
             .iter()
@@ -1340,20 +1347,20 @@ pub fn emit_project(
 ) -> EmitResult {
     use ipe_backend::Backend as _;
 
-    let program = folded_program(db, root, entry)?;
+    let program = folded_program(db, root, entry).clone()?;
 
     reject_dev_only_in_production(db, &program, config)?;
 
-    let driver = config.db_driver(db);
+    let driver = *config.db_driver(db);
     let ffi = config.ffi(db).clone();
-    let target = config.target(db);
+    let target = *config.target(db);
     let wasm_public_env = config.wasm_public_env(db).clone();
-    let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
+    let wasm_hydrate_mode = *config.wasm_hydrate_mode(db);
     let runtime_dep = config.runtime_dep(db).clone();
-    let debugger = config.debugger(db);
+    let debugger = *config.debugger(db);
     let cargo_name = config.cargo_name(db).clone();
-    let hot_appearance = config.hot_appearance(db);
-    let webview_host = config.webview_host(db);
+    let hot_appearance = *config.hot_appearance(db);
+    let webview_host = *config.webview_host(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1416,7 +1423,7 @@ pub fn program_rust_file_ids(
     root: SourceRoot,
     entry: SourceFile,
 ) -> Result<Arc<Vec<ipe_ir::ModPath>>, (Diagnostic, Vec<Symbol>)> {
-    let program = lower_program(db, root, entry)?;
+    let program = lower_program(db, root, entry).clone()?;
     let homes = {
         let interner = db.interner().lock();
         ipe_backend_rust::rust_file_homes(&program, &interner)
@@ -1442,14 +1449,14 @@ pub fn emit_spine_file(
     entry: SourceFile,
     config: BuildConfig,
 ) -> EmitTextResult {
-    let program = folded_program(db, root, entry)?;
-    let driver = config.db_driver(db);
+    let program = folded_program(db, root, entry).clone()?;
+    let driver = *config.db_driver(db);
     let ffi = config.ffi(db).clone();
-    let target = config.target(db);
+    let target = *config.target(db);
     let wasm_public_env = config.wasm_public_env(db).clone();
-    let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
+    let wasm_hydrate_mode = *config.wasm_hydrate_mode(db);
     let runtime_dep = config.runtime_dep(db).clone();
-    let hot_appearance = config.hot_appearance(db);
+    let hot_appearance = *config.hot_appearance(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1485,12 +1492,12 @@ pub fn emit_rust_file<'db>(
     config: BuildConfig,
     file: RustFileId<'db>,
 ) -> EmitTextResult {
-    let program = folded_program(db, root, entry)?;
-    let driver = config.db_driver(db);
+    let program = folded_program(db, root, entry).clone()?;
+    let driver = *config.db_driver(db);
     let ffi = config.ffi(db).clone();
-    let target = config.target(db);
+    let target = *config.target(db);
     let runtime_dep = config.runtime_dep(db).clone();
-    let hot_appearance = config.hot_appearance(db);
+    let hot_appearance = *config.hot_appearance(db);
     let home = file.home(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
@@ -1499,7 +1506,7 @@ pub fn emit_rust_file<'db>(
         .with_target(target)
         .with_runtime_dep(runtime_dep)
         .with_hot_appearance(hot_appearance)
-        .emit_module_file(&program, &home)
+        .emit_module_file(&program, home)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
 }
@@ -1531,18 +1538,18 @@ pub fn emit_manifest(
     entry: SourceFile,
     config: BuildConfig,
 ) -> EmitResult {
-    let homes = program_rust_file_ids(db, root, entry)?;
+    let homes = program_rust_file_ids(db, root, entry).clone()?;
 
     // Spine-collapse: 0 or 1 distinct IpeModule home → the byte-identical
     // single-`main.rs` path. `emit_project` IS the collapse rendering.
     if homes.len() < 2 {
-        return emit_project(db, root, entry, config);
+        return emit_project(db, root, entry, config).clone();
     }
 
     // Real split: demand the per-file query outputs (creating the salsa
     // dependency edges that make the §4.3 early-cut observable), then hand the
     // verbatim texts to the backend's file-count-agnostic assembler.
-    let program = folded_program(db, root, entry)?;
+    let program = folded_program(db, root, entry).clone()?;
 
     // The production `Debug.*` gate must fire on this multi-home path too, not
     // only on the single-home collapse: a program that pulls in a
@@ -1551,23 +1558,23 @@ pub fn emit_manifest(
     // rendered view would otherwise ship past the gate.
     reject_dev_only_in_production(db, &program, config)?;
 
-    let spine = emit_spine_file(db, root, entry, config)?;
+    let spine = emit_spine_file(db, root, entry, config).clone()?;
     let mut module_texts: BTreeMap<ipe_ir::ModPath, String> = BTreeMap::new();
     for home in homes.iter() {
         let file = RustFileId::new(db, home.clone());
-        let text = emit_rust_file(db, root, entry, config, file)?;
+        let text = emit_rust_file(db, root, entry, config, file).clone()?;
         module_texts.insert(home.clone(), (*text).clone());
     }
 
-    let driver = config.db_driver(db);
+    let driver = *config.db_driver(db);
     let ffi = config.ffi(db).clone();
-    let target = config.target(db);
+    let target = *config.target(db);
     let wasm_public_env = config.wasm_public_env(db).clone();
-    let wasm_hydrate_mode = config.wasm_hydrate_mode(db);
+    let wasm_hydrate_mode = *config.wasm_hydrate_mode(db);
     let runtime_dep = config.runtime_dep(db).clone();
-    let debugger = config.debugger(db);
-    let hot_appearance = config.hot_appearance(db);
-    let webview_host = config.webview_host(db);
+    let debugger = *config.debugger(db);
+    let hot_appearance = *config.hot_appearance(db);
+    let webview_host = *config.webview_host(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
@@ -1638,7 +1645,7 @@ pub fn sync_source_root<T: AsRef<str>>(
         let text = text.as_ref();
         if let Some(&file) = current.get(path) {
             set_text_if_changed(db, file, text);
-            if file.origin(db) != *origin {
+            if *file.origin(db) != *origin {
                 file.set_origin(db).to(*origin);
             }
             next.insert(path.clone(), file);

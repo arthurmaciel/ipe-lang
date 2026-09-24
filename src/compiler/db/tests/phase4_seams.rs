@@ -102,7 +102,9 @@ fn typecheck_memoized_coarse_floor() {
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let solved = ipe_db::typecheck(&db, root, b).expect("trivial int program must type-check");
+    let solved = ipe_db::typecheck(&db, root, b)
+        .clone()
+        .expect("trivial int program must type-check");
     assert!(
         !solved.env.is_empty(),
         "solved types must carry at least one binding"
@@ -179,7 +181,9 @@ fn lower_program_memoized_coarse_floor() {
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let program = ipe_db::lower_program(&db, root, b).expect("trivial int program must lower");
+    let program = ipe_db::lower_program(&db, root, b)
+        .clone()
+        .expect("trivial int program must lower");
     assert!(
         !program.modules.is_empty(),
         "lowered IR must carry at least one module"
@@ -228,9 +232,11 @@ fn lower_program_short_circuits_on_typecheck_error() {
     let root = root_of(&db, &[(&["Entry"], entry)]);
 
     let typecheck_err = ipe_db::typecheck(&db, root, entry)
+        .clone()
         .expect_err("annotated Int binding with a String body must be rejected")
         .0;
     let lower_err = ipe_db::lower_program(&db, root, entry)
+        .clone()
         .expect_err("lower_program must refuse to lower an ill-typed program")
         .0;
     assert_eq!(
@@ -271,9 +277,15 @@ fn typecheck_module_projection_matches_whole_program() {
     let b = file(&db, &["B"], ENTRY);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let whole = ipe_db::typecheck(&db, root, b).expect("program type-checks");
-    let a_types = ipe_db::typecheck_module(&db, root, b, a).expect("A projects");
-    let b_types = ipe_db::typecheck_module(&db, root, b, b).expect("B projects");
+    let whole = ipe_db::typecheck(&db, root, b)
+        .clone()
+        .expect("program type-checks");
+    let a_types = ipe_db::typecheck_module(&db, root, b, a)
+        .clone()
+        .expect("A projects");
+    let b_types = ipe_db::typecheck_module(&db, root, b, b)
+        .clone()
+        .expect("B projects");
 
     // Resolve the two home paths so we can filter the whole-program env.
     let (a_home, b_home) = {

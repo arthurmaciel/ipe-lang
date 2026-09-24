@@ -527,7 +527,7 @@ pub fn resolve_for_run(
         // whether or not a `CustomElement.node` mounts it.
         let graph = crate::build_source_graph(entry)?;
         let program = graph.run_attributed(entry, |db, root, file| {
-            ipe_db::lower_program(db, root, file)
+            ipe_db::lower_program(db, root, file).clone()
         })?;
         let inferred = crate::capabilities_including_served_widgets(
             &graph.db,
