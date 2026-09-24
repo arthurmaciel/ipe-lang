@@ -113,7 +113,7 @@ soundness principle's "bounded by construction" applied to matching.
 
 - **Per-symbol reference:** `ipe doc Ipe.Regex` — every function with a verified
   example. `ipe doc Ipe.Regex.replace` covers the `$1` capture substitution.
-- **Sibling guides:** [Strings](../modules/Ipe.String.md) — `contains`,
+- **Sibling guides:** [Strings](../reference/stdlib/String.md) — `contains`,
   `startsWith`, `split`, and the fixed-string operations to prefer when you don't
   need a pattern. [Result](result.md), which `compile` returns.
 - **Concepts:** [The parse-don't-validate idiom](../idioms/parse-dont-validate.md)

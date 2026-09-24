@@ -83,6 +83,30 @@ parsed 2 contacts:
   Grace Hopper <grace@navy.mil>
 ```
 
+## Multiline strings and `{{}}` interpolation
+
+A **triple-quoted string** `"""…"""` spans multiple lines, and its opening-line
+indentation margin is stripped — the block's layout in the source does not enter
+the value. Inside one, `{{expr}}` **interpolation** substitutes a value,
+auto-stringified through `Basics.toString`, so an `Int` needs no `String.fromInt`:
+
+```ipe
+banner : String -> Int -> String
+banner name count =
+    """
+    Hello, {{name}}!
+    You have {{count}} messages.
+    """
+```
+
+An interpolation body may be a bare identifier, a field access, a qualified
+name, or a single function application; anything more complex stays as literal
+`{{…}}` text. Interpolation works **only** in triple-quoted strings — in a
+single-line `"…"` string `{{x}}` is literal. Prefer an interpolated
+`"""…"""` over a long `++` chain when stitching text and values together. See
+[`string-interpolation`](../constructs/string-interpolation.md) for the full
+grammar and the [interpolation idiom](../idioms/string-interpolation.md).
+
 ## The why
 
 The parse-returning-`Maybe` step is [parse, don't validate][principles] at the

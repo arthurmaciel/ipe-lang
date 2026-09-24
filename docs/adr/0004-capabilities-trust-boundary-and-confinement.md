@@ -91,7 +91,7 @@ therefore non-breaking.
 Native binding is fully automatic — no hand-authored shims. Untrusted rustdoc JSON
 crosses into Ipê at exactly two `TryFrom<wire> → Result<Domain, Diagnostic>` decode
 points (`PkgInfo`, `Call`): parse, don't validate. A `Call` that has not passed
-`validate_call` is unconstructible, and between over-drop (silent omission) and
+`Call::validate` (run inside the `Call::decode` gate) is unconstructible, and between over-drop (silent omission) and
 under-bind (a binding `cargo` then rejects, breaking THE SEAL), the subsystem always
 over-drops. The inspector runs post-macro-expansion rustdoc-JSON analysis inside an
 RCE build sandbox (no network, read-only filesystem, explicit argv quoting) and

@@ -129,16 +129,14 @@ insertDecision db uid bodyHash decision =
 -- re-reviewing the same pair never overwrites it.
 insertIfAbsent : Db -> String -> String -> Decision -> Task.Task Error Int
 insertIfAbsent db uid bodyHash decision =
-    findDecision db uid bodyHash
-        |> Task.andThen
-            (\existing ->
-                case existing of
-                    Just _ ->
-                        Task.succeed 0
+    do
+        existing <- findDecision db uid bodyHash
+        case existing of
+            Just _ ->
+                Task.succeed 0
 
-                    Nothing ->
-                        insertNew db uid bodyHash decision
-            )
+            Nothing ->
+                insertNew db uid bodyHash decision
 
 
 insertNew : Db -> String -> String -> Decision -> Task.Task Error Int
@@ -148,28 +146,26 @@ insertNew db uid bodyHash decision =
             Task.fail e
 
         Ok store ->
-            Time.unixMillis ()
-                |> Task.andThen
-                    (\now ->
-                        let
-                            ( decisionText, reason ) =
-                                case decision of
-                                    Approved ->
-                                        ( "approve", Nothing )
+            do
+                now <- Time.unixMillis ()
+                let
+                    ( decisionText, reason ) =
+                        case decision of
+                            Approved ->
+                                ( "approve", Nothing )
 
-                                    Refused r ->
-                                        ( "refuse", Just r )
+                            Refused r ->
+                                ( "refuse", Just r )
 
-                            row =
-                                { uid = uid
-                                , bodyHash = bodyHash
-                                , decision = decisionText
-                                , reason = reason
-                                , reviewedAt = now
-                                }
-                        in
-                        Store.insert db store row
-                    )
+                    row =
+                        { uid = uid
+                        , bodyHash = bodyHash
+                        , decision = decisionText
+                        , reason = reason
+                        , reviewedAt = now
+                        }
+                in
+                Store.insert db store row
 
 
 -- Filter by both `uid` and `body_hash` using `Store.findWhere` with an
@@ -182,27 +178,25 @@ findDecision db uid bodyHash =
             Task.fail e
 
         Ok store ->
-            Store.findWhere db
-                store
-                (Sql.and
-                    (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
-                    (Sql.eq (Sql.column "body_hash") (Sql.param (SqlString bodyHash)))
-                )
-                |> Task.map List.head
-                |> Task.andThen
-                    (\mb ->
-                        case mb of
-                            Nothing ->
-                                Task.succeed Nothing
+            do
+                rows <-
+                    Store.findWhere db
+                        store
+                        (Sql.and
+                            (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
+                            (Sql.eq (Sql.column "body_hash") (Sql.param (SqlString bodyHash)))
+                        )
+                case List.head rows of
+                    Nothing ->
+                        Task.succeed Nothing
 
-                            Just row ->
-                                case decodeDecision row of
-                                    Ok d ->
-                                        Task.succeed (Just d)
+                    Just row ->
+                        case decodeDecision row of
+                            Ok d ->
+                                Task.succeed (Just d)
 
-                                    Err e ->
-                                        Task.fail e
-                    )
+                            Err e ->
+                                Task.fail e
 
 
 decodeDecision : ReviewRow -> Result Error Decision
@@ -296,18 +290,16 @@ drainCodec =
 -- interpolated into SQL text.
 recordDrain : Db -> String -> String -> Task.Task Error Int
 recordDrain db uid bodyHash =
-    Time.unixMillis ()
-        |> Task.andThen
-            (\now ->
-                case DbCodec.codecToBinds drainCodec (makeCursor uid bodyHash now) of
-                    Err e ->
-                        Task.fail e
+    do
+        now <- Time.unixMillis ()
+        case DbCodec.codecToBinds drainCodec (makeCursor uid bodyHash now) of
+            Err e ->
+                Task.fail e
 
-                    Ok binds ->
-                        Db.exec db
-                            "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
-                            (List.map bindValue binds)
-            )
+            Ok binds ->
+                Db.exec db
+                    "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
+                    (List.map bindValue binds)
 
 
 bindValue : ( String, SqlValue ) -> SqlValue

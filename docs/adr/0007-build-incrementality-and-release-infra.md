@@ -18,9 +18,9 @@ Compiler crates live under `src/compiler/<name>` (as `ipe_<name>`); the driver C
 under `src/ipe-cli/`; the runtime under `src/runtime/rust/`; the LSP crates under
 `src/lsp/`; the stdlib source under `src/stdlib/`; the backend under
 `src/compiler/backend/`. The acyclic stage pipeline is a directory listing —
-`canon → db → diagnostics → intern → ir → kernels → lower → parse → syntax →
-types → watch → backend` — so a developer locates any stage by `ls
-src/compiler/`. The runtime is separate from the compiler and consumed by the
+`annotate → backend → canon → db → diagnostics → ffi → intern → ir → kernels →
+lint → lower → parse → path-core → sandbox → syntax → types → watch` — so a
+developer locates any stage by `ls src/compiler/`. The runtime is separate from the compiler and consumed by the
 backend, which copies it into each emitted project as `src/ipe_runtime/`. Root
 `tools/` holds standalone binaries.
 

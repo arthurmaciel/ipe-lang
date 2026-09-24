@@ -55,6 +55,21 @@ main =
 The two are the *same* program — `do` desugars to that `andThen` chain. The block
 form makes the order of effects, and each binding, plain.
 
+## Bare-run over `_ <- task`
+
+When a task's result is `()` and you don't use it, run it as a **bare line** —
+never bind it to `_`:
+
+```ipe ipe:skip
+_ <- Io.println "starting"    -- avoid: the discard is noise
+Io.println "starting"         -- prefer: a bare line already discards
+```
+
+Both forms discard the `()`; the bare line just says so with less ceremony. A
+`do` block full of `_ <-` prefixes reads worse for no gain. Reserve `_ <- task`
+for the one case where making the discard *visible* genuinely helps a reader —
+otherwise drop the prefix.
+
 ## When not to reach for it
 
 A single effect needs no `do` — just return the task. One `andThen` is fine
@@ -69,7 +84,7 @@ the compiler will direct you to `let … in`.
 
 ## References
 
-- [`Ipe.Task`](../modules/Ipe.Task.md) — the combinators `do` sequences.
+- [`Ipe.Task`](../reference/stdlib/Task.md) — the combinators `do` sequences.
 - `ipe doc do` — the construct reference.
 - [The Elm Architecture](../guide/the-elm-architecture.md) — where a task's result
   returns as a `Msg` in an interactive program.

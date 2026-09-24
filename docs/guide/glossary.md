@@ -23,8 +23,8 @@ returns a `Cmd` alongside the next [`Model`](#model). Like a [`Task`](#task), a
 ## constructor
 
 One of the named alternatives of a type. `Just` and `Nothing` are the
-constructors of [`Maybe`](../modules/Ipe.Maybe.md); `Ok` and `Err` of
-[`Result`](../modules/Ipe.Result.md). A constructor is how you *build* a value of
+constructors of [`Maybe`](../reference/stdlib/Maybe.md); `Ok` and `Err` of
+[`Result`](../reference/stdlib/Result.md). A constructor is how you *build* a value of
 the type and, in a [`case`](#exhaustive-match), how you take it apart.
 
 ## doc-string
@@ -50,7 +50,7 @@ Not changeable after creation. Every Ipê value is immutable: a function that
 A standard-library operation whose implementation is native (Rust) rather than
 written in Ipê. A kernel-backed function still has a normal signature and
 [doc-string](#doc-string); only its body lives in the runtime. Much of
-[`Ipe.List`](../modules/Ipe.List.md) and [`Ipe.Maybe`](../modules/Ipe.Maybe.md)
+[`Ipe.List`](../reference/stdlib/List.md) and [`Ipe.Maybe`](../reference/stdlib/Maybe.md)
 is kernel-backed.
 
 ## Maybe
@@ -58,7 +58,7 @@ is kernel-backed.
 The type of a value that may be absent: `Just a` (present) or `Nothing`
 (absent). Ipê's stand-in for null — a function that might have no answer returns
 a `Maybe` and the caller must handle both cases. See
-[`Ipe.Maybe`](../modules/Ipe.Maybe.md) and [types](types.md).
+[`Ipe.Maybe`](../reference/stdlib/Maybe.md) and [types](types.md).
 
 ## Model
 
@@ -89,19 +89,34 @@ The `{ value | field = newValue }` syntax, producing a new record equal to
 
 The type of a computation that may fail with a reason: `Ok a` (success) or
 `Err e` (failure carrying an error). Where [`Maybe`](#maybe) says only "no
-value", `Result` says why. See [`Ipe.Result`](../modules/Ipe.Result.md).
+value", `Result` says why. See [`Ipe.Result`](../reference/stdlib/Result.md).
 
 ## shape
 
 Which kind of program an entry point produces — Web, WebView, Terminal, or
 Program. The compiler infers the shape from the function `main` is bound to.
 
+## string interpolation
+
+Substituting a value into text with `{{expr}}` inside a
+[triple-quoted string](#triple-quoted-string). The value is stringified through
+`Basics.toString` and joined with `++`; only a simple reference interpolates.
+Prefer it over a long `++` chain. See
+[`string-interpolation`](../constructs/string-interpolation.md).
+
 ## Task
 
 A value describing an effect — printing, reading a file, querying a database —
 without performing it. Your program builds a `Task`; the runtime is the single
 place that runs it, which keeps the rest of the program [pure](#pure-function).
-See [`Ipe.Task`](../modules/Ipe.Task.md).
+See [`Ipe.Task`](../reference/stdlib/Task.md).
+
+## triple-quoted string
+
+A multiline string literal written between `"""` delimiters. Its opening-line
+indentation margin is stripped, and it is the only place
+[string interpolation](#string-interpolation) applies. See
+[`string-interpolation`](../constructs/string-interpolation.md).
 
 ## type annotation
 

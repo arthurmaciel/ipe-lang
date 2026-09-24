@@ -59,7 +59,7 @@ clothing: if the function returns the input unchanged, it is still a validator.
 
 - [Types and inference](../guide/types.md) — `Maybe`, `Result`, and making invalid
   states unrepresentable.
-- [`Ipe.String`](../modules/Ipe.String.md) — the `toInt` / `toFloat` / `isEmail`
+- [`Ipe.String`](../reference/stdlib/String.md) — the `toInt` / `toFloat` / `isEmail`
   parsers this idiom builds on.
 - [`PRINCIPLES.md`](../../PRINCIPLES.md) — parse-don't-validate as a project
   principle.

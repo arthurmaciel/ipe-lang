@@ -112,7 +112,7 @@ environment variable reference.
 - **Per-symbol reference:** `ipe doc Ipe.File` and `ipe doc Ipe.Path` — every
   function with its signature. `ipe doc Ipe.File.walk` covers recursive directory
   traversal.
-- **Sibling guides:** [Tasks](../modules/Ipe.Task.md) — sequencing, concurrency,
+- **Sibling guides:** [Tasks](../reference/stdlib/Task.md) — sequencing, concurrency,
   and error handling for the effects `File` returns. [Result](result.md), which
   `Path.fromString` returns and `Task.fromResult` bridges.
 - **Concepts:** [Pure functions and immutability](pure-functions.md) — why disk

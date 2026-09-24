@@ -1,0 +1,97 @@
+module Main exposing (main)
+
+-- | server-mount — one `Ipe.Server.Http` server that serves a plain JSON API
+-- route AND mounts a full `Ipe.Tea.Web` (TEA) app behind the SAME `listen`.
+--
+-- The entry point is a plain `Task`, not a `Program Web`: the server is `main`,
+-- and the interactive UI is one of its routes. `Web.embed` turns the ordinary
+-- TEA cfg (`init` / `update` / `view` / `subscriptions` + routing) into a
+-- `WebApp` value; `Server.mountApp` mounts that app at a path prefix, next to
+-- ordinary `Server.get` handlers; `Server.listen` serves them all on one port.
+--
+-- This is the composition an app reaches for when it wants a JSON/HTML API and
+-- an interactive front end from a single binary — the API routes and the
+-- mounted TEA UI share the one server.
+
+import Ipe.Server.Http as Server
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+
+
+-- The mounted TEA app — an ordinary counter, identical to a standalone
+-- `Web.tea` app. `Web.embed` (rather than `Web.tea`) yields a `WebApp` value a
+-- server can mount instead of a top-level `Program`.
+
+
+type alias Model =
+    { count : Int }
+
+
+type Msg
+    = Increment
+    | Decrement
+    | NoOp
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+        NoOp ->
+            ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Element Msg
+view model =
+    Ui.column []
+        [ Ui.button [] { onPress = Just Increment, label = Ui.text "+" }
+        , Ui.text (String.fromInt model.count)
+        , Ui.button [] { onPress = Just Decrement, label = Ui.text "-" }
+        ]
+
+
+counterApp : Web.WebApp
+counterApp =
+    Web.embed
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = NoOp
+        }
+
+
+-- A plain API route beside the mounted app: a static JSON health check.
+health : Server.Request -> Task Error Server.Response
+health _req =
+    Task.succeed (Server.json "{\"status\":\"ok\"}")
+
+
+-- `main` is a `Task`: the server IS the entry point. `/health` is answered by a
+-- plain handler; every other path is served by the mounted TEA counter.
+main : Task Error ()
+main =
+    Server.listen 8000
+        [ Server.get "/health" health
+        , Server.mountApp "/" counterApp
+        ]
