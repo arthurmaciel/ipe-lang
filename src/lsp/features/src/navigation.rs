@@ -618,7 +618,7 @@ pub fn resolve_name_at(
     // the parse tree's top-level `values` and `type` union constructors for a
     // name-token span containing the cursor. The home is the current module.
     let parsed = ipe_db::parse(db, file).as_ref().ok()?;
-    def_name_at(&parsed, byte, db).map(|(name, span)| ResolvedName {
+    def_name_at(parsed, byte, db).map(|(name, span)| ResolvedName {
         module: module.to_vec(),
         name,
         span,
@@ -678,7 +678,7 @@ pub fn goto_definition(
     let files = root.files(db);
     let &def_file = files.get(&resolved.module)?;
     let parsed = ipe_db::parse(db, def_file).as_ref().ok()?;
-    let span = definition_span_in_parse(&parsed, &resolved.name, db)?;
+    let span = definition_span_in_parse(parsed, &resolved.name, db)?;
 
     Some(Definition {
         module: resolved.module,
@@ -749,7 +749,7 @@ pub fn type_definition(
 
     let &def_file = files.get(&type_module)?;
     let parsed = ipe_db::parse(db, def_file).as_ref().ok()?;
-    let span = type_decl_span_in_parse(&parsed, &type_name, db)?;
+    let span = type_decl_span_in_parse(parsed, &type_name, db)?;
     Some(Definition {
         module: type_module,
         span,

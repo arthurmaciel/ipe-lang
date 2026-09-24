@@ -2113,7 +2113,7 @@ pub fn infer_package_capabilities(
                     &db,
                     source_root,
                     entry_file,
-                    &program,
+                    program,
                 ));
                 any_lowered = true;
             }

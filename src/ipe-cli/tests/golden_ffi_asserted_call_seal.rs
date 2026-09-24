@@ -298,7 +298,7 @@ fn asserted_program_discloses_ffi_raw() {
         Ok(p) => p,
         Err((diag, _)) => panic!("fixture must lower: {diag:?}"),
     };
-    let caps = ipe_lower::program_capabilities(&program);
+    let caps = ipe_lower::program_capabilities(program);
     assert!(
         caps.contains(&ipe_ir::Capability::FfiRaw),
         "an asserted call must flip ffi-raw: {caps:?}"

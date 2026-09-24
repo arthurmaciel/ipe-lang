@@ -107,7 +107,7 @@ pub fn collect(
 
     match ipe_db::typecheck(db, root, entry) {
         Err((diag, home)) => {
-            let owner = attribute(db, root, entry, &home, diag.primary_span(), &entry_module);
+            let owner = attribute(db, root, entry, home, diag.primary_span(), &entry_module);
             push(&mut by_module, &owner, diag.clone());
         }
         Ok(solved) => {
@@ -116,7 +116,7 @@ pub fn collect(
                 push(&mut by_module, &owner, warning.clone());
             }
             if let Err((diag, home)) = ipe_db::lower_program(db, root, entry) {
-                let owner = attribute(db, root, entry, &home, diag.primary_span(), &entry_module);
+                let owner = attribute(db, root, entry, home, diag.primary_span(), &entry_module);
                 push(&mut by_module, &owner, diag.clone());
             }
         }

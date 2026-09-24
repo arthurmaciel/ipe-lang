@@ -926,7 +926,7 @@ pub fn compile_modules_observed(
                 root,
                 epoch,
                 &ir_key,
-                &program,
+                program,
                 ipe_db::Db::interner(&db).as_arc(),
             );
         }

@@ -478,7 +478,7 @@ fn extract_from_db(
                 // outlive this arm, and the mutex is not reentrant.
                 let module_api = {
                     let interner = db.interner().lock();
-                    project_interface(&interface, &interner, path)?
+                    project_interface(interface, &interner, path)?
                 };
                 modules.insert(path.clone(), module_api);
             }

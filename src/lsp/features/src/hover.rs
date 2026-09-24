@@ -136,7 +136,7 @@ fn control_model_at(
     // region a user's hover on `main` actually fires on.
     let lo = main.value.name.span.lo;
     let hi = main.value.body.span.hi.max(main.value.name.span.hi);
-    let shape = ipe_canon::shape_source::classify_main_shape(&module, &interner);
+    let shape = ipe_canon::shape_source::classify_main_shape(module, &interner);
     // Every interner use is done; release the lock before the byte-gate and the
     // lock-free control-model projection.
     drop(interner);
