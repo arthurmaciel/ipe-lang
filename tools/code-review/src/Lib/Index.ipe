@@ -1,13 +1,14 @@
-module Lib.Index exposing (Unit, drainUnit, indexDbUrlFor, loadPending, loadUnitByUid, nameFor, qualifiedUids)
+module Lib.Index exposing (Unit, drainUnit, indexDbUrl, loadPending, loadUnitByUid, nameFor, qualifiedUids)
 
 import Ipe.Db
 import Ipe.Db.Decode
 import Ipe.Db.Sql as Sql
-import Ipe.Dict as Dict
+import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
 import Ipe.File as File
 import Ipe.List as List
 import Ipe.Path as Path
+import Ipe.Result as Result exposing (Result)
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
@@ -49,27 +50,17 @@ unitByUidSql =
 -- the index root; Nothing when no such unit exists.
 loadUnitByUid : String -> Task.Task Error (Maybe Unit)
 loadUnitByUid uid =
-    System.cwd ()
-        |> Task.map (\cwd -> System.getenvOr "IPE_INDEX_ROOT" cwd)
-        |> Task.andThen
-            (\root ->
-                Db.open "sqlite" (indexDbUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
-                    |> Task.andThen
-                        (\conn ->
-                            Db.queryDecode conn unitByUidSql [ SqlString uid ] rowDecoder
-                                |> Task.map List.head
-                                |> Task.andThen
-                                    (\mb ->
-                                        case mb of
-                                            Just row ->
-                                                loadSource root row
-                                                    |> Task.map Just
+    do
+        root <- indexRoot
+        url <- indexDbUrl
+        conn <- Db.open "sqlite" url
+        rows <- Db.queryDecode conn unitByUidSql [ SqlString uid ] rowDecoder
+        case List.head rows of
+            Just row ->
+                Task.map Just (loadSource root row)
 
-                                            Nothing ->
-                                                Task.succeed Nothing
-                                    )
-                        )
-            )
+            Nothing ->
+                Task.succeed Nothing
 
 
 -- Every unit's (qualified, uid) pair. The link resolver (B9) matches
@@ -77,11 +68,10 @@ loadUnitByUid uid =
 -- internal jump links; only the names are needed, so no file reads happen.
 qualifiedUids : Task.Task Error (List ( String, String ))
 qualifiedUids =
-    Db.open "sqlite" (indexDbUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
-        |> Task.andThen
-            (\conn ->
-                Db.queryDecode conn "SELECT qualified, uid FROM units" [] qualifiedDecoder
-            )
+    do
+        url <- indexDbUrl
+        conn <- Db.open "sqlite" url
+        Db.queryDecode conn "SELECT qualified, uid FROM units" [] qualifiedDecoder
 
 
 qualifiedDecoder : Db.Decode.Decoder ( String, String )
@@ -242,6 +232,37 @@ indexDbWriteUrlFor raw =
         "sqlite://" ++ raw ++ "?mode=rwc"
 
 
+-- The index database location, read from `IPE_INDEX_DB`. `System.getenv` fails
+-- closed when the variable is unset, so a misconfigured run stops with a typed
+-- error rather than silently opening a wrong-path (or nonexistent) database —
+-- the `main` entry point guards this variable up front, and no code path here
+-- reintroduces a permissive default.
+indexDbRaw : Task.Task Error String
+indexDbRaw =
+    System.getenv "IPE_INDEX_DB"
+
+
+-- The read-only index URL: the env value shaped into a `mode=ro` `sqlite://`
+-- URL so the index db is opened for listing, never created or modified.
+indexDbUrl : Task.Task Error String
+indexDbUrl =
+    Task.map indexDbUrlFor indexDbRaw
+
+
+-- The read-write index URL, for the drain step that deletes a consumed
+-- `change_queue` row.
+indexDbWriteUrl : Task.Task Error String
+indexDbWriteUrl =
+    Task.map indexDbWriteUrlFor indexDbRaw
+
+
+-- The repo root the index's `tag:relative` paths join to, read from
+-- `IPE_INDEX_ROOT`; unset fails closed (guarded up front by `main`).
+indexRoot : Task.Task Error String
+indexRoot =
+    System.getenv "IPE_INDEX_ROOT"
+
+
 pendingSql : String
 pendingSql =
     "SELECT q.uid, q.change, q.old_hash, q.new_hash, u.path, u.name, u.qualified, u.kind, u.line_start, u.line_end, u.facing, u.purpose, u.body_hash, u.updated_sha FROM change_queue q JOIN units u ON u.uid = q.uid WHERE q.change IN ('new','modified') ORDER BY q.enqueued_at, q.uid"
@@ -252,17 +273,12 @@ pendingSql =
 -- the JOIN — they have no row to slice.
 loadPending : Task.Task Error (List Unit)
 loadPending =
-    System.cwd ()
-        |> Task.map (\cwd -> System.getenvOr "IPE_INDEX_ROOT" cwd)
-        |> Task.andThen
-            (\root ->
-                Db.open "sqlite" (indexDbUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
-                    |> Task.andThen
-                        (\conn ->
-                            Db.queryDecode conn pendingSql [] rowDecoder
-                                |> Task.andThen (loadSources root)
-                        )
-            )
+    do
+        root <- indexRoot
+        url <- indexDbUrl
+        conn <- Db.open "sqlite" url
+        rows <- Db.queryDecode conn pendingSql [] rowDecoder
+        loadSources root rows
 
 
 -- The review app consumes and clears explicitly: after a unit is decided,
@@ -272,27 +288,45 @@ loadPending =
 -- review).
 drainUnit : String -> Task.Task Error Int
 drainUnit uid =
-    Db.open "sqlite" (indexDbWriteUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
-        |> Task.andThen
-            (\conn ->
-                Db.exec conn "DELETE FROM change_queue WHERE uid = ?" [ SqlString uid ]
-            )
+    do
+        url <- indexDbWriteUrl
+        conn <- Db.open "sqlite" url
+        Db.deleteWhere conn "change_queue" (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
+
+
+-- The ipe-index `units` table modelled as a typed store over its explicit
+-- columns, so a lookup runs through `Store.findBy` with a bound value rather
+-- than a hand-written `WHERE` fragment. The store is read-only here — only
+-- queried, never migrated — so its column set need only cover the columns a
+-- query reads.
+unitsStore : Result Error (Store Store.Row)
+unitsStore =
+    Store.fromColumns "units"
+        [ Store.textColumn "uid"
+        , Store.textColumn "qualified"
+        ]
+        |> Result.map Store.public
 
 
 -- The unit's qualified name from the units table, if the unit still exists
 -- (a decided unit whose source was deleted leaves a review row but no name).
+-- The `uid` value is bound as a parameter by `Store.findBy`, never
+-- interpolated into SQL text.
 nameFor : Db.Db -> String -> Task.Task Error (Maybe String)
 nameFor conn uid =
-    Db.findWhere conn "units" (Sql.eq (Sql.column "uid") (Sql.param (SqlString uid)))
-        |> Task.map
-            (\rows ->
+    case unitsStore of
+        Err e ->
+            Task.fail e
+
+        Ok store ->
+            do
+                rows <- Store.findBy conn store "uid" (SqlString uid)
                 case List.head rows of
-                    Just d ->
-                        Dict.get "qualified" d
+                    Just row ->
+                        Task.succeed (Result.toMaybe (Store.readText "qualified" row))
 
                     Nothing ->
-                        Nothing
-            )
+                        Task.succeed Nothing
 
 
 loadSources : String -> List RowUnit -> Task.Task Error (List Unit)
@@ -312,9 +346,10 @@ loadSource root row =
             Task.fail (Error.unexpected ("index unit has an unresolvable path: " ++ row.path))
 
         Just absPath ->
-            Task.fromResult (Path.fromString absPath)
-                |> Task.andThen File.readFile
-                |> Task.map (\text -> withSource (sliceLines row.lineStart row.lineEnd text) row)
+            do
+                path <- Task.fromResult (Path.fromString absPath)
+                text <- File.readFile path
+                Task.succeed (withSource (sliceLines row.lineStart row.lineEnd text) row)
 
 
 withSource : String -> RowUnit -> Unit

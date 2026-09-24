@@ -4,8 +4,10 @@ import Ipe.Db as Db
 import Ipe.Error as Error exposing (Error)
 import Ipe.Html as Html
 import Ipe.Html.Attributes as Attr
+import Ipe.Io as Io
 import Ipe.List as List
 import Ipe.Result as Result exposing (Result)
+import Ipe.Server.Http as Server
 import Ipe.String as String
 import Ipe.System as System
 import Ipe.Task as Task
@@ -112,8 +114,10 @@ pageCmd path =
 
 reviewDb : Task Error Db.Db
 reviewDb =
-    Db.open "sqlite" (System.getenvOr "IPE_REVIEW_DB" "review.db")
-        |> Task.andThen (\db -> Task.map (\_ -> db) (LibDb.migrate db))
+    do
+        db <- Db.open "sqlite" (System.getenvOr "IPE_REVIEW_DB" "review.db")
+        LibDb.migrate db
+        Task.succeed db
 
 
 type Msg
@@ -261,16 +265,14 @@ clampIndex i len =
 saveDecision : Model -> String -> LibDb.Decision -> Cmd Msg
 saveDecision model uid decision =
     Cmd.perform
-        (reviewDb
-            |> Task.andThen
-                (\db ->
-                    case bodyHashOf uid model.queue of
-                        Just bodyHash ->
-                            LibDb.insertDecision db uid bodyHash decision
+        (do
+            db <- reviewDb
+            case bodyHashOf uid model.queue of
+                Just bodyHash ->
+                    LibDb.insertDecision db uid bodyHash decision
 
-                        Nothing ->
-                            Task.fail (Error.unexpected "unit is no longer in the queue")
-                )
+                Nothing ->
+                    Task.fail (Error.unexpected "unit is no longer in the queue")
         )
         (DecisionSaved uid)
 
@@ -287,13 +289,11 @@ drainAndReload model uid =
 
         Just bodyHash ->
             Cmd.perform
-                (reviewDb
-                    |> Task.andThen
-                        (\db ->
-                            LibDb.recordDrain db uid bodyHash
-                                |> Task.andThen (\_ -> Index.drainUnit uid)
-                                |> Task.andThen (\_ -> Queue.load)
-                        )
+                (do
+                    db <- reviewDb
+                    LibDb.recordDrain db uid bodyHash
+                    Index.drainUnit uid
+                    Queue.load
                 )
                 PendingLoaded
 
@@ -312,16 +312,12 @@ bodyHashOf uid qs =
 -- name resolved from the index db (Nothing when the unit no longer exists).
 loadHistory : Task Error (List HistoryRow)
 loadHistory =
-    reviewDb
-        |> Task.andThen (\db -> LibDb.findDecisions db)
-        |> Task.andThen
-            (\rows ->
-                Db.open "sqlite" (Index.indexDbUrlFor (System.getenvOr "IPE_INDEX_DB" ".ipe-index/index.db"))
-                    |> Task.andThen
-                        (\conn ->
-                            Task.sequence (List.map (enrich conn) rows)
-                        )
-            )
+    do
+        db <- reviewDb
+        rows <- LibDb.findDecisions db
+        indexUrl <- Index.indexDbUrl
+        conn <- Db.open "sqlite" indexUrl
+        Task.sequence (List.map (enrich conn) rows)
 
 
 enrich : Db.Db -> LibDb.ReviewRow -> Task Error HistoryRow
@@ -344,20 +340,16 @@ enrich conn row =
 -- token of its source against the index's qualified names.
 loadUnitView : String -> Task Error ( Maybe Index.Unit, List Links.Link )
 loadUnitView uid =
-    Index.loadUnitByUid uid
-        |> Task.andThen
-            (\mb ->
-                case mb of
-                    Just unit ->
-                        Index.qualifiedUids
-                            |> Task.map
-                                (\qs ->
-                                    ( Just unit, Links.resolve unit.qualified qs unit.source )
-                                )
+    do
+        mb <- Index.loadUnitByUid uid
+        case mb of
+            Just unit ->
+                do
+                    qs <- Index.qualifiedUids
+                    Task.succeed ( Just unit, Links.resolve unit.qualified qs unit.source )
 
-                    Nothing ->
-                        Task.succeed ( Nothing, [] )
-            )
+            Nothing ->
+                Task.succeed ( Nothing, [] )
 
 
 header : Model -> Ui.Element Msg
@@ -999,8 +991,9 @@ subscriptions model =
     Sub.none
 
 
-main =
-    Web.tea
+reviewApp : Web.WebApp
+reviewApp =
+    Web.embed
         { init = init
         , update = update
         , view = view
@@ -1008,3 +1001,32 @@ main =
         , routes = [ Web.route "/" QueuePage, Web.route "/history" HistoryPage, Web.route "/unit/:uid" UnitPage ]
         , notFound = QueuePage
         }
+
+
+-- Require an environment variable, failing closed with an actionable message
+-- when it is unset. `System.getenv` errors on a missing var; the recovery
+-- branch names the variable, the hint, and how to build the index, then exits
+-- non-zero. The app never falls back to a silent default that would surface
+-- later as an opaque SQLITE_CANTOPEN when the index db is not where a bare
+-- default points.
+requireEnv : String -> String -> Task Error String
+requireEnv key hint =
+    Task.onError
+        (\_ ->
+            do
+                Io.eprintln """
+                    code-review: required environment variable {{key}} is not set.
+                      {{hint}}
+                      Build the index first from the repo root:  tools/scripts/ipe-index index
+                    """
+                System.exit 1
+        )
+        (System.getenv key)
+
+
+main : Task Error ()
+main =
+    do
+        requireEnv "IPE_INDEX_DB" "path or sqlite:// URL of the ipe-index index.db"
+        requireEnv "IPE_INDEX_ROOT" "repo root the index's tag:relative paths join to"
+        Server.listen 8000 [ Server.mountApp "/" reviewApp ]
