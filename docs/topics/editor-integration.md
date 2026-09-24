@@ -55,11 +55,7 @@ tree-sitter CLI (installed through the Rust toolchain — no JS toolchain needed
 
 ```bash
 cargo install tree-sitter-cli
-# --abi 14 is load-bearing. Editor hosts (Helix, Neovim, Zed, Emacs treesit)
-# compile the committed parser.c, and many bundle a tree-sitter runtime that
-# loads at most ABI 14. A newer default ABI compiles fine but the grammar then
-# fails to load at parse time — silently, with no highlighting. Keep it pinned
-# wherever the parser is regenerated.
+# Editor hosts load at most ABI 14; keep it pinned when regenerating the parser.
 cd editors/tree-sitter-ipe && tree-sitter generate --abi 14
 ```
 
@@ -115,16 +111,36 @@ done
 ```
 
 Verify with `hx --health ipe` — the *Highlight*, *Textobject*, and *Indent* rows
-should all read `✓` once the query files are installed. That row reports only
-that the query *file* was found, **not** that the compiled grammar loaded: if a
-row shows `✓` yet a `.ipe` buffer is still unhighlighted, the grammar failed to
-load at parse time — almost always an ABI mismatch. Rebuild it with the
-`--abi 14` generate above, then `hx --grammar build`.
+should all read `✓` once the query files are installed. Those rows report that
+the query *file* was found, not that the compiled grammar loaded: highlighting
+also needs the `[[grammar]]` `source` pointed at the current grammar directory
+and the parser built at ABI 14 (`hx --grammar build`).
 
 Code actions surface on `<space>a` (Helix's default) with the cursor on a
 diagnostic — add a missing type annotation, add a missing import, repoint a
 wrong import, and more. Open the project directory (the folder holding
-`package.ipe`), not a loose single file, so cross-module analysis runs.
+`package.ipe`), not a loose single file, so go-to-definition and the other
+cross-module features have a project to resolve against — outside a project
+they return nothing.
+
+Diagnostics are pushed as you type, but Helix draws none of them in the buffer
+by default — they appear only in the gutter, the statusline, and the
+`:diagnostics` picker. To get inline squiggles, enable inline diagnostics in
+`~/.config/helix/config.toml`:
+
+```toml
+[editor]
+end-of-line-diagnostics = "hint"
+
+[editor.inline-diagnostics]
+cursor-line = "warning"
+other-lines = "error"
+```
+
+Go-to-definition and type-definition resolve names declared **in your project**.
+A standard-library name (`Io.println`, `List.map`, …) has no navigable source —
+the stdlib is compiled into `ipe`, not checked out on disk — so it reports "No
+definition found"; hover still shows its type.
 
 ## Neovim (with `nvim-lspconfig`)
 

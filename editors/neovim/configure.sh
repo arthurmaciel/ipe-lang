@@ -35,7 +35,7 @@ mkdir -p "$QUERY_DIR"
 
 BASE="https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/tree-sitter-ipe/queries"
 
-for q in highlights injections locals tags; do
+for q in highlights injections locals tags textobjects indents; do
     DEST="$QUERY_DIR/$q.scm"
     if [ -f "$DEST" ]; then
         printf 'Neovim: query %s.scm already present — skipping.\n' "$q"
