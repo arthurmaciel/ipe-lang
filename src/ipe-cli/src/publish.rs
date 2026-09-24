@@ -139,6 +139,11 @@ struct Args {
     /// `--fork <owner>`: the GitHub owner of the author's index fork to push to
     /// (defaults to the source repo's owner).
     fork: Option<String>,
+    /// `--fresh`: write a single-version entry (the new version only) instead of
+    /// appending to the existing entry. Permitted ONLY for the blessed publisher
+    /// on a reserved-namespace package (the disposable smoke probe); it would
+    /// otherwise erase a package's published history.
+    fresh: bool,
 }
 
 /// The real curated index repository. A `--index` override retargets the PR (a
@@ -173,9 +178,16 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
 
     let publisher = infer_publisher(entry_version.source.as_str());
 
-    // 3. Merge into the existing entry (append; refuse a duplicate version).
+    // 3. Compute the entry file. The default appends the new version to the
+    //    existing entry (refusing a duplicate); `--fresh` writes a single-version
+    //    entry (the new version only), used to reset the disposable reserved smoke
+    //    probe so its index entry never accumulates.
     let index_root = crate::resolve::index_root();
-    let entry_toml = merge_into_entry(&index_root, &manifest.name, &publisher, &entry_version)?;
+    let entry_toml = if args.fresh {
+        build_fresh_entry(&manifest.name, &publisher, &entry_version)?
+    } else {
+        merge_into_entry(&index_root, &manifest.name, &publisher, &entry_version)?
+    };
 
     // 4/5. Open the PR, or under --dry-run print the entry + intended PR.
     let plan = PrPlan {
@@ -221,6 +233,7 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
     let mut source: Option<String> = None;
     let mut rev: Option<String> = None;
     let mut fork: Option<String> = None;
+    let mut fresh = false;
 
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
@@ -230,6 +243,7 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
             "--source" => source = Some(take_value(&mut it, "--source")?),
             "--rev" => rev = Some(take_value(&mut it, "--rev")?),
             "--fork" => fork = Some(take_value(&mut it, "--fork")?),
+            "--fresh" => fresh = true,
             flag if flag.starts_with('-') => {
                 return Err(CliError::UsageOwned(format!(
                     "ipe package publish: unknown flag `{flag}`"
@@ -253,6 +267,7 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
         source,
         rev,
         fork,
+        fresh,
     })
 }
 
@@ -495,6 +510,41 @@ fn merge_into_entry(
     versions.push(new_version.clone());
 
     Ok(render_entry(name, publisher, &versions))
+}
+
+/// Build a single-version entry file — the new version ONLY, discarding any
+/// existing published history — for the `--fresh` reset path.
+///
+/// Fail-closed guard: `--fresh` is permitted ONLY when the package name is
+/// reserved (`ipe_kernels::reserved_package_prefix_of`) AND the publisher is
+/// blessed (`ipe_kernels::is_blessed_publisher`). This mirrors the admission
+/// gate's carve-out — defence in depth, so neither the CLI nor `admission_precheck`
+/// alone is the sole guard against erasing a package's published versions. Absent
+/// proof of both, the reset is unreachable and the caller must use the appending
+/// path.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when the name is not reserved or the publisher is not
+/// blessed.
+fn build_fresh_entry(
+    name: &str,
+    publisher: &str,
+    new_version: &EntryVersion,
+) -> Result<String, CliError> {
+    let reserved = ipe_kernels::reserved_package_prefix_of(name).is_some();
+    let blessed = ipe_kernels::is_blessed_publisher(publisher);
+    if !(reserved && blessed) {
+        return Err(CliError::UsageOwned(format!(
+            "ipe package publish: `--fresh` is only permitted for the blessed publisher on a \
+             reserved-namespace package (the disposable smoke probe); it would otherwise erase \
+             `{name}`'s published history. Publish a new version without `--fresh` instead."
+        )));
+    }
+    Ok(render_entry(
+        name,
+        publisher,
+        std::slice::from_ref(new_version),
+    ))
 }
 
 /// The intended pull request — everything publish would push, so `--dry-run` can
@@ -1473,6 +1523,58 @@ mod tests {
         assert!(format!("{err}").contains("already published"));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `--fresh` on a reserved-namespace package published by the blessed
+    /// identity yields a single-version entry (the reset): only the new version,
+    /// no accumulated history.
+    #[test]
+    fn fresh_on_reserved_blessed_yields_a_single_version_entry() {
+        let root = temp_dir("fresh-reset");
+        let packages = root.join("packages");
+        std::fs::create_dir_all(&packages).expect("packages dir");
+
+        let v = sample_version("0.0.0-smoke.1", caps(&[]));
+        let toml = build_fresh_entry("ipe-registry-smoke-probe", "arthurmaciel", &v)
+            .expect("reserved + blessed --fresh is permitted");
+        std::fs::write(packages.join("ipe-registry-smoke-probe.toml"), &toml).expect("write");
+
+        let parsed =
+            index::read_entry(&root, "ipe-registry-smoke-probe").expect("fresh entry parses");
+        assert_eq!(parsed.versions.len(), 1, "the fresh entry has one version");
+        assert_eq!(
+            parsed
+                .versions
+                .first()
+                .expect("one version")
+                .version
+                .to_string(),
+            "0.0.0-smoke.1"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `--fresh` on a NON-reserved package is refused, even for the blessed
+    /// publisher — it would erase a real package's published history.
+    #[test]
+    fn fresh_on_a_non_reserved_package_is_refused() {
+        let v = sample_version("1.0.0", caps(&[]));
+        let err = build_fresh_entry("http-extras", "arthurmaciel", &v)
+            .expect_err("a non-reserved name must reject --fresh");
+        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(format!("{err}").contains("--fresh"), "{err}");
+    }
+
+    /// `--fresh` on a reserved package by a NON-blessed publisher is refused —
+    /// fail-closed: reserved alone does not license the reset.
+    #[test]
+    fn fresh_on_reserved_non_blessed_is_refused() {
+        let v = sample_version("0.0.0-smoke.1", caps(&[]));
+        let err = build_fresh_entry("ipe-registry-smoke-probe", "attacker", &v)
+            .expect_err("a non-blessed publisher must reject --fresh");
+        assert!(matches!(err, CliError::UsageOwned(_)));
+        assert!(format!("{err}").contains("--fresh"), "{err}");
     }
 
     /// The `--dry-run` path prints the entry and the intended PR from pure

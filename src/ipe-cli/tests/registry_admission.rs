@@ -136,12 +136,22 @@ fn version(v: &str, source: &str, rev: &str) -> EntryVersion {
 }
 
 fn entry(name: &str, versions: Vec<EntryVersion>) -> IndexEntry {
+    entry_with_publisher(name, "tester", versions)
+}
+
+fn entry_with_publisher(name: &str, publisher: &str, versions: Vec<EntryVersion>) -> IndexEntry {
     IndexEntry {
         name: name.to_owned(),
-        publisher: "tester".to_owned(),
+        publisher: publisher.to_owned(),
         versions,
     }
 }
+
+/// The blessed first-party publisher — read from the SSOT so this corpus never
+/// re-hardcodes the identity.
+const BLESSED: &str = ipe_kernels::BLESSED_PUBLISHER;
+/// The disposable reserved smoke-probe package name.
+const RESERVED_PROBE: &str = "ipe-registry-smoke-probe";
 
 // ── admission corpus: validate_entry_file (schema) ──────────────────────────
 
@@ -345,6 +355,97 @@ fn precheck_first_publish_binds_the_source() {
     let err = index::admission_precheck(&submitted, None)
         .expect_err("a divergent source in a first publish must be denied");
     assert!(format!("{err}").contains("name-squat"), "{err}");
+}
+
+#[test]
+fn precheck_denies_dropping_a_baseline_version_for_an_ordinary_package() {
+    // Append-only: an ordinary package that omits a published version from the
+    // submission is refused — a published version must never be removed.
+    let src = "https://example.invalid/pkg";
+    let baseline = entry(
+        "pkg",
+        vec![
+            version("1.0.0", src, VALID_REV),
+            version("2.0.0", src, VALID_REV),
+        ],
+    );
+    let submitted = entry("pkg", vec![version("2.0.0", src, VALID_REV)]);
+    let err = index::admission_precheck(&submitted, Some(&baseline))
+        .expect_err("dropping a baseline version must be denied");
+    let msg = format!("{err}");
+    assert!(msg.contains("append-only"), "{msg}");
+    assert!(
+        msg.contains("1.0.0"),
+        "the reject names the dropped version: {msg}"
+    );
+}
+
+#[test]
+fn precheck_allows_a_reserved_blessed_reset_dropping_versions() {
+    // The carve-out: the reserved disposable smoke probe, published by the
+    // blessed first-party identity, may reset to a single version — dropping the
+    // accumulated history is the sanctioned smoke reset.
+    let src = "https://example.invalid/pkg";
+    let baseline = entry_with_publisher(
+        RESERVED_PROBE,
+        BLESSED,
+        vec![
+            version("0.0.0-smoke.1", src, VALID_REV),
+            version("0.0.0-smoke.2", src, VALID_REV),
+        ],
+    );
+    let submitted = entry_with_publisher(
+        RESERVED_PROBE,
+        BLESSED,
+        vec![version("0.0.0-smoke.3", src, VALID_REV)],
+    );
+    index::admission_precheck(&submitted, Some(&baseline))
+        .expect("a reserved + blessed reset drops prior versions");
+}
+
+#[test]
+fn precheck_denies_a_reserved_non_blessed_reset() {
+    // Fail-closed: a reserved name alone does not license the drop — a non-blessed
+    // publisher dropping versions still hits the append-only rejection.
+    let src = "https://example.invalid/pkg";
+    let baseline = entry_with_publisher(
+        RESERVED_PROBE,
+        "tester",
+        vec![
+            version("0.0.0-smoke.1", src, VALID_REV),
+            version("0.0.0-smoke.2", src, VALID_REV),
+        ],
+    );
+    let submitted = entry_with_publisher(
+        RESERVED_PROBE,
+        "tester",
+        vec![version("0.0.0-smoke.2", src, VALID_REV)],
+    );
+    let err = index::admission_precheck(&submitted, Some(&baseline))
+        .expect_err("a reserved but non-blessed reset must be denied");
+    assert!(format!("{err}").contains("append-only"), "{err}");
+}
+
+#[test]
+fn precheck_denies_a_reserved_blessed_rewrite() {
+    // The carve-out is drop-only: reserved + blessed may reset (drop) versions,
+    // but rewriting an EXISTING version's rev is still a supply-chain mutation and
+    // stays forbidden everywhere.
+    let src = "https://example.invalid/pkg";
+    let other_rev = "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3";
+    let baseline = entry_with_publisher(
+        RESERVED_PROBE,
+        BLESSED,
+        vec![version("0.0.0-smoke.1", src, VALID_REV)],
+    );
+    let submitted = entry_with_publisher(
+        RESERVED_PROBE,
+        BLESSED,
+        vec![version("0.0.0-smoke.1", src, other_rev)],
+    );
+    let err = index::admission_precheck(&submitted, Some(&baseline))
+        .expect_err("rewriting a reserved+blessed version must still be denied");
+    assert!(format!("{err}").contains("immutable"), "{err}");
 }
 
 // ── ephemeral local git index E2E: resolve + verify, then tamper ────────────

@@ -523,6 +523,11 @@ pub const MAX_ENTRY_VERSIONS: usize = 1024;
 /// - **Immutability** — a submitted version whose NUMBER already exists in the
 ///   baseline must be byte-for-byte identical; rewriting its
 ///   source/rev/sha256/capabilities is a supply-chain mutation and is refused.
+/// - **Append-only** — a version NUMBER published in the baseline must not be
+///   dropped from the submission; the index never removes a published version.
+///   The one carve-out (drop-only) is the disposable reserved smoke namespace
+///   owned by the blessed first-party publisher, which may reset to a single
+///   version.
 /// - **Source continuity** — a package name is bound to one source repository.
 ///   The established source is the baseline's first published version's source
 ///   (on first publish, the submitted entry's own first version fixes it); a
@@ -558,6 +563,34 @@ pub fn admission_precheck(
                  differ). A published version must never be rewritten — publish a new version.",
                 submitted.name, version.version
             )));
+        }
+    }
+
+    // Append-only: a version NUMBER published in the baseline must not be
+    // dropped from the submission. A published version is immutable AND
+    // permanent — silently removing one is a supply-chain regression (a
+    // consumer's pinned resolution would vanish), so it is refused fail-closed.
+    //
+    // Carve-out (drop-only, both conditions required): the disposable reserved
+    // smoke namespace owned by the blessed first-party publisher may reset to a
+    // single version. A reserved name with a non-blessed publisher, or a
+    // non-reserved name, still hits the rejection — absent proof the drop is the
+    // sanctioned reset, the permissive branch is unreachable. Rewriting a version
+    // stays forbidden everywhere (enforced above); only dropping is carved out.
+    let reset_allowed = ipe_kernels::reserved_package_prefix_of(&submitted.name).is_some()
+        && ipe_kernels::is_blessed_publisher(&submitted.publisher);
+    if !reset_allowed {
+        let submitted_versions: std::collections::BTreeSet<&semver::Version> =
+            submitted.versions.iter().map(|v| &v.version).collect();
+        for baseline_version in baseline_by_version.keys() {
+            if !submitted_versions.contains(*baseline_version) {
+                return Err(CliError::UsageOwned(format!(
+                    "ipe package audit-entry: `{}` drops the published version {baseline_version}, \
+                     but the index is append-only: a published version must never be removed. \
+                     Publish a new version instead.",
+                    submitted.name
+                )));
+            }
         }
     }
 
