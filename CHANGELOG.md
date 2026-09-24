@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.2.3](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.2...ipe-v0.2.3) (2026-09-24)
+
+
+### Features
+
+* **registry:** reset-per-run for the reserved smoke probe (append-only harden + --fresh) ([#2799](https://github.com/arthurmaciel/ipe-lang/issues/2799)) ([4946997](https://github.com/arthurmaciel/ipe-lang/commit/4946997ccdce6a9df26427e4e8f9b7308461f8d8))
+
 ## [0.2.2](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.1...ipe-v0.2.2) (2026-09-24)
 
 
