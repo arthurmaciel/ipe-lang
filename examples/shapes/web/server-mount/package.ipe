@@ -1,0 +1,15 @@
+module Package exposing (package)
+
+import Ipe.Package exposing (..)
+
+
+package : Package
+package =
+    { name = "server-mount"
+    , version = "0.1.0"
+    , delivery =
+        { desktop = { title = "server-mount", width = 1024, height = 768 }
+        , mobile = { bundleId = "com.example.server-mount", orientation = Portrait }
+        , browser = { basePath = "/" }
+        }
+    }
