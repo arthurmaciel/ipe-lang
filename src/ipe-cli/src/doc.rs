@@ -620,6 +620,10 @@ static CONSTRUCT_PAGES: &[(&str, &str)] = &[
         "record-update",
         include_str!("../../../docs/constructs/record-update.md"),
     ),
+    (
+        "string-interpolation",
+        include_str!("../../../docs/constructs/string-interpolation.md"),
+    ),
     ("type", include_str!("../../../docs/constructs/type.md")),
     (
         "type-alias",

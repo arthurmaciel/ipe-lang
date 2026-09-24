@@ -96,12 +96,27 @@ value", `Result` says why. See [`Ipe.Result`](../reference/stdlib/Result.md).
 Which kind of program an entry point produces — Web, WebView, Terminal, or
 Program. The compiler infers the shape from the function `main` is bound to.
 
+## string interpolation
+
+Substituting a value into text with `{{expr}}` inside a
+[triple-quoted string](#triple-quoted-string). The value is stringified through
+`Basics.toString` and joined with `++`; only a simple reference interpolates.
+Prefer it over a long `++` chain. See
+[`string-interpolation`](../constructs/string-interpolation.md).
+
 ## Task
 
 A value describing an effect — printing, reading a file, querying a database —
 without performing it. Your program builds a `Task`; the runtime is the single
 place that runs it, which keeps the rest of the program [pure](#pure-function).
 See [`Ipe.Task`](../reference/stdlib/Task.md).
+
+## triple-quoted string
+
+A multiline string literal written between `"""` delimiters. Its opening-line
+indentation margin is stripped, and it is the only place
+[string interpolation](#string-interpolation) applies. See
+[`string-interpolation`](../constructs/string-interpolation.md).
 
 ## type annotation
 
