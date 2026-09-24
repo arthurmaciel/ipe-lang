@@ -251,7 +251,11 @@ log "publishing $PACKAGE@$VERSION to $INDEX_REPO (real push-path)"
   --fork "$FORK_OWNER" \
   --source "https://github.com/$SOURCE_REPO" \
   --rev "$SRC_HEAD" \
+  --fresh \
   || fail "ipe package publish failed against $INDEX_REPO (auth/admission/push error) — fail-closed."
+# `--fresh`: reset the disposable reserved probe so its index entry never grows
+# (a single-version submission each run) and no prior rev is re-fetched from a
+# stale, tip-only clone.
 
 # ── 3. Wait for admission to accept + the entry to resolve via Pages ────────
 # Admission runs on the registry side (the PR's checks); once it merges, the
