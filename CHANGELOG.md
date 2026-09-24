@@ -10,6 +10,19 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.2.2](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.1...ipe-v0.2.2) (2026-09-24)
+
+
+### Features
+
+* **registry:** reserve the ipe-registry-smoke-* package namespace to the blessed publisher ([#2795](https://github.com/arthurmaciel/ipe-lang/issues/2795)) ([c1d8193](https://github.com/arthurmaciel/ipe-lang/commit/c1d8193f564a37df2a6cb2385088d38a8055d6b8))
+
+
+### Bug Fixes
+
+* **deps:** bump salsa 0.27.2-&gt;0.28.5 to close RUSTSEC-2026-0308 (use-after-free) ([#2797](https://github.com/arthurmaciel/ipe-lang/issues/2797)) ([4062e87](https://github.com/arthurmaciel/ipe-lang/commit/4062e871c888a98a18d1b039615792825c728b4b))
+* **doc:** embed the guide/topic/construct/idiom corpus so `ipe doc serve` renders everywhere ([#2796](https://github.com/arthurmaciel/ipe-lang/issues/2796)) ([412a573](https://github.com/arthurmaciel/ipe-lang/commit/412a57317768bf34a9a91d1f93a1e190b908b0a7))
+
 ## [0.2.1](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.0...ipe-v0.2.1) (2026-09-24)
 
 
