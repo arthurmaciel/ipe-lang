@@ -1703,20 +1703,44 @@ fn reserved_namespace_ownership(
 ///
 /// Fail-closed default-deny: the blessed exemption applies ONLY when
 /// `entry_publisher` is `Some(blessed)`. An absent publisher (a plain local
-/// audit) or any other publisher rejects on the first reserved-namespace module,
-/// naming the package and the offending module.
+/// audit) or any other publisher rejects on a reserved package name, or on the
+/// first reserved-namespace module, naming the package and the offending name.
+///
+/// Both the package NAME and the module namespaces are reserved: a package whose
+/// name lives in a reserved package namespace is refused on the name alone, even
+/// when its modules are all ordinary, so a squatted probe name cannot ride the
+/// smoke auto-approve path.
 ///
 /// # Errors
 /// [`CliError::PackageAudit`] with [`Check::ReservedNamespace`] when a
-/// non-blessed package provides a reserved-namespace module.
+/// non-blessed package claims a reserved package name or provides a
+/// reserved-namespace module.
 fn reserved_namespace_verdict(
     package_name: &str,
     module_paths: &[&[String]],
     entry_publisher: Option<&str>,
 ) -> Result<(), CliError> {
-    if entry_publisher.is_some_and(ipe_kernels::is_blessed_publisher) {
+    let is_blessed = entry_publisher.is_some_and(ipe_kernels::is_blessed_publisher);
+    if let Some(prefix) = ipe_kernels::reserved_package_prefix_of(package_name)
+        && !is_blessed
+    {
+        let who = entry_publisher.map_or_else(
+            || "with no first-party provenance".to_owned(),
+            |p| format!("published by `{p}`"),
+        );
+        return Err(reject(
+            Check::ReservedNamespace,
+            format!(
+                "package `{package_name}` ({who}) claims the reserved `{prefix}-*` package \
+                 namespace, owned by the first-party publisher `{}`; a third-party package \
+                 must not take a name there.",
+                ipe_kernels::BLESSED_PUBLISHER,
+            ),
+        ));
+    }
+    if is_blessed {
         // The blessed first-party publisher legitimately owns the reserved
-        // namespace; nothing to refuse.
+        // package namespace and reserved module namespaces; nothing to refuse.
         return Ok(());
     }
     for module_path in module_paths {
@@ -1835,6 +1859,80 @@ mod tests {
         let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
         assert!(reserved_namespace_verdict("cool-lib", &[app_mod], Some("anyone")).is_ok());
         assert!(reserved_namespace_verdict("cool-lib", &[app_mod], None).is_ok());
+    }
+
+    #[test]
+    fn reserved_package_name_rejects_third_party_publisher() {
+        // A package NAMED in the reserved smoke namespace, published by a
+        // non-blessed account, is refused on the name alone — even though its
+        // modules are all ordinary.
+        let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
+        let err =
+            reserved_namespace_verdict("ipe-registry-smoke-probe", &[app_mod], Some("attacker"))
+                .expect_err("third-party reserved package name must be rejected");
+        assert!(
+            matches!(
+                &err,
+                CliError::PackageAudit(Rejection {
+                    check: Check::ReservedNamespace,
+                    ..
+                })
+            ),
+            "expected a ReservedNamespace reject, got {err:?}"
+        );
+        // The reject names the package and the reserved package namespace.
+        let message = err.to_string();
+        assert!(
+            message.contains("ipe-registry-smoke-probe"),
+            "message: {message}"
+        );
+        assert!(
+            message.contains("ipe-registry-smoke-*"),
+            "message: {message}"
+        );
+    }
+
+    #[test]
+    fn reserved_package_name_rejects_absent_publisher() {
+        // A plain local audit (no provenance) refuses a reserved package name:
+        // the blessed exemption needs an explicit blessed publisher.
+        let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
+        let err = reserved_namespace_verdict("ipe-registry-smoke-probe-bad", &[app_mod], None)
+            .expect_err("no-provenance reserved package name must be rejected");
+        assert!(matches!(
+            err,
+            CliError::PackageAudit(Rejection {
+                check: Check::ReservedNamespace,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reserved_package_name_accepts_blessed_publisher() {
+        // The blessed first-party publisher legitimately owns the reserved
+        // package namespace.
+        let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
+        assert!(
+            reserved_namespace_verdict(
+                "ipe-registry-smoke-probe",
+                &[app_mod],
+                Some(ipe_kernels::BLESSED_PUBLISHER)
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn non_reserved_package_name_accepts_any_publisher() {
+        // A name that merely shares the leading characters without a hyphen
+        // segment boundary is not reserved, from any publisher.
+        let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
+        assert!(
+            reserved_namespace_verdict("ipe-registry-smokehouse", &[app_mod], Some("anyone"))
+                .is_ok()
+        );
+        assert!(reserved_namespace_verdict("ipe-registry-smokehouse", &[app_mod], None).is_ok());
     }
 
     #[test]

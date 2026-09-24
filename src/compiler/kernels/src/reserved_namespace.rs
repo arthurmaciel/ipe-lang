@@ -25,6 +25,22 @@
 /// here, after which [`reserved_prefix_of`] classifies it for every caller.
 pub const RESERVED_MODULE_PREFIXES: &[&str] = &["Ipe", "Rust"];
 
+/// Every reserved package-name namespace, in declaration order.
+///
+/// A package whose name equals one of these, or extends it by a hyphen segment,
+/// lives in a reserved package namespace owned by the blessed first-party
+/// publisher.
+///
+/// The disposable registry-publish-smoke probe packages
+/// (`ipe-registry-smoke-probe` / `ipe-registry-smoke-probe-bad`) live here; a
+/// third party must not claim a package name in these namespaces, since a
+/// squatted probe name could ride the smoke auto-approve path.
+///
+/// The vocabulary is closed: adding a new reserved package namespace is a single
+/// edit here, after which [`reserved_package_prefix_of`] classifies it for every
+/// caller.
+pub const RESERVED_PACKAGE_PREFIXES: &[&str] = &["ipe-registry-smoke"];
+
 /// The blessed first-party publisher identity — the one account permitted to own
 /// a module in a reserved namespace (`Ipe.*`, `Rust.*`) in the registry.
 ///
@@ -48,6 +64,23 @@ pub fn reserved_prefix_of<S: AsRef<str>>(module_path: &[S]) -> Option<&'static s
         .find(|&reserved| reserved == first)
 }
 
+/// The reserved package-name prefix a package name claims, if any.
+///
+/// A segment-boundary predicate, never a raw substring match: a name is reserved
+/// iff it equals a reserved prefix `P` or extends it by a hyphen segment
+/// (`P-…`). `ipe-registry-smoke-probe` → `Some("ipe-registry-smoke")`;
+/// `ipe-registry-smokehouse` → `None` (a distinct name, not a hyphen-segment
+/// extension); `cool-lib` → `None`.
+#[must_use]
+pub fn reserved_package_prefix_of(package_name: &str) -> Option<&'static str> {
+    RESERVED_PACKAGE_PREFIXES.iter().copied().find(|&prefix| {
+        package_name == prefix
+            || package_name
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('-'))
+    })
+}
+
 /// Whether a module path lives in a reserved namespace.
 #[must_use]
 pub fn is_reserved_module_path<S: AsRef<str>>(module_path: &[S]) -> bool {
@@ -65,7 +98,7 @@ pub fn is_blessed_publisher(publisher: &str) -> bool {
 mod tests {
     use super::{
         BLESSED_PUBLISHER, RESERVED_MODULE_PREFIXES, is_blessed_publisher, is_reserved_module_path,
-        reserved_prefix_of,
+        reserved_package_prefix_of, reserved_prefix_of,
     };
 
     #[test]
@@ -96,6 +129,29 @@ mod tests {
         assert!(is_reserved_module_path(&["Ipe", "String"]));
         assert!(is_reserved_module_path(&["Rust"]));
         assert!(!is_reserved_module_path(&["App", "View"]));
+    }
+
+    #[test]
+    fn reserved_package_prefix_matches_the_hyphen_segment_boundary_only() {
+        // The exact prefix and any hyphen-segment extension are reserved.
+        assert_eq!(
+            reserved_package_prefix_of("ipe-registry-smoke"),
+            Some("ipe-registry-smoke")
+        );
+        assert_eq!(
+            reserved_package_prefix_of("ipe-registry-smoke-probe"),
+            Some("ipe-registry-smoke")
+        );
+        assert_eq!(
+            reserved_package_prefix_of("ipe-registry-smoke-probe-bad"),
+            Some("ipe-registry-smoke")
+        );
+        // A distinct name that merely shares the leading characters without a
+        // hyphen segment boundary is NOT reserved — this is a segment predicate,
+        // not a substring match.
+        assert_eq!(reserved_package_prefix_of("ipe-registry-smokehouse"), None);
+        assert_eq!(reserved_package_prefix_of("cool-lib"), None);
+        assert_eq!(reserved_package_prefix_of(""), None);
     }
 
     #[test]
