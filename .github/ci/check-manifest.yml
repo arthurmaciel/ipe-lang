@@ -266,9 +266,9 @@ checks:
     note: playground.yml build leg; playground-jail is the Security gate.
 
   # ── Utility / non-status jobs (not gates; declared so drift stays quiet) ───
-  # `changes` (paths-filter fan-out), release/promote/backport automation, and
-  # the rerun helper are plumbing, not guarantees. Marked internal so the drift
-  # gate does not demand a gate/informational disposition for them.
+  # `changes` (paths-filter fan-out), release automation, and the rerun helper
+  # are plumbing, not guarantees. Marked internal so the drift gate does not
+  # demand a gate/informational disposition for them.
   - context: changes
     disposition: informational
     producer: ci.yml

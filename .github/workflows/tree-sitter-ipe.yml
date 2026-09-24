@@ -7,7 +7,7 @@ name: tree-sitter-ipe
 
 on:
   push:
-    branches: [main, master, development]
+    branches: [main]
     paths:
       - 'editors/tree-sitter-ipe/**'
       - 'examples/**/*.ipe'
