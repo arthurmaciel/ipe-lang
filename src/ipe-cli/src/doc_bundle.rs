@@ -1329,7 +1329,7 @@ mod tests {
 
     // -- Embedded-corpus regression tests ------------------------------------
 
-    /// The bug: with a nonexistent docs_root the four directory-convention kinds
+    /// The bug: with a nonexistent `docs_root` the four directory-convention kinds
     /// previously yielded zero entries.  The fix embeds the corpus at compile
     /// time, so all four kinds are non-empty regardless of the working directory.
     #[test]
@@ -1409,9 +1409,13 @@ mod tests {
         ];
         for (kind, key) in cases {
             let qualified = format!("{kind}:{key}");
+            assert!(
+                bundle.resolve_qualified(&qualified).is_ok(),
+                "expected {qualified} to resolve"
+            );
             let entry = bundle
                 .resolve_qualified(&qualified)
-                .unwrap_or_else(|e| panic!("expected {qualified} to resolve; got: {e}"));
+                .expect("resolution checked directly above");
             assert!(
                 !entry.body.is_empty(),
                 "{qualified} resolved but body is empty"
@@ -1428,7 +1432,7 @@ mod tests {
         let mut maps = BTreeMap::new();
         ingest_embedded_dir(&EMBEDDED_CONSTRUCTS, DocKind::Construct, &mut maps)
             .expect("ingest_embedded_dir must not error on well-formed embedded corpus");
-        let count = maps.get(&DocKind::Construct).map_or(0, |m| m.len());
+        let count = maps.get(&DocKind::Construct).map_or(0, BTreeMap::len);
         assert!(
             count >= FORMER_COUNT,
             "embedded constructs corpus has {count} entries but expected >= {FORMER_COUNT} \
