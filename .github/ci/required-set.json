@@ -17,6 +17,7 @@
   "linux-arm64 (seccomp socket-deny + bubblewrap)",
   "linux-x64 (seccomp socket-deny + bubblewrap)",
   "macos-arm64 (sandbox-exec / Seatbelt)",
+  "manifest-lock-consistency",
   "markdown-parity",
   "panic-scan",
   "playground-jail",
