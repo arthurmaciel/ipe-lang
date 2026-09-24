@@ -10,6 +10,57 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.2.1](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.0...ipe-v0.2.1) (2026-09-24)
+
+
+### Features
+
+* **auth:** add Ipe.Auth principal-claims read kernels (claim/hasRole/memberOf) ([3986d0f](https://github.com/arthurmaciel/ipe-lang/commit/3986d0fd26a6efa802246722bf43648e7727b8bd))
+* **backend:** uniquify emitted crate identity per project ([#2752](https://github.com/arthurmaciel/ipe-lang/issues/2752)) ([1baba6d](https://github.com/arthurmaciel/ipe-lang/commit/1baba6d3fff2697db11982412c2eddef4ede47e0))
+* **cli:** ipe add writes the dependency into package.ipe, not only ipe.lock ([f11da4e](https://github.com/arthurmaciel/ipe-lang/commit/f11da4e72b038387585ab6b58cb3a0e07c57521a))
+* **cli:** verified publisher identity for signed publishes + `ipe add` writes package.ipe ([d764278](https://github.com/arthurmaciel/ipe-lang/commit/d76427849e3025d92f8fbd2f86297b42b265af8d))
+* **control:** parent→child loopback control-channel transport + accept-loop server ([#2766](https://github.com/arthurmaciel/ipe-lang/issues/2766)) ([79731ac](https://github.com/arthurmaciel/ipe-lang/commit/79731accf5152695a460232adc512f3c15d6975c))
+* **db-rls:** composable Pred/Policy row-security algebra (slice 1 of [#2767](https://github.com/arthurmaciel/ipe-lang/issues/2767)) ([a7c5c10](https://github.com/arthurmaciel/ipe-lang/commit/a7c5c10b5da2b79d3c6fcfa877188c640ee563e8))
+* **db,emit:** RLS existsIn (slice 2) + tui appearance-hoist enablement ([971a7f6](https://github.com/arthurmaciel/ipe-lang/commit/971a7f6244925ece695139eddce349bcf8d0f2b6))
+* **db/store:** column masking — CASE-WHEN projection that masks to NULL for unauthorized rows ([#2771](https://github.com/arthurmaciel/ipe-lang/issues/2771)) ([e3c182d](https://github.com/arthurmaciel/ipe-lang/commit/e3c182d66ec7119fbfa3311b38034590a1954817))
+* **db:** existsIn correlated-subquery RLS predicate ([4fc1814](https://github.com/arthurmaciel/ipe-lang/commit/4fc18142dcf7ea55694117db5f6d29e81c2c571d))
+* **db:** principal-side RLS predicate leaves (role/memberOf/claimEquals) ([5c06009](https://github.com/arthurmaciel/ipe-lang/commit/5c0600956191cfe5e952496be62e36a1461f23b0))
+* **db:** wire Sql.exists + existsIn/correlate kernels across the pipeline ([58a8fb7](https://github.com/arthurmaciel/ipe-lang/commit/58a8fb70f9457bcad3f74ca6b5ecba82912e206e))
+* **debugger:** cli/worker record/replay surface (C5/C6) ([196cbea](https://github.com/arthurmaciel/ipe-lang/commit/196cbea9b0b1d8991ff0e70ee92733fc9be10854))
+* **debugger:** place the time-travel recorder above the cli and worker TEA loops ([#2765](https://github.com/arthurmaciel/ipe-lang/issues/2765)) ([2bc2092](https://github.com/arthurmaciel/ipe-lang/commit/2bc2092fdf26929f1ecb45868c335a2463accfd5))
+* **dev-loop,db:** control-channel tui wiring + ipe debugger record/replay + RLS predicate algebra (slice 1) ([1eb21e8](https://github.com/arthurmaciel/ipe-lang/commit/1eb21e8f8dc7158464c934374d8f742bdb4e4624))
+* **runtime/tui:** in-process apply seam for hot-swap + debugger scrub ([#2763](https://github.com/arthurmaciel/ipe-lang/issues/2763)) ([417e754](https://github.com/arthurmaciel/ipe-lang/commit/417e754f3cfb03a6aa590ea89e6457a49797998c))
+* **runtime:** shape-agnostic dev-loop control channel — security spine (+ debugger/web compile fix) ([#2760](https://github.com/arthurmaciel/ipe-lang/issues/2760)) ([3c7cd46](https://github.com/arthurmaciel/ipe-lang/commit/3c7cd4679369e20669ad1d24a56dacbad10f8814))
+* **tui:** mount the control apply-seam on a default `ipe watch` ([#2749](https://github.com/arthurmaciel/ipe-lang/issues/2749)) ([7546df6](https://github.com/arthurmaciel/ipe-lang/commit/7546df6593b132c19127d9def58205a94816ce90))
+* **watch,auth:** mount tui apply-seam on default watch + Auth principal-claim read kernels ([e47f6fc](https://github.com/arthurmaciel/ipe-lang/commit/e47f6fcf4b056d7c8b49ac0e4e30a82441f0f1ec))
+* **watch,tui:** wire the shape-agnostic control channel end-to-end for tui ([8658ca3](https://github.com/arthurmaciel/ipe-lang/commit/8658ca3a453cba4e53d4e75bf0ed5cf2c799fdf6))
+* **watch:** tui appearance hot-swap over the loopback control channel ([eabc51e](https://github.com/arthurmaciel/ipe-lang/commit/eabc51ef1ea289b0e1e1eb58d45d7d060fa499ec))
+
+
+### Bug Fixes
+
+* **auth:** principal_claim returns IpeMaybe&lt;String&gt; to match the Maybe scheme (SEAL) ([4cbcb46](https://github.com/arthurmaciel/ipe-lang/commit/4cbcb46e45ab19290d8da8dfb7b0a117cefcde1c))
+* **canon:** expose Auth.claim/hasRole/memberOf as Ipe.Auth module members ([6af5006](https://github.com/arthurmaciel/ipe-lang/commit/6af50060842daa356f3a8f44952acc93daca4af5))
+* **canon:** resolve fully-qualified dotted user modules in type position ([#2777](https://github.com/arthurmaciel/ipe-lang/issues/2777)) ([22398e1](https://github.com/arthurmaciel/ipe-lang/commit/22398e17dcb6e80ab9fec2524859d223e2acbf3f))
+* **ci:** resolve the static-build artifact by crate identity and deliver the Windows exe suffix ([#2764](https://github.com/arthurmaciel/ipe-lang/issues/2764)) ([4f7830d](https://github.com/arthurmaciel/ipe-lang/commit/4f7830d9c51646aac0fda248633ae656daa05993))
+* **db/store:** build Policy as a full record literal, not a generic record update (unsupported at lowering) ([f1f38ee](https://github.com/arthurmaciel/ipe-lang/commit/f1f38eed14815c440f6ba2e329f0c5e33cbe0509))
+* **db/store:** handle every Pred constructor explicitly in simplifyNot/predIsAlways/predIsNever (no closed-union catch-all) ([0d29e84](https://github.com/arthurmaciel/ipe-lang/commit/0d29e849267ddf6ed68820d4ed46675937f63b93))
+* **db:** correlate takes column values, not accessors ([64aa101](https://github.com/arthurmaciel/ipe-lang/commit/64aa10178d813f603886953f8e2d23d3935895cc))
+* **debugger:** hoist RECORD_ENV to the ungated runtime root so the featureless CLI can reference it ([a47ab6d](https://github.com/arthurmaciel/ipe-lang/commit/a47ab6d63c34575f45d01d4d813ef47aeb0af716))
+* **debugger:** hoist replay use to fn top; classify the debugger subcommand as build-heavy in the transcript matrix ([8be6a21](https://github.com/arthurmaciel/ipe-lang/commit/8be6a21610c77e63acccc2f122b154bffb1d0b45))
+* **emit:** declare literal_table in the emitted mod.rs for web/control-wire/debugger (module-set closure); drop unused re-export ([34020d8](https://github.com/arthurmaciel/ipe-lang/commit/34020d8284c4dff3862d9d93b3aaacc8637a1d15))
+* **ipe-cli:** clear clippy nursery/restriction lints in the publish + manifest-writer paths ([0221829](https://github.com/arthurmaciel/ipe-lang/commit/02218295368e7d8e6d202f9da3fb482bbb365fc0))
+* **lower:** drop ExistsRef phantom row so PExists carries no live tyvar ([466571d](https://github.com/arthurmaciel/ipe-lang/commit/466571d7dc0988cf8207d1ace4aa03e5ce834802))
+* **publish:** author the index-PR commit under the account's verified GitHub identity ([328afce](https://github.com/arthurmaciel/ipe-lang/commit/328afcecf6e6fa3f26472d348ce4e327ee41107d))
+* **rls-example:** type classifyMarker store param as Draft, not Store ([cd2c8e4](https://github.com/arthurmaciel/ipe-lang/commit/cd2c8e4e6eb60977f3e789b348095de1a3aad767))
+* **runtime:** compile ipe-runtime-rust under debugger+tui (CellsView vs Element) ([#2762](https://github.com/arthurmaciel/ipe-lang/issues/2762)) ([83d5139](https://github.com/arthurmaciel/ipe-lang/commit/83d5139a511b3bcb8778ed2c6abe52e4a1f6e7a8))
+* **runtime:** sound tui watch hot-swap over the control channel + prove the full loopback path ([#2772](https://github.com/arthurmaciel/ipe-lang/issues/2772)) ([bb2d0f2](https://github.com/arthurmaciel/ipe-lang/commit/bb2d0f261b0dd2017c47e25f302108a1b742d035))
+* **watch/runtime:** server IPE_SERVER_PORT + proxy HTTP-detection + artifact→out/ + listening gutter + script template ([#2753](https://github.com/arthurmaciel/ipe-lang/issues/2753)) ([6bbd867](https://github.com/arthurmaciel/ipe-lang/commit/6bbd86787d260c41908abbd6fdcf02e43a385513))
+* **watch:** detect web/tui/http shape across the whole emitted crate, not just src/main.rs ([c7c8383](https://github.com/arthurmaciel/ipe-lang/commit/c7c8383a595bde9b394067aa3641dbc13a9b56cf))
+* **watch:** empty appearance patch is a no-op success before the port check ([aced28a](https://github.com/arthurmaciel/ipe-lang/commit/aced28a4d7991f99aeedd39c9282e21b4291e668))
+* **watch:** route cli/worker appearance edits to rebuild, never a silent skip ([a7a8b1b](https://github.com/arthurmaciel/ipe-lang/commit/a7a8b1b8d91158d3dd16d9d880e14871ae3551a5))
+* **watch:** tui hoists only tui-appearance kernels; narrow control-wire to tui ([f32de10](https://github.com/arthurmaciel/ipe-lang/commit/f32de10541c6face2bfadf0c96d6e7b808637c06))
+
 ## [0.2.0](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.1.86...ipe-v0.2.0) (2026-09-22)
 
 
