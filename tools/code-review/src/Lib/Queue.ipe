@@ -26,12 +26,10 @@ type alias QueuedUnit =
 --   * never-seen units keep the index's enqueue order after resurfaced ones.
 load : Task.Task Error (List QueuedUnit)
 load =
-    LibDb.open
-        |> Task.andThen
-            (\db ->
-                Index.loadPending
-                    |> Task.andThen (classify db)
-            )
+    do
+        db <- LibDb.open
+        units <- Index.loadPending
+        classify db units
 
 
 classify : Db.Db -> List Index.Unit -> Task.Task Error (List QueuedUnit)
@@ -44,17 +42,16 @@ classify db units =
 
 classifyUnit : Db.Db -> Index.Unit -> Task.Task Error (Maybe QueuedUnit)
 classifyUnit db unit =
-    LibDb.findDecision db unit.uid unit.bodyHash
-        |> Task.andThen
-            (\decided ->
-                case decided of
-                    Just _ ->
-                        Task.succeed Nothing
+    do
+        decided <- LibDb.findDecision db unit.uid unit.bodyHash
+        case decided of
+            Just _ ->
+                Task.succeed Nothing
 
-                    Nothing ->
-                        LibDb.findLatestForUid db unit.uid
-                            |> Task.map (\old -> Just { unit = unit, changed = old })
-            )
+            Nothing ->
+                do
+                    old <- LibDb.findLatestForUid db unit.uid
+                    Task.succeed (Just { unit = unit, changed = old })
 
 
 prioritize : List (Maybe QueuedUnit) -> List QueuedUnit
