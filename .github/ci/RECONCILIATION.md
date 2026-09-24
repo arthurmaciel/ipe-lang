@@ -53,7 +53,7 @@ they are `gate` in the manifest but were not in the ruleset):
 
 - `env-docs-drift` — deterministic env-docs diff (parity with `stdlib-docs-drift`).
 - `capabilities-docs-drift` — deterministic capabilities-docs diff.
-- `panic-scan` — panic-pattern scan (Soundness). Already required on `development`.
+- `panic-scan` — panic-pattern scan (Soundness).
 - `registry-admission` — registry admission gate.
 - `markdown-parity` — deterministic Markdown parse-SSOT snapshot diff (parity
   with `stdlib-docs-drift`; a red is a drift between the doc-side port and
