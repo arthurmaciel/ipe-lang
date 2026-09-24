@@ -34,7 +34,8 @@ patches it over the live socket, and the same compiled read/apply/render routine
 runs in both; only the table contents differ.** Because the interpreter *is* the
 compiled read-from-data routine, dev equals production by construction. The
 partition is realised part by part — view structure and appearance as templates
-with typed holes (`web/template.rs`, `web/literal_table.rs`), simple update arms
+with typed holes (`web/template.rs`, `literal_table.rs` — a crate-root module
+re-exported as `web::literal_table`), simple update arms
 as transition descriptions (`web/transition.rs`, `transition_classify.rs`),
 subscriptions and effect wiring as descriptions (`web/sub_desc.rs`,
 `web/cmd_wiring.rs`), session-scoped init as a datum (`web/init_datum.rs`) —
