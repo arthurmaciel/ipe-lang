@@ -10,6 +10,13 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.2.4](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.3...ipe-v0.2.4) (2026-09-24)
+
+
+### Bug Fixes
+
+* **publish:** audit reserved-namespace packages under the claimed publisher ([#2808](https://github.com/arthurmaciel/ipe-lang/issues/2808)) ([40e70de](https://github.com/arthurmaciel/ipe-lang/commit/40e70de7a19f6aecb1b394c9aa7093ee15637c03))
+
 ## [0.2.3](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.2...ipe-v0.2.3) (2026-09-24)
 
 
