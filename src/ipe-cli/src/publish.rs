@@ -162,21 +162,32 @@ const DEFAULT_INDEX_REPO: &str = "arthurmaciel/ipe-registry";
 pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
     let args = parse_args(rest)?;
 
-    // 1. Gate locally — refuse to publish a package that fails its own audit.
-    //    `run_audit` prints its own passing line and returns the typed reject.
-    //    It reads the previous published version from the resolver's index root
-    //    (the same checkout `merge_into_entry` reads below), so the semver check
-    //    and the duplicate-version check see one consistent index view.
-    let audit_args: Vec<String> = vec![args.path.display().to_string()];
-    crate::audit::run_audit(&audit_args)?;
-
-    // 2. Compute the entry version from the working package.
+    // 1. Compute the entry version + publisher from the working package. This
+    //    runs before the local audit gate so the gate can be told which publisher
+    //    this publish claims: a reserved-namespace package (name or module) is
+    //    refused unless the claimed publisher is the blessed first-party identity,
+    //    so the blessed publisher must present that identity to its own local gate
+    //    exactly as it will to the registry admission gate. The publisher is the
+    //    same value written into the submitted entry below — the client gate audits
+    //    the exact provenance it is about to claim. This gate is best-effort and
+    //    runs on the caller's own machine over a spoofable `--source`; the
+    //    authoritative boundary is the registry workflow, which gates the
+    //    authenticated PR actor against the claimed publisher and re-runs this
+    //    audit, so a spoofed `--source` clears the local gate but is rejected there
+    //    (defense in depth).
     let manifest_path = locate_manifest(&args.path)?;
     let manifest = project::parse_manifest(&manifest_path)?;
     let entry_version =
         compute_entry_version(&manifest, args.source.as_deref(), args.rev.as_deref())?;
 
     let publisher = infer_publisher(entry_version.source.as_str());
+
+    // 2. Gate locally — refuse to publish a package that fails its own audit.
+    //    `run_audit` prints its own passing line and returns the typed reject.
+    //    It reads the previous published version from the resolver's index root
+    //    (the same checkout `merge_into_entry` reads below), so the semver check
+    //    and the duplicate-version check see one consistent index view.
+    crate::audit::run_audit(&audit_args_for_publish(&args.path, &publisher))?;
 
     // 3. Compute the entry file. The default appends the new version to the
     //    existing entry (refusing a duplicate); `--fresh` writes a single-version
@@ -1227,6 +1238,20 @@ fn infer_publisher(source: &str) -> String {
     github_owner(source).unwrap_or_else(|| "unknown".to_owned())
 }
 
+/// The `ipe package audit` argv the local publish gate runs: the package path
+/// plus the publisher this publish claims. Threading `--publisher` is what lets
+/// the blessed first-party publisher clear its own gate on a reserved-namespace
+/// package — the audit refuses a reserved name/module for any other (or an
+/// absent) publisher. A regression to a path-only argv would silently re-close
+/// the reserved namespace to its own owner, so the flag is pinned by a test.
+fn audit_args_for_publish(path: &Path, publisher: &str) -> Vec<String> {
+    vec![
+        path.display().to_string(),
+        "--publisher".to_owned(),
+        publisher.to_owned(),
+    ]
+}
+
 /// The `<owner>` of a `github.com/<owner>/<repo>` URL, for either the `https://`
 /// or `git@` form. `None` when the URL is not a GitHub URL.
 fn github_owner(source: &str) -> Option<String> {
@@ -1575,6 +1600,25 @@ mod tests {
             .expect_err("a non-blessed publisher must reject --fresh");
         assert!(matches!(err, CliError::UsageOwned(_)));
         assert!(format!("{err}").contains("--fresh"), "{err}");
+    }
+
+    /// The local publish gate must audit with the claimed publisher, not a
+    /// path-only argv. Threading `--publisher` is what lets the blessed
+    /// first-party publisher clear its own gate on a reserved-namespace package;
+    /// a regression to a path-only argv silently re-closes the reserved namespace
+    /// to its owner (the smoke probe stops publishing). Pin the flag + value + order.
+    #[test]
+    fn publish_audit_argv_carries_the_claimed_publisher() {
+        let argv = audit_args_for_publish(Path::new("/pkg"), "arthurmaciel");
+        assert_eq!(
+            argv,
+            vec![
+                "/pkg".to_owned(),
+                "--publisher".to_owned(),
+                "arthurmaciel".to_owned(),
+            ],
+            "the publish gate must pass --publisher <claimed> to the audit"
+        );
     }
 
     /// The `--dry-run` path prints the entry and the intended PR from pure
