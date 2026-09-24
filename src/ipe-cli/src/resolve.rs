@@ -6,8 +6,8 @@
 //! version's source at its pinned revision into the package cache, hash the
 //! fetched tree, and **verify the hash equals the one the index pinned before
 //! anything is written**. Only then is the resolution recorded — in `ipe.lock`
-//! (the exact pins) and in `ipe.toml`'s `[dependencies]` (the requirement) — and
-//! the resolved version and its capability set printed for consent.
+//! (the exact pins) and in `package.ipe`'s `dependencies` block (the requirement)
+//! — and the resolved version and its capability set printed for consent.
 //!
 //! The `{git=}` / `{path=}` escapes ([`resolve_escape`]) bypass the index by
 //! design but still carry lockfile integrity: the fetched (or copied) tree is
@@ -25,7 +25,7 @@ use ipe_ir::Capability;
 use crate::index::{self, CommitId, EntryVersion, PinnedRev, SourceUrl};
 use crate::lockfile::{DepKind, LockedDep, LockedRev, Lockfile};
 use crate::package_name::PackageName;
-use crate::project::{self, IpeDep};
+use crate::project::IpeDep;
 use crate::{CliError, cache};
 
 /// The environment variable overriding the index checkout root; tests point it
@@ -118,7 +118,7 @@ pub fn resolve_and_add(
         sha256: version.sha256.clone(),
         kind: DepKind::Index,
     };
-    write_records(project_root, name, &locked, &IpeDep::Index(req.clone()))?;
+    write_records(project_root, name, &locked, req)?;
 
     report_added(name, &version.version.to_string(), &version.capabilities);
     Ok(())
@@ -212,13 +212,13 @@ pub fn resolve_escape(project_root: &Path, name: &str, dep: &IpeDep) -> Result<(
     Ok(())
 }
 
-/// Remove a dependency: drop it from both `ipe.toml` `[dependencies]` and
-/// `ipe.lock`. A clean add→remove cycle leaves both files as they began.
+/// Remove a dependency: drop it from both `package.ipe`'s `dependencies` block
+/// and `ipe.lock`. A clean add→remove cycle leaves both files as they began.
 ///
 /// # Errors
 /// [`CliError::Io`] if the manifest or lockfile cannot be read or written.
 pub fn resolve_and_remove(project_root: &Path, name: &str) -> Result<(), CliError> {
-    project::remove_dependency(&manifest_path(project_root), name)?;
+    crate::package_manifest::remove_manifest_dependency(&manifest_path(project_root), name)?;
     let mut lock = Lockfile::read(project_root)?;
     let was_locked = lock.remove(name);
     lock.write(project_root)?;
@@ -343,9 +343,13 @@ fn signature_verifier() -> Box<dyn crate::signing::SignatureVerifier> {
     Box::new(crate::signing::UnavailableVerifier)
 }
 
-/// The manifest path for a project root.
+/// The manifest path for a project root — the `package.ipe` the toolchain reads.
+///
+/// `ipe add` must record the requirement in this file (not a legacy `ipe.toml`),
+/// or a fresh clone + resolve would lose the dependency: the lockfile pins an
+/// exact version but is regenerated from the manifest's requirements.
 fn manifest_path(project_root: &Path) -> PathBuf {
-    project_root.join("ipe.toml")
+    project_root.join(crate::package_manifest::PACKAGE_IPE)
 }
 
 /// The package cache directory for one resolved `(name, version)` under the
@@ -523,12 +527,19 @@ fn write_records(
     project_root: &Path,
     name: &str,
     locked: &LockedDep,
-    dep: &IpeDep,
+    req: &semver::VersionReq,
 ) -> Result<(), CliError> {
+    // Write the manifest FIRST: the rewrite fails closed (e.g. an index add
+    // that collides with an author-written escape is refused), and doing it
+    // before the lockfile keeps the two files consistent — a refusal leaves
+    // BOTH untouched rather than a lockfile pin with no manifest requirement.
+    // Only an INDEX requirement is written into the manifest: an escape
+    // (`{git=}`/`{path=}`) is author-written and lockfile-only by design, so
+    // `resolve_escape` never routes through here.
+    crate::package_manifest::upsert_index_dependency(&manifest_path(project_root), name, req)?;
     let mut lock = Lockfile::read(project_root)?;
     lock.upsert(locked.clone());
-    lock.write(project_root)?;
-    project::upsert_dependency(&manifest_path(project_root), name, dep)
+    lock.write(project_root)
 }
 
 /// Print the resolved version and its capability set for consent.
@@ -598,7 +609,12 @@ mod tests {
     fn scaffold_project(root: &Path) {
         std::fs::create_dir_all(root.join("src")).expect("src dir");
         std::fs::write(root.join("src").join("Main.ipe"), "module Main\n").expect("main");
-        std::fs::write(root.join("ipe.toml"), "name = \"app\"\n").expect("manifest");
+        std::fs::write(
+            root.join("package.ipe"),
+            "module Package exposing (package)\n\nimport Ipe.Package exposing (..)\n\n\n\
+             package : Package\npackage =\n    { name = \"app\" }\n",
+        )
+        .expect("manifest");
     }
 
     /// Create a git repo with one file at HEAD, returning its path.
@@ -938,7 +954,7 @@ mod tests {
         let proj = temp_dir("remove-absent");
         scaffold_project(&proj);
         resolve_and_remove(&proj, "nope").expect("removing an absent dep is not an error");
-        let manifest = std::fs::read_to_string(proj.join("ipe.toml")).expect("manifest");
+        let manifest = std::fs::read_to_string(proj.join("package.ipe")).expect("manifest");
         assert!(!manifest.contains("nope"));
         let _ = std::fs::remove_dir_all(&proj);
     }
