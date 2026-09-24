@@ -1,0 +1,295 @@
+module Main exposing (main)
+
+-- rls-composition-builders — the FOUR canonical row-level-security patterns
+-- (Owner, Rbac, Tenant, Sharing) built ENTIRELY by composition over the existing
+-- `Ipe.Db.Store` surface: no edit to the core, no new kernel. Each pattern lives
+-- in its own `Rls.*` sub-module, which exports the composed `Policy`/`Secured`
+-- values built from public exports (`ownerColumn`, `role` / `memberOf` /
+-- `claimEquals`, `existsIn` / `correlate`, `allOf` / `anyOf` / `andPolicy`,
+-- `readOnly`). Because the query and policy builders read their column from a
+-- `.field` literal at the call site (IPE-L0145), each module holds its own row
+-- type and spells the accessors inline — a pattern is a value it exports, never a
+-- helper the accessor threads through.
+--
+-- This proves the small principled core is COMPLETE for real-world RLS by
+-- composition alone — breadth grows as user package code, never by editing the
+-- core (PRINCIPLES: community-extensibility).
+--
+-- Every line is a PURE check — `Store.explain` over a composed policy, or a
+-- `Store.secured` classify outcome — so the emitted project builds and runs
+-- deterministically with no live database and no `Principal`. The refusal lines
+-- pin deny-by-default THROUGH the composition: every operation a read-only pattern
+-- does not open explains as `no row (denied)`, and a policy naming a column the
+-- store lacks fails closed at `secured`.
+
+import Ipe.Codec as Codec exposing (Codec(..), Shape(..), ColType(..))
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Encode as Encode
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task
+import Rls.Owner
+import Rls.Rbac
+import Rls.Sharing
+import Rls.Tenant
+
+
+-- A THIN `Owner.Doc` codec whose shape names ONLY `body`, so a store built from
+-- it lacks `author` — used to prove the owner policy naming a missing column
+-- fails closed at `secured` (deny-by-default, not a silent no-op).
+thinOwnerCodec : Codec Rls.Owner.Doc
+thinOwnerCodec =
+    Codec
+        { enc = \d -> Encode.object [ ( "body", Encode.string d.body ) ]
+        , mkDec =
+            \_ ->
+                Decode.map (\b -> { author = "", createdAt = "", body = b })
+                    (Decode.field "body" Decode.string)
+        , shp = SRecord [ ( "body", CText ) ]
+        }
+
+
+-- ── Secured side-stores for the dynamic patterns ────────────────────────────
+--
+-- The dynamic Tenant and Sharing patterns correlate against a caller-secured
+-- side store whose OWN read policy (owner-scoped on `.member`) composes into the
+-- EXISTS subquery. Build each once here, with the owner accessor a `.field`
+-- literal, or `Nothing` on any build/classify failure.
+
+
+securedShares : Maybe (Store.Secured Rls.Sharing.Share)
+securedShares =
+    case Store.fromCodec "shares" Rls.Sharing.shareCodec of
+        Err _ ->
+            Nothing
+
+        Ok store ->
+            case Store.secured (Store.ownerColumn .member) store of
+                Ok secured ->
+                    Just secured
+
+                Err _ ->
+                    Nothing
+
+
+securedMemberships : Maybe (Store.Secured Rls.Tenant.Membership)
+securedMemberships =
+    case Store.fromCodec "memberships" Rls.Tenant.membershipCodec of
+        Err _ ->
+            Nothing
+
+        Ok store ->
+            case Store.secured (Store.ownerColumn .member) store of
+                Ok secured ->
+                    Just secured
+
+                Err _ ->
+                    Nothing
+
+
+-- ── main ────────────────────────────────────────────────────────────────────
+
+
+main : Task Error ()
+main =
+    Io.println
+        (String.join "\n"
+            [ -- Owner
+              ownerReadLine
+            , ownerImmutableLine
+            , ownerWriteLine
+            , ownerClassifyLine
+
+            -- Rbac
+            , clauseLine "rbac-read" "read" Rls.Rbac.onlyRolePolicy
+            , clauseLine "rbac-group" "read" Rls.Rbac.onlyGroupPolicy
+            , clauseLine "rbac-any" "read" Rls.Rbac.ownerOrRolePolicy
+            , clauseLine "rbac-refuse-insert" "insert" Rls.Rbac.onlyRolePolicy
+            , clauseLine "rbac-refuse-update" "update" Rls.Rbac.onlyRolePolicy
+            , clauseLine "rbac-refuse-delete" "delete" Rls.Rbac.onlyRolePolicy
+            , rbacPrincipalLeafLine
+
+            -- Tenant
+            , clauseLine "tenant-static" "read" Rls.Tenant.staticPolicy
+            , clauseLine "tenant-refuse-insert" "insert" Rls.Tenant.staticPolicy
+            , tenantDynamicReadLine
+            , tenantDynamicOkLine
+
+            -- Sharing
+            , sharingReadLine
+            , sharingOkLine
+            , sharingRefuseInsertLine
+
+            -- Refusal: a policy naming a column the store lacks fails closed
+            , ownerMissingColumnLine
+            ]
+        )
+
+
+-- ── Owner lines ──────────────────────────────────────────────────────────────
+
+
+ownerReadLine : String
+ownerReadLine =
+    clauseLine "owner-read" "read" Rls.Owner.policy
+
+
+ownerImmutableLine : String
+ownerImmutableLine =
+    String.concat [ "owner-immutable:", immutableValue Rls.Owner.policy ]
+
+
+-- The owner pattern opens writes ONLY to the owner (never world-open): its insert
+-- explains as `author = caller subject`, so a caller can write only rows it owns.
+ownerWriteLine : String
+ownerWriteLine =
+    clauseLine "owner-write" "insert" Rls.Owner.policy
+
+
+ownerClassifyLine : String
+ownerClassifyLine =
+    case Store.fromCodec "docs" Rls.Owner.docCodec of
+        Err _ ->
+            "owner-classify:build-err"
+
+        Ok store ->
+            classifyMarker "owner-classify" store Rls.Owner.policy
+
+
+-- ── Rbac line ──────────────────────────────────────────────────────────────
+--
+-- A caller-side role leaf names NO row column, so a policy built from one
+-- classifies `Ok` over any store — it smuggles no phantom column into `secured`'s
+-- column-validation surface. Its deny-by-default meaning lives in the fold at
+-- lowering, pinned by the write-refusal lines above.
+
+
+rbacPrincipalLeafLine : String
+rbacPrincipalLeafLine =
+    case Store.fromCodec "rdocs" Rls.Rbac.docCodec of
+        Err _ ->
+            "rbac-principal-leaf:build-err"
+
+        Ok store ->
+            classifyMarker "rbac-principal-leaf" store Rls.Rbac.onlyRolePolicy
+
+
+-- ── Tenant lines ──────────────────────────────────────────────────────────────
+
+
+tenantDynamicReadLine : String
+tenantDynamicReadLine =
+    case securedMemberships of
+        Just memberships ->
+            clauseLine "tenant-dynamic" "read" (Rls.Tenant.dynamicPolicy memberships)
+
+        Nothing ->
+            "tenant-dynamic:build-err"
+
+
+tenantDynamicOkLine : String
+tenantDynamicOkLine =
+    case ( Store.fromCodec "tdocs" Rls.Tenant.docCodec, securedMemberships ) of
+        ( Ok store, Just memberships ) ->
+            classifyMarker "tenant-dynamic-ok" store (Rls.Tenant.dynamicPolicy memberships)
+
+        _ ->
+            "tenant-dynamic-ok:build-err"
+
+
+-- ── Sharing lines ──────────────────────────────────────────────────────────
+
+
+sharingReadLine : String
+sharingReadLine =
+    case securedShares of
+        Just shares ->
+            clauseLine "sharing-read" "read" (Rls.Sharing.sharedPolicy shares)
+
+        Nothing ->
+            "sharing-read:build-err"
+
+
+sharingOkLine : String
+sharingOkLine =
+    case ( Store.fromCodec "docs" Rls.Sharing.docCodec, securedShares ) of
+        ( Ok store, Just shares ) ->
+            classifyMarker "sharing-ok" store (Rls.Sharing.sharedPolicy shares)
+
+        _ ->
+            "sharing-ok:build-err"
+
+
+sharingRefuseInsertLine : String
+sharingRefuseInsertLine =
+    case securedShares of
+        Just shares ->
+            clauseLine "sharing-refuse-insert" "insert" (Rls.Sharing.sharedPolicy shares)
+
+        Nothing ->
+            "sharing-refuse-insert:build-err"
+
+
+-- `secured (ownerColumn .author)` over a store whose columns lack `author` →
+-- fail-closed typed `Err`. Deny-by-default: a policy over a missing column is
+-- never a silent no-op.
+ownerMissingColumnLine : String
+ownerMissingColumnLine =
+    case Store.fromCodec "thindocs" thinOwnerCodec of
+        Err _ ->
+            "owner-missing:build-err"
+
+        Ok store ->
+            classifyMarker "owner-missing" store (Store.ownerColumn .author)
+
+
+-- ── explain / classify plumbing ──────────────────────────────────────────────
+
+
+clauseLine : String -> String -> Store.Policy row -> String
+clauseLine label clause policy =
+    String.concat [ label, ":", clauseValue clause policy ]
+
+
+classifyMarker : String -> Store.Draft row -> Store.Policy row -> String
+classifyMarker label store policy =
+    case Store.secured policy store of
+        Ok _ ->
+            String.concat [ label, ":ok" ]
+
+        Err _ ->
+            String.concat [ label, ":err" ]
+
+
+clauseValue : String -> Store.Policy row -> String
+clauseValue clause policy =
+    lineValue (String.append clause ":") (Store.explain policy)
+
+
+immutableValue : Store.Policy row -> String
+immutableValue policy =
+    lineValue "immutable columns:" (Store.explain policy)
+
+
+lineValue : String -> String -> String
+lineValue prefix text =
+    case List.head (List.filter (String.startsWith prefix) (String.lines text)) of
+        Just line ->
+            String.trim (afterColon line)
+
+        Nothing ->
+            ""
+
+
+afterColon : String -> String
+afterColon s =
+    case String.split ":" s of
+        _ :: rest ->
+            String.join ":" rest
+
+        [] ->
+            s

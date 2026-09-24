@@ -1,0 +1,44 @@
+module Rls.Owner exposing (Doc, blankDoc, docCodec, policy)
+
+-- The OWNER row-security pattern, composed entirely over the existing
+-- `Ipe.Db.Store` surface — no core edit, no new kernel. A row belongs to the
+-- caller when its owner column equals the caller's subject; only the owner may
+-- read or write it.
+--
+-- The whole pattern is `Store.ownerColumn`, which scopes all four operations to
+-- `column = $subject` AND forces that column to the caller's subject on every
+-- write (so a caller can never insert or update a row it could not read back).
+-- Composed with `andPolicy (immutable .createdAt)`, it also pins the created-at
+-- column at insert. The column accessors are `.field` literals AT the builder
+-- call site: the query and policy builders read the accessor there to derive and
+-- gate the column name (IPE-L0145), so a pattern is a value the module exports,
+-- not a helper the accessor is threaded through.
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db.Store as Store exposing (Policy)
+
+
+type alias Doc =
+    { author : String
+    , createdAt : String
+    , body : String
+    }
+
+
+blankDoc : Doc
+blankDoc =
+    { author = "", createdAt = "", body = "" }
+
+
+docCodec : Codec Doc
+docCodec =
+    Codec.auto blankDoc
+
+
+-- | The owner policy: owner-scoped on `.author`, with `.createdAt` immutable.
+-- `always` is the neutral element of the per-operation conjunction, so
+-- `immutable` adds the update restriction without loosening any operation.
+policy : Policy Doc
+policy =
+    Store.ownerColumn .author
+        |> Store.andPolicy (Store.immutable .createdAt)

@@ -1,0 +1,71 @@
+module Rls.Sharing exposing
+    ( Doc
+    , blankDoc
+    , docCodec
+    , Share
+    , blankShare
+    , shareCodec
+    , sharedPolicy
+    )
+
+-- The SHARING row-security pattern, composed over the existing `Ipe.Db.Store`
+-- surface — no core edit, no new kernel. A row is visible when a SECURED shares
+-- store holds a share row that correlates to it.
+--
+-- `Store.existsIn securedShares (\share doc -> Store.correlate share.docId doc.id)`
+-- lowers to a correlated `EXISTS` subquery whose WHERE is the correlation AND the
+-- shares store's OWN read policy. Because the shares store is itself secured to
+-- the caller, the subquery admits only the caller's own share rows — DEFENCE IN
+-- DEPTH: even if the correlation were broadened, a share the caller cannot read
+-- cannot open a row. The shares store must be a `Secured`, so a caller cannot
+-- pass an unsecured (world-open) shares table. Writes stay `never`
+-- (deny-by-default): sharing grants read visibility, never a write path.
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db.Store as Store exposing (Policy, Secured)
+
+
+type alias Doc =
+    { id : String
+    , body : String
+    }
+
+
+blankDoc : Doc
+blankDoc =
+    { id = "", body = "" }
+
+
+docCodec : Codec Doc
+docCodec =
+    Codec.auto blankDoc
+
+
+-- A share row records which member may see which document. Its `Codec.auto`
+-- columns are `doc_id` / `member`; secured owner-scoped on `.member`.
+type alias Share =
+    { docId : String
+    , member : String
+    }
+
+
+blankShare : Share
+blankShare =
+    { docId = "", member = "" }
+
+
+shareCodec : Codec Share
+shareCodec =
+    Codec.auto blankShare
+
+
+-- | Read-only, admitting a row only when the caller-secured `shares` store holds
+-- a row whose `docId` correlates to the doc's `id` AND satisfies the shares
+-- store's own read policy. The correlation lambda holds the two accessors as
+-- `.field` literals, so each column is derived and validated on its own side.
+sharedPolicy : Secured Share -> Policy Doc
+sharedPolicy shares =
+    Store.readOnly
+        (Store.existsIn shares
+            (\share doc -> Store.correlate share.docId doc.id)
+        )
