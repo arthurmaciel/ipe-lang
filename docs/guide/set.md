@@ -139,7 +139,7 @@ intent directly and carry no boundaries to fumble.
   and a verified example. `ipe doc Ipe.Set.diff` drills into one.
 - **Sibling guides:** [Dictionaries](dict.md) — a `Set` is a `Dict` with no
   values; when you need a value *per* key, reach for `Dict`.
-  [Lists](../modules/Ipe.List.md) when order or duplicates matter.
+  [Lists](../reference/stdlib/List.md) when order or duplicates matter.
 - **Concepts:** [Pure functions and immutability](pure-functions.md) — why every
   `Set` operation returns a new set. [Types and inference](types.md) — how the
   element type `a` is tracked.

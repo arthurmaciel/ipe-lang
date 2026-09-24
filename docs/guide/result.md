@@ -112,7 +112,7 @@ produces either a complete `Account` or an `Err` — never a partial one. And th
   verified example. `ipe doc Ipe.Result.andThen` and `ipe doc Ipe.Result.map3`
   cover the two idioms above.
 - **Sibling guides:** [Maybe](maybe.md) — absence *without* an error; `Result`
-  is `Maybe` that also says *why*. [Tasks](../modules/Ipe.Task.md) for effects
+  is `Maybe` that also says *why*. [Tasks](../reference/stdlib/Task.md) for effects
   that may fail asynchronously (a `Task` settles to a `Result`).
 - **Concepts:** [Types and inference](types.md) — how `Ok`/`Err` and the error
   type `e` are tracked. [The parse-don't-validate idiom](../idioms/parse-dont-validate.md).

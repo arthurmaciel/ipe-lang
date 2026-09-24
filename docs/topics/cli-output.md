@@ -41,8 +41,8 @@ and `ipe upgrade` render this shape; other commands adopt it incrementally.
 
 ## `--plain` and `--json`
 
-The data-producing commands — `capabilities`, `diff`, `version`, and `explain`
-with no code (the code list) — accept two mutually-exclusive machine forms:
+The data-producing commands — `capabilities`, `diff`, `version`, and `doc`
+(`list` and single-module lookups) — accept two mutually-exclusive machine forms:
 
 - **`--plain`** — unstyled, **flush-left**, one record per line, so `grep`,
   `cut`, and `awk` slice it cleanly.
@@ -86,12 +86,19 @@ $ ipe version --json
 `--json` is the shared `{schema, status, command, payload}` machine envelope; the
 version string rides under `payload.version` (`jq -r '.payload.version'`).
 
-### `explain` (the code list)
+### `doc` (list and module lookups)
 
-`ipe explain` with no argument lists every diagnostic code. `--plain` prints
-`<CODE>\t<title>` rows (tab-separated, so `cut -f1` yields the codes); `--json`
-prints `{"codes": [{"code": …, "title": …}, …]}` in taxonomy order. Explaining a
-single code prints a human teaching page and takes no output flag.
+`ipe doc list` lists every stdlib and project module; `ipe doc <Module>` shows
+one module's types and values with signatures. Both accept the machine forms:
+`--plain` prints one entry per line (so `cut`/`awk` slice it), `--json` prints
+the machine-readable record. Looking up a single **key** — a diagnostic code
+(`ipe doc IPE-L0107`), a symbol (`ipe doc List.map`), a language construct
+(`ipe doc case`), or a command (`ipe doc version`) — prints a human teaching page
+and takes no output flag.
+
+> **Migration.** `ipe explain` has been folded into `ipe doc`: use `ipe doc
+> <key>` to explain a diagnostic code. The old command still forwards to `ipe
+> doc` so existing scripts keep working, but it is no longer a data producer.
 
 ### `diff`
 

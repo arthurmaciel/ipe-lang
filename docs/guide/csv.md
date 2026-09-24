@@ -112,7 +112,7 @@ environment variable reference.
   `ipe doc Ipe.Csv.parseStreamFromFile` reads a large file row-by-row through a
   validated `Path` without materialising it whole.
 - **Sibling guides:** [Files](file.md) — `parseStreamFromFile` builds on the typed
-  `Path` boundary. [Lists](../modules/Ipe.List.md) — the `filter`/`map` you
+  `Path` boundary. [Lists](../reference/stdlib/List.md) — the `filter`/`map` you
   transform rows with. [Result](result.md), which `parse` returns.
 - **Concepts:** [The parse-don't-validate idiom](../idioms/parse-dont-validate.md).
   [Pure functions and immutability](pure-functions.md) — why transforming rows

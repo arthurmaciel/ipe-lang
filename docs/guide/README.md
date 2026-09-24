@@ -26,6 +26,10 @@ at the top and follow the links; each page assumes only the ones before it.
   app into a desktop bundle (`ipe release web desktop`) and a mobile
   system-webview shell (`ipe release web solo ios|android`) through the one
   delivery grammar.
+- [Publishing a package](publishing.md) — turn a library into a package other
+  developers can `ipe add`: how the curated registry works, the one-time
+  `ipe login` + signing-key setup, the `ipe package audit` Tier-1 gate, and
+  `ipe package publish`.
 
 ## Standard-library guides
 
@@ -126,7 +130,7 @@ cross-link where topics meet.
 ## Reference and lookup
 
 - [Glossary](glossary.md) — every term of art, defined once.
-- **Module reference** (`../modules/`) — one page per `Ipe.*` module, each export
+- [**Module reference**](../reference/stdlib.md) — one page per `Ipe.*` module, each export
   with its signature, description, and a verified example; browsable with `ipe doc serve`.
 
 ## Looking something up from the terminal
