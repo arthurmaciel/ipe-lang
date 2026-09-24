@@ -17,6 +17,31 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
+use include_dir::{Dir, include_dir};
+
+// == Embedded doc-corpus ======================================================
+
+/// Language construct pages, embedded at compile time from `docs/constructs/`.
+///
+/// This is the single source of truth for construct pages in both `ipe doc
+/// <key>` (CLI lookup) and `ipe doc serve` / `ipe doc --write-format html`
+/// (the HTML site). Adding a `docs/constructs/<name>.md` file automatically
+/// makes it available everywhere — no hand-maintained table needed.
+pub(crate) static EMBEDDED_CONSTRUCTS: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/../../docs/constructs");
+
+/// Idiom pages, embedded at compile time from `docs/idioms/`.
+pub(crate) static EMBEDDED_IDIOMS: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/../../docs/idioms");
+
+/// Topic pages, embedded at compile time from `docs/topics/`.
+pub(crate) static EMBEDDED_TOPICS: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/../../docs/topics");
+
+/// Guide pages, embedded at compile time from `docs/guide/`.
+pub(crate) static EMBEDDED_GUIDES: Dir<'static> =
+    include_dir!("$CARGO_MANIFEST_DIR/../../docs/guide");
+
 // == DocKind ==================================================================
 
 /// The eight documentation kinds. Each kind has its own lookup namespace.
@@ -116,8 +141,16 @@ impl DocBundle {
     ///
     /// Modules, symbols, diagnostics, and CLI commands come from the
     /// compile-time index already populated by the caller. Constructs,
-    /// idioms, topics, and guide pages are ingested from disk via directory
-    /// convention. An absent directory yields zero entries (never an error).
+    /// idioms, topics, and guide pages are always ingested from the compile-time
+    /// embedded corpus (`docs/{constructs,idioms,topics,guide}/`), so `ipe doc
+    /// serve` and `ipe doc --write-format html` render those sections correctly
+    /// regardless of the working directory.
+    ///
+    /// When `docs_root` exists on disk (the typical in-repo case), entries from
+    /// the on-disk tree that do not already appear in the embedded corpus are
+    /// merged in as an additive overlay. This lets a developer preview a new page
+    /// before committing it without modifying the binary. The embedded corpus is
+    /// always present; the on-disk overlay is optional.
     ///
     /// # Errors
     ///
@@ -173,19 +206,29 @@ impl DocBundle {
             )?;
         }
 
-        // Prefer `docs/constructs/`; fall back to `docs/content/`.
-        let construct_dir = docs_root.join("constructs");
-        let construct_fallback = docs_root.join("content");
-        let construct_root = if construct_dir.is_dir() {
-            construct_dir
-        } else {
-            construct_fallback
-        };
-        ingest_markdown_dir(&construct_root, DocKind::Construct, &mut maps)?;
+        // Always ingest from the compile-time embedded corpus first.  This
+        // guarantees non-empty curated sections no matter the working directory.
+        ingest_embedded_dir(&EMBEDDED_CONSTRUCTS, DocKind::Construct, &mut maps)?;
+        ingest_embedded_dir(&EMBEDDED_IDIOMS, DocKind::Idiom, &mut maps)?;
+        ingest_embedded_dir(&EMBEDDED_TOPICS, DocKind::Topic, &mut maps)?;
+        ingest_embedded_dir(&EMBEDDED_GUIDES, DocKind::Guide, &mut maps)?;
 
-        ingest_markdown_dir(&docs_root.join("idioms"), DocKind::Idiom, &mut maps)?;
-        ingest_markdown_dir(&docs_root.join("topics"), DocKind::Topic, &mut maps)?;
-        ingest_markdown_dir(&docs_root.join("guide"), DocKind::Guide, &mut maps)?;
+        // Additive on-disk overlay: merge any file whose key is not already
+        // present (the embedded corpus wins on conflict).  Absent or
+        // unreadable directories are silently skipped.
+        if docs_root.is_dir() {
+            // Prefer `docs/constructs/`; fall back to `docs/content/`.
+            let construct_dir = docs_root.join("constructs");
+            let construct_root = if construct_dir.is_dir() {
+                construct_dir
+            } else {
+                docs_root.join("content")
+            };
+            ingest_markdown_dir_additive(&construct_root, DocKind::Construct, &mut maps)?;
+            ingest_markdown_dir_additive(&docs_root.join("idioms"), DocKind::Idiom, &mut maps)?;
+            ingest_markdown_dir_additive(&docs_root.join("topics"), DocKind::Topic, &mut maps)?;
+            ingest_markdown_dir_additive(&docs_root.join("guide"), DocKind::Guide, &mut maps)?;
+        }
 
         Ok(Self { maps })
     }
@@ -345,10 +388,135 @@ impl fmt::Display for BundleError {
 
 // == Ingestion ================================================================
 
+/// Ingest all `.md` files from a compile-time embedded [`Dir`] as `kind` entries.
+///
+/// Non-slug filenames (e.g. `README.md`) are silently skipped. A malformed
+/// front-matter block, an invalid slug in front-matter, or a duplicate key is a
+/// hard error. Every `include_dir` file whose content is valid UTF-8 is
+/// guaranteed present at compile time, so a read failure here is a bug — it is
+/// treated as a malformed-front-matter error with a descriptive detail string.
+pub(crate) fn ingest_embedded_dir(
+    dir: &Dir<'_>,
+    kind: DocKind,
+    maps: &mut BTreeMap<DocKind, BTreeMap<String, DocEntry>>,
+) -> Result<(), BundleError> {
+    // Collect and sort by filename for deterministic ordering.
+    let mut files: Vec<&include_dir::File<'_>> = dir
+        .files()
+        .filter(|f| {
+            f.path()
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+        })
+        .collect();
+    files.sort_by_key(|f| f.path());
+
+    for file in files {
+        let file_name = file
+            .path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let slug = file_name.strip_suffix(".md").unwrap_or(file_name);
+        let source_label = file.path().display().to_string();
+
+        if !is_valid_slug(slug) {
+            // Skip housekeeping files (e.g. `README.md`).
+            continue;
+        }
+
+        let raw = file
+            .contents_utf8()
+            .ok_or_else(|| BundleError::MalformedFrontMatter {
+                source: source_label.clone(),
+                detail: "embedded file is not valid UTF-8".to_owned(),
+            })?;
+
+        let ParsedMarkdown {
+            key,
+            title,
+            body,
+            order,
+        } = parse_markdown_file(slug, raw, &source_label)?;
+        insert_entry(maps, kind, key, title, body, order)?;
+    }
+    Ok(())
+}
+
+/// Scan `dir` for `.md` files whose key is not already in `maps` and insert
+/// each as a `kind` entry (additive, non-overwriting overlay over the embedded
+/// corpus).
+///
+/// An absent or non-directory `dir` yields zero entries (never an error). A
+/// malformed slug, bad front-matter, or a key that is already present in the
+/// embedded corpus are silently skipped (the embedded version wins).
+fn ingest_markdown_dir_additive(
+    dir: &Path,
+    kind: DocKind,
+    maps: &mut BTreeMap<DocKind, BTreeMap<String, DocEntry>>,
+) -> Result<(), BundleError> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    let mut paths: Vec<std::path::PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+        })
+        .collect();
+    paths.sort();
+
+    for path in paths {
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let slug = file_name.strip_suffix(".md").unwrap_or(file_name);
+        let source_label = path.display().to_string();
+
+        if !is_valid_slug(slug) {
+            continue;
+        }
+
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+
+        let Ok(ParsedMarkdown {
+            key,
+            title,
+            body,
+            order,
+        }) = parse_markdown_file(slug, &raw, &source_label)
+        else {
+            continue;
+        };
+
+        // Embedded corpus wins: skip if the key is already present.
+        if maps.get(&kind).is_some_and(|m| m.contains_key(&key)) {
+            continue;
+        }
+
+        insert_entry(maps, kind, key, title, body, order)?;
+    }
+    Ok(())
+}
+
 /// Scan `dir` for `.md` files and insert each as a `kind` entry.
 ///
 /// An absent or non-directory `dir` yields zero entries (never an error).
 /// A malformed slug, duplicate key, or bad front-matter is a hard error.
+///
+/// Used directly in tests to exercise the parsing/validation semantics in
+/// isolation. Production ingestion routes through [`ingest_embedded_dir`]
+/// (always) and [`ingest_markdown_dir_additive`] (on-disk overlay).
+#[cfg(test)]
 fn ingest_markdown_dir(
     dir: &Path,
     kind: DocKind,
@@ -1156,6 +1324,115 @@ mod tests {
         assert!(
             matches!(result, Err(BundleError::UnknownKey { .. })),
             "expected UnknownKey"
+        );
+    }
+
+    // -- Embedded-corpus regression tests ------------------------------------
+
+    /// The bug: with a nonexistent docs_root the four directory-convention kinds
+    /// previously yielded zero entries.  The fix embeds the corpus at compile
+    /// time, so all four kinds are non-empty regardless of the working directory.
+    #[test]
+    fn embedded_corpus_populates_curated_kinds_when_docs_root_is_absent() {
+        // Pass a docs_root that provably does not exist so the on-disk overlay
+        // path is completely bypassed.
+        let absent_root = std::path::Path::new("/nonexistent-ipe-doc-test-root-$$");
+        let bundle = DocBundle::build(absent_root, &[], &[], &[], &[])
+            .expect("bundle with absent docs_root must not error");
+
+        for kind in [
+            DocKind::Construct,
+            DocKind::Idiom,
+            DocKind::Topic,
+            DocKind::Guide,
+        ] {
+            let count = bundle.entries_for_kind(kind).count();
+            assert!(
+                count > 0,
+                "{kind} must have entries from the embedded corpus even with absent docs_root \
+                 (got 0 — this is the regression this test pins)"
+            );
+        }
+    }
+
+    /// Each embedded corpus file count must match what the directory contains.
+    /// This pins the expectation so adding a file without updating the embed
+    /// path produces a clear failure at test time rather than a silent runtime gap.
+    #[test]
+    fn embedded_corpus_file_counts_match_embedded_dirs() {
+        // Count valid-slug `.md` entries in each embedded Dir.
+        fn slug_count(dir: &include_dir::Dir<'_>) -> usize {
+            dir.files()
+                .filter(|f| {
+                    let stem = f.path().file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let is_md = f
+                        .path()
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("md"));
+                    is_md && is_valid_slug(stem)
+                })
+                .count()
+        }
+
+        let absent_root = std::path::Path::new("/nonexistent-ipe-doc-test-root-counts");
+        let bundle = DocBundle::build(absent_root, &[], &[], &[], &[])
+            .expect("bundle builds from embedded corpus");
+
+        for (kind, dir) in [
+            (DocKind::Construct, &EMBEDDED_CONSTRUCTS),
+            (DocKind::Idiom, &EMBEDDED_IDIOMS),
+            (DocKind::Topic, &EMBEDDED_TOPICS),
+            (DocKind::Guide, &EMBEDDED_GUIDES),
+        ] {
+            let expected = slug_count(dir);
+            let actual = bundle.entries_for_kind(kind).count();
+            assert_eq!(
+                actual, expected,
+                "{kind}: bundle has {actual} entries but embedded dir has {expected} slug files"
+            );
+        }
+    }
+
+    /// A specific well-known key from each kind must resolve and have a non-empty body.
+    #[test]
+    fn embedded_corpus_known_keys_resolve_with_non_empty_body() {
+        let absent_root = std::path::Path::new("/nonexistent-ipe-doc-test-root-keys");
+        let bundle = DocBundle::build(absent_root, &[], &[], &[], &[])
+            .expect("bundle builds from embedded corpus");
+
+        let cases = [
+            (DocKind::Construct, "case"),
+            (DocKind::Idiom, "pipe"),
+            (DocKind::Topic, "effects"),
+            (DocKind::Guide, "basics"),
+        ];
+        for (kind, key) in cases {
+            let qualified = format!("{kind}:{key}");
+            let entry = bundle
+                .resolve_qualified(&qualified)
+                .unwrap_or_else(|e| panic!("expected {qualified} to resolve; got: {e}"));
+            assert!(
+                !entry.body.is_empty(),
+                "{qualified} resolved but body is empty"
+            );
+        }
+    }
+
+    /// `ingest_embedded_dir` directly: the embedded constructs dir must produce
+    /// at least as many entries as the hand-maintained table it replaced.
+    #[test]
+    fn ingest_embedded_constructs_yields_at_least_former_hand_table_count() {
+        // The old CONSTRUCT_PAGES table had 14 entries.
+        const FORMER_COUNT: usize = 14;
+        let mut maps = BTreeMap::new();
+        ingest_embedded_dir(&EMBEDDED_CONSTRUCTS, DocKind::Construct, &mut maps)
+            .expect("ingest_embedded_dir must not error on well-formed embedded corpus");
+        let count = maps.get(&DocKind::Construct).map_or(0, |m| m.len());
+        assert!(
+            count >= FORMER_COUNT,
+            "embedded constructs corpus has {count} entries but expected >= {FORMER_COUNT} \
+             (the former hand-maintained table count)"
         );
     }
 }

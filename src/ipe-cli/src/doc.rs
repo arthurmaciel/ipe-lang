@@ -582,54 +582,11 @@ fn parse_port(value: &str) -> Result<u16, CliError> {
     }
 }
 
-/// Strip a leading YAML front-matter block from `text`.
-///
-/// A front-matter block starts with `---\n` on the first line and ends at the
-/// next `\n---\n`. Everything from the opening `---` through the closing `---\n`
-/// is removed; the rest of the text is returned unchanged. Pages without a
-/// front-matter block are returned as-is.
-fn strip_front_matter(text: &str) -> &str {
-    let Some(rest) = text.strip_prefix("---\n") else {
-        return text;
-    };
-    rest.find("\n---\n")
-        .map_or(text, |pos| &rest[pos + "\n---\n".len()..])
-}
-
-/// Language construct pages embedded at compile time from `docs/constructs/`.
-///
-/// Each entry is `(key, markdown_text)`. The key resolves via `ipe doc <key>`.
-/// Adding a construct page requires a new `docs/constructs/<name>.md` and a new
-/// entry here. Pages may carry YAML front-matter; [`strip_front_matter`] removes
-/// it before the text reaches the CLI renderer.
-static CONSTRUCT_PAGES: &[(&str, &str)] = &[
-    ("case", include_str!("../../../docs/constructs/case.md")),
-    ("do", include_str!("../../../docs/constructs/do.md")),
-    ("if", include_str!("../../../docs/constructs/if.md")),
-    ("import", include_str!("../../../docs/constructs/import.md")),
-    ("lambda", include_str!("../../../docs/constructs/lambda.md")),
-    ("let", include_str!("../../../docs/constructs/let.md")),
-    ("module", include_str!("../../../docs/constructs/module.md")),
-    (
-        "or-pattern",
-        include_str!("../../../docs/constructs/or-pattern.md"),
-    ),
-    ("pipe", include_str!("../../../docs/constructs/pipe.md")),
-    ("record", include_str!("../../../docs/constructs/record.md")),
-    (
-        "record-update",
-        include_str!("../../../docs/constructs/record-update.md"),
-    ),
-    (
-        "string-interpolation",
-        include_str!("../../../docs/constructs/string-interpolation.md"),
-    ),
-    ("type", include_str!("../../../docs/constructs/type.md")),
-    (
-        "type-alias",
-        include_str!("../../../docs/constructs/type-alias.md"),
-    ),
-];
+// Construct pages for `ipe doc <key>` (CLI path) are sourced from the
+// compile-time embedded corpus in `doc_bundle::EMBEDDED_CONSTRUCTS` — the same
+// `include_dir!` static that feeds `DocBundle::build`. A new
+// `docs/constructs/<name>.md` file is automatically available everywhere; no
+// hand-maintained table is required.
 
 /// Return `true` when `s` looks like a symbol key: it starts uppercase, contains
 /// a `.`, and the character after the first `.` is lowercase — e.g. `List.map`,
@@ -648,8 +605,10 @@ fn is_symbol_key(s: &str) -> bool {
 ///
 /// Diagnostics are indexed from the compile-time embedded explain pages (same
 /// source as `ipe explain`) — no filesystem lookup required. Language constructs
-/// are indexed from the embedded `docs/constructs/*.md` files via a compile-time
-/// static table. Commands are injected from `help.rs`'s `COMMANDS` registry.
+/// are indexed from the same compile-time embedded corpus (`EMBEDDED_CONSTRUCTS`
+/// in `doc_bundle`) that feeds `DocBundle::build`, so `ipe doc <key>` and the
+/// HTML site are always in sync. Commands are injected from `help.rs`'s
+/// `COMMANDS` registry.
 fn build_index() -> Result<Index, CliError> {
     use ipe_docs::IndexBuilder;
     let mut builder = IndexBuilder::new();
@@ -673,16 +632,38 @@ fn build_index() -> Result<Index, CliError> {
         );
     }
 
-    // Constructs: compile-time embedded content pages (front-matter stripped for CLI display).
-    for (key, text) in CONSTRUCT_PAGES {
-        builder.insert(
-            (*key).to_owned(),
-            ipe_docs::Entry {
-                kind: ipe_docs::EntryKind::Construct,
-                source_key: (*key).to_owned(),
-                text: strip_front_matter(text).to_owned(),
-            },
+    // Constructs: sourced from the same embedded corpus as DocBundle::build so
+    // `ipe doc <key>` and the HTML site never drift.  Front-matter is stripped
+    // for terminal display; the slug/key extraction reuses the bundle's own
+    // parsing helpers so there is one code path for both surfaces.
+    {
+        use crate::doc_bundle::DocKind;
+        // Ingest into a temporary map, then harvest parsed entries into the
+        // ipe_docs index.  Errors are silently ignored here — the same policy as
+        // the previous hand-maintained table: a malformed file is skipped rather
+        // than making `ipe doc <key>` fail entirely.
+        let mut maps: BTreeMap<DocKind, BTreeMap<String, crate::doc_bundle::DocEntry>> =
+            BTreeMap::new();
+        let _ = crate::doc_bundle::ingest_embedded_dir(
+            &crate::doc_bundle::EMBEDDED_CONSTRUCTS,
+            DocKind::Construct,
+            &mut maps,
         );
+        for entry in maps
+            .get(&DocKind::Construct)
+            .into_iter()
+            .flat_map(|m| m.values())
+        {
+            builder.insert(
+                entry.key.clone(),
+                ipe_docs::Entry {
+                    kind: ipe_docs::EntryKind::Construct,
+                    source_key: entry.key.clone(),
+                    // `body` already has front-matter stripped by `parse_markdown_file`.
+                    text: entry.body.clone(),
+                },
+            );
+        }
     }
 
     // Commands: sourced from the COMMANDS registry so the index never drifts.
@@ -700,16 +681,19 @@ fn build_index() -> Result<Index, CliError> {
     Ok(builder.finish())
 }
 
-/// `ipe doc <key>` — look up any entity by key and render it.
-///
 /// Build the unified [`DocBundle`] from all documentation sources.
 ///
 /// Modules and symbols from the stdlib, diagnostic codes from the embedded
-/// explain pages, CLI commands from `help.rs`, and markdown pages from the
-/// `docs/` directory-convention directories are all indexed together.
+/// explain pages, CLI commands from `help.rs`, and the four directory-convention
+/// kinds (constructs, idioms, topics, guides) are all indexed together.
 ///
-/// `docs_root` is normally the repo's `docs/` directory; when it is absent or
-/// unreachable, the directory-convention kinds yield zero entries (no error).
+/// The four directory-convention kinds are always populated from the compile-time
+/// embedded corpus (`docs/{constructs,idioms,topics,guide}/` baked into the
+/// binary), so `ipe doc serve` and `ipe doc --write-format html` render those
+/// sections correctly regardless of the working directory. When `docs_root` also
+/// exists on disk, any page whose key is not already in the embedded corpus is
+/// merged in as an additive overlay (useful for previewing a new page before it
+/// is committed).
 fn build_doc_bundle(docs_root: &std::path::Path) -> Result<DocBundle, CliError> {
     // Modules: one entry per stdlib module name.
     let module_sources: Vec<BundleSource> = stdlib_module_names()
@@ -6078,7 +6062,8 @@ mod tests {
             "build",
             "Compile the project.",
         )];
-        // docs_root does not exist; curated directories are absent → zero entries.
+        // docs_root does not exist on disk; the embedded corpus still populates
+        // the four curated kinds (construct, idiom, topic, guide).
         let docs_root = std::path::Path::new("/nonexistent");
         DocBundle::build(docs_root, &modules, &symbols, &diagnostics, &cli)
             .expect("nav_test_bundle")
