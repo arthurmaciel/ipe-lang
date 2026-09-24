@@ -156,6 +156,16 @@ jobs:
       - uses: actions/checkout@v7
       - run: .github/ci/artifact-guard.sh
 
+  # Cargo.lock must agree with the version Cargo.toml declares. Fail-closed
+  # backstop to the release-please sync-cargo-lock job: a version-desynced tree
+  # cannot merge, so a release never ships with a stale lock even if the sync job
+  # loses its race. Pure git + ripgrep, no toolchain — fast required PR path.
+  manifest-lock-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: .github/ci/manifest-lock-consistency.sh
+
   fmt:
     runs-on: ubuntu-latest
     steps:
