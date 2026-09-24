@@ -3,22 +3,24 @@
 # declares. release-please bumps `[workspace.package] version` in Cargo.toml on a
 # release; if Cargo.lock is not synced in lockstep, `cargo build --locked` fails
 # after the release and the next plain build dirties the tree. This gate refuses
-# to merge a version-desynced tree, so a release can never ship desynced — the
-# release-please `sync-cargo-lock` job (or a local `cargo update --workspace`)
-# makes it green. Pure text + ripgrep, no toolchain, so it stays on the fast
-# required PR path.
+# to merge a version-desynced tree, so a release can never ship a stale lock even
+# when the release-please `sync-cargo-lock` job loses its force-push race — the
+# job (or a local `cargo update --workspace`) is the fixer; this is the standing
+# guard. Pure grep + sed (no ripgrep, no toolchain) so it stays on the fast
+# required PR path — the runner for this job installs nothing.
 set -euo pipefail
 
 # The version SSOT is the single marked line in Cargo.toml.
-manifest_version="$(rg -N -o 'version = "([^"]+)" # x-release-please-version' -r '$1' Cargo.toml | head -n1)"
+manifest_version="$(sed -n 's/^version = "\([^"]*\)" # x-release-please-version.*/\1/p' Cargo.toml | head -n1)"
 if [ -z "$manifest_version" ]; then
   echo "manifest-lock-consistency: could not read the x-release-please-version marker from Cargo.toml" >&2
   exit 1
 fi
 
 # The first-party crate `ipe` inherits the workspace version; its Cargo.lock entry
-# is the canonical lockstep check.
-lock_version="$(rg -N -A2 '^name = "ipe"$' Cargo.lock | rg -N -o 'version = "([^"]+)"' -r '$1' | head -n1)"
+# is the canonical lockstep check. The `name = "ipe"` line is exact-anchored so it
+# never matches a sibling crate (ipe_kernels, ipe_lsp_server, …).
+lock_version="$(grep -A2 '^name = "ipe"$' Cargo.lock | sed -n 's/^version = "\([^"]*\)".*/\1/p' | head -n1)"
 if [ -z "$lock_version" ]; then
   echo "manifest-lock-consistency: could not read the 'ipe' version from Cargo.lock" >&2
   exit 1
