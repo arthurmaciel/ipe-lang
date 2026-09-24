@@ -101,7 +101,9 @@ fn topo_order_dep_first_and_memoized() {
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let order = topo_order(&db, root, b).expect("acyclic graph must order");
+    let order = topo_order(&db, root, b)
+        .clone()
+        .expect("acyclic graph must order");
     assert_eq!(
         *order,
         vec![vec!["A".to_owned()], vec!["B".to_owned()]],
@@ -111,7 +113,7 @@ fn topo_order_dep_first_and_memoized() {
 
     // Repeat demand is a memo hit.
     log.clear();
-    let again = topo_order(&db, root, b).expect("still ordered");
+    let again = topo_order(&db, root, b).clone().expect("still ordered");
     assert_eq!(*again, *order);
     assert_eq!(
         log.executions_of("topo_order("),
@@ -130,7 +132,9 @@ fn topo_order_cycle_is_a_value_not_a_panic() {
     let b = file(&db, &["B"], CYCLIC_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let err = topo_order(&db, root, a).expect_err("A↔B cycle must be rejected");
+    let err = topo_order(&db, root, a)
+        .clone()
+        .expect_err("A↔B cycle must be rejected");
     assert!(
         matches!(
             &err,
@@ -143,7 +147,9 @@ fn topo_order_cycle_is_a_value_not_a_panic() {
     );
 
     // The whole-program spine returns the same value-level diagnostic.
-    let spine_err = linked_program(&db, root, a).expect_err("spine sees the same cycle");
+    let spine_err = linked_program(&db, root, a)
+        .clone()
+        .expect_err("spine sees the same cycle");
     assert!(
         matches!(
             &spine_err,
@@ -170,7 +176,9 @@ fn topo_order_orphan_cycle_is_a_value_not_a_panic() {
     let b = file(&db, &["B"], CYCLIC_B);
     let root = root_of(&db, &[(&["C"], c), (&["A"], a), (&["B"], b)]);
 
-    let err = topo_order(&db, root, c).expect_err("orphan A↔B cycle must be rejected");
+    let err = topo_order(&db, root, c)
+        .clone()
+        .expect_err("orphan A↔B cycle must be rejected");
     assert!(
         matches!(
             &err,
@@ -184,7 +192,9 @@ fn topo_order_orphan_cycle_is_a_value_not_a_panic() {
 
     // The driver-level spine canonicalises the orphan pair; it must return the
     // same value-level diagnostic rather than panic on the salsa cycle.
-    let spine_err = linked_program(&db, root, c).expect_err("spine sees the orphan cycle");
+    let spine_err = linked_program(&db, root, c)
+        .clone()
+        .expect_err("spine sees the orphan cycle");
     assert!(
         matches!(
             &spine_err,
@@ -209,7 +219,9 @@ fn linked_program_links_all_modules() {
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let linked = linked_program(&db, root, b).expect("program must link");
+    let linked = linked_program(&db, root, b)
+        .clone()
+        .expect("program must link");
     // A: visible + hidden; B: b — three defs in the merged module.
     assert_eq!(linked.module.defs.len(), 3, "A(2 defs) + B(1 def) merged");
     let interner = db.interner();
@@ -272,7 +284,9 @@ fn kernel_types_memoized_and_source_independent() {
     let a = file(&db, &["A"], DEP_A);
     let root = root_of(&db, &[(&["A"], a)]);
 
-    let table = kernel_types(&db, root).expect("kernel table must derive");
+    let table = kernel_types(&db, root)
+        .clone()
+        .expect("kernel table must derive");
     assert!(
         table.len() > 100,
         "the registry schemes hundreds of kernels, got {}",
@@ -349,11 +363,15 @@ fn sync_source_root_noop_add_remove() {
         ),
     );
     sync_source_root(&mut db, root, &with_c);
-    let linked = linked_program(&db, root, b).expect("still links with C present");
+    let linked = linked_program(&db, root, b)
+        .clone()
+        .expect("still links with C present");
     assert_eq!(linked.module.defs.len(), 4, "C's def joins the merge");
 
     // Remove C again: back to the original membership and def count.
     sync_source_root(&mut db, root, &desired);
-    let linked = linked_program(&db, root, b).expect("links after removal");
+    let linked = linked_program(&db, root, b)
+        .clone()
+        .expect("links after removal");
     assert_eq!(linked.module.defs.len(), 3, "C's def is gone after removal");
 }

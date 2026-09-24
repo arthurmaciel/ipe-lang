@@ -200,7 +200,7 @@ pub fn format_range(
     range: Range,
     encoding: PositionEncoding,
 ) -> Option<Vec<TextEdit>> {
-    let module = ipe_db::parse(db, file).ok()?;
+    let module = ipe_db::parse(db, file).clone().ok()?;
     let text = file.text(db);
 
     let req_lo = position_to_offset(text, range.start, encoding);

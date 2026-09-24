@@ -106,10 +106,14 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
 
     // Warm the session: demand the top-level manifest once. On a genuine
     // 2-home program this drives emit_spine_file + one emit_rust_file per home.
-    let warm = ipe_db::emit_manifest(&db, root, main, config).expect("warm build");
+    let warm = ipe_db::emit_manifest(&db, root, main, config)
+        .clone()
+        .expect("warm build");
     // Capture the spine's OWN text before the edit, by demanding the spine
     // query directly (its memoized value is what must stay byte-stable).
-    let spine_before = ipe_db::emit_spine_file(&db, root, main, config).expect("spine before");
+    let spine_before = ipe_db::emit_spine_file(&db, root, main, config)
+        .clone()
+        .expect("spine before");
     assert!(
         warm.files
             .keys()
@@ -122,7 +126,9 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
     assert!(ipe_db::set_text_if_changed(&mut db, lib, LIB_BODY_EDIT));
 
     // Re-demand the top-level manifest — the real compile_prepared path.
-    let _rebuilt = ipe_db::emit_manifest(&db, root, main, config).expect("incremental rebuild");
+    let _rebuilt = ipe_db::emit_manifest(&db, root, main, config)
+        .clone()
+        .expect("incremental rebuild");
 
     // The edited module's file query MUST re-execute (its coarse lower_program
     // dependency changed value, and its own slice genuinely changed).
@@ -138,7 +144,9 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
     // the property the whole graph exists to deliver, asserted on the VALUE:
     // value-equality, not zero-executions, is the useful invariant on the
     // coarse floor.
-    let spine_after = ipe_db::emit_spine_file(&db, root, main, config).expect("spine after");
+    let spine_after = ipe_db::emit_spine_file(&db, root, main, config)
+        .clone()
+        .expect("spine after");
     assert_eq!(
         spine_before, spine_after,
         "a body edit to Lib must leave the Spine's emitted text byte-identical \

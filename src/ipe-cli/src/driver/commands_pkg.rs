@@ -1545,7 +1545,7 @@ pub fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
     let entry = resolve_analysis_entry(&arg)?;
     let graph = build_source_graph(&entry)?;
     let program = graph.run_attributed(&entry, |db, root, file| {
-        ipe_db::lower_program(db, root, file)
+        ipe_db::lower_program(db, root, file).clone()
     })?;
     let caps = capabilities_including_served_widgets(
         &graph.db,
@@ -2027,7 +2027,7 @@ pub fn verify_capabilities(
 ) -> Result<(), CliError> {
     let graph = build_source_graph(entry)?;
     let program = graph.run_attributed(entry, |db, root, file| {
-        ipe_db::lower_program(db, root, file)
+        ipe_db::lower_program(db, root, file).clone()
     })?;
     let inferred = capabilities_including_served_widgets(
         &graph.db,
@@ -2113,7 +2113,7 @@ pub fn infer_package_capabilities(
                     &db,
                     source_root,
                     entry_file,
-                    &program,
+                    program,
                 ));
                 any_lowered = true;
             }
@@ -2127,7 +2127,7 @@ pub fn infer_package_capabilities(
                     lowering_error = Some(CliError::Pipeline {
                         file: m.path.clone(),
                         src,
-                        diag: Box::new(diag),
+                        diag: Box::new(diag.clone()),
                     });
                 }
             }

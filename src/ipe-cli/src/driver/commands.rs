@@ -3215,9 +3215,11 @@ pub fn program_constructs_a_widget(
     root: ipe_db::SourceRoot,
     entry_file: ipe_db::SourceFile,
 ) -> bool {
-    ipe_db::linked_program(db, root, entry_file).is_ok_and(|linked| {
-        !ipe_canon::custom_element_gate::collect_widget_files(&linked.module).is_empty()
-    })
+    ipe_db::linked_program(db, root, entry_file)
+        .as_ref()
+        .is_ok_and(|linked| {
+            !ipe_canon::custom_element_gate::collect_widget_files(&linked.module).is_empty()
+        })
 }
 
 /// Lower a single `.ipe` entry through the SAME injection-aware source-graph
@@ -3240,7 +3242,7 @@ pub fn lower_entry_via_graph(
 ) -> Result<(ipe_db::IpeDatabase, std::sync::Arc<ipe_ir::Program>), CliError> {
     let graph = build_source_graph(entry)?;
     let program = graph.run_attributed(entry, |db, root, file| {
-        ipe_db::lower_program(db, root, file)
+        ipe_db::lower_program(db, root, file).clone()
     })?;
     Ok((graph.db, program))
 }
@@ -3600,8 +3602,10 @@ pub fn typecheck_entry_via_graph(entry: &Path) -> Result<(), CliError> {
         // `ipe type-check` rejects the hand-nested decoder footgun for the
         // earliest possible feedback rather than deferring it to `ipe build`.
         // `linked_program` re-demands the memos `typecheck` just populated.
-        ipe_db::typecheck(db, root, file)?;
-        let linked = ipe_db::linked_program(db, root, file).map_err(|d| (d, Vec::new()))?;
+        ipe_db::typecheck(db, root, file).clone()?;
+        let linked = ipe_db::linked_program(db, root, file)
+            .clone()
+            .map_err(|d| (d, Vec::new()))?;
         gate_decoder_pipelines(&linked.module)
     })
 }

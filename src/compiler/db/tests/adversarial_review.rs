@@ -94,8 +94,8 @@ fn ctor_reorder_punches_through_the_firewall() {
     let b = file(&db, &["B"], ADT_IMPORTER);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
-    let before_iface = module_interface(&db, root, a);
-    let before_b = canonicalize(&db, root, b);
+    let before_iface = module_interface(&db, root, a).clone();
+    let before_b = canonicalize(&db, root, b).clone();
     assert!(
         before_b.is_ok(),
         "importer must canonicalise, got {before_b:?}"
@@ -104,7 +104,7 @@ fn ctor_reorder_punches_through_the_firewall() {
     log.clear();
     a.set_text(&mut db).to(ADT_DEP_REORDERED.to_owned());
 
-    let after_iface = module_interface(&db, root, a);
+    let after_iface = module_interface(&db, root, a).clone();
     assert_ne!(
         before_iface, after_iface,
         "UNDER-INVALIDATION: ctor reorder (same names, same arities) left the \
@@ -112,7 +112,7 @@ fn ctor_reorder_punches_through_the_firewall() {
          indices in their memoized canonical ASTs"
     );
 
-    let after_b = canonicalize(&db, root, b);
+    let after_b = canonicalize(&db, root, b).clone();
     assert!(
         after_b.is_ok(),
         "importer must re-canonicalise green, got {after_b:?}"
@@ -148,8 +148,8 @@ fn transitive_alias_body_edit_reaches_grand_importer() {
     let b = file(&db, &["B"], GRAND_IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b), (&["C"], c)]);
 
-    let before_a_iface = module_interface(&db, root, a);
-    let warm = canonicalize(&db, root, b);
+    let before_a_iface = module_interface(&db, root, a).clone();
+    let warm = canonicalize(&db, root, b).clone();
     assert!(
         warm.is_ok(),
         "grand importer must canonicalise, got {warm:?}"
@@ -158,7 +158,7 @@ fn transitive_alias_body_edit_reaches_grand_importer() {
     log.clear();
     c.set_text(&mut db).to(GRAND_DEP_C_WIDENED.to_owned());
 
-    let after_a_iface = module_interface(&db, root, a);
+    let after_a_iface = module_interface(&db, root, a).clone();
     assert_ne!(
         before_a_iface, after_a_iface,
         "UNDER-INVALIDATION: widening grand-dep C's alias `P` must change A's \
@@ -188,13 +188,13 @@ fn transitive_private_edit_still_firewalls() {
     let b = file(&db, &["B"], GRAND_IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b), (&["C"], c)]);
 
-    let warm = canonicalize(&db, root, b);
+    let warm = canonicalize(&db, root, b).clone();
     assert!(warm.is_ok());
 
     log.clear();
     c.set_text(&mut db)
         .to("module C exposing (P)\n\ntype alias P = { x : Int }\n\nhidden = 2\n".to_owned());
-    let after = canonicalize(&db, root, b);
+    let after = canonicalize(&db, root, b).clone();
     assert_eq!(
         log.executions_of("canonicalize("),
         1,

@@ -108,7 +108,7 @@ fn assert_state_parity(
                     let projected =
                         ipe_db::normalize_module_types(ipe_db::project_module_types(solved, &home));
                     assert_eq!(
-                        *types,
+                        **types,
                         projected,
                         "[{label}] scoped result for {} diverges from the joint slice",
                         path.join(".")

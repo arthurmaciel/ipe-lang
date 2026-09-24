@@ -221,7 +221,7 @@ pub fn rename(
     // Collect canonical modules for every file in topo order.
     // We keep them alive in a Vec so the &Module references remain valid.
     let mut canon_modules: Vec<(ipe_canon::ast::Module, Vec<Symbol>)> = Vec::new();
-    for module_path in &*order {
+    for module_path in order.iter() {
         let Some(&module_file) = files.get(module_path) else {
             continue;
         };

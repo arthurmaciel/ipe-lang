@@ -43,7 +43,9 @@ pub fn hover(
     byte: u32,
     docs: Option<&ipe_docs::Index>,
 ) -> Option<HoverInfo> {
-    let types = ipe_db::typecheck_module(db, root, entry, module_file).ok()?;
+    let types = ipe_db::typecheck_module(db, root, entry, module_file)
+        .as_ref()
+        .ok()?;
     // Innermost wins: narrowest containing span, latest start as tiebreaker.
     let mut best: Option<(u32, u32)> = None; // (width, lo)
     for span in types.regions.keys() {
@@ -60,7 +62,7 @@ pub fn hover(
     let span = Span::new(lo, lo.saturating_add(width));
     // `parse` and `control_model_at` both acquire the interner lock internally.
     // Call them before the explicit lock below so we never hold nested locks.
-    let parsed = ipe_db::parse(db, module_file).ok();
+    let parsed = ipe_db::parse(db, module_file).clone().ok();
     let control_model = control_model_at(db, module_file, byte);
     // Find the doc-string of the top-level binding whose body span contains
     // `byte`. The parsed `Value` carries the `{-| … -}` doc-string; the hover
@@ -122,7 +124,7 @@ fn control_model_at(
     module_file: ipe_db::SourceFile,
     byte: u32,
 ) -> Option<&'static str> {
-    let module = ipe_db::parse(db, module_file).ok()?;
+    let module = ipe_db::parse(db, module_file).as_ref().ok()?;
     let interner = db.interner().lock();
     let main_sym = interner.lookup("main")?;
     let main = module
@@ -134,7 +136,7 @@ fn control_model_at(
     // region a user's hover on `main` actually fires on.
     let lo = main.value.name.span.lo;
     let hi = main.value.body.span.hi.max(main.value.name.span.hi);
-    let shape = ipe_canon::shape_source::classify_main_shape(&module, &interner);
+    let shape = ipe_canon::shape_source::classify_main_shape(module, &interner);
     // Every interner use is done; release the lock before the byte-gate and the
     // lock-free control-model projection.
     drop(interner);

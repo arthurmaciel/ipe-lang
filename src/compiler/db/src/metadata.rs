@@ -92,7 +92,7 @@ pub type ProgramMetadataResult = Result<Arc<ProgramMetadata>, (Diagnostic, Vec<S
 /// is exactly the "never firewalled" property the design spec locks in.
 #[salsa::tracked]
 pub fn program_metadata(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> ProgramMetadataResult {
-    let program = lower_program(db, root, entry)?;
+    let program = lower_program(db, root, entry).clone()?;
     Ok(Arc::new(compute_program_metadata(&program)))
 }
 
