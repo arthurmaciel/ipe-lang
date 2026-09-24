@@ -92,7 +92,7 @@ mkdir -p "$QUERY_DIR"
 
 BASE="https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/editors/tree-sitter-ipe/queries"
 
-for q in highlights injections locals tags; do
+for q in highlights injections locals tags textobjects indents; do
     DEST="$QUERY_DIR/$q.scm"
     if [ -f "$DEST" ]; then
         printf 'Helix: query %s.scm already present — skipping.\n' "$q"
@@ -111,3 +111,11 @@ printf '  queries: %s\n' "$QUERY_DIR"
 printf '\n'
 printf 'Verify with: hx --health ipe\n'
 printf 'Open a project directory (the one containing package.ipe) for cross-module analysis.\n'
+printf '\n'
+printf 'Tip: Helix does not draw diagnostics inline by default. For squiggles, add to\n'
+printf '     ~/.config/helix/config.toml:\n'
+printf '       [editor]\n'
+printf '       end-of-line-diagnostics = "hint"\n'
+printf '       [editor.inline-diagnostics]\n'
+printf '       cursor-line = "warning"\n'
+printf '       other-lines = "error"\n'
