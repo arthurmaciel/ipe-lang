@@ -36,11 +36,11 @@
 # a failed/partial run can then never corrupt the real index. Point the run at it
 # with IPE_SMOKE_INDEX_REPO=<owner>/<staging-repo> and
 # IPE_REGISTRY_URL=https://<owner>.github.io/<staging-repo>. When no staging repo
-# is configured the run falls back to the production registry using RESERVED
-# test-package names (IPE_SMOKE_PACKAGE, default `ipe-registry-smoke-probe`, for
-# the clean probe; IPE_SMOKE_BAD_PACKAGE, default `ipe-registry-smoke-probe-bad`,
-# for the negative leg's bad probe) plus guaranteed cleanup — never a real package
-# name. The bad probe is REJECTED by admission, so its PR never merges and the
+# is configured the run falls back to the production registry using a RESERVED
+# test-package name (IPE_SMOKE_PACKAGE, default `ipe-registry-smoke-probe`) plus
+# guaranteed cleanup — never a real package name. The negative leg publishes a
+# divergent-source version of that same reserved package (source pinned to
+# IPE_SMOKE_BAD_SOURCE_REPO); admission REJECTS it, so its PR never merges and the
 # index is never touched.
 #
 # ── Required environment (the live run's infra) ─────────────────────────────
@@ -58,12 +58,11 @@
 #   IPE_SMOKE_SOURCE_REPO  <owner>/<name> of the disposable git repo whose HEAD
 #                          the entry pins as the package source. Default: a repo
 #                          named <IPE_SMOKE_PACKAGE> under IPE_SMOKE_FORK.
-#   IPE_SMOKE_BAD_PACKAGE  reserved disposable name for the NEGATIVE leg's bad
-#                          probe (distinct from IPE_SMOKE_PACKAGE so it can never
-#                          collide with the clean probe or a real package).
-#                          Default: ipe-registry-smoke-probe-bad.
-#   IPE_SMOKE_BAD_SOURCE_REPO  <owner>/<name> of the disposable source repo for the
-#                          bad probe. Default: <IPE_SMOKE_BAD_PACKAGE> under the fork.
+#   IPE_SMOKE_BAD_SOURCE_REPO  <owner>/<name> of the disposable source repo the
+#                          NEGATIVE leg pins as a DIVERGENT source (distinct from
+#                          IPE_SMOKE_SOURCE_REPO) to trip admission's source-
+#                          continuity check. Default: ipe-registry-smoke-probe-bad
+#                          under the fork.
 #   IPE_SMOKE_POLL_SECS    admission/resolution poll budget in seconds, used by
 #                          BOTH legs (default 600).
 #   IPE_BIN                path to the built `ipe` binary (default: `ipe` on PATH).
@@ -92,11 +91,11 @@ SOURCE_REPO="${IPE_SMOKE_SOURCE_REPO:-$FORK_OWNER/$PACKAGE}"
 POLL_SECS="${IPE_SMOKE_POLL_SECS:-600}"
 IPE="${IPE_BIN:-ipe}"
 
-# The negative leg's DISTINCT reserved probe — a separate name so a bad probe can
-# never collide with or pollute the clean probe (or a real package). Its source is
-# a separate disposable repo (or the `-bad` sibling of the clean source).
-BAD_PACKAGE="${IPE_SMOKE_BAD_PACKAGE:-ipe-registry-smoke-probe-bad}"
-BAD_SOURCE_REPO="${IPE_SMOKE_BAD_SOURCE_REPO:-$FORK_OWNER/$BAD_PACKAGE}"
+# The negative leg reuses the SAME clean probe package, but publishes a new
+# version pinned to a DIVERGENT source repository — a name-squat the admission
+# source-continuity check refuses. That divergent source is a separate disposable
+# repo, distinct from the clean probe's source.
+BAD_SOURCE_REPO="${IPE_SMOKE_BAD_SOURCE_REPO:-$FORK_OWNER/ipe-registry-smoke-probe-bad}"
 
 # A fresh, monotonically-increasing prerelease version per run: a smoke run never
 # collides with a prior run's version (which admission would reject as immutable),
@@ -104,9 +103,10 @@ BAD_SOURCE_REPO="${IPE_SMOKE_BAD_SOURCE_REPO:-$FORK_OWNER/$BAD_PACKAGE}"
 # prerelease that no real consumer would ever depend on.
 VERSION="0.0.0-smoke.$(date -u +%Y%m%d%H%M%S)"
 BRANCH="publish/${PACKAGE}-${VERSION}"
-# The negative probe's own prerelease version + branch (same disposable scheme).
+# The negative probe is a NEW version of the SAME package (a distinct prerelease,
+# never colliding with the positive version), published on its own branch.
 BAD_VERSION="0.0.0-smokebad.$(date -u +%Y%m%d%H%M%S)"
-BAD_BRANCH="publish/${BAD_PACKAGE}-${BAD_VERSION}"
+BAD_BRANCH="publish/${PACKAGE}-${BAD_VERSION}"
 
 # The token must exist and never be printed. Its presence is checked, its value
 # is not surfaced.
@@ -307,11 +307,21 @@ log "OK: publish → admission → Pages per-package resolution all held (positi
 
 # ── NEGATIVE LEG: a deliberately-bad probe must be REFUSED by admission ───────
 # The positive leg proves a good package ADMITS + resolves. This leg proves the
-# other, security-critical direction: a package carrying a real Tier-1 audit
-# violation (a hidden `network` capability — used but NOT declared) is REJECTED by
-# the SAME deployed admission workflow. A gate that only ever proves good packages
-# pass is untested on the path that matters most; a silently-disabled audit leg
-# would still admit this bad probe while every happy-path check stayed green.
+# other, security-critical direction: a submission that violates an admission-only
+# invariant is REJECTED by the SAME deployed admission workflow. A gate that only
+# ever proves good packages pass is untested on the path that matters most; a
+# silently-disabled admission check would admit this bad probe while every
+# happy-path check stayed green.
+#
+# The violation is a name-squat: a NEW version of the clean probe that points at a
+# DIVERGENT source repository. The admission source-continuity check binds a
+# package name to one source and refuses any version pointing elsewhere. This is
+# enforced ONLY on the registry side (`ipe package audit-entry`'s admission
+# precheck against the baseline index), never by the client `ipe package publish`
+# — which audits the pushed source in isolation and has no cross-version baseline
+# — so the client opens the PR and the SERVER is the sole gate under test. (The
+# probe source itself is clean; were it a client-detectable violation, publish
+# would fail closed locally and no PR would reach admission.)
 #
 # The negative leg needs `gh` to observe the PR's admission check verdict. Without
 # it there is no way to distinguish "rejected" from "not yet run", so — fail-closed
@@ -320,11 +330,11 @@ command -v gh >/dev/null 2>&1 \
   || neg_fail "the negative leg needs \`gh\` to read the bad PR's admission check verdict; \
 without it a rejection cannot be observed — refusing to assert a hollow pass (fail-closed)."
 
-# Build the bad probe: `Main` makes a network request but `package.ipe` declares
-# NOTHING — the inferred capability set is `{network}`, the declared set is empty,
-# a hidden effect the Tier-1 capability-consistency check rejects deterministically
-# (no build-time network needed: the effect is inferred statically). This yields a
-# POSITIVE rejection signal (admission check RED), not a resolution timeout.
+# Build the bad probe: a CLEAN package (it must pass the client audit so publish
+# opens the PR) declaring the SAME package name as the clean probe, at a new
+# version. Its only sin is the divergent source it is published against (below) —
+# the admission source-continuity check is the deterministic rejection, a POSITIVE
+# rejection signal (admission check RED), not a resolution timeout.
 BAD_PKG="$WORK/pkg-bad"
 mkdir -p "$BAD_PKG/src"
 cat > "$BAD_PKG/package.ipe" <<EOF
@@ -335,53 +345,47 @@ import Ipe.Package exposing (..)
 
 package : Package
 package =
-    { name = "$BAD_PACKAGE"
+    { name = "$PACKAGE"
     , version = "$BAD_VERSION"
     }
 EOF
 cat > "$BAD_PKG/src/Main.ipe" <<'EOF'
 module Main exposing (main)
 
-import Ipe.Http as Http
-import Ipe.Task as Task
 import Ipe.Io as Io
-import Ipe.Url as Url
 
 
-main : Task ()
 main =
-    case Url.fromString "http://example.com" of
-        Ok url ->
-            Http.get url
-                |> Task.andThen (\_ -> Io.println "done")
-
-        Err e ->
-            Task.fail e
+    Io.println "registry smoke probe (divergent-source negative leg)"
 EOF
 
 git -C "$BAD_PKG" init --quiet
 git -C "$BAD_PKG" -c user.name=ipe-smoke -c user.email=smoke@ipe-lang.invalid add .
 git -C "$BAD_PKG" -c user.name=ipe-smoke -c user.email=smoke@ipe-lang.invalid \
-  commit --quiet -m "smoke-bad $BAD_VERSION"
+  commit --quiet -m "smoke divergent-source $BAD_VERSION"
 git -C "$BAD_PKG" remote add origin "https://github.com/$BAD_SOURCE_REPO.git"
-neg_log "pushing BAD probe source to $BAD_SOURCE_REPO"
+neg_log "pushing divergent-source probe to $BAD_SOURCE_REPO"
 git -C "$BAD_PKG" push --force --quiet origin HEAD:refs/heads/smoke \
-  || neg_fail "could not push the bad probe source to $BAD_SOURCE_REPO — the negative leg \
-needs a disposable source repo the token can push to (see IPE_SMOKE_BAD_SOURCE_REPO)."
+  || neg_fail "could not push the divergent-source probe to $BAD_SOURCE_REPO — the negative \
+leg needs a disposable source repo the token can push to (see IPE_SMOKE_BAD_SOURCE_REPO)."
 
-# Publish the bad probe (real push-path). `ipe package publish` itself computes a
-# correct sha256 over the pushed tree, so SCHEMA + FETCH + INTEGRITY all pass on
-# the registry side — the ONLY reachable rejection is the Tier-1 audit, exactly the
-# leg we are proving fires. Publish opening the PR is expected to SUCCEED here
-# (the client just opens the PR); the REJECTION happens on the registry's PR checks.
+# Publish the divergent-source version (real push-path). NO `--fresh`: the merge
+# must APPEND this version to the baseline entry (whose established source is the
+# clean probe's), so the submitted entry carries both the established source and
+# the divergent one — exactly the name-squat the admission source-continuity check
+# refuses. `ipe package publish` computes a correct sha256 over the pushed tree, so
+# SCHEMA + FETCH + INTEGRITY all pass; the source-continuity precheck is the sole
+# reachable rejection. Publish opening the PR is expected to SUCCEED (the client
+# appends the version — it has no cross-version source check); the REJECTION
+# happens on the registry's admission checks.
 BAD_SRC_HEAD="$(git -C "$BAD_PKG" rev-parse HEAD)"
-neg_log "publishing BAD $BAD_PACKAGE@$BAD_VERSION to $INDEX_REPO (real push-path)"
+neg_log "publishing divergent-source $PACKAGE@$BAD_VERSION to $INDEX_REPO (real push-path)"
 "$IPE" package publish "$BAD_PKG" \
   --index "$INDEX_REPO" \
   --fork "$FORK_OWNER" \
   --source "https://github.com/$BAD_SOURCE_REPO" \
   --rev "$BAD_SRC_HEAD" \
-  || neg_fail "ipe package publish could not even open the bad PR against $INDEX_REPO \
+  || neg_fail "ipe package publish could not open the divergent-source PR against $INDEX_REPO \
 (auth/push error) — the negative leg needs the PR opened so admission can reject it."
 
 # Find the bad PR by its head branch.
