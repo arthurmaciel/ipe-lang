@@ -444,18 +444,60 @@ fn fetch_git_into(name: &str, url: &SourceUrl, rev_str: &str, dest: &Path) -> Re
             source: e,
         })?;
     }
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| CliError::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
+    // `git init` runs inside `dest`, so create it now (not just its parent).
+    std::fs::create_dir_all(dest).map_err(|e| CliError::Io {
+        path: dest.to_path_buf(),
+        source: e,
+    })?;
+    // Fetch the EXACT pinned object rather than cloning a branch and hoping it
+    // contains the rev. `git init` + `fetch <sha>` pulls precisely the pinned
+    // commit and its tree — cheaper than a full clone (a shallow, single-object
+    // fetch) and independent of which branch (if any) currently points at it, so
+    // a rev that has scrolled off its branch tip but is still ref-reachable is
+    // still fetched. A server that refuses a raw-SHA want falls back to fetching
+    // all refs, then checking the rev out from among them.
+    //
+    // `--` terminates git's option list where a URL is positional; for
+    // `checkout` / `fetch <rev>` it is omitted so git treats the rev as a ref,
+    // not a path — `rev_str` / `url` come from parse-validated newtypes with no
+    // leading `-`.
+    run_git(name, &["init", "--quiet"], dest, Some(dest))?;
+    // `git remote add` has no `--` option terminator; the URL is a
+    // parse-validated newtype (no leading `-`), so it is a safe trailing arg.
+    run_git(
+        name,
+        &["remote", "add", "origin", url.as_str()],
+        dest,
+        Some(dest),
+    )?;
+    if run_git(
+        name,
+        &["fetch", "--quiet", "--depth", "1", "origin", rev_str],
+        dest,
+        Some(dest),
+    )
+    .is_err()
+    {
+        // Fallback for a server that disallows fetching an arbitrary SHA (e.g. a
+        // local `file://` remote with `allowReachableSHA1InWant` off): pull every
+        // branch AND tag, from which any ref-reachable rev — including one held
+        // alive only by a tag — resolves.
+        run_git(
+            name,
+            &["fetch", "--quiet", "--tags", "origin"],
+            dest,
+            Some(dest),
+        )?;
+        run_git(name, &["checkout", "--quiet", rev_str], dest, Some(dest))?;
+        return Ok(());
     }
-    // `--` terminates git's option list for clone: the URL that follows is a
-    // positional, never a flag. For checkout, `--` would make git treat the
-    // rev as a file path instead of a ref, so it is omitted — `rev_str` must
-    // come from a parse-validated newtype that guarantees no leading `-`.
-    run_git(name, &["clone", "--quiet", "--", url.as_str()], dest, None)?;
-    run_git(name, &["checkout", "--quiet", rev_str], dest, Some(dest))?;
+    // The exact-SHA fetch lands the commit at FETCH_HEAD.
+    run_git(
+        name,
+        &["checkout", "--quiet", "FETCH_HEAD"],
+        dest,
+        Some(dest),
+    )?;
     Ok(())
 }
 
