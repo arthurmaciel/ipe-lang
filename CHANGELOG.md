@@ -10,6 +10,20 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.2.5](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.4...ipe-v0.2.5) (2026-09-25)
+
+
+### Features
+
+* **web:** routed Web.embed mountable via Server.mountApp; fail-closed endpoint-conflict gate ([#2812](https://github.com/arthurmaciel/ipe-lang/issues/2812)) ([3a9c825](https://github.com/arthurmaciel/ipe-lang/commit/3a9c82550af1d8ddb81b9012dbb90af04f26e7f2))
+
+
+### Bug Fixes
+
+* **registry:** exempt prereleases from the enforced-semver API bump ([#2817](https://github.com/arthurmaciel/ipe-lang/issues/2817)) ([da19ad8](https://github.com/arthurmaciel/ipe-lang/commit/da19ad8406c9cf67f12ce5b998a11d4eba96fad9))
+* **registry:** fetch the exact pinned rev; keep smoke source revs immutable ([#2814](https://github.com/arthurmaciel/ipe-lang/issues/2814)) ([371930a](https://github.com/arthurmaciel/ipe-lang/commit/371930ad298e7c1fe8f2180bf204e4ba188f08f6))
+* **registry:** negative-leg smoke proves admission verify-before-trust (source spoof) ([#2815](https://github.com/arthurmaciel/ipe-lang/issues/2815)) ([2c5bb87](https://github.com/arthurmaciel/ipe-lang/commit/2c5bb876e827549adbbb3d16d956338372dcda2b))
+
 ## [0.2.4](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.3...ipe-v0.2.4) (2026-09-24)
 
 
