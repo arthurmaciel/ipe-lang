@@ -148,6 +148,54 @@ fn add_resolves_verifies_and_locks() {
 }
 
 #[test]
+fn add_resolves_a_rev_held_alive_only_by_a_tag() {
+    // The pinned rev is not the tip of any branch — the branch has advanced past
+    // it, and it survives only under a tag (the immutable per-version ref the
+    // publish smoke now pushes so an earlier version's rev is never orphaned).
+    // The exact-SHA fetch / tag-aware fallback must still fetch and hash-verify
+    // it, proving append-only re-verification of an older version stays sound.
+    let source = fixture_source("tagged");
+    let pinned = head_rev(&source); // commit C1 — the version's pinned rev
+    let sha = hash_source_tree(&source).expect("hash C1 tree"); // C1's tree hash
+    git(&source, &["tag", "smoke-pin"]); // immutable ref keeping C1 reachable
+    // Advance the branch past C1 so C1 is no longer any branch tip.
+    std::fs::write(source.join("lib.ipe"), "module Lib\nvalue = 99\n").expect("advance lib");
+    git(&source, &["add", "."]);
+    git(&source, &["commit", "--quiet", "-m", "advance"]);
+
+    // An index entry pinned to C1 (the tagged, non-tip rev) with C1's tree hash.
+    let index = temp_dir("index-tagged");
+    let packages = index.join("packages");
+    std::fs::create_dir_all(&packages).expect("packages dir");
+    let entry = format!(
+        "name = \"http-extras\"\npublisher = \"tester\"\n\n[[version]]\nversion = \"1.2.0\"\n\
+         source = \"{}\"\nrev = \"{pinned}\"\nsha256 = \"{sha}\"\ncapabilities = [\"network\"]\n",
+        source.display(),
+    );
+    std::fs::write(packages.join("http-extras.toml"), entry).expect("write entry");
+    let proj = scaffold_project("tagged");
+
+    let req = "^1".parse().expect("valid req");
+    resolve::resolve_and_add(&proj, "http-extras", &req, &index)
+        .expect("a tag-reachable, non-tip rev must still resolve and hash-verify");
+
+    let lock = Lockfile::read(&proj).expect("lock");
+    let locked = lock
+        .packages()
+        .iter()
+        .find(|p| p.name == "http-extras")
+        .expect("locked");
+    assert_eq!(
+        locked.sha256, sha,
+        "the C1 tree hash must verify against the pinned rev"
+    );
+
+    let _ = std::fs::remove_dir_all(&source);
+    let _ = std::fs::remove_dir_all(&index);
+    let _ = std::fs::remove_dir_all(&proj);
+}
+
+#[test]
 fn add_rejects_a_hash_mismatch() {
     // The index pins a hash the fetched source does not match: verify-before-
     // trust must reject it, and write nothing.

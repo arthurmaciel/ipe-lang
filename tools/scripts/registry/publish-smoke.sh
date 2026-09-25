@@ -232,13 +232,19 @@ git -C "$PKG" -c user.name=ipe-smoke -c user.email=smoke@ipe-lang.invalid add .
 git -C "$PKG" -c user.name=ipe-smoke -c user.email=smoke@ipe-lang.invalid \
   commit --quiet -m "smoke $VERSION"
 git -C "$PKG" remote add origin "https://github.com/$SOURCE_REPO.git"
-# Push the probe commit to the disposable source repo so the pinned rev is
-# fetchable. `--force` because the reserved source repo is disposable; a prior
-# run's commit is irrelevant.
-log "pushing probe source to $SOURCE_REPO"
-git -C "$PKG" push --force --quiet origin HEAD:refs/heads/smoke \
-  || fail "could not push the probe source to $SOURCE_REPO — the live run needs a \
+# Push the probe commit under an IMMUTABLE per-version tag so its pinned rev
+# stays reachable forever. Append-only admission may re-verify an earlier
+# version's rev on a later run; a moving/force-pushed branch would orphan that
+# rev (an unreachable commit is unfetchable by clone OR fetch-by-SHA — the
+# "unable to read tree" failure). The tag name embeds the unique per-run
+# VERSION, so it is created once and never force-overwritten. The `smoke` branch
+# is still updated as a convenience pointer to the latest (non-fatal — the tag
+# is the authoritative, permanent handle admission needs).
+log "pushing probe source to $SOURCE_REPO (tag smoke-$VERSION)"
+git -C "$PKG" push --quiet origin "HEAD:refs/tags/smoke-$VERSION" \
+  || fail "could not push the probe source tag to $SOURCE_REPO — the live run needs a \
 disposable source repo the token can push to (see IPE_SMOKE_SOURCE_REPO)."
+git -C "$PKG" push --force --quiet origin HEAD:refs/heads/smoke || true
 
 # ── 2. Run the REAL publish push-path ───────────────────────────────────────
 # Not --dry-run: this clones the fork, writes packages/<pkg>.toml, pushes the
