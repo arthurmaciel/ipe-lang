@@ -1107,11 +1107,74 @@ fn resolve_server_port(env_value: Option<String>, source: i64) -> i64 {
 }
 
 /// Server.listen : Int -> List Route -> Task Error ()  — serves via axum/tokio.
+/// Detect an unambiguous endpoint collision in the route set BEFORE the axum
+/// router is built. axum (matchit) *panics* on a conflicting insert, and that
+/// panic fires inside `server_listen`'s task future — before the
+/// `CatchPanicLayer`, which only wraps request-time handler panics — so it would
+/// crash the listener rather than surface a typed error (a soundness break).
+///
+/// This pre-check flags ONLY the always-invalid case that never coexists in
+/// axum: two handlers claiming the same path with an overlapping method (`ANY`
+/// overlaps every verb). It deliberately does NOT reason about `static` /
+/// `mountApp` prefix subtrees — a `nest`ed app coexists with sibling routes
+/// (a mount at `/` beside `Server.get "/health"` is valid), so a structural
+/// subtree rule would over-reject working programs. Those and any residual
+/// matchit ambiguity are caught by the per-insert `catch_unwind` in
+/// `server_listen`, which mirrors axum's ACTUAL behaviour and so can never
+/// over-reject. Fail closed either way: a conflicting set is refused, never bound.
+fn endpoint_conflict(routes: &[ServerRoute]) -> Option<String> {
+    // Only plain handlers carry an exact (method, path) that can duplicate.
+    let handlers: Vec<(String, &str)> = routes
+        .iter()
+        .filter(|r| matches!(r.target, RouteTarget::Handler(_)))
+        .map(|r| (r.method.to_uppercase(), r.path.as_str()))
+        .collect();
+    conflict_in(&handlers)
+}
+
+/// The pure collision core of [`endpoint_conflict`], over already-extracted
+/// `(METHOD, path)` handler entries — split out so the refusal set is
+/// unit-testable without constructing live axum handlers.
+fn conflict_in(handlers: &[(String, &str)]) -> Option<String> {
+    for (idx, (ma, pa)) in handlers.iter().enumerate() {
+        for (mb, pb) in handlers.iter().skip(idx + 1) {
+            // Same path (trailing-slash-insensitive) with an overlapping method.
+            let conflict = pa.trim_end_matches('/') == pb.trim_end_matches('/')
+                && (ma == mb || ma == "ANY" || mb == "ANY");
+            if conflict {
+                return Some(format!(
+                    "Server.listen: endpoint `{ma} {pa}` conflicts with `{mb} {pb}` — two \
+                     handlers may not claim the same path with an overlapping method; give each \
+                     endpoint a distinct path or method"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// The typed error for the per-insert `catch_unwind` backstop: an axum insert
+/// panicked (a matchit route conflict) that the structural pre-check did not
+/// model. Fail closed with the offending endpoint named.
+fn conflict_at(method: &str, path: &str) -> String {
+    format!(
+        "Server.listen: endpoint `{method} {path}` conflicts with a route already registered on \
+         the server — two endpoints may not claim the same path or a path nested under another; \
+         give each endpoint a distinct path"
+    )
+}
+
 pub fn server_listen<E: From<String> + Send + 'static>(
     port: i64,
     routes: Vec<ServerRoute>,
 ) -> IpeTask<E, ()> {
     Box::pin(async move {
+        // Fail-closed endpoint-conflict gate (see `endpoint_conflict`): refuse an
+        // overlapping route set with a typed error before any axum insert, so a
+        // matchit conflict can never panic the listener task.
+        if let Some(msg) = endpoint_conflict(&routes) {
+            return IpeResult::Err(msg.into());
+        }
         let mut app: axum::Router = axum::Router::new();
         // At most ONE mounted web app per server: the embedded app's cookie /
         // CSRF / asset paths are scoped through the process-wide base path
@@ -1121,15 +1184,34 @@ pub fn server_listen<E: From<String> + Send + 'static>(
         #[cfg(feature = "web")]
         let mut web_mounted = false;
         for r in routes {
+            // Kept for the fail-closed conflict message: the arm below moves the
+            // target's payload out of `r`, but leaves these scalar fields intact.
+            let rmethod = r.method.clone();
+            let rpath = r.path.clone();
+            // Each axum insert is wrapped so a residual matchit conflict the
+            // pre-check did not model becomes a typed error, never an escaped
+            // panic (the pre-check catches the definite cases; this is the
+            // independent backstop — defence in depth for a soundness invariant).
             match r.target {
                 RouteTarget::Static(dir) => {
-                    app = app.nest_service(
-                        &strip_trailing_slash(&r.path),
-                        tower_http::services::ServeDir::new(dir),
-                    );
+                    let path = strip_trailing_slash(&rpath);
+                    let svc = tower_http::services::ServeDir::new(dir);
+                    app = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        app.nest_service(&path, svc)
+                    })) {
+                        Ok(next) => next,
+                        Err(_) => return IpeResult::Err(conflict_at(&rmethod, &rpath).into()),
+                    };
                 }
                 RouteTarget::Handler(h) => {
-                    app = app.route(&r.path, method_router(&r.method, h));
+                    let mr = method_router(&rmethod, h);
+                    let path = rpath.clone();
+                    app = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        app.route(&path, mr)
+                    })) {
+                        Ok(next) => next,
+                        Err(_) => return IpeResult::Err(conflict_at(&rmethod, &rpath).into()),
+                    };
                 }
                 // `Server.mountApp`: build the embedded web app's router scoped
                 // to the prefix, then nest it under that prefix on this same
@@ -1152,9 +1234,14 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .take();
                     if let Some(build) = builder {
-                        let prefix = strip_trailing_slash(&r.path);
+                        let prefix = strip_trailing_slash(&rpath);
                         let sub = build(prefix.clone()).await;
-                        app = app.nest(&prefix, sub);
+                        app = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                            move || app.nest(&prefix, sub),
+                        )) {
+                            Ok(next) => next,
+                            Err(_) => return IpeResult::Err(conflict_at(&rmethod, &rpath).into()),
+                        };
                         web_mounted = true;
                     }
                 }
@@ -2488,6 +2575,35 @@ mod tests {
     fn ipe_server_port_env_overrides_the_source_port() {
         // A valid env value wins over the port the program passed.
         assert_eq!(resolve_server_port(Some("9123".to_owned()), 8000), 9123);
+    }
+
+    #[test]
+    fn distinct_handlers_never_conflict() {
+        // Happy path: sibling handlers and different verbs on one path coexist —
+        // the pre-check must not over-reject.
+        let ok = [
+            ("GET".to_string(), "/api/users"),
+            ("GET".to_string(), "/api/posts"),
+            ("POST".to_string(), "/api/users"), // same path, different verb
+            ("DELETE".to_string(), "/api/users/:id"),
+        ];
+        assert!(conflict_in(&ok).is_none());
+    }
+
+    #[test]
+    fn duplicate_method_and_path_is_refused() {
+        // Prove the refusal: the same endpoint twice (trailing slash is the same
+        // endpoint) is turned back before any axum insert.
+        let dup = [("GET".to_string(), "/api"), ("GET".to_string(), "/api/")];
+        assert!(conflict_in(&dup).is_some());
+    }
+
+    #[test]
+    fn any_verb_overlaps_every_method() {
+        // `ANY` claims every verb, so it collides with a specific-verb handler on
+        // the same path — axum would panic on the overlapping method route.
+        let any = [("ANY".to_string(), "/hook"), ("POST".to_string(), "/hook")];
+        assert!(conflict_in(&any).is_some());
     }
 
     #[test]

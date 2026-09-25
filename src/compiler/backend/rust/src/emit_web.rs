@@ -540,8 +540,8 @@ fn emit_web_app_inner(
     // routed branch — single-page apps pass them as structural no-ops.
     if let Some((model_ty, page_ty)) = routed_page_field(ctx, view_e) {
         return emit_routed_web_leaf(
-            ctx, fields, &tag_const, mountable, model_ty, page_ty, update_e, &init_s, &update_s,
-            &view_s, &subs_s, indent, child, generics,
+            ctx, fields, &tag_const, mountable, model_ty, page_ty, init_e, update_e, view_e,
+            subs_e, &init_s, &update_s, &view_s, &subs_s, indent, child, generics,
         );
     }
 
@@ -554,14 +554,17 @@ fn emit_web_app_inner(
     )
 }
 
-/// Emit the routed (`Model` has a `page` field) `WebApp` leaf — a `Standalone`
-/// `web_app_routed` handle. Routing (routes table + `notFound` + generated
-/// `set_page`) is forwarded to the runtime entry.
+/// Emit the routed (`Model` has a `page` field) `WebApp` leaf. Routing (routes
+/// table + `notFound` + generated `set_page`) is forwarded to the runtime entry.
 ///
-/// A routed `Web.embed` needs a routed mount router-builder
-/// (`web_embed_router_routed`), which is not yet implemented, so `mountable`
-/// here is rejected fail-closed at emit — never a mis-emit. A single-page
-/// `Web.embed` mounts today; a routed one is a follow-up.
+/// `Web.tea` → a `Standalone` `web_app_routed` handle (binds its own listener).
+/// `Web.embed` (`mountable`) → a `Mountable` handle carrying BOTH the standalone
+/// `serve` task AND a `web_embed_router_routed` router builder for
+/// `Server.mountApp` to nest under a prefix on the shared port — the routed
+/// counterpart of the single-page `Mountable` handle. The router builder needs
+/// its own copies of the four callbacks + the route table + `set_page`, so those
+/// are emitted a SECOND time (each yields a fresh named `fn` item / pure closure
+/// / by-value list, so re-emitting is a fresh value, not a move).
 #[allow(clippy::too_many_arguments)] // threads the pre-emitted callback strings + their source exprs + the solved model/page types
 fn emit_routed_web_leaf(
     ctx: &EmitCtx,
@@ -570,7 +573,10 @@ fn emit_routed_web_leaf(
     mountable: bool,
     model_ty: &ipe_ir::IrType,
     page_ty: &ipe_ir::IrType,
+    init_e: &Expr,
     update_e: &Expr,
+    view_e: &Expr,
+    subs_e: &Expr,
     init_s: &str,
     update_s: &str,
     view_s: &str,
@@ -595,16 +601,44 @@ fn emit_routed_web_leaf(
         child,
         generics,
     )?;
-    if mountable {
-        return Err(Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::emit_web_call::WebEmbed",
-            detail: "Web.embed of a routed app (Model with a `page` field) is \
-                     not yet supported for Server.mountApp; embed a single-page \
-                     Web app, or serve the routed app standalone with Web.tea"
-                .into(),
-        });
-    }
     let register = granted_web_features_register_stmt(ctx);
+    if mountable {
+        // Second emission for the router builder — fresh values, never a move of
+        // the ones the standalone `serve` task consumed.
+        let init_s2 = emit_web_fn(ctx, init_e, indent, child, generics)?;
+        let update_s2 = emit_web_fn(ctx, update_e, indent, child, generics)?;
+        let view_raw_s2 = emit_web_fn(ctx, view_e, indent, child, generics)?;
+        let view_s2 = wrap_view(&view_raw_s2);
+        let subs_s2 = emit_web_fn(ctx, subs_e, indent, child, generics)?;
+        let routes_s2 = emit_expr_at(ctx, routes_e, indent, child, generics)?;
+        let not_found_s2 = emit_expr_at(ctx, not_found_e, indent, child, generics)?;
+        let set_page2 = set_page_closure(
+            ctx,
+            fields,
+            update_e,
+            &page_ty_s,
+            &model_ty_s,
+            indent,
+            child,
+            generics,
+        )?;
+        let store_args = "::std::env::var(\"IPE_WEB_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
+             ::std::env::var(\"IPE_WEB_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
+             IPE_WEB_MODEL_SCHEMA_TAG";
+        let serve_call = format!(
+            "ipe_runtime::web::web_app_routed({init_s}, {update_s}, {view_s}, {subs_s}, \
+             {routes_s}, {not_found_s}, {set_page}, {store_args})"
+        );
+        let router_call = format!(
+            "ipe_runtime::web::web_embed_router_routed({init_s2}, {update_s2}, {view_s2}, \
+             {subs_s2}, {routes_s2}, {not_found_s2}, {set_page2}, {store_args})"
+        );
+        return Ok(Some(format!(
+            "{{ {register}{tag_const} \
+             ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Mountable {{ \
+             serve: {serve_call}, router: {router_call} }}) }}"
+        )));
+    }
     Ok(Some(format!(
         "{{ {register}{tag_const} \
          ipe_runtime::tea::WebApp(ipe_runtime::tea::WebAppKind::Standalone(\
