@@ -55,21 +55,23 @@ view model =
             [ Ui.spacing 12 ]
             [ Ui.button
                 [ Ui.padding 12
+                , Ui.width (Ui.px 44)
                 , Background.color (Ui.rgb 37 99 235)
                 , Font.color (Ui.rgb 255 255 255)
                 , Border.rounded 8
                 ]
-                { onPress = Just Decrement, label = Ui.text "-" }
+                { onPress = Just Decrement, label = Ui.el [ Ui.centerX ] (Ui.text "-") }
             , Ui.el
                 [ Font.size 32, Font.bold ]
                 (Ui.text (String.fromInt model.count))
             , Ui.button
                 [ Ui.padding 12
+                , Ui.width (Ui.px 44)
                 , Background.color (Ui.rgb 37 99 235)
                 , Font.color (Ui.rgb 255 255 255)
                 , Border.rounded 8
                 ]
-                { onPress = Just Increment, label = Ui.text "+" }
+                { onPress = Just Increment, label = Ui.el [ Ui.centerX ] (Ui.text "+") }
             ]
         ]
 

@@ -132,6 +132,66 @@ inspection, but a signed `.ipa` must be produced on a macOS runner with Xcode an
 a signing identity. As with desktop, `build web solo <os>` lays out the same shell
 around a fast dev client; `release web solo <os>` hosts the production client.
 
+## Running and simulating each host
+
+Building lays out a bundle; here is how to actually *run* one locally — including
+on a machine without a display (desktop) or without the device (mobile).
+
+### Desktop
+
+`ipe run web desktop` compiles and opens the app in a native webview window. To
+run the packaged build instead, launch the emitted binary directly:
+
+```
+ipe release web desktop
+./dist/linux/<name>/bin/<name>
+```
+
+Linux needs WebKitGTK (`libwebkit2gtk-4.1-0`); macOS uses the system WebKit;
+Windows needs the Edge WebView2 runtime. On a **headless** box (CI, a server),
+run it under a virtual display:
+
+```
+xvfb-run -a ./dist/linux/<name>/bin/<name>
+```
+
+### Android (emulator)
+
+`release web solo android` writes a Gradle project to
+`dist/android/<name>-android/`. With the Android SDK on `PATH`:
+
+```
+cd dist/android/<name>-android
+./gradlew assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
+```
+
+To **simulate**, boot an emulator and install the debug build onto it:
+
+```
+emulator -avd <your-avd> &       # or start one from Android Studio's Device Manager
+./gradlew installDebug           # builds + installs onto the running emulator/device
+# or: adb install app/build/outputs/apk/debug/app-debug.apk
+```
+
+`adb`, `emulator`, and `avdmanager` (to create an AVD once) all ship with the
+Android SDK.
+
+### iOS (simulator)
+
+`release web solo ios` writes an Xcode project to `dist/ios/<name>-ios/` (a
+`WKWebView` plus a scheme handler serving the wasm client). Simulating needs
+**macOS + Xcode**:
+
+```
+open dist/ios/<name>-ios/          # open the Xcode project, pick an iOS Simulator, press ⌘R
+# headless macOS:
+xcrun simctl boot "iPhone 15"
+xcodebuild -scheme App -destination 'platform=iOS Simulator,name=iPhone 15'
+```
+
+A distributable `.ipa` additionally needs a signing identity. iOS cannot be
+built or simulated on Linux or Windows.
+
 ## OS permissions come from your capabilities
 
 A packaged app may only touch an OS capability the app itself accepted. The

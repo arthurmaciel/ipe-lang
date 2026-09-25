@@ -39,16 +39,47 @@ cd counter
 ipe run                 # serves at http://localhost:8000 (server-rendered HTML + live SSE)
 ```
 
-On a TTY `ipe init` asks the shape (`web` / `tui` / `cli` / `server` / `script`) and, for web shape, 
-is asks which runtime is preferred — `served` (a co-located SSR + SSE server) or `solo` (a wasm client); 
+On a TTY `ipe init` asks the shape (`web` / `tui` / `cli` / `worker` / `server` / `script`) and, for the web shape, 
+asks which runtime — `served` (a co-located SSR + SSE server) or `solo` (a wasm client).
 
 
-You can name `shape`, `runtime` and `host` to skip the wizard: 
+Name the positionals to skip the wizard — `ipe init <dir> [shape] [runtime]` (host is a build-time choice, not an `init` arg): 
 ```sh
-ipe init myapp web solo android
+ipe init myapp web solo     # <dir>=myapp  <shape>=web  <runtime>=solo
 ```
 
-Check [shapes](#shapes) bellow and our [getting started](docs/guide/getting-started.md) guide.
+See [Shapes](#shapes) below and the [getting started](docs/guide/getting-started.md) guide.
+
+## Shapes
+
+One language; the **head of `main` pins the shape**, never a config field. **Web
+(served SSR + SSE) is the default**; the same `Ipe.Ui` view also renders on the
+terminal. → **[full shapes guide](docs/topics/shapes.md)**
+
+| Shape | Entry | For |
+|---|---|---|
+| **Web** *(default)* | `Web.tea` | Browser DOM — served SSR+SSE, or a `solo` wasm client (browser / desktop / iOS / Android hosts) |
+| **Tui** | `Tui.tea` | Full-screen terminal UIs |
+| **Cli** | `Cli.tea` | Line-oriented CLIs and REPLs |
+| **Worker** | `Worker.tea` | A view-less TEA loop (background jobs, timers) |
+| **Script** | bare `main : Task Error ()` | Scripts, one-shot tools, `Server.listen`, any `Task` directly |
+
+Web / Tui / Cli / Worker follow [The Elm Architecture](https://guide.elm-lang.org/architecture/).
+A `Server` can host many endpoints and mount a full `Web` app on one port:
+
+```elm
+main =
+    Server.listen 8080
+        [ Server.get "/api/health" health
+        , Server.mountApp "/app"
+            (Web.embed
+                -- the same fields as `Web.tea`, written inline
+                { init = init, update = update, view = view
+                , subscriptions = subscriptions, routes = [], notFound = Home
+                }
+            )
+        ]
+```
 
 ## Performance (dev loop)
 
@@ -58,40 +89,6 @@ served counter with the released binary:
 - **App recompilation:** ≈ 10 seconds — needed only for a **type** change (a `Model` field, a function type signature).
 - **Dev watch hot reload:** ≈ 500 **milliseconds** — every other edit (text, `init`, `update`, subscriptions, styles) hot-swaps into the running app, no `cargo`.
 - Cold build ≈ 18 s · release binary 7.0 MB · peak RAM 7.8 MB. → [faster builds](docs/topics/faster-builds.md)
-
-## Shapes
-
-One language; the shape is pinned by the head of `main`, never by config. **Web — served
-SSR + SSE — is the default**, tuned for fast web development, and the same `Ipe.Ui` view renders
-on the terminal too.
-
-| Shape | Entry | For |
-|---|---|---|
-| **Web** *(default)* | `Web.tea` | Server-rendered HTML + live SSE patches; a `solo` wasm client is opt-in |
-| Tui | `Tui.tea` | Full-screen terminal UIs |
-| Cli | `Cli.tea` | Line-oriented CLIs and REPLs |
-| Worker | `Worker.tea` | A view-less TEA loop |
-| Direct | bare `main : Task Error ()` | Scripts, one-shot tools, cron, `Server.listen` and every other `Task` directly |
-
-Web / Tui / Cli / Worker follow [The Elm Architecture](https://guide.elm-lang.org/architecture/);
-Check out the [examples](examples/) or run `ipe doc Ui` in the terminal to learn more.
-
-It is interesting to know that you can run a `Server` with many endpoints and also mounting a `web`
-on a single port:
-
-```elm
-main =
-    Server.listen 8080
-        [ Server.get "/api/health" health
-        , Server.mountApp "/app"
-            (Web.embed
-                -- the same six fields as `Web.tea`, written inline
-                { init = init, update = update, view = view
-                , subscriptions = subscriptions, routes = [], notFound = NoOp
-                }
-            )
-        ]
-```
 
 ## Features
 
