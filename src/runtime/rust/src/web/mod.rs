@@ -1945,6 +1945,107 @@ where
     })
 }
 
+/// `Web.embed` of a ROUTED app (`Model` has a `page` field): the routed sibling
+/// of [`web_embed_router`]. It builds the SAME routed `WebState` as
+/// [`web_app_routed`] — a `route_resolver` / `param_resolver` / `route_matched`
+/// derived from the route table + `set_page` — but, exactly like
+/// [`web_embed_router`], returns a [`crate::tea::MountBuilder`] that yields the
+/// fully-layered `Router` for `Server.mountApp` to nest under a prefix on the
+/// shared server port, instead of binding its own listener.
+///
+/// `Page` / `FSetPage` are erased into the boxed resolver closures, so
+/// `build_web_router` / `WebState` keep the original six type params — no `dyn`
+/// over the app's handlers (§9).
+#[allow(clippy::too_many_arguments)] // mirrors web_app_routed's routed cfg (callbacks + route table + set_page + store)
+#[cfg(feature = "server")]
+pub fn web_embed_router_routed<Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPage>(
+    init: FInit,
+    update: FUpdate,
+    view: FView,
+    subscriptions: FSubs,
+    routes: Vec<route::Route<Page>>,
+    not_found: Page,
+    set_page: FSetPage,
+    store_kind: String,
+    store_path: String,
+    schema_tag: [u8; 32],
+) -> crate::tea::MountBuilder
+where
+    Model: serde::Serialize
+        + serde::de::DeserializeOwned
+        + Clone
+        + PartialEq
+        + Send
+        + Sync
+        + crate::stringify::IpeStringify
+        + 'static,
+    Msg: Clone
+        + Send
+        + Sync
+        + std::fmt::Debug
+        + serde::Serialize
+        + serde::de::DeserializeOwned
+        + crate::stringify::IpeStringify
+        + 'static,
+    Page: Clone + Send + Sync + 'static,
+    FInit: Fn(req::WebReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
+    FSetPage: Fn(Page, Model) -> Model + Send + Sync + 'static,
+{
+    Box::new(move |prefix: String| {
+        Box::pin(async move {
+            // Scope the embedded app's cookies + assets to the mount prefix,
+            // reusing the sub-app base-path mechanism (see `web_embed_router`).
+            let base = normalise_base_path(&prefix);
+            if !base.is_empty() {
+                crate::system::locked_set_var("IPE_WEB_BASE_PATH", &base);
+            }
+            // Routed resolvers — identical construction to `web_app_routed`; only
+            // the terminal `build_web_router` (vs `serve_web`) differs.
+            let routes = Arc::new(routes);
+            let not_found = Arc::new(not_found);
+            let set_page = Arc::new(set_page);
+            let routes_for_params = routes.clone();
+            let routes_for_match = routes.clone();
+            let resolver: RouteResolver<Model> = Arc::new(move |m, path| {
+                (set_page)(route::match_routes(&routes, &not_found, path), m)
+            });
+            let param_resolver: ParamResolver =
+                Arc::new(move |path| route::match_params(&routes_for_params, path));
+            let route_matched: RouteMatched =
+                Arc::new(move |path| route::matches_any(&routes_for_match, path));
+            // A mount has no task-error channel, so an unhonourable store config
+            // fails closed as a 503-everywhere router (see `web_embed_router`).
+            let store = match store::choose_store::<Model, Msg>(
+                &store_kind,
+                &store_path,
+                web_ttl(),
+                schema_tag,
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => return fail_closed_router(e.to_string()),
+            };
+            let state = WebState {
+                store,
+                init: Arc::new(init),
+                update: Arc::new(update),
+                view: Arc::new(view),
+                subs: Arc::new(subscriptions),
+                route_resolver: resolver,
+                param_resolver,
+                route_matched,
+                session_count: Arc::new(AtomicUsize::new(0)),
+                watch_build_status: Arc::new(Mutex::new(None)),
+            };
+            build_web_router::<Model, Msg, FInit, FUpdate, FView, FSubs>(state, false)
+        }) as std::pin::Pin<Box<dyn std::future::Future<Output = axum::Router> + Send>>
+    })
+}
+
 /// A router that answers EVERY path with `503 Service Unavailable` + a plain
 /// message. Used when a mounted `Web.embed` cannot honour its store config
 /// (fail-closed): the mount stays reachable enough to report the fault, but

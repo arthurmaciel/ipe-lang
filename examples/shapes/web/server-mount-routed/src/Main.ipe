@@ -1,0 +1,111 @@
+module Main exposing (main)
+
+-- | server-mount-routed — one `Ipe.Server.Http` server that serves a plain JSON
+-- API route AND mounts a full ROUTED `Ipe.Tea.Web` (TEA) app behind the SAME
+-- `listen`.
+--
+-- The mounted app is routed: its `Model` carries a `page` field, and `routes` /
+-- `notFound` drive URL routing exactly as a standalone routed `Web.tea` app
+-- would. `Web.embed` turns that routed cfg into a `WebApp` value;
+-- `Server.mountApp` mounts it under a prefix next to ordinary `Server.get`
+-- handlers; `Server.listen` serves them all on one port.
+--
+-- This proves the routed counterpart of `server-mount`: a multi-page TEA UI and
+-- a JSON API from a single binary, on one server.
+
+import Ipe.Server.Http as Server
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+
+
+type Page
+    = HomePage
+    | AboutPage
+
+
+type alias Model =
+    { page : Page
+    , count : Int
+    }
+
+
+type Msg
+    = Increment
+    | Decrement
+    | NoOp
+
+
+init : WebReq -> ( Model, Cmd.Cmd Msg )
+init _req =
+    ( { page = HomePage, count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+        NoOp ->
+            ( model, Cmd.none )
+
+
+subscriptions : Model -> Sub.Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Element Msg
+view model =
+    case model.page of
+        HomePage ->
+            Ui.column []
+                [ Ui.text "home"
+                , Ui.button [] { onPress = Just Increment, label = Ui.text "+" }
+                , Ui.text (String.fromInt model.count)
+                , Ui.button [] { onPress = Just Decrement, label = Ui.text "-" }
+                ]
+
+        AboutPage ->
+            Ui.column []
+                [ Ui.text "about"
+                , Ui.text (String.fromInt model.count)
+                ]
+
+
+counterApp : Web.WebApp
+counterApp =
+    Web.embed
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes =
+            [ Web.route "/" HomePage
+            , Web.route "/about" AboutPage
+            ]
+        , notFound = HomePage
+        }
+
+
+-- A plain API route beside the mounted routed app: a static JSON health check.
+health : Server.Request -> Task Error Server.Response
+health _req =
+    Task.succeed (Server.json "{\"status\":\"ok\"}")
+
+
+-- `main` is a `Task`: the server IS the entry point. `/health` is answered by a
+-- plain handler; every other path is served by the mounted routed TEA app.
+main : Task Error ()
+main =
+    Server.listen 8000
+        [ Server.get "/health" health
+        , Server.mountApp "/" counterApp
+        ]
