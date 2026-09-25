@@ -1251,6 +1251,29 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
         ));
     };
 
+    // A prerelease (`X.Y.Z-<pre>`) is, by semver §9, explicitly unstable and
+    // exempt from the compatibility guarantee a release version carries. Range
+    // resolution (`index::resolve_version` via `VersionReq::matches`, Cargo
+    // semantics) never resolves a prerelease for a non-prerelease requirement, so
+    // no consumer on a stable range can even see one — enforcing an API-bump on it
+    // would only reject a normal iteration (`X.Y.Z-a` → `X.Y.Z-b`) that harms no
+    // one. Monotonicity is still guaranteed independently: `admission_precheck`'s
+    // immutability check forbids rewriting a published version, and the successor
+    // must exceed every published one. So a prerelease clears this check by being
+    // a prerelease, never by an API delta.
+    if !new_version.pre.is_empty() {
+        print!(
+            "{}",
+            crate::style::frame(&crate::style::gutter(&format!(
+                "package audit: `{}` {new_version} is a prerelease — exempt from the \
+                 enforced-semver API-compatibility bump (semver §9: a prerelease is unstable \
+                 and is not resolved by a stable version requirement).",
+                prepared.manifest.name
+            )))
+        );
+        return Ok(());
+    }
+
     let index_root = index_root.map_or_else(crate::resolve::index_root, Path::to_path_buf);
     // Absent ⇒ a first submission; no predecessor to enforce.
     // Unreadable ⇒ fail closed: a corrupt predecessor must not silently pass
@@ -2539,6 +2562,45 @@ mod tests {
         )
         .expect("a clean Direct entry with no acceptsControl certifies unconstrained");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A prerelease submission is EXEMPT from the enforced-semver API-bump, even
+    /// with a published predecessor of the same core version. Semver §9 makes a
+    /// prerelease unstable and a stable version requirement never resolves it
+    /// (`index::resolve_version` via `VersionReq::matches`), so requiring an API
+    /// bump would reject a normal `X.Y.Z-a` → `X.Y.Z-b` iteration — the exact shape
+    /// the live registry publish-smoke republishes each run. Hermetic: the
+    /// exemption returns before any predecessor fetch, so no network is touched
+    /// even though a predecessor exists in the baseline. (Release submissions still
+    /// engage the bump — see `check_semver_bump` coverage in `diff` and
+    /// `tests/diff_cli.rs`.)
+    #[test]
+    fn enforced_semver_exempts_a_prerelease_over_a_published_predecessor() {
+        let index_root = make_test_dir("semver-prerelease-exempt");
+        let pkgs = index_root.join("packages");
+        std::fs::create_dir_all(&pkgs).expect("create packages/");
+        std::fs::write(
+            pkgs.join("test-pkg.toml"),
+            "name = \"test-pkg\"\n\
+             publisher = \"someone\"\n\n\
+             [[version]]\n\
+             version = \"0.0.0-smoke.1\"\n\
+             source = \"https://github.com/example/test-pkg\"\n\
+             rev = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\
+             sha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n",
+        )
+        .expect("write baseline entry");
+
+        let mut prepared = make_prepared(&index_root.join("proj"));
+        prepared.manifest.name = "test-pkg".to_owned();
+        prepared.manifest.version = Some("0.0.0-smoke.2".parse().expect("valid prerelease"));
+
+        let result = enforced_semver(&prepared, Some(&index_root));
+        let _ = std::fs::remove_dir_all(&index_root);
+        assert!(
+            result.is_ok(),
+            "a prerelease over a published predecessor is exempt from the bump: {result:?}"
+        );
     }
 
     // ── Advisory-check gate-level tests ─────────────────────────────────────
