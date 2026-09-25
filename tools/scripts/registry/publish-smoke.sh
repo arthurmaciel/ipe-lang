@@ -10,13 +10,18 @@
 #     2. The registry's admission workflow accepts a well-formed, signed entry.
 #     3. The accepted entry resolves back through the Pages read API
 #        (`<registry-url>/index.json` + `/packages/<name>.json`).
-#   NEGATIVE (a deliberately-bad probe is REFUSED):
-#     4. A second, distinct RESERVED probe carrying a real Tier-1 audit violation
-#        (a hidden `network` capability) is published the same way; the deployed
-#        admission workflow REJECTS it — its PR admission check goes RED (or the PR
-#        is closed rejected) and the bad entry never merges, so the index is never
-#        touched. A bad probe that instead ADMITTED or auto-merged fails the leg
-#        (fail-closed): the whole point of the gate is to refuse it.
+#   NEGATIVE (a deliberately-bad submission is REFUSED):
+#     4. A second, distinct RESERVED probe is published as a SOURCE SPOOF — its
+#        pinned `sha256` names a clean working tree while its `--source`/`--rev`
+#        resolve to a divergent committed revision. The honest client opens the PR
+#        (it has no cross-check that source@rev matches the hash); the deployed
+#        admission workflow independently re-fetches source@rev, re-hashes, and
+#        REJECTS on the mismatch (verify-before-trust) — its PR admission check
+#        goes RED (or the PR is closed rejected) and the bad entry never merges, so
+#        the index is never touched. A submission that instead ADMITTED or
+#        auto-merged fails the leg (fail-closed): the whole point is to refuse it.
+#        (A capability-inconsistent source can't test admission here — the SAME
+#        Tier-1 audit runs client-side in `publish`, refusing it before the PR.)
 # Then it CLEANS UP idempotently so the real index is never polluted (BOTH probes).
 #
 # Cadence: NIGHTLY / manual `workflow_dispatch` ONLY. Pushing to a real registry
@@ -40,8 +45,8 @@
 # test-package names (IPE_SMOKE_PACKAGE, default `ipe-registry-smoke-probe`, for
 # the clean probe; IPE_SMOKE_BAD_PACKAGE, default `ipe-registry-smoke-probe-bad`,
 # for the negative leg's bad probe) plus guaranteed cleanup — never a real package
-# name. The bad probe is REJECTED by admission, so its PR never merges and the
-# index is never touched.
+# name. The bad probe's spoof is REJECTED by admission, so its PR never merges and
+# the index is never touched.
 #
 # ── Required environment (the live run's infra) ─────────────────────────────
 #   IPE_SMOKE_TOKEN        publish token (a repo secret) with push + open-PR
