@@ -311,13 +311,28 @@ fi
 
 log "OK: publish → admission → Pages per-package resolution all held (positive leg)."
 
-# ── NEGATIVE LEG: a deliberately-bad probe must be REFUSED by admission ───────
+# ── NEGATIVE LEG: a deliberately-bad publish must be REFUSED by admission ─────
 # The positive leg proves a good package ADMITS + resolves. This leg proves the
-# other, security-critical direction: a package carrying a real Tier-1 audit
-# violation (a hidden `network` capability — used but NOT declared) is REJECTED by
-# the SAME deployed admission workflow. A gate that only ever proves good packages
-# pass is untested on the path that matters most; a silently-disabled audit leg
-# would still admit this bad probe while every happy-path check stayed green.
+# other, security-critical direction: a submission whose pinned source bytes do
+# NOT match the pinned `sha256` is REJECTED by the SAME deployed admission
+# workflow. This is the verify-before-trust seam — admission independently
+# git-fetches `source@rev`, re-hashes the fetched tree, and refuses on any
+# mismatch (`fetch_and_verify_index_version` -> `CliError::HashMismatch`). A gate
+# that only ever proves good packages pass is untested on the path that matters
+# most; a silently-disabled fetch+verify step would admit this spoof while every
+# happy-path check stayed green.
+#
+# Why a HASH spoof, not a capability-inconsistent source: `ipe package publish`
+# runs the SAME Tier-1 audit (capability consistency included) on the CALLER's
+# machine before it opens the PR, so a capability-inconsistent source is refused
+# CLIENT-side and never reaches admission — the leg under test would never run.
+# The reachable-yet-admission-only defect is a source spoof: publish hashes the
+# WORKING TREE and pins `--source`/`--rev` from flags WITHOUT cross-checking that
+# the pinned revision's bytes match that hash (`compute_entry_version`; the
+# `--rev` override path has no dirty-tree/reachability guard either). So an honest
+# client opens a PR whose `sha256` names one tree while `source@rev` resolves to
+# another, and admission's independent re-hash is the ONLY place the mismatch is
+# caught — exactly the fail-closed seam this leg proves.
 #
 # The negative leg needs `gh` to observe the PR's admission check verdict. Without
 # it there is no way to distinguish "rejected" from "not yet run", so — fail-closed
@@ -326,11 +341,6 @@ command -v gh >/dev/null 2>&1 \
   || neg_fail "the negative leg needs \`gh\` to read the bad PR's admission check verdict; \
 without it a rejection cannot be observed — refusing to assert a hollow pass (fail-closed)."
 
-# Build the bad probe: `Main` makes a network request but `package.ipe` declares
-# NOTHING — the inferred capability set is `{network}`, the declared set is empty,
-# a hidden effect the Tier-1 capability-consistency check rejects deterministically
-# (no build-time network needed: the effect is inferred statically). This yields a
-# POSITIVE rejection signal (admission check RED), not a resolution timeout.
 BAD_PKG="$WORK/pkg-bad"
 mkdir -p "$BAD_PKG/src"
 cat > "$BAD_PKG/package.ipe" <<EOF
@@ -345,43 +355,59 @@ package =
     , version = "$BAD_VERSION"
     }
 EOF
+# The REGISTERED source: the tree the pin will falsely name. It is committed and
+# pushed under an IMMUTABLE per-version tag so admission can fetch it by the pinned
+# SHA. Its exact bytes only need to DIFFER from the working tree hashed below — the
+# spoof is source≠pin, not anything about this file — so it is a clean, consistent
+# program (it must never itself be the reason for a rejection).
 cat > "$BAD_PKG/src/Main.ipe" <<'EOF'
 module Main exposing (main)
 
-import Ipe.Http as Http
-import Ipe.Task as Task
 import Ipe.Io as Io
-import Ipe.Url as Url
 
 
-main : Task ()
 main =
-    case Url.fromString "http://example.com" of
-        Ok url ->
-            Http.get url
-                |> Task.andThen (\_ -> Io.println "done")
-
-        Err e ->
-            Task.fail e
+    Io.println "registry smoke probe (registered source — the spoof target)"
 EOF
 
 git -C "$BAD_PKG" init --quiet
 git -C "$BAD_PKG" -c user.name=ipe-smoke -c user.email=smoke@ipe-lang.invalid add .
 git -C "$BAD_PKG" -c user.name=ipe-smoke -c user.email=smoke@ipe-lang.invalid \
-  commit --quiet -m "smoke-bad $BAD_VERSION"
-git -C "$BAD_PKG" remote add origin "https://github.com/$BAD_SOURCE_REPO.git"
-neg_log "pushing BAD probe source to $BAD_SOURCE_REPO"
-git -C "$BAD_PKG" push --force --quiet origin HEAD:refs/heads/smoke \
-  || neg_fail "could not push the bad probe source to $BAD_SOURCE_REPO — the negative leg \
-needs a disposable source repo the token can push to (see IPE_SMOKE_BAD_SOURCE_REPO)."
-
-# Publish the bad probe (real push-path). `ipe package publish` itself computes a
-# correct sha256 over the pushed tree, so SCHEMA + FETCH + INTEGRITY all pass on
-# the registry side — the ONLY reachable rejection is the Tier-1 audit, exactly the
-# leg we are proving fires. Publish opening the PR is expected to SUCCEED here
-# (the client just opens the PR); the REJECTION happens on the registry's PR checks.
+  commit --quiet -m "smoke-bad registered-source $BAD_VERSION"
+# Pin THIS commit as `--rev`; capture it before the working tree diverges below.
 BAD_SRC_HEAD="$(git -C "$BAD_PKG" rev-parse HEAD)"
-neg_log "publishing BAD $BAD_PACKAGE@$BAD_VERSION to $INDEX_REPO (real push-path)"
+git -C "$BAD_PKG" remote add origin "https://github.com/$BAD_SOURCE_REPO.git"
+neg_log "pushing BAD probe registered source to $BAD_SOURCE_REPO (tag smoke-bad-$BAD_VERSION)"
+git -C "$BAD_PKG" push --quiet origin "$BAD_SRC_HEAD:refs/tags/smoke-bad-$BAD_VERSION" \
+  || neg_fail "could not push the bad probe source tag to $BAD_SOURCE_REPO — the negative leg \
+needs a disposable source repo the token can push to (see IPE_SMOKE_BAD_SOURCE_REPO)."
+git -C "$BAD_PKG" push --force --quiet origin "$BAD_SRC_HEAD:refs/heads/smoke-bad" || true
+
+# DIVERGE the working tree from the pushed revision: a DIFFERENT program that is
+# still clean + capability-consistent, so the CLIENT-side Tier-1 audit passes and
+# the pinned `sha256` = the hash of THIS tree — deliberately != the pushed source
+# above. Commit so the tree is pristine (belt-and-braces; the `--rev` path runs no
+# dirty-tree guard).
+cat > "$BAD_PKG/src/Main.ipe" <<'EOF'
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+
+main =
+    Io.println "registry smoke probe (working tree — hashed into the pin, != the pinned source)"
+EOF
+git -C "$BAD_PKG" -c user.name=ipe-smoke -c user.email=smoke@ipe-lang.invalid \
+  commit --quiet -am "smoke-bad diverged working tree $BAD_VERSION"
+
+# Publish the source-spoof (real push-path). The local audit passes over the CLEAN
+# working tree and pins ITS `sha256`, but `--source`/`--rev` name the divergent
+# registered commit. Publish opening the PR SUCCEEDS — the client has no cross-check
+# that `source@rev` matches the hash (a spoofable pair by construction); the
+# REJECTION is admission's independent fetch + re-hash, which finds the pinned
+# source's bytes != the pinned `sha256` (a POSITIVE rejection signal — admission
+# check RED — not a resolution timeout).
+neg_log "publishing BAD $BAD_PACKAGE@$BAD_VERSION to $INDEX_REPO (source-spoof; real push-path)"
 "$IPE" package publish "$BAD_PKG" \
   --index "$INDEX_REPO" \
   --fork "$FORK_OWNER" \
