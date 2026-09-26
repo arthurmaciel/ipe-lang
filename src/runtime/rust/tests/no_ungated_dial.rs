@@ -4,7 +4,10 @@
 //! This test scans the four files that are the closed set of network-dial call
 //! sites and asserts each `.connect(` / `builder_dangerous(` on a network path
 //! has a guard adjacent in the same function.  A newly-added ungated dial fails
-//! this test, keeping the egress class closed.
+//! this test, keeping the egress class closed. In `db.rs` the rule is
+//! structural rather than proximity-based: a raw sqlx dial may appear only in
+//! the body of `VettedPool::connect`, which takes its options from the
+//! driver-typed `GatedDial` gate.
 //!
 //! Every scan runs over [`strip_cfg_test_items`]'s output, never raw
 //! `src.lines()`, so a test fixture's own guard token or dial call can never
@@ -639,40 +642,196 @@ fn external_conn_postgres_dial_is_guarded() {
     }
 }
 
+/// Raw sqlx dial tokens: each opens a connection without the typed gate.
+const DB_DIAL_TOKENS: &[&str] = &[
+    ".connect(",
+    "connect_with(",
+    "connect_lazy",
+    "Pool::connect(",
+    "Connection::connect(",
+];
+
+/// The masked production lines of `src` and the line range of the body of
+/// `VettedPool`'s `connect`, the one place a raw dial may appear.
+///
+/// Scanning runs over [`mask_non_code`]'s output, so a comment or string can
+/// neither hide a dial nor vouch for one.
+fn gate_body(name: &str, src: &str) -> (Vec<String>, Option<(usize, usize)>) {
+    let production = strip_cfg_test_items(name, src).join("\n");
+    let masked: Vec<String> = mask_non_code(&production)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let Some(impl_at) = masked
+        .iter()
+        .position(|l| l.contains("impl<DB> VettedPool<DB>"))
+    else {
+        return (masked, None);
+    };
+    let Some(fn_start) = masked
+        .iter()
+        .skip(impl_at)
+        .position(|l| l.contains("async fn connect("))
+        .map(|offset| impl_at + offset)
+    else {
+        return (masked, None);
+    };
+    let mut depth = 0i32;
+    let mut opened = false;
+    for (i, line) in masked.iter().enumerate().skip(fn_start) {
+        for ch in line.chars() {
+            match ch {
+                '{' => {
+                    depth += 1;
+                    opened = true;
+                }
+                '}' => depth -= 1,
+                _ => {}
+            }
+        }
+        if opened && depth <= 0 {
+            return (masked, Some((fn_start, i)));
+        }
+    }
+    (masked, None)
+}
+
+/// Every raw dial in `src`'s production code that bypasses the typed gate.
+///
+/// A dial is admitted only inside `VettedPool::connect`, and only when that
+/// body takes its options from `DB::gated_connect_options` — the driver type,
+/// not any text near the call, decides which gate runs. Each violation names
+/// its 1-based line.
+fn db_dials_bypassing_the_gate(name: &str, src: &str) -> Vec<String> {
+    let (masked, body) = gate_body(name, src);
+    let mut violations = Vec::new();
+    let (lo, hi) = match body {
+        Some((lo, hi)) => {
+            let gated = masked
+                .iter()
+                .take(hi + 1)
+                .skip(lo)
+                .any(|l| l.contains("DB::gated_connect_options("));
+            if !gated {
+                violations.push(format!(
+                    "{name}:{}: VettedPool::connect does not take its options from \
+                     DB::gated_connect_options",
+                    lo + 1
+                ));
+            }
+            (lo, hi)
+        }
+        None => {
+            violations.push(format!("{name}: no VettedPool::connect body found"));
+            (usize::MAX, usize::MAX)
+        }
+    };
+    for (i, line) in masked.iter().enumerate() {
+        let inside = (lo..=hi).contains(&i);
+        if !inside && DB_DIAL_TOKENS.iter().any(|t| line.contains(t)) {
+            violations.push(format!(
+                "{name}:{}: raw dial outside VettedPool::connect: {}",
+                i + 1,
+                line.trim()
+            ));
+        }
+    }
+    violations
+}
+
+/// The gate a fixture's `VettedPool::connect` must route through.
+const GATED_POOL_FIXTURE: &str = r"
+impl<DB> VettedPool<DB> {
+    pub async fn connect(url: &str) -> Result<Self, E> {
+        let options = DB::gated_connect_options(url).await?;
+        let pool = PoolOptions::<DB>::new().connect_with(options).await?;
+        Ok(Self(pool))
+    }
+}
+";
+
+#[test]
+fn db_gate_scan_admits_the_gated_pool_fixture() {
+    assert_eq!(
+        db_dials_bypassing_the_gate("fixture.rs", GATED_POOL_FIXTURE),
+        Vec::<String>::new()
+    );
+}
+
+/// A comment naming SQLite or a file above a raw dial no longer exempts it:
+/// comments are masked, and only the typed gate's body may dial.
+#[test]
+fn db_gate_scan_refuses_a_dial_a_doc_comment_calls_local() {
+    let fixture = format!(
+        "{GATED_POOL_FIXTURE}
+/// Opens the local sqlite file at :memory: (no host to gate).
+async fn sneaky(url: &str) {{
+    let _ = PoolOptions::<Postgres>::new().connect(url).await;
+}}
+"
+    );
+    let violations = db_dials_bypassing_the_gate("fixture.rs", &fixture);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(
+        violations.iter().all(|v| v.contains("raw dial outside")),
+        "{violations:?}"
+    );
+}
+
+/// A string literal that spells a dial is not a dial, and a comment inside the
+/// gate body that spells the gate call does not stand in for it.
+#[test]
+fn db_gate_scan_reads_code_not_comments_or_strings() {
+    let fixture = r#"
+impl<DB> VettedPool<DB> {
+    pub async fn connect(url: &str) -> Result<Self, E> {
+        // let options = DB::gated_connect_options(url).await?;
+        let pool = PoolOptions::<DB>::new().connect(url).await?;
+        Ok(Self(pool))
+    }
+}
+
+fn label() -> &'static str {
+    "PoolOptions::new().connect(url)"
+}
+"#;
+    let violations = db_dials_bypassing_the_gate("fixture.rs", fixture);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(
+        violations
+            .iter()
+            .all(|v| v.contains("does not take its options")),
+        "{violations:?}"
+    );
+}
+
+#[test]
+fn db_gate_scan_refuses_a_missing_gate() {
+    let fixture = "async fn open(url: &str) {\n    let _ = SqlitePool::connect(url).await;\n}\n";
+    let violations = db_dials_bypassing_the_gate("fixture.rs", fixture);
+    assert_eq!(violations.len(), 2, "{violations:?}");
+}
+
 #[test]
 fn db_pool_connect_is_guarded() {
     let src = include_str!("../src/db.rs");
-    let lines = strip_cfg_test_items("db.rs", src);
-    let joined = lines.join("\n");
-    assert!(
-        joined.contains("async fn build_pool"),
-        "over-strip hid build_pool"
-    );
-    assert!(
-        joined.contains("VettedPool::<DbDatabase>::connect("),
-        "over-strip hid the guarded VettedPool dial"
-    );
-    assert!(
-        joined.contains("fn vet_dial_target("),
-        "over-strip hid the DialTarget SSRF gate"
-    );
-    for (i, line) in lines.iter().enumerate() {
-        if !line.contains(".connect(") {
-            continue;
-        }
-        // SQLite / file / in-memory dials carry no host — exempt.
-        let ctx_start = i.saturating_sub(30);
-        let ctx: String = lines[ctx_start..=i].join("\n");
-        if ctx.contains("sqlite") || ctx.contains("file") || ctx.contains(":memory:") {
-            continue;
-        }
+    let joined = strip_cfg_test_items("db.rs", src).join("\n");
+    for anchor in [
+        "async fn build_pool",
+        "VettedPool::<DbDatabase>::connect(",
+        "async fn vet_dial_target<",
+        "impl GatedDial for sqlx::Postgres",
+        "impl GatedDial for sqlx::Sqlite",
+    ] {
         assert!(
-            guarded_near_line(&lines, i, 60),
-            "unguarded .connect( at line {} in db.rs — add a VettedDial guard\n{}",
-            i + 1,
-            line
+            joined.contains(anchor),
+            "over-strip hid the production anchor `{anchor}`"
         );
     }
+    assert_eq!(
+        db_dials_bypassing_the_gate("db.rs", src),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

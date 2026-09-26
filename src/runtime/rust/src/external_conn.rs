@@ -95,8 +95,8 @@ async fn open_external<E: Send + From<String> + 'static>(
             // Defence in depth: the host the `Dsn` parse boundary extracted is
             // gated here, and `VettedPool::connect` independently gates every
             // host its own parse of the URL finds.
-            if let Err(e) = VettedDial::for_host(dsn.host(), dsn.port()) {
-                return IpeResult::Err(str_err(&format!("external connect: {e}")));
+            if let Err(refusal) = VettedDial::for_host(dsn.host(), dsn.port()).await {
+                return IpeResult::Err(str_err(&format!("external connect: {refusal}")));
             }
             match VettedPool::<sqlx::Postgres>::connect(&url, EXTERNAL_POOL_MAX_CONNECTIONS).await {
                 Ok(vetted) => ok_res(ExternalConnection::Postgres(vetted.into_pool())),
@@ -181,46 +181,47 @@ mod tests {
     /// Parse a Postgres DSN and check the SSRF gate that `open_external` would
     /// apply — without attempting any real network dial.  Mirrors the guard
     /// logic inserted before `PgPoolOptions::connect`.
-    fn pg_ssrf_blocked(dsn_str: &str) -> bool {
+    async fn pg_ssrf_blocked(dsn_str: &str) -> bool {
         match dsn_parse::<String>(dsn_str.to_string()) {
             IpeResult::Ok(dsn) if dsn.driver() == DsnDriver::Postgres => {
-                VettedDial::for_host(dsn.host(), dsn.port()).is_err()
+                VettedDial::for_host(dsn.host(), dsn.port()).await.is_err()
             }
             _ => false,
         }
     }
 
-    #[test]
-    fn open_external_ssrf_blocks_loopback_postgres_when_deny_private_on() {
+    #[tokio::test]
+    async fn open_external_ssrf_blocks_loopback_postgres_when_deny_private_on() {
         unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
         assert!(
-            pg_ssrf_blocked("postgres://127.0.0.1:5432/db"),
+            pg_ssrf_blocked("postgres://127.0.0.1:5432/db").await,
             "loopback Postgres DSN must be blocked by the SSRF gate"
         );
         unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
     }
 
-    #[test]
-    fn open_external_ssrf_blocks_link_local_postgres_when_deny_private_on() {
+    #[tokio::test]
+    async fn open_external_ssrf_blocks_link_local_postgres_when_deny_private_on() {
         unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
         assert!(
-            pg_ssrf_blocked("postgres://169.254.169.254:5432/db"),
+            pg_ssrf_blocked("postgres://169.254.169.254:5432/db").await,
             "link-local Postgres DSN must be blocked by the SSRF gate"
         );
         unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
     }
 
-    #[test]
-    fn open_external_ssrf_error_is_not_a_connect_or_timeout_error_for_loopback() {
+    #[tokio::test]
+    async fn open_external_ssrf_error_is_not_a_connect_or_timeout_error_for_loopback() {
         unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
         let dsn = match dsn_parse::<String>("postgres://127.0.0.1:5432/db".to_string()) {
             IpeResult::Ok(d) => d,
             IpeResult::Err(e) => panic!("DSN parse failed: {e}"),
         };
-        let err =
-            VettedDial::for_host(dsn.host(), dsn.port()).expect_err("loopback must be blocked");
+        let err = VettedDial::for_host(dsn.host(), dsn.port())
+            .await
+            .expect_err("loopback must be blocked");
         assert!(
-            err.contains("blocked"),
+            matches!(err, crate::ssrf::SsrfRefusal::Blocked { .. }),
             "SSRF block must identify as 'blocked', not a connect/TLS error: {err}"
         );
         unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
@@ -241,11 +242,11 @@ mod tests {
         unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
     }
 
-    #[test]
-    fn open_external_ssrf_passes_private_when_deny_private_off() {
+    #[tokio::test]
+    async fn open_external_ssrf_passes_private_when_deny_private_off() {
         unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0") };
         assert!(
-            !pg_ssrf_blocked("postgres://127.0.0.1:5432/db"),
+            !pg_ssrf_blocked("postgres://127.0.0.1:5432/db").await,
             "guard off must not block private host (dev workflow)"
         );
         unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };

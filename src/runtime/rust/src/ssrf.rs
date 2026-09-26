@@ -4,9 +4,9 @@
 //! reqwest) and any other surface can validate URLs against the deny-private
 //! policy WITHOUT linking the reqwest HTTP stack. URL parsing uses the `url`
 //! crate directly — `reqwest::Url` is `pub use url::Url;` (reqwest/src/lib.rs),
-//! so this is the exact same parser reqwest uses; moving here changes no parse
-//! semantics. The reqwest-coupled `ssrf_apply` (it takes a `reqwest::ClientBuilder`)
-//! stays in `http_client.rs` and imports the helpers below.
+//! so this is the exact same parser reqwest uses. The reqwest-coupled
+//! `ssrf_apply` (it takes a `reqwest::ClientBuilder`) stays in `http_client.rs`
+//! and imports the helpers below.
 //!
 //! ## SSRF protection
 //!
@@ -19,8 +19,18 @@
 //! * `IPE_HTTP_DENY_PRIVATE` unset → follows the production gate
 //!   (`production_from_env`): ON in production, OFF in dev so localhost
 //!   development keeps working.
+//!
+//! ## Pinning
+//!
+//! A vetted name is resolved exactly once, through tokio's non-blocking
+//! resolver under a bounded deadline, and the caller dials the vetted address
+//! itself ([`VettedDial::Pinned`]). A dial that resolves the name a second
+//! time would reopen the DNS-rebinding window: the first answer passes the
+//! check, the second points at an internal host.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::time::Duration;
 use url::Url;
 
 /// Returns `true` when the SSRF deny-private guard is active.
@@ -45,9 +55,54 @@ pub(crate) fn ssrf_deny_private_enabled() -> bool {
     }
 }
 
-/// Returns `true` when the address belongs to a range that must be blocked
-/// under `IPE_HTTP_DENY_PRIVATE`:
+/// The deny-private policy a dial runs under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialPolicy {
+    /// Refuse every blocked address and pin the dial to the vetted one.
+    DenyPrivate,
+    /// Dial any host (local development, or an explicit opt-out).
+    AllowAll,
+}
+
+impl DialPolicy {
+    /// The policy `IPE_HTTP_DENY_PRIVATE` and the production gate select.
+    #[must_use]
+    pub fn from_env() -> Self {
+        if ssrf_deny_private_enabled() {
+            Self::DenyPrivate
+        } else {
+            Self::AllowAll
+        }
+    }
+}
+
+/// The class of a blocked address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockedRange {
+    /// Loopback: `127.0.0.0/8`, `::1`.
+    Loopback,
+    /// Link-local: `169.254.0.0/16` (cloud metadata), `fe80::/10`.
+    LinkLocal,
+    /// A private network: RFC 1918, unique-local `fc00::/7`, CGNAT `100.64.0.0/10`.
+    Private,
+    /// Unspecified, this-network, IETF protocol, benchmarking, or reserved space.
+    Reserved,
+}
+
+impl std::fmt::Display for BlockedRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Loopback => "loopback",
+            Self::LinkLocal => "link-local",
+            Self::Private => "private",
+            Self::Reserved => "reserved",
+        })
+    }
+}
+
+/// The blocked class `ip` belongs to, or `None` for a routable public address.
 ///
+/// Covers:
 /// - loopback        (127.0.0.0/8, ::1)
 /// - RFC-1918        (10/8, 172.16/12, 192.168/16)
 /// - link-local      (169.254/16, fe80::/10)
@@ -59,76 +114,217 @@ pub(crate) fn ssrf_deny_private_enabled() -> bool {
 /// - benchmarking    (198.18.0.0/15 — RFC 2544)
 /// - reserved/bcast  (240.0.0.0/4 — incl. 255.255.255.255)
 /// - v4-mapped IPv6  (::ffff:0:0/96) whose embedded v4 is in the above ranges
-/// - NAT64           (64:ff9b::/96) / 6to4 (2002::/16) whose embedded v4 is private
+/// - NAT64           (64:ff9b::/96) / 6to4 (2002::/16) whose embedded v4 is blocked
 ///
 /// The std `Ipv4Addr` predicates for CGNAT / benchmarking / reserved are
-/// nightly-only (`is_shared`/`is_benchmarking`/`is_reserved`), so the extra
-/// ranges are matched by octet here (audit finding L1: RFC-1918-only coverage
-/// left 100.64/10 + 240/4 reachable under the deny-private guard).
-pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
+/// nightly-only (`is_shared`/`is_benchmarking`/`is_reserved`), so those ranges
+/// are matched by octet.
+#[must_use]
+pub fn blocked_range(ip: IpAddr) -> Option<BlockedRange> {
     match ip {
-        IpAddr::V4(v4) => {
-            // Array-destructure (not indexing) → provably total, no panic site.
-            let [a, b, c, _] = v4.octets();
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || a == 0                             // 0.0.0.0/8 "this host on this network" (RFC 1122)
-                || (a == 100 && (b & 0xc0) == 0x40)   // 100.64.0.0/10
-                || (a == 192 && b == 0 && c == 0)     // 192.0.0.0/24
-                || (a == 198 && (b & 0xfe) == 18)     // 198.18.0.0/15
-                || a >= 240 // 240.0.0.0/4 (incl. 255.255.255.255)
-        }
-        IpAddr::V6(v6) => {
-            if v6.is_loopback() || v6.is_unspecified() {
-                return true;
-            }
-            // Slice-pattern destructure (not indexing) → provably total, no panic site.
-            let [s0, s1, s2, _s3, _s4, _s5, s6, s7] = v6.segments();
-            // Link-local: fe80::/10
-            if (s0 & 0xffc0) == 0xfe80 {
-                return true;
-            }
-            // Unique-local: fc00::/7 (covers fc00:: and fd00::)
-            if (s0 & 0xfe00) == 0xfc00 {
-                return true;
-            }
-            // NAT64: 64:ff9b::/96 embeds the destination IPv4 in the low 32 bits.
-            // to_ipv4_mapped/to_ipv4 miss it (high bits non-zero), so a private v4
-            // reachable through a NAT64 gateway would slip past the v4 checks below.
-            if s0 == 0x0064 && s1 == 0xff9b {
-                let v4 = Ipv4Addr::new(
-                    (s6 >> 8) as u8,
-                    (s6 & 0xff) as u8,
-                    (s7 >> 8) as u8,
-                    (s7 & 0xff) as u8,
-                );
-                return is_private_ip(IpAddr::V4(v4));
-            }
-            // 6to4: 2002::/16 embeds the IPv4 in segments 1..=2 (2002:V4HI:V4LO::/48).
-            if s0 == 0x2002 {
-                let v4 = Ipv4Addr::new(
-                    (s1 >> 8) as u8,
-                    (s1 & 0xff) as u8,
-                    (s2 >> 8) as u8,
-                    (s2 & 0xff) as u8,
-                );
-                return is_private_ip(IpAddr::V4(v4));
-            }
-            // v4-mapped: ::ffff:0:0/96
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_private_ip(IpAddr::V4(v4));
-            }
-            // v4-compatible (deprecated): ::a.b.c.d, e.g. ::10.0.0.1 still routes to
-            // the embedded private IPv4 — to_ipv4() covers both compat + mapped.
-            #[allow(deprecated)]
-            if let Some(v4) = v6.to_ipv4() {
-                return is_private_ip(IpAddr::V4(v4));
-            }
-            false
-        }
+        IpAddr::V4(v4) => blocked_v4(v4),
+        IpAddr::V6(v6) => blocked_v6(v6),
     }
+}
+
+fn blocked_v4(v4: Ipv4Addr) -> Option<BlockedRange> {
+    // Array-destructure (not indexing) → provably total, no panic site.
+    let [a, b, c, _] = v4.octets();
+    // 100.64.0.0/10 (CGNAT, RFC 6598).
+    let cgnat = a == 100 && (b & 0xc0) == 0x40;
+    // 0.0.0.0/8 "this network" (RFC 1122), 192.0.0.0/24 (IETF protocol),
+    // 198.18.0.0/15 (benchmarking), 240.0.0.0/4 (reserved, incl. broadcast).
+    let reserved =
+        a == 0 || (a == 192 && b == 0 && c == 0) || (a == 198 && (b & 0xfe) == 18) || a >= 240;
+    if v4.is_loopback() {
+        Some(BlockedRange::Loopback)
+    } else if v4.is_link_local() {
+        Some(BlockedRange::LinkLocal)
+    } else if v4.is_private() || cgnat {
+        Some(BlockedRange::Private)
+    } else if v4.is_unspecified() || reserved {
+        Some(BlockedRange::Reserved)
+    } else {
+        None
+    }
+}
+
+/// The IPv4 address carried in two IPv6 segments (`hi:lo`).
+const fn v4_from_segments(hi: u16, lo: u16) -> Ipv4Addr {
+    let [a, b] = hi.to_be_bytes();
+    let [c, d] = lo.to_be_bytes();
+    Ipv4Addr::new(a, b, c, d)
+}
+
+fn blocked_v6(v6: Ipv6Addr) -> Option<BlockedRange> {
+    if v6.is_loopback() {
+        return Some(BlockedRange::Loopback);
+    }
+    if v6.is_unspecified() {
+        return Some(BlockedRange::Reserved);
+    }
+    // Slice-pattern destructure (not indexing) → provably total, no panic site.
+    let [s0, s1, s2, _s3, _s4, _s5, s6, s7] = v6.segments();
+    // Link-local: fe80::/10
+    if (s0 & 0xffc0) == 0xfe80 {
+        return Some(BlockedRange::LinkLocal);
+    }
+    // Unique-local: fc00::/7 (covers fc00:: and fd00::)
+    if (s0 & 0xfe00) == 0xfc00 {
+        return Some(BlockedRange::Private);
+    }
+    // NAT64: 64:ff9b::/96 embeds the destination IPv4 in the low 32 bits.
+    // to_ipv4_mapped/to_ipv4 miss it (high bits non-zero), so a private v4
+    // reachable through a NAT64 gateway would slip past the v4 checks below.
+    if s0 == 0x0064 && s1 == 0xff9b {
+        return blocked_v4(v4_from_segments(s6, s7));
+    }
+    // 6to4: 2002::/16 embeds the IPv4 in segments 1..=2 (2002:V4HI:V4LO::/48).
+    if s0 == 0x2002 {
+        return blocked_v4(v4_from_segments(s1, s2));
+    }
+    // v4-mapped: ::ffff:0:0/96
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return blocked_v4(v4);
+    }
+    // v4-compatible (deprecated): ::a.b.c.d, e.g. ::10.0.0.1 still routes to
+    // the embedded private IPv4 — to_ipv4() covers both compat + mapped.
+    #[allow(deprecated)]
+    if let Some(v4) = v6.to_ipv4() {
+        return blocked_v4(v4);
+    }
+    None
+}
+
+/// Returns `true` when `ip` is in any range [`blocked_range`] classifies.
+#[must_use]
+pub fn is_private_ip(ip: IpAddr) -> bool {
+    blocked_range(ip).is_some()
+}
+
+/// Why the SSRF gate refused a dial target.
+///
+/// `Display` carries no caller prefix; each surface adds its own (`http:`,
+/// `ws:`, `db:`, `email.send/Smtp:`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SsrfRefusal {
+    /// The host is, or resolved to, an address in a blocked range.
+    Blocked {
+        /// The host as the caller named it.
+        host: String,
+        /// The blocked address.
+        ip: IpAddr,
+        /// The class `ip` belongs to.
+        range: BlockedRange,
+    },
+    /// The resolver failed for the host.
+    Unresolvable {
+        /// The host as the caller named it.
+        host: String,
+        /// The resolver's failure class.
+        kind: std::io::ErrorKind,
+    },
+    /// The host resolved to no addresses.
+    NoAddresses {
+        /// The host as the caller named it.
+        host: String,
+    },
+    /// Resolution did not finish before the deadline.
+    Timeout {
+        /// The host as the caller named it.
+        host: String,
+        /// The deadline that expired.
+        after: Duration,
+    },
+    /// The target is a local Unix-domain socket, which reaches the local server
+    /// exactly as loopback TCP does.
+    LocalSocket,
+    /// The connection URL names no host, so the driver picks a target the gate
+    /// cannot prove safe.
+    UnprovenTarget,
+    /// Certificate verification needs the host name, which a pinned dial of
+    /// the vetted address cannot carry.
+    UnpinnableTlsName {
+        /// The host the certificate would be verified against.
+        host: String,
+    },
+}
+
+impl std::fmt::Display for SsrfRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Blocked { host, ip, range } => {
+                if strip_ipv6_brackets(host).parse::<IpAddr>().is_ok() {
+                    write!(f, "blocked: {range} host {ip}")?;
+                } else {
+                    write!(f, "blocked: host {host:?} resolved to {range} address {ip}")?;
+                }
+            }
+            Self::Unresolvable { host, kind } => {
+                write!(f, "blocked: could not resolve host {host:?}: {kind}")?;
+            }
+            Self::NoAddresses { host } => {
+                write!(f, "blocked: host {host:?} resolved to no addresses")?;
+            }
+            Self::Timeout { host, after } => write!(
+                f,
+                "blocked: resolving host {host:?} timed out after {} ms",
+                after.as_millis()
+            )?,
+            Self::LocalSocket => f.write_str("blocked: local socket dial target")?,
+            Self::UnprovenTarget => f.write_str(
+                "blocked: connection URL names no host, so the dial target is unproven",
+            )?,
+            Self::UnpinnableTlsName { host } => write!(
+                f,
+                "blocked: sslmode=verify-full checks the certificate against host {host:?}, \
+                 but the dial is pinned to its vetted address; use an IP-literal host \
+                 whose certificate names that address, or sslmode=verify-ca"
+            )?,
+        }
+        f.write_str(" (IPE_HTTP_DENY_PRIVATE)")
+    }
+}
+
+impl std::error::Error for SsrfRefusal {}
+
+/// Name resolution the SSRF gate vets.
+pub trait HostResolver: Sync {
+    /// Every address `host:port` resolves to.
+    fn lookup(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> impl Future<Output = std::io::Result<Vec<SocketAddr>>> + Send;
+}
+
+/// The system resolver, through tokio's non-blocking lookup.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemResolver;
+
+impl HostResolver for SystemResolver {
+    async fn lookup(&self, host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
+        Ok(tokio::net::lookup_host((host, port)).await?.collect())
+    }
+}
+
+/// Default deadline for one SSRF-gate name resolution.
+const DNS_TIMEOUT_MS_DEFAULT: u64 = 5_000;
+
+/// The deadline for one SSRF-gate name resolution.
+///
+/// A stalling resolver must not hold a task indefinitely: a remote party that
+/// controls the target name's authoritative server could otherwise pile up
+/// pending dials. Overridable via `IPE_HTTP_DNS_TIMEOUT_MS` (a positive
+/// integer); anything else falls back to the default.
+#[must_use]
+pub fn dns_timeout() -> Duration {
+    let ms = crate::system::read_env_var("IPE_HTTP_DNS_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DNS_TIMEOUT_MS_DEFAULT);
+    Duration::from_millis(ms)
 }
 
 /// Strip a single surrounding `[`…`]` from an IPv6-literal host as it appears in
@@ -146,113 +342,118 @@ pub(crate) fn strip_ipv6_brackets(host: &str) -> &str {
         .unwrap_or(host)
 }
 
-/// Resolves `host` (plain hostname or IP literal), checks that none of its
-/// addresses is in a disallowed private range, and returns the first non-private
-/// `SocketAddr` (port 0) so the caller can **pin** reqwest's DNS resolver to
-/// that exact address via `ClientBuilder::resolve_to_addrs`.
-///
-/// This closes the TOCTOU / DNS-rebinding window: the IP that passed the check
-/// is the IP reqwest connects to — a rebind happening between the check and the
-/// TCP connect has no effect because reqwest's per-client DNS override wins.
-///
-/// Returns `Ok(SocketAddr)` if allowed (with the vetted address), or
-/// `Err(message)` if blocked or if the host could not be resolved.
-///
-/// Uses port 0 for the `ToSocketAddrs` resolution; the port is not significant
-/// for the DNS lookup but is required by the API.  Callers must override the
-/// port in `resolve_to_addrs` if needed — reqwest's `resolve_to_addrs` only
-/// overrides the host→IP mapping; it uses the URL's port for the actual
-/// connection, so port 0 here is safe.
-pub(crate) fn resolve_first_non_private_addr(host: &str) -> Result<SocketAddr, String> {
-    // The HTTP client only needs the IP (reqwest's resolve_to_addrs ignores the
-    // port), so port 0 is fine here.
-    resolve_first_non_private_addr_with_port(host, 0)
-}
-
-/// Resolve `host` to its first non-private `SocketAddr` carrying `port`, rejecting
-/// if any resolved address is private/loopback/link-local. Used by the WebSocket
-/// pin (which dials the returned addr directly so the connect cannot re-resolve
-/// to a rebind target).
-pub(crate) fn resolve_first_non_private_addr_with_port(
-    host: &str,
-    port: u16,
-) -> Result<SocketAddr, String> {
-    // Parse-don't-validate at the boundary: a URL host taken from
-    // `Url::host_str()` returns an IPv6 literal BRACKETED (`"[::1]"`), which
-    // fails BOTH `IpAddr::parse` and `to_socket_addrs`. Strip a single
-    // bracket pair and parse the IP literal FIRST, so every v6 literal is put
-    // back on the `is_private_ip` guarded path (loopback/ULA/link-local/NAT64/
-    // 6to4/v4-mapped) instead of slipping through on an accidental resolve
-    // failure; public v6 literals still pass.
-    if let Ok(ip) = strip_ipv6_brackets(host).parse::<IpAddr>() {
-        if is_private_ip(ip) {
-            return Err(format!(
-                "http: blocked: private/loopback host {} (IPE_HTTP_DENY_PRIVATE)",
-                ip
-            ));
-        }
-        return Ok(SocketAddr::new(ip, port));
-    }
-
-    // Hostname → DNS resolve via std (synchronous; called before the async send).
-    let addr_iter = match (host, port).to_socket_addrs() {
-        Ok(it) => it,
-        Err(e) => {
-            return Err(format!(
-                "http: blocked: could not resolve host {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
-                host, e
-            ));
-        }
-    };
-
-    let mut first_ok: Option<SocketAddr> = None;
-    for sock_addr in addr_iter {
-        let ip = sock_addr.ip();
-        if is_private_ip(ip) {
-            return Err(format!(
-                "http: blocked: private/loopback host {:?} resolved to {} (IPE_HTTP_DENY_PRIVATE)",
-                host, ip
-            ));
-        }
-        if first_ok.is_none() {
-            first_ok = Some(sock_addr);
-        }
-    }
-
-    first_ok.ok_or_else(|| {
-        format!(
-            "http: blocked: host {:?} resolved to no addresses (IPE_HTTP_DENY_PRIVATE)",
-            host
-        )
+fn refuse_blocked(host: &str, ip: IpAddr) -> Result<(), SsrfRefusal> {
+    blocked_range(ip).map_or(Ok(()), |range| {
+        Err(SsrfRefusal::Blocked {
+            host: host.to_owned(),
+            ip,
+            range,
+        })
     })
 }
 
-/// A proof that `host:port` passed the private-IP/SSRF gate. The ONLY constructor
-/// is [`VettedDial::for_host`]; no raw `VettedDial(())` literal is reachable
-/// outside this module.  A caller holding a `VettedDial` has proof the host is
-/// not loopback, private, link-local, or otherwise blocked under the current
-/// deny-private policy — the gate ran, and it passed.
+/// Resolve `host` once and return the address to dial, refusing any blocked one.
 ///
-/// When `ssrf_deny_private_enabled()` is false (dev / explicit opt-out) the
-/// constructor still returns `Ok(VettedDial(()))` so callers are not broken
-/// in dev; the invariant is "passed the policy in effect," not "is always public."
-#[derive(Debug)]
+/// An IP literal (bracketed or not) is decided without a lookup. A name is
+/// resolved through `resolver` within `deadline`; if ANY answer is blocked the
+/// whole host is refused (a multi-record answer mixing public and private
+/// addresses is ambiguous), otherwise the first answer, carrying `port`, is
+/// returned for the caller to dial directly.
+///
+/// # Errors
+///
+/// [`SsrfRefusal`] naming why the host was refused.
+pub async fn vet_host_with<R: HostResolver>(
+    resolver: &R,
+    host: &str,
+    port: u16,
+    deadline: Duration,
+) -> Result<SocketAddr, SsrfRefusal> {
+    // Parse-don't-validate at the boundary: a URL host taken from
+    // `Url::host_str()` returns an IPv6 literal BRACKETED (`"[::1]"`). Strip a
+    // single bracket pair and parse the IP literal FIRST, so every v6 literal
+    // is decided by `blocked_range` instead of reaching the resolver.
+    if let Ok(ip) = strip_ipv6_brackets(host).parse::<IpAddr>() {
+        return refuse_blocked(host, ip).map(|()| SocketAddr::new(ip, port));
+    }
+    let addrs = match tokio::time::timeout(deadline, resolver.lookup(host, port)).await {
+        Ok(Ok(addrs)) => addrs,
+        Ok(Err(e)) => {
+            return Err(SsrfRefusal::Unresolvable {
+                host: host.to_owned(),
+                kind: e.kind(),
+            });
+        }
+        Err(_elapsed) => {
+            return Err(SsrfRefusal::Timeout {
+                host: host.to_owned(),
+                after: deadline,
+            });
+        }
+    };
+    for addr in &addrs {
+        refuse_blocked(host, addr.ip())?;
+    }
+    addrs
+        .first()
+        .map(|addr| SocketAddr::new(addr.ip(), port))
+        .ok_or_else(|| SsrfRefusal::NoAddresses {
+            host: host.to_owned(),
+        })
+}
+
+/// Resolve `host` once through the system resolver under [`dns_timeout`].
+///
+/// # Errors
+///
+/// [`SsrfRefusal`] naming why the host was refused.
+pub async fn vet_host(host: &str, port: u16) -> Result<SocketAddr, SsrfRefusal> {
+    vet_host_with(&SystemResolver, host, port, dns_timeout()).await
+}
+
+/// Proof that `host:port` passed the SSRF gate under the policy in effect.
+///
+/// The only constructors are [`VettedDial::for_host`] and
+/// [`VettedDial::for_host_with`]. Under [`DialPolicy::DenyPrivate`] the proof
+/// is the vetted address itself, and the caller MUST dial that address rather
+/// than the name — dialling the name resolves it again and reopens the
+/// DNS-rebinding window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(any(feature = "db", feature = "email")), allow(dead_code))]
-pub(crate) struct VettedDial(());
+pub(crate) enum VettedDial {
+    /// Deny-private is on: dial exactly this address.
+    Pinned(SocketAddr),
+    /// Deny-private is off: the host may be dialled by name.
+    Unrestricted,
+}
 
 #[cfg_attr(not(any(feature = "db", feature = "email")), allow(dead_code))]
 impl VettedDial {
-    /// Verify `host:port` against the SSRF deny-private policy and return a proof
-    /// token on success.  Returns `Err(message)` if the guard is on and the host
-    /// resolves to a private/loopback/link-local address.
-    ///
-    /// Callers pass the resolved token straight to the dial step; they do not re-
-    /// validate it — the token IS the validation evidence.
-    pub(crate) fn for_host(host: &str, port: u16) -> Result<Self, String> {
-        if ssrf_deny_private_enabled() {
-            resolve_first_non_private_addr_with_port(host, port).map(|_| VettedDial(()))
-        } else {
-            Ok(VettedDial(()))
+    /// Vet `host:port` under the environment's policy and the system resolver.
+    pub(crate) async fn for_host(host: &str, port: u16) -> Result<Self, SsrfRefusal> {
+        Self::for_host_with(DialPolicy::from_env(), &SystemResolver, host, port).await
+    }
+
+    /// Vet `host:port` under `policy`, resolving through `resolver`.
+    pub(crate) async fn for_host_with<R: HostResolver>(
+        policy: DialPolicy,
+        resolver: &R,
+        host: &str,
+        port: u16,
+    ) -> Result<Self, SsrfRefusal> {
+        match policy {
+            DialPolicy::DenyPrivate => vet_host_with(resolver, host, port, dns_timeout())
+                .await
+                .map(Self::Pinned),
+            DialPolicy::AllowAll => Ok(Self::Unrestricted),
+        }
+    }
+
+    /// The host string to hand a dialler: the vetted IP when pinned, else `host`.
+    pub(crate) fn dial_host(self, host: &str) -> String {
+        match self {
+            Self::Pinned(addr) => addr.ip().to_string(),
+            Self::Unrestricted => host.to_owned(),
         }
     }
 }
@@ -269,16 +470,12 @@ impl VettedDial {
 /// a generated ws caller. The attribute only silences the dead-code lint in
 /// standalone subsets that compile ssrf without the ws client.
 #[cfg_attr(not(feature = "websocket_client"), allow(dead_code))]
-pub(crate) fn ssrf_pinned_ws_addr(url: &str) -> Result<Option<SocketAddr>, String> {
+pub(crate) async fn ssrf_pinned_ws_addr(url: &str) -> Result<Option<SocketAddr>, String> {
     if !ssrf_deny_private_enabled() {
         return Ok(None);
     }
-    let parsed = Url::parse(url).map_err(|e| {
-        format!(
-            "ws: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
-            url, e
-        )
-    })?;
+    let parsed = Url::parse(url)
+        .map_err(|e| format!("ws: blocked: invalid URL {url:?}: {e} (IPE_HTTP_DENY_PRIVATE)"))?;
     let scheme = parsed.scheme();
     let host = parsed
         .host_str()
@@ -286,74 +483,53 @@ pub(crate) fn ssrf_pinned_ws_addr(url: &str) -> Result<Option<SocketAddr>, Strin
     let port = parsed
         .port_or_known_default()
         .unwrap_or(if scheme == "wss" { 443 } else { 80 });
-    resolve_first_non_private_addr_with_port(host, port).map(Some)
-}
-
-/// Validates a URL's host against the SSRF deny-private policy without
-/// returning the resolved address.  Used in the redirect policy callback
-/// where we only have a URL and cannot rebuild the client.
-///
-/// SECURITY — redirect-hop scheme/host + IP-literal check. The DNS-rebind window
-/// this once left open (validate-then-discard: the vetted address was not the one
-/// reqwest re-resolved at connect) is now CLOSED by `http_client::DenyPrivateResolver`,
-/// a `reqwest::dns::Resolve` that runs `is_private_ip` at resolution time for EVERY
-/// hop under `IPE_HTTP_DENY_PRIVATE` (so reqwest connects only to vetted addrs, no
-/// re-resolve by name). This function remains the literal/scheme guard and a
-/// belt-and-suspenders layer — IP-literal redirect targets bypass the resolver, so
-/// the per-hop `ssrf_check_url` call is still mandatory.
-///
-/// Returns `Ok(())` if allowed, `Err(message)` if blocked.
-fn check_host_not_private(host: &str) -> Result<(), String> {
-    resolve_first_non_private_addr(host).map(|_| ())
+    vet_host(host, port)
+        .await
+        .map(Some)
+        .map_err(|refusal| format!("ws: {refusal}"))
 }
 
 /// Validates a URL string under the SSRF deny-private policy.
-/// Rejects non-http/https schemes and private-range hosts.
+/// Rejects non-http/https/ws/wss schemes and blocked hosts; a named host is
+/// resolved once through [`vet_host`].
 ///
 /// Returns `Ok(())` if the request is allowed, `Err(message)` if blocked.
-pub(crate) fn ssrf_check_url(url: &str) -> Result<(), String> {
+pub(crate) async fn ssrf_check_url(url: &str) -> Result<(), String> {
     let parsed = match Url::parse(url) {
         Ok(u) => u,
         Err(e) => {
             return Err(format!(
-                "http: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
-                url, e
+                "http: blocked: invalid URL {url:?}: {e} (IPE_HTTP_DENY_PRIVATE)"
             ));
         }
     };
 
     // Permit http / https (HTTP client + redirect hops) AND ws / wss (the
-    // WebSocket client validates through this same fn). Without ws/wss here the
-    // guard rejected EVERY WebSocket URL when enabled (deny-all) and the private-
-    // IP host check below never ran for ws/wss — i.e. the guard was a no-op for
-    // the WebSocket surface. Everything else (ftp/file/…) stays rejected.
+    // WebSocket client validates through this same fn). Everything else
+    // (ftp/file/…) stays rejected.
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" {
         return Err(format!(
-            "http: blocked: scheme {:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)",
-            scheme
+            "http: blocked: scheme {scheme:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)"
         ));
     }
 
-    // Extract and check the host.
-    let host = match parsed.host_str() {
-        Some(h) => h,
-        None => {
-            return Err("http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string());
-        }
+    let Some(host) = parsed.host_str() else {
+        return Err("http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string());
     };
 
-    check_host_not_private(host)
+    vet_host(host, 0)
+        .await
+        .map(|_| ())
+        .map_err(|refusal| format!("http: {refusal}"))
 }
 
 /// Non-blocking redirect-hop guard: validate a URL's scheme and, when the host is
 /// an IP LITERAL, its private-range status — WITHOUT a DNS round-trip. For a named
-/// host the blocking DNS vet is already done by `http_client::DenyPrivateResolver`
-/// at connect time (on the blocking pool), so re-resolving here would only pin a
-/// sync `to_socket_addrs` on a tokio worker inside reqwest's sync redirect closure
-/// (the very starvation `ssrf_apply` moves off-worker). IP-literal redirect targets
-/// bypass the resolver, so they MUST still be range-checked here — that check is
-/// pure and non-blocking.
+/// host the DNS vet is already done by `http_client::DenyPrivateResolver` at
+/// connect time, so re-resolving here would only add a lookup inside reqwest's
+/// sync redirect closure. IP-literal redirect targets bypass the resolver, so
+/// they MUST still be range-checked here — that check is pure and non-blocking.
 ///
 /// Returns `Ok(())` if allowed, `Err(message)` if blocked.
 // Only `http_client::ssrf_apply`'s reqwest redirect closure calls this; the `ssrf`
@@ -365,37 +541,27 @@ pub(crate) fn ssrf_check_url_nonblocking(url: &str) -> Result<(), String> {
         Ok(u) => u,
         Err(e) => {
             return Err(format!(
-                "http: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
-                url, e
+                "http: blocked: invalid URL {url:?}: {e} (IPE_HTTP_DENY_PRIVATE)"
             ));
         }
     };
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" {
         return Err(format!(
-            "http: blocked: scheme {:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)",
-            scheme
+            "http: blocked: scheme {scheme:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)"
         ));
     }
-    let host = match parsed.host_str() {
-        Some(h) => h,
-        None => {
-            return Err("http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string());
-        }
+    let Some(host) = parsed.host_str() else {
+        return Err("http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string());
     };
     // Only IP literals are decided here (no DNS); a named host defers to the
     // connect-time resolver. `strip_ipv6_brackets` puts a `[::1]`-style literal
-    // back on the `is_private_ip` path; a hostname simply fails the parse and
+    // back on the `blocked_range` path; a hostname simply fails the parse and
     // falls through to Ok.
-    if let Ok(ip) = strip_ipv6_brackets(host).parse::<IpAddr>()
-        && is_private_ip(ip)
-    {
-        return Err(format!(
-            "http: blocked: private/loopback host {} (IPE_HTTP_DENY_PRIVATE)",
-            ip
-        ));
+    match strip_ipv6_brackets(host).parse::<IpAddr>() {
+        Ok(ip) => refuse_blocked(host, ip).map_err(|refusal| format!("http: {refusal}")),
+        Err(_) => Ok(()),
     }
-    Ok(())
 }
 
 /// Validate a single URL against the deny-private guard (no client build) — for
@@ -403,9 +569,9 @@ pub(crate) fn ssrf_check_url_nonblocking(url: &str) -> Result<(), String> {
 /// Sole consumer is `ws_client.rs`; `cfg_attr`+`allow` (not `#[cfg]`) for the same
 /// generated-module-inclusion reason as `ssrf_pinned_ws_addr` above.
 #[cfg_attr(not(feature = "websocket_client"), allow(dead_code))]
-pub(crate) fn ssrf_validate_url(url: &str) -> Result<(), String> {
+pub(crate) async fn ssrf_validate_url(url: &str) -> Result<(), String> {
     if ssrf_deny_private_enabled() {
-        ssrf_check_url(url)
+        ssrf_check_url(url).await
     } else {
         Ok(())
     }
@@ -414,74 +580,308 @@ pub(crate) fn ssrf_validate_url(url: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // -----------------------------------------------------------------------
-    // SSRF guard unit tests (no network — purely local logic)
+    // Resolver stubs (no network)
     // -----------------------------------------------------------------------
 
+    /// A resolver that must never be consulted: every lookup fails.
+    struct NoDns;
+
+    impl HostResolver for NoDns {
+        async fn lookup(&self, _host: &str, _port: u16) -> std::io::Result<Vec<SocketAddr>> {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+    }
+
+    /// A rebinding resolver: the first lookup answers a public address, every
+    /// later lookup answers a private one.
+    struct PublicThenPrivate {
+        calls: AtomicUsize,
+    }
+
+    impl PublicThenPrivate {
+        const PUBLIC: IpAddr = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
+        const PRIVATE: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+
+        const fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl HostResolver for PublicThenPrivate {
+        async fn lookup(&self, _host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
+            let ip = if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Self::PUBLIC
+            } else {
+                Self::PRIVATE
+            };
+            Ok(vec![SocketAddr::new(ip, port)])
+        }
+    }
+
+    /// A resolver that answers a fixed address list.
+    struct Answers(Vec<IpAddr>);
+
+    impl HostResolver for Answers {
+        async fn lookup(&self, _host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
+            Ok(self.0.iter().map(|ip| SocketAddr::new(*ip, port)).collect())
+        }
+    }
+
+    /// A resolver that never answers.
+    struct Stalls;
+
+    impl HostResolver for Stalls {
+        async fn lookup(&self, _host: &str, _port: u16) -> std::io::Result<Vec<SocketAddr>> {
+            std::future::pending().await
+        }
+    }
+
+    const DEADLINE: Duration = Duration::from_secs(5);
+
     // -----------------------------------------------------------------------
-    // VettedDial constructor tests (guard on via env override)
+    // VettedDial
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn vetted_dial_blocks_loopback_when_deny_private_on() {
-        // Force the guard on for this test via env.
-        unsafe {
-            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
+    #[tokio::test]
+    async fn vetted_dial_refuses_every_blocked_literal_under_deny_private() {
+        for (host, range) in [
+            ("127.0.0.1", BlockedRange::Loopback),
+            ("::1", BlockedRange::Loopback),
+            ("169.254.169.254", BlockedRange::LinkLocal),
+            ("10.0.0.5", BlockedRange::Private),
+            ("0.0.0.0", BlockedRange::Reserved),
+        ] {
+            let refused =
+                VettedDial::for_host_with(DialPolicy::DenyPrivate, &NoDns, host, 5432).await;
+            assert!(
+                matches!(refused, Err(SsrfRefusal::Blocked { range: r, .. }) if r == range),
+                "{host:?} must be refused as {range}: {refused:?}"
+            );
         }
-        assert!(VettedDial::for_host("127.0.0.1", 5432).is_err());
-        assert!(VettedDial::for_host("::1", 5432).is_err());
-        unsafe {
-            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
+    }
+
+    #[tokio::test]
+    async fn vetted_dial_pins_a_public_literal_with_its_port() {
+        let vetted =
+            VettedDial::for_host_with(DialPolicy::DenyPrivate, &NoDns, "1.1.1.1", 5432).await;
+        assert_eq!(
+            vetted,
+            Ok(VettedDial::Pinned(SocketAddr::new(
+                PublicThenPrivate::PUBLIC,
+                5432
+            )))
+        );
+    }
+
+    #[tokio::test]
+    async fn vetted_dial_is_unrestricted_when_the_policy_allows_all() {
+        for host in ["127.0.0.1", "10.0.0.1", "internal.example"] {
+            let vetted = VettedDial::for_host_with(DialPolicy::AllowAll, &NoDns, host, 5432).await;
+            assert_eq!(vetted, Ok(VettedDial::Unrestricted), "{host:?}");
+            assert_eq!(VettedDial::Unrestricted.dial_host(host), host);
+        }
+    }
+
+    /// DNS rebinding: the name is resolved once and the dial is pinned to that
+    /// answer, so a later answer pointing at a private host is never dialled.
+    /// A fresh vet (a new dial) sees the rebound answer and is refused.
+    #[tokio::test]
+    async fn vetted_dial_pins_the_first_answer_against_rebinding() {
+        let resolver = PublicThenPrivate::new();
+        let first =
+            VettedDial::for_host_with(DialPolicy::DenyPrivate, &resolver, "rebind.example", 5432)
+                .await;
+        assert_eq!(
+            first,
+            Ok(VettedDial::Pinned(SocketAddr::new(
+                PublicThenPrivate::PUBLIC,
+                5432
+            )))
+        );
+        assert_eq!(
+            first.map(|dial| dial.dial_host("rebind.example")),
+            Ok(PublicThenPrivate::PUBLIC.to_string()),
+            "the dialler must receive the vetted address, never the name"
+        );
+        assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+
+        let second =
+            VettedDial::for_host_with(DialPolicy::DenyPrivate, &resolver, "rebind.example", 5432)
+                .await;
+        assert_eq!(
+            second,
+            Err(SsrfRefusal::Blocked {
+                host: "rebind.example".to_string(),
+                ip: PublicThenPrivate::PRIVATE,
+                range: BlockedRange::Private,
+            })
+        );
+    }
+
+    /// A multi-record answer mixing public and private addresses is refused
+    /// whole rather than trusting whichever one a dialler would pick.
+    #[tokio::test]
+    async fn vet_host_refuses_a_mixed_public_private_answer() {
+        let mixed = Answers(vec![
+            PublicThenPrivate::PUBLIC,
+            IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
+        ]);
+        let refused = vet_host_with(&mixed, "mixed.example", 443, DEADLINE).await;
+        assert!(
+            matches!(
+                refused,
+                Err(SsrfRefusal::Blocked {
+                    range: BlockedRange::LinkLocal,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn vet_host_refuses_an_empty_answer() {
+        let refused = vet_host_with(&Answers(Vec::new()), "empty.example", 443, DEADLINE).await;
+        assert_eq!(
+            refused,
+            Err(SsrfRefusal::NoAddresses {
+                host: "empty.example".to_string()
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn vet_host_refuses_an_unresolvable_name() {
+        let refused = vet_host_with(&NoDns, "nowhere.example", 443, DEADLINE).await;
+        assert_eq!(
+            refused,
+            Err(SsrfRefusal::Unresolvable {
+                host: "nowhere.example".to_string(),
+                kind: std::io::ErrorKind::NotFound,
+            })
+        );
+    }
+
+    /// A resolver that never answers is cut off at the deadline with a typed
+    /// refusal instead of holding the task.
+    #[tokio::test]
+    async fn vet_host_times_out_a_stalled_resolver() {
+        let deadline = Duration::from_millis(20);
+        let refused = vet_host_with(&Stalls, "slow.example", 443, deadline).await;
+        assert_eq!(
+            refused,
+            Err(SsrfRefusal::Timeout {
+                host: "slow.example".to_string(),
+                after: deadline,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn vet_host_returns_the_first_public_answer_with_the_callers_port() {
+        let resolved = vet_host_with(
+            &Answers(vec![PublicThenPrivate::PUBLIC]),
+            "public.example",
+            8443,
+            DEADLINE,
+        )
+        .await;
+        assert_eq!(
+            resolved,
+            Ok(SocketAddr::new(PublicThenPrivate::PUBLIC, 8443))
+        );
+    }
+
+    /// Every refusal names what was refused and the policy that refused it,
+    /// with no caller prefix of its own.
+    #[test]
+    fn every_ssrf_refusal_displays_its_reason_without_a_caller_prefix() {
+        let cases = [
+            (
+                SsrfRefusal::Blocked {
+                    host: "127.0.0.1".to_string(),
+                    ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    range: BlockedRange::Loopback,
+                },
+                "loopback host 127.0.0.1",
+            ),
+            (
+                SsrfRefusal::Blocked {
+                    host: "meta.example".to_string(),
+                    ip: IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
+                    range: BlockedRange::LinkLocal,
+                },
+                "resolved to link-local address 169.254.169.254",
+            ),
+            (
+                SsrfRefusal::Unresolvable {
+                    host: "nowhere.example".to_string(),
+                    kind: std::io::ErrorKind::NotFound,
+                },
+                "could not resolve host \"nowhere.example\"",
+            ),
+            (
+                SsrfRefusal::NoAddresses {
+                    host: "empty.example".to_string(),
+                },
+                "resolved to no addresses",
+            ),
+            (
+                SsrfRefusal::Timeout {
+                    host: "slow.example".to_string(),
+                    after: Duration::from_millis(250),
+                },
+                "timed out after 250 ms",
+            ),
+            (SsrfRefusal::LocalSocket, "local socket"),
+            (SsrfRefusal::UnprovenTarget, "names no host"),
+            (
+                SsrfRefusal::UnpinnableTlsName {
+                    host: "db.example".to_string(),
+                },
+                "verify-full",
+            ),
+        ];
+        for (refusal, reason) in cases {
+            let shown = refusal.to_string();
+            assert!(shown.starts_with("blocked: "), "{shown}");
+            assert!(shown.contains(reason), "{shown} must contain {reason:?}");
+            assert!(shown.ends_with("(IPE_HTTP_DENY_PRIVATE)"), "{shown}");
+            for prefix in ["http:", "db:", "ws:"] {
+                assert!(!shown.contains(prefix), "{shown} carries a caller prefix");
+            }
         }
     }
 
     #[test]
-    fn vetted_dial_blocks_link_local_when_deny_private_on() {
-        unsafe {
-            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
-        }
-        assert!(VettedDial::for_host("169.254.169.254", 5432).is_err());
-        unsafe {
-            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
-        }
+    fn blocked_range_classifies_each_class() {
+        let class = |ip: &str| blocked_range(ip.parse().unwrap());
+        assert_eq!(class("127.0.0.1"), Some(BlockedRange::Loopback));
+        assert_eq!(class("::1"), Some(BlockedRange::Loopback));
+        assert_eq!(class("::ffff:127.0.0.1"), Some(BlockedRange::Loopback));
+        assert_eq!(class("169.254.169.254"), Some(BlockedRange::LinkLocal));
+        assert_eq!(class("fe80::1"), Some(BlockedRange::LinkLocal));
+        assert_eq!(class("64:ff9b::a9fe:a9fe"), Some(BlockedRange::LinkLocal));
+        assert_eq!(class("10.0.0.1"), Some(BlockedRange::Private));
+        assert_eq!(class("100.64.0.1"), Some(BlockedRange::Private));
+        assert_eq!(class("fd00::1"), Some(BlockedRange::Private));
+        assert_eq!(class("2002:c0a8:101::1"), Some(BlockedRange::Private));
+        assert_eq!(class("0.0.0.0"), Some(BlockedRange::Reserved));
+        assert_eq!(class("::"), Some(BlockedRange::Reserved));
+        assert_eq!(class("198.18.0.1"), Some(BlockedRange::Reserved));
+        assert_eq!(class("255.255.255.255"), Some(BlockedRange::Reserved));
+        assert_eq!(class("1.1.1.1"), None);
+        assert_eq!(class("2606:4700:4700::1111"), None);
     }
 
-    #[test]
-    fn vetted_dial_blocks_rfc1918_when_deny_private_on() {
-        unsafe {
-            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
-        }
-        assert!(VettedDial::for_host("10.0.0.5", 5432).is_err());
-        unsafe {
-            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
-        }
-    }
-
-    #[test]
-    fn vetted_dial_allows_public_ip_when_deny_private_on() {
-        unsafe {
-            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1");
-        }
-        // 1.1.1.1 is public — passes the gate (dial not attempted here).
-        assert!(VettedDial::for_host("1.1.1.1", 5432).is_ok());
-        unsafe {
-            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
-        }
-    }
-
-    #[test]
-    fn vetted_dial_passes_private_when_deny_private_off() {
-        unsafe {
-            std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0");
-        }
-        // Guard explicitly off: private host is a pass (dev workflow).
-        assert!(VettedDial::for_host("127.0.0.1", 5432).is_ok());
-        assert!(VettedDial::for_host("10.0.0.1", 5432).is_ok());
-        unsafe {
-            std::env::remove_var("IPE_HTTP_DENY_PRIVATE");
-        }
-    }
+    // -----------------------------------------------------------------------
+    // is_private_ip
+    // -----------------------------------------------------------------------
 
     #[test]
     fn is_private_ip_loopback_v4() {
@@ -589,52 +989,56 @@ mod tests {
         assert!(!is_private_ip("239.255.255.255".parse().unwrap())); // just below reserved (multicast, routable-ish)
     }
 
-    #[test]
-    fn ssrf_check_url_rejects_non_http_scheme() {
-        let err = ssrf_check_url("ftp://example.com/file").unwrap_err();
+    #[tokio::test]
+    async fn ssrf_check_url_rejects_non_http_scheme() {
+        let err = ssrf_check_url("ftp://example.com/file").await.unwrap_err();
         assert!(
             err.contains("scheme"),
             "expected scheme rejection, got: {err}"
         );
-        let err2 = ssrf_check_url("file:///etc/passwd").unwrap_err();
+        let err2 = ssrf_check_url("file:///etc/passwd").await.unwrap_err();
         assert!(
             err2.contains("scheme") || err2.contains("invalid"),
             "got: {err2}"
         );
     }
 
-    #[test]
-    fn ssrf_check_url_rejects_private_ip_literal() {
-        let err = ssrf_check_url("http://192.168.1.1/secret").unwrap_err();
+    #[tokio::test]
+    async fn ssrf_check_url_rejects_private_ip_literal() {
+        let err = ssrf_check_url("http://192.168.1.1/secret")
+            .await
+            .unwrap_err();
+        assert!(
+            err.starts_with("http: blocked"),
+            "expected blocked, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssrf_check_url_rejects_loopback_ip_literal() {
+        let err = ssrf_check_url("http://127.0.0.1:8080/admin")
+            .await
+            .unwrap_err();
         assert!(err.contains("blocked"), "expected blocked, got: {err}");
     }
 
-    #[test]
-    fn ssrf_check_url_rejects_loopback_ip_literal() {
-        let err = ssrf_check_url("http://127.0.0.1:8080/admin").unwrap_err();
+    #[tokio::test]
+    async fn ssrf_check_url_rejects_aws_imds() {
+        let err = ssrf_check_url("http://169.254.169.254/latest/meta-data/")
+            .await
+            .unwrap_err();
         assert!(err.contains("blocked"), "expected blocked, got: {err}");
     }
 
-    #[test]
-    fn ssrf_check_url_rejects_aws_imds() {
-        let err = ssrf_check_url("http://169.254.169.254/latest/meta-data/").unwrap_err();
-        assert!(err.contains("blocked"), "expected blocked, got: {err}");
-    }
-
-    #[test]
-    fn ssrf_check_url_rejects_invalid_url() {
-        let err = ssrf_check_url("not a url at all").unwrap_err();
+    #[tokio::test]
+    async fn ssrf_check_url_rejects_invalid_url() {
+        let err = ssrf_check_url("not a url at all").await.unwrap_err();
         assert!(!err.is_empty());
     }
 
-    /// The redirect-hop re-validation floor. `ssrf_apply`'s redirect policy calls
-    /// `ssrf_check_url(attempt.url())` on EVERY hop before following it, so a
-    /// redirect whose `Location` points at an internal / loopback / link-local /
-    /// metadata address is blocked even though the FIRST hop was a safe public
-    /// URL — the initial validation is not trusted for later hops. This asserts
-    /// the exact function the policy invokes rejects each such hop target.
-    #[test]
-    fn redirect_hop_revalidation_blocks_internal_targets() {
+    /// Every internal redirect-hop target is refused by the URL gate.
+    #[tokio::test]
+    async fn redirect_hop_revalidation_blocks_internal_targets() {
         for hop in [
             "http://127.0.0.1/admin",             // loopback
             "http://10.0.0.5/internal",           // RFC-1918 private
@@ -643,70 +1047,55 @@ mod tests {
             "http://192.168.1.1/",                // RFC-1918 private
         ] {
             let err = ssrf_check_url(hop)
+                .await
                 .expect_err("a redirect hop to an internal address must be blocked");
             assert!(err.contains("blocked"), "hop {hop:?} → got: {err}");
         }
         // A redirect hop with a non-http(s) scheme is blocked at the same floor.
         let err = ssrf_check_url("ftp://example.com/x")
+            .await
             .expect_err("a non-http(s) redirect hop must be blocked");
         assert!(err.contains("scheme"), "got: {err}");
     }
 
-    #[test]
-    fn ssrf_check_url_allows_public_ip() {
+    #[tokio::test]
+    async fn ssrf_check_url_allows_public_ip() {
         // 1.1.1.1 is public — should pass (no DNS needed for IP literals)
-        assert!(ssrf_check_url("https://1.1.1.1/").is_ok());
+        assert!(ssrf_check_url("https://1.1.1.1/").await.is_ok());
     }
 
     // -----------------------------------------------------------------------
-    // resolve_first_non_private_addr — pin-address path
+    // vet_host_with — IP literals are decided without the resolver
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn resolve_non_private_returns_socket_addr_for_public_ip_literal() {
-        let sa = resolve_first_non_private_addr("1.1.1.1").unwrap();
-        assert_eq!(sa.ip(), "1.1.1.1".parse::<IpAddr>().unwrap());
-        // Port is 0 — reqwest uses the URL's port; we just need the IP.
-        assert_eq!(sa.port(), 0);
+    #[tokio::test]
+    async fn vet_host_returns_socket_addr_for_public_ip_literal() {
+        let sa = vet_host_with(&NoDns, "1.1.1.1", 0, DEADLINE).await.unwrap();
+        assert_eq!(sa, SocketAddr::new(PublicThenPrivate::PUBLIC, 0));
     }
 
-    #[test]
-    fn resolve_non_private_rejects_private_ip_literal() {
-        let err = resolve_first_non_private_addr("192.168.1.1").unwrap_err();
-        assert!(err.contains("blocked"), "expected blocked, got: {err}");
-    }
-
-    #[test]
-    fn resolve_non_private_rejects_loopback_ip_literal() {
-        let err = resolve_first_non_private_addr("127.0.0.1").unwrap_err();
-        assert!(err.contains("blocked"), "expected blocked, got: {err}");
-    }
-
-    #[test]
-    fn resolve_non_private_rejects_v4mapped_loopback() {
-        let err = resolve_first_non_private_addr("::ffff:127.0.0.1").unwrap_err();
-        assert!(err.contains("blocked"), "expected blocked, got: {err}");
+    #[tokio::test]
+    async fn vet_host_rejects_blocked_ip_literals() {
+        for host in ["192.168.1.1", "127.0.0.1", "::ffff:127.0.0.1"] {
+            let refused = vet_host_with(&NoDns, host, 0, DEADLINE).await;
+            assert!(
+                matches!(refused, Err(SsrfRefusal::Blocked { .. })),
+                "{host:?}: {refused:?}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
-    // #2534 — bracketed IPv6-literal hosts (as returned by `Url::host_str()`)
-    // must reach `is_private_ip`, not slip through on a resolve failure. The
-    // deny reason is the LITERAL-path message ("private/loopback host <ip>"),
-    // proving the block came from `is_private_ip` on the parsed value — NOT the
-    // `to_socket_addrs` "could not resolve"/"resolved to no addresses" fallback.
+    // Bracketed IPv6-literal hosts (as returned by `Url::host_str()`) must be
+    // decided by `blocked_range`, never reach the resolver: `NoDns` would turn
+    // a resolver fallthrough into `Unresolvable`, not `Blocked`.
     // -----------------------------------------------------------------------
 
-    fn assert_blocked_by_is_private_ip(host: &str) {
-        let err = resolve_first_non_private_addr(host)
-            .expect_err("bracketed private v6 literal must be blocked");
+    async fn assert_blocked_by_range(host: &str) {
+        let refused = vet_host_with(&NoDns, host, 0, DEADLINE).await;
         assert!(
-            err.contains("private/loopback host"),
-            "host {host:?} must be blocked BY is_private_ip (literal path), got: {err}"
-        );
-        // Must NOT be a resolve-failure fallthrough.
-        assert!(
-            !err.contains("could not resolve") && !err.contains("resolved to no addresses"),
-            "host {host:?} was blocked by a resolve error, not is_private_ip: {err}"
+            matches!(refused, Err(SsrfRefusal::Blocked { .. })),
+            "host {host:?} must be blocked by blocked_range (literal path), got: {refused:?}"
         );
     }
 
@@ -723,36 +1112,25 @@ mod tests {
         assert_eq!(strip_ipv6_brackets("::1]"), "::1]");
     }
 
-    #[test]
-    fn resolve_non_private_blocks_bracketed_v6_loopback() {
-        assert_blocked_by_is_private_ip("[::1]");
+    #[tokio::test]
+    async fn vet_host_blocks_bracketed_private_v6_literals() {
+        for host in [
+            "[::1]",
+            "[fd00::1]",
+            "[fe80::1]",
+            "[::ffff:127.0.0.1]",
+            // 64:ff9b::7f00:1 → 127.0.0.1 (NAT64-wrapped loopback).
+            "[64:ff9b::7f00:1]",
+        ] {
+            assert_blocked_by_range(host).await;
+        }
     }
 
-    #[test]
-    fn resolve_non_private_blocks_bracketed_v6_ula() {
-        assert_blocked_by_is_private_ip("[fd00::1]");
-    }
-
-    #[test]
-    fn resolve_non_private_blocks_bracketed_v6_link_local() {
-        assert_blocked_by_is_private_ip("[fe80::1]");
-    }
-
-    #[test]
-    fn resolve_non_private_blocks_bracketed_v4mapped_loopback() {
-        assert_blocked_by_is_private_ip("[::ffff:127.0.0.1]");
-    }
-
-    #[test]
-    fn resolve_non_private_blocks_bracketed_nat64_imds() {
-        // 64:ff9b::7f00:1 → 127.0.0.1 (NAT64-wrapped loopback).
-        assert_blocked_by_is_private_ip("[64:ff9b::7f00:1]");
-    }
-
-    #[test]
-    fn resolve_non_private_allows_bracketed_public_v6() {
+    #[tokio::test]
+    async fn vet_host_allows_bracketed_public_v6() {
         // Cloudflare public v6, bracketed as a URL host would present it.
-        let sa = resolve_first_non_private_addr("[2606:4700:4700::1111]")
+        let sa = vet_host_with(&NoDns, "[2606:4700:4700::1111]", 0, DEADLINE)
+            .await
             .expect("public bracketed v6 literal must be allowed");
         assert_eq!(
             sa.ip(),
@@ -761,22 +1139,28 @@ mod tests {
         );
     }
 
-    #[test]
-    fn ssrf_check_url_blocks_bracketed_v6_loopback_and_ula() {
+    #[tokio::test]
+    async fn ssrf_check_url_blocks_bracketed_v6_loopback_and_ula() {
         // The URL entrypoint (host_str returns the bracketed form) must block.
         for url in [
             "http://[::1]/admin",
             "http://[fd00::1]/x",
             "https://[fe80::1]/",
         ] {
-            let err = ssrf_check_url(url).expect_err("bracketed private v6 URL must be blocked");
+            let err = ssrf_check_url(url)
+                .await
+                .expect_err("bracketed private v6 URL must be blocked");
             assert!(err.contains("blocked"), "url {url:?} → got: {err}");
         }
     }
 
-    #[test]
-    fn ssrf_check_url_allows_bracketed_public_v6() {
-        assert!(ssrf_check_url("https://[2606:4700:4700::1111]/").is_ok());
+    #[tokio::test]
+    async fn ssrf_check_url_allows_bracketed_public_v6() {
+        assert!(
+            ssrf_check_url("https://[2606:4700:4700::1111]/")
+                .await
+                .is_ok()
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -46,9 +46,7 @@ use std::collections::HashMap;
 // WebSocket client can validate URLs without linking reqwest). The reqwest-
 // coupled `ssrf_apply` + the request executor below import the three they use.
 #[cfg(not(target_arch = "wasm32"))]
-use super::ssrf::{
-    resolve_first_non_private_addr, ssrf_check_url_nonblocking, ssrf_deny_private_enabled,
-};
+use super::ssrf::{ssrf_check_url_nonblocking, ssrf_deny_private_enabled, vet_host};
 
 /// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
 #[derive(Clone, Debug)]
@@ -252,7 +250,7 @@ pub fn http_with_url<E: From<String>>(
 // ---------------------------------------------------------------------------
 // SSRF guard — reqwest client integration
 // ---------------------------------------------------------------------------
-// The reqwest-free validators (ssrf_check_url / resolve_first_non_private_addr /
+// The reqwest-free validators (ssrf_check_url / vet_host /
 // is_private_ip / ssrf_validate_url / ssrf_pinned_ws_addr / …) live in `ssrf.rs`.
 // What remains here is reqwest-coupled: `ssrf_apply` (a reqwest::ClientBuilder)
 // and the request executor.
@@ -333,45 +331,6 @@ fn redact_userinfo(url: &str) -> String {
     }
 }
 
-/// Bounded DNS deadline for the pre-send resolve. A stalling resolver must not
-/// pin a worker (or a `spawn_blocking` thread) indefinitely — a remote party that
-/// controls the target hostname's authoritative server could otherwise exhaust the
-/// pool. Overridable via `IPE_HTTP_DNS_TIMEOUT_MS`; floored to a sane default.
-#[cfg(not(target_arch = "wasm32"))]
-const HTTP_DNS_TIMEOUT_MS_DEFAULT: u64 = 5_000;
-
-#[cfg(not(target_arch = "wasm32"))]
-fn http_dns_timeout() -> std::time::Duration {
-    let ms = crate::system::read_env_var("IPE_HTTP_DNS_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(HTTP_DNS_TIMEOUT_MS_DEFAULT);
-    std::time::Duration::from_millis(ms)
-}
-
-/// Resolve `host` off the async worker: the private-range vet runs a synchronous
-/// `to_socket_addrs` for a named host, so it is moved to `spawn_blocking` and
-/// bounded by a DNS deadline. Mirrors `DenyPrivateResolver`, which already does
-/// this for the connect-time resolve. An IP literal short-circuits inside
-/// `resolve_first_non_private_addr` without blocking, so the blocking pool is only
-/// used when a real DNS lookup is unavoidable.
-#[cfg(not(target_arch = "wasm32"))]
-async fn resolve_first_non_private_addr_off_worker(
-    host: String,
-) -> Result<std::net::SocketAddr, String> {
-    let fut = tokio::task::spawn_blocking(move || resolve_first_non_private_addr(&host));
-    match tokio::time::timeout(http_dns_timeout(), fut).await {
-        Ok(Ok(res)) => res,
-        Ok(Err(join)) => Err(format!(
-            "http: blocked: DNS resolver task failed: {join} (IPE_HTTP_DENY_PRIVATE)"
-        )),
-        Err(_) => {
-            Err("http: blocked: DNS resolution timed out (IPE_HTTP_DENY_PRIVATE)".to_string())
-        }
-    }
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn ssrf_apply(
     mut builder: reqwest::ClientBuilder,
@@ -398,12 +357,14 @@ pub(crate) async fn ssrf_apply(
             .host_str()
             .ok_or_else(|| "http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string())?
             .to_owned();
-        // Resolve OFF the async worker (bracket-strip happens inside for a v6
-        // literal), then key the static override on the UNBRACKETED host —
+        // Resolve once through the non-blocking, deadline-bounded resolver
+        // (bracket-strip happens inside for a v6 literal), then key the static override on the UNBRACKETED host —
         // reqwest/hyper look up the DNS override by the unbracketed hostname
         // (`Uri::host`), so a `"[::1]"` key would never match and the pin would
         // silently not apply.
-        let addr = resolve_first_non_private_addr_off_worker(host.clone()).await?;
+        let addr = vet_host(&host, 0)
+            .await
+            .map_err(|refusal| format!("http: {refusal}"))?;
         let pin_key = super::ssrf::strip_ipv6_brackets(&host);
         builder = builder.resolve_to_addrs(pin_key, &[addr]);
         // Pin EVERY hostname (the initial host's static override above + every

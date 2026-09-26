@@ -3,6 +3,7 @@
 // config.rs (generated at build time per package.ipe database driver).
 use super::json::{Decoder, JsonVal, decode_and_map, decode_err_str, decode_field, decode_ok};
 use super::*;
+use crate::ssrf::{DialPolicy, HostResolver, SsrfRefusal, SystemResolver, VettedDial};
 use sqlx::{Column, Row, TypeInfo};
 use std::collections::HashMap;
 
@@ -1232,13 +1233,14 @@ impl std::fmt::Display for DbFailure {
 /// Why [`VettedPool::connect`] refused.
 ///
 /// Credential-free by construction: no variant holds a driver error or any
-/// part of the connection URL, so neither `Display` nor `Debug` can echo one.
+/// credential from the connection URL (a host refusal names only the host), so
+/// neither `Display` nor `Debug` can echo one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DbConnectError {
     /// A network URL did not parse, so the hosts it dials cannot be vetted.
     InvalidUrl,
-    /// The SSRF gate refused a host the URL dials.
-    HostRefused(String),
+    /// The SSRF gate refused a target the URL dials.
+    HostRefused(crate::ssrf::SsrfRefusal),
     /// The driver could not open the pool.
     Unreachable(DbFailure),
     /// The server's version query failed.
@@ -1251,7 +1253,7 @@ impl std::fmt::Display for DbConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidUrl => f.write_str("db: invalid connection URL"),
-            Self::HostRefused(reason) => write!(f, "db: {reason}"),
+            Self::HostRefused(refusal) => write!(f, "db: {refusal}"),
             Self::Unreachable(failure) | Self::VersionUnreadable(failure) => {
                 write!(f, "db: {failure}")
             }
@@ -1339,44 +1341,142 @@ fn postgres_dial_targets(url: &str) -> Result<Vec<DialTarget>, DbConnectError> {
         .collect())
 }
 
-/// Admit one dial target under the SSRF deny-private policy.
+/// Admit one dial target under `policy`.
 ///
-/// A TCP host goes through [`crate::ssrf::VettedDial::for_host`]. A Unix
-/// socket reaches the local server exactly as loopback TCP does, and a driver
-/// default is unproven (it may resolve to `localhost`), so under deny-private
-/// both are refused; with the policy off they pass, as loopback TCP does.
-fn vet_dial_target(target: &DialTarget) -> Result<(), DbConnectError> {
-    match target {
-        DialTarget::Tcp { host, port } => crate::ssrf::VettedDial::for_host(host, *port)
-            .map(|_| ())
-            .map_err(DbConnectError::HostRefused),
-        DialTarget::Socket if crate::ssrf::ssrf_deny_private_enabled() => {
-            Err(DbConnectError::HostRefused(
-                "blocked: local socket dial target (IPE_HTTP_DENY_PRIVATE)".to_string(),
-            ))
+/// A TCP host goes through [`VettedDial::for_host_with`]. A Unix socket
+/// reaches the local server exactly as loopback TCP does, and a driver default
+/// is unproven (it may resolve to `localhost`), so under deny-private both are
+/// refused; with the policy off they pass, as loopback TCP does.
+async fn vet_dial_target<R: HostResolver>(
+    target: &DialTarget,
+    policy: DialPolicy,
+    resolver: &R,
+) -> Result<VettedDial, DbConnectError> {
+    match (target, policy) {
+        (DialTarget::Tcp { host, port }, _) => {
+            VettedDial::for_host_with(policy, resolver, host, *port)
+                .await
+                .map_err(DbConnectError::HostRefused)
         }
-        DialTarget::DriverDefault if crate::ssrf::ssrf_deny_private_enabled() => {
-            Err(DbConnectError::HostRefused(
-                "blocked: connection URL names no host, so the dial target is unproven \
-                 (IPE_HTTP_DENY_PRIVATE)"
-                    .to_string(),
-            ))
+        (DialTarget::Socket, DialPolicy::DenyPrivate) => {
+            Err(DbConnectError::HostRefused(SsrfRefusal::LocalSocket))
         }
-        DialTarget::Socket | DialTarget::DriverDefault => Ok(()),
+        (DialTarget::DriverDefault, DialPolicy::DenyPrivate) => {
+            Err(DbConnectError::HostRefused(SsrfRefusal::UnprovenTarget))
+        }
+        (DialTarget::Socket | DialTarget::DriverDefault, DialPolicy::AllowAll) => {
+            Ok(VettedDial::Unrestricted)
+        }
     }
 }
 
-/// Run the SSRF gate on every target `url` can make `engine` dial.
+/// The PostgreSQL options `url` makes the driver dial, gated and pinned.
 ///
-/// SQLite opens a local file and dials nothing. For PostgreSQL every target
-/// from [`postgres_dial_targets`] must pass [`vet_dial_target`]; a URL that
-/// does not parse is refused, since its targets cannot be proven safe.
-fn vet_network_hosts(engine: DbEngine, url: &str) -> Result<(), DbConnectError> {
-    match engine {
-        DbEngine::Sqlite => Ok(()),
-        DbEngine::Postgres => postgres_dial_targets(url)?
-            .iter()
-            .try_for_each(vet_dial_target),
+/// Every target from [`postgres_dial_targets`] must pass [`vet_dial_target`];
+/// a URL that does not parse is refused, since its targets cannot be proven
+/// safe. The options are then the driver's own reading of `url`. Under
+/// deny-private that reading must dial TCP, and its host is replaced by the
+/// vetted address, so the pool never resolves the name again: a later answer
+/// pointing at an internal host (DNS rebinding) is not dialled on this
+/// connect nor on any connection the pool opens afterwards.
+///
+/// The driver verifies a `verify-full` certificate against the host it dials,
+/// so a pinned named host cannot keep that check; it is refused rather than
+/// silently weakened.
+async fn postgres_connect_options<R: HostResolver>(
+    url: &str,
+    policy: DialPolicy,
+    resolver: &R,
+) -> Result<sqlx::postgres::PgConnectOptions, DbConnectError> {
+    let mut vetted = Vec::new();
+    for target in postgres_dial_targets(url)? {
+        let dial = vet_dial_target(&target, policy, resolver).await?;
+        vetted.push((target, dial));
+    }
+    let options: sqlx::postgres::PgConnectOptions =
+        url.parse().map_err(|_| DbConnectError::InvalidUrl)?;
+    match policy {
+        DialPolicy::AllowAll => Ok(options),
+        DialPolicy::DenyPrivate => pin_postgres_options(options, &vetted, resolver).await,
+    }
+}
+
+/// Replace the dialled host in `options` with its vetted address.
+///
+/// Reuses the address a target in `vetted` already resolved to for the same
+/// host and port, so the name is resolved once; a host the target scan did not
+/// name is vetted here.
+async fn pin_postgres_options<R: HostResolver>(
+    options: sqlx::postgres::PgConnectOptions,
+    vetted: &[(DialTarget, VettedDial)],
+    resolver: &R,
+) -> Result<sqlx::postgres::PgConnectOptions, DbConnectError> {
+    if options.get_socket().is_some() || options.get_host().starts_with('/') {
+        return Err(DbConnectError::HostRefused(SsrfRefusal::LocalSocket));
+    }
+    let host = options.get_host().to_owned();
+    let port = options.get_port();
+    let literal = crate::ssrf::strip_ipv6_brackets(&host)
+        .parse::<std::net::IpAddr>()
+        .is_ok();
+    if !literal
+        && matches!(
+            options.get_ssl_mode(),
+            sqlx::postgres::PgSslMode::VerifyFull
+        )
+    {
+        return Err(DbConnectError::HostRefused(
+            SsrfRefusal::UnpinnableTlsName { host },
+        ));
+    }
+    let known = vetted
+        .iter()
+        .find_map(|(target, dial)| match (target, dial) {
+            (DialTarget::Tcp { host: h, port: p }, VettedDial::Pinned(_))
+                if *h == host && *p == port =>
+            {
+                Some(*dial)
+            }
+            _ => None,
+        });
+    let dial = match known {
+        Some(dial) => dial,
+        None => VettedDial::for_host_with(DialPolicy::DenyPrivate, resolver, &host, port)
+            .await
+            .map_err(DbConnectError::HostRefused)?,
+    };
+    Ok(options.host(&dial.dial_host(&host)))
+}
+
+/// A driver whose connect options pass the SSRF gate before any dial.
+///
+/// [`VettedPool::connect`] obtains its options only through this trait, so
+/// which gate runs is decided by the driver type, never by reading the URL.
+pub trait GatedDial: sqlx::Database {
+    /// The options `url` makes the driver dial, admitted by the gate.
+    fn gated_connect_options(
+        url: &str,
+    ) -> impl std::future::Future<
+        Output = Result<<Self::Connection as sqlx::Connection>::Options, DbConnectError>,
+    > + Send;
+}
+
+impl GatedDial for sqlx::Sqlite {
+    /// SQLite opens a local file and dials no host.
+    async fn gated_connect_options(
+        url: &str,
+    ) -> Result<sqlx::sqlite::SqliteConnectOptions, DbConnectError> {
+        url.parse()
+            .map_err(|e| DbConnectError::Unreachable(DbFailure::of(&e)))
+    }
+}
+
+impl GatedDial for sqlx::Postgres {
+    /// Every target is vetted under the environment's policy and pinned.
+    async fn gated_connect_options(
+        url: &str,
+    ) -> Result<sqlx::postgres::PgConnectOptions, DbConnectError> {
+        postgres_connect_options(url, DialPolicy::from_env(), &SystemResolver).await
     }
 }
 
@@ -1385,8 +1485,10 @@ fn vet_network_hosts(engine: DbEngine, url: &str) -> Result<(), DbConnectError> 
 /// [`VettedPool::connect`] is its only constructor and the runtime's only way
 /// to open a pool from a caller-supplied connection URL: the `Ipe.Db` pool, an
 /// `Ipe.Db.Connection`, and the persistent session stores all go through it.
-/// It runs, in order: the SSRF gate on every target the URL dials, a bounded
-/// connection cap, and the engine-version floor before any other statement.
+/// It runs, in order: the driver's [`GatedDial`] gate (for PostgreSQL, the
+/// SSRF gate on every target the URL dials, with the dial pinned to the vetted
+/// address), a bounded connection cap, and the engine-version floor before any
+/// other statement.
 /// Every failure is a [`DbConnectError`], which holds no driver payload, so no
 /// caller can log or return a connection URL a driver echoed. The runtime's
 /// own telemetry spill (`telemetry_spill.rs`, and the hub reading it) is not a
@@ -1396,7 +1498,7 @@ pub struct VettedPool<DB: sqlx::Database>(sqlx::Pool<DB>);
 
 impl<DB> VettedPool<DB>
 where
-    DB: sqlx::Database,
+    DB: GatedDial,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
     (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -1407,11 +1509,10 @@ where
     ///
     /// [`DbConnectError`] when a gate refuses or the driver cannot connect.
     pub async fn connect(url: &str, max_connections: u32) -> Result<Self, DbConnectError> {
-        let engine = DbEngine::for_driver::<DB>().map_err(DbConnectError::EngineRefused)?;
-        vet_network_hosts(engine, url)?;
+        let options = DB::gated_connect_options(url).await?;
         let pool = sqlx::pool::PoolOptions::<DB>::new()
             .max_connections(max_connections)
-            .connect(url)
+            .connect_with(options)
             .await
             .map_err(|e| DbConnectError::Unreachable(DbFailure::of(&e)))?;
         if let Err(refused) = enforce_engine_floor_on(&pool).await {
@@ -5059,20 +5160,22 @@ mod tests {
     }
 
     /// A PostgreSQL URL whose dial targets cannot be read is refused before
-    /// any dial, and the SQLite engine never consults the host gate.
-    #[test]
-    fn postgres_unreadable_dial_targets_are_refused() {
+    /// any dial or lookup, under either policy.
+    #[tokio::test]
+    async fn postgres_unreadable_dial_targets_are_refused() {
         for url in [
             "not a url with s3cr3t-pw",
             "postgres://public.example/db?port=s3cr3t-pw",
             "postgres://public.example/db?port=70000",
         ] {
-            assert_eq!(
-                vet_network_hosts(DbEngine::Postgres, url),
-                Err(DbConnectError::InvalidUrl)
-            );
+            for policy in [DialPolicy::DenyPrivate, DialPolicy::AllowAll] {
+                assert_eq!(
+                    postgres_connect_options(url, policy, &NoDns).await.err(),
+                    Some(DbConnectError::InvalidUrl),
+                    "{url:?} under {policy:?}"
+                );
+            }
         }
-        assert_eq!(vet_network_hosts(DbEngine::Sqlite, "not a url"), Ok(()));
     }
 
     #[test]
@@ -8215,129 +8318,257 @@ mod tests {
 
     // ── VettedPool SSRF guard tests ───────────────────────────────────────────
     //
-    // These drive the real host gate `VettedPool::connect` runs before dialing;
-    // no DB dial is attempted.
+    // These drive the real PostgreSQL gate `VettedPool::connect` runs before
+    // dialing, under an explicit policy and a stub resolver; no DB dial and no
+    // DNS lookup is attempted.
 
-    /// True when the SSRF gate refuses `url` under the current deny-private setting.
-    fn pool_ssrf_blocked(url: &str) -> bool {
-        let engine = if url.starts_with("postgres") {
-            DbEngine::Postgres
-        } else {
-            DbEngine::Sqlite
-        };
-        matches!(
-            vet_network_hosts(engine, url),
-            Err(DbConnectError::HostRefused(_))
-        )
+    use crate::ssrf::BlockedRange;
+
+    /// A resolver that must never be consulted: every lookup fails.
+    struct NoDns;
+
+    impl HostResolver for NoDns {
+        async fn lookup(
+            &self,
+            _host: &str,
+            _port: u16,
+        ) -> std::io::Result<Vec<std::net::SocketAddr>> {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
     }
 
-    #[test]
-    fn build_pool_ssrf_blocks_loopback_postgres_when_deny_private_on() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
-        assert!(
-            pool_ssrf_blocked("postgres://127.0.0.1:5432/x"),
-            "loopback postgres URL must be blocked by the SSRF gate"
-        );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    /// A rebinding resolver: the first lookup answers a public address, every
+    /// later one a private address.
+    struct PublicThenPrivate {
+        calls: std::sync::atomic::AtomicUsize,
     }
 
-    #[test]
-    fn build_pool_ssrf_blocks_link_local_postgres_when_deny_private_on() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
-        assert!(
-            pool_ssrf_blocked("postgres://169.254.169.254:5432/x"),
-            "link-local postgres URL must be blocked by the SSRF gate"
-        );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    const REBIND_PUBLIC: std::net::IpAddr =
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1));
+    const REBIND_PRIVATE: std::net::IpAddr =
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 5));
+
+    impl HostResolver for PublicThenPrivate {
+        async fn lookup(
+            &self,
+            _host: &str,
+            port: u16,
+        ) -> std::io::Result<Vec<std::net::SocketAddr>> {
+            let first = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            let ip = if first { REBIND_PUBLIC } else { REBIND_PRIVATE };
+            Ok(vec![std::net::SocketAddr::new(ip, port)])
+        }
     }
 
-    /// A `host` query parameter overrides the authority host in the driver, so
-    /// the gate must refuse it even when the authority host is public.
-    #[test]
-    fn build_pool_ssrf_blocks_a_query_host_override_when_deny_private_on() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
-        assert!(
-            pool_ssrf_blocked("postgres://8.8.8.8/x?host=169.254.169.254"),
-            "a link-local `host` override must be blocked by the SSRF gate"
-        );
-        assert!(
-            pool_ssrf_blocked("postgres://8.8.8.8/x?hostaddr=127.0.0.1"),
-            "a loopback `hostaddr` override must be blocked by the SSRF gate"
-        );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    /// The gate's verdict on `url` under `policy`, with no DNS available.
+    async fn pg_gate(
+        url: &str,
+        policy: DialPolicy,
+    ) -> Result<sqlx::postgres::PgConnectOptions, DbConnectError> {
+        postgres_connect_options(url, policy, &NoDns).await
+    }
+
+    /// The refusal the gate gives `url` under deny-private, if any.
+    async fn pg_refusal(url: &str) -> Option<SsrfRefusal> {
+        match pg_gate(url, DialPolicy::DenyPrivate).await {
+            Err(DbConnectError::HostRefused(refusal)) => Some(refusal),
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn pg_gate_refuses_blocked_literal_hosts_under_deny_private() {
+        for (url, range) in [
+            ("postgres://127.0.0.1:5432/x", BlockedRange::Loopback),
+            ("postgres://[::1]:5432/x", BlockedRange::Loopback),
+            ("postgres://169.254.169.254:5432/x", BlockedRange::LinkLocal),
+            ("postgres://10.0.0.5/x", BlockedRange::Private),
+            ("postgres://0.0.0.0/x", BlockedRange::Reserved),
+        ] {
+            let refusal = pg_refusal(url).await;
+            assert!(
+                matches!(refusal, Some(SsrfRefusal::Blocked { range: r, .. }) if r == range),
+                "{url:?} must be refused as {range}: {refusal:?}"
+            );
+        }
+    }
+
+    /// A `host` / `hostaddr` query parameter overrides the authority host in
+    /// the driver, so the gate must refuse it even when the authority host is
+    /// public.
+    #[tokio::test]
+    async fn pg_gate_refuses_a_query_host_override_under_deny_private() {
+        for url in [
+            "postgres://8.8.8.8/x?host=169.254.169.254",
+            "postgres://8.8.8.8/x?hostaddr=127.0.0.1",
+        ] {
+            let refusal = pg_refusal(url).await;
+            assert!(
+                matches!(refusal, Some(SsrfRefusal::Blocked { .. })),
+                "{url:?}: {refusal:?}"
+            );
+        }
     }
 
     /// A URL naming no host leaves the dial target to the driver, which may
     /// pick `localhost`; under deny-private that unproven target is refused.
-    #[test]
-    fn build_pool_ssrf_blocks_a_driver_default_target_when_deny_private_on() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
-        assert!(
-            pool_ssrf_blocked("postgres:///db"),
-            "a host-less postgres URL must be blocked by the SSRF gate"
-        );
-        assert!(
-            pool_ssrf_blocked("postgres:db?user=admin"),
-            "a host-less opaque postgres URL must be blocked"
-        );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    #[tokio::test]
+    async fn pg_gate_refuses_a_driver_default_target_under_deny_private() {
+        for url in ["postgres:///db", "postgres:db?user=admin"] {
+            assert_eq!(
+                pg_refusal(url).await,
+                Some(SsrfRefusal::UnprovenTarget),
+                "{url:?}"
+            );
+        }
     }
 
     /// A Unix socket reaches the local server as loopback TCP does, so under
-    /// deny-private both socket spellings are refused.
-    #[test]
-    fn build_pool_ssrf_blocks_unix_sockets_when_deny_private_on() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+    /// deny-private every socket spelling is refused.
+    #[tokio::test]
+    async fn pg_gate_refuses_unix_sockets_under_deny_private() {
         for url in [
             "postgres://%2Fvar%2Frun%2Fpostgresql/db",
             "postgres:///db?host=/var/run/postgresql",
             "postgres://8.8.8.8/db?host=/tmp",
         ] {
-            assert!(pool_ssrf_blocked(url), "{url:?} must be blocked");
+            assert_eq!(
+                pg_refusal(url).await,
+                Some(SsrfRefusal::LocalSocket),
+                "{url:?}"
+            );
         }
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
     }
 
-    /// With deny-private off, sockets and the driver default pass, as
-    /// loopback TCP does (local development).
-    #[test]
-    fn build_pool_ssrf_passes_local_targets_when_deny_private_off() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0") };
+    /// With the policy off, sockets, the driver default, and private hosts
+    /// pass unpinned, as in local development.
+    #[tokio::test]
+    async fn pg_gate_passes_local_targets_unpinned_when_the_policy_allows_all() {
         for url in [
             "postgres:///db",
             "postgres://%2Fvar%2Frun%2Fpostgresql/db",
             "postgres:///db?host=/var/run/postgresql",
+            "postgres://127.0.0.1:5432/x",
+            "postgres://db.internal/x",
         ] {
-            assert!(
-                !pool_ssrf_blocked(url),
-                "{url:?} must pass with the guard off"
-            );
+            let gated = pg_gate(url, DialPolicy::AllowAll).await;
+            assert!(gated.is_ok(), "{url:?} must pass: {:?}", gated.err());
         }
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+        let unpinned = pg_gate("postgres://db.internal/x", DialPolicy::AllowAll).await;
+        assert_eq!(
+            unpinned.map(|o| o.get_host().to_owned()),
+            Ok("db.internal".to_owned())
+        );
     }
 
-    #[test]
-    fn build_pool_ssrf_does_not_block_sqlite_url() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
-        assert!(
-            !pool_ssrf_blocked("sqlite:///app.db"),
-            "sqlite URL must bypass the network SSRF gate"
-        );
-        assert!(
-            !pool_ssrf_blocked("sqlite://:memory:"),
-            "in-memory sqlite must bypass the network SSRF gate"
-        );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    /// A public IP-literal host is dialled as itself.
+    #[tokio::test]
+    async fn pg_gate_keeps_a_public_literal_host() {
+        let gated = pg_gate("postgres://u:p@1.1.1.1:6543/x", DialPolicy::DenyPrivate).await;
+        let gated = gated.map(|o| (o.get_host().to_owned(), o.get_port()));
+        assert_eq!(gated, Ok(("1.1.1.1".to_owned(), 6543)));
     }
 
-    #[test]
-    fn build_pool_ssrf_passes_private_when_deny_private_off() {
-        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0") };
-        assert!(
-            !pool_ssrf_blocked("postgres://127.0.0.1:5432/x"),
-            "guard off must not block private host (dev workflow)"
+    /// DNS rebinding: the named host is resolved once and the options the
+    /// pool keeps dial the vetted address, so the rebound (private) answer is
+    /// never dialled, not even by a connection the pool opens later.
+    #[tokio::test]
+    async fn pg_gate_pins_a_named_host_against_rebinding() {
+        let resolver = PublicThenPrivate {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let gated = postgres_connect_options(
+            "postgres://u:p@rebind.example:5432/x",
+            DialPolicy::DenyPrivate,
+            &resolver,
+        )
+        .await
+        .map(|o| (o.get_host().to_owned(), o.get_port()));
+        assert_eq!(gated, Ok((REBIND_PUBLIC.to_string(), 5432)));
+        assert_eq!(
+            resolver.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the name must be resolved exactly once"
         );
-        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+
+        // A fresh connect resolves again and meets the rebound answer.
+        let again = postgres_connect_options(
+            "postgres://u:p@rebind.example:5432/x",
+            DialPolicy::DenyPrivate,
+            &resolver,
+        )
+        .await;
+        assert!(
+            matches!(
+                again,
+                Err(DbConnectError::HostRefused(SsrfRefusal::Blocked {
+                    range: BlockedRange::Private,
+                    ..
+                }))
+            ),
+            "{again:?}"
+        );
+    }
+
+    /// A named host under `sslmode=verify-full` cannot be pinned without
+    /// losing the certificate's host-name check, so it is refused; an IP
+    /// literal under the same mode is pinned as itself.
+    #[tokio::test]
+    async fn pg_gate_refuses_verify_full_on_a_named_host_under_deny_private() {
+        let resolver = PublicThenPrivate {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let refused = postgres_connect_options(
+            "postgres://db.example/x?sslmode=verify-full",
+            DialPolicy::DenyPrivate,
+            &resolver,
+        )
+        .await;
+        assert_eq!(
+            refused.err(),
+            Some(DbConnectError::HostRefused(
+                SsrfRefusal::UnpinnableTlsName {
+                    host: "db.example".to_owned()
+                }
+            ))
+        );
+        let literal = pg_gate(
+            "postgres://1.1.1.1/x?sslmode=verify-full",
+            DialPolicy::DenyPrivate,
+        )
+        .await;
+        assert!(literal.is_ok(), "{:?}", literal.err());
+    }
+
+    /// An unresolvable named host is refused with the typed reason.
+    #[tokio::test]
+    async fn pg_gate_refuses_an_unresolvable_named_host() {
+        assert_eq!(
+            pg_refusal("postgres://nowhere.example/x").await,
+            Some(SsrfRefusal::Unresolvable {
+                host: "nowhere.example".to_owned(),
+                kind: std::io::ErrorKind::NotFound,
+            })
+        );
+    }
+
+    /// SQLite dials no host: its gate only parses the URL.
+    #[tokio::test]
+    async fn sqlite_gate_consults_no_host() {
+        for url in ["sqlite:///app.db", "sqlite::memory:"] {
+            let gated = <sqlx::Sqlite as GatedDial>::gated_connect_options(url).await;
+            assert!(gated.is_ok(), "{url:?}: {:?}", gated.err());
+        }
+    }
+
+    /// A PostgreSQL refusal displays under the `db:` prefix.
+    #[test]
+    fn host_refused_displays_under_the_db_prefix() {
+        let shown = DbConnectError::HostRefused(SsrfRefusal::LocalSocket).to_string();
+        assert_eq!(
+            shown,
+            "db: blocked: local socket dial target (IPE_HTTP_DENY_PRIVATE)"
+        );
     }
 
     // ── parse_order_clause ─────────────────────────────────────────────────────

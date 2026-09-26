@@ -764,7 +764,7 @@ const RUNTIME_MOD_RS_HTTP_CLIENT_APPEND: &str = "pub mod http_client;\npub use h
 ///
 /// `ssrf.rs` parses URLs with the `url` crate (unconditional base dep) and is
 /// reqwest-free. Its validators are consumed by the `http_client`, `ws_client`,
-/// and `db` modules (the latter calls `VettedDial::for_host` in `VettedPool::connect` and
+/// and `db` modules (the latter calls `VettedDial` in `VettedPool::connect` and
 /// `external_conn.rs` uses it unconditionally).
 ///
 /// Declared `pub` so that in the vendored emit model — where all runtime modules

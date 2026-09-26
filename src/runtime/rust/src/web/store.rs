@@ -1539,7 +1539,9 @@ mod tests {
             assert!(!e.is_policy_refusal(), "{e} must fall back, not refuse");
         }
         let policy = [
-            StoreOpenError::Connect(DbConnectError::HostRefused("blocked".to_string())),
+            StoreOpenError::Connect(DbConnectError::HostRefused(
+                crate::ssrf::SsrfRefusal::LocalSocket,
+            )),
             StoreOpenError::Connect(DbConnectError::InvalidUrl),
         ];
         for e in &policy {
