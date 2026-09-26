@@ -126,18 +126,18 @@ const CLI_APP_LINES: &str = "module Main exposing (main)\n\
     import Ipe.Tea.Cli as Cli\n\
     import Ipe.Ui.Cli as Ui\n\
     import Ipe.Tea.Terminal.Cmd\n\
-    import Ipe.Tea.Terminal.Sub\n\
+    import Ipe.Tea.Cli.Sub\n\
     type Msg = Line String\n\
     type alias Model = { count : Int }\n\
     init _unit = ( { count = 0 }, Cmd.none )\n\
     update msg model = case msg of\n\
     \x20   Line _ -> ( { model | count = model.count + 1 }, Cmd.none )\n\
     view _model = Ui.text \"ok\"\n\
-    subscriptions _model = Sub.none\n\
+    subscriptions _model = Sub.onLine onLine\n\
     onLine s = Line s\n\
     main = Cli.tea\n\
     \x20   { init = init, update = update, view = view\n\
-    \x20   , subscriptions = subscriptions, onLine = onLine }\n";
+    \x20   , subscriptions = subscriptions }\n";
 
 /// Minimal Web TEA app that fires `Cmd.publish` from `update`. `cmd_publish`
 /// lives in `web::pubsub`; the Web shape must append the `web` runtime module
@@ -479,11 +479,11 @@ const TUI_APP: &str = "module Main exposing (main)\n\
     view : Model -> Screen Msg\n\
     view _model = Cells.text \"hello\"\n\
     subscriptions : Model -> Sub Msg\n\
-    subscriptions _model = Sub.none\n\
+    subscriptions _model = Sub.onKey onKey\n\
     onKey : KeyEvent -> Msg\n\
     onKey _event = NoOp\n\
     main = Tui.tea { init = init, update = update, view = view\n\
-    \x20            , subscriptions = subscriptions, onKey = onKey }\n";
+    \x20            , subscriptions = subscriptions }\n";
 
 /// Under the vendored emit model a `Tui.tea` program must cargo-build.
 ///

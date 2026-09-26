@@ -1317,6 +1317,12 @@ mod registry_phase_c_tests {
             // `emit_tea_call`.
             K::CmdMap,
             K::SubMap,
+            // ── TEA: shape-owned terminal input subscriptions (2) ─────
+            // Ipê-new: `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg` and
+            // `Cli.Sub.onLine : (String -> msg) -> Sub msg`. Runtime
+            // `tui_sub_on_key` / `cli_sub_on_line`, emit arm in `emit_tea_call`.
+            K::TuiSubOnKey,
+            K::CliSubOnLine,
             // ── Task combinators map2..5 + attempt (Ipê-new) ───────
             // `map2..5` combine independent tasks; `attempt` bridges a Task into
             // a Cmd (emit arm in `emit_tea_call`, runtime `cmd_perform`).

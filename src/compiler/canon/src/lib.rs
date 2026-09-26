@@ -3397,11 +3397,8 @@ mod tests {
 
     #[test]
     fn tui_app_importing_web_cmd_sub_is_rejected_n0035() {
-        // `Tui.tea` is a terminal-family entry, so its app shape folds to
-        // `Terminal`. Importing another shape's
-        // `Sub` (`Ipe.Tea.Web.Sub`) has no denotation in a terminal app and must
-        // fail closed (IPE-N0035) — the `canonical_shape` fold admits only the
-        // terminal-family surfaces, never `Web`.
+        // Importing another shape's `Sub` (`Ipe.Tea.Web.Sub`) has no denotation
+        // in a terminal app and must fail closed (IPE-N0035).
         let src = "module Main exposing (main)\n\
                    import Ipe.Tea.Tui as Tui\n\
                    import Ipe.Tea.Web.Sub as Sub\n\n\
@@ -3421,9 +3418,8 @@ mod tests {
 
     #[test]
     fn web_app_importing_tui_cmd_sub_is_rejected_n0035() {
-        // The reverse direction: a `Web.tea` importing the terminal-family
-        // `Ipe.Tea.Tui.Sub` must also fail closed. The fold folds only the
-        // imported segment; a `Web` app never folds to `Terminal`.
+        // The reverse direction: a `Web.tea` importing the terminal
+        // `Ipe.Tea.Tui.Sub` must also fail closed.
         let src = "module Main exposing (main)\n\
                    import Ipe.Tea.Web as Web\n\
                    import Ipe.Tea.Tui.Sub as Sub\n\n\
@@ -3441,27 +3437,197 @@ mod tests {
         );
     }
 
+    /// Canonicalise a one-import app and report whether IPE-N0035 fired.
+    fn wrong_shape_cmd_sub_fires(entry_import: &str, entry: &str, sub_import: &str) -> bool {
+        let src = format!(
+            "module Main exposing (main)\n\
+             import {entry_import}\n\
+             import {sub_import} as Sub\n\n\
+             cfg = 0\n\n\
+             main = {entry} cfg\n"
+        );
+        matches!(
+            canon_module_err(&src),
+            Some(Diagnostic::Name {
+                msg: NameError::WrongShapeCmdSub(_),
+                ..
+            })
+        )
+    }
+
     #[test]
-    fn cli_app_importing_tui_cmd_sub_is_admitted() {
-        // `Tui` and `Cli` are the two drive axes of the one terminal shape, so
-        // both fold to `Terminal`: a `Cli.tea` may import `Ipe.Tea.Tui.Sub`. The
-        // cross-shape gate (IPE-N0035) must NOT fire here.
-        let src = "module Main exposing (main)\n\
-                   import Ipe.Tea.Cli as Cli\n\
-                   import Ipe.Tea.Tui.Sub as Sub\n\n\
-                   cfg = 0\n\n\
-                   main = Cli.tea cfg\n";
+    fn cli_app_importing_tui_sub_is_rejected_n0035() {
+        // `Ipe.Tea.Tui.Sub` owns the key subscription (`onKey`); a `Cli` app has
+        // no key stream, so the Tui surface's `Sub` is refused there.
         assert!(
+            wrong_shape_cmd_sub_fires("Ipe.Tea.Cli as Cli", "Cli.tea", "Ipe.Tea.Tui.Sub"),
+            "a `Cli.tea` importing `Ipe.Tea.Tui.Sub` must be rejected IPE-N0035"
+        );
+        assert!(
+            wrong_shape_cmd_sub_fires("Ipe.Tea.Cli as Cli", "Cli.tea", "Ipe.Tea.Tui.Cmd"),
+            "a `Cli.tea` importing `Ipe.Tea.Tui.Cmd` must be rejected IPE-N0035"
+        );
+    }
+
+    #[test]
+    fn tui_app_importing_cli_sub_is_rejected_n0035() {
+        // `Ipe.Tea.Cli.Sub` owns the line subscription (`onLine`); a `Tui` app
+        // has no line stream, so the Cli surface's `Sub` is refused there.
+        assert!(
+            wrong_shape_cmd_sub_fires("Ipe.Tea.Tui as Tui", "Tui.tea", "Ipe.Tea.Cli.Sub"),
+            "a `Tui.tea` importing `Ipe.Tea.Cli.Sub` must be rejected IPE-N0035"
+        );
+    }
+
+    #[test]
+    fn terminal_apps_admit_their_own_and_the_shared_terminal_sub() {
+        for (entry_import, entry, own) in [
+            ("Ipe.Tea.Tui as Tui", "Tui.tea", "Ipe.Tea.Tui.Sub"),
+            ("Ipe.Tea.Cli as Cli", "Cli.tea", "Ipe.Tea.Cli.Sub"),
+        ] {
+            assert!(
+                !wrong_shape_cmd_sub_fires(entry_import, entry, own),
+                "`{entry}` must admit its own `{own}`"
+            );
+            // The shared terminal-family re-export carries no input subscription.
+            assert!(
+                !wrong_shape_cmd_sub_fires(entry_import, entry, "Ipe.Tea.Terminal.Sub"),
+                "`{entry}` must admit the shared `Ipe.Tea.Terminal.Sub`"
+            );
+        }
+    }
+
+    #[test]
+    fn input_subscriptions_resolve_only_under_their_own_shape_sub() {
+        // `onKey` is a member of `Ipe.Tea.Tui.Sub` and `onLine` of
+        // `Ipe.Tea.Cli.Sub` — and neither leaks into another shape's `Sub`.
+        let resolves = |entry_import: &str, entry: &str, sub_import: &str, member: &str| {
+            let src = format!(
+                "module Main exposing (main)\n\
+                 import {entry_import}\n\
+                 import {sub_import} as Sub\n\n\
+                 subs = Sub.{member}\n\n\
+                 cfg = 0\n\n\
+                 main = {entry} cfg\n"
+            );
             !matches!(
-                canon_module_err(src),
+                canon_module_err(&src),
                 Some(Diagnostic::Name {
-                    msg: NameError::WrongShapeCmdSub(_),
+                    msg: NameError::NoSuchMember { .. },
                     ..
                 })
-            ),
-            "a `Cli.tea` importing the terminal-family `Ipe.Tea.Tui.Sub` must be \
-             admitted — both fold to the one `Terminal` shape"
+            )
+        };
+        assert!(resolves(
+            "Ipe.Tea.Tui as Tui",
+            "Tui.tea",
+            "Ipe.Tea.Tui.Sub",
+            "onKey"
+        ));
+        assert!(resolves(
+            "Ipe.Tea.Cli as Cli",
+            "Cli.tea",
+            "Ipe.Tea.Cli.Sub",
+            "onLine"
+        ));
+        assert!(!resolves(
+            "Ipe.Tea.Tui as Tui",
+            "Tui.tea",
+            "Ipe.Tea.Tui.Sub",
+            "onLine"
+        ));
+        assert!(!resolves(
+            "Ipe.Tea.Cli as Cli",
+            "Cli.tea",
+            "Ipe.Tea.Cli.Sub",
+            "onKey"
+        ));
+        assert!(!resolves(
+            "Ipe.Tea.Tui as Tui",
+            "Tui.tea",
+            "Ipe.Tea.Terminal.Sub",
+            "onKey"
+        ));
+        assert!(!resolves(
+            "Ipe.Tea.Web as Web",
+            "Web.tea",
+            "Ipe.Tea.Web.Sub",
+            "onKey"
+        ));
+    }
+
+    /// Canonicalise `src` and return the IPE-N0051 payload, if that is the error.
+    fn input_field_error(src: &str) -> Option<(String, String, String)> {
+        match canon_module_err(src) {
+            Some(Diagnostic::Name {
+                msg:
+                    NameError::InputFieldIsSubscription {
+                        entry,
+                        field,
+                        sub_module,
+                    },
+                ..
+            }) => Some((entry.into(), field.into(), sub_module.into())),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn tui_cfg_on_key_field_is_rejected_n0051() {
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Tui as Tui\n\n\
+                   main = Tui.tea { init = 0, update = 0, view = 0, subscriptions = 0, onKey = 0 }\n";
+        assert_eq!(
+            input_field_error(src),
+            Some(("Tui.tea".into(), "onKey".into(), "Ipe.Tea.Tui.Sub".into())),
+            "a `Tui.tea` config still passing `onKey` must be rejected IPE-N0051"
         );
+    }
+
+    #[test]
+    fn cli_cfg_on_line_field_is_rejected_n0051() {
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Cli as Cli\n\n\
+                   main = Cli.tea { init = 0, update = 0, view = 0, subscriptions = 0, onLine = 0 }\n";
+        assert_eq!(
+            input_field_error(src),
+            Some(("Cli.tea".into(), "onLine".into(), "Ipe.Tea.Cli.Sub".into())),
+            "a `Cli.tea` config still passing `onLine` must be rejected IPE-N0051"
+        );
+    }
+
+    #[test]
+    fn top_level_cfg_binding_with_input_field_is_rejected_n0051() {
+        // The config bound to a sibling top-level name is checked too.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Cli as Cli\n\n\
+                   cfg = { init = 0, update = 0, view = 0, subscriptions = 0, onLine = 0 }\n\n\
+                   main = Cli.tea cfg\n";
+        assert!(
+            input_field_error(src).is_some(),
+            "a top-level `Cli.tea` config binding passing `onLine` must be rejected IPE-N0051"
+        );
+    }
+
+    #[test]
+    fn canonical_four_field_cfg_is_not_rejected_n0051() {
+        for (import, entry) in [
+            ("Ipe.Tea.Tui as Tui", "Tui.tea"),
+            ("Ipe.Tea.Cli as Cli", "Cli.tea"),
+        ] {
+            let src = format!(
+                "module Main exposing (main)\n\
+                 import {import}\n\n\
+                 main = {entry} {{ init = 0, update = 0, view = 0, subscriptions = 0 }}\n"
+            );
+            assert_eq!(input_field_error(&src), None, "`{entry}` four-field config");
+        }
+        // The other entry's field name is not this entry's input field: it falls
+        // to the closed-row type check, not this gate.
+        let src = "module Main exposing (main)\n\
+                   import Ipe.Tea.Tui as Tui\n\n\
+                   main = Tui.tea { init = 0, update = 0, view = 0, subscriptions = 0, onLine = 0 }\n";
+        assert_eq!(input_field_error(src), None);
     }
 
     #[test]

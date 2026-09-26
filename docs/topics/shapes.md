@@ -22,9 +22,13 @@ Five shapes exist:
 | **Script** | bare `main : Task Error ()` (or `Server.listen`) | *nothing* — a plain effect | `ipe init app script` |
 
 Web / Tui / Cli / Worker follow [The Elm Architecture](https://guide.elm-lang.org/architecture/):
-`init` · `update` · `subscriptions`, plus a `view` for the three that render.
-Do not mix a `Cmd`/`Sub` from one shape into another — that is **IPE-N0035**
-(`WrongShapeCmdSub`).
+`init` · `update` · `subscriptions`, plus a `view` for the three that render —
+and nothing else. Input is an event like any other, so it arrives through
+`subscriptions`: key presses via `Tui.Sub.onKey`, stdin lines via
+`Cli.Sub.onLine`. Do not mix a `Cmd`/`Sub` from one shape into another — that
+is **IPE-N0035** (`WrongShapeCmdSub`); `Tui` and `Cli` each own their `Sub`
+(only the shared `Ipe.Tea.Terminal.Sub`, with no input subscription, serves
+both).
 
 ## Web
 
@@ -130,19 +134,29 @@ an app](../guide/delivery.md) for building, running, and simulating each host.
 
 ## Tui
 
-Full-screen terminal UI; `view` returns `Screen Msg`, `onKey` maps a key event
-to a `Msg`.
+Full-screen terminal UI; `view` returns `Screen Msg`. Key input is a
+subscription: `Sub.onKey` (from `Ipe.Tea.Tui.Sub`) takes a handler that maps a
+`{ kind : String, value : String }` key event to a `Msg`.
 
 ```ipe
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.onKey onKey
+
+
 main =
     Tui.tea
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onKey = onKey
         }
 ```
+
+Combine keys with other events through `Sub.batch` (e.g.
+`Sub.batch [ Sub.onKey onKey, Sub.every 1000 Tick ]`); a key with no active
+`onKey` subscription is ignored. Passing `onKey` as a `Tui.tea` config field is
+**IPE-N0051**.
 
 The scaffolded counter (`Up` +, `Down` -, `q` quit) renders as:
 
@@ -154,19 +168,27 @@ Ipê counter
 
 ## Cli
 
-Line-oriented terminal app / REPL; `view` returns `Lines Msg`, `onLine` maps a
-line of input to a `Msg`.
+Line-oriented terminal app / REPL; `view` returns `Lines Msg`. Line input is a
+subscription: `Sub.onLine` (from `Ipe.Tea.Cli.Sub`) takes a handler that maps
+each stdin line to a `Msg`.
 
 ```ipe
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.onLine onLine
+
+
 main =
     Cli.tea
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }
 ```
+
+A line with no active `onLine` subscription is ignored. Passing `onLine` as a
+`Cli.tea` config field is **IPE-N0051**.
 
 The scaffolded echo REPL (type text, `q` quits):
 
@@ -218,6 +240,10 @@ main =
 - **shape** — one of five `main` entry patterns: Web, Tui, Cli, Worker, Script.
 - **`Web.tea`** — browser DOM TEA entry (`Element` view; `served` or `solo`).
 - **`Tui.tea`** — full-screen terminal TUI entry (`Screen` view).
+- **`Tui.Sub.onKey`** — the `Tui` key-input subscription
+  (`(KeyEvent -> msg) -> Sub msg`).
 - **`Cli.tea`** — line-oriented terminal entry (`Lines` view).
+- **`Cli.Sub.onLine`** — the `Cli` line-input subscription
+  (`(String -> msg) -> Sub msg`).
 - **`Worker.tea`** — view-less TEA loop.
 - **runtime / host** — Web-only delivery axes; see [Delivering an app](../guide/delivery.md).

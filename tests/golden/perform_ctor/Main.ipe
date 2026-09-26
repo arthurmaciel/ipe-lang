@@ -8,7 +8,7 @@ import Ipe.Tea.Cli as Cli
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Tea.Terminal.Cmd as Cmd
-import Ipe.Tea.Terminal.Sub as Sub
+import Ipe.Tea.Cli.Sub as Sub
 import Ipe.Task as Task
 
 type Msg
@@ -37,7 +37,7 @@ view _model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 onLine : String -> Msg
 onLine line =
@@ -49,5 +49,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

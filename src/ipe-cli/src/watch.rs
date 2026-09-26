@@ -3356,7 +3356,7 @@ mod tests {
     #[test]
     fn multi_module_tui_entry_is_detected_outside_main_rs() {
         let p = emitted_with_module_entry(
-            "pub fn ipe_main() -> _ { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d,e)) }",
+            "pub fn ipe_main() -> _ { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d)) }",
         );
         assert!(
             emitted_is_tui(&p),
@@ -3423,7 +3423,7 @@ mod tests {
     #[test]
     fn tui_app_emit_is_tui_not_web_or_http() {
         let p = emitted_with_main(
-            "fn main() { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d,e)); }",
+            "fn main() { ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(a,b,c,d)); }",
         );
         assert!(emitted_is_tui(&p), "tui_app_ui must classify as tui");
         assert!(!emitted_is_web(&p), "a tui app is not a web project");
@@ -3437,7 +3437,7 @@ mod tests {
     #[test]
     fn cli_app_emit_is_neither_tui_nor_web() {
         let p = emitted_with_main(
-            "fn main() { ipe_runtime::tea::CliApp(ipe_runtime::console_app(a,b,c,d,e)); }",
+            "fn main() { ipe_runtime::tea::CliApp(ipe_runtime::console_app(a,b,c,d)); }",
         );
         let (is_tui, is_web) = (emitted_is_tui(&p), emitted_is_web(&p));
         assert!(!is_tui, "a cli app is not a tui app");

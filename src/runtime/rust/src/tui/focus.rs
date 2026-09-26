@@ -8,7 +8,7 @@
 //! Focus state (which element is focused, the per-input edit buffer + cursor) is
 //! hidden from user code: the renderer discovers focusables in tab order during
 //! the walk, the registry persists buffers across renders, and the loop
-//! intercepts navigation/editing keys before the user's `onKey`.
+//! intercepts navigation/editing keys before the user's `Tui.Sub.onKey` handlers.
 //!
 //! No panic vectors: rune-indexed edits via `.get`/iterators + saturating
 //! arithmetic; nothing indexes or unwraps.

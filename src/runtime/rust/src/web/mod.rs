@@ -866,6 +866,10 @@ fn spawn_subs<Msg: Clone + Send + 'static>(
                 });
                 handles.push(spawn(emit));
             }
+            // Terminal input has no source in a Web session; the resolver and
+            // emitter refuse `Tui.Sub.onKey` / `Cli.Sub.onLine` outside their own
+            // terminal app, so these never reach here from Ipê source.
+            IpeSub::OnKey(_) | IpeSub::OnLine(_) => {}
         }
     }
     go(sub, tx, handles);

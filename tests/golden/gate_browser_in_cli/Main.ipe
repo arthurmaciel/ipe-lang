@@ -48,7 +48,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 
 onLine : String -> Msg
@@ -67,5 +67,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

@@ -13,7 +13,7 @@ import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Cli.Sub
 
 type ChildMsg
     = ChildTick
@@ -53,7 +53,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.map FromChild childSub
+    Sub.batch [ Sub.map FromChild childSub, Sub.onLine onLine ]
 
 onLine : String -> Msg
 onLine line =
@@ -65,5 +65,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

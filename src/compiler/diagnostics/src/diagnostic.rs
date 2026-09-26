@@ -23,13 +23,13 @@ use crate::code::{
     IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
     IPE_N0028, IPE_N0029, IPE_N0030, IPE_N0031, IPE_N0032, IPE_N0033, IPE_N0034, IPE_N0035,
     IPE_N0036, IPE_N0038, IPE_N0039, IPE_N0040, IPE_N0041, IPE_N0042, IPE_N0043, IPE_N0044,
-    IPE_N0045, IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_N0050, IPE_P0001, IPE_P0002,
-    IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015, IPE_P0016,
-    IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041,
-    IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065, IPE_P0066,
-    IPE_P0067, IPE_P0068, IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002, IPE_T0003,
-    IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016,
-    IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
+    IPE_N0045, IPE_N0046, IPE_N0047, IPE_N0048, IPE_N0049, IPE_N0050, IPE_N0051, IPE_P0001,
+    IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015,
+    IPE_P0016, IPE_P0017, IPE_P0018, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040,
+    IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_P0063, IPE_P0064, IPE_P0065,
+    IPE_P0066, IPE_P0067, IPE_P0068, IPE_P0069, IPE_P0070, IPE_S0001, IPE_T0001, IPE_T0002,
+    IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015,
+    IPE_T0016, IPE_T0017, IPE_T0018, IPE_T0019, IPE_T0020, Severity,
 };
 use crate::span::Span;
 
@@ -609,12 +609,12 @@ pub enum NameError {
     ProgramImportsTeaShape { module: Box<str> },
     /// A TEA app imports another shape's `Cmd` / `Sub` re-export module. `Cmd`
     /// and `Sub` are shape-specific and reached through the app's own shape
-    /// (`Ipe.Tea.Web.Cmd` in a `Web` app, `Ipe.Tea.Terminal.Sub` in a `Terminal`
-    /// app, …). The app's shape is proven from its entry kernel; a `Cmd` / `Sub`
-    /// import from a different shape has no denotation in this app and fails
-    /// closed here. `imported` is the offending import path; `imported_shape` and
-    /// `app_shape` name the two shapes; `expected` is the correct import path for
-    /// the app's shape. [IPE-N0035]
+    /// (`Ipe.Tea.Web.Cmd` in a `Web` app, `Ipe.Tea.Tui.Sub` in a `Tui` app,
+    /// `Ipe.Tea.Cli.Sub` in a `Cli` app, …). The app's shape is proven from its
+    /// entry kernel; a `Cmd` / `Sub` import from a different shape has no
+    /// denotation in this app and fails closed here. `imported` is the offending
+    /// import path; `imported_shape` and `app_shape` name the two shapes;
+    /// `expected` is the correct import path for the app's shape. [IPE-N0035]
     WrongShapeCmdSub(Box<CmdSubShapeMismatch>),
     /// A surface binding that has been intentionally removed from the stdlib.
     /// `qualifier.name` is the call site; `replacement` is the migration hint
@@ -770,6 +770,17 @@ pub enum NameError {
         shape_ui_module: Box<str>,
         shape: Box<str>,
         entry: Box<str>,
+    },
+    /// A `Tui.tea` / `Cli.tea` config still passes terminal input as a config
+    /// field. The entry config is the canonical four TEA fields (`init` /
+    /// `update` / `view` / `subscriptions`); input is a subscription. `entry` is
+    /// the entry (`Tui.tea`), `field` the stray field (`onKey`), and `sub_module`
+    /// the shape's `Sub` module whose same-named member replaces it
+    /// (`Ipe.Tea.Tui.Sub`). [IPE-N0051]
+    InputFieldIsSubscription {
+        entry: Box<str>,
+        field: Box<str>,
+        sub_module: Box<str>,
     },
 }
 
@@ -2129,6 +2140,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::RustNameFold { .. } => IPE_N0048,
         NameError::DuplicatePatternBinder { .. } => IPE_N0049,
         NameError::ScriptImportsShapeView { .. } => IPE_N0050,
+        NameError::InputFieldIsSubscription { .. } => IPE_N0051,
     })
 }
 
@@ -2343,6 +2355,7 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::RuntimeBranchedMain
         | NameError::ModuleNotAllowedInPlacement(..)
         | NameError::ScriptImportsShapeView { .. }
+        | NameError::InputFieldIsSubscription { .. }
         | NameError::WebInitPolyArg => Vec::new(), // no span-based help
     }
 }

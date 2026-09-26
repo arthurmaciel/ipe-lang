@@ -20041,12 +20041,11 @@ impl<'a> Lowerer<'a> {
                 // ── Tui.tea / Cli.tea cfg literal (L0107 exemption) ──
                 //
                 // Same pattern as `Web.tea`: intercept the single cfg-record arg
-                // BEFORE the uniform `lower_expr` path so function-typed fields
-                // (init/update/view/subscriptions/onKey) do not trip IPE-L0107.
-                // Cli.tea — 5-field cfg (init/update/view/
-                //   subscriptions/onLine), all function-typed; without this arm
-                //   every real `Cli.tea` call would trip IPE-L0107 and the
-                //   emit_console path could never fire.
+                // BEFORE the uniform `lower_expr` path so the function-typed
+                // fields (init/update/view/subscriptions) do not trip IPE-L0107;
+                // without this arm every real `Tui.tea` / `Cli.tea` call would
+                // trip IPE-L0107 and the emit_tui / emit_console path could
+                // never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
                 // IPE-L0119 at the argument span — fail-closed, never an ICE.
                 Callee::Kernel(
@@ -22880,6 +22879,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CmdBatch
                 // `Sub.batch : List (Sub msg) -> Sub msg`
                 | KernelFn::SubBatch
+                // `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg`
+                | KernelFn::TuiSubOnKey
+                // `Cli.Sub.onLine : (String -> msg) -> Sub msg`
+                | KernelFn::CliSubOnLine
                 // ── Server arity-1 ───────────────────────────────────────
                 // `Server.text / json / html / redirect : String -> Response`
                 | KernelFn::ServerText
@@ -25200,6 +25203,9 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
                     ("Sub", "map") => Ok(Callee::Kernel(KernelFn::SubMap)),
                     ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
+                    // Shape-owned terminal input subscriptions.
+                    ("TeaTuiSub", "onKey") => Ok(Callee::Kernel(KernelFn::TuiSubOnKey)),
+                    ("TeaCliSub", "onLine") => Ok(Callee::Kernel(KernelFn::CliSubOnLine)),
                     // ── Ipe.Ffi.Js ports (raw typed Ipê↔JS transport) ────────────
                     ("Js", "send") => Ok(Callee::Kernel(KernelFn::JsSend)),
                     ("Js", "subscribe") => Ok(Callee::Kernel(KernelFn::JsSubscribe)),

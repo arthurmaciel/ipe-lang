@@ -3,9 +3,9 @@ module Main exposing (main)
 {-|
 A line-oriented TEA counter using `Cli.tea`.
 
-The `onLine : String -> Msg` callback maps each stdin line to a `Msg`,
-giving the same `init / update / view / subscriptions` shape as other
-TEA backends.
+Line input is a subscription: `subscriptions` returns `Sub.onLine onLine`,
+and `onLine : String -> Msg` maps each stdin line to a `Msg` — the same
+`init / update / view / subscriptions` shape as every other TEA app.
 
 Type:
     +     increment
@@ -66,7 +66,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _ =
-    Sub.none
+    Sub.onLine onLine
 
 
 onLine : String -> Msg
@@ -95,5 +95,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }

@@ -197,7 +197,7 @@ fn tail_maybe_truncated(tail: &[u8]) -> bool {
 /// larger than 64 bytes). `map_kind` turns the decoded `TuiKey` into the wire
 /// `(kind, value)` pair (`tui_app_ui` folds the ctrl modifier into the kind for
 /// the input editor's word-jumps; `tui_app` passes it through). Runs on its own
-/// blocking thread so `on_key` stays off it.
+/// blocking thread so the key handlers stay off it.
 fn read_keys_loop<Msg, FMap>(tx: &tokio::sync::mpsc::UnboundedSender<CliEvent<Msg>>, map_kind: FMap)
 where
     FMap: Fn(TuiKey) -> (String, String),
@@ -354,16 +354,16 @@ fn spawn_control_bridge() -> tokio::sync::mpsc::UnboundedReceiver<ControlRequest
 
 /// `tui_app` — terminal TEA driver for a `view : Model -> String` (the raw
 /// frame is painted verbatim), the vehicle for the `Ui.cells` raw-cell escape.
-/// `on_key` receives the decoded key's
-/// `(kind, value)` and yields a `Msg` (the codegen wraps the user's
-/// `onKey : KeyEvent -> Msg` so the `{ kind, value }` record is built there).
+/// Each decoded key's `(kind, value)` goes to every `Tui.Sub.onKey` handler the
+/// current `subscriptions` declares (the codegen wraps the user's
+/// `KeyEvent -> Msg` so the `{ kind, value }` record is built there); a key no
+/// handler subscribes to is unobserved.
 #[allow(clippy::type_complexity)]
-pub fn tui_app<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnKey>(
+pub fn tui_app<Model, Msg, E, FInit, FUpdate, FView, FSubs>(
     init: FInit,
     update: FUpdate,
     view: FView,
     subscriptions: FSubs,
-    on_key: FOnKey,
 ) -> IpeTask<E, ()>
 where
     E: Send + From<String> + 'static,
@@ -373,7 +373,6 @@ where
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> String + Send + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
-    FOnKey: Fn(String, String) -> Msg + Send + 'static,
 {
     // Wrap update in an Arc so it can be shared between the live-pass call
     // site and the debugger's reconstruct closure without requiring Clone.
@@ -438,7 +437,7 @@ where
         paint(&render_frame(&model));
 
         while let Some(ev) = rx.recv().await {
-            let msg = match ev {
+            let msgs: Vec<Msg> = match ev {
                 CliEvent::Key(kind, value) => {
                     #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
                     {
@@ -475,25 +474,32 @@ where
                             }
                         }
                     }
-                    on_key(kind, value)
+                    submgr.key_msgs(&kind, &value)
                 }
-                CliEvent::Msg(m) | CliEvent::PerformDone(m) => m,
+                CliEvent::Msg(m) | CliEvent::PerformDone(m) => vec![m],
                 CliEvent::Line(_) => continue,
                 CliEvent::Eof => break,
             };
+            if msgs.is_empty() {
+                continue;
+            }
 
-            #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
-            let (next, cmd) = update(msg.clone(), model);
-            #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
-            let (next, cmd) = update(msg, model);
+            // Fold each message in order; the subscriptions are re-evaluated
+            // after each, so the next message meets the model it produced.
+            for msg in msgs {
+                #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+                let (next, cmd) = update(msg.clone(), model);
+                #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
+                let (next, cmd) = update(msg, model);
 
-            model = next;
+                model = next;
 
-            #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
-            dbg.record(msg, model.clone());
+                #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
+                dbg.record(msg, model.clone());
 
-            cli_run_cmd(cmd, &tx);
-            submgr.update(subscriptions(model.clone()));
+                cli_run_cmd(cmd, &tx);
+                submgr.update(subscriptions(model.clone()));
+            }
 
             #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
             {
@@ -969,14 +975,14 @@ where
 /// Shift-Tab cycle focus; typing edits the focused text input (dispatching its
 /// `onInput`); Enter/Space activates a button or toggles a checkbox/radio; the
 /// view auto-scrolls to keep the focused element on screen. Ctrl-keys and any
-/// unhandled key fall through to the user's `onKey`.
+/// unhandled key go to every `Tui.Sub.onKey` handler the current
+/// `subscriptions` declares; with none active the key is unobserved.
 #[allow(clippy::type_complexity, clippy::too_many_lines, unused_assignments)]
-pub fn tui_app_ui<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnKey>(
+pub fn tui_app_ui<Model, Msg, E, FInit, FUpdate, FView, FSubs>(
     init: FInit,
     update: FUpdate,
     view: FView,
     subscriptions: FSubs,
-    on_key: FOnKey,
 ) -> IpeTask<E, ()>
 where
     E: Send + From<String> + 'static,
@@ -986,7 +992,6 @@ where
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> CellsView<Msg> + Send + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
-    FOnKey: Fn(String, String) -> Msg + Send + 'static,
 {
     // Wrap update in Arc — same rationale as tui_app.
     let update = std::sync::Arc::new(update);
@@ -1146,7 +1151,10 @@ where
                 Some(ev) => ev,
                 None => break,
             };
+            // A widget-produced message (click / input / focus) …
             let mut produced: Option<Msg> = None;
+            // … or the messages the active `Tui.Sub.onKey` handlers map a key to.
+            let mut from_keys: Vec<Msg> = Vec::new();
             match ev {
                 CliEvent::Msg(m) | CliEvent::PerformDone(m) => produced = Some(m),
                 CliEvent::Eof => break,
@@ -1319,7 +1327,10 @@ where
                         }
 
                         if kind == "ctrl" {
-                            produced = Some(on_key(kind, value));
+                            from_keys = submgr.key_msgs(&kind, &value);
+                            if from_keys.is_empty() {
+                                continue;
+                            }
                         } else if focused_input {
                             let is_cbr = focusables
                                 .get(focus_idx)
@@ -1380,13 +1391,20 @@ where
                                 continue;
                             }
                         } else {
-                            produced = Some(on_key(kind, value));
+                            from_keys = submgr.key_msgs(&kind, &value);
+                            if from_keys.is_empty() {
+                                continue;
+                            }
                         }
                     } // end key-logic else (non-mouse)
                 }
             }
 
-            if let Some(msg) = produced {
+            // Fold each message in order; the subscriptions are re-evaluated
+            // after each, so the next message meets the model it produced.
+            let mut folded = false;
+            for msg in produced.into_iter().chain(from_keys) {
+                folded = true;
                 #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
                 let (next, cmd) = update(msg.clone(), model);
                 #[cfg(not(all(feature = "debugger", not(target_arch = "wasm32"))))]
@@ -1399,7 +1417,9 @@ where
 
                 cli_run_cmd(cmd, &tx);
                 submgr.update(subscriptions(model.clone()));
+            }
 
+            if folded {
                 #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
                 {
                     // In time-travel mode: freeze on the pinned past step.

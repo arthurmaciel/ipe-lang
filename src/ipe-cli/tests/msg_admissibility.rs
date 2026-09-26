@@ -201,7 +201,7 @@ import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Tui.Sub
 
 type Msg
     = Increment
@@ -230,7 +230,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -241,7 +241,7 @@ onKey _event =
 main =
     Tui.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onKey = onKey
+        , subscriptions = subscriptions
         }
 ";
 
@@ -254,7 +254,7 @@ import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Tui.Sub
 
 type Msg
     = NoOp
@@ -280,7 +280,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -291,7 +291,7 @@ onKey _event =
 main =
     Tui.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onKey = onKey
+        , subscriptions = subscriptions
         }
 ";
 

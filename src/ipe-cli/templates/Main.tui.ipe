@@ -39,7 +39,7 @@ update msg model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 
 view : Model -> Screen Msg
@@ -76,5 +76,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onKey = onKey
         }

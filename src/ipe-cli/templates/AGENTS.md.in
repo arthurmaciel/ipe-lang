@@ -128,8 +128,8 @@ Ask one focused question per ambiguity; no guess heroically.
 | Desktop app                              | **Ipe.Tea.Web** (host=desktop) | `Web.tea cfg` + `ipe build web desktop` | Same `web` shape; desktop is a delivery host. |
 | Mobile app (iOS / Android)               | **Ipe.Tea.Web** (solo runtime) | `Web.tea cfg` + `ipe release web solo ios\|android` | `wasm = On { mode = Solo }` in `package.ipe`. |
 | View-less background TEA worker          | **Ipe.Tea.Worker**     | `Worker.tea cfg`                   | Managed `init`/`update`/`subscriptions` loop, no view sink. |
-| Line-oriented interactive tool           | **Ipe.Tea.Cli**        | `Cli.tea cfg`                      | Managed stdin-driven TEA loop (init/update/view/onLine). |
-| Terminal UI (TUI)                        | **Ipe.Tea.Tui**        | `Tui.tea cfg`                      | `Screen` view (`Ipe.Ui.Tui`), a terminal-only view type. |
+| Line-oriented interactive tool           | **Ipe.Tea.Cli**        | `Cli.tea cfg`                      | Managed stdin-driven TEA loop (init/update/view/subscriptions); lines via `Sub.onLine`. |
+| Terminal UI (TUI)                        | **Ipe.Tea.Tui**        | `Tui.tea cfg`                      | `Screen` view (`Ipe.Ui.Tui`), a terminal-only view type; keys via `Sub.onKey`. |
 | HTTP / JSON API (no browser UI)          | **script** (plain `main`) | `main = Server.listen 8000 [...]`  | `Direct` shape; routes + middleware (CORS / rate-limit / logging / basic-auth). |
 | WebSocket-driven feed                    | **script** (plain `main`) | `Server.upgrade req`               | Bidirectional; lives inside a `Server.listen` script. |
 | Server-sent stream (LLM tokens, SSE)     | **script** (plain `main`) | `Server.Stream.emit`               | Mirror of `Ipe.Http.Stream`. |
@@ -385,8 +385,8 @@ app code.
 | Module | Path | Key functions |
 |---|---|---|
 | `Task` | `Ipe.Task` | succeed, fail, map, andThen, perform, sequence, parallel, lazy, run, fromResult, andThenResult, mapError, onError; **retryWith** + `RetryPolicy e` + `BackoffStrategy` ADT (Linear \| LinearWithJitter \| Exponential \| ExponentialWithJitter). Build via linearBackoff/exponentialBackoff/defaultRetryPolicy; decorate via withJitter/withMaxAttempts/withBaseMs (`Ipe.Duration`)/withRetryOn. |
-| `Cmd` | `Ipe.Tea.<Shape>.Cmd` | Shape-scoped (`Ipe.Tea.Web.Cmd` / `Ipe.Tea.WebView.Cmd` / `Ipe.Tea.Terminal.Cmd`); importing another shape's `Cmd` in an app is rejected (IPE-N0035). none, batch, perform, map, publish (echo-by-default pub/sub from update return), publishNoEcho (opt-out echo) |
-| `Sub` | `Ipe.Tea.<Shape>.Sub` | Shape-scoped (`Ipe.Tea.Web.Sub` / `Ipe.Tea.WebView.Sub` / `Ipe.Tea.Terminal.Sub`); wrong-shape import rejected (IPE-N0035). none, every, batch, map, subscribeTopic (pub/sub receive) |
+| `Cmd` | `Ipe.Tea.<Shape>.Cmd` | Shape-scoped (`Ipe.Tea.Web.Cmd` / `Ipe.Tea.WebView.Cmd` / `Ipe.Tea.Tui.Cmd` / `Ipe.Tea.Cli.Cmd`; `Ipe.Tea.Terminal.Cmd` serves both terminal shapes); importing another shape's `Cmd` in an app is rejected (IPE-N0035). none, batch, perform, map, publish (echo-by-default pub/sub from update return), publishNoEcho (opt-out echo) |
+| `Sub` | `Ipe.Tea.<Shape>.Sub` | Shape-scoped (`Ipe.Tea.Web.Sub` / `Ipe.Tea.WebView.Sub` / `Ipe.Tea.Tui.Sub` / `Ipe.Tea.Cli.Sub`; `Ipe.Tea.Terminal.Sub` serves both terminal shapes but has no input subscription); wrong-shape import rejected (IPE-N0035). none, every, batch, map, subscribeTopic (pub/sub receive); `Tui.Sub` adds onKey (key input), `Cli.Sub` adds onLine (stdin lines) |
 | `PubSub` | `Ipe.PubSub` | publish (Task-shaped, callable wherever a broadcast bus runs — a Web-app process, or `Err` in a plain CLI; complements `Ipe.Tea.Web.PubSub.publish`), publishNoEcho (Task-shaped no-echo) |
 | `Tea.Web.PubSub` | `Ipe.Tea.Web.PubSub` | publish, publishNoEcho (Cmd-shaped, returned from a Web `update`), subscribeTopic (Sub-shaped, declared in `subscriptions`) — the TEA-loop broadcast surface (importing it marks the module a TEA app) |
 | `Time` | `Ipe.Time` | now, sleep (`Ipe.Duration`), every (`Ipe.Duration`), unixMillis, format/formatISO8601/formatRFC3339/formatHTTP, addMillis, diffMillis, timeString |
@@ -956,24 +956,36 @@ TEA backends for the terminal, one entry per drive axis. `Tui.tea`
 (`import Ipe.Tea.Tui as Tui`) renders a `Screen` tree to ANSI cells with
 `view : Model -> Screen Msg` (built with `Ipe.Ui.Tui` — a Tui-only view
 type distinct from `Element`, so a Web-only node cannot appear in a terminal
-view; keystroke-driven via `onKey`). `Cli.tea` (`import Ipe.Tea.Cli as Cli`) is
-the line-oriented REPL with `view : Model -> String` and `onLine : String -> Msg`.
-Both share the `init`/`update`/`subscriptions` shape of Ipe.Tea.Web.
+view). `Cli.tea` (`import Ipe.Tea.Cli as Cli`) is the line-oriented REPL with
+`view : Model -> Lines Msg`. Both take exactly the four TEA fields — no more:
+input is a subscription, declared in `subscriptions` like any other event.
 
 ```elm
-type alias Cfg model msg =
-    { init          : () -> (model, Cmd msg)
-    , update        : msg -> model -> (model, Cmd msg)
-    , view          : model -> Screen msg
-    , subscriptions : model -> Sub msg
-    , onKey         : KeyEvent -> msg                  -- optional
-    , guard         : msg -> model -> Result Error ()  -- optional; same as Web.tea's guard
-    , canvasWidth   : Int                              -- default 1280 logical px
-    , canvasHeight  : Int                              -- default 720
-    }
+import Ipe.Tea.Tui as Tui
+import Ipe.Tea.Tui.Sub as Sub
 
-main = Tui.tea cfg
+type alias KeyEvent = { kind : String, value : String }
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.onKey onKey                  -- Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg
+
+main =
+    Tui.tea
+        { init = init                -- () -> ( Model, Cmd Msg )
+        , update = update            -- Msg -> Model -> ( Model, Cmd Msg )
+        , view = view                -- Model -> Screen Msg
+        , subscriptions = subscriptions
+        }
 ```
+
+A `Cli.tea` app subscribes to stdin lines the same way, through its own `Sub`:
+`import Ipe.Tea.Cli.Sub as Sub`, then `Sub.onLine onLine`
+(`Cli.Sub.onLine : (String -> msg) -> Sub msg`). Combine input with other
+events via `Sub.batch`; input with no active subscription is ignored. An
+`onKey` / `onLine` config field is rejected (IPE-N0051), and so is either
+input subscription in the other terminal shape (IPE-N0035) — `Tui.Sub` and
+`Cli.Sub` are not interchangeable.
 
 **Cell-native attributes** — `Ipe.Ui.Tui` carries its OWN `Attribute msg`,
 exposing only what a terminal cell grid honours: `spacing`/`padding` in whole

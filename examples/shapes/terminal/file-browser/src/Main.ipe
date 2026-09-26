@@ -11,6 +11,7 @@ module Main exposing (main)
 --     Enter        read the selected file and show its hexdump
 --     q            quit (Ctrl-C also quits)
 --
+-- Key input is a subscription (`Sub.onKey onKey` in `subscriptions`).
 -- `File.readDir` lists the working directory once at startup; selecting a file
 -- performs `File.readFileBytes` as a `Task`, and its settled bytes are rendered
 -- as the `Ui.cells` grid. `Screen msg` is terminal-only: this same view in the
@@ -330,7 +331,7 @@ digitChar n =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 
 type alias KeyEvent =
@@ -372,5 +373,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onKey = onKey
         }

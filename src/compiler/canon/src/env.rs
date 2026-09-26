@@ -139,8 +139,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Tea", "Web"], "Web"),
     // `Ipe.Tea.Tui` / `Ipe.Tea.Cli` — the two app-entry surfaces over the one
     // terminal rendering family's two drive axes. `Tui.tea` is the full-screen
-    // entry (view=Element, `onKey`); `Cli.tea` is the line-oriented entry
-    // (view=String, `onLine`). Both carry `KernelClass::Terminal` internally, so
+    // entry (view=Element, key input via `Tui.Sub.onKey`); `Cli.tea` is the
+    // line-oriented entry (view=Lines, line input via `Cli.Sub.onLine`). Both carry `KernelClass::Terminal` internally, so
     // every lower.rs Terminal-family arm is unchanged. `Ipe.Tea.Terminal` (the
     // bare app surface) is retired: the entries are `Tui.tea` / `Cli.tea`.
     (&["Ipe", "Tea", "Tui"], "Tui"),
@@ -1022,11 +1022,18 @@ pub const PRELUDE_QUALIFIERS: &[(&str, &[&str])] = &[
             ],
         ),
         // ── Ipe.Tui / Ipe.Cli app-entry kernels ──────────────────────────────
-        // `Tui.tea` (full screen, `onKey`) and `Cli.tea` (line stream,
-        // `onLine`) — one terminal rendering family, two drive axes. Both
+        // `Tui.tea` (full screen, key input) and `Cli.tea` (line stream, line
+        // input) — one terminal rendering family, two drive axes. Both
         // carry `KernelClass::Terminal` internally.
         ("Tui", &["tea"]),
         ("Cli", &["tea"]),
+        // Shape-owned input subscriptions. Registered under the shape-scoped
+        // `Sub` qualifiers only (never the canonical `Sub`), so `onKey` is
+        // nameable solely through `Ipe.Tea.Tui.Sub` and `onLine` solely through
+        // `Ipe.Tea.Cli.Sub`; the rest of each qualifier's members are the
+        // canonical `Sub` set cloned in by `SHAPE_SCOPED_CMD_SUB`.
+        ("TeaTuiSub", &["onKey"]),
+        ("TeaCliSub", &["onLine"]),
         // `Ipe.Tea.Worker.tea` — view-less co-located worker app-entry
         // (`{ init, update, subscriptions } -> Program Worker msg`). No render.
         ("Worker", &["tea"]),

@@ -14,7 +14,7 @@ import Ipe.Ui.Cli exposing (Lines)
 import Ipe.Task as Task
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Cli.Sub
 
 type Msg
     = Loaded (Result Error Int)
@@ -52,7 +52,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 onLine : String -> Msg
 onLine line =
@@ -64,5 +64,4 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }
