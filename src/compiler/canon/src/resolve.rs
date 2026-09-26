@@ -2130,14 +2130,23 @@ fn check_cross_shape_cmd_sub_gate(
     Ok(())
 }
 
-/// Terminal-input config fields that are subscriptions, keyed by the entry
-/// qualifier they were once passed to: `(entry qualifier, field, Sub module)`.
-/// The field name is also the `Sub` member that replaces it
-/// (`Ipe.Tea.Tui.Sub.onKey`), so the diagnostic names the exact constructor.
-const INPUT_FIELDS_AS_SUBSCRIPTIONS: &[(&str, &str, &str)] = &[
-    ("Tui", "onKey", "Ipe.Tea.Tui.Sub"),
-    ("Cli", "onLine", "Ipe.Tea.Cli.Sub"),
-];
+/// The terminal input subscriptions. Each one's member name (`onKey` /
+/// `onLine`) is also the config field a `Tui.tea` / `Cli.tea` config would name
+/// if it tried to pass input directly, so IPE-N0051 recognises that field — and
+/// names the replacing constructor — from the kernel registry itself, with no
+/// second copy of the name or the module path.
+const INPUT_SUBSCRIPTIONS: &[StdlibKernel] =
+    &[StdlibKernel::TuiSubOnKey, StdlibKernel::CliSubOnLine];
+
+/// The dotted import path of the module a kernel's qualifier is reached through
+/// (`TeaTuiSub` → `Ipe.Tea.Tui.Sub`), from [`crate::env::STDLIB_MODULE_QUALIFIERS`].
+fn kernel_module_path(kernel: StdlibKernel) -> Option<String> {
+    let qualifier = kernel.decl().qualifier;
+    crate::env::STDLIB_MODULE_QUALIFIERS
+        .iter()
+        .find(|(_, q)| *q == qualifier)
+        .map(|(path, _)| path.join("."))
+}
 
 /// IPE-N0051: reject a `Tui.tea` / `Cli.tea` config that still passes terminal
 /// input as a config field (`onKey` / `onLine`).
@@ -2200,20 +2209,24 @@ fn check_input_fields_are_subscriptions(
         }
         _ => return Ok(()),
     };
+    // The entry's own `Sub` module; only its input subscription is this
+    // entry's input field (the other surface's name falls to the closed row).
+    let own_sub_module = format!("Ipe.Tea.{entry_qualifier}.Sub");
     for (field_sym, value) in fields {
         let Some(field) = interner.resolve(*field_sym) else {
             continue;
         };
-        if let Some((_, _, sub_module)) = INPUT_FIELDS_AS_SUBSCRIPTIONS
-            .iter()
-            .find(|(q, f, _)| *q == entry_qualifier && *f == field)
-        {
+        let is_own_input = INPUT_SUBSCRIPTIONS.iter().any(|k| {
+            k.decl().name == field
+                && kernel_module_path(*k).as_deref() == Some(own_sub_module.as_str())
+        });
+        if is_own_input {
             return Err(Diagnostic::Name {
                 span: value.span,
                 msg: NameError::InputFieldIsSubscription {
                     entry: format!("{entry_qualifier}.tea").into_boxed_str(),
                     field: field.into(),
-                    sub_module: (*sub_module).into(),
+                    sub_module: own_sub_module.into_boxed_str(),
                 },
             });
         }
