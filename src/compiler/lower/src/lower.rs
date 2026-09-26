@@ -23446,6 +23446,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbUpdateWhere
                 // `DbUpsertFields : Db -> String -> List String -> List (String, SqlField) -> Task Error Int`
                 | KernelFn::DbUpsertFields
+                // `DbInsertFieldsIfAbsent : Db -> String -> List String -> List (String, SqlField) -> Task Error Int`
+                | KernelFn::DbInsertFieldsIfAbsent
                 // ── Db.Decode arity-4 ────────────────────────────────
                 // `map3 : (a->b->c->d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d`
                 | KernelFn::DbDecMap3
@@ -25224,6 +25226,9 @@ impl<'a> Lowerer<'a> {
                     ("Db", "insertFields") => Ok(Callee::Kernel(KernelFn::DbInsertFields)),
                     ("Db", "updateFields") => Ok(Callee::Kernel(KernelFn::DbUpdateFields)),
                     ("Db", "upsertFields") => Ok(Callee::Kernel(KernelFn::DbUpsertFields)),
+                    ("Db", "insertFieldsIfAbsent") => {
+                        Ok(Callee::Kernel(KernelFn::DbInsertFieldsIfAbsent))
+                    }
                     ("Db", "insertFieldsReturning") => {
                         Ok(Callee::Kernel(KernelFn::DbInsertFieldsReturning))
                     }
