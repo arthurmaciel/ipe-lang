@@ -12,9 +12,11 @@
 //! This test parses every runtime signature, collects the functions whose
 //! generics or `where` clause put `Sync` on a non-closure type parameter, and
 //! requires each to be classified in [`SYNC_SITES`] — a kernel symbol whose
-//! registries cover exactly its `Sync` parameters, a program-entry symbol, or a
-//! runtime-internal helper. A new `Sync`-bounded runtime function, or a registry
-//! entry dropped from a kernel, fails here.
+//! registries cover exactly its `Sync` parameters, a program-entry symbol whose
+//! kernels are all app entries (`StdlibKernel::is_app_entry`, which the lowerer
+//! refuses with a non-concrete `Model` / `Msg`), or a runtime-internal helper.
+//! A new `Sync`-bounded runtime function, a registry entry dropped from a
+//! kernel, or a program entry no longer gated fails here.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -27,10 +29,11 @@ enum SyncSite {
     Kernels(&'static [StdlibKernel]),
     /// A program-entry symbol emitted for these app-entry kernels.
     ///
-    /// Its `Model` / `Msg` reach the call only through the app cfg record, which
-    /// the positional registries cannot align, and the same parameters are also
-    /// bounded `Serialize + DeserializeOwned + PartialEq + IpeStringify` — traits a
-    /// `Sync` registry cannot supply.
+    /// Its `Model` / `Msg` reach the call only through the app cfg record and are
+    /// also bounded `Serialize + DeserializeOwned + PartialEq + IpeStringify`, so
+    /// no `Sync` registry covers them: every listed kernel must instead be an
+    /// app entry, whose reference the lowerer refuses unless `Model` / `Msg` are
+    /// concrete (IPE-N0051) — a concrete type carries every derived bound.
     ProgramEntry(&'static [StdlibKernel]),
     /// A runtime-internal helper no kernel emits by name.
     Internal,
@@ -256,7 +259,15 @@ fn every_sync_bounded_runtime_fn_is_owned_by_a_registry() {
                     );
                 }
             }
-            SyncSite::ProgramEntry(_) => {}
+            SyncSite::ProgramEntry(kernels) => {
+                for &kernel in *kernels {
+                    assert!(
+                        kernel.is_app_entry(),
+                        "{kernel:?}: `{name}` is classified a program entry, so the kernel must be \
+                         `StdlibKernel::is_app_entry` for the concrete Model / Msg gate to cover it"
+                    );
+                }
+            }
             SyncSite::Internal => {
                 let emitters: Vec<StdlibKernel> = StdlibKernel::ALL
                     .iter()

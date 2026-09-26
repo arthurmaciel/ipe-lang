@@ -2758,6 +2758,242 @@ main =
 }
 
 // ===========================================================================
+// App entries need a concrete Model / Msg — IPE-N0051. Every app entry's
+// runtime function bounds the cfg's model and message types with traits a
+// Rust generic does not carry, so an entry built inside a definition generic
+// over a type variable the cfg mentions is refused at ipe time — one refusal
+// per entry kind, plus the concrete contrapositive.
+// ===========================================================================
+
+/// The `Web` cfg preamble shared by the `Web.tea` / `Web.appWith` fixtures: a
+/// concrete app whose `main` is a valid entry, so the only defect is the
+/// msg-generic helper each fixture appends.
+const WEB_ENTRY_PREAMBLE: &str = r#"module Main exposing (main)
+import Ipe.Tea.Web as Web
+import Ipe.Ui as Ui
+import Ipe.Tea.Web.Cmd
+import Ipe.Tea.Web.Sub
+type Page = HomePage
+type Msg = Noop
+type alias Model = { count : Int }
+initialModel : Model
+initialModel = { count = 0 }
+init : WebReq -> ( Model, Cmd Msg )
+init _req = ( initialModel, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+view : Model -> Element Msg
+view _model = Ui.text "hi"
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+main =
+    Web.tea
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions
+        , routes = [], notFound = HomePage
+        }
+"#;
+
+/// A `Web.tea` built by a helper generic over its message type is refused.
+#[test]
+fn generic_msg_web_tea_rejected() {
+    let src = format!(
+        "{WEB_ENTRY_PREAMBLE}\
+         appOf step render =\n\
+         \x20   Web.tea\n\
+         \x20       {{ init = \\_ -> ( initialModel, Cmd.none )\n\
+         \x20       , update = step\n\
+         \x20       , view = render\n\
+         \x20       , subscriptions = \\_ -> Sub.none\n\
+         \x20       , routes = []\n\
+         \x20       , notFound = HomePage\n\
+         \x20       }}\n"
+    );
+    assert_rejected("generic_msg_web_tea", &src, "IPE-N0051");
+}
+
+/// A `Web.appWith` built by a helper generic over its message type is refused.
+#[test]
+fn generic_msg_web_app_with_rejected() {
+    let src = format!(
+        "{WEB_ENTRY_PREAMBLE}\
+         appOf step render =\n\
+         \x20   Web.appWith []\n\
+         \x20       {{ init = \\_ -> ( initialModel, Cmd.none )\n\
+         \x20       , update = step\n\
+         \x20       , view = render\n\
+         \x20       , subscriptions = \\_ -> Sub.none\n\
+         \x20       , routes = []\n\
+         \x20       , notFound = HomePage\n\
+         \x20       }}\n"
+    );
+    assert_rejected("generic_msg_web_app_with", &src, "IPE-N0051");
+}
+
+/// A server mounting a `Web.embed` app, built by a helper whose annotation
+/// keeps `msg` generic: `embedOf` would emit as a Rust generic the runtime's
+/// `Serialize + PartialEq + Sync` bounds cannot reach.
+const WEB_EMBED_GENERIC: &str = r#"module Main exposing (main)
+import Ipe.Server.Http as Server
+import Ipe.Task as Task exposing (Task)
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+type alias Model = { count : Int }
+type Msg = Noop
+initialModel : Model
+initialModel = { count = 0 }
+update : Msg -> Model -> ( Model, Cmd.Cmd Msg )
+update _msg model = ( model, Cmd.none )
+view : Model -> Element Msg
+view _model = Ui.text "hi"
+embedOf : (msg -> Model -> ( Model, Cmd.Cmd msg )) -> (Model -> Element msg) -> msg -> Web.WebApp
+embedOf step render fallback =
+    Web.embed
+        { init = \_ -> ( initialModel, Cmd.none )
+        , update = step
+        , view = render
+        , subscriptions = \_ -> Sub.none
+        , routes = []
+        , notFound = fallback
+        }
+main : Task Error ()
+main =
+    Server.listen 8000 [ Server.mountApp "/" (embedOf update view Noop) ]
+"#;
+
+/// A mounted `Web.embed` built by a msg-generic helper is refused.
+#[test]
+fn generic_msg_web_embed_rejected() {
+    assert_rejected("generic_msg_web_embed", WEB_EMBED_GENERIC, "IPE-N0051");
+}
+
+/// The contrapositive: the same helper annotated with the concrete `Msg` is accepted.
+#[test]
+fn concrete_msg_web_embed_compiles() {
+    let src = WEB_EMBED_GENERIC.replace(
+        "embedOf : (msg -> Model -> ( Model, Cmd.Cmd msg )) -> (Model -> Element msg) -> msg -> Web.WebApp",
+        "embedOf : (Msg -> Model -> ( Model, Cmd.Cmd Msg )) -> (Model -> Element Msg) -> Msg -> Web.WebApp",
+    );
+    assert!(
+        src != WEB_EMBED_GENERIC,
+        "the fixture must carry the generic annotation this test concretises"
+    );
+    assert_compiles("concrete_msg_web_embed", &src);
+}
+
+/// A `Tui.tea` built by a helper generic over its message type is refused.
+#[test]
+fn generic_msg_tui_tea_rejected() {
+    let src = r#"module Main exposing (main)
+import Ipe.Tea.Tui as Tui
+import Ipe.Ui.Cells as Cells
+import Ipe.Ui.Cells exposing (Screen)
+import Ipe.Tea.Tui.Cmd
+import Ipe.Tea.Tui.Sub
+type Msg = NoOp
+type alias Model = { count : Int }
+type alias KeyEvent = { kind : String, value : String }
+initialModel : Model
+initialModel = { count = 0 }
+init : () -> ( Model, Cmd Msg )
+init _unit = ( initialModel, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+view : Model -> Screen Msg
+view _model = Cells.text "hello"
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+onKey : KeyEvent -> Msg
+onKey _event = NoOp
+main =
+    Tui.tea
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onKey = onKey
+        }
+appOf step render toMsg =
+    Tui.tea
+        { init = \_ -> ( initialModel, Cmd.none )
+        , update = step
+        , view = render
+        , subscriptions = \_ -> Sub.none
+        , onKey = toMsg
+        }
+"#;
+    assert_rejected("generic_msg_tui_tea", src, "IPE-N0051");
+}
+
+/// A `Cli.tea` built by a helper generic over its message type is refused.
+#[test]
+fn generic_msg_cli_tea_rejected() {
+    let src = r#"module Main exposing (main)
+import Ipe.Tea.Cli as Cli
+import Ipe.Tea.Cli.Cmd
+import Ipe.Tea.Cli.Sub
+import Ipe.Ui.Cli as Ui
+import Ipe.Ui.Cli exposing (Lines)
+type Msg = Line String
+type alias Model = { count : Int }
+initialModel : Model
+initialModel = { count = 0 }
+init : () -> ( Model, Cmd Msg )
+init _unit = ( initialModel, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+view : Model -> Lines Msg
+view _model = Ui.text "ok"
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.none
+onLine : String -> Msg
+onLine s = Line s
+main =
+    Cli.tea
+        { init = init, update = update, view = view
+        , subscriptions = subscriptions, onLine = onLine
+        }
+appOf step render toMsg =
+    Cli.tea
+        { init = \_ -> ( initialModel, Cmd.none )
+        , update = step
+        , view = render
+        , subscriptions = \_ -> Sub.none
+        , onLine = toMsg
+        }
+"#;
+    assert_rejected("generic_msg_cli_tea", src, "IPE-N0051");
+}
+
+/// A `Worker.tea` built by a helper generic over its message type is refused.
+#[test]
+fn generic_msg_worker_tea_rejected() {
+    let src = r#"module Main exposing (main)
+import Ipe.Tea.Worker
+import Ipe.Tea.Worker.Cmd as Cmd
+import Ipe.Tea.Worker.Sub as Sub
+type Msg = Tick
+type alias Model = { ticks : Int }
+initialModel : Model
+initialModel = { ticks = 0 }
+init : () -> ( Model, Cmd Msg )
+init _unit = ( initialModel, Cmd.none )
+update : Msg -> Model -> ( Model, Cmd Msg )
+update _msg model = ( model, Cmd.none )
+subscriptions : Model -> Sub Msg
+subscriptions _model = Sub.every 100 Tick
+main =
+    Worker.tea { init = init, update = update, subscriptions = subscriptions }
+workerOf step =
+    Worker.tea
+        { init = \_ -> ( initialModel, Cmd.none )
+        , update = step
+        , subscriptions = \_ -> Sub.none
+        }
+"#;
+    assert_rejected("generic_msg_worker_tea", src, "IPE-N0051");
+}
+
+// ===========================================================================
 // FFI trust boundary (T1) — the decode/emit gate rejects injection-bearing
 // inspector data, and the warm-cache load re-derives `_bindings.rs` from the
 // validated inspection document so a planted `_bindings.rs` is inert. These
