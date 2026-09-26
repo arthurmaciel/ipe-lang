@@ -625,7 +625,9 @@ primaryKey =
 -- no single column identifies a row but the pair does — a join table, or a
 -- per-owner sequence. Each accessor is checked against the row type, so naming a
 -- field the row does not declare is a compile error. The lowering intercept
--- extracts both column names and calls `compositePrimaryKeyNamed`.
+-- extracts both column names and calls `compositePrimaryKeyNamed`, whose doc
+-- lists the refusals (a second key, fewer than two columns) and what `createSql`
+-- does with a composite key.
 --
 -- Example:
 --
