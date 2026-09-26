@@ -3375,6 +3375,101 @@ fn body_succeeds_on_bare_var(expr: &Expr) -> bool {
     }
 }
 
+/// Does a decoder-`succeed` in a typed tail position capture a value carrying `tv` bare?
+///
+/// `decode_succeed` moves any non-function argument into a `Box<dyn Fn() -> A +
+/// Send + Sync>` factory, so its value type `A` must be `Send + Sync`. The IR
+/// carries no per-expression type, but a `succeed` in TAIL position of a
+/// function or closure has a known result type `Decoder A`: `expected` threads
+/// that type down every tail edge (`Let`/`Destructure` body, `Match` arm, `If`
+/// branch, `TailLoop` body) and is reset at each `Lambda` / `SharedLambda` to
+/// the closure's own declared return. When the `succeed` meets `Decoder A` and
+/// `tv` reaches `A` bare ([`ir_type_generic_reaches_bare`]), the captured value
+/// carries `tv` whatever expression produced it (a match-arm local, a `let`
+/// binder, a call result), so `tv` needs `Sync`. A function-valued argument is
+/// curried, not captured (the emitter's `curry{n}` arms), and a function type
+/// never reaches `tv` bare, so neither over-bounds a caller.
+fn tail_succeed_captures_generic(tv: Symbol, expr: &Expr, expected: Option<&IrType>) -> bool {
+    match expr {
+        Expr::Call { callee, args, .. } => {
+            let captures_here = matches!(
+                callee,
+                Callee::Kernel(
+                    KernelFn::ConfigSucceed | KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed
+                )
+            ) && matches!(
+                expected,
+                Some(IrType::Decoder(inner)) if ir_type_generic_reaches_bare(inner, tv)
+            );
+            captures_here
+                || args
+                    .iter()
+                    .any(|a| tail_succeed_captures_generic(tv, a, None))
+        }
+        Expr::Lambda { ret, body, .. } | Expr::SharedLambda { ret, body, .. } => {
+            tail_succeed_captures_generic(tv, body, Some(ret))
+        }
+        Expr::TailLoop { body, .. } => tail_succeed_captures_generic(tv, body, expected),
+        Expr::Access { record, .. } => tail_succeed_captures_generic(tv, record, None),
+        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
+            tail_succeed_captures_generic(tv, value, None)
+                || tail_succeed_captures_generic(tv, body, expected)
+        }
+        Expr::Match(m) => {
+            tail_succeed_captures_generic(tv, m.scrutinee(), None)
+                || m.arms()
+                    .iter()
+                    .any(|arm| tail_succeed_captures_generic(tv, &arm.body, expected))
+        }
+        Expr::If { cond, then_, else_ } => {
+            tail_succeed_captures_generic(tv, cond, None)
+                || tail_succeed_captures_generic(tv, then_, expected)
+                || tail_succeed_captures_generic(tv, else_, expected)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            tail_succeed_captures_generic(tv, lhs, None)
+                || tail_succeed_captures_generic(tv, rhs, None)
+        }
+        Expr::Apply { func, args } => {
+            tail_succeed_captures_generic(tv, func, None)
+                || args
+                    .iter()
+                    .any(|a| tail_succeed_captures_generic(tv, a, None))
+        }
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args
+            .iter()
+            .any(|a| tail_succeed_captures_generic(tv, a, None)),
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .any(|a| tail_succeed_captures_generic(tv, a, None)),
+        Expr::Cons { head, tail } => {
+            tail_succeed_captures_generic(tv, head, None)
+                || tail_succeed_captures_generic(tv, tail, None)
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            tail_succeed_captures_generic(tv, list, None)
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
+            .iter()
+            .any(|(_, e)| tail_succeed_captures_generic(tv, e, None)),
+        Expr::TaskSeq { effect, rest } => {
+            tail_succeed_captures_generic(tv, effect, None)
+                || tail_succeed_captures_generic(tv, rest, None)
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. } => false,
+    }
+}
+
 /// Does `expr` contain a boxed CALLBACK value — a [`Expr::FuncValue`] or a
 /// [`Expr::Lambda`] / [`Expr::SharedLambda`] — whose OWN type still mentions the
 /// type variable `tv`?
@@ -4210,6 +4305,17 @@ fn apply_kernel_type_param_bounds(
         // param, a `Decoder tv` forwarder, or a record-wrapped generic does NOT
         // reach bare and gains no spurious `Sync`.
         if body_move_closure_captures_generic(*tv, body) {
+            *bounds = bounds.with_sync();
+        }
+        // `Sync` — TYPED succeed-capture obligation: a `succeed` whose result type
+        // is known from its tail position (the function's own return, or an
+        // enclosing closure's declared return) captures a value of type `A` in
+        // `Decoder A`; when `tv` reaches `A` bare the capture obliges `tv: Sync`,
+        // whatever binder produced the value. Closes the shape the binder-keyed
+        // rules above cannot see: a match-arm local of type `tv` succeeded inside
+        // a `Decoder tv`-returning closure whose own signature carries `tv` only
+        // under `Decoder`.
+        if tail_succeed_captures_generic(*tv, body, Some(ret)) {
             *bounds = bounds.with_sync();
         }
     }

@@ -1,0 +1,44 @@
+module Main exposing (main)
+
+-- SEAL repro: a generic decoder combinator whose `andThen` continuation closure
+-- is declared `-> Decoder a` and, in tail position, succeeds with a MATCH-ARM
+-- LOCAL `decoded : a`. `decode_succeed` moves that value into a
+-- `Box<dyn Fn() -> T1 + Send + Sync>` factory, so the enclosing generic must
+-- carry `T1: Send + Sync`. The function's signature carries `a` only under
+-- `Decoder` and a boxed function, and `decoded` is no parameter, so only the
+-- succeed's typed tail position (the closure's declared `Decoder a` return)
+-- exposes the obligation.
+--
+-- Output: 42
+
+
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Json.Decode as Decode
+import Ipe.Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+rewrap : ({} -> Decoder a) -> Decoder a
+rewrap mkInner =
+    Decode.andThen
+        (\v ->
+            case Decode.decodeValue (mkInner {}) v of
+                Ok decoded ->
+                    Decode.succeed decoded
+
+                Err e ->
+                    Decode.fail (Error.toString e)
+        )
+        Decode.value
+
+
+main : Task Error ()
+main =
+    case Decode.decodeString (rewrap (\_ -> Decode.int)) "42" of
+        Ok n ->
+            Io.println (String.fromInt n)
+
+        Err e ->
+            Io.println (Error.toString e)

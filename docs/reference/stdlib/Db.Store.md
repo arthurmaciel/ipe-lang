@@ -58,9 +58,16 @@ validated primary-key column used by the by-key operations. `frozenTable` and
 `frozenColumns` hold the table name and columns as first constructed (the
 source for the never-drifting create entry — neither is edited by a rename).
 `table` and `currentColumns` track the current-schema view after any renames
-(the identifiers CRUD targets). `ops` is the ordered schema-op log folded by
-`migrations`, threaded from `frozenTable` so each rename entry names the table
-as of its own position. `indexes` is the ordered list of declarative index
+(the identifiers CRUD targets); `currentColumns` stays positionally parallel to
+`frozenColumns`, so a column's identity is its position and its current name
+is the `currentColumns` entry at that position. `specs`, `pk`, and each index
+column are declared names (recorded on the `Draft`, before any rename): the
+DDL reads them as-is against the frozen columns, and every DML path reads
+them through that one declared → current mapping. A rename re-keys `codec` itself,
+so its binds and decoded reads name the current columns while the record it
+reads and writes keeps its declared fields. `ops` is the ordered schema-op
+log folded by `migrations`, threaded from `frozenTable` so each rename entry
+names the table as of its own position. `indexes` is the ordered list of declarative index
 specs emitted after the create entry by `create` / `migrations`.
 
 ## `Column`
