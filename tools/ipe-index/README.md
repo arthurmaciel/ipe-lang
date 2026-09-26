@@ -18,9 +18,10 @@ tools/scripts/ipe-index locate Lowerer # where is `Lowerer` defined / impl'd?
 tools/scripts/ipe-index wakeup         # one-screen digest of the whole index
 ```
 
-`tools/scripts/ipe-index` is a thin wrapper that execs the compiled binary at
-`tools/ipe-index/target/release/ipe-index`. Anywhere the docs say `ipe-index`,
-run `tools/scripts/ipe-index` (or the binary directly).
+`tools/scripts/ipe-index` is a thin wrapper that builds (out-of-tree, first run
+only) and execs the compiled binary — see the wrapper's own header for the
+target-dir resolution order. Anywhere the docs say `ipe-index`, run
+`tools/scripts/ipe-index` (or the resolved binary directly).
 
 The index auto-refreshes after **every commit** (git `post-commit` hook) — you
 rarely run `index`/`update` by hand.
@@ -33,17 +34,19 @@ rarely run `index`/`update` by hand.
 recent stable Rust (`rustup update`).
 
 `ipe-index` is a standalone crate — its own `target/`, detached from the compiler
-workspace. You don't have to build it by hand: the `tools/scripts/ipe-index`
-wrapper compiles it on first run and execs the release binary. To build it
-explicitly:
+workspace, and never built in-tree (never under `tools/ipe-index/target`). You
+don't have to build it by hand: the `tools/scripts/ipe-index` wrapper builds it
+out-of-tree on first run and execs the release binary. To build it explicitly,
+match the wrapper's target dir:
 
 ```bash
-cd tools/ipe-index && cargo build --release
-# → tools/ipe-index/target/release/ipe-index
+CARGO_TARGET_DIR=/mnt/ipe-scratch/warm-targets/ipe-index \
+    cargo build --release --manifest-path tools/ipe-index/Cargo.toml
 ```
 
 Nothing installs to your `PATH`: invoke the wrapper `tools/scripts/ipe-index`
-(which finds the repo root and execs the binary) or run the binary directly.
+(which finds the repo root, resolves the target dir, and execs the binary) or
+run the resolved binary directly.
 
 **Auto-refresh (recommended):** a local git `post-commit` hook runs
 `ipe-index index` after each commit so the index never drifts. Hooks live in

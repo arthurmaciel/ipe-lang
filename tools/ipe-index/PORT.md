@@ -1,7 +1,7 @@
 # ipe-index — Rust code-relation index
 
-**Status: SHIPPED.** `tools/scripts/ipe-index` is a thin wrapper execing the Rust
-binary at `tools/ipe-index/target/release/ipe-index`.
+**Status: SHIPPED.** `tools/scripts/ipe-index` is a thin wrapper that builds
+(out-of-tree) and execs the Rust binary — see the wrapper's header for where.
 
 ## What it is
 
