@@ -59,6 +59,7 @@ use ipe_ir::Capability;
 use crate::CliError;
 use crate::cli_args::OutputFormat;
 use crate::project::{self, ProjectManifest};
+use crate::publisher::{BlessedPublisher, BlessingRefusal, SelfDeclaredPublisher};
 use crate::scratch::ScratchDir;
 
 /// The package-gate checks, in the fixed order [`run_audit`] runs them. Naming
@@ -286,8 +287,27 @@ fn tier2_probe_fixture() -> Result<PathBuf, CliError> {
 /// package cannot be built or read; [`CliError::PackageAudit`] when a Tier-1
 /// check rejects the package (the gate's hard reject).
 pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
+    let unproven = BlessingRefusal::NoProvenIdentity;
+    run_audit_as(rest, Err(&unproven))
+}
+
+/// [`run_audit`] under a proven publisher standing.
+///
+/// `blessing` is the [`BlessedPublisher`] an authenticated (`ipe package publish`) or attested
+/// (`ipe package audit-entry`) identity established for the claimed
+/// `--publisher`, or the [`BlessingRefusal`] saying why none was. Only a
+/// blessing covering the claimed publisher exempts a reserved-namespace package;
+/// a bare `--publisher` never does.
+///
+/// # Errors
+/// As [`run_audit`].
+pub fn run_audit_as(
+    rest: &[String],
+    blessing: Result<&BlessedPublisher, &BlessingRefusal>,
+) -> Result<(), CliError> {
     let (path, index_root, advisory_db_override, no_advisory_db, publisher, format) =
         parse_audit_args(rest)?;
+    let claimed = publisher.map(SelfDeclaredPublisher::new);
     let prepared = prepare(&path)?;
     let name = prepared.manifest.name.clone();
     let version = prepared
@@ -310,7 +330,10 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
         &prepared,
         index_root.as_deref(),
         effective_advisory_db.as_deref(),
-        publisher.as_deref(),
+        PublisherStanding {
+            claimed: claimed.as_ref(),
+            blessing,
+        },
     );
 
     match format {
@@ -349,17 +372,17 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
 /// a declared-scoped jail and reconciles observed-vs-declared, fail-closed
 /// (ADR 0004).
 ///
-/// `entry_publisher` is the index entry's publisher when the registry admission
-/// gate runs this (the blessed first-party publisher legitimately owns the
-/// reserved namespace); `None` for a plain `ipe package audit` with no index
-/// provenance, where any reserved-namespace module is rejected fail-closed.
+/// `standing` is the claimed publisher plus the proof (or refusal) of its
+/// blessed first-party identity: only a proven blessed publisher owns the
+/// reserved namespace; a plain `ipe package audit`, or any unproven claim, has
+/// every reserved-namespace module rejected fail-closed.
 fn audit_gate(
     prepared: &Prepared,
     index_root: Option<&Path>,
     advisory_db: Option<&Path>,
-    entry_publisher: Option<&str>,
+    standing: PublisherStanding<'_>,
 ) -> Result<(crate::audit_native::Tier2Outcome, Disclosure), CliError> {
-    reserved_namespace_ownership(prepared, entry_publisher)?;
+    reserved_namespace_ownership(prepared, standing)?;
     provenance_panic_scan(prepared)?;
 
     // The whole-tree inferred capability union — computed once and shared by the
@@ -1701,11 +1724,10 @@ fn derive_deny_config(emitted_dir: &Path) -> Result<Option<PathBuf>, CliError> {
 /// own source tree (`src/`), not from the package NAME — a package named `foo`
 /// that declares `module Ipe.Evil` is what this catches.
 ///
-/// `entry_publisher` is the index entry's publisher when the registry admission
-/// gate runs this (`Some`), and `None` for a plain `ipe package audit` with no
-/// index provenance. Fail-closed default-deny: a reserved-namespace module is
-/// rejected whenever the publisher is absent or is anyone but the blessed
-/// first-party identity. The reject NAMES the package and the offending module.
+/// Fail-closed default-deny: a reserved-namespace module is rejected unless
+/// `standing` carries a [`BlessedPublisher`] proof covering the claimed publisher
+/// — a claimed `publisher` alone, however it is spelled, never exempts. The
+/// reject NAMES the package and the offending module.
 ///
 /// # Errors
 /// [`CliError::PackageAudit`] with [`Check::ReservedNamespace`] when a
@@ -1713,21 +1735,58 @@ fn derive_deny_config(emitted_dir: &Path) -> Result<Option<PathBuf>, CliError> {
 /// [`CliError::DiscoveryLimitReached`] if the source tree cannot be walked.
 fn reserved_namespace_ownership(
     prepared: &Prepared,
-    entry_publisher: Option<&str>,
+    standing: PublisherStanding<'_>,
 ) -> Result<(), CliError> {
     let modules = crate::project::discover_modules(&prepared.manifest.src_root)?;
     let module_paths: Vec<&[String]> = modules.iter().map(|m| m.module_path.as_slice()).collect();
-    reserved_namespace_verdict(&prepared.manifest.name, &module_paths, entry_publisher)
+    reserved_namespace_verdict(&prepared.manifest.name, &module_paths, standing)
+}
+
+/// The publisher an audit runs under: what the entry claims, and the proof (or
+/// the refusal) that the claim is the blessed first-party identity.
+#[derive(Clone, Copy, Debug)]
+struct PublisherStanding<'a> {
+    /// The claimed publisher (`--publisher`), named in a reject; `None` for a
+    /// plain local audit with no provenance.
+    claimed: Option<&'a SelfDeclaredPublisher>,
+    /// The blessing an authenticated or attested identity established, or why
+    /// none was.
+    blessing: Result<&'a BlessedPublisher, &'a BlessingRefusal>,
+}
+
+impl PublisherStanding<'_> {
+    /// Whether the proof covers the claim — the only way to the blessed
+    /// exemption.
+    fn is_proven_blessed(self) -> bool {
+        match (self.blessing, self.claimed) {
+            (Ok(blessed), Some(claimed)) => blessed.vouches_for(claimed),
+            _ => false,
+        }
+    }
+
+    /// The `(…)` provenance clause a reserved-namespace reject names.
+    fn describe(self) -> String {
+        let who = self.claimed.map_or_else(
+            || "with no first-party provenance".to_owned(),
+            |claimed| format!("published by `{claimed}`"),
+        );
+        let reason = self
+            .blessing
+            .err()
+            .map_or_else(String::new, |refusal| format!("; {refusal}"));
+        format!("{who}{reason}")
+    }
 }
 
 /// The pure core of [`reserved_namespace_ownership`]: over an already-discovered
 /// module set, refuse a reserved-namespace module unless the publisher is the
 /// blessed first-party identity.
 ///
-/// Fail-closed default-deny: the blessed exemption applies ONLY when
-/// `entry_publisher` is `Some(blessed)`. An absent publisher (a plain local
-/// audit) or any other publisher rejects on a reserved package name, or on the
-/// first reserved-namespace module, naming the package and the offending name.
+/// Fail-closed default-deny: the blessed exemption applies ONLY when `standing`
+/// proves the claimed publisher is the blessed identity. An absent claim (a plain
+/// local audit), an unproven claim (a forged `publisher`), or any other publisher
+/// rejects on a reserved package name, or on the first reserved-namespace module,
+/// naming the package, the offending name, and why the exemption was refused.
 ///
 /// Both the package NAME and the module namespaces are reserved: a package whose
 /// name lives in a reserved package namespace is refused on the name alone, even
@@ -1741,16 +1800,13 @@ fn reserved_namespace_ownership(
 fn reserved_namespace_verdict(
     package_name: &str,
     module_paths: &[&[String]],
-    entry_publisher: Option<&str>,
+    standing: PublisherStanding<'_>,
 ) -> Result<(), CliError> {
-    let is_blessed = entry_publisher.is_some_and(ipe_kernels::is_blessed_publisher);
+    let is_blessed = standing.is_proven_blessed();
     if let Some(prefix) = ipe_kernels::reserved_package_prefix_of(package_name)
         && !is_blessed
     {
-        let who = entry_publisher.map_or_else(
-            || "with no first-party provenance".to_owned(),
-            |p| format!("published by `{p}`"),
-        );
+        let who = standing.describe();
         return Err(reject(
             Check::ReservedNamespace,
             format!(
@@ -1769,10 +1825,7 @@ fn reserved_namespace_verdict(
     for module_path in module_paths {
         if let Some(prefix) = ipe_kernels::reserved_prefix_of(module_path) {
             let dotted = module_path.join(".");
-            let who = entry_publisher.map_or_else(
-                || "with no first-party provenance".to_owned(),
-                |p| format!("published by `{p}`"),
-            );
+            let who = standing.describe();
             return Err(reject(
                 Check::ReservedNamespace,
                 format!(
@@ -1823,13 +1876,104 @@ mod tests {
         assert!(parse_audit_args(&args(&["--publisher", "a", "--publisher", "b"])).is_err());
     }
 
+    /// Run the reserved-namespace verdict under `claimed`, with the blessing an
+    /// admission-workflow attestation of `attested` establishes for it.
+    fn verdict(
+        package_name: &str,
+        module_paths: &[&[String]],
+        claimed: Option<&str>,
+        attested: Option<&str>,
+    ) -> Result<(), CliError> {
+        let claimed = claimed.map(|c| SelfDeclaredPublisher::new(c.to_owned()));
+        let attested = attested
+            .map(|a| crate::publisher::AttestedActor::parse(a).expect("login-shaped attestation"));
+        let blessing = claimed
+            .as_ref()
+            .map_or(Err(BlessingRefusal::NoProvenIdentity), |claimed| {
+                BlessedPublisher::from_attested(attested.as_ref(), claimed)
+            });
+        reserved_namespace_verdict(
+            package_name,
+            module_paths,
+            PublisherStanding {
+                claimed: claimed.as_ref(),
+                blessing: blessing.as_ref(),
+            },
+        )
+    }
+
+    /// Whether `result` is a `ReservedNamespace` audit reject.
+    fn is_reserved_reject(result: &Result<(), CliError>) -> bool {
+        matches!(
+            result,
+            Err(CliError::PackageAudit(Rejection {
+                check: Check::ReservedNamespace,
+                ..
+            }))
+        )
+    }
+
+    #[test]
+    fn reserved_namespace_refuses_a_forged_blessed_claim_without_attestation() {
+        // A committed entry claiming `publisher = "<blessed>"` with no attested
+        // identity is refused on a reserved name AND on a reserved module.
+        let blessed = ipe_kernels::BLESSED_PUBLISHER;
+        let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
+        let ipe_mod: &[String] = &["Ipe".to_owned(), "Evil".to_owned()];
+        let by_name = verdict("ipe-registry-smoke-probe", &[app_mod], Some(blessed), None);
+        assert!(is_reserved_reject(&by_name), "{by_name:?}");
+        let by_module = verdict("totally-legit", &[ipe_mod], Some(blessed), None);
+        assert!(is_reserved_reject(&by_module), "{by_module:?}");
+        let message = by_module.expect_err("rejected").to_string();
+        assert!(
+            message.contains("self-declared"),
+            "the reject says why the claim was not trusted: {message}"
+        );
+    }
+
+    #[test]
+    fn reserved_namespace_refuses_an_attestation_not_matching_the_claim() {
+        // The attested PR author is someone else: the blessed claim is forged.
+        let blessed = ipe_kernels::BLESSED_PUBLISHER;
+        let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
+        let forged = verdict(
+            "ipe-registry-smoke-probe",
+            &[app_mod],
+            Some(blessed),
+            Some("attacker"),
+        );
+        assert!(is_reserved_reject(&forged), "{forged:?}");
+        // The blessed author attesting an entry that claims someone else is also
+        // not a blessed publish.
+        let crossed = verdict(
+            "ipe-registry-smoke-probe",
+            &[app_mod],
+            Some("attacker"),
+            Some(blessed),
+        );
+        assert!(is_reserved_reject(&crossed), "{crossed:?}");
+    }
+
+    #[test]
+    fn reserved_namespace_refuses_a_non_blessed_attestation() {
+        // A consistent claim + attestation that is not the blessed identity.
+        let ipe_mod: &[String] = &["Ipe".to_owned(), "Palette".to_owned()];
+        let result = verdict("ipe-stdlib", &[ipe_mod], Some("someone"), Some("someone"));
+        assert!(is_reserved_reject(&result), "{result:?}");
+    }
+
     #[test]
     fn reserved_namespace_rejects_third_party_ipe_module() {
         // A package (whatever its own name) whose source provides `Ipe.Evil`,
         // published by a non-blessed account, is refused fail-closed.
         let ipe_evil: &[String] = &["Ipe".to_owned(), "Evil".to_owned()];
-        let err = reserved_namespace_verdict("totally-legit", &[ipe_evil], Some("attacker"))
-            .expect_err("third-party Ipe.Evil must be rejected");
+        let err = verdict(
+            "totally-legit",
+            &[ipe_evil],
+            Some("attacker"),
+            Some("attacker"),
+        )
+        .expect_err("third-party Ipe.Evil must be rejected");
         assert!(
             matches!(
                 &err,
@@ -1851,7 +1995,7 @@ mod tests {
         // A plain local audit (no index provenance) refuses a reserved-namespace
         // module: the blessed exemption needs an explicit blessed publisher.
         let ipe_mod: &[String] = &["Ipe".to_owned(), "String".to_owned()];
-        let err = reserved_namespace_verdict("squatter", &[ipe_mod], None)
+        let err = verdict("squatter", &[ipe_mod], None, None)
             .expect_err("no-provenance Ipe.* must be rejected");
         assert!(matches!(
             err,
@@ -1864,13 +2008,15 @@ mod tests {
 
     #[test]
     fn reserved_namespace_accepts_blessed_publisher() {
-        // The blessed first-party publisher legitimately owns `Ipe.*`.
+        // The blessed first-party publisher, proven by attestation, legitimately
+        // owns `Ipe.*`.
         let ipe_mod: &[String] = &["Ipe".to_owned(), "Palette".to_owned()];
         assert!(
-            reserved_namespace_verdict(
+            verdict(
                 "ipe-stdlib",
                 &[ipe_mod],
-                Some(ipe_kernels::BLESSED_PUBLISHER)
+                Some(ipe_kernels::BLESSED_PUBLISHER),
+                Some(ipe_kernels::BLESSED_PUBLISHER),
             )
             .is_ok()
         );
@@ -1880,8 +2026,8 @@ mod tests {
     fn reserved_namespace_accepts_non_reserved_module_from_any_publisher() {
         // A package in an ordinary namespace is fine from any publisher.
         let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
-        assert!(reserved_namespace_verdict("cool-lib", &[app_mod], Some("anyone")).is_ok());
-        assert!(reserved_namespace_verdict("cool-lib", &[app_mod], None).is_ok());
+        assert!(verdict("cool-lib", &[app_mod], Some("anyone"), Some("anyone")).is_ok());
+        assert!(verdict("cool-lib", &[app_mod], None, None).is_ok());
     }
 
     #[test]
@@ -1890,9 +2036,13 @@ mod tests {
         // non-blessed account, is refused on the name alone — even though its
         // modules are all ordinary.
         let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
-        let err =
-            reserved_namespace_verdict("ipe-registry-smoke-probe", &[app_mod], Some("attacker"))
-                .expect_err("third-party reserved package name must be rejected");
+        let err = verdict(
+            "ipe-registry-smoke-probe",
+            &[app_mod],
+            Some("attacker"),
+            Some("attacker"),
+        )
+        .expect_err("third-party reserved package name must be rejected");
         assert!(
             matches!(
                 &err,
@@ -1920,7 +2070,7 @@ mod tests {
         // A plain local audit (no provenance) refuses a reserved package name:
         // the blessed exemption needs an explicit blessed publisher.
         let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
-        let err = reserved_namespace_verdict("ipe-registry-smoke-probe-bad", &[app_mod], None)
+        let err = verdict("ipe-registry-smoke-probe-bad", &[app_mod], None, None)
             .expect_err("no-provenance reserved package name must be rejected");
         assert!(matches!(
             err,
@@ -1933,14 +2083,15 @@ mod tests {
 
     #[test]
     fn reserved_package_name_accepts_blessed_publisher() {
-        // The blessed first-party publisher legitimately owns the reserved
-        // package namespace.
+        // The blessed first-party publisher, proven by attestation, legitimately
+        // owns the reserved package namespace.
         let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
         assert!(
-            reserved_namespace_verdict(
+            verdict(
                 "ipe-registry-smoke-probe",
                 &[app_mod],
-                Some(ipe_kernels::BLESSED_PUBLISHER)
+                Some(ipe_kernels::BLESSED_PUBLISHER),
+                Some(ipe_kernels::BLESSED_PUBLISHER),
             )
             .is_ok()
         );
@@ -1952,10 +2103,15 @@ mod tests {
         // segment boundary is not reserved, from any publisher.
         let app_mod: &[String] = &["App".to_owned(), "View".to_owned()];
         assert!(
-            reserved_namespace_verdict("ipe-registry-smokehouse", &[app_mod], Some("anyone"))
-                .is_ok()
+            verdict(
+                "ipe-registry-smokehouse",
+                &[app_mod],
+                Some("anyone"),
+                Some("anyone")
+            )
+            .is_ok()
         );
-        assert!(reserved_namespace_verdict("ipe-registry-smokehouse", &[app_mod], None).is_ok());
+        assert!(verdict("ipe-registry-smokehouse", &[app_mod], None, None).is_ok());
     }
 
     #[test]

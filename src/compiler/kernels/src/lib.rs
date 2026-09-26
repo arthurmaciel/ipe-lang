@@ -22,7 +22,7 @@ pub use css_value_safety::css_value_is_safe;
 
 pub mod reserved_namespace;
 pub use reserved_namespace::{
-    BLESSED_PUBLISHER, RESERVED_MODULE_PREFIXES, RESERVED_PACKAGE_PREFIXES, is_blessed_publisher,
+    BLESSED_PUBLISHER, RESERVED_MODULE_PREFIXES, RESERVED_PACKAGE_PREFIXES,
     is_reserved_module_path, reserved_package_prefix_of, reserved_prefix_of,
 };
 
