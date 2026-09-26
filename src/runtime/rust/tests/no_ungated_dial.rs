@@ -652,6 +652,10 @@ fn db_pool_connect_is_guarded() {
         joined.contains("VettedPool::<DbDatabase>::connect("),
         "over-strip hid the guarded VettedPool dial"
     );
+    assert!(
+        joined.contains("fn vet_dial_target("),
+        "over-strip hid the DialTarget SSRF gate"
+    );
     for (i, line) in lines.iter().enumerate() {
         if !line.contains(".connect(") {
             continue;
