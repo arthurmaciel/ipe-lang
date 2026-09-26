@@ -536,6 +536,36 @@ impl std::fmt::Display for StoreOpenError {
 #[cfg(any(feature = "db", feature = "redis_store"))]
 impl std::error::Error for StoreOpenError {}
 
+#[cfg(feature = "db")]
+impl StoreOpenError {
+    /// Whether a connect-time policy gate refused the store.
+    ///
+    /// A refused host, an unvettable URL, or an unsupported engine will not
+    /// change on retry, so [`choose_store`] refuses startup on it rather than
+    /// degrade to memory; a transient failure (unreachable server, failed
+    /// version query, table setup) is not a policy refusal.
+    fn is_policy_refusal(&self) -> bool {
+        use crate::db::DbConnectError;
+        matches!(
+            self,
+            Self::Connect(
+                DbConnectError::HostRefused(_)
+                    | DbConnectError::InvalidUrl
+                    | DbConnectError::EngineRefused(_)
+            )
+        )
+    }
+}
+
+/// The fail-closed startup error for a `backend` store a policy gate refused.
+#[cfg(feature = "db")]
+fn store_refused_error(backend: &str, refused: &StoreOpenError) -> StoreConfigError {
+    StoreConfigError(format!(
+        "IPE_WEB_STORE={backend} refused at connect ({refused}); fix the connection URL \
+         or the server, or set IPE_WEB_STORE=file|memory"
+    ))
+}
+
 /// The startup line logged when a persistent `backend` store falls back to memory.
 #[cfg(any(feature = "db", feature = "redis_store"))]
 fn store_unavailable_log_line(backend: &str, refused: &StoreOpenError) -> String {
@@ -1210,17 +1240,21 @@ impl StoreBackend {
     }
 }
 
-/// Select a backend from the parsed `IPE_WEB_STORE`. A backend this build cannot
-/// serve is a fail-closed [`StoreConfigError`] (surfaced by the caller as a task
-/// error → stderr + exit 1, or a 503 mount route), NEVER a silent swap. A
-/// persistent backend that parses but fails to *connect* at runtime (a dead DB
-/// / bad URL) still degrades to memory — that is an environment fault, not an
-/// operator mis-request, and matches the prior best-effort posture. The
-/// `Model: Serialize` bound is for the persistent backends; memory needs none,
-/// but a single signature keeps the codegen call uniform (it derives serde on
-/// the model when emitting this). `schema_tag` (the compile-time Model schema
-/// fingerprint, H24) is forwarded to the persistent backends only — memory
-/// never round-trips through bytes.
+/// Select and open the session store named by the parsed `IPE_WEB_STORE`.
+///
+/// Fail-closed cases are a [`StoreConfigError`] (surfaced by the caller as a
+/// task error, then stderr + exit 1, or a 503 mount route), NEVER a silent swap:
+/// a backend this build cannot serve, and a persistent backend a connect-time
+/// policy gate refuses (an SSRF-refused or unvettable connection URL, or an
+/// engine below its version floor), since neither changes on retry. A persistent
+/// backend that fails to connect for a transient reason (an unreachable server,
+/// a failed version query or table setup) degrades to memory with a
+/// credential-free log line: that is an environment fault, not an operator
+/// mis-request. The `Model: Serialize` bound is for the persistent backends;
+/// memory needs none, but a single signature keeps the codegen call uniform (it
+/// derives serde on the model when emitting this). `schema_tag` (the
+/// compile-time Model schema fingerprint, H24) is forwarded to the persistent
+/// backends only; memory never round-trips through bytes.
 pub async fn choose_store<Model, Msg>(
     kind: &str,
     path: &str,
@@ -1239,6 +1273,7 @@ where
                 eprintln!("[ipe.live] session store: sqlite @ {path}");
                 return Ok(Arc::new(s));
             }
+            Err(e) if e.is_policy_refusal() => return Err(store_refused_error("sqlite", &e)),
             Err(e) => eprintln!("{}", store_unavailable_log_line("sqlite", &e)),
         },
         #[cfg(feature = "db")]
@@ -1247,6 +1282,7 @@ where
                 eprintln!("[ipe.live] session store: postgres");
                 return Ok(Arc::new(s));
             }
+            Err(e) if e.is_policy_refusal() => return Err(store_refused_error("postgres", &e)),
             Err(e) => eprintln!("{}", store_unavailable_log_line("postgres", &e)),
         },
         #[cfg(feature = "redis_store")]
@@ -1457,6 +1493,57 @@ mod tests {
         if let Some(refused) = refused {
             assert!(matches!(refused, StoreOpenError::Connect(_)));
             assert_store_refusal_credential_free("sqlite", &refused);
+        }
+    }
+
+    /// A PostgreSQL store the SSRF gate refuses fails startup instead of
+    /// silently degrading to in-memory sessions, and the error is credential-free.
+    #[cfg(feature = "db")]
+    #[tokio::test]
+    async fn postgres_store_policy_refusal_refuses_startup() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        for url in [
+            "postgres://admin:s3cr3t-pw@127.0.0.1/prod",
+            "postgres:///prod?user=admin&password=s3cr3t-pw",
+            "postgres:///prod?host=/var/run/postgresql&password=s3cr3t-pw",
+        ] {
+            let refused =
+                choose_store::<i32, ()>("postgres", url, Duration::from_secs(60), TEST_TAG)
+                    .await
+                    .err();
+            assert!(
+                refused.is_some(),
+                "{url:?} must refuse startup, not fall back to memory"
+            );
+            if let Some(StoreConfigError(msg)) = refused {
+                assert!(msg.contains("refused"), "unexpected refusal: {msg}");
+                assert!(!msg.contains("s3cr3t-pw"), "password leaked: {msg}");
+                assert!(!msg.contains("admin"), "user leaked: {msg}");
+            }
+        }
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    /// A transient connect failure is not a policy refusal: it keeps the
+    /// documented fallback to memory.
+    #[cfg(feature = "db")]
+    #[test]
+    fn transient_store_failures_are_not_policy_refusals() {
+        use crate::db::{DbConnectError, DbFailure};
+        let transient = [
+            StoreOpenError::Connect(DbConnectError::Unreachable(DbFailure::Io)),
+            StoreOpenError::Connect(DbConnectError::VersionUnreadable(DbFailure::PoolTimedOut)),
+            StoreOpenError::Schema(DbFailure::Other),
+        ];
+        for e in &transient {
+            assert!(!e.is_policy_refusal(), "{e} must fall back, not refuse");
+        }
+        let policy = [
+            StoreOpenError::Connect(DbConnectError::HostRefused("blocked".to_string())),
+            StoreOpenError::Connect(DbConnectError::InvalidUrl),
+        ];
+        for e in &policy {
+            assert!(e.is_policy_refusal(), "{e} must refuse startup");
         }
     }
 
