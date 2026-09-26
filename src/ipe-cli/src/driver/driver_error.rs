@@ -1,4 +1,5 @@
 use super::{nearest_command, nearest_group_member};
+use crate::style::TerminalSafe;
 use crate::{
     Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, delivery,
     help, machine_output, publish, render, render_json, style, toolchain,
@@ -8,13 +9,16 @@ use crate::{
 /// version.
 ///
 /// Carried into [`CliError::EmittedBuildFailed`] so a `cargo` failure that names
-/// a missing runtime feature can point at the exact stale crate.
+/// a missing runtime feature can point at the exact stale crate. Both parts come
+/// from outside ipe (an `IPE_RUNTIME_DIR` path, a `Cargo.toml` field), so they
+/// are held as [`TerminalSafe`] text: the self-rendering error cannot
+/// interpolate them raw.
 #[derive(Debug, Clone)]
 pub struct RuntimeContext {
-    /// The resolved runtime crate root.
-    pub root: PathBuf,
+    /// The resolved runtime crate root, as display text.
+    pub root: TerminalSafe,
     /// The version that crate declares.
-    pub version: String,
+    pub version: TerminalSafe,
 }
 
 /// The payload of [`CliError::AdvisoryVulnerable`], boxed to keep `CliError`
@@ -48,7 +52,7 @@ pub enum CliError {
     ///
     /// `attempted` is the token the user typed (empty when no command was
     /// given); a near-miss to a known command is offered as a `maybe` hint.
-    UnknownCommand { attempted: String },
+    UnknownCommand { attempted: TerminalSafe },
     /// Command-line / manifest misuse whose message must echo user-supplied
     /// input (e.g. an unrecognised manifest value) — kept distinct from
     /// [`Self::Usage`] so no call site needs to leak a `String` into a
@@ -131,7 +135,7 @@ pub enum CliError {
         /// `cargo`'s exit code.
         code: i32,
         /// `cargo`'s captured stderr, presented after trimming.
-        stderr: String,
+        stderr: TerminalSafe,
         /// The runtime crate root the emitted project linked against, when the
         /// caller resolved one — named in a runtime-feature-gap message.
         runtime: Option<RuntimeContext>,
@@ -206,13 +210,13 @@ pub enum CliError {
     /// result — the check ran correctly and the package is under-documented — not
     /// a command misuse, so it exits non-zero with the report alone and never the
     /// command's `--help` page.
-    DocCoverage(String),
+    DocCoverage(TerminalSafe),
     /// `ipe doc --check-examples` found one or more broken doc-string examples.
     /// Carries the ready-to-print failure report. A legitimate gate result — the
     /// extraction ran correctly and an example does not compile or produce the
     /// expected result — not a command misuse, so it exits non-zero with the
     /// report alone and never the command's `--help` page.
-    DocExamplesFailed(String),
+    DocExamplesFailed(TerminalSafe),
     /// A known command was misused (bad or missing arguments, an unknown flag).
     /// Carries the specific reason and the command name; [`fmt::Display`] renders
     /// the reason followed by that command's full, indented `--help` page — the
@@ -224,7 +228,7 @@ pub enum CliError {
         /// The command whose help page to show (a known command name).
         command: &'static str,
         /// The specific reason for the misuse (e.g. an unknown flag).
-        reason: String,
+        reason: TerminalSafe,
     },
     /// A command group (e.g. `dev`) was followed by a token that is not one of
     /// its verbs. [`fmt::Display`] renders an "unknown verb" line — with a
@@ -235,7 +239,7 @@ pub enum CliError {
         /// The group whose subpage to show (a known group name, e.g. `dev`).
         group: &'static str,
         /// The token the user typed after the group name.
-        attempted: String,
+        attempted: TerminalSafe,
     },
     /// A stage of `ipe verify` failed. Carries the stage name and the stage's
     /// own already-rendered report. Like [`Self::DocCoverage`], this is a
@@ -246,7 +250,7 @@ pub enum CliError {
         /// The failing stage (e.g. `format`).
         stage: &'static str,
         /// The stage's rendered failure report, printed as-is.
-        report: String,
+        report: TerminalSafe,
     },
     /// The project's test runner exited non-zero — one or more `Ipe.Test` cases
     /// failed. The test binary has already printed the per-case failures and the
@@ -266,9 +270,9 @@ pub enum CliError {
     /// never the `upgrade` command's `--help` page.
     UpgradeNoPrebuilt {
         /// The release version tag (e.g. `v0.1.24`).
-        version: String,
+        version: TerminalSafe,
         /// The platform–architecture pair (e.g. `linux-x64`).
-        platform: String,
+        platform: TerminalSafe,
     },
     /// A command needed the Rust toolchain (`cargo`/`rustc`) to build, run, or
     /// test a program, but `cargo` was not found. This is an environment
@@ -299,7 +303,7 @@ pub enum CliError {
     /// tree `cargo build` could not resolve offline. Carries the reason.
     EjectUnsupported {
         /// The specific reason the program cannot be ejected.
-        reason: String,
+        reason: TerminalSafe,
     },
     /// A `Pipeline` diagnostic was already rendered as JSON and written to
     /// stderr by the caller. The process must exit non-zero, but there is
@@ -385,7 +389,7 @@ pub enum CliError {
     /// short detail describing what failed.
     WasiRunFailed {
         /// What specifically failed in the embedded run.
-        detail: String,
+        detail: TerminalSafe,
     },
     /// The emitted `wasm32-wasip1` module ran to completion under embedded
     /// wasmtime and returned a non-zero WASI exit code. Propagated as `ipe
@@ -584,9 +588,15 @@ impl CliError {
         }
     }
 
-    /// Whether this error's `Display` is a complete screen of its own — a help
-    /// page, a gate report, a self-guttered environment message — that the
-    /// error frame shows as rendered rather than painting it as one message.
+    /// Whether this error's `Display` is a complete screen of its own.
+    ///
+    /// A help page, a gate report, or a self-guttered environment message: the
+    /// error frame shows it as rendered rather than painting it as one
+    /// (sanitised) message, so its own styling escapes survive. That trust
+    /// rests on a type invariant: every piece of user or external text such a
+    /// variant carries (a typed token, a path, a tool's output, a report built
+    /// from source) is a [`TerminalSafe`] field, sanitised where it entered, so
+    /// its `Display` cannot interpolate a raw control sequence.
     #[must_use]
     pub const fn renders_own_screen(&self) -> bool {
         matches!(
@@ -701,7 +711,9 @@ impl std::fmt::Display for CliError {
                 "version {proposed} does not clear the required {required} bump — the new \
                  version must be at least {floor}."
             ),
-            Self::DocCoverage(report) | Self::DocExamplesFailed(report) => f.write_str(report),
+            Self::DocCoverage(report) | Self::DocExamplesFailed(report) => {
+                f.write_str(report.as_str())
+            }
             Self::PackageAudit(rejection) => write!(f, "{rejection}"),
             Self::Publish(refusal) => write!(f, "ipe package publish refused: {refusal}"),
             // The reason, then the command's full `--help` page (indented,
@@ -710,7 +722,7 @@ impl std::fmt::Display for CliError {
             // `None` fallback (never taken for a known command) degrades to the
             // top-level screen rather than panicking.
             Self::CommandUsage { command, reason } => {
-                writeln!(f, "{}", crate::style::gutter(reason))?;
+                writeln!(f, "{}", crate::style::gutter(reason.as_str()))?;
                 let page = help::command(command, &std::io::stderr())
                     .unwrap_or_else(|| help::top_level(&std::io::stderr()));
                 f.write_str(page.trim_end_matches('\n'))
@@ -725,7 +737,7 @@ impl std::fmt::Display for CliError {
                     "{}",
                     crate::style::gutter(&format!("unknown `ipe {group}` verb `{attempted}`"))
                 )?;
-                if let Some(sugg) = nearest_group_member(group, attempted) {
+                if let Some(sugg) = nearest_group_member(group, attempted.as_str()) {
                     writeln!(
                         f,
                         "{}",
@@ -738,7 +750,7 @@ impl std::fmt::Display for CliError {
             }
             Self::VerifyFailed { stage, report } => {
                 writeln!(f, "verify: the {stage} stage failed")?;
-                f.write_str(report.trim_end_matches('\n'))
+                f.write_str(report.as_str().trim_end_matches('\n'))
             }
             // The test binary already printed its own per-case failures and the
             // `N passed, M failed` summary to stdout; this is only the one-line
@@ -860,14 +872,17 @@ impl std::fmt::Display for CliError {
 /// the plain top-level page, only with the leading advice. The top-level page
 /// already carries its own gutter, so an unknown-command entry re-gutters only
 /// its own advice lines and leaves the page as-is.
-pub fn fmt_unknown_command(attempted: &str, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    if !attempted.is_empty() {
+pub fn fmt_unknown_command(
+    attempted: &TerminalSafe,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    if !attempted.as_str().is_empty() {
         writeln!(
             f,
             "{}",
             style::gutter(&format!("unknown command `{attempted}`"))
         )?;
-        if let Some(sugg) = nearest_command(attempted) {
+        if let Some(sugg) = nearest_command(attempted.as_str()) {
             writeln!(f, "{}", style::gutter(&format!("= help: maybe `{sugg}`?")))?;
         }
     }
@@ -990,7 +1005,7 @@ pub fn fmt_emitted_build_failed(
         return Ok(());
     };
     let runtime = runtime.as_ref();
-    let trimmed = stderr.trim();
+    let trimmed = stderr.as_str().trim();
     if let Some(feature) = missing_runtime_feature(trimmed) {
         write!(
             f,
@@ -1000,8 +1015,7 @@ pub fn fmt_emitted_build_failed(
             write!(
                 f,
                 ", but the runtime at {} (version {}) does not provide it",
-                rt.root.display(),
-                rt.version
+                rt.root, rt.version
             )?;
         }
         return write!(

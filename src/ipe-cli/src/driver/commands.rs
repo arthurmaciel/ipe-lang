@@ -7,6 +7,7 @@ use super::{
     render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
     runtime_dep_from_env, single_file_cargo_name_from_env,
 };
+use crate::style::TerminalSafe;
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, Write, build_plan, cli_args,
     delivery, explain_page, ffi, fs, help, io_bounded, native_ffi_consent, package_manifest,
@@ -170,7 +171,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     let Some((cmd, rest)) = args.split_first() else {
         // A bare `ipe` (no command) carries an empty token and just shows help.
         return Err(CliError::UnknownCommand {
-            attempted: String::new(),
+            attempted: TerminalSafe::sanitize(""),
         });
     };
     // `ipe explain` has been folded into `ipe doc`. Print a pointer and
@@ -204,7 +205,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             // above — but handled totally rather than assumed away.
             return Err(CliError::UnknownGroupSub {
                 group,
-                attempted: String::new(),
+                attempted: TerminalSafe::sanitize(""),
             });
         };
         return match help::handler(verb.as_str()) {
@@ -216,7 +217,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
             // command through the group is refused so the namespace stays honest.
             _ => Err(CliError::UnknownGroupSub {
                 group,
-                attempted: verb.clone(),
+                attempted: TerminalSafe::sanitize(verb),
             }),
         };
     }
@@ -230,7 +231,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         // an explicit `--help`, this is not a request, so it exits non-zero. The
         // typed token is kept so a near-miss can be suggested.
         None => Err(CliError::UnknownCommand {
-            attempted: cmd.clone(),
+            attempted: TerminalSafe::sanitize(cmd),
         }),
     }
 }
@@ -247,9 +248,12 @@ pub fn with_help_on_misuse(
     match result {
         Err(CliError::Usage(reason)) => Err(CliError::CommandUsage {
             command,
-            reason: reason.to_owned(),
+            reason: TerminalSafe::sanitize(reason),
         }),
-        Err(CliError::UsageOwned(reason)) => Err(CliError::CommandUsage { command, reason }),
+        Err(CliError::UsageOwned(reason)) => Err(CliError::CommandUsage {
+            command,
+            reason: TerminalSafe::sanitize(&reason),
+        }),
         other => other,
     }
 }
@@ -1018,10 +1022,11 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     // a non-empty catalog means at least one `Rust.` binding is in scope.
     if !ffi::load_catalog_for(&entry_path)?.is_empty() {
         return Err(CliError::EjectUnsupported {
-            reason: "this program binds a foreign Rust crate (FFI). Eject vendors only the \
-                     embedded runtime source, so it cannot produce a self-contained project for \
-                     a program that pulls external crates — build it with `ipe build` instead"
-                .to_owned(),
+            reason: TerminalSafe::sanitize(
+                "this program binds a foreign Rust crate (FFI). Eject vendors only the \
+                 embedded runtime source, so it cannot produce a self-contained project for \
+                 a program that pulls external crates — build it with `ipe build` instead",
+            ),
         });
     }
 
@@ -1040,10 +1045,11 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         .map(|m| m.wasm);
     if resolve_compile_target(cli_args::WasmKind::None, manifest_wasm.as_ref()).is_wasm() {
         return Err(CliError::EjectUnsupported {
-            reason: "eject produces a native Cargo project; a wasm target has a separate \
-                     bundling step — use `ipe build --target wasm` (browser) or \
-                     `ipe build --target wasi` (wasm32-wasip1)"
-                .to_owned(),
+            reason: TerminalSafe::sanitize(
+                "eject produces a native Cargo project; a wasm target has a separate \
+                 bundling step — use `ipe build --target wasm` (browser) or \
+                 `ipe build --target wasi` (wasm32-wasip1)",
+            ),
         });
     }
 
@@ -1863,7 +1869,7 @@ fn build_emitted_project_core(
     Err(CliError::EmittedBuildFailed {
         what,
         code: status.code().unwrap_or(1),
-        stderr: captured,
+        stderr: TerminalSafe::sanitize(&captured),
         runtime,
     })
 }
@@ -1903,7 +1909,7 @@ fn lock_emitted_dependencies(
     Err(CliError::EmittedBuildFailed {
         what: "the emitted crate's dependency lockfile",
         code: output.status.code().unwrap_or(1),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        stderr: TerminalSafe::sanitize(&String::from_utf8_lossy(&output.stderr)),
         runtime: None,
     })
 }
@@ -1977,8 +1983,8 @@ pub fn terminal_width(stream: &impl std::os::fd::AsFd) -> Option<u16> {
 /// for enriching an error message, never a gate.
 pub fn runtime_context_for_message() -> Option<RuntimeContext> {
     runtime_embed::resolve().ok().map(|r| RuntimeContext {
-        root: r.root().to_path_buf(),
-        version: r.version().to_owned(),
+        root: TerminalSafe::sanitize(&r.root().display().to_string()),
+        version: TerminalSafe::sanitize(r.version()),
     })
 }
 

@@ -124,7 +124,7 @@ fn io_other_kind_stays_readable_without_errno() {
 #[test]
 fn unknown_command_screen_is_fully_guttered() {
     let err = CliError::UnknownCommand {
-        attempted: "frobnicate".to_owned(),
+        attempted: style::TerminalSafe::sanitize("frobnicate"),
     };
     let rendered = err.to_string();
     // The advice line and the help header both carry the shared gutter — no
@@ -216,12 +216,13 @@ fn emitted_build_failure_reports_missing_feature() {
     let err = CliError::EmittedBuildFailed {
         what: "the emitted program",
         code: 101,
-        stderr: "package `ipe-app` depends on `ipe-runtime-rust` with feature `regex` \
-             but `ipe-runtime-rust` does not have that feature."
-            .to_owned(),
+        stderr: style::TerminalSafe::sanitize(
+            "package `ipe-app` depends on `ipe-runtime-rust` with feature `regex` \
+             but `ipe-runtime-rust` does not have that feature.",
+        ),
         runtime: Some(RuntimeContext {
-            root: PathBuf::from("/tmp/rt"),
-            version: "0.1.34".to_owned(),
+            root: style::TerminalSafe::sanitize("/tmp/rt"),
+            version: style::TerminalSafe::sanitize("0.1.34"),
         }),
     };
     let rendered = err.to_string();
@@ -245,7 +246,7 @@ fn emitted_build_failure_reports_unattributed_as_compiler_bug() {
     let err = CliError::EmittedBuildFailed {
         what: "the emitted program",
         code: 101,
-        stderr: "error[E0425]: cannot find value `x` in this scope".to_owned(),
+        stderr: style::TerminalSafe::sanitize("error[E0425]: cannot find value `x` in this scope"),
         runtime: None,
     };
     let rendered = err.to_string();

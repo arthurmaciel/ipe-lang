@@ -618,8 +618,8 @@ fn login_status_not_logged_in_is_guttered() {
 #[test]
 fn upgrade_no_prebuilt_renders_message_without_help() {
     let err = ipe::CliError::UpgradeNoPrebuilt {
-        version: "v9.9.9".to_owned(),
-        platform: "linux-x64".to_owned(),
+        version: ipe::style::TerminalSafe::sanitize("v9.9.9"),
+        platform: ipe::style::TerminalSafe::sanitize("linux-x64"),
     };
     let msg = err.to_string();
     // The message names the version and platform.

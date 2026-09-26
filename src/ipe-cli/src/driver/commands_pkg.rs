@@ -1463,7 +1463,7 @@ pub fn run_verify(rest: &[String]) -> Result<(), CliError> {
             // `--help` page a raw usage error would trigger.
             return Err(CliError::VerifyFailed {
                 stage: name,
-                report: err.to_string(),
+                report: crate::style::TerminalSafe::sanitize(&err.to_string()),
             });
         }
         line.success(format!("stage {step}/{total}: {name} passed"));
@@ -1900,7 +1900,10 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
         // The version is not known here (the installer resolves it); use the
         // running binary's version as the best available proxy.
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-        return Err(CliError::UpgradeNoPrebuilt { version, platform });
+        return Err(CliError::UpgradeNoPrebuilt {
+            version: crate::style::TerminalSafe::sanitize(&version),
+            platform: crate::style::TerminalSafe::sanitize(&platform),
+        });
     }
     Err(CliError::UsageOwned(
         "upgrade: the installer exited non-zero — nothing was changed".to_owned(),

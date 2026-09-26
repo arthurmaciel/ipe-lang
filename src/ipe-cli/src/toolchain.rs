@@ -118,7 +118,7 @@ impl std::fmt::Display for ToolchainMissing {
                 "{GUTTER}    Cargo is installed at {dir} but that directory is not on your PATH.\n\
                  {GUTTER}    Add it to your PATH, then try again:\n\
                  {GUTTER}        export PATH=\"{dir}:$PATH\"",
-                dir = found_in.display()
+                dir = crate::style::TerminalSafe::sanitize(&found_in.display().to_string())
             ),
         }
     }

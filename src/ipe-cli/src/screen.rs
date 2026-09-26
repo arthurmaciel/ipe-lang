@@ -484,4 +484,164 @@ mod tests {
     fn an_error_that_already_wrote_its_output_renders_nothing() {
         assert!(error_screen(&CliError::DiagnosticJsonEmitted, false).is_none());
     }
+
+    /// A clear-screen, a window-title OSC, a carriage return, and a cursor move,
+    /// wrapped around the one printable word `foo`.
+    const HOSTILE: &str = "\u{1b}[2J\u{1b}]0;pwned\u{7}\r\u{1b}[1;1Hfoo";
+
+    /// Every escape ipe's own renderers paint with.
+    ///
+    /// The colour palette plus the diagnostic renderer's severity colours;
+    /// anything else in a rendered screen was injected.
+    const OWN_ESCAPES: [&str; 13] = [
+        Palette::COLOR.yellow,
+        Palette::COLOR.bright_yellow,
+        Palette::COLOR.dim,
+        Palette::COLOR.green,
+        Palette::COLOR.red,
+        Palette::COLOR.light_red,
+        Palette::COLOR.orange,
+        Palette::COLOR.white,
+        Palette::COLOR.bold,
+        Palette::COLOR.reset,
+        "\x1b[31;1m",
+        "\x1b[33;1m",
+        "\x1b[34;1m",
+    ];
+
+    /// Assert `out` carries no control byte beyond ipe's own colour escapes and
+    /// the two layout whitespaces.
+    fn assert_no_foreign_control(out: &str) {
+        let mut rest = out.to_owned();
+        for esc in OWN_ESCAPES {
+            rest = rest.replace(esc, "");
+        }
+        assert!(
+            !rest
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t'),
+            "foreign control byte reached the terminal: {out:?}"
+        );
+    }
+
+    /// The coloured error screen `err` renders on a terminal.
+    fn screen_of(err: &CliError) -> String {
+        error_screen(err, true)
+            .map(|s| s.render(Header::Omitted))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn an_unknown_command_token_cannot_inject_escapes() {
+        let err = crate::run_cli(&[HOSTILE.to_owned()]).err();
+        assert!(
+            matches!(err, Some(CliError::UnknownCommand { .. })),
+            "{err:?}"
+        );
+        let out = err.as_ref().map(screen_of).unwrap_or_default();
+        assert_no_foreign_control(&out);
+        assert!(out.contains("unknown command `foo`"), "{out:?}");
+    }
+
+    #[test]
+    fn an_unknown_group_verb_cannot_inject_escapes() {
+        let err = crate::run_cli(&["dev".to_owned(), HOSTILE.to_owned()]).err();
+        assert!(
+            matches!(err, Some(CliError::UnknownGroupSub { .. })),
+            "{err:?}"
+        );
+        let out = err.as_ref().map(screen_of).unwrap_or_default();
+        assert_no_foreign_control(&out);
+        assert!(out.contains("verb `foo`"), "{out:?}");
+    }
+
+    #[test]
+    fn a_misused_flag_cannot_inject_escapes_into_the_help_screen() {
+        let err = crate::run_cli(&["verify".to_owned(), format!("--bogus{HOSTILE}")]).err();
+        assert!(
+            matches!(
+                err,
+                Some(CliError::CommandUsage {
+                    command: "verify",
+                    ..
+                })
+            ),
+            "{err:?}"
+        );
+        let out = err.as_ref().map(screen_of).unwrap_or_default();
+        assert_no_foreign_control(&out);
+    }
+
+    #[test]
+    fn a_manifest_value_cannot_inject_escapes_into_the_help_screen() {
+        let err = crate::driver::with_help_on_misuse(
+            "build",
+            Err(CliError::UsageOwned(format!(
+                "unknown manifest value `{HOSTILE}`"
+            ))),
+        )
+        .err();
+        assert!(
+            matches!(err, Some(CliError::CommandUsage { .. })),
+            "{err:?}"
+        );
+        let out = err.as_ref().map(screen_of).unwrap_or_default();
+        assert_no_foreign_control(&out);
+        assert!(out.contains("unknown manifest value `foo`"), "{out:?}");
+    }
+
+    #[test]
+    fn a_hostile_path_cannot_inject_escapes() {
+        let io = CliError::Io {
+            path: std::path::PathBuf::from(format!("/tmp/{HOSTILE}.ipe")),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        let out = screen_of(&io);
+        assert_no_foreign_control(&out);
+        assert!(out.contains("/tmp/foo.ipe"), "{out:?}");
+
+        let toolchain = CliError::ToolchainMissing(crate::toolchain::ToolchainMissing {
+            intent: crate::toolchain::ToolIntent::Build,
+            disposition: crate::toolchain::Disposition::NotOnPath {
+                found_in: std::path::PathBuf::from(format!("/opt/{HOSTILE}")),
+            },
+        });
+        let out = screen_of(&toolchain);
+        assert_no_foreign_control(&out);
+        assert!(out.contains("/opt/foo"), "{out:?}");
+    }
+
+    #[test]
+    fn external_tool_output_cannot_inject_escapes() {
+        let err = CliError::EmittedBuildFailed {
+            what: "the emitted program",
+            code: 101,
+            stderr: TerminalSafe::sanitize(&format!("error: {HOSTILE}")),
+            runtime: Some(crate::RuntimeContext {
+                root: TerminalSafe::sanitize(&format!("/rt/{HOSTILE}")),
+                version: TerminalSafe::sanitize(HOSTILE),
+            }),
+        };
+        assert_no_foreign_control(&screen_of(&err));
+    }
+
+    #[test]
+    fn machine_json_escapes_the_sanitised_message_exactly_once() {
+        let err = CliError::UsageOwned(format!("bad value `a\"b\\c` {HOSTILE}"));
+        let line = crate::machine_output::machine_error(
+            crate::cli_args::OutputFormat::Json,
+            "build",
+            err.machine_kind(),
+            &err.to_string(),
+        );
+        assert!(!line.contains('\u{1b}'), "{line:?}");
+        let message = serde_json::from_str::<serde_json::Value>(line.trim_end())
+            .ok()
+            .and_then(|v| {
+                v.pointer("/payload/message")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            });
+        assert_eq!(message.as_deref(), Some("bad value `a\"b\\c` foo"));
+    }
 }

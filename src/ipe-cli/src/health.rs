@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::cli_args::OutputFormat;
+use crate::style::TerminalSafe;
 use crate::{CliError, runtime_embed, scratch::ScratchDir, style, toolchain};
 
 /// Whether a check passed, warns, is a hard miss, or cannot be known.
@@ -1284,10 +1285,16 @@ fn render_human(report: &Report, stream: &impl IsTerminal) -> String {
                 "  {color}{}{} {}",
                 check.status.glyph(),
                 p.reset,
-                check.detail
+                TerminalSafe::sanitize(&check.detail)
             );
             if let Some(s) = &check.suggestion {
-                let _ = writeln!(body, "    {}→ {}{}", p.dim, s, p.reset);
+                let _ = writeln!(
+                    body,
+                    "    {}→ {}{}",
+                    p.dim,
+                    TerminalSafe::sanitize(s),
+                    p.reset
+                );
             }
         }
         body.push('\n');
@@ -1305,7 +1312,7 @@ fn render_plain(report: &Report) -> String {
             "{}\t{}\t{}",
             check.id,
             check.status.tag(),
-            check.detail
+            TerminalSafe::sanitize(&check.detail)
         );
     }
     out
@@ -1445,11 +1452,17 @@ fn fix_bullet(check: &Check, fix: &Fix, p: &style::Palette) -> String {
     let FixChange { change, file } = fix_change(fix);
     let mut out = format!(
         "\n{FIX_INDENT}{}• {}{}\n",
-        p.bright_yellow, check.detail, p.reset
+        p.bright_yellow,
+        TerminalSafe::sanitize(&check.detail),
+        p.reset
     );
-    let _ = writeln!(out, "{FIX_BODY_INDENT}+ {change}");
+    let _ = writeln!(
+        out,
+        "{FIX_BODY_INDENT}+ {}",
+        TerminalSafe::sanitize(&change)
+    );
     if let Some(file) = file {
-        let _ = writeln!(out, "{FIX_BODY_INDENT}{file}");
+        let _ = writeln!(out, "{FIX_BODY_INDENT}{}", TerminalSafe::sanitize(&file));
     }
     out
 }

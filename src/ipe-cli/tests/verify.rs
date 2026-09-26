@@ -102,7 +102,7 @@ fn unknown_flag_is_misuse_and_shows_help() {
         matches!(
             &result,
             Err(ipe::CliError::CommandUsage { command, reason })
-                if *command == "verify" && reason.contains("--bogus")
+                if *command == "verify" && reason.as_str().contains("--bogus")
         ),
         "expected a `verify` command-usage error naming the offending flag, got: {result:?}"
     );

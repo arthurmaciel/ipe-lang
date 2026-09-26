@@ -1706,7 +1706,10 @@ fn list_modules(path: &Path, format: OutputFormat) {
             for line in tree_out.lines() {
                 let _ = writeln!(body, "{GUTTER}  {line}");
             }
-            Screen::new(Stream::Stdout).guttered(&body).emit();
+            // Module names come from project source: sanitise before framing.
+            Screen::new(Stream::Stdout)
+                .guttered(crate::style::TerminalSafe::sanitize(&body).as_str())
+                .emit();
         }
     }
 }
@@ -1772,8 +1775,9 @@ fn render_module_human(module: &ModuleDoc, index: &AnchorIndex) {
             let _ = writeln!(body, "{GUTTER}    {}", value.comment);
         }
     }
+    // Doc comments and names are project source text: sanitise before framing.
     crate::screen::Screen::new(crate::screen::Stream::Stdout)
-        .guttered(&body)
+        .guttered(crate::style::TerminalSafe::sanitize(&body).as_str())
         .emit();
 }
 
@@ -2726,7 +2730,9 @@ fn check(path: &Path) -> Result<(), CliError> {
         report,
         "add a `-- |` comment above each, or hide it from the module's exposing list"
     );
-    Err(CliError::DocCoverage(report))
+    Err(CliError::DocCoverage(crate::style::TerminalSafe::sanitize(
+        &report,
+    )))
 }
 
 /// One extracted doc-string example awaiting verification.
@@ -3196,7 +3202,9 @@ fn check_examples() -> Result<(), CliError> {
             report,
             "fix each failing example or mark it with ` ```ipe ipe:skip ` to exempt it"
         );
-        Err(CliError::DocExamplesFailed(report))
+        Err(CliError::DocExamplesFailed(
+            crate::style::TerminalSafe::sanitize(&report),
+        ))
     }
 }
 

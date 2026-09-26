@@ -217,7 +217,7 @@ fn cli_refusals_are_typed_and_artifact_free() {
         "unknown allocator must refuse",
     );
     assert!(
-        matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.contains("jemalloc")),
+        matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.as_str().contains("jemalloc")),
         "got: {err:?}"
     );
 
@@ -253,7 +253,7 @@ fn cli_refusals_are_typed_and_artifact_free() {
     // The closed `--target` vocabulary is parsed at the CLI boundary, so an
     // unsupported triple is a command-usage refusal there, naming the value.
     assert!(
-        matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.contains("x86_64-apple-darwin")),
+        matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.as_str().contains("x86_64-apple-darwin")),
         "wrong refusal: {err:?}"
     );
 
