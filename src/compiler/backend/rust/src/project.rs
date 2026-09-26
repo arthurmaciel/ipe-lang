@@ -2466,7 +2466,7 @@ const MOD_APPENDS: &[ModAppend] = &[
         append: RUNTIME_MOD_RS_HTTP_STREAM_APPEND,
     },
     ModAppend {
-        gate: |ctx| ctx.reaches_http_client() || ctx.uses_websocket || ctx.uses_db,
+        gate: |ctx| ctx.reaches_ssrf(),
         append: RUNTIME_MOD_RS_SSRF_APPEND,
     },
     // `db_dsn` after `ssrf`/`url` (`external_conn.rs` reaches both).
@@ -3096,6 +3096,16 @@ fn assemble_project_files(
         || ctx.uses_webview
     {
         tea_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // SSRF gate: `ssrf.rs` resolves hosts through `tokio::net::lookup_host`, so
+    // the crate that declares the module (the same `reaches_ssrf` gate as its
+    // `mod.rs` append) declares tokio's `"net"` feature itself rather than
+    // relying on a transport crate to enable it. Runs after every step that
+    // anchors on an exact `tokio` line, so none of their anchors sees this edit.
+    let cargo_toml = if ctx.reaches_ssrf() {
+        ssrf_cargo_toml(&cargo_toml)?
     } else {
         cargo_toml
     };
@@ -3870,6 +3880,54 @@ fn db_cargo_toml(base: &str, driver: crate::DbDriver) -> DResult<String> {
     result.push_str(&sqlx_line);
     result.push_str(step1.get(anchor_pos..).unwrap_or(""));
     Ok(result)
+}
+
+/// Add tokio's `"net"` feature to the manifest's `tokio` dependency line.
+///
+/// The `ssrf` runtime module resolves hosts through `tokio::net::lookup_host`.
+/// Idempotent: a line that already lists `"net"` (the server or live surface
+/// added it) is returned unchanged.
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] when the manifest has no `tokio`
+/// dependency line with a feature list — a golden-drift invariant violation.
+fn ssrf_cargo_toml(base: &str) -> DResult<String> {
+    const NET: &str = "\"net\"";
+    let tokio_prefix = format!(
+        "{} = {{ version = \"{}\", features = [",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let bug = || Diagnostic::CompilerBug {
+        where_: "ipe_backend_rust::project::ssrf_cargo_toml",
+        detail: format!(
+            "Cargo.toml anchor {tokio_prefix:?} not found — golden drifted; the ssrf \
+             runtime module requires tokio \"net\""
+        ),
+    };
+    let list_start = base
+        .find(&tokio_prefix)
+        .map(|at| at + tokio_prefix.len())
+        .ok_or_else(bug)?;
+    let list_end = base
+        .get(list_start..)
+        .and_then(|rest| rest.find(']'))
+        .map(|len| list_start + len)
+        .ok_or_else(bug)?;
+    if base
+        .get(list_start..list_end)
+        .ok_or_else(bug)?
+        .contains(NET)
+    {
+        return Ok(base.to_owned());
+    }
+    let mut out = String::with_capacity(base.len() + NET.len() + 2);
+    out.push_str(base.get(..list_end).ok_or_else(bug)?);
+    out.push_str(", ");
+    out.push_str(NET);
+    out.push_str(base.get(list_end..).ok_or_else(bug)?);
+    Ok(out)
 }
 
 /// Build the server-enabled `Cargo.toml` from the given base manifest by:
@@ -5588,8 +5646,8 @@ mod tests {
         WASM_ABSENT_MODULE_PATHS, WASM_CARGO_TOML, WASM_PRESENT_OVERRIDES,
         async_runtime_cargo_toml, crypto_core_heavy_cargo_toml, db_cargo_toml,
         insert_wasi_linker_config, jwt_cargo_toml, runtime_bindings, server_cargo_toml,
-        shake_ffi_by_fn_ident, wasm_present_modules, wasm_runtime_bindings, web_cargo_toml,
-        wrapper_call_paths,
+        shake_ffi_by_fn_ident, ssrf_cargo_toml, wasm_present_modules, wasm_runtime_bindings,
+        web_cargo_toml, wrapper_call_paths,
     };
     use crate::DbDriver;
     use crate::crate_specs;
@@ -5634,6 +5692,42 @@ mod tests {
                  (efficiency knob; drop it and the guard fails)"
             );
         }
+    }
+
+    /// The `tokio = { … }` dependency line of `manifest`.
+    fn tokio_line(manifest: &str) -> Option<&str> {
+        let prefix = format!("{} = {{", crate_specs::TOKIO.name);
+        manifest.lines().find(|l| l.starts_with(&prefix))
+    }
+
+    /// `ssrf_cargo_toml` adds tokio `"net"` to a line lacking it (the db-only
+    /// manifest), leaves a line that has it unchanged, and refuses a manifest
+    /// with no `tokio` line rather than silently shipping one without it.
+    #[test]
+    fn ssrf_toml_declares_tokio_net_exactly_once() {
+        let db = db_cargo_toml(
+            &async_runtime_cargo_toml(CARGO_TOML).expect("async base"),
+            DbDriver::Sqlite,
+        )
+        .expect("db manifest");
+        assert!(
+            tokio_line(&db).is_some_and(|l| !l.contains(r#""net""#)),
+            "the db-only base line must lack \"net\" for this test to bite: {db}"
+        );
+        let with_net = ssrf_cargo_toml(&db).expect("ssrf manifest");
+        let line = tokio_line(&with_net).unwrap_or_default();
+        assert_eq!(line.matches(r#""net""#).count(), 1, "{line}");
+        assert_eq!(
+            ssrf_cargo_toml(&with_net).expect("idempotent"),
+            with_net,
+            "a line already listing \"net\" must be unchanged"
+        );
+        let server = server_cargo_toml(&db).expect("server manifest");
+        assert_eq!(ssrf_cargo_toml(&server).expect("server + ssrf"), server);
+        assert!(
+            ssrf_cargo_toml(CARGO_TOML).is_err(),
+            "a manifest with no tokio line must be refused"
+        );
     }
 
     /// Helper: extract the `default = [...]` line from a manifest string.
