@@ -219,11 +219,11 @@ pub static ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "IPE_PUBLISH_SIGNING_KEY",
         default: "unset",
-        purpose: "Path to the SSH private key used to sign a package before publishing. \
-                  When set, `ipe publish` signs the package archive and attaches the \
-                  signature; when unset, publish is refused for registries that require \
-                  signed submissions. Provide via your secret manager; never commit the \
-                  key file path alongside the key itself.",
+        purpose: "Path to the SSH private-key file `ipe package publish` signs the index \
+                  commit with (its public half must be registered as a signing key on your \
+                  GitHub account). Overrides the key `ipe login --signing-key` stored; when \
+                  set but not a readable file, publish refuses rather than fall back. \
+                  Unset with no stored key, publish refuses.",
         subsystem: Subsystem::Build,
         class: Class::Secret,
     },
