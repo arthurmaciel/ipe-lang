@@ -10672,6 +10672,37 @@ impl StdlibKernel {
         Self::ACCESSOR_INTERCEPT_PLACEHOLDERS.contains(&self)
     }
 
+    /// The argument positions whose value this kernel moves into a `Send + Sync` box.
+    ///
+    /// The single source of truth for the capture-`Sync` obligation: the
+    /// kernel's emitted Rust moves each listed argument into a thread-shared
+    /// carrier (`Box<dyn Fn() -> A + Send + Sync>` / an `Arc<dyn Fn + Send +
+    /// Sync>` handler), so every type variable that reaches the argument's
+    /// instantiated type bare must itself be `Send + Sync`. The lowerer reads the
+    /// argument type off the call site's solved kernel instantiation, so the
+    /// obligation holds wherever the kernel is referenced — tail or not, bound to
+    /// a parameter or to any local.
+    ///
+    /// * `succeed` (`Json.Decode` / `Config` / `Db.Decode`) — arg 0, the value
+    ///   `decode_succeed`'s factory captures.
+    /// * the optional-field decoders (`JsonDecP.optional` /
+    ///   `Db.Decode.optional`) — arg 2, the captured default.
+    /// * `onSubmit` (`Ui` / `Event`) — arg 0, a fixed message value dispatched
+    ///   from a thread-shared handler (a function-typed handler never reaches a
+    ///   type variable bare, so the decoder form obliges nothing).
+    #[must_use]
+    pub const fn sync_captured_args(self) -> &'static [usize] {
+        match self {
+            Self::JsonDecSucceed
+            | Self::ConfigSucceed
+            | Self::DbDecSucceed
+            | Self::UiOnSubmit
+            | Self::HtmlOnSubmit => &[0],
+            Self::JsonDecPOptional | Self::DbDecOptional => &[2],
+            _ => &[],
+        }
+    }
+
     /// The conditionally-vendored runtime module this kernel's emitted symbol
     /// needs, when that module is NOT already pulled in by the kernel's emit
     /// [`KernelClass`]. `None` for the common case (symbol lives in the module

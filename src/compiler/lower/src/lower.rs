@@ -163,6 +163,17 @@ fn peel_arrow_arity<'a>(
     Ok((arg_tys, cur))
 }
 
+/// Every parameter type of the curried arrow `fn_ty`, in order (empty for a non-arrow).
+fn arrow_params(fn_ty: &Ty) -> Vec<&Ty> {
+    let mut params = Vec::new();
+    let mut cur = fn_ty;
+    while let Ty::Fun(arg, rest) = cur {
+        params.push(arg.as_ref());
+        cur = rest.as_ref();
+    }
+    params
+}
+
 /// The `Maybe a` type carries exactly one argument; an arity-1 guard cleared it,
 /// so a missing first argument here is an unreachable internal invariant.
 fn maybe_arg_bug() -> Diagnostic {
@@ -3375,101 +3386,6 @@ fn body_succeeds_on_bare_var(expr: &Expr) -> bool {
     }
 }
 
-/// Does a decoder-`succeed` in a typed tail position capture a value carrying `tv` bare?
-///
-/// `decode_succeed` moves any non-function argument into a `Box<dyn Fn() -> A +
-/// Send + Sync>` factory, so its value type `A` must be `Send + Sync`. The IR
-/// carries no per-expression type, but a `succeed` in TAIL position of a
-/// function or closure has a known result type `Decoder A`: `expected` threads
-/// that type down every tail edge (`Let`/`Destructure` body, `Match` arm, `If`
-/// branch, `TailLoop` body) and is reset at each `Lambda` / `SharedLambda` to
-/// the closure's own declared return. When the `succeed` meets `Decoder A` and
-/// `tv` reaches `A` bare ([`ir_type_generic_reaches_bare`]), the captured value
-/// carries `tv` whatever expression produced it (a match-arm local, a `let`
-/// binder, a call result), so `tv` needs `Sync`. A function-valued argument is
-/// curried, not captured (the emitter's `curry{n}` arms), and a function type
-/// never reaches `tv` bare, so neither over-bounds a caller.
-fn tail_succeed_captures_generic(tv: Symbol, expr: &Expr, expected: Option<&IrType>) -> bool {
-    match expr {
-        Expr::Call { callee, args, .. } => {
-            let captures_here = matches!(
-                callee,
-                Callee::Kernel(
-                    KernelFn::ConfigSucceed | KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed
-                )
-            ) && matches!(
-                expected,
-                Some(IrType::Decoder(inner)) if ir_type_generic_reaches_bare(inner, tv)
-            );
-            captures_here
-                || args
-                    .iter()
-                    .any(|a| tail_succeed_captures_generic(tv, a, None))
-        }
-        Expr::Lambda { ret, body, .. } | Expr::SharedLambda { ret, body, .. } => {
-            tail_succeed_captures_generic(tv, body, Some(ret))
-        }
-        Expr::TailLoop { body, .. } => tail_succeed_captures_generic(tv, body, expected),
-        Expr::Access { record, .. } => tail_succeed_captures_generic(tv, record, None),
-        Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            tail_succeed_captures_generic(tv, value, None)
-                || tail_succeed_captures_generic(tv, body, expected)
-        }
-        Expr::Match(m) => {
-            tail_succeed_captures_generic(tv, m.scrutinee(), None)
-                || m.arms()
-                    .iter()
-                    .any(|arm| tail_succeed_captures_generic(tv, &arm.body, expected))
-        }
-        Expr::If { cond, then_, else_ } => {
-            tail_succeed_captures_generic(tv, cond, None)
-                || tail_succeed_captures_generic(tv, then_, expected)
-                || tail_succeed_captures_generic(tv, else_, expected)
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            tail_succeed_captures_generic(tv, lhs, None)
-                || tail_succeed_captures_generic(tv, rhs, None)
-        }
-        Expr::Apply { func, args } => {
-            tail_succeed_captures_generic(tv, func, None)
-                || args
-                    .iter()
-                    .any(|a| tail_succeed_captures_generic(tv, a, None))
-        }
-        Expr::Ctor { args, .. } | Expr::TailRecur { args } => args
-            .iter()
-            .any(|a| tail_succeed_captures_generic(tv, a, None)),
-        Expr::Tuple(items) | Expr::List { items, .. } => items
-            .iter()
-            .any(|a| tail_succeed_captures_generic(tv, a, None)),
-        Expr::Cons { head, tail } => {
-            tail_succeed_captures_generic(tv, head, None)
-                || tail_succeed_captures_generic(tv, tail, None)
-        }
-        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            tail_succeed_captures_generic(tv, list, None)
-        }
-        Expr::Record { fields, .. } | Expr::Update { fields, .. } => fields
-            .iter()
-            .any(|(_, e)| tail_succeed_captures_generic(tv, e, None)),
-        Expr::TaskSeq { effect, rest } => {
-            tail_succeed_captures_generic(tv, effect, None)
-                || tail_succeed_captures_generic(tv, rest, None)
-        }
-        Expr::Int(_)
-        | Expr::Bool(_)
-        | Expr::Float(_)
-        | Expr::Str(_)
-        | Expr::PathLit(_)
-        | Expr::CustomElementRef { .. }
-        | Expr::Char(_)
-        | Expr::Unit
-        | Expr::Var(_)
-        | Expr::CloneVar(_)
-        | Expr::FuncValue { .. } => false,
-    }
-}
-
 /// Does `expr` contain a boxed CALLBACK value — a [`Expr::FuncValue`] or a
 /// [`Expr::Lambda`] / [`Expr::SharedLambda`] — whose OWN type still mentions the
 /// type variable `tv`?
@@ -4140,35 +4056,18 @@ fn apply_kernel_type_param_bounds(
     let ws_open_msg_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
         matches!(k, KernelFn::SubSubscribeWebSocket) && arg_is_tracked_var(args, 2, tracked)
     };
-    // `Sync` — the optional-decoder slots (`JsonDecP.optional` /
-    // `Db.Decode.optional`) capture their element DEFAULT behind a thread-shared
-    // carrier, so their runtime slot bounds the decoded element `T: Send + Sync`
-    // (`decode_pipeline_optional` / `db_decode_optional`). Both kernels share the
-    // scheme `String -> Decoder a -> a -> Decoder (a -> b) -> Decoder b`: the
-    // `Sync`-obliged element `a` is the BARE default at arg index 2 (of type
-    // exactly `Generic(tv)`), while the result `b` never appears bare — it only
-    // sits under a `Decoder`/function — so tracking the arg-2 default selects `a`
-    // ALONE and never over-bounds `b`. Applies to wildcard `any` AND named tvars.
-    let optional_sync_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
-        matches!(k, KernelFn::JsonDecPOptional | KernelFn::DbDecOptional)
-            && arg_is_tracked_var(args, 2, tracked)
-    };
-    // `Sync` — `Config.succeed`/`JsonDec.succeed`/`Db.Decode.succeed` (all lower
-    // to `decode_succeed`) take their value at arg index 0 and MOVE it into the
-    // decoder's factory closure `Box<dyn Fn() -> A + Send + Sync>`, whose captured
-    // `A` must therefore be `Send + Sync`. When that value is a tracked
-    // `Generic(tv)` binder — `custom fallback = Config.succeed fallback`, emitting
-    // `fn custom<T>(fallback: T) -> Decoder<T>` — the tvar needs `Sync`, or the
-    // closure→trait-object cast fails E0277 (`T cannot be shared between threads`),
-    // an exit-0-then-cargo-fail SEAL break. The sibling `decode_list`/`decode_map`
-    // slots capture a pre-built `Decoder` (itself `Send + Sync` for free), not a
-    // bare `tv` value, so they oblige `Send` only — this arg-0 capture is the exact
-    // position that adds `Sync`, never over-bounding a run-through element.
-    let succeed_sync_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
-        matches!(
-            k,
-            KernelFn::ConfigSucceed | KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed
-        ) && arg_is_tracked_var(args, 0, tracked)
+    // `Sync` — a kernel that MOVES an argument value into a thread-shared
+    // `Send + Sync` carrier (`KernelFn::sync_captured_args`, the single source
+    // of truth: `succeed`'s factory value, an optional decoder's default, a
+    // fixed `onSubmit` message) obliges its captured type `Send + Sync`. This
+    // binder-keyed matcher is the defence-in-depth twin of the call-site
+    // obligation `Lowerer::note_sync_captures` records from the kernel's solved
+    // instantiation: it fires when the captured argument is exactly a tracked
+    // `Generic(tv)` parameter binder.
+    let sync_capture_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+        k.sync_captured_args()
+            .iter()
+            .any(|&idx| arg_is_tracked_var(args, idx, tracked))
     };
 
     for (tv, bounds) in type_params.iter_mut() {
@@ -4244,7 +4143,7 @@ fn apply_kernel_type_param_bounds(
         // running a pre-built `Decoder`, or an optional's produced result `b`)
         // keeps `Send` and gains no spurious `Sync`. Companion to the `Send`
         // propagation above (`with_sync` re-implies `Send` + `'static`).
-        if fires_on(&optional_sync_matcher) || fires_on(&succeed_sync_matcher) {
+        if fires_on(&sync_capture_matcher) {
             *bounds = bounds.with_sync();
         }
         // `Sync` — GENERAL capture obligation: the tvar's VALUE binder is
@@ -4305,17 +4204,6 @@ fn apply_kernel_type_param_bounds(
         // param, a `Decoder tv` forwarder, or a record-wrapped generic does NOT
         // reach bare and gains no spurious `Sync`.
         if body_move_closure_captures_generic(*tv, body) {
-            *bounds = bounds.with_sync();
-        }
-        // `Sync` — TYPED succeed-capture obligation: a `succeed` whose result type
-        // is known from its tail position (the function's own return, or an
-        // enclosing closure's declared return) captures a value of type `A` in
-        // `Decoder A`; when `tv` reaches `A` bare the capture obliges `tv: Sync`,
-        // whatever binder produced the value. Closes the shape the binder-keyed
-        // rules above cannot see: a match-arm local of type `tv` succeeded inside
-        // a `Decoder tv`-returning closure whose own signature carries `tv` only
-        // under `Decoder`.
-        if tail_succeed_captures_generic(*tv, body, Some(ret)) {
             *bounds = bounds.with_sync();
         }
     }
@@ -9480,6 +9368,12 @@ pub struct Lowerer<'a> {
     /// IPE-L0126 instead of emitting a `.clone()` on a non-`Clone` `Box`
     /// (E0599 — a SEAL break). Cleared per def.
     deferred_fun_captures: std::cell::RefCell<BTreeMap<Symbol, Span>>,
+    /// The current def's type variables obliged `Send + Sync` because a
+    /// sync-capturing kernel ([`KernelFn::sync_captured_args`]) moves a value
+    /// whose solved type reaches them bare into a thread-shared carrier.
+    /// Recorded at every kernel reference by [`Self::note_sync_captures`],
+    /// folded into the def's generic bounds when it is finalized. Cleared per def.
+    sync_obliged_tvars: std::cell::RefCell<BTreeSet<Symbol>>,
     /// A `let`-bound local that names a top-level function, mapped to that
     /// function's `(module, name)` key — a point-free alias `let w = wrap`.
     ///
@@ -11225,6 +11119,7 @@ impl<'a> Lowerer<'a> {
             fn_is_async: Cell::new(false),
             promotable_fn_binders: std::cell::RefCell::new(BTreeSet::new()),
             deferred_fun_captures: std::cell::RefCell::new(BTreeMap::new()),
+            sync_obliged_tvars: std::cell::RefCell::new(BTreeSet::new()),
             toplevel_fn_aliases: std::cell::RefCell::new(BTreeMap::new()),
             local_string_literals: std::cell::RefCell::new(BTreeMap::new()),
             shared_fn_reads: std::cell::RefCell::new(BTreeMap::new()),
@@ -14804,6 +14699,7 @@ impl<'a> Lowerer<'a> {
         // classifier and the binder sites; a def that errored out mid-lowering
         // must not leak its signals into the next def.
         self.deferred_fun_captures.borrow_mut().clear();
+        self.sync_obliged_tvars.borrow_mut().clear();
         // Eta names are scope-local to one function: reset the monotonic cursor so
         // each def draws `eta_0, eta_1, …` afresh. Within the def the cursor only
         // advances (never reuses), so no two live eta binders collide even when a
@@ -15369,6 +15265,7 @@ impl<'a> Lowerer<'a> {
                     &ret,
                     &lowered_body,
                 );
+                self.apply_sync_capture_bounds(&mut type_params);
                 // Register this def's erased row params, paired with their
                 // parameter positions, so call sites can verify that the
                 // caller's actual field types match the required field types
@@ -15538,6 +15435,7 @@ impl<'a> Lowerer<'a> {
                         &ret,
                         &lowered_body,
                     );
+                    self.apply_sync_capture_bounds(&mut type_params);
                     return Ok(Func {
                         id,
                         name,
@@ -24557,7 +24455,77 @@ impl<'a> Lowerer<'a> {
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         let resolved = self.lower_callee_resolve(callee)?;
         self.reject_curried_andmap_payload(&resolved, callee)?;
+        if let Callee::Kernel(kernel) = resolved {
+            self.note_sync_captures(kernel, callee.span);
+        }
         Ok(resolved)
+    }
+
+    /// Record the `Sync` obligation a sync-capturing kernel reference places on the def's generics.
+    ///
+    /// `kernel` moves each argument listed by [`KernelFn::sync_captured_args`]
+    /// into a `Send + Sync` carrier, so every type variable reaching that
+    /// argument's type bare must be `Sync`. The argument type is read off the
+    /// kernel's SOLVED instantiation at this reference (`span`'s region type,
+    /// an arrow whose `idx`-th parameter is the captured value), so the
+    /// obligation is positional-independent: a tail `succeed`, one bound by
+    /// `let`, passed to `oneOf` / `map2`, stored in a record, or referenced
+    /// point-free all record it alike. Every kernel resolution routes through
+    /// [`Self::lower_callee`], the one hook point.
+    ///
+    /// Fail-closed: a missing region type, or an arrow shorter than a listed
+    /// index, obliges every generic of the def; an argument type that does not
+    /// lower to an `IrType` obliges every generic it mentions.
+    fn note_sync_captures(&self, kernel: KernelFn, span: Span) {
+        let captured = kernel.sync_captured_args();
+        if captured.is_empty() {
+            return;
+        }
+        let poly: BTreeSet<Symbol> = self.current_poly_tvars.borrow().values().copied().collect();
+        if poly.is_empty() {
+            return;
+        }
+        // A missing region type yields no parameters, so every listed index
+        // falls to the fail-closed arm below.
+        let arg_tys: Vec<&Ty> = self.region_ty(span).map(arrow_params).unwrap_or_default();
+        let mut obliged: BTreeSet<Symbol> = BTreeSet::new();
+        for &idx in captured {
+            let Some(arg_ty) = arg_tys.get(idx).copied() else {
+                obliged.extend(poly.iter().copied());
+                continue;
+            };
+            let lowered = self.ir_type_from_ty(arg_ty, span).ok();
+            obliged.extend(poly.iter().copied().filter(|tv| {
+                lowered.as_ref().map_or_else(
+                    || self.ty_mentions_poly_tvar(arg_ty, *tv),
+                    |ir| ir_type_generic_reaches_bare(ir, *tv),
+                )
+            }));
+        }
+        self.sync_obliged_tvars.borrow_mut().extend(obliged);
+    }
+
+    /// Whether `t` mentions the current def's generic `tv` anywhere.
+    fn ty_mentions_poly_tvar(&self, t: &Ty, tv: Symbol) -> bool {
+        match t {
+            Ty::Var(v) => self.poly_tvar_symbol(*v) == Some(tv),
+            Ty::Fun(a, b) => self.ty_mentions_poly_tvar(a, tv) || self.ty_mentions_poly_tvar(b, tv),
+            Ty::Con { args, .. } | Ty::Tuple(args) => {
+                args.iter().any(|a| self.ty_mentions_poly_tvar(a, tv))
+            }
+            Ty::Record(fields, _) => fields.values().any(|f| self.ty_mentions_poly_tvar(f, tv)),
+            Ty::Unit => false,
+        }
+    }
+
+    /// Fold the def's recorded capture-`Sync` obligations into its generic bounds.
+    fn apply_sync_capture_bounds(&self, type_params: &mut [(Symbol, BoundSet)]) {
+        let obliged = self.sync_obliged_tvars.take();
+        for (tv, bounds) in type_params.iter_mut() {
+            if obliged.contains(tv) {
+                *bounds = bounds.with_sync();
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)] // declarative kernel-name dispatch table
