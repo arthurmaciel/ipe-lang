@@ -28,6 +28,7 @@ use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::CliError;
+use crate::doc_bundle::DocSuggestion;
 use crate::style::{self, GUTTER, Palette, REPORT_BUGS_PHRASE, TerminalSafe};
 
 /// The semantic role of a piece of human output, which fixes its colour.
@@ -312,7 +313,9 @@ pub fn error_screen(err: &CliError, color: bool) -> Option<Screen> {
         return None;
     }
     let mut screen = Screen::with_color(Stream::Stderr, color);
-    if err.renders_own_screen() {
+    if let CliError::DocNotFound { query, suggestions } = err {
+        doc_not_found(&mut screen, query, suggestions);
+    } else if err.renders_own_screen() {
         // A self-rendering error (a help page, a gate report) is styled by
         // ipe's own renderers with the stderr palette, so its escapes pass
         // through; only the frame is added.
@@ -322,6 +325,31 @@ pub fn error_screen(err: &CliError, color: bool) -> Option<Screen> {
     }
     screen.as_error();
     Some(screen)
+}
+
+/// The `ipe doc` miss: the query in the user-error tone, then each suggestion
+/// as the exact command that opens it, with its title as auxiliary text.
+fn doc_not_found(screen: &mut Screen, query: &str, suggestions: &[DocSuggestion]) {
+    screen.line(
+        Tone::UserError,
+        &format!("no documentation entry is named `{query}`"),
+    );
+    if suggestions.is_empty() {
+        return;
+    }
+    screen.blank().line(Tone::Text, "Closest matches:");
+    let width = suggestions
+        .iter()
+        .map(|s| s.key.chars().count())
+        .max()
+        .unwrap_or(0);
+    for s in suggestions {
+        let pad = width.saturating_sub(s.key.chars().count());
+        screen.line(
+            Tone::Text,
+            &format!("  ipe doc {}{:pad$}  {} ({})", s.key, "", s.title, s.kind),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -425,6 +453,30 @@ mod tests {
             .unwrap_or_default();
         assert!(out.contains(Palette::COLOR.orange), "{out:?}");
         assert!(!out.contains(Palette::COLOR.light_red), "{out:?}");
+        assert!(out.contains(REPORT_BUGS_PHRASE), "{out:?}");
+    }
+
+    #[test]
+    fn a_doc_miss_lists_its_suggestions_as_commands() {
+        let err = CliError::DocNotFound {
+            query: "pipeline".to_owned(),
+            suggestions: vec![DocSuggestion {
+                key: "topic:pipelines".to_owned(),
+                kind: crate::doc_bundle::DocKind::Topic,
+                title: "Pipelines".to_owned(),
+            }],
+        };
+        let out = error_screen(&err, false)
+            .map(|s| s.render(Header::Omitted))
+            .unwrap_or_default();
+        assert!(
+            out.contains("  no documentation entry is named `pipeline`\n"),
+            "{out:?}"
+        );
+        assert!(
+            out.contains("    ipe doc topic:pipelines  Pipelines (topic)"),
+            "{out:?}"
+        );
         assert!(out.contains(REPORT_BUGS_PHRASE), "{out:?}");
     }
 

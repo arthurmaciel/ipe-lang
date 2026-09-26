@@ -588,16 +588,14 @@ fn parse_port(value: &str) -> Result<u16, CliError> {
 // `docs/constructs/<name>.md` file is automatically available everywhere; no
 // hand-maintained table is required.
 
-/// Return `true` when `s` looks like a symbol key: it starts uppercase, contains
-/// a `.`, and the character after the first `.` is lowercase — e.g. `List.map`,
-/// `Ipe.List.map`. This distinguishes a symbol lookup from a plain module name
-/// (`Ipe.List`, `List`) which is routed to the API query instead.
+/// Return `true` when `s` looks like a member key: it contains a `.` and its
+/// last segment starts lowercase — a value of a module, e.g. `List.map`,
+/// `Ipe.List.map`, `Ipe.Time.unixMillis`. This distinguishes a member lookup
+/// from a plain module name (`Ipe.List`, `List`), which is routed to the API
+/// query instead.
 fn is_symbol_key(s: &str) -> bool {
-    let Some(dot_pos) = s.find('.') else {
-        return false;
-    };
-    s.get(dot_pos + 1..)
-        .and_then(|after| after.chars().next())
+    s.rsplit_once('.')
+        .and_then(|(_, member)| member.chars().next())
         .is_some_and(|c| c.is_ascii_lowercase())
 }
 
@@ -615,6 +613,11 @@ fn build_index() -> Result<Index, CliError> {
 
     builder
         .add_stdlib()
+        .map_err(|e| CliError::UsageOwned(format!("ipe doc: stdlib index failed: {e}")))?;
+    // The compiled-source stdlib modules (`Ipe.Time`, …) carry members too, so
+    // `ipe doc Ipe.Time.unixMillis` resolves like `ipe doc List.map`.
+    builder
+        .add_compiled_stdlib()
         .map_err(|e| CliError::UsageOwned(format!("ipe doc: stdlib index failed: {e}")))?;
 
     // Diagnostics: indexed from the compile-time embedded explain pages.
@@ -815,60 +818,122 @@ fn run_doc_lookup_with_fuzzy(key: &str, format: OutputFormat) -> Result<(), CliE
     // Try the legacy exact index first.
     let index = build_index()?;
     if let Some(entry) = index.resolve(key) {
-        let stdout = std::io::stdout();
+        use crate::screen::{Screen, Stream, emit_machine};
         match format {
-            OutputFormat::Plain => print!("{}", render_doc_entry_plain(entry)),
-            OutputFormat::Json => print!("{}", render_doc_entry_json(entry)),
+            OutputFormat::Plain => emit_machine(Stream::Stdout, &render_doc_entry_plain(entry)),
+            OutputFormat::Json => emit_machine(Stream::Stdout, &render_doc_entry_json(entry)),
             OutputFormat::Human => {
-                let p = crate::style::Palette::for_stream(&stdout);
-                print!(
-                    "{}",
-                    crate::style::frame(&crate::style::gutter(&render_doc_entry_human(entry, p)))
-                );
+                let mut screen = Screen::new(Stream::Stdout);
+                let body = render_doc_entry_human(entry, screen.palette());
+                screen.styled(&body).emit();
             }
         }
         return Ok(());
     }
 
-    // No exact match: try fuzzy across the bundle.
-    let docs_root = locate_docs_root();
-    let bundle = build_doc_bundle(&docs_root)?;
-    let results = fuzzy_rank(&bundle, key);
-
-    if results.is_empty() {
-        return Err(CliError::UsageOwned(format!(
-            "ipe doc: no documentation found for `{key}`\n\
-             \n\
-             Try `ipe doc list` to browse available entries."
-        )));
+    // A member of a module the index does not carry (a project module).
+    if let Some((module, member)) = resolve_member(key) {
+        render_member(&module, &member, format);
+        return Ok(());
     }
 
-    // One clear best: render it.
-    let Some(first) = results.first() else {
-        // Already checked `results.is_empty()` above; this branch is unreachable.
-        return Ok(());
-    };
-    let best_score = first.score;
-    let close: Vec<_> = results
-        .iter()
-        .take_while(|r| r.score >= best_score.saturating_sub(200))
+    // No exact match: a unique exact key of a kind the index does not carry (a
+    // topic, guide, or idiom) opens directly; anything else is a miss that
+    // lists the closest entries of every kind.
+    let docs_root = locate_docs_root();
+    let bundle = build_doc_bundle(&docs_root)?;
+    let exact: Vec<_> = fuzzy_rank(&bundle, key)
+        .into_iter()
+        .filter(|r| r.score >= crate::doc_bundle::EXACT_SCORE)
         .collect();
-
-    if let [only] = close.as_slice() {
+    if let [only] = exact.as_slice() {
         render_bundle_entry(only.entry, format);
         return Ok(());
     }
+    Err(doc_miss(key, &bundle, format))
+}
 
-    // Several close results: print a ranked disambiguation list.
-    let mut list = format!("ipe doc: `{key}` is ambiguous. Did you mean one of:\n");
-    for r in &results {
-        let _ = writeln!(
-            list,
-            "  {}:{} -- {}",
-            r.entry.kind, r.entry.key, r.entry.title
-        );
+/// The error for a query that named no entry: [`CliError::DocNotFound`] with
+/// the closest entries of any kind. Under a machine format it is written as the
+/// machine error envelope instead of the human frame.
+fn doc_miss(query: &str, bundle: &DocBundle, format: OutputFormat) -> CliError {
+    let err = CliError::DocNotFound {
+        query: query.to_owned(),
+        suggestions: crate::doc_bundle::suggestions_for(bundle, query),
+    };
+    match format {
+        OutputFormat::Human => err,
+        OutputFormat::Plain | OutputFormat::Json => {
+            crate::driver::emit_machine_error(format, "doc", &err)
+        }
     }
-    Err(CliError::UsageOwned(list))
+}
+
+/// Resolve `Module.member` (`Ipe.Time.unixMillis`, `Main.helper`) to the
+/// module's doc and the member's name, when the module exists and exposes a
+/// value or type of that name.
+fn resolve_member(key: &str) -> Option<(ModuleDoc, String)> {
+    let (module_name, member) = key.rsplit_once('.')?;
+    let module = find_module_doc(module_name)?;
+    let exposed = module.values.iter().any(|v| v.name == member)
+        || module.unions.iter().any(|u| u.name == member);
+    exposed.then(|| (module, member.to_owned()))
+}
+
+/// Find a module's doc by name: a project module first (it shadows the
+/// standard library), then the standard library.
+fn find_module_doc(module_name: &str) -> Option<ModuleDoc> {
+    query_project_modules()
+        .into_iter()
+        .find(|m| m.name == module_name)
+        .or_else(|| query_single_stdlib_module(module_name))
+}
+
+/// Render one member of `module` per `format`: its signature (or type
+/// declaration) and its doc comment.
+fn render_member(module: &ModuleDoc, member: &str, format: OutputFormat) {
+    use crate::screen::{Screen, Stream, Tone, emit_machine};
+    let key = format!("{}.{member}", module.name);
+    let value = module.values.iter().find(|v| v.name == member);
+    let union = module.unions.iter().find(|u| u.name == member);
+    let (declaration, comment) = match (value, union) {
+        (Some(v), _) => (format!("{} : {}", v.name, v.signature), v.comment.as_str()),
+        (None, Some(u)) => (
+            format!("type {}{}", u.name, union_params(u.params)),
+            u.comment.as_str(),
+        ),
+        (None, None) => (key.clone(), ""),
+    };
+    match format {
+        OutputFormat::Plain => {
+            let mut out = declaration;
+            out.push('\n');
+            if !comment.is_empty() {
+                out.push_str(comment);
+                out.push('\n');
+            }
+            emit_machine(Stream::Stdout, &out);
+        }
+        OutputFormat::Json => {
+            let out = format!(
+                "{{\"kind\":\"symbol\",\"key\":{},\"text\":{}}}\n",
+                json_string(&key),
+                json_string(&format!("{declaration}\n{comment}")),
+            );
+            emit_machine(Stream::Stdout, &out);
+        }
+        OutputFormat::Human => {
+            let mut screen = Screen::new(Stream::Stdout);
+            screen
+                .line(Tone::Text, &format!("{key}  [symbol]"))
+                .blank()
+                .line(Tone::Success, &declaration);
+            if !comment.is_empty() {
+                screen.blank().line(Tone::Text, comment);
+            }
+            screen.emit();
+        }
+    }
 }
 
 /// `ipe doc --type "<type expr>"` — search the stdlib API by type signature.
@@ -918,26 +983,28 @@ fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
 
 /// Render a [`crate::doc_bundle::DocEntry`] per the requested output format.
 fn render_bundle_entry(entry: &crate::doc_bundle::DocEntry, format: OutputFormat) {
-    let stdout = std::io::stdout();
+    use crate::screen::{Screen, Stream, emit_machine};
     match format {
         OutputFormat::Plain => {
             let mut out = entry.body.clone();
             if !out.ends_with('\n') {
                 out.push('\n');
             }
-            print!("{out}");
+            emit_machine(Stream::Stdout, &out);
         }
         OutputFormat::Json => {
-            println!(
-                "{{\"kind\":{},\"key\":{},\"title\":{},\"body\":{}}}",
+            let out = format!(
+                "{{\"kind\":{},\"key\":{},\"title\":{},\"body\":{}}}\n",
                 json_string(entry.kind.prefix()),
                 json_string(&entry.key),
                 json_string(&entry.title),
                 json_string(&entry.body),
             );
+            emit_machine(Stream::Stdout, &out);
         }
         OutputFormat::Human => {
-            let p = crate::style::Palette::for_stream(&stdout);
+            let mut screen = Screen::new(Stream::Stdout);
+            let p = screen.palette();
             let mut out = String::new();
             let _ = writeln!(
                 out,
@@ -951,7 +1018,7 @@ fn render_bundle_entry(entry: &crate::doc_bundle::DocEntry, format: OutputFormat
                     out.push('\n');
                 }
             }
-            print!("{}", crate::style::frame(&crate::style::gutter(&out)));
+            screen.styled(&out).emit();
         }
     }
 }
@@ -1566,7 +1633,8 @@ fn build_kernel_module_docs() -> Result<BTreeMap<String, ModuleDoc>, CliError> {
 /// * `--plain`: one bare module name per line, no framing.
 /// * `--json`: `{"modules":["Ipe.List","Ipe.String",…]}`.
 fn list_modules(path: &Path, format: OutputFormat) {
-    use crate::style::{GUTTER, frame};
+    use crate::screen::{Screen, Stream, emit_machine};
+    use crate::style::GUTTER;
 
     // Collect stdlib names.
     let stdlib: Vec<String> = stdlib_module_names();
@@ -1601,19 +1669,19 @@ fn list_modules(path: &Path, format: OutputFormat) {
             // namespace hierarchy is presented in the human listing, the
             // Markdown index, and the HTML nav (which can show pure-prefix
             // headers a plain, machine-readable list must not).
+            let mut out = String::new();
             for name in &ordered {
-                println!("{name}");
+                let _ = writeln!(out, "{name}");
             }
+            emit_machine(Stream::Stdout, &out);
         }
         OutputFormat::Json => {
             let names: Vec<&str> = ordered.iter().map(|n| n.as_str()).collect();
-            println!(
-                "{}",
-                crate::cli_args::json::object(&[(
-                    "modules",
-                    crate::cli_args::json::string_array(&names),
-                )])
-            );
+            let out = crate::cli_args::json::object(&[(
+                "modules",
+                crate::cli_args::json::string_array(&names),
+            )]);
+            emit_machine(Stream::Stdout, &format!("{out}\n"));
         }
         OutputFormat::Human => {
             let mut body = String::new();
@@ -1638,7 +1706,7 @@ fn list_modules(path: &Path, format: OutputFormat) {
             for line in tree_out.lines() {
                 let _ = writeln!(body, "{GUTTER}  {line}");
             }
-            print!("{}", frame(body.trim_end_matches('\n')));
+            Screen::new(Stream::Stdout).guttered(&body).emit();
         }
     }
 }
@@ -1670,7 +1738,7 @@ fn query_project_modules() -> Vec<ModuleDoc> {
 
 /// Render a single [`ModuleDoc`] in human-readable guttered form.
 fn render_module_human(module: &ModuleDoc, index: &AnchorIndex) {
-    use crate::style::{GUTTER, frame};
+    use crate::style::GUTTER;
 
     let md = module.comment.as_str();
     let mut body = format!("{GUTTER}{}\n\n", module.name);
@@ -1704,7 +1772,9 @@ fn render_module_human(module: &ModuleDoc, index: &AnchorIndex) {
             let _ = writeln!(body, "{GUTTER}    {}", value.comment);
         }
     }
-    print!("{}", frame(body.trim_end_matches('\n')));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .guttered(&body)
+        .emit();
 }
 
 /// Query one module's API and render it per `format`.
@@ -1723,10 +1793,14 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
         .or_else(|| query_single_stdlib_module(module_name));
 
     let Some(module) = found else {
-        return Err(CliError::UsageOwned(format!(
-            "ipe doc: unknown module `{module_name}` (IPE-N0004)\n\
-             Run `ipe doc list` to see all available modules."
-        )));
+        // `Module.member` (a type or an uppercase-led value path) or a miss:
+        // resolve the member, else suggest the closest entries of any kind.
+        if let Some((owner, member)) = resolve_member(module_name) {
+            render_member(&owner, &member, format);
+            return Ok(());
+        }
+        let bundle = build_doc_bundle(&locate_docs_root())?;
+        return Err(doc_miss(module_name, &bundle, format));
     };
 
     // Build a single-module DocsJson for the anchor index (cross-reference
@@ -1741,17 +1815,20 @@ fn query_module(module_name: &str, format: OutputFormat) -> Result<(), CliError>
     match format {
         OutputFormat::Plain => {
             // Flush-left: one entry per line, `name : signature`.
+            let mut out = String::new();
             for union in &module.unions {
-                println!("type {}{}", union.name, union_params(union.params));
+                let _ = writeln!(out, "type {}{}", union.name, union_params(union.params));
             }
             for value in &module.values {
-                println!("{} : {}", value.name, value.signature);
+                let _ = writeln!(out, "{} : {}", value.name, value.signature);
             }
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &out);
         }
         OutputFormat::Json => {
             let mut out = String::new();
             render_module_json(&mut out, &module, &index);
-            println!("{out}");
+            out.push('\n');
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &out);
         }
         OutputFormat::Human => {
             render_module_human(&module, &index);
