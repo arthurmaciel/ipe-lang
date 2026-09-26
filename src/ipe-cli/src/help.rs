@@ -334,12 +334,6 @@ const COMMANDS: &[Command] = &[
         page: include_str!("../help/clean.md"),
         hidden: false,
     },
-    Command {
-        name: "migrate",
-        run: crate::migrate::run_migrate,
-        page: include_str!("../help/migrate.md"),
-        hidden: false,
-    },
     // Editing a package.ipe `Package.dependencies` list is not yet
     // automated, so `add`/`remove` today only report the manual step. Kept
     // dispatchable (and documented) but withheld from the top-level screen
@@ -396,12 +390,6 @@ const COMMANDS: &[Command] = &[
         name: "lsp",
         run: crate::lsp::run_lsp,
         page: include_str!("../help/lsp.md"),
-        hidden: false,
-    },
-    Command {
-        name: "debugger",
-        run: crate::run_debugger,
-        page: include_str!("../help/debugger.md"),
         hidden: false,
     },
     Command {
@@ -1196,9 +1184,6 @@ mod tests {
         assert_help_flags_are_accepted("fmt", |a| crate::cli_args::parse_fmt(a).map(|_| ()));
         assert_help_flags_are_accepted("lint", |a| crate::lint::parse_lint_args(a).map(|_| ()));
         assert_help_flags_are_accepted("clean", |a| crate::clean::parse_clean_args(a).map(|_| ()));
-        assert_help_flags_are_accepted("migrate", |a| {
-            crate::migrate::parse_migrate_args(a).map(|_| ())
-        });
     }
 
     /// `help_json` emits valid JSON covering every command and section.

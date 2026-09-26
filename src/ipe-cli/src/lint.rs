@@ -112,7 +112,14 @@ pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
     }
 
     if args.fix {
-        return apply_and_report(&modules, &config, &paths);
+        // Fixes reach modules found by walking the project, so each rewrite must
+        // stay inside it (the manifest's directory, or a single file's own).
+        let root = resolved
+            .blame_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        return apply_and_report(&modules, &config, &paths, &root);
     }
     report_findings(&modules, &config, &paths, args.format)
 }
@@ -329,6 +336,7 @@ fn apply_and_report(
     modules: &[SourceModule],
     config: &LintConfig,
     paths: &BTreeMap<Vec<String>, PathBuf>,
+    root: &Path,
 ) -> Result<(), CliError> {
     let local_outcome = ipe_lint::apply_fixes(modules, config);
 
@@ -369,15 +377,25 @@ fn apply_and_report(
         let Some(path) = paths.get(module) else {
             continue;
         };
-        if let Err(err) = crate::write_atomic(path, rewritten) {
-            // Report the files already rewritten before the failure.
-            out.emit();
-            return Err(err);
-        }
+        let backup =
+            match crate::rewrite_walked_file(root, path, rewritten, crate::RewriteKind::Lossy) {
+                Ok(backup) => backup,
+                Err(err) => {
+                    // Report the files already rewritten before the failure.
+                    out.emit();
+                    return Err(err);
+                }
+            };
         out.line(
             Tone::Text,
             &format!("lint --fix: rewrote {}", path.display()),
         );
+        if let Some(backup) = backup {
+            out.line(
+                Tone::Text,
+                &format!("lint --fix: original kept at {}", backup.display()),
+            );
+        }
     }
 
     if total > 0 {

@@ -338,14 +338,14 @@ pub fn capfloor_static_source(profile: &SandboxProfile) -> String {
 ///
 /// # Errors
 ///
-/// [`CliError::Io`] on any filesystem failure.
+/// [`CliError::OutputRefused`] when `out_dir` is not ipe-owned or holds a
+/// symlink on the way; [`CliError::Io`] on any filesystem failure.
 pub fn write_build_artifacts(out_dir: &Path, profile: &SandboxProfile) -> Result<(), CliError> {
+    let crate_dir = crate::output_dir::OwnedDir::claim(out_dir)?;
     // 1. The ipe.profile mirror.
-    let profile_path = out_dir.join("ipe.profile");
-    std::fs::write(&profile_path, profile.to_profile_string()).map_err(|e| CliError::Io {
-        path: profile_path,
-        source: e,
-    })?;
+    crate_dir
+        .path_to("ipe.profile")?
+        .write(profile.to_profile_string().as_bytes())?;
 
     // 2. Embed the capfloor into the emitted main.rs: a `#[used]` static holding
     //    the floor bytes, PLUS a `black_box` read of it at the top of `fn main`
@@ -354,17 +354,15 @@ pub fn write_build_artifacts(out_dir: &Path, profile: &SandboxProfile) -> Result
     //    removes the unreferenced data). The read keeps the bytes in `.rodata`,
     //    where `strip` cannot touch them; `ipe exec` scans them out passively.
     //    Idempotent: a re-build replaces any prior floor block + reference.
-    let main_rs = out_dir.join("src").join("main.rs");
-    let existing =
-        crate::io_bounded::read_to_string_capped(&main_rs, crate::io_bounded::SOURCE_READ_CAP)?;
+    let main_rs = crate_dir.path_to(Path::new("src").join("main.rs"))?;
+    let existing = crate::io_bounded::read_to_string_capped(
+        &main_rs.path(),
+        crate::io_bounded::SOURCE_READ_CAP,
+    )?;
     let base = strip_capfloor_block(&existing);
     let referenced = inject_floor_reference(&base)?;
     let with_floor = format!("{referenced}{}", capfloor_static_source(profile));
-    std::fs::write(&main_rs, with_floor).map_err(|e| CliError::Io {
-        path: main_rs,
-        source: e,
-    })?;
-    Ok(())
+    main_rs.write(with_floor.as_bytes())
 }
 
 /// Remove any previously-appended capfloor block AND its main-body reference, so

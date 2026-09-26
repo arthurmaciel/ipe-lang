@@ -10,7 +10,7 @@ A source file, a project directory, or a package.ipe (default: the current proje
 
 ## Options
 
-- `[--out <dir>]` — write the artifact to <dir> (default: release/)
+- `[--out <dir>]` — put the artifact under <dir>/release/ (default: out/ in the project)
 - @--target
 - @--emit-permissions
 - `[--runtime <dir>]` — vendor the Ipê runtime source from <dir>

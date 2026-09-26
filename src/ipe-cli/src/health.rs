@@ -1768,28 +1768,12 @@ fn numbered_backup(path: &Path, contents: &str) -> Result<PathBuf, CliError> {
     }
 }
 
-/// Write `contents` to `path` atomically: a sibling temp file, then a rename
-/// over `path` (atomic on one filesystem). A rename failure removes the temp so
-/// no debris is left.
+/// Write `contents` to `path` through the driver's one atomic writer.
+///
+/// An exclusively created sibling temp file is renamed over `path`, so the
+/// config is never truncated in place.
 fn write_atomic_config(path: &Path, contents: &str) -> Result<(), CliError> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty());
-    let name = path.file_name().map_or_else(
-        || "config.toml".to_owned(),
-        |n| n.to_string_lossy().into_owned(),
-    );
-    let tmp_name = format!(".{name}.health.{}.tmp", std::process::id());
-    let tmp = dir.map_or_else(|| PathBuf::from(&tmp_name), |d| d.join(&tmp_name));
-    std::fs::write(&tmp, contents).map_err(|e| CliError::Io {
-        path: tmp.clone(),
-        source: e,
-    })?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        CliError::Io {
-            path: path.to_path_buf(),
-            source: e,
-        }
-    })
+    crate::driver::write_atomic(path, contents)
 }
 
 #[cfg(test)]

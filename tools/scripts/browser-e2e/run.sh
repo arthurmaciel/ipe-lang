@@ -33,11 +33,11 @@ rm -rf "$OUT_DIR"
 "$IPE" build "$REPO_ROOT/examples/shapes/web/geo-clipboard/package.ipe" --out "$OUT_DIR"
 
 echo "==> Cargo-building emitted project..."
-cargo build --release --manifest-path "$OUT_DIR/Cargo.toml"
-BINARY="$OUT_DIR/target/release/geo-clipboard"
+cargo build --release --manifest-path "$OUT_DIR/rust/Cargo.toml"
+BINARY="$OUT_DIR/rust/target/release/geo-clipboard"
 if [ ! -f "$BINARY" ]; then
   # Emitted binary name may differ; find it.
-  BINARY="$(find "$OUT_DIR/target/release" -maxdepth 1 -type f -perm /111 ! -name "*.d" | head -1)"
+  BINARY="$(find "$OUT_DIR/rust/target/release" -maxdepth 1 -type f -perm /111 ! -name "*.d" | head -1)"
 fi
 
 echo "==> Spawning geo-clipboard server on port $PORT..."

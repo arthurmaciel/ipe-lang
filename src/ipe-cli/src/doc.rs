@@ -2567,12 +2567,15 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
 
     let (json_files, markdown_files, html_files) = render_site_split(&docs, &bundle, write_format);
 
-    write_format_dir(out, "json", &json_files)?;
+    // The site overwrites same-named files, so it is written only into a
+    // directory ipe owns — never over a user's own `doc/` or `docs/`.
+    let site = crate::output_dir::OwnedDir::claim(out)?;
+    write_format_dir(&site, "json", &json_files)?;
     if write_format.wants_markdown() {
-        write_format_dir(out, "markdown", &markdown_files)?;
+        write_format_dir(&site, "markdown", &markdown_files)?;
     }
     if write_format.wants_html() {
-        write_format_dir(out, "html", &html_files)?;
+        write_format_dir(&site, "html", &html_files)?;
     }
 
     // Disclose the package's compiler-derived control model + capability set — the
@@ -2612,24 +2615,23 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
     Ok(())
 }
 
-/// Write every file in `files` into `<base>/<subdir>/`, creating the directory
-/// when absent.
+/// Write every file in `files` into `<site>/<subdir>/`.
+///
+/// Each file is an [`crate::output_dir::OwnedPath`], so a symlink planted
+/// anywhere in the owned site is refused rather than written through.
 ///
 /// # Errors
+/// [`CliError::OutputRefused`] for a symlink or non-plain name on the way;
 /// [`CliError::Io`] on any filesystem failure.
 fn write_format_dir(
-    base: &Path,
+    site: &crate::output_dir::OwnedDir,
     subdir: &str,
     files: &BTreeMap<String, String>,
 ) -> Result<(), CliError> {
-    let dir = base.join(subdir);
-    std::fs::create_dir_all(&dir).map_err(|e| crate::io_err(&dir, e))?;
+    site.path_to(subdir)?.ensure_dir()?;
     for (name, contents) in files {
-        let file_path = dir.join(name);
-        if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| crate::io_err(parent, e))?;
-        }
-        std::fs::write(&file_path, contents).map_err(|e| crate::io_err(&file_path, e))?;
+        site.path_to(Path::new(subdir).join(name))?
+            .write(contents.as_bytes())?;
     }
     Ok(())
 }
@@ -5967,9 +5969,49 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         let mut files = BTreeMap::new();
         files.insert("docs.json".to_owned(), "{\"v\":1}".to_owned());
-        write_format_dir(&tmp, "json", &files).expect("write_format_dir");
+        let site = crate::output_dir::OwnedDir::claim(&tmp).expect("claim site");
+        write_format_dir(&site, "json", &files).expect("write_format_dir");
         let written = tmp.join("json").join("docs.json");
         assert!(written.exists(), "docs.json written under json/");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A doc site planted with a symlinked directory or file is refused.
+    ///
+    /// The link targets survive byte-for-byte.
+    #[cfg(unix)]
+    #[test]
+    fn write_format_dir_refuses_planted_symlinks() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("ipe-doc-symlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let victim = tmp.join("victim");
+        fs::create_dir_all(&victim).expect("victim dir");
+        fs::write(victim.join("docs.json"), "keep").expect("victim file");
+        let site = crate::output_dir::OwnedDir::claim(&tmp.join("site")).expect("claim site");
+        std::os::unix::fs::symlink(&victim, tmp.join("site").join("json")).expect("dir link");
+        fs::create_dir_all(tmp.join("site").join("html")).expect("html dir");
+        std::os::unix::fs::symlink(victim.join("docs.json"), tmp.join("site/html/index.html"))
+            .expect("file link");
+
+        let mut files = BTreeMap::new();
+        files.insert("docs.json".to_owned(), "evil".to_owned());
+        let dir_link = write_format_dir(&site, "json", &files);
+        assert!(
+            matches!(dir_link, Err(CliError::OutputRefused(_))),
+            "a symlinked json/ must be refused, got {dir_link:?}"
+        );
+        let mut html = BTreeMap::new();
+        html.insert("index.html".to_owned(), "evil".to_owned());
+        let file_link = write_format_dir(&site, "html", &html);
+        assert!(
+            matches!(file_link, Err(CliError::OutputRefused(_))),
+            "a symlinked page must be refused, got {file_link:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(victim.join("docs.json")).ok().as_deref(),
+            Some("keep")
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 

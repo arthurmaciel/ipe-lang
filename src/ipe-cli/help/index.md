@@ -26,9 +26,7 @@
 - doc
 - fmt
 - lsp
-- debugger
 - clean
-- migrate
 - health
 - capabilities
 - diff

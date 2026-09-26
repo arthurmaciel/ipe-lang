@@ -18,6 +18,7 @@ A source file, a project directory, or a package.ipe. Defaults to the current pr
 - @--cfree
 - @--accept-risks
 - `[--debugger]` — compile the in-app time-travelling debugger overlay into the run app
+- `[--record]` — cli/worker apps: record the TEA session to out/session.ipelog, one plain `<msg> => <model>` line per step
 - @--quiet
 - @--json
 - `[-- <args>...]` — forward <args> to the compiled program

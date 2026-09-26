@@ -2662,95 +2662,285 @@ fn artifact_size_bytes_surfaces_a_missing_artifact_as_a_typed_error() {
     );
 }
 
-// ── `ipe debugger` — record/replay refusals ────────────────────────────────
+// ── `ipe run --record` — refusals ──────────────────────────────────────────
 
-// A bare `ipe debugger` (no subcommand) is a usage error naming the two forms,
-// never a silent no-op.
+// Recording is refused, before any build, for every shape without a recordable
+// cli/worker update loop — never a run that silently writes no log.
 #[test]
-fn debugger_without_subcommand_is_usage_error() {
-    let err = run_debugger(&[]).expect_err("a bare `ipe debugger` must be a usage error");
+fn record_is_refused_for_shapes_without_a_session() {
+    let entry = Path::new("Main.ipe");
+    for shape in [
+        crate::delivery::Shape::Script,
+        crate::delivery::Shape::Tui,
+        crate::delivery::Shape::Web,
+    ] {
+        let result = gate_record(shape, CompileTarget::Native, None, None, entry);
+        assert!(
+            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+            "--record on {shape:?} must be refused, got: {result:?}"
+        );
+    }
+}
+
+// A cli app run under `--target wasi` executes in wasmtime, where the recorder
+// dump is not wired: refused rather than recording nothing.
+#[test]
+fn record_is_refused_for_a_wasi_run() {
+    let result = gate_record(
+        crate::delivery::Shape::Cli,
+        CompileTarget::WasmWasi,
+        None,
+        None,
+        Path::new("Main.ipe"),
+    );
     assert!(
-        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
-        "expected a usage error, got: {err:?}"
+        matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("wasi")),
+        "--record with --target wasi must be refused, got: {result:?}"
     );
 }
 
-// An unknown subcommand is refused, naming the accepted set.
+// -----------------------------------------------------------------------
+// User files are never overwritten or deleted by the build pipeline
+// -----------------------------------------------------------------------
+
+fn user_project(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ipe_user_files_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("src")).expect("make src");
+    fs::write(
+        dir.join("src").join("Main.ipe"),
+        "module Main exposing (main)\n",
+    )
+    .expect("write Main.ipe");
+    fs::write(dir.join("Cargo.toml"), "# the user's own manifest\n").expect("write Cargo.toml");
+    dir
+}
+
+/// Emitting into a directory that holds the user's files is refused untouched.
+///
+/// This is `ipe build --out .`: nothing is written or pruned, and the user's
+/// `src/` and `Cargo.toml` survive byte-for-byte.
 #[test]
-fn debugger_unknown_subcommand_is_refused() {
-    let err = run_debugger(&["scrub".to_owned()])
-        .expect_err("an unknown debugger subcommand must be refused");
+fn emitting_into_a_user_directory_is_refused_untouched() {
+    let dir = user_project("emit");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+    let result = write_emitted_project(&emitted, &dir, &dir.join("no-runtime"), None, false);
     assert!(
-        matches!(&err, CliError::UsageOwned(_)),
-        "expected a UsageOwned error, got: {err:?}"
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "emitting into a user directory must be refused, got {result:?}"
     );
-    let CliError::UsageOwned(msg) = &err else {
+    assert_eq!(
+        fs::read_to_string(dir.join("src").join("Main.ipe")).unwrap_or_default(),
+        "module Main exposing (main)\n",
+        "the user's source must survive"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("Cargo.toml")).unwrap_or_default(),
+        "# the user's own manifest\n",
+        "the user's Cargo.toml must survive"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A lossy rewrite backs the original up before the atomic replace.
+///
+/// This covers `ipe fix` and `lint --fix`; a backup name is never reused.
+#[test]
+fn lossy_rewrite_backs_up_the_original() {
+    let dir = user_project("lossy");
+    let main = dir.join("src").join("Main.ipe");
+    let first = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v2\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite");
+    let second = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v3\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite again");
+    let (Some(first), Some(second)) = (first, second) else {
+        assert!(false_marker(), "a lossy rewrite must report its backup");
         return;
     };
-    assert!(
-        msg.contains("scrub") && msg.contains("record") && msg.contains("replay"),
-        "the refusal must name the offending token and the accepted set; got: {msg:?}"
+    assert_ne!(first, second, "each rewrite keeps its own backup");
+    assert_eq!(
+        fs::read_to_string(&first).unwrap_or_default(),
+        "module Main exposing (main)\n"
     );
+    assert_eq!(
+        fs::read_to_string(&second).unwrap_or_default(),
+        "module Main exposing (main)\n-- v2\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&main).unwrap_or_default(),
+        "module Main exposing (main)\n-- v3\n"
+    );
+    let lossless = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n",
+        RewriteKind::Lossless,
+    )
+    .expect("lossless rewrite");
+    assert!(lossless.is_none(), "a lossless rewrite takes no backup");
+    let _ = fs::remove_dir_all(&dir);
 }
 
-// `record` with no entry is refused before any build starts (fail-closed on a
-// missing positional).
+/// A symlinked source file is rewritten at its real location.
+///
+/// That is the file the user edits; the link is kept, not replaced by a
+/// detached copy.
+#[cfg(unix)]
 #[test]
-fn debugger_record_without_entry_is_refused() {
-    let err =
-        run_debugger(&["record".to_owned()]).expect_err("`record` with no entry must be refused");
+fn rewrite_follows_a_symlinked_source_to_the_real_file() {
+    let dir = user_project("symlink");
+    let real = dir.join("real.ipe");
+    fs::write(&real, "module Main exposing (main)\n").expect("write real");
+    let link = dir.join("src").join("Link.ipe");
+    std::os::unix::fs::symlink(&real, &link).expect("make link");
+    rewrite_user_file(
+        &link,
+        "module Main exposing (main)\n-- new\n",
+        RewriteKind::Lossless,
+    )
+    .expect("rewrite through link");
     assert!(
-        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
-        "expected a usage error, got: {err:?}"
+        fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
+        "the link stays a link"
     );
+    assert_eq!(
+        fs::read_to_string(&real).unwrap_or_default(),
+        "module Main exposing (main)\n-- new\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }
 
-// `record` rejects a second `--out` value rather than silently last-writing.
+/// The atomic writer's temp file is created exclusively.
+///
+/// A symlink planted at the temp name is never written through.
+#[cfg(unix)]
 #[test]
-fn debugger_record_rejects_duplicate_out() {
-    let err = run_debugger(&[
-        "record".to_owned(),
-        "Main.ipe".to_owned(),
-        "--out".to_owned(),
-        "a.log".to_owned(),
-        "--out".to_owned(),
-        "b.log".to_owned(),
-    ])
-    .expect_err("a second --out must be refused");
+fn atomic_write_never_writes_through_a_planted_temp_symlink() {
+    let dir = user_project("tmp_symlink");
+    let victim = dir.join("victim.txt");
+    fs::write(&victim, "keep").expect("write victim");
+    let tmp = dir.join("planted.tmp");
+    std::os::unix::fs::symlink(&victim, &tmp).expect("plant link");
+    let result = write_and_rename(&tmp, &dir.join("target.txt"), "payload");
     assert!(
-        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
-        "expected a usage error, got: {err:?}"
+        matches!(result, Err(CliError::Io { .. })),
+        "an existing temp path must be refused, got {result:?}"
     );
+    assert_eq!(fs::read_to_string(&victim).unwrap_or_default(), "keep");
+    let _ = fs::remove_dir_all(&dir);
 }
 
-// `replay` requires exactly one <log> positional — zero or two is refused.
+/// A marked crate dir planted with symlinks is refused by the emit.
+///
+/// A cloned repository can force-add such a dir with a symlinked `src/` or a
+/// symlinked file; the write + prune refuse both, and the link targets survive
+/// byte-for-byte.
+#[cfg(unix)]
 #[test]
-fn debugger_replay_wrong_arity_is_refused() {
+fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
+    let base = std::env::temp_dir().join(format!("ipe_planted_emit_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let victim = base.join("victim");
+    fs::create_dir_all(&victim).expect("victim dir");
+    fs::write(victim.join("precious.ipe"), "keep").expect("victim file");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+
+    // A symlinked `src/`: pruning it would mass-delete the target.
+    let dir_link = base.join("out-a");
+    crate::output_dir::OwnedDir::claim(&dir_link).expect("claim");
+    std::os::unix::fs::symlink(&victim, dir_link.join("src")).expect("dir link");
+    let result = write_emitted_project(&emitted, &dir_link, &base.join("no-runtime"), None, false);
     assert!(
-        matches!(
-            run_debugger(&["replay".to_owned()]),
-            Err(CliError::Usage(_) | CliError::UsageOwned(_))
-        ),
-        "`replay` with no log must be refused"
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a symlinked src/ must be refused, got {result:?}"
     );
+
+    // A symlinked final file: writing it would overwrite the target.
+    let file_link = base.join("out-b");
+    crate::output_dir::OwnedDir::claim(&file_link).expect("claim");
+    std::os::unix::fs::symlink(victim.join("precious.ipe"), file_link.join("Cargo.toml"))
+        .expect("file link");
+    let result = write_emitted_project(&emitted, &file_link, &base.join("no-runtime"), None, false);
     assert!(
-        matches!(
-            run_debugger(&["replay".to_owned(), "a.log".to_owned(), "b.log".to_owned()]),
-            Err(CliError::Usage(_) | CliError::UsageOwned(_))
-        ),
-        "`replay` with two logs must be refused"
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a symlinked Cargo.toml must be refused, got {result:?}"
     );
+
+    assert_eq!(
+        fs::read_to_string(victim.join("precious.ipe")).unwrap_or_default(),
+        "keep",
+        "the link target survives byte-for-byte"
+    );
+    let _ = fs::remove_dir_all(&base);
 }
 
-// `replay` on a missing log surfaces a typed Io error, never a panic.
+/// A backup keeps the original's permission bits.
+///
+/// An owner-only source never gets a more readable copy.
+#[cfg(unix)]
 #[test]
-fn debugger_replay_missing_log_is_typed_io_error() {
-    let missing =
-        std::env::temp_dir().join(format!("ipe-replay-absent-{}.ipelog", std::process::id()));
-    let err = run_debugger(&["replay".to_owned(), missing.display().to_string()])
-        .expect_err("a missing replay log must be a typed error");
-    assert!(
-        matches!(err, CliError::Io { .. }),
-        "expected a typed Io error for a missing log, got: {err:?}"
+fn backup_preserves_a_private_files_mode() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = user_project("private_backup");
+    let main = dir.join("src").join("Main.ipe");
+    fs::set_permissions(&main, fs::Permissions::from_mode(0o600)).expect("chmod 600");
+    let backup = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v2\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite");
+    let Some(backup) = backup else {
+        assert!(false_marker(), "a lossy rewrite must report its backup");
+        return;
+    };
+    let mode = fs::metadata(&backup)
+        .map(|m| m.permissions().mode() & 0o777)
+        .unwrap_or(0);
+    assert_eq!(mode, 0o600, "the backup must stay owner-only");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A directory walk refuses to rewrite a file that resolves outside the project.
+///
+/// An explicitly named file may still be followed.
+#[cfg(unix)]
+#[test]
+fn walked_rewrite_refuses_a_file_outside_the_project() {
+    let dir = user_project("walk_escape");
+    let outside = dir.with_extension("outside.ipe");
+    fs::write(&outside, "module Other\n").expect("outside file");
+    let link = dir.join("src").join("Other.ipe");
+    std::os::unix::fs::symlink(&outside, &link).expect("link");
+    let result = rewrite_walked_file(
+        &dir,
+        &link,
+        "module Other\n-- evil\n",
+        RewriteKind::Lossless,
     );
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a walked file escaping the project must be refused, got {result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(&outside).unwrap_or_default(),
+        "module Other\n"
+    );
+    let _ = fs::remove_file(&outside);
+    let _ = fs::remove_dir_all(&dir);
 }

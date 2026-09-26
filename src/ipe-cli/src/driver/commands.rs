@@ -7,6 +7,7 @@ use super::{
     render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
     runtime_dep_from_env, single_file_cargo_name_from_env,
 };
+use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::style::TerminalSafe;
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, Write, build_plan, cli_args,
@@ -258,15 +259,14 @@ pub fn with_help_on_misuse(
     }
 }
 
-/// Project-aware default entry when no positional argument is given to
-/// `build`, `run`, or `watch`.
+/// Project-aware default entry for `build`, `run`, or `watch` without a positional.
 ///
 /// Resolution order:
 /// 1. `./package.ipe` exists — entry `"."` (project mode; `discover_manifest`
 ///    reads the directory's `package.ipe`).
 /// 2. `./src/Main.ipe` exists — entry `"src/Main.ipe"` (single-file
 ///    shorthand without a manifest).
-/// 3. A bare `./ipe.toml` with no `package.ipe` — a clear migration error, so
+/// 3. A bare `./ipe.toml` with no `package.ipe` — a clear legacy-toml error, so
 ///    the legacy manifest never silently governs a build.
 /// 4. Neither — usage error: nothing to build here.
 pub fn default_entry() -> Result<String, CliError> {
@@ -276,8 +276,8 @@ pub fn default_entry() -> Result<String, CliError> {
     if std::path::Path::new("src/Main.ipe").exists() {
         return Ok("src/Main.ipe".to_owned());
     }
-    if project::migration_pending(std::path::Path::new(".")) {
-        return Err(CliError::Usage(project::MIGRATE_CONFIG_HINT));
+    if project::has_only_legacy_toml(std::path::Path::new(".")) {
+        return Err(CliError::Usage(project::LEGACY_TOML_HINT));
     }
     Err(CliError::Usage(NO_ENTRY))
 }
@@ -299,10 +299,6 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     // A grammar refusal (e.g. `web solo ios`, which cannot be watched — see the
     // spec's mobile-watch note) is caught here before the loop starts.
     let _delivery = resolve_delivery(Path::new(&entry), &args.delivery, false, "watch")?;
-
-    let out_dir = args
-        .out
-        .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
     // Watch is always a native dependency-model dev build (it never vendors the
     // runtime tree, nor targets wasm), so — like `ipe build` on its default path
     // — it must NOT require the vendored runtime source subtree. It resolves the
@@ -317,6 +313,9 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     // on every change, so a missing toolchain is reported once, up front, with
     // its root cause — not as a per-rebuild opaque spawn error.
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Watch)?;
+
+    let output = resolve_output_root(args.out.as_deref(), Path::new(&entry), None)?;
+    let out_dir = output.area_path(&[OutputArea::Rust])?;
 
     let mut opts = watch::WatchOptions::new(PathBuf::from(entry), out_dir, runtime_dir);
     opts.port = args.port;
@@ -333,6 +332,27 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
         }
     }
     watch::run(&opts)
+}
+
+/// Resolve the output root for a build of `entry`.
+///
+/// `--out <dir>` or `<project>/out`, proven claimable by ipe and disjoint from
+/// the project's sources.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] when the location overlaps the project or holds
+/// files ipe did not create; manifest discovery errors when `manifest` is absent
+/// and the entry's project must be discovered.
+pub fn resolve_output_root(
+    out: Option<&str>,
+    entry: &Path,
+    manifest: Option<&project::ProjectManifest>,
+) -> Result<OutputRoot, CliError> {
+    let paths = match manifest {
+        Some(m) => ProjectPaths::from_manifest(m),
+        None => ProjectPaths::discover(entry)?,
+    };
+    OutputRoot::resolve(out, &paths)
 }
 
 /// Classify the shape `main` pins for the entry the user named, reading the
@@ -390,17 +410,18 @@ pub fn resolve_delivery(
     .map_err(|e| CliError::UsageOwned(format!("ipe {command}: {e}")))
 }
 
-/// Route an entry argument to its `package.ipe`, when one governs it:
-/// a directory must contain one, and a `.ipe` entry walks up the tree looking
+/// Route an entry argument to its `package.ipe`, when one governs it.
+///
+/// A directory must contain one, and a `.ipe` entry walks up the tree looking
 /// for one (returning no manifest — single-file mode — when none exists). A
-/// directory carrying only a legacy `ipe.toml` is a clear migration error.
+/// directory carrying only a legacy `ipe.toml` is a clear legacy-toml error.
 pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
     if entry_path.is_dir() {
         if let Some(manifest) = project::manifest_in_dir(entry_path) {
             return Ok(Some(manifest));
         }
-        if project::migration_pending(entry_path) {
-            return Err(CliError::Usage(project::MIGRATE_CONFIG_HINT));
+        if project::has_only_legacy_toml(entry_path) {
+            return Err(CliError::Usage(project::LEGACY_TOML_HINT));
         }
         Err(CliError::Usage(
             "directory supplied but no package.ipe found inside it",
@@ -633,8 +654,6 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         } => (out, wasm, static_layer),
     };
 
-    let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
-
     // Route the build:
     //   1. Directory → expect package.ipe inside it.
     //   2. .ipe file → walk up looking for package.ipe (project-mode); fall back
@@ -794,6 +813,11 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         );
     }
 
+    // Resolved only now, after every refusal above; nothing is created until the
+    // emit writes its crate.
+    let output = resolve_output_root(out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+    let out_dir = output.area_path(&[OutputArea::Rust])?;
+
     // No manifest found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
@@ -820,6 +844,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         }
         CompileTarget::Native => Some(compile_and_finalize_native_build(
             &out_dir,
+            &output,
             native_cargo,
             static_plan,
             runtime_dep,
@@ -875,6 +900,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
 ///   steps it composes.
 pub fn compile_and_finalize_native_build(
     out_dir: &Path,
+    output: &OutputRoot,
     native_cargo: Option<toolchain::CargoBin>,
     static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
     runtime_dep: bool,
@@ -918,7 +944,12 @@ pub fn compile_and_finalize_native_build(
     // invocation's `cargo build` returns, resolving the artifact path from
     // `cargo metadata`; a binary missing at that path fails closed (no stale
     // copy). Copy (never hardlink): the shared target is often a different mount.
-    let artifact = copy_native_artifact(out_dir, static_plan.as_ref(), manifest_parsed.as_ref())?;
+    let artifact = copy_native_artifact(
+        out_dir,
+        &output.claim_area(&[OutputArea::Bin])?,
+        static_plan.as_ref(),
+        manifest_parsed.as_ref(),
+    )?;
     let driver = manifest_parsed
         .as_ref()
         .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
@@ -942,6 +973,7 @@ pub fn compile_and_finalize_native_build(
 /// a different mount.
 fn copy_native_artifact(
     out_dir: &Path,
+    bin_dir: &OwnedDir,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     manifest: Option<&project::ProjectManifest>,
 ) -> Result<PathBuf, CliError> {
@@ -964,19 +996,9 @@ fn copy_native_artifact(
             src.display()
         )));
     }
-    // `out_dir` is the emitted crate dir (default `out/rust`); the artifact copy
-    // lands in a sibling `bin/` so it sits at `<project>/out/bin/<name>`. Fall
-    // back to `out_dir` itself when it has no parent.
-    let bin_dir = out_dir.parent().unwrap_or(out_dir).join("bin");
-    std::fs::create_dir_all(&bin_dir).map_err(|e| CliError::Io {
-        path: bin_dir.clone(),
-        source: e,
-    })?;
-    let dest = bin_dir.join(&friendly);
-    std::fs::copy(&src, &dest).map_err(|e| CliError::Io {
-        path: dest.clone(),
-        source: e,
-    })?;
+    let dest = bin_dir.path_to(&friendly)?;
+    dest.copy_from(&src)?;
+    let dest = dest.path();
     #[cfg(unix)]
     set_executable(&dest)?;
     Ok(dest)
@@ -1012,7 +1034,6 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         None => default_entry()?,
     };
     let entry_path = PathBuf::from(&entry);
-    let out_dir = PathBuf::from(&args.out);
 
     // Fail closed on an FFI-bearing project BEFORE any emit: eject vendors only
     // the embedded runtime SOURCE, so a program binding a foreign Rust crate
@@ -1038,12 +1059,12 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     // `[wasm].mode` — rather than silently emit a native tree for a wasm app.
     // (`parse_eject` has no `--target` flag, so the CLI tier cannot select wasm
     // here; `WasmKind::None` for the CLI axis is exact.)
-    let manifest_wasm: Option<project::WasmConfig> = manifest
+    let manifest_parsed = manifest
         .as_deref()
         .map(project::parse_manifest)
-        .transpose()?
-        .map(|m| m.wasm);
-    if resolve_compile_target(cli_args::WasmKind::None, manifest_wasm.as_ref()).is_wasm() {
+        .transpose()?;
+    let manifest_wasm: Option<&project::WasmConfig> = manifest_parsed.as_ref().map(|m| &m.wasm);
+    if resolve_compile_target(cli_args::WasmKind::None, manifest_wasm).is_wasm() {
         return Err(CliError::EjectUnsupported {
             reason: TerminalSafe::sanitize(
                 "eject produces a native Cargo project; a wasm target has a separate \
@@ -1054,6 +1075,15 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     }
 
     let runtime_dir = resolve_vendored_runtime_dir(args.runtime, true)?;
+
+    // The ejected project is handed to the user, so it goes to a fresh
+    // directory clear of the sources — never over anything already there.
+    let paths = match manifest_parsed.as_ref() {
+        Some(m) => ProjectPaths::from_manifest(m),
+        None => ProjectPaths::discover(&entry_path)?,
+    };
+    let output = OutputRoot::fresh(&args.out, &paths)?;
+    let out_dir = output.path().to_path_buf();
 
     // Force the vendored, tree-shaken emit shape: a self-contained project names
     // no runtime path dependency (`runtime_dep = false`) and carries only the
@@ -1090,6 +1120,9 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         },
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
+    // From here on the tree is the user's: ipe drops its ownership marker so no
+    // later ipe command treats the ejected project as disposable output.
+    let out_dir = output.claim()?.release_to_user()?;
 
     if show_progress {
         eprintln!(
@@ -1232,10 +1265,9 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
 
     if wasm_target {
         // Browser/wasm production path.
-        let out_dir = args
-            .out
-            .as_deref()
-            .map_or_else(|| PathBuf::from("release"), PathBuf::from);
+        let output =
+            resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+        let out_dir = output.area_path(&[OutputArea::Release, OutputArea::Rust])?;
         let runtime_dep = runtime_dep_from_env();
         let runtime_dir = resolve_vendored_runtime_dir(args.runtime, !runtime_dep)?;
 
@@ -1330,10 +1362,9 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
 
     if !run_sandbox::is_native_bearing(&resolved.union()) {
         // Pure-native path: emit and build a plain release binary.
-        let out_dir = args
-            .out
-            .as_deref()
-            .map_or_else(|| PathBuf::from("release"), PathBuf::from);
+        let output =
+            resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+        let out_dir = output.area_path(&[OutputArea::Release, OutputArea::Rust])?;
 
         if show_progress {
             eprintln!(
@@ -1400,17 +1431,13 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
                 bin_path.display()
             )));
         }
-        // Copy the binary from the cargo target dir into the resolved out dir so
-        // the artifact lands at a predictable path regardless of CARGO_TARGET_DIR.
-        std::fs::create_dir_all(&out_dir).map_err(|e| CliError::Io {
-            path: out_dir.clone(),
-            source: e,
-        })?;
-        let dest = out_dir.join(friendly_artifact_filename(manifest_parsed.as_ref()));
-        std::fs::copy(&bin_path, &dest).map_err(|e| CliError::Io {
-            path: dest.clone(),
-            source: e,
-        })?;
+        // Copy the binary from the cargo target dir into the release area so the
+        // artifact lands at a predictable path regardless of CARGO_TARGET_DIR.
+        let dest = output
+            .claim_area(&[OutputArea::Release])?
+            .path_to(friendly_artifact_filename(manifest_parsed.as_ref()))?;
+        dest.copy_from(&bin_path)?;
+        let dest = dest.path();
         #[cfg(unix)]
         set_executable(&dest)?;
         if show_progress {
@@ -1427,10 +1454,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     }
 
     // Native-bearing path: jailed bundle (same substance as the predecessor).
-    let out_dir = args
-        .out
-        .as_deref()
-        .map_or_else(|| PathBuf::from("release"), PathBuf::from);
+    let output = resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
 
     if show_progress {
         eprintln!(
@@ -1445,7 +1469,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
 
     // Step 1: emit + build the app binary (static, musl, production).
-    let app_out = out_dir.join("app");
+    let app_out = output.area_path(&[OutputArea::Release, OutputArea::App])?;
     let app_static_plan = Some(ipe_backend_rust::static_build::StaticPlan {
         triple,
         c_profile: ipe_backend_rust::static_build::CProfile::WithLibc {
@@ -1540,11 +1564,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     )?;
 
     // Step 3: lay out the bundle.
-    let bundle_dir = out_dir.join("bundle");
-    std::fs::create_dir_all(&bundle_dir).map_err(|e| CliError::Io {
-        path: bundle_dir.clone(),
-        source: e,
-    })?;
+    let bundle_dir = output.claim_area(&[OutputArea::Release, OutputArea::Bundle])?;
 
     // Locate the wrapper binary. As with the app binary, the target dir may be
     // a global CARGO_TARGET_DIR; resolve via cargo metadata.
@@ -1557,38 +1577,26 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     let artifact = match args.mode {
         cli_args::ReleaseMode::Embed => {
             // Single-file embed: copy only the wrapper (app + profile baked in).
-            let dest = bundle_dir.join("ipe-wrapper");
-            std::fs::copy(&wrapper_src, &dest).map_err(|e| CliError::Io {
-                path: dest.clone(),
-                source: e,
-            })?;
+            let dest = bundle_dir.path_to("ipe-wrapper")?;
+            dest.copy_from(&wrapper_src)?;
+            let dest = dest.path();
             #[cfg(unix)]
             set_executable(&dest)?;
             dest
         }
         cli_args::ReleaseMode::Bundle => {
             // Bundle: wrapper + app + profile as siblings.
-            let wrapper_dest = bundle_dir.join("ipe-wrapper");
-            let app_dest = bundle_dir.join("ipe-app");
-            let profile_dest = bundle_dir.join("ipe.profile");
-            std::fs::copy(&wrapper_src, &wrapper_dest).map_err(|e| CliError::Io {
-                path: wrapper_dest.clone(),
-                source: e,
-            })?;
-            std::fs::copy(&app_binary, &app_dest).map_err(|e| CliError::Io {
-                path: app_dest.clone(),
-                source: e,
-            })?;
-            std::fs::copy(&profile_src, &profile_dest).map_err(|e| CliError::Io {
-                path: profile_dest.clone(),
-                source: e,
-            })?;
+            let wrapper_dest = bundle_dir.path_to("ipe-wrapper")?;
+            let app_dest = bundle_dir.path_to("ipe-app")?;
+            bundle_dir.path_to("ipe.profile")?.copy_from(&profile_src)?;
+            wrapper_dest.copy_from(&wrapper_src)?;
+            app_dest.copy_from(&app_binary)?;
             #[cfg(unix)]
             {
-                set_executable(&wrapper_dest)?;
-                set_executable(&app_dest)?;
+                set_executable(&wrapper_dest.path())?;
+                set_executable(&app_dest.path())?;
             }
-            bundle_dir
+            bundle_dir.path().to_path_buf()
         }
     };
 
@@ -2075,8 +2083,13 @@ pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
         via_env.filter(|p| p.is_file()).unwrap_or(via_crate)
     };
 
-    let pkg_dir = out_dir.join("www").join("pkg");
-    fs::create_dir_all(&pkg_dir).map_err(|e| io_err(&pkg_dir, e))?;
+    // `wasm-bindgen` and `wasm-opt` write into `www/pkg/` by path, so it is
+    // rebuilt empty under the owned crate: a symlink at any level is refused and
+    // nothing planted inside it can redirect their writes.
+    let pkg = OwnedDir::claim(out_dir)?.path_to(Path::new("www").join("pkg"))?;
+    pkg.remove()?;
+    pkg.ensure_dir()?;
+    let pkg_dir = pkg.path();
 
     let wb_status = std::process::Command::new("wasm-bindgen")
         .args([
@@ -2270,131 +2283,54 @@ fn set_record_env(cmd: &mut std::process::Command, dest: Option<&Path>) {
     }
 }
 
-/// `ipe debugger <record|replay> …` — the shape-agnostic time-travel debugger's
-/// portable record/replay surface for cli and worker apps.
+/// The replay-log file an `ipe run --record` session writes in the output root.
+pub const RECORD_LOG_FILE: &str = "session.ipelog";
+
+/// Refuse `ipe run --record` for a program whose session cannot be recorded.
 ///
-/// Two forms, both fail-closed to plain text off a TTY (principle 1 — no control
-/// codes into a redirected log/pipe, enforced at the OUTPUT boundary):
+/// A record request never silently yields no log.
 ///
-/// * `record <Main.ipe> [--out <log>]` — build the app with the debugger
-///   compiled in and run it, capturing each `(msg, model)` step to a **bounded**
-///   log (the recorder ring caps history). Delegates to the ordinary run
-///   pipeline with `record_log` set; the runtime dumps the plain replay log to
-///   `<log>` (default: `<Main>.ipelog` beside the entry) on exit.
-/// * `replay <log>` — re-emit each recorded step's `"<msg> => <model>"` line
-///   through [`crate::progress::inspect_line`], so off-TTY every control byte is
-///   stripped and a pipe/file receives plain lines only.
-///
-/// This is a record/replay surface, NOT a live scrubber: an interactive TTY
-/// scrubber cannot be the cli default — it must fail-closed to plain streaming
-/// off-TTY. Worker apps have no view surface, so appearance hot-swap is N/A for
-/// them; the recorder is their only debugger output (replay/inspection).
+/// The recorder lives in the cli (`Cli.tea`) and worker (`Worker.tea`) update
+/// loops and dumps its log from the directly executed native binary; a script
+/// or TUI/web app has no such loop, a `--target wasi` run executes in wasmtime,
+/// and a native-bearing program runs inside the jail, where the log destination
+/// is not writable.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] on a missing/unknown subcommand or a missing
-/// positional; the build/run errors of the record pipeline; the I/O errors of
-/// reading a replay log.
-pub fn run_debugger(rest: &[String]) -> Result<(), CliError> {
-    let Some((sub, tail)) = rest.split_first() else {
-        return Err(CliError::Usage(
-            "ipe debugger: expected a subcommand (record <Main.ipe> [--out <log>] | replay <log>)",
+/// [`CliError::UsageOwned`] naming why the session cannot be recorded; the
+/// capability-resolution errors of [`run_sandbox::resolve_for_run`].
+pub fn gate_record(
+    shape: delivery::Shape,
+    compile_target: CompileTarget,
+    manifest: Option<&project::ProjectManifest>,
+    manifest_path: Option<&Path>,
+    entry_path: &Path,
+) -> Result<(), CliError> {
+    let shape_name = match shape {
+        delivery::Shape::Cli | delivery::Shape::Worker => None,
+        delivery::Shape::Script => Some("a script"),
+        delivery::Shape::Tui => Some("a TUI app"),
+        delivery::Shape::Web => Some("a web app"),
+    };
+    if let Some(name) = shape_name {
+        return Err(CliError::UsageOwned(format!(
+            "ipe run --record: {name} has no recordable session — recording captures the \
+             update loop of a `Cli.tea` or `Worker.tea` app"
+        )));
+    }
+    if compile_target.is_wasm() {
+        return Err(CliError::UsageOwned(
+            "ipe run --record: records a native run only — drop `--target wasi`".to_owned(),
         ));
-    };
-    match sub.as_str() {
-        "record" => run_debugger_record(tail),
-        "replay" => run_debugger_replay(tail),
-        other => Err(cli_args::usage_unknown_subcommand(
-            "debugger",
-            other,
-            "record | replay",
-        )),
     }
-}
-
-/// `ipe debugger record <Main.ipe> [--out <log>]` — build+run with the debugger
-/// compiled in, capturing the session's replay log to `<log>`.
-fn run_debugger_record(tail: &[String]) -> Result<(), CliError> {
-    let mut entry: Option<String> = None;
-    let mut out: Option<String> = None;
-    let mut it = tail.iter();
-    while let Some(arg) = it.next() {
-        match arg.as_str() {
-            "--out" => {
-                let value = it
-                    .next()
-                    .ok_or(CliError::Usage("ipe debugger record: --out needs a path"))?;
-                if out.replace(value.clone()).is_some() {
-                    return Err(CliError::Usage(
-                        "ipe debugger record: --out given more than once",
-                    ));
-                }
-            }
-            flag if flag.starts_with('-') => {
-                return Err(cli_args::usage_unknown_flag("debugger record", flag));
-            }
-            positional => {
-                if entry.replace(positional.to_owned()).is_some() {
-                    return Err(cli_args::usage_unexpected_argument(
-                        "debugger record",
-                        positional,
-                    ));
-                }
-            }
-        }
-    }
-    let entry = entry.ok_or(CliError::Usage(
-        "ipe debugger record: expected a <Main.ipe> entry",
-    ))?;
-
-    // The log destination: the explicit `--out`, else `<entry>.ipelog` beside the
-    // entry (a stable, discoverable default that `ipe debugger replay` can find).
-    let log_path = out.map_or_else(
-        || {
-            let mut p = PathBuf::from(&entry);
-            p.set_extension("ipelog");
-            p
-        },
-        PathBuf::from,
-    );
-
-    // Build the run through the ordinary pipeline with the debugger compiled in
-    // and the record destination set — the recorder above the cli/worker update
-    // loop dumps its bounded, plain replay log to `log_path` on exit.
-    let base = cli_args::parse_run(std::slice::from_ref(&entry))?;
-    let args = cli_args::RunArgs {
-        debugger: true,
-        record_log: Some(log_path),
-        ..base
-    };
-    run_run_with_args(args)
-}
-
-/// `ipe debugger replay <log>` — re-emit a recorded session's steps through the
-/// fail-closed plain output boundary.
-fn run_debugger_replay(tail: &[String]) -> Result<(), CliError> {
-    use std::io::Write as _;
-    let [log] = tail else {
-        return Err(CliError::Usage(
-            "ipe debugger replay: expected exactly one <log> path",
+    let resolved = run_sandbox::resolve_for_run(manifest, manifest_path, entry_path)?;
+    if run_sandbox::is_native_bearing(&resolved.union()) {
+        return Err(CliError::UsageOwned(
+            "ipe run --record: a native-bearing program runs jailed, where the session log \
+             cannot be written — record a pure Ipê build of the app"
+                .to_owned(),
         ));
-    };
-    let path = PathBuf::from(log);
-    // Bounded read: a replay log is a text dump, capped like any source read so a
-    // crafted enormous file cannot exhaust memory (principle 1 exhaustion floor).
-    let contents = io_bounded::read_to_string_capped(&path, io_bounded::SOURCE_READ_CAP)?;
-
-    // The OUTPUT boundary: off a TTY every control byte is stripped so a
-    // pipe/file/log receives plain lines only; on a TTY the plain body passes
-    // through (the recorder body carries no control code regardless). This is the
-    // load-bearing off-TTY-no-ANSI-leak refusal (principle 1) — the interactive
-    // scrubber cannot be the cli default.
-    let stdout = std::io::stdout();
-    let mode = crate::progress::Mode::for_stream(&stdout);
-    let mut lock = stdout.lock();
-    for line in contents.lines() {
-        let _ = lock.write_all(crate::progress::inspect_line(mode, line).as_bytes());
     }
-    let _ = lock.flush();
     Ok(())
 }
 
@@ -2422,18 +2358,18 @@ pub fn run_run(rest: &[String]) -> Result<(), CliError> {
     })
 }
 
-/// Inner implementation of `run_run`, unaware of JSON formatting: parse the
-/// argument tail into a typed [`cli_args::RunArgs`], then run it. The
-/// `debugger record` subcommand reuses [`run_run_with_args`] directly with a
-/// `record_log` set, so the parse and the execution are split.
+/// Inner implementation of `run_run`, unaware of JSON formatting.
+///
+/// Parse the argument tail into a typed [`cli_args::RunArgs`], then run it.
 pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
     run_run_with_args(args)
 }
 
-/// Execute a fully-parsed `ipe run`: compile → cargo build → jailed exec. Shared
-/// by the ordinary `run` command and by `ipe debugger record` (which sets
-/// `record_log` to inject `IPE_DEBUGGER_RECORD` into the executed child).
+/// Execute a fully-parsed `ipe run`: compile → cargo build → jailed exec.
+///
+/// With `--record`, `IPE_DEBUGGER_RECORD` is injected into the executed child
+/// so the runtime dumps the session's replay log into the output root on exit.
 // A linear pipeline (compile → cargo build → resolve capabilities → jail →
 // exec); the steps share enough locals that splitting reads worse than the whole.
 #[allow(clippy::too_many_lines)]
@@ -2442,8 +2378,8 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     // A recording run compiles the debugger in unconditionally: the runtime
     // recorder and its replay-log dump are `#[cfg(feature = "debugger")]`, so a
     // record with the feature absent would silently produce no log.
-    let debugger = args.debugger || args.record_log.is_some();
-    let record_log = args.record_log;
+    let debugger = args.debugger || args.record;
+    let record = args.record;
     let bin_args = args.bin_args;
     let cli_layer = args.static_layer;
     // The CLI `--target` flavour (`--target wasi` selects the co-located WASI
@@ -2456,10 +2392,6 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     };
 
     let entry_path = PathBuf::from(&entry);
-
-    let out_dir = args
-        .out
-        .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
 
     // --- Step 1: ipe compile → emit the Rust project ---
     let manifest = discover_manifest(&entry_path)?;
@@ -2536,6 +2468,16 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         wasi_run::ensure_available()?;
     }
 
+    if record {
+        gate_record(
+            delivery.shape(),
+            compile_target,
+            manifest_parsed.as_ref(),
+            manifest.as_deref(),
+            &entry_path,
+        )?;
+    }
+
     // The dependency model (native OR wasm) needs no vendored tree — the runtime
     // is a path dependency. Only a dep-model-OFF build vendors the source subtree.
     let runtime_dep = runtime_dep_from_env();
@@ -2601,6 +2543,17 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
             ))
         );
     }
+
+    // Resolved only now, after every refusal above; nothing is created until the
+    // emit writes its crate.
+    let output = resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+    let out_dir = output.area_path(&[OutputArea::Rust])?;
+    // The session log lands in the ipe-owned output root, never beside sources.
+    let record_log = if record {
+        Some(output.claim()?.path_to(RECORD_LOG_FILE)?.path())
+    } else {
+        None
+    };
 
     manifest.as_ref().map_or_else(
         || {

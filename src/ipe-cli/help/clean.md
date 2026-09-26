@@ -1,4 +1,4 @@
-Remove the project's build-generated output (out/, target/, .ipe/).
+Remove the project's ipe-owned build output (out/, .ipe/).
 
 ```
 ipe clean

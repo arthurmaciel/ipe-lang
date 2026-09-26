@@ -1169,16 +1169,19 @@ ipe add <package>                  # add an FFI binding
 ipe remove <package>
 ipe install                        # regen missing FFI + deps
 ipe update                         # update deps
-ipe clean                          # remove out/ dist/
+ipe clean                          # remove ipe's build output (out/, .ipe/)
 ipe lsp                            # JSON-RPC LSP server (stdio)
 ipe version
 ```
 
-**Run `ipe build` from the project directory** — `--out out/rust` and `out/`
-are written relative to the current directory, so `cd` into the project first:
+**Build output lives in the project's `out/`** — `build`, `run` and `watch`
+emit the Rust crate to `out/rust/` and the binary to `out/bin/`; `release` writes
+under `out/release/`. `--out <dir>` picks another root. ipe writes only into
+directories it created (marked by an `.ipe-output` file) and refuses an `--out`
+that is the project, encloses it, sits inside `src/`, or already holds your files:
 
 ```bash
-cd my-app && ipe build src/Main.ipe
+cd my-app && ipe build            # → out/rust/, out/bin/my-app
 ```
 
 `ipe type-check` runs the same pipeline as `ipe build` up through type-checking,

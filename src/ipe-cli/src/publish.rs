@@ -298,8 +298,8 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
         if let Some(manifest) = crate::project::manifest_in_dir(path) {
             return Ok(manifest);
         }
-        if crate::project::migration_pending(path) {
-            return Err(CliError::Usage(crate::project::MIGRATE_CONFIG_HINT));
+        if crate::project::has_only_legacy_toml(path) {
+            return Err(CliError::Usage(crate::project::LEGACY_TOML_HINT));
         }
         return Err(CliError::UsageOwned(format!(
             "ipe package publish: no `package.ipe` in `{}` — publish operates on a publishable \

@@ -2,7 +2,7 @@ use super::{nearest_command, nearest_group_member};
 use crate::style::TerminalSafe;
 use crate::{
     Diagnostic, Path, PathBuf, Write, api_surface, audit, build_plan, contained_path, delivery,
-    help, machine_output, publish, render, render_json, style, toolchain,
+    help, machine_output, output_dir, publish, render, render_json, style, toolchain,
 };
 
 /// The runtime crate an emitted project linked against: its root and declared
@@ -329,6 +329,11 @@ pub enum CliError {
         /// Why the path was rejected.
         reason: contained_path::PathEscape,
     },
+    /// A build-output location was refused because ipe cannot prove it owns it.
+    ///
+    /// A symlink, a directory holding user files, or a path overlapping the
+    /// project's sources. Nothing was written, cleaned, or overwritten.
+    OutputRefused(output_dir::OutputRefusal),
     /// The module-discovery walk hit its depth ceiling or detected a symlink
     /// cycle. Carries the maximum depth that was configured and, for a cycle,
     /// the directory path where the cycle was detected.
@@ -519,6 +524,7 @@ impl CliError {
             Self::DiagnosticJsonEmitted => "diagnostic-json-emitted",
             Self::FileTooLarge { .. } => "file-too-large",
             Self::PathEscape { .. } => "path-escape",
+            Self::OutputRefused(_) => "output-refused",
             Self::DiscoveryLimitReached { .. } => "discovery-limit-reached",
             Self::UpgradeFeedUnreachable => "upgrade-feed-unreachable",
             Self::UpgradeCheckExit { .. } => "upgrade-check-exit",
@@ -805,6 +811,7 @@ impl std::fmt::Display for CliError {
             Self::PathEscape { raw, reason } => {
                 write!(f, "manifest path {raw:?} was rejected: {reason}")
             }
+            Self::OutputRefused(refusal) => write!(f, "output directory refused: {refusal}"),
             Self::DiscoveryLimitReached { detail } => {
                 write!(f, "module-discovery walk aborted: {detail}")
             }

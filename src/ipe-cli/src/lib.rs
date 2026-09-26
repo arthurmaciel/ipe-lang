@@ -48,9 +48,9 @@ pub mod lockfile;
 pub mod login;
 mod lsp;
 pub mod machine_output;
-pub mod migrate;
 pub mod native_ffi_consent;
 pub mod net;
+pub mod output_dir;
 pub mod pack;
 pub mod package_manifest;
 pub mod package_name;
@@ -102,10 +102,10 @@ pub use driver::{
 // (`watch`, `pkg`, …). Kept `pub(crate)` so no originally-private helper widens
 // to public API; the block above re-exports the genuine public surface as `pub`.
 pub(crate) use driver::{
-    build_source_graph, capabilities_including_served_widgets, default_entry,
+    RewriteKind, build_source_graph, capabilities_including_served_widgets, default_entry,
     find_manifest_for_ipe_file, force_cargo_terminal_ui, io_err, lower_entry_via_graph,
-    read_progress_chunk, read_yes_no, read_yes_no_default, resolve_vendored_runtime_dir, run_build,
-    run_capabilities, run_debugger, run_eject, run_exec, run_fix, run_installer, run_package,
-    run_release, run_run, run_test, run_type_check, run_verify, run_version, run_watch,
-    typecheck_entry_via_graph, write_atomic, write_emitted_project,
+    read_progress_chunk, read_yes_no, read_yes_no_default, resolve_vendored_runtime_dir,
+    rewrite_user_file, rewrite_walked_file, run_build, run_capabilities, run_eject, run_exec,
+    run_fix, run_installer, run_package, run_release, run_run, run_test, run_type_check,
+    run_verify, run_version, run_watch, typecheck_entry_via_graph, write_emitted_project,
 };
