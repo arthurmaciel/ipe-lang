@@ -104,9 +104,11 @@ pub struct FamilyRow {
     pub summary: &'static str,
 }
 
-/// The single letter↔family table: [`Code::family`] reads it to classify a code
-/// and [`Family::letter`] / [`Family::summary`] read it to describe a family, so
-/// the prefix letters and the families cannot drift apart. In display order.
+/// The single letter↔family table, in display order.
+///
+/// [`Code::family`] reads it to classify a code and [`Family::letter`] /
+/// [`Family::summary`] read it to describe a family, so the prefix letters and
+/// the families cannot drift apart.
 pub const FAMILIES: [FamilyRow; 8] = [
     FamilyRow {
         family: Family::Parse,
