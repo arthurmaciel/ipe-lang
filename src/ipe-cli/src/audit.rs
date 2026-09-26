@@ -26,8 +26,9 @@
 //!    `[capabilities]`. A used-but-undeclared capability is a hidden effect; a
 //!    declared-but-unused one is an over-broad, misleading claim. Either rejects.
 //! 3. **Enforced semver** — `ipe diff` / [`crate::diff::check_semver_bump`]
-//!    between this version's public API and the previous published version; an
-//!    under-bump rejects. A first version (no predecessor) skips this check.
+//!    between this version's public API and the previous published STABLE
+//!    version; an under-bump rejects. A prerelease submission, and a first
+//!    stable version (no stable predecessor), skip this check.
 //! 4. **Supply chain** — `cargo-deny` over the emitted project's dependency
 //!    graph, plus the resolver's content-hash re-assertion over any Ipê package
 //!    dependencies (verify-before-trust, re-checked at publish).
@@ -1227,11 +1228,16 @@ fn disclosure_summary(name: &str, disclosure: &Disclosure) -> String {
 /// Enforce the semver bump between this version's public API and the previous
 /// published version fetched from the index.
 ///
-/// Looks up the package in the index; the highest published version strictly
-/// below the manifest's declared version is the predecessor. When the package is
-/// not in the index, or has no version below this one, this is a FIRST version —
-/// the check has no predecessor to diff against and skips (per §1c). Otherwise it
-/// runs [`crate::diff::check_semver_bump`] and rejects an under-bump.
+/// Looks up the package in the index; the baseline is [`stable_baseline`] — the
+/// highest published RELEASE version strictly below the manifest's declared
+/// version. Prereleases are never the baseline: they carry no compatibility
+/// promise and a stable requirement never resolves them, so the promise a stable
+/// release must keep is to the previous stable release. Diffing against a
+/// prerelease instead would let a breaking change ride in through an exempt
+/// prerelease and reach stable ranges as a patch. When the package is not in the
+/// index, or has no release below this one, this is a FIRST stable version — the
+/// check has no baseline to diff against and skips (per §1c). Otherwise it runs
+/// [`crate::diff::check_semver_bump`] and rejects an under-bump.
 ///
 /// The predecessor's public API is rebuilt from its pinned source (fetched +
 /// hash-verified through the resolver), so the baseline is exactly the bytes the
@@ -1292,18 +1298,13 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
         return Ok(());
     };
 
-    // The predecessor is the highest published version strictly BELOW this one.
-    let Some(previous) = entry
-        .versions
-        .iter()
-        .filter(|v| v.version < new_version)
-        .max_by(|a, b| a.version.cmp(&b.version))
-    else {
+    let Some(previous) = stable_baseline(&entry.versions, &new_version) else {
         print!(
             "{}",
             crate::style::frame(&crate::style::gutter(&format!(
-                "package audit: `{}` has no published version below {new_version} — \
-                 skipping the enforced-semver check (first version).",
+                "package audit: `{}` has no published stable version below {new_version} — \
+                 skipping the enforced-semver check (first stable version; a prerelease \
+                 carries no compatibility promise to diff against).",
                 prepared.manifest.name
             )))
         );
@@ -1339,6 +1340,19 @@ fn enforced_semver(prepared: &Prepared, index_root: Option<&Path>) -> Result<(),
             ),
         ))
     }
+}
+
+/// The enforced-semver baseline for a release `new_version`: the highest
+/// published release (no prerelease tag) strictly below it, or `None` when there
+/// is none (a first stable version).
+fn stable_baseline<'a>(
+    versions: &'a [crate::index::EntryVersion],
+    new_version: &semver::Version,
+) -> Option<&'a crate::index::EntryVersion> {
+    versions
+        .iter()
+        .filter(|v| v.version.pre.is_empty() && v.version < *new_version)
+        .max_by(|a, b| a.version.cmp(&b.version))
 }
 
 // ===========================================================================
@@ -2600,6 +2614,88 @@ mod tests {
         assert!(
             result.is_ok(),
             "a prerelease over a published predecessor is exempt from the bump: {result:?}"
+        );
+    }
+
+    /// Write a one-package index at `index_root` publishing `versions` of
+    /// `test-pkg`.
+    fn write_index_versions(index_root: &std::path::Path, versions: &[&str]) {
+        use std::fmt::Write as _;
+        let pkgs = index_root.join("packages");
+        std::fs::create_dir_all(&pkgs).expect("create packages/");
+        let mut body = "name = \"test-pkg\"\npublisher = \"someone\"\n".to_owned();
+        for version in versions {
+            let _ = write!(
+                body,
+                "\n[[version]]\n\
+                 version = \"{version}\"\n\
+                 source = \"https://github.com/example/test-pkg\"\n\
+                 rev = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\
+                 sha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n"
+            );
+        }
+        std::fs::write(pkgs.join("test-pkg.toml"), body).expect("write index entry");
+    }
+
+    /// A stable release whose only published predecessors are prereleases is a
+    /// FIRST stable version: the check skips instead of diffing against the
+    /// prerelease. Hermetic — the skip returns before any predecessor fetch.
+    #[test]
+    fn enforced_semver_skips_a_first_stable_release_over_only_prereleases() {
+        let index_root = make_test_dir("semver-first-stable");
+        write_index_versions(&index_root, &["0.0.1-rc.1"]);
+
+        let mut prepared = make_prepared(&index_root.join("proj"));
+        prepared.manifest.name = "test-pkg".to_owned();
+        prepared.manifest.version = Some("0.0.1".parse().expect("valid release"));
+
+        let result = enforced_semver(&prepared, Some(&index_root));
+        let _ = std::fs::remove_dir_all(&index_root);
+        assert!(
+            result.is_ok(),
+            "0.0.1-rc.1 -> 0.0.1 graduates as a first stable version: {result:?}"
+        );
+    }
+
+    /// The baseline skips a prerelease for the release below it, so a breaking
+    /// change carried in through an exempt prerelease (`0.1.0` → `0.1.1-rc.1`
+    /// removes an export) is measured against `0.1.0` and `0.1.1` is refused.
+    #[test]
+    fn enforced_semver_baseline_skips_prereleases_so_a_smuggled_break_is_refused() {
+        let index_root = make_test_dir("semver-stable-baseline");
+        write_index_versions(&index_root, &["0.1.0", "0.1.1-rc.1", "0.2.0-rc.1"]);
+        let entry = crate::index::read_entry_lookup(&index_root, "test-pkg")
+            .absent_or_err()
+            .expect("readable entry")
+            .expect("entry present");
+        let _ = std::fs::remove_dir_all(&index_root);
+
+        let new_version = semver::Version::new(0, 1, 1);
+        let baseline = stable_baseline(&entry.versions, &new_version).expect("a stable baseline");
+        assert_eq!(baseline.version, semver::Version::new(0, 1, 0));
+
+        let with_export = |names: &[&str]| {
+            let mut module = crate::api_surface::ModuleApi::default();
+            for name in names {
+                module.values.insert((*name).to_owned(), "Int".to_owned());
+            }
+            crate::api_surface::PublicApi {
+                modules: std::iter::once((vec!["Lib".to_owned()], module)).collect(),
+            }
+        };
+        let stable_api = with_export(&["f", "g"]);
+        let rc_api = with_export(&["f"]);
+        let report = crate::diff::report(&stable_api, &rc_api, &baseline.version, &new_version)
+            .expect("floor does not overflow");
+        assert_eq!(report.floor, semver::Version::new(0, 2, 0));
+        assert!(
+            !report.satisfied,
+            "a break smuggled through a prerelease still needs the minor bump"
+        );
+
+        assert!(
+            stable_baseline(&entry.versions, &semver::Version::new(0, 0, 9)).is_none(),
+            "no release below the new version is a first stable version"
         );
     }
 
