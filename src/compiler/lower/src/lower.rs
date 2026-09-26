@@ -174,6 +174,43 @@ fn arrow_params(fn_ty: &Ty) -> Vec<&Ty> {
     params
 }
 
+/// The solved type scheme variable `var` is instantiated to, found by walking `shape` alongside `solved`.
+///
+/// Aligns exactly the positions [`ipe_kernels::shape_aligns_var`] counts — an
+/// arrow side, a constructor argument, a tuple element; a record field is keyed
+/// by an interned symbol the shape cannot name, so it is skipped. `None` when
+/// no aligned occurrence exists or the two trees disagree in structure. The
+/// walk is bounded by the `'static` shape's depth.
+fn scheme_var_instance<'t>(
+    shape: &ipe_kernels::TyShape,
+    solved: &'t Ty,
+    var: u8,
+) -> Option<&'t Ty> {
+    use ipe_kernels::TyShape;
+    match (shape, solved) {
+        (TyShape::Var(v), _) => (*v == var).then_some(solved),
+        (TyShape::Fun(arg, res), Ty::Fun(solved_arg, solved_res)) => {
+            scheme_var_instance(arg, solved_arg, var)
+                .or_else(|| scheme_var_instance(res, solved_res, var))
+        }
+        (
+            TyShape::Con(_, items),
+            Ty::Con {
+                args: solved_items, ..
+            },
+        )
+        | (TyShape::Tuple(items), Ty::Tuple(solved_items))
+            if items.len() == solved_items.len() =>
+        {
+            items
+                .iter()
+                .zip(solved_items)
+                .find_map(|(item, solved_item)| scheme_var_instance(item, solved_item, var))
+        }
+        _ => None,
+    }
+}
+
 /// The `Maybe a` type carries exactly one argument; an arity-1 guard cleared it,
 /// so a missing first argument here is an unreachable internal invariant.
 fn maybe_arg_bug() -> Diagnostic {
@@ -24473,31 +24510,49 @@ impl<'a> Lowerer<'a> {
     /// point-free all record it alike. Every kernel resolution routes through
     /// [`Self::lower_callee`], the one hook point.
     ///
-    /// Fail-closed: a missing region type, or an arrow shorter than a listed
-    /// index, obliges every generic of the def; an argument type that does not
-    /// lower to an `IrType` obliges every generic it mentions.
+    /// A kernel whose runtime signature bounds a scheme variable `Sync`
+    /// ([`KernelFn::sync_obliged_scheme_vars`] — the `msg` of `Input.checkbox`)
+    /// obliges the generics reaching that variable's instantiation the same way;
+    /// the instantiation is found by aligning the kernel's
+    /// [`KernelFn::scheme_shape`] with the same solved type.
+    ///
+    /// Fail-closed: a missing region type, an arrow shorter than a listed
+    /// index, or a scheme variable with no aligned instantiation obliges every
+    /// generic of the def; a type that does not lower to an `IrType` obliges
+    /// every generic it mentions.
     fn note_sync_captures(&self, kernel: KernelFn, span: Span) {
         let captured = kernel.sync_captured_args();
-        if captured.is_empty() {
+        let scheme_vars = kernel.sync_obliged_scheme_vars();
+        if captured.is_empty() && scheme_vars.is_empty() {
             return;
         }
         let poly: BTreeSet<Symbol> = self.current_poly_tvars.borrow().values().copied().collect();
         if poly.is_empty() {
             return;
         }
-        // A missing region type yields no parameters, so every listed index
-        // falls to the fail-closed arm below.
-        let arg_tys: Vec<&Ty> = self.region_ty(span).map(arrow_params).unwrap_or_default();
+        let solved = self.region_ty(span);
+        // A missing region type yields no parameters and no instantiations, so
+        // every listed entry falls to the fail-closed arm below.
+        let arg_tys: Vec<&Ty> = solved.map(arrow_params).unwrap_or_default();
+        let obliged_tys =
+            captured
+                .iter()
+                .map(|&idx| arg_tys.get(idx).copied())
+                .chain(scheme_vars.iter().map(|&var| {
+                    solved
+                        .zip(kernel.scheme_shape())
+                        .and_then(|(ty, shape)| scheme_var_instance(shape, ty, var))
+                }));
         let mut obliged: BTreeSet<Symbol> = BTreeSet::new();
-        for &idx in captured {
-            let Some(arg_ty) = arg_tys.get(idx).copied() else {
+        for obliged_ty in obliged_tys {
+            let Some(obliged_ty) = obliged_ty else {
                 obliged.extend(poly.iter().copied());
                 continue;
             };
-            let lowered = self.ir_type_from_ty(arg_ty, span).ok();
+            let lowered = self.ir_type_from_ty(obliged_ty, span).ok();
             obliged.extend(poly.iter().copied().filter(|tv| {
                 lowered.as_ref().map_or_else(
-                    || self.ty_mentions_poly_tvar(arg_ty, *tv),
+                    || self.ty_mentions_poly_tvar(obliged_ty, *tv),
                     |ir| ir_type_generic_reaches_bare(ir, *tv),
                 )
             }));
@@ -31397,5 +31452,48 @@ mod tests {
         assert!(fused.nested_cons_payload_sites >= 1, "nested cons seen");
         assert!(fused.nested_strlit_payload_sites >= 1, "nested strlit seen");
         assert!(fused.tuple_elem_rebind_sites >= 1, "tuple rebind seen");
+    }
+
+    /// `scheme_var_instance` reads a scheme variable's instantiation off the solved kernel type.
+    ///
+    /// `Input.checkbox`'s `msg` (var 0) is found through the attribute list and
+    /// the `Element msg` result; the cfg record is skipped. A solved type whose
+    /// structure disagrees with the scheme yields `None`, the fail-closed arm.
+    #[test]
+    fn scheme_var_instance_aligns_input_msg() {
+        const fn con(name: ipe_intern::Symbol, args: Vec<Ty>) -> Ty {
+            Ty::Con {
+                module: vec![],
+                name,
+                args,
+            }
+        }
+        let mut interner = Interner::new();
+        let mut intern = |name: &str| interner.intern(name).expect("intern constructor name");
+        let (msg_sym, list, attribute, view, web) = (
+            intern("Msg"),
+            intern("List"),
+            intern("Attribute"),
+            intern("View"),
+            intern("Web"),
+        );
+        let msg = con(msg_sym, vec![]);
+        let attrs = con(list, vec![con(attribute, vec![msg.clone()])]);
+        let element = con(view, vec![con(web, vec![]), msg.clone()]);
+        let cfg = Ty::Record(BTreeMap::new(), ipe_types::RowTail::Closed);
+        let solved = Ty::Fun(
+            Box::new(attrs),
+            Box::new(Ty::Fun(Box::new(cfg), Box::new(element))),
+        );
+        assert_eq!(
+            KernelFn::InputCheckbox.sync_obliged_scheme_vars(),
+            &[0],
+            "Input.checkbox obliges its msg variable Sync"
+        );
+        let shape = KernelFn::InputCheckbox.scheme_shape();
+        assert!(shape.is_some(), "Input.checkbox must carry a scheme shape");
+        let Some(shape) = shape else { return };
+        assert_eq!(super::scheme_var_instance(shape, &solved, 0), Some(&msg));
+        assert_eq!(super::scheme_var_instance(shape, &msg, 0), None);
     }
 }

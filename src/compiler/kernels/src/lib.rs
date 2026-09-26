@@ -630,6 +630,63 @@ pub enum RowTailShape {
     Open(u8),
 }
 
+/// Whether scheme variable `var` occurs in `shape` at a position that aligns positionally with a solved type.
+///
+/// An arrow side, a constructor argument, and a tuple element align by
+/// position; a record field is keyed by an interned symbol this leaf crate
+/// cannot name, so an occurrence only under a record does not count.
+#[must_use]
+pub const fn shape_aligns_var(shape: &TyShape, var: u8) -> bool {
+    match shape {
+        TyShape::Var(v) => *v == var,
+        TyShape::Fun(arg, res) => shape_aligns_var(arg, var) || shape_aligns_var(res, var),
+        TyShape::Con(_, items) | TyShape::Tuple(items) => {
+            let mut rest: &[TyShape] = *items;
+            while let Some((item, tail)) = rest.split_first() {
+                if shape_aligns_var(item, var) {
+                    return true;
+                }
+                rest = tail;
+            }
+            false
+        }
+        TyShape::Record { .. } | TyShape::Unit => false,
+    }
+}
+
+/// Whether every [`StdlibKernel::sync_obliged_scheme_vars`] entry of `kernels` aligns in its scheme.
+///
+/// A kernel listing a variable must carry a [`StdlibKernel::scheme_shape`] in
+/// which [`shape_aligns_var`] finds that variable; otherwise the lowerer cannot
+/// read the variable's instantiation at a call site.
+#[must_use]
+pub const fn sync_obliged_scheme_vars_are_aligned(kernels: &[StdlibKernel]) -> bool {
+    let mut rest = kernels;
+    while let Some((kernel, tail)) = rest.split_first() {
+        let mut vars = kernel.sync_obliged_scheme_vars();
+        if !vars.is_empty() {
+            let Some(shape) = kernel.scheme_shape() else {
+                return false;
+            };
+            while let Some((var, more)) = vars.split_first() {
+                if !shape_aligns_var(shape, *var) {
+                    return false;
+                }
+                vars = more;
+            }
+        }
+        rest = tail;
+    }
+    true
+}
+
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a `sync_obliged_scheme_vars` entry has no aligned occurrence in its kernel's scheme, the capture-`Sync` SEAL invariant [ledger #boundary]
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    sync_obliged_scheme_vars_are_aligned(StdlibKernel::ALL),
+    "a kernel's sync_obliged_scheme_vars names a variable its scheme_shape does not carry at an aligned position",
+);
+
 /// A record field name, named structurally by tag rather than by an interned
 /// [`ipe_intern::Symbol`].
 ///
@@ -10699,6 +10756,31 @@ impl StdlibKernel {
             | Self::UiOnSubmit
             | Self::HtmlOnSubmit => &[0],
             Self::JsonDecPOptional | Self::DbDecOptional => &[2],
+            _ => &[],
+        }
+    }
+
+    /// The scheme variables ([`TyShape::Var`] indices) this kernel's runtime call bounds `Sync`.
+    ///
+    /// The sibling of [`Self::sync_captured_args`] for a `Sync` bound no argument
+    /// exposes bare: the runtime function puts `Sync` on a type parameter the Ipê
+    /// scheme spells only as a constructor argument (the `msg` of `Element msg`),
+    /// so the obligation is keyed on the scheme variable. The lowerer reads the
+    /// variable's instantiation off the call site's solved kernel type, and every
+    /// generic reaching that instantiation bare becomes `Send + Sync`.
+    ///
+    /// * `Input.checkbox` / `Input.radio` / `Input.radioRow` — var 0, the `msg`
+    ///   bound `M: Clone + Send + Sync` by `input_checkbox_` / `input_radio_` /
+    ///   `input_radio_row_`.
+    ///
+    /// Every listed variable occurs in the kernel's [`Self::scheme_shape`] at a
+    /// position the lowerer aligns (an arrow, constructor-argument, or tuple
+    /// slot — not only under a record field); the build asserts it
+    /// ([`sync_obliged_scheme_vars_are_aligned`]).
+    #[must_use]
+    pub const fn sync_obliged_scheme_vars(self) -> &'static [u8] {
+        match self {
+            Self::InputCheckbox | Self::InputRadio | Self::InputRadioRow => &[0],
             _ => &[],
         }
     }

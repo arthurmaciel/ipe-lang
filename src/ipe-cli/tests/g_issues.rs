@@ -4,6 +4,8 @@
 
 mod support;
 
+#[path = "g_issues/golden_generic_msg_input_sync_seal.rs"]
+mod golden_generic_msg_input_sync_seal;
 #[path = "g_issues/golden_generic_succeed_tail_sync_seal.rs"]
 mod golden_generic_succeed_tail_sync_seal;
 #[path = "g_issues/golden_i1005_generic_capture_append_seal.rs"]
