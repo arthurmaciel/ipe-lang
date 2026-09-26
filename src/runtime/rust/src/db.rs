@@ -4087,6 +4087,8 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
 /// - a conflict-target column not supplied as a `SetField` — its value would be
 ///   absent or DB-generated, the conflict could never match, and the upsert
 ///   would silently degrade to a plain insert.
+/// - a conflict-target column bound to `SqlNull` — NULLs never compare equal
+///   under a unique constraint, so the upsert would likewise degrade to an insert.
 ///
 /// Security: every interpolated name is a validated `SqlIdent`; `excluded.<col>`
 /// reuses the same validated identifier. Values bind positionally.
@@ -4135,6 +4137,11 @@ fn build_upsert_sql(
             continue;
         };
         if target_keys.contains(&key) {
+            if matches!(p, SqlParam::Null(_)) {
+                return Err(format!(
+                    "{kernel}: conflict-target column {col:?} is NULL; a NULL key never conflicts"
+                ));
+            }
             supplied_target_keys.insert(key);
         } else {
             set_clauses.push(format!("{0} = excluded.{0}", qcol.as_str()));
@@ -7235,6 +7242,16 @@ mod tests {
             (
                 "conflict-target column is OmitField",
                 upsert_sql(&["id"], vec![key(), ("id", None)]),
+            ),
+            (
+                "conflict-target column is SqlNull",
+                upsert_sql(
+                    &["k"],
+                    vec![(
+                        "k",
+                        Some(SqlParam::Null(Box::new(SqlParam::Text(String::new())))),
+                    )],
+                ),
             ),
         ];
         for (label, built) in cases {
