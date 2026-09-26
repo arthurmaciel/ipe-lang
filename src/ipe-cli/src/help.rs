@@ -18,7 +18,7 @@ use std::fmt::Write as _;
 use std::io::IsTerminal;
 
 use crate::CliError;
-use crate::style::{Palette, REPO_URL, gutter, report_bugs_footer};
+use crate::style::{Palette, gutter};
 
 /// A command's dispatch handler: it receives the arguments after the command
 /// name and runs the command.
@@ -1150,19 +1150,11 @@ fn command_line(cmd: &Command, p: &Palette) -> String {
     line
 }
 
-/// Render the top-level overview: the header, then every command grouped by
-/// section.
+/// Render the top-level overview: every command grouped by section. The
+/// product header and the bug footer come from the screen frame
+/// ([`crate::screen`]).
 fn render_top_level(p: &Palette) -> String {
-    let version = env!("CARGO_PKG_VERSION");
     let mut out = String::new();
-
-    // Header: the product name in soft yellow, the URL dimmed.
-    out.push('\n');
-    let _ = writeln!(
-        out,
-        "{}Ipê language{} - v{version} - {}{REPO_URL}{}",
-        p.yellow, p.reset, p.dim, p.reset
-    );
 
     // The full list: every command by section, each shown as a ready-to-run
     // `ipe <command> --help`. The `--help` suffix aligns into one column within
@@ -1199,11 +1191,6 @@ fn render_top_level(p: &Palette) -> String {
         }
     }
 
-    // Footer: where to report bugs. The repository link already sits in the
-    // header, so it is not repeated here.
-    out.push('\n');
-    let _ = writeln!(out, "{}{}{}", p.dim, report_bugs_footer(), p.reset);
-    out.push('\n');
     gutter(&out)
 }
 

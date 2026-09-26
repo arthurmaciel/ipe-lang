@@ -253,7 +253,7 @@ enum WatchRole {
 /// is guaranteed absorbed.
 pub const SIGTERM_TEARDOWN_MARKER: &str = "[ipe watch] SIGTERM received; shutting down";
 
-/// `text` is already-sanitised [`TerminalSafe`], mirroring [`crate::style::error_banner`]:
+/// `text` is already-sanitised [`TerminalSafe`], mirroring [`crate::screen::error_screen`]:
 /// the line's own gutter/colour escapes are the only control bytes the output may
 /// carry. Callers construct it via [`crate::style::TerminalSafe::sanitize`] at the
 /// message boundary, so an unsanitised watch message is unrepresentable here.
