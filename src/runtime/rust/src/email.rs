@@ -236,7 +236,7 @@ async fn email_post_json<E: From<String>>(
     .await
     {
         Ok(b) => b,
-        Err(e) => return Err(e.into()),
+        Err(refusal) => return Err(format!("http: {refusal}").into()),
     };
     let client = match builder.build() {
         Ok(c) => c,
@@ -1042,9 +1042,17 @@ mod tests {
             IpeResult::Err(e) => e,
             IpeResult::Ok(_) => panic!("expected SSRF block for 10.0.0.1"),
         };
-        let http_err = crate::ssrf::ssrf_check_url("http://10.0.0.1/")
-            .await
-            .unwrap_err();
+        let http_err = crate::http_client::ssrf_apply_with(
+            reqwest::Client::builder(),
+            "http://10.0.0.1/",
+            crate::http_client::RedirectPolicy::NoRedirects,
+            crate::ssrf::DialPolicy::DenyPrivate,
+            crate::http_client::VettingResolver::system(),
+        )
+        .await
+        .err()
+        .map(|refusal| refusal.to_string())
+        .unwrap_or_default();
         assert!(
             smtp_err.contains("blocked"),
             "SMTP error must contain 'blocked': {smtp_err}"

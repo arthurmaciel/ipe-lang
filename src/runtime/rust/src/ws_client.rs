@@ -186,14 +186,14 @@ async fn do_connect<E: From<String> + Send + 'static>(
     // Build the credential-stripped form ONCE; every error message below echoes
     // this, never the raw `url`.
     let safe_url = redact_ws_url(&url);
-    // SSRF guard: when IPE_HTTP_DENY_PRIVATE is set, reject a ws/wss URL whose host
-    // resolves to a private/loopback/link-local address BEFORE the handshake — the
-    // without this check the WebSocket surface would connect with no
-    // deny-private guard, letting an attacker-controlled URL reach internal
-    // services the Http client blocks.
-    if let Err(msg) = super::ssrf::ssrf_validate_url(&url).await {
-        return IpeResult::Err(msg.into());
-    }
+    // SSRF gate, before the handshake: under deny-private the host is resolved
+    // ONCE through the shared gate (bounded deadline, a host with any blocked
+    // answer refused whole) and the dial below is pinned to the vetted address,
+    // so tokio-tungstenite never re-resolves the name to a rebind target.
+    let dial = match super::ssrf::VettedDial::for_url(&url).await {
+        Ok(dial) => dial,
+        Err(refusal) => return IpeResult::Err(format!("ws: {refusal}").into()),
+    };
     // Build the handshake request so custom headers (e.g. Authorization) from
     // connectWith's cfg.headers are sent.
     let mut req = match url.as_str().into_client_request() {
@@ -253,15 +253,6 @@ async fn do_connect<E: From<String> + Send + 'static>(
         max_frame_size: Some(max_msg),
         ..Default::default()
     };
-    // SSRF pin (R1): when IPE_HTTP_DENY_PRIVATE is on, resolve the host to a
-    // vetted non-private addr and dial THAT ourselves, so tokio-tungstenite can't
-    // re-resolve the name to a rebind target at connect time — closing the
-    // resolve->connect TOCTOU that the bare ssrf_validate_url check above leaves
-    // open (it validates a name that connect_async would resolve again).
-    let pinned = match super::ssrf::ssrf_pinned_ws_addr(&url).await {
-        Ok(p) => p,
-        Err(msg) => return IpeResult::Err(msg.into()),
-    };
     type WsConnOut = Result<
         (
             tokio_tungstenite::WebSocketStream<
@@ -272,8 +263,8 @@ async fn do_connect<E: From<String> + Send + 'static>(
         tokio_tungstenite::tungstenite::Error,
     >;
     let connect_fut: std::pin::Pin<Box<dyn std::future::Future<Output = WsConnOut> + Send>> =
-        match pinned {
-            Some(addr) => {
+        match dial {
+            super::ssrf::VettedDial::Pinned(addr) => {
                 // When SSRF-pinning is active (IPE_HTTP_DENY_PRIVATE), we dial
                 // the already-vetted IP directly via a raw TCP socket, bypassing
                 // the name-resolution step. A raw TCP socket carries no TLS
@@ -311,11 +302,9 @@ async fn do_connect<E: From<String> + Send + 'static>(
                     .await
                 })
             }
-            None => Box::pin(tokio_tungstenite::connect_async_with_config(
-                req,
-                Some(ws_config),
-                false,
-            )),
+            super::ssrf::VettedDial::Unrestricted => Box::pin(
+                tokio_tungstenite::connect_async_with_config(req, Some(ws_config), false),
+            ),
         };
     // Floor the handshake timeout: a non-positive cfg.timeout must NOT disable it
     // (an unreachable / silently-stalling host would otherwise hang connect_async

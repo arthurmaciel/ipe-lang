@@ -111,7 +111,7 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
             reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(30));
         let builder = match crate::http_client::ssrf_apply(builder, &req.url, req.redirects).await {
             Ok(b) => b,
-            Err(msg) => return IpeResult::Err(msg.into()),
+            Err(refusal) => return IpeResult::Err(format!("http: {refusal}").into()),
         };
         let client = match builder.build() {
             Ok(c) => c,

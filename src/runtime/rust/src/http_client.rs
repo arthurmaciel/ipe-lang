@@ -15,38 +15,31 @@
 //! any other value (`0`/`off`/`false`) is the explicit production opt-out. See
 //! `ssrf::ssrf_deny_private_enabled`.
 //!
-//! When ON the check runs in three layers:
-//! 1. **Pre-send resolve + pin (DNS-rebinding defence)**: parse the URL;
-//!    DNS-resolve the host; reject if any resolved IP is private; then
-//!    **pin** the client to the first vetted non-private `SocketAddr` via
-//!    `ClientBuilder::resolve_to_addrs(host, &[vetted_addr])`.  This closes
-//!    the TOCTOU window: reqwest connects to the exact IP that passed the
-//!    check — a rebind returning a private address at connect time cannot
-//!    bypass the guard.
-//! 2. **Each redirect (URL-level re-check)**: a custom
-//!    `reqwest::redirect::Policy` repeats the scheme + private-IP check on
-//!    every `Location` target before following it, preventing open-redirect
-//!    chains that bypass the pre-send check.
-//!
-//! ### Redirect-pin limitation
-//! Full per-redirect IP pinning (resolving + pinning the *new* host on each
-//! hop) is not expressible with reqwest's current `redirect::Policy` API: the
-//! callback receives only the redirect URL, not a `ClientBuilder`, so we
-//! cannot rebuild and re-pin the client mid-chain.  The URL-level re-check
-//! (layer 2) is therefore the floor for redirect hops: it catches IP literals
-//! and known-private hostnames but cannot prevent a mid-chain rebind on a
-//! freshly registered hostname.  In practice redirect chains to attacker-
-//! controlled domains are blocked by the scheme + private-IP URL check; a
-//! full per-hop pin would require a reqwest API extension or a custom
-//! `hyper` connector.
+//! When ON every name goes through the one SSRF gate
+//! (`ssrf::vet_host_addrs_with`: bounded deadline, a host with ANY blocked
+//! answer refused whole) in three places:
+//! 1. **Pre-send resolve + pin**: the request host is vetted once and
+//!    reqwest's lookup of it is pinned to the vetted addresses via
+//!    `ClientBuilder::resolve_to_addrs`, so a rebind at connect time cannot
+//!    reach a private address.
+//! 2. **Every other name (redirect hops)**: `VettingResolver` is reqwest's DNS
+//!    resolver, so a redirect to a different name is vetted by the same gate
+//!    at connect and reqwest dials exactly the vetted addresses.
+//! 3. **Each redirect (URL-level re-check)**: a custom
+//!    `reqwest::redirect::Policy` repeats the scheme + IP-literal range check
+//!    on every `Location` target, since an IP literal bypasses any resolver.
 
 use super::*;
 use std::collections::HashMap;
 // SSRF deny-private helpers live in the reqwest-free `ssrf` module (so the
 // WebSocket client can validate URLs without linking reqwest). The reqwest-
-// coupled `ssrf_apply` + the request executor below import the three they use.
+// coupled `ssrf_apply` + the request executor below import what they use.
 #[cfg(not(target_arch = "wasm32"))]
-use super::ssrf::{ssrf_check_url_nonblocking, ssrf_deny_private_enabled, vet_host};
+use super::ssrf::{
+    DialPolicy, HostResolver, SsrfRefusal, SystemResolver, UrlRefusal, VettedAddrs, dns_timeout,
+    parse_gated_url, redact_userinfo, ssrf_check_url_nonblocking, strip_ipv6_brackets,
+    vet_host_addrs_with,
+};
 
 /// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
 #[derive(Clone, Debug)]
@@ -250,154 +243,151 @@ pub fn http_with_url<E: From<String>>(
 // ---------------------------------------------------------------------------
 // SSRF guard — reqwest client integration
 // ---------------------------------------------------------------------------
-// The reqwest-free validators (ssrf_check_url / vet_host /
-// is_private_ip / ssrf_validate_url / ssrf_pinned_ws_addr / …) live in `ssrf.rs`.
+// The reqwest-free gate (`vet_host_addrs_with` / `vet_url_with` /
+// `blocked_range` / …) lives in `ssrf.rs`.
 // What remains here is reqwest-coupled: `ssrf_apply` (a reqwest::ClientBuilder)
 // and the request executor.
 
-/// Apply the SSRF deny-private guard to a `reqwest::ClientBuilder` for `url`.
-/// When `IPE_HTTP_DENY_PRIVATE` is set, validates the URL scheme + host, resolves
-/// to a vetted non-private `SocketAddr`, pins DNS to it (defeats DNS-rebinding),
-/// and installs a per-redirect-hop re-check. SHARED by every outbound request
-/// surface — the regular Http client, `Http.Stream.open`, the WebSocket client,
-/// the Email SES path — so the guard can NEVER be missing from a request path
-/// (the bug class this closes: a new path that built its own client without the
-/// check). When the guard is off, installs the caller's plain redirect policy.
-/// Fail-closed DNS resolver vetting EVERY hostname reqwest resolves (initial AND
-/// every redirect hop) at connect time against `ssrf::is_private_ip`, returning
-/// only non-private addresses. Closes the redirect-rebinding TOCTOU the per-hop
-/// URL re-check left open: `ssrf_check_url` validated a hostname then DISCARDED the
-/// address, so reqwest re-resolved it by name at connect and could hit a rebind
-/// target; with this resolver reqwest connects to exactly the vetted addrs (no
-/// re-resolve). Installed only under IPE_HTTP_DENY_PRIVATE. IP-literal targets
-/// bypass the resolver, so the literal/scheme checks below and the per-hop
-/// redirect `Policy` remain mandatory.
+/// The reqwest resolver that runs every name through the one SSRF gate.
+///
+/// Installed under [`DialPolicy::DenyPrivate`], it vets EVERY hostname reqwest
+/// resolves — a redirect hop to a different name included — with
+/// [`vet_host_addrs_with`]: the same resolver, the same bounded deadline, and
+/// the same rule (a host any of whose answers is blocked is refused whole) as
+/// every other outbound dial. reqwest connects to exactly the vetted
+/// addresses, so a name is never re-resolved by name to a rebind target.
+/// IP-literal targets bypass a resolver, so the per-hop redirect `Policy`'s
+/// literal check stays mandatory.
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug)]
-struct DenyPrivateResolver;
+pub(crate) struct VettingResolver<R> {
+    resolver: std::sync::Arc<R>,
+    deadline: std::time::Duration,
+}
 
 #[cfg(not(target_arch = "wasm32"))]
-impl reqwest::dns::Resolve for DenyPrivateResolver {
+impl VettingResolver<SystemResolver> {
+    /// The system resolver under [`dns_timeout`].
+    pub(crate) fn system() -> Self {
+        Self::new(std::sync::Arc::new(SystemResolver), dns_timeout())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<R: HostResolver + Send + 'static> VettingResolver<R> {
+    /// Vet names through `resolver`, each lookup bounded by `deadline`.
+    pub(crate) const fn new(resolver: std::sync::Arc<R>, deadline: std::time::Duration) -> Self {
+        Self { resolver, deadline }
+    }
+
+    /// Every address `host` may be dialled at (port 0: reqwest substitutes the real one).
+    async fn vet(&self, host: &str) -> Result<VettedAddrs, SsrfRefusal> {
+        vet_host_addrs_with(self.resolver.as_ref(), host, 0, self.deadline).await
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<R: HostResolver + Send + 'static> reqwest::dns::Resolve for VettingResolver<R> {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_string();
+        let gate = Self {
+            resolver: std::sync::Arc::clone(&self.resolver),
+            deadline: self.deadline,
+        };
+        let host = name.as_str().to_owned();
         Box::pin(async move {
-            let resolved = tokio::task::spawn_blocking(move || {
-                use std::net::ToSocketAddrs;
-                // Port 0: reqwest substitutes the real port onto the returned addrs.
-                let addrs: Vec<std::net::SocketAddr> = (host.as_str(), 0u16)
-                    .to_socket_addrs()
-                    .map_err(|e| e.to_string())?
-                    .filter(|a| !super::ssrf::is_private_ip(a.ip()))
-                    .collect();
-                if addrs.is_empty() {
-                    Err("http: blocked: host resolves only to private/blocked addresses (IPE_HTTP_DENY_PRIVATE)".to_string())
-                } else {
+            match gate.vet(&host).await {
+                Ok(vetted) => {
+                    let addrs: reqwest::dns::Addrs = Box::new(vetted.into_vec().into_iter());
                     Ok(addrs)
                 }
-            })
-            .await;
-            match resolved {
-                Ok(Ok(addrs)) => {
-                    let iter: Box<dyn Iterator<Item = std::net::SocketAddr> + Send> =
-                        Box::new(addrs.into_iter());
-                    Ok(iter)
-                }
-                Ok(Err(msg)) => Err(msg.into()),
-                Err(join) => Err(format!("http: blocked: DNS resolver task failed: {join}").into()),
+                Err(refusal) => Err(refusal.into()),
             }
         })
     }
 }
 
-/// Redact a `user:pass@` userinfo segment from a URL string for safe inclusion
-/// in an error message. Used on the parse-FAILURE path where the `url` crate
-/// can't help, so it's a best-effort split (no raw indexing — `indexing_slicing`
-/// is denied crate-wide). Removes the `userinfo@` between `://` and the next `/`.
-#[cfg(not(target_arch = "wasm32"))]
-fn redact_userinfo(url: &str) -> String {
-    match url.split_once("://") {
-        None => url.to_string(),
-        Some((scheme, rest)) => {
-            let (authority, path) = match rest.split_once('/') {
-                Some((a, p)) => (a, Some(p)),
-                None => (rest, None),
-            };
-            let host = authority.rsplit_once('@').map_or(authority, |(_ui, h)| h);
-            match path {
-                Some(p) => format!("{scheme}://{host}/{p}"),
-                None => format!("{scheme}://{host}"),
-            }
-        }
-    }
-}
-
+/// Apply the SSRF deny-private guard to a `reqwest::ClientBuilder` for `url`.
+///
+/// Reads the policy from the environment and resolves through the system
+/// resolver; see [`ssrf_apply_with`].
+///
+/// # Errors
+///
+/// [`UrlRefusal`] naming why `url` was refused.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn ssrf_apply(
+    builder: reqwest::ClientBuilder,
+    url: &str,
+    redirects: RedirectPolicy,
+) -> Result<reqwest::ClientBuilder, UrlRefusal> {
+    ssrf_apply_with(
+        builder,
+        url,
+        redirects,
+        DialPolicy::from_env(),
+        VettingResolver::system(),
+    )
+    .await
+}
+
+/// Apply the SSRF guard under `policy`, vetting names through `gate`.
+///
+/// SHARED by every outbound request surface — the regular Http client,
+/// `Http.Stream.open`, the Email HTTP providers — so the guard can never be
+/// missing from a request path. Under [`DialPolicy::DenyPrivate`] it admits
+/// only a gated scheme with a host, vets that host once through `gate`, pins
+/// reqwest's lookup of it to the vetted addresses (defeats DNS rebinding),
+/// installs `gate` as the resolver for every other name (redirect hops), and
+/// re-checks each redirect hop's scheme and IP literal. Under
+/// [`DialPolicy::AllowAll`] it installs the caller's plain redirect policy.
+///
+/// # Errors
+///
+/// [`UrlRefusal`] naming why `url` was refused.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn ssrf_apply_with<R: HostResolver + Send + 'static>(
     mut builder: reqwest::ClientBuilder,
     url: &str,
-    policy: RedirectPolicy,
-) -> Result<reqwest::ClientBuilder, String> {
-    let deny = ssrf_deny_private_enabled();
-    if deny {
-        let parsed = reqwest::Url::parse(url).map_err(|e| {
-            format!(
-                "http: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
-                redact_userinfo(url),
-                e
-            )
-        })?;
-        let scheme = parsed.scheme();
-        if scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" {
-            return Err(format!(
-                "http: blocked: scheme {:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)",
-                scheme
-            ));
+    redirects: RedirectPolicy,
+    policy: DialPolicy,
+    gate: VettingResolver<R>,
+) -> Result<reqwest::ClientBuilder, UrlRefusal> {
+    match policy {
+        DialPolicy::DenyPrivate => {
+            let parsed = parse_gated_url(url)?;
+            let host = parsed.host_str().ok_or(UrlRefusal::NoHost)?;
+            let vetted = gate.vet(host).await.map_err(UrlRefusal::Host)?;
+            // reqwest/hyper key the override by the UNBRACKETED host
+            // (`Uri::host`), so a `"[::1]"` key would never match and the pin
+            // would silently not apply.
+            builder = builder.resolve_to_addrs(strip_ipv6_brackets(host), &vetted.into_vec());
+            builder = builder.dns_resolver(std::sync::Arc::new(gate));
         }
-        let host = parsed
-            .host_str()
-            .ok_or_else(|| "http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string())?
-            .to_owned();
-        // Resolve once through the non-blocking, deadline-bounded resolver
-        // (bracket-strip happens inside for a v6 literal), then key the static override on the UNBRACKETED host —
-        // reqwest/hyper look up the DNS override by the unbracketed hostname
-        // (`Uri::host`), so a `"[::1]"` key would never match and the pin would
-        // silently not apply.
-        let addr = vet_host(&host, 0)
-            .await
-            .map_err(|refusal| format!("http: {refusal}"))?;
-        let pin_key = super::ssrf::strip_ipv6_brackets(&host);
-        builder = builder.resolve_to_addrs(pin_key, &[addr]);
-        // Pin EVERY hostname (the initial host's static override above + every
-        // redirect hop) through the vetting resolver so a redirect to a DIFFERENT
-        // hostname can't be re-resolved by name to a rebind target at connect.
-        builder = builder.dns_resolver(std::sync::Arc::new(DenyPrivateResolver));
+        DialPolicy::AllowAll => {}
     }
-    // Apply the redirect policy.  The per-redirect-hop SSRF re-check is
-    // preserved unchanged: only the follow/limit decision now reads
-    // `RedirectPolicy` instead of a `(bool, i64)` pair.
-    builder = match policy {
+    builder = match redirects {
         RedirectPolicy::NoRedirects => builder.redirect(reqwest::redirect::Policy::none()),
         RedirectPolicy::FollowRedirects(max_hops) => {
             // Clamp to 0: a user-supplied negative Int is safe (0 hops
             // followed).  This is the load-bearing `.max(0)` the spec requires.
             let max = max_hops.max(0) as usize;
-            if deny {
-                builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                    if attempt.previous().len() >= max {
-                        return attempt.error(format!("http: too many redirects (max {})", max));
-                    }
-                    // Non-blocking hop guard: scheme + IP-literal range check
-                    // only. A named-host hop is vetted by `DenyPrivateResolver`
-                    // on the blocking pool at connect; re-resolving here would
-                    // pin a sync DNS call on a tokio worker inside reqwest's sync
-                    // redirect closure — the starvation this whole path avoids.
-                    if let Err(msg) = ssrf_check_url_nonblocking(attempt.url().as_str()) {
-                        return attempt.error(msg);
-                    }
-                    attempt.follow()
-                }))
-            } else {
-                builder.redirect(reqwest::redirect::Policy::limited(max))
+            match policy {
+                DialPolicy::DenyPrivate => {
+                    builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                        if attempt.previous().len() >= max {
+                            return attempt
+                                .error(format!("http: too many redirects (max {})", max));
+                        }
+                        // Non-blocking hop guard: scheme + IP-literal range
+                        // check only. A named-host hop is vetted by
+                        // `VettingResolver` at connect; resolving here would
+                        // block inside reqwest's sync redirect closure.
+                        if let Err(refusal) = ssrf_check_url_nonblocking(attempt.url().as_str()) {
+                            return attempt.error(format!("http: {refusal}"));
+                        }
+                        attempt.follow()
+                    }))
+                }
+                DialPolicy::AllowAll => builder.redirect(reqwest::redirect::Policy::limited(max)),
             }
         }
     };
@@ -415,10 +405,10 @@ async fn do_request<E: From<String> + Send + 'static>(
     // This surface (Http.get/post/request) accepts only http/https — ws/wss is
     // the WebSocket client's surface. When the SSRF guard is on, enforce that
     // narrower scheme set here, then delegate the host-resolve + DNS-rebinding
-    // pin + per-redirect re-check to the SHARED `ssrf_apply` (single source of
-    // truth — no second hand-rolled copy of the guard that could drift out of
-    // sync with the one every other outbound surface uses).
-    if ssrf_deny_private_enabled() {
+    // pin + per-redirect re-check to the SHARED `ssrf_apply_with` under the
+    // same policy reading.
+    let policy = DialPolicy::from_env();
+    if policy == DialPolicy::DenyPrivate {
         match reqwest::Url::parse(&req.url) {
             Ok(u) => {
                 let scheme = u.scheme();
@@ -446,9 +436,10 @@ async fn do_request<E: From<String> + Send + 'static>(
     }
 
     let builder = reqwest::Client::builder();
-    let mut builder = match ssrf_apply(builder, &req.url, req.redirects).await {
+    let gate = VettingResolver::system();
+    let mut builder = match ssrf_apply_with(builder, &req.url, req.redirects, policy, gate).await {
         Ok(b) => b,
-        Err(e) => return IpeResult::Err(e.into()),
+        Err(refusal) => return IpeResult::Err(format!("http: {refusal}").into()),
     };
 
     // Always install a request deadline. A Ipê-controllable `timeout <= 0`
@@ -659,7 +650,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 // code. Resolved to raw `web-sys` fetch:
 //
 //   - The native kernel's substantial logic beyond request-building is the
-//     SSRF deny-private guard above (`ssrf_apply`/`DenyPrivateResolver`) — DNS
+//     SSRF deny-private guard above (`ssrf_apply`/`VettingResolver`) — DNS
 //     resolution, address pinning, per-redirect-hop re-checks. None of it has
 //     a browser analogue: a tab cannot open a raw socket or resolve a
 //     hostname itself; CORS/mixed-content/CSP are the browser's OWN network
@@ -1065,5 +1056,216 @@ mod tests {
         let min_i64: i64 = i64::MIN;
         let clamped_min = min_i64.max(0) as usize;
         assert_eq!(clamped_min, 0, "i64::MIN must clamp to 0");
+    }
+
+    // -----------------------------------------------------------------------
+    // SSRF gate — reqwest integration, under stub resolvers and an explicit
+    // policy (no network, no environment)
+    // -----------------------------------------------------------------------
+
+    mod ssrf_gate {
+        use super::super::{RedirectPolicy, VettingResolver, ssrf_apply_with};
+        use crate::ssrf::test_resolvers::{Answers, NoDns, PublicThenPrivate, Stalls};
+        use crate::ssrf::{BlockedRange, DialPolicy, HostResolver, SsrfRefusal, UrlRefusal};
+        use reqwest::dns::Resolve as _;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        const DEADLINE: Duration = Duration::from_secs(5);
+        const PRIVATE: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+
+        fn gate<R: HostResolver + Send + 'static>(resolver: R) -> VettingResolver<R> {
+            VettingResolver::new(Arc::new(resolver), DEADLINE)
+        }
+
+        /// What the reqwest resolver answers for `host`: the addresses, or the
+        /// refusal's message.
+        async fn resolve<R: HostResolver + Send + 'static>(
+            resolver: &VettingResolver<R>,
+            host: &str,
+        ) -> Result<Vec<SocketAddr>, String> {
+            let name = host.parse::<reqwest::dns::Name>();
+            assert!(name.is_ok(), "{host:?} must be a valid DNS name");
+            let Ok(name) = name else {
+                return Err(String::new());
+            };
+            resolver
+                .resolve(name)
+                .await
+                .map(Iterator::collect)
+                .map_err(|e| e.to_string())
+        }
+
+        async fn apply<R: HostResolver + Send + 'static>(
+            url: &str,
+            policy: DialPolicy,
+            resolver: VettingResolver<R>,
+        ) -> Option<UrlRefusal> {
+            ssrf_apply_with(
+                reqwest::Client::builder(),
+                url,
+                RedirectPolicy::FollowRedirects(5),
+                policy,
+                resolver,
+            )
+            .await
+            .err()
+        }
+
+        fn blocked(host: &str, ip: IpAddr, range: BlockedRange) -> SsrfRefusal {
+            SsrfRefusal::Blocked {
+                host: host.to_owned(),
+                ip,
+                range,
+            }
+        }
+
+        /// A name whose answer mixes a public and a private address is refused
+        /// whole, never filtered down to the public one.
+        #[tokio::test]
+        async fn resolver_refuses_a_mixed_answer() {
+            let resolver = gate(Answers(vec![PublicThenPrivate::PUBLIC, PRIVATE]));
+            assert_eq!(
+                resolve(&resolver, "mixed.example").await,
+                Err(blocked("mixed.example", PRIVATE, BlockedRange::Private).to_string())
+            );
+        }
+
+        /// A stalled resolver is cut off at the deadline with the typed timeout.
+        #[tokio::test]
+        async fn resolver_times_out_a_stalled_lookup() {
+            let after = Duration::from_millis(20);
+            let resolver = VettingResolver::new(Arc::new(Stalls), after);
+            let expected = SsrfRefusal::Timeout {
+                host: "slow.example".to_owned(),
+                after,
+            };
+            assert_eq!(
+                resolve(&resolver, "slow.example").await,
+                Err(expected.to_string())
+            );
+        }
+
+        /// A rebinding name: the first answer is dialled, the rebound private
+        /// answer is refused, and no private address is ever handed to reqwest.
+        #[tokio::test]
+        async fn resolver_never_returns_a_rebound_private_address() {
+            let resolver = gate(PublicThenPrivate::new());
+            let first = resolve(&resolver, "rebind.example").await;
+            assert_eq!(
+                first,
+                Ok(vec![SocketAddr::new(PublicThenPrivate::PUBLIC, 0)])
+            );
+            let second = resolve(&resolver, "rebind.example").await;
+            assert_eq!(
+                second,
+                Err(blocked(
+                    "rebind.example",
+                    PublicThenPrivate::PRIVATE,
+                    BlockedRange::Private
+                )
+                .to_string())
+            );
+        }
+
+        /// The request host is refused with the typed reason for a mixed answer.
+        #[tokio::test]
+        async fn apply_refuses_a_mixed_answer_for_the_request_host() {
+            let resolver = gate(Answers(vec![PublicThenPrivate::PUBLIC, PRIVATE]));
+            assert_eq!(
+                apply("https://mixed.example/x", DialPolicy::DenyPrivate, resolver).await,
+                Some(UrlRefusal::Host(blocked(
+                    "mixed.example",
+                    PRIVATE,
+                    BlockedRange::Private
+                )))
+            );
+        }
+
+        /// A stalled lookup of the request host is a typed timeout.
+        #[tokio::test]
+        async fn apply_times_out_a_stalled_request_host() {
+            let after = Duration::from_millis(20);
+            let resolver = VettingResolver::new(Arc::new(Stalls), after);
+            assert_eq!(
+                apply("https://slow.example/", DialPolicy::DenyPrivate, resolver).await,
+                Some(UrlRefusal::Host(SsrfRefusal::Timeout {
+                    host: "slow.example".to_owned(),
+                    after,
+                }))
+            );
+        }
+
+        /// The request host is resolved once, through the same resolver the
+        /// client keeps for every other name; that resolver then refuses the
+        /// rebound answer, so neither path can reach the private address.
+        #[tokio::test]
+        async fn apply_resolves_the_request_host_once_through_the_shared_gate() {
+            let shared = Arc::new(PublicThenPrivate::new());
+            let resolver = VettingResolver::new(Arc::clone(&shared), DEADLINE);
+            assert_eq!(
+                apply("https://rebind.example/", DialPolicy::DenyPrivate, resolver).await,
+                None
+            );
+            assert_eq!(shared.calls(), 1, "the request host must be resolved once");
+            let later = VettingResolver::new(shared, DEADLINE);
+            assert!(
+                resolve(&later, "rebind.example").await.is_err(),
+                "a later lookup meets the rebound answer and is refused"
+            );
+        }
+
+        /// Each malformed request URL is refused with its typed reason, before
+        /// any lookup.
+        #[tokio::test]
+        async fn apply_refuses_malformed_urls_without_a_lookup() {
+            assert_eq!(
+                apply("ftp://files.example/", DialPolicy::DenyPrivate, gate(NoDns)).await,
+                Some(UrlRefusal::Scheme {
+                    scheme: "ftp".to_owned()
+                })
+            );
+            assert!(
+                matches!(
+                    apply("not a url", DialPolicy::DenyPrivate, gate(NoDns)).await,
+                    Some(UrlRefusal::Invalid { .. })
+                ),
+                "an unparseable URL must be refused"
+            );
+            assert_eq!(
+                apply("http://127.0.0.1/", DialPolicy::DenyPrivate, gate(NoDns)).await,
+                Some(UrlRefusal::Host(blocked(
+                    "127.0.0.1",
+                    IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    BlockedRange::Loopback
+                )))
+            );
+        }
+
+        /// With the policy off, nothing is vetted and no lookup runs.
+        #[tokio::test]
+        async fn apply_is_unrestricted_when_the_policy_allows_all() {
+            let shared = Arc::new(PublicThenPrivate::new());
+            let resolver = VettingResolver::new(Arc::clone(&shared), DEADLINE);
+            assert_eq!(
+                apply("http://127.0.0.1/", DialPolicy::AllowAll, resolver).await,
+                None
+            );
+            assert_eq!(shared.calls(), 0);
+        }
+
+        /// A refusal shows under the `http:` prefix its surfaces add.
+        #[test]
+        fn refusal_displays_the_policy_that_refused() {
+            let shown = format!(
+                "http: {}",
+                UrlRefusal::Host(blocked("10.0.0.1", PRIVATE, BlockedRange::Private))
+            );
+            assert_eq!(
+                shown,
+                "http: blocked: private host 10.0.0.1 (IPE_HTTP_DENY_PRIVATE)"
+            );
+        }
     }
 }

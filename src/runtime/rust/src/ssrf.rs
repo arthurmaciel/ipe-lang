@@ -352,29 +352,59 @@ fn refuse_blocked(host: &str, ip: IpAddr) -> Result<(), SsrfRefusal> {
     })
 }
 
-/// Resolve `host` once and return the address to dial, refusing any blocked one.
+/// Every address a host passed the SSRF gate with — never empty.
+///
+/// The only constructor is [`vet_host_addrs_with`], so holding one proves
+/// every address in it is outside every blocked range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VettedAddrs {
+    first: SocketAddr,
+    rest: Vec<SocketAddr>,
+}
+
+impl VettedAddrs {
+    /// The address a single-address dialler uses.
+    #[must_use]
+    pub const fn first(&self) -> SocketAddr {
+        self.first
+    }
+
+    /// Every vetted address, first one first.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<SocketAddr> {
+        let mut all = Vec::with_capacity(self.rest.len().saturating_add(1));
+        all.push(self.first);
+        all.extend(self.rest);
+        all
+    }
+}
+
+/// Resolve `host` once and return every address to dial, refusing any blocked one.
 ///
 /// An IP literal (bracketed or not) is decided without a lookup. A name is
 /// resolved through `resolver` within `deadline`; if ANY answer is blocked the
 /// whole host is refused (a multi-record answer mixing public and private
-/// addresses is ambiguous), otherwise the first answer, carrying `port`, is
+/// addresses is ambiguous), otherwise every answer, carrying `port`, is
 /// returned for the caller to dial directly.
 ///
 /// # Errors
 ///
 /// [`SsrfRefusal`] naming why the host was refused.
-pub async fn vet_host_with<R: HostResolver>(
+pub async fn vet_host_addrs_with<R: HostResolver>(
     resolver: &R,
     host: &str,
     port: u16,
     deadline: Duration,
-) -> Result<SocketAddr, SsrfRefusal> {
+) -> Result<VettedAddrs, SsrfRefusal> {
     // Parse-don't-validate at the boundary: a URL host taken from
     // `Url::host_str()` returns an IPv6 literal BRACKETED (`"[::1]"`). Strip a
     // single bracket pair and parse the IP literal FIRST, so every v6 literal
     // is decided by `blocked_range` instead of reaching the resolver.
     if let Ok(ip) = strip_ipv6_brackets(host).parse::<IpAddr>() {
-        return refuse_blocked(host, ip).map(|()| SocketAddr::new(ip, port));
+        return refuse_blocked(host, ip).map(|()| VettedAddrs {
+            first: SocketAddr::new(ip, port),
+            rest: Vec::new(),
+        });
     }
     let addrs = match tokio::time::timeout(deadline, resolver.lookup(host, port)).await {
         Ok(Ok(addrs)) => addrs,
@@ -394,12 +424,41 @@ pub async fn vet_host_with<R: HostResolver>(
     for addr in &addrs {
         refuse_blocked(host, addr.ip())?;
     }
-    addrs
-        .first()
-        .map(|addr| SocketAddr::new(addr.ip(), port))
-        .ok_or_else(|| SsrfRefusal::NoAddresses {
-            host: host.to_owned(),
-        })
+    let mut vetted = addrs
+        .into_iter()
+        .map(|addr| SocketAddr::new(addr.ip(), port));
+    vetted.next().map_or_else(
+        || {
+            Err(SsrfRefusal::NoAddresses {
+                host: host.to_owned(),
+            })
+        },
+        |first| {
+            Ok(VettedAddrs {
+                first,
+                rest: vetted.collect(),
+            })
+        },
+    )
+}
+
+/// Resolve `host` once and return the address to dial, refusing any blocked one.
+///
+/// The first address [`vet_host_addrs_with`] vets, for a dialler that takes
+/// one address.
+///
+/// # Errors
+///
+/// [`SsrfRefusal`] naming why the host was refused.
+pub async fn vet_host_with<R: HostResolver>(
+    resolver: &R,
+    host: &str,
+    port: u16,
+    deadline: Duration,
+) -> Result<SocketAddr, SsrfRefusal> {
+    vet_host_addrs_with(resolver, host, port, deadline)
+        .await
+        .map(|vetted| vetted.first())
 }
 
 /// Resolve `host` once through the system resolver under [`dns_timeout`].
@@ -413,13 +472,16 @@ pub async fn vet_host(host: &str, port: u16) -> Result<SocketAddr, SsrfRefusal> 
 
 /// Proof that `host:port` passed the SSRF gate under the policy in effect.
 ///
-/// The only constructors are [`VettedDial::for_host`] and
-/// [`VettedDial::for_host_with`]. Under [`DialPolicy::DenyPrivate`] the proof
-/// is the vetted address itself, and the caller MUST dial that address rather
-/// than the name — dialling the name resolves it again and reopens the
-/// DNS-rebinding window.
+/// The only constructors are [`VettedDial::for_host`],
+/// [`VettedDial::for_host_with`], [`VettedDial::for_url`] and [`vet_url_with`].
+/// Under [`DialPolicy::DenyPrivate`] the proof is the vetted address itself,
+/// and the caller MUST dial that address rather than the name — dialling the
+/// name resolves it again and reopens the DNS-rebinding window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(any(feature = "db", feature = "email")), allow(dead_code))]
+#[cfg_attr(
+    not(any(feature = "db", feature = "email", feature = "websocket_client")),
+    allow(dead_code)
+)]
 pub(crate) enum VettedDial {
     /// Deny-private is on: dial exactly this address.
     Pinned(SocketAddr),
@@ -449,6 +511,16 @@ impl VettedDial {
         }
     }
 
+    /// Vet `url`'s host under the environment's policy and the system resolver.
+    // Sole consumer is `ws_client.rs`. `cfg_attr`+`allow`, not `#[cfg]`:
+    // generated projects include this module without declaring the
+    // `websocket_client` Cargo feature, so a `#[cfg]` would remove the fn
+    // from under a generated WebSocket caller.
+    #[cfg_attr(not(feature = "websocket_client"), allow(dead_code))]
+    pub(crate) async fn for_url(url: &str) -> Result<Self, UrlRefusal> {
+        vet_url_with(DialPolicy::from_env(), &SystemResolver, url, dns_timeout()).await
+    }
+
     /// The host string to hand a dialler: the vetted IP when pinned, else `host`.
     pub(crate) fn dial_host(self, host: &str) -> String {
         match self {
@@ -458,136 +530,169 @@ impl VettedDial {
     }
 }
 
-/// WebSocket SSRF pin: when `IPE_HTTP_DENY_PRIVATE` is on, resolve `url`'s host to
-/// a vetted non-private `SocketAddr` (with the real ws/wss port) so the caller can
-/// dial THAT addr — closing the DNS-rebinding TOCTOU that an unpinned
-/// `connect_async` (which re-resolves the name at connect) would leave open.
-/// Returns `Ok(None)` when the guard is off (caller uses the normal path).
+/// The schemes an outbound request surface may dial under deny-private.
+const GATED_SCHEMES: [&str; 4] = ["http", "https", "ws", "wss"];
+
+/// Why the SSRF gate refused a URL.
 ///
-/// Sole consumer is `ws_client.rs`. Use `cfg_attr`+`allow`, NOT `#[cfg(...)]`:
-/// generated projects include ssrf by MODULE (Project.hs) without declaring a
-/// `websocket_client` Cargo feature, so a `#[cfg]` would remove the fn and E0425
-/// a generated ws caller. The attribute only silences the dead-code lint in
-/// standalone subsets that compile ssrf without the ws client.
+/// `Display` carries no caller prefix; each surface adds its own (`http:`,
+/// `ws:`). No variant holds URL userinfo: an unparseable URL is kept only
+/// with its `user:pass@` segment removed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UrlRefusal {
+    /// The URL did not parse.
+    Invalid {
+        /// The URL with any userinfo removed.
+        redacted: String,
+        /// The parser's reason.
+        reason: url::ParseError,
+    },
+    /// The scheme is not one of `http`, `https`, `ws`, `wss`.
+    Scheme {
+        /// The URL's scheme.
+        scheme: String,
+    },
+    /// The URL names no host.
+    NoHost,
+    /// The URL's host was refused.
+    Host(SsrfRefusal),
+}
+
+impl UrlRefusal {
+    fn invalid(url: &str, reason: url::ParseError) -> Self {
+        Self::Invalid {
+            redacted: redact_userinfo(url),
+            reason,
+        }
+    }
+}
+
+impl std::fmt::Display for UrlRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid { redacted, reason } => write!(
+                f,
+                "blocked: invalid URL {redacted:?}: {reason} (IPE_HTTP_DENY_PRIVATE)"
+            ),
+            Self::Scheme { scheme } => write!(
+                f,
+                "blocked: scheme {scheme:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)"
+            ),
+            Self::NoHost => f.write_str("blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)"),
+            Self::Host(refusal) => write!(f, "{refusal}"),
+        }
+    }
+}
+
+impl std::error::Error for UrlRefusal {}
+
+/// Redact a `user:pass@` userinfo segment from a URL string for an error message.
+///
+/// Used on the parse-FAILURE path where the `url` crate can't help, so it's a
+/// best-effort split (no raw indexing). Removes the `userinfo@` between `://`
+/// and the next `/`.
+pub(crate) fn redact_userinfo(url: &str) -> String {
+    match url.split_once("://") {
+        None => url.to_string(),
+        Some((scheme, rest)) => {
+            let (authority, path) = match rest.split_once('/') {
+                Some((a, p)) => (a, Some(p)),
+                None => (rest, None),
+            };
+            let host = authority.rsplit_once('@').map_or(authority, |(_ui, h)| h);
+            match path {
+                Some(p) => format!("{scheme}://{host}/{p}"),
+                None => format!("{scheme}://{host}"),
+            }
+        }
+    }
+}
+
+/// Parse `url` and admit only a gated scheme.
+///
+/// # Errors
+///
+/// [`UrlRefusal::Invalid`] or [`UrlRefusal::Scheme`].
+pub(crate) fn parse_gated_url(url: &str) -> Result<Url, UrlRefusal> {
+    let parsed = Url::parse(url).map_err(|reason| UrlRefusal::invalid(url, reason))?;
+    if GATED_SCHEMES.contains(&parsed.scheme()) {
+        Ok(parsed)
+    } else {
+        Err(UrlRefusal::Scheme {
+            scheme: parsed.scheme().to_owned(),
+        })
+    }
+}
+
+/// Vet `url` under `policy`, resolving its host through `resolver` within `deadline`.
+///
+/// Under [`DialPolicy::DenyPrivate`] the URL must parse, carry a gated scheme
+/// and a host, and the host must pass [`vet_host_with`]; the proof pins the
+/// vetted address with the URL's port. Under [`DialPolicy::AllowAll`] the URL
+/// is dialled as given.
+///
+/// # Errors
+///
+/// [`UrlRefusal`] naming why the URL was refused.
 #[cfg_attr(not(feature = "websocket_client"), allow(dead_code))]
-pub(crate) async fn ssrf_pinned_ws_addr(url: &str) -> Result<Option<SocketAddr>, String> {
-    if !ssrf_deny_private_enabled() {
-        return Ok(None);
-    }
-    let parsed = Url::parse(url)
-        .map_err(|e| format!("ws: blocked: invalid URL {url:?}: {e} (IPE_HTTP_DENY_PRIVATE)"))?;
-    let scheme = parsed.scheme();
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| "ws: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string())?;
-    let port = parsed
-        .port_or_known_default()
-        .unwrap_or(if scheme == "wss" { 443 } else { 80 });
-    vet_host(host, port)
-        .await
-        .map(Some)
-        .map_err(|refusal| format!("ws: {refusal}"))
-}
-
-/// Validates a URL string under the SSRF deny-private policy.
-/// Rejects non-http/https/ws/wss schemes and blocked hosts; a named host is
-/// resolved once through [`vet_host`].
-///
-/// Returns `Ok(())` if the request is allowed, `Err(message)` if blocked.
-pub(crate) async fn ssrf_check_url(url: &str) -> Result<(), String> {
-    let parsed = match Url::parse(url) {
-        Ok(u) => u,
-        Err(e) => {
-            return Err(format!(
-                "http: blocked: invalid URL {url:?}: {e} (IPE_HTTP_DENY_PRIVATE)"
-            ));
+pub(crate) async fn vet_url_with<R: HostResolver>(
+    policy: DialPolicy,
+    resolver: &R,
+    url: &str,
+    deadline: Duration,
+) -> Result<VettedDial, UrlRefusal> {
+    match policy {
+        DialPolicy::AllowAll => Ok(VettedDial::Unrestricted),
+        DialPolicy::DenyPrivate => {
+            let parsed = parse_gated_url(url)?;
+            let host = parsed.host_str().ok_or(UrlRefusal::NoHost)?;
+            // Every gated scheme has a known default port, so the fallback is
+            // unreachable; port 0 would fail the dial, never reach a service.
+            let port = parsed.port_or_known_default().unwrap_or(0);
+            vet_host_with(resolver, host, port, deadline)
+                .await
+                .map(VettedDial::Pinned)
+                .map_err(UrlRefusal::Host)
         }
-    };
-
-    // Permit http / https (HTTP client + redirect hops) AND ws / wss (the
-    // WebSocket client validates through this same fn). Everything else
-    // (ftp/file/…) stays rejected.
-    let scheme = parsed.scheme();
-    if scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" {
-        return Err(format!(
-            "http: blocked: scheme {scheme:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)"
-        ));
     }
-
-    let Some(host) = parsed.host_str() else {
-        return Err("http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string());
-    };
-
-    vet_host(host, 0)
-        .await
-        .map(|_| ())
-        .map_err(|refusal| format!("http: {refusal}"))
 }
 
-/// Non-blocking redirect-hop guard: validate a URL's scheme and, when the host is
-/// an IP LITERAL, its private-range status — WITHOUT a DNS round-trip. For a named
-/// host the DNS vet is already done by `http_client::DenyPrivateResolver` at
-/// connect time, so re-resolving here would only add a lookup inside reqwest's
-/// sync redirect closure. IP-literal redirect targets bypass the resolver, so
-/// they MUST still be range-checked here — that check is pure and non-blocking.
+/// Non-blocking redirect-hop guard: a URL's scheme and, for an IP-literal host, its range.
 ///
-/// Returns `Ok(())` if allowed, `Err(message)` if blocked.
+/// A named host is vetted by the HTTP client's connect-time resolver, which
+/// runs the same [`vet_host_addrs_with`] gate, so re-resolving here would only
+/// add a lookup inside reqwest's sync redirect closure. IP-literal redirect
+/// targets bypass the resolver, so they MUST still be range-checked here —
+/// that check is pure and non-blocking.
+///
+/// # Errors
+///
+/// [`UrlRefusal`] naming why the hop was refused.
 // Only `http_client::ssrf_apply`'s reqwest redirect closure calls this; the `ssrf`
-// module also compiles under `db`/`websocket_client` (DSN / ws pin) where that caller
-// is absent, so allow-dead there (mirrors `ssrf_pinned_ws_addr`'s cfg_attr).
+// module also compiles under `db`/`websocket_client` where that caller is absent.
 #[cfg_attr(not(feature = "http_client"), allow(dead_code))]
-pub(crate) fn ssrf_check_url_nonblocking(url: &str) -> Result<(), String> {
-    let parsed = match Url::parse(url) {
-        Ok(u) => u,
-        Err(e) => {
-            return Err(format!(
-                "http: blocked: invalid URL {url:?}: {e} (IPE_HTTP_DENY_PRIVATE)"
-            ));
-        }
-    };
-    let scheme = parsed.scheme();
-    if scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" {
-        return Err(format!(
-            "http: blocked: scheme {scheme:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)"
-        ));
-    }
-    let Some(host) = parsed.host_str() else {
-        return Err("http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string());
-    };
+pub(crate) fn ssrf_check_url_nonblocking(url: &str) -> Result<(), UrlRefusal> {
+    let parsed = parse_gated_url(url)?;
+    let host = parsed.host_str().ok_or(UrlRefusal::NoHost)?;
     // Only IP literals are decided here (no DNS); a named host defers to the
     // connect-time resolver. `strip_ipv6_brackets` puts a `[::1]`-style literal
-    // back on the `blocked_range` path; a hostname simply fails the parse and
-    // falls through to Ok.
-    match strip_ipv6_brackets(host).parse::<IpAddr>() {
-        Ok(ip) => refuse_blocked(host, ip).map_err(|refusal| format!("http: {refusal}")),
-        Err(_) => Ok(()),
-    }
+    // back on the `blocked_range` path; a hostname simply fails the parse.
+    strip_ipv6_brackets(host)
+        .parse::<IpAddr>()
+        .map_or(Ok(()), |ip| {
+            refuse_blocked(host, ip).map_err(UrlRefusal::Host)
+        })
 }
 
-/// Validate a single URL against the deny-private guard (no client build) — for
-/// surfaces (WebSocket) that connect outside reqwest. No-op when the guard is off.
-/// Sole consumer is `ws_client.rs`; `cfg_attr`+`allow` (not `#[cfg]`) for the same
-/// generated-module-inclusion reason as `ssrf_pinned_ws_addr` above.
-#[cfg_attr(not(feature = "websocket_client"), allow(dead_code))]
-pub(crate) async fn ssrf_validate_url(url: &str) -> Result<(), String> {
-    if ssrf_deny_private_enabled() {
-        ssrf_check_url(url).await
-    } else {
-        Ok(())
-    }
-}
-
+/// Stub resolvers for tests of every SSRF-gated surface — no network.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_resolvers {
+    use super::HostResolver;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // -----------------------------------------------------------------------
-    // Resolver stubs (no network)
-    // -----------------------------------------------------------------------
-
     /// A resolver that must never be consulted: every lookup fails.
-    struct NoDns;
+    pub struct NoDns;
 
     impl HostResolver for NoDns {
         async fn lookup(&self, _host: &str, _port: u16) -> std::io::Result<Vec<SocketAddr>> {
@@ -597,18 +702,28 @@ mod tests {
 
     /// A rebinding resolver: the first lookup answers a public address, every
     /// later lookup answers a private one.
-    struct PublicThenPrivate {
-        calls: AtomicUsize,
+    #[derive(Default)]
+    pub struct PublicThenPrivate {
+        /// Lookups answered so far.
+        pub calls: AtomicUsize,
     }
 
     impl PublicThenPrivate {
-        const PUBLIC: IpAddr = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
-        const PRIVATE: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+        /// The first answer.
+        pub const PUBLIC: IpAddr = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
+        /// Every later answer.
+        pub const PRIVATE: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
 
-        const fn new() -> Self {
+        /// A resolver that has answered nothing yet.
+        pub const fn new() -> Self {
             Self {
                 calls: AtomicUsize::new(0),
             }
+        }
+
+        /// Lookups answered so far.
+        pub fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
         }
     }
 
@@ -624,7 +739,7 @@ mod tests {
     }
 
     /// A resolver that answers a fixed address list.
-    struct Answers(Vec<IpAddr>);
+    pub struct Answers(pub Vec<IpAddr>);
 
     impl HostResolver for Answers {
         async fn lookup(&self, _host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
@@ -633,15 +748,182 @@ mod tests {
     }
 
     /// A resolver that never answers.
-    struct Stalls;
+    pub struct Stalls;
 
     impl HostResolver for Stalls {
         async fn lookup(&self, _host: &str, _port: u16) -> std::io::Result<Vec<SocketAddr>> {
             std::future::pending().await
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_resolvers::{Answers, NoDns, PublicThenPrivate, Stalls};
+    use super::*;
 
     const DEADLINE: Duration = Duration::from_secs(5);
+
+    /// The URL gate's deny-private verdict, rendered as the `http:` surface shows it.
+    async fn ssrf_check_url(url: &str) -> Result<VettedDial, String> {
+        vet_url_with(DialPolicy::DenyPrivate, &NoDns, url, DEADLINE)
+            .await
+            .map_err(|refusal| format!("http: {refusal}"))
+    }
+
+    /// The redirect-hop guard's verdict, rendered as the `http:` surface shows it.
+    fn nonblocking_hop(url: &str) -> Result<(), String> {
+        ssrf_check_url_nonblocking(url).map_err(|refusal| format!("http: {refusal}"))
+    }
+
+    // -----------------------------------------------------------------------
+    // vet_url_with — the WebSocket client's single gate
+    // -----------------------------------------------------------------------
+
+    /// DNS rebinding through the URL gate: the dial is pinned to the first
+    /// answer with the URL's port, and a fresh vet meets the rebound answer
+    /// and is refused, so the private address is never handed to a dialler.
+    #[tokio::test]
+    async fn vet_url_pins_the_first_answer_against_rebinding() {
+        let resolver = PublicThenPrivate::new();
+        let url = "ws://rebind.example:9000/socket";
+        let first = vet_url_with(DialPolicy::DenyPrivate, &resolver, url, DEADLINE).await;
+        assert_eq!(
+            first,
+            Ok(VettedDial::Pinned(SocketAddr::new(
+                PublicThenPrivate::PUBLIC,
+                9000
+            )))
+        );
+        assert_eq!(resolver.calls(), 1, "the name must be resolved once");
+        let second = vet_url_with(DialPolicy::DenyPrivate, &resolver, url, DEADLINE).await;
+        assert_eq!(
+            second,
+            Err(UrlRefusal::Host(SsrfRefusal::Blocked {
+                host: "rebind.example".to_owned(),
+                ip: PublicThenPrivate::PRIVATE,
+                range: BlockedRange::Private,
+            }))
+        );
+    }
+
+    /// A mixed public and private answer refuses the whole URL.
+    #[tokio::test]
+    async fn vet_url_refuses_a_mixed_answer() {
+        let mixed = Answers(vec![
+            PublicThenPrivate::PUBLIC,
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        ]);
+        let refused = vet_url_with(
+            DialPolicy::DenyPrivate,
+            &mixed,
+            "wss://mixed.example/",
+            DEADLINE,
+        )
+        .await;
+        assert!(
+            matches!(
+                refused,
+                Err(UrlRefusal::Host(SsrfRefusal::Blocked {
+                    range: BlockedRange::Loopback,
+                    ..
+                }))
+            ),
+            "{refused:?}"
+        );
+    }
+
+    /// A stalled resolver is cut off with a typed timeout.
+    #[tokio::test]
+    async fn vet_url_times_out_a_stalled_resolver() {
+        let deadline = Duration::from_millis(20);
+        let refused = vet_url_with(
+            DialPolicy::DenyPrivate,
+            &Stalls,
+            "ws://slow.example/",
+            deadline,
+        )
+        .await;
+        assert_eq!(
+            refused,
+            Err(UrlRefusal::Host(SsrfRefusal::Timeout {
+                host: "slow.example".to_owned(),
+                after: deadline,
+            }))
+        );
+    }
+
+    /// Each malformed URL is refused with its own typed reason.
+    #[tokio::test]
+    async fn vet_url_refuses_each_malformed_url() {
+        let scheme = vet_url_with(
+            DialPolicy::DenyPrivate,
+            &NoDns,
+            "ftp://x.example/",
+            DEADLINE,
+        )
+        .await;
+        assert_eq!(
+            scheme,
+            Err(UrlRefusal::Scheme {
+                scheme: "ftp".to_owned()
+            })
+        );
+        let invalid = vet_url_with(DialPolicy::DenyPrivate, &NoDns, "not a url", DEADLINE).await;
+        assert!(
+            matches!(invalid, Err(UrlRefusal::Invalid { .. })),
+            "{invalid:?}"
+        );
+    }
+
+    /// An unparseable URL's refusal never carries its userinfo.
+    #[tokio::test]
+    async fn vet_url_invalid_refusal_redacts_userinfo() {
+        let url = "http://admin:s3cr3t-pw@exa mple.com/";
+        let refused = vet_url_with(DialPolicy::DenyPrivate, &NoDns, url, DEADLINE).await;
+        assert!(
+            matches!(refused, Err(UrlRefusal::Invalid { .. })),
+            "{refused:?}"
+        );
+        let shown = format!(
+            "{refused:?} {}",
+            refused.map_or_else(|r| r.to_string(), |_| String::new())
+        );
+        assert!(!shown.contains("s3cr3t-pw"), "password leaked: {shown}");
+        assert!(!shown.contains("admin"), "user leaked: {shown}");
+    }
+
+    /// With the policy off, the URL is dialled as given and no lookup runs.
+    #[tokio::test]
+    async fn vet_url_is_unrestricted_when_the_policy_allows_all() {
+        let resolver = PublicThenPrivate::new();
+        for url in ["ws://127.0.0.1/", "ws://internal.example/", "not a url"] {
+            let vetted = vet_url_with(DialPolicy::AllowAll, &resolver, url, DEADLINE).await;
+            assert_eq!(vetted, Ok(VettedDial::Unrestricted), "{url:?}");
+        }
+        assert_eq!(resolver.calls(), 0);
+    }
+
+    /// Every vetted address comes back, each carrying the caller's port.
+    #[tokio::test]
+    async fn vet_host_addrs_returns_every_public_answer() {
+        let second = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+        let vetted = vet_host_addrs_with(
+            &Answers(vec![PublicThenPrivate::PUBLIC, second]),
+            "multi.example",
+            443,
+            DEADLINE,
+        )
+        .await
+        .map(VettedAddrs::into_vec);
+        assert_eq!(
+            vetted,
+            Ok(vec![
+                SocketAddr::new(PublicThenPrivate::PUBLIC, 443),
+                SocketAddr::new(second, 443)
+            ])
+        );
+    }
 
     // -----------------------------------------------------------------------
     // VettedDial
@@ -708,7 +990,7 @@ mod tests {
             Ok(PublicThenPrivate::PUBLIC.to_string()),
             "the dialler must receive the vetted address, never the name"
         );
-        assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(resolver.calls(), 1);
 
         let second =
             VettedDial::for_host_with(DialPolicy::DenyPrivate, &resolver, "rebind.example", 5432)
@@ -1179,7 +1461,7 @@ mod tests {
             "http://[fd00::1]/",
             "http://[64:ff9b::7f00:1]/", // NAT64 → 127.0.0.1
         ] {
-            let err = ssrf_check_url_nonblocking(url)
+            let err = nonblocking_hop(url)
                 .expect_err("private IP-literal hop must be blocked without DNS");
             assert!(err.contains("blocked"), "url {url:?} → got: {err}");
         }
@@ -1187,16 +1469,16 @@ mod tests {
 
     #[test]
     fn nonblocking_check_rejects_non_http_scheme() {
-        let err = ssrf_check_url_nonblocking("ftp://example.com/x").unwrap_err();
+        let err = nonblocking_hop("ftp://example.com/x").unwrap_err();
         assert!(err.contains("scheme"), "got: {err}");
     }
 
     #[test]
     fn nonblocking_check_allows_public_ip_and_defers_hostnames() {
         // Public IP literal: allowed. Hostname: deferred (no DNS here) → Ok.
-        assert!(ssrf_check_url_nonblocking("https://1.1.1.1/").is_ok());
-        assert!(ssrf_check_url_nonblocking("https://[2606:4700:4700::1111]/").is_ok());
-        assert!(ssrf_check_url_nonblocking("https://example.com/path").is_ok());
+        assert!(nonblocking_hop("https://1.1.1.1/").is_ok());
+        assert!(nonblocking_hop("https://[2606:4700:4700::1111]/").is_ok());
+        assert!(nonblocking_hop("https://example.com/path").is_ok());
     }
 
     // -----------------------------------------------------------------------
