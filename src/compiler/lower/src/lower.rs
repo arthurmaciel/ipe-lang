@@ -4656,6 +4656,15 @@ fn collect_local_derived_tvars(
 ///     stops at opaque `Send + Sync` carriers). A pass-through the callee left
 ///     [`BoundSet::UNBOUNDED`] contributes nothing, so a truly-parametric
 ///     forwarder stays reusable.
+///   * A callee generic a position carries only behind a function arrow or an
+///     opaque carrier (`checkboxOf : (Bool -> msg) -> …` handed the caller's
+///     `toMsg`) is instantiated by the mirrored slot of the argument's own type,
+///     so the argument's type — a parameter's or `let`'s declared type, a
+///     function value's solved type, a lambda's signature — is aligned against
+///     the callee parameter type ([`aligned_param_tvars`]) and the caller
+///     generics reaching that slot bare inherit the bound, whatever position the
+///     call sits in. An argument of unrecoverable type, or of a shape the
+///     parameter does not share, obliges every caller generic (fail closed).
 ///
 /// The fixpoint iterates because propagation chains: a caller of `Store.toMaybe`
 /// that itself forwards its generic acquires the bound only once `toMaybe` has
@@ -4710,6 +4719,15 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
             }
             collect_local_derived_tvars(&caller.body, &mut binder_tvars);
 
+            // The declared type of every binder whose type is recoverable —
+            // each parameter, and each `let` bound to a value of known type —
+            // for aligning a forwarded argument against a callee parameter.
+            let mut site_types: std::collections::HashMap<Symbol, Option<IrType>> = caller_params
+                .iter()
+                .map(|(b, bty)| (*b, Some(bty.clone())))
+                .collect();
+            collect_let_site_types(&caller.body, &mut site_types);
+
             let mut calls: Vec<(FuncId, &[Expr])> = Vec::new();
             collect_user_calls(&caller.body, &mut calls);
 
@@ -4733,19 +4751,35 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                     // candidate to inherit the callee position's bound.
                     let mut binders: Vec<Symbol> = Vec::new();
                     arg_forwarded_binders(arg, &mut binders);
-                    if binders.is_empty() {
-                        continue;
-                    }
                     let Some(callee_pty) = callee_param_tys.get(pos) else {
                         continue;
                     };
-                    // Which callee generic does this position carry bare, and
-                    // does it carry an auto-trait bound worth propagating?
                     for (g, gbound) in callee_tparams {
-                        if !ir_type_generic_reaches_bare(callee_pty, *g) {
+                        if !(gbound.has_sync() || gbound.has_send() || gbound.has_static()) {
                             continue;
                         }
-                        if !(gbound.has_sync() || gbound.has_send() || gbound.has_static()) {
+                        // A callee generic riding this position only behind a
+                        // function arrow or an opaque carrier (`Bool -> msg`)
+                        // is instantiated by the mirrored slot of the argument's
+                        // own type, so the argument type is aligned against the
+                        // callee parameter type. An argument whose type is not
+                        // recoverable, or whose shape the parameter does not
+                        // share, obliges every caller generic (fail closed).
+                        if !ir_type_generic_reaches_bare(callee_pty, *g) {
+                            if !ir_type_mentions_generic(callee_pty, *g) {
+                                continue;
+                            }
+                            let obliged = arg_site_type(arg, &site_types)
+                                .and_then(|site| {
+                                    aligned_param_tvars(callee_pty, *g, &site, &caller_tvars)
+                                })
+                                .unwrap_or_else(|| caller_tvars.clone());
+                            for tv in obliged {
+                                oblige_auto_traits(
+                                    add.entry(tv).or_insert(BoundSet::UNBOUNDED),
+                                    *gbound,
+                                );
+                            }
                             continue;
                         }
                         for binder in &binders {
@@ -4757,16 +4791,10 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                                 continue;
                             };
                             for tv in tvs {
-                                let slot = add.entry(*tv).or_insert(BoundSet::UNBOUNDED);
-                                if gbound.has_sync() {
-                                    *slot = slot.with_sync();
-                                }
-                                if gbound.has_send() {
-                                    *slot = slot.with_send();
-                                }
-                                if gbound.has_static() {
-                                    *slot = slot.with_static();
-                                }
+                                oblige_auto_traits(
+                                    add.entry(*tv).or_insert(BoundSet::UNBOUNDED),
+                                    *gbound,
+                                );
                             }
                         }
                     }
@@ -4802,16 +4830,10 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                         continue;
                     }
                     for caller_tv in aligned_caller_tvars(sig_ret, *g, &caller_ret) {
-                        let slot = add.entry(caller_tv).or_insert(BoundSet::UNBOUNDED);
-                        if gbound.has_sync() {
-                            *slot = slot.with_sync();
-                        }
-                        if gbound.has_send() {
-                            *slot = slot.with_send();
-                        }
-                        if gbound.has_static() {
-                            *slot = slot.with_static();
-                        }
+                        oblige_auto_traits(
+                            add.entry(caller_tv).or_insert(BoundSet::UNBOUNDED),
+                            *gbound,
+                        );
                     }
                 }
             }
@@ -4951,6 +4973,267 @@ fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Sy
             align_ret_tvars(ra, target, rb, out);
         }
         _ => {}
+    }
+}
+
+/// Fold `from`'s auto-trait and lifetime bits (`Sync`/`Send`/`'static`) into `slot`.
+fn oblige_auto_traits(slot: &mut BoundSet, from: BoundSet) {
+    if from.has_sync() {
+        *slot = slot.with_sync();
+    }
+    if from.has_send() {
+        *slot = slot.with_send();
+    }
+    if from.has_static() {
+        *slot = slot.with_static();
+    }
+}
+
+/// The lowered type of a call argument, when the argument or the binder it names records one.
+///
+/// A binder resolves through `site_types` (a parameter, or a `let` bound to a
+/// value of known type); a function value carries its solved type; a lambda
+/// its parameter and return types. Any other shape has no recoverable type and
+/// yields `None`, which [`propagate_call_site_bounds`] treats as fail-closed.
+fn arg_site_type(
+    arg: &Expr,
+    site_types: &std::collections::HashMap<Symbol, Option<IrType>>,
+) -> Option<IrType> {
+    match arg {
+        Expr::Var(s) | Expr::CloneVar(s) => site_types.get(s).cloned().flatten(),
+        Expr::FuncValue { ty, .. } => Some(ty.clone()),
+        Expr::Lambda { params, ret, .. } => Some(IrType::Fun(
+            params.iter().map(|(_, t)| t.clone()).collect(),
+            Box::new(ret.clone()),
+        )),
+        Expr::SharedLambda { params, ret, .. } => Some(IrType::SharedFun(
+            params.iter().map(|(_, t)| t.clone()).collect(),
+            Box::new(ret.clone()),
+        )),
+        _ => None,
+    }
+}
+
+/// Record `ty` as `name`'s site type; a name bound twice to differing types becomes unknown.
+///
+/// An unknown (`None`) entry makes every argument naming the binder fail
+/// closed, so a shadowing binder can never lend the shadowed one's type.
+fn record_site_type(
+    site_types: &mut std::collections::HashMap<Symbol, Option<IrType>>,
+    name: Symbol,
+    ty: Option<IrType>,
+) {
+    let conflicting = site_types
+        .get(&name)
+        .is_some_and(|existing| *existing != ty);
+    site_types.insert(name, if conflicting { None } else { ty });
+}
+
+/// Record every binder `pat` introduces as of unknown type.
+fn record_pat_site_types(
+    pat: &Pat,
+    site_types: &mut std::collections::HashMap<Symbol, Option<IrType>>,
+) {
+    let mut binders: Vec<Symbol> = Vec::new();
+    pat_binder_syms(pat, &mut binders);
+    for b in binders {
+        record_site_type(site_types, b, None);
+    }
+}
+
+/// Extend `site_types` with every binder `body` introduces.
+///
+/// A `let` records its value's type ([`arg_site_type`]); a lambda or loop
+/// parameter its declared type; a pattern binder is recorded unknown, since
+/// the lowered pattern carries no per-binder type.
+#[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
+fn collect_let_site_types(
+    body: &Expr,
+    site_types: &mut std::collections::HashMap<Symbol, Option<IrType>>,
+) {
+    match body {
+        Expr::Let { name, value, body } => {
+            collect_let_site_types(value, site_types);
+            let ty = arg_site_type(value, site_types);
+            record_site_type(site_types, *name, ty);
+            collect_let_site_types(body, site_types);
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            collect_let_site_types(value, site_types);
+            record_pat_site_types(binder, site_types);
+            collect_let_site_types(body, site_types);
+        }
+        Expr::Match(m) => {
+            collect_let_site_types(m.scrutinee(), site_types);
+            for arm in m.arms() {
+                record_pat_site_types(&arm.pat, site_types);
+                if let Some(g) = arm.guard.as_ref() {
+                    collect_let_site_types(g, site_types);
+                }
+                collect_let_site_types(&arm.body, site_types);
+            }
+        }
+        Expr::Lambda { params, body, .. }
+        | Expr::SharedLambda { params, body, .. }
+        | Expr::TailLoop { params, body } => {
+            for (p, pty) in params {
+                record_site_type(site_types, *p, Some(pty.clone()));
+            }
+            collect_let_site_types(body, site_types);
+        }
+        Expr::Call { args, .. } | Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                collect_let_site_types(a, site_types);
+            }
+        }
+        Expr::Apply { func, args } => {
+            collect_let_site_types(func, site_types);
+            for a in args {
+                collect_let_site_types(a, site_types);
+            }
+        }
+        Expr::If { cond, then_, else_ } => {
+            collect_let_site_types(cond, site_types);
+            collect_let_site_types(then_, site_types);
+            collect_let_site_types(else_, site_types);
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_let_site_types(lhs, site_types);
+            collect_let_site_types(rhs, site_types);
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                collect_let_site_types(e, site_types);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            collect_let_site_types(head, site_types);
+            collect_let_site_types(tail, site_types);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            collect_let_site_types(list, site_types);
+        }
+        Expr::Record { fields, .. } | Expr::Update { fields, .. } => {
+            for (_, e) in fields {
+                collect_let_site_types(e, site_types);
+            }
+        }
+        Expr::TaskSeq { effect, rest } => {
+            collect_let_site_types(effect, site_types);
+            collect_let_site_types(rest, site_types);
+        }
+        Expr::Access { record, .. } => collect_let_site_types(record, site_types),
+        Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::FuncValue { .. }
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit => {}
+    }
+}
+
+/// The caller generics a callee parameter's generic `target` is instantiated with at one call.
+///
+/// Walks the callee parameter type `sig` alongside the argument's type `site`
+/// through every shape they share — function arrows, value containers, effect
+/// carriers, tuples, records, enums. Where `sig` holds `target` itself, the
+/// mirrored `site` slot is `target`'s instantiation, so every generic of
+/// `caller_tvars` reaching that slot bare must meet `target`'s bound.
+/// `None` when `target` occurs under a `sig` shape `site` does not share: the
+/// instantiation is unknown and the caller must fail closed.
+fn aligned_param_tvars(
+    sig: &IrType,
+    target: Symbol,
+    site: &IrType,
+    caller_tvars: &[Symbol],
+) -> Option<Vec<Symbol>> {
+    let mut out = Vec::new();
+    align_param_slot(sig, target, site, caller_tvars, &mut out).then_some(out)
+}
+
+/// One step of [`aligned_param_tvars`]; `false` when alignment is impossible.
+fn align_param_slot(
+    sig: &IrType,
+    target: Symbol,
+    site: &IrType,
+    caller_tvars: &[Symbol],
+    out: &mut Vec<Symbol>,
+) -> bool {
+    if !ir_type_mentions_generic(sig, target) {
+        return true;
+    }
+    // `sig` mentions `target`, so a generic here IS `target`: `site` is its
+    // instantiation.
+    if matches!(sig, IrType::Generic(_)) {
+        for tv in caller_tvars {
+            if ir_type_generic_reaches_bare(site, *tv) && !out.contains(tv) {
+                out.push(*tv);
+            }
+        }
+        return true;
+    }
+    let mut slot = |a: &IrType, b: &IrType| align_param_slot(a, target, b, caller_tvars, out);
+    match (sig, site) {
+        (IrType::List(a), IrType::List(b))
+        | (IrType::Maybe(a), IrType::Maybe(b))
+        | (IrType::Set(a), IrType::Set(b))
+        | (IrType::Task(a), IrType::Task(b))
+        | (IrType::Cmd(a), IrType::Cmd(b))
+        | (IrType::Sub(a), IrType::Sub(b))
+        | (IrType::Decoder(a), IrType::Decoder(b))
+        | (IrType::WebRoute(a), IrType::WebRoute(b)) => slot(a, b),
+        (
+            IrType::Ui {
+                ctor: sig_ctor,
+                msg: a,
+            },
+            IrType::Ui {
+                ctor: site_ctor,
+                msg: b,
+            },
+        ) if sig_ctor == site_ctor => slot(a, b),
+        (IrType::Result(a1, a2), IrType::Result(b1, b2))
+        | (IrType::Dict(a1, a2), IrType::Dict(b1, b2))
+        | (
+            IrType::CustomElement { down: a1, up: a2 },
+            IrType::CustomElement { down: b1, up: b2 },
+        ) => slot(a1, b1) && slot(a2, b2),
+        (IrType::Tuple(a), IrType::Tuple(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(ca, cb)| slot(ca, cb))
+        }
+        (
+            IrType::Enum {
+                home: sig_home,
+                name: sig_name,
+                args: a,
+            },
+            IrType::Enum {
+                home: site_home,
+                name: site_name,
+                args: b,
+            },
+        ) if sig_home == site_home && sig_name == site_name => {
+            a.len() == b.len() && a.iter().zip(b).all(|(ca, cb)| slot(ca, cb))
+        }
+        (IrType::Record(a), IrType::Record(b)) => a
+            .iter()
+            .all(|(field, ca)| b.get(field).is_some_and(|cb| slot(ca, cb))),
+        // The three function carriers share one arrow shape; which box the
+        // argument arrives in does not move the generic's slot.
+        (
+            IrType::Fun(pa, ra) | IrType::SharedFun(pa, ra) | IrType::FnOnceChain(pa, ra),
+            IrType::Fun(pb, rb) | IrType::SharedFun(pb, rb) | IrType::FnOnceChain(pb, rb),
+        ) => pa.len() == pb.len() && pa.iter().zip(pb).all(|(ca, cb)| slot(ca, cb)) && slot(ra, rb),
+        _ => false,
     }
 }
 
@@ -31495,5 +31778,71 @@ mod tests {
         let Some(shape) = shape else { return };
         assert_eq!(super::scheme_var_instance(shape, &solved, 0), Some(&msg));
         assert_eq!(super::scheme_var_instance(shape, &msg, 0), None);
+    }
+
+    /// `aligned_param_tvars` reads a callee generic's instantiation behind a function arrow.
+    ///
+    /// A callee parameter `Bool -> msg` handed the caller's `Bool -> t` binds
+    /// `msg` to `t`, whichever function carrier the argument arrives in. A
+    /// concrete result obliges nothing, a wrapped one obliges the generic it
+    /// wraps, and a shape the parameter does not share yields `None` — the
+    /// fail-closed arm that obliges every caller generic.
+    #[test]
+    fn aligned_param_tvars_reaches_through_function_arrows() {
+        let mut interner = Interner::new();
+        let mut intern = |name: &str| interner.intern(name).expect("intern type variable name");
+        let (msg, other, t, u) = (intern("msg"), intern("other"), intern("t"), intern("u"));
+        let callback = |ret: IrType| IrType::Fun(vec![IrType::Bool], Box::new(ret));
+        let sig = callback(IrType::Generic(msg));
+        let caller = [t, u];
+        let align = |site: &IrType| super::aligned_param_tvars(&sig, msg, site, &caller);
+
+        assert_eq!(align(&callback(IrType::Generic(t))), Some(vec![t]));
+        assert_eq!(
+            align(&IrType::SharedFun(
+                vec![IrType::Bool],
+                Box::new(IrType::Generic(u))
+            )),
+            Some(vec![u])
+        );
+        assert_eq!(align(&callback(IrType::Str)), Some(vec![]));
+        assert_eq!(
+            align(&callback(IrType::Maybe(Box::new(IrType::Generic(u))))),
+            Some(vec![u])
+        );
+
+        // Refusals: a non-function argument, or an arrow of another arity,
+        // cannot be aligned.
+        assert_eq!(align(&IrType::Generic(t)), None);
+        assert_eq!(align(&IrType::Int), None);
+        assert_eq!(
+            align(&IrType::Fun(
+                vec![IrType::Bool, IrType::Bool],
+                Box::new(IrType::Generic(t))
+            )),
+            None
+        );
+
+        // A parameter that never mentions the target imposes nothing, even
+        // against a mismatched argument.
+        assert_eq!(
+            super::aligned_param_tvars(&IrType::Generic(other), msg, &IrType::Int, &caller),
+            Some(vec![])
+        );
+    }
+
+    /// A binder bound twice to differing types has no recoverable site type.
+    #[test]
+    fn record_site_type_forgets_a_conflicting_rebind() {
+        let mut interner = Interner::new();
+        let f = interner.intern("f").expect("intern binder name");
+        let mut site_types = std::collections::HashMap::new();
+        super::record_site_type(&mut site_types, f, Some(IrType::Int));
+        super::record_site_type(&mut site_types, f, Some(IrType::Int));
+        assert_eq!(site_types.get(&f), Some(&Some(IrType::Int)));
+        super::record_site_type(&mut site_types, f, Some(IrType::Str));
+        assert_eq!(site_types.get(&f), Some(&None));
+        super::record_site_type(&mut site_types, f, Some(IrType::Int));
+        assert_eq!(site_types.get(&f), Some(&None));
     }
 }
