@@ -2072,9 +2072,10 @@ pub fn infer_package_capabilities(
     infer_package_capabilities_in(&ipe_db::IpeDatabase::new(), &package)
 }
 
-/// Every source a package's capability inference sees — the package's own
-/// modules plus the compiled-source stdlib closure and FFI interface modules the
-/// build injects — and the modules each lowered as an entry.
+/// Every source a package's capability inference sees, plus its entry modules.
+///
+/// Sources are the package's own modules plus the compiled-source stdlib closure
+/// and FFI interface modules the build injects.
 #[derive(Clone, Debug)]
 pub struct PackageSourceSet {
     sources: BTreeMap<Vec<String>, (PathBuf, String)>,
@@ -2152,10 +2153,11 @@ impl PackageSourceSet {
     }
 }
 
-/// [`infer_package_capabilities`] over one caller-supplied database: every
-/// entry is lowered against ONE shared [`ipe_db::SourceRoot`], so each module's
-/// per-file queries (parse, canonicalize, interface) run once for the whole
-/// package rather than once per entry.
+/// [`infer_package_capabilities`] over one caller-supplied database.
+///
+/// Every entry is lowered against ONE shared [`ipe_db::SourceRoot`], so each
+/// module's per-file queries (parse, canonicalize, interface) run once for the
+/// whole package rather than once per entry.
 ///
 /// Determinism: an entry's capability set is a function of its
 /// `(root, entry)` query key alone. Symbol numbering on the shared interner
