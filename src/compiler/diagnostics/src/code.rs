@@ -68,8 +68,9 @@ impl Code {
         self.0
     }
 
-    /// The [`Family`] this code belongs to, derived from the family letter — the
-    /// byte at index 4 of the `"IPE-X…"` wire string (`I`,`P`,`E`,`-`, then the
+    /// The [`Family`] this code belongs to, derived from its family letter.
+    ///
+    /// The letter is the byte at index 4 of the `"IPE-X…"` wire string (`I`,`P`,`E`,`-`, then the
     /// letter) — looked up in [`FAMILIES`], the one letter↔family table.
     /// Matched with a bounds-checked slice pattern (never an unchecked `[4]`
     /// index) so a malformed wire string — impossible for a taxonomy constant,
@@ -104,9 +105,11 @@ pub struct FamilyRow {
     pub summary: &'static str,
 }
 
-/// The single letter↔family table: [`Code::family`] reads it to classify a code
-/// and [`Family::letter`] / [`Family::summary`] read it to describe a family, so
-/// the prefix letters and the families cannot drift apart. In display order.
+/// The single letter↔family table, in display order.
+///
+/// [`Code::family`] reads it to classify a code and [`Family::letter`] /
+/// [`Family::summary`] read it to describe a family, so the prefix letters and
+/// the families cannot drift apart.
 pub const FAMILIES: [FamilyRow; 8] = [
     FamilyRow {
         family: Family::Parse,

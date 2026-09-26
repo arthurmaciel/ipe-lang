@@ -458,12 +458,14 @@ struct StaticFlags {
     c_free: bool,
 }
 
-/// The `--target` vocabulary `build`, `run`, and `release` share, parsed once at
-/// the flag (parse, don't validate): the browser bundle, the portable WASI
-/// module, or a supported musl-static triple. An out-of-set value is refused
-/// here, with the same message for every command; what a command cannot do
-/// with an in-set target (`run` has no process to execute for `wasm`, `release`
-/// produces no `wasi` module) is that command's own typed refusal.
+/// The `--target` vocabulary `build`, `run`, and `release` share.
+///
+/// Parsed once at the flag (parse, don't validate): the browser bundle, the
+/// portable WASI module, or a supported musl-static triple. An out-of-set value
+/// is refused here, with the same message for every command; what a command
+/// cannot do with an in-set target (`run` has no process to execute for
+/// `wasm`, `release` produces no `wasi` module) is that command's own typed
+/// refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     /// `wasm` — the browser bundle (`wasm32-unknown-unknown`).
@@ -1746,8 +1748,8 @@ mod tests {
     /// `--allocator system` is the choice itself.
     #[test]
     fn allow_slow_allocator_is_an_unknown_flag() {
-        let parsers: [fn(&[String]) -> Result<(), CliError>; 2] =
-            [|a| parse_build(a).map(|_| ()), |a| parse_run(a).map(|_| ())];
+        type Parser = fn(&[String]) -> Result<(), CliError>;
+        let parsers: [Parser; 2] = [|a| parse_build(a).map(|_| ()), |a| parse_run(a).map(|_| ())];
         for parse in parsers {
             let err = parse(&s(&["--allow-slow-allocator"]));
             assert!(
@@ -1758,9 +1760,10 @@ mod tests {
         }
     }
 
-    /// `build`, `run`, and `release` share one `--target` vocabulary: an
-    /// in-set value parses for all three, and an out-of-set value is refused by
-    /// all three with the same message. The only per-command refusals are
+    /// `build`, `run`, and `release` share one `--target` vocabulary.
+    ///
+    /// An in-set value parses for all three, and an out-of-set value is refused
+    /// by all three with the same message. The only per-command refusals are
     /// semantic — `run` has no process to execute for `wasm`, and `release`
     /// produces no `wasi` module — and each names why.
     #[test]

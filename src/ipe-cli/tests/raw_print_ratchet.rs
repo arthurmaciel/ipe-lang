@@ -46,8 +46,9 @@ const BUDGET: &[(&str, usize)] = &[
 /// The raw print macros the ratchet counts.
 const MACROS: &[&str] = &["print!(", "println!(", "eprint!(", "eprintln!("];
 
-/// Count the raw print macro invocations in `text`: an occurrence counts only
-/// when it is not the tail of a longer identifier (`eprint!(` is not a
+/// Count the raw print macro invocations in `text`.
+///
+/// An occurrence counts only when it is not the tail of a longer identifier (`eprint!(` is not a
 /// `print!(`).
 fn count_raw_prints(text: &str) -> usize {
     MACROS

@@ -162,7 +162,7 @@ pub fn parse_command_page(name: &str, page: &'static str) -> (CommandText, Vec<P
 
     for line in page.lines() {
         let trimmed = line.trim();
-        if let At::Synopsis = at {
+        if matches!(at, At::Synopsis) {
             if trimmed == "```" {
                 at = At::Section(None);
             } else if synopsis_seen {
@@ -184,7 +184,7 @@ pub fn parse_command_page(name: &str, page: &'static str) -> (CommandText, Vec<P
             continue;
         }
         if trimmed == "```" {
-            if let At::Lead = at {
+            if matches!(at, At::Lead) {
                 at = At::Synopsis;
             } else {
                 defects.push(PageDefect::StrayLine(line));
@@ -226,7 +226,7 @@ pub fn parse_command_page(name: &str, page: &'static str) -> (CommandText, Vec<P
         }
     }
 
-    if let At::Synopsis = at {
+    if matches!(at, At::Synopsis) {
         defects.push(PageDefect::UnclosedSynopsis);
     }
     if !synopsis_seen {
