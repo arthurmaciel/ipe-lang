@@ -99,14 +99,14 @@ pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] when there is no `package.ipe` here (fail-closed: no
-/// project, nothing to clean), with the migration hint when only a legacy
+/// project, nothing to clean), with the legacy-toml hint when only a legacy
 /// `ipe.toml` is present; [`CliError::Io`] when the directory cannot be
 /// canonicalised.
 fn project_root() -> Result<PathBuf, CliError> {
     let cwd = PathBuf::from(".");
     if crate::project::manifest_in_dir(&cwd).is_none() {
-        if crate::project::migration_pending(&cwd) {
-            return Err(CliError::Usage(crate::project::MIGRATE_CONFIG_HINT));
+        if crate::project::has_only_legacy_toml(&cwd) {
+            return Err(CliError::Usage(crate::project::LEGACY_TOML_HINT));
         }
         return Err(CliError::UsageOwned(
             "clean: no package.ipe here — run it from an Ipê project root".to_owned(),

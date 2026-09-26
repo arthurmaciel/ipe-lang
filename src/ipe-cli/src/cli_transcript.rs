@@ -117,8 +117,7 @@ pub fn classify(name: &str) -> Hermetic {
         // Project-tree mutators / environment probes — output depends on a
         // project or the host toolchain. `type-check` reads and compiles a
         // project tree, so its diagnostics/paths are environment-dependent.
-        "type-check" | "lint" | "fmt" | "clean" | "migrate" | "fix" | "eject" | "rust"
-        | "health" => {
+        "type-check" | "lint" | "fmt" | "clean" | "fix" | "eject" | "rust" | "health" => {
             Hermetic::Excluded("depends on a project tree / host toolchain — flaky transcript")
         }
 

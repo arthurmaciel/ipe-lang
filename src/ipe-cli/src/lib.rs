@@ -47,7 +47,6 @@ pub mod lockfile;
 pub mod login;
 mod lsp;
 pub mod machine_output;
-pub mod migrate;
 pub mod native_ffi_consent;
 pub mod net;
 pub mod output_dir;

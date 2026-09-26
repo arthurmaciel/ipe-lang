@@ -669,24 +669,6 @@ const COMMANDS: &[Command] = &[
         hidden: false,
     },
     Command {
-        name: "migrate",
-        run: crate::migrate::run_migrate,
-        summary: "Convert an interim manifest to the package.ipe record form.",
-        args: "config",
-        args_desc: "The migration to run. `config` rewrites the interim manifest (a `Package.named |>` package.ipe, or a legacy ipe.toml) as the record form.",
-        options: &[
-            Opt {
-                flag: "[--json]",
-                desc: "emit the migration result as JSON ({\"schema\":\"ipe.cli.migrate/1\",\"action\":…,\"path\":…})",
-            },
-            Opt {
-                flag: "[--plain]",
-                desc: "print a single status line flush-left, no decoration",
-            },
-        ],
-        hidden: false,
-    },
-    Command {
         name: "add",
         run: crate::pkg::run_add,
         summary: "Add an Ipê package dependency (resolution ships with the index).",
@@ -1001,7 +983,6 @@ const SECTIONS: &[Section] = &[
             "lsp",
             "debugger",
             "clean",
-            "migrate",
             "health",
             "capabilities",
             "diff",
@@ -1712,9 +1693,6 @@ mod tests {
         assert_help_flags_are_accepted("fmt", |a| crate::cli_args::parse_fmt(a).map(|_| ()));
         assert_help_flags_are_accepted("lint", |a| crate::lint::parse_lint_args(a).map(|_| ()));
         assert_help_flags_are_accepted("clean", |a| crate::clean::parse_clean_args(a).map(|_| ()));
-        assert_help_flags_are_accepted("migrate", |a| {
-            crate::migrate::parse_migrate_args(a).map(|_| ())
-        });
     }
 
     /// `help_json` emits valid JSON covering every command and section.

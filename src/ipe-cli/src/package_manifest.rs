@@ -1323,9 +1323,8 @@ fn line_col(src: &str, off: u32) -> (usize, usize) {
 /// The inverse of [`read_package_manifest`] over the fields the manifest carries:
 /// the emitted record re-reads to an equivalent manifest. Only non-default
 /// sections are written, so a minimal manifest serialises to a minimal record.
-/// Used by `ipe migrate config` to rewrite an interim builder manifest (or a
-/// legacy `ipe.toml`) into the record form, and available to any caller that must
-/// emit a manifest.
+/// Available to any caller that must emit a manifest; the round-trip tests below
+/// pin it to the reader.
 #[must_use]
 pub fn render_manifest_record(manifest: &ProjectManifest) -> String {
     let mut fields: Vec<String> = Vec::new();

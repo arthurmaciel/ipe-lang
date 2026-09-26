@@ -45,7 +45,7 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
 ///
 /// # Errors
 /// [`CliError::Io`] if the current directory cannot be read; [`CliError::Usage`]
-/// when there is no `package.ipe` here (with the migration hint when only a
+/// when there is no `package.ipe` here (with the legacy-toml hint when only a
 /// legacy `ipe.toml` is present).
 fn project_root() -> Result<PathBuf, CliError> {
     let cwd = std::env::current_dir().map_err(|e| CliError::Io {
@@ -55,8 +55,8 @@ fn project_root() -> Result<PathBuf, CliError> {
     if crate::project::manifest_in_dir(&cwd).is_some() {
         return Ok(cwd);
     }
-    if crate::project::migration_pending(&cwd) {
-        return Err(CliError::Usage(crate::project::MIGRATE_CONFIG_HINT));
+    if crate::project::has_only_legacy_toml(&cwd) {
+        return Err(CliError::Usage(crate::project::LEGACY_TOML_HINT));
     }
     Err(CliError::Usage(
         "ipe add/remove: no `package.ipe` in the current directory (run inside an Ipê project)",

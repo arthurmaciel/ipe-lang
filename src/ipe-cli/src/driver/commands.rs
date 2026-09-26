@@ -248,7 +248,7 @@ pub fn with_help_on_misuse(
 ///    reads the directory's `package.ipe`).
 /// 2. `./src/Main.ipe` exists — entry `"src/Main.ipe"` (single-file
 ///    shorthand without a manifest).
-/// 3. A bare `./ipe.toml` with no `package.ipe` — a clear migration error, so
+/// 3. A bare `./ipe.toml` with no `package.ipe` — a clear legacy-toml error, so
 ///    the legacy manifest never silently governs a build.
 /// 4. Neither — usage error: nothing to build here.
 pub fn default_entry() -> Result<String, CliError> {
@@ -258,8 +258,8 @@ pub fn default_entry() -> Result<String, CliError> {
     if std::path::Path::new("src/Main.ipe").exists() {
         return Ok("src/Main.ipe".to_owned());
     }
-    if project::migration_pending(std::path::Path::new(".")) {
-        return Err(CliError::Usage(project::MIGRATE_CONFIG_HINT));
+    if project::has_only_legacy_toml(std::path::Path::new(".")) {
+        return Err(CliError::Usage(project::LEGACY_TOML_HINT));
     }
     Err(CliError::Usage(NO_ENTRY))
 }
@@ -394,14 +394,14 @@ pub fn resolve_delivery(
 /// Route an entry argument to its `package.ipe`, when one governs it:
 /// a directory must contain one, and a `.ipe` entry walks up the tree looking
 /// for one (returning no manifest — single-file mode — when none exists). A
-/// directory carrying only a legacy `ipe.toml` is a clear migration error.
+/// directory carrying only a legacy `ipe.toml` is a clear legacy-toml error.
 pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
     if entry_path.is_dir() {
         if let Some(manifest) = project::manifest_in_dir(entry_path) {
             return Ok(Some(manifest));
         }
-        if project::migration_pending(entry_path) {
-            return Err(CliError::Usage(project::MIGRATE_CONFIG_HINT));
+        if project::has_only_legacy_toml(entry_path) {
+            return Err(CliError::Usage(project::LEGACY_TOML_HINT));
         }
         Err(CliError::Usage(
             "directory supplied but no package.ipe found inside it",

@@ -444,8 +444,8 @@ pub(crate) fn resolve_project_sources(
     let manifest_path = if entry.is_dir() {
         match project::manifest_in_dir(entry) {
             Some(manifest) => Some(manifest),
-            None if project::migration_pending(entry) => {
-                return Err(CliError::Usage(project::MIGRATE_CONFIG_HINT));
+            None if project::has_only_legacy_toml(entry) => {
+                return Err(CliError::Usage(project::LEGACY_TOML_HINT));
             }
             None => {
                 return Err(CliError::Usage(
