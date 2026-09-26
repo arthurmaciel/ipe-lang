@@ -60,7 +60,7 @@ pub struct ProjectManifest {
     /// documented default in `AGENTS.md`'s `package.ipe` schema table.
     pub driver: ipe_backend_rust::DbDriver,
     /// The `[rust]` static-build request layer (`static` / `target` /
-    /// `allocator` / `allowSlowAllocator` / `cFree`) — the lowest-precedence layer
+    /// `allocator` / `cFree`) — the lowest-precedence layer
     /// (CLI > env > `package.ipe`) of `crate::build_plan::resolve`'s input.
     /// Every field defaults to unset when the section (or key) is absent.
     /// Malformed values (a bad bool, an unknown allocator) are refused at

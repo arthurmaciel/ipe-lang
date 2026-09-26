@@ -16,10 +16,9 @@ path: a source file, a project directory, or a package.ipe (default: the current
 - `[--fix]` — apply machine-applicable fixes before building
 - @--accept-risks
 - @--static
-- `[--target <triple|wasm|wasi>]` — cross-compile to <triple>, the browser (`wasm`), or co-located WebAssembly/WASI (`wasi`, a wasm32-wasip1 module for a Direct script)
+- @--target
 - @--emit-permissions
 - @--allocator
-- @--allow-slow-allocator
 - @--cfree
 - `[--debugger]` — compile the in-app time-travelling debugger overlay into the built app
 - @--quiet

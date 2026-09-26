@@ -11,7 +11,7 @@ A source file, a project directory, or a package.ipe (default: the current proje
 ## Options
 
 - `[--out <dir>]` — put the artifact under <dir>/release/ (default: out/ in the project)
-- `[--target wasm|<triple>]` — produce a browser bundle (`wasm`) or a musl-static binary for <triple> (default: x86_64-unknown-linux-musl)
+- @--target
 - @--emit-permissions
 - `[--runtime <dir>]` — vendor the Ipê runtime source from <dir>
 - `[--bundle]` — native-bearing only: multi-file opt-out — wrapper + app + profile as siblings (app binary can be run directly, bypassing the sandbox)

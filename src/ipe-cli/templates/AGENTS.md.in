@@ -1152,8 +1152,7 @@ ipe release src/Main.ipe           # PRODUCTION build; rejects any Debug.* use
                                    #  (IPE-L0140)
 ipe dev build|run … --static       # fully-static musl single binary (dlmalloc
                                    #  default; --target <triple> --allocator
-                                   #  <auto|system|dlmalloc|talc|mimalloc>
-                                   #  --allow-slow-allocator)
+                                   #  <auto|system|dlmalloc|talc|mimalloc>)
 ipe dev watch src/Main.ipe         # file-watch rebuild + restart (bare `ipe watch` too)
 ipe type-check src/Main.ipe        # type-check only — no build, no run, no emit
 ipe fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.ipei)

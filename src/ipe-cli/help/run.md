@@ -13,9 +13,8 @@ A source file, a project directory, or a package.ipe. Defaults to the current pr
 - @--out
 - @--runtime
 - @--static
-- `[--target <triple>]` — cross-compile to <triple>
+- @--target
 - @--allocator
-- @--allow-slow-allocator
 - @--cfree
 - @--accept-risks
 - `[--debugger]` — compile the in-app time-travelling debugger overlay into the run app
