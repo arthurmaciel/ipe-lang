@@ -538,7 +538,8 @@ fn render_group(g: &Group, p: &Palette) -> String {
     out.push('\n');
     let _ = writeln!(out, "{}ipe {} <verb>{}", p.yellow, g.name, p.reset);
     out.push('\n');
-    out.push_str("Verbs:\n");
+    out.push_str(crate::text::verbs_label());
+    out.push('\n');
     let name_w = g
         .members
         .iter()

@@ -13,9 +13,9 @@
 //! `run_fmt` consume the typed value; the scattered ad-hoc checks they used to
 //! carry are folded into these parses.
 
-use crate::CliError;
 use crate::build_plan::{AllocatorChoice, StaticRequestLayer};
 use crate::delivery::{DeliveryError, DeliveryTokens, Shape, TargetTriple};
+use crate::{CliError, text};
 pub use ipe_backend_rust::static_build::StaticTriple;
 
 /// The delivery positionals a `build` / `run` / `watch` tail may carry after the
@@ -67,7 +67,7 @@ fn take_delivery_positionals(
 /// refusals are pedagogical lessons, carried verbatim behind the command prefix.
 #[must_use]
 fn delivery_usage(command: &str, err: &DeliveryError) -> CliError {
-    CliError::UsageOwned(format!("ipe {command}: {err}"))
+    CliError::UsageOwned(text::command_refusal(&command, err))
 }
 
 /// The one phrasing for "a command was given a flag it does not recognise".
@@ -78,23 +78,21 @@ fn delivery_usage(command: &str, err: &DeliveryError) -> CliError {
 /// Always backticks (never `Debug`/`{:?}` straight quotes), always the prefix.
 #[must_use]
 pub fn usage_unknown_flag(command: &str, flag: &str) -> CliError {
-    CliError::UsageOwned(format!("ipe {command}: unknown flag `{flag}`"))
+    CliError::UsageOwned(text::unknown_flag(&command, &flag))
 }
 
 /// The one phrasing for "a parent command was given a subcommand it does not
 /// recognise", naming the accepted set so the fix is obvious.
 #[must_use]
 pub fn usage_unknown_subcommand(command: &str, sub: &str, expected: &str) -> CliError {
-    CliError::UsageOwned(format!(
-        "ipe {command}: unknown subcommand `{sub}` (expected {expected})"
-    ))
+    CliError::UsageOwned(text::unknown_subcommand(&command, &sub, &expected))
 }
 
 /// The one phrasing for "a command that takes no positional was given one, or a
 /// single-positional command was given a second".
 #[must_use]
 pub fn usage_unexpected_argument(command: &str, arg: &str) -> CliError {
-    CliError::UsageOwned(format!("ipe {command}: unexpected argument `{arg}`"))
+    CliError::UsageOwned(text::unexpected_argument(&command, &arg))
 }
 
 /// How a data-producing command renders its result.
@@ -247,12 +245,10 @@ pub(crate) fn consume_format_flag(
             *slot = Some(requested);
             Ok(true)
         }
-        Some(existing) if *existing == requested => Err(CliError::UsageOwned(format!(
-            "ipe {command}: {flag} given more than once"
-        ))),
-        Some(_) => Err(CliError::UsageOwned(format!(
-            "ipe {command}: --plain and --json are mutually exclusive"
-        ))),
+        Some(existing) if *existing == requested => {
+            Err(CliError::UsageOwned(text::flag_repeated(&command, &flag)))
+        }
+        Some(_) => Err(CliError::UsageOwned(text::plain_json_exclusive(&command))),
     }
 }
 
@@ -339,9 +335,7 @@ pub fn single_positional_with_format<'a>(
 /// [`CliError::UsageOwned`] when `slot` already holds a value.
 fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str, command: &str) -> Result<(), CliError> {
     if slot.is_some() {
-        return Err(CliError::UsageOwned(format!(
-            "ipe {command}: {flag} given more than once"
-        )));
+        return Err(CliError::UsageOwned(text::flag_repeated(&command, &flag)));
     }
     *slot = Some(value);
     Ok(())
@@ -359,7 +353,7 @@ fn take_value(
 ) -> Result<String, CliError> {
     it.next()
         .cloned()
-        .ok_or_else(|| CliError::UsageOwned(format!("ipe {command}: {flag} needs a value")))
+        .ok_or_else(|| CliError::UsageOwned(text::flag_needs_value(&command, &flag)))
 }
 
 /// Take the leading positional entry, if any: the first token, but ONLY when it
@@ -396,9 +390,7 @@ fn is_delivery_word(token: &str) -> bool {
 /// without touching the real filesystem.
 fn shadowing_note(word: &str, exists: impl FnOnce(&str) -> bool) -> Option<String> {
     if is_delivery_word(word) && exists(word) {
-        Some(format!(
-            "note: a path `{word}` exists but bare `{word}` selects the delivery; write `./{word}` to build that path"
-        ))
+        Some(text::delivery_word_shadows_path(&word))
     } else {
         None
     }
@@ -476,9 +468,9 @@ struct StaticFlags {
 /// the vocabulary.
 pub fn parse_target(raw: &str) -> Result<TargetTriple, CliError> {
     TargetTriple::from_flag(raw).ok_or_else(|| {
-        CliError::UsageOwned(format!(
-            "unsupported target `{raw}` — supported: wasm, wasi, {}",
-            StaticTriple::SUPPORTED.join(", ")
+        CliError::UsageOwned(text::unsupported_target(
+            &raw,
+            &StaticTriple::SUPPORTED.join(", "),
         ))
     })
 }
@@ -717,16 +709,12 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     // compose with the native static flags.
     let wasm = wasm_kind_of(static_flags.target);
     if wasm.is_wasm() && (static_flags.static_flag || static_flags.allocator.is_some()) {
-        return Err(CliError::UsageOwned(format!(
-            "--static / --allocator are native-target flags; they do not compose with --target {}",
-            wasm.word(),
+        return Err(CliError::UsageOwned(text::static_flags_with_wasm(
+            &wasm.word(),
         )));
     }
     if wasm.is_wasm() && static_flags.c_free {
-        return Err(CliError::UsageOwned(format!(
-            "--cfree is a native-target flag; it does not compose with --target {}",
-            wasm.word(),
-        )));
+        return Err(CliError::UsageOwned(text::cfree_with_wasm(&wasm.word())));
     }
 
     let mode = if emit_ir {
@@ -734,21 +722,19 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
         // meaningless with it. Reject rather than silently ignore (the old early
         // return dropped them without a word).
         if out.is_some() {
-            return Err(CliError::Usage("--emit-ir does not compose with --out"));
+            return Err(CliError::Usage(text::emit_ir_with_out()));
         }
         if static_flags.static_flag {
-            return Err(CliError::Usage("--emit-ir does not compose with --static"));
+            return Err(CliError::Usage(text::emit_ir_with_static()));
         }
         if static_flags.target.is_some() {
-            return Err(CliError::Usage("--emit-ir does not compose with --target"));
+            return Err(CliError::Usage(text::emit_ir_with_target()));
         }
         if static_flags.allocator.is_some() {
-            return Err(CliError::Usage(
-                "--emit-ir does not compose with --allocator",
-            ));
+            return Err(CliError::Usage(text::emit_ir_with_allocator()));
         }
         if static_flags.c_free {
-            return Err(CliError::Usage("--emit-ir does not compose with --cfree"));
+            return Err(CliError::Usage(text::emit_ir_with_cfree()));
         }
         BuildMode::EmitIr
     } else if wasm.is_wasm() {
@@ -896,17 +882,11 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     let wasm = wasm_kind_of(static_flags.target);
     match wasm {
         WasmKind::Client => {
-            return Err(CliError::Usage(
-                "ipe run builds and executes a native binary; --target wasm has no native \
-                 artifact to run — use `ipe build --target wasm` to produce a browser bundle",
-            ));
+            return Err(CliError::Usage(text::run_wasm_target()));
         }
         WasmKind::Wasi => {
             if static_flags.static_flag || static_flags.allocator.is_some() || static_flags.c_free {
-                return Err(CliError::Usage(
-                    "--static / --allocator / --cfree are native-target flags; they do not \
-                     compose with --target wasi",
-                ));
+                return Err(CliError::Usage(text::run_wasi_native_flags()));
             }
         }
         WasmKind::None => {}
@@ -986,9 +966,7 @@ pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
         }
     }
 
-    let out = out.ok_or(CliError::Usage(
-        "ipe eject: --out <dir> is required (the directory to write the standalone project to)",
-    ))?;
+    let out = out.ok_or_else(|| CliError::Usage(text::eject_out_required()))?;
 
     Ok(EjectArgs {
         entry,
@@ -1027,11 +1005,9 @@ impl ReleaseTarget {
             None => Ok(Self::Native(StaticTriple::default())),
             Some(TargetTriple::BrowserWasm) => Ok(Self::Wasm),
             Some(TargetTriple::Native(triple)) => Ok(Self::Native(triple)),
-            Some(TargetTriple::Wasm32Wasip1) => Err(CliError::UsageOwned(
-                "ipe release produces a browser bundle (`--target wasm`) or a native binary; \
-                 it does not produce a WASI module — build one with `ipe build --target wasi`"
-                    .to_owned(),
-            )),
+            Some(TargetTriple::Wasm32Wasip1) => {
+                Err(CliError::UsageOwned(text::release_no_wasi().to_owned()))
+            }
         }
     }
 }
@@ -1141,9 +1117,7 @@ pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
 
     if saw_embed && saw_bundle {
         return Err(CliError::UsageOwned(
-            "ipe release: --embed and --bundle are mutually exclusive (embed is the default \
-             single self-jailing binary; --bundle is the multi-file opt-out)"
-                .to_owned(),
+            text::release_embed_bundle_exclusive().to_owned(),
         ));
     }
 
@@ -1260,13 +1234,9 @@ pub fn parse_watch(rest: &[String]) -> Result<WatchArgs, CliError> {
 /// [`CliError::UsageOwned`] on a non-numeric value or on `0`.
 pub fn parse_port(value: &str, command: &str) -> Result<u16, CliError> {
     match value.parse::<u16>() {
-        Ok(0) => Err(CliError::UsageOwned(format!(
-            "ipe {command}: --port 0 is not a real port; omit --port to auto-select a free one"
-        ))),
+        Ok(0) => Err(CliError::UsageOwned(text::port_zero(&command))),
         Ok(port) => Ok(port),
-        Err(_) => Err(CliError::UsageOwned(format!(
-            "ipe {command}: --port `{value}` is not a port number (1-65535)"
-        ))),
+        Err(_) => Err(CliError::UsageOwned(text::port_invalid(&command, &value))),
     }
 }
 
@@ -1298,7 +1268,7 @@ pub fn parse_fix(rest: &[String]) -> Result<FixArgs, CliError> {
             positional => set_once(&mut entry, positional.to_owned(), "<path>", "fix")?,
         }
     }
-    let entry = entry.ok_or(CliError::Usage("usage: ipe fix <path> [--yes]"))?;
+    let entry = entry.ok_or_else(|| CliError::Usage(text::fix_usage()))?;
     Ok(FixArgs { entry, auto })
 }
 
@@ -1372,9 +1342,7 @@ pub fn parse_health(rest: &[String]) -> Result<HealthArgs, CliError> {
     }
     let format = format.unwrap_or_default();
     if assume_yes && format != OutputFormat::Human {
-        return Err(CliError::Usage(
-            "ipe health: --yes does not compose with --plain / --json (a data form never mutates)",
-        ));
+        return Err(CliError::Usage(text::health_yes_with_format()));
     }
     Ok(HealthArgs { format, assume_yes })
 }
@@ -1433,27 +1401,21 @@ pub fn parse_fmt(rest: &[String]) -> Result<FmtMode, CliError> {
             }
             positional => {
                 if path.is_some() {
-                    return Err(CliError::Usage("fmt: expected a single <path> argument"));
+                    return Err(CliError::Usage(text::fmt_single_path()));
                 }
                 path = Some(positional.to_owned());
             }
         }
     }
     if stdin && path.is_some() {
-        return Err(CliError::Usage(
-            "fmt: --stdin and a <path> argument are mutually exclusive",
-        ));
+        return Err(CliError::Usage(text::fmt_stdin_and_path()));
     }
     let format = format.unwrap_or_default();
     if format != OutputFormat::Human && stdin {
-        return Err(CliError::Usage(
-            "fmt: --plain / --json do not compose with --stdin (it already writes to stdout)",
-        ));
+        return Err(CliError::Usage(text::fmt_format_with_stdin()));
     }
     if format != OutputFormat::Human && !check {
-        return Err(CliError::Usage(
-            "fmt: --plain / --json report the unformatted files of a --check scan; pass --check",
-        ));
+        return Err(CliError::Usage(text::fmt_format_needs_check()));
     }
     if stdin {
         if check {

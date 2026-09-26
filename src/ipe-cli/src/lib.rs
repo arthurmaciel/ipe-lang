@@ -66,6 +66,7 @@ pub mod scratch;
 pub mod screen;
 pub mod signing;
 pub mod style;
+pub mod text;
 pub mod toolchain;
 pub mod unsafe_ack;
 pub mod version_check;

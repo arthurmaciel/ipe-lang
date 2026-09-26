@@ -76,44 +76,16 @@ pub enum Refusal {
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DirtyTree { source_root } => write!(
-                f,
-                "the working tree at {} has uncommitted changes — publish pins the exact \
-                 committed revision, so commit (or stash) every change first; otherwise the \
-                 pinned `sha256`/`rev` would not name the bytes you publish.",
-                source_root.display()
-            ),
-            Self::UnpushedHead { rev } => write!(
-                f,
-                "HEAD ({rev}) is not reachable from any remote branch — a published version \
-                 pins an immutable, fetchable revision, so push this commit to its remote \
-                 before publishing."
-            ),
-            Self::DuplicateVersion { name, version } => write!(
-                f,
-                "`{name}` {version} is already published in the index — a published version is \
-                 immutable and must never be rewritten. Bump the version in `package.ipe` and \
-                 publish the new one."
-            ),
-            Self::NoSource => f.write_str(
-                "could not determine the package's source URL — the index needs a public git \
-                 URL the resolver can fetch. Pass `--source <url>`, or set an `origin` remote \
-                 on the package's git repository.",
-            ),
-            Self::UnsignedCommit => f.write_str(
-                "no commit-signing key is configured, so the publish commit could only be \
-                 pushed unsigned — the curated index requires signed commits and would never \
-                 merge it, so nothing was published. Set `IPE_PUBLISH_SIGNING_KEY` to the path \
-                 of an SSH signing key (the private key file; its `.pub` must be registered as \
-                 a signing key on your GitHub account) and publish again.",
-            ),
-            Self::UnresolvableIdentity => f.write_str(
-                "could not resolve your GitHub identity for the index-PR commit — the curated \
-                 index requires signed commits marked \"Verified\", which is only possible when \
-                 the commit's committer is your authenticated GitHub account's verified noreply \
-                 identity. Run `ipe login` so publish can sign the index PR under your verified \
-                 GitHub identity, then publish again. Nothing was published.",
-            ),
+            Self::DirtyTree { source_root } => {
+                f.write_str(&crate::text::publish_dirty_tree(&source_root.display()))
+            }
+            Self::UnpushedHead { rev } => f.write_str(&crate::text::publish_unpushed_head(rev)),
+            Self::DuplicateVersion { name, version } => {
+                f.write_str(&crate::text::publish_duplicate_version(name, version))
+            }
+            Self::NoSource => f.write_str(crate::text::publish_no_source()),
+            Self::UnsignedCommit => f.write_str(crate::text::publish_unsigned_commit()),
+            Self::UnresolvableIdentity => f.write_str(crate::text::publish_unresolvable_identity()),
         }
     }
 }

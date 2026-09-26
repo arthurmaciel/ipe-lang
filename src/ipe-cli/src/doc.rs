@@ -1179,14 +1179,6 @@ pub enum ModuleKind {
     Stdlib,
 }
 
-/// The section label for the user's own project modules, shared by every
-/// rendering (console listing and generated HTML) so the phrasing lives once.
-const LABEL_PROJECT: &str = "Project modules";
-
-/// The section label for the bundled standard library, shared by every
-/// rendering so the phrasing lives once.
-const LABEL_STDLIB: &str = "Standard library";
-
 /// The stable machine tag a `docs.json` consumer reads to group a module.
 const fn module_kind_tag(kind: ModuleKind) -> &'static str {
     match kind {
@@ -1693,7 +1685,12 @@ fn list_modules(path: &Path, format: OutputFormat) {
         }
         OutputFormat::Human => {
             let mut body = String::new();
-            let _ = writeln!(body, "{GUTTER}{LABEL_PROJECT} ({}):\n", project_names.len());
+            let _ = writeln!(
+                body,
+                "{GUTTER}{} ({}):\n",
+                crate::text::site_project_modules(),
+                project_names.len()
+            );
             if project_names.is_empty() {
                 let _ = writeln!(body, "{GUTTER}  (none)\n");
             } else {
@@ -1706,7 +1703,12 @@ fn list_modules(path: &Path, format: OutputFormat) {
                 }
                 body.push('\n');
             }
-            let _ = writeln!(body, "{GUTTER}{LABEL_STDLIB} ({}):\n", stdlib_names.len());
+            let _ = writeln!(
+                body,
+                "{GUTTER}{} ({}):\n",
+                crate::text::site_standard_library(),
+                stdlib_names.len()
+            );
             let stdlib_refs: Vec<&str> = stdlib_names.iter().map(String::as_str).collect();
             let tree = build_namespace_tree(&stdlib_refs);
             let mut tree_out = String::new();
@@ -3560,14 +3562,14 @@ fn render_markdown_index(docs: &DocsJson) -> String {
         .collect();
 
     if !project_names.is_empty() {
-        let _ = writeln!(out, "## {LABEL_PROJECT}\n");
+        let _ = writeln!(out, "## {}\n", crate::text::site_project_modules());
         let tree = build_namespace_tree(&project_names);
         render_markdown_tree(&tree, 0, &mut out);
         out.push('\n');
     }
 
     if !stdlib_names.is_empty() {
-        let _ = writeln!(out, "## {LABEL_STDLIB}\n");
+        let _ = writeln!(out, "## {}\n", crate::text::site_standard_library());
         let tree = build_namespace_tree(&stdlib_names);
         render_markdown_tree(&tree, 0, &mut out);
     }
@@ -3969,75 +3971,101 @@ enum NavSection {
 /// current page (empty string `""` for root-level pages, `"../"` for pages
 /// one directory deep). The active section is highlighted.
 fn render_header(active: NavSection, base: &str, search_script: &str) -> String {
+    use crate::text;
+
     let link = |section: NavSection, href: &str, label: &str| -> String {
         let cls = if active == section {
             " class=\"active\""
         } else {
             ""
         };
-        format!("<a href=\"{base}{href}\"{cls}>{label}</a>")
+        format!("<a href=\"{base}{href}\"{cls}>{}</a>", html_escape(label))
     };
-    let mut h = String::from(
-        "<a class=\"skip-link\" href=\"#content\">Skip to content</a>\n\
-         <nav class=\"site-header\" aria-label=\"Site\">\n",
+    let mut h = format!(
+        "<a class=\"skip-link\" href=\"#content\">{}</a>\n\
+         <nav class=\"site-header\" aria-label=\"{}\">\n",
+        html_escape(text::site_skip_link()),
+        html_escape(text::site_nav_label()),
     );
     // The full title on desktop; the mobile CSS swaps in the short form via a
     // second span — never a bare \"Ipê docs\" (issue #1874, item 20).
     let _ = writeln!(
         h,
         "<a class=\"site-title\" href=\"{base}index.html\">\
-         <span class=\"title-full\">Ip\u{ea} language documentation</span>\
-         <span class=\"title-short\">Ip\u{ea} language docs</span></a>"
+         <span class=\"title-full\">{}</span>\
+         <span class=\"title-short\">{}</span></a>",
+        html_escape(text::site_title_full()),
+        html_escape(text::site_title_short()),
     );
-    h.push_str(
+    let _ = writeln!(
+        h,
         "<button class=\"nav-toggle\" id=\"nav-toggle\" type=\"button\" \
-         aria-label=\"Menu\" aria-expanded=\"false\" aria-controls=\"nav-links\">\
+         aria-label=\"{}\" aria-expanded=\"false\" aria-controls=\"nav-links\">\
          <span class=\"nav-toggle-open\">\u{2630}</span>\
-         <span class=\"nav-toggle-close\">\u{2715}</span></button>\n",
+         <span class=\"nav-toggle-close\">\u{2715}</span></button>",
+        html_escape(text::site_menu_label()),
     );
     h.push_str("<div class=\"nav-links\" id=\"nav-links\">\n");
-    h.push_str(&link(NavSection::Guide, "guide/index.html", "Guides"));
+    h.push_str(&link(
+        NavSection::Guide,
+        "guide/index.html",
+        text::site_guides(),
+    ));
     h.push('\n');
-    h.push_str(&link(NavSection::Topic, "topic/index.html", "Topics"));
+    h.push_str(&link(
+        NavSection::Topic,
+        "topic/index.html",
+        text::site_topics(),
+    ));
     h.push('\n');
-    h.push_str(&link(NavSection::Idiom, "idiom/index.html", "Idioms"));
+    h.push_str(&link(
+        NavSection::Idiom,
+        "idiom/index.html",
+        text::site_idioms(),
+    ));
     h.push('\n');
     h.push_str(&link(
         NavSection::Construct,
         "construct/index.html",
-        "Constructs",
+        text::site_constructs(),
     ));
     h.push('\n');
     h.push_str("<span class=\"sep\" aria-hidden=\"true\">\u{2502}</span>\n");
     h.push_str(&link(
         NavSection::Reference,
         "module/index.html",
-        "Reference",
+        text::site_reference(),
     ));
     h.push('\n');
     h.push_str(&link(
         NavSection::Diagnostic,
         "diagnostic/index.html",
-        "Diagnostics",
+        text::site_diagnostics(),
     ));
     h.push('\n');
-    h.push_str(&link(NavSection::Cli, "cli/index.html", "CLI"));
+    h.push_str(&link(NavSection::Cli, "cli/index.html", text::site_cli()));
     h.push('\n');
-    h.push_str(
+    let _ = writeln!(
+        h,
         "<span class=\"search-wrap\" role=\"search\">\
          <input type=\"search\" id=\"nav-search\" class=\"nav-search\" \
-         placeholder=\"Search\u{2026}\" aria-label=\"Search documentation\" \
+         placeholder=\"{}\" aria-label=\"{}\" \
          role=\"combobox\" aria-expanded=\"false\" aria-controls=\"search-results\" \
          aria-autocomplete=\"list\" autocomplete=\"off\">\
          <ul class=\"search-results\" id=\"search-results\" role=\"listbox\" \
-         aria-label=\"Search results\"></ul>\
-         </span>\n",
+         aria-label=\"{}\"></ul>\
+         </span>",
+        html_escape(text::site_search_placeholder()),
+        html_escape(text::site_search_label()),
+        html_escape(text::site_search_results_label()),
     );
-    h.push_str(
+    let _ = writeln!(
+        h,
         "<button class=\"theme-toggle\" id=\"theme-toggle\" type=\"button\" \
-         aria-label=\"Toggle light and dark theme\" aria-pressed=\"false\">\
+         aria-label=\"{}\" aria-pressed=\"false\">\
          <span class=\"theme-icon-dark\" aria-hidden=\"true\">\u{263e}</span>\
-         <span class=\"theme-icon-light\" aria-hidden=\"true\">\u{2600}</span></button>\n",
+         <span class=\"theme-icon-light\" aria-hidden=\"true\">\u{2600}</span></button>",
+        html_escape(text::site_theme_toggle_label()),
     );
     h.push_str("</div>\n");
     h.push_str("</nav>\n");
@@ -4306,8 +4334,9 @@ fn html_page(title: &str, css_href: &str, header: &str, body: &str) -> String {
          <title>{}</title>\n<link rel=\"stylesheet\" href=\"{css_href}\">\n</head>\n\
          <body>\n{header}<main id=\"content\" class=\"page-body\">\n{body}</main>\n\
          <button id=\"scroll-top\" class=\"scroll-top\" type=\"button\" \
-         aria-label=\"Scroll to top\">\u{2191}</button>\n</body>\n</html>\n",
-        html_escape(title)
+         aria-label=\"{}\">\u{2191}</button>\n</body>\n</html>\n",
+        html_escape(title),
+        html_escape(crate::text::site_scroll_top_label()),
     )
 }
 
@@ -4452,18 +4481,32 @@ fn strip_markdown_links(text: &str) -> String {
 /// presented in the same hierarchical namespace tree used on the old landing.
 fn render_reference_index(docs: &DocsJson, search_script: &str) -> String {
     let header = render_header(NavSection::Reference, "../", search_script);
-    let mut body = String::from("<h1>Reference</h1>\n");
-    body.push_str(
-        "<input type=\"search\" id=\"filter\" class=\"filter\" \
-         placeholder=\"Filter modules\u{2026}\" aria-label=\"Filter modules\" \
+    let title = crate::text::site_reference();
+    let mut body = format!(
+        "<h1>{}</h1>\n\
+         <input type=\"search\" id=\"filter\" class=\"filter\" \
+         placeholder=\"{}\" aria-label=\"{}\" \
          autocomplete=\"off\">\n",
+        html_escape(title),
+        html_escape(crate::text::site_filter_modules()),
+        html_escape(crate::text::site_filter_modules_label()),
     );
 
-    render_html_module_section_relative(&mut body, docs, ModuleKind::Local, LABEL_PROJECT);
-    render_html_module_section_relative(&mut body, docs, ModuleKind::Stdlib, LABEL_STDLIB);
+    render_html_module_section_relative(
+        &mut body,
+        docs,
+        ModuleKind::Local,
+        crate::text::site_project_modules(),
+    );
+    render_html_module_section_relative(
+        &mut body,
+        docs,
+        ModuleKind::Stdlib,
+        crate::text::site_standard_library(),
+    );
 
     body.push_str(FILTER_SCRIPT);
-    html_page("Reference", "../style.css", &header, &body)
+    html_page(title, "../style.css", &header, &body)
 }
 
 /// Render one module section for the reference index.
@@ -4537,7 +4580,8 @@ fn render_html_tree_relative(nodes: &[NamespaceNode], out: &mut String) {
 /// page.
 fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
     let header = render_header(NavSection::Diagnostic, "../", search_script);
-    let mut body = String::from("<h1>Diagnostics</h1>\n");
+    let title = crate::text::site_diagnostics();
+    let mut body = format!("<h1>{}</h1>\n", html_escape(title));
     body.push_str(&render_code_families());
     body.push_str("<ul class=\"index-entries index-table\">\n");
     let mut entries: Vec<&crate::doc_bundle::DocEntry> = bundle
@@ -4559,7 +4603,7 @@ fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script:
         );
     }
     body.push_str("</ul>\n");
-    html_page("Diagnostics", "../style.css", &header, &body)
+    html_page(title, "../style.css", &header, &body)
 }
 
 /// The Diagnostics page's key to the code letters.
@@ -4568,10 +4612,9 @@ fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script:
 /// family table ([`ipe_diagnostics::FAMILIES`]) so a new family appears here by
 /// construction.
 fn render_code_families() -> String {
-    let mut out = String::from(
-        "<p class=\"code-families-intro\">Every code reads <code>IPE-</code>, a family \
-         letter, and four digits. The letter names the part of the compiler that \
-         reports it:</p>\n<dl class=\"code-families\">\n",
+    let mut out = format!(
+        "<p class=\"code-families-intro\">{}</p>\n<dl class=\"code-families\">\n",
+        crate::text::site_code_families_intro(),
     );
     for row in ipe_diagnostics::FAMILIES {
         let _ = writeln!(
@@ -4590,7 +4633,8 @@ fn render_code_families() -> String {
 /// Lists all `Cli` entries (subcommand — summary), each linking to its page.
 fn render_cli_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
     let header = render_header(NavSection::Cli, "../", search_script);
-    let mut body = String::from("<h1>CLI</h1>\n");
+    let title = crate::text::site_cli();
+    let mut body = format!("<h1>{}</h1>\n", html_escape(title));
     // A two-column aligned table: command in one column, summary in the next, so
     // every summary starts at the same indentation (issue #1874, item 7).
     body.push_str("<ul class=\"index-entries index-table\">\n");
@@ -4621,7 +4665,7 @@ fn render_cli_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) 
         body.push_str("</li>\n");
     }
     body.push_str("</ul>\n");
-    html_page("CLI", "../style.css", &header, &body)
+    html_page(title, "../style.css", &header, &body)
 }
 
 /// Render per-kind index pages for curated kinds (Guide, Topic, Idiom, Construct).
@@ -4636,22 +4680,22 @@ fn render_curated_kind_indexes(
     let curated = [
         (
             crate::doc_bundle::DocKind::Guide,
-            "Guides",
+            crate::text::site_guides(),
             NavSection::Guide,
         ),
         (
             crate::doc_bundle::DocKind::Topic,
-            "Topics",
+            crate::text::site_topics(),
             NavSection::Topic,
         ),
         (
             crate::doc_bundle::DocKind::Idiom,
-            "Idioms",
+            crate::text::site_idioms(),
             NavSection::Idiom,
         ),
         (
             crate::doc_bundle::DocKind::Construct,
-            "Constructs",
+            crate::text::site_constructs(),
             NavSection::Construct,
         ),
     ];
@@ -4723,7 +4767,11 @@ fn render_entry_page(
         );
     }
     if entry.body.is_empty() {
-        body.push_str("<p class=\"comment\">No further documentation yet.</p>\n");
+        let _ = writeln!(
+            body,
+            "<p class=\"comment\">{}</p>",
+            html_escape(crate::text::site_no_documentation())
+        );
     } else {
         // Entry bodies are sourced from Markdown files (explain pages, construct
         // docs, command help) — rendered through the one doc-side Markdown path
@@ -4775,13 +4823,27 @@ fn render_html_index(
     search_script: &str,
 ) -> String {
     let header = render_header(NavSection::Home, "", search_script);
-    let mut body = String::from("<h1>Documentation</h1>\n");
+    let title = crate::text::site_documentation();
+    let heading = format!("<h1>{}</h1>\n", html_escape(title));
+    let mut body = heading.clone();
 
     let curated = [
-        (crate::doc_bundle::DocKind::Guide, "Guides"),
-        (crate::doc_bundle::DocKind::Topic, "Topics"),
-        (crate::doc_bundle::DocKind::Idiom, "Idioms"),
-        (crate::doc_bundle::DocKind::Construct, "Constructs"),
+        (
+            crate::doc_bundle::DocKind::Guide,
+            crate::text::site_guides(),
+        ),
+        (
+            crate::doc_bundle::DocKind::Topic,
+            crate::text::site_topics(),
+        ),
+        (
+            crate::doc_bundle::DocKind::Idiom,
+            crate::text::site_idioms(),
+        ),
+        (
+            crate::doc_bundle::DocKind::Construct,
+            crate::text::site_constructs(),
+        ),
     ];
 
     for (kind, label) in curated {
@@ -4814,28 +4876,28 @@ fn render_html_index(
         body.push_str("</ul>\n</section>\n");
     }
 
-    if body == "<h1>Documentation</h1>\n" {
+    if body == heading {
         // No curated entries yet -- show the module index as a fallback.
-        body.push_str("<p>See <a href=\"module/index.html\">Reference</a> for the full API.</p>\n");
+        let _ = writeln!(body, "<p>{}</p>", crate::text::site_reference_fallback());
     }
 
-    html_page("Documentation", "style.css", &header, &body)
+    html_page(title, "style.css", &header, &body)
 }
 
 /// Render one module's page — its doc-comment, its exposed types and values,
 /// each entry carrying a stable `id` anchor and its cross-linked signature.
 fn render_html_module(module: &ModuleDoc, index: &AnchorIndex, search_script: &str) -> String {
     let header = render_header(NavSection::Reference, "", search_script);
-    let mut body = String::from(
-        "<nav class=\"crumb\"><a href=\"module/index.html\">&larr; Reference</a></nav>\n",
-    );
+    let mut body = String::from("<nav class=\"crumb\"><a href=\"module/index.html\">&larr; ");
+    body.push_str(&html_escape(crate::text::site_reference()));
+    body.push_str("</a></nav>\n");
     let _ = writeln!(body, "<h1>{}</h1>", html_escape(&module.name));
     if !module.comment.is_empty() {
         body.push_str(&render_comment_html(&module.comment));
     }
 
     if !module.unions.is_empty() {
-        body.push_str("<h2>Types</h2>\n");
+        let _ = writeln!(body, "<h2>{}</h2>", html_escape(crate::text::site_types()));
         for union in &module.unions {
             let _ = writeln!(
                 body,
@@ -4861,7 +4923,7 @@ fn render_html_module(module: &ModuleDoc, index: &AnchorIndex, search_script: &s
     }
 
     if !module.values.is_empty() {
-        body.push_str("<h2>Values</h2>\n");
+        let _ = writeln!(body, "<h2>{}</h2>", html_escape(crate::text::site_values()));
         for value in &module.values {
             let sig = html_signature(&signature_pieces(&value.signature_ty, index));
             let _ = writeln!(
@@ -5608,8 +5670,14 @@ mod tests {
         let idx = render_reference_index(&docs, &search_script);
 
         // Both section labels render.
-        assert!(idx.contains(LABEL_PROJECT), "project label: {idx}");
-        assert!(idx.contains(LABEL_STDLIB), "stdlib label: {idx}");
+        assert!(
+            idx.contains(crate::text::site_project_modules()),
+            "project label: {idx}"
+        );
+        assert!(
+            idx.contains(crate::text::site_standard_library()),
+            "stdlib label: {idx}"
+        );
         // The project section precedes the standard-library section.
         let p = idx.find(LABEL_PROJECT).expect("project label present");
         let s = idx.find(LABEL_STDLIB).expect("stdlib label present");

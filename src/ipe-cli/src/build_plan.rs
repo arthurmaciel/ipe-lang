@@ -14,6 +14,8 @@ use std::fmt;
 
 use ipe_backend_rust::static_build::{CProfile, StaticAllocator, StaticPlan, StaticTriple};
 
+use crate::text;
+
 /// The user's allocator choice before AUTO resolution — a closed enum.
 ///
 /// [`Self::parse`] rejects anything outside it (including `jemalloc` /
@@ -172,64 +174,34 @@ pub enum Refusal {
 
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownAllocator { got } => write!(
-                f,
-                "unknown allocator {got:?} — expected one of: auto, system, dlmalloc, talc, mimalloc"
+        let message = match self {
+            Self::UnknownAllocator { got } => text::unknown_allocator(&format_args!("{got:?}")),
+            Self::UnknownStaticTarget { got } => text::unknown_static_target(
+                &format_args!("{got:?}"),
+                &StaticTriple::SUPPORTED.join(", "),
             ),
-            Self::UnknownStaticTarget { got } => write!(
-                f,
-                "{got:?} is not a supported static target — supported: {}",
-                StaticTriple::SUPPORTED.join(", ")
-            ),
-            Self::TargetRequiresStatic { got } => write!(
-                f,
-                "--target {got} requires --static (cross-compiling a dynamic build is not supported)"
-            ),
-            Self::AllocatorRequiresStatic { got } => write!(
-                f,
-                "--allocator {got:?} requires --static (allocator selection applies to static builds)"
-            ),
-            Self::TalcRequiresArenaDesign => write!(
-                f,
-                "the talc allocator is not wired yet: a hosted talc #[global_allocator] needs a \
-                 static arena design that has not landed. Use the dlmalloc default instead"
-            ),
-            Self::WebviewStatic => write!(
-                f,
-                "an Ipe.WebView app cannot be built --static: it links the system webview \
-                 (WebKit/WebView2), which has no static form"
-            ),
-            Self::TargetNotInstalled { triple } => write!(
-                f,
-                "the target {triple} is not installed — run: rustup target add {triple}"
-            ),
-            Self::MuslCCompilerMissing { triple } => write!(
-                f,
-                "no musl-capable C compiler found for {triple} (the emitted project's zstd/ring \
-                 dependencies compile C). Install one (Debian/Ubuntu: apt install musl-tools) or \
-                 set CC_{}",
-                triple.replace('-', "_")
-            ),
-            Self::AllocatorRequiresC { got } => write!(
-                f,
-                "--allocator {got:?} cannot combine with --cfree: {} links C. Drop --cfree, or \
-                 use the pure-Rust dlmalloc default",
-                match got {
-                    AllocatorChoice::Mimalloc => "mimalloc vendors and",
-                    _ => "the target libc's malloc",
-                }
-            ),
-            Self::CfreeNotYetWired => write!(
-                f,
-                "--cfree is not wired yet: the pure-Rust dependency swaps that make the default \
-                 emitted graph link no C (flate2/zstd codecs, a ring-free rustls provider) have \
-                 not landed, so the build would still pull C. Drop --cfree"
-            ),
-            Self::InvalidBool { source, got } => {
-                write!(f, "{source}: expected true/false/1/0, got {got:?}")
+            Self::TargetRequiresStatic { got } => text::target_requires_static(got),
+            Self::AllocatorRequiresStatic { got } => {
+                text::allocator_requires_static(&format_args!("{got:?}"))
             }
-        }
+            Self::TalcRequiresArenaDesign => text::talc_requires_arena_design().to_owned(),
+            Self::WebviewStatic => text::webview_static().to_owned(),
+            Self::TargetNotInstalled { triple } => text::target_not_installed(triple),
+            Self::MuslCCompilerMissing { triple } => {
+                text::musl_c_compiler_missing(triple, &triple.replace('-', "_"))
+            }
+            Self::AllocatorRequiresC {
+                got: got @ AllocatorChoice::Mimalloc,
+            } => text::mimalloc_requires_c(&format_args!("{got:?}")),
+            Self::AllocatorRequiresC { got } => {
+                text::libc_allocator_requires_c(&format_args!("{got:?}"))
+            }
+            Self::CfreeNotYetWired => text::cfree_not_yet_wired().to_owned(),
+            Self::InvalidBool { source, got } => {
+                text::invalid_bool(source, &format_args!("{got:?}"))
+            }
+        };
+        f.write_str(&message)
     }
 }
 
