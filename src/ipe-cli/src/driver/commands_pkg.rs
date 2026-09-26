@@ -1,10 +1,11 @@
 use super::{
-    CliError, build_emitted_project, build_project, build_source_graph,
-    build_test_with_project_sources, build_with_sibling_discovery,
-    capabilities_including_served_widgets, cargo_target_directory, classify_entry_shape,
-    create_source_root, default_entry, discover_manifest, emit_machine_error, emitted_bin_filename,
-    force_cargo_terminal_ui, resolve_runtime, resolve_vendored_runtime_dir, run_build,
-    runtime_context_for_message, typecheck_entry_via_graph,
+    CliError, attribute_canon_errors, attribute_post_link_error, build_emitted_project,
+    build_project, build_source_graph, build_test_with_project_sources,
+    build_with_sibling_discovery, capabilities_including_served_widgets, cargo_target_directory,
+    classify_entry_shape, create_source_root, default_entry, discover_manifest, emit_machine_error,
+    emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, resolve_runtime,
+    resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
+    typecheck_entry_via_graph,
 };
 use crate::publisher::{AttestedActor, BlessedPublisher};
 use crate::{
@@ -2102,40 +2103,149 @@ pub fn verify_capabilities(
 /// — the same whole-tree posture the enforced-semver check already takes over the
 /// package's public API.
 ///
-/// This lowers each discovered module in turn (with every sibling source present,
-/// so cross-module imports resolve) and unions their inferred capabilities. A
-/// module that fails to lower on its own — e.g. one that is only meaningful as a
-/// dependency of another — is skipped for the union rather than failing the whole
-/// inference, so a helper module never masks a sibling's real effect.
+/// Each discovered module is lowered as its own entry (with every sibling source
+/// present, so cross-module imports resolve) and their inferred capabilities are
+/// unioned. A module that fails to lower on its own — e.g. one that is only
+/// meaningful as a dependency of another — is skipped for the union rather than
+/// failing the whole inference, so a helper module never masks a sibling's real
+/// effect. Every entry links the WHOLE package source tree, exactly as
+/// `ipe build` does, so a module that does not compile at all (a name or type
+/// error, imported or not) fails every entry: the package is refused, never
+/// disclosed with that module's capabilities silently missing.
 ///
 /// # Errors
 /// [`CliError::Pipeline`] / [`CliError::Io`] when the package cannot be read or
-/// no module lowers at all.
+/// no module lowers at all; the diagnostic is framed against the module that
+/// owns it.
 pub fn infer_package_capabilities(
     manifest_path: &Path,
 ) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
-    let manifest = project::parse_manifest(manifest_path)?;
-    let mut discovered = project::discover_modules(&manifest.src_root)?;
+    let package = PackageSourceSet::read(manifest_path)?;
+    infer_package_capabilities_in(&ipe_db::IpeDatabase::new(), &package)
+}
 
-    // Read every module's source once; the shared map lets each per-module
-    // lowering resolve its sibling imports.
-    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
-    for m in &discovered {
-        let src =
-            crate::io_bounded::read_to_string_capped(&m.path, crate::io_bounded::SOURCE_READ_CAP)?;
-        sources.insert(m.module_path.clone(), (m.path.clone(), src));
+/// Every source a package's capability inference sees, plus its entry modules.
+///
+/// Sources are the package's own modules plus the compiled-source stdlib closure
+/// and FFI interface modules the build injects.
+#[derive(Clone, Debug)]
+pub struct PackageSourceSet {
+    sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    entries: Vec<project::DiscoveredModule>,
+    injected: std::collections::BTreeSet<Vec<String>>,
+    ffi_injected: std::collections::BTreeSet<Vec<String>>,
+}
+
+impl PackageSourceSet {
+    /// Read the package rooted at `manifest_path`: every discovered module's
+    /// source (read once, bounded), then the same compiled-source stdlib closure
+    /// and FFI interface injection the build performs.
+    ///
+    /// # Errors
+    /// [`CliError::Io`] / manifest errors when the package cannot be read.
+    pub fn read(manifest_path: &Path) -> Result<Self, CliError> {
+        let manifest = project::parse_manifest(manifest_path)?;
+        let mut entries = project::discover_modules(&manifest.src_root)?;
+
+        let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+        for m in &entries {
+            let src = crate::io_bounded::read_to_string_capped(
+                &m.path,
+                crate::io_bounded::SOURCE_READ_CAP,
+            )?;
+            sources.insert(m.module_path.clone(), (m.path.clone(), src));
+        }
+
+        // Inject the compiled-source stdlib closure (e.g. `Ipe.Css`) just like
+        // the real build path, so a module that imports a compiled-source stdlib
+        // module lowers standalone here instead of failing name resolution
+        // (which, since a failing entry surfaces its real diagnostic, would
+        // otherwise abort build).
+        let injected = project::inject_compiled_std_closure(&mut sources, &mut entries);
+        // Inject the FFI interface modules (installed crates + the asserted-call
+        // `Rust.Ffi` module) exactly as the build does, so an FFI-using module
+        // lowers here and its `native-ffi`/`ffi-raw` capabilities are inferred
+        // rather than the whole module being skipped on a resolve failure.
+        let ffi_injected = ffi::prepare_ffi(&mut sources, manifest_path)?.injected;
+        Ok(Self {
+            sources,
+            entries,
+            injected,
+            ffi_injected,
+        })
     }
 
-    // Inject the compiled-source stdlib closure (e.g. `Ipe.Css`) just like the
-    // real build path, so a module that imports a compiled-source stdlib module
-    // lowers standalone here instead of failing name resolution (which, since a
-    // failing entry surfaces its real diagnostic, would otherwise abort build).
-    let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
-    // Inject the FFI interface modules (installed crates + the asserted-call
-    // `Rust.Ffi` module) exactly as the build does, so an FFI-using module
-    // lowers here and its `native-ffi`/`ffi-raw` capabilities are inferred
-    // rather than the whole module being skipped on a resolve failure.
-    let ffi_injected = ffi::prepare_ffi(&mut sources, manifest_path)?.injected;
+    /// The module path of every module lowered as an inference entry.
+    pub fn entry_module_paths(&self) -> impl Iterator<Item = &[String]> {
+        self.entries.iter().map(|m| m.module_path.as_slice())
+    }
+
+    /// Number of modules in the source graph (entries plus injected modules).
+    #[must_use]
+    pub fn module_count(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// The same source graph with `module_path` as its only entry — the
+    /// single-entry view whose capability sets [`infer_package_capabilities_in`]
+    /// unions over every entry.
+    #[must_use]
+    pub fn restricted_to_entry(&self, module_path: &[String]) -> Self {
+        Self {
+            sources: self.sources.clone(),
+            entries: self
+                .entries
+                .iter()
+                .filter(|m| m.module_path == module_path)
+                .cloned()
+                .collect(),
+            injected: self.injected.clone(),
+            ffi_injected: self.ffi_injected.clone(),
+        }
+    }
+}
+
+/// [`infer_package_capabilities`] over one caller-supplied database.
+///
+/// Every entry is lowered against ONE shared [`ipe_db::SourceRoot`], so each
+/// module's per-file queries (parse, canonicalize, interface) run once for the
+/// whole package rather than once per entry.
+///
+/// Determinism: an entry's capability set is a function of its
+/// `(root, entry)` query key alone. Symbol numbering on the shared interner
+/// varies with demand order, but no capability depends on a symbol's number,
+/// and the fresh-name avoid-set is the build's own (the identifier words of the
+/// whole root), so each entry lowers exactly as a cold build over the same root
+/// would. Entries are visited in the fixed [`PackageSourceSet`] order, and the
+/// union is order-independent.
+///
+/// # Errors
+/// [`CliError::Pipeline`] when no module lowers (the entry `Main`'s diagnostic
+/// when it fails, else the first failure), framed against the module that owns
+/// it; [`CliError::Usage`] when the package
+/// has no module at all.
+pub fn infer_package_capabilities_in(
+    db: &ipe_db::IpeDatabase,
+    package: &PackageSourceSet,
+) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
+    let source_root = create_source_root(
+        db,
+        &package.sources,
+        &package.injected,
+        &package.ffi_injected,
+    );
+
+    // The fresh-name collision universe the build path sets: the identifier
+    // words of every module in the root — a pure function of the source inputs,
+    // so the lowering pools mint the same names whatever entries ran before on
+    // this shared interner. Set before the first `lower_program` executes; the
+    // guard is released at the end of the statement, before any further query.
+    let mut fresh_avoid: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for file in source_root.files(db).values() {
+        fresh_avoid.extend(ipe_db::identifier_words(db, *file).iter().cloned());
+    }
+    ipe_db::Db::interner(db).lock().set_fresh_avoid(fresh_avoid);
+
     let mut inferred: std::collections::BTreeSet<ipe_ir::Capability> =
         std::collections::BTreeSet::new();
     let mut any_lowered = false;
@@ -2144,38 +2254,35 @@ pub fn infer_package_capabilities(
     // entry module `Main` if it fails, otherwise the first failure seen.
     let mut lowering_error: Option<CliError> = None;
 
-    // Lower each module as its own entry (a fresh database per module keeps the
-    // interning deterministic and the borrow of the shared interner scoped). A
-    // module that does not lower standalone is skipped, never fatal — its
-    // capabilities, if any, surface through whichever sibling does reach it.
-    for m in &discovered {
-        let db = ipe_db::IpeDatabase::new();
-        let source_root = create_source_root(&db, &sources, &injected, &ffi_injected);
-        let Some(entry_file) = source_root.files(&db).get(&m.module_path).copied() else {
+    // Lower each module as its own entry. A module that does not lower
+    // standalone is skipped, never fatal — its capabilities, if any, surface
+    // through whichever sibling does reach it.
+    for m in &package.entries {
+        let Some(entry_file) = source_root.files(db).get(&m.module_path).copied() else {
             continue;
         };
-        match ipe_db::lower_program(&db, source_root, entry_file) {
+        match ipe_db::lower_program(db, source_root, entry_file) {
             Ok(program) => {
                 inferred.extend(capabilities_including_served_widgets(
-                    &db,
+                    db,
                     source_root,
                     entry_file,
                     program,
                 ));
                 any_lowered = true;
             }
-            Err((diag, _)) => {
+            Err((diag, home)) => {
                 let is_entry = m.module_path.last().map(String::as_str) == Some("Main");
                 if lowering_error.is_none() || is_entry {
-                    let src = sources
-                        .get(&m.module_path)
-                        .map(|(_, s)| s.clone())
-                        .unwrap_or_default();
-                    lowering_error = Some(CliError::Pipeline {
-                        file: m.path.clone(),
-                        src,
-                        diag: Box::new(diag.clone()),
-                    });
+                    lowering_error = Some(attribute_entry_lowering_error(
+                        db,
+                        source_root,
+                        package,
+                        m,
+                        entry_file,
+                        diag.clone(),
+                        home,
+                    ));
                 }
             }
         }
@@ -2189,6 +2296,54 @@ pub fn infer_package_capabilities(
         Err(lowering_error.unwrap_or(CliError::Usage(
             "package capability inference: no module in the package could be lowered",
         )))
+    }
+}
+
+/// Frame one entry's lowering failure against the module that OWNS it.
+///
+/// The build's own attribution: a canon error is blamed on its own module's
+/// file via [`attribute_canon_errors`] (the root holds every package module, so
+/// an unimported sibling that fails to canonicalize fails every entry, exactly
+/// as `ipe build` refuses it); a post-link error goes through
+/// [`attribute_post_link_error`]. Demanded after `lower_program`, so every
+/// query here is a memo hit.
+fn attribute_entry_lowering_error(
+    db: &ipe_db::IpeDatabase,
+    source_root: ipe_db::SourceRoot,
+    package: &PackageSourceSet,
+    entry: &project::DiscoveredModule,
+    entry_file: ipe_db::SourceFile,
+    diag: Diagnostic,
+    home: &[ipe_intern::Symbol],
+) -> CliError {
+    if let Err(canon_err) =
+        attribute_canon_errors(db, source_root, &package.sources, entry_file, &entry.path)
+    {
+        return canon_err;
+    }
+    let entry_source = (
+        entry.path.clone(),
+        package
+            .sources
+            .get(&entry.module_path)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default(),
+    );
+    let home_to_source = home_to_source_map(ipe_db::Db::interner(db), &package.sources);
+    match ipe_db::linked_program(db, source_root, entry_file) {
+        Ok(linked) => {
+            attribute_post_link_error(&linked.module, &home_to_source, &entry_source, diag, home)
+        }
+        // A link failure has no linked program to scan: frame the lowering
+        // diagnostic against its home module when known, else the entry.
+        Err(_) => {
+            let (file, src) = home_to_source.get(home).cloned().unwrap_or(entry_source);
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(diag),
+            }
+        }
     }
 }
 
