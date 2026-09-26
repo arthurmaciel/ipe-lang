@@ -39,10 +39,10 @@ pub(crate) struct Command {
     /// arguments, options. See [`crate::help_page`].
     page: &'static str,
     /// Whether the command is withheld from the top-level `ipe --help` screen.
-    /// A hidden command is still fully dispatchable (its `--help` page renders,
-    /// it runs) but is not listed among the overview's sections, so a command whose
-    /// only outcome today is a manual-step message is not advertised as a
-    /// finished feature. A hidden command belongs to no section.
+    ///
+    /// A hidden command is still fully dispatchable (its `--help` page renders, it runs) but is not
+    /// listed among the overview's sections, so a command whose only outcome today is a manual-step
+    /// message is not advertised as a finished feature. A hidden command belongs to no section.
     hidden: bool,
 }
 
@@ -163,9 +163,10 @@ pub struct CommandSpec {
     pub options: Vec<FlagSpec>,
 }
 
-/// A top-level help section, projected from `help/index.md` for the CLI reference
-/// generator. The command names are in display order and each names a
-/// [`CommandSpec`] entry (or a [`GroupSpec`]).
+/// A top-level help section, projected from `help/index.md` for the CLI reference generator.
+///
+/// The command names are in display order and each names a [`CommandSpec`] entry (or a
+/// [`GroupSpec`]).
 #[derive(Clone, Debug)]
 pub struct SectionSpec {
     /// The section heading (e.g. `"Development"`).
@@ -862,9 +863,10 @@ mod tests {
         }
     }
 
-    /// Every embedded `.md` page keeps the page shape: a summary, a synopsis
-    /// naming its own command, one-line paragraphs, well-formed options, and
-    /// only shared flags `help/flags.md` defines.
+    /// Every embedded `.md` page keeps the page shape.
+    ///
+    /// A summary, a synopsis naming its own command, one-line paragraphs,
+    /// well-formed options, and only shared flags `help/flags.md` defines.
     #[test]
     fn every_help_page_parses_without_defects() {
         for cmd in COMMANDS {
@@ -876,9 +878,10 @@ mod tests {
         }
     }
 
-    /// Every `.md` under `help/` is embedded: a command page, a group page, the
-    /// shared flags, or the overview layout — no orphan text a dev could edit to
-    /// no effect.
+    /// Every `.md` under `help/` is embedded.
+    ///
+    /// Each is a command page, a group page, the shared flags, or the overview
+    /// layout — no orphan text a dev could edit to no effect.
     #[test]
     fn every_help_md_file_is_embedded() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("help");

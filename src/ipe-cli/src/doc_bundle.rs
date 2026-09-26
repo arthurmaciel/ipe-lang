@@ -899,13 +899,16 @@ pub const EXACT_SCORE: u32 = 1000;
 /// few modules, few enough to read at a glance.
 pub const SUGGESTION_LIMIT: usize = 8;
 
-/// The longest query (in characters) the edit-distance tiers consider. Longer
-/// input still ranks by exact, prefix, substring, and token match; the bound
-/// keeps a pasted blob from buying an unbounded distance computation.
+/// The longest query (in characters) the edit-distance tiers consider.
+///
+/// Longer input still ranks by exact, prefix, substring, and token match; the bound keeps a pasted
+/// blob from buying an unbounded distance computation.
 const DISTANCE_QUERY_CAP: usize = 64;
 
-/// Rank all entries in `bundle` against `query`, case-insensitively, over each
-/// entry's key, the key's last `.` segment (a bare member name), and its title.
+/// Rank all entries in `bundle` against `query`, case-insensitively.
+///
+/// Matches each entry's key, the key's last `.` segment (a bare member name),
+/// and its title.
 ///
 /// Tiers, best first: exact key ([`EXACT_SCORE`]); exact last segment; prefix;
 /// exact or prefix title; substring; every query word a word of the key or
@@ -932,9 +935,10 @@ pub fn fuzzy_rank<'a>(bundle: &'a DocBundle, query: &str) -> Vec<FuzzyMatch<'a>>
     results
 }
 
-/// The `limit` entries closest to `query` by edit distance over key, last
-/// segment, and title, closest first — the fallback that makes a miss never a
-/// dead end. Non-empty whenever the bundle is.
+/// The `limit` entries closest to `query` by edit distance, closest first.
+///
+/// Distance is over key, last segment, and title — the fallback that makes a
+/// miss never a dead end. Non-empty whenever the bundle is.
 #[must_use]
 pub fn nearest<'a>(bundle: &'a DocBundle, query: &str, limit: usize) -> Vec<FuzzyMatch<'a>> {
     let q: String = query
@@ -1070,9 +1074,11 @@ impl DocSuggestion {
     }
 }
 
-/// The suggestions for a query that named no entry: the ranked matches, or —
-/// when nothing matches any tier — the nearest entries by edit distance, so a
-/// miss always offers somewhere to go. At most [`SUGGESTION_LIMIT`].
+/// The suggestions for a query that named no entry.
+///
+/// The ranked matches, or — when nothing matches any tier — the nearest entries
+/// by edit distance, so a miss always offers somewhere to go. At most
+/// [`SUGGESTION_LIMIT`].
 #[must_use]
 pub fn suggestions_for(bundle: &DocBundle, query: &str) -> Vec<DocSuggestion> {
     let ranked = fuzzy_rank(bundle, query);

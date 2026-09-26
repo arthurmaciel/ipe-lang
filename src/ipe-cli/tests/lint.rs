@@ -218,8 +218,9 @@ fn unknown_rule_in_config_fails_closed() -> TestResult {
     Ok(())
 }
 
-/// Human `ipe lint <file>` output is the one screen frame: the product header,
-/// then every line in the two-space gutter; `NO_COLOR` output carries no colour.
+/// Human `ipe lint <file>` output is the one screen frame.
+///
+/// The product header, then every line in the two-space gutter; `NO_COLOR` output carries no colour.
 #[test]
 fn human_output_is_framed_and_guttered() -> TestResult {
     let out = Command::new(support::ipe_bin())

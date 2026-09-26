@@ -288,9 +288,10 @@ fn report_findings(
     Ok(())
 }
 
-/// The tone a rendered finding line is painted in: the title rule is the
-/// finding itself (a user-side issue), the message and snippet are prose, and
-/// the teaching help is auxiliary.
+/// The tone a rendered finding line is painted in.
+///
+/// The title rule is the finding itself (a user-side issue), the message and
+/// snippet are prose, and the teaching help is auxiliary.
 const fn finding_tone(role: ipe_lint::LineRole) -> Tone {
     match role {
         ipe_lint::LineRole::Title => Tone::UserError,

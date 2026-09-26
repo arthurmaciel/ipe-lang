@@ -193,9 +193,10 @@ impl Screen {
         self.palette
     }
 
-    /// Append `text` painted in `tone`, one guttered line per text line. The
-    /// text may be untrusted: it is sanitised to [`TerminalSafe`] first, so the
-    /// tone's own escapes are the only control bytes it can carry.
+    /// Append `text` painted in `tone`, one guttered line per text line.
+    ///
+    /// The text may be untrusted: it is sanitised to [`TerminalSafe`] first, so the tone's own
+    /// escapes are the only control bytes it can carry.
     pub fn line(&mut self, tone: Tone, text: &str) -> &mut Self {
         let safe = TerminalSafe::sanitize(text);
         let ink = tone.ink(self.palette);
@@ -222,9 +223,10 @@ impl Screen {
         self
     }
 
-    /// Append a block a trusted renderer already styled with [`Self::palette`]
-    /// (a help page, a finding). Every line gains the gutter; edge newlines are
-    /// dropped.
+    /// Append a block a trusted renderer already styled with [`Self::palette`] (a help page, a
+    /// finding).
+    ///
+    /// Every line gains the gutter; edge newlines are dropped.
     pub fn styled(&mut self, block: &str) -> &mut Self {
         let block = block.trim_matches('\n');
         if !block.is_empty() {
@@ -234,10 +236,11 @@ impl Screen {
         self
     }
 
-    /// Append a block whose renderer guttered some or all of its own lines
-    /// (a self-rendering error). A line that already starts with the gutter is
-    /// kept as is; any other non-empty line gains it, so no line reaches the
-    /// terminal edge and none is indented twice.
+    /// Append a block whose renderer guttered some or all of its own lines (a self-rendering
+    /// error).
+    ///
+    /// A line that already starts with the gutter is kept as is; any other non-empty line gains it,
+    /// so no line reaches the terminal edge and none is indented twice.
     pub fn guttered(&mut self, block: &str) -> &mut Self {
         for line in block.trim_matches('\n').split('\n') {
             if !line.is_empty() && !line.starts_with(GUTTER) {
@@ -292,9 +295,11 @@ impl Screen {
     }
 }
 
-/// Report a failed command on stderr in the one error frame: the header (when
-/// not yet shown), the error in its [`Fault`]'s tone — or, for an error that
-/// renders its own complete screen, that screen — then the bug footer.
+/// Report a failed command on stderr in the one error frame.
+///
+/// The header (when not yet shown), the error in its [`Fault`]'s tone — or, for
+/// an error that renders its own complete screen, that screen — then the bug
+/// footer.
 ///
 /// An error that already wrote its final output (a machine-mode envelope, an
 /// upgrade verdict) renders nothing here.

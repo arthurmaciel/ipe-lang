@@ -143,9 +143,10 @@ pub enum CliError {
         input: String,
         suggestions: Vec<&'static str>,
     },
-    /// `ipe doc <query>` named no documentation entry. Carries the query and
-    /// the closest entries of any kind (ranked, bounded, never empty while any
-    /// documentation exists), so a miss always points somewhere.
+    /// `ipe doc <query>` named no documentation entry.
+    ///
+    /// Carries the query and the closest entries of any kind (ranked, bounded, never empty while
+    /// any documentation exists), so a miss always points somewhere.
     DocNotFound {
         query: String,
         suggestions: Vec<crate::doc_bundle::DocSuggestion>,
@@ -590,9 +591,10 @@ impl CliError {
         }
     }
 
-    /// Whether this error's `Display` is a complete screen of its own — a help
-    /// page, a gate report, a self-guttered environment message — that the
-    /// error frame shows as rendered rather than painting it as one message.
+    /// Whether this error's `Display` is a complete screen of its own.
+    ///
+    /// A help page, a gate report, or a self-guttered environment message: the
+    /// error frame shows it as rendered rather than painting it as one message.
     #[must_use]
     pub const fn renders_own_screen(&self) -> bool {
         matches!(

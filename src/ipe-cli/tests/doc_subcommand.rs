@@ -591,8 +591,9 @@ fn a_qualified_member_resolves_to_its_doc() -> io::Result<()> {
     Ok(())
 }
 
-/// A query that names no entry is a miss that never dead-ends: it lists the
-/// closest entries of any kind as ready-to-run `ipe doc` commands, in the error
+/// A query that names no entry is a miss that never dead-ends.
+///
+/// It lists the closest entries of any kind as ready-to-run `ipe doc` commands, in the error
 /// frame, without the command's usage page.
 #[test]
 fn a_miss_lists_the_closest_matches_as_commands() -> io::Result<()> {
