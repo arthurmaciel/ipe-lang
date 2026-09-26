@@ -37,7 +37,7 @@ fn compile_files(
     let _ = std::fs::remove_dir_all(&out_dir);
 
     let runtime = ipe::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
-    Ok(ipe::build(&entry, &out_dir, &runtime))
+    Ok(ipe::build_with_sibling_discovery(&entry, &out_dir, &runtime))
 }
 
 fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
