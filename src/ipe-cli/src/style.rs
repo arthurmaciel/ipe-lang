@@ -32,8 +32,8 @@ pub fn issues_url() -> String {
 }
 
 /// The "report bugs" footer, `{REPORT_BUGS_PHRASE}{issues_url()}.`, unstyled.
-/// The installer mirrors the rendered text; the CLI renderer paints the same
-/// two parts.
+///
+/// The installer mirrors the rendered text; the CLI renderer paints the same two parts.
 #[must_use]
 pub fn report_bugs_footer() -> String {
     format!("{REPORT_BUGS_PHRASE}{}.", issues_url())
@@ -270,10 +270,11 @@ pub fn sandbox_override_warning(p: &Palette, override_env: &str, axes: &str) -> 
     )))
 }
 
-/// The product header that opens every human screen: a leading blank line, then
-/// `Ipê language - vN.N.N - <repo>` in the gutter — the name light yellow, the
-/// version light green, the URL dim gray. Never shown under `--plain`, `--json`,
-/// or `--quiet`.
+/// The product header that opens every human screen.
+///
+/// A leading blank line, then `Ipê language - vN.N.N - <repo>` in the gutter —
+/// the name light yellow, the version light green, the URL dim gray. Never
+/// shown under `--plain`, `--json`, or `--quiet`.
 ///
 /// Coloured when `use_color` is true; plain otherwise. [`crate::screen`] owns
 /// when it is printed (once per process).
@@ -290,9 +291,10 @@ pub fn command_header(use_color: bool) -> String {
     )
 }
 
-/// Print the product header to stderr (once per process), respecting the
-/// terminal / `NO_COLOR` state of stderr. Called at the start of human-mode
-/// commands so the header leads their progress chatter.
+/// Print the product header to stderr (once per process), respecting the terminal / `NO_COLOR`
+/// state of stderr.
+///
+/// Called at the start of human-mode commands so the header leads their progress chatter.
 pub fn print_command_header() {
     crate::screen::emit_header(crate::screen::Stream::Stderr);
 }

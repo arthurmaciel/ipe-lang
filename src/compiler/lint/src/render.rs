@@ -26,9 +26,9 @@ pub enum LineRole {
     Blank,
 }
 
-/// Render one finding against its module's `source`, showing `file` on the title
-/// line. Deterministic and colour-free: the lines of [`render_finding_lines`],
-/// each ended by a newline.
+/// Render one finding against its module's `source`, showing `file` on the title line.
+///
+/// Deterministic and colour-free: the lines of [`render_finding_lines`], each ended by a newline.
 #[must_use]
 pub fn render_finding(finding: &Finding, file: &str, source: &str, severity: Severity) -> String {
     let mut out = String::new();

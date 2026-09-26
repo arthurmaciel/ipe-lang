@@ -588,11 +588,11 @@ fn parse_port(value: &str) -> Result<u16, CliError> {
 // `docs/constructs/<name>.md` file is automatically available everywhere; no
 // hand-maintained table is required.
 
-/// Return `true` when `s` looks like a member key: it contains a `.` and its
-/// last segment starts lowercase — a value of a module, e.g. `List.map`,
-/// `Ipe.List.map`, `Ipe.Time.unixMillis`. This distinguishes a member lookup
-/// from a plain module name (`Ipe.List`, `List`), which is routed to the API
-/// query instead.
+/// Return `true` when `s` looks like a member key: it contains a `.` and its last segment starts
+/// lowercase — a value of a module, e.g.
+///
+/// `List.map`, `Ipe.List.map`, `Ipe.Time.unixMillis`. This distinguishes a member lookup from a
+/// plain module name (`Ipe.List`, `List`), which is routed to the API query instead.
 fn is_symbol_key(s: &str) -> bool {
     s.rsplit_once('.')
         .and_then(|(_, member)| member.chars().next())
@@ -853,9 +853,10 @@ fn run_doc_lookup_with_fuzzy(key: &str, format: OutputFormat) -> Result<(), CliE
     Err(doc_miss(key, &bundle, format))
 }
 
-/// The error for a query that named no entry: [`CliError::DocNotFound`] with
-/// the closest entries of any kind. Under a machine format it is written as the
-/// machine error envelope instead of the human frame.
+/// The error for a query that named no entry: [`CliError::DocNotFound`] with the closest entries of
+/// any kind.
+///
+/// Under a machine format it is written as the machine error envelope instead of the human frame.
 fn doc_miss(query: &str, bundle: &DocBundle, format: OutputFormat) -> CliError {
     let err = CliError::DocNotFound {
         query: query.to_owned(),
@@ -869,9 +870,10 @@ fn doc_miss(query: &str, bundle: &DocBundle, format: OutputFormat) -> CliError {
     }
 }
 
-/// Resolve `Module.member` (`Ipe.Time.unixMillis`, `Main.helper`) to the
-/// module's doc and the member's name, when the module exists and exposes a
-/// value or type of that name.
+/// Resolve `Module.member` to the module's doc and the member's name.
+///
+/// Matches (`Ipe.Time.unixMillis`, `Main.helper`) when the module exists and
+/// exposes a value or type of that name.
 fn resolve_member(key: &str) -> Option<(ModuleDoc, String)> {
     let (module_name, member) = key.rsplit_once('.')?;
     let module = find_module_doc(module_name)?;
@@ -4534,9 +4536,10 @@ fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script:
     html_page("Diagnostics", "../style.css", &header, &body)
 }
 
-/// The Diagnostics page's key to the code letters: what each `IPE-<letter>`
-/// family covers, read from the diagnostics family table
-/// ([`ipe_diagnostics::FAMILIES`]) so a new family appears here by
+/// The Diagnostics page's key to the code letters.
+///
+/// Says what each `IPE-<letter>` family covers, read from the diagnostics
+/// family table ([`ipe_diagnostics::FAMILIES`]) so a new family appears here by
 /// construction.
 fn render_code_families() -> String {
     let mut out = String::from(

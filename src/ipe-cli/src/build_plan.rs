@@ -24,8 +24,9 @@ pub enum AllocatorChoice {
     /// Resolve by target: musl-static → dlmalloc.
     #[default]
     Auto,
-    /// The target libc's malloc — honoured as asked. On musl it is several
-    /// times slower on allocation-heavy work than the dlmalloc default, which
+    /// The target libc's malloc — honoured as asked.
+    ///
+    /// On musl it is several times slower on allocation-heavy work than the dlmalloc default, which
     /// the `--allocator` help states; choosing it is the acknowledgment.
     System,
     /// Pure-Rust dlmalloc (the static default).
