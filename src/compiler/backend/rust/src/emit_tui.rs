@@ -110,7 +110,7 @@ pub fn emit_tui_call(
 /// [`Diagnostic::CompilerBug`] if the `KeyEvent` field names were never interned
 /// or no struct was synthesised for the record shape — both internal invariant
 /// violations for a program that type-checked a `Tui.Sub.onKey` call.
-pub(crate) fn key_event_bridge(ctx: &EmitCtx, handler_src: &str) -> DResult<String> {
+pub fn key_event_bridge(ctx: &EmitCtx, handler_src: &str) -> DResult<String> {
     let struct_name = key_event_struct_name(ctx)?;
     Ok(format!(
         "{{ let __ipe_on_key = {handler_src}; \
