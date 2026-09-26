@@ -537,7 +537,7 @@ const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "[--replay [<log>]]",
-                desc: "cli/worker apps: re-fold a recorded session (default: out/session.ipemsgs) from init with no Cmd fired, printing each step and the final model; a log from a changed program is refused",
+                desc: "cli/worker apps: re-fold a recorded session (default: out/session.ipemsgs) from init with no Cmd fired, printing each step and the final model; a log from a changed program is refused. A plain trace (.ipelog, the default when no typed log was recorded, e.g. a Msg carrying a Secret) is shown instead, labelled, with every control character stripped and nothing re-run",
             },
             Opt {
                 flag: "[-q|--quiet]",

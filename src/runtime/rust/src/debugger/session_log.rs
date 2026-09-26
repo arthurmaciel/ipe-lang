@@ -33,7 +33,11 @@
 //! are both encodable, [`MsgsOnly`] when only `Msg` is (an overflowed session is
 //! then unreplayable), and [`TraceOnly`] when `Msg` is not encodable (it carries
 //! a `Secret` or another value with no encoding): such a session is recorded as
-//! a trace only and replay refuses with the reason.
+//! a trace only, which `ipe run --replay` shows (sanitised, nothing re-run)
+//! instead of folding, and a typed replay refuses with the reason.
+//!
+//! The encoder escapes every control character (`DEL` and C1 as well as C0),
+//! so a log this runtime writes holds none raw.
 
 #![cfg(feature = "debugger")]
 
@@ -101,13 +105,14 @@ impl core::fmt::Display for ReplayError {
         match self {
             Self::Unreplayable(Unreplayable::MsgNotEncodable) => f.write_str(
                 "replay refused: this program's Msg type carries a value with no encoding \
-                 (such as a Secret), so its sessions are recorded as a trace only \
-                 (out/session.ipelog), never as a replayable log",
+                 (such as a Secret), so its sessions are recorded as a trace only, never \
+                 as a replayable log — `ipe run --replay out/session.ipelog` shows the trace",
             ),
             Self::Unreplayable(Unreplayable::TypeUnknown) => f.write_str(
                 "replay refused: the compiler could not recover this app's Msg or Model \
-                 type, so its sessions are recorded as a trace only — pass `update` and \
-                 `view` as named functions or lambdas",
+                 type, so its sessions are recorded as a trace only (`ipe run --replay \
+                 out/session.ipelog` shows it) — pass `update` and `view` as named \
+                 functions or lambdas",
             ),
             Self::Unreadable(kind) => write!(f, "replay refused: the log cannot be read ({kind})"),
             Self::Oversized { cap } => write!(
@@ -358,7 +363,36 @@ where
         start,
         msgs: buf.msgs().collect(),
     };
-    serde_json::to_vec(&wire).map_err(|_| ReplayError::Encode)
+    let mut bytes = Vec::new();
+    let mut ser = serde_json::Serializer::with_formatter(&mut bytes, ControlEscaping);
+    serde::Serialize::serialize(&wire, &mut ser).map_err(|_| ReplayError::Encode)?;
+    Ok(bytes)
+}
+
+/// Compact JSON that escapes every control character, not only C0.
+///
+/// `serde_json` escapes the C0 range but writes `DEL` and the C1 controls
+/// (`U+0080`–`U+009F`, among them the single-character CSI and OSC
+/// introducers) raw. Escaping them as `\u00XX` keeps the log file free of
+/// control characters by construction, so reading it with any tool cannot
+/// drive a terminal; the decoded values are unchanged.
+struct ControlEscaping;
+
+impl serde_json::ser::Formatter for ControlEscaping {
+    fn write_string_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> std::io::Result<()>
+    where
+        W: ?Sized + Write,
+    {
+        let mut utf8 = [0u8; 4];
+        for c in fragment.chars() {
+            if c.is_control() {
+                write!(writer, "\\u{:04x}", u32::from(c))?;
+            } else {
+                writer.write_all(c.encode_utf8(&mut utf8).as_bytes())?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Classify a JSON decode failure: an early end is a truncation.
@@ -823,6 +857,27 @@ mod tests {
             !out.chars().any(|c| c.is_control() && c != '\n'),
             "replay output must carry no control byte: {out:?}"
         );
+    }
+
+    // The typed log on disk carries no raw control character: `DEL` and the C1
+    // controls a `Msg` value holds are written escaped, and decode back intact.
+    #[test]
+    fn encoded_log_escapes_every_control_character() {
+        let laced = "a\u{7f}b\u{9b}2J\u{9d}8;;https://evil\u{9c}\x1b[2Jc";
+        let (buf, _) = record(&[Msg::Say(laced.into())], 16);
+        let bytes = encode_full(&buf);
+        let text_result = core::str::from_utf8(&bytes);
+        assert!(text_result.is_ok(), "the log must be UTF-8");
+        let Ok(text) = text_result else { return };
+        assert!(
+            !text.chars().any(char::is_control),
+            "the log must carry no raw control character: {text:?}"
+        );
+        assert!(text.contains("\\u009b"), "C1 CSI must be escaped: {text}");
+        let plan_result = decode_full(&bytes);
+        assert!(plan_result.is_ok(), "an escaped log must decode");
+        let Ok(plan) = plan_result else { return };
+        assert_eq!(plan.msgs, vec![Msg::Say(laced.into())]);
     }
 
     // The capped read refuses an oversized file without reading it whole, and

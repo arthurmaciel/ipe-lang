@@ -139,6 +139,10 @@ fn record_then_replay_is_deterministic_and_refuses_bad_logs() {
 
     // A changed program: the log's Msg tag no longer matches.
     let text = std::fs::read_to_string(&typed).unwrap_or_default();
+    assert!(
+        !text.chars().any(char::is_control),
+        "the typed log on disk must carry no raw control character: {text:?}"
+    );
     let tampered = text.replacen("\"msg_tag\":\"", "\"msg_tag\":\"ff", 1);
     let changed = logs.join("changed.ipemsgs");
     assert!(

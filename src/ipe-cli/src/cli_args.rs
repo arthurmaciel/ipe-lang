@@ -796,9 +796,11 @@ pub enum SessionMode {
     Live,
     /// `--record` — run live and write the session into the output root.
     Record,
-    /// `--replay [<log>]` — re-fold a recorded log instead of running live.
+    /// `--replay [<log>]` — re-fold a recorded log, or show a recorded trace,
+    /// instead of running live.
     ///
-    /// `None` reads the log `--record` last wrote into the output root.
+    /// `None` reads the typed log `--record` last wrote into the output root,
+    /// else the trace beside it.
     Replay(Option<String>),
 }
 
@@ -852,7 +854,8 @@ pub struct RunArgs {
     /// Either forces `debugger` on. `--record` has the runtime dump the bounded,
     /// plain trace (one `"<msg> => <model>"` line per step) and the typed log
     /// into the output root on exit; `--replay` has it fold the typed log with
-    /// every `Cmd` discarded and print each step.
+    /// every `Cmd` discarded and print each step, or shows a plain trace
+    /// sanitised without building.
     pub session: SessionMode,
     /// Arguments after `--`, forwarded verbatim to the compiled binary.
     pub bin_args: Vec<String>,

@@ -35,6 +35,13 @@ pub const SOURCE_READ_CAP: u64 = 8 * 1024 * 1024;
 /// device node or accidentally-swapped large binary.
 pub const FFI_CACHE_READ_CAP: u64 = 4 * 1024 * 1024;
 
+/// Maximum bytes for a recorded session trace (`session.ipelog`) shown by
+/// `ipe run --replay`.
+///
+/// 16 MiB holds a full recorder ring of large-model steps while refusing a
+/// planted multi-GiB file before it is buffered.
+pub const SESSION_TRACE_READ_CAP: u64 = 16 * 1024 * 1024;
+
 /// Maximum bytes for miscellaneous small CLI-internal files (lock files,
 /// index entries, OAuth tokens, Cargo profile fragments, etc.).
 pub const SMALL_FILE_READ_CAP: u64 = 1024 * 1024;

@@ -2253,6 +2253,7 @@ fn wasi_artifact_path(messages: &str, out_dir: &Path) -> Result<PathBuf, CliErro
 ///
 /// Parsed once from [`cli_args::SessionMode`] and the output root, so the exec
 /// sites never re-derive a path.
+#[derive(Debug)]
 pub enum SessionEnv {
     /// An ordinary run: no session variable.
     Live,
@@ -2343,48 +2344,147 @@ pub fn gate_session(
     Ok(())
 }
 
-/// Resolve the session env for a run, once the output root is known.
+/// What a run does with its session, resolved once the output root is known.
+#[derive(Debug)]
+pub enum SessionPlan {
+    /// Build the app and run it with this session env.
+    Run(SessionEnv),
+    /// Show the plain trace at this path: nothing is built and nothing re-runs.
+    ShowTrace(PathBuf),
+}
+
+/// Resolve what a run does with its session, once the output root is known.
 ///
-/// A replay's log must exist as a regular file before anything is built, so a
-/// missing log is refused up front instead of after a full build; the runtime
-/// then reads it through its own capped, fail-closed decoder.
+/// `--replay` folds a typed log or shows a plain trace (`.ipelog`) — the only
+/// reader of a trace-only session. With no path it takes the typed log
+/// `--record` wrote, else the trace beside it. The log must exist as a regular
+/// file before anything is built, so a missing log is refused up front; the
+/// runtime reads a typed log through its own capped, fail-closed decoder, and
+/// [`show_session_trace`] reads a trace through the capped reader.
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] when the replay log is missing or not a file; the
 /// output-root errors of claiming the log path.
-pub fn resolve_session_env(
+pub fn resolve_session_plan(
     session: &cli_args::SessionMode,
     output: &OutputRoot,
-) -> Result<SessionEnv, CliError> {
+) -> Result<SessionPlan, CliError> {
     match session {
-        cli_args::SessionMode::Live => Ok(SessionEnv::Live),
-        cli_args::SessionMode::Record => Ok(SessionEnv::Record(
+        cli_args::SessionMode::Live => Ok(SessionPlan::Run(SessionEnv::Live)),
+        cli_args::SessionMode::Record => Ok(SessionPlan::Run(SessionEnv::Record(
             output.claim()?.path_to(RECORD_LOG_FILE)?.path(),
-        )),
-        cli_args::SessionMode::Replay(log) => {
-            let path = match log {
-                Some(explicit) => PathBuf::from(explicit),
-                None => output.claim()?.path_to(typed_log_file())?.path(),
-            };
-            replay_env(path)
+        ))),
+        cli_args::SessionMode::Replay(Some(explicit)) => replay_plan(PathBuf::from(explicit)),
+        cli_args::SessionMode::Replay(None) => {
+            let owned = output.claim()?;
+            let typed = owned.path_to(typed_log_file())?.path();
+            if is_regular_file(&typed) {
+                return Ok(SessionPlan::Run(SessionEnv::Replay(typed)));
+            }
+            let trace = owned.path_to(RECORD_LOG_FILE)?.path();
+            if is_regular_file(&trace) {
+                return Ok(SessionPlan::ShowTrace(trace));
+            }
+            Err(CliError::UsageOwned(format!(
+                "ipe run --replay: no session log at {} or trace at {} — record one with \
+                 `ipe run --record`",
+                typed.display(),
+                trace.display()
+            )))
         }
     }
 }
 
-/// The replay env for the log at `path`, refused unless it is a regular file.
+/// The plan for the log a user named: a trace is shown, any other log folded.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming the path and how to record a log.
-pub fn replay_env(path: PathBuf) -> Result<SessionEnv, CliError> {
-    if !std::fs::metadata(&path).is_ok_and(|meta| meta.is_file()) {
+/// [`CliError::UsageOwned`] naming the path and how to record a log, unless it
+/// is a regular file.
+pub fn replay_plan(path: PathBuf) -> Result<SessionPlan, CliError> {
+    if !is_regular_file(&path) {
         return Err(CliError::UsageOwned(format!(
-            "ipe run --replay: no session log at {} — record one with `ipe run --record` \
-             (an app whose Msg carries a Secret or another unencodable value is recorded as a \
-             trace only and cannot be replayed)",
+            "ipe run --replay: no session log at {} — record one with `ipe run --record`",
             path.display()
         )));
     }
-    Ok(SessionEnv::Replay(path))
+    if is_session_trace(&path) {
+        Ok(SessionPlan::ShowTrace(path))
+    } else {
+        Ok(SessionPlan::Run(SessionEnv::Replay(path)))
+    }
+}
+
+/// `true` when `path` names a regular file (following a symlink the user named).
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
+}
+
+/// `true` when `path` has the plain trace's extension, the one `--record` writes.
+#[must_use]
+pub fn is_session_trace(path: &Path) -> bool {
+    path.extension() == Path::new(RECORD_LOG_FILE).extension()
+}
+
+/// The line that labels a shown trace, so it is never mistaken for a replay.
+const TRACE_LABEL: &str = "trace (not a replay — shown as recorded, nothing re-runs)";
+
+/// One trace line made safe for any terminal, or `None` when nothing is left.
+///
+/// Every escape sequence (CSI, OSC and the rest) is dropped whole, then every
+/// remaining control character — C0, `DEL` and C1, tab included — so the output
+/// carries none, whatever the stream is.
+fn terminal_safe_line(body: &str) -> Option<String> {
+    let plain: String = style::TerminalSafe::sanitize(body)
+        .as_str()
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    (!plain.is_empty()).then(|| format!("{plain}\n"))
+}
+
+/// Render a recorded trace read from `path`: the label, then one step per line.
+///
+/// Pure. The trace is untrusted — handed over, planted or hand-edited — so every
+/// line, the label's path included, is stripped of control characters here,
+/// independently of the strip the recorder applies when it writes.
+#[must_use]
+pub fn render_session_trace(path: &Path, text: &str) -> String {
+    let mut out =
+        terminal_safe_line(&format!("{TRACE_LABEL}: {}", path.display())).unwrap_or_default();
+    for step in text.lines().filter_map(terminal_safe_line) {
+        out.push_str(&step);
+    }
+    out
+}
+
+/// Read the recorded trace at `path` whole and render it sanitised.
+///
+/// # Errors
+/// [`CliError::FileTooLarge`] past [`io_bounded::SESSION_TRACE_READ_CAP`];
+/// [`CliError::Io`] when the trace cannot be read or is not UTF-8 (kind
+/// `InvalidData`).
+pub fn load_session_trace(path: &Path) -> Result<String, CliError> {
+    let text = io_bounded::read_to_string_capped(path, io_bounded::SESSION_TRACE_READ_CAP)?;
+    Ok(render_session_trace(path, &text))
+}
+
+/// Print the recorded trace at `path` to stdout, sanitised.
+///
+/// The read is capped and whole: an oversized or non-UTF-8 trace is refused
+/// before anything is printed.
+///
+/// # Errors
+/// As [`load_session_trace`]; [`CliError::Io`] when stdout cannot be written.
+pub fn show_session_trace(path: &Path) -> Result<(), CliError> {
+    let rendered = load_session_trace(path)?;
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(rendered.as_bytes())
+        .and_then(|()| stdout.flush())
+        .map_err(|source| CliError::Io {
+            path: path.to_path_buf(),
+            source,
+        })
 }
 
 /// `ipe run [<path>]` — compile a program and run the resulting binary.
@@ -2424,7 +2524,8 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
 /// With `--record`, `IPE_DEBUGGER_RECORD` is injected into the executed child
 /// so the runtime dumps the session's trace and typed log into the output root
 /// on exit; with `--replay`, `IPE_DEBUGGER_REPLAY` names the typed log the child
-/// re-folds instead of running live.
+/// re-folds instead of running live, and a plain trace is shown sanitised
+/// without building anything.
 // A linear pipeline (compile → cargo build → resolve capabilities → jail →
 // exec); the steps share enough locals that splitting reads worse than the whole.
 #[allow(clippy::too_many_lines)]
@@ -2535,6 +2636,15 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         )?;
     }
 
+    // Resolved after every program refusal above. The session log lands in the
+    // ipe-owned output root, never beside sources; a shown trace ends the run
+    // here, before any toolchain check or build — nothing re-runs.
+    let output = resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+    let session_env = match resolve_session_plan(&session, &output)? {
+        SessionPlan::Run(env) => env,
+        SessionPlan::ShowTrace(trace) => return show_session_trace(&trace),
+    };
+
     // The dependency model (native OR wasm) needs no vendored tree — the runtime
     // is a path dependency. Only a dep-model-OFF build vendors the source subtree.
     let runtime_dep = runtime_dep_from_env();
@@ -2601,12 +2711,8 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         );
     }
 
-    // Resolved only now, after every refusal above; nothing is created until the
-    // emit writes its crate.
-    let output = resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+    // Nothing is created in the Rust area until the emit writes its crate.
     let out_dir = output.area_path(&[OutputArea::Rust])?;
-    // The session log lands in the ipe-owned output root, never beside sources.
-    let session_env = resolve_session_env(&session, &output)?;
 
     manifest.as_ref().map_or_else(
         || {

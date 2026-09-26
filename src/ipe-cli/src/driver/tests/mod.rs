@@ -2710,17 +2710,168 @@ fn session_is_refused_for_a_wasi_run() {
 fn replay_of_a_missing_log_is_refused_before_building() {
     let dir = std::env::temp_dir().join(format!("ipe_replay_missing_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let result = replay_env(dir.join("absent.ipemsgs"));
-    assert!(
-        matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
-        "a missing replay log must be refused"
-    );
+    for absent in ["absent.ipemsgs", "absent.ipelog"] {
+        let result = replay_plan(dir.join(absent));
+        assert!(
+            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+            "a missing replay log must be refused: {result:?}"
+        );
+    }
 }
 
 // The default replay log is the typed sibling of the trace `--record` writes.
 #[test]
 fn default_replay_log_is_the_typed_sibling_of_the_trace() {
     assert_eq!(typed_log_file(), Path::new("session.ipemsgs"));
+}
+
+/// A fresh scratch directory for a session-log test.
+fn session_scratch(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ipe_session_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    assert!(fs::create_dir_all(&dir).is_ok(), "make scratch dir");
+    dir
+}
+
+// A named `.ipelog` is shown as a trace; any other named log is folded.
+#[test]
+fn named_replay_log_is_shown_when_it_is_a_trace() {
+    let dir = session_scratch("named");
+    let trace = dir.join("bug.ipelog");
+    let typed = dir.join("bug.ipemsgs");
+    assert!(fs::write(&trace, "Add(1) => 1\n").is_ok(), "write trace");
+    assert!(fs::write(&typed, "{}").is_ok(), "write typed log");
+    let shown = replay_plan(trace.clone());
+    assert!(
+        matches!(&shown, Ok(SessionPlan::ShowTrace(p)) if *p == trace),
+        "a named trace must be shown: {shown:?}"
+    );
+    let folded = replay_plan(typed.clone());
+    assert!(
+        matches!(&folded, Ok(SessionPlan::Run(SessionEnv::Replay(p))) if *p == typed),
+        "a named typed log must be folded: {folded:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// With no path, `--replay` folds the typed log, falls back to showing the
+// trace when only the trace exists (a trace-only session), and refuses when
+// neither was recorded.
+#[test]
+fn default_replay_prefers_the_typed_log_then_the_trace() {
+    let dir = session_scratch("default");
+    let entry = dir.join("proj").join("Main.ipe");
+    assert!(
+        fs::create_dir_all(dir.join("proj")).is_ok(),
+        "make project dir"
+    );
+    assert!(
+        fs::write(&entry, "module Main exposing (main)\n").is_ok(),
+        "write entry"
+    );
+    let out = dir.join("out");
+    let output_result = resolve_output_root(Some(&out.to_string_lossy()), &entry, None);
+    assert!(output_result.is_ok(), "out must resolve: {output_result:?}");
+    let Ok(output) = output_result else { return };
+    let replay = cli_args::SessionMode::Replay(None);
+
+    let none = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&none, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+        "no recorded session must be refused: {none:?}"
+    );
+
+    let trace = out.join(RECORD_LOG_FILE);
+    assert!(fs::write(&trace, "Add(1) => 1\n").is_ok(), "write trace");
+    let shown = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&shown, Ok(SessionPlan::ShowTrace(p)) if p.ends_with(RECORD_LOG_FILE)),
+        "a lone trace must be shown: {shown:?}"
+    );
+
+    assert!(
+        fs::write(out.join(typed_log_file()), "{}").is_ok(),
+        "write typed log"
+    );
+    let folded = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&folded, Ok(SessionPlan::Run(SessionEnv::Replay(p))) if p.ends_with(typed_log_file())),
+        "the typed log must win over the trace: {folded:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A planted trace carrying terminal escapes (a screen clear, an OSC 8
+// hyperlink, C1 controls, DEL, tabs) is shown with every control character
+// removed, one step per line under a label that says it is not a replay.
+#[test]
+fn shown_trace_strips_every_control_character() {
+    let dir = session_scratch("laced");
+    let trace = dir.join("planted\x1b[31m.ipelog");
+    let laced = "\x1b[2JAdd(1) => 1\n\
+                 Say(\x1b]8;;https://evil.example\x07link\x1b]8;;\x1b\\) => 2\r\n\
+                 \u{9b}2J\u{9d}0;title\u{9c}Add(\u{85}3\t\u{7f}) => 5\n\
+                 \x1b[H\x1b[2J\n";
+    assert!(fs::write(&trace, laced).is_ok(), "write planted trace");
+    let shown = load_session_trace(&trace);
+    assert!(
+        shown.is_ok(),
+        "a UTF-8 trace under the cap must show: {shown:?}"
+    );
+    let Ok(out) = shown else { return };
+    assert!(
+        !out.chars().any(|c| c.is_control() && c != '\n'),
+        "the shown trace must carry no control character: {out:?}"
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 4, "label + one line per step: {out:?}");
+    assert!(
+        lines.first().is_some_and(|l| l.contains("not a replay")),
+        "the trace must be labelled as not a replay: {out:?}"
+    );
+    assert_eq!(lines.get(1).copied(), Some("Add(1) => 1"));
+    assert_eq!(lines.get(2).copied(), Some("Say(link) => 2"));
+    assert!(
+        lines.get(3).is_some_and(|l| l.ends_with("Add(3) => 5")),
+        "{out:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A trace over the cap is refused typed, before anything is rendered.
+#[test]
+fn shown_trace_over_the_cap_is_refused() {
+    let dir = session_scratch("oversized");
+    let trace = dir.join("big.ipelog");
+    let over = usize::try_from(crate::io_bounded::SESSION_TRACE_READ_CAP + 1).unwrap_or(usize::MAX);
+    assert!(
+        fs::write(&trace, vec![b'a'; over]).is_ok(),
+        "write big trace"
+    );
+    let shown = load_session_trace(&trace);
+    assert!(
+        matches!(shown, Err(CliError::FileTooLarge { .. })),
+        "an oversized trace must be refused: {shown:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A non-UTF-8 trace is refused typed, never a panic and never lossy output.
+#[test]
+fn shown_trace_not_utf8_is_refused() {
+    let dir = session_scratch("not_utf8");
+    let trace = dir.join("bin.ipelog");
+    assert!(
+        fs::write(&trace, [b'A', 0xff, 0xfe, b'\n']).is_ok(),
+        "write binary trace"
+    );
+    let shown = load_session_trace(&trace);
+    assert!(
+        matches!(&shown, Err(CliError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::InvalidData),
+        "a non-UTF-8 trace must be refused: {shown:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }
 
 // -----------------------------------------------------------------------
