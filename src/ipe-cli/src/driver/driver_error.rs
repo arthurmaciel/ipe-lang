@@ -423,7 +423,7 @@ impl From<delivery::DeliveryError> for CliError {
 /// This is the single machine-error routing point for the machine-mode command
 /// bodies (`type-check`, `build`, `run`). It closes the disclosure class every
 /// one of them shared: under a machine format NO error may fall through to the
-/// human [`style::print_error_banner`] on the top-level path — a soft-yellow
+/// human [`crate::screen::report_error`] on the top-level path — a framed
 /// banner in a `--json` or `--plain` stream is exactly the leak this unification
 /// prevents.
 ///
@@ -516,6 +516,91 @@ impl CliError {
             Self::WasiRunFailed { .. } => "wasi-run-failed",
             Self::WasiRunExited { .. } => "wasi-run-exited",
         }
+    }
+
+    /// Who this error belongs to, which picks its colour in the human error
+    /// frame ([`crate::screen::Fault`]).
+    ///
+    /// Internal means ipe broke a promise it makes: a program ipe accepted whose
+    /// emitted Rust then failed to build (the SEAL), or an installed runtime
+    /// that disagrees with the compiler's own version. Everything else is
+    /// actionable by the user. Exhaustive with no wildcard, like
+    /// [`Self::machine_kind`], so a new variant must be classified to build.
+    #[must_use]
+    pub const fn fault(&self) -> crate::screen::Fault {
+        use crate::screen::Fault::{Internal, User};
+        match self {
+            Self::EmittedBuildFailed { .. } | Self::RuntimeVersionMismatch { .. } => Internal,
+            Self::Usage(_)
+            | Self::UsageOwned(_)
+            | Self::UnknownCommand { .. }
+            | Self::Io { .. }
+            | Self::Pipeline { .. }
+            | Self::RuntimeNotFound
+            | Self::RuntimeDirInvalid { .. }
+            | Self::RuntimeHomeUnknown
+            | Self::RuntimeMaterializeFailed { .. }
+            | Self::UnknownCode { .. }
+            | Self::StaticRefusal(_)
+            | Self::CapabilityMismatch { .. }
+            | Self::Resolve(_)
+            | Self::HashMismatch { .. }
+            | Self::Diff(_)
+            | Self::SemverRejected { .. }
+            | Self::PackageAudit(_)
+            | Self::Publish(_)
+            | Self::DocCoverage(_)
+            | Self::DocExamplesFailed(_)
+            | Self::CommandUsage { .. }
+            | Self::UnknownGroupSub { .. }
+            | Self::VerifyFailed { .. }
+            | Self::TestFailed { .. }
+            | Self::UpgradeNoPrebuilt { .. }
+            | Self::ToolchainMissing(_)
+            | Self::HealthCritical
+            | Self::LintGateFailed
+            | Self::EjectUnsupported { .. }
+            | Self::DiagnosticJsonEmitted
+            | Self::FileTooLarge { .. }
+            | Self::PathEscape { .. }
+            | Self::DiscoveryLimitReached { .. }
+            | Self::UpgradeFeedUnreachable
+            | Self::UpgradeCheckExit { .. }
+            | Self::AdvisoryVulnerable(_)
+            | Self::AdvisoryDbUnreachable { .. }
+            | Self::AdvisoryDbMalformed { .. }
+            | Self::WasiRunFeatureDisabled
+            | Self::WasiRunFailed { .. }
+            | Self::WasiRunExited { .. } => User,
+        }
+    }
+
+    /// Whether this error's `Display` is a complete screen of its own — a help
+    /// page, a gate report, a self-guttered environment message — that the
+    /// error frame shows as rendered rather than painting it as one message.
+    #[must_use]
+    pub const fn renders_own_screen(&self) -> bool {
+        matches!(
+            self,
+            Self::UnknownCommand { .. }
+                | Self::CommandUsage { .. }
+                | Self::UnknownGroupSub { .. }
+                | Self::DocCoverage(_)
+                | Self::DocExamplesFailed(_)
+                | Self::VerifyFailed { .. }
+                | Self::TestFailed { .. }
+                | Self::UpgradeNoPrebuilt { .. }
+                | Self::ToolchainMissing(_)
+                | Self::EmittedBuildFailed { .. }
+                | Self::HealthCritical
+                | Self::LintGateFailed
+                | Self::EjectUnsupported { .. }
+                | Self::UpgradeFeedUnreachable
+                | Self::WasiRunFeatureDisabled
+                | Self::WasiRunFailed { .. }
+                | Self::WasiRunExited { .. }
+                | Self::DiagnosticJsonEmitted
+        )
     }
 }
 

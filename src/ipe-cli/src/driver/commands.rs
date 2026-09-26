@@ -10,8 +10,8 @@ use super::{
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, Write, build_plan, cli_args,
     delivery, explain_page, ffi, fs, help, io_bounded, native_ffi_consent, package_manifest,
-    project, run_sandbox, runtime_embed, style, title, toolchain, unsafe_ack, wasi_run, watch,
-    web_consent,
+    project, run_sandbox, runtime_embed, screen, style, title, toolchain, unsafe_ack, wasi_run,
+    watch, web_consent,
 };
 
 /// The misuse reason shown when `build` / `run` / `watch` are invoked with no
@@ -44,7 +44,7 @@ pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
     // No arguments, or a leading bare help token: the top-level screen.
     match args.split_first() {
         None => {
-            print!("{}", help::top_level(&std::io::stdout()));
+            show_top_level_help();
             return Some(HelpRequest);
         }
         Some((first, rest)) if is_help_flag(first) => {
@@ -59,10 +59,8 @@ pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
                 let named_json = rest_no_json
                     .first()
                     .and_then(|c| help::command_json(c.as_str()));
-                match named_json {
-                    Some(json) => print!("{json}"),
-                    None => print!("{}", help::help_json()),
-                }
+                let json = named_json.unwrap_or_else(help::help_json);
+                screen::emit_machine(screen::Stream::Stdout, &json);
             } else {
                 // `help <name>` / `--help <name>`: that command's page, a
                 // group's subpage, or the top-level screen — in that order.
@@ -71,8 +69,8 @@ pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
                         .or_else(|| help::group(c.as_str(), &std::io::stdout()))
                 });
                 match named {
-                    Some(page) => print!("{page}"),
-                    None => print!("{}", help::top_level(&std::io::stdout())),
+                    Some(page) => show_help_page(&page),
+                    None => show_top_level_help(),
                 }
             }
             return Some(HelpRequest);
@@ -92,11 +90,11 @@ pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
     {
         if has_json(rest) {
             if let Some(json) = help::command_json(verb) {
-                print!("{json}");
+                screen::emit_machine(screen::Stream::Stdout, &json);
                 return Some(HelpRequest);
             }
         } else if let Some(page) = help::command(verb, &std::io::stdout()) {
-            print!("{page}");
+            show_help_page(&page);
             return Some(HelpRequest);
         }
     }
@@ -113,7 +111,7 @@ pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
         && (rest.is_empty() || (rest.first().is_some_and(|a| is_help_flag(a))))
         && let Some(page) = help::group(first, &std::io::stdout())
     {
-        print!("{page}");
+        show_help_page(&page);
         return Some(HelpRequest);
     }
 
@@ -124,15 +122,32 @@ pub fn intercept_help(args: &[String]) -> Option<HelpRequest> {
     {
         if has_json(rest) {
             if let Some(json) = help::command_json(cmd) {
-                print!("{json}");
+                screen::emit_machine(screen::Stream::Stdout, &json);
                 return Some(HelpRequest);
             }
         } else if let Some(page) = help::command(cmd, &std::io::stdout()) {
-            print!("{page}");
+            show_help_page(&page);
             return Some(HelpRequest);
         }
     }
     None
+}
+
+/// Print a rendered help page (already guttered and styled for stdout) in the
+/// screen frame on stdout.
+fn show_help_page(page: &str) {
+    let mut out = screen::Screen::new(screen::Stream::Stdout);
+    out.guttered(page);
+    out.emit();
+}
+
+/// Print the top-level overview in the screen frame on stdout, closed by the
+/// bug footer.
+fn show_top_level_help() {
+    let mut out = screen::Screen::new(screen::Stream::Stdout);
+    out.guttered(&help::top_level(&std::io::stdout()))
+        .with_bug_footer();
+    out.emit();
 }
 
 /// Parse `argv` (excluding the program name) and run the requested command.

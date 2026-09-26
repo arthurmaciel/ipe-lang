@@ -15,10 +15,12 @@
 //! `--fix` (a data form must not trigger mutations — the same rule `health` uses).
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use ipe_lint::{LintConfig, SourceModule};
 
+use crate::screen::{self, Screen, Stream, Tone};
 use crate::{CliError, cli_args, watch};
 
 /// The `lint.ipe` file name, resolved next to a project's `package.ipe` (or in
@@ -190,27 +192,26 @@ fn report_findings(
                 })
                 .collect();
             let gate_tripped = report.gate_tripped(config);
-            println!(
-                "{}",
-                json::object(&[
-                    ("schema", json::string("ipe.cli.lint/1")),
-                    ("findings", json::array(&finding_objs)),
-                    (
-                        "gate_tripped",
-                        if gate_tripped {
-                            "true".to_owned()
-                        } else {
-                            "false".to_owned()
-                        },
-                    ),
-                ])
-            );
+            let payload = json::object(&[
+                ("schema", json::string("ipe.cli.lint/1")),
+                ("findings", json::array(&finding_objs)),
+                (
+                    "gate_tripped",
+                    if gate_tripped {
+                        "true".to_owned()
+                    } else {
+                        "false".to_owned()
+                    },
+                ),
+            ]);
+            screen::emit_machine(Stream::Stdout, &format!("{payload}\n"));
             if gate_tripped {
                 return Err(CliError::LintGateFailed);
             }
         }
         Plain => {
             // One line per finding: `<severity>:<file>:<line>:<col>: <message>`.
+            let mut lines = String::new();
             for f in &report.findings {
                 let file = paths
                     .get(&f.module)
@@ -218,7 +219,8 @@ fn report_findings(
                 let source = source_of.get(f.module.as_slice()).copied().unwrap_or("");
                 let severity = config.severity_of(f.rule);
                 let (line, col) = byte_to_line_col(source, f.span.lo);
-                println!(
+                let _ = writeln!(
+                    lines,
                     "{}:{}:{}:{}: {}",
                     severity.word(),
                     file,
@@ -227,13 +229,16 @@ fn report_findings(
                     f.message
                 );
             }
+            screen::emit_machine(Stream::Stdout, &lines);
             if report.gate_tripped(config) {
                 return Err(CliError::LintGateFailed);
             }
         }
         Human => {
+            let mut out = Screen::new(Stream::Stdout);
             if report.findings.is_empty() {
-                println!("{}", crate::style::gutter("lint: no findings"));
+                out.line(Tone::Success, "lint: no findings");
+                out.emit();
                 return Ok(());
             }
 
@@ -246,29 +251,47 @@ fn report_findings(
                     .copied()
                     .unwrap_or("");
                 let severity = config.severity_of(finding.rule);
-                // `render_finding` ends with a newline; `println!` adds the blank
-                // line that separates one finding's block from the next.
-                println!(
-                    "{}",
-                    ipe_lint::render_finding(finding, &file, source, severity)
-                );
+                for (role, line) in ipe_lint::render_finding_lines(finding, &file, source, severity)
+                {
+                    match role {
+                        ipe_lint::LineRole::Blank => out.blank(),
+                        other => out.line(finding_tone(other), &line),
+                    };
+                }
+                out.blank();
             }
 
             let count = report.findings.len();
-            println!(
-                "{}",
-                crate::style::gutter(&format!(
-                    "lint: {count} finding{}",
-                    if count == 1 { "" } else { "s" }
-                ))
+            let gate_tripped = report.gate_tripped(config);
+            out.line(
+                if gate_tripped {
+                    Tone::UserError
+                } else {
+                    Tone::Text
+                },
+                &format!("lint: {count} finding{}", if count == 1 { "" } else { "s" }),
             );
+            out.emit();
 
-            if report.gate_tripped(config) {
+            if gate_tripped {
                 return Err(CliError::LintGateFailed);
             }
         }
     }
     Ok(())
+}
+
+/// The tone a rendered finding line is painted in: the title rule is the
+/// finding itself (a user-side issue), the message and snippet are prose, and
+/// the teaching help is auxiliary.
+const fn finding_tone(role: ipe_lint::LineRole) -> Tone {
+    match role {
+        ipe_lint::LineRole::Title => Tone::UserError,
+        ipe_lint::LineRole::Message | ipe_lint::LineRole::Snippet | ipe_lint::LineRole::Blank => {
+            Tone::Text
+        }
+        ipe_lint::LineRole::Help => Tone::Aux,
+    }
 }
 
 /// Convert a byte offset into a 1-based `(line, col)` pair by scanning the
@@ -326,11 +349,10 @@ fn apply_and_report(
     let sig_outcome = ipe_lint::apply_sig_fixes(&modules_after_local, config);
 
     let total = local_outcome.applied + sig_outcome.applied;
+    let mut out = Screen::new(Stream::Stdout);
     if total == 0 && sig_outcome.manual_reviews.is_empty() {
-        println!(
-            "{}",
-            crate::style::gutter("lint --fix: no machine-applicable fixes")
-        );
+        out.line(Tone::Text, "lint --fix: no machine-applicable fixes");
+        out.emit();
         return Ok(());
     }
 
@@ -346,33 +368,38 @@ fn apply_and_report(
         let Some(path) = paths.get(module) else {
             continue;
         };
-        crate::write_atomic(path, rewritten)?;
-        println!(
-            "{}",
-            crate::style::gutter(&format!("lint --fix: rewrote {}", path.display()))
+        if let Err(err) = crate::write_atomic(path, rewritten) {
+            // Report the files already rewritten before the failure.
+            out.emit();
+            return Err(err);
+        }
+        out.line(
+            Tone::Text,
+            &format!("lint --fix: rewrote {}", path.display()),
         );
     }
 
     if total > 0 {
-        println!(
-            "{}",
-            crate::style::gutter(&format!(
+        out.line(
+            Tone::Success,
+            &format!(
                 "lint --fix: applied {} fix{}",
                 total,
                 if total == 1 { "" } else { "es" }
-            ))
+            ),
         );
     }
 
     for mr in &sig_outcome.manual_reviews {
-        println!(
-            "{}",
-            crate::style::gutter(&format!(
+        out.line(
+            Tone::UserError,
+            &format!(
                 "lint --fix: manual review needed for `{}` ({}) — {}",
                 mr.symbol_name, mr.rule, mr.reason
-            ))
+            ),
         );
     }
 
+    out.emit();
     Ok(())
 }
