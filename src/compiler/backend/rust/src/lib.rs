@@ -2738,7 +2738,7 @@ impl<'a> EmitCtx<'a> {
     /// `http_client.rs` targets a typed `crate::url::Url`), the WebSocket
     /// client ([`Self::uses_websocket`], whose `ws_client.rs` calls
     /// `::url::Url::parse`), or the Db surface ([`Self::uses_db`], whose
-    /// `db.rs::build_pool` applies the SSRF host gate via `::url::Url::parse`
+    /// `db.rs::VettedPool::connect` applies the SSRF host gate via `::url::Url::parse`
     /// and `ssrf.rs` parses URLs with `url::Url`). The shared `ssrf` validators
     /// (`use url::Url`) are declared exactly when any of these is, so this union
     /// covers them too. This is the single source of truth shared by the manifest

@@ -227,7 +227,7 @@ const AUTHED_ROUTE: &str = include_str!(concat!(
 ///
 /// Under the vendored emit model the emitted `ipe_runtime/mod.rs` is a trimmed
 /// subset of the full runtime `mod.rs`. The runtime `db.rs` calls
-/// `crate::ssrf::VettedDial::for_host` in its `build_pool` function
+/// `crate::ssrf::VettedDial::for_host` in `VettedPool::connect`
 /// unconditionally (production code, not test-only), and `external_conn.rs` calls
 /// `crate::dsn::{Dsn, DsnDriver}` and `crate::ssrf::VettedDial`. Without `ssrf`,
 /// `dsn`, and `external_conn` appended to the vendored `mod.rs` whenever `uses_db`
@@ -354,7 +354,7 @@ fn authed_route_vendored_builds() {
 
 /// Under the vendored emit model an authed-route + Db-store program
 /// (`Server.getAuthed` + `Store.allAs`) must cargo-build. The runtime `db.rs`
-/// calls `crate::ssrf::VettedDial::for_host` in `build_pool` (production, not
+/// calls `crate::ssrf::VettedDial::for_host` in `VettedPool::connect` (production, not
 /// test-only); `external_conn.rs` calls `crate::dsn::{Dsn, DsnDriver}` and
 /// `crate::ssrf::VettedDial`. Without `ssrf`, `dsn`, and `external_conn`
 /// appended to the vendored `mod.rs` under `uses_db`, the emitted crate fails

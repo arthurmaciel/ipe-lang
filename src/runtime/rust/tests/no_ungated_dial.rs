@@ -108,3 +108,44 @@ fn email_smtp_builder_dangerous_is_guarded() {
         );
     }
 }
+
+/// Raw sqlx pool openers: each bypasses `VettedPool::connect` (SSRF gate,
+/// connection cap, version floor, credential-free errors).
+const RAW_POOL_OPENERS: &[&str] = &[
+    "Pool::connect",
+    "PoolOptions",
+    "connect_with(",
+    "connect_lazy",
+];
+
+/// The files that open a pool from a caller-supplied connection URL must do so
+/// only through `VettedPool::connect`, never a raw sqlx opener whose error may
+/// echo the URL's credentials.
+#[test]
+fn caller_url_pools_open_only_through_vetted_pool() {
+    let sources = [
+        ("web/store.rs", include_str!("../src/web/store.rs")),
+        ("external_conn.rs", include_str!("../src/external_conn.rs")),
+    ];
+    for (name, src) in sources {
+        let lines: Vec<&str> = src.lines().collect();
+        // Production code only: the test module may open fixture pools.
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("mod tests"))
+            .unwrap_or(lines.len());
+        for (i, line) in lines.iter().enumerate().take(tests_start) {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            let code = line.replace("VettedPool", "");
+            for opener in RAW_POOL_OPENERS {
+                assert!(
+                    !code.contains(opener),
+                    "raw pool opener `{opener}` at {name}:{} — open through VettedPool::connect\n{line}",
+                    i + 1
+                );
+            }
+        }
+    }
+}
