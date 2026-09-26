@@ -203,7 +203,8 @@ fn a_broken_unimported_sibling_refuses_the_package_like_the_build() -> Result<()
         "expected the public entry point to agree, got: {public:?}"
     );
     // The build graph refuses the same package, blamed on the same file.
-    let built = ipe::lower_entry_via_graph(&dir.join("src").join("Main.ipe"));
+    let runtime = ipe::resolve_runtime()?;
+    let built = ipe::build_project(&manifest, &dir.join("out"), &runtime);
     assert!(
         is_pipeline_error_in(&built, "Broken.ipe"),
         "expected the build graph to refuse on Broken.ipe"
