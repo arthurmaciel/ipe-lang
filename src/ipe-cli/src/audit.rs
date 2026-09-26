@@ -291,8 +291,9 @@ pub fn run_audit(rest: &[String]) -> Result<(), CliError> {
     run_audit_as(rest, Err(&unproven))
 }
 
-/// [`run_audit`] under a proven publisher standing: `blessing` is the
-/// [`BlessedPublisher`] an authenticated (`ipe package publish`) or attested
+/// [`run_audit`] under a proven publisher standing.
+///
+/// `blessing` is the [`BlessedPublisher`] an authenticated (`ipe package publish`) or attested
 /// (`ipe package audit-entry`) identity established for the claimed
 /// `--publisher`, or the [`BlessingRefusal`] saying why none was. Only a
 /// blessing covering the claimed publisher exempts a reserved-namespace package;
