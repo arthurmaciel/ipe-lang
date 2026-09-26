@@ -2330,19 +2330,16 @@ fn attribute_entry_lowering_error(
             .unwrap_or_default(),
     );
     let home_to_source = home_to_source_map(ipe_db::Db::interner(db), &package.sources);
-    match ipe_db::linked_program(db, source_root, entry_file) {
-        Ok(linked) => {
-            attribute_post_link_error(&linked.module, &home_to_source, &entry_source, diag, home)
-        }
+    if let Ok(linked) = ipe_db::linked_program(db, source_root, entry_file) {
+        attribute_post_link_error(&linked.module, &home_to_source, &entry_source, diag, home)
+    } else {
         // A link failure has no linked program to scan: frame the lowering
         // diagnostic against its home module when known, else the entry.
-        Err(_) => {
-            let (file, src) = home_to_source.get(home).cloned().unwrap_or(entry_source);
-            CliError::Pipeline {
-                file,
-                src,
-                diag: Box::new(diag),
-            }
+        let (file, src) = home_to_source.get(home).cloned().unwrap_or(entry_source);
+        CliError::Pipeline {
+            file,
+            src,
+            diag: Box::new(diag),
         }
     }
 }
