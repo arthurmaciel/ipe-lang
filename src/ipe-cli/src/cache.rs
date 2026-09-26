@@ -577,14 +577,18 @@ fn derive_epoch_uncached() -> Option<String> {
     Some(hex::encode(hasher.finalize()))
 }
 
-/// The default cache root for a build writing to `out_dir`, honouring the
-/// `IPE_BUILD_CACHE` / `IPE_BUILD_CACHE_DIR` environment overrides.
+/// The cache root for a build writing to `out_dir`.
 ///
 /// - `IPE_BUILD_CACHE=0` (also `off` / `false`) disables the cache entirely.
 /// - `IPE_BUILD_CACHE_DIR=<path>` overrides the default location.
-/// - Otherwise: `<out_dir>/.ipe-cache` — colocated with the build output
-///   so `rm -rf <out_dir>` (the existing "force a clean rebuild" ritual)
-///   also resets the cache, with no new mental model to learn.
+/// - Otherwise: `<out_dir>/.ipe-cache/<user salt>`, colocated with the build
+///   output so removing it also resets the cache.
+///
+/// A cached entry is emitted verbatim, so the default partition is named by a
+/// secret per-user salt kept in `IPE_HOME`: a cache a cloned repository ships
+/// inside a force-added `out/` sits under a name this user never reads, and can
+/// never substitute the Rust built from the sources. No salt (no resolvable
+/// `IPE_HOME`) disables the default cache.
 #[must_use]
 pub fn env_cache_dir(out_dir: &Path) -> Option<PathBuf> {
     if matches!(
@@ -596,7 +600,115 @@ pub fn env_cache_dir(out_dir: &Path) -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("IPE_BUILD_CACHE_DIR") {
         return Some(PathBuf::from(dir));
     }
-    Some(out_dir.join(".ipe-cache"))
+    default_cache_dir(out_dir)
+}
+
+/// `<out_dir>/.ipe-cache/<user salt>`, or `None` when no salt is available.
+fn default_cache_dir(out_dir: &Path) -> Option<PathBuf> {
+    static SALT: OnceLock<Option<String>> = OnceLock::new();
+    let salt = SALT.get_or_init(user_cache_salt).clone()?;
+    Some(out_dir.join(".ipe-cache").join(salt))
+}
+
+/// The bytes of randomness in a per-user cache salt.
+const SALT_BYTES: usize = 32;
+
+/// The per-user secret naming the default cache partition, created on first use.
+///
+/// Stored as hex in `$IPE_HOME/build-cache-salt` (owner-only). A symlink or a
+/// malformed file there yields `None` (the default cache is then disabled),
+/// never a salt an attacker could have chosen.
+fn user_cache_salt() -> Option<String> {
+    use std::io::{Read as _, Write as _};
+    let home = crate::runtime_embed::ipe_home().ok()?;
+    let path = home.join("build-cache-salt");
+    let read = |path: &Path| -> Option<String> {
+        let meta = fs::symlink_metadata(path).ok()?;
+        if !meta.file_type().is_file() {
+            return None;
+        }
+        let mut text = String::new();
+        fs::File::open(path)
+            .ok()?
+            .take(128)
+            .read_to_string(&mut text)
+            .ok()?;
+        let text = text.trim().to_owned();
+        (text.len() == SALT_BYTES * 2 && text.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then_some(text)
+    };
+    if fs::symlink_metadata(&path).is_ok() {
+        return read(&path);
+    }
+    let mut bytes = [0u8; SALT_BYTES];
+    getrandom::fill(&mut bytes).ok()?;
+    let salt = hex::encode(bytes);
+    fs::create_dir_all(&home).ok()?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
+        Ok(mut file) => {
+            file.write_all(salt.as_bytes()).ok()?;
+            Some(salt)
+        }
+        // A concurrent first build won the race: use the salt it wrote.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read(&path),
+        Err(_) => None,
+    }
+}
+
+/// Whether any existing level from `cache_root` down to `path` is a symlink.
+///
+/// A cache write is skipped rather than made through a link.
+fn crosses_symlink(cache_root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(cache_root) else {
+        return true;
+    };
+    let mut current = cache_root.to_path_buf();
+    let is_link = |p: &Path| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+    if is_link(&current) {
+        return true;
+    }
+    for part in rel.components() {
+        current.push(part);
+        if is_link(&current) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Write `bytes` to `path` through an exclusively created temp file and a rename.
+///
+/// Best-effort: every failure is swallowed. A symlink anywhere below
+/// `cache_root` skips the write.
+fn write_entry(cache_root: &Path, path: &Path, tmp: &Path, bytes: &[u8]) {
+    use std::io::Write as _;
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    if crosses_symlink(cache_root, dir) || fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    if crosses_symlink(cache_root, path) {
+        return;
+    }
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
+        .and_then(|mut file| file.write_all(bytes));
+    if written.is_err() {
+        return;
+    }
+    if fs::rename(tmp, path).is_err() {
+        let _ = fs::remove_file(tmp);
+    }
 }
 
 fn entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
@@ -633,23 +745,11 @@ pub fn try_load(cache_root: &Path, epoch: &str, key: &str) -> Option<EmittedProj
 /// was written between my miss-check and now" race).
 pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject) {
     let path = entry_file_path(cache_root, epoch, key);
-    let Some(dir) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(dir).is_err() {
-        return;
-    }
     let Ok(json) = serde_json::to_vec(project) else {
         return;
     };
     let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-    if fs::write(&tmp, &json).is_err() {
-        let _ = fs::remove_file(&tmp);
-        return;
-    }
-    if fs::rename(&tmp, &path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
+    write_entry(cache_root, &path, &tmp, &json);
 }
 
 // ---------------------------------------------------------------------------
@@ -730,12 +830,6 @@ pub fn store_ir(
     interner: &Arc<Mutex<Interner>>,
 ) {
     let path = ir_entry_file_path(cache_root, epoch, key);
-    let Some(dir) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(dir).is_err() {
-        return;
-    }
     let json = {
         let _guard = SerdeInternerGuard::install(Arc::clone(interner));
         serde_json::to_vec(program)
@@ -744,13 +838,7 @@ pub fn store_ir(
         return;
     };
     let tmp = path.with_extension(format!("ir.json.{}.tmp", std::process::id()));
-    if fs::write(&tmp, &json).is_err() {
-        let _ = fs::remove_file(&tmp);
-        return;
-    }
-    if fs::rename(&tmp, &path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
+    write_entry(cache_root, &path, &tmp, &json);
 }
 
 #[cfg(test)]
@@ -1271,8 +1359,17 @@ mod tests {
         // explicit-cache-dir seam, never via `std::env::set_var` — see that
         // module's doc for why).
         let out_dir = Path::new("/tmp/ipe-cache-dir-does-not-need-to-exist");
-        let default = env_cache_dir(out_dir);
-        assert_eq!(default, Some(out_dir.join(".ipe-cache")));
+        let default = default_cache_dir(out_dir);
+        // The default sits under `<out>/.ipe-cache/` in a partition named by
+        // the per-user salt — 64 hex digits a shipped cache cannot predict.
+        if let Some(dir) = &default {
+            assert_eq!(dir.parent(), Some(out_dir.join(".ipe-cache").as_path()));
+            let salt = dir.file_name().map(|n| n.to_string_lossy().into_owned());
+            assert!(
+                salt.is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())),
+                "the partition is the hex salt, got {dir:?}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------

@@ -2715,9 +2715,10 @@ fn user_project(tag: &str) -> PathBuf {
     dir
 }
 
-/// Writing an emitted project into a directory that holds the user's files —
-/// `ipe build --out .` — is refused before anything is written or pruned: the
-/// user's `src/` and `Cargo.toml` survive byte-for-byte.
+/// Emitting into a directory that holds the user's files is refused untouched.
+///
+/// This is `ipe build --out .`: nothing is written or pruned, and the user's
+/// `src/` and `Cargo.toml` survive byte-for-byte.
 #[test]
 fn emitting_into_a_user_directory_is_refused_untouched() {
     let dir = user_project("emit");
@@ -2744,8 +2745,9 @@ fn emitting_into_a_user_directory_is_refused_untouched() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// A lossy rewrite (`ipe fix`, `lint --fix`) backs the original up before the
-/// atomic replace, and never reuses an existing backup name.
+/// A lossy rewrite backs the original up before the atomic replace.
+///
+/// This covers `ipe fix` and `lint --fix`; a backup name is never reused.
 #[test]
 fn lossy_rewrite_backs_up_the_original() {
     let dir = user_project("lossy");
@@ -2789,8 +2791,10 @@ fn lossy_rewrite_backs_up_the_original() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// A symlinked source file is rewritten at its real location (the file the user
-/// edits) — the link is kept, not replaced by a detached copy.
+/// A symlinked source file is rewritten at its real location.
+///
+/// That is the file the user edits; the link is kept, not replaced by a
+/// detached copy.
 #[cfg(unix)]
 #[test]
 fn rewrite_follows_a_symlinked_source_to_the_real_file() {
@@ -2816,8 +2820,9 @@ fn rewrite_follows_a_symlinked_source_to_the_real_file() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// The atomic writer's temp file is created exclusively: a symlink planted at
-/// the temp name is never written through.
+/// The atomic writer's temp file is created exclusively.
+///
+/// A symlink planted at the temp name is never written through.
 #[cfg(unix)]
 #[test]
 fn atomic_write_never_writes_through_a_planted_temp_symlink() {
@@ -2832,5 +2837,109 @@ fn atomic_write_never_writes_through_a_planted_temp_symlink() {
         "an existing temp path must be refused, got {result:?}"
     );
     assert_eq!(fs::read_to_string(&victim).unwrap_or_default(), "keep");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A marked crate dir planted with symlinks is refused by the emit.
+///
+/// A cloned repository can force-add such a dir with a symlinked `src/` or a
+/// symlinked file; the write + prune refuse both, and the link targets survive
+/// byte-for-byte.
+#[cfg(unix)]
+#[test]
+fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
+    let base = std::env::temp_dir().join(format!("ipe_planted_emit_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let victim = base.join("victim");
+    fs::create_dir_all(&victim).expect("victim dir");
+    fs::write(victim.join("precious.ipe"), "keep").expect("victim file");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+
+    // A symlinked `src/`: pruning it would mass-delete the target.
+    let dir_link = base.join("out-a");
+    crate::output_dir::OwnedDir::claim(&dir_link).expect("claim");
+    std::os::unix::fs::symlink(&victim, dir_link.join("src")).expect("dir link");
+    let result = write_emitted_project(&emitted, &dir_link, &base.join("no-runtime"), None, false);
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a symlinked src/ must be refused, got {result:?}"
+    );
+
+    // A symlinked final file: writing it would overwrite the target.
+    let file_link = base.join("out-b");
+    crate::output_dir::OwnedDir::claim(&file_link).expect("claim");
+    std::os::unix::fs::symlink(victim.join("precious.ipe"), file_link.join("Cargo.toml"))
+        .expect("file link");
+    let result = write_emitted_project(&emitted, &file_link, &base.join("no-runtime"), None, false);
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a symlinked Cargo.toml must be refused, got {result:?}"
+    );
+
+    assert_eq!(
+        fs::read_to_string(victim.join("precious.ipe")).unwrap_or_default(),
+        "keep",
+        "the link target survives byte-for-byte"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// A backup keeps the original's permission bits.
+///
+/// An owner-only source never gets a more readable copy.
+#[cfg(unix)]
+#[test]
+fn backup_preserves_a_private_files_mode() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = user_project("private_backup");
+    let main = dir.join("src").join("Main.ipe");
+    fs::set_permissions(&main, fs::Permissions::from_mode(0o600)).expect("chmod 600");
+    let backup = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v2\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite");
+    let Some(backup) = backup else {
+        assert!(false_marker(), "a lossy rewrite must report its backup");
+        return;
+    };
+    let mode = fs::metadata(&backup)
+        .map(|m| m.permissions().mode() & 0o777)
+        .unwrap_or(0);
+    assert_eq!(mode, 0o600, "the backup must stay owner-only");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A directory walk refuses to rewrite a file that resolves outside the project.
+///
+/// An explicitly named file may still be followed.
+#[cfg(unix)]
+#[test]
+fn walked_rewrite_refuses_a_file_outside_the_project() {
+    let dir = user_project("walk_escape");
+    let outside = dir.with_extension("outside.ipe");
+    fs::write(&outside, "module Other\n").expect("outside file");
+    let link = dir.join("src").join("Other.ipe");
+    std::os::unix::fs::symlink(&outside, &link).expect("link");
+    let result = rewrite_walked_file(
+        &dir,
+        &link,
+        "module Other\n-- evil\n",
+        RewriteKind::Lossless,
+    );
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a walked file escaping the project must be refused, got {result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(&outside).unwrap_or_default(),
+        "module Other\n"
+    );
+    let _ = fs::remove_file(&outside);
     let _ = fs::remove_dir_all(&dir);
 }

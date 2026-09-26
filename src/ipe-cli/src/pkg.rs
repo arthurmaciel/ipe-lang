@@ -40,8 +40,9 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     crate::resolve::resolve_and_remove(&project_root, package)
 }
 
-/// The current directory, confirmed to be an Ipê project — it holds a
-/// `package.ipe`. The manifest reader/writer both key off this root.
+/// The current directory, confirmed to be an Ipê project holding a `package.ipe`.
+///
+/// The manifest reader/writer both key off this root.
 ///
 /// # Errors
 /// [`CliError::Io`] if the current directory cannot be read; [`CliError::Usage`]

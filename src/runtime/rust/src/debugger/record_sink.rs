@@ -99,16 +99,48 @@ fn write_blob(dest: &RecordDest, blob: &str) {
             let _ = lock.write_all(blob.as_bytes());
             let _ = lock.flush();
         }
-        // A path destination: create/truncate and write the plain dump. The
-        // recorder's dev-loop log is not a trust boundary, so `File::create` is
-        // fine; a failure to open is swallowed like any write error.
+        // A path destination: replace the file with the plain dump. A failure is
+        // swallowed like any write error.
         RecordDest::Path(path) => {
-            if let Ok(mut file) = std::fs::File::create(path) {
-                let _ = file.write_all(blob.as_bytes());
-                let _ = file.flush();
-            }
+            let _ = replace_file(path, blob.as_bytes());
         }
     }
+}
+
+/// Replace `path` with `bytes` through an exclusively created sibling temp file.
+///
+/// The temp file is created with `create_new` (never opening an existing file or
+/// symlink) and renamed over `path`, so the dump never writes through a symlink
+/// planted at the destination; a symlinked destination is refused outright.
+fn replace_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let tmp = parent.join(format!(".{name}.ipe-tmp.{}", std::process::id()));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            file.flush()
+        });
+    if let Err(e) = written {
+        if e.kind() != std::io::ErrorKind::AlreadyExists {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return Err(e);
+    }
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// Dump `buf`'s portable replay log to the destination named by
@@ -234,5 +266,40 @@ mod tests {
         let blob = render_replay_blob(&buf, &update);
         let lines = blob.lines().count();
         assert_eq!(lines, cap, "rendered blob must hold exactly cap lines");
+    }
+
+    // The dump replaces a regular file, and refuses a symlinked destination
+    // without touching the link's target.
+    #[cfg(unix)]
+    #[test]
+    fn replace_file_never_writes_through_a_symlink() {
+        let dir = std::env::temp_dir().join(format!("ipe_record_sink_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
+
+        let log = dir.join("session.ipelog");
+        assert!(replace_file(&log, b"first\n").is_ok(), "fresh write");
+        assert!(replace_file(&log, b"second\n").is_ok(), "replacing write");
+        assert_eq!(
+            std::fs::read_to_string(&log).ok().as_deref(),
+            Some("second\n")
+        );
+
+        let victim = dir.join("victim.txt");
+        assert!(std::fs::write(&victim, "keep").is_ok(), "write victim");
+        let link = dir.join("linked.ipelog");
+        assert!(
+            std::os::unix::fs::symlink(&victim, &link).is_ok(),
+            "plant link"
+        );
+        assert!(
+            replace_file(&link, b"evil").is_err(),
+            "a symlinked log is refused"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&victim).ok().as_deref(),
+            Some("keep")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -16,11 +16,14 @@ use crate::CliError;
 use crate::cli_args::{self, OutputFormat};
 use crate::style;
 
-/// A directory `clean` may remove, named relative to the project root, with
-/// the proof of ownership it must show first.
+/// A directory `clean` may remove.
+///
+/// Named relative to the project root, with the proof of ownership it must show
+/// first.
 struct Generated {
     name: &'static str,
-    /// Whether the directory must carry [`crate::output_dir::OWNERSHIP_MARKER`]:
+    /// Whether the directory must carry [`crate::output_dir::OWNERSHIP_MARKER`].
+    ///
     /// `out/` is a common name a user may have chosen for their own files, so
     /// it is removed only when ipe marked it; `.ipe/` is ipe's own namespace.
     needs_marker: bool,
@@ -93,9 +96,10 @@ pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Resolve and validate the project root: the current directory, which must
-/// hold a `package.ipe`. Returns the canonicalised root so every later
-/// containment check compares real, symlink-resolved paths.
+/// Resolve and validate the project root, the current directory holding a `package.ipe`.
+///
+/// Returns the canonicalised root so every later containment check compares
+/// real, symlink-resolved paths.
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] when there is no `package.ipe` here (fail-closed: no
@@ -118,42 +122,40 @@ fn project_root() -> Result<PathBuf, CliError> {
     })
 }
 
-/// Remove one generated directory under `root`, returning the path removed (for
-/// the summary) or `None` when it was absent or not a directory. The target is
-/// canonicalised and proven to sit strictly inside `root` before removal, so a
-/// symlinked `out/`/`.ipe/` pointing outside the project is refused rather than
-/// followed; an `out/` without ipe's ownership marker is refused untouched.
+/// Remove one generated directory under `root`, returning its name for the summary.
+///
+/// `None` when it is absent or not a directory. The entry is lstat'd, never
+/// followed: a symlinked `out/`/`.ipe/` is refused (its target untouched), an
+/// `out/` without ipe's ownership marker is refused untouched, and the removal
+/// itself never follows a symlink met inside the tree.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] if the resolved target escapes the project root (a
-/// fail-closed refusal — the delete never leaves the project);
-/// [`CliError::OutputRefused`] for an unmarked `out/`; [`CliError::Io`] on a
-/// canonicalise or remove failure.
+/// [`CliError::OutputRefused`] for a symlink or an unmarked `out/`;
+/// [`CliError::Io`] on a stat or remove failure.
 fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Option<String>, CliError> {
     let name = generated.name;
     let candidate = root.join(name);
-    if !candidate.is_dir() {
+    let meta = match std::fs::symlink_metadata(&candidate) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(CliError::Io {
+                path: candidate,
+                source: e,
+            });
+        }
+    };
+    if meta.file_type().is_symlink() {
+        return Err(crate::output_dir::OutputRefusal::Symlink(candidate).into());
+    }
+    if !meta.is_dir() {
         return Ok(None);
     }
-    let real = std::fs::canonicalize(&candidate).map_err(|e| CliError::Io {
-        path: candidate.clone(),
-        source: e,
-    })?;
-    // Containment guard: the resolved directory must be a strict descendant of
-    // the resolved root, and never the root itself. A `..`/symlink that resolves
-    // outside is refused, not deleted.
-    if !real.starts_with(root) || real == *root {
-        return Err(CliError::UsageOwned(format!(
-            "clean: refusing to remove {} — it resolves outside the project root {}",
-            real.display(),
-            root.display()
-        )));
-    }
-    if generated.needs_marker && !crate::output_dir::has_marker(&real)? {
+    if generated.needs_marker && !crate::output_dir::has_marker(&candidate)? {
         return Err(crate::output_dir::OutputRefusal::NotIpeOwned(candidate).into());
     }
-    std::fs::remove_dir_all(&real).map_err(|e| CliError::Io {
-        path: real,
+    std::fs::remove_dir_all(&candidate).map_err(|e| CliError::Io {
+        path: candidate,
         source: e,
     })?;
     Ok(Some(format!("{name}/")))
@@ -294,12 +296,43 @@ mod tests {
 
         let result = remove_generated_dir(&real_root, OUT);
         assert!(
-            matches!(result, Err(CliError::UsageOwned(_))),
+            matches!(result, Err(CliError::OutputRefused(_))),
             "an escaping symlink must be refused, got: {result:?}"
         );
         assert!(
             outside.join("keep.txt").exists(),
             "the escape target must be left untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Planted symlinks in a marked `out/` are removed as links.
+    ///
+    /// Neither target is followed or touched.
+    #[cfg(unix)]
+    #[test]
+    fn removes_planted_links_without_following_them() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("ipe_clean_planted_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("project");
+        let outside = base.join("precious");
+        std::fs::create_dir_all(&root).expect("make root");
+        std::fs::create_dir_all(&outside).expect("make outside");
+        std::fs::write(outside.join("keep.txt"), b"do not delete").expect("write victim");
+        let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
+        crate::output_dir::OwnedDir::claim(&real_root.join("out")).expect("claim out");
+        symlink(&outside, real_root.join("out").join("rust")).expect("dir link");
+        symlink(outside.join("keep.txt"), real_root.join("out").join("bin")).expect("file link");
+
+        let removed = remove_generated_dir(&real_root, OUT).expect("remove must succeed");
+        assert_eq!(removed.as_deref(), Some("out/"));
+        assert_eq!(
+            std::fs::read(outside.join("keep.txt")).ok().as_deref(),
+            Some(&b"do not delete"[..]),
+            "link targets survive byte-for-byte"
         );
 
         let _ = std::fs::remove_dir_all(&base);

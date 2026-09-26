@@ -355,8 +355,10 @@ fn run_record_flag_accepted() {
     assert!(!plain.record, "record must default to false");
 }
 
-/// `--record` takes no value: the log always lands in the ipe-owned output
-/// root, so a stray path argument can never name a user file to overwrite.
+/// `--record` takes no value.
+///
+/// The log always lands in the ipe-owned output root, so a stray path argument
+/// can never name a user file to overwrite.
 #[test]
 fn run_record_takes_no_path() {
     let result = parse_run(&v(&["Main.ipe", "--record", "notes.txt"]));

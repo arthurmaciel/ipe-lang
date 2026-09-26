@@ -1,5 +1,4 @@
-//! Multi-module project manifest parsing, module discovery, import graph, and
-//! topological sort.
+//! Multi-module project manifest parsing, module discovery, import graph, and topological sort.
 //!
 //! `package.ipe` is the sole project manifest the toolchain discovers and
 //! builds. A legacy `ipe.toml` is not accepted as a project manifest;
@@ -528,9 +527,10 @@ pub fn manifest_in_dir(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Whether `dir` carries a legacy `ipe.toml` but no `package.ipe` — the case
-/// where a caller should report [`LEGACY_TOML_HINT`] rather than treat the
-/// directory as manifest-free.
+/// Whether `dir` carries a legacy `ipe.toml` but no `package.ipe`.
+///
+/// The case where a caller should report [`LEGACY_TOML_HINT`] rather than treat
+/// the directory as manifest-free.
 #[must_use]
 pub fn has_only_legacy_toml(dir: &Path) -> bool {
     !dir.join(crate::package_manifest::PACKAGE_IPE).is_file() && dir.join(IPE_TOML).is_file()

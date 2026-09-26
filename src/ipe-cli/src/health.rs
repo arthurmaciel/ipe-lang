@@ -1755,9 +1755,10 @@ fn numbered_backup(path: &Path, contents: &str) -> Result<PathBuf, CliError> {
     }
 }
 
-/// Write `contents` to `path` atomically through the driver's one atomic
-/// writer (an exclusively created sibling temp file, then a rename over
-/// `path`), so the config is never truncated in place.
+/// Write `contents` to `path` through the driver's one atomic writer.
+///
+/// An exclusively created sibling temp file is renamed over `path`, so the
+/// config is never truncated in place.
 fn write_atomic_config(path: &Path, contents: &str) -> Result<(), CliError> {
     crate::driver::write_atomic(path, contents)
 }

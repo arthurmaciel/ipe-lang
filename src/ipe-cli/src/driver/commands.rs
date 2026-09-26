@@ -240,8 +240,7 @@ pub fn with_help_on_misuse(
     }
 }
 
-/// Project-aware default entry when no positional argument is given to
-/// `build`, `run`, or `watch`.
+/// Project-aware default entry for `build`, `run`, or `watch` without a positional.
 ///
 /// Resolution order:
 /// 1. `./package.ipe` exists — entry `"."` (project mode; `discover_manifest`
@@ -316,9 +315,10 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     watch::run(&opts)
 }
 
-/// Resolve the output root for a build of `entry`: `--out <dir>` or
-/// `<project>/out`, proven claimable by ipe and disjoint from the project's
-/// sources.
+/// Resolve the output root for a build of `entry`.
+///
+/// `--out <dir>` or `<project>/out`, proven claimable by ipe and disjoint from
+/// the project's sources.
 ///
 /// # Errors
 /// [`CliError::OutputRefused`] when the location overlaps the project or holds
@@ -391,8 +391,9 @@ pub fn resolve_delivery(
     .map_err(|e| CliError::UsageOwned(format!("ipe {command}: {e}")))
 }
 
-/// Route an entry argument to its `package.ipe`, when one governs it:
-/// a directory must contain one, and a `.ipe` entry walks up the tree looking
+/// Route an entry argument to its `package.ipe`, when one governs it.
+///
+/// A directory must contain one, and a `.ipe` entry walks up the tree looking
 /// for one (returning no manifest — single-file mode — when none exists). A
 /// directory carrying only a legacy `ipe.toml` is a clear legacy-toml error.
 pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
@@ -976,11 +977,9 @@ fn copy_native_artifact(
             src.display()
         )));
     }
-    let dest = bin_dir.path().join(&friendly);
-    std::fs::copy(&src, &dest).map_err(|e| CliError::Io {
-        path: dest.clone(),
-        source: e,
-    })?;
+    let dest = bin_dir.path_to(&friendly)?;
+    dest.copy_from(&src)?;
+    let dest = dest.path();
     #[cfg(unix)]
     set_executable(&dest)?;
     Ok(dest)
@@ -1415,12 +1414,9 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         // artifact lands at a predictable path regardless of CARGO_TARGET_DIR.
         let dest = output
             .claim_area(&[OutputArea::Release])?
-            .path()
-            .join(friendly_artifact_filename(manifest_parsed.as_ref()));
-        std::fs::copy(&bin_path, &dest).map_err(|e| CliError::Io {
-            path: dest.clone(),
-            source: e,
-        })?;
+            .path_to(friendly_artifact_filename(manifest_parsed.as_ref()))?;
+        dest.copy_from(&bin_path)?;
+        let dest = dest.path();
         #[cfg(unix)]
         set_executable(&dest)?;
         if show_progress {
@@ -1547,10 +1543,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     )?;
 
     // Step 3: lay out the bundle.
-    let bundle_dir = output
-        .claim_area(&[OutputArea::Release, OutputArea::Bundle])?
-        .path()
-        .to_path_buf();
+    let bundle_dir = output.claim_area(&[OutputArea::Release, OutputArea::Bundle])?;
 
     // Locate the wrapper binary. As with the app binary, the target dir may be
     // a global CARGO_TARGET_DIR; resolve via cargo metadata.
@@ -1563,38 +1556,26 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     let artifact = match args.mode {
         cli_args::ReleaseMode::Embed => {
             // Single-file embed: copy only the wrapper (app + profile baked in).
-            let dest = bundle_dir.join("ipe-wrapper");
-            std::fs::copy(&wrapper_src, &dest).map_err(|e| CliError::Io {
-                path: dest.clone(),
-                source: e,
-            })?;
+            let dest = bundle_dir.path_to("ipe-wrapper")?;
+            dest.copy_from(&wrapper_src)?;
+            let dest = dest.path();
             #[cfg(unix)]
             set_executable(&dest)?;
             dest
         }
         cli_args::ReleaseMode::Bundle => {
             // Bundle: wrapper + app + profile as siblings.
-            let wrapper_dest = bundle_dir.join("ipe-wrapper");
-            let app_dest = bundle_dir.join("ipe-app");
-            let profile_dest = bundle_dir.join("ipe.profile");
-            std::fs::copy(&wrapper_src, &wrapper_dest).map_err(|e| CliError::Io {
-                path: wrapper_dest.clone(),
-                source: e,
-            })?;
-            std::fs::copy(&app_binary, &app_dest).map_err(|e| CliError::Io {
-                path: app_dest.clone(),
-                source: e,
-            })?;
-            std::fs::copy(&profile_src, &profile_dest).map_err(|e| CliError::Io {
-                path: profile_dest.clone(),
-                source: e,
-            })?;
+            let wrapper_dest = bundle_dir.path_to("ipe-wrapper")?;
+            let app_dest = bundle_dir.path_to("ipe-app")?;
+            bundle_dir.path_to("ipe.profile")?.copy_from(&profile_src)?;
+            wrapper_dest.copy_from(&wrapper_src)?;
+            app_dest.copy_from(&app_binary)?;
             #[cfg(unix)]
             {
-                set_executable(&wrapper_dest)?;
-                set_executable(&app_dest)?;
+                set_executable(&wrapper_dest.path())?;
+                set_executable(&app_dest.path())?;
             }
-            bundle_dir
+            bundle_dir.path().to_path_buf()
         }
     };
 
@@ -2081,8 +2062,13 @@ pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
         via_env.filter(|p| p.is_file()).unwrap_or(via_crate)
     };
 
-    let pkg_dir = out_dir.join("www").join("pkg");
-    fs::create_dir_all(&pkg_dir).map_err(|e| io_err(&pkg_dir, e))?;
+    // `wasm-bindgen` and `wasm-opt` write into `www/pkg/` by path, so it is
+    // rebuilt empty under the owned crate: a symlink at any level is refused and
+    // nothing planted inside it can redirect their writes.
+    let pkg = OwnedDir::claim(out_dir)?.path_to(Path::new("www").join("pkg"))?;
+    pkg.remove()?;
+    pkg.ensure_dir()?;
+    let pkg_dir = pkg.path();
 
     let wb_status = std::process::Command::new("wasm-bindgen")
         .args([
@@ -2276,12 +2262,12 @@ fn set_record_env(cmd: &mut std::process::Command, dest: Option<&Path>) {
     }
 }
 
-/// The file, in the output root, a `ipe run --record` session's replay log is
-/// written to.
+/// The replay-log file an `ipe run --record` session writes in the output root.
 pub const RECORD_LOG_FILE: &str = "session.ipelog";
 
-/// Refuse `ipe run --record` for a program whose session cannot be recorded, so
-/// a record request never silently yields no log.
+/// Refuse `ipe run --record` for a program whose session cannot be recorded.
+///
+/// A record request never silently yields no log.
 ///
 /// The recorder lives in the cli (`Cli.tea`) and worker (`Worker.tea`) update
 /// loops and dumps its log from the directly executed native binary; a script
@@ -2351,16 +2337,18 @@ pub fn run_run(rest: &[String]) -> Result<(), CliError> {
     })
 }
 
-/// Inner implementation of `run_run`, unaware of JSON formatting: parse the
-/// argument tail into a typed [`cli_args::RunArgs`], then run it.
+/// Inner implementation of `run_run`, unaware of JSON formatting.
+///
+/// Parse the argument tail into a typed [`cli_args::RunArgs`], then run it.
 pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
     let args = cli_args::parse_run(rest)?;
     run_run_with_args(args)
 }
 
-/// Execute a fully-parsed `ipe run`: compile → cargo build → jailed exec. With
-/// `--record`, `IPE_DEBUGGER_RECORD` is injected into the executed child so the
-/// runtime dumps the session's replay log into the output root on exit.
+/// Execute a fully-parsed `ipe run`: compile → cargo build → jailed exec.
+///
+/// With `--record`, `IPE_DEBUGGER_RECORD` is injected into the executed child
+/// so the runtime dumps the session's replay log into the output root on exit.
 // A linear pipeline (compile → cargo build → resolve capabilities → jail →
 // exec); the steps share enough locals that splitting reads worse than the whole.
 #[allow(clippy::too_many_lines)]
@@ -2541,7 +2529,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     let out_dir = output.area_path(&[OutputArea::Rust])?;
     // The session log lands in the ipe-owned output root, never beside sources.
     let record_log = if record {
-        Some(output.claim()?.path().join(RECORD_LOG_FILE))
+        Some(output.claim()?.path_to(RECORD_LOG_FILE)?.path())
     } else {
         None
     };

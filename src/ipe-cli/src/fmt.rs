@@ -111,6 +111,9 @@ fn run_fmt_inplace(
         )));
     }
 
+    // A file reached by walking a directory must stay inside it; only an
+    // explicitly named file may be a symlink to elsewhere.
+    let walked = !root.is_file();
     let mut unformatted: Vec<PathBuf> = Vec::new();
     for file in &files {
         let src =
@@ -121,7 +124,11 @@ fn run_fmt_inplace(
                 unformatted.push(file.clone());
             }
         } else if formatted != src {
-            crate::rewrite_user_file(file, &formatted, crate::RewriteKind::Lossless)?;
+            if walked {
+                crate::rewrite_walked_file(&root, file, &formatted, crate::RewriteKind::Lossless)?;
+            } else {
+                crate::rewrite_user_file(file, &formatted, crate::RewriteKind::Lossless)?;
+            }
             eprintln!(
                 "{}",
                 crate::style::gutter(&format!("formatted {}", file.display()))

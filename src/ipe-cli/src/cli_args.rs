@@ -796,9 +796,11 @@ pub struct RunArgs {
     /// the emitted runtime loop. Absent from `ipe release` so the debugger can
     /// never ship in a production artifact.
     pub debugger: bool,
-    /// `--record` — record a cli/worker app's TEA session: forces `debugger` on
-    /// and has the runtime dump its bounded, plain replay log (one
-    /// `"<msg> => <model>"` line per step) into the output root on exit.
+    /// `--record` — record a cli/worker app's TEA session.
+    ///
+    /// Forces `debugger` on and has the runtime dump its bounded, plain replay
+    /// log (one `"<msg> => <model>"` line per step) into the output root on
+    /// exit.
     pub record: bool,
     /// Arguments after `--`, forwarded verbatim to the compiled binary.
     pub bin_args: Vec<String>,

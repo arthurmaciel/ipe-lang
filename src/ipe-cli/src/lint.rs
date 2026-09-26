@@ -110,7 +110,14 @@ pub(crate) fn run_lint(rest: &[String]) -> Result<(), CliError> {
     }
 
     if args.fix {
-        return apply_and_report(&modules, &config, &paths);
+        // Fixes reach modules found by walking the project, so each rewrite must
+        // stay inside it (the manifest's directory, or a single file's own).
+        let root = resolved
+            .blame_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        return apply_and_report(&modules, &config, &paths, &root);
     }
     report_findings(&modules, &config, &paths, args.format)
 }
@@ -305,6 +312,7 @@ fn apply_and_report(
     modules: &[SourceModule],
     config: &LintConfig,
     paths: &BTreeMap<Vec<String>, PathBuf>,
+    root: &Path,
 ) -> Result<(), CliError> {
     let local_outcome = ipe_lint::apply_fixes(modules, config);
 
@@ -346,7 +354,7 @@ fn apply_and_report(
         let Some(path) = paths.get(module) else {
             continue;
         };
-        let backup = crate::rewrite_user_file(path, rewritten, crate::RewriteKind::Lossy)?;
+        let backup = crate::rewrite_walked_file(root, path, rewritten, crate::RewriteKind::Lossy)?;
         println!(
             "{}",
             crate::style::gutter(&format!("lint --fix: rewrote {}", path.display()))

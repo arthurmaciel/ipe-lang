@@ -1760,9 +1760,10 @@ pub fn remove_manifest_dependency(manifest_path: &Path, name: &str) -> Result<()
     write_manifest_file(manifest_path, &updated)
 }
 
-/// Write `text` to the user's `manifest_path` atomically (never truncated in
-/// place). The edit is the one dependency entry the user asked to add or drop,
-/// with the rest of the file preserved, so no backup is kept.
+/// Write `text` to the user's `manifest_path` atomically, never truncating in place.
+///
+/// The edit is the one dependency entry the user asked to add or drop, with the
+/// rest of the file preserved, so no backup is kept.
 fn write_manifest_file(manifest_path: &Path, text: &str) -> Result<(), CliError> {
     crate::rewrite_user_file(manifest_path, text, crate::RewriteKind::Lossless).map(|_| ())
 }

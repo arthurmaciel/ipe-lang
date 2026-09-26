@@ -147,6 +147,7 @@ impl Lockfile {
     }
 
     /// Write the lockfile to `project_root/ipe.lock`, packages sorted by name.
+    ///
     /// The write is atomic, so an interrupted write never leaves a truncated
     /// lockfile.
     ///

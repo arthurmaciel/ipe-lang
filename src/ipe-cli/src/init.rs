@@ -996,8 +996,10 @@ fn create_dir_all(path: &Path) -> Result<(), CliError> {
     })
 }
 
-/// Create a file that must not exist yet (`create_new`): a file or symlink that
-/// appeared at `path` is never overwritten or written through.
+/// Create a file that must not exist yet (`create_new`).
+///
+/// A file or symlink that appeared at `path` is never overwritten or written
+/// through.
 fn write_new_file(path: &Path, contents: &str) -> Result<(), CliError> {
     std::fs::OpenOptions::new()
         .write(true)
@@ -1010,8 +1012,9 @@ fn write_new_file(path: &Path, contents: &str) -> Result<(), CliError> {
         })
 }
 
-/// Overwrite an existing user file the user asked to replace: its original is
-/// backed up first, and the replacement is atomic.
+/// Overwrite an existing user file the user asked to replace.
+///
+/// Its original is backed up first, and the replacement is atomic.
 fn replace_file(path: &Path, contents: &str) -> Result<(), CliError> {
     if let Some(backup) = crate::rewrite_user_file(path, contents, crate::RewriteKind::Lossy)? {
         println!(

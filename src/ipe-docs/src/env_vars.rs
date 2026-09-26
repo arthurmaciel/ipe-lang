@@ -152,14 +152,14 @@ pub static ENV_VARS: &[EnvVar] = &[
         name: "IPE_BUILD_CACHE",
         default: "on",
         purpose: "Set to `0`, `off`, or `false` to disable the incremental build cache. \
-                  Default is on; the cache directory is `<out>/.ipe-cache` unless \
+                  Default is on; the cache directory is `<out>/.ipe-cache/<per-user salt>` unless \
                   `IPE_BUILD_CACHE_DIR` is set.",
         subsystem: Subsystem::Build,
         class: Class::Tunable,
     },
     EnvVar {
         name: "IPE_BUILD_CACHE_DIR",
-        default: "unset (<out>/.ipe-cache)",
+        default: "unset (<out>/.ipe-cache/<per-user salt>)",
         purpose: "Explicit path for the incremental build cache directory. Takes effect \
                   only when the cache is enabled (`IPE_BUILD_CACHE` not `off`).",
         subsystem: Subsystem::Build,

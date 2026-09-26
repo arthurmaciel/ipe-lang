@@ -317,9 +317,10 @@ pub enum CliError {
         /// Why the path was rejected.
         reason: contained_path::PathEscape,
     },
-    /// A build-output location was refused because ipe cannot prove it owns
-    /// it — a symlink, a directory holding user files, or a path overlapping
-    /// the project's sources. Nothing was written, cleaned, or overwritten.
+    /// A build-output location was refused because ipe cannot prove it owns it.
+    ///
+    /// A symlink, a directory holding user files, or a path overlapping the
+    /// project's sources. Nothing was written, cleaned, or overwritten.
     OutputRefused(output_dir::OutputRefusal),
     /// The module-discovery walk hit its depth ceiling or detected a symlink
     /// cycle. Carries the maximum depth that was configured and, for a cycle,

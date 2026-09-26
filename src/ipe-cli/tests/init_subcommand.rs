@@ -116,9 +116,9 @@ fn init_reconciles_existing_project_without_clobbering() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// A target with no project yet may still hold the user's own files (a README,
-/// a `.gitignore`): a fresh `ipe init` scaffolds around them and never
-/// overwrites one.
+/// A fresh `ipe init` keeps the user's own files already in the target.
+///
+/// A fresh `ipe init` scaffolds around them and never overwrites one.
 #[test]
 fn init_keeps_existing_user_files_in_a_fresh_target() {
     let dir = fresh_dir("keep_user_files");

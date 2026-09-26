@@ -21,10 +21,11 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 const SRC_A: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"AAA\"\n";
 const SRC_B: &str = "module Main exposing (main)\n\nimport Ipe.Io\n\nmain = Io.println \"BBB\"\n";
 
-/// `ipe build <entry> --out <project>/out`, with `CARGO_TARGET_DIR` forced
-/// to a SHARED directory OUTSIDE the project, and the emitted crate name pinned
-/// so both projects collide on the same shared-target path. Returns the
-/// project's `out/bin/<name>` path.
+/// Run `ipe build <entry> --out <project>/out` against a shared target.
+///
+/// `CARGO_TARGET_DIR` is forced to a SHARED directory OUTSIDE the project, and
+/// the emitted crate name pinned so both projects collide on the same
+/// shared-target path. Returns the project's `out/bin/<name>` path.
 fn build_into_shared_target(
     tag: &str,
     src: &str,
