@@ -15,7 +15,9 @@
 //! init), asserting the usage-error contract without needing a project on disk.
 
 use ipe::CliError;
-use ipe::cli_args::{BuildMode, parse_build, parse_fix, parse_fmt, parse_run, parse_watch};
+use ipe::cli_args::{
+    BuildMode, SessionMode, parse_build, parse_fix, parse_fmt, parse_run, parse_watch,
+};
 
 /// `&[&str]` → `Vec<String>`, the shape every parse/dispatch entry point takes.
 fn v(args: &[&str]) -> Vec<String> {
@@ -350,9 +352,48 @@ fn release_debugger_flag_rejected() {
 #[test]
 fn run_record_flag_accepted() {
     let a = parse_run(&v(&["Main.ipe", "--record"])).expect("--record must parse");
-    assert!(a.record, "--record must set the field");
+    assert_eq!(a.session, SessionMode::Record, "--record must set the mode");
     let plain = parse_run(&v(&["Main.ipe"])).expect("plain run must parse");
-    assert!(!plain.record, "record must default to false");
+    assert_eq!(plain.session, SessionMode::Live, "a plain run is live");
+}
+
+/// `ipe run --replay` reads the default log; `--replay <log>` names one.
+#[test]
+fn run_replay_flag_accepted_with_optional_log() {
+    let a = parse_run(&v(&["Main.ipe", "--replay"])).expect("--replay must parse");
+    assert_eq!(a.session, SessionMode::Replay(None));
+    let b = parse_run(&v(&["Main.ipe", "--replay", "bug.ipemsgs", "--quiet"]))
+        .expect("--replay <log> must parse");
+    assert_eq!(
+        b.session,
+        SessionMode::Replay(Some("bug.ipemsgs".to_owned()))
+    );
+    assert!(b.quiet, "a flag after the log is still parsed");
+    let c = parse_run(&v(&["Main.ipe", "--replay", "--quiet"]))
+        .expect("--replay before a flag must parse");
+    assert_eq!(
+        c.session,
+        SessionMode::Replay(None),
+        "a flag is never the log"
+    );
+}
+
+/// `--record` and `--replay` are exclusive, and neither may repeat.
+#[test]
+fn run_record_and_replay_are_exclusive() {
+    for args in [
+        &["Main.ipe", "--record", "--replay"][..],
+        &["Main.ipe", "--replay", "--record"][..],
+        &["Main.ipe", "--record", "--record"][..],
+        &["Main.ipe", "--replay", "a.ipemsgs", "--replay"][..],
+    ] {
+        let result = parse_run(&v(args));
+        assert!(
+            result.is_err(),
+            "{args:?} must be rejected, got: {:?}",
+            result.map(|a| a.session)
+        );
+    }
 }
 
 /// `--record` takes no value.
@@ -365,7 +406,7 @@ fn run_record_takes_no_path() {
     assert!(
         result.is_err(),
         "a path after --record must be rejected, got: {:?}",
-        result.map(|a| a.record)
+        result.map(|a| a.session)
     );
 }
 

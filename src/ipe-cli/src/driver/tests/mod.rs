@@ -2661,41 +2661,66 @@ fn artifact_size_bytes_surfaces_a_missing_artifact_as_a_typed_error() {
     );
 }
 
-// ── `ipe run --record` — refusals ──────────────────────────────────────────
+// ── `ipe run --record` / `--replay` — refusals ─────────────────────────────
 
-// Recording is refused, before any build, for every shape without a recordable
-// cli/worker update loop — never a run that silently writes no log.
+// Recording and replay are refused, before any build, for every shape without
+// a cli/worker update loop — never a run that silently writes no log, nor a
+// replay that silently runs the app live.
 #[test]
-fn record_is_refused_for_shapes_without_a_session() {
+fn session_is_refused_for_shapes_without_a_session() {
     let entry = Path::new("Main.ipe");
-    for shape in [
-        crate::delivery::Shape::Script,
-        crate::delivery::Shape::Tui,
-        crate::delivery::Shape::Web,
-    ] {
-        let result = gate_record(shape, CompileTarget::Native, None, None, entry);
-        assert!(
-            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
-            "--record on {shape:?} must be refused, got: {result:?}"
-        );
+    for flag in ["--record", "--replay"] {
+        for shape in [
+            crate::delivery::Shape::Script,
+            crate::delivery::Shape::Tui,
+            crate::delivery::Shape::Web,
+        ] {
+            let result = gate_session(flag, shape, CompileTarget::Native, None, None, entry);
+            assert!(
+                matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains(flag)),
+                "{flag} on {shape:?} must be refused, got: {result:?}"
+            );
+        }
     }
 }
 
 // A cli app run under `--target wasi` executes in wasmtime, where the recorder
-// dump is not wired: refused rather than recording nothing.
+// is not wired: refused rather than recording nothing or replaying live.
 #[test]
-fn record_is_refused_for_a_wasi_run() {
-    let result = gate_record(
-        crate::delivery::Shape::Cli,
-        CompileTarget::WasmWasi,
-        None,
-        None,
-        Path::new("Main.ipe"),
-    );
+fn session_is_refused_for_a_wasi_run() {
+    for flag in ["--record", "--replay"] {
+        let result = gate_session(
+            flag,
+            crate::delivery::Shape::Cli,
+            CompileTarget::WasmWasi,
+            None,
+            None,
+            Path::new("Main.ipe"),
+        );
+        assert!(
+            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("wasi")),
+            "{flag} with --target wasi must be refused, got: {result:?}"
+        );
+    }
+}
+
+// A replay whose log does not exist is refused before any build, naming the
+// path and the way to record one.
+#[test]
+fn replay_of_a_missing_log_is_refused_before_building() {
+    let dir = std::env::temp_dir().join(format!("ipe_replay_missing_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let result = replay_env(dir.join("absent.ipemsgs"));
     assert!(
-        matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("wasi")),
-        "--record with --target wasi must be refused, got: {result:?}"
+        matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+        "a missing replay log must be refused"
     );
+}
+
+// The default replay log is the typed sibling of the trace `--record` writes.
+#[test]
+fn default_replay_log_is_the_typed_sibling_of_the_trace() {
+    assert_eq!(typed_log_file(), Path::new("session.ipemsgs"));
 }
 
 // -----------------------------------------------------------------------

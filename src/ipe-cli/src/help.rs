@@ -533,7 +533,11 @@ const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "[--record]",
-                desc: "cli/worker apps: record the TEA session to out/session.ipelog, one plain `<msg> => <model>` line per step",
+                desc: "cli/worker apps: record the TEA session to out/session.ipelog (one plain `<msg> => <model>` line per step) and, when its Msg is encodable, a replayable out/session.ipemsgs",
+            },
+            Opt {
+                flag: "[--replay [<log>]]",
+                desc: "cli/worker apps: re-fold a recorded session (default: out/session.ipemsgs) from init with no Cmd fired, printing each step and the final model; a log from a changed program is refused",
             },
             Opt {
                 flag: "[-q|--quiet]",

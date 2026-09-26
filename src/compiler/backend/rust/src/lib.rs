@@ -2839,6 +2839,19 @@ impl<'a> EmitCtx<'a> {
             .unwrap_or(true)
     }
 
+    /// Does this program emit `serde` derives on its serde-legal types?
+    ///
+    /// Both browser shapes route seal types through serde (the Web session
+    /// store, the `CustomElement` down/up seam), and a `--debugger` build encodes
+    /// a cli/worker session's `Msg` (and, when legal, `Model`) into the typed
+    /// session log `ipe run --replay` reads. The derive only ever lands on a
+    /// type the serde fixpoint proved derivable, so widening this gate is
+    /// cargo-buildable by construction. The ONE predicate every serde derive
+    /// site and the app-crate `serde` dependency read, so they cannot drift.
+    pub(crate) const fn derives_serde(&self) -> bool {
+        self.uses_web || self.uses_webview || self.debugger
+    }
+
     /// Is user enum `sym`'s rendered Rust type `Clone` (every variant payload
     /// carrier is `Clone`, including the promoted `Arc<dyn Fn>` `SharedFun`
     /// slot)? Resolved from the whole-program Clone fixpoint at [`Self::build`].

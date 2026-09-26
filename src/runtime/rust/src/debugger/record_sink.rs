@@ -1,6 +1,12 @@
 //! The cli/worker record sink — dump a recorded session's portable replay log
 //! to the destination named by `IPE_DEBUGGER_RECORD`, fail-closed to plain text.
 //!
+//! Beside a file destination it also writes the session's typed log (same
+//! stem, extension [`crate::TYPED_LOG_EXTENSION`]) through the program's
+//! [`SessionCodec`] — the replayable form `ipe run --replay` reads. A program
+//! with no typed log (see [`crate::debugger::session_log`]) gets the trace
+//! only, and any stale typed log from an earlier build is removed.
+//!
 //! Enabled only when the `debugger` feature is active. A non-`--debugger` build
 //! carries zero code from this module.
 //!
@@ -23,10 +29,11 @@
 
 use std::io::Write;
 
-use crate::RECORD_ENV;
 use crate::debugger::RecordBuffer;
+use crate::debugger::session_log::SessionCodec;
 use crate::stringify::IpeStringify;
 use crate::tea::IpeCmd;
+use crate::{RECORD_ENV, TYPED_LOG_EXTENSION};
 
 /// The sentinel `IPE_DEBUGGER_RECORD` value that selects stderr over a file.
 const STDERR_SENTINEL: &str = "-";
@@ -73,7 +80,7 @@ pub fn plain_line(body: &str) -> String {
 ///
 /// Pure: no `Cmd` is fired (a re-fold via [`RecordBuffer::replay_log`]) and no
 /// I/O happens. The blob is bounded by the recorder's ring cap. This is the
-/// testable seam the env-driven [`dump_replay_log`] writes out.
+/// testable seam the env-driven [`dump_session`] writes out.
 #[must_use]
 pub fn render_replay_blob<Msg, Model, F>(buf: &RecordBuffer<Msg, Model>, update: &F) -> String
 where
@@ -143,17 +150,48 @@ fn replace_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     })
 }
 
-/// Dump `buf`'s portable replay log to the destination named by
-/// `IPE_DEBUGGER_RECORD`, if that variable is set. A no-op when it is unset.
+/// Write the typed log for `buf` beside the trace at `trace`.
 ///
-/// The dump is rendered by [`render_replay_blob`] (plain, bounded by the ring
-/// cap, no `Cmd` fired) and written to the parsed [`RecordDest`], so a
-/// redirected log or file receives only plain, control-free lines.
-pub fn dump_replay_log<Msg, Model, F>(buf: &RecordBuffer<Msg, Model>, update: &F)
+/// A program with no typed log removes any stale one instead, so a replay can
+/// never pick up a log an earlier build of the program wrote. Failures are
+/// swallowed like every record write.
+fn write_typed_log<Msg, Model, C>(
+    trace: &std::path::Path,
+    buf: &RecordBuffer<Msg, Model>,
+    codec: &C,
+) where
+    C: SessionCodec<Msg, Model>,
+{
+    let typed = trace.with_extension(TYPED_LOG_EXTENSION);
+    if typed == trace {
+        return;
+    }
+    match codec.encode(buf) {
+        Ok(bytes) => {
+            let _ = replace_file(&typed, &bytes);
+        }
+        Err(_) => {
+            // `remove_file` on a symlink removes the link, never its target.
+            if std::fs::symlink_metadata(&typed).is_ok() {
+                let _ = std::fs::remove_file(&typed);
+            }
+        }
+    }
+}
+
+/// Dump `buf`'s session to the destination named by `IPE_DEBUGGER_RECORD`, if
+/// that variable is set; a no-op when it is unset.
+///
+/// The plain trace is rendered by [`render_replay_blob`] (plain, bounded by the
+/// ring cap, no `Cmd` fired) and written to the parsed [`RecordDest`], so a
+/// redirected log or file receives only plain, control-free lines. A file
+/// destination also gets the typed log beside it (see [`write_typed_log`]).
+pub fn dump_session<Msg, Model, F, C>(buf: &RecordBuffer<Msg, Model>, update: &F, codec: &C)
 where
     Msg: Clone + IpeStringify,
     Model: Clone + IpeStringify,
     F: Fn(Msg, Model) -> (Model, IpeCmd<Msg>),
+    C: SessionCodec<Msg, Model>,
 {
     let Ok(raw) = std::env::var(RECORD_ENV) else {
         return;
@@ -161,6 +199,9 @@ where
     let dest = RecordDest::parse(&raw);
     let blob = render_replay_blob(buf, update);
     write_blob(&dest, &blob);
+    if let RecordDest::Path(path) = &dest {
+        write_typed_log(path, buf, codec);
+    }
 }
 
 #[cfg(test)]
@@ -299,6 +340,26 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&victim).ok().as_deref(),
             Some("keep")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A program with no typed log removes a stale one beside the trace, so a
+    // replay never reads a log an earlier build wrote.
+    #[test]
+    fn trace_only_program_removes_stale_typed_log() {
+        use crate::debugger::session_log::{TraceOnly, Unreplayable};
+        let dir = std::env::temp_dir().join(format!("ipe_record_typed_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(std::fs::create_dir_all(&dir).is_ok(), "make scratch dir");
+        let trace = dir.join("session.ipelog");
+        let typed = dir.join("session.ipemsgs");
+        assert!(std::fs::write(&typed, "stale").is_ok(), "plant stale log");
+        let buf: RecordBuffer<Msg, Model> = RecordBuffer::new(Model { n: 0 }, 8);
+        write_typed_log(&trace, &buf, &TraceOnly(Unreplayable::MsgNotEncodable));
+        assert!(
+            std::fs::symlink_metadata(&typed).is_err(),
+            "the stale typed log must be removed"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

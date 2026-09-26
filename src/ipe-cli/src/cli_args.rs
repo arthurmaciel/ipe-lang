@@ -347,6 +347,22 @@ fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str, command: &str) -> Res
     Ok(())
 }
 
+/// Select `ipe run`'s session mode, refusing a second `--record` / `--replay`.
+fn set_session(slot: &mut SessionMode, mode: SessionMode) -> Result<(), CliError> {
+    if let Some(first) = slot.flag() {
+        let second = mode.flag().unwrap_or(first);
+        return Err(CliError::UsageOwned(if first == second {
+            format!("ipe run: {first} given more than once")
+        } else {
+            format!(
+                "ipe run: {first} and {second} cannot be combined — record a session, then replay it"
+            )
+        }));
+    }
+    *slot = mode;
+    Ok(())
+}
+
 /// Pull the value that follows a value-taking flag, or fail with a message
 /// naming the flag whose argument is missing (rather than the generic synopsis).
 ///
@@ -770,6 +786,40 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     })
 }
 
+/// What `ipe run` does with a cli/worker app's TEA session.
+///
+/// One value, so a run that both records and replays is unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SessionMode {
+    /// Run live; record nothing.
+    #[default]
+    Live,
+    /// `--record` — run live and write the session into the output root.
+    Record,
+    /// `--replay [<log>]` — re-fold a recorded log instead of running live.
+    ///
+    /// `None` reads the log `--record` last wrote into the output root.
+    Replay(Option<String>),
+}
+
+impl SessionMode {
+    /// `true` for an ordinary live run that neither records nor replays.
+    #[must_use]
+    pub const fn is_live(&self) -> bool {
+        matches!(self, Self::Live)
+    }
+
+    /// The flag that selected this mode, for messages; `None` when live.
+    #[must_use]
+    pub const fn flag(&self) -> Option<&'static str> {
+        match self {
+            Self::Live => None,
+            Self::Record => Some("--record"),
+            Self::Replay(_) => Some("--replay"),
+        }
+    }
+}
+
 /// Fully-parsed `ipe run` arguments.
 pub struct RunArgs {
     /// The positional entry (`None` → project-aware default).
@@ -796,12 +846,14 @@ pub struct RunArgs {
     /// the emitted runtime loop. Absent from `ipe release` so the debugger can
     /// never ship in a production artifact.
     pub debugger: bool,
-    /// `--record` — record a cli/worker app's TEA session.
+    /// `--record` / `--replay [<log>]` — record a cli/worker app's TEA session,
+    /// or re-fold a recorded one.
     ///
-    /// Forces `debugger` on and has the runtime dump its bounded, plain replay
-    /// log (one `"<msg> => <model>"` line per step) into the output root on
-    /// exit.
-    pub record: bool,
+    /// Either forces `debugger` on. `--record` has the runtime dump the bounded,
+    /// plain trace (one `"<msg> => <model>"` line per step) and the typed log
+    /// into the output root on exit; `--replay` has it fold the typed log with
+    /// every `Cmd` discarded and print each step.
+    pub session: SessionMode,
     /// Arguments after `--`, forwarded verbatim to the compiled binary.
     pub bin_args: Vec<String>,
     /// `--json` — emit each diagnostic as a stable JSON object instead of the
@@ -843,7 +895,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     let mut runtime: Option<String> = None;
     let mut accept_risks = false;
     let mut debugger = false;
-    let mut record = false;
+    let mut session = SessionMode::Live;
     let mut quiet = false;
     let mut static_flags = StaticFlags::default();
     let mut format: Option<OutputFormat> = None;
@@ -869,7 +921,13 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
             )?,
             "--accept-risks" => accept_risks = true,
             "--debugger" => debugger = true,
-            "--record" => record = true,
+            "--record" => set_session(&mut session, SessionMode::Record)?,
+            "--replay" => {
+                // Every positional precedes the flags, so a non-flag token
+                // right after `--replay` can only be its log path.
+                let log = it.next_if(|next| !next.starts_with('-')).cloned();
+                set_session(&mut session, SessionMode::Replay(log))?;
+            }
             "-q" | "--quiet" => quiet = true,
             other => {
                 return Err(usage_unknown_flag("run", other));
@@ -926,7 +984,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
         wasm,
         accept_risks,
         debugger,
-        record,
+        session,
         bin_args,
         format: format.unwrap_or_default(),
         quiet,

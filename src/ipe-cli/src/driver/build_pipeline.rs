@@ -775,6 +775,7 @@ pub fn compile_modules_observed(
         options.target,
         &options.wasm_public_env,
         options.production,
+        options.debugger,
         options.hot_appearance,
         options.webview_host,
         options.webview_window.as_ref(),

@@ -2249,36 +2249,67 @@ fn wasi_artifact_path(messages: &str, out_dir: &Path) -> Result<PathBuf, CliErro
     )))
 }
 
-/// Inject `IPE_DEBUGGER_RECORD` into a child `Command` when this is a recording
-/// run, so the emitted runtime dumps its bounded replay log to `dest` on exit.
-/// A no-op for an ordinary run (`dest` is `None`).
+/// The session env a recording or replaying child gets.
 ///
-/// The variable name is the runtime's own [`ipe_runtime_rust::RECORD_ENV`]
-/// constant — one source of truth for the wire name across the two crates, never
-/// a hand-duplicated literal.
-fn set_record_env(cmd: &mut std::process::Command, dest: Option<&Path>) {
-    if let Some(path) = dest {
-        cmd.env(ipe_runtime_rust::RECORD_ENV, path.as_os_str());
+/// Parsed once from [`cli_args::SessionMode`] and the output root, so the exec
+/// sites never re-derive a path.
+pub enum SessionEnv {
+    /// An ordinary run: no session variable.
+    Live,
+    /// `--record`: the runtime dumps the trace (and the typed log beside it) here.
+    Record(PathBuf),
+    /// `--replay`: the runtime re-folds the typed log here instead of running.
+    Replay(PathBuf),
+}
+
+/// Inject the session variable into a child `Command`; a no-op for a live run.
+///
+/// The variable names are the runtime's own [`ipe_runtime_rust::RECORD_ENV`] /
+/// [`ipe_runtime_rust::REPLAY_ENV`] constants — one source of truth for the wire
+/// names across the two crates, never hand-duplicated literals.
+fn set_session_env(cmd: &mut std::process::Command, session: &SessionEnv) {
+    match session {
+        SessionEnv::Live => {}
+        SessionEnv::Record(path) => {
+            cmd.env(ipe_runtime_rust::RECORD_ENV, path.as_os_str());
+        }
+        SessionEnv::Replay(path) => {
+            cmd.env(ipe_runtime_rust::REPLAY_ENV, path.as_os_str());
+        }
     }
 }
 
-/// The replay-log file an `ipe run --record` session writes in the output root.
+/// The plain trace an `ipe run --record` session writes in the output root.
 pub const RECORD_LOG_FILE: &str = "session.ipelog";
 
-/// Refuse `ipe run --record` for a program whose session cannot be recorded.
+/// The typed log an `ipe run --record` session writes beside the trace — the
+/// log `ipe run --replay` reads by default.
 ///
-/// A record request never silently yields no log.
+/// Derived from the runtime's [`ipe_runtime_rust::TYPED_LOG_EXTENSION`], the
+/// same rule the recorder applies, so the two can never name different files.
+#[must_use]
+pub fn typed_log_file() -> PathBuf {
+    Path::new(RECORD_LOG_FILE).with_extension(ipe_runtime_rust::TYPED_LOG_EXTENSION)
+}
+
+/// Refuse `ipe run --record` / `--replay` for a program whose session cannot
+/// be recorded or replayed.
+///
+/// A record request never silently yields no log, and a replay request never
+/// silently runs the app live.
 ///
 /// The recorder lives in the cli (`Cli.tea`) and worker (`Worker.tea`) update
-/// loops and dumps its log from the directly executed native binary; a script
-/// or TUI/web app has no such loop, a `--target wasi` run executes in wasmtime,
-/// and a native-bearing program runs inside the jail, where the log destination
-/// is not writable.
+/// loops and dumps (or replays) its log from the directly executed native
+/// binary; a script or TUI/web app has no such loop, a `--target wasi` run
+/// executes in wasmtime, and a native-bearing program runs inside the jail,
+/// where the log is not reachable.
 ///
 /// # Errors
-/// [`CliError::UsageOwned`] naming why the session cannot be recorded; the
-/// capability-resolution errors of [`run_sandbox::resolve_for_run`].
-pub fn gate_record(
+/// [`CliError::UsageOwned`] naming why the session cannot be recorded or
+/// replayed; the capability-resolution errors of
+/// [`run_sandbox::resolve_for_run`].
+pub fn gate_session(
+    flag: &str,
     shape: delivery::Shape,
     compile_target: CompileTarget,
     manifest: Option<&project::ProjectManifest>,
@@ -2293,24 +2324,67 @@ pub fn gate_record(
     };
     if let Some(name) = shape_name {
         return Err(CliError::UsageOwned(format!(
-            "ipe run --record: {name} has no recordable session — recording captures the \
-             update loop of a `Cli.tea` or `Worker.tea` app"
+            "ipe run {flag}: {name} has no recordable session — recording and replay \
+             capture the update loop of a `Cli.tea` or `Worker.tea` app"
         )));
     }
     if compile_target.is_wasm() {
-        return Err(CliError::UsageOwned(
-            "ipe run --record: records a native run only — drop `--target wasi`".to_owned(),
-        ));
+        return Err(CliError::UsageOwned(format!(
+            "ipe run {flag}: works on a native run only — drop `--target wasi`"
+        )));
     }
     let resolved = run_sandbox::resolve_for_run(manifest, manifest_path, entry_path)?;
     if run_sandbox::is_native_bearing(&resolved.union()) {
-        return Err(CliError::UsageOwned(
-            "ipe run --record: a native-bearing program runs jailed, where the session log \
-             cannot be written — record a pure Ipê build of the app"
-                .to_owned(),
-        ));
+        return Err(CliError::UsageOwned(format!(
+            "ipe run {flag}: a native-bearing program runs jailed, where the session log \
+             cannot be reached — record and replay a pure Ipê build of the app"
+        )));
     }
     Ok(())
+}
+
+/// Resolve the session env for a run, once the output root is known.
+///
+/// A replay's log must exist as a regular file before anything is built, so a
+/// missing log is refused up front instead of after a full build; the runtime
+/// then reads it through its own capped, fail-closed decoder.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] when the replay log is missing or not a file; the
+/// output-root errors of claiming the log path.
+pub fn resolve_session_env(
+    session: &cli_args::SessionMode,
+    output: &OutputRoot,
+) -> Result<SessionEnv, CliError> {
+    match session {
+        cli_args::SessionMode::Live => Ok(SessionEnv::Live),
+        cli_args::SessionMode::Record => Ok(SessionEnv::Record(
+            output.claim()?.path_to(RECORD_LOG_FILE)?.path(),
+        )),
+        cli_args::SessionMode::Replay(log) => {
+            let path = match log {
+                Some(explicit) => PathBuf::from(explicit),
+                None => output.claim()?.path_to(typed_log_file())?.path(),
+            };
+            replay_env(path)
+        }
+    }
+}
+
+/// The replay env for the log at `path`, refused unless it is a regular file.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] naming the path and how to record a log.
+pub fn replay_env(path: PathBuf) -> Result<SessionEnv, CliError> {
+    if !std::fs::metadata(&path).is_ok_and(|meta| meta.is_file()) {
+        return Err(CliError::UsageOwned(format!(
+            "ipe run --replay: no session log at {} — record one with `ipe run --record` \
+             (an app whose Msg carries a Secret or another unencodable value is recorded as a \
+             trace only and cannot be replayed)",
+            path.display()
+        )));
+    }
+    Ok(SessionEnv::Replay(path))
 }
 
 /// `ipe run [<path>]` — compile a program and run the resulting binary.
@@ -2348,17 +2422,20 @@ pub fn run_run_body(rest: &[String]) -> Result<(), CliError> {
 /// Execute a fully-parsed `ipe run`: compile → cargo build → jailed exec.
 ///
 /// With `--record`, `IPE_DEBUGGER_RECORD` is injected into the executed child
-/// so the runtime dumps the session's replay log into the output root on exit.
+/// so the runtime dumps the session's trace and typed log into the output root
+/// on exit; with `--replay`, `IPE_DEBUGGER_REPLAY` names the typed log the child
+/// re-folds instead of running live.
 // A linear pipeline (compile → cargo build → resolve capabilities → jail →
 // exec); the steps share enough locals that splitting reads worse than the whole.
 #[allow(clippy::too_many_lines)]
 pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     let output_format = args.format;
-    // A recording run compiles the debugger in unconditionally: the runtime
-    // recorder and its replay-log dump are `#[cfg(feature = "debugger")]`, so a
-    // record with the feature absent would silently produce no log.
-    let debugger = args.debugger || args.record;
-    let record = args.record;
+    // A recording or replaying run compiles the debugger in unconditionally:
+    // the runtime recorder, its log dump and its replay are all
+    // `#[cfg(feature = "debugger")]`, so without the feature a record would
+    // silently produce no log and a replay would silently run the app live.
+    let session = args.session;
+    let debugger = args.debugger || !session.is_live();
     let bin_args = args.bin_args;
     let cli_layer = args.static_layer;
     // The CLI `--target` flavour (`--target wasi` selects the co-located WASI
@@ -2447,8 +2524,9 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         wasi_run::ensure_available()?;
     }
 
-    if record {
-        gate_record(
+    if let Some(flag) = session.flag() {
+        gate_session(
+            flag,
             delivery.shape(),
             compile_target,
             manifest_parsed.as_ref(),
@@ -2528,11 +2606,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     let output = resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
     let out_dir = output.area_path(&[OutputArea::Rust])?;
     // The session log lands in the ipe-owned output root, never beside sources.
-    let record_log = if record {
-        Some(output.claim()?.path_to(RECORD_LOG_FILE)?.path())
-    } else {
-        None
-    };
+    let session_env = resolve_session_env(&session, &output)?;
 
     manifest.as_ref().map_or_else(
         || {
@@ -2690,7 +2764,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         // proceeded unconfined after the recorded-consent warning: run directly.
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(&bin_args);
-        set_record_env(&mut cmd, record_log.as_deref());
+        set_session_env(&mut cmd, &session_env);
         let err = cmd.exec();
         Err(CliError::Io {
             path: bin,
@@ -2719,7 +2793,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
         }
         let mut cmd = std::process::Command::new(&bin);
         cmd.args(&bin_args);
-        set_record_env(&mut cmd, record_log.as_deref());
+        set_session_env(&mut cmd, &session_env);
         let status = cmd.status().map_err(|e| CliError::Io {
             path: bin,
             source: e,
