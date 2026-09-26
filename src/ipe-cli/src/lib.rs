@@ -89,11 +89,12 @@ pub(crate) use ipe_intern::Interner;
 mod driver;
 
 pub use driver::{
-    AdvisoryVulnerablePayload, BuildOptions, CliError, INSTALL_SH_URL, RuntimeContext, apply_fixes,
-    bluegreen_enabled, build, build_project, build_project_with_options, build_with_options,
-    build_with_sibling_discovery, build_with_sibling_discovery_with_options, code_index,
-    compile_prepared, create_source_root, emit_ir_text, explain_lookup, hot_appearance_enabled,
-    infer_package_capabilities, resolve_runtime, run_cli, run_upgrade, runtime_dep_from_env,
+    AdvisoryVulnerablePayload, BuildOptions, CliError, INSTALL_SH_URL, PackageSourceSet,
+    RuntimeContext, apply_fixes, bluegreen_enabled, build, build_project,
+    build_project_with_options, build_with_options, build_with_sibling_discovery,
+    build_with_sibling_discovery_with_options, code_index, compile_prepared, create_source_root,
+    emit_ir_text, explain_lookup, hot_appearance_enabled, infer_package_capabilities,
+    infer_package_capabilities_in, resolve_runtime, run_cli, run_upgrade, runtime_dep_from_env,
     select_non_overlapping, verify_capabilities, watch_banner_enabled,
 };
 // Crate-internal driver items reached as `crate::…` by sibling modules
