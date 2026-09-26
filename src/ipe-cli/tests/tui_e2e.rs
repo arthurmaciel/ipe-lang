@@ -2,10 +2,10 @@
 //! `Cells.el`, `Cells.text`, and `String.fromInt`.
 //!
 //! Non-E2E tests (no `IPE_E2E` required):
-//! - `tui_onkey_record_typechecks` — ipe-level regression for the `onKey :
-//!   KeyEvent -> Msg` record scheme fix (T0001); verifies `Tui.tea`
-//!   accepts a single-argument record-typed key handler and that the emitter
-//!   generates the bridging wrapper closure.
+//! - `tui_onkey_record_typechecks` — ipe-level regression for the
+//!   `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg` record scheme (T0001);
+//!   verifies a single-argument record-typed key handler is accepted and that
+//!   the emitter generates the bridging wrapper closure.
 //!
 //! E2E tests (gated on `IPE_E2E=1`):
 //! - `tui_counter_build_only` — full ipe + cargo build with `Tui.tea`
@@ -26,7 +26,8 @@
 //!
 //! ```text
 //! Tui.tea cfg → constrain → lower → emit_tui_call →
-//!     ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)
+//!     ipe_runtime::tui::tui_app_ui(init, update, view, subs)
+//! Sub.onKey handler → emit_tea_call → tui_sub_on_key(|kind, value| …)
 //! ```
 //!
 //! The headless render assertion — does `view` produce a frame containing `0`?
@@ -42,12 +43,12 @@
 
 /// A minimal `Tui.tea` counter exercising the `Tui.tea` scheme.
 ///
-/// `onKey` is a SINGLE-argument record handler — `KeyEvent -> Msg` — matching
-/// the reference compiler scheme (`any -> msg`).  The emitter generates the
-/// bridging closure:
+/// Key input is a subscription: `subscriptions` returns `Sub.onKey onKey`, and
+/// `onKey` is a SINGLE-argument record handler — `KeyEvent -> Msg`.  The
+/// emitter binds the handler and generates the bridging closure:
 ///
 /// ```text
-/// |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
+/// move |kind: String, value: String| __ipe_on_key(RecKindValue { kind, value })
 /// ```
 ///
 /// The curried `String -> String -> Msg` shape is not valid under the
@@ -65,7 +66,7 @@ import Ipe.Ui.Cells as Cells
 import Ipe.Ui.Cells exposing (Screen)
 import Ipe.Tea.Terminal.Cmd
 import Ipe.String
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Tui.Sub
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -94,7 +95,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 onKey : KeyEvent -> Msg
 onKey _ =
@@ -106,7 +107,6 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onKey = onKey
         }
 ";
 
@@ -141,22 +141,17 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     Ok(std::path::PathBuf::from(exe))
 }
 
-/// **Regression for T0001**: `Tui.tea` must accept
+/// **Regression for T0001**: `Tui.Sub.onKey` must accept a handler
 /// `onKey : KeyEvent -> Msg` where `KeyEvent = { kind : String,
 /// value : String }` (a SINGLE-argument record handler).
 ///
-/// Typing `onKey` as `String -> String -> Msg` (two curried String arguments)
-/// would cause `IPE-T0001` at the `Tui.tea` call site, since example
-/// code uses the record-alias shape.
-///
-/// After the fix, the scheme PINS the key-event argument to the closed
-/// record `{ kind : String, value : String }` (the reference compiler types it
-/// `any -> msg` but we fail at compile time — same sanctioned tightening as
-/// the Model / Msg gates).
-/// The emitter generates a bridging wrapper:
+/// The scheme PINS the key-event argument to the closed record
+/// `{ kind : String, value : String }`, so a handler of any other argument
+/// type fails at compile time (same sanctioned tightening as the Model / Msg
+/// gates). The emitter generates a bridging wrapper:
 ///
 /// ```text
-/// |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
+/// move |kind: String, value: String| __ipe_on_key(RecKindValue { kind, value })
 /// ```
 ///
 /// What this test proves and what it does NOT: it typechecks the program
@@ -223,7 +218,7 @@ fn tui_onkey_record_typechecks() {
         combined
     }
 
-    // ── Tui.tea with `onKey : KeyEvent -> Msg` ────────────────────
+    // ── Tui.tea subscribing with `Sub.onKey : (KeyEvent -> Msg) -> Sub Msg` ──
     let app_rs = compile_ok("terminal_app_screen", IPE_TUI_COUNTER);
     if app_rs.is_empty() {
         return; // runtime unavailable — structural assertions skipped
@@ -272,12 +267,13 @@ fn tui_onkey_record_typechecks() {
 /// This is a BUILD-ONLY test — it does not spawn the binary (Tui requires a
 /// real TTY).  A successful `cargo build` is the assertion:
 ///
-/// * constrain: `Tui.tea` correctly types the 5-field cfg with a
-///   record-typed `onKey : KeyEvent -> Msg` handler.
+/// * constrain: `Tui.tea` correctly types the closed 4-field cfg, and
+///   `Sub.onKey` a record-typed `onKey : KeyEvent -> Msg` handler.
 /// * lower: the cfg record literal bypasses IPE-L0107 (same exemption
 ///   as `Web.tea`).
-/// * emit: `emit_tui_call` delegates to `tui_app_ui(…)` with the five
-///   handler arguments correctly emitted, including the `|kind, value|` wrapper.
+/// * emit: `emit_tui_call` delegates to `tui_app_ui(…)` with the four
+///   handler arguments, and `Sub.onKey` emits `tui_sub_on_key` with the
+///   `|kind, value|` wrapper.
 /// * manifest: `tui_cargo_toml` adds `"tui"` to default features,
 ///   `crossterm` + `unicode-width` deps, and `"sync"` to tokio.
 ///

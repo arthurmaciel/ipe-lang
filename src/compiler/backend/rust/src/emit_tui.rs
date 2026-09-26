@@ -1,46 +1,37 @@
-//! Emission for the `Ipe.Terminal` full-screen app-entry.
+//! Emission for the `Ipe.Terminal` full-screen app-entry and its key input.
 //!
 //! * [`KernelFn::TerminalAppScreen`] — `Tui.tea cfg` →
 //!   `ipe_runtime::tui::tui_app_ui(…)`. View returns `Element<Msg>` (the Ipe.Ui
-//!   typed element tree, rendered to ANSI cells by the runtime). 5-field cfg
-//!   (init / update / view / subscriptions / onKey) with an open row tail for
-//!   optional fields.
+//!   typed element tree, rendered to ANSI cells by the runtime). The cfg is the
+//!   canonical, closed 4-field TEA record (init / update / view /
+//!   subscriptions); key input is a subscription.
+//! * [`key_event_bridge`] — the `Tui.Sub.onKey` handler bridge, used by the TEA
+//!   kernel emitter for [`KernelFn::TuiSubOnKey`].
 //!
-//! # `onKey` dispatch bridge
+//! # `KeyEvent` bridge
 //!
-//! The Rust runtime signature is `FOnKey: Fn(String, String) -> Msg` — the two
-//! `String` arguments are the key's `kind` and `value` as extracted from the
-//! [`ipe_runtime::tui::TuiKey`] struct.
-//!
-//! Ipê user code writes `onKey : KeyEvent -> Msg` where `KeyEvent` is typically a
-//! record alias `{ kind : String, value : String }`.  Because `FOnKey` takes two
-//! bare `String`s — not a record — the emitter generates a wrapper closure when
-//! `on_key_e` is a named function whose first parameter is a CLOSED record of all-
-//! `String` fields with `kind` and `value` present:
+//! The runtime delivers each key as two bare `String`s — its `kind` and `value`
+//! (`ipe_runtime::tui_sub_on_key` takes `Fn(String, String) -> Msg`). Ipê code
+//! writes `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg`, whose scheme pins
+//! `KeyEvent` to the closed record `{ kind : String, value : String }`. The
+//! emitter binds the handler once and wraps it in a closure that builds that
+//! record from the two strings:
 //!
 //! ```text
-//! // Ipê source:  onKey : { kind : String, value : String } -> Msg
+//! // Ipê source:  Sub.onKey KeyPressed
 //! // Emitted:
-//! |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
+//! tui_sub_on_key({ let __ipe_on_key = <handler>;
+//!     move |kind: String, value: String| __ipe_on_key(RecKindValue { kind, value }) })
 //! ```
 //!
-//! For records with additional String fields (e.g. `{ ctrl, kind, shift, value }`),
-//! the wrapper fills the runtime-supplied `kind` and `value` and initialises every
-//! other String field to an empty string.  Non-String fields (Bool, Int, …) are
-//! initialised to their zero value.  This matches what the runtime does via
-//! reflection: fields not present in the runtime key-event struct receive their
-//! zero value.
-//!
-//! If the record's argument is not a `FuncValue` (i.e., `onKey` is a lambda or a
-//! local variable), the standard [`emit_tui_fn`] fallback applies; `cargo` will
-//! then check type compatibility.
+//! The wrapper applies to EVERY handler expression — a named function, a
+//! lambda, a constructor, a partial application, a local — because the record
+//! shape comes from the pinned scheme, not from the handler's syntax. There is
+//! no unwrapped fallback whose arity the runtime bound would reject at `cargo`
+//! time.
 //!
 //! # Correctness constraints (MAKE INVALID STATES UNREPRESENTABLE)
 //!
-//! * `onKey` MUST be present: the runtime calls `on_key(kind, value)` on every key
-//!   event and returns a `Msg` (not `Option`).  There is no total way to fabricate
-//!   a `Msg` without the handler; omitting it would leave `FOnKey` generic
-//!   unconstrained (Rust E0282) or produce a runtime-panic/unsound path.
 //! * Function fields are emitted via [`emit_tui_fn`] (raw function name for
 //!   `FuncValue`, fallback to `emit_expr_at` for lambdas).  A named `fn` item
 //!   satisfies `Send + Sync + 'static` via the blanket impl; a `Box<dyn Fn>` does
@@ -76,10 +67,10 @@ pub fn emit_tui_call(
     };
 
     match k {
-        // ── Tui.tea { init, update, view, subscriptions, onKey } ─
+        // ── Tui.tea { init, update, view, subscriptions } ─
         //
         // view : Model -> Cells Msg
-        // Runtime entry: `ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)`
+        // Runtime entry: `ipe_runtime::tui::tui_app_ui(init, update, view, subs)`
         KernelFn::TerminalAppScreen => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -106,9 +97,45 @@ pub fn emit_tui_call(
     }
 }
 
+/// Wrap an emitted `Tui.Sub.onKey` handler (`KeyEvent -> msg`) as the runtime's
+/// flat `Fn(String, String) -> msg` key handler.
+///
+/// `handler_src` is the handler expression as already emitted. It is bound once
+/// (so it is evaluated once, not per key) and applied to the `KeyEvent` struct
+/// built from the runtime's `(kind, value)` pair. The struct is the one the
+/// backend synthesised for the scheme-pinned `{ kind : String, value : String }`
+/// record — the lowerer surfaces it from the kernel's solved type.
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] if the `KeyEvent` field names were never interned
+/// or no struct was synthesised for the record shape — both internal invariant
+/// violations for a program that type-checked a `Tui.Sub.onKey` call.
+pub(crate) fn key_event_bridge(ctx: &EmitCtx, handler_src: &str) -> DResult<String> {
+    let struct_name = key_event_struct_name(ctx)?;
+    Ok(format!(
+        "{{ let __ipe_on_key = {handler_src}; \
+         move |kind: String, value: String| \
+         __ipe_on_key({struct_name} {{ kind, value }}) }}"
+    ))
+}
+
+/// The generated Rust struct name for the pinned `KeyEvent` record
+/// `{ kind : String, value : String }`.
+fn key_event_struct_name(ctx: &EmitCtx) -> DResult<String> {
+    let shape: BTreeMap<ipe_intern::Symbol, IrType> = [
+        (ctx.lookup_symbol("kind")?, IrType::Str),
+        (ctx.lookup_symbol("value")?, IrType::Str),
+    ]
+    .into_iter()
+    .collect();
+    let field_names = ["kind".to_owned(), "value".to_owned()];
+    let name = ctx.record_name_for_literal(&field_names, Some(&IrType::Record(shape)))?;
+    Ok(name.to_owned())
+}
+
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-/// Emit `ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)`.
+/// Emit `ipe_runtime::tui::tui_app_ui(init, update, view, subs)`.
 ///
 /// # Function-field emission
 ///
@@ -123,13 +150,12 @@ fn emit_tui_inner(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Option<String>> {
-    // All five fields are required — fail-closed on any miss (compiler bug, not
-    // user error: the constrain scheme enforces the 5-field shape upstream).
+    // All four fields are required — fail-closed on any miss (compiler bug, not
+    // user error: the constrain scheme enforces the closed 4-field shape upstream).
     let init_e = lookup_field(ctx, fields, "init")?;
     let update_e = lookup_field(ctx, fields, "update")?;
     let view_e = lookup_field(ctx, fields, "view")?;
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
-    let on_key_e = lookup_field(ctx, fields, "onKey")?;
 
     // seal: gate the Model against `tui_app`'s `Clone` bound. A non-clonable
     // (non-derivable) Model — a field of type `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/
@@ -154,168 +180,22 @@ fn emit_tui_inner(
     let update_s = emit_tui_fn(ctx, update_e, indent, child, generics)?;
     let view_s = emit_tui_fn(ctx, view_e, indent, child, generics)?;
     let subs_s = emit_tui_fn(ctx, subs_e, indent, child, generics)?;
-    // `onKey` bridges `FOnKey: Fn(String, String) -> Msg` ↔ user's
-    // `onKey : KeyEvent -> Msg`.  A record-taking `FuncValue` is wrapped in a
-    // closure that unpacks (kind, value) into the struct literal.
-    let on_key_s = emit_tui_on_key(ctx, on_key_e, indent, child, generics)?;
 
     Ok(Some(format!(
         "ipe_runtime::tea::TuiApp(ipe_runtime::tui::tui_app_ui(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
-         {subs_s}, \
-         {on_key_s}\
+         {subs_s}\
          ))"
     )))
-}
-
-/// Emit the `onKey` argument for a Tui app-entry kernel.
-///
-/// The Rust runtime expects `FOnKey: Fn(String, String) -> Msg` — two bare
-/// `String`s for the key's `kind` and `value`.  When the user writes
-/// `onKey : KeyEvent -> Msg` (where `KeyEvent` is a record alias), the emitter
-/// generates a bridging wrapper:
-///
-/// ```text
-/// |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
-/// ```
-///
-/// The rule for wrapper generation:
-///
-/// * The expression must be a [`Expr::FuncValue`] (a top-level named function).
-///   Lambdas and local variables fall through to the plain [`emit_tui_fn`] path;
-///   `cargo` then validates the type compatibility directly.
-/// * The first parameter type must be [`IrType::Record`].
-/// * The struct is looked up via [`EmitCtx::record_name_for_literal`] (the
-///   pre-pass collected every record shape reachable from a signature).
-/// * `kind` and `value` fields must be present (both `IrType::Str`); they map
-///   directly to the runtime parameters.  Any additional String fields receive
-///   `String::new()` as the default; Bool fields receive `false`; Int fields
-///   receive `0i64`.  This mirrors the runtime's zero-value fill for record
-///   fields not supplied by `tuiKeyToIpe`.
-///
-/// Rationale for the default-fill approach: the reference compiler's the backend
-/// handles the `KeyEvent → Msg` bridge via reflection (`IpeCall`), which
-/// zero-initialises fields not present in the runtime struct.  The Rust port
-/// replicates that contract statically at code-generation time.
-fn emit_tui_on_key(
-    ctx: &EmitCtx,
-    e: &Expr,
-    indent: usize,
-    child: u16,
-    generics: GenericScope,
-) -> DResult<String> {
-    // Named function reference whose first parameter is a record: direct
-    // (unboxed) wrapper around the callee name.
-    if let Expr::FuncValue { callee, ty } = e
-        && let IrType::Fun(params, _ret) = ty
-        && let Some(IrType::Record(rec_fields)) = params.first()
-    {
-        return emit_on_key_record_wrapper(ctx, callee, rec_fields);
-    }
-    // Lambda whose first parameter is a record: bind the emitted closure and
-    // apply it inside the flat wrapper. The `TerminalAppScreen` scheme pins
-    // `onKey`'s parameter to the closed `{ kind : String, value : String }`
-    // record, so a well-typed lambda always lands here — leaving it unwrapped
-    // was an exit-0-then-cargo-fail hole (the 1-arg closure broke the
-    // runtime's `FOnKey: Fn(String, String) -> Msg` bound with `E0593`).
-    if let Expr::Lambda { params, .. } = e
-        && let Some((_, IrType::Record(rec_fields))) = params.first()
-    {
-        let inner = emit_tui_fn(ctx, e, indent, child, generics)?;
-        let (struct_name, init_body) = on_key_struct_literal(ctx, rec_fields)?;
-        return Ok(format!(
-            "{{ let __ipe_on_key = {inner}; \
-             move |kind: String, value: String| \
-             __ipe_on_key({struct_name} {{ {init_body} }}) }}"
-        ));
-    }
-    // Residual (local var / other fn-typed exprs): plain emission; `cargo`
-    // validates compatibility. Reaching here with a record-typed handler value
-    // is only possible via a let-bound binding (see the let-bound-cfg gate
-    // family).
-    emit_tui_fn(ctx, e, indent, child, generics)
-}
-
-/// Generate the `|kind: String, value: String| <callee>(<Struct> { … })` wrapper
-/// that bridges the runtime's flat `(String, String)` key event to the user's
-/// record-typed `onKey` function.
-///
-/// Field rules (in the struct literal):
-///
-/// | Field in user's `KeyEvent` | Struct initializer |
-/// |---|---|
-/// | `"kind"` (must be `String`) | `kind` (closure param) |
-/// | `"value"` (must be `String`) | `value` (closure param) |
-/// | any other `String` field | `String::new()` |
-/// | `Bool` field | `false` |
-/// | `Int` field | `0i64` |
-/// | unsupported type | returns `Diagnostic::CompilerBug` |
-fn emit_on_key_record_wrapper(
-    ctx: &EmitCtx,
-    callee: &Callee,
-    rec_fields: &BTreeMap<ipe_intern::Symbol, IrType>,
-) -> DResult<String> {
-    let (struct_name, init_body) = on_key_struct_literal(ctx, rec_fields)?;
-    let fn_name = callee_name(ctx, callee)?;
-    Ok(format!(
-        "|kind: String, value: String| {fn_name}({struct_name} {{ {init_body} }})"
-    ))
-}
-
-/// Resolve the `KeyEvent` record shape to its generated Rust struct name plus
-/// the struct-literal body mapping the flat runtime `(kind, value)` params
-/// (shared by the named-function and lambda wrapper paths).
-fn on_key_struct_literal(
-    ctx: &EmitCtx,
-    rec_fields: &BTreeMap<ipe_intern::Symbol, IrType>,
-) -> DResult<(String, String)> {
-    // Resolve all field symbols to (name, IrType) pairs and sort by name so
-    // the struct literal matches the pre-pass order used by record_name_for_literal.
-    let mut fields: Vec<(String, &IrType)> = rec_fields
-        .iter()
-        .map(|(sym, ty)| ctx.resolve_ident(*sym).map(|n| (n.to_owned(), ty)))
-        .collect::<DResult<_>>()?;
-    fields.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Look up the Rust struct name for this record shape. The full field map is
-    // the disambiguating shape when the name set is shared by two structs.
-    let field_names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
-    let shape = IrType::Record(rec_fields.clone());
-    let struct_name = ctx.record_name_for_literal(&field_names, Some(&shape))?;
-
-    // Build the struct-literal body, mapping runtime params + zero defaults.
-    let mut init_parts: Vec<String> = Vec::with_capacity(fields.len());
-    for (name, ty) in &fields {
-        let part = match ty {
-            IrType::Str if name == "kind" => "kind".to_owned(),
-            IrType::Str if name == "value" => "value".to_owned(),
-            IrType::Str => format!("{name}: String::new()"),
-            IrType::Bool => format!("{name}: false"),
-            IrType::Int => format!("{name}: 0i64"),
-            other => {
-                return Err(Diagnostic::CompilerBug {
-                    where_: "ipe_backend_rust::emit_tui::emit_on_key_record_wrapper",
-                    detail: format!(
-                        "KeyEvent record field `{name}` has unsupported IR type {other:?}; \
-                         the Tui runtime only bridges String, Bool, and Int fields \
-                         from the flat (kind, value) key event"
-                    ),
-                });
-            }
-        };
-        init_parts.push(part);
-    }
-
-    Ok((struct_name.to_owned(), init_parts.join(", ")))
 }
 
 /// Emit a cfg-field expression for a Tui app-entry kernel.
 ///
 /// Mirrors `emit_web_fn` in `emit_web.rs` exactly: for a named function
 /// reference ([`Expr::FuncValue`]), emits the raw callee name (e.g.
-/// `Main_on_key`) rather than a boxed closure.  A named function item satisfies
+/// `Main_update`) rather than a boxed closure.  A named function item satisfies
 /// `Fn(…) + Send + Sync + 'static` via the compiler's blanket impl; a
 /// `Box<dyn Fn(…)>` does NOT carry these bounds without explicit annotation.
 ///

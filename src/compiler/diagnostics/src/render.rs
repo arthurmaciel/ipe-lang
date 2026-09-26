@@ -575,6 +575,10 @@ fn name_prose(msg: &NameError) -> String {
              imports `{shape_ui_module}`, the {shape} view. A script has no `view`, so that UI \
              never reaches the screen."
         ),
+        NameError::InputFieldIsSubscription { entry, field, .. } => format!(
+            "`{field}` is not a `{entry}` config field — terminal input arrives through \
+             `subscriptions`, like every other event."
+        ),
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -1621,6 +1625,12 @@ fn name_label(msg: &NameError) -> Option<String> {
         }
         NameError::ScriptImportsShapeView { shape, entry, .. } => Some(format!(
             "this script has no `view`; did you mean `main = {entry} {{ … }}` to run a {shape} app?"
+        )),
+        NameError::InputFieldIsSubscription {
+            field, sub_module, ..
+        } => Some(format!(
+            "remove `{field}` from the config and subscribe instead: \
+             `import {sub_module} as Sub`, then `subscriptions _ = Sub.{field} {field}`"
         )),
         NameError::RustNameFold { .. } | NameError::Unknown => None,
     }

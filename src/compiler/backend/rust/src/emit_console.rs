@@ -1,20 +1,18 @@
 //! Emission for the `Ipe.Terminal` line-oriented app-entry.
 //!
 //! * [`KernelFn::TerminalAppLines`] — `Cli.tea cfg` →
-//!   `ipe_runtime::console_app(init, update, view, subscriptions, on_line)`.
+//!   `ipe_runtime::console_app(init, update, view, subscriptions)`.
 //!   View returns a `Lines msg` value (`ipe_runtime::tui::LinesView`), which the
 //!   runtime rasterizes to a styled terminal string on each state change.
-//!   5-field closed cfg: init / update / view / subscriptions / onLine.
+//!   Canonical 4-field closed cfg: init / update / view / subscriptions. Line
+//!   input is a subscription (`Cli.Sub.onLine`), dispatched by the runtime to
+//!   every line handler the current `subscriptions` declares.
 //!
 //! # Correctness constraints (MAKE INVALID STATES UNREPRESENTABLE)
 //!
-//! * All five required cfg fields are looked up with `lookup_field` (fail-closed
+//! * All four required cfg fields are looked up with `lookup_field` (fail-closed
 //!   on miss — a missing field here is a compiler bug, not user error, because the
 //!   constrain scheme already enforces the shape).
-//! * `onLine` MUST be present: the runtime calls `on_line(line)` on every stdin
-//!   line and returns a `Msg` (not `Option`).  There is no total way to fabricate
-//!   a `Msg` without the handler; omitting it would leave `FOnLine` generic
-//!   unconstrained (Rust E0282) or produce a runtime-panic/unsound path.
 //! * Function fields are emitted via `emit_console_fn` (raw function name for
 //!   `FuncValue`, fallback to `emit_expr_at` for lambdas).  A named `fn` item
 //!   satisfies `Send + Sync + 'static` via the blanket impl; a `Box<dyn Fn>` does
@@ -48,10 +46,10 @@ pub fn emit_console_call(
     };
 
     match k {
-        // ── Cli.tea { init, update, view, subscriptions, onLine } ─
+        // ── Cli.tea { init, update, view, subscriptions } ─
         //
         // view : Model -> Lines Msg
-        // Runtime entry: `ipe_runtime::console_app(init, update, view, subs, on_line)`
+        // Runtime entry: `ipe_runtime::console_app(init, update, view, subs)`
         KernelFn::TerminalAppLines => {
             let [cfg_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -80,7 +78,7 @@ pub fn emit_console_call(
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-/// Emit `ipe_runtime::console_app(init, update, view, subs, on_line)`.
+/// Emit `ipe_runtime::console_app(init, update, view, subs)`.
 ///
 /// # Function-field emission
 ///
@@ -95,13 +93,12 @@ fn emit_console_inner(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Option<String>> {
-    // All five fields are required — fail-closed on any miss (compiler bug, not
-    // user error: the constrain scheme enforces the 5-field shape upstream).
+    // All four fields are required — fail-closed on any miss (compiler bug, not
+    // user error: the constrain scheme enforces the closed 4-field shape upstream).
     let init_e = lookup_field(ctx, fields, "init")?;
     let update_e = lookup_field(ctx, fields, "update")?;
     let view_e = lookup_field(ctx, fields, "view")?;
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
-    let on_line_e = lookup_field(ctx, fields, "onLine")?;
 
     // seal: gate the Model against `console_app`'s `Clone` bound. A
     // non-clonable (non-derivable) Model — a field of type `Cmd`/`Sub`/`Task`/
@@ -119,15 +116,13 @@ fn emit_console_inner(
     let update_s = emit_console_fn(ctx, update_e, indent, child, generics)?;
     let view_s = emit_console_fn(ctx, view_e, indent, child, generics)?;
     let subs_s = emit_console_fn(ctx, subs_e, indent, child, generics)?;
-    let on_line_s = emit_console_fn(ctx, on_line_e, indent, child, generics)?;
 
     Ok(Some(format!(
         "ipe_runtime::tea::CliApp(ipe_runtime::console_app(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
-         {subs_s}, \
-         {on_line_s}\
+         {subs_s}\
          ))"
     )))
 }
@@ -135,7 +130,7 @@ fn emit_console_inner(
 /// Emit a cfg-field expression for the Cli app-entry kernel.
 ///
 /// Mirrors `emit_tui_fn` exactly: for a named function reference
-/// ([`Expr::FuncValue`]), emits the raw callee name (e.g. `Main_on_line`)
+/// ([`Expr::FuncValue`]), emits the raw callee name (e.g. `Main_update`)
 /// rather than a boxed closure.  A named function item satisfies
 /// `Fn(…) + Send + Sync + 'static` via the compiler's blanket impl; a
 /// `Box<dyn Fn(…)>` does NOT carry these bounds without explicit annotation.

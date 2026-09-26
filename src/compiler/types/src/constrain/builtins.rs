@@ -326,19 +326,14 @@ pub struct Builtins {
     /// Reserved for a future split scheme between `app` and `appRouted`.
     #[allow(dead_code)]
     pub live_f_not_found: Symbol,
-    // ── Tui cfg record field name symbols ─────────────────────────────────────
-    /// `"onKey"` — the onKey field of the `Tui.tea` config record.
-    /// Typed `{ kind : String, value : String } -> msg`; the backend bridges the
-    /// record handler onto the runtime bound `FOnKey: Fn(String, String) -> Msg`.
-    pub tui_f_on_key: Symbol,
-    /// `"kind"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
+    // ── Tui.Sub.onKey `KeyEvent` record field name symbols ────────────────────
+    /// `"kind"` — field of the pinned `KeyEvent` record in the `Tui.Sub.onKey`
+    /// scheme; the backend bridges the record handler onto the runtime's flat
+    /// `Fn(String, String) -> Msg` key handler.
     pub tui_f_key_kind: Symbol,
-    /// `"value"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
+    /// `"value"` — field of the pinned `KeyEvent` record in the `Tui.Sub.onKey`
+    /// scheme.
     pub tui_f_key_value: Symbol,
-    // ── Cli cfg record field name symbols ──────────────────────────────
-    /// `"onLine"` — the onLine field of the `Cli.tea` config record.
-    /// Typed as `String -> Msg` — called once per stdin line.
-    pub cli_f_on_line: Symbol,
     // ── Ui.button cfg record field name symbols ───────────────────────────────
     /// `"onPress"` — the onPress field of the `Ui.button` config record.
     /// Typed as `Maybe msg`.
@@ -884,12 +879,9 @@ impl Builtins {
             live_f_subscriptions: interner.intern("subscriptions")?,
             live_f_routes: interner.intern("routes")?,
             live_f_not_found: interner.intern("notFound")?,
-            // Tui cfg field names.
-            tui_f_on_key: interner.intern("onKey")?,
+            // Tui.Sub.onKey `KeyEvent` field names.
             tui_f_key_kind: interner.intern("kind")?,
             tui_f_key_value: interner.intern("value")?,
-            // Cli cfg field names.
-            cli_f_on_line: interner.intern("onLine")?,
             // Ui.button cfg field names.
             btn_f_on_press: interner.intern("onPress")?,
             btn_f_label: interner.intern("label")?,

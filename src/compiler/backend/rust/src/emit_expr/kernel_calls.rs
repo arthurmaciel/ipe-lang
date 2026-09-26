@@ -1630,6 +1630,48 @@ pub fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
     Some(format!("{tag}i64"))
 }
 
+/// Fail closed unless the program's entry is the one app surface whose loop
+/// drives this input subscription (`Tui.Sub.onKey` → `Tui.tea`,
+/// `Cli.Sub.onLine` → `Cli.tea`).
+///
+/// The resolver already refuses the other surface's `Sub` import in the entry
+/// module (IPE-N0035); this re-checks at the one point the kernel is emitted,
+/// against the whole program's entry, so a helper module that names the wrong
+/// surface's input subscription is refused too rather than compiling into a
+/// subscription no loop ever reads.
+fn require_input_sub_shape(ctx: &EmitCtx, k: KernelFn) -> DResult<()> {
+    let (owner, admitted) = match k {
+        KernelFn::TuiSubOnKey => ("Tui", ctx.uses_tui),
+        KernelFn::CliSubOnLine => ("Cli", ctx.uses_console),
+        _ => return Ok(()),
+    };
+    if admitted {
+        return Ok(());
+    }
+    let app_shape = if ctx.uses_tui {
+        "Tui"
+    } else if ctx.uses_console {
+        "Cli"
+    } else if ctx.uses_webview {
+        "WebView"
+    } else if ctx.uses_web {
+        "Web"
+    } else {
+        "Script"
+    };
+    Err(Diagnostic::Name {
+        span: Span::DUMMY,
+        msg: ipe_diagnostics::NameError::WrongShapeCmdSub(Box::new(
+            ipe_diagnostics::CmdSubShapeMismatch {
+                imported: format!("Ipe.Tea.{owner}.Sub").into_boxed_str(),
+                imported_shape: owner.into(),
+                app_shape: app_shape.into(),
+                expected: format!("Ipe.Tea.{app_shape}.Sub").into_boxed_str(),
+            },
+        )),
+    })
+}
+
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]
 pub fn emit_tea_call(
     ctx: &EmitCtx,
@@ -1726,6 +1768,26 @@ pub fn emit_tea_call(
         // non-describable entry) it passes through the default N-arg emitter
         // (`Ok(None)`), byte-identical to the flag-off form — no boxing needed.
         KernelFn::SubEvery | KernelFn::TimeEvery => Ok(emit_sub_arm(ctx, *k, args)),
+        // ── Arity-1: shape-owned terminal input subscriptions ────────────────────
+        // `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg`
+        //   →  `tui_sub_on_key(|kind, value| handler(KeyEvent { kind, value }))`
+        // `Cli.Sub.onLine : (String -> msg) -> Sub msg`
+        //   →  `cli_sub_on_line(handler)`
+        // Only the matching terminal loop drives these; the shape guard refuses
+        // either one anywhere else (a sub no loop reads is silently lost input).
+        KernelFn::TuiSubOnKey => {
+            require_input_sub_shape(ctx, *k)?;
+            let handler_expr = arg!(0, "to_msg")?;
+            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
+            let bridge = crate::emit_tui::key_event_bridge(ctx, &handler_src)?;
+            Ok(Some(format!("tui_sub_on_key({bridge})")))
+        }
+        KernelFn::CliSubOnLine => {
+            require_input_sub_shape(ctx, *k)?;
+            let handler_expr = arg!(0, "to_msg")?;
+            let handler_src = emit_expr_at(ctx, handler_expr, indent, child, generics)?;
+            Ok(Some(format!("cli_sub_on_line({handler_src})")))
+        }
         // ── Arity-2: pub/sub subscription — standard path ────────────────────────
         // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`
         // The runtime `sub_subscribe_topic` is in live/pubsub.rs (live-feature

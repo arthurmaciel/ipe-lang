@@ -1449,6 +1449,7 @@ pub fn canonicalise_module_in_project(
         check_main_not_runtime_branched(&canon_mod, interner)?;
         check_program_tea_import_gate(m, &canon_mod, interner)?;
         check_cross_shape_cmd_sub_gate(m, &canon_mod, interner)?;
+        check_input_fields_are_subscriptions(&canon_mod, interner)?;
         check_library_ssot_import_gate(m, interner)?;
         // Thread a sibling top-level `config` binding into the app entry
         // (`main = Web.tea { … }` becomes `Web.appWith config { … }`), or reject
@@ -1643,9 +1644,8 @@ fn thread_config_into_entry(
 /// `env::QUALIFIERS` (`Web.tea`/`appRouted`, `Tui.tea`, `Cli.tea`).
 ///
 /// Keyed on the kernel `(module, name)` a resolved `VarKernel` carries. `Tui.tea`
-/// and `Cli.tea` are the two terminal drive-axis entries; each maps to the one
-/// `"Terminal"` rendering family via [`canonical_shape`] where the shape gate
-/// needs a family name.
+/// and `Cli.tea` are the two terminal drive-axis entries; each owns its own
+/// `Cmd` / `Sub` surface (see [`cmd_sub_surface_admissible`]).
 const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Web", "tea"),
     ("Web", "appRouted"),
@@ -1653,8 +1653,8 @@ const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Tui", "tea"),
     ("Cli", "tea"),
     // `Worker.tea` — the view-less co-located worker app-entry. A worker is a TEA
-    // app (its `main` head-calls the entry), but folds onto its own `"Worker"`
-    // shape family for `Cmd` / `Sub` scoping (see `canonical_shape`).
+    // app (its `main` head-calls the entry) with its own `Cmd` / `Sub` scope
+    // (`Ipe.Tea.Worker.{Cmd,Sub}`).
     ("Worker", "tea"),
 ];
 
@@ -1761,18 +1761,18 @@ const _: () = {
     }
 };
 
-/// The canonical shape (rendering family) name for a TEA surface segment. Most
-/// shapes name themselves; the two terminal drive-axis surfaces (`Tui` / `Cli`)
-/// both fold onto the one `Terminal` rendering family, so their shape-scoped
-/// `Cmd` / `Sub` imports are admissible in a terminal app. An unrecognised
-/// segment maps to itself, so a genuine cross-shape import still fails the gate.
-fn canonical_shape(surface: &str) -> &str {
-    match surface {
-        "Tui" | "Cli" => "Terminal",
-        // The view-less worker's entry qualifier `Worker` names its own `Cmd` /
-        // `Sub` scope (`Ipe.Tea.Worker.{Cmd,Sub}`) directly via `other => other`.
-        other => other,
-    }
+/// Whether an `Ipe.Tea.<imported>.{Cmd,Sub}` import is admissible in an app
+/// whose entry is the `app` surface (`Web` / `Tui` / `Cli` / `Worker`).
+///
+/// Each app surface owns its `Cmd` / `Sub`: `Ipe.Tea.Tui.Sub` carries the
+/// Tui-only `onKey` and `Ipe.Tea.Cli.Sub` the Cli-only `onLine`, whose inputs
+/// exist only in that surface's loop, so the two terminal surfaces are NOT
+/// interchangeable. `Ipe.Tea.Terminal.{Cmd,Sub}` is the shared terminal-family
+/// re-export — it carries no surface-owned member — and is admissible in either
+/// terminal app. Every other pairing (an unrecognised segment included) fails
+/// the gate.
+fn cmd_sub_surface_admissible(imported: &str, app: &str) -> bool {
+    imported == app || (imported == "Terminal" && matches!(app, "Tui" | "Cli"))
 }
 
 /// IPE-N0045: reject a `main` that selects its shape at run time.
@@ -2024,12 +2024,9 @@ fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
     }
 }
 
-/// The CANONICAL TEA shape (rendering family) a `main` proves from its entry
-/// kernel. The value is the family a user's `Ipe.Tea.<Shape>.{Cmd,Sub}` import
-/// must fold onto (via [`canonical_shape`]) to be admissible. The terminal
-/// family's two drive axes (`Tui.tea`, `Cli.tea`) both resolve to the one
-/// `"Terminal"` family here, so a terminal app may import either surface's
-/// `Cmd` / `Sub`.
+/// The TEA app surface (`Web` / `Tui` / `Cli` / `Worker`) a `main` proves from
+/// its entry kernel — the surface a user's `Ipe.Tea.<Shape>.{Cmd,Sub}` import is
+/// checked against by [`cmd_sub_surface_admissible`].
 ///
 /// Returns `None` when `main` is not a shape-entry app — the cross-shape gate
 /// then does not apply (a plain-`main` Program importing `Ipe.Tea.*` is already
@@ -2045,7 +2042,7 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
                 return TEA_APP_ENTRIES
                     .iter()
                     .find(|(em, en)| *em == m && *en == n)
-                    .map(|(shape, _member)| canonical_shape(shape));
+                    .map(|(shape, _member)| *shape);
             }
             _ => return None,
         }
@@ -2098,9 +2095,9 @@ fn check_cross_shape_cmd_sub_gate(
         return Ok(());
     };
 
-    // The gate compares CANONICAL shapes: the `Tui` / `Cli` surface segments both
-    // fold onto `Terminal`, so a terminal app may import either surface's `Cmd` /
-    // `Sub`. `app_shape` is already canonical (proven from the entry kernel).
+    // The gate compares app SURFACES: `Tui` and `Cli` each own their `Sub`
+    // (input subscriptions live there), so neither admits the other's; only the
+    // shared `Ipe.Tea.Terminal.{Cmd,Sub}` serves both terminal surfaces.
     for imp in &m.imports {
         // `Ipe.Tea.<Shape>.{Cmd,Sub}`: exactly four segments,
         // `Ipe . Tea . Shape . Cmd|Sub`.
@@ -2116,8 +2113,8 @@ fn check_cross_shape_cmd_sub_gate(
         let Some(imported_shape) = interner.resolve(*shape) else {
             continue;
         };
-        if canonical_shape(imported_shape) == app_shape {
-            continue; // the app's own shape (after folding surface aliases) — admissible.
+        if cmd_sub_surface_admissible(imported_shape, app_shape) {
+            continue;
         }
         let leaf_name = if *leaf == cmd_sym { "Cmd" } else { "Sub" };
         return Err(Diagnostic::Name {
@@ -2129,6 +2126,97 @@ fn check_cross_shape_cmd_sub_gate(
                 expected: format!("Ipe.Tea.{app_shape}.{leaf_name}").into_boxed_str(),
             })),
         });
+    }
+    Ok(())
+}
+
+/// Terminal-input config fields that are subscriptions, keyed by the entry
+/// qualifier they were once passed to: `(entry qualifier, field, Sub module)`.
+/// The field name is also the `Sub` member that replaces it
+/// (`Ipe.Tea.Tui.Sub.onKey`), so the diagnostic names the exact constructor.
+const INPUT_FIELDS_AS_SUBSCRIPTIONS: &[(&str, &str, &str)] = &[
+    ("Tui", "onKey", "Ipe.Tea.Tui.Sub"),
+    ("Cli", "onLine", "Ipe.Tea.Cli.Sub"),
+];
+
+/// IPE-N0051: reject a `Tui.tea` / `Cli.tea` config that still passes terminal
+/// input as a config field (`onKey` / `onLine`).
+///
+/// The entry configs are the canonical four TEA fields (`init` / `update` /
+/// `view` / `subscriptions`); input is a subscription (`Tui.Sub.onKey` /
+/// `Cli.Sub.onLine`). The closed config row already refuses any extra field at
+/// type-check, so this gate is not what keeps the program sound — it turns the
+/// generic record mismatch into a diagnostic naming the `Sub` constructor to
+/// use. Checks the entry's inline record literal and a same-module top-level
+/// binding the entry is applied to.
+///
+/// # Errors
+/// [`Diagnostic::Name`] (IPE-N0051) at the offending field's value.
+fn check_input_fields_are_subscriptions(
+    canon_mod: &canon::Module,
+    interner: &Interner,
+) -> DResult<()> {
+    let Some(main_sym) = interner.lookup("main") else {
+        return Ok(());
+    };
+    let Some(main_def) = canon_mod.defs.iter().find(|d| d.name().value == main_sym) else {
+        return Ok(());
+    };
+    let body = match main_def {
+        canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+    };
+    // Peel to the entry call the shape classifier reads.
+    let mut node = body;
+    let (entry_qualifier, cfg) = loop {
+        match &node.value {
+            canon::Expr_::Call(callee, args) => {
+                if let canon::Expr_::VarKernel { module, name, .. } = &callee.value
+                    && interner.resolve(*name) == Some("tea")
+                    && let Some(q @ ("Tui" | "Cli")) = interner.resolve(*module)
+                    && let [cfg] = args.as_slice()
+                {
+                    break (q, cfg);
+                }
+                node = callee;
+            }
+            canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => node = inner,
+            _ => return Ok(()),
+        }
+    };
+    // The config record: inline, or a same-module top-level binding.
+    let fields = match &cfg.value {
+        canon::Expr_::Record(fields) => fields,
+        canon::Expr_::VarTopLevel { module, name } if *module == canon_mod.name => {
+            let Some(def) = canon_mod.defs.iter().find(|d| d.name().value == *name) else {
+                return Ok(());
+            };
+            let def_body = match def {
+                canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+            };
+            let canon::Expr_::Record(fields) = &def_body.value else {
+                return Ok(());
+            };
+            fields
+        }
+        _ => return Ok(()),
+    };
+    for (field_sym, value) in fields {
+        let Some(field) = interner.resolve(*field_sym) else {
+            continue;
+        };
+        if let Some((_, _, sub_module)) = INPUT_FIELDS_AS_SUBSCRIPTIONS
+            .iter()
+            .find(|(q, f, _)| *q == entry_qualifier && *f == field)
+        {
+            return Err(Diagnostic::Name {
+                span: value.span,
+                msg: NameError::InputFieldIsSubscription {
+                    entry: format!("{entry_qualifier}.tea").into_boxed_str(),
+                    field: field.into(),
+                    sub_module: (*sub_module).into(),
+                },
+            });
+        }
     }
     Ok(())
 }

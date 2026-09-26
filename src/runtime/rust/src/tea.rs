@@ -2,10 +2,10 @@
 //!
 //! Cmd/Sub are generic over the message type M (NOT `any`): the intermediate
 //! value `a` in `Cmd.perform` is erased inside a boxed M-producing future, but M
-//! stays concrete. Step 1 (this file) ships the types, the simple kernels, and a
-//! blocking Cli.tea loop (stdin -> onLine -> update -> view). Sub.every
-//! tickers + async Cmd.perform delivery land in steps 2-3 (a subManager + an
-//! mpsc msg channel + tokio::select over stdin and the channel).
+//! stays concrete. This file ships the types, the kernels, the `SubManager`
+//! that drives `Sub.every` tickers / subscription sources and holds the active
+//! terminal input handlers (`Tui.Sub.onKey` / `Cli.Sub.onLine`), and the Cli.tea
+//! loop (stdin line -> active `onLine` handlers -> update -> view).
 
 use super::*;
 use std::future::Future;
@@ -49,12 +49,32 @@ pub type SubSpawn<M> =
 #[cfg(target_arch = "wasm32")]
 pub type SubSpawn<M> = Box<dyn FnOnce(std::rc::Rc<dyn Fn(M)>) -> Box<dyn FnOnce()>>;
 
+/// A `Tui.Sub.onKey` handler over a key's flat `(kind, value)` pair (the
+/// emitter builds the `KeyEvent` record inside it). `Send` so the terminal loop's
+/// future stays `Send`; called only on the loop's own task, so no `Sync` needed.
+#[cfg(not(target_arch = "wasm32"))]
+pub type KeyHandler<M> = Box<dyn Fn(String, String) -> M + Send>;
+/// A `Cli.Sub.onLine` handler over one stdin line.
+#[cfg(not(target_arch = "wasm32"))]
+pub type LineHandler<M> = Box<dyn Fn(String) -> M + Send>;
+
 /// Ipê `Sub msg`.
 pub enum IpeSub<M> {
     None,
     Batch(Vec<IpeSub<M>>),
-    Every { ms: i64, msg: M },
+    Every {
+        ms: i64,
+        msg: M,
+    },
     Source(SubSpawn<M>),
+    /// `Tui.Sub.onKey` — read by the Tui loop, which hands each key to every
+    /// active key handler. Native-only: a terminal never runs in a browser.
+    #[cfg(not(target_arch = "wasm32"))]
+    OnKey(KeyHandler<M>),
+    /// `Cli.Sub.onLine` — read by the Cli loop, which hands each stdin line to
+    /// every active line handler.
+    #[cfg(not(target_arch = "wasm32"))]
+    OnLine(LineHandler<M>),
 }
 
 // ─── Cmd kernels ──────────────────────────────────────────────────────────
@@ -192,6 +212,26 @@ pub fn sub_every<M>(ms: i64, msg: M) -> IpeSub<M> {
     IpeSub::Every { ms, msg }
 }
 
+/// `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg` — subscribe to terminal keys.
+/// `on_key` receives the key's `(kind, value)`; the emitter wraps the user's
+/// `KeyEvent -> msg` handler so the record is built there.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn tui_sub_on_key<M, F>(on_key: F) -> IpeSub<M>
+where
+    F: Fn(String, String) -> M + Send + 'static,
+{
+    IpeSub::OnKey(Box::new(on_key))
+}
+
+/// `Cli.Sub.onLine : (String -> msg) -> Sub msg` — subscribe to stdin lines.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn cli_sub_on_line<M, F>(on_line: F) -> IpeSub<M>
+where
+    F: Fn(String) -> M + Send + 'static,
+{
+    IpeSub::OnLine(Box::new(on_line))
+}
+
 /// Time.every : Int -> msg -> Sub msg — alias of `Sub.every` (matches
 /// `Time_every`, which delegates to `Sub_every`). The `Time_every` kernel name
 /// lowers to this.
@@ -205,7 +245,8 @@ pub fn time_every<M>(ms: i64, msg: M) -> IpeSub<M> {
 /// passes through; a `Source` is rewrapped so the emit callback it receives
 /// first pushes each `a` through `f` before handing the resulting `msg` to the
 /// scheduler's real emit — the source stays oblivious to the retagging and its
-/// teardown handle is preserved unchanged.
+/// teardown handle is preserved unchanged. A terminal input handler is composed
+/// with `f`, so each key / line it maps yields the retagged message.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn sub_map<A, M, F>(sub: IpeSub<A>, f: F) -> IpeSub<M>
 where
@@ -238,6 +279,10 @@ where
                 spawn(emit_inner)
             },
         )),
+        IpeSub::OnKey(on_key) => IpeSub::OnKey(Box::new(move |kind: String, value: String| {
+            f(on_key(kind, value))
+        })),
+        IpeSub::OnLine(on_line) => IpeSub::OnLine(Box::new(move |line: String| f(on_line(line)))),
     }
 }
 
@@ -311,8 +356,10 @@ pub(crate) enum CliEvent<M> {
 }
 
 /// Tracks the goroutine-equivalent ticker tasks spawned for the active
-/// `Sub.every` subscriptions. `update` stops all + respawns from the new Sub
-/// (one program, one model, re-evaluated each tick).
+/// `Sub.every` subscriptions, and the active terminal input handlers
+/// (`Tui.Sub.onKey` / `Cli.Sub.onLine`). `update` stops all + respawns from the
+/// new Sub (one program, one model, re-evaluated each tick), so an input event
+/// is always dispatched against the handlers the CURRENT model subscribes to.
 ///
 /// Terminal-loop-only (see [`CliEvent`]): both consuming drivers are
 /// `feature = "tui"`-gated.
@@ -320,6 +367,8 @@ pub(crate) enum CliEvent<M> {
 pub(crate) struct SubManager<M> {
     tx: tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
     handles: Vec<tokio::task::JoinHandle<()>>,
+    key_handlers: Vec<KeyHandler<M>>,
+    line_handlers: Vec<LineHandler<M>>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
@@ -328,12 +377,33 @@ impl<M: Clone + Send + 'static> SubManager<M> {
         SubManager {
             tx,
             handles: Vec::new(),
+            key_handlers: Vec::new(),
+            line_handlers: Vec::new(),
         }
     }
     pub(crate) fn stop_all(&mut self) {
         for h in self.handles.drain(..) {
             h.abort();
         }
+        self.key_handlers.clear();
+        self.line_handlers.clear();
+    }
+    /// The messages every active `Tui.Sub.onKey` handler maps one key to, in
+    /// subscription order. Empty when no key subscription is active — the key
+    /// is then unobserved.
+    pub(crate) fn key_msgs(&self, kind: &str, value: &str) -> Vec<M> {
+        self.key_handlers
+            .iter()
+            .map(|on_key| on_key(kind.to_owned(), value.to_owned()))
+            .collect()
+    }
+    /// The messages every active `Cli.Sub.onLine` handler maps one stdin line
+    /// to, in subscription order. Empty when no line subscription is active.
+    pub(crate) fn line_msgs(&self, line: &str) -> Vec<M> {
+        self.line_handlers
+            .iter()
+            .map(|on_line| on_line(line.to_owned()))
+            .collect()
     }
     pub(crate) fn update(&mut self, sub: IpeSub<M>) {
         self.stop_all();
@@ -372,6 +442,8 @@ impl<M: Clone + Send + 'static> SubManager<M> {
                 });
                 self.handles.push(spawn(emit));
             }
+            IpeSub::OnKey(on_key) => self.key_handlers.push(on_key),
+            IpeSub::OnLine(on_line) => self.line_handlers.push(on_line),
         }
     }
 }
@@ -474,11 +546,12 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
 
 // ─── Ipe.Terminal — line-oriented TEA loop ─────────────────────────────────────
 
-/// Cli.tea { init, update, view, subscriptions, onLine } : Task Error ().
+/// Cli.tea { init, update, view, subscriptions } : Task Error ().
 ///
-/// init -> fire cmd -> subs -> view; then fold each event (stdin line via
-/// onLine, ticker/Cmd.perform Msg) through update -> re-fire cmd -> re-subs ->
-/// view, until stdin EOF. Stdin is read on a blocking task; tickers + perform
+/// init -> fire cmd -> subs -> view; then fold each event (a stdin line through
+/// every active `Cli.Sub.onLine` handler, a ticker/Cmd.perform Msg) through
+/// update -> re-fire cmd -> re-subs -> view, until stdin EOF. A line no handler
+/// subscribes to is unobserved (no update, no render). Stdin is read on a blocking task; tickers + perform
 /// results merge into the same single-threaded update sequence via one channel.
 ///
 /// Gated on `feature = "tui"`: the `Lines msg` view rasterizes through
@@ -486,12 +559,11 @@ pub(crate) fn cli_run_cmd_tracked<M: Send + 'static>(
 /// with `tui_app`. A `Cli.tea` program selects the `tui` feature, so a plain
 /// `tokio` program (web/server, no terminal shape) never compiles this entry.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
-pub fn console_app<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnLine>(
+pub fn console_app<Model, Msg, E, FInit, FUpdate, FView, FSubs>(
     init: FInit,
     update: FUpdate,
     view: FView,
     subscriptions: FSubs,
-    on_line: FOnLine,
 ) -> IpeTask<E, ()>
 where
     E: Send + 'static,
@@ -501,14 +573,13 @@ where
     FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FView: Fn(Model) -> crate::tui::LinesView<Msg> + Send + 'static,
     FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
-    FOnLine: Fn(String) -> Msg + Send + 'static,
 {
     Box::pin(async move {
         use std::io::Write;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
 
-        // Blocking stdin reader → raw Line events, then Eof. onLine is applied in
-        // the main task (keeps it off the blocking thread / out of Send bounds).
+        // Blocking stdin reader → raw Line events, then Eof. The line handlers are
+        // applied in the main task (keeps them off the blocking thread).
         //
         // KNOWN LEAK (intentional, bounded): this detached thread is never joined
         // or signalled — if the returned future is dropped/cancelled the thread
@@ -575,16 +646,17 @@ where
         }
 
         while let Some(ev) = rx.recv().await {
-            let msg = match ev {
-                CliEvent::Line(l) => on_line(l),
+            let msgs: Vec<Msg> = match ev {
+                // Every active line handler sees the line; none → unobserved.
+                CliEvent::Line(l) => submgr.line_msgs(&l),
                 CliEvent::Key(_, _) => continue, // Cli has no keys
-                CliEvent::Msg(m) => m,
+                CliEvent::Msg(m) => vec![m],
                 CliEvent::PerformDone(m) => {
                     // A one-shot effect delivered its result: this effect is no
                     // longer outstanding. If EOF already arrived and this was the
                     // last outstanding effect, fold it and then let EOF terminate.
                     outstanding.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                    m
+                    vec![m]
                 }
                 CliEvent::Eof => {
                     // EOF terminates only once every outstanding one-shot effect
@@ -598,14 +670,21 @@ where
                     continue;
                 }
             };
-            #[cfg(feature = "debugger")]
-            let msg_for_recorder = msg.clone();
-            let (next, cmd) = update(msg, model);
-            model = next;
-            #[cfg(feature = "debugger")]
-            recorder.record(msg_for_recorder, model.clone(), &update);
-            cli_run_cmd_tracked(cmd, &tx, Some(&outstanding));
-            submgr.update(subscriptions(model.clone()));
+            if msgs.is_empty() {
+                continue;
+            }
+            // Fold each message in order; the subscriptions are re-evaluated
+            // after each, so the next message meets the model it produced.
+            for msg in msgs {
+                #[cfg(feature = "debugger")]
+                let msg_for_recorder = msg.clone();
+                let (next, cmd) = update(msg, model);
+                model = next;
+                #[cfg(feature = "debugger")]
+                recorder.record(msg_for_recorder, model.clone(), &update);
+                cli_run_cmd_tracked(cmd, &tx, Some(&outstanding));
+                submgr.update(subscriptions(model.clone()));
+            }
             let rendered = crate::tui::render_lines_view(view(model.clone()));
             let _ = std::io::stdout().write_all(rendered.as_bytes());
             let _ = std::io::stdout().flush();
@@ -840,6 +919,11 @@ fn worker_spawn_subs<M: Clone + Send + 'static>(
             handles.push(spawn(emit));
             1
         }
+        // Terminal input has no source in a worker (it reads no stream); the
+        // resolver and emitter refuse `Tui.Sub.onKey` / `Cli.Sub.onLine` outside
+        // their own terminal app, so these never reach here from Ipê source.
+        // Neither can deliver, so neither keeps the worker alive.
+        IpeSub::OnKey(_) | IpeSub::OnLine(_) => 0,
     }
 }
 
@@ -959,6 +1043,8 @@ mod map_tests {
     #[derive(Clone, Debug, PartialEq)]
     enum Child {
         Tick(i64),
+        Key(String),
+        Line(String),
     }
     #[derive(Clone, Debug, PartialEq)]
     enum Parent {
@@ -1027,6 +1113,29 @@ mod map_tests {
             rx.recv().expect("one message")
         });
         assert_eq!(got, Parent::FromChild(Child::Tick(9)));
+    }
+
+    #[test]
+    fn sub_map_composes_terminal_input_handlers() {
+        let key = sub_map(
+            tui_sub_on_key(|kind, value| Child::Key(format!("{kind}:{value}"))),
+            wrap,
+        );
+        assert!(matches!(key, IpeSub::OnKey(_)));
+        if let IpeSub::OnKey(on_key) = key {
+            assert_eq!(
+                on_key("char".into(), "q".into()),
+                Parent::FromChild(Child::Key("char:q".into()))
+            );
+        }
+        let line = sub_map(cli_sub_on_line(Child::Line), wrap);
+        assert!(matches!(line, IpeSub::OnLine(_)));
+        if let IpeSub::OnLine(on_line) = line {
+            assert_eq!(
+                on_line("hi".into()),
+                Parent::FromChild(Child::Line("hi".into()))
+            );
+        }
     }
 
     #[test]
@@ -1157,5 +1266,58 @@ mod worker_appearance_na_tests {
         let _run: fn(WorkerApp) -> crate::IpeResult<crate::error::IpeError, ()> =
             WorkerApp::run_blocking;
         let _ = handle;
+    }
+}
+
+// ─── Terminal input dispatch unit tests ────────────────────────────────────
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "tui"))]
+mod input_dispatch_tests {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum Msg {
+        Key(String),
+        Line(String),
+    }
+
+    fn manager() -> SubManager<Msg> {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
+        SubManager::new(tx)
+    }
+
+    #[test]
+    fn every_active_handler_sees_the_input_in_subscription_order() {
+        let mut mgr = manager();
+        mgr.update(sub_batch(vec![
+            tui_sub_on_key(|kind, _value| Msg::Key(kind)),
+            tui_sub_on_key(|_kind, value| Msg::Key(value)),
+            cli_sub_on_line(Msg::Line),
+        ]));
+        assert_eq!(
+            mgr.key_msgs("char", "x"),
+            vec![Msg::Key("char".into()), Msg::Key("x".into())]
+        );
+        assert_eq!(mgr.line_msgs("hello"), vec![Msg::Line("hello".into())]);
+    }
+
+    #[test]
+    fn input_with_no_active_handler_is_unobserved() {
+        let mut mgr = manager();
+        mgr.update(sub_none());
+        assert!(mgr.key_msgs("char", "x").is_empty());
+        assert!(mgr.line_msgs("hello").is_empty());
+    }
+
+    #[test]
+    fn resubscribing_replaces_the_handler_set() {
+        // A model whose `subscriptions` stops listening drops every handler.
+        let mut mgr = manager();
+        mgr.update(cli_sub_on_line(Msg::Line));
+        assert_eq!(mgr.line_msgs("a").len(), 1);
+        mgr.update(sub_none());
+        assert!(mgr.line_msgs("a").is_empty());
+        mgr.stop_all();
+        assert!(mgr.key_msgs("char", "x").is_empty());
     }
 }

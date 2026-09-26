@@ -348,6 +348,9 @@ code! {
     IPE_N0049 = "IPE-N0049", "a pattern binds the same name twice", "IPE-N0049";
     /// a Script imports a shape's view module but renders nothing
     IPE_N0050 = "IPE-N0050", "a Script imports a shape's UI, which it cannot render", "IPE-N0050";
+    /// a `Tui.tea` / `Cli.tea` config passes terminal input as a field instead of
+    /// subscribing to it
+    IPE_N0051 = "IPE-N0051", "terminal input is a subscription, not an app config field", "IPE-N0051";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)
