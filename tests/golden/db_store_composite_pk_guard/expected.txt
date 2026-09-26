@@ -1,4 +1,5 @@
 single-ddl:ok
+single-unknown:ok
 second-pk-single-twice:ok
 second-pk-single-then-composite:ok
 second-pk-composite-then-single:ok
@@ -8,5 +9,14 @@ composite-empty:ok
 composite2:ok
 composite3:ok
 composite-named:ok
+composite-unique:ok
+composite-migrations:ok
+composite-duplicate:ok
+composite-unknown:ok
+composite-bad-ident:ok
+composite-serial:ok
+rename-key-single:ok
+rename-key-composite:ok
+rename-non-key:ok
 by-key-composite:ok
 by-key-second-pk:ok

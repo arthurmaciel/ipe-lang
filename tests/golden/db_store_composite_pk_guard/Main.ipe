@@ -1,20 +1,31 @@
 module Main exposing (main)
 
--- Primary-key declaration guard: a table has exactly one primary key, and a
--- composite key names at least two columns. The `Draft` builders parse every
--- key declaration once; a refused one surfaces as a typed `Err` from
--- `createSql` / `migrations` and from every by-key operation — never DDL with
--- two keys, a one-column "composite" key, or a key silently dropped.
+-- Primary-key declaration guard: a table has exactly one primary key, a
+-- composite key names at least two of the store's own columns, each once, and
+-- renders as ONE table-level `PRIMARY KEY (…)` constraint in declared order. The
+-- `Draft` builders parse every key declaration once and `createSql` validates it
+-- against the schema; a refused one surfaces as a typed `Err` from `createSql` /
+-- `migrations` and from every by-key operation — never DDL with two keys, a
+-- one-column "composite" key, or a key silently dropped.
 --
 -- Checks (one line each):
---   single-ddl            a single-column key renders the inline DDL unchanged
+--   single-ddl            a single-column key renders inline, unchanged
+--   single-unknown        a one-column key naming no store column is refused
 --   second-pk-*           a second declaration, in any order/form, is refused
 --   composite-one-column  a one-element composite key is refused, pointing at
 --                         Store.primaryKey
 --   composite-empty       an empty composite key is refused
---   composite2/3/named    each composite form records its columns in declared
---                         order (accessors snake_cased); the DDL renderer
---                         refuses to emit CREATE TABLE without the key
+--   composite2/3/named    each composite form renders the exact table-level
+--                         key, columns in declared order (accessors snake_cased)
+--   composite-unique      a UNIQUE key column keeps its inline UNIQUE
+--   composite-migrations  the `migrations` create entry carries the same key
+--   composite-duplicate   a key column named twice is refused
+--   composite-unknown     a key column the store does not have is refused
+--   composite-bad-ident   a key column that is not a SQL identifier is refused
+--   composite-serial      a composite key with a `serial` column is refused
+--   rename-key-single     renaming a one-column key's column is refused
+--   rename-key-composite  renaming a composite key's column is refused
+--   rename-non-key        renaming a non-key column keeps the key's DDL
 --   by-key-composite      `Store.get` on a composite-key store fails closed
 --   by-key-second-pk      `Store.get` on a double-declared store fails closed
 
@@ -112,18 +123,46 @@ refusedWith label needle result =
             classifyRefusal label needle e
 
 
-singleDdlLine : String
-singleDdlLine =
-    case ddlOf (tagStore (\d -> StoreU.primaryKey "slug" d)) of
+-- `label:ok` when `result` is exactly the DDL `expected`.
+ddlIs : String -> String -> Result Error String -> String
+ddlIs label expected result =
+    case result of
         Ok ddl ->
-            if ddl == "CREATE TABLE IF NOT EXISTS tags (slug TEXT PRIMARY KEY, label TEXT)" then
-                "single-ddl:ok"
+            if ddl == expected then
+                String.concat [ label, ":ok" ]
 
             else
-                String.concat [ "single-ddl:FAIL-bad-ddl:", ddl ]
+                String.concat [ label, ":FAIL-bad-ddl:", ddl ]
 
         Err e ->
-            String.concat [ "single-ddl:FAIL-rejected:", Error.toString e ]
+            String.concat [ label, ":FAIL-rejected:", Error.toString e ]
+
+
+-- The SQL of the `migrations` create entry (the first ledger entry).
+createEntryOf : Result Error (Store a) -> Result Error String
+createEntryOf built =
+    case Result.andThen Store.migrations built of
+        Err e ->
+            Err e
+
+        Ok entries ->
+            case entries of
+                first :: _ ->
+                    Ok first.sql
+
+                [] ->
+                    Err (Error.invalidInput "migrations produced no create entry")
+
+
+singleLines : List String
+singleLines =
+    [ ddlIs "single-ddl"
+        "CREATE TABLE IF NOT EXISTS tags (slug TEXT PRIMARY KEY, label TEXT)"
+        (ddlOf (tagStore (\d -> StoreU.primaryKey "slug" d)))
+    , refusedWith "single-unknown"
+        "primary-key column \"nope\" is not a column of this store"
+        (ddlOf (tagStore (\d -> StoreU.primaryKey "nope" d)))
+    ]
 
 
 secondPkLines : List String
@@ -190,11 +229,61 @@ shiftStore =
             Ok (Store.public (Store.compositePrimaryKeyNamed [ "site_id", "day", "slot", "badge" ] draft))
 
 
+membershipsDdl : String
+membershipsDdl =
+    "CREATE TABLE IF NOT EXISTS memberships (user_id TEXT, group_id TEXT, role TEXT, PRIMARY KEY (user_id, group_id))"
+
+
 compositeDdlLines : List String
 compositeDdlLines =
-    [ refusedWith "composite2" "composite primary key (user_id, group_id)" (ddlOf membershipStore)
-    , refusedWith "composite3" "composite primary key (sensor_id, day, slot)" (ddlOf readingStore)
-    , refusedWith "composite-named" "composite primary key (site_id, day, slot, badge)" (ddlOf shiftStore)
+    [ ddlIs "composite2" membershipsDdl (ddlOf membershipStore)
+    , ddlIs "composite3"
+        "CREATE TABLE IF NOT EXISTS readings (sensor_id TEXT, day TEXT, slot INTEGER, value REAL, PRIMARY KEY (sensor_id, day, slot))"
+        (ddlOf readingStore)
+    , ddlIs "composite-named"
+        "CREATE TABLE IF NOT EXISTS shifts (site_id TEXT, day TEXT, slot INTEGER, badge TEXT, notes TEXT, PRIMARY KEY (site_id, day, slot, badge))"
+        (ddlOf shiftStore)
+    , ddlIs "composite-unique"
+        "CREATE TABLE IF NOT EXISTS tags (slug TEXT UNIQUE, label TEXT, PRIMARY KEY (slug, label))"
+        (ddlOf (tagStore (\d -> Store.compositePrimaryKeyNamed [ "slug", "label" ] (StoreU.unique "slug" d))))
+    , ddlIs "composite-migrations" membershipsDdl (createEntryOf membershipStore)
+    ]
+
+
+compositeRefusalLines : List String
+compositeRefusalLines =
+    [ refusedWith "composite-duplicate"
+        "names column \"slug\" more than once"
+        (ddlOf (tagStore (\d -> Store.compositePrimaryKeyNamed [ "slug", "label", "slug" ] d)))
+    , refusedWith "composite-unknown"
+        "primary-key column \"nope\" is not a column of this store"
+        (ddlOf (tagStore (\d -> Store.compositePrimaryKeyNamed [ "slug", "nope" ] d)))
+    , refusedWith "composite-bad-ident"
+        "rejected primary-key column identifier"
+        (ddlOf (tagStore (\d -> Store.compositePrimaryKeyNamed [ "slug", "label; DROP TABLE tags" ] d)))
+    , refusedWith "composite-serial"
+        "is marked serial, but the store's primary key is the composite key"
+        (ddlOf
+            (case Store.fromColumns "shifts" shiftColumns of
+                Err e ->
+                    Err e
+
+                Ok draft ->
+                    Ok (Store.public (Store.compositePrimaryKeyNamed [ "site_id", "slot" ] (StoreU.serial "slot" draft)))
+            )
+        )
+    ]
+
+
+renameLines : List String
+renameLines =
+    [ refusedWith "rename-key-single"
+        "renames a primary-key column"
+        (createEntryOf (Result.map (Store.renameColumn "slug" "handle") (tagStore (\d -> StoreU.primaryKey "slug" d))))
+    , refusedWith "rename-key-composite"
+        "renames a primary-key column"
+        (ddlOf (Result.map (Store.renameColumn "group_id" "team_id") membershipStore))
+    , ddlIs "rename-non-key" membershipsDdl (createEntryOf (Result.map (Store.renameColumn "role" "title") membershipStore))
     ]
 
 
@@ -249,10 +338,12 @@ main =
             Io.println
                 (String.join "\n"
                     (List.concat
-                        [ [ singleDdlLine ]
+                        [ singleLines
                         , secondPkLines
                         , shortCompositeLines
                         , compositeDdlLines
+                        , compositeRefusalLines
+                        , renameLines
                         , [ byKeyLines ]
                         ]
                     )

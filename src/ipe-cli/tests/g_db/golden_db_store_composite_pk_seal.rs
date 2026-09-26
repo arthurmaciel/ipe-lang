@@ -1,12 +1,15 @@
 //! Primary-key declaration guard for `Ipe.Db.Store` — the one-key-per-table
-//! and at-least-two-columns-per-composite-key invariants, and the accessor tie
-//! of `Store.compositePrimaryKey2` / `Store.compositePrimaryKey3`.
+//! and at-least-two-columns-per-composite-key invariants, the composite key's
+//! table-level DDL, and the accessor tie of `Store.compositePrimaryKey2` /
+//! `Store.compositePrimaryKey3`.
 //!
 //! * `db_store_composite_pk_guard` — every refused declaration (a second key in
-//!   any order/form, a one-column or empty composite key) is a typed `Err` from
-//!   `createSql` / `migrations` / the by-key operations; each composite form
-//!   records its columns in declared order; a single-column key's DDL is
-//!   unchanged. Emit gate always; run + `expected.txt` under `IPE_E2E=1`.
+//!   any order/form, a one-column or empty composite key, an unknown, repeated,
+//!   or non-identifier key column, a composite key with a `serial` column, a
+//!   renamed key column) is a typed `Err` from `createSql` / `migrations` / the
+//!   by-key operations; each composite form renders the exact
+//!   `PRIMARY KEY (…)` constraint in declared order; a single-column key's DDL
+//!   is unchanged. Emit gate always; run + `expected.txt` under `IPE_E2E=1`.
 //! * `db_store_composite_pk_unknown_field_rejected` — a composite-key accessor
 //!   naming a field the row does not declare is an ipe-time TYPE error.
 
