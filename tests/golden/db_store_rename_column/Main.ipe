@@ -12,7 +12,12 @@ module Main exposing (main)
 --     value, and the row reads back keyed by its declared column names;
 --   * a codec store renames its primary key and a field: insert binds the new
 --     names, `update` / `get` key on the renamed primary key, `insertReturning`
---     decodes the renamed row, and `findBy` reads the current column name;
+--     decodes the renamed row, and `findBy` names the DECLARED column;
+--   * every query-layer name is the declared name, emitted as the current
+--     column: a `Cond` accessor, `orderDesc`, a join key, a join filter, a join
+--     sort column, and a `select` projection (plain, `upper`, `coalesce`);
+--   * a current name that is not a declared one is refused with a typed `Err`
+--     by `orderAsc` and by `findBy`;
 --   * `createSql` names the FROZEN table with the frozen columns, identical to
 --     the first `migrations` entry, after both a table and a column rename;
 --   * an index on a renamed column targets the current table and column while
@@ -23,7 +28,7 @@ module Main exposing (main)
 
 import Ipe.Codec as Codec exposing (Codec)
 import Ipe.Db as Db exposing (Db)
-import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store as Store exposing (Store, Order(..))
 import Ipe.Db.Store.Unsafe as StoreU
 import Ipe.Dict as Dict
 import Ipe.Error as Error exposing (Error)
@@ -85,8 +90,8 @@ eventsChecks conn store =
         _ <- Store.update conn store (eventRow "bye" "CLIENT2")
         updated <- Store.get conn store (SqlString "e1")
         Io.println (updateLine updated)
-        found <- Store.findBy conn store "title" (SqlString "bye")
-        Io.println (String.concat [ "raw-findBy-current-name:", String.fromInt (List.length found) ])
+        found <- Store.findBy conn store "label" (SqlString "bye")
+        Io.println (String.concat [ "raw-findBy-declared-name:", String.fromInt (List.length found) ])
 
 
 insertLine : Maybe Store.Row -> String
@@ -154,8 +159,8 @@ peopleChecks conn store =
         Io.println (String.concat [ "codec-get-renamed-pk:", personName got ])
         returned <- Store.insertReturning conn store { id = "p2", name = "Hopper" }
         Io.println (String.concat [ "codec-insertReturning:", returned.id, "=", returned.name ])
-        found <- Store.findBy conn store "full_name" (SqlString "Grace")
-        Io.println (String.concat [ "codec-findBy-current-name:", String.join "," (List.map .id found) ])
+        found <- Store.findBy conn store "name" (SqlString "Grace")
+        Io.println (String.concat [ "codec-findBy-declared-name:", String.join "," (List.map .id found) ])
 
 
 personName : Maybe Person -> String
@@ -166,6 +171,109 @@ personName maybePerson =
 
         Nothing ->
             "missing"
+
+
+-- ── Query layer: declared names in, current columns out ─────────────
+
+type alias Pet =
+    { id : String
+    , owner : String
+    , label : String
+    }
+
+
+blankPet : Pet
+blankPet =
+    { id = "", owner = "", label = "" }
+
+
+petCodec : Codec Pet
+petCodec =
+    Codec.auto blankPet
+
+
+petsStore : Result Error (Store Pet)
+petsStore =
+    Store.fromCodec "pets" petCodec
+        |> Result.map (\s -> Store.primaryKey .id s)
+        |> Result.map Store.public
+        |> Result.map (Store.renameColumn "owner" "owner_ref")
+        |> Result.map (Store.renameColumn "label" "pet_label")
+
+
+personIds : List Person -> String
+personIds people =
+    String.join "," (List.map .id people)
+
+
+pairLine : ( Person, Pet ) -> String
+pairLine pair =
+    case pair of
+        ( person, pet ) ->
+            String.concat [ person.id, "=", person.name, "/", pet.label ]
+
+
+projectedLine : ( String, String, String ) -> String
+projectedLine triple =
+    case triple of
+        ( upperName, label, fallback ) ->
+            String.concat [ upperName, "/", label, "/", fallback ]
+
+
+-- A query that must be refused: its typed `Err` is the expected outcome.
+refusal : String -> Task Error (List Person) -> Task Error String
+refusal label task =
+    Task.onError
+        (\_ -> Task.succeed (String.concat [ label, ":refused" ]))
+        (Task.map (\_ -> String.concat [ label, ":FAIL accepted" ]) task)
+
+
+queryChecks : Db -> Store Person -> Store Pet -> Task Error ()
+queryChecks conn people pets =
+    do
+        _ <- Store.create conn pets
+        _ <- Store.insert conn pets { id = "t1", owner = "p1", label = "cat" }
+        _ <- Store.insert conn pets { id = "t2", owner = "p2", label = "dog" }
+        matched <-
+            Store.toList conn
+                (Store.query people |> Store.where (Store.eq .name "Grace"))
+        Io.println (String.concat [ "query-cond-declared-name:", personIds matched ])
+        ordered <-
+            Store.toList conn
+                (Store.query people
+                    |> Store.where (Store.inList .id [ "p1", "p2" ])
+                    |> Store.orderDesc "name"
+                )
+        Io.println (String.concat [ "query-order-declared-name:", personIds ordered ])
+        orderRefused <-
+            refusal "query-order-current-name"
+                (Store.toList conn (Store.query people |> Store.orderAsc "full_name"))
+        Io.println orderRefused
+        findRefused <-
+            refusal "findBy-current-name"
+                (Store.findBy conn people "full_name" (SqlString "Grace"))
+        Io.println findRefused
+        filtered <-
+            Store.joinToList conn
+                (Store.join people .id pets .owner
+                    |> Store.joinFilterRight (Store.eq .label "cat")
+                )
+        Io.println (String.concat [ "join-filter-declared-names:", String.join "," (List.map pairLine filtered) ])
+        sorted <-
+            Store.joinToList conn
+                (Store.join people .id pets .owner
+                    |> Store.orderByLeft .name Desc
+                )
+        Io.println (String.concat [ "join-order-declared-names:", String.join "," (List.map pairLine sorted) ])
+        projected <-
+            Store.selectToList conn
+                (Store.select
+                    (\( person, pet ) -> ( Store.upper person.name, pet.label, Store.coalesce pet.label (Store.literal "none") ))
+                    (Store.join people .id pets .owner
+                        |> Store.joinFilterRight (Store.eq .label "cat")
+                    )
+                )
+        Io.println (String.concat [ "select-declared-names:", String.join "," (List.map projectedLine projected) ])
 
 
 -- ── createSql / migrations / index: one frozen identity ──────────────
@@ -259,15 +367,21 @@ main : Task Error ()
 main =
     case ( eventsStore, peopleStore, usersStore ) of
         ( Ok events, Ok people, Ok users ) ->
-            do
-                conn <- Db.open "sqlite" "sqlite::memory:"
-                Db.withTransaction conn
-                    (\tx ->
-                        do
-                            eventsChecks tx events
-                            peopleChecks tx people
-                            Io.println (String.join "\n" (schemaLines users ++ refusals))
-                    )
+            case petsStore of
+                Ok pets ->
+                    do
+                        conn <- Db.open "sqlite" "sqlite::memory:"
+                        Db.withTransaction conn
+                            (\tx ->
+                                do
+                                    eventsChecks tx events
+                                    peopleChecks tx people
+                                    queryChecks tx people pets
+                                    Io.println (String.join "\n" (schemaLines users ++ refusals))
+                            )
+
+                Err _ ->
+                    Io.println "store-build:FAIL"
 
         _ ->
             Io.println "store-build:FAIL"

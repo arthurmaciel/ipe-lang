@@ -5,6 +5,11 @@
 //!     on `insert` and `update`, so a client value never overwrites them;
 //!   * a codec store binds the renamed columns, keys `update` / `get` on the
 //!     renamed primary key, and decodes `insertReturning` / `findBy` rows;
+//!   * every query-layer name is the declared name emitted as the current
+//!     column: a `Cond` accessor, `orderDesc`, `findBy`, a join key, a join
+//!     filter, a join sort column, and a `select` projection;
+//!   * a current name that is not a declared one is refused with a typed error
+//!     by `orderAsc` and `findBy`;
 //!   * `createSql` is the frozen create entry (frozen table + frozen columns),
 //!     identical to the first `migrations` entry;
 //!   * an index on a renamed column targets the current table and column;
