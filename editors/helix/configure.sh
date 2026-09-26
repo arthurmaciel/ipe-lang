@@ -28,11 +28,13 @@ case "$0" in
         if [ -n "$_d" ] && [ -f "$_d/editors/lib/ipe-editors.sh" ]; then IPE_SRC_ROOT="$_d"; fi ;;
 esac
 if [ -n "$IPE_SRC_ROOT" ]; then
+    # shellcheck source=../lib/ipe-editors.sh
     . "$IPE_SRC_ROOT/editors/lib/ipe-editors.sh"
 else
     _lib="$(mktemp)" || exit 1
     curl -fsSL "https://raw.githubusercontent.com/arthurmaciel/ipe-lang/$IPE_EDITORS_REF/editors/lib/ipe-editors.sh" -o "$_lib" \
         || { rm -f "$_lib"; printf 'error: cannot download editors/lib/ipe-editors.sh\n' >&2; exit 1; }
+    # shellcheck source=/dev/null
     . "$_lib"
     rm -f "$_lib"
 fi
@@ -85,22 +87,7 @@ if [ -f "$LANG_FILE" ] && ! ipe_has_block "$LANG_FILE" \
     warn "$LANG_FILE already defines Ipê outside a managed block — leaving it as is"
     warn "delete that definition and re-run to let this script manage it"
 else
-    cat > "$IPE_WORK/block" << 'TOML_BLOCK'
-[[language]]
-name = "ipe"
-scope = "source.ipe"
-file-types = ["ipe"]
-roots = ["package.ipe"]
-language-servers = ["ipe-lsp"]
-auto-format = true
-comment-tokens = ["--"]
-block-comment-tokens = { start = "{-", end = "-}" }
-indent = { tab-width = 4, unit = "    " }
-
-[language-server.ipe-lsp]
-command = "ipe"
-args = ["lsp"]
-TOML_BLOCK
+    ipe_fetch "editors/helix/languages.toml" "$IPE_WORK/block"
     ipe_write_block "$LANG_FILE" "#" "$IPE_WORK/block"
 fi
 

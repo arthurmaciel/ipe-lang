@@ -26,8 +26,18 @@ die() { printf '%s: error: %s\n' "$IPE_TAG" "$*" >&2; exit 1; }
 warn() { printf '%s: warning: %s\n' "$IPE_TAG" "$*" >&2; }
 say() { printf '%s: %s\n' "$IPE_TAG" "$*"; }
 
+# ipe_have CMD — CMD resolves to an executable (dash's `command -v` also
+# reports a non-executable file on PATH).
+ipe_have() {
+    _p="$(command -v "$1" 2>/dev/null)" || return 1
+    case "$_p" in
+        /*) [ -x "$_p" ] ;;
+        *) return 0 ;;
+    esac
+}
+
 need() {
-    command -v "$1" >/dev/null 2>&1 || die "'$1' not found — $2"
+    ipe_have "$1" || die "'$1' not found — $2"
 }
 
 # ipe_workdir — a private scratch directory removed on exit.
