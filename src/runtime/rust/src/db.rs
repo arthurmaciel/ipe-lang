@@ -1239,6 +1239,18 @@ impl std::fmt::Display for DbFailure {
 pub enum DbConnectError {
     /// A network URL did not parse, so the hosts it dials cannot be vetted.
     InvalidUrl,
+    /// The URL's scheme selects no engine the runtime supports.
+    ///
+    /// The scheme is not echoed: a malformed URL's scheme position can hold
+    /// its userinfo.
+    UnsupportedScheme,
+    /// The URL selects a different engine than the driver the pool opens with.
+    EngineMismatch {
+        /// The engine the URL's scheme selects.
+        url: DbEngine,
+        /// The engine the driver speaks.
+        driver: DbEngine,
+    },
     /// The SSRF gate refused a target the URL dials.
     HostRefused(crate::ssrf::SsrfRefusal),
     /// The driver could not open the pool.
@@ -1253,6 +1265,16 @@ impl std::fmt::Display for DbConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidUrl => f.write_str("db: invalid connection URL"),
+            Self::UnsupportedScheme => f.write_str(
+                "db: unsupported connection URL scheme (use sqlite:, file:, postgres: or \
+                 postgresql:)",
+            ),
+            Self::EngineMismatch { url, driver } => write!(
+                f,
+                "db: the connection URL selects {} but this build's driver is {}",
+                url.name(),
+                driver.name()
+            ),
             Self::HostRefused(refusal) => write!(f, "db: {refusal}"),
             Self::Unreachable(failure) | Self::VersionUnreadable(failure) => {
                 write!(f, "db: {failure}")
@@ -1341,6 +1363,109 @@ fn postgres_dial_targets(url: &str) -> Result<Vec<DialTarget>, DbConnectError> {
         .collect())
 }
 
+/// The scheme `url` names, or `None` when it names none.
+///
+/// A scheme is the text before the first `:` when it has the RFC 3986 shape
+/// (a letter, then letters, digits, `+`, `-` or `.`). A bare file path or
+/// SQLite's `:memory:` names none.
+fn url_scheme(url: &str) -> Option<&str> {
+    let (scheme, _) = url.split_once(':')?;
+    let mut chars = scheme.chars();
+    let shaped = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    shaped.then_some(scheme)
+}
+
+/// A SQLite connection URL.
+pub struct SqliteUrl {
+    url: String,
+    /// A file every pool connection shares, as opposed to a private in-memory database.
+    shared_file: bool,
+}
+
+/// A PostgreSQL connection URL and every target it makes the driver dial.
+pub struct PostgresUrl {
+    url: String,
+    targets: Vec<DialTarget>,
+}
+
+impl PostgresUrl {
+    /// Read every dial target of `url`.
+    ///
+    /// # Errors
+    ///
+    /// [`DbConnectError::InvalidUrl`] when the targets cannot be read.
+    fn parse(url: &str) -> Result<Self, DbConnectError> {
+        postgres_dial_targets(url).map(|targets| Self {
+            url: url.to_owned(),
+            targets,
+        })
+    }
+}
+
+/// A database connection URL, parsed once into the engine it selects.
+///
+/// The engine a pool is opened with, the SSRF gate's dial targets, and the
+/// SQLite WAL setup all read this one value, so they cannot disagree.
+/// Holds the URL's credentials, so it has no `Debug` or `Display`.
+pub enum DbUrl {
+    /// `sqlite:` or `file:`, or a bare path naming no scheme.
+    Sqlite(SqliteUrl),
+    /// `postgres:` or `postgresql:`.
+    Postgres(PostgresUrl),
+}
+
+impl DbUrl {
+    /// Parse `url` into the engine its scheme selects.
+    ///
+    /// Schemes are matched exactly (lower-case), as the drivers read them.
+    ///
+    /// # Errors
+    ///
+    /// [`DbConnectError::UnsupportedScheme`] for any other scheme, and
+    /// [`DbConnectError::InvalidUrl`] for a PostgreSQL URL whose dial targets
+    /// cannot be read.
+    pub fn parse(url: &str) -> Result<Self, DbConnectError> {
+        match url_scheme(url) {
+            None | Some("sqlite" | "file") => Ok(Self::Sqlite(SqliteUrl {
+                url: url.to_owned(),
+                shared_file: url_is_cacheable(url),
+            })),
+            Some("postgres" | "postgresql") => PostgresUrl::parse(url).map(Self::Postgres),
+            Some(_) => Err(DbConnectError::UnsupportedScheme),
+        }
+    }
+
+    /// The engine the URL selects.
+    #[must_use]
+    pub const fn engine(&self) -> DbEngine {
+        match self {
+            Self::Sqlite(_) => DbEngine::Sqlite,
+            Self::Postgres(_) => DbEngine::Postgres,
+        }
+    }
+
+    /// Whether the URL names a SQLite file every pool connection shares.
+    #[must_use]
+    pub const fn is_shared_sqlite_file(&self) -> bool {
+        matches!(
+            self,
+            Self::Sqlite(SqliteUrl {
+                shared_file: true,
+                ..
+            })
+        )
+    }
+
+    /// The refusal for a driver that speaks `driver` but was handed this URL.
+    const fn mismatch(&self, driver: DbEngine) -> DbConnectError {
+        DbConnectError::EngineMismatch {
+            url: self.engine(),
+            driver,
+        }
+    }
+}
+
 /// Admit one dial target under `policy`.
 ///
 /// A TCP host goes through [`VettedDial::for_host_with`]. A Unix socket
@@ -1384,17 +1509,17 @@ async fn vet_dial_target<R: HostResolver>(
 /// so a pinned named host cannot keep that check; it is refused rather than
 /// silently weakened.
 async fn postgres_connect_options<R: HostResolver>(
-    url: &str,
+    url: &PostgresUrl,
     policy: DialPolicy,
     resolver: &R,
 ) -> Result<sqlx::postgres::PgConnectOptions, DbConnectError> {
-    let mut vetted = Vec::new();
-    for target in postgres_dial_targets(url)? {
-        let dial = vet_dial_target(&target, policy, resolver).await?;
-        vetted.push((target, dial));
+    let mut vetted = Vec::with_capacity(url.targets.len());
+    for target in &url.targets {
+        let dial = vet_dial_target(target, policy, resolver).await?;
+        vetted.push((target.clone(), dial));
     }
     let options: sqlx::postgres::PgConnectOptions =
-        url.parse().map_err(|_| DbConnectError::InvalidUrl)?;
+        url.url.parse().map_err(|_| DbConnectError::InvalidUrl)?;
     match policy {
         DialPolicy::AllowAll => Ok(options),
         DialPolicy::DenyPrivate => pin_postgres_options(options, &vetted, resolver).await,
@@ -1454,8 +1579,11 @@ async fn pin_postgres_options<R: HostResolver>(
 /// which gate runs is decided by the driver type, never by reading the URL.
 pub trait GatedDial: sqlx::Database {
     /// The options `url` makes the driver dial, admitted by the gate.
+    ///
+    /// A URL selecting another engine is refused with
+    /// [`DbConnectError::EngineMismatch`].
     fn gated_connect_options(
-        url: &str,
+        url: &DbUrl,
     ) -> impl std::future::Future<
         Output = Result<<Self::Connection as sqlx::Connection>::Options, DbConnectError>,
     > + Send;
@@ -1464,19 +1592,29 @@ pub trait GatedDial: sqlx::Database {
 impl GatedDial for sqlx::Sqlite {
     /// SQLite opens a local file and dials no host.
     async fn gated_connect_options(
-        url: &str,
+        url: &DbUrl,
     ) -> Result<sqlx::sqlite::SqliteConnectOptions, DbConnectError> {
-        url.parse()
-            .map_err(|e| DbConnectError::Unreachable(DbFailure::of(&e)))
+        match url {
+            DbUrl::Sqlite(sqlite) => sqlite
+                .url
+                .parse()
+                .map_err(|e| DbConnectError::Unreachable(DbFailure::of(&e))),
+            DbUrl::Postgres(_) => Err(url.mismatch(DbEngine::Sqlite)),
+        }
     }
 }
 
 impl GatedDial for sqlx::Postgres {
     /// Every target is vetted under the environment's policy and pinned.
     async fn gated_connect_options(
-        url: &str,
+        url: &DbUrl,
     ) -> Result<sqlx::postgres::PgConnectOptions, DbConnectError> {
-        postgres_connect_options(url, DialPolicy::from_env(), &SystemResolver).await
+        match url {
+            DbUrl::Postgres(postgres) => {
+                postgres_connect_options(postgres, DialPolicy::from_env(), &SystemResolver).await
+            }
+            DbUrl::Sqlite(_) => Err(url.mismatch(DbEngine::Postgres)),
+        }
     }
 }
 
@@ -1508,7 +1646,7 @@ where
     /// # Errors
     ///
     /// [`DbConnectError`] when a gate refuses or the driver cannot connect.
-    pub async fn connect(url: &str, max_connections: u32) -> Result<Self, DbConnectError> {
+    pub async fn connect(url: &DbUrl, max_connections: u32) -> Result<Self, DbConnectError> {
         let options = DB::gated_connect_options(url).await?;
         let pool = sqlx::pool::PoolOptions::<DB>::new()
             .max_connections(max_connections)
@@ -1533,14 +1671,18 @@ where
 /// readers alongside a single writer — plus a `busy_timeout` so lock contention
 /// WAITS (sound) instead of erroring with `SQLITE_BUSY`. Without WAL a shared pool
 /// serialises every statement on the rollback-journal lock (the contention that a
-/// naive cache-only change regressed). The PRAGMAs are a no-op for other drivers
-/// (guarded by the url scheme).
+/// naive cache-only change regressed). The PRAGMAs run only when the parsed URL
+/// selects a shared SQLite file, the same value that chose the driver's gate.
 async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> IpeResult<E, Db> {
-    let pool: Db = match VettedPool::<DbDatabase>::connect(url, max_pool_connections()).await {
+    let db_url = match DbUrl::parse(url) {
+        Ok(db_url) => db_url,
+        Err(refused) => return IpeResult::Err(str_err(&refused.to_string())),
+    };
+    let pool: Db = match VettedPool::<DbDatabase>::connect(&db_url, max_pool_connections()).await {
         Ok(vetted) => vetted.into_pool(),
         Err(refused) => return IpeResult::Err(str_err(&refused.to_string())),
     };
-    if url.contains("sqlite") && url_is_cacheable(url) {
+    if db_url.is_shared_sqlite_file() {
         let _ = sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await;
         let _ = sqlx::query("PRAGMA busy_timeout=5000;")
             .execute(&pool)
@@ -5082,7 +5224,10 @@ mod tests {
     #[tokio::test]
     async fn vetted_pool_postgres_refusal_is_credential_free() {
         let url = "postgres://admin:s3cr3t-pw@db.internal/prod?sslmode=s3cr3t-pw";
-        let refused = VettedPool::<sqlx::Postgres>::connect(url, 1).await.err();
+        let refused = match DbUrl::parse(url) {
+            Ok(url) => VettedPool::<sqlx::Postgres>::connect(&url, 1).await.err(),
+            Err(refused) => Some(refused),
+        };
         assert!(refused.is_some(), "an invalid sslmode must be refused");
         if let Some(refused) = refused {
             assert_credential_free(&refused);
@@ -5097,7 +5242,10 @@ mod tests {
             "sqlite:///nonexistent-admin-s3cr3t-pw/x.db?mode=ro",
             "sqlite://x.db?mode=s3cr3t-pw",
         ] {
-            let refused = VettedPool::<sqlx::Sqlite>::connect(url, 1).await.err();
+            let refused = match DbUrl::parse(url) {
+                Ok(url) => VettedPool::<sqlx::Sqlite>::connect(&url, 1).await.err(),
+                Err(refused) => Some(refused),
+            };
             assert!(refused.is_some(), "{url:?} must be refused");
             if let Some(refused) = refused {
                 assert_credential_free(&refused);
@@ -5108,7 +5256,12 @@ mod tests {
     /// The bundled SQLite passes every gate and yields a usable pool.
     #[tokio::test]
     async fn vetted_pool_admits_the_bundled_sqlite() {
-        let vetted = VettedPool::<sqlx::Sqlite>::connect("sqlite::memory:", 1).await;
+        let vetted = match DbUrl::parse("sqlite::memory:") {
+            Ok(url) => VettedPool::<sqlx::Sqlite>::connect(&url, 1)
+                .await
+                .map(|_| ()),
+            Err(refused) => Err(refused),
+        };
         assert!(
             vetted.is_ok(),
             "bundled SQLite must connect: {:?}",
@@ -5170,7 +5323,7 @@ mod tests {
         ] {
             for policy in [DialPolicy::DenyPrivate, DialPolicy::AllowAll] {
                 assert_eq!(
-                    postgres_connect_options(url, policy, &NoDns).await.err(),
+                    pg_gate_with(url, policy, &NoDns).await.err(),
                     Some(DbConnectError::InvalidUrl),
                     "{url:?} under {policy:?}"
                 );
@@ -8324,40 +8477,17 @@ mod tests {
 
     use crate::ssrf::BlockedRange;
 
-    /// A resolver that must never be consulted: every lookup fails.
-    struct NoDns;
+    use crate::ssrf::test_resolvers::{NoDns, PublicThenPrivate};
 
-    impl HostResolver for NoDns {
-        async fn lookup(
-            &self,
-            _host: &str,
-            _port: u16,
-        ) -> std::io::Result<Vec<std::net::SocketAddr>> {
-            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
-        }
-    }
+    const REBIND_PUBLIC: std::net::IpAddr = PublicThenPrivate::PUBLIC;
 
-    /// A rebinding resolver: the first lookup answers a public address, every
-    /// later one a private address.
-    struct PublicThenPrivate {
-        calls: std::sync::atomic::AtomicUsize,
-    }
-
-    const REBIND_PUBLIC: std::net::IpAddr =
-        std::net::IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1));
-    const REBIND_PRIVATE: std::net::IpAddr =
-        std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 5));
-
-    impl HostResolver for PublicThenPrivate {
-        async fn lookup(
-            &self,
-            _host: &str,
-            port: u16,
-        ) -> std::io::Result<Vec<std::net::SocketAddr>> {
-            let first = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
-            let ip = if first { REBIND_PUBLIC } else { REBIND_PRIVATE };
-            Ok(vec![std::net::SocketAddr::new(ip, port)])
-        }
+    /// The gate's verdict on `url` under `policy`, resolving through `resolver`.
+    async fn pg_gate_with<R: HostResolver>(
+        url: &str,
+        policy: DialPolicy,
+        resolver: &R,
+    ) -> Result<sqlx::postgres::PgConnectOptions, DbConnectError> {
+        postgres_connect_options(&PostgresUrl::parse(url)?, policy, resolver).await
     }
 
     /// The gate's verdict on `url` under `policy`, with no DNS available.
@@ -8365,7 +8495,7 @@ mod tests {
         url: &str,
         policy: DialPolicy,
     ) -> Result<sqlx::postgres::PgConnectOptions, DbConnectError> {
-        postgres_connect_options(url, policy, &NoDns).await
+        pg_gate_with(url, policy, &NoDns).await
     }
 
     /// The refusal the gate gives `url` under deny-private, if any.
@@ -8474,10 +8604,8 @@ mod tests {
     /// never dialled, not even by a connection the pool opens later.
     #[tokio::test]
     async fn pg_gate_pins_a_named_host_against_rebinding() {
-        let resolver = PublicThenPrivate {
-            calls: std::sync::atomic::AtomicUsize::new(0),
-        };
-        let gated = postgres_connect_options(
+        let resolver = PublicThenPrivate::new();
+        let gated = pg_gate_with(
             "postgres://u:p@rebind.example:5432/x",
             DialPolicy::DenyPrivate,
             &resolver,
@@ -8486,13 +8614,13 @@ mod tests {
         .map(|o| (o.get_host().to_owned(), o.get_port()));
         assert_eq!(gated, Ok((REBIND_PUBLIC.to_string(), 5432)));
         assert_eq!(
-            resolver.calls.load(std::sync::atomic::Ordering::SeqCst),
+            resolver.calls(),
             1,
             "the name must be resolved exactly once"
         );
 
         // A fresh connect resolves again and meets the rebound answer.
-        let again = postgres_connect_options(
+        let again = pg_gate_with(
             "postgres://u:p@rebind.example:5432/x",
             DialPolicy::DenyPrivate,
             &resolver,
@@ -8515,10 +8643,8 @@ mod tests {
     /// literal under the same mode is pinned as itself.
     #[tokio::test]
     async fn pg_gate_refuses_verify_full_on_a_named_host_under_deny_private() {
-        let resolver = PublicThenPrivate {
-            calls: std::sync::atomic::AtomicUsize::new(0),
-        };
-        let refused = postgres_connect_options(
+        let resolver = PublicThenPrivate::new();
+        let refused = pg_gate_with(
             "postgres://db.example/x?sslmode=verify-full",
             DialPolicy::DenyPrivate,
             &resolver,
@@ -8556,8 +8682,169 @@ mod tests {
     #[tokio::test]
     async fn sqlite_gate_consults_no_host() {
         for url in ["sqlite:///app.db", "sqlite::memory:"] {
-            let gated = <sqlx::Sqlite as GatedDial>::gated_connect_options(url).await;
+            let parsed = DbUrl::parse(url);
+            assert!(parsed.is_ok(), "{url:?}: {:?}", parsed.err());
+            let Ok(parsed) = parsed else { return };
+            let gated = <sqlx::Sqlite as GatedDial>::gated_connect_options(&parsed).await;
             assert!(gated.is_ok(), "{url:?}: {:?}", gated.err());
+        }
+    }
+
+    // ── DbUrl: one parse decides the engine, the dial, and WAL ────────────────
+
+    /// The engine each scheme selects.
+    #[test]
+    fn db_url_selects_the_engine_by_scheme() {
+        for (url, engine) in [
+            ("sqlite://app.db?mode=rwc", DbEngine::Sqlite),
+            ("sqlite::memory:", DbEngine::Sqlite),
+            ("file:app.db", DbEngine::Sqlite),
+            ("app.db", DbEngine::Sqlite),
+            ("./data/app.db", DbEngine::Sqlite),
+            (":memory:", DbEngine::Sqlite),
+            ("postgres://u:p@db.example/app", DbEngine::Postgres),
+            ("postgresql://db.example/app", DbEngine::Postgres),
+            ("postgres:///app", DbEngine::Postgres),
+        ] {
+            assert!(
+                DbUrl::parse(url).is_ok_and(|parsed| parsed.engine() == engine),
+                "{url:?} must select {}",
+                engine.name()
+            );
+        }
+    }
+
+    /// A scheme selecting no supported engine is refused without echoing it,
+    /// since a malformed URL's scheme position can hold its userinfo.
+    #[test]
+    fn db_url_refuses_an_unsupported_scheme() {
+        for url in [
+            "mysql://admin:s3cr3t-pw@db.example/app",
+            "redis://db.example/",
+            "http://db.example/",
+            "SQLITE://app.db",
+            "Postgres://db.example/app",
+            "admin:s3cr3t-pw@db.example/app",
+        ] {
+            let refused = DbUrl::parse(url).err();
+            assert_eq!(refused, Some(DbConnectError::UnsupportedScheme), "{url:?}");
+            if let Some(refused) = refused {
+                assert_credential_free(&refused);
+            }
+        }
+    }
+
+    /// A PostgreSQL URL whose dial targets cannot be read is refused at the parse.
+    #[test]
+    fn db_url_refuses_an_unreadable_postgres_url() {
+        for url in [
+            "postgres://public.example/db?port=s3cr3t-pw",
+            "postgres://public.example/db?port=70000",
+        ] {
+            assert_eq!(
+                DbUrl::parse(url).err(),
+                Some(DbConnectError::InvalidUrl),
+                "{url:?}"
+            );
+        }
+    }
+
+    /// A PostgreSQL URL's dial targets are read once, at the parse, and the
+    /// gate vets exactly those.
+    #[test]
+    fn db_url_carries_the_postgres_dial_targets() {
+        let parsed = DbUrl::parse("postgres://public.example/db?host=169.254.169.254");
+        let targets = match parsed {
+            Ok(DbUrl::Postgres(postgres)) => Some(postgres.targets),
+            _ => None,
+        };
+        assert_eq!(
+            targets,
+            Some(vec![
+                DialTarget::Tcp {
+                    host: "public.example".to_owned(),
+                    port: POSTGRES_DEFAULT_PORT,
+                },
+                DialTarget::Tcp {
+                    host: "169.254.169.254".to_owned(),
+                    port: POSTGRES_DEFAULT_PORT,
+                },
+            ])
+        );
+    }
+
+    /// Only a shared SQLite file gets the WAL setup: never a PostgreSQL URL
+    /// that merely mentions `sqlite`, never a private in-memory database.
+    #[test]
+    fn db_url_decides_wal_from_the_parsed_engine() {
+        for (url, wal) in [
+            ("sqlite://app.db?mode=rwc", true),
+            ("app.db", true),
+            ("file::memory:?cache=shared", true),
+            ("sqlite::memory:", false),
+            (":memory:", false),
+            ("postgres://db.example/sqlite", false),
+            ("postgres://db.example/app?application_name=sqlite", false),
+        ] {
+            assert!(
+                DbUrl::parse(url).is_ok_and(|parsed| parsed.is_shared_sqlite_file() == wal),
+                "{url:?}: WAL must be {wal}"
+            );
+        }
+    }
+
+    /// Each driver refuses a URL selecting the other engine, before any dial
+    /// or lookup.
+    #[tokio::test]
+    async fn gated_dial_refuses_a_url_for_the_other_engine() {
+        let postgres = DbUrl::parse("postgres://127.0.0.1/app");
+        assert!(postgres.is_ok(), "{:?}", postgres.as_ref().err());
+        let Ok(postgres) = postgres else { return };
+        assert_eq!(
+            <sqlx::Sqlite as GatedDial>::gated_connect_options(&postgres)
+                .await
+                .err(),
+            Some(DbConnectError::EngineMismatch {
+                url: DbEngine::Postgres,
+                driver: DbEngine::Sqlite,
+            })
+        );
+        let sqlite = DbUrl::parse("sqlite::memory:");
+        assert!(sqlite.is_ok(), "{:?}", sqlite.as_ref().err());
+        let Ok(sqlite) = sqlite else { return };
+        assert_eq!(
+            <sqlx::Postgres as GatedDial>::gated_connect_options(&sqlite)
+                .await
+                .err(),
+            Some(DbConnectError::EngineMismatch {
+                url: DbEngine::Sqlite,
+                driver: DbEngine::Postgres,
+            })
+        );
+    }
+
+    /// `build_pool` refuses an unsupported scheme and a URL for the other
+    /// engine, with the typed reason and no credential.
+    #[tokio::test]
+    async fn build_pool_refuses_urls_the_build_cannot_open() {
+        for (url, expected) in [
+            (
+                "mysql://admin:s3cr3t-pw@db.example/app",
+                DbConnectError::UnsupportedScheme,
+            ),
+            (
+                "postgres://admin:s3cr3t-pw@1.1.1.1/app",
+                DbConnectError::EngineMismatch {
+                    url: DbEngine::Postgres,
+                    driver: DbEngine::Sqlite,
+                },
+            ),
+        ] {
+            let refused = match build_pool::<String>(url).await {
+                IpeResult::Err(e) => Some(e),
+                IpeResult::Ok(_) => None,
+            };
+            assert_eq!(refused, Some(expected.to_string()), "{url:?}");
         }
     }
 

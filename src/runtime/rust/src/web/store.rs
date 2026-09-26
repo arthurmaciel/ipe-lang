@@ -553,7 +553,9 @@ impl StoreOpenError {
         use crate::ssrf::SsrfRefusal;
         match self {
             Self::Connect(failure) => match failure {
-                DbConnectError::InvalidUrl => true,
+                DbConnectError::InvalidUrl
+                | DbConnectError::UnsupportedScheme
+                | DbConnectError::EngineMismatch { .. } => true,
                 DbConnectError::HostRefused(refusal) => match refusal {
                     SsrfRefusal::Blocked { .. }
                     | SsrfRefusal::Unresolvable { .. }
@@ -623,7 +625,8 @@ impl<Model, Msg> SqliteStore<Model, Msg> {
         ttl: Duration,
         schema_tag: [u8; 32],
     ) -> Result<Self, StoreOpenError> {
-        let url = format!("sqlite:{path}?mode=rwc");
+        let url = crate::db::DbUrl::parse(&format!("sqlite:{path}?mode=rwc"))
+            .map_err(StoreOpenError::Connect)?;
         let pool =
             crate::db::VettedPool::<sqlx::Sqlite>::connect(&url, SESSION_STORE_MAX_CONNECTIONS)
                 .await
@@ -825,13 +828,12 @@ impl<Model, Msg> PostgresStore<Model, Msg> {
         ttl: Duration,
         schema_tag: [u8; 32],
     ) -> Result<Self, StoreOpenError> {
-        let pool = crate::db::VettedPool::<sqlx::Postgres>::connect(
-            conn_str,
-            SESSION_STORE_MAX_CONNECTIONS,
-        )
-        .await
-        .map_err(StoreOpenError::Connect)?
-        .into_pool();
+        let url = crate::db::DbUrl::parse(conn_str).map_err(StoreOpenError::Connect)?;
+        let pool =
+            crate::db::VettedPool::<sqlx::Postgres>::connect(&url, SESSION_STORE_MAX_CONNECTIONS)
+                .await
+                .map_err(StoreOpenError::Connect)?
+                .into_pool();
         // Pre-existing tables keep their old column set (IF NOT EXISTS) —
         // same fail-soft degradation as SqliteStore::new.
         sqlx::query(
@@ -1563,6 +1565,11 @@ mod tests {
         let policy = [
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::LocalSocket)),
             StoreOpenError::Connect(DbConnectError::InvalidUrl),
+            StoreOpenError::Connect(DbConnectError::UnsupportedScheme),
+            StoreOpenError::Connect(DbConnectError::EngineMismatch {
+                url: DbEngine::Sqlite,
+                driver: DbEngine::Postgres,
+            }),
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Blocked {
                 host: "10.0.0.1".to_owned(),
                 ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),

@@ -30,7 +30,7 @@
 
 use super::IpeResult;
 use crate::core::{IpeTask, ok_res, str_err};
-use crate::db::{DbConnectError, VettedPool};
+use crate::db::{DbConnectError, DbUrl, VettedPool};
 use crate::dsn::{Dsn, DsnDriver};
 use crate::ssrf::VettedDial;
 
@@ -89,7 +89,10 @@ fn connect_err<E: From<String>>(refused: &DbConnectError) -> E {
 async fn open_external<E: Send + From<String> + 'static>(
     dsn: Dsn,
 ) -> IpeResult<E, ExternalConnection> {
-    let url = dsn.connection_url();
+    let url = match DbUrl::parse(&dsn.connection_url()) {
+        Ok(url) => url,
+        Err(refused) => return IpeResult::Err(connect_err(&refused)),
+    };
     match dsn.driver() {
         DsnDriver::Postgres => {
             // Defence in depth: the host the `Dsn` parse boundary extracted is
