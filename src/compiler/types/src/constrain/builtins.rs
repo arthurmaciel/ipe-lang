@@ -327,12 +327,12 @@ pub struct Builtins {
     #[allow(dead_code)]
     pub live_f_not_found: Symbol,
     // ── Tui.Sub.onKey `KeyEvent` record field name symbols ────────────────────
-    /// `"kind"` — field of the pinned `KeyEvent` record in the `Tui.Sub.onKey`
-    /// scheme; the backend bridges the record handler onto the runtime's flat
+    /// `"kind"` — a field of the pinned `Tui.Sub.onKey` `KeyEvent` record.
+    ///
+    /// The backend bridges the record handler onto the runtime's flat
     /// `Fn(String, String) -> Msg` key handler.
     pub tui_f_key_kind: Symbol,
-    /// `"value"` — field of the pinned `KeyEvent` record in the `Tui.Sub.onKey`
-    /// scheme.
+    /// `"value"` — a field of the pinned `Tui.Sub.onKey` `KeyEvent` record.
     pub tui_f_key_value: Symbol,
     // ── Ui.button cfg record field name symbols ───────────────────────────────
     /// `"onPress"` — the onPress field of the `Ui.button` config record.

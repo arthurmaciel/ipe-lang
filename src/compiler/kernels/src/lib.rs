@@ -145,6 +145,71 @@ pub struct StdlibDecl {
     pub emit: &'static str,
 }
 
+/// The app surface a program's entry `main` pins.
+///
+/// Each TEA surface runs its own loop and owns its own `Cmd` / `Sub` import path
+/// (`Ipe.Tea.<Surface>.{Cmd,Sub}`). The shared `Ipe.Tea.Terminal.{Cmd,Sub}`
+/// re-export names no surface; it serves both terminal surfaces. `Script` is a
+/// `main` that heads on no app entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum AppSurface {
+    /// `Web.tea` / `Web.appRouted` / `Web.appWith` / `Web.embed`.
+    Web,
+    /// A `Web` app delivered to a desktop webview host.
+    WebView,
+    /// `Tui.tea` — the full-screen terminal loop.
+    Tui,
+    /// `Cli.tea` — the line-oriented terminal loop.
+    Cli,
+    /// `Worker.tea` — the view-less loop.
+    Worker,
+    /// A plain `main : Task Error ()`.
+    Script,
+}
+
+impl AppSurface {
+    /// The surface's segment in its `Ipe.Tea.<Surface>` import path.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Web => "Web",
+            Self::WebView => "WebView",
+            Self::Tui => "Tui",
+            Self::Cli => "Cli",
+            Self::Worker => "Worker",
+            Self::Script => "Script",
+        }
+    }
+
+    /// The app surface an `Ipe.Tea.<segment>` path segment names.
+    ///
+    /// `Terminal` is the shared terminal re-export, not a surface, so it (and any
+    /// unrecognised segment) yields `None`.
+    #[must_use]
+    pub fn from_segment(segment: &str) -> Option<Self> {
+        match segment {
+            "Web" => Some(Self::Web),
+            "WebView" => Some(Self::WebView),
+            "Tui" => Some(Self::Tui),
+            "Cli" => Some(Self::Cli),
+            "Worker" => Some(Self::Worker),
+            _ => None,
+        }
+    }
+
+    /// Whether an app on this surface may import `Ipe.Tea.<segment>.{Cmd,Sub}`.
+    ///
+    /// Only its own surface's modules qualify, plus the shared
+    /// `Ipe.Tea.Terminal.{Cmd,Sub}` for either terminal surface.
+    #[must_use]
+    pub fn admits_cmd_sub_of(self, segment: &str) -> bool {
+        match Self::from_segment(segment) {
+            Some(imported) => imported == self,
+            None => segment == "Terminal" && matches!(self, Self::Tui | Self::Cli),
+        }
+    }
+}
+
 /// A reference to the HM type scheme of a kernel, without carrying the scheme
 /// itself.
 ///
@@ -1834,13 +1899,15 @@ pub enum StdlibKernel {
     /// `Sub.map` — `(a -> msg) -> Sub a -> Sub msg`; the `Sub` twin of
     /// [`Self::CmdMap`].
     SubMap,
-    /// `Tui.Sub.onKey` — `(KeyEvent -> msg) -> Sub msg`; terminal key input as
-    /// a subscription. Reachable only through `Ipe.Tea.Tui.Sub`, so only a
-    /// `Tui.tea` app can name it.
+    /// `Tui.Sub.onKey` — `(KeyEvent -> msg) -> Sub msg`, key input as a subscription.
+    ///
+    /// Reachable only through `Ipe.Tea.Tui.Sub`, so only a `Tui.tea` app can
+    /// name it.
     TuiSubOnKey,
-    /// `Cli.Sub.onLine` — `(String -> msg) -> Sub msg`; stdin line input as a
-    /// subscription. Reachable only through `Ipe.Tea.Cli.Sub`, so only a
-    /// `Cli.tea` app can name it.
+    /// `Cli.Sub.onLine` — `(String -> msg) -> Sub msg`, line input as a subscription.
+    ///
+    /// Reachable only through `Ipe.Tea.Cli.Sub`, so only a `Cli.tea` app can
+    /// name it.
     CliSubOnLine,
     // ── TEA: pub/sub ────────────────────────────────────────────────────────
     /// `Cmd.publish` — `"publish"` registered in canon `QUALIFIERS`.
@@ -13305,6 +13372,45 @@ impl StdlibKernel {
     #[must_use]
     pub const fn is_worker(self) -> bool {
         matches!(self, Self::TeaWorker)
+    }
+
+    /// The app surface this app-entry kernel pins, when it is one.
+    #[must_use]
+    pub const fn app_entry_surface(self) -> Option<AppSurface> {
+        match self {
+            Self::WebApp | Self::WebAppRouted | Self::WebAppWith | Self::WebEmbed => {
+                Some(AppSurface::Web)
+            }
+            Self::TerminalAppScreen => Some(AppSurface::Tui),
+            Self::TerminalAppLines => Some(AppSurface::Cli),
+            Self::TeaWorker => Some(AppSurface::Worker),
+            _ => None,
+        }
+    }
+
+    /// The one app surface whose loop reads this shape-owned input subscription.
+    ///
+    /// `Tui.Sub.onKey` is driven only by the `Tui` loop and `Cli.Sub.onLine` only
+    /// by the `Cli` loop; anywhere else the subscription would be silently dead.
+    #[must_use]
+    pub const fn input_surface(self) -> Option<AppSurface> {
+        match self {
+            Self::TuiSubOnKey => Some(AppSurface::Tui),
+            Self::CliSubOnLine => Some(AppSurface::Cli),
+            _ => None,
+        }
+    }
+
+    /// Whether this kernel is emittable only as a saturated call.
+    ///
+    /// Such a kernel's emit arm carries a bridge or a guard (the input
+    /// subscriptions' `KeyEvent` bridge and surface check) that a point-free
+    /// first-class reference would bypass, so the lowerer eta-expands every
+    /// point-free reference to it into `\x -> kernel x` and the backend refuses
+    /// to box it as a bare function value.
+    #[must_use]
+    pub const fn requires_saturated_emit(self) -> bool {
+        self.input_surface().is_some()
     }
 
     /// `true` when this variant belongs to the `Ipe.CssSafety` leaf

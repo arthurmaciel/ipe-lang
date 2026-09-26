@@ -14,7 +14,9 @@ use super::super::core::{IpeResult, IpeTask, ok_res};
 #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
 use super::super::debugger::tui::TuiDebugger;
 use super::super::stringify::IpeStringify;
-use super::super::tea::{CliEvent, IpeCmd, IpeSub, SubManager, cli_run_cmd};
+use super::super::tea::{
+    CliEvent, InputBudget, IpeCmd, IpeSub, MAX_QUEUED_INPUT, SubManager, cli_run_cmd,
+};
 use super::CellsView;
 use super::focus::{
     Focusable, InputRegistry, clamp_focus, edit_input, ensure_focus_visible, extract_click_msg,
@@ -197,11 +199,14 @@ fn tail_maybe_truncated(tail: &[u8]) -> bool {
 /// larger than 64 bytes). `map_kind` turns the decoded `TuiKey` into the wire
 /// `(kind, value)` pair (`tui_app_ui` folds the ctrl modifier into the kind for
 /// the input editor's word-jumps; `tui_app` passes it through). Runs on its own
-/// blocking thread so the key handlers stay off it.
+/// blocking thread so the key handlers stay off it. Each key is queued only with
+/// an [`InputBudget`] permit, so at most [`MAX_QUEUED_INPUT`] keys wait for the
+/// loop; past that the reader blocks until the loop catches up.
 fn read_keys_loop<Msg, FMap>(tx: &tokio::sync::mpsc::UnboundedSender<CliEvent<Msg>>, map_kind: FMap)
 where
     FMap: Fn(TuiKey) -> (String, String),
 {
+    let budget = InputBudget::new(MAX_QUEUED_INPUT);
     let mut stdin = std::io::stdin();
     let mut buf = [0u8; 64];
     let mut carry: Vec<u8> = Vec::new();
@@ -228,7 +233,10 @@ where
             }
             i += consumed;
             let (kind, value) = map_kind(k);
-            if tx.send(CliEvent::Key(kind, value)).is_err() {
+            let Some(permit) = budget.acquire(|| tx.is_closed()) else {
+                return;
+            };
+            if tx.send(CliEvent::Key(kind, value, permit)).is_err() {
                 return;
             }
         }
@@ -243,7 +251,10 @@ where
         }
         i += consumed;
         let (kind, value) = map_kind(k);
-        if tx.send(CliEvent::Key(kind, value)).is_err() {
+        let Some(permit) = budget.acquire(|| tx.is_closed()) else {
+            return;
+        };
+        if tx.send(CliEvent::Key(kind, value, permit)).is_err() {
             return;
         }
     }
@@ -438,7 +449,8 @@ where
 
         while let Some(ev) = rx.recv().await {
             let msgs: Vec<Msg> = match ev {
-                CliEvent::Key(kind, value) => {
+                // The permit returns to the reader's budget as the key is taken.
+                CliEvent::Key(kind, value, _permit) => {
                     #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
                     {
                         // Ctrl-T: toggle time-travel mode.
@@ -477,7 +489,7 @@ where
                     submgr.key_msgs(&kind, &value)
                 }
                 CliEvent::Msg(m) | CliEvent::PerformDone(m) => vec![m],
-                CliEvent::Line(_) => continue,
+                CliEvent::Line(..) => continue,
                 CliEvent::Eof => break,
             };
             if msgs.is_empty() {
@@ -1158,8 +1170,9 @@ where
             match ev {
                 CliEvent::Msg(m) | CliEvent::PerformDone(m) => produced = Some(m),
                 CliEvent::Eof => break,
-                CliEvent::Line(_) => continue,
-                CliEvent::Key(kind, value) => {
+                CliEvent::Line(..) => continue,
+                // The permit returns to the reader's budget as the key is taken.
+                CliEvent::Key(kind, value, _permit) => {
                     // Debugger key intercept — must come before any app key handling.
                     #[cfg(all(feature = "debugger", not(target_arch = "wasm32")))]
                     {

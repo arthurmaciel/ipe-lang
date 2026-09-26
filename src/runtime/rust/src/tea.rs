@@ -49,9 +49,11 @@ pub type SubSpawn<M> =
 #[cfg(target_arch = "wasm32")]
 pub type SubSpawn<M> = Box<dyn FnOnce(std::rc::Rc<dyn Fn(M)>) -> Box<dyn FnOnce()>>;
 
-/// A `Tui.Sub.onKey` handler over a key's flat `(kind, value)` pair (the
-/// emitter builds the `KeyEvent` record inside it). `Send` so the terminal loop's
-/// future stays `Send`; called only on the loop's own task, so no `Sync` needed.
+/// A `Tui.Sub.onKey` handler over a key's flat `(kind, value)` pair.
+///
+/// The emitter builds the `KeyEvent` record inside it. `Send` so the terminal
+/// loop's future stays `Send`; called only on the loop's own task, so no `Sync`
+/// is needed.
 #[cfg(not(target_arch = "wasm32"))]
 pub type KeyHandler<M> = Box<dyn Fn(String, String) -> M + Send>;
 /// A `Cli.Sub.onLine` handler over one stdin line.
@@ -67,12 +69,15 @@ pub enum IpeSub<M> {
         msg: M,
     },
     Source(SubSpawn<M>),
-    /// `Tui.Sub.onKey` — read by the Tui loop, which hands each key to every
-    /// active key handler. Native-only: a terminal never runs in a browser.
+    /// `Tui.Sub.onKey`, read by the Tui loop.
+    ///
+    /// The loop hands each key to every active key handler. Native-only: a
+    /// terminal never runs in a browser.
     #[cfg(not(target_arch = "wasm32"))]
     OnKey(KeyHandler<M>),
-    /// `Cli.Sub.onLine` — read by the Cli loop, which hands each stdin line to
-    /// every active line handler.
+    /// `Cli.Sub.onLine`, read by the Cli loop.
+    ///
+    /// The loop hands each stdin line to every active line handler.
     #[cfg(not(target_arch = "wasm32"))]
     OnLine(LineHandler<M>),
 }
@@ -213,6 +218,7 @@ pub fn sub_every<M>(ms: i64, msg: M) -> IpeSub<M> {
 }
 
 /// `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg` — subscribe to terminal keys.
+///
 /// `on_key` receives the key's `(kind, value)`; the emitter wraps the user's
 /// `KeyEvent -> msg` handler so the record is built there.
 #[cfg(not(target_arch = "wasm32"))]
@@ -346,20 +352,172 @@ where
 /// the shared TEA event plumbing rather than carrying it as dead code.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub(crate) enum CliEvent<M> {
-    Line(String),
+    /// A stdin line, holding its share of the reader's [`InputBudget`].
+    Line(String, InputPermit),
     // Constructed only by the `tui` raw-key reader; console_app matches it
     // defensively (keys are ignored under Cli).
-    Key(String, String),
+    Key(String, String, InputPermit),
     Msg(M),
     PerformDone(M),
     Eof,
 }
 
-/// Tracks the goroutine-equivalent ticker tasks spawned for the active
-/// `Sub.every` subscriptions, and the active terminal input handlers
-/// (`Tui.Sub.onKey` / `Cli.Sub.onLine`). `update` stops all + respawns from the
-/// new Sub (one program, one model, re-evaluated each tick), so an input event
-/// is always dispatched against the handlers the CURRENT model subscribes to.
+/// The most terminal input events the loop may hold queued but not yet taken.
+///
+/// Past it the blocking reader waits (backpressure), so a flood of piped stdin
+/// or held-down keys can never outrun the loop into an unbounded queue.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) const MAX_QUEUED_INPUT: usize = 256;
+
+/// The longest stdin line the Cli loop delivers, in bytes without its terminator.
+///
+/// A longer line is dropped whole (never truncated: a prefix of a line can mean
+/// something different from the line), and at most this many bytes of it are
+/// ever buffered.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) const MAX_LINE_BYTES: usize = 64 * 1024;
+
+/// The shared count of queued input events behind an [`InputBudget`].
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+type QueuedInput = std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>;
+
+/// A ceiling on the terminal input events queued for the loop.
+///
+/// The blocking reader takes one [`InputPermit`] per event before queuing it and
+/// waits while `capacity` are outstanding; the loop returns a permit by dropping
+/// it when it takes the event.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) struct InputBudget {
+    queued: QueuedInput,
+    capacity: usize,
+}
+
+/// One queued input event's share of an [`InputBudget`], returned on drop.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) struct InputPermit {
+    queued: QueuedInput,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+impl InputBudget {
+    /// A budget of `capacity` queued events (at least one).
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            queued: std::sync::Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new())),
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// Wait until one more event may be queued, or `None` once `closed` reports the loop gone.
+    ///
+    /// `closed` is polled while waiting, so a reader parked on a full budget
+    /// still exits after the loop drops its receiver.
+    pub(crate) fn acquire(&self, closed: impl Fn() -> bool) -> Option<InputPermit> {
+        let (lock, ready) = &*self.queued;
+        let mut queued = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *queued >= self.capacity {
+            if closed() {
+                return None;
+            }
+            let (guard, _timeout) = ready
+                .wait_timeout(queued, std::time::Duration::from_millis(50))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            queued = guard;
+        }
+        *queued = queued.saturating_add(1);
+        Some(InputPermit {
+            queued: std::sync::Arc::clone(&self.queued),
+        })
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+impl Drop for InputPermit {
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.queued;
+        let mut queued = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *queued = queued.saturating_sub(1);
+        ready.notify_one();
+    }
+}
+
+/// One stdin line read under [`MAX_LINE_BYTES`].
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BoundedLine {
+    /// A complete line within the ceiling, its `\n` / `\r\n` terminator removed.
+    Line(String),
+    /// A line past the ceiling, consumed through its terminator and dropped.
+    TooLong,
+    /// A line within the ceiling that is not UTF-8.
+    NotUtf8,
+}
+
+/// Read the next line from `reader`, buffering at most `max_bytes` of it.
+///
+/// Returns `Ok(None)` at end of input. A final line without a terminator is
+/// still a line. A line longer than `max_bytes` is consumed through its
+/// terminator without being buffered past the ceiling and reported as
+/// [`BoundedLine::TooLong`].
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub(crate) fn read_bounded_line<R: std::io::BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<BoundedLine>> {
+    let mut line: Vec<u8> = Vec::new();
+    let mut too_long = false;
+    let mut read_any = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if !read_any {
+                return Ok(None);
+            }
+            break;
+        }
+        read_any = true;
+        let newline = available.iter().position(|b| *b == b'\n');
+        let chunk = match newline {
+            Some(at) => available.get(..at).unwrap_or(available),
+            None => available,
+        };
+        if !too_long {
+            if line.len().saturating_add(chunk.len()) > max_bytes.saturating_add(1) {
+                // One byte of slack admits a `\r` of a `\r\n` terminator.
+                too_long = true;
+                line = Vec::new();
+            } else {
+                line.extend_from_slice(chunk);
+            }
+        }
+        let consumed = chunk.len().saturating_add(usize::from(newline.is_some()));
+        reader.consume(consumed);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if line.last() == Some(&b'\r') {
+        line.pop();
+    }
+    if too_long || line.len() > max_bytes {
+        return Ok(Some(BoundedLine::TooLong));
+    }
+    Ok(Some(
+        String::from_utf8(line).map_or(BoundedLine::NotUtf8, BoundedLine::Line),
+    ))
+}
+
+/// Tracks the running subscription tasks and the active terminal input handlers.
+///
+/// The tasks are the goroutine-equivalent tickers of `Sub.every` and the
+/// subscription sources; the handlers are the `Tui.Sub.onKey` /
+/// `Cli.Sub.onLine` ones. `update` stops all + respawns from the new Sub (one
+/// program, one model, re-evaluated each tick), so an input event is always
+/// dispatched against the handlers the CURRENT model subscribes to.
 ///
 /// Terminal-loop-only (see [`CliEvent`]): both consuming drivers are
 /// `feature = "tui"`-gated.
@@ -388,17 +546,19 @@ impl<M: Clone + Send + 'static> SubManager<M> {
         self.key_handlers.clear();
         self.line_handlers.clear();
     }
-    /// The messages every active `Tui.Sub.onKey` handler maps one key to, in
-    /// subscription order. Empty when no key subscription is active — the key
-    /// is then unobserved.
+    /// The messages every active `Tui.Sub.onKey` handler maps one key to.
+    ///
+    /// In subscription order; empty when no key subscription is active (the key
+    /// is then unobserved).
     pub(crate) fn key_msgs(&self, kind: &str, value: &str) -> Vec<M> {
         self.key_handlers
             .iter()
             .map(|on_key| on_key(kind.to_owned(), value.to_owned()))
             .collect()
     }
-    /// The messages every active `Cli.Sub.onLine` handler maps one stdin line
-    /// to, in subscription order. Empty when no line subscription is active.
+    /// The messages every active `Cli.Sub.onLine` handler maps one stdin line to.
+    ///
+    /// In subscription order; empty when no line subscription is active.
     pub(crate) fn line_msgs(&self, line: &str) -> Vec<M> {
         self.line_handlers
             .iter()
@@ -581,25 +741,35 @@ where
         // Blocking stdin reader → raw Line events, then Eof. The line handlers are
         // applied in the main task (keeps them off the blocking thread).
         //
+        // Bounded by construction: each line is read under `MAX_LINE_BYTES` (an
+        // over-long line is dropped whole) and queued only with an
+        // `InputBudget` permit, so at most `MAX_QUEUED_INPUT` lines wait for the
+        // loop; past that the reader blocks until the loop catches up.
+        //
         // KNOWN LEAK (intentional, bounded): this detached thread is never joined
         // or signalled — if the returned future is dropped/cancelled the thread
-        // stays parked on `lines()` until the next stdin line (or process exit).
+        // stays parked on its stdin read until the next line (or process exit).
         // Benign for a one-shot Cli `main` (the process is exiting anyway); a
         // shutdown flag wouldn't help since the read blocks until the next line
         // regardless. Do NOT compose `console_app` under a cancelling parent or
         // invoke it twice in one process without first accounting for this.
         let line_tx = tx.clone();
         std::thread::spawn(move || {
-            use std::io::BufRead;
+            let budget = InputBudget::new(MAX_QUEUED_INPUT);
             let stdin = std::io::stdin();
-            for line in stdin.lock().lines() {
-                match line {
-                    Ok(l) => {
-                        if line_tx.send(CliEvent::Line(l)).is_err() {
-                            return;
-                        }
-                    }
-                    Err(_) => break,
+            let mut reader = stdin.lock();
+            loop {
+                let line = match read_bounded_line(&mut reader, MAX_LINE_BYTES) {
+                    Ok(Some(BoundedLine::Line(l))) => l,
+                    Ok(Some(BoundedLine::TooLong)) => continue,
+                    // End of input, a non-UTF-8 line, or a read error ends input.
+                    Ok(None | Some(BoundedLine::NotUtf8)) | Err(_) => break,
+                };
+                let Some(permit) = budget.acquire(|| line_tx.is_closed()) else {
+                    return;
+                };
+                if line_tx.send(CliEvent::Line(line, permit)).is_err() {
+                    return;
                 }
             }
             let _ = line_tx.send(CliEvent::Eof);
@@ -648,8 +818,9 @@ where
         while let Some(ev) = rx.recv().await {
             let msgs: Vec<Msg> = match ev {
                 // Every active line handler sees the line; none → unobserved.
-                CliEvent::Line(l) => submgr.line_msgs(&l),
-                CliEvent::Key(_, _) => continue, // Cli has no keys
+                // The permit returns to the reader's budget as the line is taken.
+                CliEvent::Line(l, _permit) => submgr.line_msgs(&l),
+                CliEvent::Key(..) => continue, // Cli has no keys
                 CliEvent::Msg(m) => vec![m],
                 CliEvent::PerformDone(m) => {
                     // A one-shot effect delivered its result: this effect is no
@@ -1319,5 +1490,70 @@ mod input_dispatch_tests {
         assert!(mgr.line_msgs("a").is_empty());
         mgr.stop_all();
         assert!(mgr.key_msgs("char", "x").is_empty());
+    }
+}
+
+// ─── Bounded terminal input unit tests ─────────────────────────────────────
+
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "tui"))]
+mod bounded_input_tests {
+    use super::*;
+
+    fn lines(input: &[u8], max: usize) -> Vec<BoundedLine> {
+        let mut reader = std::io::BufReader::with_capacity(4, input);
+        let mut out = Vec::new();
+        while let Ok(Some(line)) = read_bounded_line(&mut reader, max) {
+            out.push(line);
+        }
+        out
+    }
+
+    #[test]
+    fn lines_within_the_cap_are_delivered_without_terminators() {
+        assert_eq!(
+            lines(b"ab\r\ncd\nef", 8),
+            vec![
+                BoundedLine::Line("ab".into()),
+                BoundedLine::Line("cd".into()),
+                BoundedLine::Line("ef".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_at_exactly_the_cap_is_delivered() {
+        assert_eq!(lines(b"abcd\n", 4), vec![BoundedLine::Line("abcd".into())]);
+        assert_eq!(
+            lines(b"abcd\r\n", 4),
+            vec![BoundedLine::Line("abcd".into())]
+        );
+    }
+
+    #[test]
+    fn a_line_one_byte_past_the_cap_is_dropped_whole() {
+        // The over-long line is consumed through its terminator; the next line
+        // is read intact, never a truncated prefix of the dropped one.
+        assert_eq!(
+            lines(b"abcde\nok\n", 4),
+            vec![BoundedLine::TooLong, BoundedLine::Line("ok".into())]
+        );
+        assert_eq!(lines(b"abcde", 4), vec![BoundedLine::TooLong]);
+    }
+
+    #[test]
+    fn a_non_utf8_line_is_reported() {
+        assert_eq!(lines(&[0xff, b'\n'], 4), vec![BoundedLine::NotUtf8]);
+    }
+
+    #[test]
+    fn the_budget_blocks_past_its_capacity_until_a_permit_returns() {
+        let budget = InputBudget::new(2);
+        let first = budget.acquire(|| false);
+        let second = budget.acquire(|| false);
+        assert!(first.is_some() && second.is_some());
+        // Full: a closed loop makes the waiting reader give up instead of queuing.
+        assert!(budget.acquire(|| true).is_none());
+        drop(first);
+        assert!(budget.acquire(|| true).is_some());
     }
 }

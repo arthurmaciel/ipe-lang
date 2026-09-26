@@ -1630,46 +1630,25 @@ pub fn emit_config_ctor_call(callee: &Callee) -> Option<String> {
     Some(format!("{tag}i64"))
 }
 
-/// Fail closed unless the program's entry is the one app surface whose loop
-/// drives this input subscription (`Tui.Sub.onKey` → `Tui.tea`,
-/// `Cli.Sub.onLine` → `Cli.tea`).
+/// Fail closed unless the entry's surface is the one whose loop reads this input subscription.
 ///
-/// The resolver already refuses the other surface's `Sub` import in the entry
-/// module (IPE-N0035); this re-checks at the one point the kernel is emitted,
-/// against the whole program's entry, so a helper module that names the wrong
-/// surface's input subscription is refused too rather than compiling into a
-/// subscription no loop ever reads.
+/// The lowerer refuses every reference outside its surface with a
+/// source-anchored IPE-N0035; reaching here with a mismatch is a broken
+/// invariant, so it is a compiler bug — never emitted Rust whose subscription
+/// no loop reads.
 fn require_input_sub_shape(ctx: &EmitCtx, k: KernelFn) -> DResult<()> {
-    let (owner, admitted) = match k {
-        KernelFn::TuiSubOnKey => ("Tui", ctx.uses_tui),
-        KernelFn::CliSubOnLine => ("Cli", ctx.uses_console),
-        _ => return Ok(()),
-    };
-    if admitted {
-        return Ok(());
+    match k.input_surface() {
+        Some(owner) if owner != ctx.entry_surface => Err(Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::emit_tea_call::require_input_sub_shape",
+            detail: format!(
+                "{k:?} reads {} input but the entry is a {} app; the lowerer's \
+                 surface gate should have refused it",
+                owner.name(),
+                ctx.entry_surface.name()
+            ),
+        }),
+        _ => Ok(()),
     }
-    let app_shape = if ctx.uses_tui {
-        "Tui"
-    } else if ctx.uses_console {
-        "Cli"
-    } else if ctx.uses_webview {
-        "WebView"
-    } else if ctx.uses_web {
-        "Web"
-    } else {
-        "Script"
-    };
-    Err(Diagnostic::Name {
-        span: Span::DUMMY,
-        msg: ipe_diagnostics::NameError::WrongShapeCmdSub(Box::new(
-            ipe_diagnostics::CmdSubShapeMismatch {
-                imported: format!("Ipe.Tea.{owner}.Sub").into_boxed_str(),
-                imported_shape: owner.into(),
-                app_shape: app_shape.into(),
-                expected: format!("Ipe.Tea.{app_shape}.Sub").into_boxed_str(),
-            },
-        )),
-    })
 }
 
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]

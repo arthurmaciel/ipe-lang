@@ -141,10 +141,10 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     Ok(std::path::PathBuf::from(exe))
 }
 
-/// **Regression for T0001**: `Tui.Sub.onKey` must accept a handler
-/// `onKey : KeyEvent -> Msg` where `KeyEvent = { kind : String,
-/// value : String }` (a SINGLE-argument record handler).
+/// **Regression for T0001**: `Tui.Sub.onKey` accepts a record-typed key handler.
 ///
+/// The handler is `onKey : KeyEvent -> Msg` where `KeyEvent = { kind : String,
+/// value : String }` (a SINGLE-argument record handler).
 /// The scheme PINS the key-event argument to the closed record
 /// `{ kind : String, value : String }`, so a handler of any other argument
 /// type fails at compile time (same sanctioned tightening as the Model / Msg

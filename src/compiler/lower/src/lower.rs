@@ -24,10 +24,10 @@ use ipe_diagnostics::{
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
-    Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId, IrType,
-    KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule, TypeDef,
-    UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_is_serde, is_dispatch_free,
-    is_irrefutable,
+    AppSurface, Arm, BinOp, BoundSet, CallPin, Callee, Capability, EnumDef, Expr, Func, FuncId,
+    IrType, KernelFn, Match, ModPath, Module, OnFormKind, Pat, Program, RowParam, RuntimeModule,
+    TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable, ir_type_is_serde,
+    is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{RowTail, SolvedTypes, Ty, TyBounds};
 
@@ -19398,6 +19398,17 @@ impl<'a> Lowerer<'a> {
                 // whose argument the literal gate sees. See
                 // [`reject_unapplied_secret_from_string`].
                 reject_unapplied_secret_from_string(&callee, e.span)?;
+                // A kernel whose emit arm carries a bridge or a guard is emitted
+                // only as a saturated call: eta-expand the point-free reference
+                // (`List.map Sub.onKey hs`, `let on = Sub.onKey`) into
+                // `\x -> kernel x`, so that arm fires on every path. See
+                // `StdlibKernel::requires_saturated_emit`.
+                if let Callee::Kernel(k) = &callee
+                    && k.requires_saturated_emit()
+                {
+                    let arity = self.callee_arity(&callee)?;
+                    return self.eta_expand_partial(e, callee, Vec::new(), arity, e.span);
+                }
                 // For kernel callees use the JSON-aware type resolver so that
                 // a `Value = any = Ty::Var` in the argument / return position
                 // of a JSON kernel (e.g. `JsonEnc.string : String -> Value`)
@@ -24454,7 +24465,70 @@ impl<'a> Lowerer<'a> {
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         let resolved = self.lower_callee_resolve(callee)?;
         self.reject_curried_andmap_payload(&resolved, callee)?;
+        self.reject_input_sub_outside_its_surface(&resolved, callee.span)?;
         Ok(resolved)
+    }
+
+    /// Refuse a shape-owned input subscription outside the surface whose loop reads it.
+    ///
+    /// `Tui.Sub.onKey` is driven only by the `Tui` loop and `Cli.Sub.onLine` only
+    /// by the `Cli` loop; anywhere else the subscription would compile into input
+    /// no loop ever delivers. The resolver refuses the wrong surface's `Sub` import
+    /// in the entry module (IPE-N0035); this checks every reference — a helper
+    /// module's included, applied or point-free — against the surface the
+    /// demanded entry's `main` pins, at the reference's own span. A `Script`
+    /// `main` has no loop at all, so the reference is the IPE-N0033 contradiction.
+    fn reject_input_sub_outside_its_surface(&self, callee: &Callee, span: Span) -> DResult<()> {
+        let Callee::Kernel(k) = callee else {
+            return Ok(());
+        };
+        let Some(owner) = k.input_surface() else {
+            return Ok(());
+        };
+        let Some(app) = self.entry_surface() else {
+            return Ok(());
+        };
+        if owner == app {
+            return Ok(());
+        }
+        let imported = format!("Ipe.Tea.{}.Sub", owner.name()).into_boxed_str();
+        let msg = if app == AppSurface::Script {
+            NameError::ProgramImportsTeaShape { module: imported }
+        } else {
+            NameError::WrongShapeCmdSub(Box::new(ipe_diagnostics::CmdSubShapeMismatch {
+                imported,
+                imported_shape: owner.name().into(),
+                app_shape: app.name().into(),
+                expected: format!("Ipe.Tea.{}.Sub", app.name()).into_boxed_str(),
+            }))
+        };
+        Err(Diagnostic::Name { span, msg })
+    }
+
+    /// The app surface the demanded entry's `main` pins.
+    ///
+    /// Read from the head of the entry module's own `main` — never from an app
+    /// entry that merely appears in some helper module. `None` when this lowering
+    /// has no demanded-entry `main` (a merged audit lowering whose `main` belongs
+    /// to another module).
+    fn entry_surface(&self) -> Option<AppSurface> {
+        let main = self.m.defs.iter().find(|d| {
+            d.home() == self.m.name.as_slice()
+                && self.interner.resolve(d.name().value) == Some("main")
+        })?;
+        let mut node = match main {
+            canon::Def::Untyped { body, .. } | canon::Def::Typed { body, .. } => body,
+        };
+        loop {
+            match &node.value {
+                canon::Expr_::Call(callee, _) => node = callee,
+                canon::Expr_::Lambda(_, inner) | canon::Expr_::Let(_, inner) => node = inner,
+                canon::Expr_::VarKernel { id: Some(k), .. } => {
+                    return Some(k.app_entry_surface().unwrap_or(AppSurface::Script));
+                }
+                _ => return Some(AppSurface::Script),
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)] // declarative kernel-name dispatch table

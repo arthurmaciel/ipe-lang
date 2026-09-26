@@ -11,7 +11,7 @@ use ipe_diagnostics::{
     SortedNames, Span, TypeError,
 };
 use ipe_intern::{Interner, Symbol};
-use ipe_kernels::{StdlibKernel, WebCapability};
+use ipe_kernels::{AppSurface, StdlibKernel, WebCapability};
 use ipe_syntax as src;
 
 use crate::ast as canon;
@@ -1645,7 +1645,7 @@ fn thread_config_into_entry(
 ///
 /// Keyed on the kernel `(module, name)` a resolved `VarKernel` carries. `Tui.tea`
 /// and `Cli.tea` are the two terminal drive-axis entries; each owns its own
-/// `Cmd` / `Sub` surface (see [`cmd_sub_surface_admissible`]).
+/// `Cmd` / `Sub` surface (see [`AppSurface::admits_cmd_sub_of`]).
 const TEA_APP_ENTRIES: &[(&str, &str)] = &[
     ("Web", "tea"),
     ("Web", "appRouted"),
@@ -1760,20 +1760,6 @@ const _: () = {
         j += 1;
     }
 };
-
-/// Whether an `Ipe.Tea.<imported>.{Cmd,Sub}` import is admissible in an app
-/// whose entry is the `app` surface (`Web` / `Tui` / `Cli` / `Worker`).
-///
-/// Each app surface owns its `Cmd` / `Sub`: `Ipe.Tea.Tui.Sub` carries the
-/// Tui-only `onKey` and `Ipe.Tea.Cli.Sub` the Cli-only `onLine`, whose inputs
-/// exist only in that surface's loop, so the two terminal surfaces are NOT
-/// interchangeable. `Ipe.Tea.Terminal.{Cmd,Sub}` is the shared terminal-family
-/// re-export — it carries no surface-owned member — and is admissible in either
-/// terminal app. Every other pairing (an unrecognised segment included) fails
-/// the gate.
-fn cmd_sub_surface_admissible(imported: &str, app: &str) -> bool {
-    imported == app || (imported == "Terminal" && matches!(app, "Tui" | "Cli"))
-}
 
 /// IPE-N0045: reject a `main` that selects its shape at run time.
 ///
@@ -2024,14 +2010,13 @@ fn main_head_is_tea_entry(body: &canon::Expr, interner: &Interner) -> bool {
     }
 }
 
-/// The TEA app surface (`Web` / `Tui` / `Cli` / `Worker`) a `main` proves from
-/// its entry kernel — the surface a user's `Ipe.Tea.<Shape>.{Cmd,Sub}` import is
-/// checked against by [`cmd_sub_surface_admissible`].
+/// The TEA app surface a `main` proves from its entry kernel.
 ///
-/// Returns `None` when `main` is not a shape-entry app — the cross-shape gate
-/// then does not apply (a plain-`main` Program importing `Ipe.Tea.*` is already
-/// rejected by IPE-N0033).
-fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static str> {
+/// A user's `Ipe.Tea.<Shape>.{Cmd,Sub}` import is checked against it by
+/// [`AppSurface::admits_cmd_sub_of`]. Returns `None` when `main` is not a
+/// shape-entry app — the cross-shape gate then does not apply (a plain-`main`
+/// Program importing `Ipe.Tea.*` is already rejected by IPE-N0033).
+fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<AppSurface> {
     let mut node = body;
     loop {
         match &node.value {
@@ -2042,7 +2027,7 @@ fn app_shape_name(body: &canon::Expr, interner: &Interner) -> Option<&'static st
                 return TEA_APP_ENTRIES
                     .iter()
                     .find(|(em, en)| *em == m && *en == n)
-                    .map(|(shape, _member)| *shape);
+                    .and_then(|(shape, _member)| AppSurface::from_segment(shape));
             }
             _ => return None,
         }
@@ -2113,33 +2098,28 @@ fn check_cross_shape_cmd_sub_gate(
         let Some(imported_shape) = interner.resolve(*shape) else {
             continue;
         };
-        if cmd_sub_surface_admissible(imported_shape, app_shape) {
+        if app_shape.admits_cmd_sub_of(imported_shape) {
             continue;
         }
         let leaf_name = if *leaf == cmd_sym { "Cmd" } else { "Sub" };
+        let app_name = app_shape.name();
         return Err(Diagnostic::Name {
             span: imp.name.span,
             msg: NameError::WrongShapeCmdSub(Box::new(CmdSubShapeMismatch {
                 imported: format!("Ipe.Tea.{imported_shape}.{leaf_name}").into_boxed_str(),
                 imported_shape: imported_shape.into(),
-                app_shape: app_shape.into(),
-                expected: format!("Ipe.Tea.{app_shape}.{leaf_name}").into_boxed_str(),
+                app_shape: app_name.into(),
+                expected: format!("Ipe.Tea.{app_name}.{leaf_name}").into_boxed_str(),
             })),
         });
     }
     Ok(())
 }
 
-/// The terminal input subscriptions. Each one's member name (`onKey` /
-/// `onLine`) is also the config field a `Tui.tea` / `Cli.tea` config would name
-/// if it tried to pass input directly, so IPE-N0051 recognises that field — and
-/// names the replacing constructor — from the kernel registry itself, with no
-/// second copy of the name or the module path.
-const INPUT_SUBSCRIPTIONS: &[StdlibKernel] =
-    &[StdlibKernel::TuiSubOnKey, StdlibKernel::CliSubOnLine];
-
-/// The dotted import path of the module a kernel's qualifier is reached through
-/// (`TeaTuiSub` → `Ipe.Tea.Tui.Sub`), from [`crate::env::STDLIB_MODULE_QUALIFIERS`].
+/// The dotted import path a kernel's qualifier is reached through.
+///
+/// For example `TeaTuiSub` → `Ipe.Tea.Tui.Sub`, from
+/// [`crate::env::STDLIB_MODULE_QUALIFIERS`].
 fn kernel_module_path(kernel: StdlibKernel) -> Option<String> {
     let qualifier = kernel.decl().qualifier;
     crate::env::STDLIB_MODULE_QUALIFIERS
@@ -2148,10 +2128,9 @@ fn kernel_module_path(kernel: StdlibKernel) -> Option<String> {
         .map(|(path, _)| path.join("."))
 }
 
-/// IPE-N0051: reject a `Tui.tea` / `Cli.tea` config that still passes terminal
-/// input as a config field (`onKey` / `onLine`).
+/// IPE-N0051: reject terminal input passed as a `Tui.tea` / `Cli.tea` config field.
 ///
-/// The entry configs are the canonical four TEA fields (`init` / `update` /
+/// The stray field is `onKey` / `onLine`. The entry configs are the canonical four TEA fields (`init` / `update` /
 /// `view` / `subscriptions`); input is a subscription (`Tui.Sub.onKey` /
 /// `Cli.Sub.onLine`). The closed config row already refuses any extra field at
 /// type-check, so this gate is not what keeps the program sound — it turns the
@@ -2176,15 +2155,14 @@ fn check_input_fields_are_subscriptions(
     };
     // Peel to the entry call the shape classifier reads.
     let mut node = body;
-    let (entry_qualifier, cfg) = loop {
+    let (entry, surface, cfg) = loop {
         match &node.value {
             canon::Expr_::Call(callee, args) => {
-                if let canon::Expr_::VarKernel { module, name, .. } = &callee.value
-                    && interner.resolve(*name) == Some("tea")
-                    && let Some(q @ ("Tui" | "Cli")) = interner.resolve(*module)
+                if let canon::Expr_::VarKernel { id: Some(k), .. } = &callee.value
+                    && let Some(surface) = k.app_entry_surface()
                     && let [cfg] = args.as_slice()
                 {
-                    break (q, cfg);
+                    break (*k, surface, cfg);
                 }
                 node = callee;
             }
@@ -2209,24 +2187,26 @@ fn check_input_fields_are_subscriptions(
         }
         _ => return Ok(()),
     };
-    // The entry's own `Sub` module; only its input subscription is this
-    // entry's input field (the other surface's name falls to the closed row).
-    let own_sub_module = format!("Ipe.Tea.{entry_qualifier}.Sub");
+    // Only this entry's own input subscription names its input field (the other
+    // surface's name falls to the closed config row). Every input subscription
+    // and its module come from the kernel registry.
     for (field_sym, value) in fields {
         let Some(field) = interner.resolve(*field_sym) else {
             continue;
         };
-        let is_own_input = INPUT_SUBSCRIPTIONS.iter().any(|k| {
-            k.decl().name == field
-                && kernel_module_path(*k).as_deref() == Some(own_sub_module.as_str())
-        });
-        if is_own_input {
+        let own_input = StdlibKernel::ALL
+            .iter()
+            .find(|k| k.input_surface() == Some(surface) && k.decl().name == field);
+        if let Some(input) = own_input {
+            let entry_decl = entry.decl();
             return Err(Diagnostic::Name {
                 span: value.span,
                 msg: NameError::InputFieldIsSubscription {
-                    entry: format!("{entry_qualifier}.tea").into_boxed_str(),
+                    entry: format!("{}.{}", entry_decl.qualifier, entry_decl.name).into_boxed_str(),
                     field: field.into(),
-                    sub_module: own_sub_module.into_boxed_str(),
+                    sub_module: kernel_module_path(*input)
+                        .unwrap_or_else(|| input.decl().qualifier.to_owned())
+                        .into_boxed_str(),
                 },
             });
         }

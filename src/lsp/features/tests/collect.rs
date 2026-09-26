@@ -308,7 +308,9 @@ fn add_import_quick_fix_sorts_among_existing_imports() {
     );
 }
 
-/// IPE-N0035 quick-fix: a Cli app importing the Web shape's `Cmd` yields a
+/// IPE-N0035 quick-fix: repoint a wrong-shape `Cmd` import to the app's own.
+///
+/// A Cli app importing the Web shape's `Cmd` yields a
 /// "Change import to `Ipe.Tea.Cli.Cmd`" code action whose edit, once
 /// applied, repoints the import to the app's shape and clears the diagnostic
 /// (SEAL — the program compiles), leaving the `as Cmd` binding untouched.

@@ -97,10 +97,10 @@ pub fn emit_tui_call(
     }
 }
 
-/// Wrap an emitted `Tui.Sub.onKey` handler (`KeyEvent -> msg`) as the runtime's
-/// flat `Fn(String, String) -> msg` key handler.
+/// Wrap an emitted `Tui.Sub.onKey` handler as the runtime's flat key handler.
 ///
-/// `handler_src` is the handler expression as already emitted. It is bound once
+/// The user's handler is `KeyEvent -> msg`; the runtime calls
+/// `Fn(String, String) -> msg`. `handler_src` is the handler expression as already emitted. It is bound once
 /// (so it is evaluated once, not per key) and applied to the `KeyEvent` struct
 /// built from the runtime's `(kind, value)` pair. The struct is the one the
 /// backend synthesised for the scheme-pinned `{ kind : String, value : String }`
@@ -119,8 +119,9 @@ pub(crate) fn key_event_bridge(ctx: &EmitCtx, handler_src: &str) -> DResult<Stri
     ))
 }
 
-/// The generated Rust struct name for the pinned `KeyEvent` record
-/// `{ kind : String, value : String }`.
+/// The generated Rust struct name for the pinned `KeyEvent` record.
+///
+/// The record is `{ kind : String, value : String }`.
 fn key_event_struct_name(ctx: &EmitCtx) -> DResult<String> {
     let shape: BTreeMap<ipe_intern::Symbol, IrType> = [
         (ctx.lookup_symbol("kind")?, IrType::Str),

@@ -771,8 +771,9 @@ pub enum NameError {
         shape: Box<str>,
         entry: Box<str>,
     },
-    /// A `Tui.tea` / `Cli.tea` config still passes terminal input as a config
-    /// field. The entry config is the canonical four TEA fields (`init` /
+    /// A `Tui.tea` / `Cli.tea` config still passes terminal input as a field.
+    ///
+    /// The entry config is the canonical four TEA fields (`init` /
     /// `update` / `view` / `subscriptions`); input is a subscription. `entry` is
     /// the entry (`Tui.tea`), `field` the stray field (`onKey`), and `sub_module`
     /// the shape's `Sub` module whose same-named member replaces it
