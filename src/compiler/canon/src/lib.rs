@@ -3556,7 +3556,7 @@ mod tests {
         ));
     }
 
-    /// Canonicalise `src` and return the IPE-N0051 payload, if that is the error.
+    /// Canonicalise `src` and return the IPE-N0052 payload, if that is the error.
     fn input_field_error(src: &str) -> Option<(String, String, String)> {
         match canon_module_err(src) {
             Some(Diagnostic::Name {
@@ -3573,31 +3573,31 @@ mod tests {
     }
 
     #[test]
-    fn tui_cfg_on_key_field_is_rejected_n0051() {
+    fn tui_cfg_on_key_field_is_rejected_n0052() {
         let src = "module Main exposing (main)\n\
                    import Ipe.Tea.Tui as Tui\n\n\
                    main = Tui.tea { init = 0, update = 0, view = 0, subscriptions = 0, onKey = 0 }\n";
         assert_eq!(
             input_field_error(src),
             Some(("Tui.tea".into(), "onKey".into(), "Ipe.Tea.Tui.Sub".into())),
-            "a `Tui.tea` config still passing `onKey` must be rejected IPE-N0051"
+            "a `Tui.tea` config still passing `onKey` must be rejected IPE-N0052"
         );
     }
 
     #[test]
-    fn cli_cfg_on_line_field_is_rejected_n0051() {
+    fn cli_cfg_on_line_field_is_rejected_n0052() {
         let src = "module Main exposing (main)\n\
                    import Ipe.Tea.Cli as Cli\n\n\
                    main = Cli.tea { init = 0, update = 0, view = 0, subscriptions = 0, onLine = 0 }\n";
         assert_eq!(
             input_field_error(src),
             Some(("Cli.tea".into(), "onLine".into(), "Ipe.Tea.Cli.Sub".into())),
-            "a `Cli.tea` config still passing `onLine` must be rejected IPE-N0051"
+            "a `Cli.tea` config still passing `onLine` must be rejected IPE-N0052"
         );
     }
 
     #[test]
-    fn top_level_cfg_binding_with_input_field_is_rejected_n0051() {
+    fn top_level_cfg_binding_with_input_field_is_rejected_n0052() {
         // The config bound to a sibling top-level name is checked too.
         let src = "module Main exposing (main)\n\
                    import Ipe.Tea.Cli as Cli\n\n\
@@ -3605,12 +3605,12 @@ mod tests {
                    main = Cli.tea cfg\n";
         assert!(
             input_field_error(src).is_some(),
-            "a top-level `Cli.tea` config binding passing `onLine` must be rejected IPE-N0051"
+            "a top-level `Cli.tea` config binding passing `onLine` must be rejected IPE-N0052"
         );
     }
 
     #[test]
-    fn canonical_four_field_cfg_is_not_rejected_n0051() {
+    fn canonical_four_field_cfg_is_not_rejected_n0052() {
         for (import, entry) in [
             ("Ipe.Tea.Tui as Tui", "Tui.tea"),
             ("Ipe.Tea.Cli as Cli", "Cli.tea"),

@@ -2128,7 +2128,7 @@ fn kernel_module_path(kernel: StdlibKernel) -> Option<String> {
         .map(|(path, _)| path.join("."))
 }
 
-/// IPE-N0051: reject terminal input passed as a `Tui.tea` / `Cli.tea` config field.
+/// IPE-N0052: reject terminal input passed as a `Tui.tea` / `Cli.tea` config field.
 ///
 /// The stray field is `onKey` / `onLine`. The entry configs are the canonical four TEA fields (`init` / `update` /
 /// `view` / `subscriptions`); input is a subscription (`Tui.Sub.onKey` /
@@ -2139,7 +2139,7 @@ fn kernel_module_path(kernel: StdlibKernel) -> Option<String> {
 /// binding the entry is applied to.
 ///
 /// # Errors
-/// [`Diagnostic::Name`] (IPE-N0051) at the offending field's value.
+/// [`Diagnostic::Name`] (IPE-N0052) at the offending field's value.
 fn check_input_fields_are_subscriptions(
     canon_mod: &canon::Module,
     interner: &Interner,

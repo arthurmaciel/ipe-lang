@@ -349,7 +349,7 @@ code! {
     /// a Script imports a shape's view module but renders nothing
     IPE_N0050 = "IPE-N0050", "a Script imports a shape's UI, which it cannot render", "IPE-N0050";
     /// terminal input passed as an app config field instead of a subscription
-    IPE_N0051 = "IPE-N0051", "terminal input is a subscription, not an app config field", "IPE-N0051";
+    IPE_N0052 = "IPE-N0052", "terminal input is a subscription, not an app config field", "IPE-N0052";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)

@@ -156,7 +156,7 @@ main =
 Combine keys with other events through `Sub.batch` (e.g.
 `Sub.batch [ Sub.onKey onKey, Sub.every 1000 Tick ]`); a key with no active
 `onKey` subscription is ignored. Passing `onKey` as a `Tui.tea` config field is
-**IPE-N0051**.
+**IPE-N0052**.
 
 The scaffolded counter (`Up` +, `Down` -, `q` quit) renders as:
 
@@ -188,7 +188,7 @@ main =
 ```
 
 A line with no active `onLine` subscription is ignored. Passing `onLine` as a
-`Cli.tea` config field is **IPE-N0051**.
+`Cli.tea` config field is **IPE-N0052**.
 
 The scaffolded echo REPL (type text, `q` quits):
 

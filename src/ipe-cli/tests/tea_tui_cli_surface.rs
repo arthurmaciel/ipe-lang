@@ -275,20 +275,20 @@ fn assert_rejected(test_name: &str, source: &str) -> Result<(), BoxError> {
     }
 }
 
-/// A `Tui.tea` config still passing `onKey` is refused with IPE-N0051.
+/// A `Tui.tea` config still passing `onKey` is refused with IPE-N0052.
 ///
 /// Never silently accepted with key input dropped.
 #[test]
 fn tui_on_key_config_field_is_rejected() -> Result<(), BoxError> {
     let src = variant(TUI_APP, CFG_TAIL, CFG_TAIL_WITH_ON_KEY)?;
-    assert_rejected_code("tui_on_key_field", &src, "IPE-N0051")
+    assert_rejected_code("tui_on_key_field", &src, "IPE-N0052")
 }
 
-/// A `Cli.tea` config still passing `onLine` is refused with IPE-N0051.
+/// A `Cli.tea` config still passing `onLine` is refused with IPE-N0052.
 #[test]
 fn cli_on_line_config_field_is_rejected() -> Result<(), BoxError> {
     let src = variant(CLI_APP, CFG_TAIL, CFG_TAIL_WITH_ON_LINE)?;
-    assert_rejected_code("cli_on_line_field", &src, "IPE-N0051")
+    assert_rejected_code("cli_on_line_field", &src, "IPE-N0052")
 }
 
 /// A config bound to a top-level name is checked too.
@@ -299,7 +299,7 @@ fn cli_on_line_in_top_level_config_is_rejected() -> Result<(), BoxError> {
         "main =\n    Cli.tea\n        { init = init, update = update, view = view\n        , subscriptions = subscriptions\n        }",
         "cfg =\n    { init = init, update = update, view = view\n    , subscriptions = subscriptions, onLine = onLine\n    }\n\nmain =\n    Cli.tea cfg",
     )?;
-    assert_rejected_code("cli_on_line_top_level_cfg", &src, "IPE-N0051")
+    assert_rejected_code("cli_on_line_top_level_cfg", &src, "IPE-N0052")
 }
 
 /// The config rows are closed, so an extra field is refused.

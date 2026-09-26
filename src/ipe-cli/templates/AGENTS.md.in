@@ -983,7 +983,7 @@ A `Cli.tea` app subscribes to stdin lines the same way, through its own `Sub`:
 `import Ipe.Tea.Cli.Sub as Sub`, then `Sub.onLine onLine`
 (`Cli.Sub.onLine : (String -> msg) -> Sub msg`). Combine input with other
 events via `Sub.batch`; input with no active subscription is ignored. An
-`onKey` / `onLine` config field is rejected (IPE-N0051), and so is either
+`onKey` / `onLine` config field is rejected (IPE-N0052), and so is either
 input subscription in the other terminal shape (IPE-N0035) — `Tui.Sub` and
 `Cli.Sub` are not interchangeable.
 
