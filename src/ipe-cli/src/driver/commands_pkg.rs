@@ -1,10 +1,11 @@
 use super::{
-    CliError, build_emitted_project, build_project, build_source_graph,
-    build_test_with_project_sources, build_with_sibling_discovery,
-    capabilities_including_served_widgets, cargo_target_directory, classify_entry_shape,
-    create_source_root, default_entry, discover_manifest, emit_machine_error, emitted_bin_filename,
-    force_cargo_terminal_ui, resolve_runtime, resolve_vendored_runtime_dir, run_build,
-    runtime_context_for_message, typecheck_entry_via_graph,
+    CliError, attribute_canon_errors, attribute_post_link_error, build_emitted_project,
+    build_project, build_source_graph, build_test_with_project_sources,
+    build_with_sibling_discovery, capabilities_including_served_widgets, cargo_target_directory,
+    classify_entry_shape, create_source_root, default_entry, discover_manifest, emit_machine_error,
+    emitted_bin_filename, force_cargo_terminal_ui, home_to_source_map, resolve_runtime,
+    resolve_vendored_runtime_dir, run_build, runtime_context_for_message,
+    typecheck_entry_via_graph,
 };
 use crate::{
     Applicability, BTreeMap, Diagnostic, HelpLine, Interner, Path, PathBuf, Suggestion, Write,
@@ -2060,11 +2061,15 @@ pub fn verify_capabilities(
 /// unioned. A module that fails to lower on its own — e.g. one that is only
 /// meaningful as a dependency of another — is skipped for the union rather than
 /// failing the whole inference, so a helper module never masks a sibling's real
-/// effect.
+/// effect. Every entry links the WHOLE package source tree, exactly as
+/// `ipe build` does, so a module that does not compile at all (a name or type
+/// error, imported or not) fails every entry: the package is refused, never
+/// disclosed with that module's capabilities silently missing.
 ///
 /// # Errors
 /// [`CliError::Pipeline`] / [`CliError::Io`] when the package cannot be read or
-/// no module lowers at all.
+/// no module lowers at all; the diagnostic is framed against the module that
+/// owns it.
 pub fn infer_package_capabilities(
     manifest_path: &Path,
 ) -> Result<std::collections::BTreeSet<ipe_ir::Capability>, CliError> {
@@ -2169,7 +2174,8 @@ impl PackageSourceSet {
 ///
 /// # Errors
 /// [`CliError::Pipeline`] when no module lowers (the entry `Main`'s diagnostic
-/// when it fails, else the first failure); [`CliError::Usage`] when the package
+/// when it fails, else the first failure), framed against the module that owns
+/// it; [`CliError::Usage`] when the package
 /// has no module at all.
 pub fn infer_package_capabilities_in(
     db: &ipe_db::IpeDatabase,
@@ -2218,19 +2224,18 @@ pub fn infer_package_capabilities_in(
                 ));
                 any_lowered = true;
             }
-            Err((diag, _)) => {
+            Err((diag, home)) => {
                 let is_entry = m.module_path.last().map(String::as_str) == Some("Main");
                 if lowering_error.is_none() || is_entry {
-                    let src = package
-                        .sources
-                        .get(&m.module_path)
-                        .map(|(_, s)| s.clone())
-                        .unwrap_or_default();
-                    lowering_error = Some(CliError::Pipeline {
-                        file: m.path.clone(),
-                        src,
-                        diag: Box::new(diag.clone()),
-                    });
+                    lowering_error = Some(attribute_entry_lowering_error(
+                        db,
+                        source_root,
+                        package,
+                        m,
+                        entry_file,
+                        diag.clone(),
+                        home,
+                    ));
                 }
             }
         }
@@ -2244,6 +2249,54 @@ pub fn infer_package_capabilities_in(
         Err(lowering_error.unwrap_or(CliError::Usage(
             "package capability inference: no module in the package could be lowered",
         )))
+    }
+}
+
+/// Frame one entry's lowering failure against the module that OWNS it.
+///
+/// The build's own attribution: a canon error is blamed on its own module's
+/// file via [`attribute_canon_errors`] (the root holds every package module, so
+/// an unimported sibling that fails to canonicalize fails every entry, exactly
+/// as `ipe build` refuses it); a post-link error goes through
+/// [`attribute_post_link_error`]. Demanded after `lower_program`, so every
+/// query here is a memo hit.
+fn attribute_entry_lowering_error(
+    db: &ipe_db::IpeDatabase,
+    source_root: ipe_db::SourceRoot,
+    package: &PackageSourceSet,
+    entry: &project::DiscoveredModule,
+    entry_file: ipe_db::SourceFile,
+    diag: Diagnostic,
+    home: &[ipe_intern::Symbol],
+) -> CliError {
+    if let Err(canon_err) =
+        attribute_canon_errors(db, source_root, &package.sources, entry_file, &entry.path)
+    {
+        return canon_err;
+    }
+    let entry_source = (
+        entry.path.clone(),
+        package
+            .sources
+            .get(&entry.module_path)
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default(),
+    );
+    let home_to_source = home_to_source_map(ipe_db::Db::interner(db), &package.sources);
+    match ipe_db::linked_program(db, source_root, entry_file) {
+        Ok(linked) => {
+            attribute_post_link_error(&linked.module, &home_to_source, &entry_source, diag, home)
+        }
+        // A link failure has no linked program to scan: frame the lowering
+        // diagnostic against its home module when known, else the entry.
+        Err(_) => {
+            let (file, src) = home_to_source.get(home).cloned().unwrap_or(entry_source);
+            CliError::Pipeline {
+                file,
+                src,
+                diag: Box::new(diag),
+            }
+        }
     }
 }
 

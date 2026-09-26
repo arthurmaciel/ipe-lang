@@ -82,8 +82,9 @@ const UNSAFE_AND_SIBLING_NETWORK: &[(&str, &str)] = &[
     ),
 ];
 
-/// `Main` reaches the network and the clock; `Util` is pure; `Broken` does not
-/// lower and must be skipped without masking its siblings.
+/// `Main` reaches the network and the clock; `Util` is pure; the UNIMPORTED
+/// `Broken` does not compile, so the package is refused exactly as `ipe build`
+/// refuses it, with the diagnostic framed against `Broken.ipe`.
 const NETWORK_CLOCK_WITH_BROKEN_SIBLING: &[(&str, &str)] = &[
     (
         "Main.ipe",
@@ -170,13 +171,46 @@ fn shared_graph_equals_per_entry_union_with_an_unimported_sibling() -> Result<()
     )
 }
 
+/// The result is a `Pipeline` error framed against `file_name`.
+fn is_pipeline_error_in<T>(result: &Result<T, ipe::CliError>, file_name: &str) -> bool {
+    matches!(result, Err(ipe::CliError::Pipeline { file, .. }) if file.ends_with(file_name))
+}
+
+/// An unimported sibling that does not compile refuses the whole package.
+///
+/// Every entry links the whole source tree, as the build does, so no entry
+/// lowers: the shared graph and the per-entry union agree (nothing disclosed),
+/// the diagnostic is blamed on the sibling's own file, and a consent surface is
+/// never published with the broken module's capabilities missing.
 #[test]
-fn shared_graph_equals_per_entry_union_with_a_broken_sibling() -> Result<(), Box<dyn Error>> {
-    assert_shared_equals_per_entry(
-        "broken_sibling",
-        NETWORK_CLOCK_WITH_BROKEN_SIBLING,
-        &[Capability::Network],
-    )
+fn a_broken_unimported_sibling_refuses_the_package_like_the_build() -> Result<(), Box<dyn Error>> {
+    let dir = scratch_package("broken_sibling", NETWORK_CLOCK_WITH_BROKEN_SIBLING)?;
+    let manifest = dir.join("package.ipe");
+    let package = PackageSourceSet::read(&manifest)?;
+
+    let shared = ipe::infer_package_capabilities_in(&ipe_db::IpeDatabase::new(), &package);
+    assert!(
+        is_pipeline_error_in(&shared, "Broken.ipe"),
+        "expected the sibling's diagnostic framed against Broken.ipe, got: {shared:?}"
+    );
+    assert!(
+        per_entry_union(&package).is_empty(),
+        "no entry lowers per-entry either"
+    );
+    let public = ipe::infer_package_capabilities(&manifest);
+    assert!(
+        is_pipeline_error_in(&public, "Broken.ipe"),
+        "expected the public entry point to agree, got: {public:?}"
+    );
+    // The build graph refuses the same package, blamed on the same file.
+    let built = ipe::lower_entry_via_graph(&dir.join("src").join("Main.ipe"));
+    assert!(
+        is_pipeline_error_in(&built, "Broken.ipe"),
+        "expected the build graph to refuse on Broken.ipe"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    Ok(())
 }
 
 /// A poison-safe log of the debug key of every executed salsa query.
@@ -218,14 +252,23 @@ fn logged_db() -> (ipe_db::IpeDatabase, ExecutionLog) {
 /// Each module (package and stdlib alike) is parsed and canonicalized at most
 /// once for the whole package, each entry is lowered exactly once on the
 /// caller's database, and no query instance ever executes twice.
+///
+/// `expect_refusal` pins whether the package is accepted or refused, so the
+/// refusal path's error attribution is held to the same once-guard.
 fn assert_each_module_analyzed_once(
     tag: &str,
     files: &[(&str, &str)],
+    expect_refusal: bool,
 ) -> Result<(), Box<dyn Error>> {
     let dir = scratch_package(tag, files)?;
     let package = PackageSourceSet::read(&dir.join("package.ipe"))?;
     let (db, log) = logged_db();
-    ipe::infer_package_capabilities_in(&db, &package)?;
+    let outcome = ipe::infer_package_capabilities_in(&db, &package);
+    assert_eq!(
+        outcome.is_err(),
+        expect_refusal,
+        "fixture `{tag}` outcome: {outcome:?}"
+    );
 
     let keys = log.keys();
     let distinct: BTreeSet<&String> = keys.iter().collect();
@@ -255,6 +298,6 @@ fn assert_each_module_analyzed_once(
 
 #[test]
 fn each_module_is_analyzed_once_per_package() -> Result<(), Box<dyn Error>> {
-    assert_each_module_analyzed_once("once_unsafe", UNSAFE_AND_SIBLING_NETWORK)?;
-    assert_each_module_analyzed_once("once_broken", NETWORK_CLOCK_WITH_BROKEN_SIBLING)
+    assert_each_module_analyzed_once("once_unsafe", UNSAFE_AND_SIBLING_NETWORK, false)?;
+    assert_each_module_analyzed_once("once_broken", NETWORK_CLOCK_WITH_BROKEN_SIBLING, true)
 }
