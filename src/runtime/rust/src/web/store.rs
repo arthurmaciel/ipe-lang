@@ -544,16 +544,36 @@ impl StoreOpenError {
     /// change on retry, so [`choose_store`] refuses startup on it rather than
     /// degrade to memory; a transient failure (unreachable server, failed
     /// version query, table setup) is not a policy refusal.
-    fn is_policy_refusal(&self) -> bool {
-        use crate::db::DbConnectError;
-        matches!(
-            self,
-            Self::Connect(
-                DbConnectError::HostRefused(_)
-                    | DbConnectError::InvalidUrl
-                    | DbConnectError::EngineRefused(_)
-            )
-        )
+    ///
+    /// Every variant is classified by name, with no wildcard, so a new refusal
+    /// variant is a compile error here until it is classified, never a silent
+    /// fallback to memory.
+    const fn is_policy_refusal(&self) -> bool {
+        use crate::db::{DbConnectError, EngineVersionError};
+        use crate::ssrf::SsrfRefusal;
+        match self {
+            Self::Connect(failure) => match failure {
+                DbConnectError::InvalidUrl => true,
+                DbConnectError::HostRefused(refusal) => match refusal {
+                    SsrfRefusal::Blocked { .. }
+                    | SsrfRefusal::Unresolvable { .. }
+                    | SsrfRefusal::NoAddresses { .. }
+                    | SsrfRefusal::Timeout { .. }
+                    | SsrfRefusal::LocalSocket
+                    | SsrfRefusal::UnprovenTarget
+                    | SsrfRefusal::UnpinnableTlsName { .. } => true,
+                },
+                DbConnectError::EngineRefused(refused) => match refused {
+                    EngineVersionError::UnknownEngine
+                    | EngineVersionError::Unparseable { .. }
+                    | EngineVersionError::BelowFloor { .. } => true,
+                },
+                DbConnectError::Unreachable(_) | DbConnectError::VersionUnreadable(_) => false,
+            },
+            Self::Schema(_) => false,
+            #[cfg(feature = "redis_store")]
+            Self::Redis(_) => false,
+        }
     }
 }
 
@@ -1529,7 +1549,9 @@ mod tests {
     #[cfg(feature = "db")]
     #[test]
     fn transient_store_failures_are_not_policy_refusals() {
-        use crate::db::{DbConnectError, DbFailure};
+        use crate::db::{DbConnectError, DbEngine, DbFailure, EngineVersion, EngineVersionError};
+        use crate::ssrf::{BlockedRange, SsrfRefusal};
+        use std::net::{IpAddr, Ipv4Addr};
         let transient = [
             StoreOpenError::Connect(DbConnectError::Unreachable(DbFailure::Io)),
             StoreOpenError::Connect(DbConnectError::VersionUnreadable(DbFailure::PoolTimedOut)),
@@ -1539,10 +1561,44 @@ mod tests {
             assert!(!e.is_policy_refusal(), "{e} must fall back, not refuse");
         }
         let policy = [
-            StoreOpenError::Connect(DbConnectError::HostRefused(
-                crate::ssrf::SsrfRefusal::LocalSocket,
-            )),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::LocalSocket)),
             StoreOpenError::Connect(DbConnectError::InvalidUrl),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Blocked {
+                host: "10.0.0.1".to_owned(),
+                ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+                range: BlockedRange::Private,
+            })),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Unresolvable {
+                host: "db.invalid".to_owned(),
+                kind: std::io::ErrorKind::NotFound,
+            })),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::NoAddresses {
+                host: "db.invalid".to_owned(),
+            })),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::Timeout {
+                host: "db.invalid".to_owned(),
+                after: Duration::from_secs(1),
+            })),
+            StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::UnprovenTarget)),
+            StoreOpenError::Connect(DbConnectError::HostRefused(
+                SsrfRefusal::UnpinnableTlsName {
+                    host: "db.example".to_owned(),
+                },
+            )),
+            StoreOpenError::Connect(DbConnectError::EngineRefused(
+                EngineVersionError::UnknownEngine,
+            )),
+            StoreOpenError::Connect(DbConnectError::EngineRefused(
+                EngineVersionError::Unparseable {
+                    engine: DbEngine::Postgres,
+                },
+            )),
+            StoreOpenError::Connect(DbConnectError::EngineRefused(
+                EngineVersionError::BelowFloor {
+                    engine: DbEngine::Sqlite,
+                    found: EngineVersion::new(1, 0),
+                },
+            )),
         ];
         for e in &policy {
             assert!(e.is_policy_refusal(), "{e} must refuse startup");

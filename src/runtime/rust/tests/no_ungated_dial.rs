@@ -1,38 +1,26 @@
-//! Grep-gate: every raw network-dial call site in the runtime must be
-//! accompanied by an SSRF guard (`VettedDial` or `ssrf_apply`).
+//! Dial-gate scan: every raw network dial in the runtime's dial-site files
+//! must route through its typed SSRF gate.
 //!
-//! This test scans the four files that are the closed set of network-dial call
-//! sites and asserts each `.connect(` / `builder_dangerous(` on a network path
-//! has a guard adjacent in the same function.  A newly-added ungated dial fails
-//! this test, keeping the egress class closed. In `db.rs` the rule is
-//! structural rather than proximity-based: a raw sqlx dial may appear only in
-//! the body of `VettedPool::connect`, which takes its options from the
-//! driver-typed `GatedDial` gate.
+//! The rule is structural, never proximity-based. A sqlx dial (`connect`,
+//! `connect_with`, `connect_lazy`, `connect_lazy_with`, in any method or path
+//! form) or `*PoolOptions` opener is admitted only as `VettedPool`'s own
+//! associated `connect`, and `db.rs` holds exactly one raw dial, inside the
+//! body of `VettedPool::connect`, which takes its options from the driver-typed
+//! `DB::gated_connect_options`. An SMTP transport is admitted only when its
+//! host argument is `<binding>.dial_host(…)`, a method only `VettedDial` has.
+//! No comment, string, or nearby token can exempt a dial or vouch for a gate.
 //!
-//! Every scan runs over [`strip_cfg_test_items`]'s output, never raw
-//! `src.lines()`, so a test fixture's own guard token or dial call can never
-//! vouch for — or masquerade as — production code. That helper is a small
-//! token-level scanner (not a line heuristic): it tracks string/char/comment
-//! state across the whole file, so a brace or a `#[cfg(test)]`-looking line
-//! hidden inside a string or comment can never desync the boundary it draws.
-//! Getting that boundary too wide silently hides a real ungated dial (a
-//! vacuous green), so the helper itself carries refusal tests pinning it
-//! against every fooling shape below, and every scan test asserts a known
-//! production anchor survives — an over-strip turns the anchor assertion red
-//! before it could ever turn the dial-scan itself vacuously green.
-
-const GUARDS: &[&str] = &["VettedDial", "ssrf_apply"];
-
-/// True when any guard marker appears within `window_lines` lines of `target_line`
-/// in the line-oriented source view.  Using lines (not bytes) avoids slicing into
-/// multi-byte UTF-8 chars in adjacent comments.
-fn guarded_near_line(lines: &[String], target_line: usize, window_lines: usize) -> bool {
-    let lo = target_line.saturating_sub(window_lines);
-    let hi = (target_line + window_lines).min(lines.len());
-    lines[lo..hi]
-        .iter()
-        .any(|l| GUARDS.iter().any(|g| l.contains(g)))
-}
+//! Every scan runs over [`production_code`]: [`strip_cfg_test_items`] blanks
+//! `#[cfg(test)]` items, then [`mask_non_code`] blanks comments and strings,
+//! so a test fixture's own dial or guard can never vouch for — or masquerade
+//! as — production code. The stripper is a token-level scanner (not a line
+//! heuristic): it tracks string/char/comment state across the whole file, so a
+//! brace or a `#[cfg(test)]`-looking line hidden inside a string or comment can
+//! never desync the boundary it draws. A boundary drawn too wide silently hides
+//! a real ungated dial (a vacuous green), so the helpers carry refusal tests
+//! pinning them against every fooling shape below, and every scan test asserts
+//! a known production anchor survives — an over-strip turns the anchor
+//! assertion red before it could ever turn the dial scan vacuously green.
 
 // ---------------------------------------------------------------------------
 // Token-level source classification.
@@ -52,16 +40,16 @@ fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-// Detects a raw or byte-raw string prefix (`r#*"`, `br#*"`) starting at
-// `chars[i]`, guarded so it only fires at a token boundary (not mid-identifier,
-// e.g. `foo_r"..."`). Returns the prefix length (through the opening `"`) and
-// the hash count the closing `"` must match.
+// Detects a raw, byte-raw, or C-raw string prefix (`r#*"`, `br#*"`, `cr#*"`)
+// starting at `chars[i]`, guarded so it only fires at a token boundary (not
+// mid-identifier, e.g. `foo_r"..."`). Returns the prefix length (through the
+// opening `"`) and the hash count the closing `"` must match.
 fn raw_string_prefix(chars: &[char], i: usize) -> Option<(usize, usize)> {
     if i > 0 && chars.get(i - 1).is_some_and(|c| is_ident_char(*c)) {
         return None;
     }
     let mut j = i;
-    if chars.get(j) == Some(&'b') {
+    if matches!(chars.get(j), Some(&('b' | 'c'))) {
         j += 1;
     }
     if chars.get(j) != Some(&'r') {
@@ -323,9 +311,7 @@ fn cfg_test_gated(predicate: &str) -> bool {
 /// same-line) attribute to its opening `{` — tracking nested depth back to
 /// zero — or, for a brace-free item such as `#[cfg(test)] use path;`, to its
 /// terminating `;`. Reaching EOF before that happens is an unbalanced item and
-/// fails loudly (an unproven boundary must never silently pass), UNLESS it is
-/// the file's last item and the file's last non-blank line is `}` — there is
-/// no production code left afterward for a wrong boundary to hide.
+/// fails loudly, wherever the item sits: an unproven boundary never passes.
 fn strip_cfg_test_items(name: &str, src: &str) -> Vec<String> {
     let raw: Vec<&str> = src.lines().collect();
     let masked_src = mask_non_code(src);
@@ -352,20 +338,12 @@ fn strip_cfg_test_items(name: &str, src: &str) -> Vec<String> {
         let mut opened = false;
         let mut j = start;
         let end = loop {
-            if j >= raw.len() {
-                let last_non_blank_is_close = raw
-                    .iter()
-                    .rev()
-                    .find(|l| !l.trim().is_empty())
-                    .is_some_and(|l| l.trim() == "}");
-                assert!(
-                    last_non_blank_is_close,
-                    "{name}: #[cfg(test)] item starting at line {} never closes before EOF \
-                     — strip_cfg_test_items cannot safely bound it",
-                    start + 1
-                );
-                break j;
-            }
+            assert!(
+                j < raw.len(),
+                "{name}: #[cfg(test)] item starting at line {} never closes before EOF \
+                 — strip_cfg_test_items cannot safely bound it",
+                start + 1
+            );
             let ml = mask_lines[j];
             for ch in ml.chars() {
                 match ch {
@@ -551,6 +529,14 @@ fn strip_cfg_test_items_refuses_an_unbalanced_gated_item() {
     let _ = strip_cfg_test_items("fixture.rs", fixture);
 }
 
+/// A file whose last line is `}` still refuses a gated item that never closes.
+#[test]
+#[should_panic(expected = "never closes before EOF")]
+fn strip_cfg_test_items_refuses_an_unbalanced_last_item_ending_in_a_brace() {
+    let fixture = "fn production() {}\n#[cfg(test)]\nmod t {\n    fn helper() {\n    }\n";
+    let _ = strip_cfg_test_items("fixture.rs", fixture);
+}
+
 #[test]
 fn mask_non_code_treats_nested_block_comments_as_non_code() {
     let src = "fn f() { /* outer /* inner */ leaked-brace-here-{ */ }";
@@ -584,6 +570,22 @@ fn mask_non_code_handles_raw_strings_with_embedded_quotes_and_trailing_backslash
 }
 
 #[test]
+fn mask_non_code_handles_c_raw_strings() {
+    let src = r###"fn f() { let a = cr#"a"{"#; let b = cr"C:\"; }"###;
+    let masked = mask_non_code(src);
+    assert_eq!(
+        masked.matches('{').count(),
+        1,
+        "a brace inside a C raw string must stay masked:\n{masked}"
+    );
+    assert_eq!(
+        masked.matches('}').count(),
+        1,
+        "a C raw string ending in a backslash must still close at its own quote:\n{masked}"
+    );
+}
+
+#[test]
 fn mask_non_code_treats_char_literals_as_non_code_not_lifetimes() {
     let src = "fn f<'q>() { let a = '{'; let b = '}'; let c = '\"'; }";
     let masked = mask_non_code(src);
@@ -607,78 +609,182 @@ fn mask_non_code_carries_string_state_across_lines() {
 }
 
 // ---------------------------------------------------------------------------
-// The dial scans.
+// Token-level dial classification over masked production code.
 // ---------------------------------------------------------------------------
 
-#[test]
-fn external_conn_postgres_dial_is_guarded() {
-    let src = include_str!("../src/external_conn.rs");
-    let lines = strip_cfg_test_items("external_conn.rs", src);
-    let joined = lines.join("\n");
-    assert!(
-        joined.contains("async fn open_external"),
-        "over-strip hid open_external"
-    );
-    assert!(
-        joined.contains("VettedPool::<sqlx::Postgres>::connect("),
-        "over-strip hid the guarded VettedPool dial"
-    );
-    for (i, line) in lines.iter().enumerate() {
-        if !line.contains(".connect(") {
-            continue;
-        }
-        // SQLite path has no host to gate — skip it.
-        let ctx_start = i.saturating_sub(10);
-        let ctx: String = lines[ctx_start..=i].join("\n");
-        if ctx.contains("Sqlite") || ctx.contains("SqlitePool") {
-            continue;
-        }
-        assert!(
-            guarded_near_line(&lines, i, 60),
-            "unguarded .connect( at line {} in external_conn.rs — add a VettedDial guard\n{}",
-            i + 1,
-            line
-        );
-    }
+/// The production code of `src`, with comments and strings masked.
+///
+/// `#[cfg(test)]` items are blanked first; every line keeps its number, so a
+/// byte offset in the result maps to the same 1-based line of `src`.
+fn production_code(name: &str, src: &str) -> String {
+    mask_non_code(&strip_cfg_test_items(name, src).join("\n"))
 }
 
-/// Raw sqlx dial tokens: each opens a connection without the typed gate.
-const DB_DIAL_TOKENS: &[&str] = &[
-    ".connect(",
-    "connect_with(",
+/// One identifier token in masked code.
+struct Ident<'a> {
+    /// Byte offset of its first char.
+    at: usize,
+    text: &'a str,
+}
+
+/// Every identifier token in `code`, in order.
+fn idents(code: &str) -> Vec<Ident<'_>> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (at, ch) in code.char_indices() {
+        match (is_ident_char(ch), start) {
+            (true, None) => start = Some(at),
+            (false, Some(s)) => {
+                if let Some(text) = code.get(s..at) {
+                    out.push(Ident { at: s, text });
+                }
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(text) = start.and_then(|s| code.get(s..)) {
+        out.push(Ident {
+            at: code.len() - text.len(),
+            text,
+        });
+    }
+    out
+}
+
+/// The 1-based line holding byte offset `at` of `code`.
+fn line_of(code: &str, at: usize) -> usize {
+    code.get(..at)
+        .map_or(0, |before| before.matches('\n').count())
+        + 1
+}
+
+/// Whether the token before `at` is the `fn` keyword, making the identifier at
+/// `at` a definition rather than a use.
+fn is_fn_definition(code: &str, at: usize) -> bool {
+    code.get(..at)
+        .map(str::trim_end)
+        .and_then(|before| before.strip_suffix("fn"))
+        .is_some_and(|rest| !rest.ends_with(is_ident_char))
+}
+
+/// `s` with one trailing balanced `<…>` removed; `s` itself when it does not
+/// end in `>`, and `None` when the brackets do not balance.
+fn strip_trailing_generics(s: &str) -> Option<&str> {
+    if !s.ends_with('>') {
+        return Some(s);
+    }
+    let mut depth = 0i32;
+    for (i, ch) in s.char_indices().rev() {
+        match ch {
+            '>' => depth += 1,
+            '<' => {
+                depth -= 1;
+                if depth == 0 {
+                    return s.get(..i).map(str::trim_end);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The type segment owning the associated function named at `at`.
+///
+/// Generics are skipped, so `crate::db::VettedPool::<sqlx::Sqlite>::connect`
+/// yields `VettedPool`. A method call (`x.connect`), a bare call, or a
+/// qualified `<T as Trait>::` path yields `None`.
+fn path_owner(code: &str, at: usize) -> Option<&str> {
+    let before = code.get(..at)?.trim_end().strip_suffix("::")?.trim_end();
+    let before = strip_trailing_generics(before)?;
+    let before = before.strip_suffix("::").unwrap_or(before).trim_end();
+    let seg_start = before
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_ident_char(*c))
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    before.get(seg_start..).filter(|seg| !seg.is_empty())
+}
+
+/// sqlx functions that open a connection or a pool.
+const DIAL_FNS: &[&str] = &[
+    "connect",
+    "connect_with",
     "connect_lazy",
-    "Pool::connect(",
-    "Connection::connect(",
+    "connect_lazy_with",
 ];
 
-/// The masked production lines of `src` and the line range of the body of
-/// `VettedPool`'s `connect`, the one place a raw dial may appear.
+/// The one type whose associated `connect` routes every dial through the gate.
+const GATED_OWNER: &str = "VettedPool";
+
+/// What a [`RawDial`] opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RawKind {
+    /// A call to one of [`DIAL_FNS`].
+    Dial,
+    /// A sqlx `*PoolOptions` builder, which opens a pool.
+    PoolOptions,
+}
+
+/// A raw sqlx dial or pool opener in masked production code.
+#[derive(Debug)]
+struct RawDial {
+    /// Its 1-based line.
+    line: usize,
+    ident: String,
+    kind: RawKind,
+}
+
+/// Every raw sqlx dial or pool opener in masked `code`.
 ///
-/// Scanning runs over [`mask_non_code`]'s output, so a comment or string can
-/// neither hide a dial nor vouch for one.
-fn gate_body(name: &str, src: &str) -> (Vec<String>, Option<(usize, usize)>) {
-    let production = strip_cfg_test_items(name, src).join("\n");
-    let masked: Vec<String> = mask_non_code(&production)
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    let Some(impl_at) = masked
+/// Each mention of a [`DIAL_FNS`] identifier is a dial, in every syntactic
+/// form (method call, path call, function reference), unless it is a `fn`
+/// definition or an associated function of [`GATED_OWNER`]. Only the path's
+/// owning type admits a call; no text near it does.
+fn raw_dials(code: &str) -> Vec<RawDial> {
+    idents(code)
+        .into_iter()
+        .filter_map(|id| {
+            let kind = if DIAL_FNS.contains(&id.text) {
+                RawKind::Dial
+            } else if id.text.ends_with("PoolOptions") {
+                RawKind::PoolOptions
+            } else {
+                return None;
+            };
+            let gated = kind == RawKind::Dial && path_owner(code, id.at) == Some(GATED_OWNER);
+            (!gated && !is_fn_definition(code, id.at)).then(|| RawDial {
+                line: line_of(code, id.at),
+                ident: id.text.to_owned(),
+                kind,
+            })
+        })
+        .collect()
+}
+
+/// Lines of every raw sqlx dial or pool opener in `src`'s production code.
+fn caller_url_raw_dials(name: &str, src: &str) -> Vec<usize> {
+    raw_dials(&production_code(name, src))
         .iter()
-        .position(|l| l.contains("impl<DB> VettedPool<DB>"))
-    else {
-        return (masked, None);
-    };
-    let Some(fn_start) = masked
+        .map(|d| d.line)
+        .collect()
+}
+
+/// The 0-based line range of the body of `VettedPool`'s `connect` in masked
+/// `lines`, the one place a raw dial may appear.
+fn gate_body(lines: &[&str]) -> Option<(usize, usize)> {
+    let impl_at = lines
+        .iter()
+        .position(|l| l.contains("impl<DB> VettedPool<DB>"))?;
+    let fn_start = lines
         .iter()
         .skip(impl_at)
         .position(|l| l.contains("async fn connect("))
-        .map(|offset| impl_at + offset)
-    else {
-        return (masked, None);
-    };
+        .map(|offset| impl_at + offset)?;
     let mut depth = 0i32;
     let mut opened = false;
-    for (i, line) in masked.iter().enumerate().skip(fn_start) {
+    for (i, line) in lines.iter().enumerate().skip(fn_start) {
         for ch in line.chars() {
             match ch {
                 '{' => {
@@ -690,53 +796,164 @@ fn gate_body(name: &str, src: &str) -> (Vec<String>, Option<(usize, usize)>) {
             }
         }
         if opened && depth <= 0 {
-            return (masked, Some((fn_start, i)));
+            return Some((fn_start, i));
         }
     }
-    (masked, None)
+    None
 }
 
 /// Every raw dial in `src`'s production code that bypasses the typed gate.
 ///
-/// A dial is admitted only inside `VettedPool::connect`, and only when that
-/// body takes its options from `DB::gated_connect_options` — the driver type,
-/// not any text near the call, decides which gate runs. Each violation names
-/// its 1-based line.
+/// Exactly one raw dial is admitted, inside `VettedPool::connect`, and only
+/// when that body takes its options from `DB::gated_connect_options`: the
+/// driver type, not any text near the call, decides which gate runs. Each
+/// violation names its 1-based line.
 fn db_dials_bypassing_the_gate(name: &str, src: &str) -> Vec<String> {
-    let (masked, body) = gate_body(name, src);
+    let code = production_code(name, src);
+    let lines: Vec<&str> = code.lines().collect();
+    let body = gate_body(&lines).map(|(lo, hi)| (lo + 1)..=(hi + 1));
+    let dials = raw_dials(&code);
     let mut violations = Vec::new();
-    let (lo, hi) = match body {
-        Some((lo, hi)) => {
-            let gated = masked
-                .iter()
-                .take(hi + 1)
-                .skip(lo)
-                .any(|l| l.contains("DB::gated_connect_options("));
+    match &body {
+        Some(body) => {
+            let gated = idents(&code).iter().any(|id| {
+                id.text == "gated_connect_options"
+                    && body.contains(&line_of(&code, id.at))
+                    && path_owner(&code, id.at) == Some("DB")
+            });
             if !gated {
                 violations.push(format!(
                     "{name}:{}: VettedPool::connect does not take its options from \
                      DB::gated_connect_options",
-                    lo + 1
+                    body.start()
                 ));
             }
-            (lo, hi)
+            let admitted = dials
+                .iter()
+                .filter(|d| d.kind == RawKind::Dial && body.contains(&d.line))
+                .count();
+            if admitted != 1 {
+                violations.push(format!(
+                    "{name}:{}: VettedPool::connect holds {admitted} raw dials; exactly one \
+                     is admitted",
+                    body.start()
+                ));
+            }
         }
-        None => {
-            violations.push(format!("{name}: no VettedPool::connect body found"));
-            (usize::MAX, usize::MAX)
-        }
-    };
-    for (i, line) in masked.iter().enumerate() {
-        let inside = (lo..=hi).contains(&i);
-        if !inside && DB_DIAL_TOKENS.iter().any(|t| line.contains(t)) {
+        None => violations.push(format!("{name}: no VettedPool::connect body found")),
+    }
+    for dial in &dials {
+        if !body.as_ref().is_some_and(|b| b.contains(&dial.line)) {
             violations.push(format!(
-                "{name}:{}: raw dial outside VettedPool::connect: {}",
-                i + 1,
-                line.trim()
+                "{name}:{}: raw dial `{}` outside VettedPool::connect",
+                dial.line, dial.ident
             ));
         }
     }
     violations
+}
+
+/// lettre functions that build an SMTP transport dialing their host argument.
+const SMTP_TRANSPORT_FNS: &[&str] = &["builder_dangerous", "relay", "starttls_relay", "from_url"];
+
+/// Whether the call whose name ends at byte `end` of `code` passes
+/// `<binding>.dial_host(…)` as its first argument.
+fn takes_vetted_host(code: &str, end: usize) -> bool {
+    let Some(args) = code
+        .get(end..)
+        .and_then(|rest| rest.trim_start().strip_prefix('('))
+        .map(str::trim_start)
+    else {
+        return false;
+    };
+    let binding_len = args.find(|c: char| !is_ident_char(c)).unwrap_or(args.len());
+    binding_len > 0
+        && args
+            .get(binding_len..)
+            .map(str::trim_start)
+            .and_then(|r| r.strip_prefix('.'))
+            .map(str::trim_start)
+            .and_then(|r| r.strip_prefix("dial_host"))
+            .map(str::trim_start)
+            .is_some_and(|r| r.starts_with('('))
+}
+
+/// Lines of every SMTP transport built from a host that did not pass the gate.
+///
+/// A transport is gated only when its first argument is `<binding>.dial_host(…)`:
+/// `dial_host` exists only on `VettedDial`, whose sole constructor runs the SSRF
+/// gate, so the argument's type proves the host was vetted. A guard named only
+/// in a comment or string is masked away and proves nothing.
+fn ungated_smtp_transports(name: &str, src: &str) -> Vec<usize> {
+    let code = production_code(name, src);
+    idents(&code)
+        .iter()
+        .filter(|id| {
+            SMTP_TRANSPORT_FNS.contains(&id.text)
+                && !is_fn_definition(&code, id.at)
+                && !takes_vetted_host(&code, id.at + id.text.len())
+        })
+        .map(|id| line_of(&code, id.at))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Refusal tests for the dial scans.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn raw_dial_scan_admits_only_vetted_pool_calls_and_definitions() {
+    let fixture = "async fn open(url: &str) {
+    let a = crate::db::VettedPool::<sqlx::Postgres>::connect(url, 4).await;
+    let b = VettedPool::<sqlx::Sqlite>::
+        connect(url, 4).await;
+}
+pub async fn connect(url: &str) {}
+";
+    assert_eq!(
+        caller_url_raw_dials("fixture.rs", fixture),
+        Vec::<usize>::new()
+    );
+}
+
+/// A comment or nearby token naming sqlite or a file never exempts a raw dial.
+#[test]
+fn raw_dial_scan_refuses_a_method_dial_a_comment_calls_local() {
+    let fixture = "async fn open(url: &str) {
+    // Local sqlite file at :memory:, no host to gate (SqlitePool).
+    let _ = options.connect(url).await;
+}
+";
+    assert_eq!(caller_url_raw_dials("fixture.rs", fixture), vec![3]);
+}
+
+#[test]
+fn raw_dial_scan_refuses_every_path_form() {
+    let fixture = "async fn open(url: &str) {
+    let _ = PgPool::connect(url).await;
+    let _ = sqlx::postgres::PgPool::connect_lazy(url);
+    let _ = sqlx::Pool::<Postgres>::connect_with(opts).await;
+    let _ = ConnectOptions::connect(&opts).await;
+    let _ = <PgConnection as Connection>::connect(url).await;
+    let f = SqlitePool::connect;
+    let _ = PgPoolOptions::new();
+}
+";
+    assert_eq!(
+        caller_url_raw_dials("fixture.rs", fixture),
+        vec![2, 3, 4, 5, 6, 7, 8]
+    );
+}
+
+/// `VettedPool` spelled in a comment or a string does not own the call after it.
+#[test]
+fn raw_dial_scan_ignores_a_gate_named_in_a_comment_or_string() {
+    let fixture = "async fn open(url: &str) {
+    let _ = /* VettedPool:: */ PgPool::connect(url).await;
+    let s = \"VettedPool::\"; connect(url);
+}
+";
+    assert_eq!(caller_url_raw_dials("fixture.rs", fixture), vec![2, 3]);
 }
 
 /// The gate a fixture's `VettedPool::connect` must route through.
@@ -758,7 +975,7 @@ fn db_gate_scan_admits_the_gated_pool_fixture() {
     );
 }
 
-/// A comment naming SQLite or a file above a raw dial no longer exempts it:
+/// A comment naming sqlite or a file above a raw dial does not exempt it:
 /// comments are masked, and only the typed gate's body may dial.
 #[test]
 fn db_gate_scan_refuses_a_dial_a_doc_comment_calls_local() {
@@ -766,14 +983,36 @@ fn db_gate_scan_refuses_a_dial_a_doc_comment_calls_local() {
         "{GATED_POOL_FIXTURE}
 /// Opens the local sqlite file at :memory: (no host to gate).
 async fn sneaky(url: &str) {{
-    let _ = PoolOptions::<Postgres>::new().connect(url).await;
+    let _ = options.connect(url).await;
 }}
 "
     );
     let violations = db_dials_bypassing_the_gate("fixture.rs", &fixture);
     assert_eq!(violations.len(), 1, "{violations:?}");
     assert!(
-        violations.iter().all(|v| v.contains("raw dial outside")),
+        violations
+            .iter()
+            .all(|v| v.contains("raw dial `connect` outside")),
+        "{violations:?}"
+    );
+}
+
+#[test]
+fn db_gate_scan_refuses_a_path_form_dial_outside_the_gate() {
+    let fixture = format!(
+        "{GATED_POOL_FIXTURE}
+async fn sneaky(url: &str) {{
+    let _ = PgPool::connect(url).await;
+    let _ = sqlx::Pool::<Sqlite>::connect_lazy(url);
+}}
+"
+    );
+    let violations = db_dials_bypassing_the_gate("fixture.rs", &fixture);
+    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert!(
+        violations
+            .iter()
+            .all(|v| v.contains("outside VettedPool::connect")),
         "{violations:?}"
     );
 }
@@ -786,6 +1025,7 @@ fn db_gate_scan_reads_code_not_comments_or_strings() {
 impl<DB> VettedPool<DB> {
     pub async fn connect(url: &str) -> Result<Self, E> {
         // let options = DB::gated_connect_options(url).await?;
+        let s = "DB::gated_connect_options(url)";
         let pool = PoolOptions::<DB>::new().connect(url).await?;
         Ok(Self(pool))
     }
@@ -806,6 +1046,26 @@ fn label() -> &'static str {
 }
 
 #[test]
+fn db_gate_scan_refuses_a_second_dial_inside_the_gate() {
+    let fixture = r"
+impl<DB> VettedPool<DB> {
+    pub async fn connect(url: &str) -> Result<Self, E> {
+        let options = DB::gated_connect_options(url).await?;
+        let pool = PoolOptions::<DB>::new().connect_with(options).await?;
+        let raw = PgPool::connect(url).await?;
+        Ok(Self(pool))
+    }
+}
+";
+    let violations = db_dials_bypassing_the_gate("fixture.rs", fixture);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(
+        violations.iter().all(|v| v.contains("holds 2 raw dials")),
+        "{violations:?}"
+    );
+}
+
+#[test]
 fn db_gate_scan_refuses_a_missing_gate() {
     let fixture = "async fn open(url: &str) {\n    let _ = SqlitePool::connect(url).await;\n}\n";
     let violations = db_dials_bypassing_the_gate("fixture.rs", fixture);
@@ -813,65 +1073,43 @@ fn db_gate_scan_refuses_a_missing_gate() {
 }
 
 #[test]
-fn db_pool_connect_is_guarded() {
-    let src = include_str!("../src/db.rs");
-    let joined = strip_cfg_test_items("db.rs", src).join("\n");
-    for anchor in [
-        "async fn build_pool",
-        "VettedPool::<DbDatabase>::connect(",
-        "async fn vet_dial_target<",
-        "impl GatedDial for sqlx::Postgres",
-        "impl GatedDial for sqlx::Sqlite",
-    ] {
-        assert!(
-            joined.contains(anchor),
-            "over-strip hid the production anchor `{anchor}`"
-        );
-    }
+fn smtp_scan_admits_a_vetted_host() {
+    let fixture = "async fn send() {
+    let vetted = VettedDial::for_host(&cfg.host, port).await?;
+    let tb = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
+        vetted.dial_host(&cfg.host),
+    );
+}
+";
     assert_eq!(
-        db_dials_bypassing_the_gate("db.rs", src),
-        Vec::<String>::new()
+        ungated_smtp_transports("fixture.rs", fixture),
+        Vec::<usize>::new()
     );
 }
 
+/// A guard named only in a comment or a string never vouches for a transport.
 #[test]
-fn email_smtp_builder_dangerous_is_guarded() {
-    let src = include_str!("../src/email.rs");
-    let lines = strip_cfg_test_items("email.rs", src);
-    let joined = lines.join("\n");
-    assert!(
-        joined.contains("async fn send_smtp"),
-        "over-strip hid send_smtp"
+fn smtp_scan_refuses_a_guard_in_a_comment_or_string() {
+    let fixture = "async fn send() {
+    // let vetted = VettedDial::for_host(&cfg.host, port); vetted.dial_host(h)
+    let a = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.host);
+    let b = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(\"vetted.dial_host(h)\");
+    let c = AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host);
+}
+";
+    assert_eq!(
+        ungated_smtp_transports("fixture.rs", fixture),
+        vec![3, 4, 5]
     );
-    assert!(
-        joined.contains("builder_dangerous("),
-        "over-strip hid the guarded builder_dangerous( site"
-    );
-    for (i, line) in lines.iter().enumerate() {
-        if !line.contains("builder_dangerous(") {
-            continue;
-        }
-        assert!(
-            guarded_near_line(&lines, i, 60),
-            "unguarded builder_dangerous( at line {} in email.rs — add a VettedDial guard\n{}",
-            i + 1,
-            line
-        );
-    }
 }
 
-/// Raw sqlx pool openers: each bypasses `VettedPool::connect` (SSRF gate,
-/// connection cap, version floor, credential-free errors).
-const RAW_POOL_OPENERS: &[&str] = &[
-    "Pool::connect",
-    "PoolOptions",
-    "connect_with(",
-    "connect_lazy",
-];
+// ---------------------------------------------------------------------------
+// The dial scans over the runtime's dial sites.
+// ---------------------------------------------------------------------------
 
 /// The files that open a pool from a caller-supplied connection URL must do so
-/// only through `VettedPool::connect`, never a raw sqlx opener whose error may
-/// echo the URL's credentials.
+/// only through `VettedPool::connect`, never a raw sqlx opener, whose error may
+/// echo the URL's credentials and which skips the SSRF gate.
 #[test]
 fn caller_url_pools_open_only_through_vetted_pool() {
     let sources = [
@@ -889,30 +1127,61 @@ fn caller_url_pools_open_only_through_vetted_pool() {
             &[
                 "async fn open_external",
                 "VettedPool::<sqlx::Postgres>::connect(",
+                "VettedPool::<sqlx::Sqlite>::connect(",
             ][..],
         ),
     ];
     for (name, src, anchors) in sources {
-        let lines = strip_cfg_test_items(name, src);
-        let joined = lines.join("\n");
+        let code = production_code(name, src);
         for anchor in anchors {
             assert!(
-                joined.contains(anchor),
+                code.contains(anchor),
                 "over-strip hid production anchor `{anchor}` in {name}"
             );
         }
-        for (i, line) in lines.iter().enumerate() {
-            if line.trim_start().starts_with("//") {
-                continue;
-            }
-            let code = line.replace("VettedPool", "");
-            for opener in RAW_POOL_OPENERS {
-                assert!(
-                    !code.contains(opener),
-                    "raw pool opener `{opener}` at {name}:{} — open through VettedPool::connect\n{line}",
-                    i + 1
-                );
-            }
-        }
+        assert_eq!(
+            caller_url_raw_dials(name, src),
+            Vec::<usize>::new(),
+            "raw sqlx dial in {name} — open through VettedPool::connect"
+        );
     }
+}
+
+#[test]
+fn db_pool_connect_is_guarded() {
+    let src = include_str!("../src/db.rs");
+    let code = production_code("db.rs", src);
+    for anchor in [
+        "async fn build_pool",
+        "VettedPool::<DbDatabase>::connect(",
+        "async fn vet_dial_target<",
+        "impl GatedDial for sqlx::Postgres",
+        "impl GatedDial for sqlx::Sqlite",
+    ] {
+        assert!(
+            code.contains(anchor),
+            "over-strip hid the production anchor `{anchor}`"
+        );
+    }
+    assert_eq!(
+        db_dials_bypassing_the_gate("db.rs", src),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn email_smtp_builder_dangerous_is_guarded() {
+    let src = include_str!("../src/email.rs");
+    let code = production_code("email.rs", src);
+    for anchor in ["async fn send_smtp", "builder_dangerous("] {
+        assert!(
+            code.contains(anchor),
+            "over-strip hid the production anchor `{anchor}` in email.rs"
+        );
+    }
+    assert_eq!(
+        ungated_smtp_transports("email.rs", src),
+        Vec::<usize>::new(),
+        "SMTP transport in email.rs built from an unvetted host — pass VettedDial::dial_host"
+    );
 }
