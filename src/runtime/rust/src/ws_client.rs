@@ -140,40 +140,6 @@ fn deregister(id: i64) {
 #[cfg(not(target_arch = "wasm32"))]
 static WS_CLIENT_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
-/// Redact any `user:pass@` userinfo from a URL before it is echoed in an error
-/// message. WebSocket URLs legitimately carry credentials (`ws://user:pass@host`),
-/// and connect-error strings flow to `Ipe.Log` / structured logs, so the raw URL
-/// would leak the secret (PRINCIPLES #1: no secret leakage into errors/logs).
-/// Parse-and-rebuild via the `url` crate when possible; fall back to a manual
-/// `scheme://...@` strip so a URL the parser rejects (the bad-url error path)
-/// still never echoes credentials. Total — no unwrap/index/panic.
-#[cfg(not(target_arch = "wasm32"))]
-fn redact_ws_url(url: &str) -> String {
-    if let Ok(mut u) = ::url::Url::parse(url) {
-        if !u.username().is_empty() || u.password().is_some() {
-            // set_username/set_password return Err only for cannot-be-a-base URLs,
-            // which can't reach here (they have no userinfo); ignore either way.
-            let _ = u.set_username("");
-            let _ = u.set_password(None);
-        }
-        return u.to_string();
-    }
-    // Unparseable URL: strip a leading `scheme://userinfo@` manually. Only the
-    // authority's userinfo (before the first '/', '?' or '#') is considered, so a
-    // later `@` in a path/query is preserved.
-    match url.split_once("://") {
-        Some((scheme, rest)) => {
-            let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-            let (authority, tail) = rest.split_at(authority_end);
-            match authority.rsplit_once('@') {
-                Some((_userinfo, host)) => format!("{scheme}://{host}{tail}"),
-                None => url.to_string(),
-            }
-        }
-        None => url.to_string(),
-    }
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 async fn do_connect<E: From<String> + Send + 'static>(
     url: String,
@@ -185,7 +151,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
     use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
     // Build the credential-stripped form ONCE; every error message below echoes
     // this, never the raw `url`.
-    let safe_url = redact_ws_url(&url);
+    let safe_url = super::ssrf::redact_userinfo(&url);
     // SSRF gate, before the handshake: under deny-private the host is resolved
     // ONCE through the shared gate (bounded deadline, a host with any blocked
     // answer refused whole) and the dial below is pinned to the vetted address,
@@ -750,26 +716,6 @@ mod tests {
         assert_eq!(ws_close_code(1011), WsCloseCode::InternalError);
         assert_eq!(ws_close_code(4000), WsCloseCode::Custom(4000));
     }
-
-    #[test]
-    fn redact_ws_url_strips_userinfo() {
-        // Credentials must never survive into an error/log string.
-        let r = redact_ws_url("ws://user:s3cret@example.com:9000/feed?token=abc");
-        assert!(!r.contains("s3cret"), "password leaked: {r}");
-        assert!(!r.contains("user:"), "username leaked: {r}");
-        assert!(r.contains("example.com"));
-        // Username-only (no password) is also stripped.
-        let r2 = redact_ws_url("wss://admin@host/x");
-        assert!(!r2.contains("admin@"), "username leaked: {r2}");
-        // No userinfo → unchanged host/path.
-        let r3 = redact_ws_url("ws://example.com/feed");
-        assert!(r3.contains("example.com") && !r3.contains('@'));
-        // Unparseable URL still strips a leading scheme://userinfo@ and keeps a
-        // later '@' in the path intact.
-        let r4 = redact_ws_url("ws://bob:pw@@@host/a@b");
-        assert!(!r4.contains("bob:pw"), "creds leaked from bad url: {r4}");
-        assert!(r4.contains("a@b"), "path '@' wrongly stripped: {r4}");
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -833,8 +779,15 @@ mod wasm_client {
     }
 
     fn open_socket<E: From<String> + 'static>(url: &str) -> Result<i64, E> {
-        let ws = web_sys::WebSocket::new(url)
-            .map_err(|e| E::from(format!("WebSocket.connect {url}: {e:?}")))?;
+        // Neither the URL nor the browser's exception is echoed: the URL can
+        // carry credentials and the exception text quotes it verbatim.
+        let ws = web_sys::WebSocket::new(url).map_err(|_| {
+            E::from(
+                "WebSocket.connect: the browser refused the URL (malformed, or a scheme or \
+                 port it blocks)"
+                    .to_owned(),
+            )
+        })?;
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
         let id = next_id();
         SOCKETS.with(|s| s.borrow_mut().insert(id, ws));

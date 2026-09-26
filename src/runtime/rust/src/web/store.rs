@@ -540,10 +540,14 @@ impl std::error::Error for StoreOpenError {}
 impl StoreOpenError {
     /// Whether a connect-time policy gate refused the store.
     ///
-    /// A refused host, an unvettable URL, or an unsupported engine will not
-    /// change on retry, so [`choose_store`] refuses startup on it rather than
-    /// degrade to memory; a transient failure (unreachable server, failed
-    /// version query, table setup) is not a policy refusal.
+    /// A refused host, an unvettable URL, or an unsupported engine is a
+    /// policy refusal, so [`choose_store`] refuses startup on it rather than
+    /// degrade to memory. That includes a host the SSRF gate could not
+    /// resolve or resolved too slowly: such a failure may be transient DNS,
+    /// but a host the gate never vetted is not dialled, and falling back would
+    /// silently run without the configured store, so it fails closed. A
+    /// driver failure after the gate admitted the target (unreachable server,
+    /// failed version query, table setup) is not a policy refusal.
     ///
     /// Every variant is classified by name, with no wildcard, so a new refusal
     /// variant is a compile error here until it is classified, never a silent
@@ -554,6 +558,8 @@ impl StoreOpenError {
         match self {
             Self::Connect(failure) => match failure {
                 DbConnectError::InvalidUrl
+                | DbConnectError::MisplacedUserinfo
+                | DbConnectError::TooManyDialTargets { .. }
                 | DbConnectError::UnsupportedScheme
                 | DbConnectError::EngineMismatch { .. } => true,
                 DbConnectError::HostRefused(refusal) => match refusal {
@@ -1565,6 +1571,8 @@ mod tests {
         let policy = [
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::LocalSocket)),
             StoreOpenError::Connect(DbConnectError::InvalidUrl),
+            StoreOpenError::Connect(DbConnectError::MisplacedUserinfo),
+            StoreOpenError::Connect(DbConnectError::TooManyDialTargets { limit: 8 }),
             StoreOpenError::Connect(DbConnectError::UnsupportedScheme),
             StoreOpenError::Connect(DbConnectError::EngineMismatch {
                 url: DbEngine::Sqlite,

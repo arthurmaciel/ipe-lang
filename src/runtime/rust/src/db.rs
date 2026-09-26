@@ -1237,8 +1237,20 @@ impl std::fmt::Display for DbFailure {
 /// neither `Display` nor `Debug` can echo one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DbConnectError {
-    /// A network URL did not parse, so the hosts it dials cannot be vetted.
+    /// The URL did not parse, so what it opens cannot be vetted.
     InvalidUrl,
+    /// A PostgreSQL URL has an `@` after its authority.
+    ///
+    /// Only the authority's last `@` separates the credentials from the host,
+    /// so a later one means a credential held a `/`, `?`, or `#` and the
+    /// parser read part of it as the host. The URL is refused, and the text
+    /// that would have been taken for a host is never echoed.
+    MisplacedUserinfo,
+    /// A PostgreSQL URL names more dial targets than the gate vets.
+    TooManyDialTargets {
+        /// The most targets one URL may name.
+        limit: usize,
+    },
     /// The URL's scheme selects no engine the runtime supports.
     ///
     /// The scheme is not echoed: a malformed URL's scheme position can hold
@@ -1265,6 +1277,14 @@ impl std::fmt::Display for DbConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidUrl => f.write_str("db: invalid connection URL"),
+            Self::MisplacedUserinfo => f.write_str(
+                "db: the connection URL has an `@` after its host; percent-encode `@`, `/`, `?` \
+                 and `#` in the user name and password (as %40, %2F, %3F, %23)",
+            ),
+            Self::TooManyDialTargets { limit } => write!(
+                f,
+                "db: the connection URL names more than {limit} hosts to dial"
+            ),
             Self::UnsupportedScheme => f.write_str(
                 "db: unsupported connection URL scheme (use sqlite:, file:, postgres: or \
                  postgresql:)",
@@ -1308,6 +1328,12 @@ where
 /// Port a PostgreSQL URL dials when it names none.
 const POSTGRES_DEFAULT_PORT: u16 = 5432;
 
+/// The most dial targets one PostgreSQL URL may name.
+///
+/// Each target is resolved and vetted before the dial, so the count bounds
+/// the DNS work one connection URL can demand.
+const MAX_POSTGRES_DIAL_TARGETS: usize = 8;
+
 /// One place a PostgreSQL connection URL can make the driver dial.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DialTarget {
@@ -1333,17 +1359,29 @@ enum DialTarget {
 /// driver's precedence. A URL naming no host yields exactly
 /// [`DialTarget::DriverDefault`].
 fn postgres_dial_targets(url: &str) -> Result<Vec<DialTarget>, DbConnectError> {
+    if crate::ssrf::has_at_after_authority(url) {
+        return Err(DbConnectError::MisplacedUserinfo);
+    }
     let parsed = ::url::Url::parse(url).map_err(|_| DbConnectError::InvalidUrl)?;
     let mut port = parsed.port().unwrap_or(POSTGRES_DEFAULT_PORT);
     let mut hosts: Vec<Option<String>> = Vec::new();
+    let mut push_host = |host: Option<String>| {
+        if hosts.len() >= MAX_POSTGRES_DIAL_TARGETS {
+            return Err(DbConnectError::TooManyDialTargets {
+                limit: MAX_POSTGRES_DIAL_TARGETS,
+            });
+        }
+        hosts.push(host);
+        Ok(())
+    };
     if let Some(host) = parsed.host_str().filter(|h| !h.is_empty()) {
         let socket = host.starts_with("%2F") || host.starts_with("%2f");
-        hosts.push((!socket).then(|| host.to_owned()));
+        push_host((!socket).then(|| host.to_owned()))?;
     }
     for (key, value) in parsed.query_pairs() {
         match &*key {
             "host" | "hostaddr" => {
-                hosts.push((!value.starts_with('/')).then(|| value.into_owned()));
+                push_host((!value.starts_with('/')).then(|| value.into_owned()))?;
             }
             "port" => {
                 port = value.parse().map_err(|_| DbConnectError::InvalidUrl)?;
@@ -1376,9 +1414,9 @@ fn url_scheme(url: &str) -> Option<&str> {
     shaped.then_some(scheme)
 }
 
-/// A SQLite connection URL.
+/// A SQLite connection URL, parsed into the options the driver opens.
 pub struct SqliteUrl {
-    url: String,
+    options: sqlx::sqlite::SqliteConnectOptions,
     /// A file every pool connection shares, as opposed to a private in-memory database.
     shared_file: bool,
 }
@@ -1423,12 +1461,12 @@ impl DbUrl {
     /// # Errors
     ///
     /// [`DbConnectError::UnsupportedScheme`] for any other scheme, and
-    /// [`DbConnectError::InvalidUrl`] for a PostgreSQL URL whose dial targets
-    /// cannot be read.
+    /// [`DbConnectError::InvalidUrl`] for a SQLite URL the driver cannot read
+    /// or a PostgreSQL URL whose dial targets cannot be read.
     pub fn parse(url: &str) -> Result<Self, DbConnectError> {
         match url_scheme(url) {
             None | Some("sqlite" | "file") => Ok(Self::Sqlite(SqliteUrl {
-                url: url.to_owned(),
+                options: url.parse().map_err(|_| DbConnectError::InvalidUrl)?,
                 shared_file: url_is_cacheable(url),
             })),
             Some("postgres" | "postgresql") => PostgresUrl::parse(url).map(Self::Postgres),
@@ -1595,10 +1633,7 @@ impl GatedDial for sqlx::Sqlite {
         url: &DbUrl,
     ) -> Result<sqlx::sqlite::SqliteConnectOptions, DbConnectError> {
         match url {
-            DbUrl::Sqlite(sqlite) => sqlite
-                .url
-                .parse()
-                .map_err(|e| DbConnectError::Unreachable(DbFailure::of(&e))),
+            DbUrl::Sqlite(sqlite) => Ok(sqlite.options.clone()),
             DbUrl::Postgres(_) => Err(url.mismatch(DbEngine::Sqlite)),
         }
     }
@@ -5331,6 +5366,72 @@ mod tests {
         }
     }
 
+    /// A credential holding an unencoded `/`, `?`, or `#` ends the authority
+    /// early, so the parser would read part of the userinfo as the host. Such
+    /// a URL is refused before any lookup, and the refusal names no part of it.
+    #[tokio::test]
+    async fn postgres_url_with_an_at_after_its_authority_is_refused() {
+        for url in [
+            "postgres://admin:5432/s3cr3t-pw@db.example",
+            "postgres://admin@s3cr3t/-pw@db.example",
+            "postgres://admin:s3cr3t?pw@db.example",
+            "postgres://admin#s3cr3t-pw@db.example",
+            "postgres://db.example/app?user=admin@s3cr3t-pw",
+        ] {
+            for policy in [DialPolicy::DenyPrivate, DialPolicy::AllowAll] {
+                let refused = pg_gate_with(url, policy, &NoDns).await.err();
+                assert_eq!(
+                    refused,
+                    Some(DbConnectError::MisplacedUserinfo),
+                    "{url:?} under {policy:?}"
+                );
+                if let Some(refused) = refused {
+                    assert_credential_free(&refused);
+                    assert!(!refused.to_string().contains("s3cr3t"), "{refused}");
+                }
+            }
+        }
+    }
+
+    /// Only the authority's last `@` splits credentials from the host, so an
+    /// `@` inside the password is read, not refused.
+    #[test]
+    fn postgres_url_with_an_at_inside_its_authority_is_read() {
+        assert_eq!(
+            postgres_dial_targets("postgres://admin:s3cr@3t-pw@db.example:6432/app"),
+            Ok(vec![DialTarget::Tcp {
+                host: "db.example".to_owned(),
+                port: 6432,
+            }])
+        );
+    }
+
+    /// A URL naming more hosts than the gate vets is refused before any
+    /// lookup; the largest admitted count still parses.
+    #[test]
+    fn postgres_dial_targets_are_capped() {
+        let url_with = |hosts: usize| {
+            let params: Vec<String> = (0..hosts.saturating_sub(1))
+                .map(|i| format!("host=h{i}.example"))
+                .collect();
+            format!("postgres://db.example/app?{}", params.join("&"))
+        };
+        let too_many = DbConnectError::TooManyDialTargets {
+            limit: MAX_POSTGRES_DIAL_TARGETS,
+        };
+        assert_eq!(
+            postgres_dial_targets(&url_with(MAX_POSTGRES_DIAL_TARGETS)).map(|t| t.len()),
+            Ok(MAX_POSTGRES_DIAL_TARGETS)
+        );
+        assert_eq!(
+            postgres_dial_targets(&url_with(MAX_POSTGRES_DIAL_TARGETS + 1)),
+            Err(too_many.clone())
+        );
+        assert!(
+            DbUrl::parse(&url_with(MAX_POSTGRES_DIAL_TARGETS + 1)).is_err_and(|e| e == too_many)
+        );
+    }
+
     #[test]
     fn migrate_checksum_is_lowercase_sha256_hex_matching_go() {
         // G4 pin: the ledger checksum is a cross-backend DB contract. This value
@@ -8740,6 +8841,22 @@ mod tests {
         for url in [
             "postgres://public.example/db?port=s3cr3t-pw",
             "postgres://public.example/db?port=70000",
+        ] {
+            assert_eq!(
+                DbUrl::parse(url).err(),
+                Some(DbConnectError::InvalidUrl),
+                "{url:?}"
+            );
+        }
+    }
+
+    /// A SQLite URL the driver cannot read is refused at the parse, as a
+    /// PostgreSQL one is, never reported as an unreachable server.
+    #[test]
+    fn db_url_refuses_an_unreadable_sqlite_url() {
+        for url in [
+            "sqlite://app.db?mode=bogus",
+            "sqlite://app.db?no_such_param=1",
         ] {
             assert_eq!(
                 DbUrl::parse(url).err(),

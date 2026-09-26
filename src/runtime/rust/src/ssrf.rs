@@ -288,6 +288,35 @@ impl std::fmt::Display for SsrfRefusal {
 
 impl std::error::Error for SsrfRefusal {}
 
+impl SsrfRefusal {
+    /// This refusal with the host it names replaced by a placeholder.
+    ///
+    /// For a host read from a URL whose credentials may have spilled into it,
+    /// so the refusal cannot echo part of a credential.
+    fn withholding_host(self) -> Self {
+        let withheld = || WITHHELD_HOST.to_owned();
+        match self {
+            Self::Blocked { ip, range, .. } => Self::Blocked {
+                host: withheld(),
+                ip,
+                range,
+            },
+            Self::Unresolvable { kind, .. } => Self::Unresolvable {
+                host: withheld(),
+                kind,
+            },
+            Self::NoAddresses { .. } => Self::NoAddresses { host: withheld() },
+            Self::Timeout { after, .. } => Self::Timeout {
+                host: withheld(),
+                after,
+            },
+            Self::UnpinnableTlsName { .. } => Self::UnpinnableTlsName { host: withheld() },
+            Self::LocalSocket => Self::LocalSocket,
+            Self::UnprovenTarget => Self::UnprovenTarget,
+        }
+    }
+}
+
 /// Name resolution the SSRF gate vets.
 pub trait HostResolver: Sync {
     /// Every address `host:port` resolves to.
@@ -586,26 +615,92 @@ impl std::fmt::Display for UrlRefusal {
 
 impl std::error::Error for UrlRefusal {}
 
-/// Redact a `user:pass@` userinfo segment from a URL string for an error message.
+/// Stands in for the part of a URL an error message cannot show safely.
+const WITHHELD_URL_TAIL: &str = "<withheld: `@` after the host>";
+
+/// Stands in for a refused host that may be part of a URL's credentials.
+const WITHHELD_HOST: &str = "<withheld: the URL has an `@` after its host>";
+
+/// The raw text of a URL, split around its authority.
 ///
-/// Used on the parse-FAILURE path where the `url` crate can't help, so it's a
-/// best-effort split (no raw indexing). Removes the `userinfo@` between `://`
-/// and the next `/`.
-pub(crate) fn redact_userinfo(url: &str) -> String {
-    match url.split_once("://") {
-        None => url.to_string(),
-        Some((scheme, rest)) => {
-            let (authority, path) = match rest.split_once('/') {
-                Some((a, p)) => (a, Some(p)),
-                None => (rest, None),
-            };
-            let host = authority.rsplit_once('@').map_or(authority, |(_ui, h)| h);
-            match path {
-                Some(p) => format!("{scheme}://{host}/{p}"),
-                None => format!("{scheme}://{host}"),
-            }
+/// Read without the parser, so it serves URLs the parser rejects as well as
+/// ones it accepts. The authority runs from `scheme://` (or the start, with
+/// no scheme) to the first `/`, `?`, or `#`.
+struct RawUrlParts<'a> {
+    /// The scheme before `://`, when the URL names one.
+    scheme: Option<&'a str>,
+    authority: &'a str,
+    /// Everything after the authority.
+    tail: &'a str,
+}
+
+impl<'a> RawUrlParts<'a> {
+    fn of(url: &'a str) -> Self {
+        let (scheme, rest) = match url.split_once("://") {
+            Some((scheme, rest)) if is_url_scheme(scheme) => (Some(scheme), rest),
+            _ => (None, url),
+        };
+        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        Self {
+            scheme,
+            authority: rest.get(..authority_end).unwrap_or(rest),
+            tail: rest.get(authority_end..).unwrap_or_default(),
         }
     }
+
+    /// Whether an `@` follows the authority.
+    ///
+    /// Only the authority's last `@` separates the userinfo from the host, so
+    /// a later one means a credential may have held a `/`, `?`, or `#`: the
+    /// authority then ended inside it, and a parser may read part of the
+    /// credential as the host.
+    fn has_at_after_authority(&self) -> bool {
+        self.tail.contains('@')
+    }
+}
+
+/// Whether an `@` in `url` follows its authority, so the host a parser reads
+/// from it may be part of a credential.
+pub(crate) fn has_at_after_authority(url: &str) -> bool {
+    RawUrlParts::of(url).has_at_after_authority()
+}
+
+/// `url` with its userinfo removed, for an error message or log line.
+///
+/// When an `@` follows the authority ([`has_at_after_authority`]), where the
+/// credential ends cannot be told from the text, so everything after the
+/// scheme is withheld rather than guessed at.
+pub(crate) fn redact_userinfo(url: &str) -> String {
+    let parts = RawUrlParts::of(url);
+    let prefix = parts
+        .scheme
+        .map_or_else(String::new, |scheme| format!("{scheme}://"));
+    if parts.has_at_after_authority() {
+        return format!("{prefix}{WITHHELD_URL_TAIL}");
+    }
+    let host = parts
+        .authority
+        .rsplit_once('@')
+        .map_or(parts.authority, |(_, host)| host);
+    format!("{prefix}{host}{}", parts.tail)
+}
+
+/// Whether `s` has the RFC 3986 scheme shape: a letter, then letters, digits,
+/// `+`, `-`, or `.`.
+fn is_url_scheme(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// `refusal` for `url`, naming its host only when that host cannot be part of
+/// the URL's credentials.
+fn url_host_refusal(url: &str, refusal: SsrfRefusal) -> UrlRefusal {
+    UrlRefusal::Host(if has_at_after_authority(url) {
+        refusal.withholding_host()
+    } else {
+        refusal
+    })
 }
 
 /// Parse `url` and admit only a gated scheme.
@@ -652,7 +747,7 @@ pub(crate) async fn vet_url_with<R: HostResolver>(
             vet_host_with(resolver, host, port, deadline)
                 .await
                 .map(VettedDial::Pinned)
-                .map_err(UrlRefusal::Host)
+                .map_err(|refusal| url_host_refusal(url, refusal))
         }
     }
 }
@@ -680,7 +775,7 @@ pub(crate) fn ssrf_check_url_nonblocking(url: &str) -> Result<(), UrlRefusal> {
     strip_ipv6_brackets(host)
         .parse::<IpAddr>()
         .map_or(Ok(()), |ip| {
-            refuse_blocked(host, ip).map_err(UrlRefusal::Host)
+            refuse_blocked(host, ip).map_err(|refusal| url_host_refusal(url, refusal))
         })
 }
 
@@ -1516,5 +1611,101 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Userinfo never survives into a rendered URL, whether the parser accepts
+    /// the URL or not; a URL with no userinfo keeps its host, path, and query.
+    #[test]
+    fn redact_userinfo_strips_the_authority_userinfo() {
+        for (url, shown) in [
+            (
+                "ws://user:s3cr3t@example.com:9000/feed?token=abc",
+                "ws://example.com:9000/feed?token=abc",
+            ),
+            ("wss://admin@host/x", "wss://host/x"),
+            ("ws://example.com/feed", "ws://example.com/feed"),
+            ("http://u:p@@@host", "http://host"),
+            ("admin:s3cr3t@host/x", "host/x"),
+            ("not a url", "not a url"),
+        ] {
+            assert_eq!(redact_userinfo(url), shown, "{url:?}");
+        }
+    }
+
+    /// A credential holding `/`, `?`, or `#` ends the authority early; its
+    /// `@` then follows the authority and nothing after the scheme is shown.
+    #[test]
+    fn redact_userinfo_withholds_a_url_with_an_at_after_its_authority() {
+        for url in [
+            "ws://admin:5432/s3cr3t@db.example",
+            "http://admin@s3cr3t/-pw@host/x",
+            "https://admin:s3cr3t?pw@host",
+            "wss://admin#s3cr3t@host",
+            "ws://bob:s3cr3t@@@host/a@b",
+            "admin/s3cr3t@host",
+        ] {
+            let shown = redact_userinfo(url);
+            assert!(shown.ends_with(WITHHELD_URL_TAIL), "{url:?} -> {shown}");
+            assert!(
+                !shown.contains("admin") && !shown.contains("s3cr3t") && !shown.contains("bob"),
+                "{url:?} leaked into {shown}"
+            );
+        }
+    }
+
+    /// An unparseable URL is refused naming only its redacted form.
+    #[test]
+    fn invalid_url_refusal_never_echoes_userinfo() {
+        for url in ["http://admin:s3cr3t@[bad/x", "http://admin:s3cr3t/@[bad"] {
+            let refused = parse_gated_url(url).err();
+            assert!(
+                matches!(refused, Some(UrlRefusal::Invalid { .. })),
+                "{url:?}: {refused:?}"
+            );
+            if let Some(refused) = refused {
+                for shown in [refused.to_string(), format!("{refused:?}")] {
+                    assert!(
+                        !shown.contains("admin") && !shown.contains("s3cr3t"),
+                        "{url:?} leaked into {shown}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// When the URL has an `@` after its authority, the host the parser read
+    /// may be part of a credential, so a host refusal withholds it.
+    #[tokio::test]
+    async fn host_refusal_withholds_a_host_that_may_be_a_credential() {
+        let refused = ssrf_check_url("http://admin:80/s3cr3t@public.example/").await;
+        assert!(
+            refused.as_ref().is_err_and(|e| e.contains(WITHHELD_HOST)),
+            "{refused:?}"
+        );
+        assert!(
+            refused.as_ref().is_err_and(|e| !e.contains("admin")),
+            "{refused:?}"
+        );
+        let hop = nonblocking_hop("http://127.0.0.1/admin@s3cr3t");
+        assert!(
+            hop.as_ref().is_err_and(|e| e.contains(WITHHELD_HOST)),
+            "{hop:?}"
+        );
+        assert!(
+            hop.as_ref().is_err_and(|e| !e.contains("s3cr3t")),
+            "{hop:?}"
+        );
+    }
+
+    /// A URL with no `@` after its authority keeps naming the refused host.
+    #[tokio::test]
+    async fn host_refusal_names_a_host_read_from_a_clean_url() {
+        let refused = ssrf_check_url("http://nowhere.example/path").await;
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.contains("nowhere.example")),
+            "{refused:?}"
+        );
     }
 }
