@@ -5111,7 +5111,7 @@ fn instance_tvars(
 }
 
 /// Fold `from`'s auto-trait and lifetime bits (`Sync`/`Send`/`'static`) into `slot`.
-fn oblige_auto_traits(slot: &mut BoundSet, from: BoundSet) {
+const fn oblige_auto_traits(slot: &mut BoundSet, from: BoundSet) {
     if from.has_sync() {
         *slot = slot.with_sync();
     }

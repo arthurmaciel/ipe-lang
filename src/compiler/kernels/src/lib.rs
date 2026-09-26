@@ -641,7 +641,7 @@ pub const fn shape_aligns_var(shape: &TyShape, var: u8) -> bool {
         TyShape::Var(v) => *v == var,
         TyShape::Fun(arg, res) => shape_aligns_var(arg, var) || shape_aligns_var(res, var),
         TyShape::Con(_, items) | TyShape::Tuple(items) => {
-            let mut rest: &[TyShape] = *items;
+            let mut rest: &[TyShape] = items;
             while let Some((item, tail)) = rest.split_first() {
                 if shape_aligns_var(item, var) {
                     return true;
