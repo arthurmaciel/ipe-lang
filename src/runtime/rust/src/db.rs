@@ -1048,11 +1048,10 @@ pub enum DbEngine {
 }
 
 impl DbEngine {
-    /// The engine this build's sqlx driver speaks, from the driver's own
+    /// The engine the sqlx driver `DB` speaks, from the driver's own
     /// `Database::NAME`. An unrecognised driver is refused, never assumed.
-    fn for_build() -> Result<Self, EngineVersionError> {
-        Self::from_driver_name(<DbDatabase as sqlx::Database>::NAME)
-            .ok_or(EngineVersionError::UnknownEngine)
+    fn for_driver<DB: sqlx::Database>() -> Result<Self, EngineVersionError> {
+        Self::from_driver_name(DB::NAME).ok_or(EngineVersionError::UnknownEngine)
     }
 
     fn from_driver_name(name: &str) -> Option<Self> {
@@ -1170,6 +1169,8 @@ impl std::fmt::Display for EngineVersionError {
     }
 }
 
+impl std::error::Error for EngineVersionError {}
+
 /// Parse `raw` as `engine`'s version report and admit it only at or above the
 /// engine's floor.
 fn check_engine_version(engine: DbEngine, raw: &str) -> Result<EngineVersion, EngineVersionError> {
@@ -1182,17 +1183,57 @@ fn check_engine_version(engine: DbEngine, raw: &str) -> Result<EngineVersion, En
     Ok(found)
 }
 
-/// Read the connected server's version once and refuse the pool when it is
-/// below the engine floor or unreadable — before any caller query runs.
-async fn enforce_engine_floor<E: From<String> + Send>(pool: &Db) -> Result<(), E> {
-    let engine = DbEngine::for_build().map_err(|e| str_err::<E>(&e.to_string()))?;
-    let raw: String = sqlx::query_scalar::<DbDatabase, String>(engine.version_query())
+/// Why [`enforce_engine_floor_on`] refused a pool.
+#[derive(Debug)]
+pub(crate) enum EngineFloorError {
+    /// The server answered, and its version is unsupported or unreadable.
+    Refused(EngineVersionError),
+    /// The version query itself failed.
+    Unreadable(sqlx::Error),
+}
+
+/// Session stores surface `sqlx::Error`: a refusal travels as a
+/// `Configuration` error carrying the floor message; a failed query is
+/// passed through unchanged.
+impl From<EngineFloorError> for sqlx::Error {
+    fn from(e: EngineFloorError) -> Self {
+        match e {
+            EngineFloorError::Refused(refused) => Self::Configuration(Box::new(refused)),
+            EngineFloorError::Unreadable(query) => query,
+        }
+    }
+}
+
+/// Read the connected server's version once and admit the pool only at or
+/// above its engine's floor. Shared by every pool the runtime opens — the
+/// `Ipe.Db` pool and the session-store pools — so each runs the gate before
+/// any other statement.
+pub(crate) async fn enforce_engine_floor_on<DB>(
+    pool: &sqlx::Pool<DB>,
+) -> Result<EngineVersion, EngineFloorError>
+where
+    DB: sqlx::Database,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> <DB as sqlx::Database>::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
+{
+    let engine = DbEngine::for_driver::<DB>().map_err(EngineFloorError::Refused)?;
+    let raw: String = sqlx::query_scalar::<DB, String>(engine.version_query())
         .fetch_one(pool)
         .await
-        .map_err(|e| ipe_err::<E>(&e))?;
-    check_engine_version(engine, &raw)
-        .map(|_| ())
-        .map_err(|e| str_err(&e.to_string()))
+        .map_err(EngineFloorError::Unreadable)?;
+    check_engine_version(engine, &raw).map_err(EngineFloorError::Refused)
+}
+
+/// [`enforce_engine_floor_on`] for the `Ipe.Db` pool, as a typed runtime
+/// error. A failed version query goes through [`connect_err`], so a driver
+/// message can never echo the connection URL.
+async fn enforce_engine_floor<E: From<String> + Send>(pool: &Db) -> Result<(), E> {
+    match enforce_engine_floor_on(pool).await {
+        Ok(_) => Ok(()),
+        Err(EngineFloorError::Refused(e)) => Err(str_err(&e.to_string())),
+        Err(EngineFloorError::Unreadable(e)) => Err(connect_err(&e)),
+    }
 }
 
 /// Build one configured pool. SQLite (file, not `:memory:`) gets WAL — concurrent
@@ -8563,7 +8604,11 @@ mod tests {
 
     #[test]
     fn engine_for_build_resolves_the_linked_driver() {
-        assert_eq!(DbEngine::for_build(), Ok(DbEngine::Sqlite));
+        assert_eq!(DbEngine::for_driver::<DbDatabase>(), Ok(DbEngine::Sqlite));
+        assert_eq!(
+            DbEngine::for_driver::<sqlx::Postgres>(),
+            Ok(DbEngine::Postgres)
+        );
         assert_eq!(DbEngine::from_driver_name("MySQL"), None);
         assert_eq!(DbEngine::from_driver_name(""), None);
     }
@@ -8577,6 +8622,72 @@ mod tests {
             matches!(pool, IpeResult::Ok(_)),
             "bundled SQLite must clear its version floor"
         );
+    }
+
+    /// The shared gate admits a live pool and reports the version it read.
+    #[tokio::test]
+    async fn engine_floor_on_admits_a_live_sqlite_pool() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await;
+        assert!(pool.is_ok(), "in-memory SQLite must connect");
+        if let Ok(pool) = pool {
+            let admitted = enforce_engine_floor_on(&pool).await;
+            assert!(
+                matches!(admitted, Ok(v) if v >= SQLITE_VERSION_FLOOR),
+                "bundled SQLite must clear the shared gate, got {admitted:?}"
+            );
+        }
+    }
+
+    /// A pool whose version cannot be read is refused, never admitted.
+    #[tokio::test]
+    async fn engine_floor_on_refuses_an_unreadable_pool() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await;
+        assert!(pool.is_ok(), "in-memory SQLite must connect");
+        if let Ok(pool) = pool {
+            pool.close().await;
+            assert!(matches!(
+                enforce_engine_floor_on(&pool).await,
+                Err(EngineFloorError::Unreadable(_))
+            ));
+        }
+    }
+
+    /// A refusal reaches a session store as a `Configuration` error that still
+    /// names the required floor; a failed query passes through unchanged.
+    #[test]
+    fn engine_floor_refusal_maps_to_a_configuration_error() {
+        for engine in ENGINES {
+            let floor = engine.version_floor();
+            let refused = EngineVersionError::BelowFloor {
+                engine,
+                found: one_step_below(floor),
+            };
+            let mapped = sqlx::Error::from(EngineFloorError::Refused(refused));
+            assert!(matches!(mapped, sqlx::Error::Configuration(_)));
+            assert!(
+                mapped.to_string().contains(&format!("{engine} >= {floor}")),
+                "store error {mapped} must name the required floor"
+            );
+        }
+        assert!(matches!(
+            sqlx::Error::from(EngineFloorError::Unreadable(sqlx::Error::PoolClosed)),
+            sqlx::Error::PoolClosed
+        ));
+    }
+
+    /// A failed version query on the `Ipe.Db` pool maps through `connect_err`:
+    /// the message is built from the error variant, never the driver payload.
+    #[tokio::test]
+    async fn engine_floor_query_failure_is_credential_free() {
+        let pool = sqlx::pool::PoolOptions::<DbDatabase>::new()
+            .connect("sqlite::memory:")
+            .await;
+        assert!(pool.is_ok(), "in-memory SQLite must connect");
+        if let Ok(pool) = pool {
+            pool.close().await;
+            let err = enforce_engine_floor::<String>(&pool).await;
+            assert_eq!(err, Err(connect_err::<String>(&sqlx::Error::PoolClosed)));
+        }
     }
 
     /// The floors are stated once, in their consts: no doc comment in this file
