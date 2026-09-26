@@ -95,13 +95,14 @@ pub fn resolve_and_add(
     )? {
         crate::signing::SignatureOutcome::UnsignedAllowed => {
             if !policy.trusted_identities().is_empty() {
-                eprintln!(
-                    "{}",
-                    crate::style::gutter(&format!(
+                crate::screen::chatter(
+                    crate::screen::Stream::Stderr,
+                    crate::screen::Tone::UserError,
+                    &format!(
                         "warning: `{name}` {} is unsigned — no publisher signature to verify \
                          against the configured registry trust policy.",
                         version.version
-                    ))
+                    ),
                 );
             }
         }
@@ -223,17 +224,16 @@ pub fn resolve_and_remove(project_root: &Path, name: &str) -> Result<(), CliErro
     let was_locked = lock.remove(name);
     lock.write(project_root)?;
     if was_locked {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(&format!("Removed `{name}`.")))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(crate::screen::Tone::Text, &format!("Removed `{name}`."))
+            .emit();
     } else {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(&format!(
-                "`{name}` was not a dependency; nothing to remove."
-            )))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                &format!("`{name}` was not a dependency; nothing to remove."),
+            )
+            .emit();
     }
     Ok(())
 }
@@ -586,14 +586,12 @@ fn write_records(
 
 /// Print the resolved version and its capability set for consent.
 fn report_added(name: &str, version: &str, capabilities: &std::collections::BTreeSet<Capability>) {
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&added_report(
-            name,
-            version,
-            capabilities
-        )))
-    );
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(
+            crate::screen::Tone::Text,
+            &added_report(name, version, capabilities),
+        )
+        .emit();
 }
 
 /// The `ipe add` consent report: the resolved version, the capability set, and —

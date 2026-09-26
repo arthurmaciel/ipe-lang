@@ -266,7 +266,9 @@ struct ParsedFlags {
 /// # Errors
 /// [`CliError::Usage`] / [`CliError::UsageOwned`] naming the exact problem.
 pub fn parse_doc(rest: &[String]) -> Result<DocMode, CliError> {
-    parse_doc_with(rest, &mut |msg| eprintln!("{msg}"))
+    parse_doc_with(rest, &mut |msg| {
+        crate::screen::chatter(crate::screen::Stream::Stderr, crate::screen::Tone::Aux, msg);
+    })
 }
 
 /// The stderr notice emitted when the deprecated `--list` alias is used.
@@ -966,18 +968,22 @@ fn run_type_search(query: &str, format: OutputFormat) -> Result<(), CliError> {
                 let p = crate::style::Palette::for_stream(&stdout);
                 let header = format!(
                     "{}Type-signature matches for `{}`{}\n\n",
-                    p.bold, query, p.reset
+                    p.bold,
+                    crate::style::TerminalSafe::sanitize(query),
+                    p.reset
                 );
-                print!(
-                    "{}",
-                    crate::style::frame(&crate::style::gutter(&format!("{header}{text}")))
-                );
+                crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                    .styled(&format!("{header}{text}"))
+                    .emit();
             } else {
-                print!("{text}");
+                crate::screen::emit_machine(crate::screen::Stream::Stdout, &text);
             }
         }
         OutputFormat::Json => {
-            println!("{}", render_type_matches_json(&hits));
+            crate::screen::emit_machine(
+                crate::screen::Stream::Stdout,
+                &format!("{}\n", render_type_matches_json(&hits)),
+            );
         }
     }
     Ok(())
@@ -2586,31 +2592,25 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
         } else {
             disclosure.capabilities.join(", ")
         };
-        print!(
-            "{}",
-            crate::style::status_line(
-                true,
-                &crate::style::TerminalSafe::sanitize(&format!(
-                    "control model: {}; capabilities: {caps}",
-                    disclosure.control_model,
-                )),
-                crate::style::use_color(&std::io::stdout()),
-            )
+        crate::screen::status(
+            crate::screen::Stream::Stdout,
+            true,
+            &crate::style::TerminalSafe::sanitize(&format!(
+                "control model: {}; capabilities: {caps}",
+                disclosure.control_model,
+            )),
         );
     }
 
-    print!(
-        "{}",
-        crate::style::status_line(
-            true,
-            &crate::style::TerminalSafe::sanitize(&format!(
-                "documented {} module{} to {}",
-                docs.modules.len(),
-                if docs.modules.len() == 1 { "" } else { "s" },
-                out.display()
-            )),
-            crate::style::use_color(&std::io::stdout()),
-        )
+    crate::screen::status(
+        crate::screen::Stream::Stdout,
+        true,
+        &crate::style::TerminalSafe::sanitize(&format!(
+            "documented {} module{} to {}",
+            docs.modules.len(),
+            if docs.modules.len() == 1 { "" } else { "s" },
+            out.display()
+        )),
     );
     Ok(())
 }
@@ -2713,12 +2713,12 @@ fn check(path: &Path) -> Result<(), CliError> {
     }
 
     if gaps.is_empty() {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(&format!(
-                "all {exposed} exposed binding(s) are documented"
-            )))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                &format!("all {exposed} exposed binding(s) are documented"),
+            )
+            .emit();
         return Ok(());
     }
 
@@ -3154,12 +3154,19 @@ fn check_examples() -> Result<(), CliError> {
             // Tier 1: type-check the example (always).
             match crate::typecheck_entry_via_graph(&snippet_path) {
                 Ok(()) => {
-                    eprintln!("  ok   {}", ex.label);
+                    crate::screen::chatter(
+                        crate::screen::Stream::Stderr,
+                        crate::screen::Tone::Success,
+                        &format!("ok   {}", ex.label),
+                    );
                     passed += 1;
                 }
                 Err(err) => {
-                    eprintln!("  FAIL {}: does not type-check", ex.label);
-                    eprintln!("       {err}");
+                    crate::screen::chatter(
+                        crate::screen::Stream::Stderr,
+                        crate::screen::Tone::UserError,
+                        &format!("FAIL {}: does not type-check\n     {err}", ex.label),
+                    );
                     failed.push(format!("{}: does not type-check", ex.label));
                     // Skip result-checking for examples that don't even type-check.
                     continue;
@@ -3174,7 +3181,11 @@ fn check_examples() -> Result<(), CliError> {
                 match run_example_and_check(&snippet_path, &ex.label, &ex.expected_results) {
                     Ok(()) => {}
                     Err(msg) => {
-                        eprintln!("  FAIL {msg}");
+                        crate::screen::chatter(
+                            crate::screen::Stream::Stderr,
+                            crate::screen::Tone::UserError,
+                            &format!("FAIL {msg}"),
+                        );
                         failed.push(msg);
                     }
                 }
@@ -3182,16 +3193,21 @@ fn check_examples() -> Result<(), CliError> {
         }
     }
 
-    eprintln!();
-    eprintln!("=== doc-example gate: {passed}/{total} passed ===");
+    crate::screen::Screen::new(crate::screen::Stream::Stderr)
+        .blank()
+        .line(
+            crate::screen::Tone::Text,
+            &format!("doc-example gate: {passed}/{total} passed"),
+        )
+        .emit_chatter();
 
     if failed.is_empty() {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(&format!(
-                "all {total} doc-string example(s) type-check"
-            )))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                &format!("all {total} doc-string example(s) type-check"),
+            )
+            .emit();
         Ok(())
     } else {
         let mut report = format!(
@@ -4900,15 +4916,12 @@ fn serve(path: &Path, port: Option<u16>) -> Result<(), CliError> {
         .map_err(|e| crate::io_err(Path::new(&addr), e))?;
 
     let url = format!("http://{bound}/");
-    print!(
-        "{}",
-        crate::style::status_line(
-            true,
-            &crate::style::TerminalSafe::sanitize(&format!(
-                "serving docs at {url} (read-only, loopback; Ctrl-C to stop)"
-            )),
-            crate::style::use_color(&std::io::stdout()),
-        )
+    crate::screen::status(
+        crate::screen::Stream::Stdout,
+        true,
+        &crate::style::TerminalSafe::sanitize(&format!(
+            "serving docs at {url} (read-only, loopback; Ctrl-C to stop)"
+        )),
     );
     // A headless caller (CI, a test, a remote shell) opts out of the browser pop
     // with `IPE_DOC_NO_OPEN`; the URL is already printed, so the preview stays

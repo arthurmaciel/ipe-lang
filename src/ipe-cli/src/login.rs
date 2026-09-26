@@ -66,7 +66,9 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
                     "not logged in — run `ipe login` to authorize".to_owned()
                 }
             };
-            print!("{}", crate::style::frame(&crate::style::gutter(&message)));
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .line(crate::screen::Tone::Text, &message)
+                .emit();
             Ok(())
         }
         Some("--logout") if rest.len() == 1 => logout(),
@@ -135,28 +137,37 @@ pub fn stored_token() -> Option<PublishToken> {
 fn run_device_flow() -> Result<(), CliError> {
     let device = request_device_code()?;
 
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "To authorize ipe, visit:\n  {}\nand enter the code:  {}",
-            device.verification_uri.as_str(),
-            device.user_code
-        )))
-    );
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(
+            crate::screen::Tone::Text,
+            &format!(
+                "To authorize ipe, visit:\n  {}\nand enter the code:  {}",
+                device.verification_uri.as_str(),
+                device.user_code
+            ),
+        )
+        .emit();
     if open_in_browser(device.verification_uri.as_str()) {
-        eprintln!("{}", crate::style::gutter("(opened your browser)"));
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            "(opened your browser)",
+        );
     }
-    eprintln!("{}", crate::style::gutter("Waiting for authorization …"));
+    crate::screen::chatter(
+        crate::screen::Stream::Stderr,
+        crate::screen::Tone::Text,
+        "Waiting for authorization …",
+    );
 
     let token = poll_for_token(&device)?;
     let path = store_token(&token)?;
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "Logged in. Token stored at {}",
-            path.display()
-        )))
-    );
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(
+            crate::screen::Tone::Text,
+            &format!("Logged in. Token stored at {}", path.display()),
+        )
+        .emit();
     Ok(())
 }
 
@@ -519,21 +530,22 @@ fn write_token_atomic(path: &std::path::Path, token: &str) -> Result<(), CliErro
 /// Remove the stored token.
 fn logout() -> Result<(), CliError> {
     let Some(path) = token_path().filter(|p| p.exists()) else {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter("not logged in — nothing to remove"))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                "not logged in — nothing to remove",
+            )
+            .emit();
         return Ok(());
     };
     std::fs::remove_file(&path)
         .map_err(|e| login_error(&format!("could not remove {}: {e}", path.display())))?;
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "logged out — removed {}",
-            path.display()
-        )))
-    );
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(
+            crate::screen::Tone::Text,
+            &format!("logged out — removed {}", path.display()),
+        )
+        .emit();
     Ok(())
 }
 

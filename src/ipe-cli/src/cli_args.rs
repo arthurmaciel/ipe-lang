@@ -419,7 +419,11 @@ fn take_leading_entry_path(
         Some(first) if !first.starts_with('-') && !is_delivery_word(first) => it.next().cloned(),
         Some(first) => {
             if let Some(note) = shadowing_note(first, |w| std::path::Path::new(w).exists()) {
-                eprintln!("{note}");
+                crate::screen::chatter(
+                    crate::screen::Stream::Stderr,
+                    crate::screen::Tone::Aux,
+                    &note,
+                );
             }
             None
         }

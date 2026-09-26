@@ -76,7 +76,9 @@ pub fn run_fmt(rest: &[String]) -> Result<(), CliError> {
     // what the top-level dispatcher prints for `ipe fmt --help`.
     if rest.iter().any(|a| a == "--help" || a == "-h") {
         if let Some(page) = crate::help::command("fmt", &std::io::stdout()) {
-            print!("{page}");
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .guttered(&page)
+                .emit();
         }
         return Ok(());
     }
@@ -129,9 +131,10 @@ fn run_fmt_inplace(
             } else {
                 crate::rewrite_user_file(file, &formatted, crate::RewriteKind::Lossless)?;
             }
-            eprintln!(
-                "{}",
-                crate::style::gutter(&format!("formatted {}", file.display()))
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Text,
+                &format!("formatted {}", file.display()),
             );
         }
     }
@@ -163,10 +166,8 @@ fn report_check(
                 .map(|p| p.display().to_string())
                 .collect();
             let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-            println!(
-                "{}",
-                json::object(&[("unformatted", json::string_array(&refs))])
-            );
+            let payload = json::object(&[("unformatted", json::string_array(&refs))]);
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &format!("{payload}\n"));
             if unformatted.is_empty() {
                 Ok(())
             } else {
@@ -174,9 +175,12 @@ fn report_check(
             }
         }
         OutputFormat::Plain => {
+            let mut lines = String::new();
             for p in unformatted {
-                println!("{}", p.display());
+                lines.push_str(&p.display().to_string());
+                lines.push('\n');
             }
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &lines);
             if unformatted.is_empty() {
                 Ok(())
             } else {

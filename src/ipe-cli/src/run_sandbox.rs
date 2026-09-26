@@ -185,8 +185,9 @@ pub fn resolve_refusal(
     // Recorded consent: warn loudly, in red, and proceed unconfined.
     // Route through the style palette so the warning honours use_color / NO_COLOR
     // and never leaks ANSI escapes into piped or redirected stderr.
-    let p = crate::style::Palette::for_stream(&std::io::stderr());
-    eprint!("{}", override_warning(p, &names.join(", ")));
+    let mut screen = crate::screen::Screen::new(crate::screen::Stream::Stderr);
+    let warning = override_warning(screen.palette(), &names.join(", "));
+    screen.guttered(&warning).emit();
     Ok(true)
 }
 

@@ -642,10 +642,8 @@ fn print_runtime_rename_hint(alias: &str, runtime: InitRuntime) {
 /// Returns the selected [`InitShape`]. The wizard is only called when stdin
 /// and stdout are both TTYs and `--shape` was not passed.
 fn wizard_shape() -> Result<InitShape, CliError> {
-    print!(
-        "{}",
-        style::gutter(
-            "What kind of program is this?\n\
+    crate::screen::prompt(
+        "What kind of program is this?\n\
              \n\
              [1] web    — browser / desktop / mobile app  (default)\n\
              [2] tui    — terminal UI with cells\n\
@@ -654,8 +652,7 @@ fn wizard_shape() -> Result<InitShape, CliError> {
              [5] server — HTTP server\n\
              [6] script — plain task, no rendering\n\
              \n\
-             Shape [1]: "
-        )
+             Shape [1]: ",
     );
     let _ = std::io::stdout().flush();
     let line = read_line_trimmed();
@@ -679,16 +676,13 @@ fn wizard_shape() -> Result<InitShape, CliError> {
 /// TTY wizard: prompt for the `web` runtime (served vs solo). Only called for the
 /// web shape when the runtime positional was omitted on a TTY.
 fn wizard_runtime() -> Result<InitRuntime, CliError> {
-    print!(
-        "{}",
-        style::gutter(
-            "How does this web app run?\n\
+    crate::screen::prompt(
+        "How does this web app run?\n\
              \n\
              [1] served — a co-located server loop, streamed to the browser  (default)\n\
              [2] solo   — a self-contained client, wasm in the browser\n\
              \n\
-             Runtime [1]: "
-        )
+             Runtime [1]: ",
     );
     let _ = std::io::stdout().flush();
     let line = read_line_trimmed();
@@ -911,7 +905,7 @@ fn decide_action(rel: &Path, exists: bool, interactive: bool) -> FileAction {
 /// Ask a `[Y/n]` / `[y/N]` question and read the answer.
 fn prompt_yes_no(question: &str, default: bool) -> bool {
     let hint = if default { "[Y/n]" } else { "[y/N]" };
-    print!("{}", style::gutter(&format!("{question} {hint} ")));
+    crate::screen::prompt(&format!("{question} {hint} "));
     let _ = std::io::stdout().flush();
     crate::read_yes_no_default(default)
 }
@@ -932,7 +926,9 @@ fn print_reconcile_summary(interactive: bool, restored: &[PathBuf], skipped: &[P
     if body.is_empty() {
         body.push_str("nothing to do.\n");
     }
-    print!("{}", style::frame(&style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 /// Derive the project name from the last path component of the resolved target.
@@ -984,7 +980,9 @@ fn scaffold(target_dir: &Path, files: &[ManagedFile], force: bool) -> Result<(),
         for rel in kept {
             let _ = writeln!(body, "kept {} (unchanged)", rel.display());
         }
-        print!("{}", style::frame(&style::gutter(&body)));
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(crate::screen::Tone::Text, &body)
+            .emit();
     }
     Ok(())
 }
@@ -1017,13 +1015,10 @@ fn write_new_file(path: &Path, contents: &str) -> Result<(), CliError> {
 /// Its original is backed up first, and the replacement is atomic.
 fn replace_file(path: &Path, contents: &str) -> Result<(), CliError> {
     if let Some(backup) = crate::rewrite_user_file(path, contents, crate::RewriteKind::Lossy)? {
-        println!(
-            "{}",
-            style::gutter(&format!(
-                "backed up {} to {}",
-                path.display(),
-                backup.display()
-            ))
+        crate::screen::chatter(
+            crate::screen::Stream::Stdout,
+            crate::screen::Tone::Text,
+            &format!("backed up {} to {}", path.display(), backup.display()),
         );
     }
     Ok(())
@@ -1064,7 +1059,9 @@ fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool, run
          {open_hint}\
          {health_tip}"
     );
-    print!("{}", style::frame(&style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 /// Print the next-steps message for a freshly scaffolded library.
@@ -1082,7 +1079,9 @@ fn print_next_steps_lib(target_arg: &str, project_name: &str) {
          \n\
          Add public modules under src/ and list each in package.ipe's exposedModules.\n"
     );
-    print!("{}", style::frame(&style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────

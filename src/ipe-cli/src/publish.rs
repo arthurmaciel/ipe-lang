@@ -604,7 +604,9 @@ fn print_dry_run(entry_toml: &str, plan: &PrPlan, identity: Option<&CommitIdenti
          No network was touched (--dry-run).",
         plan.entry_file, plan.index_repo, plan.branch, plan.entry_file, plan.title, committer,
     );
-    print!("{}", crate::style::frame(&crate::style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 /// The SSH key used to sign the publish commit, parsed once at the boundary
@@ -1173,7 +1175,9 @@ fn print_pr_opened(plan: &PrPlan, url: &str, opened: bool) {
         }
     );
     let _ = write!(body, "  {url}");
-    print!("{}", crate::style::frame(&crate::style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 /// Print the "PR opened via the API" summary (headless path — no browser).
@@ -1181,7 +1185,9 @@ fn print_pr_submitted(plan: &PrPlan, url: &str) {
     let mut body = String::new();
     let _ = writeln!(body, "published `{}` — pull request opened:", plan.branch);
     let _ = write!(body, "  {url}");
-    print!("{}", crate::style::frame(&crate::style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 /// Print the manual fallback when the headless API PR-open failed. The branch is
@@ -1194,7 +1200,9 @@ fn print_pr_api_fallback(plan: &PrPlan, url: &str, err: &str) {
         "the GitHub API PR-open failed ({err}); finish it here:"
     );
     let _ = write!(body, "  {url}");
-    print!("{}", crate::style::frame(&crate::style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 }
 
 /// A scratch-filesystem failure during publish.

@@ -10,10 +10,10 @@ use super::{
 use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::style::TerminalSafe;
 use crate::{
-    ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, Write, build_plan, cli_args,
-    delivery, explain_page, ffi, fs, help, io_bounded, native_ffi_consent, package_manifest,
-    project, run_sandbox, runtime_embed, screen, style, title, toolchain, unsafe_ack, wasi_run,
-    watch, web_consent,
+    ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, build_plan, cli_args, delivery,
+    explain_page, ffi, fs, help, io_bounded, native_ffi_consent, package_manifest, project,
+    run_sandbox, runtime_embed, screen, style, title, toolchain, unsafe_ack, wasi_run, watch,
+    web_consent,
 };
 
 /// The misuse reason shown when `build` / `run` / `watch` are invoked with no
@@ -464,12 +464,11 @@ pub fn resolve_static_plan(
             // The design's explicit opt-in notice: the C cost is acknowledged,
             // never silent. Human mode only — machine streams must stay
             // furniture-free (see #2590).
-            eprintln!(
-                "{}",
-                style::gutter(
-                    "note: mimalloc adds a C toolchain and unsafe FFI, vendors C source, and \
-                     freezes it into the artifact for CVE-rebuild purposes; chosen explicitly."
-                )
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Text,
+                "note: mimalloc adds a C toolchain and unsafe FFI, vendors C source, and \
+                     freezes it into the artifact for CVE-rebuild purposes; chosen explicitly.",
             );
         }
     }
@@ -596,7 +595,7 @@ pub fn run_build(rest: &[String]) -> Result<(), CliError> {
                     "entry": success.entry,
                     "out": success.out_dir.to_string_lossy(),
                 });
-                println!("{json}");
+                screen::emit_machine(screen::Stream::Stdout, &format!("{json}\n"));
             }
             // Human progress line already printed inside run_build_body.
             Ok(())
@@ -641,7 +640,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
             // to the source reader (which would fail with a raw "Is a directory").
             let ir_entry = resolve_analysis_entry(&entry_path)?;
             let tree = emit_ir_text(&ir_entry)?;
-            print!("{tree}");
+            screen::emit_machine(screen::Stream::Stdout, &tree);
             return Ok(BuildSuccess {
                 entry,
                 out_dir: PathBuf::new(),
@@ -804,12 +803,13 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     };
     if show_progress {
         style::print_command_header();
-        eprintln!(
-            "{}",
-            style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &format!(
                 "{} building {entry}",
                 style::outcome_glyph(style::Outcome::Step)
-            ))
+            ),
         );
     }
 
@@ -861,13 +861,14 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
             || out_dir.display().to_string(),
             |p| p.display().to_string(),
         );
-        eprintln!(
-            "{}",
-            style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Success,
+            &format!(
                 "{} built → {}",
                 style::outcome_glyph(style::Outcome::Success),
                 destination
-            ))
+            ),
         );
     }
     Ok(BuildSuccess { entry, out_dir })
@@ -1100,12 +1101,13 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         std::io::stderr().is_terminal()
     };
     if show_progress {
-        eprintln!(
-            "{}",
-            style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &format!(
                 "{} ejecting {entry}",
                 style::outcome_glyph(style::Outcome::Step)
-            ))
+            ),
         );
     }
 
@@ -1125,14 +1127,15 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     let out_dir = output.claim()?.release_to_user()?;
 
     if show_progress {
-        eprintln!(
-            "{}",
-            style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Success,
+            &format!(
                 "{} ejected → {} (self-contained; `cd {} && cargo build`)",
                 style::outcome_glyph(style::Outcome::Success),
                 out_dir.display(),
                 out_dir.display()
-            ))
+            ),
         );
     }
     Ok(())
@@ -1276,12 +1279,13 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             std::io::stderr().is_terminal()
         };
         if show_progress {
-            eprintln!(
-                "{}",
-                style::gutter(&format!(
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Text,
+                &format!(
                     "{} releasing {entry} (wasm)",
                     style::outcome_glyph(style::Outcome::Step)
-                ))
+                ),
             );
         }
 
@@ -1322,13 +1326,14 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         )?;
         bundle_wasm(&out_dir)?;
         if show_progress {
-            eprintln!(
-                "{}",
-                style::gutter(&format!(
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Success,
+                &format!(
                     "{} released → {}/www/",
                     style::outcome_glyph(style::Outcome::Success),
                     out_dir.display()
-                ))
+                ),
             );
         }
         return Ok(());
@@ -1367,12 +1372,13 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         let out_dir = output.area_path(&[OutputArea::Release, OutputArea::Rust])?;
 
         if show_progress {
-            eprintln!(
-                "{}",
-                style::gutter(&format!(
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Text,
+                &format!(
                     "{} releasing {entry}",
                     style::outcome_glyph(style::Outcome::Step)
-                ))
+                ),
             );
         }
 
@@ -1441,13 +1447,14 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         #[cfg(unix)]
         set_executable(&dest)?;
         if show_progress {
-            eprintln!(
-                "{}",
-                style::gutter(&format!(
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Success,
+                &format!(
                     "{} released → {}",
                     style::outcome_glyph(style::Outcome::Success),
                     dest.display()
-                ))
+                ),
             );
         }
         return Ok(());
@@ -1457,12 +1464,13 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     let output = resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
 
     if show_progress {
-        eprintln!(
-            "{}",
-            style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &format!(
                 "{} releasing {entry}",
                 style::outcome_glyph(style::Outcome::Step)
-            ))
+            ),
         );
     }
 
@@ -1604,29 +1612,31 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         // Post-build report: how the binary is linked, where it landed, and the
         // capability model it will enforce.
         let cap_names: Vec<&'static str> = resolved.union().iter().map(|c| c.as_str()).collect();
-        eprint!(
-            "{}",
-            release_bundle_report(&artifact, &cap_names, args.mode)
+        screen::chatter_styled(
+            screen::Stream::Stderr,
+            &release_bundle_report(&artifact, &cap_names, args.mode),
         );
         match args.mode {
-            cli_args::ReleaseMode::Embed => eprintln!(
-                "{}",
-                style::gutter(&format!(
+            cli_args::ReleaseMode::Embed => crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Success,
+                &format!(
                     "{} released → {} (single self-jailing binary; \
                      run `--capabilities` to audit)",
                     style::outcome_glyph(style::Outcome::Success),
                     artifact.display()
-                ))
+                ),
             ),
-            cli_args::ReleaseMode::Bundle => eprintln!(
-                "{}",
-                style::gutter(&format!(
+            cli_args::ReleaseMode::Bundle => crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::Success,
+                &format!(
                     "{} released (bundle) → {} (run `./ipe-wrapper -- <args>`; \
                      WARNING: ipe-app can be run directly, bypassing the sandbox — \
                      prefer embed mode for production)",
                     style::outcome_glyph(style::Outcome::Success),
                     artifact.display()
-                ))
+                ),
             ),
         }
     }
@@ -1646,9 +1656,9 @@ pub fn run_release_capabilities(
     };
     let resolved = run_sandbox::resolve_for_run(manifest_parsed.as_ref(), manifest, entry_path)?;
     let names: Vec<&'static str> = resolved.union().iter().map(|c| c.as_str()).collect();
-    print!(
-        "{}",
-        render_capabilities(&names, format, &std::io::stdout())
+    screen::emit_report(
+        format,
+        &render_capabilities(&names, format, &std::io::stdout()),
     );
     Ok(())
 }
@@ -1854,8 +1864,7 @@ fn build_emitted_project_core(
             }
             // Forward this chunk live so the user sees cargo's progress as it
             // happens; also accumulate it for a failure diagnostic.
-            eprint!("{line}");
-            let _ = std::io::stderr().flush();
+            screen::emit_machine(screen::Stream::Stderr, &line);
             captured.push_str(&line);
         }
     }
@@ -2130,26 +2139,28 @@ pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
     {
         // wasm-opt found but failed — non-fatal; the unoptimised bundle
         // is still correct. Log and continue.
-        eprintln!(
-            "{}",
-            style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &format!(
                 "note: wasm-opt exited {}; bundle is unoptimised but functional",
                 status.code().unwrap_or(1)
-            ))
+            ),
         );
     }
 
     let bundle_size = format_artifact_size(artifact_size_bytes(&bg_wasm)?);
     let www = out_dir.join("www");
-    eprintln!(
-        "{}",
-        style::gutter(&format!(
+    crate::screen::chatter(
+        crate::screen::Stream::Stderr,
+        crate::screen::Tone::Text,
+        &format!(
             "wasm bundle ready at {www}/\n\
              bundle size: {bundle_size} ({bg})\n\
              serve with: python3 -m http.server -d {www} 8080",
             www = www.display(),
             bg = bg_wasm.display(),
-        ))
+        ),
     );
     Ok(())
 }
@@ -2204,14 +2215,15 @@ pub fn bundle_wasi(out_dir: &Path) -> Result<PathBuf, CliError> {
     // by construction, immune to any target-dir divergence.
     let module = wasi_artifact_path(&messages, out_dir)?;
     let module_size = format_artifact_size(artifact_size_bytes(&module)?);
-    eprintln!(
-        "{}",
-        style::gutter(&format!(
+    crate::screen::chatter(
+        crate::screen::Stream::Stderr,
+        crate::screen::Tone::Text,
+        &format!(
             "wasm32-wasip1 module ready at {module}\n\
              module size: {module_size}\n\
              run with: wasmtime {module}",
             module = module.display(),
-        ))
+        ),
     );
     Ok(module)
 }
@@ -2535,12 +2547,13 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     };
     if show_progress {
         style::print_command_header();
-        eprintln!(
-            "{}",
-            style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &format!(
                 "{} building {entry}",
                 style::outcome_glyph(style::Outcome::Step)
-            ))
+            ),
         );
     }
 

@@ -1500,7 +1500,10 @@ pub fn compile_prepared(
     for w in &types.warnings {
         let span = diag_span(w);
         let (w_file, w_src) = source_for_span(span);
-        eprintln!("{}", render(w, &w_file.to_string_lossy(), &w_src));
+        crate::screen::chatter_styled(
+            crate::screen::Stream::Stderr,
+            &render(w, &w_file.to_string_lossy(), &w_src),
+        );
     }
     // Attribute lower / backend diagnostics to the source file that OWNS the
     // failing span, not blindly to the entry file. After link, every module's

@@ -369,15 +369,17 @@ pub fn run_health(rest: &[String]) -> Result<(), CliError> {
     let stdout = std::io::stdout();
     match args.format {
         OutputFormat::Plain => {
-            print!("{}", render_plain(&report));
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &render_plain(&report));
             return finish(&report);
         }
         OutputFormat::Json => {
-            print!("{}", render_json(&report));
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &render_json(&report));
             return finish(&report);
         }
         OutputFormat::Human => {
-            print!("{}", render_human(&report, &stdout));
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .guttered(&render_human(&report, &stdout))
+                .emit();
         }
     }
 
@@ -393,12 +395,11 @@ pub fn run_health(rest: &[String]) -> Result<(), CliError> {
         // Reported already; a non-interactive run without `--yes` mutates
         // nothing. Point the user at the two ways to apply.
         if report.fixable().next().is_some() {
-            print!(
-                "{}",
-                style::gutter(
-                    "Run `ipe health` in a terminal to apply these interactively, or \
-                     `ipe health --yes` to apply them all.\n"
-                )
+            crate::screen::chatter(
+                crate::screen::Stream::Stdout,
+                crate::screen::Tone::Text,
+                "Run `ipe health` in a terminal to apply these interactively, or \
+                     `ipe health --yes` to apply them all.\n",
             );
         }
         return finish(&report);
@@ -424,7 +425,9 @@ pub fn run_health(rest: &[String]) -> Result<(), CliError> {
 pub(crate) fn run_health_inline() -> Result<(), CliError> {
     let report = detect();
     let stdout = std::io::stdout();
-    print!("{}", render_human(&report, &stdout));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .guttered(&render_human(&report, &stdout))
+        .emit();
     apply_fixes(&report, Consent::Interactive, &stdout);
     finish(&report)
 }
@@ -1358,7 +1361,7 @@ enum Answer {
 /// command could not read.
 fn ask(prompt: &str) -> Answer {
     use std::io::Write as _;
-    print!("{}", style::gutter(&format!("{prompt} [Y/n] ")));
+    crate::screen::prompt(&format!("{prompt} [Y/n] "));
     let _ = std::io::stdout().flush();
     let mut line = String::new();
     match std::io::stdin().read_line(&mut line) {
@@ -1385,13 +1388,16 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
     let p = style::Palette::for_stream(stream);
     // The header sits at the report's base indent; the fix bullets below it are
     // indented one level deeper so the actionable list reads as nested under it.
-    print!(
-        "{}",
-        style::gutter(&format!("\n{}Suggested fixes{}\n", p.bold, p.reset))
+    crate::screen::chatter_styled(
+        crate::screen::Stream::Stdout,
+        &crate::style::gutter(&format!("\n{}Suggested fixes{}\n", p.bold, p.reset)),
     );
     for check in fixable {
         let Some(fix) = &check.fix else { continue };
-        print!("{}", style::gutter(&fix_bullet(check, fix, p)));
+        crate::screen::chatter_styled(
+            crate::screen::Stream::Stdout,
+            &style::gutter(&fix_bullet(check, fix, p)),
+        );
         // The question hangs a blank line below the preview and sits at the
         // body column (one level deeper than the bullet) so it reads as the last
         // line of the fix, not a new item.
@@ -1400,7 +1406,11 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
             Consent::Interactive => ask(&format!("\n{FIX_BODY_INDENT}Apply?")) == Answer::Yes,
         };
         if !apply {
-            print!("{}", style::gutter(&format!("{FIX_BODY_INDENT}skipped.\n")));
+            crate::screen::chatter(
+                crate::screen::Stream::Stdout,
+                crate::screen::Tone::Text,
+                &format!("{FIX_BODY_INDENT}skipped.\n"),
+            );
             continue;
         }
         // The outcome leads with the status glyph — green ✓ on success, red ✗ on
@@ -1408,12 +1418,13 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
         match apply_one(fix) {
             Ok(outcome) => {
                 let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
-                print!(
-                    "{}",
-                    style::gutter(&format!(
-                        "{FIX_BODY_INDENT}{tint}{glyph}{} {outcome}\n",
-                        p.reset
-                    ))
+                crate::screen::chatter_styled(
+                    crate::screen::Stream::Stdout,
+                    &crate::style::gutter(&format!(
+                        "{FIX_BODY_INDENT}{tint}{glyph}{} {}\n",
+                        p.reset,
+                        TerminalSafe::sanitize(&outcome)
+                    )),
                 );
             }
             Err(e) => {
@@ -1422,12 +1433,13 @@ fn apply_fixes(report: &Report, consent: Consent, stream: &impl IsTerminal) {
                 // command non-zero (the exit code is the diagnostic verdict, not
                 // the apply outcome).
                 let (glyph, tint) = style::Outcome::Failure.glyph_and_tint(p);
-                print!(
-                    "{}",
-                    style::gutter(&format!(
-                        "{FIX_BODY_INDENT}{tint}{glyph}{} could not apply: {e}\n",
-                        p.reset
-                    ))
+                crate::screen::chatter_styled(
+                    crate::screen::Stream::Stdout,
+                    &crate::style::gutter(&format!(
+                        "{FIX_BODY_INDENT}{tint}{glyph}{} could not apply: {}\n",
+                        p.reset,
+                        TerminalSafe::sanitize(&e.to_string())
+                    )),
                 );
             }
         }

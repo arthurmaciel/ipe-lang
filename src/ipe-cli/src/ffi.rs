@@ -702,17 +702,17 @@ fn jail_limits() -> ipe_sandbox::ResourceLimits {
             if let Ok(v) = raw.parse::<u64>().map(|v| v.saturating_mul(scale))
                 && v > 0
             {
-                eprintln!(
-                    "{}",
-                    crate::style::gutter(&format!("WARNING: jail cap override {var}={raw}"))
+                crate::screen::chatter(
+                    crate::screen::Stream::Stderr,
+                    crate::screen::Tone::UserError,
+                    &format!("WARNING: jail cap override {var}={raw}"),
                 );
                 *slot = v;
             } else {
-                eprintln!(
-                    "{}",
-                    crate::style::gutter(&format!(
-                        "WARNING: ignoring non-numeric jail cap override {var}={raw}"
-                    ))
+                crate::screen::chatter(
+                    crate::screen::Stream::Stderr,
+                    crate::screen::Tone::UserError,
+                    &format!("WARNING: ignoring non-numeric jail cap override {var}={raw}"),
                 );
             }
         }
@@ -1226,11 +1226,10 @@ fn run_inspector_job_unsandboxed(
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
     let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
-    eprintln!(
-        "{}",
-        crate::style::gutter(
-            "WARNING: running the FFI inspector UNSANDBOXED (IPE_FFI_ALLOW_UNSANDBOXED=1)"
-        )
+    crate::screen::chatter(
+        crate::screen::Stream::Stderr,
+        crate::screen::Tone::UserError,
+        "WARNING: running the FFI inspector UNSANDBOXED (IPE_FFI_ALLOW_UNSANDBOXED=1)",
     );
     let scoped_tmp = make_scratch_dir(scratch_hint)?;
     let manifest_path = match job {
@@ -1323,15 +1322,16 @@ fn install_wrapper(
 
     if !assume_yes {
         use std::io::Write as _;
-        eprintln!(
-            "{}",
-            crate::style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &format!(
                 "About to COMPILE a local wrapper crate `{}` at {} (inside the isolation jail).",
                 krate.as_str(),
                 abs_str
-            ))
+            ),
         );
-        print!("Continue? [y/N] ");
+        crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
             return Err(CliError::Usage("ipe install: aborted"));
@@ -1357,16 +1357,18 @@ fn install_wrapper(
     let (pkg, paths) = ipe_ffi::driver::install_from_inspection(cache, &doc_text)
         .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
     let iface = ipe_ffi::interface::crate_interface(&pkg);
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "added wrapper `{}`: {} bindings ({} skipped) -> {}",
-            pkg.name(),
-            iface.bindings.len(),
-            iface.skipped.len(),
-            paths.interface.display()
-        )))
-    );
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(
+            crate::screen::Tone::Text,
+            &format!(
+                "added wrapper `{}`: {} bindings ({} skipped) -> {}",
+                pkg.name(),
+                iface.bindings.len(),
+                iface.skipped.len(),
+                paths.interface.display()
+            ),
+        )
+        .emit();
     Ok(())
 }
 
@@ -1450,15 +1452,16 @@ fn enforce_wrapper_capabilities(
         .map(|c| c.as_str())
         .collect();
     if !undeclared.is_empty() {
-        eprintln!(
-            "{}",
-            crate::style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &format!(
                 "note: the wrapper's source appears to reach {} that it did not declare. \
                  The runtime jail will still contain any undeclared effect (it fails closed at \
                  the OS boundary), but an honest declaration is the consent surface a user sees — \
                  consider declaring it.",
                 undeclared.join(", ")
-            ))
+            ),
         );
     }
 
@@ -1483,10 +1486,12 @@ fn enforce_wrapper_capabilities(
             } else {
                 ""
             };
-            print!(
-                "{}",
-                crate::style::frame(&crate::style::gutter(&format!("{cap_line}{consent_note}")))
-            );
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .line(
+                    crate::screen::Tone::Text,
+                    &format!("{cap_line}{consent_note}"),
+                )
+                .emit();
             Ok(())
         }
         ipe_ffi::capability_scan::Verdict::Refuse { reasons, proposed } => {
@@ -1674,13 +1679,21 @@ fn emit_raw_inspector_log(inspection_json: &str) {
     if log.is_empty() {
         return;
     }
-    eprint!("{}", crate::style::gutter("raw inspector log (--verbose):"));
+    crate::screen::chatter(
+        crate::screen::Stream::Stderr,
+        crate::screen::Tone::Text,
+        "raw inspector log (--verbose):",
+    );
     for line in &log {
         let clean: String = line
             .chars()
             .filter(|c| *c == '\t' || !c.is_control())
             .collect();
-        eprintln!("  {clean}");
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Aux,
+            &format!("  {clean}"),
+        );
     }
 }
 
@@ -1795,17 +1808,19 @@ fn add_one(
         Ok((pkg, paths)) => {
             build_stage.success(format!("built {crate_label}"));
             let iface = ipe_ffi::interface::crate_interface(&pkg);
-            print!(
-                "{}",
-                crate::style::frame(&crate::style::gutter(&format!(
-                    "added `{}` v{}: {} bindings ({} skipped) -> {}",
-                    pkg.name(),
-                    pkg.version(),
-                    iface.bindings.len(),
-                    iface.skipped.len(),
-                    paths.interface.display()
-                )))
-            );
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .line(
+                    crate::screen::Tone::Text,
+                    &format!(
+                        "added `{}` v{}: {} bindings ({} skipped) -> {}",
+                        pkg.name(),
+                        pkg.version(),
+                        iface.bindings.len(),
+                        iface.skipped.len(),
+                        paths.interface.display()
+                    ),
+                )
+                .emit();
             Ok(())
         }
         Err(diag) => {
@@ -2031,11 +2046,12 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
 
     if !assume_yes {
         use std::io::Write as _;
-        eprintln!(
-            "{}",
-            crate::style::gutter(&ipe_ffi::driver::trust_summary(spec.name(), "", None, 0))
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &ipe_ffi::driver::trust_summary(spec.name(), "", None, 0),
         );
-        print!("[y/N] ");
+        crate::screen::prompt("[y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
             return Err(CliError::Usage("ipe rust add: aborted"));
@@ -2059,10 +2075,9 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
     cache
         .remove_package(&slug)
         .map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!("removed `{raw}`")))
-    );
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &format!("removed `{raw}`"))
+        .emit();
     Ok(())
 }
 
@@ -2115,12 +2130,12 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     let deps = rust_dependencies_from_manifest(&text);
     let wrapper = rust_wrapper_from_manifest(&text);
     if deps.is_empty() && wrapper.is_none() {
-        print!(
-            "{}",
-            crate::style::frame(&crate::style::gutter(
-                "ipe install: no [rust.dependencies] or [rust.wrapper] entries"
-            ))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                "ipe install: no [rust.dependencies] or [rust.wrapper] entries",
+            )
+            .emit();
         return Ok(());
     }
     let cache = FfiCache::at_project_root(Path::new("."));
@@ -2139,16 +2154,17 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     if !assume_yes {
         use std::io::Write as _;
         let names: Vec<&str> = deps.iter().map(|d| d.name.as_str()).collect();
-        eprintln!(
-            "{}",
-            crate::style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &format!(
                 "About to fetch and COMPILE untrusted code for {} crate(s): {}\n\
                  Compiling runs each crate's build scripts and proc-macros (inside the isolation jail).",
                 names.len(),
                 names.join(", ")
-            ))
+            ),
         );
-        print!("Continue? [y/N] ");
+        crate::screen::prompt("Continue? [y/N] ");
         let _ = std::io::stdout().flush();
         if !crate::read_yes_no() {
             return Err(CliError::Usage("ipe install: aborted"));
@@ -2236,16 +2252,17 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
                 ffi_build_error(diag)
             })?;
         let iface = ipe_ffi::interface::crate_interface(&pkg);
-        eprintln!(
-            "{}",
-            crate::style::gutter(&format!(
+        crate::screen::chatter(
+            crate::screen::Stream::Stderr,
+            crate::screen::Tone::Text,
+            &format!(
                 "added `{}` v{}: {} bindings ({} skipped) -> {}",
                 pkg.name(),
                 pkg.version(),
                 iface.bindings.len(),
                 iface.skipped.len(),
                 paths.interface.display()
-            ))
+            ),
         );
     }
     Ok(())

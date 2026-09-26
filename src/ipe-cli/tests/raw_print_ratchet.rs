@@ -1,49 +1,18 @@
 #![forbid(unsafe_code)]
-//! Ratchet on raw terminal printing in the `ipe` CLI.
+//! No raw terminal printing in the `ipe` CLI.
 //!
 //! Human output goes through the one renderer (`ipe::screen`): a framed,
 //! guttered, toned screen. Machine output goes through
 //! `ipe::screen::emit_machine`. A raw `print!` / `println!` / `eprint!` /
 //! `eprintln!` bypasses both, so its output escapes the frame (no header, no
-//! gutter, no tone, no bug footer).
+//! gutter, no tone, no sanitising, no bug footer).
 //!
-//! [`BUDGET`] records, per source file, the raw print macros still waiting to be
-//! routed through the renderer. The count must match EXACTLY:
-//!
-//! * a new raw print (or a new file with one) fails — route it through
-//!   `ipe::screen` instead;
-//! * a routed site lowers the count, and the budget must be lowered with it, so
-//!   the ratchet only ever tightens.
+//! No source file may print raw: a raw print fails the test, and the fix is to
+//! route it through `ipe::screen`.
 
 use std::path::{Path, PathBuf};
 
-/// Files that still print raw, with their exact raw print macro counts. A file
-/// absent here must print nothing raw.
-const BUDGET: &[(&str, usize)] = &[
-    ("advisory.rs", 1),
-    ("audit.rs", 9),
-    ("bin/gen_cli_docs.rs", 1),
-    ("clean.rs", 3),
-    ("cli_args.rs", 1),
-    ("diff.rs", 5),
-    ("doc.rs", 15),
-    ("driver/build_pipeline.rs", 1),
-    ("driver/commands.rs", 21),
-    ("driver/commands_pkg.rs", 26),
-    ("driver/tests/mod.rs", 1),
-    ("ffi.rs", 18),
-    ("fmt.rs", 4),
-    ("health.rs", 11),
-    ("init.rs", 6),
-    ("login.rs", 7),
-    ("migrate.rs", 2),
-    ("publish.rs", 4),
-    ("resolve.rs", 4),
-    ("run_sandbox.rs", 1),
-    ("watch.rs", 35),
-];
-
-/// The raw print macros the ratchet counts.
+/// The raw print macros the check counts.
 const MACROS: &[&str] = &["print!(", "println!(", "eprint!(", "eprintln!("];
 
 /// Count the raw print macro invocations in `text`.
@@ -95,7 +64,7 @@ fn rust_files(root: &Path) -> Vec<(String, PathBuf)> {
 }
 
 #[test]
-fn raw_prints_match_the_budget_exactly() {
+fn no_source_file_prints_raw() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let files = rust_files(&src);
     assert!(
@@ -104,31 +73,21 @@ fn raw_prints_match_the_budget_exactly() {
         src.display()
     );
 
-    let mut drift = Vec::new();
+    let mut raw = Vec::new();
     for (rel, path) in &files {
         let Ok(text) = std::fs::read_to_string(path) else {
-            drift.push(format!("{rel}: unreadable"));
+            raw.push(format!("{rel}: unreadable"));
             continue;
         };
-        let actual = count_raw_prints(&text);
-        let budget = BUDGET
-            .iter()
-            .find(|(file, _)| file == rel)
-            .map_or(0, |(_, n)| *n);
-        if actual != budget {
-            drift.push(format!("{rel}: {actual} raw prints, budget {budget}"));
-        }
-    }
-    for (file, _) in BUDGET {
-        if !files.iter().any(|(rel, _)| rel == file) {
-            drift.push(format!("{file}: budgeted but no longer exists"));
+        let count = count_raw_prints(&text);
+        if count != 0 {
+            raw.push(format!("{rel}: {count} raw prints"));
         }
     }
     assert!(
-        drift.is_empty(),
-        "raw print budget drift — route new output through `ipe::screen`, and lower the \
-         budget when a site is routed:\n  {}",
-        drift.join("\n  ")
+        raw.is_empty(),
+        "raw terminal printing — route this output through `ipe::screen`:\n  {}",
+        raw.join("\n  ")
     );
 }
 

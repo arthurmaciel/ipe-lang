@@ -350,7 +350,7 @@ fn explain_unknown_code_display_is_deterministic() {
 
 #[test]
 fn explain_output_ends_with_trailing_newline() {
-    // `ipe explain <CODE>` does `print!("{page}")`, so the page itself must
+    // `ipe explain <CODE>` writes the page as is, so the page itself must
     // end with a newline to avoid a missing newline at the shell prompt.
     let page = explain_lookup("IPE-T0001").expect("known code must resolve");
     assert!(

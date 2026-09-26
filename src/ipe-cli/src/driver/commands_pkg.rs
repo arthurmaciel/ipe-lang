@@ -350,6 +350,8 @@ impl<'a> BundleAssembler<'a> {
     /// Build/emit errors from the underlying compile; [`CliError::Io`] on any
     /// filesystem failure while materialising the bundle.
     fn assemble_desktop(&self, os: pack::desktop::DesktopOs) -> Result<(), CliError> {
+        use std::fmt::Write as _;
+
         let manifest = self.manifest;
         let identity = pack::desktop::BundleIdentity::new(
             &manifest.name,
@@ -402,15 +404,16 @@ impl<'a> BundleAssembler<'a> {
         let dist = self.profile.dist_dir(&output)?.child(os.as_str())?;
         let bundle_root = pack::desktop::materialise(&layout, &binary, icon, &dist)?;
 
-        println!(
-            "packaged `{}` for {} → {}",
+        let mut body = format!(
+            "packaged `{}` for {} → {}\n  {}\n",
             manifest.name,
             os.as_str(),
-            bundle_root.display()
+            bundle_root.display(),
+            os.webview_runtime_note()
         );
-        println!("  {}", os.webview_runtime_note());
         if os != pack::desktop::DesktopOs::Linux {
-            println!(
+            let _ = writeln!(
+                body,
                 "  note: the {} bundle layout is written here, but a signed, runnable {} \
                  artifact must be produced on a {} runner (unsigned; cross-tooling out of scope).",
                 os.as_str(),
@@ -418,6 +421,9 @@ impl<'a> BundleAssembler<'a> {
                 os.as_str()
             );
         }
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(crate::screen::Tone::Text, &body)
+            .emit();
         Ok(())
     }
 
@@ -462,24 +468,25 @@ impl<'a> BundleAssembler<'a> {
         let dist = self.profile.dist_dir(&output)?.child(os.as_str())?;
         let shell_root = pack::mobile::materialise(&layout, icon, &dist)?;
 
-        println!(
-            "packaged `{}` for {} → {}",
-            manifest.name,
-            os.as_str(),
-            shell_root.display()
-        );
-        if os.build_runs_on_linux() {
-            println!(
-                "  note: an Android shell project is written here; run `./gradlew assembleDebug` \
-                 inside it with the Android SDK to produce an APK."
-            );
+        let note = if os.build_runs_on_linux() {
+            "note: an Android shell project is written here; run `./gradlew assembleDebug` \
+             inside it with the Android SDK to produce an APK."
         } else {
-            println!(
-                "  note: the iOS shell project layout is written here, but a signed, runnable \
-                 .ipa must be produced on a macOS runner with Xcode + a signing identity \
-                 (out of scope)."
-            );
-        }
+            "note: the iOS shell project layout is written here, but a signed, runnable \
+             .ipa must be produced on a macOS runner with Xcode + a signing identity \
+             (out of scope)."
+        };
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(
+                crate::screen::Tone::Text,
+                &format!(
+                    "packaged `{}` for {} → {}\n  {note}",
+                    manifest.name,
+                    os.as_str(),
+                    shell_root.display()
+                ),
+            )
+            .emit();
         Ok(())
     }
 }
@@ -701,7 +708,9 @@ pub fn emit_permissions(
             }
         }
     }
-    print!("{out}");
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &out)
+        .emit();
     Ok(())
 }
 
@@ -775,7 +784,9 @@ pub fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
         versions.len(),
         versions.join(", ")
     );
-    print!("{}", style::frame(&style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
     Ok(())
 }
 
@@ -902,9 +913,13 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         // Display names the failing check; the version context is clear from
         // the eprintln below and the structured error kind.
         if let Err(e) = audit::run_audit(&audit_args) {
-            eprintln!(
-                "audit-entry: `{}` version {} rejected",
-                submitted.name, ver_str
+            crate::screen::chatter(
+                crate::screen::Stream::Stderr,
+                crate::screen::Tone::UserError,
+                &format!(
+                    "audit-entry: `{}` version {} rejected",
+                    submitted.name, ver_str
+                ),
             );
             return Err(e);
         }
@@ -919,7 +934,9 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         submitted.name,
         passing.len()
     );
-    print!("{}", style::frame(&style::gutter(&body)));
+    crate::screen::Screen::new(crate::screen::Stream::Stdout)
+        .line(crate::screen::Tone::Text, &body)
+        .emit();
 
     // Remove the per-run scratch directory (best-effort; a leftover is harmless).
     let _ = std::fs::remove_dir_all(&scratch_root);
@@ -1068,29 +1085,28 @@ pub fn run_type_check_body(rest: &[String]) -> Result<(), CliError> {
             // The shared machine envelope; a clean type-check carries an empty
             // payload (the outcome is the `status`, there is no result data).
             let payload = cli_args::json::object(&[]);
-            print!(
-                "{}",
-                crate::machine_output::MachineOutput::ok(
+            crate::screen::emit_machine(
+                crate::screen::Stream::Stdout,
+                &crate::machine_output::MachineOutput::ok(
                     "ipe.cli.type-check/1",
                     "type-check",
                     payload,
                 )
-                .render_json()
+                .render_json(),
             );
         }
         cli_args::OutputFormat::Plain => {
-            println!("ok");
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, "ok\n");
         }
         cli_args::OutputFormat::Human => {
             let p = style::Palette::for_stream(&std::io::stdout());
             let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
-            print!(
-                "{}",
-                style::frame(&style::gutter(&format!(
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .styled(&format!(
                     "{tint}{glyph} No type errors — this program type-checks.{}",
                     p.reset,
-                )))
-            );
+                ))
+                .emit();
         }
     }
     Ok(())
@@ -1429,21 +1445,18 @@ pub fn run_test_json(path: Option<&str>) -> Result<(), CliError> {
     let verdict = |result: &str| json::object(&[("result", json::string(result))]);
     match run_project_tests_with(path, TestStdio::Quiet) {
         Ok(TestOutcome::AllPassed) => {
-            println!("{}", verdict("passed"));
+            json_line(&verdict("passed"));
             Ok(())
         }
         Ok(TestOutcome::NoTestEntry) => {
-            println!("{}", verdict("no-tests"));
+            json_line(&verdict("no-tests"));
             Ok(())
         }
         Err(CliError::TestFailed { code }) => {
-            println!(
-                "{}",
-                json::object(&[
-                    ("result", json::string("failed")),
-                    ("exitCode", code.to_string()),
-                ])
-            );
+            json_line(&json::object(&[
+                ("result", json::string("failed")),
+                ("exitCode", code.to_string()),
+            ]));
             Err(CliError::DiagnosticJsonEmitted)
         }
         // A build/toolchain error is not a test verdict — surface it as itself.
@@ -1521,24 +1534,23 @@ pub fn run_verify_json(path: Option<&str>) -> Result<(), CliError> {
 
     for (name, stage) in stages {
         if stage(path).is_err() {
-            println!(
-                "{}",
-                json::object(&[
-                    ("result", json::string("failed")),
-                    ("stage", json::string(name)),
-                ])
-            );
+            json_line(&json::object(&[
+                ("result", json::string("failed")),
+                ("stage", json::string(name)),
+            ]));
             return Err(CliError::DiagnosticJsonEmitted);
         }
     }
-    println!(
-        "{}",
-        json::object(&[
-            ("result", json::string("passed")),
-            ("stages", stages.len().to_string()),
-        ])
-    );
+    json_line(&json::object(&[
+        ("result", json::string("passed")),
+        ("stages", stages.len().to_string()),
+    ]));
     Ok(())
+}
+
+/// Write one machine JSON object to stdout as its own line.
+fn json_line(object: &str) {
+    crate::screen::emit_machine(crate::screen::Stream::Stdout, &format!("{object}\n"));
 }
 
 /// The type-check stage in machine-quiet form: the same source-graph type-check
@@ -1581,9 +1593,9 @@ pub fn run_capabilities(rest: &[String]) -> Result<(), CliError> {
         &program,
     );
     let names: Vec<&'static str> = caps.iter().map(|c| c.as_str()).collect();
-    print!(
-        "{}",
-        render_capabilities(&names, format, &std::io::stdout())
+    crate::screen::emit_report(
+        format,
+        &render_capabilities(&names, format, &std::io::stdout()),
     );
     Ok(())
 }
@@ -1669,7 +1681,7 @@ pub fn run_version(rest: &[String]) -> Result<(), CliError> {
     if let Some(extra) = positional.first() {
         return Err(cli_args::usage_unexpected_argument("version", extra));
     }
-    print!("{}", render_version(format, &std::io::stdout()));
+    crate::screen::emit_report(format, &render_version(format, &std::io::stdout()));
     Ok(())
 }
 
@@ -1746,10 +1758,9 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
 
     // --dry-run: show the installer command and stop — no version check needed.
     if dry_run {
-        print!(
-            "{}",
-            style::frame(&style::gutter(&format!("would run: {command}")))
-        );
+        crate::screen::Screen::new(crate::screen::Stream::Stdout)
+            .line(crate::screen::Tone::Text, &format!("would run: {command}"))
+            .emit();
         return Ok(());
     }
 
@@ -1758,7 +1769,10 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
 
     // --plain / --json: emit machine output and never prompt or install.
     if fmt != cli_args::OutputFormat::Human {
-        print!("{}", render_upgrade(&vc, &action, false, fmt));
+        crate::screen::emit_machine(
+            crate::screen::Stream::Stdout,
+            &render_upgrade(&vc, &action, false, fmt),
+        );
         return match action {
             version_check::UpgradeAction::Unreachable => Err(CliError::UpgradeFeedUnreachable),
             _ => Ok(()),
@@ -1772,13 +1786,12 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
         version_check::UpgradeAction::UpToDate => {
             let v = vc.current.to_string();
             let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
-            print!(
-                "{}",
-                style::frame(&style::gutter(&format!(
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .styled(&format!(
                     "{tint}{glyph}{} ipe {v} — already the latest release",
                     p.reset
-                )))
-            );
+                ))
+                .emit();
             if check && exit_code_flag {
                 return Err(CliError::UpgradeCheckExit {
                     code: check_exit_code(&version_check::UpgradeAction::UpToDate),
@@ -1788,13 +1801,12 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
         }
         version_check::UpgradeAction::Unreachable => {
             let (glyph, tint) = style::Outcome::Failure.glyph_and_tint(p);
-            print!(
-                "{}",
-                style::frame(&style::gutter(&format!(
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .styled(&format!(
                     "{tint}{glyph}{}  couldn't reach the release feed — check your connection",
                     p.reset
-                )))
-            );
+                ))
+                .emit();
             if check && exit_code_flag {
                 return Err(CliError::UpgradeCheckExit {
                     code: check_exit_code(&version_check::UpgradeAction::Unreachable),
@@ -1809,13 +1821,12 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
                 .as_ref()
                 .map(semver::Version::to_string)
                 .unwrap_or_default();
-            print!(
-                "{}",
-                style::frame(&style::gutter(&format!(
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .styled(&format!(
                     "{}?{}  ipe {cur} \u{2192} {lat} available",
                     p.yellow, p.reset
-                )))
-            );
+                ))
+                .emit();
             if check {
                 if exit_code_flag {
                     return Err(CliError::UpgradeCheckExit {
@@ -1832,10 +1843,7 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     let should_prompt = fmt == cli_args::OutputFormat::Human && stdout_is_tty && !yes;
     let confirmed = if should_prompt {
         use std::io::Write as _;
-        print!(
-            "{}",
-            style::gutter(&format!("{}Upgrade now? [Y/n] ", style::GUTTER))
-        );
+        crate::screen::prompt(&format!("{}Upgrade now? [Y/n] ", style::GUTTER));
         let _ = std::io::stdout().flush();
         let mut line = String::new();
         match std::io::stdin().read_line(&mut line) {

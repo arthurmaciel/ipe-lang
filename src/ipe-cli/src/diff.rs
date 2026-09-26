@@ -396,12 +396,16 @@ fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
     let required = report.required.as_str();
     match format {
         Plain => {
+            use std::fmt::Write as _;
+
+            let mut out = String::new();
             for change in &report.changes {
                 // The Display form leads with indent + glyph; trim to a
                 // flush-left `<+|-|~> <detail>` record for a clean pipe.
-                println!("change\t{}", change.to_string().trim());
+                let _ = writeln!(out, "change\t{}", change.to_string().trim());
             }
-            println!("bump\t{compat}\t{required}\t{}", report.floor);
+            let _ = writeln!(out, "bump\t{compat}\t{required}\t{}", report.floor);
+            crate::screen::emit_machine(crate::screen::Stream::Stdout, &out);
         }
         Json => {
             let changes: Vec<String> = report
@@ -409,11 +413,14 @@ fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
                 .iter()
                 .map(|c| format!("{:?}", c.to_string().trim()))
                 .collect();
-            println!(
-                "{{\"compatibility\":{compat:?},\"required\":{required:?},\
-                 \"floor\":{:?},\"changes\":[{}]}}",
-                report.floor.to_string(),
-                changes.join(","),
+            crate::screen::emit_machine(
+                crate::screen::Stream::Stdout,
+                &format!(
+                    "{{\"compatibility\":{compat:?},\"required\":{required:?},\
+                     \"floor\":{:?},\"changes\":[{}]}}\n",
+                    report.floor.to_string(),
+                    changes.join(","),
+                ),
             );
         }
         Human => {
@@ -433,7 +440,9 @@ fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
                 "\nThis is a {compat} change — it requires at least a {required} bump (>= {}).\n",
                 report.floor,
             );
-            print!("{}", crate::style::gutter(&body));
+            crate::screen::Screen::new(crate::screen::Stream::Stdout)
+                .line(crate::screen::Tone::Text, &body)
+                .emit();
         }
     }
 }
@@ -454,7 +463,9 @@ fn print_report(report: &SemverReport, format: crate::cli_args::OutputFormat) {
 /// malformed version, [`CliError::Diff`] when a tree cannot be read/typechecked,
 /// or [`CliError::SemverRejected`] when the verify mode finds an under-bump.
 pub fn run_diff(rest: &[String]) -> Result<(), CliError> {
-    run_diff_with(rest, &mut |msg| eprintln!("{msg}"))
+    run_diff_with(rest, &mut |msg| {
+        crate::screen::chatter(crate::screen::Stream::Stderr, crate::screen::Tone::Aux, msg);
+    })
 }
 
 /// The stderr notice emitted when the deprecated `--check` alias is used.

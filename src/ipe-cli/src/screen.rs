@@ -293,6 +293,97 @@ impl Screen {
     pub fn emit(&self) {
         self.stream.write(&self.render(claim_header()));
     }
+
+    /// Render the screen as progress chatter: its lines alone, with no blank edge.
+    ///
+    /// The header leads when it is `header`.
+    #[must_use]
+    pub fn render_chatter(&self, header: Header) -> String {
+        let mut out = match header {
+            Header::Shown => style::command_header(!self.palette.reset.is_empty()),
+            Header::Omitted => String::new(),
+        };
+        out.push_str(&self.body);
+        out
+    }
+
+    /// Write the screen to its stream as progress chatter.
+    ///
+    /// A step line of a running command continues the output under the header
+    /// instead of opening a new blank-edged block.
+    pub fn emit_chatter(&self) {
+        self.stream.write(&self.render_chatter(claim_header()));
+    }
+}
+
+/// Write one line of progress chatter, painted in `tone`, to `stream`.
+///
+/// The text may be untrusted: it is sanitised like [`Screen::line`].
+pub fn chatter(stream: Stream, tone: Tone, text: &str) {
+    Screen::new(stream).line(tone, text).emit_chatter();
+}
+
+/// Write a block a trusted renderer already styled for `stream` as progress
+/// chatter.
+///
+/// Lines the renderer already guttered keep their indent, as in
+/// [`Screen::guttered`]; blank lines, leading and trailing ones included, are
+/// kept as the renderer laid them out.
+pub fn chatter_styled(stream: Stream, block: &str) {
+    emit_header(stream);
+    stream.write(&guttered_once(block));
+}
+
+/// Gutter every non-empty line of `block` that does not already start with the
+/// gutter, keeping every newline.
+fn guttered_once(block: &str) -> String {
+    let mut out = String::with_capacity(block.len() + GUTTER.len());
+    for line in block.split_inclusive('\n') {
+        let text = line.trim_end_matches('\n');
+        if !text.is_empty() && !text.starts_with(GUTTER) {
+            out.push_str(GUTTER);
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Write a report a renderer produced for `format` to stdout.
+///
+/// The human form is a framed, guttered, styled block and becomes a screen; a
+/// machine form (`--plain`, `--json`) is written byte for byte.
+pub fn emit_report(format: crate::cli_args::OutputFormat, text: &str) {
+    use crate::cli_args::OutputFormat::{Human, Json, Plain};
+    match format {
+        Human => {
+            Screen::new(Stream::Stdout).guttered(text).emit();
+        }
+        Plain | Json => emit_machine(Stream::Stdout, text),
+    }
+}
+
+/// Write a completed step as its own screen on `stream`: the success or failure
+/// glyph, then `message` (see [`style::status_line`]).
+pub fn status(stream: Stream, ok: bool, message: &TerminalSafe) {
+    Screen::new(stream)
+        .guttered(&style::status_line(ok, message, stream.color()))
+        .emit();
+}
+
+/// The palette a trusted renderer paints a block for `stream` with.
+#[must_use]
+pub fn palette(stream: Stream) -> &'static Palette {
+    Palette::select(stream.color())
+}
+
+/// Ask the user `question` on stdout.
+///
+/// Every line is guttered and sanitised, and no newline follows the last, so
+/// the answer is typed on the same line.
+pub fn prompt(question: &str) {
+    emit_header(Stream::Stdout);
+    let safe = TerminalSafe::sanitize(question);
+    Stream::Stdout.write(&style::gutter(safe.as_str()));
 }
 
 /// Report a failed command on stderr in the one error frame.
@@ -431,6 +522,29 @@ mod tests {
         let out = s.render(Header::Omitted);
         assert!(!out.contains('\x1b'), "{out:?}");
         assert!(out.contains("  boom"), "{out:?}");
+    }
+
+    #[test]
+    fn chatter_is_the_lines_alone_with_no_blank_edge() {
+        let mut s = plain(Stream::Stderr);
+        s.line(Tone::Text, "• building\u{1b}[2J Main.ipe");
+        assert_eq!(s.render_chatter(Header::Omitted), "  • building Main.ipe\n");
+        let version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            s.render_chatter(Header::Shown),
+            format!(
+                "\n  Ipê language - v{version} - {}\n  • building Main.ipe\n",
+                style::REPO_URL
+            )
+        );
+    }
+
+    #[test]
+    fn styled_chatter_keeps_its_blank_lines_and_indents_once() {
+        assert_eq!(
+            guttered_once("\n  already\nbare\n\n"),
+            "\n  already\n  bare\n\n"
+        );
     }
 
     #[test]
