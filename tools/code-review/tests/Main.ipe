@@ -63,18 +63,24 @@ idempotent db =
         |> Task.andThen (\_ -> tableExists db "review")
 
 
+-- The first insert affects one row and the duplicate none. The counts also
+-- prove the store's `(uid, body_hash)` key matches the migrated table's primary
+-- key: a conflict target the table does not declare is a database error.
 duplicateInsertIsNoop : Db -> Task.Task Error Bool
 duplicateInsertIsNoop db =
     LibDb.insertDecision db "dup-uid" "h1" Approved
         |> Task.andThen
-            (\_ ->
+            (\first ->
                 LibDb.insertDecision db "dup-uid" "h1" (Refused "changed")
-            )
-        |> Task.andThen (\_ -> countReviewRows db "dup-uid" "h1")
-        |> Task.andThen
-            (\n ->
-                LibDb.findDecision db "dup-uid" "h1"
-                    |> Task.map (\m -> n == 1 && isApproved m)
+                    |> Task.andThen
+                        (\second ->
+                            countReviewRows db "dup-uid" "h1"
+                                |> Task.andThen
+                                    (\n ->
+                                        LibDb.findDecision db "dup-uid" "h1"
+                                            |> Task.map (\m -> first == 1 && second == 0 && n == 1 && isApproved m)
+                                    )
+                        )
             )
 
 

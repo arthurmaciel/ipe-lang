@@ -39,7 +39,7 @@ module Ipe.Db.Store exposing
     , index, indexNamed
     , tableName, columnNames, createSql
     , readText, readInt, readBool, readFloat
-    , insert, insertReturning, upsert, all, get, delete, findWhere, create
+    , insert, insertReturning, upsert, insertIfAbsent, all, get, delete, findWhere, create
     , allOn, getOn, findWhereOn
     , update, updateWhere, deleteWhere, findBy
     , renameColumn, renameTable, migrations
@@ -1625,31 +1625,94 @@ insertReturningNoRowError =
 --         Store.upsert conn store setting
 upsert : Db -> Store a -> a -> Task Error Int
 upsert conn store row =
+    case conflictWrite "upsert" store row of
+        Err e ->
+            Task.fail e
+
+        Ok w ->
+            Db.upsertFields conn w.table w.target w.fields
+
+
+-- | `insertIfAbsent conn store row` — insert `row` unless a row with the same
+-- key already exists, in which case the existing row is left untouched (the
+-- first write wins); returns `1` when the row was inserted and `0` when its key
+-- was already present. The key is derived from the store's declaration exactly
+-- as `upsert` derives it — the primary key (single or composite), or, on a
+-- store with no primary key, its one `unique` column — and every refusal
+-- `upsert` makes, `insertIfAbsent` makes too, with a typed `Err` before any SQL
+-- is issued.
+--
+-- The check and the insert are one atomic statement, so two concurrent writers
+-- of the same key never both insert and neither sees an error. Routes through
+-- the audited `Db.insertFieldsIfAbsent`, which re-validates every identifier
+-- and binds every value — no SQL text is built here.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias Vote =
+--         { voter : String, ballot : String, choice : String }
+--
+--     -- keyed on (voter, ballot): a voter's first choice stands.
+--     castVote : Db -> Store Vote -> Vote -> Task Error Int
+--     castVote conn store vote =
+--         Store.insertIfAbsent conn store vote
+insertIfAbsent : Db -> Store a -> a -> Task Error Int
+insertIfAbsent conn store row =
+    case conflictWrite "insertIfAbsent" store row of
+        Err e ->
+            Task.fail e
+
+        Ok w ->
+            Db.insertFieldsIfAbsent conn w.table w.target w.fields
+
+
+-- One keyed insert, ready for a conflict-aware kernel: the table, the conflict
+-- target derived from the store's key, and the OmitField-aware fields.
+type alias ConflictWrite =
+    { table : String
+    , target : List String
+    , fields : List ( String, SqlField )
+    }
+
+
+-- Project `row` for a conflict-aware write named `op`, or refuse it with a
+-- typed `Err` naming `op` when the store has no usable conflict key.
+conflictWrite : String -> Store a -> a -> Result Error ConflictWrite
+conflictWrite op store row =
     case store of
         Store r ->
-            case conflictTarget r.specs r.pk of
+            case conflictTarget op r.specs r.pk of
                 Err e ->
-                    Task.fail e
+                    Err e
 
                 Ok target ->
                     case DbCodec.codecToBinds r.codec row of
                         Err e ->
-                            Task.fail e
+                            Err e
 
                         Ok binds ->
-                            case targetWritable r.specs binds target of
+                            case targetWritable op r.specs binds target of
                                 Err e ->
-                                    Task.fail e
+                                    Err e
 
                                 Ok _ ->
-                                    Db.upsertFields conn r.table target (insertFields r.specs binds)
+                                    Ok
+                                        { table = r.table
+                                        , target = target
+                                        , fields = insertFields r.specs binds
+                                        }
 
 
--- The columns an upsert matches a conflict on, derived only from the store's
--- declared key: the primary key when one is declared, otherwise the single
--- `unique` column. A refused key declaration surfaces its own fault.
-conflictTarget : List ColumnSpec -> Result PrimaryKeyFault PrimaryKeyDecl -> Result Error (List String)
-conflictTarget specs pk =
+-- The columns a conflict-aware write matches a conflict on, derived only from
+-- the store's declared key: the primary key when one is declared, otherwise the
+-- single `unique` column. A refused key declaration surfaces its own fault.
+conflictTarget : String -> List ColumnSpec -> Result PrimaryKeyFault PrimaryKeyDecl -> Result Error (List String)
+conflictTarget op specs pk =
     case primaryKeyColumns pk of
         Err e ->
             Err e
@@ -1659,13 +1722,13 @@ conflictTarget specs pk =
                 [] ->
                     case distinctColumns [] (List.filterMap uniqueColumnOf (List.reverse specs)) of
                         [] ->
-                            Err noConflictTargetError
+                            Err (noConflictTargetError op)
 
                         [ only ] ->
                             Ok [ only ]
 
                         several ->
-                            Err (ambiguousConflictTargetError several)
+                            Err (ambiguousConflictTargetError op several)
 
                 _ :: _ ->
                     Ok keyCols
@@ -1710,60 +1773,71 @@ distinctColumns seen cols =
 
 -- Every conflict-target column must reach the statement as a client value: one
 -- the database fills (`serial` / `defaultNow` / `touchOnUpdate`) or one the row
--- projection lacks leaves the conflict nothing to match, so the upsert would
+-- projection lacks leaves the conflict nothing to match, so the write would
 -- silently degrade to a plain insert.
-targetWritable : List ColumnSpec -> List ( String, SqlValue ) -> List String -> Result Error ()
-targetWritable specs binds target =
+targetWritable : String -> List ColumnSpec -> List ( String, SqlValue ) -> List String -> Result Error ()
+targetWritable op specs binds target =
     case target of
         [] ->
             Ok ()
 
         col :: rest ->
             if dbFilledColumn specs col then
-                Err (dbFilledConflictColumnError col)
+                Err (dbFilledConflictColumnError op col)
 
             else
                 case bindValue col binds of
                     Nothing ->
-                        Err (missingConflictColumnError col)
+                        Err (missingConflictColumnError op col)
 
                     Just _ ->
-                        targetWritable specs binds rest
+                        targetWritable op specs binds rest
 
 
-noConflictTargetError : Error
-noConflictTargetError =
-    Error.invalidInput
-        "Ipe.Db.Store: upsert requires a declared primary key or unique constraint as its conflict target — declare one with Store.primaryKey / Store.compositePrimaryKey2 / Store.compositePrimaryKey3 / Store.compositePrimaryKeyNamed, or Store.unique"
-
-
-ambiguousConflictTargetError : List String -> Error
-ambiguousConflictTargetError cols =
+noConflictTargetError : String -> Error
+noConflictTargetError op =
     Error.invalidInput
         (String.concat
-            [ "Ipe.Db.Store: upsert requires a declared primary key or unique constraint as its conflict target, but this store has no primary key and several unique columns ("
+            [ "Ipe.Db.Store: "
+            , op
+            , " requires a declared primary key or unique constraint as its conflict target — declare one with Store.primaryKey / Store.compositePrimaryKey2 / Store.compositePrimaryKey3 / Store.compositePrimaryKeyNamed, or Store.unique"
+            ]
+        )
+
+
+ambiguousConflictTargetError : String -> List String -> Error
+ambiguousConflictTargetError op cols =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: "
+            , op
+            , " requires a declared primary key or unique constraint as its conflict target, but this store has no primary key and several unique columns ("
             , String.join ", " cols
             , ") — declare the column (or columns) rows are matched on as the primary key"
             ]
         )
 
 
-dbFilledConflictColumnError : String -> Error
-dbFilledConflictColumnError col =
+dbFilledConflictColumnError : String -> String -> Error
+dbFilledConflictColumnError op col =
     Error.invalidInput
         (String.concat
-            [ "Ipe.Db.Store: upsert matches conflicts on column \""
+            [ "Ipe.Db.Store: "
+            , op
+            , " matches conflicts on column \""
             , col
             , "\", but the database fills that column (serial / defaultNow / touchOnUpdate), so a row never carries a value to match on — use Store.insert for this store, or key it on a column the row supplies"
             ]
         )
 
 
-missingConflictColumnError : String -> Error
-missingConflictColumnError col =
+missingConflictColumnError : String -> String -> Error
+missingConflictColumnError op col =
     Error.invalidInput
         (String.concat
-            [ "Ipe.Db.Store: upsert matches conflicts on column \""
+            [ "Ipe.Db.Store: "
+            , op
+            , " matches conflicts on column \""
             , col
             , "\", but the row's codec projection has no such column"
             ]

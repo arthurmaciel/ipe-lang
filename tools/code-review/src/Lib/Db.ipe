@@ -85,14 +85,14 @@ makeRow uid bodyHash decision reason reviewedAt =
     }
 
 
--- The typed store for the review table. `fromCodec` validates every column
--- identifier; `public` classifies it as world-readable/writable. No
--- `primaryKey` spec: the composite `PRIMARY KEY (uid, body_hash)` lives only
--- in the hand-written DDL migration, which Store cannot express.
+-- The typed store for the review table, keyed on `(uid, body_hash)` like its
+-- migration, so `Store.insertIfAbsent` matches a re-reviewed pair on that key.
+-- `fromCodec` validates every column identifier; `public` classifies it as
+-- world-readable/writable.
 reviewStore : Result Error (Store ReviewRow)
 reviewStore =
     Store.fromCodec "review" reviewCodec
-        |> Result.map Store.public
+        |> Result.map (\draft -> Store.public (Store.compositePrimaryKeyNamed [ "uid", "body_hash" ] draft))
 
 
 open : Task.Task Error Db
@@ -124,22 +124,12 @@ insertDecision db uid bodyHash decision =
             insertIfAbsent db uid bodyHash decision
 
 
--- A duplicate (uid, body_hash) pair is a no-op: the first review wins and
--- re-reviewing the same pair never overwrites it.
+-- A duplicate (uid, body_hash) pair is a no-op returning 0: the first review
+-- wins and re-reviewing the same pair never overwrites it. The existence check
+-- and the insert are one atomic statement, so concurrent reviews of one pair
+-- never race.
 insertIfAbsent : Db -> String -> String -> Decision -> Task.Task Error Int
 insertIfAbsent db uid bodyHash decision =
-    do
-        existing <- findDecision db uid bodyHash
-        case existing of
-            Just _ ->
-                Task.succeed 0
-
-            Nothing ->
-                insertNew db uid bodyHash decision
-
-
-insertNew : Db -> String -> String -> Decision -> Task.Task Error Int
-insertNew db uid bodyHash decision =
     case reviewStore of
         Err e ->
             Task.fail e
@@ -164,7 +154,7 @@ insertNew db uid bodyHash decision =
                         , reviewedAt = now
                         }
                 in
-                Store.insert db store row
+                Store.insertIfAbsent db store row
 
 
 -- Filter by both `uid` and `body_hash` using `Store.findWhere` with an
