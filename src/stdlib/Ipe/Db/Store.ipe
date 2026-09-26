@@ -801,6 +801,14 @@ addIndex spec draft =
 -- store decodes into the same record, and a raw-column store reads and writes a
 -- `Row` keyed by its declared column names.
 --
+-- Queries name columns the same way: every query-layer name — a `Cond` accessor
+-- (`eq .name …`), `orderAsc` / `orderDesc`, `findBy`, a join key, a join filter
+-- or sort column, a `select` projection, and every policy column — is the
+-- DECLARED name, resolved through the same mapping to the current column the
+-- emitted SQL names. A current name that is not also a declared one is not a
+-- query name: it is refused with a typed unknown-column `Err`, exactly as a name
+-- the store never had.
+--
 -- This function is a total constructor: `from` and `to` are admitted into the
 -- op log unconditionally. Identifier validation happens once, in `migrations`,
 -- which is the only point SQL text is built — an invalid name therefore
@@ -890,30 +898,81 @@ renameColumnInList from to cols =
         cols
 
 
--- The current name of the column declared as `name`: a column's identity is its
--- position in the frozen column list, and `currentColumns` is positionally
--- parallel to it (a rename edits a name in place, never the order or length).
--- This is the single declared → current mapping every declared-name fact (a
--- `ColumnSpec`, the primary key, an index column) resolves through before it
--- reaches SQL. A name the store does not declare maps to itself; the DDL path
--- has already refused a spec or index naming such a column.
-liveColumnName : List Column -> List Column -> String -> String
-liveColumnName declared current name =
+-- The current column declared as `name`, or `Nothing` when the store declares no
+-- such column. A column's identity is its position in the frozen column list, and
+-- `currentColumns` is positionally parallel to it (a rename edits a name in place,
+-- never the order or length). This is the single declared → current mapping:
+-- every declared-name fact (a `ColumnSpec`, the primary key, an index column) and
+-- every query-layer name (a `Cond` leaf, an ordering, a join key, a projection, a
+-- policy column) resolves through it before it reaches SQL.
+declaredColumn : List Column -> List Column -> String -> Maybe Column
+declaredColumn declared current name =
     case declared of
         [] ->
-            name
+            Nothing
 
         d :: ds ->
             case current of
                 [] ->
-                    name
+                    Nothing
 
                 c :: cs ->
                     if columnName d == name then
-                        columnName c
+                        Just c
 
                     else
-                        liveColumnName ds cs name
+                        declaredColumn ds cs name
+
+
+-- The current name of the column declared as `name`. A name the store does not
+-- declare maps to itself; the DDL path has already refused a spec or index naming
+-- such a column.
+liveColumnName : List Column -> List Column -> String -> String
+liveColumnName declared current name =
+    case declaredColumn declared current name of
+        Just col ->
+            columnName col
+
+        Nothing ->
+            name
+
+
+-- A store's column vocabulary as every query-layer name sees it: the declared
+-- (frozen) columns and the positionally parallel current ones. A query names a
+-- column by its DECLARED name — the record field the codec reads and writes —
+-- and the emitted SQL names its CURRENT one, so a renamed store is queried
+-- exactly as before the rename. A current name that is not also a declared one
+-- is not a query name: it resolves to nothing and fails closed, so a name that
+-- two positions could claim across a chain of renames is never ambiguous.
+type ColumnView
+    = ColumnView (List Column) (List Column)
+
+
+storeView : Store a -> ColumnView
+storeView store =
+    case store of
+        Store r ->
+            ColumnView r.frozenColumns r.currentColumns
+
+
+-- Resolve a query-layer (declared) column name to the store's current column, or
+-- a typed unknown-column `Err` when the store declares no such column.
+resolveColumn : ColumnView -> String -> Result Error Column
+resolveColumn view name =
+    case view of
+        ColumnView declared current ->
+            case declaredColumn declared current name of
+                Just col ->
+                    Ok col
+
+                Nothing ->
+                    Err (unknownColumnError name)
+
+
+-- The current SQL name of the query-layer column `name` (see `resolveColumn`).
+liveName : ColumnView -> String -> Result Error String
+liveName view name =
+    Result.map columnName (resolveColumn view name)
 
 
 -- The store's column specs under their current column names — what every write
@@ -1700,7 +1759,7 @@ updateWhere conn store cond row =
                 Task.fail unconstrainedMutationError
 
             else
-                case condFragmentIn r.currentColumns cond of
+                case condFragmentIn (storeView store) cond of
                     Err e ->
                         Task.fail e
 
@@ -1764,7 +1823,7 @@ deleteWhere conn store cond =
                 Task.fail unconstrainedMutationError
 
             else
-                case condFragmentIn r.currentColumns cond of
+                case condFragmentIn (storeView store) cond of
                     Err e ->
                         Task.fail e
 
@@ -1858,9 +1917,10 @@ get conn store keyValue =
 
 
 -- | `findBy conn store col value` — read every row whose `col` equals `value`,
--- decoded through the store's codec. `col` is validated against the store's own
--- derived column list before any SQL is built (a name absent from the codec's
--- columns is a typed `Err`, parse-don't-validate), then reaches SQL only through
+-- decoded through the store's codec. `col` is the column's declared name (the
+-- record field it decodes into, unchanged by `renameColumn`); it is resolved to
+-- the store's current column before any SQL is built (a name the store does not
+-- declare is a typed `Err`, parse-don't-validate), then reaches SQL only through
 -- `Sql.column`; `value` binds as a parameter through `Sql.param`. This is the
 -- convenience single-column equality read; a compound predicate uses the query
 -- builder (`query |> where …`) or the raw-fragment escape `findWhere`.
@@ -1882,13 +1942,14 @@ findBy : Db -> Store a -> String -> SqlValue -> Task Error (List a)
 findBy conn store col value =
     case store of
         Store r ->
-            if Basics.not (hasColumn r.currentColumns col) then
-                Task.fail (unknownColumnError col)
+            case liveName (storeView store) col of
+                Err e ->
+                    Task.fail e
 
-            else
-                Task.andThen
-                    (\rows -> decodeRows r.codec rows)
-                    (Db.findWhere conn r.table (keyEquals col value))
+                Ok live ->
+                    Task.andThen
+                        (\rows -> decodeRows r.codec rows)
+                        (Db.findWhere conn r.table (keyEquals live value))
 
 
 -- Whether `name` is one of the store's current columns — the derived vocabulary
@@ -2017,8 +2078,9 @@ firstDecoded codec rows =
 -- `count`, to the audited `SqlFragment` — every column through `Sql.column`,
 -- every value through `Sql.param`. No leaf builds SQL text, so the builder adds
 -- no injection surface over the fragment builder it lowers to. A column named in
--- a leaf is validated against the store's own derived column list at lowering
--- time (a name absent from the codec's columns is a typed `Err`), so a stringly
+-- a leaf is its declared name (the record field), resolved at lowering time to
+-- the store's current column (`renameColumn` changes the SQL name, never the
+-- query name); a name the store does not declare is a typed `Err`, so a stringly
 -- column that is not a real store column fails closed before any SQL is issued.
 --
 -- `ORDER BY` / `LIMIT` / `OFFSET` are applied in Ipê over the fetched rows: the
@@ -2133,28 +2195,26 @@ where : Cond a -> Query a -> Query a
 where cond q =
     case q of
         Query r ->
-            case r.store of
-                Store s ->
-                    case condFragmentIn s.currentColumns cond of
-                        Err e ->
-                            Query
-                                { store = r.store
-                                , frag = r.frag
-                                , orderings = r.orderings
-                                , lim = r.lim
-                                , off = r.off
-                                , poison = firstPoison r.poison e
-                                }
+            case condFragmentIn (storeView r.store) cond of
+                Err e ->
+                    Query
+                        { store = r.store
+                        , frag = r.frag
+                        , orderings = r.orderings
+                        , lim = r.lim
+                        , off = r.off
+                        , poison = firstPoison r.poison e
+                        }
 
-                        Ok lowered ->
-                            Query
-                                { store = r.store
-                                , frag = Just (conjoinFrag r.frag lowered)
-                                , orderings = r.orderings
-                                , lim = r.lim
-                                , off = r.off
-                                , poison = r.poison
-                                }
+                Ok lowered ->
+                    Query
+                        { store = r.store
+                        , frag = Just (conjoinFrag r.frag lowered)
+                        , orderings = r.orderings
+                        , lim = r.lim
+                        , off = r.off
+                        , poison = r.poison
+                        }
 
 
 conjoinFrag : Maybe SqlFragment -> SqlFragment -> SqlFragment
@@ -2583,28 +2643,26 @@ addOrdering : String -> SortDir -> Query a -> Query a
 addOrdering col dir q =
     case q of
         Query r ->
-            case r.store of
-                Store s ->
-                    case columnTypeOf s.currentColumns col of
-                        Nothing ->
-                            Query
-                                { store = r.store
-                                , frag = r.frag
-                                , orderings = r.orderings
-                                , lim = r.lim
-                                , off = r.off
-                                , poison = firstPoison r.poison (unknownColumnError col)
-                                }
+            case resolveColumn (storeView r.store) col of
+                Err e ->
+                    Query
+                        { store = r.store
+                        , frag = r.frag
+                        , orderings = r.orderings
+                        , lim = r.lim
+                        , off = r.off
+                        , poison = firstPoison r.poison e
+                        }
 
-                        Just colType ->
-                            Query
-                                { store = r.store
-                                , frag = r.frag
-                                , orderings = r.orderings ++ [ ( col, cellTypeOf colType, dir ) ]
-                                , lim = r.lim
-                                , off = r.off
-                                , poison = r.poison
-                                }
+                Ok live ->
+                    Query
+                        { store = r.store
+                        , frag = r.frag
+                        , orderings = r.orderings ++ [ ( columnName live, cellTypeOf (columnColType live), dir ) ]
+                        , lim = r.lim
+                        , off = r.off
+                        , poison = r.poison
+                        }
 
 
 -- | `limit n q` — keep at most `n` rows (applied after ordering). A negative or
@@ -2759,20 +2817,6 @@ count conn q =
                             Task.map List.length (Db.findWhere conn s.table (queryFrag r.frag))
 
 
-columnTypeOf : List Column -> String -> Maybe ColType
-columnTypeOf columns name =
-    case columns of
-        [] ->
-            Nothing
-
-        first :: rest ->
-            if columnName first == name then
-                Just (columnColType first)
-
-            else
-                columnTypeOf rest name
-
-
 -- ─── Typed two-store inner join ─────────────────────────────────────
 --
 -- A `Joined a b` is an inner join of two stores on key equality, lowering to
@@ -2859,9 +2903,11 @@ join =
 
 
 -- | The lowered form of `join`: each accessor `.field` has already been turned
--- into its validated, snake_cased column name (`keyA` / `keyB`). Builds the
--- `Joined` with the key-equality WHERE fragment `a0.keyA = a1.keyB` — both sides
--- reach SQL only through `Sql.column` on the aliased reference. If either key is
+-- into its validated, snake_cased declared column name (`keyA` / `keyB`). Each
+-- key resolves to its side's current column (a key the side does not declare
+-- poisons the join with a typed `Err`), and the `Joined` carries the
+-- key-equality WHERE fragment `a0.keyA = a1.keyB` — both sides reach SQL only
+-- through `Sql.column` on the aliased reference. If either key is
 -- somehow not a valid dotted identifier the fragment poisons itself (the
 -- `Sql.column` gate), which the runners surface as a typed `Err`; no value is
 -- interpolated.
@@ -2870,14 +2916,38 @@ join =
 -- columns; not part of the accessor caller surface.
 joinNamed : Store a -> String -> Store b -> String -> Joined a b
 joinNamed storeA keyA storeB keyB =
+    case ( liveName (storeView storeA) keyA, liveName (storeView storeB) keyB ) of
+        ( Ok liveA, Ok liveB ) ->
+            Joined
+                { storeA = storeA
+                , storeB = storeB
+                , keyA = liveA
+                , keyB = liveB
+                , frag = joinKeyEquals liveA liveB
+                , order = Nothing
+                , poison = Nothing
+                }
+
+        ( Err e, _ ) ->
+            poisonedJoin storeA keyA storeB keyB e
+
+        ( _, Err e ) ->
+            poisonedJoin storeA keyA storeB keyB e
+
+
+-- A join whose key names a column its side does not declare: it matches no row
+-- (`frag` is the always-false fragment) and carries the typed error as `poison`,
+-- so the runners fail closed before issuing any SQL.
+poisonedJoin : Store a -> String -> Store b -> String -> Error -> Joined a b
+poisonedJoin storeA keyA storeB keyB e =
     Joined
         { storeA = storeA
         , storeB = storeB
         , keyA = keyA
         , keyB = keyB
-        , frag = joinKeyEquals keyA keyB
+        , frag = falseFragment
         , order = Nothing
-        , poison = Nothing
+        , poison = Just e
         }
 
 
@@ -2914,9 +2984,7 @@ joinFilterLeft : Cond a -> Joined a b -> Joined a b
 joinFilterLeft cond joined =
     case joined of
         Joined r ->
-            case r.storeA of
-                Store s ->
-                    addJoinFilter leftAlias s.currentColumns cond joined
+            addJoinFilter leftAlias (storeView r.storeA) cond joined
 
 
 -- | `joinFilterRight cond joined` — restrict the join to rows whose RIGHT side
@@ -2932,20 +3000,18 @@ joinFilterRight : Cond b -> Joined a b -> Joined a b
 joinFilterRight cond joined =
     case joined of
         Joined r ->
-            case r.storeB of
-                Store s ->
-                    addJoinFilter rightAlias s.currentColumns cond joined
+            addJoinFilter rightAlias (storeView r.storeB) cond joined
 
 
 -- Lower `cond` against one side's columns, qualify each referenced column with
 -- that side's alias, and AND it into the join's WHERE fragment. A column absent
 -- from the side's store poisons the join with the first fail-closed error, so a
 -- poisoned join issues no SQL and fails at the terminal runner.
-addJoinFilter : String -> List Column -> Cond row -> Joined a b -> Joined a b
-addJoinFilter alias columns cond joined =
+addJoinFilter : String -> ColumnView -> Cond row -> Joined a b -> Joined a b
+addJoinFilter alias view cond joined =
     case joined of
         Joined r ->
-            case condFragmentInQualified alias columns cond of
+            case condFragmentInQualified alias view cond of
                 Err e ->
                     Joined
                         { storeA = r.storeA
@@ -3007,15 +3073,7 @@ orderByLeftNamed : Joined a b -> String -> Bool -> Joined a b
 orderByLeftNamed joined col ascending =
     case joined of
         Joined r ->
-            Joined
-                { storeA = r.storeA
-                , storeB = r.storeB
-                , keyA = r.keyA
-                , keyB = r.keyB
-                , frag = r.frag
-                , order = Just ( leftAlias, col, ascending )
-                , poison = r.poison
-                }
+            setJoinOrder leftAlias (storeView r.storeA) col ascending joined
 
 
 -- | Lowered form of `orderByRight`: symmetric to `orderByLeftNamed` but uses
@@ -3025,15 +3083,38 @@ orderByRightNamed : Joined a b -> String -> Bool -> Joined a b
 orderByRightNamed joined col ascending =
     case joined of
         Joined r ->
-            Joined
-                { storeA = r.storeA
-                , storeB = r.storeB
-                , keyA = r.keyA
-                , keyB = r.keyB
-                , frag = r.frag
-                , order = Just ( rightAlias, col, ascending )
-                , poison = r.poison
-                }
+            setJoinOrder rightAlias (storeView r.storeB) col ascending joined
+
+
+-- Attach the sort column `col` of the side bound to `alias`, resolved through
+-- that side's column view to its current name. A column the side does not
+-- declare leaves the order unset and poisons the join with the typed `Err`.
+setJoinOrder : String -> ColumnView -> String -> Bool -> Joined a b -> Joined a b
+setJoinOrder alias view col ascending joined =
+    case joined of
+        Joined r ->
+            case liveName view col of
+                Err e ->
+                    Joined
+                        { storeA = r.storeA
+                        , storeB = r.storeB
+                        , keyA = r.keyA
+                        , keyB = r.keyB
+                        , frag = r.frag
+                        , order = r.order
+                        , poison = firstPoison r.poison e
+                        }
+
+                Ok live ->
+                    Joined
+                        { storeA = r.storeA
+                        , storeB = r.storeB
+                        , keyA = r.keyA
+                        , keyB = r.keyB
+                        , frag = r.frag
+                        , order = Just ( alias, live, ascending )
+                        , poison = r.poison
+                        }
 
 
 -- | `joinToList conn joined` — run the join and return each matched pair, both
@@ -3304,7 +3385,9 @@ mul =
 -- | The lowered form of `select`: the lambda has already been read into the
 -- ordered `ProjectionTerm` list. Each term is one typed SELECT descriptor:
 -- `ColumnTerm alias col`, `LiteralTerm`, `UpperTerm dotted`, `LowerTerm dotted`,
--- or `CoalesceTerm operandA operandB`. Literal-position `SqlValue` binds appear
+-- or `CoalesceTerm operandA operandB`; every column it names is a declared
+-- column, resolved here to its side's current column (an unresolvable one
+-- poisons the `Select`). Literal-position `SqlValue` binds appear
 -- in `extraBinds` in left→right, coalesce-left-before-right order, ahead of the
 -- WHERE binds. Builds the `Select` from the join's tables, alias-bound `FROM …
 -- WHERE` fragment, and any inherited `poison`. Reached only through the
@@ -3317,17 +3400,102 @@ selectNamed joined projections extraBinds =
                 Store sa ->
                     case r.storeB of
                         Store sb ->
-                            Select
-                                { joinedA = leftAlias
-                                , joinedB = rightAlias
-                                , leftTable = sa.table
-                                , rightTable = sb.table
-                                , frag = r.frag
-                                , order = r.order
-                                , poison = r.poison
-                                , projections = projections
-                                , extraBinds = extraBinds
-                                }
+                            case liveProjections (storeView r.storeA) (storeView r.storeB) projections of
+                                Ok live ->
+                                    Select
+                                        { joinedA = leftAlias
+                                        , joinedB = rightAlias
+                                        , leftTable = sa.table
+                                        , rightTable = sb.table
+                                        , frag = r.frag
+                                        , order = r.order
+                                        , poison = r.poison
+                                        , projections = live
+                                        , extraBinds = extraBinds
+                                        }
+
+                                Err e ->
+                                    Select
+                                        { joinedA = leftAlias
+                                        , joinedB = rightAlias
+                                        , leftTable = sa.table
+                                        , rightTable = sb.table
+                                        , frag = r.frag
+                                        , order = r.order
+                                        , poison = firstPoison r.poison e
+                                        , projections = projections
+                                        , extraBinds = extraBinds
+                                        }
+
+
+-- Resolve every column a projection list references (each named by its declared
+-- column on the side its alias binds) to that side's current column. The first
+-- column a side does not declare — or a reference to neither join alias — is a
+-- typed `Err`, so an unresolvable projection poisons the `Select` rather than
+-- reaching SQL.
+liveProjections : ColumnView -> ColumnView -> List ProjectionTerm -> Result Error (List ProjectionTerm)
+liveProjections left right terms =
+    Result.combine (List.map (\term -> liveProjectionTerm left right term) terms)
+
+
+liveProjectionTerm : ColumnView -> ColumnView -> ProjectionTerm -> Result Error ProjectionTerm
+liveProjectionTerm left right term =
+    case term of
+        ColumnTerm alias col ->
+            Result.map (\live -> ColumnTerm alias live) (liveAliased left right alias col)
+
+        LiteralTerm ->
+            Ok term
+
+        UpperTerm dotted ->
+            Result.map (\live -> UpperTerm live) (liveDotted left right dotted)
+
+        LowerTerm dotted ->
+            Result.map (\live -> LowerTerm live) (liveDotted left right dotted)
+
+        CoalesceTerm a b ->
+            Result.map2 (\liveA liveB -> CoalesceTerm liveA liveB)
+                (liveOperand left right a)
+                (liveOperand left right b)
+
+        ArithTerm op a b ->
+            Result.map2 (\liveA liveB -> ArithTerm op liveA liveB)
+                (liveOperand left right a)
+                (liveOperand left right b)
+
+
+liveOperand : ColumnView -> ColumnView -> ProjectionOperand -> Result Error ProjectionOperand
+liveOperand left right operand =
+    case operand of
+        OperandColumn dotted ->
+            Result.map (\live -> OperandColumn live) (liveDotted left right dotted)
+
+        OperandLiteral ->
+            Ok operand
+
+
+-- Resolve a dotted `alias.column` projection reference to `alias.<current>`.
+liveDotted : ColumnView -> ColumnView -> String -> Result Error String
+liveDotted left right dotted =
+    case String.split "." dotted of
+        [ alias, col ] ->
+            Result.map (\live -> qualified alias live) (liveAliased left right alias col)
+
+        _ ->
+            Err (unknownColumnError dotted)
+
+
+-- Resolve `col` on the join side bound to `alias` to its current name.
+liveAliased : ColumnView -> ColumnView -> String -> String -> Result Error String
+liveAliased left right alias col =
+    if alias == leftAlias then
+        liveName left col
+
+    else if alias == rightAlias then
+        liveName right col
+
+    else
+        Err (unknownColumnError (qualified alias col))
 
 
 -- | `selectToList db sel` — run the projection and return the projected `row`
@@ -3523,54 +3691,40 @@ decodeJoinRows codecA codecB pairs =
 -- ── Cond → SqlFragment lowering (the single validation + emit point) ──
 
 
--- Lower a `Cond` to an audited `SqlFragment`, validating every column against
--- the store's own column list first. A column absent from that list is a typed
--- `Err` (parse-don't-validate); an accepted column reaches SQL only through
+-- Lower a `Cond` to an audited `SqlFragment`, resolving every column through the
+-- store's column view first. A leaf names a column by its declared name (the
+-- record field its accessor reads); the view maps it to the store's current
+-- column, and a name the store does not declare is a typed `Err`
+-- (parse-don't-validate). The resolved column reaches SQL only through
 -- `Sql.column`, and every value only through `Sql.param`. `where` calls this the
 -- moment a `Cond` is added (the store is in hand), so a bad column fails closed
 -- at build time and no `Cond` value survives past the query builder.
-condFragmentIn : List Column -> Cond row -> Result Error SqlFragment
-condFragmentIn columns cond =
+condFragmentIn : ColumnView -> Cond row -> Result Error SqlFragment
+condFragmentIn view cond =
     case cond of
         Compare op col value ->
-            checkColumn columns col
-                (compareFragment op col value)
+            Result.map (\live -> compareFragment op live value) (liveName view col)
 
         Like col pattern ->
-            checkColumn columns col
-                (Sql.like (Sql.column col) pattern)
+            Result.map (\live -> Sql.like (Sql.column live) pattern) (liveName view col)
 
         IsNull col ->
-            checkColumn columns col
-                (Sql.isNull (Sql.column col))
+            Result.map (\live -> Sql.isNull (Sql.column live)) (liveName view col)
 
         NotNull col ->
-            checkColumn columns col
-                (Sql.isNotNull (Sql.column col))
+            Result.map (\live -> Sql.isNotNull (Sql.column live)) (liveName view col)
 
         InList col values ->
-            checkColumn columns col
-                (Sql.inList (Sql.column col) values)
+            Result.map (\live -> Sql.inList (Sql.column live) values) (liveName view col)
 
         AndList conds ->
-            foldConds columns Sql.and trueFragment conds
+            foldConds view Sql.and trueFragment conds
 
         OrList conds ->
-            foldConds columns Sql.or falseFragment conds
+            foldConds view Sql.or falseFragment conds
 
         NotCond inner ->
-            Result.map Sql.not (condFragmentIn columns inner)
-
-
--- Validate `col` against the store's columns, returning `built` when accepted or
--- a fail-closed `Err` when the store names no such column.
-checkColumn : List Column -> String -> SqlFragment -> Result Error SqlFragment
-checkColumn columns col built =
-    if hasColumn columns col then
-        Ok built
-
-    else
-        Err (unknownColumnError col)
+            Result.map Sql.not (condFragmentIn view inner)
 
 
 compareFragment : CompareOp -> String -> SqlValue -> SqlFragment
@@ -3602,90 +3756,83 @@ compareFragment op col value =
             Sql.lte lhs rhs
 
 
--- Lower a `Cond` for one join side to an audited `SqlFragment`, validating every
--- column against that side's own column list first and QUALIFYING each accepted
+-- Lower a `Cond` for one join side to an audited `SqlFragment`, resolving every
+-- column through that side's own column view first and QUALIFYING each resolved
 -- column with the side's table alias (`col` → `alias.col`) before it reaches
--- SQL. The bare column is what the store's derived list names, so the
--- membership check stays against `columns`; only the emitted reference is
--- qualified, so the join's WHERE names each side unambiguously. A column absent
--- from the side's store is a typed `Err` (parse-don't-validate); every value
--- binds through `Sql.param`. This is `condFragmentIn` with the alias qualifier —
--- the two share the same validation contract, differing only in the emitted
--- column reference.
-condFragmentInQualified : String -> List Column -> Cond row -> Result Error SqlFragment
-condFragmentInQualified alias columns cond =
+-- SQL, so the join's WHERE names each side unambiguously. A column the side does
+-- not declare is a typed `Err` (parse-don't-validate); every value binds through
+-- `Sql.param`. This is `condFragmentIn` with the alias qualifier — the two share
+-- the same resolution contract, differing only in the emitted column reference.
+condFragmentInQualified : String -> ColumnView -> Cond row -> Result Error SqlFragment
+condFragmentInQualified alias view cond =
     case cond of
         Compare op col value ->
-            checkColumn columns col
-                (compareFragment op (qualified alias col) value)
+            Result.map (\live -> compareFragment op (qualified alias live) value) (liveName view col)
 
         Like col pattern ->
-            checkColumn columns col
-                (Sql.like (Sql.column (qualified alias col)) pattern)
+            Result.map (\live -> Sql.like (Sql.column (qualified alias live)) pattern) (liveName view col)
 
         IsNull col ->
-            checkColumn columns col
-                (Sql.isNull (Sql.column (qualified alias col)))
+            Result.map (\live -> Sql.isNull (Sql.column (qualified alias live))) (liveName view col)
 
         NotNull col ->
-            checkColumn columns col
-                (Sql.isNotNull (Sql.column (qualified alias col)))
+            Result.map (\live -> Sql.isNotNull (Sql.column (qualified alias live))) (liveName view col)
 
         InList col values ->
-            checkColumn columns col
-                (Sql.inList (Sql.column (qualified alias col)) values)
+            Result.map (\live -> Sql.inList (Sql.column (qualified alias live)) values) (liveName view col)
 
         AndList conds ->
-            foldCondsQualified alias columns Sql.and trueFragment conds
+            foldCondsQualified alias view Sql.and trueFragment conds
 
         OrList conds ->
-            foldCondsQualified alias columns Sql.or falseFragment conds
+            foldCondsQualified alias view Sql.or falseFragment conds
 
         NotCond inner ->
-            Result.map Sql.not (condFragmentInQualified alias columns inner)
+            Result.map Sql.not (condFragmentInQualified alias view inner)
 
 
 -- The alias-qualifying counterpart to `foldConds`, threading the side's alias
 -- through each recursive lowering.
-foldCondsQualified : String -> List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Cond row) -> Result Error SqlFragment
-foldCondsQualified alias columns join emptyFragment conds =
+foldCondsQualified : String -> ColumnView -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Cond row) -> Result Error SqlFragment
+foldCondsQualified alias view join emptyFragment conds =
     case conds of
         [] ->
             Ok emptyFragment
 
         [ single ] ->
-            condFragmentInQualified alias columns single
+            condFragmentInQualified alias view single
 
         first :: rest ->
-            case condFragmentInQualified alias columns first of
+            case condFragmentInQualified alias view first of
                 Err e ->
                     Err e
 
                 Ok head ->
                     Result.map (\tail -> join head tail)
-                        (foldCondsQualified alias columns join emptyFragment rest)
+                        (foldCondsQualified alias view join emptyFragment rest)
 
 
 -- Fold a list of conditions with a binary connective, using `emptyFragment` as
--- the identity for the empty list. Each condition is lowered (and column-checked)
--- before it joins, so the first invalid column fails the whole fold closed.
-foldConds : List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Cond row) -> Result Error SqlFragment
-foldConds columns join emptyFragment conds =
+-- the identity for the empty list. Each condition is lowered (and its columns
+-- resolved) before it joins, so the first unknown column fails the whole fold
+-- closed.
+foldConds : ColumnView -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Cond row) -> Result Error SqlFragment
+foldConds view join emptyFragment conds =
     case conds of
         [] ->
             Ok emptyFragment
 
         [ single ] ->
-            condFragmentIn columns single
+            condFragmentIn view single
 
         first :: rest ->
-            case condFragmentIn columns first of
+            case condFragmentIn view first of
                 Err e ->
                     Err e
 
                 Ok head ->
                     Result.map (\tail -> join head tail)
-                        (foldConds columns join emptyFragment rest)
+                        (foldConds view join emptyFragment rest)
 
 
 -- The always-true / always-false fragments, the identities of `and` / `or` over
@@ -4460,25 +4607,25 @@ type Pred row
 -- correlated `EXISTS` subquery needs is captured HERE at `existsIn` time (the
 -- share store is in hand), so `predFragmentIn` builds the subquery with no
 -- closure and no deferred lookup. `shareTable` is the share store's validated
--- table name; `shareColumns` are the share store's own columns (so the share
--- read predicate and the correlation's share side are re-validated against
--- them, never against the outer row's); `shareRead` is the share store's OWN
+-- table name; `shareView` is the share store's own column view (so the share
+-- read predicate and the correlation's share side resolve against it, never
+-- against the outer row's); `shareRead` is the share store's OWN
 -- read predicate, composed into the subquery's WHERE (defence in depth — a row
 -- the share's policy denies never satisfies the `EXISTS`); `shareCol` /
--- `outerCol` are the two correlation columns (`shares.doc = docs.id`), the share
--- side validated against `shareColumns`, the outer side against the enclosing
--- store's columns. Carries no functions, so structural `==` holds and the
+-- `outerCol` are the two declared correlation columns (`shares.doc = docs.id`),
+-- the share side resolved through `shareView`, the outer side through the
+-- enclosing store's view. Carries no functions, so structural `==` holds and the
 -- simplifier can dedupe.
 --
 -- Phantom in `row` exactly as `Pred row` is: `shareRead`'s phantom is the
 -- share store's row type, but the phantom carries no runtime value, so it rides
 -- the enclosing `row` phantom here — the share side is kept honest by
--- `shareColumns` (the real column strings), never by the phantom. `existsIn`'s
+-- `shareView` (the real column strings), never by the phantom. `existsIn`'s
 -- scheme pins the surface types; `secured` re-validates BOTH sides' columns.
 type ExistsRef row
     = ExistsRef
         { shareTable : String
-        , shareColumns : List Column
+        , shareView : ColumnView
         , shareRead : Pred row
         , shareCol : String
         , outerCol : String
@@ -4658,7 +4805,7 @@ existsInNamed shareSecured shareCol outerCol =
                     PExists
                         (ExistsRef
                             { shareTable = s.table
-                            , shareColumns = s.currentColumns
+                            , shareView = storeView shareStore
                             , shareRead = recastPred (readPred sharePolicy)
                             , shareCol = shareCol
                             , outerCol = outerCol
@@ -4672,7 +4819,7 @@ existsInNamed shareSecured shareCol outerCol =
 -- not a cast: the referenced share store's read predicate (`Pred share`) is
 -- carried inside a `PExists` leaf of the outer `Pred row`, where the two phantom
 -- rows differ but neither constrains the runtime data. The share side stays
--- honest through `shareColumns` (the real column strings), never the phantom.
+-- honest through `shareView` (the real column strings), never the phantom.
 recastPred : Pred a -> Pred b
 recastPred pred =
     case pred of
@@ -4749,7 +4896,7 @@ recastExistsRef ref =
         ExistsRef r ->
             ExistsRef
                 { shareTable = r.shareTable
-                , shareColumns = r.shareColumns
+                , shareView = r.shareView
                 , shareRead = recastPred r.shareRead
                 , shareCol = r.shareCol
                 , outerCol = r.outerCol
@@ -4801,7 +4948,7 @@ predColumns pred =
             -- columns (the correlation's share side + every column the share read
             -- predicate names) live in the DIFFERENT share table and are
             -- re-validated against the share store's own columns by
-            -- `existsShareColumnsValid`, called from `secured` alongside this.
+            -- `firstUnknownExistsShareColumn`, called from `secured` alongside this.
             case ref of
                 ExistsRef r ->
                     [ r.outerCol ]
@@ -4809,8 +4956,8 @@ predColumns pred =
 
 -- The share-side columns an `existsIn` predicate names — the correlation's share
 -- side plus every column the share read predicate names — each of which MUST be a
--- real column of the SHARE store (`shareColumns`), never the outer store. Returns
--- the first share-side column absent from `shareColumns`, or `Nothing` when every
+-- real column of the SHARE store (`shareView`), never the outer store. Returns
+-- the first share-side column absent from `shareView`, or `Nothing` when every
 -- share-side column exists. `secured` walks this over the whole algebra so a
 -- correlation naming a missing column on the SHARE side fails closed exactly as a
 -- missing outer column does.
@@ -4850,7 +4997,7 @@ firstUnknownExistsShareColumn pred =
         PExists ref ->
             case ref of
                 ExistsRef r ->
-                    firstUnknownPolicyColumn r.shareColumns
+                    firstUnknownPolicyColumn r.shareView
                         (r.shareCol :: predColumns r.shareRead)
 
 
@@ -5056,8 +5203,8 @@ dedupePreds preds =
 -- `outerTable` is the enclosing store's validated table name, used to qualify the
 -- OUTER correlation column of a `PExists` (`docs.id`) so it reaches out of the
 -- subquery unambiguously; the share side is qualified by its own table.
-predFragmentIn : Auth.Principal -> String -> List Column -> Pred row -> Result Error SqlFragment
-predFragmentIn principal outerTable columns pred =
+predFragmentIn : Auth.Principal -> String -> ColumnView -> Pred row -> Result Error SqlFragment
+predFragmentIn principal outerTable view pred =
     case pred of
         PAlways ->
             Ok trueFragment
@@ -5066,12 +5213,12 @@ predFragmentIn principal outerTable columns pred =
             Ok falseFragment
 
         PMatch cond ->
-            condFragmentIn columns cond
+            condFragmentIn view cond
 
         POwner col ->
-            checkColumn columns
-                col
-                (Sql.eq (Sql.column col) (Sql.param (SqlString (Auth.subject principal))))
+            Result.map
+                (\live -> Sql.eq (Sql.column live) (Sql.param (SqlString (Auth.subject principal))))
+                (liveName view col)
 
         PRole name ->
             -- The caller's role is known once the principal is in hand, so this
@@ -5093,16 +5240,16 @@ predFragmentIn principal outerTable columns pred =
             Ok (admitFragment (Auth.claim key principal == Just value))
 
         PNotP inner ->
-            Result.map Sql.not (predFragmentIn principal outerTable columns inner)
+            Result.map Sql.not (predFragmentIn principal outerTable view inner)
 
         PAll preds ->
-            foldPreds principal outerTable columns Sql.and trueFragment preds
+            foldPreds principal outerTable view Sql.and trueFragment preds
 
         PAny preds ->
-            foldPreds principal outerTable columns Sql.or falseFragment preds
+            foldPreds principal outerTable view Sql.or falseFragment preds
 
         PExists ref ->
-            existsFragment principal outerTable ref
+            existsFragment principal outerTable view ref
 
 
 -- Lower a `PExists` to `EXISTS (SELECT 1 FROM <share> WHERE <correlation> AND
@@ -5115,59 +5262,71 @@ predFragmentIn principal outerTable columns pred =
 -- ambiguous. The share store's OWN read predicate is composed into the subquery
 -- WHERE (defence in depth), lowered against the SHARE store's columns — a share
 -- column named by the correlation or the share read predicate that the share
--- store lacks fails closed here as well as at `secured`.
-existsFragment : Auth.Principal -> String -> ExistsRef row -> Result Error SqlFragment
-existsFragment principal outerTable ref =
+-- store lacks fails closed here as well as at `secured`. Each correlation column
+-- is a declared name, resolved through its own store's column view (`outerView`
+-- for the enclosing store, the carried `shareView` for the share store) to the
+-- current column the SQL names.
+existsFragment : Auth.Principal -> String -> ColumnView -> ExistsRef row -> Result Error SqlFragment
+existsFragment principal outerTable outerView ref =
     case ref of
         ExistsRef r ->
-            if Basics.not (hasColumn r.shareColumns r.shareCol) then
-                Err (unknownColumnError r.shareCol)
+            case ( liveName r.shareView r.shareCol, liveName outerView r.outerCol ) of
+                ( Err e, _ ) ->
+                    Err e
 
-            else
-                let
-                    qualifiedShareCol =
-                        String.concat [ r.shareTable, ".", r.shareCol ]
+                ( _, Err e ) ->
+                    Err e
 
-                    qualifiedOuterCol =
-                        String.concat [ outerTable, ".", r.outerCol ]
+                ( Ok liveShareCol, Ok liveOuterCol ) ->
+                    existsFragmentLive principal
+                        r.shareTable
+                        r.shareView
+                        r.shareRead
+                        (String.concat [ r.shareTable, ".", liveShareCol ])
+                        (String.concat [ outerTable, ".", liveOuterCol ])
 
-                    correlation =
-                        Sql.eq (Sql.column qualifiedShareCol) (Sql.column qualifiedOuterCol)
-                in
-                -- The share read predicate is lowered against the SHARE store's
-                -- columns and its own table (its columns are bare inside the
-                -- single-FROM subquery), then AND-ed with the correlation. The
-                -- outer table qualifier is irrelevant to the share read pred (it
-                -- names no outer column), but threading the share table keeps a
-                -- nested `existsIn` correct.
-                case predFragmentIn principal r.shareTable r.shareColumns (simplify r.shareRead) of
-                    Err e ->
-                        Err e
 
-                    Ok shareReadFrag ->
-                        Ok (Sql.exists r.shareTable (Sql.and correlation shareReadFrag))
+-- The `EXISTS` subquery over resolved, table-qualified correlation columns.
+existsFragmentLive : Auth.Principal -> String -> ColumnView -> Pred row -> String -> String -> Result Error SqlFragment
+existsFragmentLive principal shareTable shareView shareRead qualifiedShareCol qualifiedOuterCol =
+    let
+        correlation =
+            Sql.eq (Sql.column qualifiedShareCol) (Sql.column qualifiedOuterCol)
+    in
+    -- The share read predicate is lowered against the SHARE store's
+    -- columns and its own table (its columns are bare inside the
+    -- single-FROM subquery), then AND-ed with the correlation. The
+    -- outer table qualifier is irrelevant to the share read pred (it
+    -- names no outer column), but threading the share table keeps a
+    -- nested `existsIn` correct.
+    case predFragmentIn principal shareTable shareView (simplify shareRead) of
+        Err e ->
+            Err e
+
+        Ok shareReadFrag ->
+            Ok (Sql.exists shareTable (Sql.and correlation shareReadFrag))
 
 
 -- Fold a list of predicates with a binary connective, using `emptyFragment` as
 -- the identity for the empty list. Each predicate is lowered (and column-checked)
 -- before it joins, so the first invalid column fails the whole fold closed.
-foldPreds : Auth.Principal -> String -> List Column -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Pred row) -> Result Error SqlFragment
-foldPreds principal outerTable columns join emptyFragment preds =
+foldPreds : Auth.Principal -> String -> ColumnView -> (SqlFragment -> SqlFragment -> SqlFragment) -> SqlFragment -> List (Pred row) -> Result Error SqlFragment
+foldPreds principal outerTable view join emptyFragment preds =
     case preds of
         [] ->
             Ok emptyFragment
 
         [ single ] ->
-            predFragmentIn principal outerTable columns single
+            predFragmentIn principal outerTable view single
 
         first :: rest ->
-            case predFragmentIn principal outerTable columns first of
+            case predFragmentIn principal outerTable view first of
                 Err e ->
                     Err e
 
                 Ok head ->
                     Result.map (\tail -> join head tail)
-                        (foldPreds principal outerTable columns join emptyFragment rest)
+                        (foldPreds principal outerTable view join emptyFragment rest)
 
 
 -- ─── Operation-scoped policy ────────────────────────────────────────
@@ -5620,7 +5779,7 @@ secured : Policy a -> Draft a -> Result Error (Secured a)
 secured policy draft =
     case draft of
         Draft r ->
-            case firstUnknownPolicyColumn r.currentColumns (policyColumns policy) of
+            case firstUnknownPolicyColumn (ColumnView r.frozenColumns r.currentColumns) (policyColumns policy) of
                 Just bad ->
                     Err (unknownColumnError bad)
 
@@ -5643,7 +5802,7 @@ secured policy draft =
                             -- decoder cannot represent — a fail-closed typed `Err`
                             -- at classification, never a decode panic at read time
                             -- (the soundness SEAL).
-                            case firstNonNullableMaskColumn r.currentColumns policy of
+                            case firstNonNullableMaskColumn (ColumnView r.frozenColumns r.currentColumns) policy of
                                 Just bad ->
                                     Err (nonNullableMaskError bad)
 
@@ -5655,22 +5814,22 @@ secured policy draft =
 -- (`CNull _`), or `Nothing` when every masked column is nullable. A masked column
 -- absent from the store is already rejected by the `policyColumns` check, so a
 -- column reaching here is present; only its nullability is in question.
-firstNonNullableMaskColumn : List Column -> Policy a -> Maybe String
-firstNonNullableMaskColumn columns policy =
+firstNonNullableMaskColumn : ColumnView -> Policy a -> Maybe String
+firstNonNullableMaskColumn view policy =
     case policy of
         Policy r ->
-            firstNonNullableMaskColumnIn columns (List.map maskColumn r.masks)
+            firstNonNullableMaskColumnIn view (List.map maskColumn r.masks)
 
 
-firstNonNullableMaskColumnIn : List Column -> List String -> Maybe String
-firstNonNullableMaskColumnIn columns cols =
+firstNonNullableMaskColumnIn : ColumnView -> List String -> Maybe String
+firstNonNullableMaskColumnIn view cols =
     case cols of
         [] ->
             Nothing
 
         col :: rest ->
-            if columnIsNullable columns col then
-                firstNonNullableMaskColumnIn columns rest
+            if columnIsNullable view col then
+                firstNonNullableMaskColumnIn view rest
 
             else
                 Just col
@@ -5679,54 +5838,38 @@ firstNonNullableMaskColumnIn columns cols =
 -- Whether `name`'s store column type is nullable (`CNull _`). A column absent
 -- from the store is treated as non-nullable (fail-closed), though `secured`'s
 -- earlier column-existence check makes that case unreachable for a real policy.
-columnIsNullable : List Column -> String -> Bool
-columnIsNullable columns name =
-    case columnColTypeByName columns name of
-        Just (CNull _) ->
+columnIsNullable : ColumnView -> String -> Bool
+columnIsNullable view name =
+    case Result.map columnColType (resolveColumn view name) of
+        Ok (CNull _) ->
             True
 
-        Just CText ->
+        Ok CText ->
             False
 
-        Just CInt ->
+        Ok CInt ->
             False
 
-        Just CReal ->
+        Ok CReal ->
             False
 
-        Just CBool ->
+        Ok CBool ->
             False
 
-        Just CTime ->
+        Ok CTime ->
             False
 
-        Just CDecimal ->
+        Ok CDecimal ->
             False
 
-        Just CMoney ->
+        Ok CMoney ->
             False
 
-        Just CBlob ->
+        Ok CBlob ->
             False
 
-        Nothing ->
+        Err _ ->
             False
-
-
--- The `ColType` of the store column named `name`, or `Nothing` when no such
--- column exists.
-columnColTypeByName : List Column -> String -> Maybe ColType
-columnColTypeByName columns name =
-    case columns of
-        [] ->
-            Nothing
-
-        first :: rest ->
-            if columnName first == name then
-                Just (columnColType first)
-
-            else
-                columnColTypeByName rest name
 
 
 -- The first share-side column any `existsIn` in `policy` names that is absent
@@ -5777,18 +5920,19 @@ maskPred pair =
 
 -- The first column in `names` that is not one of the store's columns, or
 -- `Nothing` when every named column is a real store column.
-firstUnknownPolicyColumn : List Column -> List String -> Maybe String
-firstUnknownPolicyColumn columns names =
+firstUnknownPolicyColumn : ColumnView -> List String -> Maybe String
+firstUnknownPolicyColumn view names =
     case names of
         [] ->
             Nothing
 
         name :: rest ->
-            if hasColumn columns name then
-                firstUnknownPolicyColumn columns rest
+            case resolveColumn view name of
+                Ok _ ->
+                    firstUnknownPolicyColumn view rest
 
-            else
-                Just name
+                Err _ ->
+                    Just name
 
 
 -- ─── Secured operations (the ONLY ops that accept a `Secured`) ──────
@@ -5813,7 +5957,7 @@ policyFragment : Auth.Principal -> (Policy a -> Pred a) -> Store a -> Policy a -
 policyFragment principal op store policy =
     case store of
         Store s ->
-            case predFragmentIn principal s.table s.currentColumns (simplify (op policy)) of
+            case predFragmentIn principal s.table (storeView store) (simplify (op policy)) of
                 Ok fragment ->
                     fragment
 
@@ -5845,32 +5989,32 @@ maskedRead principal conn store policy whereFrag =
                 Codec codecR ->
                     Db.findWhereMasked conn
                         r.table
-                        (projectionTerms principal store policy r.currentColumns)
+                        (List.map2
+                            (\declared current -> projectionTerm principal store policy (columnName declared) (columnName current))
+                            r.frozenColumns
+                            r.currentColumns
+                        )
                         whereFrag
                         (codecR.mkDec {})
 
 
--- Build the ordered projection `SqlFragment` list for a secured read: each store
--- column becomes a bare `Sql.column` reference, unless the policy masks it — then
--- it becomes an `Sql.maskedColumn` `CASE` term guarded by the mask predicate
--- lowered against the store's columns. The mask predicate reaches SQL only
--- through the ONE audited `predFragmentIn` path; a predicate that fails to lower
--- (an unreachable column mismatch, already refused at `secured`) falls back to the
--- always-FALSE fragment, so the column masks for EVERY row (fail-closed — a mask
--- that cannot be validated hides the value, never reveals it).
-projectionTerms : Auth.Principal -> Store a -> Policy a -> List Column -> List SqlFragment
-projectionTerms principal store policy columns =
-    List.map (\col -> projectionTerm principal store policy (columnName col)) columns
-
-
-projectionTerm : Auth.Principal -> Store a -> Policy a -> String -> SqlFragment
-projectionTerm principal store policy col =
-    case maskPredForColumn policy col of
+-- One projection term of a secured read, for the store column declared as
+-- `declared` and currently named `current`: a bare `Sql.column` reference to the
+-- current column, unless the policy masks the declared column — then an
+-- `Sql.maskedColumn` `CASE` term guarded by the mask predicate lowered against
+-- the store's column view. The mask predicate reaches SQL only through the ONE
+-- audited `predFragmentIn` path; a predicate that fails to lower (an unreachable
+-- column mismatch, already refused at `secured`) falls back to the always-FALSE
+-- fragment, so the column masks for EVERY row (fail-closed — a mask that cannot
+-- be validated hides the value, never reveals it).
+projectionTerm : Auth.Principal -> Store a -> Policy a -> String -> String -> SqlFragment
+projectionTerm principal store policy declared current =
+    case maskPredForColumn policy declared of
         Nothing ->
-            Sql.column col
+            Sql.column current
 
         Just pred ->
-            Sql.maskedColumn (maskPredFragment principal store pred) col
+            Sql.maskedColumn (maskPredFragment principal store pred) current
 
 
 -- The mask predicate for `col` if the policy masks it, else `Nothing`. First
@@ -5907,7 +6051,7 @@ maskPredFragment : Auth.Principal -> Store a -> Pred a -> SqlFragment
 maskPredFragment principal store pred =
     case store of
         Store s ->
-            case predFragmentIn principal s.table s.currentColumns (simplify pred) of
+            case predFragmentIn principal s.table (storeView store) (simplify pred) of
                 Ok fragment ->
                     fragment
 
@@ -5984,7 +6128,7 @@ insertAs principal conn secured row =
                             Db.insertFields conn
                                 r.table
                                 (insertFields (liveSpecs store)
-                                    (forceOwnerColumns principal policy binds)
+                                    (forceOwnerColumns principal (liveNames store (policyOwners policy)) binds)
                                 )
 
 
@@ -6021,7 +6165,7 @@ updateAs principal conn secured row =
                                                 r.table
                                                 (updateSetFields (liveSpecs store)
                                                     keyCol
-                                                    (dropImmutableColumns policy binds)
+                                                    (dropImmutableColumns (liveNames store (policyImmutables policy)) binds)
                                                 )
                                                 (Sql.and
                                                     (keyEquals keyCol keyValue)
@@ -6057,11 +6201,9 @@ deleteAs principal conn secured keyValue =
 -- The bind is removed entirely (not set to its old value, which the update path
 -- does not have), so the column is absent from the SET and the database keeps its
 -- current value. Non-immutable columns leave the binds unchanged.
-dropImmutableColumns : Policy a -> List ( String, SqlValue ) -> List ( String, SqlValue )
-dropImmutableColumns policy binds =
-    case policy of
-        Policy r ->
-            List.filter (\pair -> Basics.not (bindIsImmutable r.immutables pair)) binds
+dropImmutableColumns : List String -> List ( String, SqlValue ) -> List ( String, SqlValue )
+dropImmutableColumns immutables binds =
+    List.filter (\pair -> Basics.not (bindIsImmutable immutables pair)) binds
 
 
 -- True when the policy's immutable-column set names the column this bind sets.
@@ -6075,14 +6217,37 @@ bindIsImmutable immutables pair =
 -- Force every owner column named by the policy to `principal`'s subject in a
 -- codec projection, so an insert cannot set an owner other than the caller. A
 -- column the policy does not scope to the owner leaves the binds unchanged.
-forceOwnerColumns : Auth.Principal -> Policy a -> List ( String, SqlValue ) -> List ( String, SqlValue )
-forceOwnerColumns principal policy binds =
+forceOwnerColumns : Auth.Principal -> List String -> List ( String, SqlValue ) -> List ( String, SqlValue )
+forceOwnerColumns principal owners binds =
+    List.foldl
+        (\col acc -> setBind col (SqlString (Auth.subject principal)) acc)
+        binds
+        owners
+
+
+-- The current names of a policy's declared write-projection columns (owners or
+-- immutables): the codec binds a write consults name the store's current
+-- columns, so each declared name resolves through the store's one declared →
+-- current mapping before it is compared against a bind.
+liveNames : Store a -> List String -> List String
+liveNames store names =
+    case store of
+        Store r ->
+            List.map (liveColumnName r.frozenColumns r.currentColumns) names
+
+
+policyOwners : Policy a -> List String
+policyOwners policy =
     case policy of
         Policy r ->
-            List.foldl
-                (\col acc -> setBind col (SqlString (Auth.subject principal)) acc)
-                binds
-                r.owners
+            r.owners
+
+
+policyImmutables : Policy a -> List String
+policyImmutables policy =
+    case policy of
+        Policy r ->
+            r.immutables
 
 
 -- Set `col`'s value to `value` in a codec projection: replace the existing pair

@@ -1,9 +1,16 @@
 raw-insert-omits-defaultNow:ok label=hello
 raw-update-omits-touchOnUpdate:ok label=bye
-raw-findBy-current-name:1
+raw-findBy-declared-name:1
 codec-get-renamed-pk:p1=Grace
 codec-insertReturning:p2=Hopper
-codec-findBy-current-name:p1
+codec-findBy-declared-name:p1
+query-cond-declared-name:p1
+query-order-declared-name:p2,p1
+query-order-current-name:refused
+findBy-current-name:refused
+join-filter-declared-names:p1=Grace/cat
+join-order-declared-names:p2=Hopper/dog,p1=Grace/cat
+select-declared-names:GRACE/cat/cat
 createSql-frozen:CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)
 createSql-equals-create-entry:ok
 create_users: CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)
