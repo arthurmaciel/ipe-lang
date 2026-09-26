@@ -716,9 +716,10 @@ pub static ENV_VARS: &[EnvVar] = &[
     EnvVar {
         name: "IPE_HTTP_DNS_TIMEOUT_MS",
         default: "5000 (5 s)",
-        purpose: "Deadline (ms) for the SSRF pre-send DNS resolve, run off the async \
-                  worker via spawn_blocking. Bounds worker-pool starvation from a slow \
-                  or stalling resolver on an outbound request.",
+        purpose: "Deadline (ms) for each SSRF-gate DNS resolve (HTTP, WebSocket, database, \
+                  SMTP), through the non-blocking resolver. A host still unresolved at the \
+                  deadline is refused, so a slow or stalling resolver cannot hold an \
+                  outbound dial.",
         subsystem: Subsystem::Http,
         class: Class::SecurityTunable,
     },
