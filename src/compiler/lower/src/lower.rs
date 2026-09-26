@@ -24922,7 +24922,10 @@ impl<'a> Lowerer<'a> {
         let resolved = self.lower_callee_resolve(callee)?;
         self.reject_curried_andmap_payload(&resolved, callee)?;
         match &resolved {
-            Callee::Kernel(kernel) => self.note_sync_captures(*kernel, callee.span),
+            Callee::Kernel(kernel) => {
+                self.reject_generic_app_entry(*kernel, callee.span)?;
+                self.note_sync_captures(*kernel, callee.span);
+            }
             Callee::Func(id) => self.note_callee_instance(*id, callee.span),
             Callee::Ffi { .. } => {}
         }
@@ -24977,6 +24980,56 @@ impl<'a> Lowerer<'a> {
             params,
             tails,
         });
+    }
+
+    /// Refuse an app-entry reference whose solved type still mentions a generic of the enclosing definition.
+    ///
+    /// Every [`KernelFn::is_app_entry`] kernel's runtime function bounds the
+    /// cfg's `Model` / `Msg` with traits a Rust generic does not carry
+    /// (`IpeStringify`, `Serialize + DeserializeOwned + PartialEq`, `Sync`), and
+    /// they reach the runtime only through the cfg record, so no per-bound
+    /// obligation can be threaded onto the generic. A helper generic over `msg`
+    /// that builds the cfg would pass `ipe` and fail `cargo build`; it is
+    /// refused here with IPE-N0051. The check reads the entry's solved
+    /// instantiation at this reference (`span`'s region type), so every
+    /// syntactic position — a direct call, a pipe, a point-free reference — is
+    /// covered by the one [`Self::lower_callee`] funnel.
+    ///
+    /// A definition with no generics cannot leak one into the entry. With
+    /// generics in scope, a missing region type proves nothing, so it is
+    /// refused (fail-closed).
+    fn reject_generic_app_entry(&self, kernel: KernelFn, span: Span) -> DResult<()> {
+        if !kernel.is_app_entry() || self.current_poly_tvars.borrow().is_empty() {
+            return Ok(());
+        }
+        let offending = self.region_ty(span).map_or_else(
+            || self.current_poly_tvars.borrow().values().next().copied(),
+            |solved| self.first_poly_tvar(solved),
+        );
+        let Some(type_var) = offending else {
+            return Ok(());
+        };
+        let def = kernel.def();
+        Err(Diagnostic::Name {
+            span,
+            msg: NameError::GenericAppEntry {
+                entry: format!("{}.{}", def.qualifier, def.name).into_boxed_str(),
+                type_var: self.resolve(type_var).unwrap_or("a").into(),
+            },
+        })
+    }
+
+    /// The first generic of the enclosing definition that `t` mentions, in a left-to-right walk.
+    fn first_poly_tvar(&self, t: &Ty) -> Option<Symbol> {
+        match t {
+            Ty::Var(v) => self.poly_tvar_symbol(*v),
+            Ty::Fun(a, b) => self.first_poly_tvar(a).or_else(|| self.first_poly_tvar(b)),
+            Ty::Con { args, .. } | Ty::Tuple(args) => {
+                args.iter().find_map(|a| self.first_poly_tvar(a))
+            }
+            Ty::Record(fields, _) => fields.values().find_map(|f| self.first_poly_tvar(f)),
+            Ty::Unit => None,
+        }
     }
 
     /// Record the `Sync` obligation a sync-capturing kernel reference places on the def's generics.

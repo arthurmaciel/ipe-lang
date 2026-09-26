@@ -687,6 +687,43 @@ const _: () = assert!(
     "a kernel's sync_obliged_scheme_vars names a variable its scheme_shape does not carry at an aligned position",
 );
 
+/// Whether `shape`'s final result, past every arrow, is an app carrier (a `Program` or the opaque `WebApp` leaf).
+#[must_use]
+pub const fn shape_yields_app(shape: &TyShape) -> bool {
+    match shape {
+        TyShape::Fun(_, res) => shape_yields_app(res),
+        TyShape::Con(tag, _) => matches!(tag, BuiltinTag::Program | BuiltinTag::WebApp),
+        TyShape::Var(_) | TyShape::Tuple(_) | TyShape::Record { .. } | TyShape::Unit => false,
+    }
+}
+
+/// Whether [`StdlibKernel::is_app_entry`] holds for exactly the schemed kernels of `kernels` that yield an app carrier.
+///
+/// A new kernel whose scheme builds a program is thereby an app entry, so it
+/// reaches the lowerer's concrete-`Model` / `Msg` gate; a kernel listed as an
+/// app entry whose scheme builds no program is stale. An unschemed kernel has
+/// no result to compare and is not constrained.
+#[must_use]
+pub const fn app_entries_match_their_schemes(kernels: &[StdlibKernel]) -> bool {
+    let mut rest = kernels;
+    while let Some((kernel, tail)) = rest.split_first() {
+        if let Some(shape) = kernel.scheme_shape()
+            && shape_yields_app(shape) != kernel.is_app_entry()
+        {
+            return false;
+        }
+        rest = tail;
+    }
+    true
+}
+
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a kernel building a program is not registered as an app entry (so it would skip the concrete Model/Msg gate), the app-entry SEAL invariant [ledger #boundary]
+#[allow(clippy::assertions_on_constants)] // the constant IS the tripwire
+const _: () = assert!(
+    app_entries_match_their_schemes(StdlibKernel::ALL),
+    "a kernel whose scheme yields a Program / WebApp carrier must be StdlibKernel::is_app_entry, and only those",
+);
+
 /// A record field name, named structurally by tag rather than by an interned
 /// [`ipe_intern::Symbol`].
 ///
@@ -13396,6 +13433,28 @@ impl StdlibKernel {
     #[must_use]
     pub const fn is_worker(self) -> bool {
         matches!(self, Self::TeaWorker)
+    }
+
+    /// `true` when this variant is an app entry: it takes an app cfg record and builds a program.
+    ///
+    /// Every app entry's runtime function bounds the cfg's `Model` / `Msg` with
+    /// traits a generic type parameter does not carry (`IpeStringify`,
+    /// `Serialize`, `Sync`, …), so the lowerer refuses an entry reference whose
+    /// solved type still mentions a generic of the enclosing definition. The
+    /// build asserts this set equals the schemed kernels yielding an app carrier
+    /// ([`app_entries_match_their_schemes`]).
+    #[must_use]
+    pub const fn is_app_entry(self) -> bool {
+        matches!(
+            self,
+            Self::WebApp
+                | Self::WebEmbed
+                | Self::WebAppRouted
+                | Self::WebAppWith
+                | Self::TerminalAppScreen
+                | Self::TerminalAppLines
+                | Self::TeaWorker
+        )
     }
 
     /// `true` when this variant belongs to the `Ipe.CssSafety` leaf

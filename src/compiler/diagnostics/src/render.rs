@@ -575,6 +575,10 @@ fn name_prose(msg: &NameError) -> String {
              imports `{shape_ui_module}`, the {shape} view. A script has no `view`, so that UI \
              never reaches the screen."
         ),
+        NameError::GenericAppEntry { entry, type_var } => format!(
+            "`{entry}` is built here with `{type_var}` still a type variable, but a running app \
+             needs one concrete model and message type."
+        ),
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -1621,6 +1625,10 @@ fn name_label(msg: &NameError) -> Option<String> {
         }
         NameError::ScriptImportsShapeView { shape, entry, .. } => Some(format!(
             "this script has no `view`; did you mean `main = {entry} {{ … }}` to run a {shape} app?"
+        )),
+        NameError::GenericAppEntry { type_var, .. } => Some(format!(
+            "fix `{type_var}` to your concrete type (e.g. `Msg`) in this definition's annotation, \
+             or build the app where the model and message types are known"
         )),
         NameError::RustNameFold { .. } | NameError::Unknown => None,
     }
