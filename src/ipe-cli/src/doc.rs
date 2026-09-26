@@ -2484,6 +2484,9 @@ fn generate(path: &Path, out: &Path, write_format: WriteFormat) -> Result<(), Cl
 
     let (json_files, markdown_files, html_files) = render_site_split(&docs, &bundle, write_format);
 
+    // The site overwrites same-named files, so it is written only into a
+    // directory ipe owns — never over a user's own `doc/` or `docs/`.
+    crate::output_dir::OwnedDir::claim(out)?;
     write_format_dir(out, "json", &json_files)?;
     if write_format.wants_markdown() {
         write_format_dir(out, "markdown", &markdown_files)?;

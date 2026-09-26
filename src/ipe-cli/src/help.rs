@@ -329,7 +329,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the emitted project to <dir>",
+                desc: "put build output under <dir> (default: out/ in the project)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -397,7 +397,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "--out <dir>",
-                desc: "write the standalone project to <dir> (required)",
+                desc: "write the standalone project to <dir>, which must be absent or empty (required)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -421,7 +421,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the artifact to <dir> (default: release/)",
+                desc: "put the artifact under <dir>/release/ (default: out/ in the project)",
             },
             Opt {
                 flag: "[--target wasm|<triple>]",
@@ -497,7 +497,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the emitted project to <dir>",
+                desc: "put build output under <dir> (default: out/ in the project)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -569,7 +569,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the emitted project to <dir>",
+                desc: "put build output under <dir> (default: out/ in the project)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -653,7 +653,7 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "clean",
         run: crate::clean::run_clean,
-        summary: "Remove the project's build-generated output (out/, target/, .ipe/).",
+        summary: "Remove the project's ipe-owned build output (out/, .ipe/).",
         args: "",
         args_desc: "",
         options: &[

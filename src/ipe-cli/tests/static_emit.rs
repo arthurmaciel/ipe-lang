@@ -674,11 +674,12 @@ fn ipe_run_static_builds_and_executes_a_static_binary() {
         String::from_utf8_lossy(&run.stdout)
     );
 
-    // The executed artifact must be genuinely static.
+    // The executed artifact must be genuinely static. `--out` names the output
+    // root; the emitted crate is its `rust/` area.
     let bin = target_dir
         .join("x86_64-unknown-linux-musl")
         .join("debug")
-        .join(emitted_bin_name(&out));
+        .join(emitted_bin_name(&out.join("rust")));
     let ldd = std::process::Command::new("ldd")
         .arg(&bin)
         .output()

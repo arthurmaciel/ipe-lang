@@ -1849,6 +1849,9 @@ pub fn write_emitted_project(
             static_build::cargo_config(plan),
         );
     }
+    // The reconcile below prunes and overwrites, so it runs only in a directory
+    // proven ipe-owned — a user tree passed as `out_dir` is refused untouched.
+    crate::output_dir::OwnedDir::claim(out_dir)?;
     reconcile_emitted_project(&manifest, out_dir)?;
     if static_plan.is_none() {
         remove_stale_static_config(out_dir)?;

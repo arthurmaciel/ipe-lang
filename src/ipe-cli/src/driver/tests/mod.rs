@@ -2753,3 +2753,140 @@ fn debugger_replay_missing_log_is_typed_io_error() {
         "expected a typed Io error for a missing log, got: {err:?}"
     );
 }
+
+// -----------------------------------------------------------------------
+// User files are never overwritten or deleted by the build pipeline
+// -----------------------------------------------------------------------
+
+fn user_project(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ipe_user_files_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("src")).expect("make src");
+    fs::write(
+        dir.join("src").join("Main.ipe"),
+        "module Main exposing (main)\n",
+    )
+    .expect("write Main.ipe");
+    fs::write(dir.join("Cargo.toml"), "# the user's own manifest\n").expect("write Cargo.toml");
+    dir
+}
+
+/// Writing an emitted project into a directory that holds the user's files —
+/// `ipe build --out .` — is refused before anything is written or pruned: the
+/// user's `src/` and `Cargo.toml` survive byte-for-byte.
+#[test]
+fn emitting_into_a_user_directory_is_refused_untouched() {
+    let dir = user_project("emit");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+    let result = write_emitted_project(&emitted, &dir, &dir.join("no-runtime"), None, false);
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "emitting into a user directory must be refused, got {result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("src").join("Main.ipe")).unwrap_or_default(),
+        "module Main exposing (main)\n",
+        "the user's source must survive"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("Cargo.toml")).unwrap_or_default(),
+        "# the user's own manifest\n",
+        "the user's Cargo.toml must survive"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A lossy rewrite (`ipe fix`, `lint --fix`) backs the original up before the
+/// atomic replace, and never reuses an existing backup name.
+#[test]
+fn lossy_rewrite_backs_up_the_original() {
+    let dir = user_project("lossy");
+    let main = dir.join("src").join("Main.ipe");
+    let first = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v2\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite");
+    let second = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v3\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite again");
+    let (Some(first), Some(second)) = (first, second) else {
+        assert!(false_marker(), "a lossy rewrite must report its backup");
+        return;
+    };
+    assert_ne!(first, second, "each rewrite keeps its own backup");
+    assert_eq!(
+        fs::read_to_string(&first).unwrap_or_default(),
+        "module Main exposing (main)\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&second).unwrap_or_default(),
+        "module Main exposing (main)\n-- v2\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&main).unwrap_or_default(),
+        "module Main exposing (main)\n-- v3\n"
+    );
+    let lossless = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n",
+        RewriteKind::Lossless,
+    )
+    .expect("lossless rewrite");
+    assert!(lossless.is_none(), "a lossless rewrite takes no backup");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A symlinked source file is rewritten at its real location (the file the user
+/// edits) — the link is kept, not replaced by a detached copy.
+#[cfg(unix)]
+#[test]
+fn rewrite_follows_a_symlinked_source_to_the_real_file() {
+    let dir = user_project("symlink");
+    let real = dir.join("real.ipe");
+    fs::write(&real, "module Main exposing (main)\n").expect("write real");
+    let link = dir.join("src").join("Link.ipe");
+    std::os::unix::fs::symlink(&real, &link).expect("make link");
+    rewrite_user_file(
+        &link,
+        "module Main exposing (main)\n-- new\n",
+        RewriteKind::Lossless,
+    )
+    .expect("rewrite through link");
+    assert!(
+        fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
+        "the link stays a link"
+    );
+    assert_eq!(
+        fs::read_to_string(&real).unwrap_or_default(),
+        "module Main exposing (main)\n-- new\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The atomic writer's temp file is created exclusively: a symlink planted at
+/// the temp name is never written through.
+#[cfg(unix)]
+#[test]
+fn atomic_write_never_writes_through_a_planted_temp_symlink() {
+    let dir = user_project("tmp_symlink");
+    let victim = dir.join("victim.txt");
+    fs::write(&victim, "keep").expect("write victim");
+    let tmp = dir.join("planted.tmp");
+    std::os::unix::fs::symlink(&victim, &tmp).expect("plant link");
+    let result = write_and_rename(&tmp, &dir.join("target.txt"), "payload");
+    assert!(
+        matches!(result, Err(CliError::Io { .. })),
+        "an existing temp path must be refused, got {result:?}"
+    );
+    assert_eq!(fs::read_to_string(&victim).unwrap_or_default(), "keep");
+    let _ = fs::remove_dir_all(&dir);
+}

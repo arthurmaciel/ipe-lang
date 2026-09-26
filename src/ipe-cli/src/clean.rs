@@ -1,12 +1,13 @@
 //! `ipe clean` — remove a project's build-generated output.
 //!
-//! Deletes only the directories `ipe` itself generates — the emitted Rust
-//! project (`out/`), the Cargo build tree (`target/`), and the per-project
-//! cache (`.ipe/`) — and never user source or `package.ipe`. The command is
-//! fail-closed on two axes: it refuses to run outside an Ipê project (no
-//! `package.ipe` at the resolved root), and every deletion target is proven to
-//! sit inside the canonicalised project root before a byte is removed, so a
-//! symlink or a `..` component can never carry the delete outside the project.
+//! Deletes only the directories `ipe` itself owns — the build output (`out/`,
+//! and only while it carries ipe's ownership marker) and the per-project cache
+//! (`.ipe/`) — and never user source or `package.ipe`. The command is
+//! fail-closed on three axes: it refuses to run outside an Ipê project (no
+//! `package.ipe` at the resolved root), it refuses an `out/` ipe did not create,
+//! and every deletion target is proven to sit inside the canonicalised project
+//! root before a byte is removed, so a symlink or a `..` component can never
+//! carry the delete outside the project.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -15,11 +16,27 @@ use crate::CliError;
 use crate::cli_args::{self, OutputFormat};
 use crate::style;
 
-/// The generated directories `clean` removes, named relative to the project
-/// root. This is the deletion allowlist — nothing outside it is ever a
-/// candidate — and it mirrors the ignore set the scaffolded `.gitignore`
-/// carries (`out/`, `target/`, `.ipe/`).
-const GENERATED_DIRS: &[&str] = &["out", "target", ".ipe"];
+/// A directory `clean` may remove, named relative to the project root, with
+/// the proof of ownership it must show first.
+struct Generated {
+    name: &'static str,
+    /// Whether the directory must carry [`crate::output_dir::OWNERSHIP_MARKER`]:
+    /// `out/` is a common name a user may have chosen for their own files, so
+    /// it is removed only when ipe marked it; `.ipe/` is ipe's own namespace.
+    needs_marker: bool,
+}
+
+/// The deletion allowlist — nothing outside it is ever a candidate.
+const GENERATED_DIRS: &[Generated] = &[
+    Generated {
+        name: crate::output_dir::DEFAULT_OUTPUT_DIR,
+        needs_marker: true,
+    },
+    Generated {
+        name: ".ipe",
+        needs_marker: false,
+    },
+];
 
 /// Parsed `ipe clean` arguments.
 pub(crate) struct CleanArgs {
@@ -66,8 +83,8 @@ pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
 
     let root = project_root()?;
     let mut removed: Vec<String> = Vec::new();
-    for name in GENERATED_DIRS {
-        if let Some(display) = remove_generated_dir(&root, name)? {
+    for generated in GENERATED_DIRS {
+        if let Some(display) = remove_generated_dir(&root, generated)? {
             removed.push(display);
         }
     }
@@ -104,14 +121,16 @@ fn project_root() -> Result<PathBuf, CliError> {
 /// Remove one generated directory under `root`, returning the path removed (for
 /// the summary) or `None` when it was absent or not a directory. The target is
 /// canonicalised and proven to sit strictly inside `root` before removal, so a
-/// symlinked `out/`/`target/`/`.ipe/` pointing outside the project is refused
-/// rather than followed.
+/// symlinked `out/`/`.ipe/` pointing outside the project is refused rather than
+/// followed; an `out/` without ipe's ownership marker is refused untouched.
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] if the resolved target escapes the project root (a
-/// fail-closed refusal — the delete never leaves the project); [`CliError::Io`]
-/// on a canonicalise or remove failure.
-fn remove_generated_dir(root: &Path, name: &str) -> Result<Option<String>, CliError> {
+/// fail-closed refusal — the delete never leaves the project);
+/// [`CliError::OutputRefused`] for an unmarked `out/`; [`CliError::Io`] on a
+/// canonicalise or remove failure.
+fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Option<String>, CliError> {
+    let name = generated.name;
     let candidate = root.join(name);
     if !candidate.is_dir() {
         return Ok(None);
@@ -129,6 +148,9 @@ fn remove_generated_dir(root: &Path, name: &str) -> Result<Option<String>, CliEr
             real.display(),
             root.display()
         )));
+    }
+    if generated.needs_marker && !crate::output_dir::has_marker(&real)? {
+        return Err(crate::output_dir::OutputRefusal::NotIpeOwned(candidate).into());
     }
     std::fs::remove_dir_all(&real).map_err(|e| CliError::Io {
         path: real,
@@ -189,17 +211,50 @@ fn print_summary(removed: &[String], format: OutputFormat) {
 mod tests {
     use super::*;
 
-    /// `remove_generated_dir` deletes a real subdirectory and reports it.
+    const OUT: &Generated = &Generated {
+        name: "out",
+        needs_marker: true,
+    };
+    const DOT_IPE: &Generated = &Generated {
+        name: ".ipe",
+        needs_marker: false,
+    };
+
+    /// `remove_generated_dir` deletes an ipe-owned output directory and reports it.
     #[test]
     fn removes_a_generated_subdir() {
         let root = std::env::temp_dir().join(format!("ipe_clean_ok_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("out").join("rust")).expect("make out/rust");
+        std::fs::create_dir_all(&root).expect("make root");
         let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
+        crate::output_dir::OwnedDir::claim(&real_root.join("out").join("rust"))
+            .expect("claim out/rust");
 
-        let removed = remove_generated_dir(&real_root, "out").expect("remove must succeed");
+        let removed = remove_generated_dir(&real_root, OUT).expect("remove must succeed");
         assert_eq!(removed.as_deref(), Some("out/"));
         assert!(!real_root.join("out").exists(), "out/ must be gone");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An `out/` ipe did not create — no ownership marker — is refused and kept.
+    #[test]
+    fn refuses_an_unowned_out_dir() {
+        let root = std::env::temp_dir().join(format!("ipe_clean_unowned_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("out")).expect("make out");
+        std::fs::write(root.join("out").join("thesis.tex"), "mine").expect("user file");
+        let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
+
+        let result = remove_generated_dir(&real_root, OUT);
+        assert!(
+            matches!(result, Err(CliError::OutputRefused(_))),
+            "an unmarked out/ must be refused, got: {result:?}"
+        );
+        assert!(
+            real_root.join("out").join("thesis.tex").is_file(),
+            "user file kept"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -212,7 +267,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("make root");
         let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
 
-        let removed = remove_generated_dir(&real_root, "target").expect("must succeed");
+        let removed = remove_generated_dir(&real_root, DOT_IPE).expect("must succeed");
         assert!(removed.is_none(), "an absent dir yields no removal");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -237,7 +292,7 @@ mod tests {
         // `out` inside the project is a symlink to the outside directory.
         symlink(&outside, root.join("out")).expect("make escaping symlink");
 
-        let result = remove_generated_dir(&real_root, "out");
+        let result = remove_generated_dir(&real_root, OUT);
         assert!(
             matches!(result, Err(CliError::UsageOwned(_))),
             "an escaping symlink must be refused, got: {result:?}"

@@ -117,8 +117,11 @@ impl Staged {
 /// offline in the jail.
 fn stage_ipe(source: &str) -> Staged {
     let scratch = tempfile::TempDir::new().expect("scratch");
-    let crate_dir = scratch.path().join("crate");
-    let src_dir = crate_dir.join("src-ipe");
+    // `--out` names the output root, kept apart from the source; the emitted
+    // crate is its `rust/` area.
+    let out_root = scratch.path().join("out");
+    let crate_dir = out_root.join("rust");
+    let src_dir = scratch.path().join("src-ipe");
     let entry = src_dir.join("Main.ipe");
     std::fs::create_dir_all(&src_dir).unwrap();
     std::fs::write(&entry, source).unwrap();
@@ -127,7 +130,7 @@ fn stage_ipe(source: &str) -> Staged {
         .arg("build")
         .arg(&entry)
         .arg("--out")
-        .arg(&crate_dir)
+        .arg(&out_root)
         .arg("--runtime")
         .arg(runtime_dir())
         .env("CARGO_TERM_PROGRESS_WHEN", "never")
@@ -161,8 +164,11 @@ fn stage_adversarial_rust(main_rs: &str) -> Staged {
 /// emit, warmed and seeded — but the caller replaces `main.rs`.
 fn stage_scaffold_only() -> Staged {
     let scratch = tempfile::TempDir::new().expect("scratch");
-    let crate_dir = scratch.path().join("crate");
-    let src_dir = crate_dir.join("src-ipe");
+    // `--out` names the output root, kept apart from the source; the emitted
+    // crate is its `rust/` area.
+    let out_root = scratch.path().join("out");
+    let crate_dir = out_root.join("rust");
+    let src_dir = scratch.path().join("src-ipe");
     let entry = src_dir.join("Main.ipe");
     std::fs::create_dir_all(&src_dir).unwrap();
     std::fs::write(
@@ -174,7 +180,7 @@ fn stage_scaffold_only() -> Staged {
         .arg("build")
         .arg(&entry)
         .arg("--out")
-        .arg(&crate_dir)
+        .arg(&out_root)
         .arg("--runtime")
         .arg(runtime_dir())
         .env("CARGO_TERM_PROGRESS_WHEN", "never")

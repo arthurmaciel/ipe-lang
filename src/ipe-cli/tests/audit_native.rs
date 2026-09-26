@@ -1130,11 +1130,8 @@ mod real_jail {
             msg.contains("Rust.Csum"),
             "names the disclosing crate: {msg}"
         );
-        // The refusal fires before emit: no artifact is produced.
-        assert!(
-            !out.join("src").join("ffi.rs").is_file(),
-            "a refused build must emit nothing"
-        );
+        // The refusal fires before the output root is claimed: nothing is written.
+        assert!(!out.exists(), "a refused build must write nothing");
         let _ = std::fs::remove_dir_all(&base);
     }
 

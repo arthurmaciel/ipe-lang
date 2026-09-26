@@ -7,6 +7,7 @@ use super::{
     render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
     runtime_dep_from_env, single_file_cargo_name_from_env,
 };
+use crate::output_dir::{OutputArea, OutputRoot, OwnedDir, ProjectPaths};
 use crate::{
     ALL_CODES, BTreeMap, Diagnostic, Interner, Path, PathBuf, Write, build_plan, cli_args,
     delivery, explain_page, ffi, fs, help, io_bounded, native_ffi_consent, package_manifest,
@@ -280,10 +281,6 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     // A grammar refusal (e.g. `web solo ios`, which cannot be watched — see the
     // spec's mobile-watch note) is caught here before the loop starts.
     let _delivery = resolve_delivery(Path::new(&entry), &args.delivery, false, "watch")?;
-
-    let out_dir = args
-        .out
-        .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
     // Watch is always a native dependency-model dev build (it never vendors the
     // runtime tree, nor targets wasm), so — like `ipe build` on its default path
     // — it must NOT require the vendored runtime source subtree. It resolves the
@@ -298,6 +295,9 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
     // on every change, so a missing toolchain is reported once, up front, with
     // its root cause — not as a per-rebuild opaque spawn error.
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Watch)?;
+
+    let output = resolve_output_root(args.out.as_deref(), Path::new(&entry), None)?;
+    let out_dir = output.area_path(&[OutputArea::Rust])?;
 
     let mut opts = watch::WatchOptions::new(PathBuf::from(entry), out_dir, runtime_dir);
     opts.port = args.port;
@@ -314,6 +314,26 @@ pub fn run_watch(rest: &[String]) -> Result<(), CliError> {
         }
     }
     watch::run(&opts)
+}
+
+/// Resolve the output root for a build of `entry`: `--out <dir>` or
+/// `<project>/out`, proven claimable by ipe and disjoint from the project's
+/// sources.
+///
+/// # Errors
+/// [`CliError::OutputRefused`] when the location overlaps the project or holds
+/// files ipe did not create; manifest discovery errors when `manifest` is absent
+/// and the entry's project must be discovered.
+pub fn resolve_output_root(
+    out: Option<&str>,
+    entry: &Path,
+    manifest: Option<&project::ProjectManifest>,
+) -> Result<OutputRoot, CliError> {
+    let paths = match manifest {
+        Some(m) => ProjectPaths::from_manifest(m),
+        None => ProjectPaths::discover(entry)?,
+    };
+    OutputRoot::resolve(out, &paths)
 }
 
 /// Classify the shape `main` pins for the entry the user named, reading the
@@ -614,8 +634,6 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         } => (out, wasm, static_layer),
     };
 
-    let out_dir = out.map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
-
     // Route the build:
     //   1. Directory → expect package.ipe inside it.
     //   2. .ipe file → walk up looking for package.ipe (project-mode); fall back
@@ -775,6 +793,11 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         );
     }
 
+    // Resolved only now, after every refusal above; nothing is created until the
+    // emit writes its crate.
+    let output = resolve_output_root(out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+    let out_dir = output.area_path(&[OutputArea::Rust])?;
+
     // No manifest found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
@@ -801,6 +824,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
         }
         CompileTarget::Native => Some(compile_and_finalize_native_build(
             &out_dir,
+            &output,
             native_cargo,
             static_plan,
             runtime_dep,
@@ -856,6 +880,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
 ///   steps it composes.
 pub fn compile_and_finalize_native_build(
     out_dir: &Path,
+    output: &OutputRoot,
     native_cargo: Option<toolchain::CargoBin>,
     static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
     runtime_dep: bool,
@@ -899,7 +924,12 @@ pub fn compile_and_finalize_native_build(
     // invocation's `cargo build` returns, resolving the artifact path from
     // `cargo metadata`; a binary missing at that path fails closed (no stale
     // copy). Copy (never hardlink): the shared target is often a different mount.
-    let artifact = copy_native_artifact(out_dir, static_plan.as_ref(), manifest_parsed.as_ref())?;
+    let artifact = copy_native_artifact(
+        out_dir,
+        &output.claim_area(&[OutputArea::Bin])?,
+        static_plan.as_ref(),
+        manifest_parsed.as_ref(),
+    )?;
     let driver = manifest_parsed
         .as_ref()
         .map_or(ipe_backend_rust::DbDriver::Sqlite, |m| m.driver);
@@ -923,6 +953,7 @@ pub fn compile_and_finalize_native_build(
 /// a different mount.
 fn copy_native_artifact(
     out_dir: &Path,
+    bin_dir: &OwnedDir,
     static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
     manifest: Option<&project::ProjectManifest>,
 ) -> Result<PathBuf, CliError> {
@@ -945,15 +976,7 @@ fn copy_native_artifact(
             src.display()
         )));
     }
-    // `out_dir` is the emitted crate dir (default `out/rust`); the artifact copy
-    // lands in a sibling `bin/` so it sits at `<project>/out/bin/<name>`. Fall
-    // back to `out_dir` itself when it has no parent.
-    let bin_dir = out_dir.parent().unwrap_or(out_dir).join("bin");
-    std::fs::create_dir_all(&bin_dir).map_err(|e| CliError::Io {
-        path: bin_dir.clone(),
-        source: e,
-    })?;
-    let dest = bin_dir.join(&friendly);
+    let dest = bin_dir.path().join(&friendly);
     std::fs::copy(&src, &dest).map_err(|e| CliError::Io {
         path: dest.clone(),
         source: e,
@@ -993,7 +1016,6 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         None => default_entry()?,
     };
     let entry_path = PathBuf::from(&entry);
-    let out_dir = PathBuf::from(&args.out);
 
     // Fail closed on an FFI-bearing project BEFORE any emit: eject vendors only
     // the embedded runtime SOURCE, so a program binding a foreign Rust crate
@@ -1018,12 +1040,12 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     // `[wasm].mode` — rather than silently emit a native tree for a wasm app.
     // (`parse_eject` has no `--target` flag, so the CLI tier cannot select wasm
     // here; `WasmKind::None` for the CLI axis is exact.)
-    let manifest_wasm: Option<project::WasmConfig> = manifest
+    let manifest_parsed = manifest
         .as_deref()
         .map(project::parse_manifest)
-        .transpose()?
-        .map(|m| m.wasm);
-    if resolve_compile_target(cli_args::WasmKind::None, manifest_wasm.as_ref()).is_wasm() {
+        .transpose()?;
+    let manifest_wasm: Option<&project::WasmConfig> = manifest_parsed.as_ref().map(|m| &m.wasm);
+    if resolve_compile_target(cli_args::WasmKind::None, manifest_wasm).is_wasm() {
         return Err(CliError::EjectUnsupported {
             reason: "eject produces a native Cargo project; a wasm target has a separate \
                      bundling step — use `ipe build --target wasm` (browser) or \
@@ -1033,6 +1055,15 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     }
 
     let runtime_dir = resolve_vendored_runtime_dir(args.runtime, true)?;
+
+    // The ejected project is handed to the user, so it goes to a fresh
+    // directory clear of the sources — never over anything already there.
+    let paths = match manifest_parsed.as_ref() {
+        Some(m) => ProjectPaths::from_manifest(m),
+        None => ProjectPaths::discover(&entry_path)?,
+    };
+    let output = OutputRoot::fresh(&args.out, &paths)?;
+    let out_dir = output.path().to_path_buf();
 
     // Force the vendored, tree-shaken emit shape: a self-contained project names
     // no runtime path dependency (`runtime_dep = false`) and carries only the
@@ -1069,6 +1100,9 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
         },
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
+    // From here on the tree is the user's: ipe drops its ownership marker so no
+    // later ipe command treats the ejected project as disposable output.
+    let out_dir = output.claim()?.release_to_user()?;
 
     if show_progress {
         eprintln!(
@@ -1211,10 +1245,9 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
 
     if wasm_target {
         // Browser/wasm production path.
-        let out_dir = args
-            .out
-            .as_deref()
-            .map_or_else(|| PathBuf::from("release"), PathBuf::from);
+        let output =
+            resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+        let out_dir = output.area_path(&[OutputArea::Release, OutputArea::Rust])?;
         let runtime_dep = runtime_dep_from_env();
         let runtime_dir = resolve_vendored_runtime_dir(args.runtime, !runtime_dep)?;
 
@@ -1309,10 +1342,9 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
 
     if !run_sandbox::is_native_bearing(&resolved.union()) {
         // Pure-native path: emit and build a plain release binary.
-        let out_dir = args
-            .out
-            .as_deref()
-            .map_or_else(|| PathBuf::from("release"), PathBuf::from);
+        let output =
+            resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+        let out_dir = output.area_path(&[OutputArea::Release, OutputArea::Rust])?;
 
         if show_progress {
             eprintln!(
@@ -1379,13 +1411,12 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
                 bin_path.display()
             )));
         }
-        // Copy the binary from the cargo target dir into the resolved out dir so
-        // the artifact lands at a predictable path regardless of CARGO_TARGET_DIR.
-        std::fs::create_dir_all(&out_dir).map_err(|e| CliError::Io {
-            path: out_dir.clone(),
-            source: e,
-        })?;
-        let dest = out_dir.join(friendly_artifact_filename(manifest_parsed.as_ref()));
+        // Copy the binary from the cargo target dir into the release area so the
+        // artifact lands at a predictable path regardless of CARGO_TARGET_DIR.
+        let dest = output
+            .claim_area(&[OutputArea::Release])?
+            .path()
+            .join(friendly_artifact_filename(manifest_parsed.as_ref()));
         std::fs::copy(&bin_path, &dest).map_err(|e| CliError::Io {
             path: dest.clone(),
             source: e,
@@ -1406,10 +1437,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     }
 
     // Native-bearing path: jailed bundle (same substance as the predecessor).
-    let out_dir = args
-        .out
-        .as_deref()
-        .map_or_else(|| PathBuf::from("release"), PathBuf::from);
+    let output = resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
 
     if show_progress {
         eprintln!(
@@ -1424,7 +1452,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     let cargo_bin = toolchain::require_cargo(toolchain::ToolIntent::Build)?;
 
     // Step 1: emit + build the app binary (static, musl, production).
-    let app_out = out_dir.join("app");
+    let app_out = output.area_path(&[OutputArea::Release, OutputArea::App])?;
     let app_static_plan = Some(ipe_backend_rust::static_build::StaticPlan {
         triple,
         c_profile: ipe_backend_rust::static_build::CProfile::WithLibc {
@@ -1519,11 +1547,10 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
     )?;
 
     // Step 3: lay out the bundle.
-    let bundle_dir = out_dir.join("bundle");
-    std::fs::create_dir_all(&bundle_dir).map_err(|e| CliError::Io {
-        path: bundle_dir.clone(),
-        source: e,
-    })?;
+    let bundle_dir = output
+        .claim_area(&[OutputArea::Release, OutputArea::Bundle])?
+        .path()
+        .to_path_buf();
 
     // Locate the wrapper binary. As with the app binary, the target dir may be
     // a global CARGO_TARGET_DIR; resolve via cargo metadata.
@@ -2436,10 +2463,6 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
 
     let entry_path = PathBuf::from(&entry);
 
-    let out_dir = args
-        .out
-        .map_or_else(|| PathBuf::from("out").join("rust"), PathBuf::from);
-
     // --- Step 1: ipe compile → emit the Rust project ---
     let manifest = discover_manifest(&entry_path)?;
 
@@ -2580,6 +2603,11 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
             ))
         );
     }
+
+    // Resolved only now, after every refusal above; nothing is created until the
+    // emit writes its crate.
+    let output = resolve_output_root(args.out.as_deref(), &entry_path, manifest_parsed.as_ref())?;
+    let out_dir = output.area_path(&[OutputArea::Rust])?;
 
     manifest.as_ref().map_or_else(
         || {

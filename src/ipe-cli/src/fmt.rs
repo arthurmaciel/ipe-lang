@@ -121,7 +121,7 @@ fn run_fmt_inplace(
                 unformatted.push(file.clone());
             }
         } else if formatted != src {
-            crate::write_atomic(file, &formatted)?;
+            crate::rewrite_user_file(file, &formatted, crate::RewriteKind::Lossless)?;
             eprintln!(
                 "{}",
                 crate::style::gutter(&format!("formatted {}", file.display()))

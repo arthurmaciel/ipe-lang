@@ -147,12 +147,13 @@ impl Lockfile {
     }
 
     /// Write the lockfile to `project_root/ipe.lock`, packages sorted by name.
+    /// The write is atomic, so an interrupted write never leaves a truncated
+    /// lockfile.
     ///
     /// # Errors
     /// [`CliError::Io`] if the file cannot be written.
     pub fn write(&self, project_root: &Path) -> Result<(), CliError> {
-        let path = Self::path(project_root);
-        std::fs::write(&path, self.render()).map_err(|e| CliError::Io { path, source: e })
+        crate::driver::write_atomic(&Self::path(project_root), &self.render())
     }
 
     /// Insert `dep`, replacing any existing entry with the same name. The set

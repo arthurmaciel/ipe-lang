@@ -326,7 +326,7 @@ fn closed_union_catch_all_build_emits_no_crate() -> TestResult {
         .output()?;
     let ok = output.status.success();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let main_rs_present = out_dir.join("src").join("main.rs").exists();
+    let main_rs_present = out_dir.join("rust").join("src").join("main.rs").exists();
     std::fs::remove_dir_all(&dir)?;
 
     assert!(

@@ -346,11 +346,20 @@ fn apply_and_report(
         let Some(path) = paths.get(module) else {
             continue;
         };
-        crate::write_atomic(path, rewritten)?;
+        let backup = crate::rewrite_user_file(path, rewritten, crate::RewriteKind::Lossy)?;
         println!(
             "{}",
             crate::style::gutter(&format!("lint --fix: rewrote {}", path.display()))
         );
+        if let Some(backup) = backup {
+            println!(
+                "{}",
+                crate::style::gutter(&format!(
+                    "lint --fix: original kept at {}",
+                    backup.display()
+                ))
+            );
+        }
     }
 
     if total > 0 {
