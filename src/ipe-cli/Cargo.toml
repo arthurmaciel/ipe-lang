@@ -89,6 +89,14 @@ hex = "0.4"
 # (`getrandom(2)`/`/dev/urandom` on Unix, `BCryptGenRandom` on Windows), so the
 # security control has no silent non-CSPRNG fallback on any released target.
 getrandom = "0.3"
+# `ipe login`'s opt-in signing-key setup (`src/ssh_signing_key.rs`) generates an
+# ed25519 keypair in process — no `ssh-keygen` subprocess, so no argv or PATH
+# exposure — and encodes it in the OpenSSH format. `ed25519-dalek` (already in the
+# vetted graph) derives the public key from the CSPRNG seed; `base64` armors the
+# key files; `zeroize` wipes the seed and the encoded private key from memory.
+ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"] }
+base64 = "0.22"
+zeroize = "1"
 serde_json = "1"
 # `[dependencies]` version requirements in `ipe.toml` are parsed into typed
 # `semver::VersionReq` at manifest-parse time (parse, don't validate).
@@ -176,10 +184,6 @@ rustix = { version = "0.38", features = ["fs", "termios"] }
 # `cargo build --message-format=json` parsing that locates the produced binary
 # lives in the `e2e_support` crate, so serde_json is pulled in transitively.
 e2e-support = { path = "../../tools/e2e-support" }
-# SRI content-pinning assertion in the widget E2E: the test recomputes
-# `sha256-<base64>` over the served asset bytes and asserts it equals the
-# `integrity` the page pinned (page == bytes). Same version as the runtime.
-base64 = "0.22"
 
 [lints]
 workspace = true

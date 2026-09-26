@@ -24,37 +24,22 @@ stay open to any GitHub user without a maintainer vetting each upload by hand.
 ## One-time setup
 
 Publishing signs a commit as *you*, so the index can attribute every version to
-a real, verified GitHub identity. Three one-time steps, none repeated per
-release:
+a real, verified GitHub identity. Two one-time steps, none repeated per release:
 
 1. **A GitHub account.** The index is hosted on GitHub; your account is your
    publisher identity. Nothing to configure — you already have one if you cloned
    this repo.
 
-2. **An SSH signing key registered on that account.** This is the only
-   irreducible step, and it is the standard cost of signed commits anywhere.
-   - Create a key if you do not have one: `ssh-keygen -t ed25519 -C "you@example.com"`.
-   - Add its **public** half to GitHub: *Settings → SSH and GPG keys → New SSH
-     key*, and set **Key type: Signing Key** (not the default *Authentication
-     Key* — this distinction is what lets GitHub mark your commits "Verified").
-   - Export its **private** half so `ipe` can sign with it:
-
-     ```sh
-     export IPE_PUBLISH_SIGNING_KEY="$(cat ~/.ssh/id_ed25519)"
-     ```
-
-     Keep the private key private — put the `export` in your shell profile or a
-     secret manager, never in a committed file.
-
-3. **`ipe login`.** This authorizes `ipe` with GitHub over the device flow — it
+2. **`ipe login`.** This authorizes `ipe` with GitHub over the device flow — it
    prints a short code and a URL; you enter the code in your browser, and `ipe`
    stores a scoped token (`public_repo`, enough to fork the index and open the
    PR) at `~/.config/ipe/token` with `0600` permissions.
 
    ```sh
-   ipe login          # authorize and store the token
-   ipe login --status # check whether a token is stored
-   ipe login --logout # remove it
+   ipe login               # authorize, store the token, offer signing-key setup
+   ipe login --status      # show the stored token and the signing key publish uses
+   ipe login --signing-key # set up the signing key on its own
+   ipe login --logout      # remove the token
    ```
 
    The login token is also how `publish` learns your account's login and id, so
@@ -62,6 +47,35 @@ release:
    the address GitHub already treats as verified for you. That is why the signed
    commit comes out "Verified" for every publisher automatically, with no
    maintainer-side key curation.
+
+   **The signing key.** The commit must be signed by an SSH key registered on
+   your account as a **Signing Key** — that signature is what ties the commit to
+   you. When none is configured, `ipe login` asks (default *no*) whether to set
+   one up:
+   - it generates a dedicated ed25519 key without a passphrase at
+     `~/.config/ipe/signing_key` (`0600`; the public half beside it as
+     `signing_key.pub`);
+   - it registers the public half as a signing key through a **second, one-time**
+     device-flow authorization with the `write:ssh_signing_key` scope. That token
+     is used for this single request and never stored (the login token `ipe`
+     stores is always requested with `public_repo` alone);
+   - if registration fails, the local key is removed — nothing half-configured
+     is left behind.
+
+   `ipe package publish` then signs with that key automatically. Review or revoke
+   it at *Settings → SSH and GPG keys* on GitHub.
+
+   **Bring your own key instead.** Register an existing key's **public** half at
+   *Settings → SSH and GPG keys → New SSH key* with **Key type: Signing Key** (not
+   the default *Authentication Key* — this distinction is what lets GitHub mark
+   your commits "Verified"), and point `ipe` at the **private-key file**:
+
+   ```sh
+   export IPE_PUBLISH_SIGNING_KEY=~/.ssh/id_ed25519
+   ```
+
+   When set, `IPE_PUBLISH_SIGNING_KEY` always wins over the key `ipe login`
+   stored; if it names no readable file, publish refuses rather than fall back.
 
 > Without a registered signing key, `ipe package publish` **refuses** rather than
 > producing an unverifiable commit the index would reject downstream. A refusal
@@ -221,10 +235,10 @@ ipe build
 
 - **The index PR shows "Unverified", or `publish` refuses with an identity
   error.** Your commit is not signed by a key GitHub can attribute to you. Check
-  that (a) `IPE_PUBLISH_SIGNING_KEY` holds the *private* half of a key whose
-  *public* half is registered on your account as a **Signing Key**, and (b) you
-  have run `ipe login` (verify with `ipe login --status`) so `publish` can resolve
-  your identity.
+  that (a) the signing key publish uses — shown by `ipe login --status` — has
+  its *public* half registered on your account as a **Signing Key** (the key
+  `ipe login --signing-key` generates is registered for you), and (b) you have
+  run `ipe login` so `publish` can resolve your identity.
 - **`ipe login` says the token is missing or malformed.** Re-run `ipe login`; if
   a stored token is corrupt, `--status` reports it distinctly and re-authorizing
   overwrites it.

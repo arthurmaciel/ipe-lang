@@ -10,6 +10,10 @@
 //! The token is written to `$XDG_CONFIG_HOME/ipe/token` (or `~/.config/ipe/token`)
 //! with `0600` permissions, never into the project tree.
 //!
+//! After login, when no commit-signing key is configured, `ipe login` offers
+//! (opt-in, interactive) to generate and register one — see
+//! [`crate::ssh_signing_key`]. `ipe login --signing-key` runs that step alone.
+//!
 //! [device authorization grant]: https://docs.github.com/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
 
 use std::io::Write as _;
@@ -23,9 +27,35 @@ use crate::CliError;
 /// authenticates with the client id alone (no secret), so embedding it is safe.
 const CLIENT_ID: &str = "Ov23liBpCFLSoxJvSTwO";
 
-/// The scope requested: enough to fork the public index repo and open the
-/// publish pull request, nothing more.
-const SCOPE: &str = "public_repo";
+/// What a device-flow authorization is for. Each purpose requests exactly one
+/// scope, so a grant can never be widened by composing scope strings.
+#[derive(Clone, Copy)]
+enum GrantScope {
+    /// The stored publish token: enough to fork the public index repo and open
+    /// the publish pull request, nothing more.
+    Publish,
+    /// A one-shot, never-stored token that may only add an SSH signing key to
+    /// the account.
+    RegisterSigningKey,
+}
+
+impl GrantScope {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Publish => "public_repo",
+            Self::RegisterSigningKey => "write:ssh_signing_key",
+        }
+    }
+
+    const fn purpose(self) -> &'static str {
+        match self {
+            Self::Publish => "To authorize ipe",
+            Self::RegisterSigningKey => {
+                "To let ipe add the signing key (scope `write:ssh_signing_key`, used once, never stored)"
+            }
+        }
+    }
+}
 
 /// Upper bound on the poll interval (seconds) accepted from GitHub's response.
 /// A hostile or malformed `interval` (up to `u64::MAX`) is clamped to this, so
@@ -39,8 +69,10 @@ const GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// `ipe login [--status | --logout]` — obtain and store a GitHub publish token.
 ///
-/// With no flag, runs the device flow and stores the token. `--status` reports
-/// whether a token is stored; `--logout` removes it.
+/// With no flag, runs the device flow, stores the token, then offers signing-key
+/// setup when none is configured. `--status` reports whether a token is stored
+/// and which signing key publish would use; `--logout` removes the token;
+/// `--signing-key` runs only the signing-key setup.
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] on an unknown flag; [`CliError::Resolve`] when the
@@ -66,10 +98,18 @@ pub fn run_login(rest: &[String]) -> Result<(), CliError> {
                     "not logged in — run `ipe login` to authorize".to_owned()
                 }
             };
-            print!("{}", crate::style::frame(&crate::style::gutter(&message)));
+            let key_line = crate::ssh_signing_key::status_line(
+                std::env::var_os(crate::ssh_signing_key::SIGNING_KEY_ENV).as_deref(),
+                config_dir().as_deref(),
+            );
+            print!(
+                "{}",
+                crate::style::frame(&crate::style::gutter(&format!("{message}\n{key_line}")))
+            );
             Ok(())
         }
         Some("--logout") if rest.len() == 1 => logout(),
+        Some("--signing-key") if rest.len() == 1 => crate::ssh_signing_key::run_setup_command(),
         Some(other) if other.starts_with('-') => {
             Err(crate::cli_args::usage_unknown_flag("login", other))
         }
@@ -96,18 +136,7 @@ impl PublishToken {
     /// rejected, closing the curl-config injection path.
     #[must_use]
     pub fn parse(raw: &str) -> Option<Self> {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if trimmed
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        {
-            Some(Self(trimmed.to_owned()))
-        } else {
-            None
-        }
+        token_alphabet(raw).map(|t| Self(t.to_owned()))
     }
 
     /// The token bytes, safe to splice into the curl config header line.
@@ -115,6 +144,37 @@ impl PublishToken {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// A one-shot GitHub token granted only `write:ssh_signing_key`, used for the
+/// single signing-key registration request and then dropped.
+///
+/// A distinct type from [`PublishToken`]: it has no `Clone`, and nothing that
+/// persists or reuses a publish token accepts it, so the wider-scoped grant can
+/// never be written to disk or reach the publish path.
+pub(crate) struct KeyRegistrationToken(String);
+
+impl KeyRegistrationToken {
+    /// Parse a raw token under the same alphabet rule as [`PublishToken`].
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        token_alphabet(raw).map(|t| Self(t.to_owned()))
+    }
+
+    /// The token bytes, for the `Authorization` header only.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The trimmed token when it is non-empty and drawn only from the GitHub token
+/// alphabet (`[A-Za-z0-9_]`); `None` otherwise.
+fn token_alphabet(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    let well_formed = !trimmed.is_empty()
+        && trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    well_formed.then_some(trimmed)
 }
 
 /// The stored publish token, if the user has run `ipe login`. `None` when no
@@ -131,14 +191,40 @@ pub fn stored_token() -> Option<PublishToken> {
 }
 
 /// Run the full device flow: request a code, prompt the user, poll for the token,
-/// store it.
+/// store it; then offer signing-key setup when none is configured.
 fn run_device_flow() -> Result<(), CliError> {
-    let device = request_device_code()?;
+    let token = authorize(GrantScope::Publish, PublishToken::parse)?;
+    let path = store_token(&token)?;
+    print!(
+        "{}",
+        crate::style::frame(&crate::style::gutter(&format!(
+            "Logged in. Token stored at {}",
+            path.display()
+        )))
+    );
+    crate::ssh_signing_key::offer_after_login()
+}
+
+/// Obtain the one-shot `write:ssh_signing_key` token through its own device-flow
+/// authorization. The caller uses it for one request and drops it.
+///
+/// # Errors
+/// [`CliError::Resolve`] when the OAuth request fails or the user does not
+/// authorize in time.
+pub(crate) fn authorize_signing_key_registration() -> Result<KeyRegistrationToken, CliError> {
+    authorize(GrantScope::RegisterSigningKey, KeyRegistrationToken::parse)
+}
+
+/// One device-flow authorization for `scope`: request a code, show it, poll until
+/// the user approves, and parse the granted token into its role type `T`.
+fn authorize<T>(scope: GrantScope, parse: fn(&str) -> Option<T>) -> Result<T, CliError> {
+    let device = request_device_code(scope)?;
 
     print!(
         "{}",
         crate::style::frame(&crate::style::gutter(&format!(
-            "To authorize ipe, visit:\n  {}\nand enter the code:  {}",
+            "{}, visit:\n  {}\nand enter the code:  {}",
+            scope.purpose(),
             device.verification_uri.as_str(),
             device.user_code
         )))
@@ -148,16 +234,7 @@ fn run_device_flow() -> Result<(), CliError> {
     }
     eprintln!("{}", crate::style::gutter("Waiting for authorization …"));
 
-    let token = poll_for_token(&device)?;
-    let path = store_token(&token)?;
-    print!(
-        "{}",
-        crate::style::frame(&crate::style::gutter(&format!(
-            "Logged in. Token stored at {}",
-            path.display()
-        )))
-    );
-    Ok(())
+    poll_for_token(&device, parse)
 }
 
 /// The verification URL GitHub tells the user to open, parsed once into a value
@@ -208,11 +285,11 @@ struct DeviceGrant {
     expires_in: u64,
 }
 
-/// POST `login/device/code` and parse the device-code grant.
-fn request_device_code() -> Result<DeviceGrant, CliError> {
+/// POST `login/device/code` for `scope` and parse the device-code grant.
+fn request_device_code(scope: GrantScope) -> Result<DeviceGrant, CliError> {
     let json = post_form(
         DEVICE_CODE_URL,
-        &[("client_id", CLIENT_ID), ("scope", SCOPE)],
+        &[("client_id", CLIENT_ID), ("scope", scope.as_str())],
     )?;
     let device_code = str_field(&json, "device_code")?;
     let user_code = str_field(&json, "user_code")?;
@@ -242,9 +319,9 @@ fn request_device_code() -> Result<DeviceGrant, CliError> {
 }
 
 /// Poll `login/oauth/access_token` until the user authorizes, the code expires,
-/// or GitHub reports a terminal error. The returned token is parsed into a
-/// [`PublishToken`] at this boundary, so a malformed token never travels on.
-fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
+/// or GitHub reports a terminal error. The returned token is parsed into its
+/// role type by `parse` at this boundary, so a malformed token never travels on.
+fn poll_for_token<T>(device: &DeviceGrant, parse: fn(&str) -> Option<T>) -> Result<T, CliError> {
     let deadline = Instant::now() + Duration::from_secs(device.expires_in);
     let mut interval = device.interval.clamp(1, MAX_POLL_INTERVAL_SECS);
     loop {
@@ -269,7 +346,7 @@ fn poll_for_token(device: &DeviceGrant) -> Result<PublishToken, CliError> {
             ],
         )?;
         if let Some(token) = json.get("access_token").and_then(serde_json::Value::as_str) {
-            return PublishToken::parse(token)
+            return parse(token)
                 .ok_or_else(|| login_error("GitHub returned a token with unexpected characters"));
         }
         match json.get("error").and_then(serde_json::Value::as_str) {
@@ -411,13 +488,19 @@ fn str_field(json: &serde_json::Value, key: &str) -> Result<String, CliError> {
         .ok_or_else(|| login_error(&format!("GitHub's response was missing `{key}`")))
 }
 
-/// The token file path (`$XDG_CONFIG_HOME/ipe/token`, else `~/.config/ipe/token`).
-/// `None` only when neither `XDG_CONFIG_HOME` nor `HOME` is set.
-fn token_path() -> Option<PathBuf> {
+/// The ipe config directory (`$XDG_CONFIG_HOME/ipe`, else `~/.config/ipe`) that
+/// holds the publish token and the generated signing key. `None` only when
+/// neither `XDG_CONFIG_HOME` nor `HOME` is set.
+pub(crate) fn config_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("ipe").join("token"))
+    Some(base.join("ipe"))
+}
+
+/// The token file path (`<config dir>/token`).
+fn token_path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("token"))
 }
 
 /// The three distinguishable login states `--status` reports. A token file that

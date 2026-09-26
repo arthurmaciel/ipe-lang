@@ -783,7 +783,7 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "login",
         run: crate::login::run_login,
-        summary: "Authorize ipe with GitHub (device flow) and store a publish token.",
+        summary: "Authorize ipe with GitHub (device flow), store a publish token, and offer to set up a publish signing key.",
         args: "",
         args_desc: "",
         options: &[
@@ -794,6 +794,10 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--logout]",
                 desc: "remove the stored token",
+            },
+            Opt {
+                flag: "[--signing-key]",
+                desc: "generate an SSH signing key and register it on your GitHub account (opt-in)",
             },
         ],
         hidden: false,

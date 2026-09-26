@@ -2978,6 +2978,7 @@ version = "0.2.6"
 dependencies = [
  "base64 0.22.1",
  "e2e-support",
+ "ed25519-dalek",
  "getrandom 0.3.4",
  "hex",
  "include_dir",
@@ -3017,6 +3018,7 @@ dependencies = [
  "ureq",
  "wasmtime",
  "wasmtime-wasi",
+ "zeroize",
 ]
 
 [[package]]
