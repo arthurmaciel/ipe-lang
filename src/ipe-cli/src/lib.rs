@@ -38,6 +38,7 @@ pub mod ffi;
 pub mod fmt;
 pub mod health;
 pub mod help;
+pub mod help_page;
 pub mod hot_classify;
 pub mod index;
 pub mod init;
