@@ -1284,21 +1284,42 @@ where
 /// Port a PostgreSQL URL dials when it names none.
 const POSTGRES_DEFAULT_PORT: u16 = 5432;
 
-/// Every network host a PostgreSQL `url` can dial, and the port it dials.
-fn postgres_dial_targets(url: &str) -> Result<(Vec<String>, u16), DbConnectError> {
+/// One place a PostgreSQL connection URL can make the driver dial.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DialTarget {
+    /// A TCP host and port.
+    Tcp { host: String, port: u16 },
+    /// A local Unix-domain socket directory.
+    Socket,
+    /// No host in the URL, so the driver picks one itself.
+    ///
+    /// It tries `PGHOSTADDR` / `PGHOST`, then a default socket directory, then
+    /// `localhost`.
+    DriverDefault,
+}
+
+/// Every target the PostgreSQL driver can dial for `url`, in resolution order.
+///
+/// The driver starts from its environment default, takes the URL authority
+/// host, then applies each `host` / `hostaddr` query parameter; a value
+/// starting with `/` (percent-encoded in the authority) selects a Unix socket,
+/// which the driver keeps even when a later parameter names a TCP host. The
+/// last entry is the target a plain resolution picks; every entry is returned
+/// so the gate can refuse the whole set rather than trust one reading of the
+/// driver's precedence. A URL naming no host yields exactly
+/// [`DialTarget::DriverDefault`].
+fn postgres_dial_targets(url: &str) -> Result<Vec<DialTarget>, DbConnectError> {
     let parsed = ::url::Url::parse(url).map_err(|_| DbConnectError::InvalidUrl)?;
     let mut port = parsed.port().unwrap_or(POSTGRES_DEFAULT_PORT);
-    let mut hosts: Vec<String> = Vec::new();
-    if let Some(host) = parsed.host_str() {
+    let mut hosts: Vec<Option<String>> = Vec::new();
+    if let Some(host) = parsed.host_str().filter(|h| !h.is_empty()) {
         let socket = host.starts_with("%2F") || host.starts_with("%2f");
-        if !socket {
-            hosts.push(host.to_owned());
-        }
+        hosts.push((!socket).then(|| host.to_owned()));
     }
     for (key, value) in parsed.query_pairs() {
         match &*key {
-            "host" | "hostaddr" if !value.starts_with('/') => {
-                hosts.push(value.into_owned());
+            "host" | "hostaddr" => {
+                hosts.push((!value.starts_with('/')).then(|| value.into_owned()));
             }
             "port" => {
                 port = value.parse().map_err(|_| DbConnectError::InvalidUrl)?;
@@ -1306,28 +1327,56 @@ fn postgres_dial_targets(url: &str) -> Result<(Vec<String>, u16), DbConnectError
             _ => {}
         }
     }
-    Ok((hosts, port))
+    if hosts.is_empty() {
+        return Ok(vec![DialTarget::DriverDefault]);
+    }
+    Ok(hosts
+        .into_iter()
+        .map(|host| match host {
+            Some(host) => DialTarget::Tcp { host, port },
+            None => DialTarget::Socket,
+        })
+        .collect())
 }
 
-/// Run the SSRF gate on every network host `url` can make `engine` dial.
+/// Admit one dial target under the SSRF deny-private policy.
 ///
-/// SQLite opens a local file and dials nothing. The PostgreSQL driver takes
-/// its host from the URL authority and lets a `host` / `hostaddr` query
-/// parameter override it, so each of those is vetted; a host starting with `/`
-/// (percent-encoded in the authority) names a local Unix socket and dials no
-/// network. A PostgreSQL URL that does not parse is refused: its hosts cannot
-/// be read, so they cannot be proven safe.
+/// A TCP host goes through [`crate::ssrf::VettedDial::for_host`]. A Unix
+/// socket reaches the local server exactly as loopback TCP does, and a driver
+/// default is unproven (it may resolve to `localhost`), so under deny-private
+/// both are refused; with the policy off they pass, as loopback TCP does.
+fn vet_dial_target(target: &DialTarget) -> Result<(), DbConnectError> {
+    match target {
+        DialTarget::Tcp { host, port } => crate::ssrf::VettedDial::for_host(host, *port)
+            .map(|_| ())
+            .map_err(DbConnectError::HostRefused),
+        DialTarget::Socket if crate::ssrf::ssrf_deny_private_enabled() => {
+            Err(DbConnectError::HostRefused(
+                "blocked: local socket dial target (IPE_HTTP_DENY_PRIVATE)".to_string(),
+            ))
+        }
+        DialTarget::DriverDefault if crate::ssrf::ssrf_deny_private_enabled() => {
+            Err(DbConnectError::HostRefused(
+                "blocked: connection URL names no host, so the dial target is unproven \
+                 (IPE_HTTP_DENY_PRIVATE)"
+                    .to_string(),
+            ))
+        }
+        DialTarget::Socket | DialTarget::DriverDefault => Ok(()),
+    }
+}
+
+/// Run the SSRF gate on every target `url` can make `engine` dial.
+///
+/// SQLite opens a local file and dials nothing. For PostgreSQL every target
+/// from [`postgres_dial_targets`] must pass [`vet_dial_target`]; a URL that
+/// does not parse is refused, since its targets cannot be proven safe.
 fn vet_network_hosts(engine: DbEngine, url: &str) -> Result<(), DbConnectError> {
     match engine {
         DbEngine::Sqlite => Ok(()),
-        DbEngine::Postgres => {
-            let (hosts, port) = postgres_dial_targets(url)?;
-            for host in &hosts {
-                crate::ssrf::VettedDial::for_host(host, port)
-                    .map_err(DbConnectError::HostRefused)?;
-            }
-            Ok(())
-        }
+        DbEngine::Postgres => postgres_dial_targets(url)?
+            .iter()
+            .try_for_each(vet_dial_target),
     }
 }
 
@@ -1336,7 +1385,7 @@ fn vet_network_hosts(engine: DbEngine, url: &str) -> Result<(), DbConnectError> 
 /// [`VettedPool::connect`] is its only constructor and the runtime's only way
 /// to open a pool from a caller-supplied connection URL: the `Ipe.Db` pool, an
 /// `Ipe.Db.Connection`, and the persistent session stores all go through it.
-/// It runs, in order: the SSRF gate on every host the URL dials, a bounded
+/// It runs, in order: the SSRF gate on every target the URL dials, a bounded
 /// connection cap, and the engine-version floor before any other statement.
 /// Every failure is a [`DbConnectError`], which holds no driver payload, so no
 /// caller can log or return a connection URL a driver echoed. The runtime's
@@ -4966,32 +5015,47 @@ mod tests {
         );
     }
 
-    /// The SSRF gate sees every host the PostgreSQL driver can dial, including
-    /// a `host` / `hostaddr` query override, but never a Unix socket.
+    /// The dial-target set covers the authority host, every `host` /
+    /// `hostaddr` query override, both socket forms, and the driver default.
     #[test]
-    fn postgres_dial_targets_cover_query_host_overrides() {
+    fn postgres_dial_targets_cover_every_dial_source() {
+        let tcp = |host: &str, port| DialTarget::Tcp {
+            host: host.to_string(),
+            port,
+        };
         assert_eq!(
             postgres_dial_targets("postgres://u:p@public.example/db?host=169.254.169.254"),
-            Ok((
-                vec!["public.example".to_string(), "169.254.169.254".to_string()],
-                POSTGRES_DEFAULT_PORT
-            ))
+            Ok(vec![
+                tcp("public.example", POSTGRES_DEFAULT_PORT),
+                tcp("169.254.169.254", POSTGRES_DEFAULT_PORT)
+            ])
         );
         assert_eq!(
             postgres_dial_targets("postgres://public.example:6543/db?hostaddr=10.0.0.1&port=7000"),
-            Ok((
-                vec!["public.example".to_string(), "10.0.0.1".to_string()],
-                7000
-            ))
+            Ok(vec![tcp("public.example", 7000), tcp("10.0.0.1", 7000)])
         );
         assert_eq!(
             postgres_dial_targets("postgres:///db?host=/var/run/postgresql"),
-            Ok((Vec::new(), POSTGRES_DEFAULT_PORT))
+            Ok(vec![DialTarget::Socket])
         );
         assert_eq!(
             postgres_dial_targets("postgres://%2Fvar%2Frun%2Fpostgresql/db"),
-            Ok((Vec::new(), POSTGRES_DEFAULT_PORT))
+            Ok(vec![DialTarget::Socket])
         );
+        assert_eq!(
+            postgres_dial_targets("postgres://public.example/db?host=/tmp"),
+            Ok(vec![
+                tcp("public.example", POSTGRES_DEFAULT_PORT),
+                DialTarget::Socket
+            ])
+        );
+        for no_host in ["postgres:///db", "postgres:db"] {
+            assert_eq!(
+                postgres_dial_targets(no_host),
+                Ok(vec![DialTarget::DriverDefault]),
+                "{no_host:?} names no host"
+            );
+        }
     }
 
     /// A PostgreSQL URL whose dial targets cannot be read is refused before
@@ -8200,6 +8264,55 @@ mod tests {
             pool_ssrf_blocked("postgres://8.8.8.8/x?hostaddr=127.0.0.1"),
             "a loopback `hostaddr` override must be blocked by the SSRF gate"
         );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    /// A URL naming no host leaves the dial target to the driver, which may
+    /// pick `localhost`; under deny-private that unproven target is refused.
+    #[test]
+    fn build_pool_ssrf_blocks_a_driver_default_target_when_deny_private_on() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        assert!(
+            pool_ssrf_blocked("postgres:///db"),
+            "a host-less postgres URL must be blocked by the SSRF gate"
+        );
+        assert!(
+            pool_ssrf_blocked("postgres:db?user=admin"),
+            "a host-less opaque postgres URL must be blocked"
+        );
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    /// A Unix socket reaches the local server as loopback TCP does, so under
+    /// deny-private both socket spellings are refused.
+    #[test]
+    fn build_pool_ssrf_blocks_unix_sockets_when_deny_private_on() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "1") };
+        for url in [
+            "postgres://%2Fvar%2Frun%2Fpostgresql/db",
+            "postgres:///db?host=/var/run/postgresql",
+            "postgres://8.8.8.8/db?host=/tmp",
+        ] {
+            assert!(pool_ssrf_blocked(url), "{url:?} must be blocked");
+        }
+        unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
+    }
+
+    /// With deny-private off, sockets and the driver default pass, as
+    /// loopback TCP does (local development).
+    #[test]
+    fn build_pool_ssrf_passes_local_targets_when_deny_private_off() {
+        unsafe { std::env::set_var("IPE_HTTP_DENY_PRIVATE", "0") };
+        for url in [
+            "postgres:///db",
+            "postgres://%2Fvar%2Frun%2Fpostgresql/db",
+            "postgres:///db?host=/var/run/postgresql",
+        ] {
+            assert!(
+                !pool_ssrf_blocked(url),
+                "{url:?} must pass with the guard off"
+            );
+        }
         unsafe { std::env::remove_var("IPE_HTTP_DENY_PRIVATE") };
     }
 
