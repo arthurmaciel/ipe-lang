@@ -672,15 +672,25 @@ fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), Cl
 
     match check {
         None => {
-            // Report mode: diff against a placeholder version pair so the report
-            // still names the required bump. The floor is informational here, and
-            // the bump is the initial `0.y.z` line's; `check` reads the real line
-            // from the given predecessor version.
+            // Report mode: the required bump depends on the predecessor's release
+            // line, so it is measured from `<old>`'s declared version. The
+            // proposed version is unknown here, so `satisfied` is not reported.
+            let predecessor = match ReportBaseline::of(&old_tree)? {
+                ReportBaseline::Declared(version) => version,
+                ReportBaseline::Unversioned => {
+                    notice(&format!(
+                        "note: `{}` declares no `version`, so the required bump is measured as \
+                         for an unreleased 0.y.z package (from 0.0.0); declare `version` in its \
+                         package.ipe for the exact floor",
+                        old_tree.display()
+                    ));
+                    Version::new(0, 0, 0)
+                }
+            };
             let old_api = extract_tree(&old_tree)?;
             let new_api = extract_tree(&new_tree)?;
-            let placeholder = Version::new(0, 0, 0);
             let rep =
-                report(&old_api, &new_api, &placeholder, &placeholder).map_err(DiffError::from)?;
+                report(&old_api, &new_api, &predecessor, &predecessor).map_err(DiffError::from)?;
             print_report(&rep, format);
             Ok(())
         }
@@ -699,6 +709,38 @@ fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), Cl
                 })
             }
         }
+    }
+}
+
+/// The version report mode measures the required bump from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ReportBaseline {
+    /// The `<old>` package's declared `version`.
+    Declared(Version),
+    /// `<old>` declares no version (no `package.ipe`, or one without `version`).
+    ///
+    /// Publishing requires a version, so such a tree is unreleased: it sits on
+    /// the initial `0.y.z` line, measured from `0.0.0`.
+    Unversioned,
+}
+
+impl ReportBaseline {
+    /// Read the declared version of the package at `old_tree`.
+    ///
+    /// # Errors
+    /// The manifest parse error when `old_tree` holds a malformed `package.ipe`
+    /// — fail closed rather than measure from a guessed release line.
+    fn of(old_tree: &Path) -> Result<Self, CliError> {
+        let manifest_path = if old_tree.is_dir() {
+            crate::project::manifest_in_dir(old_tree)
+        } else {
+            None
+        };
+        let Some(manifest_path) = manifest_path else {
+            return Ok(Self::Unversioned);
+        };
+        let manifest = crate::project::parse_manifest(&manifest_path)?;
+        Ok(manifest.version.map_or(Self::Unversioned, Self::Declared))
     }
 }
 
