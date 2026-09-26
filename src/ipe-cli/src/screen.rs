@@ -337,7 +337,7 @@ pub fn chatter_styled(stream: Stream, block: &str) {
 /// Gutter every non-empty line of `block` that does not already start with the
 /// gutter, keeping every newline.
 fn guttered_once(block: &str) -> String {
-    let mut out = String::with_capacity(block.len() + GUTTER.len());
+    let mut out = String::with_capacity(block.len().saturating_add(GUTTER.len()));
     for line in block.split_inclusive('\n') {
         let text = line.trim_end_matches('\n');
         if !text.is_empty() && !text.starts_with(GUTTER) {
@@ -368,12 +368,6 @@ pub fn status(stream: Stream, ok: bool, message: &TerminalSafe) {
     Screen::new(stream)
         .guttered(&style::status_line(ok, message, stream.color()))
         .emit();
-}
-
-/// The palette a trusted renderer paints a block for `stream` with.
-#[must_use]
-pub fn palette(stream: Stream) -> &'static Palette {
-    Palette::select(stream.color())
 }
 
 /// Ask the user `question` on stdout.
