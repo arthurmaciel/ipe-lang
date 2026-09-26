@@ -722,7 +722,7 @@ mod tests {
         let toolchain = CliError::ToolchainMissing(crate::toolchain::ToolchainMissing {
             intent: crate::toolchain::ToolIntent::Build,
             disposition: crate::toolchain::Disposition::NotOnPath {
-                found_in: std::path::PathBuf::from(format!("/opt/{HOSTILE}")),
+                found_in: TerminalSafe::sanitize(&format!("/opt/{HOSTILE}")),
             },
         });
         let out = screen_of(&toolchain);

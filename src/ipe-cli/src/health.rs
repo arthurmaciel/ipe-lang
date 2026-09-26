@@ -546,13 +546,9 @@ fn check_rust_toolchain() -> Vec<Check> {
             id: "cargo",
             status: Status::Missing,
             detail: format!(
-                "cargo is installed at {} but that directory is not on your PATH",
-                found_in.display()
+                "cargo is installed at {found_in} but that directory is not on your PATH"
             ),
-            suggestion: Some(format!(
-                "add it to PATH: export PATH=\"{}:$PATH\"",
-                found_in.display()
-            )),
+            suggestion: Some(format!("add it to PATH: export PATH=\"{found_in}:$PATH\"")),
             fix: None,
         },
     };
