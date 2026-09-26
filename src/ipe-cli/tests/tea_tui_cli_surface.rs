@@ -15,11 +15,22 @@
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 fn compile(test_name: &str, source: &str) -> Result<Result<(), ipe::CliError>, BoxError> {
+    compile_files(test_name, &[("Main.ipe", source)])
+}
+
+/// Compile a multi-module program: every `(file name, source)` is written beside
+/// `Main.ipe`, the entry.
+fn compile_files(
+    test_name: &str,
+    files: &[(&str, &str)],
+) -> Result<Result<(), ipe::CliError>, BoxError> {
     let ipe_dir = std::env::temp_dir().join(format!("tea_surface_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir)?;
+    for (name, source) in files {
+        std::fs::write(ipe_dir.join(name), source)?;
+    }
     let entry = ipe_dir.join("Main.ipe");
-    std::fs::write(&entry, source)?;
 
     let out_dir = std::env::temp_dir().join(format!("tea_surface_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -352,4 +363,32 @@ fn tui_on_key_accepts_any_handler_form() -> Result<(), BoxError> {
 fn cli_on_line_accepts_a_constructor_handler() -> Result<(), BoxError> {
     let src = variant(CLI_APP, "Sub.onLine onLine", "Sub.onLine Line")?;
     assert_accepted("cli_on_line_ctor", &src)
+}
+
+/// Defense in depth: a helper module (not the entry, so the entry-module import
+/// gate never sees it) that builds `Tui.Sub.onKey` for a `Cli` app is refused
+/// where the kernel is emitted (IPE-N0035) — never compiled into a key
+/// subscription the line loop would silently never read.
+#[test]
+fn tui_sub_from_a_helper_module_in_a_cli_app_is_rejected() -> Result<(), BoxError> {
+    let main = variant(
+        CLI_APP,
+        "import Ipe.Tea.Cli as Cli\n",
+        "import Ipe.Tea.Cli as Cli\nimport Keys\n",
+    )?;
+    let main = variant(&main, "Sub.onLine onLine", "Keys.keys NoOp")?;
+    let keys = "module Keys exposing (keys)\n\n\
+                import Ipe.Tea.Tui.Sub as Sub\n\n\n\
+                keys msg =\n    Sub.onKey (\\_ -> msg)\n";
+    let outcome = compile_files(
+        "tui_sub_helper_in_cli",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", keys)],
+    )?;
+    match outcome {
+        Ok(()) => Err("tui_sub_helper_in_cli: expected rejection, but ipe accepted".into()),
+        Err(ipe::CliError::Pipeline { diag, .. }) if diag.code().as_str() == "IPE-N0035" => Ok(()),
+        Err(other) => {
+            Err(format!("tui_sub_helper_in_cli: expected IPE-N0035, got {other:?}").into())
+        }
+    }
 }
