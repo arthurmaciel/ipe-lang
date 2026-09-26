@@ -511,16 +511,16 @@ impl CompileTarget {
     /// not a separate biconditional — is the live gate at every callsite. The
     /// WASI cell admits ONLY the sealed `Direct`/`Script` floor; every non-viable
     /// shape (TEA/Server/Web) is refused there fail-closed.
-    const fn engine_triple(self) -> (delivery::Engine, delivery::TargetTriple) {
+    const fn engine_triple(self) -> (delivery::Engine, Option<delivery::TargetTriple>) {
         match self {
-            Self::Native => (delivery::Engine::Native, delivery::TargetTriple::Host),
+            Self::Native => (delivery::Engine::Native, None),
             Self::WasmClient => (
                 delivery::Engine::WasmClient,
-                delivery::TargetTriple::BrowserWasm,
+                Some(delivery::TargetTriple::BrowserWasm),
             ),
             Self::WasmWasi => (
                 delivery::Engine::WasmWasi,
-                delivery::TargetTriple::Wasm32Wasip1,
+                Some(delivery::TargetTriple::Wasm32Wasip1),
             ),
         }
     }

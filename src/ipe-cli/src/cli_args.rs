@@ -15,7 +15,7 @@
 
 use crate::CliError;
 use crate::build_plan::{AllocatorChoice, StaticRequestLayer};
-use crate::delivery::{DeliveryError, DeliveryTokens, Shape};
+use crate::delivery::{DeliveryError, DeliveryTokens, Shape, TargetTriple};
 pub use ipe_backend_rust::static_build::StaticTriple;
 
 /// The delivery positionals a `build` / `run` / `watch` tail may carry after the
@@ -451,71 +451,46 @@ fn take_delivery_words(it: &mut std::iter::Peekable<std::slice::Iter<'_, String>
 /// layer. Each value flag is rejected on a second occurrence; the boolean flags
 /// are idempotent (a repeat is harmless and stays accepted).
 ///
-/// `--target` is parsed into the closed [`Target`] vocabulary and `--allocator`
+/// `--target` is parsed into the closed [`TargetTriple`] set and `--allocator`
 /// into the closed [`AllocatorChoice`] at this boundary, so an out-of-set value
 /// can never reach resolution.
 #[derive(Default)]
 struct StaticFlags {
     static_flag: bool,
-    target: Option<Target>,
+    target: Option<TargetTriple>,
     allocator: Option<AllocatorChoice>,
     c_free: bool,
 }
 
-/// The `--target` vocabulary `build`, `run`, and `release` share.
+/// Parse a raw `--target` value into the shared [`TargetTriple`] set.
 ///
-/// Parsed once at the flag (parse, don't validate): the browser bundle, the
-/// portable WASI module, or a supported musl-static triple. An out-of-set value
-/// is refused here, with the same message for every command; what a command
-/// cannot do with an in-set target (`run` has no process to execute for
-/// `wasm`, `release` produces no `wasi` module) is that command's own typed
-/// refusal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Target {
-    /// `wasm` — the browser bundle (`wasm32-unknown-unknown`).
-    Wasm,
-    /// `wasi` — the portable `wasm32-wasip1` module.
-    Wasi,
-    /// A supported musl-static native triple.
-    Native(StaticTriple),
+/// `build`, `run`, and `release` share this one vocabulary (parse, don't
+/// validate): the browser bundle, the portable WASI module, or a supported
+/// musl-static triple. An out-of-set value is refused here, with the same
+/// message for every command; what a command cannot do with an in-set target
+/// (`run` has no process to execute for `wasm`, `release` produces no `wasi`
+/// module) is that command's own typed refusal.
+///
+/// # Errors
+/// [`CliError::UsageOwned`] naming every supported value when `raw` is outside
+/// the vocabulary.
+pub fn parse_target(raw: &str) -> Result<TargetTriple, CliError> {
+    TargetTriple::from_flag(raw).ok_or_else(|| {
+        CliError::UsageOwned(format!(
+            "unsupported target `{raw}` — supported: wasm, wasi, {}",
+            StaticTriple::SUPPORTED.join(", ")
+        ))
+    })
 }
 
-impl Target {
-    /// Parse a raw `--target` value.
-    ///
-    /// # Errors
-    /// [`CliError::UsageOwned`] naming every supported value when `raw` is
-    /// outside the vocabulary.
-    pub fn parse(raw: &str) -> Result<Self, CliError> {
-        match raw {
-            "wasm" => Ok(Self::Wasm),
-            "wasi" => Ok(Self::Wasi),
-            triple => StaticTriple::parse(triple)
-                .map(Self::Native)
-                .ok_or_else(|| {
-                    CliError::UsageOwned(format!(
-                        "unsupported target `{triple}` — supported: wasm, wasi, {}",
-                        StaticTriple::SUPPORTED.join(", ")
-                    ))
-                }),
-        }
-    }
-
-    /// The WASM flavour this target selects ([`WasmKind::None`] for a native
-    /// triple).
-    #[must_use]
-    pub const fn wasm_kind(self) -> WasmKind {
-        match self {
-            Self::Wasm => WasmKind::Client,
-            Self::Wasi => WasmKind::Wasi,
-            Self::Native(_) => WasmKind::None,
-        }
-    }
-
-    /// The WASM flavour an optional `--target` selects.
-    #[must_use]
-    pub fn wasm_kind_of(target: Option<Self>) -> WasmKind {
-        target.map_or(WasmKind::None, Self::wasm_kind)
+/// The WASM flavour an optional `--target` selects ([`WasmKind::None`] for a
+/// native triple or no target).
+#[must_use]
+pub const fn wasm_kind_of(target: Option<TargetTriple>) -> WasmKind {
+    match target {
+        Some(TargetTriple::BrowserWasm) => WasmKind::Client,
+        Some(TargetTriple::Wasm32Wasip1) => WasmKind::Wasi,
+        Some(TargetTriple::Native(_)) | None => WasmKind::None,
     }
 }
 
@@ -536,7 +511,7 @@ impl StaticFlags {
         match flag {
             "--static" => self.static_flag = true,
             "--target" => {
-                let target = Target::parse(&take_value(it, "--target", command)?)?;
+                let target = parse_target(&take_value(it, "--target", command)?)?;
                 set_once(&mut self.target, target, "--target", command)?;
             }
             "--allocator" => {
@@ -558,8 +533,8 @@ impl StaticFlags {
             // Only a native triple enters static resolution; a WASM target is
             // its own axis, routed before this layer is built.
             target: match self.target {
-                Some(Target::Native(triple)) => Some(triple.as_str().to_owned()),
-                Some(Target::Wasm | Target::Wasi) | None => None,
+                Some(TargetTriple::Native(triple)) => Some(triple.as_str().to_owned()),
+                Some(TargetTriple::BrowserWasm | TargetTriple::Wasm32Wasip1) | None => None,
             },
             allocator: self.allocator,
             c_free: self.c_free.then_some(true),
@@ -740,7 +715,7 @@ pub fn parse_build(rest: &[String]) -> Result<BuildArgs, CliError> {
     // `--target wasm`/`--target wasi` is a compilation-target axis, not a
     // static-link triple; it never enters static-request resolution and does not
     // compose with the native static flags.
-    let wasm = Target::wasm_kind_of(static_flags.target);
+    let wasm = wasm_kind_of(static_flags.target);
     if wasm.is_wasm() && (static_flags.static_flag || static_flags.allocator.is_some()) {
         return Err(CliError::UsageOwned(format!(
             "--static / --allocator are native-target flags; they do not compose with --target {}",
@@ -918,7 +893,7 @@ pub fn parse_run(rest: &[String]) -> Result<RunArgs, CliError> {
     // wasmtime, so it composes with none of the native static-link flags — the
     // same non-composition `ipe build` enforces (they lower to a native triple
     // that a wasm target has no use for).
-    let wasm = Target::wasm_kind_of(static_flags.target);
+    let wasm = wasm_kind_of(static_flags.target);
     match wasm {
         WasmKind::Client => {
             return Err(CliError::Usage(
@@ -1026,7 +1001,7 @@ pub fn parse_eject(rest: &[String]) -> Result<EjectArgs, CliError> {
 /// statically-linked native binary for a specific rustc target triple.
 ///
 /// Constructed exclusively through [`ReleaseTarget::from_target`] over the
-/// shared [`Target`] vocabulary, so the `"wasm"` sentinel cannot leak past the
+/// shared [`TargetTriple`] set, so the `"wasm"` sentinel cannot leak past the
 /// CLI boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReleaseTarget {
@@ -1040,19 +1015,19 @@ pub enum ReleaseTarget {
 impl ReleaseTarget {
     /// The release destination for a parsed `--target` (or its absence).
     ///
-    /// `None` → the default native triple; [`Target::Wasm`] → [`Self::Wasm`];
-    /// [`Target::Native`] → [`Self::Native`].
+    /// `None` → the default native triple; [`TargetTriple::BrowserWasm`] →
+    /// [`Self::Wasm`]; [`TargetTriple::Native`] → [`Self::Native`].
     ///
     /// # Errors
     ///
-    /// [`CliError::UsageOwned`] for [`Target::Wasi`]: a release produces a
-    /// browser bundle or a native binary, never a WASI module.
-    pub fn from_target(target: Option<Target>) -> Result<Self, CliError> {
+    /// [`CliError::UsageOwned`] for [`TargetTriple::Wasm32Wasip1`]: a release
+    /// produces a browser bundle or a native binary, never a WASI module.
+    pub fn from_target(target: Option<TargetTriple>) -> Result<Self, CliError> {
         match target {
             None => Ok(Self::Native(StaticTriple::default())),
-            Some(Target::Wasm) => Ok(Self::Wasm),
-            Some(Target::Native(triple)) => Ok(Self::Native(triple)),
-            Some(Target::Wasi) => Err(CliError::UsageOwned(
+            Some(TargetTriple::BrowserWasm) => Ok(Self::Wasm),
+            Some(TargetTriple::Native(triple)) => Ok(Self::Native(triple)),
+            Some(TargetTriple::Wasm32Wasip1) => Err(CliError::UsageOwned(
                 "ipe release produces a browser bundle (`--target wasm`) or a native binary; \
                  it does not produce a WASI module — build one with `ipe build --target wasi`"
                     .to_owned(),
@@ -1121,7 +1096,7 @@ pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
 
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
-    let mut target: Option<Target> = None;
+    let mut target: Option<TargetTriple> = None;
     let mut format: Option<OutputFormat> = None;
     let mut emit_permissions: Option<String> = None;
     let mut saw_embed = false;
@@ -1146,7 +1121,7 @@ pub fn parse_release(rest: &[String]) -> Result<ReleaseArgs, CliError> {
                 "release",
             )?,
             "--target" => {
-                let parsed = Target::parse(&take_value(&mut it, "--target", "release")?)?;
+                let parsed = parse_target(&take_value(&mut it, "--target", "release")?)?;
                 set_once(&mut target, parsed, "--target", "release")?;
             }
             "--emit-permissions" => set_once(
@@ -1779,7 +1754,7 @@ mod tests {
             "aarch64-unknown-linux-musl",
         ];
         for value in in_set {
-            assert!(Target::parse(value).is_ok(), "{value}");
+            assert!(parse_target(value).is_ok(), "{value}");
             assert!(
                 parse_build(&s(&["--target", value])).is_ok(),
                 "build {value}"
@@ -1802,7 +1777,7 @@ mod tests {
             }
         }
         for value in ["x86_64-apple-darwin", "bogus", "WASM", ""] {
-            let expected = Target::parse(value).map(|_| ()).map_err(|e| e.to_string());
+            let expected = parse_target(value).map(|_| ()).map_err(|e| e.to_string());
             assert!(expected.is_err(), "{value} is out of set");
             for got in [
                 parse_build(&s(&["--target", value])).map(|_| ()),
