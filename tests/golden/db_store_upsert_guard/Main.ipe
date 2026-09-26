@@ -1,0 +1,285 @@
+module Main exposing (main)
+
+-- `Store.upsert` guard: the conflict target is derived only from the store's
+-- declared key, a store with no usable key fails closed with a typed `Err`
+-- before any SQL is issued, and a DB-filled column is never written.
+--
+-- The refusal stores are never created, so a refusal that reached SQL would
+-- surface as a missing-table error, not the expected message.
+--
+-- Checks (one line each):
+--   no-key             no primary key and no unique column is refused
+--   ambiguous-unique   no primary key and two unique columns is refused
+--   serial-key         a key the database fills (serial) is refused
+--   second-pk          a refused key declaration surfaces its own fault
+--   composite-rows     a composite-key upsert of an existing key updates it in
+--                      place (two keys upserted three times leave two rows)
+--   composite-update   the conflicting row carries the upserted value
+--   omit-default-now   a `defaultNow` column never takes the client's value
+--   unique-target      a store keyed only by a unique column upserts on it
+
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store.Unsafe as StoreU
+import Ipe.Dict as Dict
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Maybe as Maybe exposing (Maybe(..))
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+noteColumns : List Store.Column
+noteColumns =
+    [ Store.textColumn "slug", Store.textColumn "body" ]
+
+
+noteRow : String -> String -> Store.Row
+noteRow slug body =
+    Dict.fromList [ ( "slug", slug ), ( "body", body ) ]
+
+
+-- Build a raw-column store from `columns`, shaped by `shape`.
+rowStore : String -> List Store.Column -> (Store.Draft Store.Row -> Store.Draft Store.Row) -> Result Error (Store Store.Row)
+rowStore table columns shape =
+    case Store.fromColumns table columns of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            Ok (Store.public (shape draft))
+
+
+eventColumns : List Store.Column
+eventColumns =
+    [ Store.intColumn "id", Store.textColumn "name" ]
+
+
+eventRow : Store.Row
+eventRow =
+    Dict.fromList [ ( "id", "7" ), ( "name", "boot" ) ]
+
+
+cursorColumns : List Store.Column
+cursorColumns =
+    [ Store.textColumn "uid"
+    , Store.textColumn "body_hash"
+    , Store.intColumn "pos"
+    , Store.textColumn "seen_at"
+    ]
+
+
+clientStamp : String
+clientStamp =
+    "client-supplied-stamp"
+
+
+cursorRow : String -> String -> Int -> Store.Row
+cursorRow uid hash pos =
+    Dict.fromList
+        [ ( "uid", uid )
+        , ( "body_hash", hash )
+        , ( "pos", String.fromInt pos )
+        , ( "seen_at", clientStamp )
+        ]
+
+
+cursorStore : Result Error (Store Store.Row)
+cursorStore =
+    rowStore "drain_cursor"
+        cursorColumns
+        (\d -> StoreU.defaultNow "seen_at" (Store.compositePrimaryKeyNamed [ "uid", "body_hash" ] d))
+
+
+tagStore : Result Error (Store Store.Row)
+tagStore =
+    rowStore "tags" noteColumns (\d -> StoreU.unique "slug" d)
+
+
+classifyRefusal : String -> String -> Error -> String
+classifyRefusal label needle e =
+    if String.contains needle (Error.toString e) then
+        String.concat [ label, ":ok" ]
+
+    else
+        String.concat [ label, ":FAIL-wrong-error:", Error.toString e ]
+
+
+-- `label:ok` when `upsert` on the built store fails with an error containing
+-- `needle`.
+upsertRefused : Db -> String -> String -> Result Error (Store Store.Row) -> Store.Row -> Task Error String
+upsertRefused conn label needle built row =
+    case built of
+        Err e ->
+            Task.succeed (String.concat [ label, ":FAIL-store:", Error.toString e ])
+
+        Ok store ->
+            Task.onError
+                (\e -> Task.succeed (classifyRefusal label needle e))
+                (Task.map (\_ -> String.concat [ label, ":FAIL-accepted" ]) (Store.upsert conn store row))
+
+
+refusalChecks : Db -> List (Task Error String)
+refusalChecks conn =
+    [ upsertRefused conn
+        "no-key"
+        "upsert requires a declared primary key or unique constraint as its conflict target"
+        (rowStore "notes" noteColumns (\d -> d))
+        (noteRow "a" "b")
+    , upsertRefused conn
+        "ambiguous-unique"
+        "several unique columns (slug, body)"
+        (rowStore "notes" noteColumns (\d -> StoreU.unique "body" (StoreU.unique "slug" d)))
+        (noteRow "a" "b")
+    , upsertRefused conn
+        "serial-key"
+        "but the database fills that column"
+        (rowStore "events" eventColumns (\d -> StoreU.primaryKey "id" (StoreU.serial "id" d)))
+        eventRow
+    , upsertRefused conn
+        "second-pk"
+        "more than one primary key"
+        (rowStore "notes" noteColumns (\d -> StoreU.primaryKey "body" (StoreU.primaryKey "slug" d)))
+        (noteRow "a" "b")
+    ]
+
+
+-- Run each task in order, collecting its line.
+sequenceLines : List (Task Error String) -> Task Error (List String)
+sequenceLines tasks =
+    case tasks of
+        [] ->
+            Task.succeed []
+
+        first :: rest ->
+            Task.andThen
+                (\line -> Task.map (\lines -> line :: lines) (sequenceLines rest))
+                first
+
+
+rowField : String -> Store.Row -> String
+rowField key row =
+    Maybe.withDefault "" (Dict.get key row)
+
+
+isCursor : String -> String -> Store.Row -> Bool
+isCursor uid hash row =
+    rowField "uid" row == uid && rowField "body_hash" row == hash
+
+
+cursorLines : List Store.Row -> List String
+cursorLines rows =
+    let
+        rowsLine =
+            if List.length rows == 2 then
+                "composite-rows:ok"
+
+            else
+                String.concat [ "composite-rows:FAIL-count:", String.fromInt (List.length rows) ]
+    in
+    case List.filter (isCursor "u1" "h1") rows of
+        [ row ] ->
+            [ rowsLine, posLine row, stampLine row ]
+
+        _ ->
+            [ rowsLine, "composite-update:FAIL-missing", "omit-default-now:FAIL-missing" ]
+
+
+posLine : Store.Row -> String
+posLine row =
+    if rowField "pos" row == "5" then
+        "composite-update:ok"
+
+    else
+        String.concat [ "composite-update:FAIL-pos:", rowField "pos" row ]
+
+
+stampLine : Store.Row -> String
+stampLine row =
+    if rowField "seen_at" row /= clientStamp && rowField "seen_at" row /= "" then
+        "omit-default-now:ok"
+
+    else
+        String.concat [ "omit-default-now:FAIL-seen-at:", rowField "seen_at" row ]
+
+
+cursorChecks : Db -> Task Error (List String)
+cursorChecks conn =
+    case cursorStore of
+        Err e ->
+            Task.succeed [ String.concat [ "composite-rows:FAIL-store:", Error.toString e ] ]
+
+        Ok store ->
+            Task.andThen
+                (\_ ->
+                    Task.andThen
+                        (\_ ->
+                            Task.andThen
+                                (\_ ->
+                                    Task.andThen
+                                        (\_ -> Task.map cursorLines (Store.all conn store))
+                                        (Store.upsert conn store (cursorRow "u1" "h2" 1))
+                                )
+                                (Store.upsert conn store (cursorRow "u1" "h1" 5))
+                        )
+                        (Store.upsert conn store (cursorRow "u1" "h1" 1))
+                )
+                (Store.create conn store)
+
+
+tagLine : List Store.Row -> String
+tagLine rows =
+    case rows of
+        [ row ] ->
+            if rowField "slug" row == "ipe" && rowField "body" row == "second" then
+                "unique-target:ok"
+
+            else
+                String.concat [ "unique-target:FAIL-row:", rowField "slug" row, "/", rowField "body" row ]
+
+        _ ->
+            String.concat [ "unique-target:FAIL-count:", String.fromInt (List.length rows) ]
+
+
+tagChecks : Db -> Task Error String
+tagChecks conn =
+    case tagStore of
+        Err e ->
+            Task.succeed (String.concat [ "unique-target:FAIL-store:", Error.toString e ])
+
+        Ok store ->
+            Task.andThen
+                (\_ ->
+                    Task.andThen
+                        (\_ ->
+                            Task.andThen
+                                (\_ -> Task.map tagLine (Store.all conn store))
+                                (Store.upsert conn store (noteRow "ipe" "second"))
+                        )
+                        (Store.upsert conn store (noteRow "ipe" "first"))
+                )
+                (Store.create conn store)
+
+
+runChecks : Db -> Task Error ()
+runChecks conn =
+    Task.andThen
+        (\refusals ->
+            Task.andThen
+                (\cursors ->
+                    Task.andThen
+                        (\tag -> Io.println (String.join "\n" (List.concat [ refusals, cursors, [ tag ] ])))
+                        (tagChecks conn)
+                )
+                (cursorChecks conn)
+        )
+        (sequenceLines (refusalChecks conn))
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\conn -> Db.withTransaction conn (\txconn -> runChecks txconn))
+        (Db.open "sqlite" "sqlite::memory:")

@@ -39,7 +39,7 @@ module Ipe.Db.Store exposing
     , index, indexNamed
     , tableName, columnNames, createSql
     , readText, readInt, readBool, readFloat
-    , insert, insertReturning, all, get, delete, findWhere, create
+    , insert, insertReturning, upsert, all, get, delete, findWhere, create
     , allOn, getOn, findWhereOn
     , update, updateWhere, deleteWhere, findBy
     , renameColumn, renameTable, migrations
@@ -1588,6 +1588,186 @@ insertReturningNoRowError : Error
 insertReturningNoRowError =
     Error.invalidInput
         "Ipe.Db.Store: insertReturning did not receive a RETURNING row from the database"
+
+
+-- | `upsert conn store row` — insert `row`, or, when a row with the same key
+-- already exists, update that row in place; returns the affected-row count. The
+-- key the conflict is matched on is the store's own declaration, never an
+-- argument: the primary key (`primaryKey` → that column, a composite key → all
+-- of its columns), or, on a store with no primary key, its one `unique` column.
+-- A store declaring neither, or several `unique` columns and no primary key,
+-- has no single conflict key and fails closed with a typed `Err` before any SQL
+-- is issued.
+--
+-- On a conflict the existing row keeps its identity: every non-key column the
+-- row supplies is overwritten, and no row is deleted and re-inserted. The same
+-- OmitField discipline as `insert` applies — columns marked `serial` /
+-- `defaultNow` / `touchOnUpdate` are never written, so the database fills them
+-- on insert and keeps them on update. A key column of that kind carries no
+-- client value to match on, so a store keyed on one is refused with a typed
+-- `Err` (use `insert` for such a store). Routes through the audited
+-- `Db.upsertFields`, which re-validates every identifier and binds every value
+-- — no SQL text is built here.
+--
+-- Example:
+--
+--     import Ipe.Db as Db exposing (Db)
+--     import Ipe.Db.Store as Store exposing (Store)
+--     import Ipe.Task as Task exposing (Task)
+--     import Ipe.Error exposing (Error)
+--
+--     type alias Setting =
+--         { key : String, value : String }
+--
+--     -- `key` is the primary key: a second save of the same key updates it.
+--     saveSetting : Db -> Store Setting -> Setting -> Task Error Int
+--     saveSetting conn store setting =
+--         Store.upsert conn store setting
+upsert : Db -> Store a -> a -> Task Error Int
+upsert conn store row =
+    case store of
+        Store r ->
+            case conflictTarget r.specs r.pk of
+                Err e ->
+                    Task.fail e
+
+                Ok target ->
+                    case DbCodec.codecToBinds r.codec row of
+                        Err e ->
+                            Task.fail e
+
+                        Ok binds ->
+                            case targetWritable r.specs binds target of
+                                Err e ->
+                                    Task.fail e
+
+                                Ok _ ->
+                                    Db.upsertFields conn r.table target (insertFields r.specs binds)
+
+
+-- The columns an upsert matches a conflict on, derived only from the store's
+-- declared key: the primary key when one is declared, otherwise the single
+-- `unique` column. A refused key declaration surfaces its own fault.
+conflictTarget : List ColumnSpec -> Result PrimaryKeyFault PrimaryKeyDecl -> Result Error (List String)
+conflictTarget specs pk =
+    case primaryKeyColumns pk of
+        Err e ->
+            Err e
+
+        Ok keyCols ->
+            case keyCols of
+                [] ->
+                    case distinctColumns [] (List.filterMap uniqueColumnOf (List.reverse specs)) of
+                        [] ->
+                            Err noConflictTargetError
+
+                        [ only ] ->
+                            Ok [ only ]
+
+                        several ->
+                            Err (ambiguousConflictTargetError several)
+
+                _ :: _ ->
+                    Ok keyCols
+
+
+uniqueColumnOf : ColumnSpec -> Maybe String
+uniqueColumnOf spec =
+    case spec of
+        Unique c ->
+            Just c
+
+        Serial _ ->
+            Nothing
+
+        DefaultNow _ ->
+            Nothing
+
+        DefaultText _ _ ->
+            Nothing
+
+        DefaultInt _ _ ->
+            Nothing
+
+        TouchOnUpdate _ ->
+            Nothing
+
+
+-- `cols` with repeats dropped, first occurrence kept, in order.
+distinctColumns : List String -> List String -> List String
+distinctColumns seen cols =
+    case cols of
+        [] ->
+            List.reverse seen
+
+        first :: rest ->
+            if List.member first seen then
+                distinctColumns seen rest
+
+            else
+                distinctColumns (first :: seen) rest
+
+
+-- Every conflict-target column must reach the statement as a client value: one
+-- the database fills (`serial` / `defaultNow` / `touchOnUpdate`) or one the row
+-- projection lacks leaves the conflict nothing to match, so the upsert would
+-- silently degrade to a plain insert.
+targetWritable : List ColumnSpec -> List ( String, SqlValue ) -> List String -> Result Error ()
+targetWritable specs binds target =
+    case target of
+        [] ->
+            Ok ()
+
+        col :: rest ->
+            if dbFilledColumn specs col then
+                Err (dbFilledConflictColumnError col)
+
+            else
+                case bindValue col binds of
+                    Nothing ->
+                        Err (missingConflictColumnError col)
+
+                    Just _ ->
+                        targetWritable specs binds rest
+
+
+noConflictTargetError : Error
+noConflictTargetError =
+    Error.invalidInput
+        "Ipe.Db.Store: upsert requires a declared primary key or unique constraint as its conflict target — declare one with Store.primaryKey / Store.compositePrimaryKey2 / Store.compositePrimaryKey3 / Store.compositePrimaryKeyNamed, or Store.unique"
+
+
+ambiguousConflictTargetError : List String -> Error
+ambiguousConflictTargetError cols =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: upsert requires a declared primary key or unique constraint as its conflict target, but this store has no primary key and several unique columns ("
+            , String.join ", " cols
+            , ") — declare the column (or columns) rows are matched on as the primary key"
+            ]
+        )
+
+
+dbFilledConflictColumnError : String -> Error
+dbFilledConflictColumnError col =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: upsert matches conflicts on column \""
+            , col
+            , "\", but the database fills that column (serial / defaultNow / touchOnUpdate), so a row never carries a value to match on — use Store.insert for this store, or key it on a column the row supplies"
+            ]
+        )
+
+
+missingConflictColumnError : String -> Error
+missingConflictColumnError col =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: upsert matches conflicts on column \""
+            , col
+            , "\", but the row's codec projection has no such column"
+            ]
+        )
 
 
 -- | `update conn store row` — update the row whose primary key matches `row`'s

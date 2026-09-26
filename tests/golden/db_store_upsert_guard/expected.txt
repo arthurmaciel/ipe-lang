@@ -1,0 +1,8 @@
+no-key:ok
+ambiguous-unique:ok
+serial-key:ok
+second-pk:ok
+composite-rows:ok
+composite-update:ok
+omit-default-now:ok
+unique-target:ok

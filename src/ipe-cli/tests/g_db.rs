@@ -48,6 +48,8 @@ mod golden_db_store_projection_seal;
 mod golden_db_store_projection_upper_lower_seal;
 #[path = "g_db/golden_db_store_rls_composition_builders_seal.rs"]
 mod golden_db_store_rls_composition_builders_seal;
+#[path = "g_db/golden_db_store_upsert_seal.rs"]
+mod golden_db_store_upsert_seal;
 #[path = "g_db/golden_db_wrapper_empty_params_165.rs"]
 mod golden_db_wrapper_empty_params_165;
 #[path = "g_db/golden_i177_db_get_false_positive.rs"]

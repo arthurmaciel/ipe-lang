@@ -3,7 +3,6 @@ module Lib.Db exposing (Decision(..), ReviewRow, findDecision, findDecisions, fi
 import Ipe.Codec as Codec exposing (Codec(..), ColType(..), Shape(..))
 import Ipe.Config as Config
 import Ipe.Db as Db
-import Ipe.Db.Codec as DbCodec
 import Ipe.Db.Sql as Sql
 import Ipe.Db.Store as Store exposing (Store)
 import Ipe.Error as Error
@@ -255,8 +254,7 @@ makeCursor uid bodyHash updatedAt =
 
 -- Codec for the drain cursor. `updated_at` flows through `Codec.timestamp`, so
 -- its shape is `CTime` and the projected bind is `SqlTime` (Unix millis in the
--- time role), never `SqlInt`. Column keys match the `drain_cursor` DDL order,
--- which is also the `VALUES (?, ?, ?)` order the projected binds fill.
+-- time role), never `SqlInt`. Column keys match the `drain_cursor` DDL columns.
 drainCodec : Codec DrainCursor
 drainCodec =
     Codec
@@ -282,31 +280,29 @@ drainCodec =
         }
 
 
--- Bookkeeping for the drain loop. Re-draining the same pair is a no-op
--- (INSERT OR REPLACE), so a re-queued unit that gets reviewed twice keeps
--- a single cursor row. The row's values are projected through `drainCodec` to
--- typed binds — the timestamp binds as `SqlTime`, not a raw `SqlInt` — then
--- filled positionally into the parameterised statement; no value is
+-- The typed store for the drain cursor, keyed on `(uid, body_hash)` like its
+-- DDL migration, so `Store.upsert` matches a re-drained pair on that key.
+drainStore : Result Error (Store DrainCursor)
+drainStore =
+    Store.fromCodec "drain_cursor" drainCodec
+        |> Result.map (\draft -> Store.public (Store.compositePrimaryKeyNamed [ "uid", "body_hash" ] draft))
+
+
+-- Bookkeeping for the drain loop. Re-draining the same pair updates its cursor
+-- row in place, so a re-queued unit that gets reviewed twice keeps a single
+-- cursor row. The row is projected through `drainCodec` to typed binds — the
+-- timestamp binds as `SqlTime`, not a raw `SqlInt` — and no value is
 -- interpolated into SQL text.
 recordDrain : Db -> String -> String -> Task.Task Error Int
 recordDrain db uid bodyHash =
-    do
-        now <- Time.unixMillis ()
-        case DbCodec.codecToBinds drainCodec (makeCursor uid bodyHash now) of
-            Err e ->
-                Task.fail e
+    case drainStore of
+        Err e ->
+            Task.fail e
 
-            Ok binds ->
-                Db.exec db
-                    "INSERT OR REPLACE INTO drain_cursor VALUES (?, ?, ?)"
-                    (List.map bindValue binds)
-
-
-bindValue : ( String, SqlValue ) -> SqlValue
-bindValue pair =
-    case pair of
-        ( _, value ) ->
-            value
+        Ok store ->
+            do
+                now <- Time.unixMillis ()
+                Store.upsert db store (makeCursor uid bodyHash now)
 
 
 -- Every review row, newest first. `Store.all` fetches all rows; the query
