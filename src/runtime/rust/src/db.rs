@@ -994,6 +994,207 @@ fn max_db_pools() -> usize {
         .unwrap_or(32)
 }
 
+// ─── Engine version floor (connect-time, fail closed) ─────────────────────────
+
+/// A database engine release, ordered numerically by `(major, minor)`. A patch
+/// level never moves a floor, so it is not carried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EngineVersion {
+    major: u32,
+    minor: u32,
+}
+
+impl EngineVersion {
+    #[must_use]
+    pub const fn new(major: u32, minor: u32) -> Self {
+        Self { major, minor }
+    }
+
+    #[must_use]
+    pub const fn major(self) -> u32 {
+        self.major
+    }
+
+    #[must_use]
+    pub const fn minor(self) -> u32 {
+        self.minor
+    }
+}
+
+impl std::fmt::Display for EngineVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
+/// Oldest SQLite the runtime accepts: the release that introduced `RETURNING`
+/// (`db_insert_fields_returning`, the `RETURNING id` insert path) — the newest
+/// SQLite syntax Ipe.Db emits (`ON CONFLICT … DO UPDATE` and
+/// `ALTER TABLE … RENAME COLUMN` are older).
+pub const SQLITE_VERSION_FLOOR: EngineVersion = EngineVersion::new(3, 35);
+
+/// Oldest PostgreSQL the runtime accepts: the release that introduced
+/// `INSERT … ON CONFLICT` (the session-store upsert) and
+/// `CREATE INDEX IF NOT EXISTS` (`Ipe.Db.Store` index DDL) — the newest
+/// PostgreSQL syntax Ipe.Db emits (`RETURNING` is older).
+pub const POSTGRES_VERSION_FLOOR: EngineVersion = EngineVersion::new(9, 5);
+
+/// The database engines the runtime can be built against. Closed set: a driver
+/// with no declared floor has no variant, so it cannot be connected to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DbEngine {
+    Sqlite,
+    Postgres,
+}
+
+impl DbEngine {
+    /// The engine this build's sqlx driver speaks, from the driver's own
+    /// `Database::NAME`. An unrecognised driver is refused, never assumed.
+    fn for_build() -> Result<Self, EngineVersionError> {
+        Self::from_driver_name(<DbDatabase as sqlx::Database>::NAME)
+            .ok_or(EngineVersionError::UnknownEngine)
+    }
+
+    fn from_driver_name(name: &str) -> Option<Self> {
+        match name {
+            "SQLite" => Some(Self::Sqlite),
+            "PostgreSQL" => Some(Self::Postgres),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Sqlite => "SQLite",
+            Self::Postgres => "PostgreSQL",
+        }
+    }
+
+    #[must_use]
+    pub const fn version_floor(self) -> EngineVersion {
+        match self {
+            Self::Sqlite => SQLITE_VERSION_FLOOR,
+            Self::Postgres => POSTGRES_VERSION_FLOOR,
+        }
+    }
+
+    /// Single-row, single-`TEXT`-column query reporting the server's version in
+    /// the form [`Self::parse_version`] accepts.
+    const fn version_query(self) -> &'static str {
+        match self {
+            Self::Sqlite => "SELECT sqlite_version()",
+            Self::Postgres => "SELECT current_setting('server_version_num')",
+        }
+    }
+
+    /// Parse the engine's self-reported version. Strict: anything but the
+    /// exact documented shape is `None`, so an unexpected report fails closed.
+    ///
+    /// - SQLite `sqlite_version()`: `MAJOR.MINOR.PATCH`, all decimal.
+    /// - PostgreSQL `server_version_num`: one decimal integer, encoded as
+    ///   `M*10000 + m*100 + p` before major 10 and `M*10000 + m` from major 10
+    ///   on.
+    fn parse_version(self, raw: &str) -> Option<EngineVersion> {
+        match self {
+            Self::Sqlite => {
+                let mut parts = raw.split('.');
+                let major = parse_decimal(parts.next()?)?;
+                let minor = parse_decimal(parts.next()?)?;
+                parse_decimal(parts.next()?)?;
+                if parts.next().is_some() {
+                    return None;
+                }
+                Some(EngineVersion::new(major, minor))
+            }
+            Self::Postgres => {
+                let num = parse_decimal(raw)?;
+                let major = num / 10_000;
+                let minor = if major >= 10 {
+                    num % 10_000
+                } else {
+                    (num / 100) % 100
+                };
+                Some(EngineVersion::new(major, minor))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for DbEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// A non-empty run of ASCII digits that fits `u32`. Rejects the sign and empty
+/// forms `str::parse` would otherwise accept or report ambiguously.
+fn parse_decimal(s: &str) -> Option<u32> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
+/// Why a connection was refused at the engine-version gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EngineVersionError {
+    /// The build's sqlx driver is not a [`DbEngine`] with a declared floor.
+    UnknownEngine,
+    /// The engine's version report did not parse.
+    Unparseable { engine: DbEngine },
+    /// The engine is older than its [`DbEngine::version_floor`].
+    BelowFloor {
+        engine: DbEngine,
+        found: EngineVersion,
+    },
+}
+
+impl std::fmt::Display for EngineVersionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::UnknownEngine => {
+                f.write_str("db: unsupported database driver (no version floor is declared for it)")
+            }
+            Self::Unparseable { engine } => write!(
+                f,
+                "db: could not parse the {engine} server version; Ipe.Db requires {engine} >= {}",
+                engine.version_floor()
+            ),
+            Self::BelowFloor { engine, found } => write!(
+                f,
+                "db: {engine} {found} is too old; Ipe.Db requires {engine} >= {}",
+                engine.version_floor()
+            ),
+        }
+    }
+}
+
+/// Parse `raw` as `engine`'s version report and admit it only at or above the
+/// engine's floor.
+fn check_engine_version(engine: DbEngine, raw: &str) -> Result<EngineVersion, EngineVersionError> {
+    let found = engine
+        .parse_version(raw)
+        .ok_or(EngineVersionError::Unparseable { engine })?;
+    if found < engine.version_floor() {
+        return Err(EngineVersionError::BelowFloor { engine, found });
+    }
+    Ok(found)
+}
+
+/// Read the connected server's version once and refuse the pool when it is
+/// below the engine floor or unreadable — before any caller query runs.
+async fn enforce_engine_floor<E: From<String> + Send>(pool: &Db) -> Result<(), E> {
+    let engine = DbEngine::for_build().map_err(|e| str_err::<E>(&e.to_string()))?;
+    let raw: String = sqlx::query_scalar::<DbDatabase, String>(engine.version_query())
+        .fetch_one(pool)
+        .await
+        .map_err(|e| ipe_err::<E>(&e))?;
+    check_engine_version(engine, &raw)
+        .map(|_| ())
+        .map_err(|e| str_err(&e.to_string()))
+}
+
 /// Build one configured pool. SQLite (file, not `:memory:`) gets WAL — concurrent
 /// readers alongside a single writer — plus a `busy_timeout` so lock contention
 /// WAITS (sound) instead of erroring with `SQLITE_BUSY`. Without WAL a shared pool
@@ -1023,6 +1224,10 @@ async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> IpeResult<E,
         Ok(p) => p,
         Err(e) => return IpeResult::Err(connect_err(&e)),
     };
+    if let Err(e) = enforce_engine_floor::<E>(&pool).await {
+        pool.close().await;
+        return IpeResult::Err(e);
+    }
     if url.contains("sqlite") && url_is_cacheable(url) {
         let _ = sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await;
         let _ = sqlx::query("PRAGMA busy_timeout=5000;")
@@ -3870,8 +4075,8 @@ pub fn db_conn_get_by_id<E: Send + From<String> + 'static>(
 ///
 /// Returns `(sql_without_returning, args)` on success, or
 /// `IpeResult::Err` on invalid table/column name.  All-OmitField → returns
-/// `"INSERT INTO t DEFAULT VALUES"` with an empty arg list (valid on SQLite ≥
-/// 3.35 and PostgreSQL).
+/// `"INSERT INTO t DEFAULT VALUES"` with an empty arg list (valid on every
+/// engine at or above its [`DbEngine::version_floor`]).
 ///
 /// Security: table and column names are validated before interpolation.
 /// Values are bound positionally — never interpolated.
@@ -4073,8 +4278,8 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
 /// SQL expressions and `AS` aliases are intentionally REJECTED (`Err`), as is an
 /// empty projection.
 ///
-/// Requires SQLite ≥ 3.35 (Mar 2021) or PostgreSQL — same requirement as
-/// other RETURNING uses already in Ipe.Db.
+/// `RETURNING` is what sets [`SQLITE_VERSION_FLOOR`]; the connect-time
+/// engine gate refuses any older server before this runs.
 ///
 /// Security: table + column names validated; values bound positionally; only
 /// the RETURNING projection is caller-supplied (and it's not executed as DML,
@@ -8205,6 +8410,191 @@ mod tests {
                 );
             }
             IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
+        }
+    }
+
+    // ─── Engine version floor ────────────────────────────────────────────────
+
+    /// The release immediately preceding `v` in `(major, minor)` order.
+    fn one_step_below(v: EngineVersion) -> EngineVersion {
+        if v.minor() > 0 {
+            EngineVersion::new(v.major(), v.minor() - 1)
+        } else {
+            EngineVersion::new(v.major().saturating_sub(1), 99)
+        }
+    }
+
+    fn sqlite_report(v: EngineVersion) -> String {
+        format!("{}.{}.0", v.major(), v.minor())
+    }
+
+    /// `server_version_num` encoding of `v` (patch 0).
+    fn postgres_report(v: EngineVersion) -> String {
+        let num = if v.major() >= 10 {
+            v.major() * 10_000 + v.minor()
+        } else {
+            v.major() * 10_000 + v.minor() * 100
+        };
+        num.to_string()
+    }
+
+    fn report(engine: DbEngine, v: EngineVersion) -> String {
+        match engine {
+            DbEngine::Sqlite => sqlite_report(v),
+            DbEngine::Postgres => postgres_report(v),
+        }
+    }
+
+    const ENGINES: [DbEngine; 2] = [DbEngine::Sqlite, DbEngine::Postgres];
+
+    #[test]
+    fn engine_floor_admits_the_floor_itself() {
+        for engine in ENGINES {
+            let floor = engine.version_floor();
+            assert_eq!(
+                check_engine_version(engine, &report(engine, floor)),
+                Ok(floor),
+                "{engine} at its floor must be admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn engine_floor_refuses_one_step_below() {
+        for engine in ENGINES {
+            let below = one_step_below(engine.version_floor());
+            assert_eq!(
+                check_engine_version(engine, &report(engine, below)),
+                Err(EngineVersionError::BelowFloor {
+                    engine,
+                    found: below
+                }),
+                "{engine} one step below its floor must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn engine_floor_admits_newer_majors() {
+        assert!(check_engine_version(DbEngine::Sqlite, "4.0.0").is_ok());
+        assert_eq!(
+            check_engine_version(DbEngine::Postgres, "170002"),
+            Ok(EngineVersion::new(17, 2))
+        );
+    }
+
+    #[test]
+    fn engine_floor_refuses_an_older_major_with_a_larger_minor() {
+        let floor = DbEngine::Sqlite.version_floor();
+        let older = EngineVersion::new(floor.major() - 1, floor.minor() + 1);
+        assert!(matches!(
+            check_engine_version(DbEngine::Sqlite, &sqlite_report(older)),
+            Err(EngineVersionError::BelowFloor { .. })
+        ));
+    }
+
+    #[test]
+    fn engine_floor_refuses_unparseable_sqlite_reports() {
+        let floor = SQLITE_VERSION_FLOOR;
+        let (maj, min) = (floor.major(), floor.minor());
+        for raw in [
+            String::new(),
+            "garbage".to_string(),
+            format!("{maj}.{min}"),
+            format!("{maj}.{min}."),
+            format!("{maj}.{min}.0.1"),
+            format!("+{maj}.{min}.0"),
+            format!(" {maj}.{min}.0"),
+            format!("{maj}.{min}.0 "),
+            format!("{maj}.x.0"),
+            format!("{maj}..{min}"),
+            "99999999999.0.0".to_string(),
+        ] {
+            assert_eq!(
+                check_engine_version(DbEngine::Sqlite, &raw),
+                Err(EngineVersionError::Unparseable {
+                    engine: DbEngine::Sqlite
+                }),
+                "SQLite report {raw:?} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn engine_floor_refuses_unparseable_postgres_reports() {
+        let floor = POSTGRES_VERSION_FLOOR;
+        for raw in [
+            String::new(),
+            "garbage".to_string(),
+            floor.to_string(),
+            format!("+{}", postgres_report(floor)),
+            format!("-{}", postgres_report(floor)),
+            format!("{} ", postgres_report(floor)),
+            "99999999999".to_string(),
+        ] {
+            assert_eq!(
+                check_engine_version(DbEngine::Postgres, &raw),
+                Err(EngineVersionError::Unparseable {
+                    engine: DbEngine::Postgres
+                }),
+                "PostgreSQL report {raw:?} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn engine_floor_error_names_the_required_floor() {
+        for engine in ENGINES {
+            let floor = engine.version_floor();
+            let below = EngineVersionError::BelowFloor {
+                engine,
+                found: one_step_below(floor),
+            }
+            .to_string();
+            let unparseable = EngineVersionError::Unparseable { engine }.to_string();
+            for msg in [below, unparseable] {
+                assert!(
+                    msg.contains(&format!("{engine} >= {floor}")),
+                    "error {msg:?} must name the required floor"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn engine_for_build_resolves_the_linked_driver() {
+        assert_eq!(DbEngine::for_build(), Ok(DbEngine::Sqlite));
+        assert_eq!(DbEngine::from_driver_name("MySQL"), None);
+        assert_eq!(DbEngine::from_driver_name(""), None);
+    }
+
+    /// The bundled SQLite passes the gate end to end: `build_pool` reads the
+    /// live `sqlite_version()` and admits it.
+    #[tokio::test]
+    async fn engine_floor_admits_the_bundled_sqlite() {
+        let pool = build_pool::<String>("sqlite::memory:").await;
+        assert!(
+            matches!(pool, IpeResult::Ok(_)),
+            "bundled SQLite must clear its version floor"
+        );
+    }
+
+    /// The floors are stated once, in their consts: no doc comment in this file
+    /// restates a floor's number, so prose cannot drift from the enforced value.
+    #[test]
+    fn engine_floor_numbers_are_not_restated_in_prose() {
+        let source = include_str!("db.rs");
+        for engine in ENGINES {
+            let rendered = engine.version_floor().to_string();
+            let restated = source.lines().filter(|line| {
+                let t = line.trim_start();
+                t.starts_with("//") && t.contains(rendered.as_str())
+            });
+            assert_eq!(
+                restated.count(),
+                0,
+                "a comment restates the {engine} floor {rendered}; reference the const instead"
+            );
         }
     }
 }
