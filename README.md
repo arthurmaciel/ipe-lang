@@ -108,11 +108,11 @@ served counter with the released binary:
 - `ipe doc` — reference documentation from source (json / markdown / html; runs with or without a project).
 - `ipe lint` / `ipe lint --fix` — advisory static analysis, configured by a `lint.ipe`. → [lint guide](docs/guide/lint.md)
 - `ipe lsp` — completion, go-to-definition, find-references, rename, code actions, semantic tokens over stdio. → [editor setup](docs/topics/editor-integration.md)
-- `ipe debugger record <Main.ipe>` records a cli/worker app's TEA session (each `(msg, model)` step, bounded ring) to `<Main>.ipelog`; `ipe debugger replay <log>` re-emits it as plain text — off a TTY every control byte is stripped, so piping into a file or log stays clean. A record/replay surface, not a live scrubber (the interactive form can't be the cli default: it fails closed to plain streaming off-TTY).
+- `ipe run --record` records a cli/worker app's TEA session (each `(msg, model)` step, bounded ring) to `out/session.ipelog` as plain text — every control byte is stripped at write, so the log is safe to `cat`, pipe or grep. A record surface, not a live scrubber (the interactive form can't be the cli default: it fails closed to plain streaming off-TTY).
 
   ```sh
-  ipe debugger record src/Main.ipe        # runs the app, writes src/Main.ipelog on exit
-  ipe debugger replay src/Main.ipelog     # one "<msg> => <model>" line per step
+  ipe run --record              # runs the app, writes out/session.ipelog on exit
+  cat out/session.ipelog        # one "<msg> => <model>" line per step
   ```
 - `ipe add <pkg>[@<req>]` / `ipe remove <pkg>` — add or remove an Ipê package dependency. `add` resolves the requirement through the index (fetch, hash-verify), records the exact pin in `ipe.lock`, and writes the requirement into `package.ipe`'s `dependencies` block so a fresh clone re-resolves the same dependency; `remove` drops it from both. Author-written `depGit`/`depPath` escapes are left untouched — `add` never overwrites one.
 

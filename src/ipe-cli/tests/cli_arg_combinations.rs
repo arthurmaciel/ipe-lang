@@ -343,31 +343,32 @@ fn release_debugger_flag_rejected() {
 }
 
 // ===========================================================================
-// debugger (record / replay) — the fail-closed refusals, driven through
-// dispatch so the record/replay surface has standing coverage.
+// run --record — session recording lives on `ipe run`, not a top-level verb.
 // ===========================================================================
 
-/// `ipe debugger` with no subcommand is a usage error, never a silent no-op.
+/// `ipe run --record` parses, and a plain `ipe run` does not record.
 #[test]
-fn debugger_without_subcommand_is_rejected() {
-    dispatch_rejects(&["debugger"]);
+fn run_record_flag_accepted() {
+    let a = parse_run(&v(&["Main.ipe", "--record"])).expect("--record must parse");
+    assert!(a.record, "--record must set the field");
+    let plain = parse_run(&v(&["Main.ipe"])).expect("plain run must parse");
+    assert!(!plain.record, "record must default to false");
 }
 
-/// `ipe debugger <unknown>` names no known subcommand and is rejected.
+/// `--record` takes no value: the log always lands in the ipe-owned output
+/// root, so a stray path argument can never name a user file to overwrite.
 #[test]
-fn debugger_unknown_subcommand_is_rejected() {
-    dispatch_rejects(&["debugger", "frobnicate"]);
+fn run_record_takes_no_path() {
+    let result = parse_run(&v(&["Main.ipe", "--record", "notes.txt"]));
+    assert!(
+        result.is_err(),
+        "a path after --record must be rejected, got: {:?}",
+        result.map(|a| a.record)
+    );
 }
 
-/// `ipe debugger replay` with no `<log>` path is a usage error (arity).
+/// `debugger` is not a top-level command (recording is `ipe run --record`).
 #[test]
-fn debugger_replay_without_log_is_rejected() {
-    dispatch_rejects(&["debugger", "replay"]);
-}
-
-/// `ipe debugger replay <missing>` surfaces a typed error, never a panic — a
-/// log path that does not exist fails closed at the bounded read boundary.
-#[test]
-fn debugger_replay_missing_log_is_a_typed_error() {
-    dispatch_rejects(&["debugger", "replay", "/nonexistent/ipe-debugger-replay.log"]);
+fn debugger_is_not_a_top_level_command() {
+    dispatch_rejects(&["debugger", "record", "Main.ipe"]);
 }

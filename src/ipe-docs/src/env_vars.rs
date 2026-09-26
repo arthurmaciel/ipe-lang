@@ -1262,10 +1262,10 @@ pub static EXCLUDED_NAMES: &[&str] = &[
     // `ipe watch` into the spawned child (never operator-set), like the port
     // vars above. Present only in a dev-loop (web/debugger) build.
     "IPE_CONTROL_PORT",
-    // Dev-loop-internal record-log destination — set by `ipe debugger record`
-    // on the spawned child (the operator names the log with `--out`, never this
-    // var directly). Read by the recorder dump; present only in a `debugger`
-    // build.
+    // Dev-loop-internal record-log destination — set by `ipe run --record` on
+    // the executed child (the log always lands in the ipe-owned output root; the
+    // operator never sets this var directly). Read by the recorder dump; present
+    // only in a `debugger` build.
     "IPE_DEBUGGER_RECORD",
 ];
 
