@@ -487,6 +487,11 @@ with no DDL produced. This is the one place a Store builds SQL text for the
 create entry; it builds only from validated identifiers and holds no values,
 so there is nothing to inject.
 
+The DDL is the store's FROZEN schema — the table name, columns, and specs as
+first constructed — and is exactly the create entry `migrations` emits first.
+A rename never edits it (the renames are later ledger entries), so the table
+name, the columns, and the specs it names always belong to one schema.
+
 ## `readText`
 
 ```ipe
@@ -785,15 +790,27 @@ renameColumn : String -> String -> Store a -> Store a
 ```
 
 `renameColumn from to store` — record a column rename in the store's
-schema-op log and update the current-column view so subsequent
-`insert` / `get` / `all` target `to`. The frozen create columns are
-unchanged; the rename appears as a separate ledger entry when `migrations`
-is called.
+schema-op log and move the store's current schema onto `to`. The rename is
+ONE mapping applied to the whole store: the current-column view and the codec
+(so every write bind and every decoded read) name `to`, and the declared-name
+facts — each `ColumnSpec`, the primary key, each index column — resolve
+through the same column identity, so a `DefaultNow` /
+`TouchOnUpdate` / `Serial` column stays DB-filled and a by-key operation keys
+on the renamed column. The frozen create columns are unchanged; the rename
+appears as a separate ledger entry when `migrations` is called.
+
+A column keeps its identity (its position in the frozen column list) across
+renames, so the declared names the `Draft` builders recorded never drift from
+the current schema. Rows stay in the codec's declared field names: a codec
+store decodes into the same record, and a raw-column store reads and writes a
+`Row` keyed by its declared column names.
 
 This function is a total constructor: `from` and `to` are admitted into the
 op log unconditionally. Identifier validation happens once, in `migrations`,
 which is the only point SQL text is built — an invalid name therefore
-surfaces as `Err` there, not here.
+surfaces as `Err` there, not here. A rename whose `from` is not a current
+column, or whose `to` already names one, leaves the current schema unchanged
+and is refused by `migrations`, so a store carrying it cannot be migrated.
 
 Example:
 
@@ -882,7 +899,9 @@ This is the single point where rename DDL text is assembled. Every identifier
 that will appear in SQL — the table name and each rename's `from`/`to` — is
 checked through `validSqlIdent` before it reaches the string. The first
 failing identifier returns `Err` and produces no SQL. A no-op rename
-(`from == to`) is also rejected with `noopRenameError`.
+(`from == to`) is also rejected with `noopRenameError`, and a column rename
+whose `from` is not a column at that point of the log, or whose `to` already
+names one, is rejected too (it would target a missing column or merge two).
 
 For a store with no rename ops, `migrations` yields exactly the frozen create
 entry — identical to calling `Store.create`, which routes through here.
