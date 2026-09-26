@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ipe::diff::{Compatibility, RequiredBump, check_semver_bump};
+use ipe::diff::{Magnitude, RequiredBump, check_semver_bump};
 use semver::Version;
 
 mod support;
@@ -77,7 +77,7 @@ fn check_semver_bump_classifies_a_breaking_change() {
 
     let rep = check_semver_bump(&old, &new, &Version::new(0, 1, 0), &Version::new(0, 1, 1))
         .expect("diff succeeds");
-    assert_eq!(rep.compatibility, Compatibility::Breaking);
+    assert_eq!(rep.magnitude, Magnitude::Breaking);
     assert_eq!(rep.required, RequiredBump::Minor);
     assert_eq!(rep.floor, Version::new(0, 2, 0));
     assert!(!rep.satisfied, "a patch bump under-bumps a breaking change");
@@ -92,7 +92,7 @@ fn check_semver_bump_classifies_a_compatible_change() {
 
     let rep = check_semver_bump(&old, &new, &Version::new(0, 1, 0), &Version::new(0, 1, 1))
         .expect("diff succeeds");
-    assert_eq!(rep.compatibility, Compatibility::Compatible);
+    assert_eq!(rep.magnitude, Magnitude::Additive);
     assert_eq!(rep.required, RequiredBump::Patch);
     assert!(rep.satisfied, "a patch bump clears a compatible change");
 }
