@@ -1440,6 +1440,7 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::DbUpsertFields
         | KernelFn::DbInsertFieldsChecked
         | KernelFn::DbUpdateWhereChecked
+        | KernelFn::DbInsertFieldsIfAbsent
         | KernelFn::SecretFromString
         | KernelFn::SecretReveal
         | KernelFn::SecretUse
