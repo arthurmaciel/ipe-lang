@@ -61,7 +61,6 @@ fn build_valid_combinations_parse() {
             "x86_64-unknown-linux-musl",
             "--allocator",
             "system",
-            "--allow-slow-allocator",
             "--out",
             "o",
         ]))
@@ -82,7 +81,6 @@ fn build_invalid_combinations_rejected() {
         vec!["--emit-ir", "--target", "wasm"],
         vec!["--emit-ir", "--target", "x86_64-unknown-linux-musl"],
         vec!["--emit-ir", "--allocator", "dlmalloc"],
-        vec!["--emit-ir", "--allow-slow-allocator"],
     ] {
         assert!(
             parse_build(&v(&extra)).is_err(),
@@ -92,7 +90,6 @@ fn build_invalid_combinations_rejected() {
     // --target wasm vs native-only static flags.
     assert!(parse_build(&v(&["--target", "wasm", "--static"])).is_err());
     assert!(parse_build(&v(&["--target", "wasm", "--allocator", "dlmalloc"])).is_err());
-    assert!(parse_build(&v(&["--target", "wasm", "--allow-slow-allocator"])).is_err());
     // Duplicate value flags.
     assert!(parse_build(&v(&["--out", "a", "--out", "b"])).is_err());
     assert!(parse_build(&v(&["--target", "a", "--target", "b"])).is_err());

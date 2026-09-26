@@ -152,7 +152,6 @@ struct ManifestFields {
     static_build: Option<bool>,
     target: Option<String>,
     allocator: Option<crate::build_plan::AllocatorChoice>,
-    allow_slow_allocator: Option<bool>,
     c_free: Option<bool>,
     dependencies: BTreeMap<String, IpeDep>,
     rust_dependencies: BTreeMap<String, RustDep>,
@@ -212,7 +211,6 @@ impl ManifestFields {
                 static_build: self.static_build,
                 target: self.target,
                 allocator: self.allocator,
-                allow_slow_allocator: self.allow_slow_allocator,
                 c_free: self.c_free,
             },
             wasm: self.wasm,
@@ -410,16 +408,13 @@ impl Reader<'_> {
                 "static" => fields.static_build = Some(self.expect_bool(value)?),
                 "target" => fields.target = self.read_target(value)?,
                 "allocator" => fields.allocator = Some(self.read_allocator(value)?),
-                "allowSlowAllocator" => {
-                    fields.allow_slow_allocator = Some(self.expect_bool(value)?);
-                }
                 "cFree" => fields.c_free = Some(self.expect_bool(value)?),
                 other => {
                     return Err(self.reject(
                         fname.span,
                         &format!(
                             "`{other}` is not a build field — expected one of database, static, \
-                             target, allocator, allowSlowAllocator, cFree"
+                             target, allocator, cFree"
                         ),
                     ));
                 }
@@ -1669,9 +1664,6 @@ fn render_build(manifest: &ProjectManifest) -> Option<String> {
     if let Some(alloc) = static_layer.allocator {
         parts.push(format!("allocator = {}", allocator_ctor_name(alloc)));
     }
-    if let Some(b) = static_layer.allow_slow_allocator {
-        parts.push(format!("allowSlowAllocator = {}", bool_ctor(b)));
-    }
     if let Some(b) = static_layer.c_free {
         parts.push(format!("cFree = {}", bool_ctor(b)));
     }
@@ -2175,7 +2167,6 @@ mod tests {
              \x20       , static = True\n\
              \x20       , target = Cross \"x86_64-unknown-linux-musl\"\n\
              \x20       , allocator = Dlmalloc\n\
-             \x20       , allowSlowAllocator = False\n\
              \x20       , cFree = True\n\
              \x20       }}\n\
              \x20   }}\n"
@@ -2221,7 +2212,6 @@ mod tests {
             m.static_request.allocator,
             Some(crate::build_plan::AllocatorChoice::Dlmalloc)
         );
-        assert_eq!(m.static_request.allow_slow_allocator, Some(false));
         assert_eq!(m.static_request.c_free, Some(true));
 
         let cap_names: Vec<&str> = m.capabilities.iter().map(|c| c.as_str()).collect();
@@ -2640,6 +2630,18 @@ mod tests {
         let r = read(
             "reject_exposed_lower",
             &format!("{HEADER}package =\n    {{ name = \"x\", exposedModules = [ \"core\" ] }}\n"),
+        );
+        assert_rejected(&r);
+    }
+
+    /// A build field outside the closed set is refused, never ignored.
+    #[test]
+    fn reject_unknown_build_field() {
+        let r = read(
+            "reject_build_field",
+            &format!(
+                "{HEADER}package =\n    {{ name = \"x\", build = {{ allowSlowAllocator = True }} }}\n"
+            ),
         );
         assert_rejected(&r);
     }

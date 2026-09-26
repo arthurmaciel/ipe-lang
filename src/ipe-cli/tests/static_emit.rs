@@ -250,24 +250,10 @@ fn cli_refusals_are_typed_and_artifact_free() {
         ],
         "mac static must refuse",
     );
+    // The closed `--target` vocabulary is parsed at the CLI boundary, so an
+    // unsupported triple is a command-usage refusal there, naming the value.
     assert!(
-        matches!(
-            err,
-            CliError::StaticRefusal(build_plan::Refusal::UnknownStaticTarget { .. })
-        ),
-        "wrong refusal: {err:?}"
-    );
-
-    // The musl-malloc cliff needs the two-key acknowledgment.
-    let err = refuse(
-        &["build", "NoSuch.ipe", "--static", "--allocator", "system"],
-        "system-on-musl without ack must refuse",
-    );
-    assert!(
-        matches!(
-            err,
-            CliError::StaticRefusal(build_plan::Refusal::MuslMallocCliff)
-        ),
+        matches!(&err, CliError::CommandUsage { command: "build", reason } if reason.contains("x86_64-apple-darwin")),
         "wrong refusal: {err:?}"
     );
 
@@ -386,7 +372,6 @@ fn package_ipe_rust_stages_parse_and_reject_typos() {
          \x20       { database = Sqlite\n\
          \x20       , static = True\n\
          \x20       , allocator = Dlmalloc\n\
-         \x20       , allowSlowAllocator = False\n\
          \x20       }\n\
          \x20   }\n",
     )
@@ -398,7 +383,6 @@ fn package_ipe_rust_stages_parse_and_reject_typos() {
             static_build: Some(true),
             target: None,
             allocator: Some(build_plan::AllocatorChoice::Dlmalloc),
-            allow_slow_allocator: Some(false),
             c_free: None,
         }
     );
