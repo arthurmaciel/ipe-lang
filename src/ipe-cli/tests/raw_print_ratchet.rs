@@ -26,7 +26,7 @@ const BUDGET: &[(&str, usize)] = &[
     ("clean.rs", 3),
     ("cli_args.rs", 1),
     ("diff.rs", 5),
-    ("doc.rs", 28),
+    ("doc.rs", 15),
     ("driver/build_pipeline.rs", 1),
     ("driver/commands.rs", 21),
     ("driver/commands_pkg.rs", 26),

@@ -143,6 +143,13 @@ pub enum CliError {
         input: String,
         suggestions: Vec<&'static str>,
     },
+    /// `ipe doc <query>` named no documentation entry. Carries the query and
+    /// the closest entries of any kind (ranked, bounded, never empty while any
+    /// documentation exists), so a miss always points somewhere.
+    DocNotFound {
+        query: String,
+        suggestions: Vec<crate::doc_bundle::DocSuggestion>,
+    },
     /// A static-build request was refused (typed reason — see
     /// [`build_plan::Refusal`]). Refusal means NO artifact: the build asked
     /// to be static is never silently degraded to a dynamic one.
@@ -484,6 +491,7 @@ impl CliError {
             Self::RuntimeVersionMismatch { .. } => "runtime-version-mismatch",
             Self::EmittedBuildFailed { .. } => "emitted-build-failed",
             Self::UnknownCode { .. } => "unknown-code",
+            Self::DocNotFound { .. } => "doc-not-found",
             Self::StaticRefusal(_) => "static-refusal",
             Self::CapabilityMismatch { .. } => "capability-mismatch",
             Self::Resolve(_) => "resolve",
@@ -541,6 +549,7 @@ impl CliError {
             | Self::RuntimeHomeUnknown
             | Self::RuntimeMaterializeFailed { .. }
             | Self::UnknownCode { .. }
+            | Self::DocNotFound { .. }
             | Self::StaticRefusal(_)
             | Self::CapabilityMismatch { .. }
             | Self::Resolve(_)
@@ -659,6 +668,16 @@ impl std::fmt::Display for CliError {
                  match the hash the index pinned.\n  expected: {expected}\n  actual:   {actual}\n\
                  the source was NOT trusted; nothing was written."
             ),
+            Self::DocNotFound { query, suggestions } => {
+                write!(f, "no documentation entry is named `{query}`")?;
+                if !suggestions.is_empty() {
+                    f.write_str("\nclosest matches:")?;
+                    for s in suggestions {
+                        write!(f, "\n  ipe doc {}  — {} ({})", s.key, s.title, s.kind)?;
+                    }
+                }
+                Ok(())
+            }
             Self::UnknownCode { input, suggestions } => {
                 write!(f, "unknown error code `{input}`")?;
                 match suggestions.split_first() {
