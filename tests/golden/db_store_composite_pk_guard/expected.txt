@@ -1,0 +1,12 @@
+single-ddl:ok
+second-pk-single-twice:ok
+second-pk-single-then-composite:ok
+second-pk-composite-then-single:ok
+second-pk-migrations:ok
+composite-one-column:ok
+composite-empty:ok
+composite2:ok
+composite3:ok
+composite-named:ok
+by-key-composite:ok
+by-key-second-pk:ok

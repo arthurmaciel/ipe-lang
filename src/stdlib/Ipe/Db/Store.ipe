@@ -32,7 +32,9 @@ module Ipe.Db.Store exposing
     , public
     , primaryKey, serial, unique, defaultNow
     , defaultText, defaultInt, touchOnUpdate
+    , compositePrimaryKey2, compositePrimaryKey3
     , primaryKeyNamed, serialNamed, uniqueNamed, defaultNowNamed
+    , compositePrimaryKeyNamed
     , defaultTextNamed, defaultIntNamed, touchOnUpdateNamed
     , index, indexNamed
     , tableName, columnNames, createSql
@@ -140,6 +142,36 @@ type ColumnSpec
     | TouchOnUpdate String
 
 
+-- | The table's primary-key declaration — a table has at most one primary key,
+-- so the single-column and the composite form are alternatives of one closed
+-- sum rather than two independent fields that could both be set.
+--
+--   * `NoPk` — no key declared; the by-key operations (`get` / `update` /
+--     `delete` and their `…As` / `…On` twins) fail closed.
+--   * `SinglePk column` — one key column (`primaryKey` / `primaryKeyNamed`).
+--   * `CompositePk columns` — a table-level key over two or more columns, in
+--     declared order (`compositePrimaryKey2` / `compositePrimaryKey3` /
+--     `compositePrimaryKeyNamed`). A composite key is a schema fact: the by-key
+--     operations, which bind exactly one key value, refuse it.
+--
+-- The builders parse their input once: a composite key of fewer than two
+-- columns, or a second key declaration, is recorded as a `PrimaryKeyFault`
+-- instead of a `PrimaryKeyDecl`, so no builder ever yields a one-column
+-- `CompositePk` or a table with two keys.
+type PrimaryKeyDecl
+    = NoPk
+    | SinglePk String
+    | CompositePk (List String)
+
+
+-- | Why a primary-key declaration was refused. Carried on the `Draft` / `Store`
+-- in place of a `PrimaryKeyDecl` and surfaced as a typed `Err` by `createSql`,
+-- `migrations`, and every operation that reads the key.
+type PrimaryKeyFault
+    = SecondPrimaryKey
+    | CompositeKeyTooShort (List String)
+
+
 -- | A declarative performance index over one or more of the store's columns.
 -- Declared through `index` (name derived from table + columns) or `indexNamed`
 -- (caller-supplied name). The columns are validated against the store's
@@ -161,20 +193,20 @@ type SchemaOp
 
 -- | A table under construction: its schema is known but its access intent is
 -- not yet declared, so it is NOT queryable. `fromCodec` / `fromColumns` return a
--- `Draft a`, the schema-shaping builders (`primaryKey` / `serial` / `unique` /
--- `defaultNow` / `defaultText` / `defaultInt` / `touchOnUpdate` / `index` /
--- `indexNamed`) refine one, and `public` / `secured` are the only ways to promote
--- one to a queryable `Store a` / `Secured a`. No read or write operation accepts
--- a `Draft a`, so a table left unclassified cannot be read or written by mistake
--- (deny-by-default).
+-- `Draft a`, the schema-shaping builders (`primaryKey` / `compositePrimaryKey2` /
+-- `compositePrimaryKey3` / `serial` / `unique` / `defaultNow` / `defaultText` /
+-- `defaultInt` / `touchOnUpdate` / `index` / `indexNamed`) refine one, and
+-- `public` / `secured` are the only ways to promote one to a queryable
+-- `Store a` / `Secured a`. No read or write operation accepts a `Draft a`, so a
+-- table left unclassified cannot be read or written by mistake (deny-by-default).
 --
 -- The record fields are the same schema payload a `Store a` carries: `codec` is
 -- the single source of truth (its `Shape` yields the columns and their types),
--- `specs` are the DB-only facts, `pk` is the validated primary-key column,
--- `frozenTable` / `frozenColumns` hold the table name and columns as first
--- constructed, `table` / `currentColumns` track the current-schema view after any
--- renames, `ops` is the ordered schema-op log, and `indexes` is the ordered index
--- specs. Built only through `fromCodec` / `fromColumns`, so every identifier it
+-- `specs` are the DB-only facts, `pk` is the parsed primary-key declaration (or
+-- the fault that refused it), `frozenTable` / `frozenColumns` hold the table
+-- name and columns as first constructed, `table` / `currentColumns` track the
+-- current-schema view after any renames, `ops` is the ordered schema-op log, and
+-- `indexes` is the ordered index specs. Built only through `fromCodec` / `fromColumns`, so every identifier it
 -- holds has already been accepted by `validSqlIdent`.
 type Draft a
     = Draft
@@ -184,7 +216,7 @@ type Draft a
         , currentColumns : List Column
         , codec : Codec a
         , specs : List ColumnSpec
-        , pk : Maybe String
+        , pk : Result PrimaryKeyFault PrimaryKeyDecl
         , ops : List SchemaOp
         , indexes : List IndexSpec
         }
@@ -197,9 +229,10 @@ type Draft a
 -- the same schema payload the `Draft a` held: `codec` is the single source of
 -- truth (its `Shape` yields the columns and their types, its encoder writes a
 -- row, its decoder reads one back); `specs` are the DB-only facts; `pk` is the
--- validated primary-key column used by the by-key operations. `frozenTable` and
--- `frozenColumns` hold the table name and columns as first constructed (the
--- source for the never-drifting create entry — neither is edited by a rename).
+-- parsed primary-key declaration (or the fault that refused it) the by-key
+-- operations and the DDL read. `frozenTable` and `frozenColumns` hold the table
+-- name and columns as first constructed (the source for the never-drifting
+-- create entry — neither is edited by a rename).
 -- `table` and `currentColumns` track the current-schema view after any renames
 -- (the identifiers CRUD targets). `ops` is the ordered schema-op log folded by
 -- `migrations`, threaded from `frozenTable` so each rename entry names the table
@@ -213,7 +246,7 @@ type Store a
         , currentColumns : List Column
         , codec : Codec a
         , specs : List ColumnSpec
-        , pk : Maybe String
+        , pk : Result PrimaryKeyFault PrimaryKeyDecl
         , ops : List SchemaOp
         , indexes : List IndexSpec
         }
@@ -413,7 +446,7 @@ buildStore table columns codec =
                         , currentColumns = columns
                         , codec = codec
                         , specs = []
-                        , pk = Nothing
+                        , pk = Ok NoPk
                         , ops = []
                         , indexes = []
                         }
@@ -546,11 +579,91 @@ public draft =
 -- name into SQL.
 
 
--- | Mark the accessor-named column the primary key. The lowering intercept
--- extracts the column name from the accessor and calls `primaryKeyNamed`.
+-- | Mark the accessor-named column the primary key — the one-column form. The
+-- lowering intercept extracts the column name from the accessor and calls
+-- `primaryKeyNamed`.
+--
+-- A table has exactly one primary key. Declare it ONCE, with the builder that
+-- matches its width:
+--
+--   * one column                    → `primaryKey .field`
+--   * two columns                   → `compositePrimaryKey2 .fieldA .fieldB`
+--   * three columns                 → `compositePrimaryKey3 .fieldA .fieldB .fieldC`
+--   * four or more columns, or a
+--     raw-column (`fromColumns`) store → `compositePrimaryKeyNamed [ "col_a", "col_b", … ]`
+--
+-- Prefer the accessor forms: each accessor is checked against the row type, so a
+-- misspelled field is a compile error. The `…Named` forms take bare column names
+-- (snake_case, as `Codec.auto` derives them), checked only when the DDL is built.
+-- Declaring a second key (any mix of the forms above), or a composite key of
+-- fewer than two columns, is refused with a typed `Err` from `createSql`,
+-- `migrations`, and every operation that reads the key — never a silent
+-- last-writer-wins. The by-key operations (`get` / `update` / `delete` and their
+-- `…As` / `…On` twins) bind ONE key value, so they need a one-column key; on a
+-- composite-key store they fail closed, and rows are read and written through
+-- `query` / `updateWhere` / `deleteWhere` conditions over the key columns.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     type alias User =
+--         { id : String, name : String }
+--
+--     users : Result Error (Store User)
+--     users =
+--         Store.fromCodec "users" userCodec
+--             |> Result.map (Store.primaryKey .id)
+--             |> Result.map Store.public
 primaryKey : (row -> t) -> Draft row -> Draft row
 primaryKey =
     Kernel.kernel "Store_primaryKey"
+
+
+-- | `compositePrimaryKey2 .a .b draft` — declare a two-column primary key over
+-- the accessor-named columns, in that order (`PRIMARY KEY (a, b)`). Use it when
+-- no single column identifies a row but the pair does — a join table, or a
+-- per-owner sequence. Each accessor is checked against the row type, so naming a
+-- field the row does not declare is a compile error. The lowering intercept
+-- extracts both column names and calls `compositePrimaryKeyNamed`.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     type alias Membership =
+--         { userId : String, groupId : String, role : String }
+--
+--     memberships : Result Error (Store Membership)
+--     memberships =
+--         Store.fromCodec "memberships" membershipCodec
+--             |> Result.map (Store.compositePrimaryKey2 .userId .groupId)
+--             |> Result.map Store.public
+compositePrimaryKey2 : (row -> a) -> (row -> b) -> Draft row -> Draft row
+compositePrimaryKey2 =
+    Kernel.kernel "Store_compositePrimaryKey2"
+
+
+-- | `compositePrimaryKey3 .a .b .c draft` — declare a three-column primary key
+-- over the accessor-named columns, in that order (`PRIMARY KEY (a, b, c)`). Like
+-- `compositePrimaryKey2`, each accessor is checked against the row type. For
+-- four or more columns use `compositePrimaryKeyNamed`.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     type alias Reading =
+--         { sensorId : String, day : String, slot : Int, value : Float }
+--
+--     readings : Result Error (Store Reading)
+--     readings =
+--         Store.fromCodec "readings" readingCodec
+--             |> Result.map (Store.compositePrimaryKey3 .sensorId .day .slot)
+--             |> Result.map Store.public
+compositePrimaryKey3 : (row -> a) -> (row -> b) -> (row -> c) -> Draft row -> Draft row
+compositePrimaryKey3 =
+    Kernel.kernel "Store_compositePrimaryKey3"
 
 
 -- | Mark the accessor-named column DB-assigned (serial). `insert` omits it so
@@ -637,17 +750,137 @@ primaryKeyNamed : String -> Draft a -> Draft a
 primaryKeyNamed name draft =
     case draft of
         Draft r ->
+            case combinePrimaryKey r.pk (Ok (SinglePk name)) of
+                Ok decl ->
+                    withPrimaryKey (Ok decl) (PrimaryKey name :: r.specs) draft
+
+                Err fault ->
+                    withPrimaryKey (Err fault) r.specs draft
+
+
+-- | `compositePrimaryKeyNamed columns draft` — declare a primary key over two or
+-- more bare-named columns, in that order (`PRIMARY KEY (col_a, col_b, …)`). The
+-- string form behind `compositePrimaryKey2` / `compositePrimaryKey3`; reach for it
+-- directly for a key of four or more columns, or on a raw-column
+-- (`fromColumns`) store that has no row type to name an accessor against.
+-- Column names are the snake_case names `Codec.auto` derives (`userId` →
+-- `"user_id"`); each is an identifier, never a bound value.
+--
+-- A list of fewer than two columns is refused (a one-column key is
+-- `primaryKey` / `primaryKeyNamed`), and so is a second key declaration on the
+-- same draft; both surface as a typed `Err` from `createSql`, `migrations`, and
+-- every operation that reads the key. The by-key operations (`get` / `update` /
+-- `delete`) need a one-column key and fail closed on a composite-key store.
+-- `createSql` / `migrations` do not render a composite key yet: for a
+-- composite-key store they return a typed `Err` rather than DDL missing the key.
+--
+-- Example:
+--
+--     import Ipe.Db.Store as Store exposing (Store)
+--
+--     type alias Shift =
+--         { siteId : String, day : String, slot : Int, badge : String, notes : String }
+--
+--     shifts : Result Error (Store Shift)
+--     shifts =
+--         Store.fromCodec "shifts" shiftCodec
+--             |> Result.map (Store.compositePrimaryKeyNamed [ "site_id", "day", "slot", "badge" ])
+--             |> Result.map Store.public
+compositePrimaryKeyNamed : List String -> Draft a -> Draft a
+compositePrimaryKeyNamed columns draft =
+    case draft of
+        Draft r ->
+            withPrimaryKey (combinePrimaryKey r.pk (parseCompositeKey columns)) r.specs draft
+
+
+-- A composite key names at least two columns; a shorter list is a one-column key
+-- (or no key) mis-declared, refused rather than silently narrowed.
+parseCompositeKey : List String -> Result PrimaryKeyFault PrimaryKeyDecl
+parseCompositeKey columns =
+    if List.length columns < 2 then
+        Err (CompositeKeyTooShort columns)
+
+    else
+        Ok (CompositePk columns)
+
+
+-- Fold a new key declaration into the draft's current one: a table has one
+-- primary key, so any declaration after the first is a `SecondPrimaryKey` fault,
+-- and an earlier fault is kept (the first refusal is the one reported).
+combinePrimaryKey : Result PrimaryKeyFault PrimaryKeyDecl -> Result PrimaryKeyFault PrimaryKeyDecl -> Result PrimaryKeyFault PrimaryKeyDecl
+combinePrimaryKey current proposed =
+    case current of
+        Err fault ->
+            Err fault
+
+        Ok existing ->
+            case existing of
+                NoPk ->
+                    proposed
+
+                SinglePk _ ->
+                    Err SecondPrimaryKey
+
+                CompositePk _ ->
+                    Err SecondPrimaryKey
+
+
+withPrimaryKey : Result PrimaryKeyFault PrimaryKeyDecl -> List ColumnSpec -> Draft a -> Draft a
+withPrimaryKey decl specs draft =
+    case draft of
+        Draft r ->
             Draft
                 { table = r.table
                 , frozenTable = r.frozenTable
                 , frozenColumns = r.frozenColumns
                 , currentColumns = r.currentColumns
                 , codec = r.codec
-                , specs = PrimaryKey name :: r.specs
-                , pk = Just name
+                , specs = specs
+                , pk = decl
                 , ops = r.ops
                 , indexes = r.indexes
                 }
+
+
+-- The one key column a by-key operation binds its value against. `NoPk` and a
+-- `CompositePk` (several columns, one value) both fail closed with
+-- `noPrimaryKeyError`; a refused declaration surfaces its own fault.
+singleKeyColumn : Result PrimaryKeyFault PrimaryKeyDecl -> Result Error String
+singleKeyColumn pk =
+    case pk of
+        Err fault ->
+            Err (primaryKeyFaultError fault)
+
+        Ok decl ->
+            case decl of
+                SinglePk keyCol ->
+                    Ok keyCol
+
+                NoPk ->
+                    Err noPrimaryKeyError
+
+                CompositePk _ ->
+                    Err noPrimaryKeyError
+
+
+-- Every column of the declared key (empty for `NoPk`), or the declaration's
+-- fault.
+primaryKeyColumns : Result PrimaryKeyFault PrimaryKeyDecl -> Result Error (List String)
+primaryKeyColumns pk =
+    case pk of
+        Err fault ->
+            Err (primaryKeyFaultError fault)
+
+        Ok decl ->
+            case decl of
+                NoPk ->
+                    Ok []
+
+                SinglePk keyCol ->
+                    Ok [ keyCol ]
+
+                CompositePk cols ->
+                    Ok cols
 
 
 serialNamed : String -> Draft a -> Draft a
@@ -950,7 +1183,7 @@ migrations : Store a -> Result Error (List Db.Migration)
 migrations store =
     case store of
         Store r ->
-            case createSqlFromColumns r.frozenTable r.frozenColumns r.specs of
+            case createSqlFromColumns r.frozenTable r.frozenColumns r.specs r.pk of
                 Err e ->
                     Err e
 
@@ -1357,11 +1590,11 @@ update : Db -> Store a -> a -> Task Error Int
 update conn store row =
     case store of
         Store r ->
-            case r.pk of
-                Nothing ->
-                    Task.fail noPrimaryKeyError
+            case singleKeyColumn r.pk of
+                Err e ->
+                    Task.fail e
 
-                Just keyCol ->
+                Ok keyCol ->
                     case DbCodec.codecToBinds r.codec row of
                         Err e ->
                             Task.fail e
@@ -1468,31 +1701,33 @@ updateWhere conn store cond row =
                                 Task.fail e
 
                             Ok binds ->
-                                Db.updateWhere conn
-                                    r.table
-                                    (updateWhereSetFields r.specs r.pk binds)
-                                    frag
+                                case primaryKeyColumns r.pk of
+                                    Err e ->
+                                        Task.fail e
+
+                                    Ok keyCols ->
+                                        Db.updateWhere conn
+                                            r.table
+                                            (updateWhereSetFields r.specs keyCols binds)
+                                            frag
 
 
 -- Project the codec binds to the UPDATE SET fields for a WHERE-scoped update:
 -- every DB-filled column (`Serial` / `DefaultNow` / `touchOnUpdate`) becomes
--- `OmitField` so the database keeps its own value, the primary key is dropped
--- entirely (a WHERE-scoped update never rewrites row identity), and every other
--- column is a bound `SetField`.
-updateWhereSetFields : List ColumnSpec -> Maybe String -> List ( String, SqlValue ) -> List ( String, SqlField )
-updateWhereSetFields specs pk values =
+-- `OmitField` so the database keeps its own value, every primary-key column is
+-- dropped entirely (a WHERE-scoped update never rewrites row identity), and
+-- every other column is a bound `SetField`.
+updateWhereSetFields : List ColumnSpec -> List String -> List ( String, SqlValue ) -> List ( String, SqlField )
+updateWhereSetFields specs keyCols values =
     List.map (\pair -> updateSetField specs pair)
-        (List.filter (\pair -> Basics.not (bindIsKey pk pair)) values)
+        (List.filter (\pair -> Basics.not (bindIsKey keyCols pair)) values)
 
 
-bindIsKey : Maybe String -> ( String, SqlValue ) -> Bool
-bindIsKey pk pair =
-    case pk of
-        Just keyCol ->
-            bindNameIs keyCol pair
-
-        Nothing ->
-            False
+bindIsKey : List String -> ( String, SqlValue ) -> Bool
+bindIsKey keyCols pair =
+    case pair of
+        ( name, _ ) ->
+            List.member name keyCols
 
 
 -- | `deleteWhere conn store cond` — delete every row matching `cond` and return
@@ -1605,11 +1840,11 @@ get : Db -> Store a -> SqlValue -> Task Error (Maybe a)
 get conn store keyValue =
     case store of
         Store r ->
-            case r.pk of
-                Nothing ->
-                    Task.fail noPrimaryKeyError
+            case singleKeyColumn r.pk of
+                Err e ->
+                    Task.fail e
 
-                Just keyCol ->
+                Ok keyCol ->
                     Task.andThen
                         (\rows -> firstDecoded r.codec rows)
                         (Db.findWhere conn r.table (keyEquals keyCol keyValue))
@@ -1699,11 +1934,11 @@ getOn : Connection mode -> Store a -> SqlValue -> Task Error (Maybe a)
 getOn conn store keyValue =
     case store of
         Store r ->
-            case r.pk of
-                Nothing ->
-                    Task.fail noPrimaryKeyError
+            case singleKeyColumn r.pk of
+                Err e ->
+                    Task.fail e
 
-                Just keyCol ->
+                Ok keyCol ->
                     Task.andThen
                         (\rows -> firstDecoded r.codec rows)
                         (Db.findWhereOn conn r.table (keyEquals keyCol keyValue))
@@ -1717,11 +1952,11 @@ delete : Db -> Store a -> SqlValue -> Task Error Int
 delete conn store keyValue =
     case store of
         Store r ->
-            case r.pk of
-                Nothing ->
-                    Task.fail noPrimaryKeyError
+            case singleKeyColumn r.pk of
+                Err e ->
+                    Task.fail e
 
-                Just keyCol ->
+                Ok keyCol ->
                     Db.deleteWhere conn r.table (keyEquals keyCol keyValue)
 
 
@@ -3687,39 +3922,73 @@ readBool name row =
 -- yields `Ok`, and any identifier that somehow does not validate fails closed
 -- with no DDL produced. This is the one place a Store builds SQL text for the
 -- create entry; it builds only from validated identifiers and holds no values,
--- so there is nothing to inject.
+-- so there is nothing to inject. A refused primary-key declaration (a second
+-- key, a composite key of fewer than two columns) is an `Err`, and so is a
+-- composite key, which this renderer does not emit — never DDL missing the key.
 createSql : Store a -> Result Error String
 createSql store =
     case store of
         Store r ->
-            createSqlFromColumns r.table r.frozenColumns r.specs
+            createSqlFromColumns r.table r.frozenColumns r.specs r.pk
 
 
-createSqlFromColumns : String -> List Column -> List ColumnSpec -> Result Error String
-createSqlFromColumns table cols specs =
+createSqlFromColumns : String -> List Column -> List ColumnSpec -> Result PrimaryKeyFault PrimaryKeyDecl -> Result Error String
+createSqlFromColumns table cols specs pk =
     if Basics.not (validSqlIdentPlain table) then
         Err (invalidIdentError "table" table)
 
     else
-        case specsWithinColumns specs cols of
+        case renderablePrimaryKey pk of
             Err e ->
                 Err e
 
             Ok _ ->
-                case columnDefs specs cols of
-                    Err e ->
-                        Err e
+                createSqlWithInlineKey table cols specs
 
-                    Ok defs ->
-                        Ok
-                            (String.concat
-                                [ "CREATE TABLE IF NOT EXISTS "
-                                , table
-                                , " ("
-                                , String.join ", " defs
-                                , ")"
-                                ]
-                            )
+
+-- The key declarations the DDL renders: none, or one inline `PRIMARY KEY` column
+-- (carried by its `PrimaryKey` spec). A refused declaration surfaces its fault,
+-- and a composite key — a table-level constraint this renderer does not emit —
+-- fails closed rather than producing DDL without the key.
+renderablePrimaryKey : Result PrimaryKeyFault PrimaryKeyDecl -> Result Error ()
+renderablePrimaryKey pk =
+    case pk of
+        Err fault ->
+            Err (primaryKeyFaultError fault)
+
+        Ok decl ->
+            case decl of
+                NoPk ->
+                    Ok ()
+
+                SinglePk _ ->
+                    Ok ()
+
+                CompositePk cols ->
+                    Err (compositeKeyDdlUnsupportedError cols)
+
+
+createSqlWithInlineKey : String -> List Column -> List ColumnSpec -> Result Error String
+createSqlWithInlineKey table cols specs =
+    case specsWithinColumns specs cols of
+        Err e ->
+            Err e
+
+        Ok _ ->
+            case columnDefs specs cols of
+                Err e ->
+                    Err e
+
+                Ok defs ->
+                    Ok
+                        (String.concat
+                            [ "CREATE TABLE IF NOT EXISTS "
+                            , table
+                            , " ("
+                            , String.join ", " defs
+                            , ")"
+                            ]
+                        )
 
 
 -- Every spec must name one of the codec's own derived columns; a spec for a
@@ -5705,11 +5974,11 @@ getAs principal conn secured keyValue =
         Secured store policy ->
             case store of
                 Store r ->
-                    case r.pk of
-                        Nothing ->
-                            Task.fail noPrimaryKeyError
+                    case singleKeyColumn r.pk of
+                        Err e ->
+                            Task.fail e
 
-                        Just keyCol ->
+                        Ok keyCol ->
                             Task.map List.head
                                 (maskedRead principal conn store policy
                                     (Sql.and
@@ -5755,11 +6024,11 @@ updateAs principal conn secured row =
         Secured store policy ->
             case store of
                 Store r ->
-                    case r.pk of
-                        Nothing ->
-                            Task.fail noPrimaryKeyError
+                    case singleKeyColumn r.pk of
+                        Err e ->
+                            Task.fail e
 
-                        Just keyCol ->
+                        Ok keyCol ->
                             case DbCodec.codecToBinds r.codec row of
                                 Err e ->
                                     Task.fail e
@@ -5792,11 +6061,11 @@ deleteAs principal conn secured keyValue =
         Secured store policy ->
             case store of
                 Store r ->
-                    case r.pk of
-                        Nothing ->
-                            Task.fail noPrimaryKeyError
+                    case singleKeyColumn r.pk of
+                        Err e ->
+                            Task.fail e
 
-                        Just keyCol ->
+                        Ok keyCol ->
                             Db.deleteWhere conn
                                 r.table
                                 (Sql.and
@@ -5877,7 +6146,45 @@ notARecordError =
 noPrimaryKeyError : Error
 noPrimaryKeyError =
     Error.invalidInput
-        "Ipe.Db.Store: this operation requires a primary key; declare one with Store.primaryKey"
+        "Ipe.Db.Store: this operation requires a single-column primary key; declare one with Store.primaryKey (a composite key cannot be addressed by one key value — read and write a composite-key store through query / updateWhere / deleteWhere conditions over its key columns)"
+
+
+-- The typed refusal for a primary-key declaration the builders parsed as a
+-- fault, naming the builder that expresses the intended key.
+primaryKeyFaultError : PrimaryKeyFault -> Error
+primaryKeyFaultError fault =
+    case fault of
+        SecondPrimaryKey ->
+            Error.invalidInput
+                "Ipe.Db.Store: this store declares more than one primary key, but a table has exactly one — declare it once: Store.primaryKey for one column, Store.compositePrimaryKey2 / compositePrimaryKey3 / compositePrimaryKeyNamed for several columns together"
+
+        CompositeKeyTooShort cols ->
+            case cols of
+                [ only ] ->
+                    Error.invalidInput
+                        (String.concat
+                            [ "Ipe.Db.Store: a composite primary key needs at least two columns, but only \""
+                            , only
+                            , "\" was given — declare a one-column key with Store.primaryKey (or Store.primaryKeyNamed \""
+                            , only
+                            , "\")"
+                            ]
+                        )
+
+                _ ->
+                    Error.invalidInput
+                        "Ipe.Db.Store: a composite primary key needs at least two columns, but none were given — list the key columns, or declare a one-column key with Store.primaryKey"
+
+
+compositeKeyDdlUnsupportedError : List String -> Error
+compositeKeyDdlUnsupportedError cols =
+    Error.invalidInput
+        (String.concat
+            [ "Ipe.Db.Store: createSql / migrations cannot render the composite primary key ("
+            , String.join ", " cols
+            , ") — refusing to emit CREATE TABLE DDL without the declared key"
+            ]
+        )
 
 
 unknownColumnError : String -> Error

@@ -1,0 +1,48 @@
+module Main exposing (main)
+
+-- `Store.compositePrimaryKey2` ties each key column to the row type: naming a
+-- field the row does not declare (`.tenantId` on `Membership`) must be an
+-- ipe-time TYPE error, never a column name that reaches the DDL unchecked.
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Membership =
+    { userId : String
+    , groupId : String
+    }
+
+
+blankMembership : Membership
+blankMembership =
+    { userId = "", groupId = "" }
+
+
+membershipCodec : Codec Membership
+membershipCodec =
+    Codec.auto blankMembership
+
+
+membershipStore : Result Error (Store Membership)
+membershipStore =
+    case Store.fromCodec "memberships" membershipCodec of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            Ok (Store.public (Store.compositePrimaryKey2 .userId .tenantId draft))
+
+
+main : Task Error ()
+main =
+    case membershipStore of
+        Ok _ ->
+            Io.println "accepted"
+
+        Err e ->
+            Io.println (Error.toString e)

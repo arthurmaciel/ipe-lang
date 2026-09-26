@@ -14,6 +14,8 @@ mod golden_db_get_alias_row;
 mod golden_db_get_iperow_bound;
 #[path = "g_db/golden_db_store_accessor_leaves.rs"]
 mod golden_db_store_accessor_leaves;
+#[path = "g_db/golden_db_store_composite_pk_seal.rs"]
+mod golden_db_store_composite_pk_seal;
 #[path = "g_db/golden_db_store_cond_composed_lowers.rs"]
 mod golden_db_store_cond_composed_lowers;
 #[path = "g_db/golden_db_store_draft_query_rejected.rs"]

@@ -1752,6 +1752,15 @@ pub enum StdlibKernel {
     /// `Store.defaultInt : (row -> Int) -> Int -> Store row -> Store row` —
     /// gives the accessor-named column a DB-level `DEFAULT` of the integer value.
     StoreDefaultInt,
+    /// `Store.compositePrimaryKey2 : (row -> a) -> (row -> b) -> Draft row -> Draft row`
+    /// — declares a two-column primary key over the accessor-named columns. The
+    /// intercept extracts both column names and delegates to the
+    /// `compositePrimaryKeyNamed` stdlib helper.
+    StoreCompositePrimaryKey2,
+    /// `Store.compositePrimaryKey3 : (row -> a) -> (row -> b) -> (row -> c) -> Draft row -> Draft row`
+    /// — declares a three-column primary key over the accessor-named columns,
+    /// delegating to `compositePrimaryKeyNamed` like `StoreCompositePrimaryKey2`.
+    StoreCompositePrimaryKey3,
     /// `Store.ownerColumn : (row -> t) -> Policy row` — a row-security policy of
     /// one owner-column rule over the accessor-named column. The intercept
     /// extracts the column name and delegates to the `ownerColumnNamed` stdlib
@@ -4029,6 +4038,21 @@ impl StdlibKernel {
             // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
             Self::StoreDefaultText => d("Store", "defaultText", 3, Pure, "store_default_text"),
             Self::StoreDefaultInt => d("Store", "defaultInt", 3, Pure, "store_default_int"),
+            // Composite primary key — arity 3 / 4 (two / three accessors + store).
+            Self::StoreCompositePrimaryKey2 => d(
+                "Store",
+                "compositePrimaryKey2",
+                3,
+                Pure,
+                "store_composite_primary_key2",
+            ),
+            Self::StoreCompositePrimaryKey3 => d(
+                "Store",
+                "compositePrimaryKey3",
+                4,
+                Pure,
+                "store_composite_primary_key3",
+            ),
             // Row-security policy builders — arity 1 (accessor only), intercepted
             // inline (accessor becomes the validated column, then the stringly
             // `*Named` helper is called). Runtime-fn names are placeholders.
@@ -5749,6 +5773,8 @@ impl StdlibKernel {
         Self::StoreTouchOnUpdate,
         Self::StoreDefaultText,
         Self::StoreDefaultInt,
+        Self::StoreCompositePrimaryKey2,
+        Self::StoreCompositePrimaryKey3,
         // Row-security policy builders (accessor-typed).
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
@@ -9283,6 +9309,24 @@ impl StdlibKernel {
         const INT_TO_DRAFT_A_TO_DRAFT_A: TyShape = TyShape::Fun(&INT, &DRAFT_A_TO_DRAFT_A);
         const STORE_DEFAULT_INT: TyShape =
             TyShape::Fun(&A_TO_INT_GETTER, &INT_TO_DRAFT_A_TO_DRAFT_A);
+        // `compositePrimaryKey2 : (row -> a) -> (row -> b) -> Draft row -> Draft row`
+        // (row = A, a = B, b = C). Each accessor has its own field type, so a key
+        // over columns of different types is typeable.
+        const A_TO_C_GETTER: TyShape = TyShape::Fun(&A, &C);
+        const A_TO_C_TO_DRAFT_A_TO_DRAFT_A: TyShape =
+            TyShape::Fun(&A_TO_C_GETTER, &DRAFT_A_TO_DRAFT_A);
+        const STORE_COMPOSITE_PRIMARY_KEY2: TyShape =
+            TyShape::Fun(&A_TO_B_GETTER, &A_TO_C_TO_DRAFT_A_TO_DRAFT_A);
+        // `compositePrimaryKey3 : (row -> a) -> (row -> b) -> (row -> c) -> Draft row
+        // -> Draft row` (row = A, a = B, b = C, c = D).
+        const STORE_COMPOSITE_PRIMARY_KEY3: TyShape = {
+            const A_TO_D_GETTER: TyShape = TyShape::Fun(&A, &D);
+            const A_TO_D_TO_DRAFT_A_TO_DRAFT_A: TyShape =
+                TyShape::Fun(&A_TO_D_GETTER, &DRAFT_A_TO_DRAFT_A);
+            const A_TO_C_TO_REST: TyShape =
+                TyShape::Fun(&A_TO_C_GETTER, &A_TO_D_TO_DRAFT_A_TO_DRAFT_A);
+            TyShape::Fun(&A_TO_B_GETTER, &A_TO_C_TO_REST)
+        };
         // Policy builders: `(row -> t) -> Policy row`.
         const STORE_POLICY_BUILDER: TyShape = TyShape::Fun(&A_TO_B_GETTER, &POLICY_A);
         // Correlated-subquery row-security ADTs (phantom in the row type).
@@ -10546,6 +10590,8 @@ impl StdlibKernel {
             | Self::StoreTouchOnUpdate => Some(&STORE_SCHEMA_BUILDER),
             Self::StoreDefaultText => Some(&STORE_DEFAULT_TEXT),
             Self::StoreDefaultInt => Some(&STORE_DEFAULT_INT),
+            Self::StoreCompositePrimaryKey2 => Some(&STORE_COMPOSITE_PRIMARY_KEY2),
+            Self::StoreCompositePrimaryKey3 => Some(&STORE_COMPOSITE_PRIMARY_KEY3),
             Self::StoreOwnerColumn | Self::StoreImmutable => Some(&STORE_POLICY_BUILDER),
             Self::StoreMask => Some(&STORE_MASK),
             Self::StoreCorrelate => Some(&STORE_CORRELATE),
@@ -10641,6 +10687,9 @@ impl StdlibKernel {
         // ── Column-spec builders — arity-3 (accessor + value + store) ────────
         Self::StoreDefaultText,
         Self::StoreDefaultInt,
+        // ── Composite primary key — arity-3 / arity-4 (accessors + store) ─────
+        Self::StoreCompositePrimaryKey2,
+        Self::StoreCompositePrimaryKey3,
         // ── Row-security policy builders — arity-1 (accessor only) ───────────
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
@@ -11113,6 +11162,8 @@ impl StdlibKernel {
             | Self::StoreTouchOnUpdate
             | Self::StoreDefaultText
             | Self::StoreDefaultInt
+            | Self::StoreCompositePrimaryKey2
+            | Self::StoreCompositePrimaryKey3
             | Self::StoreOwnerColumn
             | Self::StoreImmutable
             | Self::StoreMask

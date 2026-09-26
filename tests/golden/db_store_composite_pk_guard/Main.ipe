@@ -1,0 +1,261 @@
+module Main exposing (main)
+
+-- Primary-key declaration guard: a table has exactly one primary key, and a
+-- composite key names at least two columns. The `Draft` builders parse every
+-- key declaration once; a refused one surfaces as a typed `Err` from
+-- `createSql` / `migrations` and from every by-key operation — never DDL with
+-- two keys, a one-column "composite" key, or a key silently dropped.
+--
+-- Checks (one line each):
+--   single-ddl            a single-column key renders the inline DDL unchanged
+--   second-pk-*           a second declaration, in any order/form, is refused
+--   composite-one-column  a one-element composite key is refused, pointing at
+--                         Store.primaryKey
+--   composite-empty       an empty composite key is refused
+--   composite2/3/named    each composite form records its columns in declared
+--                         order (accessors snake_cased); the DDL renderer
+--                         refuses to emit CREATE TABLE without the key
+--   by-key-composite      `Store.get` on a composite-key store fails closed
+--   by-key-second-pk      `Store.get` on a double-declared store fails closed
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db as Db exposing (Db)
+import Ipe.Db.Store as Store exposing (Store)
+import Ipe.Db.Store.Unsafe as StoreU
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.List as List
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Membership =
+    { userId : String
+    , groupId : String
+    , role : String
+    }
+
+
+blankMembership : Membership
+blankMembership =
+    { userId = "", groupId = "", role = "" }
+
+
+membershipCodec : Codec Membership
+membershipCodec =
+    Codec.auto blankMembership
+
+
+type alias Reading =
+    { sensorId : String
+    , day : String
+    , slot : Int
+    , value : Float
+    }
+
+
+blankReading : Reading
+blankReading =
+    { sensorId = "", day = "", slot = 0, value = 0.0 }
+
+
+readingCodec : Codec Reading
+readingCodec =
+    Codec.auto blankReading
+
+
+tagColumns : List Store.Column
+tagColumns =
+    [ Store.textColumn "slug", Store.textColumn "label" ]
+
+
+shiftColumns : List Store.Column
+shiftColumns =
+    [ Store.textColumn "site_id"
+    , Store.textColumn "day"
+    , Store.intColumn "slot"
+    , Store.textColumn "badge"
+    , Store.textColumn "notes"
+    ]
+
+
+-- Build a raw-column store from `tagColumns`, shaped by `shape`.
+tagStore : (Store.Draft Store.Row -> Store.Draft Store.Row) -> Result Error (Store Store.Row)
+tagStore shape =
+    case Store.fromColumns "tags" tagColumns of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            Ok (Store.public (shape draft))
+
+
+ddlOf : Result Error (Store a) -> Result Error String
+ddlOf built =
+    case built of
+        Err e ->
+            Err e
+
+        Ok store ->
+            Store.createSql store
+
+
+-- `label:ok` when `result` is an `Err` whose message contains `needle`.
+refusedWith : String -> String -> Result Error b -> String
+refusedWith label needle result =
+    case result of
+        Ok _ ->
+            String.concat [ label, ":FAIL-accepted" ]
+
+        Err e ->
+            classifyRefusal label needle e
+
+
+singleDdlLine : String
+singleDdlLine =
+    case ddlOf (tagStore (\d -> StoreU.primaryKey "slug" d)) of
+        Ok ddl ->
+            if ddl == "CREATE TABLE IF NOT EXISTS tags (slug TEXT PRIMARY KEY, label TEXT)" then
+                "single-ddl:ok"
+
+            else
+                String.concat [ "single-ddl:FAIL-bad-ddl:", ddl ]
+
+        Err e ->
+            String.concat [ "single-ddl:FAIL-rejected:", Error.toString e ]
+
+
+secondPkLines : List String
+secondPkLines =
+    [ refusedWith "second-pk-single-twice"
+        "more than one primary key"
+        (ddlOf (tagStore (\d -> StoreU.primaryKey "label" (StoreU.primaryKey "slug" d))))
+    , refusedWith "second-pk-single-then-composite"
+        "more than one primary key"
+        (ddlOf (tagStore (\d -> Store.compositePrimaryKeyNamed [ "slug", "label" ] (StoreU.primaryKey "slug" d))))
+    , refusedWith "second-pk-composite-then-single"
+        "more than one primary key"
+        (ddlOf (tagStore (\d -> StoreU.primaryKey "slug" (Store.compositePrimaryKeyNamed [ "slug", "label" ] d))))
+    , refusedWith "second-pk-migrations"
+        "more than one primary key"
+        (case tagStore (\d -> StoreU.primaryKey "label" (StoreU.primaryKey "slug" d)) of
+            Err e ->
+                Err e
+
+            Ok store ->
+                Store.migrations store
+        )
+    ]
+
+
+shortCompositeLines : List String
+shortCompositeLines =
+    [ refusedWith "composite-one-column"
+        "Store.primaryKey"
+        (ddlOf (tagStore (\d -> Store.compositePrimaryKeyNamed [ "slug" ] d)))
+    , refusedWith "composite-empty"
+        "at least two columns"
+        (ddlOf (tagStore (\d -> Store.compositePrimaryKeyNamed [] d)))
+    ]
+
+
+membershipStore : Result Error (Store Membership)
+membershipStore =
+    case Store.fromCodec "memberships" membershipCodec of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            Ok (Store.public (Store.compositePrimaryKey2 .userId .groupId draft))
+
+
+readingStore : Result Error (Store Reading)
+readingStore =
+    case Store.fromCodec "readings" readingCodec of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            Ok (Store.public (Store.compositePrimaryKey3 .sensorId .day .slot draft))
+
+
+shiftStore : Result Error (Store Store.Row)
+shiftStore =
+    case Store.fromColumns "shifts" shiftColumns of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            Ok (Store.public (Store.compositePrimaryKeyNamed [ "site_id", "day", "slot", "badge" ] draft))
+
+
+compositeDdlLines : List String
+compositeDdlLines =
+    [ refusedWith "composite2" "composite primary key (user_id, group_id)" (ddlOf membershipStore)
+    , refusedWith "composite3" "composite primary key (sensor_id, day, slot)" (ddlOf readingStore)
+    , refusedWith "composite-named" "composite primary key (site_id, day, slot, badge)" (ddlOf shiftStore)
+    ]
+
+
+-- `label:ok` when the task fails with an error whose message contains `needle`.
+byKeyRefused : String -> String -> Task Error a -> Task Error String
+byKeyRefused label needle task =
+    Task.onError
+        (\e -> Task.succeed (classifyRefusal label needle e))
+        (Task.map (\_ -> String.concat [ label, ":FAIL-accepted" ]) task)
+
+
+classifyRefusal : String -> String -> Error -> String
+classifyRefusal label needle e =
+    if String.contains needle (Error.toString e) then
+        String.concat [ label, ":ok" ]
+
+    else
+        String.concat [ label, ":FAIL-wrong-error:", Error.toString e ]
+
+
+byKeyChecks : Db -> Task Error String
+byKeyChecks conn =
+    case membershipStore of
+        Err e ->
+            Task.succeed (String.concat [ "by-key-composite:FAIL-store:", Error.toString e ])
+
+        Ok memberships ->
+            case tagStore (\d -> StoreU.primaryKey "label" (StoreU.primaryKey "slug" d)) of
+                Err e ->
+                    Task.succeed (String.concat [ "by-key-second-pk:FAIL-store:", Error.toString e ])
+
+                Ok doubled ->
+                    Task.andThen
+                        (\compositeLine ->
+                            Task.map
+                                (\secondLine -> String.join "\n" [ compositeLine, secondLine ])
+                                (byKeyRefused "by-key-second-pk"
+                                    "more than one primary key"
+                                    (Store.get conn doubled (SqlString "x"))
+                                )
+                        )
+                        (byKeyRefused "by-key-composite"
+                            "single-column primary key"
+                            (Store.get conn memberships (SqlString "u1"))
+                        )
+
+
+main : Task Error ()
+main =
+    Task.andThen
+        (\byKeyLines ->
+            Io.println
+                (String.join "\n"
+                    (List.concat
+                        [ [ singleDdlLine ]
+                        , secondPkLines
+                        , shortCompositeLines
+                        , compositeDdlLines
+                        , [ byKeyLines ]
+                        ]
+                    )
+                )
+        )
+        (Task.andThen byKeyChecks (Db.open "sqlite" "sqlite::memory:"))

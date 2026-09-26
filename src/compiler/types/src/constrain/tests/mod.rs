@@ -1182,6 +1182,9 @@ mod registry_phase_c_tests {
             K::StoreTouchOnUpdate,
             K::StoreDefaultText,
             K::StoreDefaultInt,
+            // Composite primary key builders (Ipê-new).
+            K::StoreCompositePrimaryKey2,
+            K::StoreCompositePrimaryKey3,
             // Row-security policy builders (Ipê-new).
             K::StoreOwnerColumn,
             K::StoreImmutable,
