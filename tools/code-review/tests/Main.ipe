@@ -30,6 +30,7 @@ import Lib.Queue as Queue exposing (HistoryState(..), QueueState(..), UnitPageSt
 import Lib.RepoPath as RepoPath exposing (PathError(..), Root, RootMap)
 import Lib.SafeText as SafeText
 import Lib.Settings as Settings
+import Migrations
 
 
 tableExists : Db -> String -> Task.Task Error Bool
@@ -75,19 +76,46 @@ idempotent db =
         |> Task.andThen (\_ -> tableExists db "review")
 
 
+-- The first insert affects one row and the duplicate none. The counts also
+-- prove the store's `(uid, body_hash)` key matches the migrated table's primary
+-- key: a conflict target the table does not declare is a database error.
 duplicateInsertIsNoop : Db -> Task.Task Error Bool
 duplicateInsertIsNoop db =
     LibDb.insertDecision db "dup-uid" "h1" Approved
         |> Task.andThen
-            (\_ ->
-                refuse "changed" |> Task.andThen (LibDb.insertDecision db "dup-uid" "h1")
+            (\first ->
+                refuse "changed"
+                    |> Task.andThen (LibDb.insertDecision db "dup-uid" "h1")
+                    |> Task.andThen
+                        (\second ->
+                            countReviewRows db "dup-uid" "h1"
+                                |> Task.andThen
+                                    (\n ->
+                                        LibDb.findDecision db "dup-uid" "h1"
+                                            |> Task.map (\m -> first == 1 && second == 0 && n == 1 && isApproved m)
+                                    )
+                        )
             )
-        |> Task.andThen (\_ -> countReviewRows db "dup-uid" "h1")
-        |> Task.andThen
-            (\n ->
-                LibDb.findDecision db "dup-uid" "h1"
-                    |> Task.map (\m -> n == 1 && isApproved m)
-            )
+
+
+-- The review store's declared key renders the `PRIMARY KEY (uid, body_hash)`
+-- clause the applied `0001_review` migration declares, so the store's conflict
+-- target is the table's key.
+reviewStoreKeyMatchesMigration : Bool
+reviewStoreKeyMatchesMigration =
+    let
+        clause =
+            "PRIMARY KEY (uid, body_hash)"
+
+        migrated =
+            List.any (\m -> m.name == "0001_review" && String.contains clause m.sql) Migrations.all
+    in
+    case LibDb.reviewTableSql of
+        Ok sql ->
+            migrated && String.contains clause sql
+
+        Err _ ->
+            False
 
 
 -- Re-reviewing the same pair must succeed (any Err here fails
@@ -382,6 +410,7 @@ allChecks db =
         [ Task.map (\ok -> ( "0001+0002 create tables", ok )) (bothTablesExist db)
         , Task.map (\ok -> ( "re-migrate idempotent", ok )) (idempotent db)
         , Task.map (\ok -> ( "duplicate (uid,body_hash) no-op", ok )) (duplicateInsertIsNoop db)
+        , Task.succeed ( "review store key renders the migration's PRIMARY KEY", reviewStoreKeyMatchesMigration )
         , Task.map (\ok -> ( "refusal reason is non-blank and bounded", ok )) (reasonBounded db)
         , Task.map (\ok -> ( "a stored over-long reason decodes and shows its length", ok )) (storedOverlongReasonDecodes db)
         , Task.map (\ok -> ( "a stored blank reason decodes as blank", ok )) (storedBlankReasonDecodes db)
