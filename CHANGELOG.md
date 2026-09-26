@@ -10,6 +10,15 @@ Entries below the header are maintained by
 section is generated from Conventional Commit messages and prepended when the
 standing release pull request is merged.
 
+## [0.2.6](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.5...ipe-v0.2.6) (2026-09-26)
+
+
+### Bug Fixes
+
+* **ci:** sync Cargo.lock on the release branch, not the default branch ([#2820](https://github.com/arthurmaciel/ipe-lang/issues/2820)) ([a6d19d5](https://github.com/arthurmaciel/ipe-lang/commit/a6d19d55264b904db0651f7e79cc8e0594fbfc9f))
+* **init:** equal-width counter buttons; refresh shapes + package.ipe docs from code ([#2818](https://github.com/arthurmaciel/ipe-lang/issues/2818)) ([9ec8b33](https://github.com/arthurmaciel/ipe-lang/commit/9ec8b33370fc6a239eac8f26ff671aa8f957df38))
+* **ipe-index:** seed change_queue on initial index ([#2824](https://github.com/arthurmaciel/ipe-lang/issues/2824)) ([c14dfd6](https://github.com/arthurmaciel/ipe-lang/commit/c14dfd6c6400635e35c3ef9413faba39aff75e5f))
+
 ## [0.2.5](https://github.com/arthurmaciel/ipe-lang/compare/ipe-v0.2.4...ipe-v0.2.5) (2026-09-25)
 
 
