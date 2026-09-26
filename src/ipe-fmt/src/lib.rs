@@ -1039,10 +1039,10 @@ impl Printer<'_> {
     /// a bare-run line becomes `let _ = task in …`, which the parser rejects
     /// outside a `do` (`BareWildcardBinding`).
     fn expr(&self, e: &Expr, indent: usize) -> String {
-        match self.do_view(e) {
-            Some(view) => self.do_block(&view, indent),
-            None => self.expr_node(e, indent),
-        }
+        self.do_view(e).map_or_else(
+            || self.expr_node(e, indent),
+            |view| self.do_block(&view, indent),
+        )
     }
 
     /// The source offset just past the `do` keyword of a block's span.
