@@ -111,5 +111,5 @@ nvim --headless -i NONE -c "luafile $IPE_WORK/check.lua" > "$IPE_WORK/check.log"
 }
 
 say "setup complete (parser, queries, plugin/ipe.lua) — verified headlessly"
-say "open the folder holding package.ipe; completion pops up as you type,"
+say "open the folder holding package.ipe; completion pops up after '.' (<C-x><C-o> any time),"
 say "<C-]> = go to definition, gra = code actions, gq/:lua vim.lsp.buf.format() = format"
