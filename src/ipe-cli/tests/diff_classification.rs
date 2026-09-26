@@ -13,10 +13,12 @@ use ipe::diff::{
 use semver::Version;
 
 /// [`ipe::diff::report`] over versions whose floors cannot overflow.
+#[allow(clippy::expect_used)] // test helper: a non-overflowing fixture
 fn report(old: &PublicApi, new: &PublicApi, old_v: &Version, new_v: &Version) -> SemverReport {
     ipe::diff::report(old, new, old_v, new_v).expect("floor does not overflow")
 }
 
+#[allow(clippy::expect_used)] // test helper: literal fixture versions
 fn parse(raw: &str) -> Version {
     Version::parse(raw).expect("valid version")
 }
