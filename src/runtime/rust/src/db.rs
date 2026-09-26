@@ -4061,6 +4061,158 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
     })
 }
 
+/// Builds the upsert statement for `db_upsert_fields`:
+///
+/// ```sql
+/// INSERT INTO <table> (<set-cols>) VALUES (?, …)
+///   ON CONFLICT (<target-cols>) DO UPDATE SET <c> = excluded.<c>, …
+/// ```
+///
+/// The SET list is every `SetField` column that is not a conflict-target
+/// column. `OmitField` columns appear nowhere: the database fills them on
+/// insert and never overwrites them on conflict, so a DB-owned column
+/// (`Serial` / `DefaultNow` / `TouchOnUpdate`) is never replaced by a client
+/// value. An empty SET list yields `ON CONFLICT (…) DO NOTHING`
+/// (insert-if-absent), never an empty `SET`.
+///
+/// Refused with `Err` before any SQL exists:
+/// - a table name failing `SqlIdent::parse_dotted`;
+/// - a field or conflict-target column failing `SqlIdent::parse_plain` —
+///   columns are bare names because `ON CONFLICT (…)` and `excluded.<col>`
+///   admit no qualifier;
+/// - an empty conflict target (no `ON CONFLICT` target is valid on both
+///   engines for `DO UPDATE`);
+/// - a column named twice in the fields or in the conflict target, compared
+///   ASCII-case-insensitively as both engines compare unquoted identifiers;
+/// - a conflict-target column not supplied as a `SetField` — its value would be
+///   absent or DB-generated, the conflict could never match, and the upsert
+///   would silently degrade to a plain insert.
+///
+/// Security: every interpolated name is a validated `SqlIdent`; `excluded.<col>`
+/// reuses the same validated identifier. Values bind positionally.
+#[cfg(feature = "db")]
+fn build_upsert_sql(
+    kernel: &str,
+    table: &str,
+    conflict_target: Vec<String>,
+    fields: Vec<(String, Option<SqlParam>)>,
+) -> Result<(String, Vec<SqlParam>), String> {
+    let qtable = SqlIdent::parse_dotted(table)
+        .ok_or_else(|| format!("{kernel}: invalid table name {table:?}"))?;
+    if conflict_target.is_empty() {
+        return Err(format!(
+            "{kernel}: empty conflict target; pass the primary-key or unique columns"
+        ));
+    }
+    let mut target_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(conflict_target.len());
+    let mut target_cols: Vec<SqlIdent> = Vec::with_capacity(conflict_target.len());
+    for col in conflict_target {
+        let qcol = SqlIdent::parse_plain(&col)
+            .ok_or_else(|| format!("{kernel}: invalid conflict-target column name {col:?}"))?;
+        if !target_keys.insert(qcol.as_str().to_ascii_lowercase()) {
+            return Err(format!(
+                "{kernel}: conflict-target column {col:?} is listed more than once"
+            ));
+        }
+        target_cols.push(qcol);
+    }
+    let mut field_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(fields.len());
+    let mut supplied_target_keys: std::collections::HashSet<String> =
+        std::collections::HashSet::with_capacity(target_cols.len());
+    let mut insert_cols: Vec<String> = Vec::with_capacity(fields.len());
+    let mut set_clauses: Vec<String> = Vec::new();
+    let mut args: Vec<SqlParam> = Vec::with_capacity(fields.len());
+    for (col, opt) in fields {
+        let qcol = SqlIdent::parse_plain(&col)
+            .ok_or_else(|| format!("{kernel}: invalid column name {col:?}"))?;
+        let key = qcol.as_str().to_ascii_lowercase();
+        if !field_keys.insert(key.clone()) {
+            return Err(format!("{kernel}: column {col:?} is listed more than once"));
+        }
+        let Some(p) = opt else {
+            continue;
+        };
+        if target_keys.contains(&key) {
+            supplied_target_keys.insert(key);
+        } else {
+            set_clauses.push(format!("{0} = excluded.{0}", qcol.as_str()));
+        }
+        insert_cols.push(qcol.as_str().to_string());
+        args.push(p);
+    }
+    if let Some(missing) = target_cols
+        .iter()
+        .find(|t| !supplied_target_keys.contains(&t.as_str().to_ascii_lowercase()))
+    {
+        return Err(format!(
+            "{kernel}: conflict-target column {:?} must be supplied as a SetField; \
+             without a client value the conflict can never match",
+            missing.as_str()
+        ));
+    }
+    let target_list = target_cols
+        .iter()
+        .map(SqlIdent::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let action = if set_clauses.is_empty() {
+        "DO NOTHING".to_string()
+    } else {
+        format!("DO UPDATE SET {}", set_clauses.join(", "))
+    };
+    let sql = format!(
+        "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) {}",
+        qtable.as_str(),
+        insert_cols.join(", "),
+        vec!["?"; insert_cols.len()].join(", "),
+        target_list,
+        action
+    );
+    Ok((sql, args))
+}
+
+/// `Db.upsertFields : Db -> String -> List String -> List (String, SqlField) -> Task Error Int`
+///
+/// Insert-or-update-in-place on the conflict target (the `List String`, the
+/// table's primary-key or unique columns). On a conflict the existing row is
+/// UPDATED — its identity, rowid, and every column outside the SET list are
+/// preserved and no DELETE fires — identically on SQLite and Postgres, because
+/// the one statement built by [`build_upsert_sql`] is standard on both. SQLite's
+/// delete-then-insert `INSERT OR REPLACE` is never emitted.
+///
+/// Returns the affected-row count: `1` when a row was inserted or updated, `0`
+/// when a `DO NOTHING` upsert met an existing row.
+///
+/// Security: table + column names are identifier-validated; values are bound
+/// positionally — never interpolated into SQL.
+/// Totality: every error path returns `IpeResult::Err`; no panic/unwrap.
+#[cfg(feature = "db")]
+pub fn db_upsert_fields<E: Send + From<String> + 'static>(
+    conn: Db,
+    table: String,
+    conflict_target: Vec<String>,
+    fields: Vec<(String, Option<SqlParam>)>,
+) -> IpeTask<E, i64> {
+    Box::pin(async move {
+        let (sql, args) = match build_upsert_sql("db.upsertFields", &table, conflict_target, fields)
+        {
+            Ok(v) => v,
+            Err(e) => return IpeResult::Err(e.into()),
+        };
+        let sql = db_format_sql(sql);
+        let mut q = sqlx::query(&sql);
+        for p in args {
+            q = bind_sql_param(q, p);
+        }
+        match exec_routed(&conn, q).await {
+            Ok(res) => ok_res(res.rows_affected() as i64),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
+        }
+    })
+}
+
 /// `Db.insertFieldsReturning : Db -> String -> List (String, SqlField) -> String -> Decoder a -> Task Error (List a)`
 ///
 /// Builds the same OmitField-aware INSERT as `db_insert_fields`, appends
@@ -6975,6 +7127,218 @@ mod tests {
         }
     }
 
+    fn upsert_sql(
+        target: &[&str],
+        fields: Vec<(&str, Option<SqlParam>)>,
+    ) -> Result<(String, Vec<SqlParam>), String> {
+        build_upsert_sql(
+            "db.upsertFields",
+            "kv",
+            target.iter().map(|c| (*c).to_string()).collect(),
+            fields
+                .into_iter()
+                .map(|(c, p)| (c.to_string(), p))
+                .collect(),
+        )
+    }
+
+    /// The statement is the one standard form both engines share: SET covers
+    /// every `SetField` column except the conflict target, as `excluded.<col>`;
+    /// an `OmitField` column appears nowhere.
+    #[test]
+    fn upsert_sql_updates_non_target_set_fields_from_excluded() {
+        let built = upsert_sql(
+            &["k"],
+            vec![
+                ("k", Some(SqlParam::Text("a".to_string()))),
+                ("v", Some(SqlParam::Text("1".to_string()))),
+                ("created_at", None),
+                ("n", Some(SqlParam::Int(7))),
+            ],
+        );
+        assert!(
+            matches!(
+                &built,
+                Ok((sql, args)) if sql == "INSERT INTO kv (k, v, n) VALUES (?, ?, ?) \
+                    ON CONFLICT (k) DO UPDATE SET v = excluded.v, n = excluded.n"
+                    && args.len() == 3
+            ),
+            "unexpected upsert SQL: {built:?}"
+        );
+    }
+
+    /// Nothing left to SET once the target and the `OmitField` columns are
+    /// excluded → `DO NOTHING` (insert-if-absent), never an empty `SET`.
+    #[test]
+    fn upsert_sql_with_empty_set_list_is_do_nothing() {
+        let built = upsert_sql(
+            &["a", "b"],
+            vec![
+                ("a", Some(SqlParam::Int(1))),
+                ("b", Some(SqlParam::Int(2))),
+                ("created_at", None),
+            ],
+        );
+        assert!(
+            matches!(
+                &built,
+                Ok((sql, _)) if sql == "INSERT INTO kv (a, b) VALUES (?, ?) \
+                    ON CONFLICT (a, b) DO NOTHING"
+            ),
+            "empty SET must degrade to DO NOTHING: {built:?}"
+        );
+    }
+
+    /// Every malformed upsert is refused before any SQL string exists.
+    #[test]
+    fn upsert_sql_refuses_malformed_requests() {
+        let key = || ("k", Some(SqlParam::Text("a".to_string())));
+        let cases = [
+            (
+                "hostile table",
+                build_upsert_sql(
+                    "db.upsertFields",
+                    "kv; DROP TABLE kv",
+                    vec!["k".to_string()],
+                    vec![("k".to_string(), Some(SqlParam::Int(1)))],
+                ),
+            ),
+            (
+                "hostile set column",
+                upsert_sql(&["k"], vec![key(), ("v = 1; --", Some(SqlParam::Int(1)))]),
+            ),
+            (
+                "hostile conflict-target column",
+                upsert_sql(&["k) DO NOTHING; --"], vec![key()]),
+            ),
+            (
+                "dotted column (no qualifier allowed in excluded.<col>)",
+                upsert_sql(&["k"], vec![key(), ("kv.v", Some(SqlParam::Int(1)))]),
+            ),
+            (
+                "dotted conflict-target column",
+                upsert_sql(&["kv.k"], vec![key()]),
+            ),
+            ("empty conflict target", upsert_sql(&[], vec![key()])),
+            (
+                "duplicate column (case-insensitive)",
+                upsert_sql(&["k"], vec![key(), ("K", Some(SqlParam::Int(1)))]),
+            ),
+            (
+                "duplicate conflict-target column",
+                upsert_sql(&["k", "K"], vec![key()]),
+            ),
+            (
+                "conflict-target column absent from fields",
+                upsert_sql(&["id"], vec![key()]),
+            ),
+            (
+                "conflict-target column is OmitField",
+                upsert_sql(&["id"], vec![key(), ("id", None)]),
+            ),
+        ];
+        for (label, built) in cases {
+            assert!(built.is_err(), "{label} must be refused, got {built:?}");
+        }
+    }
+
+    /// Round-trip on SQLite: a conflicting upsert UPDATES the row in place —
+    /// rowid unchanged, the column outside the SET list preserved, still one
+    /// row — the semantics `INSERT OR REPLACE` would break. A `DO NOTHING`
+    /// upsert meeting the existing row affects zero rows.
+    #[tokio::test]
+    async fn upsert_fields_updates_in_place_on_sqlite() {
+        let db = fresh_db().await;
+        let mk: IpeResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT, note TEXT DEFAULT 'none')".to_string(),
+        )
+        .await;
+        assert!(matches!(mk, IpeResult::Ok(_)), "create: {mk:?}");
+
+        let upsert = |v: &str| {
+            db_upsert_fields::<String>(
+                db.clone(),
+                "kv".to_string(),
+                vec!["k".to_string()],
+                vec![
+                    ("k".to_string(), Some(SqlParam::Text("a".to_string()))),
+                    ("v".to_string(), Some(SqlParam::Text(v.to_string()))),
+                    ("note".to_string(), None),
+                ],
+            )
+        };
+        let first = upsert("1").await;
+        assert!(matches!(first, IpeResult::Ok(1)), "insert: {first:?}");
+        let noted: IpeResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "UPDATE kv SET note = 'kept' WHERE k = 'a'".to_string(),
+        )
+        .await;
+        assert!(matches!(noted, IpeResult::Ok(1)), "note: {noted:?}");
+        // A later row raises max(rowid), so a delete-then-insert of `a` would
+        // be assigned a fresh rowid rather than reusing its old one.
+        let other: IpeResult<String, i64> = db_exec_raw(
+            db.clone(),
+            "INSERT INTO kv (k, v) VALUES ('b', 'x')".to_string(),
+        )
+        .await;
+        assert!(matches!(other, IpeResult::Ok(1)), "second row: {other:?}");
+
+        let read = || {
+            db_query_params::<String>(
+                db.clone(),
+                "SELECT rowid AS rid, v, note FROM kv WHERE k = 'a'".to_string(),
+                Vec::new(),
+            )
+        };
+        let before = read().await.with_default(Vec::new());
+        let rid_before = before.first().and_then(|r| r.get("rid")).cloned();
+        assert!(rid_before.is_some(), "row missing after insert: {before:?}");
+
+        let second = upsert("2").await;
+        assert!(matches!(second, IpeResult::Ok(1)), "update: {second:?}");
+        let after = read().await.with_default(Vec::new());
+        assert_eq!(
+            after.len(),
+            1,
+            "conflict must update, not add a row: {after:?}"
+        );
+        let all: IpeResult<String, Vec<HashMap<String, String>>> =
+            db_query_params(db.clone(), "SELECT k FROM kv".to_string(), Vec::new()).await;
+        assert_eq!(all.with_default(Vec::new()).len(), 2, "row count changed");
+        let row = after.first();
+        assert_eq!(
+            row.and_then(|r| r.get("rid")).cloned(),
+            rid_before,
+            "rowid changed"
+        );
+        assert_eq!(row.and_then(|r| r.get("v")).map(String::as_str), Some("2"));
+        assert_eq!(
+            row.and_then(|r| r.get("note")).map(String::as_str),
+            Some("kept"),
+            "column outside the SET list must be preserved"
+        );
+
+        let key_only: IpeResult<String, i64> = db_upsert_fields(
+            db.clone(),
+            "kv".to_string(),
+            vec!["k".to_string()],
+            vec![("k".to_string(), Some(SqlParam::Text("a".to_string())))],
+        )
+        .await;
+        assert!(
+            matches!(key_only, IpeResult::Ok(0)),
+            "DO NOTHING on an existing key affects no row: {key_only:?}"
+        );
+        let last = read().await.with_default(Vec::new());
+        assert_eq!(
+            last.first().and_then(|r| r.get("v")).map(String::as_str),
+            Some("2"),
+            "DO NOTHING must leave the row untouched"
+        );
+    }
+
     #[tokio::test]
     async fn update_fields_refuses_unscoped_update() {
         let db = fresh_db().await;
@@ -7567,6 +7931,36 @@ mod tests {
                     hs.clone(),
                     vec![("title".to_string(), Some(SqlParam::Text("x".to_string())))],
                     sql_eq(sql_column("id".to_string()), sql_param("1".to_string())),
+                )
+            );
+            assert_rejects!(
+                "db_upsert_fields(table)",
+                db_upsert_fields(
+                    db.clone(),
+                    hs.clone(),
+                    vec!["id".to_string()],
+                    vec![("id".to_string(), Some(SqlParam::Int(1)))],
+                )
+            );
+            assert_rejects!(
+                "db_upsert_fields(column)",
+                db_upsert_fields(
+                    db.clone(),
+                    "todos".to_string(),
+                    vec!["id".to_string()],
+                    vec![
+                        ("id".to_string(), Some(SqlParam::Int(1))),
+                        (hs.clone(), Some(SqlParam::Text("x".to_string()))),
+                    ],
+                )
+            );
+            assert_rejects!(
+                "db_upsert_fields(conflict-target column)",
+                db_upsert_fields(
+                    db.clone(),
+                    "todos".to_string(),
+                    vec![hs.clone()],
+                    vec![(hs.clone(), Some(SqlParam::Text("x".to_string())))],
                 )
             );
             assert_rejects!(
