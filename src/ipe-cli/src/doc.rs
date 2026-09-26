@@ -4510,6 +4510,7 @@ fn render_html_tree_relative(nodes: &[NamespaceNode], out: &mut String) {
 fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script: &str) -> String {
     let header = render_header(NavSection::Diagnostic, "../", search_script);
     let mut body = String::from("<h1>Diagnostics</h1>\n");
+    body.push_str(&render_code_families());
     body.push_str("<ul class=\"index-entries index-table\">\n");
     let mut entries: Vec<&crate::doc_bundle::DocEntry> = bundle
         .entries_for_kind(crate::doc_bundle::DocKind::Diagnostic)
@@ -4531,6 +4532,28 @@ fn render_diagnostic_index(bundle: &crate::doc_bundle::DocBundle, search_script:
     }
     body.push_str("</ul>\n");
     html_page("Diagnostics", "../style.css", &header, &body)
+}
+
+/// The Diagnostics page's key to the code letters: what each `IPE-<letter>`
+/// family covers, read from the diagnostics family table
+/// ([`ipe_diagnostics::FAMILIES`]) so a new family appears here by
+/// construction.
+fn render_code_families() -> String {
+    let mut out = String::from(
+        "<p class=\"code-families-intro\">Every code reads <code>IPE-</code>, a family \
+         letter, and four digits. The letter names the part of the compiler that \
+         reports it:</p>\n<dl class=\"code-families\">\n",
+    );
+    for row in ipe_diagnostics::FAMILIES {
+        let _ = writeln!(
+            out,
+            "<dt><code>{}</code></dt><dd>{}</dd>",
+            row.letter,
+            html_escape(row.summary),
+        );
+    }
+    out.push_str("</dl>\n");
+    out
 }
 
 /// Render the CLI index page.
@@ -5001,6 +5024,33 @@ fn open_in_browser(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Diagnostics page explains every code letter, from the family table.
+    #[test]
+    fn diagnostics_page_explains_every_code_family() {
+        let page = render_diagnostic_index(&DocBundle::empty(), "");
+        for row in ipe_diagnostics::FAMILIES {
+            assert!(
+                page.contains(&format!("<dt><code>{}</code></dt>", row.letter)),
+                "family {} missing:\n{page}",
+                row.letter
+            );
+            assert!(page.contains(&html_escape(row.summary)), "{page}");
+        }
+    }
+
+    /// A member key routes to the lookup, whatever the case of the module path.
+    #[test]
+    fn a_member_key_is_a_symbol_key() {
+        assert!(is_symbol_key("Ipe.Time.unixMillis"));
+        assert!(is_symbol_key("List.map"));
+        assert!(!is_symbol_key("Ipe.List"));
+        assert!(!is_symbol_key("List"));
+        assert!(matches!(
+            parse_doc(&s(&["Ipe.Time.unixMillis"])),
+            Ok(DocMode::Lookup { .. })
+        ));
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| (*x).to_owned()).collect()
