@@ -4665,13 +4665,25 @@ fn collect_local_derived_tvars(
 ///     generics reaching that slot bare inherit the bound, whatever position the
 ///     call sits in. An argument of unrecoverable type, or of a shape the
 ///     parameter does not share, obliges every caller generic (fail closed).
+///   * Every user-function reference — a call in any position, a point-free
+///     value, a `let`-bound alias — carries the solved type it instantiates
+///     the callee at (`instances`, recorded by `Lowerer::note_callee_instance`).
+///     The callee's whole signature, return type included, is aligned against
+///     it ([`instance_tvars`]), so a generic the callee bounds only in its
+///     return type (`helper : Ui msg`) reaches the caller generic it is
+///     instantiated with, whichever position the reference sits in. The
+///     binder- and tail-keyed rules above stay as defence in depth: they also
+///     cover calls the lowerer synthesises without a source reference.
 ///
 /// The fixpoint iterates because propagation chains: a caller of `Store.toMaybe`
 /// that itself forwards its generic acquires the bound only once `toMaybe` has
 /// acquired it. Termination is guaranteed — each iteration only ever SETS bits
 /// in a finite [`BoundSet`], so the total bit count is monotone and bounded.
 #[allow(clippy::too_many_lines)] // A fixpoint pass with per-caller seeding + nested call walk.
-fn propagate_call_site_bounds(funcs: &mut [Func]) {
+fn propagate_call_site_bounds(
+    funcs: &mut [Func],
+    instances: &std::collections::HashMap<FuncId, Vec<CalleeInstance>>,
+) {
     // Callee lookup by raw id, plus a snapshot of each callee's (param types,
     // type-param bounds) so a caller can read a callee's obligations without
     // aliasing the `&mut [Func]` it is about to write.
@@ -4797,6 +4809,40 @@ fn propagate_call_site_bounds(funcs: &mut [Func]) {
                                 );
                             }
                         }
+                    }
+                }
+            }
+
+            // Instantiation propagation: every user-function reference the
+            // caller's body makes — a call in any position, a point-free value,
+            // a `let`-bound alias — was recorded at lowering time with the
+            // solved type it instantiates the callee at. Aligning the callee's
+            // full signature (parameters AND return type) against that type
+            // names exactly the caller generics each bounded callee generic is
+            // instantiated with, so a generic the callee bounds only in its
+            // return type (`helper : Ui msg` built from a `Sync`-bounded
+            // kernel, used as `Ui.column [] [ helper ]`) obliges the caller
+            // just as a forwarded argument does. An unknown instantiation
+            // fails closed (see [`instance_slot_tvars`]).
+            for instance in instances.get(&caller.id).into_iter().flatten() {
+                let Some(callee_idx) = by_id.get(&instance.callee.as_raw()).copied() else {
+                    continue;
+                };
+                let (Some(callee_param_tys), Some(callee_ret), Some(callee_tparams)) = (
+                    sig_param_tys.get(callee_idx),
+                    sig_rets.get(callee_idx),
+                    sig_tparams.get(callee_idx),
+                ) else {
+                    continue;
+                };
+                for (g, gbound) in callee_tparams {
+                    if !(gbound.has_sync() || gbound.has_send() || gbound.has_static()) {
+                        continue;
+                    }
+                    for tv in
+                        instance_tvars(callee_param_tys, callee_ret, *g, instance, &caller_tvars)
+                    {
+                        oblige_auto_traits(add.entry(tv).or_insert(BoundSet::UNBOUNDED), *gbound);
                     }
                 }
             }
@@ -4974,6 +5020,94 @@ fn align_ret_tvars(sig: &IrType, target: Symbol, site: &IrType, out: &mut Vec<Sy
         }
         _ => {}
     }
+}
+
+/// One slot of a user-function reference's solved instantiation, in the referencing def's generics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SiteSlot {
+    /// The slot's solved type, lowered.
+    Lowered(IrType),
+    /// The slot's solved type does not lower; the def generics it mentions anywhere.
+    Unlowered(Vec<Symbol>),
+}
+
+/// A user-function reference in a def body, paired with the solved type it instantiates the callee at.
+///
+/// Recorded for every call and every point-free value reference alike, so a
+/// callee generic is aligned against its instantiation wherever it sits in
+/// the callee's signature — a parameter, the return type, or behind an arrow
+/// — and whatever position the reference occupies in the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CalleeInstance {
+    callee: FuncId,
+    /// The `i`-th curried arrow parameter of the reference's solved type.
+    params: Vec<SiteSlot>,
+    /// The solved type left after peeling `d` arrows, at index `d`.
+    ///
+    /// Empty when the reference has no solved type, so every lookup misses
+    /// and the alignment fails closed.
+    tails: Vec<SiteSlot>,
+}
+
+/// The caller generics a callee generic `target` is instantiated with through one signature slot.
+///
+/// `sig` is the callee's declared slot type, `site` the reference's solved
+/// slot. A slot that does not mention `target` obliges nothing; a missing
+/// `site` (the reference type is unknown, or shallower than the callee's
+/// arity) obliges every caller generic; a lowered `site` of a shape `sig`
+/// does not share obliges every caller generic the site mentions, since the
+/// instantiation is one of its subterms.
+fn instance_slot_tvars(
+    sig: &IrType,
+    target: Symbol,
+    site: Option<&SiteSlot>,
+    caller_tvars: &[Symbol],
+) -> Vec<Symbol> {
+    if !ir_type_mentions_generic(sig, target) {
+        return Vec::new();
+    }
+    match site {
+        None => caller_tvars.to_vec(),
+        Some(SiteSlot::Unlowered(mentioned)) => mentioned.clone(),
+        Some(SiteSlot::Lowered(site)) => aligned_param_tvars(sig, target, site, caller_tvars)
+            .unwrap_or_else(|| {
+                caller_tvars
+                    .iter()
+                    .copied()
+                    .filter(|tv| ir_type_mentions_generic(site, *tv))
+                    .collect()
+            }),
+    }
+}
+
+/// The caller generics a bounded callee generic `target` is instantiated with at one reference.
+///
+/// Aligns the callee's full signature — each parameter, then the return type
+/// — against the reference's solved instantiation (see [`instance_slot_tvars`]).
+fn instance_tvars(
+    callee_params: &[IrType],
+    callee_ret: &IrType,
+    target: Symbol,
+    instance: &CalleeInstance,
+    caller_tvars: &[Symbol],
+) -> Vec<Symbol> {
+    let slots = callee_params
+        .iter()
+        .enumerate()
+        .map(|(i, sig)| (sig, instance.params.get(i)))
+        .chain(std::iter::once((
+            callee_ret,
+            instance.tails.get(callee_params.len()),
+        )));
+    let mut out: Vec<Symbol> = Vec::new();
+    for (sig, site) in slots {
+        for tv in instance_slot_tvars(sig, target, site, caller_tvars) {
+            if !out.contains(&tv) {
+                out.push(tv);
+            }
+        }
+    }
+    out
 }
 
 /// Fold `from`'s auto-trait and lifetime bits (`Sync`/`Send`/`'static`) into `slot`.
@@ -9694,6 +9828,11 @@ pub struct Lowerer<'a> {
     /// Recorded at every kernel reference by [`Self::note_sync_captures`],
     /// folded into the def's generic bounds when it is finalized. Cleared per def.
     sync_obliged_tvars: std::cell::RefCell<BTreeSet<Symbol>>,
+    /// The current def's user-function references, each with the solved type
+    /// it instantiates the callee at. Recorded at every reference by
+    /// [`Self::note_callee_instance`], drained per def into the cross-call
+    /// bound propagation ([`propagate_call_site_bounds`]). Cleared per def.
+    callee_instances: std::cell::RefCell<Vec<CalleeInstance>>,
     /// A `let`-bound local that names a top-level function, mapped to that
     /// function's `(module, name)` key — a point-free alias `let w = wrap`.
     ///
@@ -11440,6 +11579,7 @@ impl<'a> Lowerer<'a> {
             promotable_fn_binders: std::cell::RefCell::new(BTreeSet::new()),
             deferred_fun_captures: std::cell::RefCell::new(BTreeMap::new()),
             sync_obliged_tvars: std::cell::RefCell::new(BTreeSet::new()),
+            callee_instances: std::cell::RefCell::new(Vec::new()),
             toplevel_fn_aliases: std::cell::RefCell::new(BTreeMap::new()),
             local_string_literals: std::cell::RefCell::new(BTreeMap::new()),
             shared_fn_reads: std::cell::RefCell::new(BTreeMap::new()),
@@ -13674,6 +13814,10 @@ impl<'a> Lowerer<'a> {
         // is actually used, so a program that never calls it keeps the accessor
         // pruned.
         let mut duration_to_millis_id: Option<FuncId> = None;
+        // Each def's user-function references with their solved
+        // instantiations, for the cross-call bound propagation below.
+        let mut callee_instances: std::collections::HashMap<FuncId, Vec<CalleeInstance>> =
+            std::collections::HashMap::with_capacity(self.m.defs.len());
         for (idx, def) in self.m.defs.iter().enumerate() {
             // Positional id: `func_ids` was assigned from this very
             // enumeration order in `new()` under the unique-`(home, name)`
@@ -13699,6 +13843,7 @@ impl<'a> Lowerer<'a> {
             // its needed default pin. Centralised here so no `lower_def` branch
             // can silently miss it.
             func.body = clear_let_bound_task_fail_pins(func.body);
+            callee_instances.insert(func.id, self.callee_instances.take());
             if self.interner.resolve(func.name) == Some("main") {
                 entry = Some(func.id);
                 entry_span = Some(def.name().span);
@@ -13736,7 +13881,7 @@ impl<'a> Lowerer<'a> {
         // obligation onto the caller's forwarded tvar, so the emitted caller
         // proves the bound instead of cargo-failing E0277 (an
         // exit-0-then-cargo-fail SEAL break).
-        propagate_call_site_bounds(&mut funcs);
+        propagate_call_site_bounds(&mut funcs, &callee_instances);
 
         // when any Db kernel call is present, inject the synthetic
         // `SqlValue` and `SqlField` `EnumDef`s into `module.types`.  They are
@@ -15020,6 +15165,7 @@ impl<'a> Lowerer<'a> {
         // must not leak its signals into the next def.
         self.deferred_fun_captures.borrow_mut().clear();
         self.sync_obliged_tvars.borrow_mut().clear();
+        self.callee_instances.borrow_mut().clear();
         // Eta names are scope-local to one function: reset the monotonic cursor so
         // each def draws `eta_0, eta_1, …` afresh. Within the def the cursor only
         // advances (never reuses), so no two live eta binders collide even when a
@@ -24775,10 +24921,62 @@ impl<'a> Lowerer<'a> {
     fn lower_callee(&self, callee: &canon::Expr) -> DResult<Callee> {
         let resolved = self.lower_callee_resolve(callee)?;
         self.reject_curried_andmap_payload(&resolved, callee)?;
-        if let Callee::Kernel(kernel) = resolved {
-            self.note_sync_captures(kernel, callee.span);
+        match &resolved {
+            Callee::Kernel(kernel) => self.note_sync_captures(*kernel, callee.span),
+            Callee::Func(id) => self.note_callee_instance(*id, callee.span),
+            Callee::Ffi { .. } => {}
         }
         Ok(resolved)
+    }
+
+    /// Record a user-function reference with the solved type it instantiates the callee at.
+    ///
+    /// Every call and point-free value reference resolves through
+    /// [`Self::lower_callee`], so each reference is recorded whatever position
+    /// it sits in. The reference's region type (`span`) is split into its
+    /// curried arrow parameters and the tail left after each peel, each lowered
+    /// in the current def's generics; [`propagate_call_site_bounds`] aligns the
+    /// callee's signature against them once every callee's bounds are known.
+    /// A slot that does not lower keeps the def generics it mentions; a
+    /// missing region type records no slots, so alignment fails closed. A def
+    /// with no generics has nothing to oblige and records nothing.
+    fn note_callee_instance(&self, callee: FuncId, span: Span) {
+        let poly: BTreeSet<Symbol> = self.current_poly_tvars.borrow().values().copied().collect();
+        if poly.is_empty() {
+            return;
+        }
+        let slot = |t: &Ty| {
+            self.ir_type_from_ty(t, span).map_or_else(
+                |_| {
+                    SiteSlot::Unlowered(
+                        poly.iter()
+                            .copied()
+                            .filter(|tv| self.ty_mentions_poly_tvar(t, *tv))
+                            .collect(),
+                    )
+                },
+                SiteSlot::Lowered,
+            )
+        };
+        let mut params = Vec::new();
+        let mut tails = Vec::new();
+        // Bounded by the solved type's own arrow depth.
+        let mut cur = self.region_ty(span);
+        while let Some(t) = cur {
+            tails.push(slot(t));
+            cur = match t {
+                Ty::Fun(arg, rest) => {
+                    params.push(slot(arg));
+                    Some(rest.as_ref())
+                }
+                _ => None,
+            };
+        }
+        self.callee_instances.borrow_mut().push(CalleeInstance {
+            callee,
+            params,
+            tails,
+        });
     }
 
     /// Record the `Sync` obligation a sync-capturing kernel reference places on the def's generics.
@@ -31844,5 +32042,112 @@ mod tests {
         assert_eq!(site_types.get(&f), Some(&None));
         super::record_site_type(&mut site_types, f, Some(IrType::Int));
         assert_eq!(site_types.get(&f), Some(&None));
+    }
+
+    /// `instance_tvars` aligns a callee's full signature against one reference's solved instantiation.
+    ///
+    /// A `msg` bounded only in the callee's return type (`helper : Html msg`)
+    /// is instantiated by the reference's tail after peeling the callee's
+    /// arity; a parameter slot aligns the same way. The refusals fail closed:
+    /// an unknown reference type (no slots) obliges every caller generic, an
+    /// unlowered slot the generics it mentions, and a shape the signature
+    /// does not share every caller generic the site mentions.
+    #[test]
+    fn instance_tvars_aligns_return_and_parameter_slots() {
+        use super::{CalleeInstance, SiteSlot};
+        let mut interner = Interner::new();
+        let mut intern = |name: &str| interner.intern(name).expect("intern type variable name");
+        let (msg, t, u) = (intern("msg"), intern("t"), intern("u"));
+        let html = |m: IrType| IrType::Ui {
+            ctor: ipe_ir::UiCtor::Html,
+            msg: Box::new(m),
+        };
+        let caller = [t, u];
+        let instance = |params: Vec<SiteSlot>, tails: Vec<SiteSlot>| CalleeInstance {
+            callee: ipe_ir::FuncId::from_raw(0),
+            params,
+            tails,
+        };
+        let lowered = SiteSlot::Lowered;
+
+        // Return-only generic, nullary helper referenced as a value.
+        let ret = html(IrType::Generic(msg));
+        let site = instance(vec![], vec![lowered(html(IrType::Generic(t)))]);
+        assert_eq!(
+            super::instance_tvars(&[], &ret, msg, &site, &caller),
+            vec![t]
+        );
+
+        // The same return with one parameter: the tail after one peel is the
+        // instantiated return.
+        let params = [IrType::Int];
+        let site = instance(
+            vec![lowered(IrType::Int)],
+            vec![
+                lowered(IrType::Fun(
+                    vec![IrType::Int],
+                    Box::new(html(IrType::Generic(u))),
+                )),
+                lowered(html(IrType::Generic(u))),
+            ],
+        );
+        assert_eq!(
+            super::instance_tvars(&params, &ret, msg, &site, &caller),
+            vec![u]
+        );
+
+        // A generic in a parameter slot behind an arrow.
+        let callback = [IrType::Fun(
+            vec![IrType::Bool],
+            Box::new(IrType::Generic(msg)),
+        )];
+        let site = instance(
+            vec![lowered(IrType::Fun(
+                vec![IrType::Bool],
+                Box::new(IrType::Generic(t)),
+            ))],
+            vec![],
+        );
+        assert_eq!(
+            super::instance_tvars(&callback, &IrType::Unit, msg, &site, &caller),
+            vec![t]
+        );
+
+        // A concrete instantiation obliges nothing.
+        let site = instance(vec![], vec![lowered(html(IrType::Str))]);
+        assert!(super::instance_tvars(&[], &ret, msg, &site, &caller).is_empty());
+
+        // Refusals: an unknown reference type obliges every caller generic.
+        let site = instance(vec![], vec![]);
+        assert_eq!(
+            super::instance_tvars(&[], &ret, msg, &site, &caller),
+            vec![t, u]
+        );
+        // A reference type shallower than the callee's arity does too.
+        let site = instance(vec![], vec![lowered(html(IrType::Generic(t)))]);
+        assert_eq!(
+            super::instance_tvars(&params, &ret, msg, &site, &caller),
+            vec![t, u]
+        );
+        // An unlowered slot obliges the generics it mentions.
+        let site = instance(vec![], vec![SiteSlot::Unlowered(vec![u])]);
+        assert_eq!(
+            super::instance_tvars(&[], &ret, msg, &site, &caller),
+            vec![u]
+        );
+        // A shape the signature does not share obliges every generic the site mentions.
+        let site = instance(
+            vec![],
+            vec![lowered(IrType::List(Box::new(IrType::Generic(t))))],
+        );
+        assert_eq!(
+            super::instance_tvars(&[], &ret, msg, &site, &caller),
+            vec![t]
+        );
+        // A signature that never mentions the target imposes nothing.
+        assert!(
+            super::instance_tvars(&[], &IrType::Int, msg, &instance(vec![], vec![]), &caller)
+                .is_empty()
+        );
     }
 }
