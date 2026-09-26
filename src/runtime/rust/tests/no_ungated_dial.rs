@@ -201,10 +201,10 @@ fn mask_non_code(src: &str) -> String {
                     i += 1;
                 } else if c == '\\' && i + 1 < n {
                     out[i] = ' ';
-                    if let Some(o) = out.get_mut(i + 1) {
-                        if chars[i + 1] != '\n' {
-                            *o = ' ';
-                        }
+                    if let Some(o) = out.get_mut(i + 1)
+                        && chars[i + 1] != '\n'
+                    {
+                        *o = ' ';
                     }
                     i += 2;
                 } else {
