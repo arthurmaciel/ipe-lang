@@ -223,6 +223,9 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
                 String::new()
             }
         };
+        // One timestamp for the whole repo so the initial-seed events order
+        // stably (enqueued_at is a tiebreaker in `pending`'s ORDER BY).
+        let now = diff::now_millis();
         for f in &files {
             let Some(src) = read_capped(root, &f.path) else {
                 continue;
@@ -250,6 +253,22 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
                 && (role == model::Role::Fixture || role == model::Role::Example)
             {
                 coverage::record_coverage(&store, &tagged, &src)?;
+            }
+            // Seed the review queue: on a fresh index every unit is new. Diffing
+            // the just-extracted units against an empty baseline yields exactly
+            // the `new` events the incremental `update` path emits, so the review
+            // app has a full backlog after the first `index` (not only after a
+            // later change re-enqueues one).
+            let new = store.units_for_path(&tagged)?;
+            for ev in diff::diff_units(&[], &new) {
+                store.enqueue_change(
+                    &ev.uid,
+                    ev.change,
+                    ev.old_hash.as_deref(),
+                    ev.new_hash.as_deref(),
+                    &sha,
+                    now,
+                )?;
             }
         }
         // Per-repo HEAD sha so an incremental `update` can diff each.
