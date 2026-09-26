@@ -155,12 +155,33 @@ fn split_top_level(s: &str) -> Vec<&str> {
     parts
 }
 
+/// The signature patterns the scan matches, compiled once per test run.
+struct Patterns {
+    fn_re: regex::Regex,
+    where_re: regex::Regex,
+    sync_re: regex::Regex,
+    closure_re: regex::Regex,
+}
+
+impl Patterns {
+    fn new() -> Result<Self, regex::Error> {
+        Ok(Self {
+            fn_re: regex::Regex::new(r"\bpub (?:async )?fn ([a-z_][a-z0-9_]*)\s*<")?,
+            where_re: regex::Regex::new(r"\bwhere\b")?,
+            sync_re: regex::Regex::new(r"\bSync\b")?,
+            closure_re: regex::Regex::new(r"\bFn(?:Mut|Once)?\s*\(")?,
+        })
+    }
+}
+
 /// The number of value type parameters each runtime function in `src` bounds `Sync`, by name.
-fn sync_value_params(src: &str) -> BTreeMap<String, usize> {
-    let fn_re = regex::Regex::new(r"\bpub (?:async )?fn ([a-z_][a-z0-9_]*)\s*<").expect("fn_re");
-    let where_re = regex::Regex::new(r"\bwhere\b").expect("where_re");
-    let sync_re = regex::Regex::new(r"\bSync\b").expect("sync_re");
-    let closure_re = regex::Regex::new(r"\bFn(?:Mut|Once)?\s*\(").expect("closure_re");
+fn sync_value_params(patterns: &Patterns, src: &str) -> BTreeMap<String, usize> {
+    let Patterns {
+        fn_re,
+        where_re,
+        sync_re,
+        closure_re,
+    } = patterns;
     let src = strip_line_comments(src);
     let mut found = BTreeMap::new();
     for cap in fn_re.captures_iter(&src) {
@@ -206,18 +227,18 @@ fn sync_value_params(src: &str) -> BTreeMap<String, usize> {
     found
 }
 
-fn walk(dir: &Path, out: &mut BTreeMap<String, usize>) {
+fn walk(dir: &Path, patterns: &Patterns, out: &mut BTreeMap<String, usize>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            walk(&path, out);
+            walk(&path, patterns, out);
         } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
             && let Ok(content) = std::fs::read_to_string(&path)
         {
-            for (name, count) in sync_value_params(&content) {
+            for (name, count) in sync_value_params(patterns, &content) {
                 let slot = out.entry(name).or_insert(0);
                 *slot = (*slot).max(count);
             }
@@ -234,7 +255,8 @@ const fn registry_len(kernel: StdlibKernel) -> usize {
 fn every_sync_bounded_runtime_fn_is_owned_by_a_registry() {
     let runtime_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut scanned = BTreeMap::new();
-    walk(&runtime_src, &mut scanned);
+    let patterns = Patterns::new().expect("the scan patterns compile");
+    walk(&runtime_src, &patterns, &mut scanned);
 
     let scanned_names: BTreeSet<&str> = scanned.keys().map(String::as_str).collect();
     let listed_names: BTreeSet<&str> = SYNC_SITES.iter().map(|(name, _)| *name).collect();

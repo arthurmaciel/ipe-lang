@@ -2967,7 +2967,7 @@ appOf step render toMsg =
 /// A `Worker.tea` built by a helper generic over its message type is refused.
 #[test]
 fn generic_msg_worker_tea_rejected() {
-    let src = r#"module Main exposing (main)
+    let src = r"module Main exposing (main)
 import Ipe.Tea.Worker
 import Ipe.Tea.Worker.Cmd as Cmd
 import Ipe.Tea.Worker.Sub as Sub
@@ -2989,7 +2989,7 @@ workerOf step =
         , update = step
         , subscriptions = \_ -> Sub.none
         }
-"#;
+";
     assert_rejected("generic_msg_worker_tea", src, "IPE-N0051");
 }
 
