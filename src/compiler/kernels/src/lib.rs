@@ -203,10 +203,10 @@ impl AppSurface {
     /// `Ipe.Tea.Terminal.{Cmd,Sub}` for either terminal surface.
     #[must_use]
     pub fn admits_cmd_sub_of(self, segment: &str) -> bool {
-        match Self::from_segment(segment) {
-            Some(imported) => imported == self,
-            None => segment == "Terminal" && matches!(self, Self::Tui | Self::Cli),
-        }
+        Self::from_segment(segment).map_or_else(
+            || segment == "Terminal" && matches!(self, Self::Tui | Self::Cli),
+            |imported| imported == self,
+        )
     }
 }
 
