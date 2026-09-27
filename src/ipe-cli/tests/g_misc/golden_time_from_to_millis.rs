@@ -47,7 +47,7 @@ fn time_from_to_millis_emits() {
 /// Gated on `IPE_E2E=1`.
 #[test]
 fn time_from_to_millis_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

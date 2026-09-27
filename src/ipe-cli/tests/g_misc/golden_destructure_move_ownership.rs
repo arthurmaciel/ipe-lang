@@ -67,7 +67,7 @@ fn i224_destructure_ipec_accepts_and_clones_reused_component() {
 /// cargo-0 ∧ run-correct: gated on `IPE_E2E=1` — THE SEAL.
 #[test]
 fn i224_destructure_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

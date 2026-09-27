@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ipe_path_core = { path = "../path-core" }
+ipe_env = { path = "../env" }
 unicode-width = "0.1"
 
 [lints]

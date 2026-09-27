@@ -614,7 +614,7 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
             return Ok(sibling);
         }
     }
-    if let Some(paths) = std::env::var_os("PATH") {
+    if let Some(paths) = ipe_env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
             let candidate = dir.join("ipe-ffi-inspector");
             if candidate.is_file() {
@@ -695,7 +695,7 @@ fn toolchain_binds_from(
 fn jail_limits() -> ipe_sandbox::ResourceLimits {
     let mut limits = ipe_sandbox::ResourceLimits::default();
     let with_override = |var: &str, slot: &mut u64, scale: u64| {
-        if let Ok(raw) = std::env::var(var) {
+        if let Ok(raw) = ipe_env::var(var) {
             if let Ok(v) = raw.parse::<u64>().map(|v| v.saturating_mul(scale))
                 && v > 0
             {

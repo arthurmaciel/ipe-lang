@@ -53,7 +53,7 @@ fn emits_byte_identical_main_rs() {
 /// pre-reorder emit: `ipe`-accept must imply `cargo`-build.
 #[test]
 fn end_to_end_builds_and_prints_one() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

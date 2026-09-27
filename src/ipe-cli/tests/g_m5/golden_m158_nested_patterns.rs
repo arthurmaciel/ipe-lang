@@ -54,7 +54,7 @@ fn assert_accepted_runs(name: &str, expected_stdout: &str) {
     let (built, out) = built_code(&root, name);
     assert!(built.is_ok(), "{name}: must be accepted, got: {built:?}");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted(name, &out);

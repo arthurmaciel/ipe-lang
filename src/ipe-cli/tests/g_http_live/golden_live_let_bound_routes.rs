@@ -106,7 +106,7 @@ fn live_let_bound_routes_renders_route_page() {
 /// shared dependency target is reused, so the deps compile once, not per fixture.
 #[test]
 fn live_let_bound_routes_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Emit into a PRIVATE dir this test alone owns, so a compile-only sibling

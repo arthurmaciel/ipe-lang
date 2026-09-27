@@ -79,7 +79,7 @@ fn i225_depth0_no_overclone_ipec_accepts_lean() {
 /// and run — leanness never at the cost of soundness.
 #[test]
 fn i225_depth0_no_overclone_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

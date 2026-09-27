@@ -542,7 +542,7 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
 /// static (`ldd`) and runs. Gated: `IPE_E2E_STATIC=1`.
 #[test]
 fn end_to_end_static_binary_is_static_and_runs() {
-    if std::env::var("IPE_E2E_STATIC").is_err() {
+    if ipe_env::var("IPE_E2E_STATIC").is_err() {
         return;
     }
     let root = repo_root();
@@ -621,7 +621,7 @@ fn end_to_end_static_binary_is_static_and_runs() {
 /// static binary. Gated: `IPE_E2E_STATIC=1`.
 #[test]
 fn ipe_run_static_builds_and_executes_a_static_binary() {
-    if std::env::var("IPE_E2E_STATIC").is_err() {
+    if ipe_env::var("IPE_E2E_STATIC").is_err() {
         return;
     }
     let root = repo_root();

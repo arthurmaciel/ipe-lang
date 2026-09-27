@@ -109,7 +109,7 @@ fn subset_access_ipec_accepts_and_resolves_superset_struct() {
 /// `Ada`"), hand-verified against `the prior compiler`.
 #[test]
 fn subset_access_cargo_builds_and_prints_ada() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -193,7 +193,7 @@ fn subset_pattern_ipec_accepts_and_completes_superset_pattern() {
 /// (`Iri: Ada, Bo`).
 #[test]
 fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -416,7 +416,7 @@ fn accessor_ipec_accepts_and_resolves_concrete_getter() {
 /// `IPE_E2E=1`.
 #[test]
 fn accessor_cargo_builds_and_prints_names() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -513,7 +513,7 @@ fn row_poly_greet_lowers_and_monomorphises_two_shapes() {
 /// sites.
 #[test]
 fn row_poly_greet_cargo_builds_and_prints_both() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -608,7 +608,7 @@ fn row_poly_task_seq_row_read_routes_effect_through_getter() {
 /// `IPE_E2E=1`.
 #[test]
 fn row_poly_task_seq_row_read_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -796,7 +796,7 @@ fn captured_clone_field_read_is_ipe_l0131() {
 /// companion to the annotated `greet` slice. Gated on `IPE_E2E=1`.
 #[test]
 fn accessor_two_shapes_cargo_builds_and_prints_both() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -892,7 +892,7 @@ fn row_poly_multi_lowers_with_one_witness_bound_per_field() {
 /// labels, each field read off a different concrete shape. Gated on `IPE_E2E=1`.
 #[test]
 fn row_poly_multi_cargo_builds_and_prints_both() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -971,7 +971,7 @@ fn row_poly_passthrough_lowers_to_r1_to_r1() {
 /// field of the record passed through `touch`. Gated on `IPE_E2E=1`.
 #[test]
 fn row_poly_passthrough_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -1064,7 +1064,7 @@ fn row_poly_update_lowers_to_setter_witness() {
 /// bumped `n` for both shapes. Gated on `IPE_E2E=1`.
 #[test]
 fn row_poly_update_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -1134,7 +1134,7 @@ fn row_poly_map_update_funcvalue_lowers_and_builds() {
 /// bumped `n` concatenated with the `label`. Gated on `IPE_E2E=1`.
 #[test]
 fn row_poly_map_update_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

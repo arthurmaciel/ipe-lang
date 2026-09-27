@@ -94,7 +94,7 @@ fn i199_ipec_accepts_and_hoists() {
 /// emitted Rust cargo-builds (no E0507/E0382) and runs to the expected output.
 #[test]
 fn i199_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

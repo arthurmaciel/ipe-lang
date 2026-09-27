@@ -66,7 +66,7 @@ fn assert_ipec_ok(fixture: &str, out_suffix: &str) {
 /// stdout (covering the wrong-output witnesses, which compile fine but print a
 /// corrupted string when the textual rewrite corrupts a shared word).
 fn assert_e2e_output(fixture: &str, expect_contains: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

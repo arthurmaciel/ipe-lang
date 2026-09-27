@@ -27,7 +27,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn html_attributes_family_renders_and_escapes() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

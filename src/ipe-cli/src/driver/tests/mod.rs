@@ -555,7 +555,7 @@ fn generic_record_program_builds_and_prints_forty_two() {
          unwrap r =\n    r.value\n\n\
          main = Io.println (String.fromInt (unwrap (wrap 42)))\n";
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

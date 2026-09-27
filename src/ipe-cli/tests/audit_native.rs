@@ -225,7 +225,7 @@ mod real_jail {
     /// unused by the macOS `build_in_jail` (a present-primitive placeholder).
     #[cfg(target_os = "macos")]
     fn probe_tools() -> Option<RunJailTools> {
-        let path = std::env::var_os("PATH")?;
+        let path = ipe_env::var_os("PATH")?;
         let sandbox_exec = std::env::split_paths(&path)
             .map(|d| d.join("sandbox-exec"))
             .find(|p| p.is_file())?;
@@ -240,7 +240,7 @@ mod real_jail {
     /// unused by the FreeBSD `build_in_jail` (a present-primitive placeholder).
     #[cfg(target_os = "freebsd")]
     fn probe_tools() -> Option<RunJailTools> {
-        let path = std::env::var_os("PATH")?;
+        let path = ipe_env::var_os("PATH")?;
         let jail = std::env::split_paths(&path)
             .map(|d| d.join("jail"))
             .find(|p| p.is_file())?;
@@ -260,7 +260,7 @@ mod real_jail {
     /// `powershell.exe` the payload runs.
     #[cfg(target_os = "windows")]
     fn probe_tools() -> Option<RunJailTools> {
-        let path = std::env::var_os("PATH")?;
+        let path = ipe_env::var_os("PATH")?;
         let powershell = std::env::split_paths(&path)
             .map(|d| d.join("powershell.exe"))
             .find(|p| p.is_file())?;
@@ -275,7 +275,7 @@ mod real_jail {
     /// actually be established here (a clean-exit canary settles it once) —
     /// mirroring the sandbox crate's gate. Never a false pass.
     fn e2e_tools() -> Option<RunJailTools> {
-        if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+        if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
             return None;
         }
         let tools = probe_tools()?;
@@ -676,7 +676,7 @@ mod real_jail {
     }
 
     fn which_cargo() -> Option<PathBuf> {
-        let path = std::env::var_os("PATH")?;
+        let path = ipe_env::var_os("PATH")?;
         // `cargo` on POSIX, `cargo.exe` on Windows.
         let names: &[&str] = if cfg!(target_os = "windows") {
             &["cargo.exe", "cargo"]
@@ -722,9 +722,9 @@ mod real_jail {
     /// `$XDG_CACHE_HOME` or `~/.cache` — the write-boundary root the project
     /// pins scratch and target state under (never `/tmp`).
     fn dirs_cache_root() -> PathBuf {
-        std::env::var_os("XDG_CACHE_HOME")
+        ipe_env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .or_else(|| ipe_sandbox::home::home_dir().map(|h| h.join(".cache")))
             .expect("HOME or XDG_CACHE_HOME set")
     }
 
@@ -1112,7 +1112,7 @@ mod real_jail {
     /// an un-granted native capability is a compile error naming the dep.
     #[test]
     fn build_refuses_an_ungranted_native_crossing_naming_the_dep() {
-        if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+        if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
             return;
         }
         if ipe::resolve_runtime().is_err() {
@@ -1148,7 +1148,7 @@ mod real_jail {
     /// proves the gate admits a granted crossing rather than refusing everything.
     #[test]
     fn build_admits_a_granted_native_crossing_past_the_consent_gate() {
-        if std::env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
+        if ipe_env::var_os("IPE_E2E").is_none_or(|v| v != "1") {
             return;
         }
         if ipe::resolve_runtime().is_err() {

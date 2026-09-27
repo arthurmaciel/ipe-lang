@@ -290,7 +290,7 @@ fn tui_onkey_record_typechecks() {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn tui_counter_build_only() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 

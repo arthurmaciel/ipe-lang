@@ -130,7 +130,7 @@ fn build_run(name: &str) -> (PathBuf, crate::support::RunOutcome) {
 /// Compile/build/run the golden and assert its stdout matches the cached oracle.
 /// Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let (dir, outcome) = build_run(name);
@@ -506,7 +506,7 @@ fn dsn_parse() {
     assert_runs_and_matches_oracle("dsn_parse");
     // Belt-and-suspenders Secret non-leak proof: the password sentinel must be
     // absent from the emitted program's stdout even on the happy path.
-    if std::env::var("IPE_E2E").is_ok() {
+    if ipe_env::var("IPE_E2E").is_ok() {
         let (_dir, outcome) = build_run("dsn_parse");
         assert!(
             !outcome.stdout.contains("hunter2SENTINEL"),

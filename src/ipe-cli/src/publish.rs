@@ -630,7 +630,7 @@ impl SigningKey {
     /// readable regular file all yield `None`, which the caller turns into a
     /// fail-closed [`Refusal::UnsignedCommit`].
     fn from_env() -> Option<Self> {
-        Self::from_raw(std::env::var(Self::ENV).ok().as_deref())
+        Self::from_raw(ipe_env::var(Self::ENV).ok().as_deref())
     }
 
     /// The pure core of [`Self::from_env`]: turn a raw configuration value into a
@@ -921,7 +921,7 @@ fn commit_and_push_steps(
 /// carrying a quote, newline, or other non-alphabet byte selects the browser
 /// path rather than reaching curl's `--config` mini-language.
 fn publish_token() -> Option<crate::login::PublishToken> {
-    std::env::var("GITHUB_TOKEN")
+    ipe_env::var("GITHUB_TOKEN")
         .ok()
         .and_then(|t| crate::login::PublishToken::parse(&t))
         .or_else(crate::login::stored_token)

@@ -97,7 +97,7 @@ fn i198_ipec_accepts_and_renders_send_only_fnonce_param() {
 /// have caught the original SEAL violation (ipe-0, cargo-fail).
 #[test]
 fn i198_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

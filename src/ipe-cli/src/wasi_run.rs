@@ -254,7 +254,7 @@ mod engine {
         // not passed (never an empty-string surprise), and a var outside the
         // allowlist is never visible — the same subset the native jail scrubs to.
         for name in &profile.env_allowlist {
-            if let Some(value) = std::env::var_os(name) {
+            if let Some(value) = ipe_sandbox::host_env::granted(name) {
                 builder.env(name, value.to_string_lossy());
             }
         }

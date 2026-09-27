@@ -111,7 +111,7 @@ fn i193_oninput_ipec_accepts_and_hoists_capture_clone() {
 /// violation (E0382 from `cargo build`, invisible to `ipe`).
 #[test]
 fn i193_oninput_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

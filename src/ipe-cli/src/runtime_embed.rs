@@ -144,8 +144,8 @@ fn verify(root: &Path) -> Result<Option<ResolvedRuntime>, CliError> {
 ///   materialize into.
 pub fn ipe_home() -> Result<PathBuf, CliError> {
     ipe_home_from(
-        std::env::var_os("IPE_HOME"),
-        std::env::var_os("XDG_DATA_HOME"),
+        ipe_env::var_os("IPE_HOME"),
+        ipe_env::var_os("XDG_DATA_HOME"),
         crate::env_dir::home(),
     )
 }
@@ -452,7 +452,7 @@ pub fn materialize() -> Result<ResolvedRuntime, CliError> {
 ///   version is not the compiler's.
 /// - Any error from [`materialize`] when the embedded fallback is taken.
 pub fn resolve() -> Result<ResolvedRuntime, CliError> {
-    let resolved = if let Some(dir) = std::env::var_os("IPE_RUNTIME_DIR") {
+    let resolved = if let Some(dir) = ipe_env::var_os("IPE_RUNTIME_DIR") {
         resolve_override(&PathBuf::from(dir))?
     } else if let Some(in_repo) = resolve_in_repo()? {
         in_repo

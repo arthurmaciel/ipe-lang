@@ -103,7 +103,7 @@ fn i177_ipec_accepts_and_bounds_fn_not_struct() {
 /// violation (E0277 on `examples/27-multi-session-chat`, `ipe build` clean).
 #[test]
 fn i177_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

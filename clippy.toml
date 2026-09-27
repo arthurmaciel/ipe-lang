@@ -14,4 +14,12 @@ disallowed-methods = [
     { path = "std::panic::panic_any", reason = "a panic; return a Result or emit a diagnostic" },
     { path = "core::hint::unreachable_unchecked", reason = "UB; model the invariant in a type instead" },
     { path = "std::env::home_dir", reason = "an unvalidated home; read it through `ipe_sandbox::home::home_dir` (absolute or nothing)" },
+    # The process environment is read only by audited readers: `ipe_env` (refuses
+    # every home name), `ipe_sandbox::home` (the sole home reader, absolute or
+    # nothing), and `ipe_sandbox::host_env` (verbatim jail passthrough). The
+    # `home_read_scan` test pins which files may carry the per-site allow.
+    { path = "std::env::var", reason = "read through `ipe_env::var` (home names refused; the home is `ipe_sandbox::home::home_dir`)" },
+    { path = "std::env::var_os", reason = "read through `ipe_env::var_os` (home names refused; the home is `ipe_sandbox::home::home_dir`)" },
+    { path = "std::env::vars", reason = "a whole-environment iterator hands the home out under its own name; read named keys through `ipe_env`" },
+    { path = "std::env::vars_os", reason = "a whole-environment iterator hands the home out under its own name; read named keys through `ipe_env`" },
 ]

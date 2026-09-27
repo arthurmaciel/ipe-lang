@@ -95,7 +95,7 @@ fn i190_ipec_accepts_and_bounds_fn_static() {
 /// caught the original SEAL violation (E0310, `ipe build` clean).
 #[test]
 fn i190_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

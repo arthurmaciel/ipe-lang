@@ -81,7 +81,7 @@ fn i186_false_positive_ipec_no_spurious_display() {
 /// Gated on `IPE_E2E=1`.
 #[test]
 fn i186_false_positive_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

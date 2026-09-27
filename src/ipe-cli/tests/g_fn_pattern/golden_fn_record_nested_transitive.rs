@@ -49,7 +49,7 @@ fn nested_transitive_emits_byte_identical_main_rs() {
 
 #[test]
 fn nested_transitive_end_to_end_prints_twenty_seven() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

@@ -59,7 +59,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
          skips the promotion and re-opens the per-arm double-move E0382)"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("nonclone_fn_once_per_arm", &out);

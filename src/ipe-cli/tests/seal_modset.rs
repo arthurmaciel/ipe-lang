@@ -103,7 +103,7 @@ fn emit_and_build_vendored(name: &str, ipe_source: &str) -> Result<(), BoxError>
 
 /// True unless `IPE_E2E` is set — the per-shape `cargo build`s are expensive.
 fn skip() -> bool {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         eprintln!("seal_modset: set IPE_E2E=1 to run (each shape does a cargo build)");
         return true;
     }

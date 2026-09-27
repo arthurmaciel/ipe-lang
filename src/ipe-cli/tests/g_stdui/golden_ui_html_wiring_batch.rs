@@ -85,7 +85,7 @@ fn build_run_ui_html_wiring_batch() -> (PathBuf, crate::support::RunOutcome) {
 
 #[test]
 fn ui_html_wiring_batch_compiles_builds_and_renders_correctly() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -38,7 +38,7 @@ fn repo_root() -> PathBuf {
 /// move `s`, making the branches' reuse E0382.
 #[test]
 fn f1_multiuse_let_clone() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -82,7 +82,7 @@ fn f1_multiuse_let_clone() {
 /// `++ "[" ++ prefix ++ "]"` is E0382.
 #[test]
 fn f2_closure_capture_reuse() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -35,7 +35,7 @@ pub fn home() -> Option<PathBuf> {
 /// tool override is resolved by [`tool_home`] instead.
 #[must_use]
 pub fn ambient_home(var: &str, fallback: &str) -> Option<PathBuf> {
-    ambient_home_from(std::env::var_os(var), home(), fallback)
+    ambient_home_from(ipe_env::var_os(var), home(), fallback)
 }
 
 /// Resolve an ambient base directory from the raw variable value and the home.
@@ -58,7 +58,7 @@ pub fn ambient_home_from(
 /// # Errors
 /// [`CliError::EnvDirNotAbsolute`] when `var` is set, non-empty, and relative.
 pub fn tool_home(var: &'static str, fallback: &str) -> Result<Option<PathBuf>, CliError> {
-    tool_home_from(var, std::env::var_os(var), home(), fallback)
+    tool_home_from(var, ipe_env::var_os(var), home(), fallback)
 }
 
 /// Resolve a tool home from the raw variable value and the resolved home.

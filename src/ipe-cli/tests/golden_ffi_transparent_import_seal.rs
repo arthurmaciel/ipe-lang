@@ -229,7 +229,7 @@ fn transparent_import_emits_the_conversion_seam() {
 /// from, never what the emitted code says.
 #[test]
 fn transparent_import_emitted_crate_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -290,7 +290,7 @@ pub fn brightness(s: Shade) -> i64 {
     );
     fs::write(&manifest_path, patched).expect("patched Cargo.toml");
 
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let cargo = ipe_env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let run = std::process::Command::new(cargo)
         .arg("run")
         .arg("--quiet")

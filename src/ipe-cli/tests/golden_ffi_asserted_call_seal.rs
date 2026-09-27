@@ -352,7 +352,7 @@ fn analysis_entrypoints_accept_an_asserted_program() {
 /// crate — surfacing as a typed `Err`, proven by the printed branch.
 #[test]
 fn asserted_call_emitted_crate_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -413,7 +413,7 @@ pub fn boom(n: i64) -> i64 {
     );
     fs::write(&manifest_path, patched).expect("patched Cargo.toml");
 
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let cargo = ipe_env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let run = std::process::Command::new(cargo)
         .arg("run")
         .arg("--quiet")
@@ -534,7 +534,7 @@ fn a_result_typed_const_is_refused() {
 /// REAL foreign crate exposing the constants and runs, reading both values.
 #[test]
 fn const_read_emitted_crate_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let Ok(runtime) = ipe::resolve_runtime() else {
@@ -577,7 +577,7 @@ fn const_read_emitted_crate_builds_and_runs() {
     );
     fs::write(&manifest_path, patched).expect("patched Cargo.toml");
 
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let cargo = ipe_env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let run = std::process::Command::new(cargo)
         .arg("run")
         .arg("--quiet")

@@ -118,7 +118,7 @@ fn postgres_driver_selects_postgres_config_template() {
 /// alone cannot catch a missing Cargo feature dependency.
 #[test]
 fn postgres_driver_project_cargo_builds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let dir = write_project("postgres_cargo_build", ", build = { database = Postgres }");

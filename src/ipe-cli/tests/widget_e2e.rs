@@ -383,7 +383,7 @@ fn sri_of(bytes: &[u8]) -> String {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn ui_widget_serves_sri_glue_and_round_trips_up_event() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -689,7 +689,7 @@ fn emitted_source(out_dir: &std::path::Path) -> String {
 ///    `js_send`/`js_subscribe` this program lowers to.
 #[test]
 fn js_port_seal_legal_lowers_and_builds() -> Result<(), BoxError> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     // `compile_and_build` returns the built binary path; reaching it means both

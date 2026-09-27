@@ -62,7 +62,7 @@ fn json_decode_nullable_ipec_accepts_and_emits_shared_builder() {
 /// error on a present-but-malformed value (never swallowed). Gated on `IPE_E2E`.
 #[test]
 fn json_decode_nullable_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

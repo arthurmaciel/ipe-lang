@@ -127,7 +127,7 @@ pub struct BuildOptions {
 /// env-derived default.
 #[must_use]
 pub fn runtime_dep_from_env() -> bool {
-    !std::env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
+    !ipe_env::var("IPE_RUNTIME_VENDORED").is_ok_and(|v| v == "1")
 }
 
 /// The emitted-crate package name for a no-manifest (single-file) build, read
@@ -146,7 +146,7 @@ pub fn runtime_dep_from_env() -> bool {
 /// default — this lever changes nothing for a normal build.
 #[must_use]
 pub fn single_file_cargo_name_from_env() -> String {
-    std::env::var("IPE_EMIT_PACKAGE_NAME")
+    ipe_env::var("IPE_EMIT_PACKAGE_NAME")
         .ok()
         .map(|name| ipe_backend_rust::sanitize_cargo_name(&name))
         .unwrap_or_default()
@@ -182,8 +182,8 @@ fn canonical_project_dir(manifest_path: &Path) -> PathBuf {
 #[must_use]
 pub fn hot_appearance_enabled() -> bool {
     hot_appearance_from_env(
-        std::env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
-        std::env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_NO_HOT_APPEARANCE").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_HOT_APPEARANCE").ok().as_deref(),
     )
 }
 
@@ -208,7 +208,7 @@ pub fn hot_appearance_from_env(no_var: Option<&str>, hot_var: Option<&str>) -> b
 /// error whenever the banner is on, even with appearance hot-swap off.
 #[must_use]
 pub fn watch_banner_enabled() -> bool {
-    std::env::var("IPE_WEB_BANNER").map_or(true, |v| {
+    ipe_env::var("IPE_WEB_BANNER").map_or(true, |v| {
         let v = v.trim().to_ascii_lowercase();
         !(v == "off" || v == "0" || v == "false")
     })
@@ -228,8 +228,8 @@ pub fn watch_banner_enabled() -> bool {
 #[must_use]
 pub fn bluegreen_enabled() -> bool {
     bluegreen_from_env_values(
-        std::env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
-        std::env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_NO_BLUEGREEN").ok().as_deref(),
+        ipe_env::var("IPE_WATCH_BLUEGREEN").ok().as_deref(),
     )
 }
 
@@ -2384,7 +2384,7 @@ pub fn build_project_with_options(
 /// Returns [`CliError::RuntimeNotFound`] when no candidate directory exists, or
 /// [`CliError::Io`] if the current directory cannot be read.
 pub fn resolve_runtime() -> Result<PathBuf, CliError> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_RUNTIME_DIR") {
         let path = PathBuf::from(dir);
         if path.is_dir() {
             return Ok(path);

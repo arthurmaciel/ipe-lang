@@ -61,7 +61,7 @@ fn str_column_var_scrutinee_builds() {
 /// `scale(0.9)|other|F|T|1121` (see the fixture's arithmetic).
 #[test]
 fn str_column_var_scrutinee_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

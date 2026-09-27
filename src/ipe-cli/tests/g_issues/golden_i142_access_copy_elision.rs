@@ -109,7 +109,7 @@ fn copy_field_reads_bare_heap_field_keeps_clone() {
 /// exact expected value.
 #[test]
 fn copy_field_no_clone_compiles_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

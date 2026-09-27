@@ -15,12 +15,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `#[cfg(embed_mode)]` in main.rs.
     println!("cargo::rustc-check-cfg=cfg(embed_mode)");
 
-    let app_path = std::env::var_os("IPE_EMBED_APP");
-    let profile_path = std::env::var_os("IPE_EMBED_PROFILE");
+    let app_path = ipe_env::var_os("IPE_EMBED_APP");
+    let profile_path = ipe_env::var_os("IPE_EMBED_PROFILE");
 
     match (app_path, profile_path) {
         (Some(app), Some(profile)) => {
-            let out = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("OUT_DIR not set by cargo")?);
+            let out = PathBuf::from(ipe_env::var_os("OUT_DIR").ok_or("OUT_DIR not set by cargo")?);
             let app_dest = out.join("embedded-app");
             let profile_dest = out.join("embedded-profile");
             std::fs::copy(&app, &app_dest)?;

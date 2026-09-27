@@ -53,7 +53,7 @@ fn assert_accepted_and_builds(fixture: &str) {
         built.err()
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Build-only: the fixture is a listening server, so it cannot run-to-exit.

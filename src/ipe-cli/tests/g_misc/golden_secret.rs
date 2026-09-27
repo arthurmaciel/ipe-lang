@@ -25,7 +25,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project,

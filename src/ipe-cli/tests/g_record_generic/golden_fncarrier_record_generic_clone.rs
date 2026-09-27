@@ -99,7 +99,7 @@ fn fncarrier_record_generic_clone_ipec_accepts_and_impls_clone() {
 /// SEAL violation (ipe-0 then `RecReadSeed<T1> does not implement Clone`).
 #[test]
 fn fncarrier_record_generic_clone_cargo_builds_and_runs() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

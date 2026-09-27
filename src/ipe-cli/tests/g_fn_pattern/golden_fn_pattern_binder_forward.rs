@@ -54,7 +54,7 @@ fn pattern_binder_forward_emits_byte_identical_main_rs() {
 
 #[test]
 fn pattern_binder_forward_end_to_end_prints_nine() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

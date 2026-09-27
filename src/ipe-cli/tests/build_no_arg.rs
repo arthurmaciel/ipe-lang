@@ -103,7 +103,7 @@ fn run_no_arg_empty_dir_returns_usage_error() {
 /// Gated on `IPE_E2E=1` — requires a working cargo and `IPE_RUNTIME_DIR`.
 #[test]
 fn build_no_arg_in_project_dir_succeeds() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -149,7 +149,7 @@ fn build_no_arg_in_project_dir_succeeds() {
 /// Gated on `IPE_E2E=1`.
 #[test]
 fn build_flag_first_no_entry_resolves_default() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
 

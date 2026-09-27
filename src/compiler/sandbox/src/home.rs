@@ -6,20 +6,25 @@
 //! toolchain binds live, so it is parsed once here: an unset, empty, or
 //! relative value names no directory. A relative home would silently resolve
 //! against the working directory, redirecting writes to wherever the process
-//! happens to run.
+//! happens to run. `ipe_env` refuses every home name, so this module's raw
+//! read is the only way a compiler-side crate reaches the value.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 /// The platform variable naming the invoking user's home directory.
+///
+/// Private: the raw name is never handed out, so no caller can pair it with a
+/// raw environment read and skip the absolute-path parse in [`home_dir_from`].
 #[cfg(windows)]
-pub const HOME_VAR: &str = "USERPROFILE";
+const HOME_VAR: &str = "USERPROFILE";
 /// The platform variable naming the invoking user's home directory.
 #[cfg(not(windows))]
-pub const HOME_VAR: &str = "HOME";
+const HOME_VAR: &str = "HOME";
 
 /// The invoking user's home directory, when the environment names an absolute one.
 #[must_use]
+#[allow(clippy::disallowed_methods)] // the sole home reader: parsed absolute-or-nothing below
 pub fn home_dir() -> Option<PathBuf> {
     home_dir_from(std::env::var_os(HOME_VAR))
 }

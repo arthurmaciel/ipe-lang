@@ -453,7 +453,7 @@ fn transitive_server_import_fails_naming_the_exact_chain() {
 #[test]
 #[allow(clippy::expect_used)] // test setup: a failed emit/cargo-spawn IS the failure
 fn hydrate_glue_type_name_matches_emitted_struct_and_compiles_for_wasm() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     // Skip cleanly when the wasm target is not installed (cargo check would

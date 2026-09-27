@@ -74,7 +74,7 @@ fn enum_payload_emits_arc_carrier_and_clone() {
 
 #[test]
 fn enum_payload_end_to_end_prints_two_hundred_seven() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

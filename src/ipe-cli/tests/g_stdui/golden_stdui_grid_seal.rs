@@ -106,7 +106,7 @@ fn grid_module_resolves_and_emits_kernel() {
 /// in the HTML output — the seal, end to end.
 #[test]
 fn grid_e2e_builds_and_renders_grid_css() {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let (emit, res) = build_grid_project("e2e");

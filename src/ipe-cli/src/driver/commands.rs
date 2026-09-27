@@ -532,7 +532,7 @@ pub fn resolve_compile_target(
         cli_args::WasmKind::Wasi => return CompileTarget::WasmWasi,
         cli_args::WasmKind::None => {}
     }
-    match std::env::var("IPE_TARGET").ok().as_deref() {
+    match ipe_env::var("IPE_TARGET").ok().as_deref() {
         Some("wasm") => return CompileTarget::WasmClient,
         Some("wasi") => return CompileTarget::WasmWasi,
         _ => {}
@@ -2064,7 +2064,7 @@ pub fn bundle_wasm(crate_dir: &OwnedDir) -> Result<(), CliError> {
     // per-project fallback the emitted manifest's `[workspace]` detachment
     // would use).
     let wasm_path = {
-        let via_env = std::env::var_os("CARGO_TARGET_DIR").map(|d| {
+        let via_env = ipe_env::var_os("CARGO_TARGET_DIR").map(|d| {
             std::path::PathBuf::from(d)
                 .join("wasm32-unknown-unknown")
                 .join("release")

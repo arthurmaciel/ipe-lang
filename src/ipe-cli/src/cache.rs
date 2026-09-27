@@ -773,12 +773,12 @@ const fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
 #[must_use]
 pub fn env_cache_dir(out_dir: &Path) -> Option<CacheSite> {
     if matches!(
-        std::env::var("IPE_BUILD_CACHE").as_deref(),
+        ipe_env::var("IPE_BUILD_CACHE").as_deref(),
         Ok("0" | "off" | "false")
     ) {
         return None;
     }
-    if let Ok(dir) = std::env::var("IPE_BUILD_CACHE_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_BUILD_CACHE_DIR") {
         return Some(CacheSite::Explicit(PathBuf::from(dir)));
     }
     default_cache_site(out_dir)

@@ -29,7 +29,7 @@ fn golden_entry(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("IPE_E2E").is_ok()
+    ipe_env::var("IPE_E2E").is_ok()
 }
 
 /// Compile, build, and run the named golden fixture; return the captured

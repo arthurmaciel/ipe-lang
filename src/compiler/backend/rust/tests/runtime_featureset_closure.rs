@@ -112,7 +112,7 @@ fn sampled_masks(count: usize) -> Vec<u32> {
 /// Locate the runtime crate root (`src/runtime/rust`) — the manifest whose
 /// `[features]` universe and the `src/mod.rs` whose cfg gates this test reads.
 fn resolve_runtime_crate() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
+    if let Ok(dir) = ipe_env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         // Accept either the crate root or the legacy `src/` tree (walk up one).
         if p.join("Cargo.toml").is_file() {
@@ -1116,7 +1116,7 @@ fn uses_email_selects_email_feature() {
 /// Gated on `IPE_E2E=1`; skipped in offline / unit-test-only runs.
 #[test]
 fn email_parse_address_only_cargo_builds() -> DResult<()> {
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let Some(runtime) = seal_e2e::resolve_runtime() else {

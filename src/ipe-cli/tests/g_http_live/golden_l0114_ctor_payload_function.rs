@@ -128,7 +128,7 @@ fn result_and_map_fn_payload_accepted() {
         "Ok f |> Result.andMap must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("result_and_map_fn_payload", &out);
@@ -152,7 +152,7 @@ fn maybe_and_map_fn_payload_accepted() {
         "Just f |> Maybe.andMap must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("maybe_and_map_fn_payload", &out);
@@ -189,7 +189,7 @@ fn let_bound_fn_payload_accepted() {
         "let f = Ok (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("let_bound_fn_payload", &out);
@@ -214,7 +214,7 @@ fn let_bound_maybe_fn_payload_accepted() {
         "let f = Just (\\x -> …) crossing a fn boundary must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("let_bound_maybe_fn_payload", &out);
@@ -239,7 +239,7 @@ fn ctor_decl_fn_payload_accepted() {
         "declared fn-typed ctor payload must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("ctor_decl_fn_payload", &out);
@@ -264,7 +264,7 @@ fn fn_extracted_called_twice_accepted() {
         "calling an extracted fn twice must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("fn_extracted_called_twice", &out);
@@ -473,7 +473,7 @@ fn lambda_param_call_twice_accepted() {
         "calling a lambda param twice must be accepted: {built:?}"
     );
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted("lambda_param_call_twice_accepted", &out);
@@ -535,7 +535,7 @@ fn assert_accepted_runs(name: &str, expected_stdout: &str) {
     let (built, out) = built_code(&root, name);
     assert!(built.is_ok(), "{name}: must be accepted, got: {built:?}");
 
-    if std::env::var("IPE_E2E").is_err() {
+    if ipe_env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = crate::support::build_and_run_emitted(name, &out);
