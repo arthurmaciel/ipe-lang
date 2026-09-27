@@ -7,7 +7,7 @@
 //! container moves (`label` passed by value into `wrapJust label`) is gone when
 //! the closure's `let label = label.clone()` capture reads it — `ipe build`
 //! exit 0, then `cargo build` E0382. The lowerer's last-use clone rewrite walks
-//! every kernel `StdlibKernel::swaps_first_two` reverses in that evaluation
+//! every kernel declared `ArgOrder::ContainerFirst` in that evaluation
 //! order, so the container's read is the one cloned and the closure's capture
 //! the last, bare use.
 //!

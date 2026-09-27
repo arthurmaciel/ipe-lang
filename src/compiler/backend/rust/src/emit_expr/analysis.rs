@@ -1091,3 +1091,63 @@ pub fn ir_type_contains_task(ty: &IrType) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Expr, IrType, Symbol, clone_free_target};
+
+    const TARGET: Symbol = Symbol::from_raw(1);
+
+    fn var() -> Expr {
+        Expr::Var(TARGET)
+    }
+
+    #[test]
+    fn clone_free_target_leaves_an_index_read_list_bare() {
+        let rewritten = clone_free_target(
+            Expr::ListIndexClone {
+                list: Box::new(var()),
+                index: 0,
+            },
+            TARGET,
+        );
+        assert!(
+            matches!(rewritten, Expr::ListIndexClone { ref list, index: 0 } if matches!(**list, Expr::Var(s) if s == TARGET)),
+            "an index read borrows the list: {rewritten:?}"
+        );
+    }
+
+    #[test]
+    fn clone_free_target_leaves_a_length_check_list_bare() {
+        let rewritten = clone_free_target(
+            Expr::ListLenCheck {
+                list: Box::new(var()),
+                len: 2,
+                exact: true,
+            },
+            TARGET,
+        );
+        assert!(
+            matches!(rewritten, Expr::ListLenCheck { ref list, len: 2, exact: true } if matches!(**list, Expr::Var(s) if s == TARGET)),
+            "a length check borrows the list: {rewritten:?}"
+        );
+    }
+
+    #[test]
+    fn clone_free_target_clones_a_consuming_read() {
+        let rewritten = clone_free_target(
+            Expr::Cons {
+                head: Box::new(var()),
+                tail: Box::new(Expr::List {
+                    elem: IrType::Int,
+                    items: Vec::new(),
+                }),
+            },
+            TARGET,
+        );
+        assert!(
+            matches!(rewritten, Expr::Cons { ref head, .. } if matches!(**head, Expr::CloneVar(s) if s == TARGET)),
+            "a cons head moves the value: {rewritten:?}"
+        );
+    }
+}
