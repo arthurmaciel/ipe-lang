@@ -387,7 +387,7 @@ mod tests {
     use ipe_intern::{Interner, Symbol};
 
     use super::{clone_free_target, seq_rewrite_clones_symbol};
-    use crate::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, OnFormKind};
+    use crate::{Arm, CallPin, Callee, Expr, FuncId, IrType, KernelFn, Match, OnFormKind, Pat};
 
     fn call(callee: Callee, args: Vec<Expr>) -> Expr {
         Expr::Call {
@@ -477,5 +477,31 @@ mod tests {
             vec![thunk(consume()), kernel(vec![borrowed()])],
         );
         assert!(hazard(&and_then));
+    }
+
+    /// A rest mentioning the binding only in an arm guard triggers no rewrite.
+    ///
+    /// The emitter's free-variable scan skips arm guards, so it never clones
+    /// the effect for a guard-only use; the hazard check must agree.
+    #[test]
+    fn seq_hazard_skips_arm_guards_like_the_emitter() {
+        let (w, tag) = symbols();
+        let consume = || user(vec![Expr::Var(w)]);
+        let hazard_with_rest = |guard: Option<Expr>, body: Expr| {
+            let arm = Arm {
+                pat: Pat::Wildcard,
+                body,
+                guard,
+            };
+            Match::new_flat(Expr::Int(0), vec![arm]).map(|m| {
+                let effect = kernel(vec![read(Expr::Var(w), tag)]);
+                seq_rewrite_clones_symbol(w, &seq(effect, Expr::Match(m)))
+            })
+        };
+        assert!(matches!(
+            hazard_with_rest(Some(consume()), Expr::Unit),
+            Ok(false)
+        ));
+        assert!(matches!(hazard_with_rest(None, consume()), Ok(true)));
     }
 }

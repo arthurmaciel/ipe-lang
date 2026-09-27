@@ -15,6 +15,13 @@
 //! | `consume_then_inlined_let_borrow` | `let xs = [Task.succeed w.tag] in withLists (consume w) (Task.sequence xs) (Task.sequence xs)` | fail-closed IPE-L0135 |
 //! | `borrow_then_consume_call` | `tagFirst w.tag (consume w)` | builds + prints `10` |
 //! | `let_bound_borrow_then_consume` | `let t = w.tag in both (consume w) t` | builds + prints `10` |
+//! | `seq_kernel_read_then_consume` | `do { Io.println (String.fromInt w.tag) ; both (consume w) 0 }` | fail-closed IPE-L0135 |
+//! | `and_then_kernel_read_then_consume` | `Task.andThen (\x -> both (consume w) x) (Task.succeed w.tag)` | fail-closed IPE-L0135 |
+//! | `let_bound_seq_kernel_read` | `let w = mk n in do { .. w.tag .. ; both (consume w) 0 }` | fail-closed IPE-L0135 |
+//! | `destructured_seq_kernel_read` | `let (w, _) = pair n in do { .. w.tag .. ; both (consume w) 0 }` | fail-closed IPE-L0135 |
+//! | `partial_move_then_same_field` | `case w of { job } -> withLists job (Task.sequence [ w.job ]) ..` | fail-closed IPE-L0135 |
+//! | `seq_user_arg_read_then_consume` | `do { x <- tagTask w.tag ; both (consume w) x }` | builds + prints `10` |
+//! | `seq_user_statement_read_then_consume` | `do { announce w.tag ; both (consume w) 0 }` | builds + prints `3`, `7` |
 //!
 //! A kernel call's argument order is chosen by its emitter, so a move and a
 //! read of the same record in sibling kernel arguments are rejected in either
@@ -22,6 +29,15 @@
 //! names, proven by the last fixture. A multi-use `let` of a task list is
 //! inlined by the emitter at each use site, so its value's reads of `w` happen
 //! where the binding is used — after the move — and are rejected too.
+//!
+//! A sequenced task (a do-block statement or an explicit `Task.andThen`) whose
+//! continuation still uses `w` makes the emitter clone every read of `w` in a
+//! deferred position of the effect — a kernel argument may run inside a `move`
+//! closure. A non-`Clone` record has no clone, so that shape is refused for
+//! every binder form: a parameter, a `let`, and a destructured component. A
+//! user function's arguments run eagerly, so the same read there only borrows
+//! and round-trips. A record pattern moves the fields it binds, so reading one
+//! of them again through `w` is refused too.
 //!
 //! ```text
 //! # gate check only (fast):
@@ -261,6 +277,152 @@ main =
     run { job = Task.succeed 7, tag = 3 }
 ";
 
+/// Helpers for the sequenced-task fixtures: `mk` builds the record from a
+/// call (never a literal, so a `let` of it is a real Rust binder), `pair`
+/// wraps it for a tuple destructure, and `tagTask` / `announce` are user
+/// functions whose arguments the emitter evaluates eagerly.
+const SEQ_HELPERS: &str = r"
+
+mk : Int -> { job : Task Error Int, tag : Int }
+mk n =
+    { job = Task.succeed 7, tag = n }
+
+
+pair : Int -> ( { job : Task Error Int, tag : Int }, Int )
+pair n =
+    ( mk n, n )
+
+
+tagTask : Int -> Task Error Int
+tagTask n =
+    Task.succeed n
+
+
+announce : Int -> Task Error ()
+announce n =
+    Io.println (String.fromInt n)
+";
+
+/// A do-block statement reads `w.tag` inside a kernel argument, then the rest
+/// consumes `w`. The kernel argument may be deferred into a `move` closure, so
+/// the emitter would rewrite the read to `w.clone()` for the rest to keep `w`
+/// — no `Clone` impl exists.
+const SEQ_KERNEL_READ_THEN_CONSUME: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    do
+        Io.println (String.fromInt w.tag)
+        both (consume w) 0
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
+";
+
+/// The same hazard through an explicit `Task.andThen` continuation.
+const AND_THEN_KERNEL_READ_THEN_CONSUME: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    Task.andThen (\x -> both (consume w) x) (Task.succeed w.tag)
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
+";
+
+/// The do-block hazard on a `let`-bound record (a call result, so the `let`
+/// is a real binder the gate must discipline).
+const LET_BOUND_SEQ_KERNEL_READ: &str = r"
+
+run : Int -> Task Error ()
+run n =
+    let
+        w =
+            mk n
+    in
+    do
+        Io.println (String.fromInt w.tag)
+        both (consume w) 0
+
+
+main : Task Error ()
+main =
+    run 3
+";
+
+/// The do-block hazard on a record bound by a tuple destructure.
+const DESTRUCTURED_SEQ_KERNEL_READ: &str = r"
+
+run : Int -> Task Error ()
+run n =
+    let
+        ( w, _ ) =
+            pair n
+    in
+    do
+        Io.println (String.fromInt w.tag)
+        both (consume w) 0
+
+
+main : Task Error ()
+main =
+    run 3
+";
+
+/// A record pattern moves `job` out of `w`; the arm then reads `w.job` again.
+const PARTIAL_MOVE_THEN_SAME_FIELD: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    case w of
+        { job } ->
+            withLists job (Task.sequence [ w.job ]) (Task.succeed [])
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
+";
+
+/// A user function's argument is evaluated eagerly, so `tagTask w.tag` only
+/// borrows `w` before the continuation consumes it. Prints `10`.
+const SEQ_USER_ARG_READ_THEN_CONSUME: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    do
+        x <- tagTask w.tag
+        both (consume w) x
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
+";
+
+/// The eager borrow in a plain do-block statement. Prints `3` then `7`.
+const SEQ_USER_STATEMENT_READ_THEN_CONSUME: &str = r"
+
+run : { job : Task Error Int, tag : Int } -> Task Error ()
+run w =
+    do
+        announce w.tag
+        both (consume w) 0
+
+
+main : Task Error ()
+main =
+    run { job = Task.succeed 7, tag = 3 }
+";
+
+fn seq_program(body: &str) -> String {
+    format!("{PRELUDE}{SEQ_HELPERS}{body}")
+}
+
 fn program(body: &str) -> String {
     format!("{PRELUDE}{body}")
 }
@@ -307,5 +469,68 @@ fn let_bound_borrow_then_consume_round_trips() {
         "let_bound_borrow_then_consume",
         &program(LET_BOUND_BORROW_THEN_CONSUME),
         "10",
+    );
+}
+
+#[test]
+fn seq_kernel_read_then_consume_fails_closed() {
+    assert_rejected(
+        "seq_kernel_read_then_consume",
+        &seq_program(SEQ_KERNEL_READ_THEN_CONSUME),
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn and_then_kernel_read_then_consume_fails_closed() {
+    assert_rejected(
+        "and_then_kernel_read_then_consume",
+        &seq_program(AND_THEN_KERNEL_READ_THEN_CONSUME),
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn let_bound_seq_kernel_read_fails_closed() {
+    assert_rejected(
+        "let_bound_seq_kernel_read",
+        &seq_program(LET_BOUND_SEQ_KERNEL_READ),
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn destructured_seq_kernel_read_fails_closed() {
+    assert_rejected(
+        "destructured_seq_kernel_read",
+        &seq_program(DESTRUCTURED_SEQ_KERNEL_READ),
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn partial_move_then_same_field_fails_closed() {
+    assert_rejected(
+        "partial_move_then_same_field",
+        &seq_program(PARTIAL_MOVE_THEN_SAME_FIELD),
+        ipe_diagnostics::IPE_L0135,
+    );
+}
+
+#[test]
+fn seq_user_arg_read_then_consume_round_trips() {
+    assert_accepted(
+        "seq_user_arg_read_then_consume",
+        &seq_program(SEQ_USER_ARG_READ_THEN_CONSUME),
+        "10",
+    );
+}
+
+#[test]
+fn seq_user_statement_read_then_consume_round_trips() {
+    assert_accepted(
+        "seq_user_statement_read_then_consume",
+        &seq_program(SEQ_USER_STATEMENT_READ_THEN_CONSUME),
+        "3\n7",
     );
 }

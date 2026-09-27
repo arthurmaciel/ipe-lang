@@ -879,6 +879,11 @@ pub(super) fn rewrite_captured_clones(
     }
 }
 
+/// Refuse (IPE-L0135) a reuse of a non-`Clone` effect-carrier binding `sym`.
+///
+/// Reached only through the lowerer's single move-ownership entry point, so
+/// every binder form (parameter, arm binder, `let`, destructured component)
+/// runs it.
 pub(super) fn reject_nonclone_value_reuse(
     env: CloneEnv<'_>,
     sym: Symbol,
@@ -902,8 +907,10 @@ pub(super) fn reject_nonclone_value_reuse(
     }
     // A borrowing read (`sym.field`, a length probe) that the emitted order
     // evaluates AFTER a move of `sym` observes a moved value (E0382), even
-    // though the borrow itself is not a consume.
-    if consumes == 1 && super::nonclone_read_after_move(sym, body) {
+    // though the borrow itself is not a consume. A by-value pattern match
+    // (`match sym`, `let <pat> = sym`) moves the parts its binders bind with
+    // no consume counted, so a later read of a moved part is the same hazard.
+    if super::nonclone_read_after_move(sym, body) {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
     // A single consume that is a bare `Var` update base, combined with any use
