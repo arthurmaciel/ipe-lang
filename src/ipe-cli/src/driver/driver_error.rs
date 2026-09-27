@@ -436,7 +436,10 @@ impl From<toolchain::ToolchainMissing> for CliError {
 
 impl From<api_surface::DiffError> for CliError {
     fn from(err: api_surface::DiffError) -> Self {
-        Self::Diff(err)
+        match err {
+            api_surface::DiffError::Source(refusal) => *refusal,
+            other => Self::Diff(other),
+        }
     }
 }
 
