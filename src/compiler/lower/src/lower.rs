@@ -79,6 +79,9 @@ use ty_templates::{
 /// IR type.
 type IrParam = (Symbol, IrType);
 
+/// A lowered function arrow: its parameter types and its return type.
+type IrArrow = (Vec<IrType>, IrType);
+
 /// A tuple-parameter destructure-prologue entry: the synthetic binder name the
 /// parameter was given, paired with the irrefutable tuple [`Pat`] that opens it
 /// at the top of the function body (`let <Pat> = <synthetic>`).
@@ -11876,12 +11879,6 @@ impl EtaDemand {
         }
     }
 
-    /// The eta names drawn so far.
-    #[must_use]
-    pub const fn names(self) -> usize {
-        self.0
-    }
-
     /// The names one mapper wrap ([`Lowerer::wrap_mapper_value`]) at kernel
     /// position `arg` draws: none when no spine parameter binds a stored
     /// function element (the mapper is left untouched); otherwise the holder,
@@ -22826,8 +22823,7 @@ impl<'a> Lowerer<'a> {
             .map_err(|_| refuse())?;
         // Every parameter's carrier, decided before any eta name is drawn so the
         // whole demand is charged up front.
-        let mut carriers: Vec<(IrType, Option<(Vec<IrType>, IrType)>)> =
-            Vec::with_capacity(spine.params().len());
+        let mut carriers: Vec<(IrType, Option<IrArrow>)> = Vec::with_capacity(spine.params().len());
         for (param, ty) in spine.params().iter().enumerate() {
             let ir = self.ir_type_from_ty(ty, span).map_err(|_| refuse())?;
             if bound(param, ty) {
@@ -22853,7 +22849,7 @@ impl<'a> Lowerer<'a> {
         let drawn_from = self.eta_base.get();
         let holder = self.eta_sym(0)?;
         let mut wrapper_params: Vec<(Symbol, IrType)> = Vec::with_capacity(carriers.len());
-        let mut demote: Vec<Option<(Vec<IrType>, IrType)>> = Vec::with_capacity(carriers.len());
+        let mut demote: Vec<Option<IrArrow>> = Vec::with_capacity(carriers.len());
         for (param, (carrier, adapter)) in carriers.into_iter().enumerate() {
             wrapper_params.push((self.eta_sym(param.saturating_add(1))?, carrier));
             demote.push(adapter);
@@ -30564,7 +30560,10 @@ mod tests {
     #[test]
     fn eta_demand_holds_the_ceiling_and_refuses_one_past() {
         let at_limit = EtaDemand::EMPTY.charge(MAX_ETA_PER_SITE);
-        assert_eq!(at_limit.map(EtaDemand::names), Some(MAX_ETA_PER_SITE));
+        assert!(
+            at_limit.is_some(),
+            "a demand of exactly the ceiling must be held"
+        );
         assert_eq!(at_limit.and_then(|d| d.charge(0)), at_limit);
         assert_eq!(at_limit.and_then(|d| d.charge(1)), None);
         assert_eq!(EtaDemand::EMPTY.charge(MAX_ETA_PER_SITE + 1), None);
