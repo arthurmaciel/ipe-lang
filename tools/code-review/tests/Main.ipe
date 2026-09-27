@@ -224,7 +224,7 @@ allChecks db =
             )
         , Task.succeed
             ( "formatBytes: negative clamps to zero"
-            , Format.formatBytes (ByteSize.bytes -5) == "0 B"
+            , Format.formatBytes (ByteSize.bytes (-5)) == "0 B"
             )
         , Task.succeed
             ( "dbFileName: url, absolute path, bare name"
