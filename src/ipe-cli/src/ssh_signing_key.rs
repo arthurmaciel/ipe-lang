@@ -869,7 +869,7 @@ mod tests {
                         let name = e.file_name().to_string_lossy().into_owned();
                         name.starts_with(".signing_key.")
                             && !name.starts_with(".signing_key.pub.")
-                            && name.ends_with(".tmp")
+                            && Path::new(&name).extension() == Some(OsStr::new("tmp"))
                     })
                     .map(|e| e.metadata().expect("metadata").permissions().mode() & 0o777);
             }
