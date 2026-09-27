@@ -1,0 +1,26 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.String
+
+-- Tuple-pattern parameters under generics. `fst` and `pick` are unannotated,
+-- so each tuple component's type is the definition's own generalized
+-- variable, and each is instantiated at two different types below.
+fst (a, b) = a
+
+pick (a, b) flag =
+    if flag then
+        a
+    else
+        b
+
+main =
+    Io.println
+        (String.fromInt (fst (40, "x"))
+            ++ " "
+            ++ fst ("ok", 2)
+            ++ " "
+            ++ pick ("l", "r") False
+            ++ " "
+            ++ String.fromInt (pick (1, 2) True)
+        )

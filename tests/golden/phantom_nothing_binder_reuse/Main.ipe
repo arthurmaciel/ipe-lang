@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+-- A phantom-typed binder reused twice. `n = Nothing` leaves the `Maybe`
+-- element type unconstrained, and `n` is read by two calls.
+isNothing m =
+    case m of
+        Nothing -> True
+        Just _ -> False
+
+label isNone =
+    if isNone then
+        "none"
+    else
+        "some"
+
+main =
+    let
+        n =
+            Nothing
+    in
+    Io.println (label (isNothing n) ++ " " ++ label (isNothing n))
