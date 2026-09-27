@@ -4,19 +4,21 @@
 Writes `release_only=true` to "$GITHUB_OUTPUT" only when EVERY condition holds:
   * the event is a pull_request whose head repository is this repository (a
     fork can never qualify);
-  * the tested commit (`HEAD`, the PR merge commit) differs from its base
-    parent (`HEAD^1`) only in RELEASE_FILES, and changes the manifest;
+  * the tested commit (`HEAD`) is the PR merge commit — exactly two parents,
+    the second being the PR head — and differs from its base parent
+    (`HEAD^1`) only in RELEASE_FILES, and changes the manifest;
   * `Cargo.toml` differs only in `workspace.package.version`, which equals the
     manifest's root version;
   * `Cargo.lock` differs only in the `version` of workspace packages (those with
     no `source`) — no third-party version, source, checksum or dependency edge.
-Such a commit is the already-gated base plus version metadata, so the heavy
-emitted-build/SEAL/sandbox tiers a version string cannot affect may skip.
+Such a commit is the already-gated base plus version metadata; the fast tiers
+still check the new version, and the heavy emitted-build/SEAL/sandbox tiers
+may skip (the push to main re-runs every tier).
 The classification reads the tested tree, never the branch name or a live API,
 so it describes exactly the commit whose checks it gates. Any other diff, and
 any error, yields `release_only=false` (fail closed).
 
-Inputs (env): EVENT_NAME, HEAD_REPO, REPO. Needs a checkout with fetch-depth 2.
+Inputs (env): EVENT_NAME, HEAD_REPO, REPO, PR_HEAD_SHA. Needs a checkout with fetch-depth 2.
 """
 
 from __future__ import annotations
@@ -105,6 +107,11 @@ def classify() -> Verdict:
     head_repo = os.environ.get("HEAD_REPO", "")
     if not head_repo or head_repo != os.environ.get("REPO", ""):
         return NotReleaseOnly(f"head repository {head_repo!r} is not this repository")
+
+    parents = git("rev-list", "--parents", "-n1", HEAD).decode("ascii").split()[1:]
+    pr_head = os.environ.get("PR_HEAD_SHA", "")
+    if len(parents) != 2 or not pr_head or parents[1] != pr_head:
+        return NotReleaseOnly("tested commit is not the base + PR-head merge commit")
 
     files = changed_files()
     outside = [f for f in files if f not in RELEASE_FILES]

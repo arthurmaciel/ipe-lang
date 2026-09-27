@@ -112,6 +112,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: python3 .github/ci/release_only.py
       - uses: dorny/paths-filter@v3
