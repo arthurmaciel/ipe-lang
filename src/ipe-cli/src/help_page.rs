@@ -40,15 +40,18 @@
 //! reports are pinned empty by the page tests, so a malformed page cannot ship.
 
 /// The heading of a page's argument description.
-pub fn arguments_heading() -> &'static str {
+#[must_use]
+pub const fn arguments_heading() -> &'static str {
     crate::text::help_arguments_label()
 }
 /// The heading of a page's option list.
-pub fn options_heading() -> &'static str {
+#[must_use]
+pub const fn options_heading() -> &'static str {
     crate::text::help_options_label()
 }
 /// The heading of a page's output-location note.
-pub fn output_heading() -> &'static str {
+#[must_use]
+pub const fn output_heading() -> &'static str {
     crate::text::help_output_label()
 }
 

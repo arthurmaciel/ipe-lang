@@ -890,13 +890,12 @@ pub fn fmt_io_error(
 ) -> std::fmt::Result {
     // The generic error path in the binary already frames and gutters this
     // (`ipe: <message>`); render only the message body, styled and errno-free.
+    let path = path.display();
     if source.kind() == std::io::ErrorKind::NotFound {
-        let path = path.display();
         f.write_str(&text::cli_io_not_found(&path))
     } else {
         // A readable kind description, never the `(os error N)` tail. `ErrorKind`
         // renders as a short human phrase (e.g. "permission denied").
-        let path = path.display();
         f.write_str(&text::cli_io_other(&path, &source.kind()))
     }
 }

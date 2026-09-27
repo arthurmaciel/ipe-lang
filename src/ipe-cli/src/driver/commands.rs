@@ -2481,6 +2481,7 @@ pub fn load_session_trace(path: &Path) -> Result<String, CliError> {
 /// # Errors
 /// As [`load_session_trace`]; [`CliError::Io`] when stdout cannot be written.
 pub fn show_session_trace(path: &Path) -> Result<(), CliError> {
+    use std::io::Write as _;
     let rendered = load_session_trace(path)?;
     let mut stdout = std::io::stdout().lock();
     stdout
