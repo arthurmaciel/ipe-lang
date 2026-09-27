@@ -1056,13 +1056,15 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     let runtime_dir = resolve_vendored_runtime_dir(args.runtime, true)?;
 
     // The ejected project is handed to the user, so it goes to a fresh
-    // directory clear of the sources — never over anything already there.
+    // directory clear of the sources and of every tree ipe owns — never over
+    // anything already there. It is claimed before the build, so the emit
+    // adopts it and no ancestor is ever marked ipe-owned.
     let paths = match manifest_parsed.as_ref() {
         Some(m) => ProjectPaths::from_manifest(m),
         None => ProjectPaths::discover(&entry_path)?,
     };
-    let output = OutputRoot::fresh(&args.out, &paths)?;
-    let out_dir = output.path().to_path_buf();
+    let target = OutputRoot::fresh(&args.out, &paths)?.claim()?;
+    let out_dir = target.path().to_path_buf();
 
     // Force the vendored, tree-shaken emit shape: a self-contained project names
     // no runtime path dependency (`runtime_dep = false`) and carries only the
@@ -1101,7 +1103,7 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     )?;
     // From here on the tree is the user's: ipe drops its ownership marker so no
     // later ipe command treats the ejected project as disposable output.
-    let out_dir = output.claim()?.release_to_user()?;
+    let out_dir = target.release_to_user()?;
 
     if show_progress {
         eprintln!(

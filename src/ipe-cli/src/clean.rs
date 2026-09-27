@@ -1,13 +1,14 @@
 //! `ipe clean` — remove a project's build-generated output.
 //!
-//! Deletes only the directories `ipe` itself owns — the build output (`out/`,
-//! and only while it carries ipe's ownership marker) and the per-project cache
-//! (`.ipe/`) — and never user source or `package.ipe`. The command is
-//! fail-closed on three axes: it refuses to run outside an Ipê project (no
-//! `package.ipe` at the resolved root), it refuses an `out/` ipe did not create,
-//! and every deletion target is proven to sit inside the canonicalised project
-//! root before a byte is removed, so a symlink or a `..` component can never
-//! carry the delete outside the project.
+//! Deletes only what `ipe` itself owns — the build output (`out/`, and only
+//! while it carries ipe's ownership marker) and the cache subtrees ipe writes in
+//! the per-project `.ipe/` namespace — and never user source, `package.ipe`, or
+//! anything else a user put in `.ipe/`. The command is fail-closed on three
+//! axes: it refuses to run outside an Ipê project (no `package.ipe` at the
+//! resolved root), it refuses an `out/` ipe did not create, and every deletion
+//! target is lstat'd under the canonicalised project root before a byte is
+//! removed, so a symlink or a `..` component can never carry the delete outside
+//! the project.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -22,22 +23,36 @@ use crate::style;
 /// first.
 struct Generated {
     name: &'static str,
-    /// Whether the directory must carry [`crate::output_dir::OWNERSHIP_MARKER`].
+    proof: Proof,
+}
+
+/// What proves a [`Generated`] directory is ipe's to delete.
+enum Proof {
+    /// It carries [`crate::output_dir::OWNERSHIP_MARKER`] and is removed whole.
     ///
     /// `out/` is a common name a user may have chosen for their own files, so
-    /// it is removed only when ipe marked it; `.ipe/` is ipe's own namespace.
-    needs_marker: bool,
+    /// it is removed only when ipe marked it.
+    Marker,
+    /// It is ipe's namespace, but only the named entries in it are ipe's.
+    ///
+    /// Those are removed; anything else in it is kept, and the namespace
+    /// directory itself goes only once nothing is left in it.
+    Namespace(&'static [&'static str]),
 }
+
+/// The entries ipe writes in the `.ipe/` namespace: its build caches and the
+/// fetched package sources.
+const CACHE_NAMESPACE_ENTRIES: &[&str] = &["cache", "packages"];
 
 /// The deletion allowlist — nothing outside it is ever a candidate.
 const GENERATED_DIRS: &[Generated] = &[
     Generated {
         name: crate::output_dir::DEFAULT_OUTPUT_DIR,
-        needs_marker: true,
+        proof: Proof::Marker,
     },
     Generated {
-        name: ".ipe",
-        needs_marker: false,
+        name: crate::output_dir::CACHE_NAMESPACE_DIR,
+        proof: Proof::Namespace(CACHE_NAMESPACE_ENTRIES),
     },
 ];
 
@@ -85,15 +100,23 @@ pub fn run_clean(rest: &[String]) -> Result<(), CliError> {
     let args = parse_clean_args(rest)?;
 
     let root = project_root()?;
-    let mut removed: Vec<String> = Vec::new();
-    for generated in GENERATED_DIRS {
-        if let Some(display) = remove_generated_dir(&root, generated)? {
-            removed.push(display);
-        }
-    }
-
+    let removed = clean_root(&root)?;
     print_summary(&removed, args.format);
     Ok(())
+}
+
+/// Remove every generated directory under the canonical project `root`.
+///
+/// Returns the removed paths, relative to `root`, for the summary.
+///
+/// # Errors
+/// As [`remove_generated_dir`].
+pub(crate) fn clean_root(root: &Path) -> Result<Vec<String>, CliError> {
+    let mut removed: Vec<String> = Vec::new();
+    for generated in GENERATED_DIRS {
+        removed.extend(remove_generated_dir(root, generated)?);
+    }
+    Ok(removed)
 }
 
 /// Resolve and validate the project root, the current directory holding a `package.ipe`.
@@ -122,43 +145,86 @@ fn project_root() -> Result<PathBuf, CliError> {
     })
 }
 
-/// Remove one generated directory under `root`, returning its name for the summary.
+/// Remove one generated directory under `root`, returning what went for the summary.
 ///
-/// `None` when it is absent or not a directory. The entry is lstat'd, never
-/// followed: a symlinked `out/`/`.ipe/` is refused (its target untouched), an
-/// `out/` without ipe's ownership marker is refused untouched, and the removal
-/// itself never follows a symlink met inside the tree.
+/// Nothing when it is absent or not a directory. Every entry is lstat'd, never
+/// followed: a symlinked `out/`/`.ipe/` (or a symlinked entry in `.ipe/`) is
+/// refused, its target untouched; an `out/` without ipe's ownership marker is
+/// refused untouched; and a removal never follows a symlink met inside the tree.
 ///
 /// # Errors
 /// [`CliError::OutputRefused`] for a symlink or an unmarked `out/`;
 /// [`CliError::Io`] on a stat or remove failure.
-fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Option<String>, CliError> {
+fn remove_generated_dir(root: &Path, generated: &Generated) -> Result<Vec<String>, CliError> {
     let name = generated.name;
     let candidate = root.join(name);
-    let meta = match std::fs::symlink_metadata(&candidate) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(CliError::Io {
-                path: candidate,
-                source: e,
-            });
+    if !is_real_dir(&candidate)? {
+        return Ok(Vec::new());
+    }
+    match generated.proof {
+        Proof::Marker => {
+            if !crate::output_dir::has_marker(&candidate)? {
+                return Err(crate::output_dir::OutputRefusal::NotIpeOwned(candidate).into());
+            }
+            remove_tree(&candidate)?;
+            Ok(vec![format!("{name}/")])
         }
-    };
-    if meta.file_type().is_symlink() {
-        return Err(crate::output_dir::OutputRefusal::Symlink(candidate).into());
+        Proof::Namespace(entries) => {
+            let mut removed = Vec::new();
+            for entry in entries {
+                let path = candidate.join(entry);
+                if is_real_dir(&path)? {
+                    remove_tree(&path)?;
+                    removed.push(format!("{name}/{entry}/"));
+                }
+            }
+            if is_empty(&candidate)? {
+                std::fs::remove_dir(&candidate).map_err(|e| CliError::Io {
+                    path: candidate,
+                    source: e,
+                })?;
+                return Ok(vec![format!("{name}/")]);
+            }
+            Ok(removed)
+        }
     }
-    if !meta.is_dir() {
-        return Ok(None);
+}
+
+/// Whether `path` is a directory, never following a link.
+///
+/// `false` when absent or a plain file (ipe never removes one it does not own).
+///
+/// # Errors
+/// [`CliError::OutputRefused`] for a symlink; [`CliError::Io`] on a stat failure.
+fn is_real_dir(path: &Path) -> Result<bool, CliError> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(CliError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
+        Ok(meta) if meta.file_type().is_symlink() => {
+            Err(crate::output_dir::OutputRefusal::Symlink(path.to_path_buf()).into())
+        }
+        Ok(meta) => Ok(meta.is_dir()),
     }
-    if generated.needs_marker && !crate::output_dir::has_marker(&candidate)? {
-        return Err(crate::output_dir::OutputRefusal::NotIpeOwned(candidate).into());
-    }
-    std::fs::remove_dir_all(&candidate).map_err(|e| CliError::Io {
-        path: candidate,
+}
+
+/// Whether the directory `dir` has no entries.
+fn is_empty(dir: &Path) -> Result<bool, CliError> {
+    let mut entries = std::fs::read_dir(dir).map_err(|e| CliError::Io {
+        path: dir.to_path_buf(),
         source: e,
     })?;
-    Ok(Some(format!("{name}/")))
+    Ok(entries.next().is_none())
+}
+
+/// Remove the directory tree `dir`; `remove_dir_all` never follows a symlink in it.
+fn remove_tree(dir: &Path) -> Result<(), CliError> {
+    std::fs::remove_dir_all(dir).map_err(|e| CliError::Io {
+        path: dir.to_path_buf(),
+        source: e,
+    })
 }
 
 /// Print the removal result in the requested format.
@@ -215,11 +281,11 @@ mod tests {
 
     const OUT: &Generated = &Generated {
         name: "out",
-        needs_marker: true,
+        proof: Proof::Marker,
     };
     const DOT_IPE: &Generated = &Generated {
         name: ".ipe",
-        needs_marker: false,
+        proof: Proof::Namespace(CACHE_NAMESPACE_ENTRIES),
     };
 
     /// `remove_generated_dir` deletes an ipe-owned output directory and reports it.
@@ -233,7 +299,7 @@ mod tests {
             .expect("claim out/rust");
 
         let removed = remove_generated_dir(&real_root, OUT).expect("remove must succeed");
-        assert_eq!(removed.as_deref(), Some("out/"));
+        assert_eq!(removed, ["out/"]);
         assert!(!real_root.join("out").exists(), "out/ must be gone");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -270,7 +336,7 @@ mod tests {
         let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
 
         let removed = remove_generated_dir(&real_root, DOT_IPE).expect("must succeed");
-        assert!(removed.is_none(), "an absent dir yields no removal");
+        assert!(removed.is_empty(), "an absent dir yields no removal");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -328,11 +394,91 @@ mod tests {
         symlink(outside.join("keep.txt"), real_root.join("out").join("bin")).expect("file link");
 
         let removed = remove_generated_dir(&real_root, OUT).expect("remove must succeed");
-        assert_eq!(removed.as_deref(), Some("out/"));
+        assert_eq!(removed, ["out/"]);
         assert_eq!(
             std::fs::read(outside.join("keep.txt")).ok().as_deref(),
             Some(&b"do not delete"[..]),
             "link targets survive byte-for-byte"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The `.ipe/` cache subtrees go, and an emptied namespace goes with them.
+    #[test]
+    fn removes_the_cache_namespace_when_only_ipe_entries_are_in_it() {
+        let root = std::env::temp_dir().join(format!("ipe_clean_ns_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".ipe/cache/ffi/rust")).expect("make cache");
+        std::fs::create_dir_all(root.join(".ipe/packages/dep-1.0.0")).expect("make packages");
+        let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
+
+        let removed = remove_generated_dir(&real_root, DOT_IPE).expect("must succeed");
+        assert_eq!(removed, [".ipe/"]);
+        assert!(!real_root.join(".ipe").exists(), ".ipe/ must be gone");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Anything in `.ipe/` that ipe did not write survives, and so does `.ipe/`.
+    ///
+    /// `.ipe/` carries no ownership marker, so only the cache entries ipe
+    /// names are proven its own.
+    #[test]
+    fn keeps_user_files_in_an_unmarked_cache_namespace() {
+        let root = std::env::temp_dir().join(format!("ipe_clean_ns_user_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".ipe/cache")).expect("make cache");
+        std::fs::create_dir_all(root.join(".ipe/standalone/src")).expect("make user tree");
+        std::fs::write(root.join(".ipe/standalone/src/main.rs"), "fn main() {}").expect("user");
+        std::fs::write(root.join(".ipe/notes.txt"), "mine").expect("user note");
+        let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
+
+        let removed = remove_generated_dir(&real_root, DOT_IPE).expect("must succeed");
+        assert_eq!(removed, [".ipe/cache/"]);
+        assert!(
+            !real_root.join(".ipe/cache").exists(),
+            "the cache must be gone"
+        );
+        assert_eq!(
+            std::fs::read_to_string(real_root.join(".ipe/standalone/src/main.rs"))
+                .ok()
+                .as_deref(),
+            Some("fn main() {}"),
+            "a user tree in .ipe/ survives"
+        );
+        assert!(
+            real_root.join(".ipe/notes.txt").is_file(),
+            "a user file in .ipe/ survives"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A symlinked cache entry is refused, never followed.
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_symlinked_cache_entry() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("ipe_clean_ns_link_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("project");
+        let outside = base.join("precious");
+        std::fs::create_dir_all(root.join(".ipe")).expect("make .ipe");
+        std::fs::create_dir_all(&outside).expect("make outside");
+        std::fs::write(outside.join("keep.txt"), b"do not delete").expect("write victim");
+        symlink(&outside, root.join(".ipe").join("cache")).expect("link");
+        let real_root = std::fs::canonicalize(&root).expect("canonicalize root");
+
+        let result = remove_generated_dir(&real_root, DOT_IPE);
+        assert!(
+            matches!(result, Err(CliError::OutputRefused(_))),
+            "a symlinked cache entry must be refused, got: {result:?}"
+        );
+        assert!(
+            outside.join("keep.txt").is_file(),
+            "the link target survives"
         );
 
         let _ = std::fs::remove_dir_all(&base);

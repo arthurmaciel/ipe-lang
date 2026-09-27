@@ -397,7 +397,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "--out <dir>",
-                desc: "write the standalone project to <dir>, which must be absent or empty (required)",
+                desc: "write the standalone project to <dir>, which must be absent or empty and outside out/, .ipe/ and any other ipe-owned tree (required)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
