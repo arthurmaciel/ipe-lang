@@ -542,14 +542,24 @@ impl CliError {
     ///
     /// Internal means ipe broke a promise it makes: a program ipe accepted whose
     /// emitted Rust then failed to build (the SEAL), or an installed runtime
-    /// that disagrees with the compiler's own version. Everything else is
-    /// actionable by the user. Exhaustive with no wildcard, like
-    /// [`Self::machine_kind`], so a new variant must be classified to build.
+    /// that disagrees with the compiler's own version. An emitted build that
+    /// failed only because the crate registry was unreachable is the network's
+    /// doing, not ipe's. Everything else is actionable by the user. Exhaustive
+    /// with no wildcard, like [`Self::machine_kind`], so a new variant must be
+    /// classified to build.
     #[must_use]
-    pub const fn fault(&self) -> crate::screen::Fault {
+    pub fn fault(&self) -> crate::screen::Fault {
         use crate::screen::Fault::{Internal, User};
         match self {
-            Self::EmittedBuildFailed { .. } | Self::RuntimeVersionMismatch { .. } => Internal,
+            Self::EmittedBuildFailed { stderr, .. } => {
+                match EmittedBuildCause::of(stderr.as_str().trim()) {
+                    EmittedBuildCause::RegistryUnreachable => User,
+                    EmittedBuildCause::MissingRuntimeFeature(_) | EmittedBuildCause::Miscompile => {
+                        Internal
+                    }
+                }
+            }
+            Self::RuntimeVersionMismatch { .. } => Internal,
             Self::Usage(_)
             | Self::UsageOwned(_)
             | Self::UnknownCommand { .. }
@@ -938,18 +948,20 @@ pub fn fmt_runtime_install_error(
 
 /// Render [`CliError::EmittedBuildFailed`] for `Display`.
 ///
-/// Two cases:
+/// Three cases, one per [`EmittedBuildCause`]:
 ///
-/// - **Attributable**: `cargo`'s stderr names a missing runtime feature — lead
+/// - **Stale runtime**: `cargo`'s stderr names a missing runtime feature — lead
 ///   with a targeted line pointing at the stale runtime crate.
-/// - **Unattributable**: every other `cargo` failure after a successful Ipê
+/// - **Registry unreachable**: `cargo` could not reach the crate registry — a
+///   network problem, rendered with no bug-report invitation.
+/// - **Miscompile**: every other `cargo` failure after a successful Ipê
 ///   compile. The front-end gate ensures only valid programs reach emit, so a
 ///   `cargo` failure here means the emitted Rust is wrong — a miscompile in Ipê,
 ///   not the user's source. Render it as a humble `CompilerBug` ICE so the user
 ///   knows to file a report rather than try to fix their source. The full `cargo`
 ///   stderr is embedded as the reportable detail.
 ///
-/// Neither form shows any command's `--help` page.
+/// No form shows any command's `--help` page.
 pub fn fmt_emitted_build_failed(
     err: &CliError,
     f: &mut std::fmt::Formatter<'_>,
@@ -966,46 +978,74 @@ pub fn fmt_emitted_build_failed(
     };
     let runtime = runtime.as_ref();
     let trimmed = stderr.as_str().trim();
-    if let Some(feature) = missing_runtime_feature(trimmed) {
-        f.write_str(&text::cli_emitted_build_feature_missing(what, &feature))?;
-        if let Some(rt) = runtime {
-            write!(
-                f,
-                "{}",
-                text::cli_emitted_build_feature_context(&rt.root, &rt.version)
-            )?;
+    match EmittedBuildCause::of(trimmed) {
+        EmittedBuildCause::MissingRuntimeFeature(feature) => {
+            f.write_str(&text::cli_emitted_build_feature_missing(what, &feature))?;
+            if let Some(rt) = runtime {
+                write!(
+                    f,
+                    "{}",
+                    text::cli_emitted_build_feature_context(&rt.root, &rt.version)
+                )?;
+            }
+            write!(f, ".\n{}", text::cli_emitted_build_stale_runtime_hint())
         }
-        return write!(f, ".\n{}", text::cli_emitted_build_stale_runtime_hint());
+        // An environment failure (DNS, offline, proxy), not a compiler bug and
+        // not the user's source: a calm, actionable message with no bug-report
+        // invitation.
+        EmittedBuildCause::RegistryUnreachable => {
+            let detail = if trimmed.is_empty() {
+                text::cli_cargo_fetch_failed(code, what)
+            } else {
+                text::cli_cargo_fetch_failed_detail(code, what, &trimmed)
+            };
+            let d = Diagnostic::RegistryUnreachable { detail };
+            f.write_str(&render(&d, "", ""))
+        }
+        // The front-end gate lets only valid programs reach emit, so this cargo
+        // failure is a bug in ipe's own emission: a humble ICE whose detail
+        // embeds the full cargo stderr, so a report carries everything needed to
+        // reproduce the miscompile.
+        EmittedBuildCause::Miscompile => {
+            let detail = if trimmed.is_empty() {
+                text::cli_cargo_compile_failed(code, what)
+            } else {
+                text::cli_cargo_compile_failed_detail(code, what, &trimmed)
+            };
+            let ice = Diagnostic::CompilerBug {
+                where_: "emit.cargo_build",
+                detail,
+            };
+            f.write_str(&render(&ice, "", ""))
+        }
     }
-    // Registry/network unreachable: cargo could not reach crates.io. This is an
-    // environment failure (DNS, offline, proxy), not a compiler bug and not the
-    // user's source. Render a calm, actionable message and do NOT invite a bug
-    // report.
-    if is_registry_unreachable(trimmed) {
-        let detail = if trimmed.is_empty() {
-            text::cli_cargo_fetch_failed(code, what)
+}
+
+/// Why an emitted crate's `cargo build` failed, read from `cargo`'s stderr.
+///
+/// The one classification both the rendered message and the error's
+/// [`crate::screen::Fault`] follow, so the two never disagree.
+enum EmittedBuildCause {
+    /// The runtime crate lacks a feature the emitted crate enables: a stale
+    /// runtime install.
+    MissingRuntimeFeature(String),
+    /// `cargo` could not reach the crate registry: DNS, offline, or a proxy.
+    RegistryUnreachable,
+    /// Any other failure: the emitted Rust is wrong, a miscompile in ipe.
+    Miscompile,
+}
+
+impl EmittedBuildCause {
+    /// Classify `cargo`'s trimmed stderr.
+    fn of(stderr: &str) -> Self {
+        if let Some(feature) = missing_runtime_feature(stderr) {
+            Self::MissingRuntimeFeature(feature)
+        } else if is_registry_unreachable(stderr) {
+            Self::RegistryUnreachable
         } else {
-            text::cli_cargo_fetch_failed_detail(code, what, &trimmed)
-        };
-        let d = Diagnostic::RegistryUnreachable { detail };
-        return f.write_str(&render(&d, "", ""));
+            Self::Miscompile
+        }
     }
-    // Unattributable: the emitted Rust crate failed to compile for a reason that
-    // is not a known runtime-feature gap. Because the front-end gate ensures only
-    // valid programs reach emit, this cargo failure reflects a bug in Ipê's own
-    // emission, not the user's source. Surface it as a humble ICE. The full cargo
-    // stderr is embedded as the reportable detail so a bug report contains
-    // everything needed to reproduce the miscompile.
-    let detail = if trimmed.is_empty() {
-        text::cli_cargo_compile_failed(code, what)
-    } else {
-        text::cli_cargo_compile_failed_detail(code, what, &trimmed)
-    };
-    let ice = Diagnostic::CompilerBug {
-        where_: "emit.cargo_build",
-        detail,
-    };
-    f.write_str(&render(&ice, "", ""))
 }
 
 /// Detect whether cargo's stderr signals a network-level registry failure

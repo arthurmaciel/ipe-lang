@@ -619,8 +619,8 @@ fn a_miss_lists_the_closest_matches_as_commands() -> io::Result<()> {
         "a miss is not misuse; no usage page:\n{stderr}"
     );
     assert!(
-        stderr.contains("If you find any bugs, please report them at"),
-        "the error frame closes with the bug footer:\n{stderr}"
+        !stderr.contains("If you find any bugs, please report them at"),
+        "a miss is the user's to fix; no bug footer:\n{stderr}"
     );
     Ok(())
 }

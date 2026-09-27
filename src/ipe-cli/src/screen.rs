@@ -10,8 +10,9 @@
 //! ```
 //!
 //! The header ([`crate::style::command_header`]) opens a process's human output
-//! once; a later screen in the same run carries only its content. An error
-//! screen always closes with the "report bugs" footer.
+//! once; a later screen in the same run carries only its content. The "report
+//! bugs" footer closes an error only when the fault is ipe's own
+//! ([`Fault::Internal`]); a user or environment error never invites a bug report.
 //!
 //! A line's colour is its semantic [`Tone`], never a raw palette field picked at
 //! the call site: light green for success, light red for an ipe-internal error,
@@ -163,7 +164,7 @@ pub struct Screen {
     /// The body so far: every non-empty line already guttered, each ended by a
     /// newline.
     body: String,
-    /// Whether the screen closes with the bug footer (always, for an error).
+    /// Whether the screen closes with the bug footer.
     bug_footer: bool,
 }
 
@@ -252,14 +253,8 @@ impl Screen {
         self
     }
 
-    /// Mark the screen as an error report: it closes with the bug footer.
-    pub const fn as_error(&mut self) -> &mut Self {
-        self.bug_footer = true;
-        self
-    }
-
-    /// Close a non-error screen with the bug footer too (the top-level help
-    /// overview, where a newcomer looks for where to report problems).
+    /// Close the screen with the bug footer: an internal error, or the top-level
+    /// help overview, where a newcomer looks for where to report problems.
     pub const fn with_bug_footer(&mut self) -> &mut Self {
         self.bug_footer = true;
         self
@@ -383,8 +378,8 @@ pub fn prompt(question: &str) {
 /// Report a failed command on stderr in the one error frame.
 ///
 /// The header (when not yet shown), the error in its [`Fault`]'s tone — or, for
-/// an error that renders its own complete screen, that screen — then the bug
-/// footer.
+/// an error that renders its own complete screen, that screen — then, for an
+/// internal fault only, the bug footer.
 ///
 /// An error that already wrote its final output (a machine-mode envelope, an
 /// upgrade verdict) renders nothing here.
@@ -402,6 +397,7 @@ pub fn error_screen(err: &CliError, color: bool) -> Option<Screen> {
     if text.trim().is_empty() {
         return None;
     }
+    let fault = err.fault();
     let mut screen = Screen::with_color(Stream::Stderr, color);
     if let CliError::DocNotFound { query, suggestions } = err {
         doc_not_found(&mut screen, query, suggestions);
@@ -411,9 +407,11 @@ pub fn error_screen(err: &CliError, color: bool) -> Option<Screen> {
         // through; only the frame is added.
         screen.guttered(&text);
     } else {
-        screen.line(err.fault().tone(), &text);
+        screen.line(fault.tone(), &text);
     }
-    screen.as_error();
+    if fault == Fault::Internal {
+        screen.with_bug_footer();
+    }
     Some(screen)
 }
 
@@ -456,9 +454,9 @@ mod tests {
     }
 
     #[test]
-    fn error_screen_closes_with_the_bug_footer() {
+    fn a_footed_screen_closes_with_the_bug_footer() {
         let mut s = plain(Stream::Stderr);
-        s.line(Tone::UserError, "boom").as_error();
+        s.line(Tone::InternalError, "boom").with_bug_footer();
         let out = s.render(Header::Omitted);
         assert!(
             out.ends_with(&format!(
@@ -475,7 +473,7 @@ mod tests {
         s.line(Tone::InternalError, "x")
             .line(Tone::Success, "y")
             .line(Tone::Aux, "z")
-            .as_error();
+            .with_bug_footer();
         let out = s.render(Header::Shown);
         assert!(!out.contains('\x1b'), "{out:?}");
     }
@@ -556,7 +554,38 @@ mod tests {
             .unwrap_or_default();
         assert!(out.contains(Palette::COLOR.orange), "{out:?}");
         assert!(!out.contains(Palette::COLOR.light_red), "{out:?}");
+        assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
+    }
+
+    /// An emitted build failed for `cargo` stderr `stderr`.
+    fn emitted_build_failed(stderr: &str) -> CliError {
+        CliError::EmittedBuildFailed {
+            what: "the emitted program",
+            code: 101,
+            stderr: TerminalSafe::sanitize(stderr),
+            runtime: None,
+        }
+    }
+
+    #[test]
+    fn only_an_internal_error_invites_a_bug_report() {
+        let screen_of = |err: &CliError| {
+            error_screen(err, false)
+                .map(|s| s.render(Header::Omitted))
+                .unwrap_or_default()
+        };
+        let miscompile = emitted_build_failed("error[E0609]: no field `x` on type `Y`");
+        assert_eq!(miscompile.fault(), Fault::Internal);
+        let out = screen_of(&miscompile);
         assert!(out.contains(REPORT_BUGS_PHRASE), "{out:?}");
+
+        let offline = emitted_build_failed("Could not resolve host: index.crates.io");
+        assert_eq!(offline.fault(), Fault::User);
+        let out = screen_of(&offline);
+        assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
+
+        let out = screen_of(&CliError::Usage("nothing to build here"));
+        assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
     }
 
     #[test]
@@ -580,7 +609,7 @@ mod tests {
             out.contains("    ipe doc topic:pipelines  Pipelines (topic)"),
             "{out:?}"
         );
-        assert!(out.contains(REPORT_BUGS_PHRASE), "{out:?}");
+        assert!(!out.contains(REPORT_BUGS_PHRASE), "{out:?}");
     }
 
     #[test]

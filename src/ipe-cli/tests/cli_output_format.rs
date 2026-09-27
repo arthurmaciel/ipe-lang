@@ -57,13 +57,17 @@ fn sample_entry() -> String {
 fn version_default_is_human_and_guttered() {
     let r = run(&["version"]);
     assert!(r.ok);
-    // Human form is framed (leading newline) and guttered (two-space indent).
-    // The frame opens with a blank line, so the first non-blank line is `  ipe …`.
-    assert!(
+    // Human form is a screen like every other: a blank line, the guttered
+    // product header, then the guttered (two-space indent) `ipe …` line.
+    let mut lines = r.stdout.lines().filter(|l| !l.trim().is_empty());
+    assert_eq!(
+        lines.next(),
+        Some(format!("  {}", ipe::style::header_line(env!("CARGO_PKG_VERSION"))).as_str()),
+        "human version must open with the product header: {:?}",
         r.stdout
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .is_some_and(|l| l.starts_with("  ipe ")),
+    );
+    assert!(
+        lines.next().is_some_and(|l| l.starts_with("  ipe ")),
         "human version must be guttered: {:?}",
         r.stdout
     );
@@ -697,9 +701,15 @@ fn remove_unknown_flag_is_rejected() {
 fn unknown_command_screen_is_fully_guttered() {
     let r = run(&["frobnicate"]);
     assert!(!r.ok, "an unknown command must exit non-zero");
+    let header = format!(
+        "\n  {}\n",
+        ipe::style::header_line(env!("CARGO_PKG_VERSION"))
+    );
     assert!(
-        r.stderr.starts_with("  unknown command `frobnicate`"),
-        "the advice line must be guttered, got:\n{}",
+        r.stderr
+            .strip_prefix(&header)
+            .is_some_and(|rest| rest.starts_with("  unknown command `frobnicate`")),
+        "the product header, then the guttered advice line, must open the screen, got:\n{}",
         r.stderr
     );
     for line in r.stderr.lines().filter(|l| !l.is_empty()) {

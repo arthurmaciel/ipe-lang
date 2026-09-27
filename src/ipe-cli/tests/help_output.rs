@@ -416,10 +416,11 @@ fn dev_verbs_stay_dispatchable_bare_as_dev_posture_aliases() {
     }
 }
 
-/// The one frame for an error: the product header leads, every line sits in
-/// the gutter, and the report-bugs footer closes the screen.
+/// The one frame for an error: the product header leads and every line sits in
+/// the gutter. A user error (here, misuse) never invites a bug report — the
+/// report-bugs footer is for ipe's own faults only.
 #[test]
-fn an_error_screen_is_framed_and_closed_by_the_bug_footer() {
+fn a_user_error_screen_is_framed_without_the_bug_footer() {
     let r = run(&["build", "--definitely-not-a-flag"]);
     assert!(!r.ok);
     let header = format!(
@@ -428,11 +429,8 @@ fn an_error_screen_is_framed_and_closed_by_the_bug_footer() {
     );
     assert!(r.stderr.starts_with(&header), "header leads:\n{}", r.stderr);
     assert!(
-        r.stderr.ends_with(
-            "\n\n  If you find any bugs, please report them at \
-             https://github.com/arthurmaciel/ipe-lang/issues.\n"
-        ),
-        "bug footer closes the error:\n{}",
+        !r.stderr.contains("please report"),
+        "a user error carries no bug footer:\n{}",
         r.stderr
     );
     for line in r.stderr.lines().filter(|l| !l.is_empty()) {

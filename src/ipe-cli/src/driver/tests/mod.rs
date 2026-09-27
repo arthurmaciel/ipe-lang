@@ -2113,18 +2113,22 @@ fn parse_audit_entry_args_rejects_unknown_flag() {
     );
 }
 
-/// `parse_audit_entry_args` — `--index` without a value yields `Usage`.
+/// `parse_audit_entry_args` — a value-taking flag without its value yields the
+/// catalog's `flag-needs-value` refusal, the one shape every such flag shares.
 #[test]
-fn parse_audit_entry_args_rejects_index_without_value() {
-    let args: Vec<String> = ["packages/foo.toml", "--index"]
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let err = parse_audit_entry_args(&args).unwrap_err();
-    assert!(
-        matches!(err, CliError::Usage(_)),
-        "--index without value must be a Usage error: {err:?}"
-    );
+fn parse_audit_entry_args_rejects_a_flag_without_its_value() {
+    for flag in ["--index", "--attested-actor"] {
+        let args: Vec<String> = ["packages/foo.toml", flag]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let err = parse_audit_entry_args(&args).unwrap_err();
+        let expected = crate::text::flag_needs_value(&"package audit-entry", &flag);
+        assert!(
+            matches!(&err, CliError::UsageOwned(message) if *message == expected),
+            "{flag} without value must be the flag-needs-value refusal: {err:?}"
+        );
+    }
 }
 
 /// `parse_audit_entry_args` — two positionals yields `Usage`.
