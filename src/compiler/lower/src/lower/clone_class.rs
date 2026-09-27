@@ -895,6 +895,12 @@ pub(super) fn reject_nonclone_value_reuse(
     if consumes > 1 {
         return Err(super::unsupported(span, Feature::NonCloneValueReuse));
     }
+    // A borrowing read (`sym.field`, a length probe) that the emitted order
+    // evaluates AFTER a move of `sym` observes a moved value (E0382), even
+    // though the borrow itself is not a consume.
+    if consumes == 1 && super::nonclone_read_after_move(sym, body) {
+        return Err(super::unsupported(span, Feature::NonCloneValueReuse));
+    }
     // A single consume that is a bare `Var` update base, combined with any use
     // of `sym` OUTSIDE that update expression (in the let-body or a peer
     // expression), is a use-after-move: the emitted `let mut __ipe_rec = sym;`

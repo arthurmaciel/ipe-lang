@@ -5527,6 +5527,199 @@ fn base_move_consumes(sym: Symbol, record: &Expr) -> usize {
     }
 }
 
+/// Is the non-`Clone` binding `sym` read, in emitted evaluation order, AFTER a
+/// position of `expr` has already moved it?
+///
+/// [`count_value_consumes`] counts a bare field read (`sym.field`) as a borrow,
+/// not a consume — sound only while `sym` is still owned. Once an earlier
+/// position moves `sym` (a bare argument, a lambda capture, an update base), a
+/// later field read, length probe, or index clone of `sym` observes a moved
+/// value (E0382). This walk models the emitted order to catch that
+/// consume-then-borrow shape, while a borrow-then-consume in a known
+/// left-to-right position stays accepted.
+///
+/// A kernel or FFI call has no single evaluation order: its bespoke emitters
+/// may reorder or hoist arguments. Its arguments are therefore order-unknown —
+/// a move of `sym` in one argument combined with any mention of `sym` in a
+/// sibling argument is a hazard, whichever order the emitter picks.
+fn nonclone_read_after_move(sym: Symbol, expr: &Expr) -> bool {
+    let mut state = FnValueMoveState::default();
+    nonclone_move_walk(sym, expr, &mut state);
+    state.hazard
+}
+
+/// Walk `expr` in emitted evaluation order for [`nonclone_read_after_move`].
+///
+/// A bare `sym` as an `Access` base, a list length probe or index clone, a
+/// `Match` scrutinee, or a `Destructure` value is a borrowing (or field-wise
+/// partial) read; every other occurrence of `sym` moves it. `Update` field
+/// values run before the base move (`emit_update` binds them to temporaries
+/// first). Branch alternatives each continue from the pre-branch state and
+/// merge conservatively.
+#[allow(clippy::too_many_lines)] // exhaustive IR match; every arm is structurally required
+fn nonclone_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => {
+            if *s == sym {
+                state.read(true);
+            }
+        }
+        Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
+            if lambda_body_refs_sym(sym, body) {
+                state.read(true);
+            }
+        }
+        Expr::Access { record, .. } => nonclone_borrow_base(sym, record, state),
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            nonclone_borrow_base(sym, list, state);
+        }
+        Expr::Update { record, fields } => {
+            for (_, e) in fields {
+                nonclone_move_walk(sym, e, state);
+            }
+            nonclone_move_walk(sym, record, state);
+        }
+        Expr::Call {
+            callee: Callee::Func(_),
+            args,
+            ..
+        }
+        | Expr::Ctor { args, .. }
+        | Expr::TailRecur { args } => {
+            for a in args {
+                nonclone_move_walk(sym, a, state);
+            }
+        }
+        Expr::Call { args, .. } => nonclone_unordered_args(sym, args, state),
+        Expr::Apply { func, args } => {
+            nonclone_move_walk(sym, func, state);
+            for a in args {
+                nonclone_move_walk(sym, a, state);
+            }
+        }
+        Expr::Let { name, value, body } => {
+            nonclone_move_walk(sym, value, state);
+            if *name != sym {
+                nonclone_move_walk(sym, body, state);
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            nonclone_borrow_base(sym, value, state);
+            if !pat_binds_symbol(binder, sym) {
+                nonclone_move_walk(sym, body, state);
+            }
+        }
+        Expr::If { cond, then_, else_ } => {
+            nonclone_move_walk(sym, cond, state);
+            let pre = *state;
+            let mut merged = pre;
+            for branch in [then_.as_ref(), else_.as_ref()] {
+                let mut s = pre;
+                nonclone_move_walk(sym, branch, &mut s);
+                merged.hazard |= s.hazard;
+                merged.consumed |= s.consumed;
+            }
+            *state = merged;
+        }
+        Expr::Match(m) => {
+            nonclone_borrow_base(sym, m.scrutinee(), state);
+            let pre = *state;
+            let mut merged = pre;
+            for arm in m.arms() {
+                if pat_binds_symbol(&arm.pat, sym) {
+                    continue;
+                }
+                let mut s = pre;
+                if let Some(guard) = &arm.guard {
+                    nonclone_move_walk(sym, guard, &mut s);
+                }
+                nonclone_move_walk(sym, &arm.body, &mut s);
+                merged.hazard |= s.hazard;
+                merged.consumed |= s.consumed;
+            }
+            *state = merged;
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            nonclone_move_walk(sym, lhs, state);
+            nonclone_move_walk(sym, rhs, state);
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                nonclone_move_walk(sym, e, state);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            nonclone_move_walk(sym, head, state);
+            nonclone_move_walk(sym, tail, state);
+        }
+        Expr::Record { fields, .. } => {
+            for (_, e) in fields {
+                nonclone_move_walk(sym, e, state);
+            }
+        }
+        Expr::TaskSeq { effect, rest } => {
+            nonclone_move_walk(sym, effect, state);
+            nonclone_move_walk(sym, rest, state);
+        }
+        Expr::TailLoop { params, body } => {
+            if !params.iter().any(|(s, _)| *s == sym) {
+                nonclone_move_walk(sym, body, state);
+            }
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::PathLit(_)
+        | Expr::CustomElementRef { .. }
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => {}
+    }
+}
+
+/// A borrowing base position: a bare `sym` is a non-moving read.
+///
+/// Any other base is walked as an ordinary (possibly moving) sub-expression.
+fn nonclone_borrow_base(sym: Symbol, base: &Expr, state: &mut FnValueMoveState) {
+    if matches!(base, Expr::Var(s) | Expr::CloneVar(s) if *s == sym) {
+        state.read(false);
+    } else {
+        nonclone_move_walk(sym, base, state);
+    }
+}
+
+/// Order-unknown arguments of a kernel or FFI call.
+///
+/// Each argument is walked from the shared pre-call state. A hazard inside an
+/// argument propagates; an argument that moves `sym` while a sibling argument
+/// also mentions `sym` is a hazard in whichever order the emitter evaluates
+/// them.
+fn nonclone_unordered_args(sym: Symbol, args: &[Expr], state: &mut FnValueMoveState) {
+    let pre = *state;
+    let mut merged = pre;
+    let mut mentioning = 0usize;
+    let mut moved = false;
+    for a in args {
+        let mut s = pre;
+        nonclone_move_walk(sym, a, &mut s);
+        merged.hazard |= s.hazard;
+        moved |= s.consumed && !pre.consumed;
+        merged.consumed |= s.consumed;
+        if count_var_uses(sym, a) > 0 {
+            mentioning = mentioning.saturating_add(1);
+        }
+    }
+    if moved && mentioning > 1 {
+        merged.hazard = true;
+    }
+    *state = merged;
+}
+
 /// Returns `true` if `sym` appears as a bare `Var(sym)` record-update base
 /// anywhere in `expr`. An `Expr::Update { record: Var(sym), .. }` emits
 /// `let mut __ipe_rec = sym;` which MOVES `sym`. Used by
@@ -29042,6 +29235,109 @@ mod tests {
             reject_nonclone_value_reuse(env, sym, &wrap_task, &update_linear, span).is_ok(),
             "update-base linear use must be accepted"
         );
+    }
+
+    /// A borrowing read of a non-`Clone` effect carrier that the emitted order
+    /// evaluates AFTER a move of the carrier fails closed with IPE-L0135.
+    ///
+    /// Covers the consume-then-borrow shape in an ordered user call, an ordered
+    /// tuple, and an order-unknown kernel call; and pins that the ordered
+    /// borrow-then-consume shape, an update whose field reads run before the base
+    /// move, and a borrow bound by `let` before the consume all stay accepted.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one IR fixture per shape; splitting obscures the pairing
+    fn nonclone_borrow_after_consume_fails_closed() {
+        use ipe_diagnostics::Feature;
+        use ipe_ir::{CallPin, Callee, Expr, FuncId, IrType, KernelFn, ModPath, OnFormKind};
+
+        use super::{CloneEnv, nonclone_read_after_move, reject_nonclone_value_reuse, unsupported};
+
+        let mut interner = Interner::new();
+        let main = interner.intern("Main").expect("intern");
+        let wrap = interner.intern("Wrap").expect("intern");
+        let w = interner.intern("w").expect("intern");
+        let tag = interner.intern("tag").expect("intern");
+        let t = interner.intern("t").expect("intern");
+        let span = Span::DUMMY;
+        let transparent = BTreeSet::new();
+        let env = CloneEnv {
+            interner: &interner,
+            transparent_ffi: &transparent,
+        };
+        let wrap_task = IrType::Enum {
+            home: ModPath(vec![main]),
+            name: wrap,
+            args: vec![IrType::Task(Box::new(IrType::Int))],
+        };
+
+        let read_tag = || Expr::Access {
+            record: Box::new(Expr::Var(w)),
+            field: tag,
+            field_ty: IrType::Int,
+        };
+        let user_call = |args: Vec<Expr>| Expr::Call {
+            callee: Callee::Func(FuncId::from_raw(0)),
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let kernel_call = |args: Vec<Expr>| Expr::Call {
+            callee: Callee::Kernel(KernelFn::StringAppend),
+            args,
+            pin: CallPin::None,
+            on_form: OnFormKind::NotForm,
+        };
+        let reject = |body: &Expr| reject_nonclone_value_reuse(env, w, &wrap_task, body, span);
+
+        // `f w w.tag`: the move of `w` precedes the field read — rejected.
+        let consume_then_borrow = user_call(vec![Expr::Var(w), read_tag()]);
+        assert!(nonclone_read_after_move(w, &consume_then_borrow));
+        let err = reject(&consume_then_borrow).expect_err("consume-then-borrow must be rejected");
+        assert_eq!(err, unsupported(span, Feature::NonCloneValueReuse));
+
+        // `(w, w.tag)`: tuple slots evaluate left to right — rejected.
+        let tuple_shape = Expr::Tuple(vec![Expr::Var(w), read_tag()]);
+        assert!(reject(&tuple_shape).is_err());
+
+        // `f w.tag w`: the field read precedes the move — accepted.
+        let borrow_then_consume = user_call(vec![read_tag(), Expr::Var(w)]);
+        assert!(!nonclone_read_after_move(w, &borrow_then_consume));
+        assert!(reject(&borrow_then_consume).is_ok());
+
+        // A kernel call's argument order is emitter-defined: a move and a read of
+        // `w` in sibling arguments are rejected in EITHER written order.
+        let kernel_move_first = kernel_call(vec![Expr::Var(w), read_tag()]);
+        let kernel_read_first = kernel_call(vec![read_tag(), Expr::Var(w)]);
+        assert!(reject(&kernel_move_first).is_err());
+        assert!(reject(&kernel_read_first).is_err());
+
+        // `{ w | tag = w.tag }`: field values bind before the base moves — accepted.
+        let update_reads_then_moves = Expr::Update {
+            record: Box::new(Expr::Var(w)),
+            fields: vec![(tag, read_tag())],
+        };
+        assert!(!nonclone_read_after_move(w, &update_reads_then_moves));
+        assert!(reject(&update_reads_then_moves).is_ok());
+
+        // `let t = w.tag in f w t`: the documented fix — accepted.
+        let let_bound_borrow = Expr::Let {
+            name: t,
+            value: Box::new(read_tag()),
+            body: Box::new(user_call(vec![Expr::Var(w), Expr::Var(t)])),
+        };
+        assert!(reject(&let_bound_borrow).is_ok());
+
+        // `if c then f w else 0` then `w.tag` in a sibling slot: a move in ANY
+        // branch leaves `w` possibly moved — rejected.
+        let branch_move = Expr::Tuple(vec![
+            Expr::If {
+                cond: Box::new(Expr::Bool(true)),
+                then_: Box::new(user_call(vec![Expr::Var(w)])),
+                else_: Box::new(Expr::Int(0)),
+            },
+            read_tag(),
+        ]);
+        assert!(reject(&branch_move).is_err());
     }
 
     /// A reuse HIDDEN inside an `Access`/`Update` record base must not slip past
