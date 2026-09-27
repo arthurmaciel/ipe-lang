@@ -1038,13 +1038,16 @@ enum EmittedBuildCause {
 impl EmittedBuildCause {
     /// Classify `cargo`'s trimmed stderr.
     fn of(stderr: &str) -> Self {
-        if let Some(feature) = missing_runtime_feature(stderr) {
-            Self::MissingRuntimeFeature(feature)
-        } else if is_registry_unreachable(stderr) {
-            Self::RegistryUnreachable
-        } else {
-            Self::Miscompile
-        }
+        missing_runtime_feature(stderr).map_or_else(
+            || {
+                if is_registry_unreachable(stderr) {
+                    Self::RegistryUnreachable
+                } else {
+                    Self::Miscompile
+                }
+            },
+            Self::MissingRuntimeFeature,
+        )
     }
 }
 
