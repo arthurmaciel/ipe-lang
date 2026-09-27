@@ -3067,6 +3067,7 @@ dependencies = [
  "rsa",
  "rust_decimal",
  "rustix 1.1.4",
+ "rustls",
  "serde",
  "serde_json",
  "serde_urlencoded",
