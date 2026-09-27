@@ -11500,7 +11500,7 @@ impl<'a> Lowerer<'a> {
     /// that module (one of its segments was never interned).
     ///
     /// `Ipe.*` is a reserved namespace, so no user module can claim this home.
-    fn store_home(&self) -> Option<ModPath> {
+    fn store_home(&self) -> Option<Vec<Symbol>> {
         ["Ipe", "Db", "Store"]
             .iter()
             .map(|segment| self.interner.lookup(segment))
@@ -11521,9 +11521,9 @@ impl<'a> Lowerer<'a> {
         self.enum_variants
             .iter()
             .find_map(|((variant_home, ty), variants)| {
-                (*variant_home == home && variants.contains(&want)).then_some(*ty)
+                (variant_home.0 == home && variants.contains(&want)).then_some(*ty)
             })
-            .map(|ty| (home, ty, want))
+            .map(|ty| (ModPath(home), ty, want))
     }
 
     /// The `(home, Cond, Compare, CompareOp, OpEq)` identities the `Store.eq` /
