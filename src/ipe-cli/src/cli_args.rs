@@ -346,11 +346,9 @@ fn set_session(slot: &mut SessionMode, mode: SessionMode) -> Result<(), CliError
     if let Some(first) = slot.flag() {
         let second = mode.flag().unwrap_or(first);
         return Err(CliError::UsageOwned(if first == second {
-            format!("ipe run: {first} given more than once")
+            text::flag_repeated(&"run", &first)
         } else {
-            format!(
-                "ipe run: {first} and {second} cannot be combined — record a session, then replay it"
-            )
+            text::session_flags_exclusive(&first, &second)
         }));
     }
     *slot = mode;

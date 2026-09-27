@@ -146,12 +146,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
         compute_entry_version(&manifest, args.source.as_deref(), args.rev.as_deref())?;
 
     let claimed = SelfDeclaredPublisher::parse(&infer_publisher(entry_version.source.as_str()))
-        .map_err(|refusal| {
-            CliError::UsageOwned(format!(
-                "ipe package publish: the source URL's owner is not a GitHub login ({refusal}) — \
-                 publish from a `https://github.com/<owner>/<repo>` source"
-            ))
-        })?;
+        .map_err(|refusal| CliError::UsageOwned(text::publish_source_owner_not_login(&refusal)))?;
 
     // 2. Prove the publishing identity. A real publish resolves the signing key
     //    and then the authenticated account (`GET /user`) before the gate, so the
@@ -533,21 +528,16 @@ fn build_fresh_entry(
         )),
         Ok(_) => Err(fresh_needs_blessing(
             name,
-            &format!("the proof does not cover the claimed publisher `{claimed}`"),
+            &text::publish_fresh_claim_not_covered(claimed),
         )),
-        Err(refusal) => Err(fresh_needs_blessing(name, &refusal.to_string())),
+        Err(refusal) => Err(fresh_needs_blessing(name, refusal)),
     }
 }
 
 /// The `--fresh` refusal for a reserved package whose claimed publisher is not a
 /// proven blessed identity; `reason` says why.
-fn fresh_needs_blessing(name: &str, reason: &str) -> CliError {
-    CliError::UsageOwned(format!(
-        "ipe package publish: `--fresh` on `{name}` requires an authenticated blessed \
-         publisher identity: {reason}. The identity is the account your `ipe login` token \
-         authenticates as, resolved only on a real publish — `--dry-run` makes no network \
-         call, so it can never preview a `--fresh` reset."
-    ))
+fn fresh_needs_blessing(name: &str, reason: &dyn std::fmt::Display) -> CliError {
+    CliError::UsageOwned(text::publish_fresh_needs_blessing(&name, reason))
 }
 
 /// The intended pull request — everything publish would push, so `--dry-run` can

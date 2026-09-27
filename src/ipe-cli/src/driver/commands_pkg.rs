@@ -975,13 +975,17 @@ pub fn parse_audit_entry_args(rest: &[String]) -> Result<AuditEntryArgs, CliErro
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--attested-actor" => {
-                let value = it.next().ok_or(CliError::Usage(
-                    "ipe package audit-entry: --attested-actor needs a value",
-                ))?;
+                let value = it.next().ok_or_else(|| {
+                    CliError::UsageOwned(text::flag_needs_value(
+                        &"package audit-entry",
+                        &"--attested-actor",
+                    ))
+                })?;
                 if attested_actor.is_some() {
-                    return Err(CliError::Usage(
-                        "ipe package audit-entry: --attested-actor given more than once",
-                    ));
+                    return Err(CliError::UsageOwned(text::flag_repeated(
+                        &"package audit-entry",
+                        &"--attested-actor",
+                    )));
                 }
                 attested_actor = Some(AttestedActor::parse(value)?);
             }

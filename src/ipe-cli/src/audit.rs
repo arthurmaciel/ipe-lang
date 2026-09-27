@@ -615,8 +615,9 @@ fn parse_audit_args(rest: &[String]) -> Result<AuditArgs, CliError> {
                     )));
                 }
                 publisher = Some(SelfDeclaredPublisher::parse(value).map_err(|refusal| {
-                    CliError::UsageOwned(format!(
-                        "ipe package audit: --publisher {value:?} is not a GitHub login: {refusal}"
+                    CliError::UsageOwned(text::audit_publisher_not_login(
+                        &format!("{value:?}"),
+                        &refusal,
                     ))
                 })?);
             }

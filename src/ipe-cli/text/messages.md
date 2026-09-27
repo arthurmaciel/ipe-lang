@@ -802,6 +802,118 @@ See <a href="module/index.html">Reference</a> for the full API.
 
 Every code reads <code>IPE-</code>, a family letter, and four digits. The letter names the part of the compiler that reports it:
 
+# Output directories
+
+## output-symlink
+
+{path} is a symbolic link — ipe never writes or deletes through one; remove it or point --out at a real directory
+
+## output-not-a-directory
+
+{path} exists and is not a directory
+
+## output-not-ipe-owned
+
+{path} already holds files ipe did not create (no `{marker}` marker); ipe never overwrites them — remove the directory yourself or choose another --out
+
+## output-project-root
+
+{path} is the project root — build output goes in a separate directory (the default is `out/`)
+
+## output-contains-project
+
+{out} contains the project at {project} — build output must not enclose your sources
+
+## output-inside-sources
+
+{out} is inside the source root {sources} — build output must stay out of your sources
+
+## output-unresolved-sources
+
+the source root {path} cannot be resolved — ipe cannot prove the output stays out of your sources; create it or fix `package.ipe`
+
+## output-inside-ipe-owned
+
+{out} is inside {owner}, which ipe owns and may delete (`ipe clean`) — an ejected project must live outside ipe's output and cache; choose another --out
+
+## output-inside-vcs
+
+{out} is inside a `.git` directory — build output must stay out of version-control metadata; choose another --out
+
+## output-inside-cache-namespace
+
+{out} is inside a `{namespace}` directory, whose contents ipe deletes by name (`ipe clean`) in whichever project holds it — output must stay out of every ipe cache namespace; choose another --out
+
+## output-parent-traversal
+
+{path} has a `..` in a part that does not exist yet — name the directory directly
+
+## output-not-fresh
+
+{path} is not empty — eject writes a new project, so point --out at an absent or empty directory
+
+## output-unsafe-component
+
+{path} is not a plain relative path — refusing to write it
+
+## output-outside-project
+
+{path} resolves outside the project at {root} — a directory walk never rewrites it
+
+# Publisher identity
+
+## login-empty
+
+it is empty
+
+## login-too-long
+
+it is longer than {max} characters
+
+## login-forbidden-byte
+
+it holds a character other than an ASCII letter, digit, or hyphen
+
+## login-edge-hyphen
+
+it starts or ends with a hyphen
+
+## login-double-hyphen
+
+it holds consecutive hyphens
+
+## blessing-no-proven-identity
+
+no authenticated or attested publisher identity was presented, and a self-declared `publisher` is never trusted
+
+## blessing-identity-mismatch
+
+the proven identity `{proven}` does not match the claimed publisher `{claimed}`
+
+## blessing-not-blessed
+
+the proven identity `{proven}` is not the first-party publisher `{blessed}`
+
+## attested-actor-not-login
+
+ipe package audit-entry: --attested-actor {raw} is not a GitHub login: {refusal}
+
+## audit-publisher-not-login
+
+ipe package audit: --publisher {value} is not a GitHub login: {refusal}
+
+## publish-source-owner-not-login
+
+ipe package publish: the source URL's owner is not a GitHub login ({refusal}) — publish from a `https://github.com/<owner>/<repo>` source
+
+## publish-fresh-needs-blessing
+
+ipe package publish: `--fresh` on `{name}` requires an authenticated blessed publisher identity: {reason}. The identity is the account your `ipe login` token authenticates as, resolved only on a real publish — `--dry-run` makes no network call, so it can never preview a `--fresh` reset.
+
+## publish-fresh-claim-not-covered
+
+the proof does not cover the claimed publisher `{claimed}`
+
 # Package index and audit
 
 ## audit-no-manifest
@@ -1336,6 +1448,10 @@ ipe run {flag}: works on a native run only — drop `--target wasi`
 ## session-jailed
 
 ipe run {flag}: a native-bearing program runs jailed, where the session log cannot be reached — record and replay a pure Ipê build of the app
+
+## session-flags-exclusive
+
+ipe run: {first} and {second} cannot be combined — record a session, then replay it
 
 ## replay-no-default-log
 

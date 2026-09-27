@@ -997,6 +997,8 @@ messages! {
     session_native_only(flag) = "session-native-only";
     /// `ipe run --record`/`--replay` on a native-bearing program.
     session_jailed(flag) = "session-jailed";
+    /// `ipe run --record` with `--replay`.
+    session_flags_exclusive(first, second) = "session-flags-exclusive";
     /// `ipe run --replay` with no recorded log or trace in the output root.
     replay_no_default_log(typed, trace) = "replay-no-default-log";
     /// `ipe run --replay <log>` naming no regular file.
@@ -1037,6 +1039,60 @@ messages! {
     upgrade_installer_wait_failed(detail) = "upgrade-installer-wait-failed";
     /// `ipe upgrade`'s installer exited non-zero.
     upgrade_installer_failed = "upgrade-installer-failed";
+    /// An output path that is a symbolic link.
+    output_symlink(path) = "output-symlink";
+    /// An output path that exists and is not a directory.
+    output_not_a_directory(path) = "output-not-a-directory";
+    /// An output directory holding files but no ownership marker.
+    output_not_ipe_owned(path, marker) = "output-not-ipe-owned";
+    /// An output that is the project root.
+    output_project_root(path) = "output-project-root";
+    /// An output that encloses the project.
+    output_contains_project(out, project) = "output-contains-project";
+    /// An output inside the project's source root.
+    output_inside_sources(out, sources) = "output-inside-sources";
+    /// A project whose source root cannot be resolved.
+    output_unresolved_sources(path) = "output-unresolved-sources";
+    /// A user-bound output inside a tree ipe owns.
+    output_inside_ipe_owned(out, owner) = "output-inside-ipe-owned";
+    /// An output inside a `.git` directory.
+    output_inside_vcs(out) = "output-inside-vcs";
+    /// An output inside an ipe cache namespace.
+    output_inside_cache_namespace(out, namespace) = "output-inside-cache-namespace";
+    /// An output whose not-yet-existing tail contains `..`.
+    output_parent_traversal(path) = "output-parent-traversal";
+    /// An eject output that is not absent or empty.
+    output_not_fresh(path) = "output-not-fresh";
+    /// A product path with a component other than a plain name.
+    output_unsafe_component(path) = "output-unsafe-component";
+    /// A walked file that resolves outside the project.
+    output_outside_project(path, root) = "output-outside-project";
+    /// A GitHub login with nothing before its optional `[bot]` suffix.
+    login_empty = "login-empty";
+    /// A GitHub login past the length ceiling.
+    login_too_long(max) = "login-too-long";
+    /// A GitHub login holding a forbidden character.
+    login_forbidden_byte = "login-forbidden-byte";
+    /// A GitHub login starting or ending with a hyphen.
+    login_edge_hyphen = "login-edge-hyphen";
+    /// A GitHub login holding consecutive hyphens.
+    login_double_hyphen = "login-double-hyphen";
+    /// No proven publisher identity was presented.
+    blessing_no_proven_identity = "blessing-no-proven-identity";
+    /// The proven identity differs from the claimed publisher.
+    blessing_identity_mismatch(proven, claimed) = "blessing-identity-mismatch";
+    /// The proven identity is not the blessed first-party publisher.
+    blessing_not_blessed(proven, blessed) = "blessing-not-blessed";
+    /// `ipe package audit-entry --attested-actor` given a non-login.
+    attested_actor_not_login(raw, refusal) = "attested-actor-not-login";
+    /// `ipe package audit --publisher` given a non-login.
+    audit_publisher_not_login(value, refusal) = "audit-publisher-not-login";
+    /// `ipe package publish` from a source whose owner is not a login.
+    publish_source_owner_not_login(refusal) = "publish-source-owner-not-login";
+    /// `ipe package publish --fresh` without a proven blessed publisher.
+    publish_fresh_needs_blessing(name, reason) = "publish-fresh-needs-blessing";
+    /// A blessing proof that does not cover the claimed publisher.
+    publish_fresh_claim_not_covered(claimed) = "publish-fresh-claim-not-covered";
 }
 
 #[cfg(test)]
