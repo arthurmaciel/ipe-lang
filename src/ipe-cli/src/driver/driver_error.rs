@@ -183,6 +183,11 @@ pub enum CliError {
     /// not be found or parsed, no published version satisfied the requirement, or
     /// a `git` fetch of the source failed. Carries a message naming the package.
     Resolve(String),
+    /// `ipe.lock` cannot record or admit a dependency: a missing field, an
+    /// unrecognised `kind`, an impossible `source`/`rev`/`kind` pairing, or a
+    /// path dependency that cannot be written into the lockfile. Boxed to keep
+    /// `CliError` within its size ceiling.
+    LockRefused(Box<crate::lockfile::LockRefusal>),
     /// A fetched package's content hash did not equal the hash the index pinned.
     /// This is the verify-before-trust boundary: a mismatch is always a hard,
     /// typed error — never a warning — because the source that was fetched is not
@@ -527,6 +532,7 @@ impl CliError {
             Self::StaticRefusal(_) => "static-refusal",
             Self::CapabilityMismatch { .. } => "capability-mismatch",
             Self::Resolve(_) => "resolve",
+            Self::LockRefused(_) => "lock-refused",
             Self::HashMismatch { .. } => "hash-mismatch",
             Self::Diff(_) => "diff",
             Self::SemverRejected { .. } => "semver-rejected",
@@ -599,6 +605,7 @@ impl CliError {
             | Self::StaticRefusal(_)
             | Self::CapabilityMismatch { .. }
             | Self::Resolve(_)
+            | Self::LockRefused(_)
             | Self::HashMismatch { .. }
             | Self::Diff(_)
             | Self::SemverRejected { .. }
@@ -719,6 +726,7 @@ impl std::fmt::Display for CliError {
                 Ok(())
             }
             Self::Resolve(message) => f.write_str(message),
+            Self::LockRefused(refusal) => write!(f, "{refusal}"),
             Self::HashMismatch {
                 package,
                 expected,

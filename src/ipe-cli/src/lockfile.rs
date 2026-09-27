@@ -28,6 +28,73 @@ use crate::published_version::PublishedVersion;
 /// The lockfile's filename at a project root.
 const LOCKFILE_NAME: &str = "ipe.lock";
 
+/// Why `ipe.lock` cannot record or admit a dependency.
+///
+/// Rendered through the message catalog; boxed inside
+/// [`CliError::LockRefused`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LockRefusal {
+    /// A `[[package]]` table lacks a required field.
+    MissingField {
+        /// The absent field's key.
+        field: &'static str,
+    },
+    /// A package's `kind` is neither `index` nor `escape`.
+    UnknownKind {
+        /// The package carrying the value.
+        package: PackageName,
+        /// The unrecognised `kind` value, verbatim.
+        kind: String,
+    },
+    /// An index dependency records the `local` rev only a path dependency carries.
+    IndexDepLocalRev {
+        /// The index dependency.
+        package: PackageName,
+    },
+    /// A path dependency's `source` cannot be written into a quoted lockfile line.
+    UnrecordableLocalSource {
+        /// The path dependency.
+        package: PackageName,
+        /// The refused `source` value, verbatim.
+        raw: String,
+    },
+    /// A path dependency's manifest path is not valid UTF-8.
+    NonUtf8LocalPath {
+        /// The path dependency.
+        package: PackageName,
+        /// The path as the manifest named it.
+        path: PathBuf,
+    },
+}
+
+impl std::fmt::Display for LockRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&match self {
+            Self::MissingField { field } => crate::text::lock_missing_field(field),
+            Self::UnknownKind { package, kind } => {
+                crate::text::lock_unknown_kind(package, &kind.escape_debug())
+            }
+            Self::IndexDepLocalRev { package } => crate::text::lock_index_dep_local_rev(package),
+            Self::UnrecordableLocalSource { package, raw } => {
+                crate::text::lock_unrecordable_local_source(
+                    package,
+                    &MAX_LOCAL_SOURCE_LEN,
+                    &raw.escape_debug(),
+                )
+            }
+            Self::NonUtf8LocalPath { package, path } => {
+                crate::text::lock_non_utf8_local_path(package, &path.display())
+            }
+        })
+    }
+}
+
+impl From<LockRefusal> for CliError {
+    fn from(refusal: LockRefusal) -> Self {
+        Self::LockRefused(Box::new(refusal))
+    }
+}
+
 /// The on-disk `rev` of a local-path dependency, which has no commit to pin.
 const LOCAL_REV: &str = "local";
 
@@ -48,19 +115,18 @@ impl LocalSource {
     /// Parse a recorded local path.
     ///
     /// # Errors
-    /// [`CliError::Resolve`] when `raw` is empty, longer than
+    /// [`CliError::LockRefused`] when `raw` is empty, longer than
     /// [`MAX_LOCAL_SOURCE_LEN`] bytes, or contains a control character or `"`.
     pub fn parse(pkg: &PackageName, raw: &str) -> Result<Self, CliError> {
         let recordable = !raw.is_empty()
             && raw.len() <= MAX_LOCAL_SOURCE_LEN
             && !raw.chars().any(|c| c.is_control() || c == '"');
         if !recordable {
-            return Err(CliError::Resolve(format!(
-                "package `{pkg}`: a path dependency's `source` must be a non-empty path of at \
-                 most {MAX_LOCAL_SOURCE_LEN} bytes with no control characters or `\"`, got: \
-                 \"{}\"",
-                raw.escape_debug()
-            )));
+            return Err(LockRefusal::UnrecordableLocalSource {
+                package: pkg.clone(),
+                raw: raw.to_owned(),
+            }
+            .into());
         }
         Ok(Self(raw.to_owned()))
     }
@@ -68,15 +134,13 @@ impl LocalSource {
     /// Record a manifest path, refusing one that is not valid UTF-8.
     ///
     /// # Errors
-    /// [`CliError::Resolve`] when the path is not UTF-8 (a lossy rendering would
-    /// record a different path than the one resolved) or fails [`Self::parse`].
+    /// [`CliError::LockRefused`] when the path is not UTF-8 (a lossy rendering
+    /// would record a different path than the one resolved) or fails
+    /// [`Self::parse`].
     pub fn from_path(pkg: &PackageName, path: &Path) -> Result<Self, CliError> {
-        let raw = path.to_str().ok_or_else(|| {
-            CliError::Resolve(format!(
-                "package `{pkg}`: path dependency `{}` is not valid UTF-8 and cannot be recorded \
-                 in ipe.lock",
-                path.display()
-            ))
+        let raw = path.to_str().ok_or_else(|| LockRefusal::NonUtf8LocalPath {
+            package: pkg.clone(),
+            path: path.to_path_buf(),
         })?;
         Self::parse(pkg, raw)
     }
@@ -152,20 +216,20 @@ impl LockedOrigin {
             Some("index") => false,
             Some("escape") => true,
             Some(other) => {
-                return Err(CliError::Resolve(format!(
-                    "ipe.lock: package `{pkg}` has an unrecognised `kind` value \"{}\" — re-run \
-                     `ipe add` to regenerate",
-                    other.escape_debug()
-                )));
+                return Err(LockRefusal::UnknownKind {
+                    package: pkg.clone(),
+                    kind: other.to_owned(),
+                }
+                .into());
             }
             None => *version == PublishedVersion::new(0, 0, 0),
         };
         if rev == LOCAL_REV {
             if !escape {
-                return Err(CliError::Resolve(format!(
-                    "ipe.lock: package `{pkg}` is an index dependency but records a `local` rev \
-                     — an index dependency is always pinned to a commit; re-run `ipe add`"
-                )));
+                return Err(LockRefusal::IndexDepLocalRev {
+                    package: pkg.clone(),
+                }
+                .into());
             }
             return LocalSource::parse(pkg, source).map(|source| Self::Path { source });
         }
@@ -209,8 +273,9 @@ impl Lockfile {
     /// # Errors
     /// [`CliError::Io`] if the file exists but cannot be read;
     /// [`CliError::VersionRefused`] if a `version` is malformed or carries build
-    /// metadata; [`CliError::Resolve`] if a field is missing or malformed (a bad
-    /// name, source, rev, kind, or sha256, or an impossible pairing of them).
+    /// metadata; [`CliError::LockRefused`] if a field is missing, a `kind` is
+    /// unrecognised, or `source`/`rev`/`kind` pair impossibly;
+    /// [`CliError::Resolve`] if a name, source URL, rev, or sha256 is malformed.
     pub fn read(project_root: &Path) -> Result<Self, CliError> {
         let path = Self::path(project_root);
         let text = match crate::io_bounded::read_to_string_capped(
@@ -369,9 +434,7 @@ impl RawLocked {
     /// `source`/`rev`/`kind` triple is parsed by [`LockedOrigin::parse`], and the
     /// hash by [`Sha256Hex::parse`].
     fn into_dep(self) -> Result<LockedDep, CliError> {
-        let missing = |field: &str| {
-            CliError::Resolve(format!("ipe.lock: a `[[package]]` is missing `{field}`"))
-        };
+        let missing = |field: &'static str| CliError::from(LockRefusal::MissingField { field });
         let name = PackageName::parse(&self.name.ok_or_else(|| missing("name"))?)?;
         let version_str = self.version.ok_or_else(|| missing("version"))?;
         let version = PublishedVersion::parse(&version_str)
@@ -400,7 +463,9 @@ fn unquote(value: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalSource, LockedDep, LockedOrigin, Lockfile, MAX_LOCAL_SOURCE_LEN};
+    use super::{
+        LocalSource, LockRefusal, LockedDep, LockedOrigin, Lockfile, MAX_LOCAL_SOURCE_LEN,
+    };
     use crate::CliError;
     use crate::index::{PinnedRev, Sha256Hex, SourceUrl};
     use crate::package_name::PackageName;
@@ -739,8 +804,17 @@ mod tests {
             FIXTURE_SHA,
             "kind = \"frobnicator\"\n",
         );
-        let msg = read_text("bad-kind", &text).unwrap_err().to_string();
-        assert!(msg.contains("frobnicator"), "{msg}");
+        let err = read_text("bad-kind", &text).unwrap_err();
+        assert!(
+            matches!(&err, CliError::LockRefused(r) if matches!(**r, LockRefusal::UnknownKind { .. })),
+            "{err:?}"
+        );
+        assert_eq!(err.machine_kind(), "lock-refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unrecognised `kind` value \"frobnicator\""),
+            "{msg}"
+        );
     }
 
     #[test]
@@ -793,7 +867,13 @@ mod tests {
             "[[package]]\nname = \"mylib\"\nversion = \"1.0.0\"\n\
              source = \"https://example.invalid/mylib\"\nrev = \"{FIXTURE_SHA}\"\n"
         );
-        let msg = read_text("no-sha256", &text).unwrap_err().to_string();
+        let err = read_text("no-sha256", &text).unwrap_err();
+        assert!(
+            matches!(&err, CliError::LockRefused(r)
+                if **r == LockRefusal::MissingField { field: "sha256" }),
+            "{err:?}"
+        );
+        let msg = err.to_string();
         assert!(msg.contains("missing `sha256`"), "{msg}");
     }
 
@@ -839,6 +919,10 @@ mod tests {
         use std::os::unix::ffi::OsStrExt as _;
         let path = std::path::Path::new(std::ffi::OsStr::from_bytes(b"lib\xff"));
         let err = LocalSource::from_path(&name("mylib"), path).unwrap_err();
+        assert!(
+            matches!(&err, CliError::LockRefused(r) if matches!(**r, LockRefusal::NonUtf8LocalPath { .. })),
+            "{err:?}"
+        );
         assert!(err.to_string().contains("not valid UTF-8"), "{err}");
     }
 }

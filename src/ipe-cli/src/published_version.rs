@@ -121,28 +121,19 @@ impl VersionRefusal {
 
 impl fmt::Display for VersionRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+        f.write_str(&match self {
             // `{raw:?}` escapes control bytes: the raw value is untrusted input.
             Self::Malformed { raw, reason } => {
-                write!(f, "{raw:?} is not a valid semantic version: {reason}")
+                crate::text::version_refused_malformed(&format!("{raw:?}"), reason)
             }
-            Self::BuildMetadata { version } => write!(
-                f,
-                "version {version} carries build metadata (`+{}`), which the package index \
-                 refuses — semver precedence ignores it, so the version would not name one \
-                 release unambiguously. Drop the `+…` suffix from the version.",
-                version.build
-            ),
+            Self::BuildMetadata { version } => {
+                crate::text::version_refused_build_metadata(version, &version.build)
+            }
             Self::NotAboveGreatest {
                 candidate,
                 greatest,
-            } => write!(
-                f,
-                "version {candidate} is not above the greatest published version {greatest} — \
-                 every new version must exceed every version already in the index. Publish a \
-                 version above {greatest}."
-            ),
-        }
+            } => crate::text::version_refused_not_above(candidate, greatest),
+        })
     }
 }
 

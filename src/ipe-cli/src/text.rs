@@ -658,6 +658,22 @@ messages! {
     publish_unsigned_commit = "publish-unsigned-commit";
     /// Publish without a resolvable GitHub identity.
     publish_unresolvable_identity = "publish-unresolvable-identity";
+    /// An `ipe.lock` `[[package]]` table lacks a required field.
+    lock_missing_field(field) = "lock-missing-field";
+    /// An `ipe.lock` package carries an unrecognised `kind`.
+    lock_unknown_kind(package, kind) = "lock-unknown-kind";
+    /// An `ipe.lock` index dependency records a `local` rev.
+    lock_index_dep_local_rev(package) = "lock-index-dep-local-rev";
+    /// A path dependency's `source` cannot be recorded in `ipe.lock`.
+    lock_unrecordable_local_source(package, max, raw) = "lock-unrecordable-local-source";
+    /// A path dependency's path is not valid UTF-8.
+    lock_non_utf8_local_path(package, path) = "lock-non-utf8-local-path";
+    /// A version string that is not valid semver.
+    version_refused_malformed(raw, reason) = "version-refused-malformed";
+    /// A version carrying build metadata.
+    version_refused_build_metadata(version, build) = "version-refused-build-metadata";
+    /// A version not above the greatest published one.
+    version_refused_not_above(candidate, greatest) = "version-refused-not-above";
     /// The documentation site's skip-to-content link.
     site_skip_link = "site-skip-link";
     /// The accessible name of the site navigation.

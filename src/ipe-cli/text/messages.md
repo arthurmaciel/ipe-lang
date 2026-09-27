@@ -701,6 +701,42 @@ no commit-signing key is configured, so the publish commit could only be pushed 
 
 could not resolve your GitHub identity for the index-PR commit — the curated index requires signed commits marked "Verified", which is only possible when the commit's committer is your authenticated GitHub account's verified noreply identity. Run `ipe login` so publish can sign the index PR under your verified GitHub identity, then publish again. Nothing was published.
 
+# Lockfile refusals
+
+## lock-missing-field
+
+ipe.lock: a `[[package]]` is missing `{field}`
+
+## lock-unknown-kind
+
+ipe.lock: package `{package}` has an unrecognised `kind` value "{kind}" — re-run `ipe add` to regenerate
+
+## lock-index-dep-local-rev
+
+ipe.lock: package `{package}` is an index dependency but records a `local` rev — an index dependency is always pinned to a commit; re-run `ipe add`
+
+## lock-unrecordable-local-source
+
+package `{package}`: a path dependency's `source` must be a non-empty path of at most {max} bytes with no control characters or `"`, got: "{raw}"
+
+## lock-non-utf8-local-path
+
+package `{package}`: path dependency `{path}` is not valid UTF-8 and cannot be recorded in ipe.lock
+
+# Version refusals
+
+## version-refused-malformed
+
+{raw} is not a valid semantic version: {reason}
+
+## version-refused-build-metadata
+
+version {version} carries build metadata (`+{build}`), which the package index refuses — semver precedence ignores it, so the version would not name one release unambiguously. Drop the `+…` suffix from the version.
+
+## version-refused-not-above
+
+version {candidate} is not above the greatest published version {greatest} — every new version must exceed every version already in the index. Publish a version above {greatest}.
+
 # Documentation site
 
 The labels of the generated documentation site (`ipe doc`). A label is plain
