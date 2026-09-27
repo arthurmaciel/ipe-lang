@@ -423,8 +423,8 @@ pub(crate) struct ResolvedProject {
     pub(crate) entry_path: Vec<String>,
     pub(crate) blame_path: PathBuf,
     pub(crate) db_driver: ipe_backend_rust::DbDriver,
-    /// The `[wasm] publicEnv` allowlist (empty for the no-manifest / sibling-
-    /// discovery path — there is no manifest to declare one).
+    /// The `[wasm] publicEnv` allowlist (empty for the no-manifest loose-file
+    /// path — there is no manifest to declare one).
     pub(crate) wasm_public_env: Vec<String>,
     /// The sanitized Cargo package name for the emitted crate (from `package.ipe`
     /// name via [`ipe_backend_rust::sanitize_cargo_name`]). Empty string
@@ -3141,10 +3141,11 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         AppearanceRoute, BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY,
-        RebuildTimings, appearance_route, apply_build_accel_env, child_env, choose_build_accel,
-        compile_failed_frame, dir_has_dep_rlib, emitted_binds_http, emitted_is_tui, emitted_is_web,
-        env_flag_on, first_error_line, mint_hot_token, mpsc, push_control_appearance,
-        schedule_resolve_retry, send_control_frame, spawn_command, strip_ansi, watch_status_body,
+        RebuildTimings, ResolvedProject, appearance_route, apply_build_accel_env, child_env,
+        choose_build_accel, compile_failed_frame, dir_has_dep_rlib, emitted_binds_http,
+        emitted_is_tui, emitted_is_web, env_flag_on, first_error_line, mint_hot_token, mpsc,
+        push_control_appearance, resolve_project_sources, schedule_resolve_retry,
+        send_control_frame, spawn_command, strip_ansi, watch_status_body,
     };
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
@@ -3866,5 +3867,69 @@ mod tests {
             "token must be lowercase hex"
         );
         assert_ne!(a, b, "two mints must not collide");
+    }
+
+    /// A fresh scratch directory unique to this test run.
+    fn loose_scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ipe_loose_watch_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    /// Watch resolves a loose file to its import closure, beside an unreadable directory.
+    ///
+    /// A rebuild re-resolves from disk, so an import added to the entry pulls
+    /// the newly named sibling in, while an unimported sibling stays out.
+    #[cfg(unix)]
+    #[test]
+    fn watch_loose_file_resolves_the_import_closure_and_follows_a_new_import() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = loose_scratch("closure");
+        let entry = dir.join("Main.ipe");
+        std::fs::write(&entry, "module Main exposing (main)\n\nmain = 1\n").expect("write entry");
+        std::fs::write(
+            dir.join("Helper.ipe"),
+            "module Helper exposing (h)\n\nh = 1\n",
+        )
+        .expect("write helper");
+        std::fs::write(
+            dir.join("Stray.ipe"),
+            "module Stray exposing (s)\n\ns = ???\n",
+        )
+        .expect("write stray");
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&locked).expect("create locked dir");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("chmod 000");
+
+        let before = resolve_project_sources(&entry, None);
+        std::fs::write(
+            &entry,
+            "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.h\n",
+        )
+        .expect("rewrite entry");
+        let after = resolve_project_sources(&entry, None);
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let modules = |resolved: &ResolvedProject| -> Vec<Vec<String>> {
+            resolved.sources.keys().cloned().collect()
+        };
+        let before = before.expect("loose file resolves");
+        let after = after.expect("loose file re-resolves");
+        assert_eq!(modules(&before), vec![vec!["Main".to_owned()]]);
+        assert_eq!(
+            modules(&after),
+            vec![vec!["Helper".to_owned()], vec!["Main".to_owned()]],
+            "the re-resolve picks up the newly imported sibling only"
+        );
+        assert_eq!(after.entry_path, vec!["Main".to_owned()]);
+        assert_eq!(after.blame_path, entry);
     }
 }
