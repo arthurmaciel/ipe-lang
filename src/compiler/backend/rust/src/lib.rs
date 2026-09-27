@@ -272,17 +272,22 @@ pub struct WebViewWindow {
 /// 1. Lowercase the input.
 /// 2. Replace every run of characters that are not `[a-z0-9_-]` with `-`.
 /// 3. Strip leading and trailing `-`.
-/// 4. If the result starts with a digit, prepend `app-`.
-/// 5. If the result is empty (input was all-invalid chars, or was the empty
-///    string), use the fallback `ipe-app`.
-/// 6. If the result is a [reserved Rust keyword][reserved], the fixed name
+/// 4. Truncate to 64 characters (Cargo's practical limit), again stripping a
+///    trailing `-`.
+/// 5. If the result starts with a digit, prepend `app-` (re-truncated to 64).
+/// 6. If the result is empty or only `_` (input was all-invalid chars, the
+///    empty string, or a bare `_`, which Cargo rejects), use the fallback
+///    `ipe-app`.
+/// 7. If the result is a [reserved Rust keyword][reserved], the fixed name
 ///    `ipe` (the toolchain binary), or a name Cargo forbids as a binary target
 ///    (`build`, `deps`, `examples`, `incremental`), append `-app`.
-/// 7. Truncate to 64 characters (Cargo's practical limit).
+///
+/// Truncating before the checks keeps them authoritative: a long name whose
+/// 64-character prefix is a keyword or only `_` is still caught.
 ///
 /// Examples: `"my-app"` → `"my-app"`, `"My App"` → `"my-app"`,
-/// `"1game"` → `"app-1game"`, `""` → `"ipe-app"`, `"mod"` → `"mod-app"`,
-/// `"build"` → `"build-app"`.
+/// `"1game"` → `"app-1game"`, `""` → `"ipe-app"`, `"_"` → `"ipe-app"`,
+/// `"mod"` → `"mod-app"`, `"build"` → `"build-app"`.
 ///
 /// [reserved]: https://doc.rust-lang.org/reference/keywords.html
 #[must_use]
@@ -296,6 +301,17 @@ pub fn sanitize_cargo_name(name: &str) -> String {
     // build-directory names — the emitted crate has no `[[bin]]` override, so
     // the bin target is inferred from the package name and would fail to parse.
     const CARGO_FORBIDDEN_BIN: &[&str] = &["build", "deps", "examples", "incremental"];
+
+    // Every byte is ASCII after step 2, so a byte-length truncation never
+    // splits a character.
+    fn truncate_to_limit(s: &mut String) {
+        const MAX_LEN: usize = 64;
+        if s.len() > MAX_LEN {
+            s.truncate(MAX_LEN);
+            let trimmed_len = s.trim_end_matches('-').len();
+            s.truncate(trimmed_len);
+        }
+    }
 
     // Step 1: lowercase.
     let lower = name.to_ascii_lowercase();
@@ -314,39 +330,31 @@ pub fn sanitize_cargo_name(name: &str) -> String {
     }
 
     // Step 3: strip leading/trailing `-`.
-    let trimmed = out.trim_matches('-');
+    let mut result = out.trim_matches('-').to_owned();
 
-    // Step 4: if the first char is a digit, prepend `app-`.
-    let mut result = if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
-        format!("app-{trimmed}")
-    } else {
-        trimmed.to_owned()
-    };
+    // Step 4: truncate.
+    truncate_to_limit(&mut result);
 
-    // Step 5: empty → fallback.
-    if result.is_empty() {
+    // Step 5: if the first char is a digit, prepend `app-`.
+    if result.starts_with(|c: char| c.is_ascii_digit()) {
+        result.insert_str(0, "app-");
+        truncate_to_limit(&mut result);
+    }
+
+    // Step 6: empty or underscore-only → fallback.
+    if result.bytes().all(|b| b == b'_') {
         return "ipe-app".to_owned();
     }
 
-    // Step 6: reserved Rust keywords, the extra suffixed names, and Cargo's
+    // Step 7: reserved Rust keywords, the extra suffixed names, and Cargo's
     // forbidden binary-target names get `-app` appended to keep the emitted
-    // crate buildable.
+    // crate buildable. Each is far shorter than the limit, so the suffix never
+    // pushes past it.
     if ipe_intern::is_rust_keyword(&result)
         || EXTRA_SUFFIXED.contains(&result.as_str())
         || CARGO_FORBIDDEN_BIN.contains(&result.as_str())
     {
         result.push_str("-app");
-    }
-
-    // Step 7: truncate to 64 chars at an ASCII boundary.
-    if result.len() > 64 {
-        result.truncate(64);
-        // Ensure we don't end on a `-` after truncation.
-        let trimmed_len = result.trim_end_matches('-').len();
-        result.truncate(trimmed_len);
-        if result.is_empty() {
-            return "ipe-app".to_owned();
-        }
     }
 
     result
@@ -5716,6 +5724,87 @@ mod sanitize_cargo_name_tests {
     #[test]
     fn valid_name_with_underscores() {
         assert_eq!(sanitize_cargo_name("my_app"), "my_app");
+    }
+
+    #[test]
+    fn underscore_only_returns_fallback() {
+        // A bare `_` is not a Cargo package name; neither is any name the
+        // trim reduces to only underscores.
+        for raw in ["_", "__", "-_-", "!_!", "_é"] {
+            assert_eq!(sanitize_cargo_name(raw), "ipe-app", "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn checks_run_after_truncation() {
+        // The 64-char prefix is a keyword once the trailing `-` run is trimmed.
+        let keyword_prefix = format!("fn{}x", "-".repeat(62));
+        assert_eq!(sanitize_cargo_name(&keyword_prefix), "fn-app");
+        // The 64-char prefix is only underscores.
+        let underscore_prefix = format!("{}x", "_".repeat(64));
+        assert_eq!(sanitize_cargo_name(&underscore_prefix), "ipe-app");
+        // A long leading-digit name keeps the prefix and the limit.
+        let digits = "9".repeat(80);
+        let out = sanitize_cargo_name(&digits);
+        assert!(out.starts_with("app-9") && out.len() == 64, "{out}");
+    }
+
+    /// Cargo's package-name rule plus the emitter's own reservations.
+    fn is_valid_cargo_package_name(name: &str) -> bool {
+        let charset_ok = name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
+        let first_ok = name
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b == b'_');
+        charset_ok
+            && first_ok
+            && name.len() <= 64
+            && !name.bytes().all(|b| b == b'_')
+            && !name.ends_with('-')
+            && !ipe_intern::is_rust_keyword(name)
+            && !["ipe", "union", "build", "deps", "examples", "incremental"].contains(&name)
+    }
+
+    #[test]
+    fn every_output_is_a_valid_cargo_package_name() {
+        let long_keyword = format!("fn{}x", "-".repeat(62));
+        let long_underscore = format!("{}x", "_".repeat(64));
+        let long_digits = "9".repeat(80);
+        let long_mixed = format!("{}é", "a".repeat(63));
+        let mut corpus: Vec<&str> = vec![
+            "",
+            "_",
+            "__",
+            "-",
+            "-_-",
+            "!!!",
+            "   ",
+            "1game",
+            "42",
+            "café",
+            "üapp",
+            "My App",
+            "my_app",
+            "ipe",
+            "IPE",
+            "union",
+            "build",
+            "Deps",
+            "_1",
+            "a-",
+            "-a",
+            &long_keyword,
+            &long_underscore,
+            &long_digits,
+            &long_mixed,
+        ];
+        corpus.extend(ipe_intern::RUST_KEYWORDS.iter().copied());
+        for raw in corpus {
+            let out = sanitize_cargo_name(raw);
+            assert!(is_valid_cargo_package_name(&out), "{raw:?} -> {out:?}");
+        }
     }
 
     #[test]
