@@ -1,0 +1,18 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+import Ipe.List
+import Ipe.String
+
+-- An empty list bound once and read twice through a generic function. Nothing
+-- fixes the element type, so the empty list itself must carry it.
+count : List a -> Int
+count xs =
+    List.length xs
+
+main =
+    let
+        xs =
+            []
+    in
+    Io.println (String.fromInt (count xs + count xs))

@@ -1,0 +1,21 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+-- A nullary constructor of a parameterised user type, passed straight to a
+-- generic function. Nothing fixes `a`, so the constructor itself must carry it.
+type Tree a = Leaf | Node a
+
+isLeaf t =
+    case t of
+        Leaf -> True
+        Node _ -> False
+
+label leaf =
+    if leaf then
+        "leaf"
+    else
+        "node"
+
+main =
+    Io.println (label (isLeaf Leaf))

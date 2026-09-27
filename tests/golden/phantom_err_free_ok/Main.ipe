@@ -1,0 +1,14 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+-- A bare `Err` scrutinised directly. Nothing constrains the `Ok` payload
+-- type, so the constructor itself must carry it.
+describe : String -> String
+describe msg =
+    case Err msg of
+        Ok _ -> "ok"
+        Err m -> "err " ++ m
+
+main =
+    Io.println (describe "boom")

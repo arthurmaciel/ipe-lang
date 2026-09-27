@@ -1,0 +1,20 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+-- A phantom-born `Nothing` passed straight to a generic function. No binder
+-- or annotation fixes the `Maybe` element type, so the constructor itself
+-- must carry it.
+isNothing m =
+    case m of
+        Nothing -> True
+        Just _ -> False
+
+label isNone =
+    if isNone then
+        "none"
+    else
+        "some"
+
+main =
+    Io.println (label (isNothing Nothing))
