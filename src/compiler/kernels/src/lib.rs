@@ -13432,8 +13432,9 @@ impl StdlibKernel {
     /// The backend rebuilds this handler inside a fresh `move` closure per call
     /// and shadows every free local the handler captures with `.clone()`, so
     /// each such capture must be `Clone`. The lowerer reads this index to refuse
-    /// a non-`Clone` capture at `ipe` time (IPE-L0126); the backend asserts the
-    /// index at build time against the argument it re-wraps.
+    /// a non-`Clone` capture (IPE-L0126) and a point-free or partial use
+    /// (IPE-L0152) at `ipe` time; the backend asserts the index at build time
+    /// against the argument it re-wraps.
     #[must_use]
     pub const fn capture_cloned_handler_arg(self) -> Option<usize> {
         match self {

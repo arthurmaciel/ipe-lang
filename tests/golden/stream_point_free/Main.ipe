@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 -- A point-free `Stream.stream`: the kernel is reified as a function value,
--- so its handler has no copyable form and ipe refuses it (IPE-L0126).
+-- so its handler has no copyable form and ipe refuses it (IPE-L0152).
 
 import Ipe.Http.Server as Server
 import Ipe.Http.Server.Stream as Stream

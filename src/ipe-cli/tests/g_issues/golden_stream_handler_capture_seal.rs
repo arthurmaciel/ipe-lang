@@ -7,7 +7,7 @@
 //! type did not resolve — is refused with IPE-L0126 at ipe time, so the clone
 //! prologue never meets a `Box<dyn Fn>` (E0599). A piped (`<|` / `|>`) handler
 //! lowers as the saturated call and meets the same gate; a partially applied or
-//! point-free `Stream.stream` is refused outright.
+//! point-free `Stream.stream` is refused outright with its own code, IPE-L0152.
 //!
 //! ```text
 //! IPE_E2E=1 cargo nextest run -p ipe --test g_issues golden_stream_handler_capture_seal
@@ -76,7 +76,7 @@ fn assert_refused_l0126(fixture: &str) {
     assert_eq!(
         got,
         Some(ipe_diagnostics::IPE_L0126),
-        "{fixture}: a non-Clone or unsaturated Stream.stream handler must fail closed at ipe time, got {built:?}"
+        "{fixture}: a non-Clone Stream.stream handler capture must fail closed at ipe time, got {built:?}"
     );
     // The code alone is shared with the generic capture refusal; the feature
     // pins the refusal to the stream-handler gate itself.
@@ -93,6 +93,35 @@ fn assert_refused_l0126(fixture: &str) {
                 )
         ),
         "{fixture}: the refusal must come from the stream-handler capture gate, got {built:?}"
+    );
+}
+
+/// A fixture is refused at ipe time with IPE-L0152 naming `Stream.stream` as used unsaturated.
+fn assert_refused_l0152(fixture: &str) {
+    let out = out_dir(fixture);
+    let built = ipe::build(&fixture_entry(fixture), &out, &runtime_dir());
+    let got = match &built {
+        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        _ => None,
+    };
+    assert_eq!(
+        got,
+        Some(ipe_diagnostics::IPE_L0152),
+        "{fixture}: a point-free or partial Stream.stream must fail closed at ipe time, got {built:?}"
+    );
+    assert!(
+        matches!(
+            &built,
+            Err(CliError::Pipeline { diag, .. })
+                if matches!(
+                    diag.as_ref(),
+                    Diagnostic::Lower {
+                        msg: LowerError::UnsaturatedHandlerKernel { kernel },
+                        ..
+                    } if &**kernel == "Stream.stream"
+                )
+        ),
+        "{fixture}: the refusal must name the unsaturated handler kernel, got {built:?}"
     );
 }
 
@@ -126,16 +155,16 @@ fn piped_destructured_fn_capture_is_refused() {
     assert_refused_l0126("stream_pipe_destructured_fn_capture");
 }
 
-/// A partially applied `Stream.stream` is refused with IPE-L0126.
+/// A partially applied `Stream.stream` is refused with IPE-L0152.
 #[test]
 fn partial_application_is_refused() {
-    assert_refused_l0126("stream_partial_application");
+    assert_refused_l0152("stream_partial_application");
 }
 
-/// A point-free `Stream.stream` is refused with IPE-L0126.
+/// A point-free `Stream.stream` is refused with IPE-L0152.
 #[test]
 fn point_free_reference_is_refused() {
-    assert_refused_l0126("stream_point_free");
+    assert_refused_l0152("stream_point_free");
 }
 
 /// A destructure that shadows a promotable fn param does not inherit its promotion.

@@ -9089,14 +9089,20 @@ fn reject_point_free_store_kernel(callee: &Callee, span: Span) -> DResult<()> {
 /// reify, the handler is the synthesized closure's own parameter — a bare
 /// `Box<dyn Fn>` with no `Clone` (E0599) and no `Sync` (E0277) — and the
 /// handler-capture gate never sees the handler's captures. Refuse with
-/// IPE-L0126; a piped `<|` / `|>` spine is flattened to the saturated call
-/// first, so only a genuinely unsaturated use reaches here. A no-op (`Ok`)
-/// for every other callee.
-const fn reject_unsaturated_handler_kernel(callee: &Callee, span: Span) -> DResult<()> {
+/// IPE-L0152 (the kernel is legal only saturated — a distinct fact from the
+/// non-`Clone` capture refusal, IPE-L0126); a piped `<|` / `|>` spine is
+/// flattened to the saturated call first, so only a genuinely unsaturated use
+/// reaches here. A no-op (`Ok`) for every other callee.
+fn reject_unsaturated_handler_kernel(callee: &Callee, span: Span) -> DResult<()> {
     if let Callee::Kernel(k) = callee
         && k.capture_cloned_handler_arg().is_some()
     {
-        return Err(unsupported(span, Feature::StreamHandlerCapture));
+        let d = k.decl();
+        let kernel = format!("{}.{}", d.qualifier, d.name).into_boxed_str();
+        return Err(Diagnostic::Lower {
+            span,
+            msg: LowerError::UnsaturatedHandlerKernel { kernel },
+        });
     }
     Ok(())
 }
@@ -20668,7 +20674,7 @@ impl<'a> Lowerer<'a> {
         // the kernel is reified point-free and rejected, IPE-L0146), or a
         // capture-cloned handler kernel (`Stream.stream ct <| h` / `h |>
         // Stream.stream ct`; the handler-capture gate reads the handler argument
-        // of the saturated call, else the partial is refused, IPE-L0126). The
+        // of the saturated call, else the partial is refused, IPE-L0152). The
         // collapsed spine is exactly the direct saturated call the programmer
         // could have written. Restricted to those heads on purpose: a GENERAL
         // flatten reshapes the call tree the downstream multi-use / last-use
