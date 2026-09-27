@@ -30,17 +30,20 @@ const fn false_marker() -> bool {
 }
 
 /// Write `source` as a single-file `Main.ipe` under a fresh scratch dir keyed by
-/// `name`, returning the entry path (or `None` if scratch setup fails).
-fn write_single(name: &str, source: &str) -> Option<PathBuf> {
+/// `name`, returning the entry path. Panics on scratch-setup failure — a
+/// swallowed setup error here would let a refusal test pass vacuously without
+/// ever exercising the fail-closed path.
+fn write_single(name: &str, source: &str) -> PathBuf {
     let dir = crate::support::scratch_root()
         .join("ipec_enum_payload_nonclone")
         .join(name);
     let _ = std::fs::remove_dir_all(&dir);
     let src = dir.join("src");
-    std::fs::create_dir_all(&src).ok()?;
+    std::fs::create_dir_all(&src)
+        .expect("create scratch src dir for enum-payload-nonclone fixture");
     let entry = src.join("Main.ipe");
-    std::fs::write(&entry, source).ok()?;
-    Some(entry)
+    std::fs::write(&entry, source).expect("write Main.ipe fixture source");
+    entry
 }
 
 /// The scratch output dir for `name`, cleared.
@@ -55,9 +58,11 @@ fn out_dir(name: &str) -> PathBuf {
 /// Assert `ipe` rejects the build of `entry` with the typed `expected` code.
 #[track_caller]
 fn assert_rejected(name: &str, entry: &Path, expected: ipe_diagnostics::Code) {
-    let Ok(runtime) = ipe::resolve_runtime() else {
-        return; // runtime unavailable — skip
-    };
+    // Unlike an accepted-build test, a refusal test proves nothing if it skips
+    // silently here — a missing runtime would let the fail-closed assertion
+    // pass vacuously without ever driving the pipeline.
+    let runtime =
+        ipe::resolve_runtime().expect("runtime must resolve to prove the fail-closed refusal");
     let out = out_dir(name);
     match ipe::build_with_sibling_discovery(entry, &out, &runtime) {
         Err(CliError::Pipeline { diag, .. }) => assert_eq!(
@@ -255,18 +260,14 @@ const FFI_HANDLE_ENUM_LINEAR: &str = "module Main exposing (main)\n\
 #[test]
 fn task_payload_enum_reuse_fails_closed() {
     let name = "task_payload_enum_reuse";
-    let Some(entry) = write_single(name, TASK_PAYLOAD_ENUM_REUSE) else {
-        return;
-    };
+    let entry = write_single(name, TASK_PAYLOAD_ENUM_REUSE);
     assert_rejected(name, &entry, ipe_diagnostics::IPE_L0135);
 }
 
 #[test]
 fn task_payload_enum_linear_builds() {
     let name = "task_payload_enum_linear";
-    let Some(entry) = write_single(name, TASK_PAYLOAD_ENUM_LINEAR) else {
-        return;
-    };
+    let entry = write_single(name, TASK_PAYLOAD_ENUM_LINEAR);
     let Some(out) = accepted_out(name, &entry) else {
         return;
     };
@@ -276,9 +277,7 @@ fn task_payload_enum_linear_builds() {
 #[test]
 fn clone_payload_enum_reuse_builds() {
     let name = "clone_payload_enum_reuse";
-    let Some(entry) = write_single(name, CLONE_PAYLOAD_ENUM_REUSE) else {
-        return;
-    };
+    let entry = write_single(name, CLONE_PAYLOAD_ENUM_REUSE);
     let Some(out) = accepted_out(name, &entry) else {
         return;
     };
@@ -311,10 +310,13 @@ fn ffi_handle_enum_linear_builds() {
     };
 
     let emitted = emitted_app_rs(&out);
-    let Some(attrs) = attributes_above_enum(&emitted, "Holder") else {
+    // The backend module-prefixes every user type name (`naming::enum_name`,
+    // `src/compiler/backend/rust/src/naming.rs`): `Holder` in `Main` emits as
+    // `MainHolder`.
+    let Some(attrs) = attributes_above_enum(&emitted, "MainHolder") else {
         assert!(
             false_marker(),
-            "emitted app Rust must declare `enum Holder`; got:\n{emitted}"
+            "emitted app Rust must declare `enum MainHolder`; got:\n{emitted}"
         );
         return;
     };
