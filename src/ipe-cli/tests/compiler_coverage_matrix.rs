@@ -115,3 +115,30 @@ fn allowlisted_holes_are_still_real() {
         );
     }
 }
+
+#[test]
+fn only_a_tests_directory_under_src_is_test_module_code() {
+    use ipe::coverage::compiler_surface::is_test_module_path;
+    use std::path::Path;
+
+    let src = Path::new("/crate/src");
+    assert!(is_test_module_path(
+        src,
+        Path::new("/crate/src/rules/tests/style.rs")
+    ));
+    assert!(is_test_module_path(
+        src,
+        Path::new("/crate/src/tests/mod.rs")
+    ));
+    // A module file merely named like a test, or beside `src/`, stays production.
+    assert!(!is_test_module_path(
+        src,
+        Path::new("/crate/src/rules/style_tests.rs")
+    ));
+    assert!(!is_test_module_path(src, Path::new("/crate/src/tests.rs")));
+    assert!(!is_test_module_path(
+        src,
+        Path::new("/tests/crate/src/lib.rs")
+    ));
+    assert!(!is_test_module_path(src, Path::new("/other/tests/lib.rs")));
+}

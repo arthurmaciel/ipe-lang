@@ -4,7 +4,9 @@
 //! three columns inspect the crate's `src/` tree directly, without building, so
 //! they run in the fast (non-E2E) path.
 
-use crate::coverage::compiler_surface::{CompilerCrate, has_prod_panic, prod_source, rust_files};
+use crate::coverage::compiler_surface::{
+    CompilerCrate, has_prod_panic, is_test_module_path, prod_source, rust_files,
+};
 use crate::coverage::contract::{AspectCheck, Cell};
 
 // ── tested ────────────────────────────────────────────────────────────────────
@@ -41,7 +43,8 @@ impl AspectCheck<CompilerCrate> for TestedColumn {
 // ── no-panic ──────────────────────────────────────────────────────────────────
 
 /// Column **no-panic**: no `unwrap()`, `expect(`, `panic!(`, or `.index(` in
-/// production source (outside `#[cfg(test)]` / `mod tests { … }` blocks).
+/// production source (outside `#[cfg(test)]` / `mod tests { … }` blocks and
+/// out-of-line test modules under a `tests/` directory).
 ///
 /// Panics in production code violate the soundness principle: a well-typed Ipê
 /// program must never trigger a runtime failure in the generated Rust, and the
@@ -58,6 +61,9 @@ impl AspectCheck<CompilerCrate> for NoPanicColumn {
         let mut violations: Vec<String> = Vec::new();
 
         for path in &files {
+            if is_test_module_path(&item.src_path, path) {
+                continue;
+            }
             let Ok(src) = std::fs::read_to_string(path) else {
                 continue;
             };

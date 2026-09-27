@@ -11,7 +11,7 @@
 //!   `src/` or `tests/` trees, signalling standing tests.
 //! - `no-panic` — no `unwrap()`, `expect(`, `panic!(`, or `.index(` appears in
 //!   production code (source lines outside `#[cfg(test)]` / `mod tests { … }`
-//!   blocks) within `src/`.
+//!   blocks, and files outside a `tests/` test-module directory) within `src/`.
 //! - `documented` — `src/lib.rs` opens with at least one `//!` inner doc line.
 //!
 //! `staleness` was considered but dropped: measuring whether test coverage has
@@ -196,6 +196,21 @@ pub fn prod_source(src: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Whether `path`, relative to the crate's `src_root`, lies in a `tests`
+/// directory.
+///
+/// An out-of-line `#[cfg(test)] mod tests;` places its files under a `tests/`
+/// directory beside the declaring module; that tree is test code, the same
+/// segment rule `tools/panic-scan` applies. A path outside `src_root` is never
+/// treated as test code.
+#[must_use]
+pub fn is_test_module_path(src_root: &Path, path: &Path) -> bool {
+    path.strip_prefix(src_root).is_ok_and(|rel| {
+        rel.parent()
+            .is_some_and(|dir| dir.components().any(|c| c.as_os_str() == "tests"))
+    })
 }
 
 /// Whether a prod-stripped source string contains any panic-prone pattern.
