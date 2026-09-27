@@ -728,10 +728,21 @@ fn open_entry(path: &Path) -> Option<fs::File> {
         .map(fs::File::from)
 }
 
-/// Open `path` read-only.
-#[cfg(not(unix))]
+/// Open `path` read-only, refusing a reparse point at its final component.
+#[cfg(windows)]
 fn open_entry(path: &Path) -> Option<fs::File> {
-    fs::File::open(path).ok()
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    /// `FILE_FLAG_OPEN_REPARSE_POINT`: opens a reparse point itself, never its target.
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+    const ATTR_REPARSE_POINT: u32 = 0x400;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    let attributes = file.metadata().ok()?.file_attributes();
+    (attributes & ATTR_REPARSE_POINT == 0).then_some(file)
 }
 
 /// Whether two metadata records name the same file.
@@ -741,8 +752,8 @@ fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     a.dev() == b.dev() && a.ino() == b.ino()
 }
 
-/// No portable file identity here, so never the same file: the cache runs cold.
-#[cfg(not(unix))]
+/// No stable file identity in a metadata record here, so never the same file: the cache runs cold.
+#[cfg(windows)]
 const fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
     false
 }
@@ -835,54 +846,40 @@ fn user_cache_salt() -> Option<String> {
     }
 }
 
-/// Whether any existing level from `cache_root` down to `path` is a symlink.
-///
-/// A cache write is skipped rather than made through a link.
-fn crosses_symlink(cache_root: &Path, path: &Path) -> bool {
-    let Ok(rel) = path.strip_prefix(cache_root) else {
-        return true;
-    };
-    let mut current = cache_root.to_path_buf();
-    let is_link = |p: &Path| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
-    if is_link(&current) {
-        return true;
-    }
-    for part in rel.components() {
-        current.push(part);
-        if is_link(&current) {
-            return true;
-        }
-    }
-    false
+/// Whether `part` is one plain path component, never a separator, `..` or `.`.
+fn is_plain_name(part: &str) -> bool {
+    let mut components = Path::new(part).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(name)), None) if name == std::ffi::OsStr::new(part)
+    )
 }
 
-/// Write `bytes` to `<cache_root>/<epoch>/<file_name>` via an exclusive temp file and a rename.
+/// Write `bytes` to `<cache_root>/<epoch>/<file_name>` through held directory handles.
 ///
-/// Best-effort: every failure is swallowed. A symlink anywhere below
-/// `cache_root` skips the write. The temp name carries this process's PID, so
-/// two concurrent builds storing the same key never share a temp file.
+/// Best-effort: every failure is swallowed. `cache_root` is opened without
+/// following a final link and the epoch level beneath it through that handle,
+/// so a level swapped for a symlink between the check and the write refuses
+/// the write rather than landing it through the link. The entry is staged in
+/// an exclusively created, process-unique temp file renamed over the name.
 fn write_entry(cache_root: &Path, epoch: &str, file_name: &str, bytes: &[u8]) {
+    use crate::output_dir::held::{HeldDir, level_held};
     use std::io::Write as _;
-    let dir = cache_root.join(epoch);
-    let path = dir.join(file_name);
-    let tmp = dir.join(format!("{file_name}.{}.tmp", std::process::id()));
-    if crosses_symlink(cache_root, &dir) || fs::create_dir_all(&dir).is_err() {
+    if !is_plain_name(epoch) || !is_plain_name(file_name) || fs::create_dir_all(cache_root).is_err()
+    {
         return;
     }
-    if crosses_symlink(cache_root, &path) {
+    let Ok(Some(root)) = HeldDir::open(cache_root) else {
         return;
-    }
-    let written = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .and_then(|mut file| file.write_all(bytes));
-    if written.is_err() {
+    };
+    level_held(root.path());
+    let Ok((dir, _)) = root.create_child(std::ffi::OsStr::new(epoch)) else {
         return;
-    }
-    if fs::rename(&tmp, &path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
+    };
+    level_held(dir.path());
+    let _ = dir.write_file(std::ffi::OsStr::new(file_name), None, |file| {
+        file.write_all(bytes)
+    });
 }
 
 /// The file name of the `EmittedProject`-tier entry for `key`.
@@ -909,7 +906,7 @@ pub fn try_load(site: &CacheSite, epoch: &str, key: &str) -> Option<EmittedProje
 /// missing-then-appearing file is the only visible race, which `try_load`
 /// already treats as an ordinary miss.
 ///
-/// The tmp file name carries this process's PID, so two concurrent
+/// The tmp file name is unique to this process, so two concurrent
 /// `ipe build` invocations computing the same key never write to the same
 /// tmp path and so never interleave into one entry a third reader could load.
 ///
@@ -1671,12 +1668,11 @@ mod tests {
     /// A marked `out/` whose `.ipe-cache` is a planted link: the build keeps
     /// going uncached (the cache is advisory), and nothing is written or read
     /// through the link.
-    #[cfg(unix)]
     #[test]
     fn in_output_cache_never_goes_through_a_planted_cache_dir_link() {
         let (base, owned, elsewhere) = claimed_out_and_elsewhere("dir-link");
         let link = owned.path().join(CACHE_DIR_NAME);
-        std::os::unix::fs::symlink(&elsewhere, &link).expect("plant .ipe-cache link");
+        crate::output_dir::test_links::plant_link(&elsewhere, &link);
         let site = in_output_site(&owned);
         let root = site.root(&owned).expect("root from the claimed dir");
 
@@ -1699,13 +1695,12 @@ mod tests {
     }
 
     /// As above, with the link one level down, at the salt partition.
-    #[cfg(unix)]
     #[test]
     fn in_output_cache_never_goes_through_a_planted_salt_link() {
         let (base, owned, elsewhere) = claimed_out_and_elsewhere("salt-link");
         let cache = owned.path().join(CACHE_DIR_NAME);
         fs::create_dir_all(&cache).expect("mkdir .ipe-cache");
-        std::os::unix::fs::symlink(&elsewhere, cache.join("salt")).expect("plant salt link");
+        crate::output_dir::test_links::plant_link(&elsewhere, &cache.join("salt"));
         let site = in_output_site(&owned);
         let root = site.root(&owned).expect("root from the claimed dir");
 
@@ -1724,7 +1719,6 @@ mod tests {
     }
 
     /// A planted link at the entry file itself is a miss, never followed.
-    #[cfg(unix)]
     #[test]
     fn in_output_load_refuses_a_linked_entry_file() {
         let (base, owned, elsewhere) = claimed_out_and_elsewhere("file-link");
@@ -1732,7 +1726,7 @@ mod tests {
         plant_entry(&planted);
         let epoch_dir = owned.path().join(CACHE_DIR_NAME).join("salt").join("epoch");
         fs::create_dir_all(&epoch_dir).expect("mkdir epoch");
-        std::os::unix::fs::symlink(&planted, epoch_dir.join("key.json")).expect("plant entry link");
+        crate::output_dir::test_links::plant_link(&planted, &epoch_dir.join("key.json"));
         assert!(try_load(&in_output_site(&owned), "epoch", "key").is_none());
         let _ = fs::remove_dir_all(&base);
     }
@@ -2279,5 +2273,103 @@ mod tests {
             via_hasher, via_hash_tree,
             "hex(tree_hasher(t).finalize()) must equal hash_tree(t) exactly"
         );
+    }
+
+    /// An epoch level swapped for a link after the write held it never writes through the link.
+    #[cfg(unix)]
+    #[test]
+    fn write_entry_never_follows_an_epoch_swapped_for_a_link_mid_walk() {
+        let base = std::env::temp_dir().join(format!("ipe_cache_swap_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("cache");
+        let victim = base.join("victim");
+        fs::create_dir_all(root.join("e1")).expect("make epoch");
+        fs::create_dir_all(&victim).expect("make victim");
+        let level = root.join("e1");
+        let (from, target) = (level.clone(), victim.clone());
+        let mut swap = Some(move || {
+            fs::rename(&from, from.with_extension("aside")).expect("move epoch aside");
+            std::os::unix::fs::symlink(&target, &from).expect("plant link");
+        });
+        let held_at = level.clone();
+        crate::output_dir::held::set_level_hook(Some(Box::new(move |held: &Path| {
+            if held == held_at
+                && let Some(swap) = swap.take()
+            {
+                swap();
+            }
+        })));
+        write_entry(&root, "e1", "k.json", b"payload");
+        crate::output_dir::held::set_level_hook(None);
+        assert_eq!(
+            fs::read_dir(&victim).expect("read victim").count(),
+            0,
+            "nothing reaches the link target"
+        );
+        assert_eq!(
+            fs::read(level.with_extension("aside").join("k.json"))
+                .ok()
+                .as_deref(),
+            Some(b"payload".as_slice()),
+            "the write went through the held epoch handle"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// An empty epoch level junctioned in place after the write held it never writes through it.
+    ///
+    /// A held level cannot be renamed on this platform, only turned into a
+    /// junction while empty.
+    #[cfg(windows)]
+    #[test]
+    fn write_entry_never_follows_an_epoch_junctioned_in_place_mid_walk() {
+        let base = std::env::temp_dir().join(format!("ipe_cache_junction_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("cache");
+        let victim = base.join("victim");
+        fs::create_dir_all(root.join("e1")).expect("make epoch");
+        fs::create_dir_all(&victim).expect("make victim");
+        let level = root.join("e1");
+        let (at, target) = (level.clone(), victim.clone());
+        let mut swap = Some(move || {
+            crate::output_dir::test_links::junction_in_place(&at, &target);
+        });
+        let held_at = level.clone();
+        crate::output_dir::held::set_level_hook(Some(Box::new(move |held: &Path| {
+            if held == held_at
+                && let Some(swap) = swap.take()
+            {
+                swap();
+            }
+        })));
+        write_entry(&root, "e1", "k.json", b"payload");
+        crate::output_dir::held::set_level_hook(None);
+        assert_eq!(
+            fs::read_dir(&victim).expect("read victim").count(),
+            0,
+            "nothing reaches the junction target"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// An epoch or file name that is not one plain component is never written.
+    #[test]
+    fn write_entry_refuses_a_non_plain_name() {
+        let base = std::env::temp_dir().join(format!("ipe_cache_plain_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let root = base.join("cache");
+        write_entry(&root, "../escape", "k.json", b"x");
+        write_entry(&root, "e1", "../k.json", b"x");
+        write_entry(&root, ".", "k.json", b"x");
+        assert!(
+            !base.join("escape").exists(),
+            "a traversing epoch writes nothing"
+        );
+        assert!(
+            !root.join("k.json").exists(),
+            "a traversing file name writes nothing"
+        );
+        assert!(!root.exists(), "a refused write creates nothing");
+        let _ = fs::remove_dir_all(&base);
     }
 }
