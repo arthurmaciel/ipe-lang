@@ -137,8 +137,15 @@ fn record_then_replay_is_deterministic_and_refuses_bad_logs() {
         "replay output must carry no control byte: {stdout:?}"
     );
 
+    assert_bad_logs_are_refused(&exe, &logs, &typed);
+
+    let _ = std::fs::remove_dir_all(&logs);
+}
+
+/// A log from a changed program or a truncated log is refused, printing nothing.
+fn assert_bad_logs_are_refused(exe: &str, logs: &Path, typed: &Path) {
     // A changed program: the log's Msg tag no longer matches.
-    let text = std::fs::read_to_string(&typed).unwrap_or_default();
+    let text = std::fs::read_to_string(typed).unwrap_or_default();
     assert!(
         !text.chars().any(char::is_control),
         "the typed log on disk must carry no raw control character: {text:?}"
@@ -149,7 +156,7 @@ fn record_then_replay_is_deterministic_and_refuses_bad_logs() {
         std::fs::write(&changed, tampered).is_ok(),
         "write changed log"
     );
-    let refused = run_with(&exe, ipe_runtime_rust::REPLAY_ENV, &changed, b"");
+    let refused = run_with(exe, ipe_runtime_rust::REPLAY_ENV, &changed, b"");
     assert!(
         matches!(&refused, Some((Some(code), out)) if *code != 0 && out.is_empty()),
         "a log from a changed program must be refused with nothing printed: {refused:?}"
@@ -159,11 +166,9 @@ fn record_then_replay_is_deterministic_and_refuses_bad_logs() {
     let cut = logs.join("cut.ipemsgs");
     let half = text.get(..text.len() / 2).unwrap_or_default();
     assert!(std::fs::write(&cut, half).is_ok(), "write truncated log");
-    let refused = run_with(&exe, ipe_runtime_rust::REPLAY_ENV, &cut, b"");
+    let refused = run_with(exe, ipe_runtime_rust::REPLAY_ENV, &cut, b"");
     assert!(
         matches!(&refused, Some((Some(code), out)) if *code != 0 && out.is_empty()),
         "a truncated log must be refused with nothing printed: {refused:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&logs);
 }
