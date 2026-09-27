@@ -42,8 +42,12 @@ parse : String -> Result Error Dsn
 `parse raw` — THE seal from a full DSN URL string. Returns `Err` on any
 invalid shape: an unparseable string, an unknown driver, a missing host for a
 network driver, an out-of-range port, an explicit `sslmode=disable`, an unknown
-`sslmode`, a smuggled/duplicated credential parameter, or a control-character
-component. The password is captured as a `Secret`.
+`sslmode`, a smuggled/duplicated credential parameter, a control-character
+component, or a PostgreSQL user name or password that may run past the URL's
+authority. An `@` anywhere after the host (in the path or a query value) is
+refused the same way; write it as `%40`. The user name, password, and database
+are percent-decoded, so `user` and `database` return the decoded text. The
+password is captured as a `Secret`.
 
 ## `build`
 
@@ -54,7 +58,11 @@ build :
 `build parts` — THE seal from typed parts, running the SAME validators as
 `parse`. Preferred over `parse` when the parts are already structured (there is
 no string to mis-escape). The `password` is a `Secret` on the way in; `Disable`
-TLS and an out-of-range port are rejected.
+TLS and an out-of-range port are rejected. The `database`, `user`, and
+`password` are taken literally and percent-encoded into the connection URL, so a
+`?`, `&`, `#`, `@`, `/`, or `%` in them cannot add a parameter such as `sslmode`.
+The `host` must be a host name or IP literal (IPv6 in brackets); one holding a
+URL delimiter is rejected.
 
 ## `driver`
 

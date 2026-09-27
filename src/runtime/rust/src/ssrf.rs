@@ -302,7 +302,7 @@ pub enum SsrfRefusal {
     /// the vetted address cannot carry.
     UnpinnableTlsName {
         /// The host the certificate would be verified against.
-        host: String,
+        host: ConfiguredHost,
     },
 }
 
@@ -340,9 +340,10 @@ impl std::fmt::Display for SsrfRefusal {
             )?,
             Self::UnpinnableTlsName { host } => write!(
                 f,
-                "blocked: sslmode=verify-full checks the certificate against host {host:?}, \
+                "blocked: sslmode=verify-full checks the certificate against host {:?}, \
                  but the dial is pinned to its vetted address; use an IP-literal host \
-                 whose certificate names that address, or sslmode=verify-ca"
+                 whose certificate names that address, or sslmode=verify-ca",
+                host.as_str()
             )?,
         }
         f.write_str(" (IPE_HTTP_DENY_PRIVATE)")
@@ -531,25 +532,6 @@ pub async fn vet_host_with<R: HostResolver>(
         .map(|vetted| vetted.first())
 }
 
-/// Resolve a configured `host` once through the system resolver under [`dns_timeout`].
-///
-/// A [`ConfiguredHost`] cannot be part of a URL's credentials, so a refusal
-/// names it.
-///
-/// # Errors
-///
-/// [`SsrfRefusal`] naming why the host was refused.
-pub async fn vet_host(host: &ConfiguredHost, port: u16) -> Result<SocketAddr, SsrfRefusal> {
-    vet_host_with(
-        &SystemResolver,
-        host.as_str(),
-        HostDisclosure::Named,
-        port,
-        dns_timeout(),
-    )
-    .await
-}
-
 /// A host a refusal may name, because it cannot be part of a URL's credentials.
 ///
 /// Built only from a configuration field that holds a host and nothing else
@@ -564,13 +546,6 @@ impl ConfiguredHost {
     /// The host a configuration field names on its own, never read from a URL.
     #[cfg_attr(not(any(feature = "db", feature = "email")), allow(dead_code))]
     pub(crate) const fn from_config(host: String) -> Self {
-        Self(host)
-    }
-
-    /// A host `url` names outside its authority: a query parameter's value,
-    /// or a driver's own reading of `url`.
-    #[cfg_attr(not(feature = "db"), allow(dead_code))]
-    pub(crate) const fn named_by(_url: &UnambiguousUrl, host: String) -> Self {
         Self(host)
     }
 
@@ -647,6 +622,23 @@ impl UnambiguousUrl {
             .host_str()
             .filter(|host| !host.is_empty())
             .map(|host| ConfiguredHost(host.to_owned()))
+    }
+
+    /// The value of a `host` or `hostaddr` query parameter of this URL equal to
+    /// `value`.
+    pub(crate) fn query_host(&self, value: &str) -> Option<ConfiguredHost> {
+        self.parsed
+            .query_pairs()
+            .find(|(key, named)| matches!(&**key, "host" | "hostaddr") && named == value)
+            .map(|(_, named)| ConfiguredHost(named.into_owned()))
+    }
+
+    /// `host` when this URL names it, by its authority or by a `host` or
+    /// `hostaddr` query parameter, as a driver's own reading of the URL does.
+    pub(crate) fn named_host(&self, host: &str) -> Option<ConfiguredHost> {
+        self.host()
+            .filter(|named| named.as_str() == host)
+            .or_else(|| self.query_host(host))
     }
 }
 
@@ -1597,7 +1589,7 @@ mod tests {
             (SsrfRefusal::UnprovenTarget, "names no host"),
             (
                 SsrfRefusal::UnpinnableTlsName {
-                    host: "db.example".to_string(),
+                    host: configured("db.example"),
                 },
                 "verify-full",
             ),

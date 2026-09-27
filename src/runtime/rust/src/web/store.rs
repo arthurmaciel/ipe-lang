@@ -1599,7 +1599,7 @@ mod tests {
             StoreOpenError::Connect(DbConnectError::HostRefused(SsrfRefusal::UnprovenTarget)),
             StoreOpenError::Connect(DbConnectError::HostRefused(
                 SsrfRefusal::UnpinnableTlsName {
-                    host: "db.example".to_owned(),
+                    host: crate::ssrf::ConfiguredHost::from_config("db.example".to_owned()),
                 },
             )),
             StoreOpenError::Connect(DbConnectError::EngineRefused(

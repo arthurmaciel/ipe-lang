@@ -1383,10 +1383,12 @@ fn read_dial_targets(url: &UnambiguousUrl) -> Result<Vec<DialTarget>, DbConnectE
     for (key, value) in parsed.query_pairs() {
         match &*key {
             "host" | "hostaddr" => {
-                push_host(
-                    (!value.starts_with('/'))
-                        .then(|| ConfiguredHost::named_by(url, value.into_owned())),
-                )?;
+                let host = if value.starts_with('/') {
+                    None
+                } else {
+                    Some(url.query_host(&value).ok_or(DbConnectError::InvalidUrl)?)
+                };
+                push_host(host)?;
             }
             "port" => {
                 port = value.parse().map_err(|_| DbConnectError::InvalidUrl)?;
@@ -1579,7 +1581,7 @@ async fn postgres_connect_options<R: HostResolver>(
 ///
 /// Reuses the address a target in `vetted` already resolved to for the same
 /// host and port, so the name is resolved once; a host the target scan did not
-/// name is vetted here.
+/// name is vetted here. A host `url` does not name is refused as unproven.
 async fn pin_postgres_options<R: HostResolver>(
     url: &UnambiguousUrl,
     options: sqlx::postgres::PgConnectOptions,
@@ -1590,6 +1592,9 @@ async fn pin_postgres_options<R: HostResolver>(
         return Err(DbConnectError::HostRefused(SsrfRefusal::LocalSocket));
     }
     let host = options.get_host().to_owned();
+    let Some(named) = url.named_host(&host) else {
+        return Err(DbConnectError::HostRefused(SsrfRefusal::UnprovenTarget));
+    };
     let port = options.get_port();
     let literal = crate::ssrf::strip_ipv6_brackets(&host)
         .parse::<std::net::IpAddr>()
@@ -1601,7 +1606,7 @@ async fn pin_postgres_options<R: HostResolver>(
         )
     {
         return Err(DbConnectError::HostRefused(
-            SsrfRefusal::UnpinnableTlsName { host },
+            SsrfRefusal::UnpinnableTlsName { host: named },
         ));
     }
     let known = vetted
@@ -1616,14 +1621,11 @@ async fn pin_postgres_options<R: HostResolver>(
         });
     let dial = match known {
         Some(dial) => dial,
-        None => VettedDial::for_configured_host_with(
-            DialPolicy::DenyPrivate,
-            resolver,
-            &ConfiguredHost::named_by(url, host.clone()),
-            port,
-        )
-        .await
-        .map_err(DbConnectError::HostRefused)?,
+        None => {
+            VettedDial::for_configured_host_with(DialPolicy::DenyPrivate, resolver, &named, port)
+                .await
+                .map_err(DbConnectError::HostRefused)?
+        }
     };
     Ok(options.host(&dial.dial_host(&host)))
 }
@@ -8779,7 +8781,7 @@ mod tests {
             refused.err(),
             Some(DbConnectError::HostRefused(
                 SsrfRefusal::UnpinnableTlsName {
-                    host: "db.example".to_owned()
+                    host: ConfiguredHost::from_config("db.example".to_owned())
                 }
             ))
         );
