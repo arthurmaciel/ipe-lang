@@ -94,7 +94,7 @@ fn main() {
             // AUD-10: explicit opt-in required before any dependency with a
             // build script / proc-macro is allowed to run `cargo +nightly
             // rustdoc` (build scripts + proc-macro expansion execute
-            // arbitrary code at compile time). See `check_build_consent`.
+            // arbitrary code at compile time). See `ConsentedManifest::scan`.
             "--allow-build-scripts" => {
                 ALLOW_BUILD_SCRIPTS.with(|c| c.set(true));
             }
@@ -668,9 +668,12 @@ fn run_rustdoc_source(
         };
     let dir = probe_root.as_path();
 
-    // Write the probe manifest with a given dep-feature set. Re-used to rewrite
-    // the manifest once the #89 visibility feature set is resolved (and again on
-    // the fallback to default features).
+    let manifest_str = dir.join("Cargo.toml").to_string_lossy().to_string();
+    let target_dir = dir.join("target");
+
+    // Write the probe manifest with a given dep-feature set. A write yields an
+    // unscanned `WrittenManifest`; only a consent scan of that exact file turns
+    // it into the `ConsentedManifest` a build step accepts.
     let write_manifest = |feats: &[String]| -> Result<(), String> {
         let dep_entry = build_dep_entry_source(crate_name, feats, git, path, req_version);
         let toml_content = format!(
@@ -690,54 +693,24 @@ edition = "2021"
     let src_dir = dir.join("src");
     std::fs::create_dir_all(&src_dir).map_err(|e| format!("mkdir src: {e}"))?;
     // Initial manifest uses the EXPLICIT features (empty for the default path) so
-    // `fetch_dep` + `cargo metadata` resolve; the #89 block rewrites it below.
+    // `fetch_dep` + `cargo metadata` resolve the crate's own feature list.
     write_manifest(features)?;
+    let initial = WrittenManifest::new(manifest_str.clone());
     std::fs::write(src_dir.join("lib.rs"), "// placeholder\n")
         .map_err(|e| format!("write lib.rs: {e}"))?;
 
-    let manifest_str = dir.join("Cargo.toml").to_string_lossy().to_string();
-    let target_dir = dir.join("target");
-
     // Fetch first (uses cargo cache — fast on repeated calls)
-    fetch_dep(&manifest_str)?;
-
-    // Two-phase sandbox: the fetch phase populates the scoped CARGO_HOME
-    // registry (network on) and STOPS here — before `check_build_consent` /
-    // rustdoc expand any proc-macro or build script. No foreign code runs
-    // while egress is available; the introspect phase re-runs offline.
-    if FETCH_ONLY.with(std::cell::Cell::get) {
-        return Ok((
-            "{}".to_owned(),
-            req_version.unwrap_or("").to_owned(),
-            Vec::new(),
-            Vec::new(),
-        ));
-    }
-
-    // AUD-10: consent gate BEFORE rustdoc — see `check_build_consent`'s doc
-    // comment for why this must run here and not after.
-    let allow_build_scripts = ALLOW_BUILD_SCRIPTS.with(std::cell::Cell::get);
-    check_build_consent(&manifest_str, allow_build_scripts)?;
-
-    // WALL-B (#75): resolve the identifier→(canonical name, exact version) map for
-    // every crate in this probe (direct + transitive) from the now-resolved
-    // Cargo.lock. Done once per crate inspect; a metadata error refuses.
-    let transitive_deps = collect_transitive_deps(&manifest_str).map_err(|e| {
-        format!("refusing to inspect: cannot resolve transitive dependencies ({e})")
-    })?;
+    fetch_dep(initial.path())?;
 
     // [#51/#89] Maximise API visibility. An explicit `--features` wins verbatim;
     // otherwise enumerate the crate's OWN features (via `cargo metadata`) and
-    // inject the chosen set THROUGH THE DEP TABLE. We never pass the
-    // `--all-features` CLI flag — cargo rejects it for an external `-p <dep>`
-    // ("cannot specify features for packages outside of workspace"), which is why
-    // the pre-#89 default path silently degraded every external-crate audit to
-    // DEFAULT features and hid every feature-gated API (the firebase #81 + stripe
-    // #89 root cause). No features to offer → plain default build; a metadata
-    // error refuses.
+    // inject the chosen set THROUGH THE DEP TABLE. The `--all-features` CLI flag
+    // is never passed: cargo rejects it for an external `-p <dep>` ("cannot
+    // specify features for packages outside of workspace"). No features to
+    // offer → plain default build; a metadata error refuses.
     let injected: Vec<String> = if features.is_empty() {
         choose_visibility_features(
-            &enumerate_crate_features(&manifest_str, crate_name).map_err(|e| {
+            &enumerate_crate_features(initial.path(), crate_name).map_err(|e| {
                 format!("refusing to inspect: cannot enumerate crate features ({e})")
             })?,
         )
@@ -749,17 +722,47 @@ edition = "2021"
     // possibly dropped below. A user-EXPLICIT `--features` set is kept verbatim
     // ("explicit wins", #89 contract) — the user owns their build toolchain.
     let auto_injected = features.is_empty() && injected_nonempty;
-    if injected_nonempty {
+    // Injected features can enable optional dependencies, so the rewritten
+    // manifest's graph is fetched before the fetch-only phase returns.
+    let written = if auto_injected {
         write_manifest(&injected)?;
+        let rewritten = WrittenManifest::new(manifest_str);
+        fetch_dep(rewritten.path())?;
+        rewritten
+    } else {
+        initial
+    };
+
+    // Two-phase sandbox: the fetch phase populates the scoped CARGO_HOME
+    // registry (network on) and STOPS here — before the consent scan /
+    // rustdoc expand any proc-macro or build script. No foreign code runs
+    // while egress is available; the introspect phase re-runs offline.
+    if FETCH_ONLY.with(std::cell::Cell::get) {
+        return Ok((
+            "{}".to_owned(),
+            req_version.unwrap_or("").to_owned(),
+            Vec::new(),
+            Vec::new(),
+        ));
     }
+
+    // AUD-10: consent gate on the FINAL manifest, before any build step — see
+    // `ConsentedManifest::scan`.
+    let allow_build_scripts = ALLOW_BUILD_SCRIPTS.with(std::cell::Cell::get);
+    let manifest = ConsentedManifest::scan(written, allow_build_scripts)?;
+    // Default-feature fallback: the rewritten manifest is re-scanned before any
+    // build sees it.
+    let to_default = |stale: ConsentedManifest| -> Result<ConsentedManifest, String> {
+        ConsentedManifest::scan(stale.rewrite(|| write_manifest(&[]))?, allow_build_scripts)
+    };
 
     // [#100 Part B] `effective_features` = the set rustdoc actually SUCCEEDED with.
     // It is what the generated `[dependencies]` must enable so the bound wrappers'
     // feature-gated APIs exist. On the mutually-exclusive-feature fallback we drop
     // to DEFAULT, so effective = [] (propagate nothing — matches what was bound).
-    let (json_content, version, effective_features) = match run_rustdoc_package(
+    let (json_content, version, effective_features, manifest) = match run_rustdoc_package(
         crate_name,
-        &manifest_str,
+        &manifest,
         &target_dir,
         &safe_name,
         false,
@@ -777,23 +780,18 @@ edition = "2021"
         // THERE, so the bound wrappers ↔ propagated features stay consistent
         // and the `ipe build ⇒ cargo build` floor holds.
         Ok((j, v)) if auto_injected && verify_stable => {
-            match injected_stable_check(&manifest_str, &dir.join("target-verify")) {
-                StableCheck::Builds => (j, v, injected.clone()),
+            match injected_stable_check(&manifest, &dir.join("target-verify")) {
+                StableCheck::Builds => (j, v, injected.clone(), manifest),
                 StableCheck::FeatureGated => {
                     eprintln!(
                         "[ipe-ffi] feature set [{}] needs a NIGHTLY-ONLY crate feature \
                              (E0554 on stable); retrying with default features",
                         injected.join(",")
                     );
-                    write_manifest(&[])?;
-                    let (j2, v2) = run_rustdoc_package(
-                        crate_name,
-                        &manifest_str,
-                        &target_dir,
-                        &safe_name,
-                        false,
-                    )?;
-                    (j2, v2, Vec::new())
+                    let fallback = to_default(manifest)?;
+                    let (j2, v2) =
+                        run_rustdoc_package(crate_name, &fallback, &target_dir, &safe_name, false)?;
+                    (j2, v2, Vec::new(), fallback)
                 }
                 // Could not reach a stable verdict (no stable toolchain /
                 // transient cargo error). Floor-safe for the PORTABLE
@@ -808,34 +806,36 @@ edition = "2021"
                         injected.join(","),
                         why
                     );
-                    write_manifest(&[])?;
-                    let (j2, v2) = run_rustdoc_package(
-                        crate_name,
-                        &manifest_str,
-                        &target_dir,
-                        &safe_name,
-                        false,
-                    )?;
-                    (j2, v2, Vec::new())
+                    let fallback = to_default(manifest)?;
+                    let (j2, v2) =
+                        run_rustdoc_package(crate_name, &fallback, &target_dir, &safe_name, false)?;
+                    (j2, v2, Vec::new(), fallback)
                 }
             }
         }
-        Ok((j, v)) => (j, v, injected.clone()),
+        Ok((j, v)) => (j, v, injected.clone(), manifest),
         // A mutually-exclusive injected feature subset can fail the doc build;
-        // fall back to default features (the pre-#89 behaviour) before giving up.
+        // fall back to default features before giving up.
         Err(e) if injected_nonempty => {
             eprintln!(
                 "[ipe-ffi] feature set [{}] doc build failed ({}); retrying with default features",
                 injected.join(","),
                 e.lines().next().unwrap_or("").trim()
             );
-            write_manifest(&[])?;
+            let fallback = to_default(manifest)?;
             let (j, v) =
-                run_rustdoc_package(crate_name, &manifest_str, &target_dir, &safe_name, false)?;
-            (j, v, Vec::new())
+                run_rustdoc_package(crate_name, &fallback, &target_dir, &safe_name, false)?;
+            (j, v, Vec::new(), fallback)
         }
         Err(e) => return Err(e),
     };
+
+    // WALL-B (#75): resolve the identifier→(canonical name, exact version) map
+    // for every crate (direct + transitive) of the manifest rustdoc succeeded
+    // with, from its resolved Cargo.lock. A metadata error refuses.
+    let transitive_deps = collect_transitive_deps(&manifest).map_err(|e| {
+        format!("refusing to inspect: cannot resolve transitive dependencies ({e})")
+    })?;
 
     // If 0 public functions were found, the crate may be a thin re-export
     // facade (e.g. `clap` is just `pub use clap_builder::*`).  Detect glob
@@ -844,7 +844,7 @@ edition = "2021"
     if !has_fns && let Some(underlying) = find_glob_reexport_source(&json_content) {
         let under_safe = underlying.replace('-', "_");
         if let Ok((under_json, under_ver)) =
-            run_rustdoc_package(&underlying, &manifest_str, &target_dir, &under_safe, false)
+            run_rustdoc_package(&underlying, &manifest, &target_dir, &under_safe, false)
             && json_has_functions(&under_json)
         {
             return Ok((under_json, under_ver, transitive_deps, effective_features));
@@ -884,9 +884,9 @@ enum StableCheck {
 /// pin, and `RUSTC_BOOTSTRAP` is removed so a globally-set bootstrap flag can't
 /// un-gate `#![feature]` on stable and forge a false pass. A separate
 /// `target-verify` dir keeps stable artifacts off the nightly rustdoc target.
-fn injected_stable_check(manifest_str: &str, verify_target: &Path) -> StableCheck {
+fn injected_stable_check(manifest: &ConsentedManifest, verify_target: &Path) -> StableCheck {
     let out = Command::new("cargo")
-        .args(["check", "--quiet", "--manifest-path", manifest_str])
+        .args(["check", "--quiet", "--manifest-path", manifest.path()])
         .env("CARGO_TARGET_DIR", verify_target)
         .env("RUSTUP_TOOLCHAIN", "stable")
         .env_remove("RUSTC")
@@ -924,7 +924,7 @@ fn injected_stable_check(manifest_str: &str, verify_target: &Path) -> StableChec
 /// Run `cargo +nightly rustdoc --package pkg` and return the JSON content.
 fn run_rustdoc_package(
     package_name: &str,
-    manifest_str: &str,
+    manifest: &ConsentedManifest,
     target_dir: &PathBuf,
     safe_name: &str,
     all_features: bool,
@@ -938,7 +938,7 @@ fn run_rustdoc_package(
         "--lib", // pin to library target; avoids "extra arguments"
         // errors on crates with binary or example targets.
         "--manifest-path",
-        manifest_str,
+        manifest.path(),
     ])
     // Pass the target dir as an OsStr so a non-UTF8 tempdir path can't panic
     // (an earlier `.to_str().unwrap()` aborted on TMPDIR with invalid bytes).
@@ -1132,14 +1132,30 @@ fn metadata_from_output(
     if !output.status.success() {
         return Err(MetadataError::Failed {
             status: output.status.to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr)
-                .trim()
-                .chars()
-                .take(METADATA_STDERR_MAX_CHARS)
-                .collect(),
+            stderr: terminal_safe_stderr(&output.stderr),
         });
     }
     serde_json::from_slice(&output.stdout).map_err(|e| MetadataError::Parse(e.to_string()))
+}
+
+/// Bounded, terminal-safe rendering of `cargo metadata` stderr.
+///
+/// The text reaches the operator's terminal inside a refusal, so control
+/// characters (ESC sequences, bell, line breaks) and bidirectional-override
+/// characters each become a space.
+fn terminal_safe_stderr(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .take(METADATA_STDERR_MAX_CHARS)
+        .collect()
 }
 
 /// The `packages` array of a `cargo metadata` document.
@@ -1169,15 +1185,21 @@ fn metadata_package_targets(
         ))
 }
 
-/// A target's `kind` array.
-fn metadata_target_kinds(
-    target: &serde_json::Value,
-) -> Result<&[serde_json::Value], MetadataError> {
+/// A target's `kind` strings.
+///
+/// A non-string entry refuses: skipping it could hide a `custom-build` kind.
+fn metadata_target_kinds(target: &serde_json::Value) -> Result<Vec<&str>, MetadataError> {
     target
         .get("kind")
         .and_then(serde_json::Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or(MetadataError::Malformed("target without a `kind` array"))
+        .ok_or(MetadataError::Malformed("target without a `kind` array"))?
+        .iter()
+        .map(|k| {
+            k.as_str().ok_or(MetadataError::Malformed(
+                "target `kind` entry is not a string",
+            ))
+        })
+        .collect()
 }
 
 /// Walk `cargo metadata`'s package graph (transitive — the default scope of
@@ -1209,11 +1231,7 @@ fn offenders_from_metadata(
         let pkg_name = metadata_package_name(pkg)?;
         let mut kinds = Vec::new();
         for target in metadata_package_targets(pkg)? {
-            kinds.extend(
-                metadata_target_kinds(target)?
-                    .iter()
-                    .filter_map(serde_json::Value::as_str),
-            );
+            kinds.extend(metadata_target_kinds(target)?);
         }
         if kinds.contains(&"custom-build") {
             offenders.push(BuildConsentOffender {
@@ -1231,27 +1249,86 @@ fn offenders_from_metadata(
     Ok(offenders)
 }
 
-/// AUD-10 gate: called right after `fetch_dep` succeeds and before the first
-/// `cargo +nightly rustdoc` invocation (rustdoc runs AFTER macro expansion,
-/// so build scripts and proc-macros in the dependency graph already executed
-/// by the time rustdoc's JSON comes back — this must run before that, not
-/// after).
+use consented_manifest::{ConsentedManifest, WrittenManifest};
+
+/// Probe-manifest proof tokens for the AUD-10 build-script consent gate.
 ///
-/// `allow_build_scripts = false` (the default): any offender REFUSES with a
-/// loud, specific error naming every one + whether it's a build-script or
-/// proc-macro + the exact flag to opt in. `allow_build_scripts = true`:
-/// proceeds, but still prints a loud provenance warning naming the packages
-/// — a consent gate, not a technical sandbox, so the warning is load-bearing
-/// (the operator must actually see what they're consenting to).
-fn check_build_consent(manifest_str: &str, allow_build_scripts: bool) -> Result<(), String> {
-    let offenders = find_build_consent_offenders(manifest_str);
-    match consent_decision_from_graph(offenders, allow_build_scripts) {
-        Ok(None) => Ok(()),
-        Ok(Some(warning)) => {
-            eprintln!("{warning}");
-            Ok(())
+/// Every build step (`cargo +nightly rustdoc`, the stable `cargo check`, the
+/// transitive-dependency walk) takes a [`ConsentedManifest`], and the only way
+/// to obtain one is to consent-scan the [`WrittenManifest`] a write produced.
+/// Rewriting the manifest consumes the token, so no rewritten dependency graph
+/// reaches a build without a fresh scan.
+mod consented_manifest {
+    use super::{BuildConsentOffender, MetadataError};
+
+    /// A probe manifest on disk whose dependency graph is not yet consent-scanned.
+    pub(super) struct WrittenManifest {
+        path: String,
+    }
+
+    impl WrittenManifest {
+        /// Names the manifest file a write just produced.
+        #[must_use]
+        pub(super) const fn new(path: String) -> Self {
+            Self { path }
         }
-        Err(e) => Err(e),
+
+        /// The manifest path, for fetch and metadata steps that run no foreign code.
+        #[must_use]
+        pub(super) const fn path(&self) -> &str {
+            self.path.as_str()
+        }
+    }
+
+    /// A probe manifest whose exact on-disk dependency graph passed the consent gate.
+    pub(super) struct ConsentedManifest {
+        path: String,
+    }
+
+    impl ConsentedManifest {
+        /// Consent-scans `written`'s full dependency graph.
+        ///
+        /// Build scripts and proc-macros execute during `cargo rustdoc` /
+        /// `cargo check` macro expansion, so this scan precedes every build
+        /// step. Without `--allow-build-scripts` any offender refuses with a
+        /// message naming each one and the opt-in flag; with it, a warning
+        /// naming the same packages is printed and the scan passes.
+        pub(super) fn scan(
+            written: WrittenManifest,
+            allow_build_scripts: bool,
+        ) -> Result<Self, String> {
+            let offenders = super::find_build_consent_offenders(&written.path);
+            Self::from_graph(written, offenders, allow_build_scripts)
+        }
+
+        /// Decides consent for `written` from its offender scan.
+        pub(super) fn from_graph(
+            written: WrittenManifest,
+            offenders: Result<Vec<BuildConsentOffender>, MetadataError>,
+            allow_build_scripts: bool,
+        ) -> Result<Self, String> {
+            if let Some(warning) =
+                super::consent_decision_from_graph(offenders, allow_build_scripts)?
+            {
+                eprintln!("{warning}");
+            }
+            Ok(Self { path: written.path })
+        }
+
+        /// Rewrites the manifest via `write`, surrendering this consent.
+        pub(super) fn rewrite(
+            self,
+            write: impl FnOnce() -> Result<(), String>,
+        ) -> Result<WrittenManifest, String> {
+            write()?;
+            Ok(WrittenManifest { path: self.path })
+        }
+
+        /// The consented manifest path.
+        #[must_use]
+        pub(super) const fn path(&self) -> &str {
+            self.path.as_str()
+        }
     }
 }
 
@@ -1273,7 +1350,7 @@ fn consent_decision_from_graph(
     build_consent_decision(&offenders, allow_build_scripts)
 }
 
-/// The PURE decision half of [`check_build_consent`] — given the offender
+/// The PURE decision half of [`ConsentedManifest::scan`] — given the offender
 /// list and whether `--allow-build-scripts` was passed, decide: `Ok(None)`
 /// (no offenders, proceed silently), `Ok(Some(warning))` (offenders present,
 /// flag set — proceed, caller must print `warning`), or `Err(message)`
@@ -1344,7 +1421,9 @@ fn fetch_dep(manifest_str: &str) -> Result<(), String> {
 /// lib-target name lets it resolve each to the real `[dependencies]` key + a
 /// pinned version. Fail-closed: any metadata error is returned, never an empty
 /// map that would silently drop every wrapper's transitive pin.
-fn collect_transitive_deps(manifest_str: &str) -> Result<Vec<TransitiveDep>, MetadataError> {
+fn collect_transitive_deps(
+    manifest: &ConsentedManifest,
+) -> Result<Vec<TransitiveDep>, MetadataError> {
     // Filter the graph to the HOST platform: unfiltered `cargo metadata`
     // lists EVERY platform's conditional deps (`system-configuration` — a
     // macOS-only reqwest dep), and each listed dep becomes an UNCONDITIONAL
@@ -1357,7 +1436,7 @@ fn collect_transitive_deps(manifest_str: &str) -> Result<Vec<TransitiveDep>, Met
     let filter: Vec<&str> = host
         .as_deref()
         .map_or_else(Vec::new, |h| vec!["--filter-platform", h]);
-    transitive_deps_from_metadata(&run_cargo_metadata(manifest_str, &filter)?)
+    transitive_deps_from_metadata(&run_cargo_metadata(manifest.path(), &filter)?)
 }
 
 /// The host target triple (`rustc -vV` `host:` line), for platform-filtering
@@ -1395,10 +1474,10 @@ fn transitive_deps_from_metadata(
         // identifier for a lib/proc-macro/cdylib target; bin/test/example targets
         // are skipped (they are never `::<crate>::`-referenced from a wrapper).
         for tgt in metadata_package_targets(pkg)? {
-            let is_lib_like = metadata_target_kinds(tgt)?.iter().any(|k| {
+            let is_lib_like = metadata_target_kinds(tgt)?.into_iter().any(|k| {
                 matches!(
-                    k.as_str(),
-                    Some("lib" | "rlib" | "dylib" | "cdylib" | "staticlib" | "proc-macro")
+                    k,
+                    "lib" | "rlib" | "dylib" | "cdylib" | "staticlib" | "proc-macro"
                 )
             });
             if !is_lib_like {
@@ -4472,7 +4551,7 @@ fn make_enum_extract(
 thread_local! {
     static TAIL_AUDIT_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     // AUD-10: mirrors TAIL_AUDIT_ENABLED's pattern for a global CLI flag consulted
-    // deep in the `inspect_crate` -> `run_rustdoc` -> `check_build_consent` call
+    // deep in the `inspect_crate` -> `run_rustdoc` -> `ConsentedManifest::scan` call
     // chain, without threading a new parameter through every call site (including
     // the multi-crate `--manifest` fan-out).
     static ALLOW_BUILD_SCRIPTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -13440,10 +13519,10 @@ mod tests {
 
     #[test]
     fn transitive_deps_refuses_missing_packages_key() {
-        assert_eq!(
+        assert!(matches!(
             transitive_deps_from_metadata(&serde_json::json!({})),
             Err(MetadataError::Malformed("missing `packages` array"))
-        );
+        ));
     }
 
     #[test]
@@ -13634,6 +13713,148 @@ mod tests {
             Err(MetadataError::Failed { stderr, .. })
                 if stderr.chars().count() == METADATA_STDERR_MAX_CHARS
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_stderr_in_refusal_strips_control_characters() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let mut output = metadata_output(std::process::ExitStatus::from_raw(1 << 8), b"");
+        output.stderr = "\x1b[31merror\x07\nnext\r\u{202E}evil\u{2066}"
+            .as_bytes()
+            .to_vec();
+        let graph = metadata_from_output(Ok(output));
+        let Err(MetadataError::Failed { stderr, .. }) = graph else {
+            panic!("expected MetadataError::Failed, got {graph:?}");
+        };
+        assert!(
+            !stderr.chars().any(|c| c.is_control()
+                || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')),
+            "stderr must be terminal-safe: {stderr:?}"
+        );
+        assert!(stderr.contains("error"), "text survives: {stderr:?}");
+        assert!(stderr.contains("next"), "text survives: {stderr:?}");
+    }
+
+    #[test]
+    fn metadata_refuses_non_string_target_kind() {
+        for kind in [serde_json::json!([1, "lib"]), serde_json::json!([null])] {
+            let meta = serde_json::json!({
+                "packages": [ { "name": "x", "version": "1.0.0",
+                                "targets": [ { "name": "x", "kind": kind } ] } ]
+            });
+            assert!(
+                matches!(
+                    offenders_from_metadata(&meta),
+                    Err(MetadataError::Malformed(
+                        "target `kind` entry is not a string"
+                    ))
+                ),
+                "offender scan must refuse {meta}"
+            );
+            assert!(
+                matches!(
+                    transitive_deps_from_metadata(&meta),
+                    Err(MetadataError::Malformed(
+                        "target `kind` entry is not a string"
+                    ))
+                ),
+                "transitive walk must refuse {meta}"
+            );
+            assert_consent_refuses(&Ok(meta));
+        }
+    }
+
+    /// Graph of the probe before feature injection: plain libraries only.
+    fn aud10_pre_injection_meta() -> serde_json::Value {
+        serde_json::json!({
+            "packages": [
+                { "name": "tls-wrapper", "version": "1.0.0",
+                  "targets": [ { "name": "tls_wrapper", "kind": ["lib"] } ] }
+            ]
+        })
+    }
+
+    /// Graph after an injected feature enables an optional build-script dep.
+    fn aud10_post_injection_meta() -> serde_json::Value {
+        serde_json::json!({
+            "packages": [
+                { "name": "tls-wrapper", "version": "1.0.0",
+                  "targets": [ { "name": "tls_wrapper", "kind": ["lib"] } ] },
+                { "name": "openssl-sys", "version": "0.9.100",
+                  "targets": [
+                      { "name": "build-script-build", "kind": ["custom-build"] },
+                      { "name": "openssl-sys", "kind": ["lib"] }
+                  ] }
+            ]
+        })
+    }
+
+    #[test]
+    fn consent_refuses_build_script_dep_added_by_injected_feature() {
+        let written = || WrittenManifest::new("probe/Cargo.toml".to_owned());
+        assert!(
+            ConsentedManifest::from_graph(
+                written(),
+                offenders_from_metadata(&aud10_pre_injection_meta()),
+                false,
+            )
+            .is_ok(),
+            "the pre-injection graph is clean"
+        );
+        let refused = ConsentedManifest::from_graph(
+            written(),
+            offenders_from_metadata(&aud10_post_injection_meta()),
+            false,
+        )
+        .err()
+        .unwrap_or_default();
+        assert!(
+            refused.contains("openssl-sys") && refused.contains("--allow-build-scripts"),
+            "the injected graph must refuse without the flag: {refused:?}"
+        );
+        assert!(
+            ConsentedManifest::from_graph(
+                written(),
+                offenders_from_metadata(&aud10_post_injection_meta()),
+                true,
+            )
+            .is_ok(),
+            "the opt-in flag admits the injected graph"
+        );
+    }
+
+    #[test]
+    fn consent_rewrite_surrenders_the_token_until_rescanned() {
+        let consented = ConsentedManifest::from_graph(
+            WrittenManifest::new("probe/Cargo.toml".to_owned()),
+            offenders_from_metadata(&aud10_pre_injection_meta()),
+            false,
+        )
+        .ok()
+        .unwrap_or_else(|| panic!("the pre-injection graph is clean"));
+        let failed = consented.rewrite(|| Err("write Cargo.toml: denied".to_owned()));
+        assert!(matches!(failed, Err(msg) if msg == "write Cargo.toml: denied"));
+        let consented = ConsentedManifest::from_graph(
+            WrittenManifest::new("probe/Cargo.toml".to_owned()),
+            offenders_from_metadata(&aud10_pre_injection_meta()),
+            false,
+        )
+        .ok()
+        .unwrap_or_else(|| panic!("the pre-injection graph is clean"));
+        let Ok(rewritten) = consented.rewrite(|| Ok(())) else {
+            panic!("a successful write yields an unscanned manifest");
+        };
+        assert_eq!(rewritten.path(), "probe/Cargo.toml");
+        let rescanned = ConsentedManifest::from_graph(
+            rewritten,
+            offenders_from_metadata(&aud10_post_injection_meta()),
+            false,
+        );
+        assert!(
+            rescanned.is_err(),
+            "a rewritten graph is re-decided, not inherited"
+        );
     }
 
     #[test]
