@@ -85,7 +85,7 @@ for dir in "$GOLDEN_ROOT"/*/; do
     rm -rf "$out"
 
     # Build from `Main.ipe` (single-file) or `ipe.toml` (project), whichever the
-    # golden ships. Both land the emitted crate at "$out/src/main.rs".
+    # golden ships. Both land the emitted crate at "$out/rust/src/main.rs".
     built=0
     if [[ -f "$dir/Main.ipe" ]]; then
         if ( cd "$dir" && timeout 120 "$IPE_BIN" build "Main.ipe" --out "$out" ) \
@@ -104,7 +104,7 @@ for dir in "$GOLDEN_ROOT"/*/; do
         continue
     fi
 
-    emitted="$out/src/main.rs"
+    emitted="$out/rust/src/main.rs"
     [[ -f "$emitted" ]] || { echo "SKIP $name: no emitted src/main.rs" >&2; skipped=$((skipped + 1)); continue; }
 
     bless_file "$emitted" "$golden_main_rs" plain

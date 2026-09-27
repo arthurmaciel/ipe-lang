@@ -105,7 +105,7 @@ pub fn classify(name: &str) -> Hermetic {
         "version" | "capabilities" | "doc" | "diff" => Hermetic::Snapshot,
 
         // Cargo / build / run / execute — heavy, environment-dependent output.
-        "build" | "run" | "release" | "test" | "verify" | "exec" | "watch" | "debugger" => {
+        "build" | "run" | "release" | "test" | "verify" | "exec" | "watch" => {
             Hermetic::Excluded("runs cargo / builds / executes — flaky transcript")
         }
 
@@ -117,8 +117,7 @@ pub fn classify(name: &str) -> Hermetic {
         // Project-tree mutators / environment probes — output depends on a
         // project or the host toolchain. `type-check` reads and compiles a
         // project tree, so its diagnostics/paths are environment-dependent.
-        "type-check" | "lint" | "fmt" | "clean" | "migrate" | "fix" | "eject" | "rust"
-        | "health" => {
+        "type-check" | "lint" | "fmt" | "clean" | "fix" | "eject" | "rust" | "health" => {
             Hermetic::Excluded("depends on a project tree / host toolchain — flaky transcript")
         }
 

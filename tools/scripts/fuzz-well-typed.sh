@@ -4,7 +4,7 @@
 # Ported from ../ipe/tools/scripts/fuzz-well-typed.sh (Haskell backend, Go target).
 # KEY ADAPTATIONS — Rust/Ipê backend:
 #
-#   BUILD: ipe build src/Main.ipe --out out/rust
+#   BUILD: ipe build src/Main.ipe --out out
 #          cargo build --manifest-path out/rust/Cargo.toml
 #          (binary: $CARGO_TARGET_DIR/debug/<name-from-emitted-Cargo.toml>, default ipe-app)
 #
@@ -782,7 +782,7 @@ run_iter() {
     # ── Step 1: ipe build → emitted Rust project ──────────────────────────
     local ipe_rc=0
     if ! ( cd "$iterdir" && timeout "$BUILD_TIMEOUT" \
-           "$IPE_BIN" build src/Main.ipe --out out/rust >"$buildlog" 2>&1 ); then
+           "$IPE_BIN" build src/Main.ipe --out out >"$buildlog" 2>&1 ); then
         ipe_rc=$?
         echo "IPE-BUILD-FAILED rc=$ipe_rc kind=$kind"
         return 1
@@ -894,7 +894,7 @@ EOF
 
     echo "[1/3] ipe build..."
     if ! ( cd "$tp_dir" && timeout "$BUILD_TIMEOUT" \
-           "$IPE_BIN" build src/Main.ipe --out out/rust >"$buildlog" 2>&1 ); then
+           "$IPE_BIN" build src/Main.ipe --out out >"$buildlog" 2>&1 ); then
         echo "RESULT: FAIL — program did not build (compiler bug)"
         echo "  Build log: $(cat "$buildlog")"
         rm -rf "$tp_dir"; return 1

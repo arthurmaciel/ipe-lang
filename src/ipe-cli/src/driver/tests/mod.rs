@@ -1358,6 +1358,74 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+/// A cold build into a fresh output dir whose cache sits inside it — the
+/// default `<out>/.ipe-cache/<salt>` layout — succeeds and leaves the dir
+/// ipe-owned: the cache is stored only after the emit has claimed the dir,
+/// never creating it unmarked first. A rebuild into the same dir then hits.
+#[test]
+fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
+    let Ok(runtime) = resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join(format!("ipe-cache-in-out-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let out = tmp.join("out");
+    let cache_dir = out.join(".ipe-cache").join("salt");
+
+    let entry_path = vec!["Main".to_owned()];
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (
+            PathBuf::from("<cache-in-out>/Main.ipe"),
+            "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
+        ),
+    );
+    let discovered = vec![project::DiscoveredModule {
+        path: PathBuf::from("<cache-in-out>/Main.ipe"),
+        module_path: entry_path.clone(),
+    }];
+
+    let build = || {
+        compile_modules_observed(
+            sources.clone(),
+            discovered.clone(),
+            &entry_path,
+            &out,
+            &runtime,
+            Path::new("<cache-in-out>"),
+            ipe_backend_rust::DbDriver::Sqlite,
+            Some(&cache_dir),
+            BuildOptions::default(),
+        )
+    };
+
+    let (cold, cold_outcome) = build();
+    assert!(
+        cold.is_ok(),
+        "a cold build into a fresh dir must succeed: {cold:?}"
+    );
+    assert_eq!(cold_outcome, CacheOutcome::Miss);
+    assert!(
+        crate::output_dir::has_marker(&out).unwrap_or(false),
+        "the fresh output dir must be claimed (marked) by the build"
+    );
+    assert!(
+        find_single_cache_entry(&cache_dir).is_some(),
+        "the cold build must still store its cache entry inside the claimed dir"
+    );
+
+    let (warm, warm_outcome) = build();
+    assert!(
+        warm.is_ok(),
+        "a rebuild into the same dir must succeed: {warm:?}"
+    );
+    assert_eq!(warm_outcome, CacheOutcome::Hit);
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// Walk `cache_root/<epoch>/*.ir.json` and return the single
 /// lowered-IR entry file a build just wrote. Mirrors
 /// [`find_single_cache_entry`], but matches on the `.ir.json` suffix
@@ -2693,95 +2761,506 @@ fn artifact_size_bytes_surfaces_a_missing_artifact_as_a_typed_error() {
     );
 }
 
-// ── `ipe debugger` — record/replay refusals ────────────────────────────────
+// ── `ipe run --record` / `--replay` — refusals ─────────────────────────────
 
-// A bare `ipe debugger` (no subcommand) is a usage error naming the two forms,
-// never a silent no-op.
+// Recording and replay are refused, before any build, for every shape without
+// a cli/worker update loop — never a run that silently writes no log, nor a
+// replay that silently runs the app live.
 #[test]
-fn debugger_without_subcommand_is_usage_error() {
-    let err = run_debugger(&[]).expect_err("a bare `ipe debugger` must be a usage error");
-    assert!(
-        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
-        "expected a usage error, got: {err:?}"
-    );
+fn session_is_refused_for_shapes_without_a_session() {
+    for flag in ["--record", "--replay"] {
+        for shape in [
+            crate::delivery::Shape::Script,
+            crate::delivery::Shape::Tui,
+            crate::delivery::Shape::Web,
+        ] {
+            let result = gate_session(flag, shape, CompileTarget::Native);
+            assert!(
+                matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains(flag)),
+                "{flag} on {shape:?} must be refused, got: {result:?}"
+            );
+        }
+    }
 }
 
-// An unknown subcommand is refused, naming the accepted set.
+// A cli app run under `--target wasi` executes in wasmtime, where the recorder
+// is not wired: refused rather than recording nothing or replaying live.
 #[test]
-fn debugger_unknown_subcommand_is_refused() {
-    let err = run_debugger(&["scrub".to_owned()])
-        .expect_err("an unknown debugger subcommand must be refused");
+fn session_is_refused_for_a_wasi_run() {
+    for flag in ["--record", "--replay"] {
+        let result = gate_session(flag, crate::delivery::Shape::Cli, CompileTarget::WasmWasi);
+        assert!(
+            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("wasi")),
+            "{flag} with --target wasi must be refused, got: {result:?}"
+        );
+    }
+}
+
+// A native cli or worker app has a recordable session: the shape gate admits it.
+#[test]
+fn session_is_admitted_for_a_native_cli_or_worker_app() {
+    for shape in [crate::delivery::Shape::Cli, crate::delivery::Shape::Worker] {
+        let result = gate_session("--record", shape, CompileTarget::Native);
+        assert!(
+            result.is_ok(),
+            "{shape:?} must be admitted, got: {result:?}"
+        );
+    }
+}
+
+// A native-bearing program runs jailed, where the log is unreachable: refused
+// whether the crossing is inferred or only declared, and a pure program passes.
+#[test]
+fn session_is_refused_for_a_native_bearing_program() {
+    use crate::run_sandbox::ResolvedCapabilities;
+    use ipe_ir::Capability;
+    use std::collections::BTreeSet;
+    let native: BTreeSet<Capability> = std::iter::once(Capability::NativeFfi).collect();
+    let raw: BTreeSet<Capability> = std::iter::once(Capability::FfiRaw).collect();
+    let bearing = [
+        ResolvedCapabilities {
+            inferred: native.clone(),
+            declared: BTreeSet::new(),
+        },
+        ResolvedCapabilities {
+            inferred: BTreeSet::new(),
+            declared: native,
+        },
+        ResolvedCapabilities {
+            inferred: raw,
+            declared: BTreeSet::new(),
+        },
+    ];
+    for flag in ["--record", "--replay"] {
+        for resolved in &bearing {
+            let result = gate_session_capabilities(flag, resolved);
+            assert!(
+                matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("native-bearing")),
+                "{flag} on a native-bearing program must be refused, got: {result:?}"
+            );
+        }
+        let pure = ResolvedCapabilities {
+            inferred: BTreeSet::new(),
+            declared: BTreeSet::new(),
+        };
+        let result = gate_session_capabilities(flag, &pure);
+        assert!(
+            result.is_ok(),
+            "{flag} on a pure program must pass: {result:?}"
+        );
+    }
+}
+
+// A replay whose log does not exist is refused before any build, naming the
+// path and the way to record one.
+#[test]
+fn replay_of_a_missing_log_is_refused_before_building() {
+    let dir = std::env::temp_dir().join(format!("ipe_replay_missing_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for absent in ["absent.ipemsgs", "absent.ipelog"] {
+        let result = replay_plan(dir.join(absent));
+        assert!(
+            matches!(&result, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+            "a missing replay log must be refused: {result:?}"
+        );
+    }
+}
+
+// The default replay log is the typed sibling of the trace `--record` writes.
+#[test]
+fn default_replay_log_is_the_typed_sibling_of_the_trace() {
+    assert_eq!(typed_log_file(), Path::new("session.ipemsgs"));
+}
+
+/// A fresh scratch directory for a session-log test.
+fn session_scratch(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ipe_session_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    assert!(fs::create_dir_all(&dir).is_ok(), "make scratch dir");
+    dir
+}
+
+// A named `.ipelog` is shown as a trace; any other named log is folded.
+#[test]
+fn named_replay_log_is_shown_when_it_is_a_trace() {
+    let dir = session_scratch("named");
+    let trace = dir.join("bug.ipelog");
+    let typed = dir.join("bug.ipemsgs");
+    assert!(fs::write(&trace, "Add(1) => 1\n").is_ok(), "write trace");
+    assert!(fs::write(&typed, "{}").is_ok(), "write typed log");
+    let shown = replay_plan(trace.clone());
     assert!(
-        matches!(&err, CliError::UsageOwned(_)),
-        "expected a UsageOwned error, got: {err:?}"
+        matches!(&shown, Ok(SessionPlan::ShowTrace(p)) if *p == trace),
+        "a named trace must be shown: {shown:?}"
     );
-    let CliError::UsageOwned(msg) = &err else {
+    let folded = replay_plan(typed.clone());
+    assert!(
+        matches!(&folded, Ok(SessionPlan::Run(SessionEnv::Replay(p))) if *p == typed),
+        "a named typed log must be folded: {folded:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// With no path, `--replay` folds the typed log, falls back to showing the
+// trace when only the trace exists (a trace-only session), and refuses when
+// neither was recorded.
+#[test]
+fn default_replay_prefers_the_typed_log_then_the_trace() {
+    let dir = session_scratch("default");
+    let entry = dir.join("proj").join("Main.ipe");
+    assert!(
+        fs::create_dir_all(dir.join("proj")).is_ok(),
+        "make project dir"
+    );
+    assert!(
+        fs::write(&entry, "module Main exposing (main)\n").is_ok(),
+        "write entry"
+    );
+    let out = dir.join("out");
+    let output_result = resolve_output_root(Some(&out.to_string_lossy()), &entry, None);
+    assert!(output_result.is_ok(), "out must resolve: {output_result:?}");
+    let Ok(output) = output_result else { return };
+    let replay = cli_args::SessionMode::Replay(None);
+
+    let none = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&none, Err(CliError::UsageOwned(msg)) if msg.contains("--record")),
+        "no recorded session must be refused: {none:?}"
+    );
+
+    let trace = out.join(RECORD_LOG_FILE);
+    assert!(fs::write(&trace, "Add(1) => 1\n").is_ok(), "write trace");
+    let shown = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&shown, Ok(SessionPlan::ShowTrace(p)) if p.ends_with(RECORD_LOG_FILE)),
+        "a lone trace must be shown: {shown:?}"
+    );
+
+    assert!(
+        fs::write(out.join(typed_log_file()), "{}").is_ok(),
+        "write typed log"
+    );
+    let folded = resolve_session_plan(&replay, &output);
+    assert!(
+        matches!(&folded, Ok(SessionPlan::Run(SessionEnv::Replay(p))) if p.ends_with(typed_log_file())),
+        "the typed log must win over the trace: {folded:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A planted trace carrying terminal escapes (a screen clear, an OSC 8
+// hyperlink, C1 controls, DEL, tabs) is shown with every control character
+// removed, one step per line under a label that says it is not a replay.
+#[test]
+fn shown_trace_strips_every_control_character() {
+    let dir = session_scratch("laced");
+    let trace = dir.join("planted\x1b[31m.ipelog");
+    let laced = "\x1b[2JAdd(1) => 1\n\
+                 Say(\x1b]8;;https://evil.example\x07link\x1b]8;;\x1b\\) => 2\r\n\
+                 \u{9b}2J\u{9d}0;title\u{9c}Add(\u{85}3\t\u{7f}) => 5\n\
+                 \x1b[H\x1b[2J\n";
+    assert!(fs::write(&trace, laced).is_ok(), "write planted trace");
+    let shown = load_session_trace(&trace);
+    assert!(
+        shown.is_ok(),
+        "a UTF-8 trace under the cap must show: {shown:?}"
+    );
+    let Ok(out) = shown else { return };
+    assert!(
+        !out.chars().any(|c| c.is_control() && c != '\n'),
+        "the shown trace must carry no control character: {out:?}"
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 4, "label + one line per step: {out:?}");
+    assert!(
+        lines.first().is_some_and(|l| l.contains("not a replay")),
+        "the trace must be labelled as not a replay: {out:?}"
+    );
+    assert_eq!(lines.get(1).copied(), Some("Add(1) => 1"));
+    assert_eq!(lines.get(2).copied(), Some("Say(link) => 2"));
+    assert!(
+        lines.get(3).is_some_and(|l| l.ends_with("Add(3) => 5")),
+        "{out:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A trace over the cap is refused typed, before anything is rendered.
+#[test]
+fn shown_trace_over_the_cap_is_refused() {
+    let dir = session_scratch("oversized");
+    let trace = dir.join("big.ipelog");
+    let over = usize::try_from(crate::io_bounded::SESSION_TRACE_READ_CAP + 1).unwrap_or(usize::MAX);
+    assert!(
+        fs::write(&trace, vec![b'a'; over]).is_ok(),
+        "write big trace"
+    );
+    let shown = load_session_trace(&trace);
+    assert!(
+        matches!(shown, Err(CliError::FileTooLarge { .. })),
+        "an oversized trace must be refused: {shown:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// A non-UTF-8 trace is refused typed, never a panic and never lossy output.
+#[test]
+fn shown_trace_not_utf8_is_refused() {
+    let dir = session_scratch("not_utf8");
+    let trace = dir.join("bin.ipelog");
+    assert!(
+        fs::write(&trace, [b'A', 0xff, 0xfe, b'\n']).is_ok(),
+        "write binary trace"
+    );
+    let shown = load_session_trace(&trace);
+    assert!(
+        matches!(&shown, Err(CliError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::InvalidData),
+        "a non-UTF-8 trace must be refused: {shown:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// -----------------------------------------------------------------------
+// User files are never overwritten or deleted by the build pipeline
+// -----------------------------------------------------------------------
+
+fn user_project(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ipe_user_files_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("src")).expect("make src");
+    fs::write(
+        dir.join("src").join("Main.ipe"),
+        "module Main exposing (main)\n",
+    )
+    .expect("write Main.ipe");
+    fs::write(dir.join("Cargo.toml"), "# the user's own manifest\n").expect("write Cargo.toml");
+    dir
+}
+
+/// Emitting into a directory that holds the user's files is refused untouched.
+///
+/// This is `ipe build --out .`: nothing is written or pruned, and the user's
+/// `src/` and `Cargo.toml` survive byte-for-byte.
+#[test]
+fn emitting_into_a_user_directory_is_refused_untouched() {
+    let dir = user_project("emit");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+    let result = write_emitted_project(&emitted, &dir, &dir.join("no-runtime"), None, false);
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "emitting into a user directory must be refused, got {result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("src").join("Main.ipe")).unwrap_or_default(),
+        "module Main exposing (main)\n",
+        "the user's source must survive"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("Cargo.toml")).unwrap_or_default(),
+        "# the user's own manifest\n",
+        "the user's Cargo.toml must survive"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A lossy rewrite backs the original up before the atomic replace.
+///
+/// This covers `ipe fix` and `lint --fix`; a backup name is never reused.
+#[test]
+fn lossy_rewrite_backs_up_the_original() {
+    let dir = user_project("lossy");
+    let main = dir.join("src").join("Main.ipe");
+    let first = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v2\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite");
+    let second = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v3\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite again");
+    let (Some(first), Some(second)) = (first, second) else {
+        assert!(false_marker(), "a lossy rewrite must report its backup");
         return;
     };
-    assert!(
-        msg.contains("scrub") && msg.contains("record") && msg.contains("replay"),
-        "the refusal must name the offending token and the accepted set; got: {msg:?}"
+    assert_ne!(first, second, "each rewrite keeps its own backup");
+    assert_eq!(
+        fs::read_to_string(&first).unwrap_or_default(),
+        "module Main exposing (main)\n"
     );
+    assert_eq!(
+        fs::read_to_string(&second).unwrap_or_default(),
+        "module Main exposing (main)\n-- v2\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&main).unwrap_or_default(),
+        "module Main exposing (main)\n-- v3\n"
+    );
+    let lossless = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n",
+        RewriteKind::Lossless,
+    )
+    .expect("lossless rewrite");
+    assert!(lossless.is_none(), "a lossless rewrite takes no backup");
+    let _ = fs::remove_dir_all(&dir);
 }
 
-// `record` with no entry is refused before any build starts (fail-closed on a
-// missing positional).
+/// A symlinked source file is rewritten at its real location.
+///
+/// That is the file the user edits; the link is kept, not replaced by a
+/// detached copy.
+#[cfg(unix)]
 #[test]
-fn debugger_record_without_entry_is_refused() {
-    let err =
-        run_debugger(&["record".to_owned()]).expect_err("`record` with no entry must be refused");
+fn rewrite_follows_a_symlinked_source_to_the_real_file() {
+    let dir = user_project("symlink");
+    let real = dir.join("real.ipe");
+    fs::write(&real, "module Main exposing (main)\n").expect("write real");
+    let link = dir.join("src").join("Link.ipe");
+    std::os::unix::fs::symlink(&real, &link).expect("make link");
+    rewrite_user_file(
+        &link,
+        "module Main exposing (main)\n-- new\n",
+        RewriteKind::Lossless,
+    )
+    .expect("rewrite through link");
     assert!(
-        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
-        "expected a usage error, got: {err:?}"
+        fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
+        "the link stays a link"
     );
+    assert_eq!(
+        fs::read_to_string(&real).unwrap_or_default(),
+        "module Main exposing (main)\n-- new\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }
 
-// `record` rejects a second `--out` value rather than silently last-writing.
+/// The atomic writer's temp file is created exclusively.
+///
+/// A symlink planted at the temp name is never written through.
+#[cfg(unix)]
 #[test]
-fn debugger_record_rejects_duplicate_out() {
-    let err = run_debugger(&[
-        "record".to_owned(),
-        "Main.ipe".to_owned(),
-        "--out".to_owned(),
-        "a.log".to_owned(),
-        "--out".to_owned(),
-        "b.log".to_owned(),
-    ])
-    .expect_err("a second --out must be refused");
+fn atomic_write_never_writes_through_a_planted_temp_symlink() {
+    let dir = user_project("tmp_symlink");
+    let victim = dir.join("victim.txt");
+    fs::write(&victim, "keep").expect("write victim");
+    let tmp = dir.join("planted.tmp");
+    std::os::unix::fs::symlink(&victim, &tmp).expect("plant link");
+    let result = write_and_rename(&tmp, &dir.join("target.txt"), "payload");
     assert!(
-        matches!(err, CliError::Usage(_) | CliError::UsageOwned(_)),
-        "expected a usage error, got: {err:?}"
+        matches!(result, Err(CliError::Io { .. })),
+        "an existing temp path must be refused, got {result:?}"
     );
+    assert_eq!(fs::read_to_string(&victim).unwrap_or_default(), "keep");
+    let _ = fs::remove_dir_all(&dir);
 }
 
-// `replay` requires exactly one <log> positional — zero or two is refused.
+/// A marked crate dir planted with symlinks is refused by the emit.
+///
+/// A cloned repository can force-add such a dir with a symlinked `src/` or a
+/// symlinked file; the write + prune refuse both, and the link targets survive
+/// byte-for-byte.
+#[cfg(unix)]
 #[test]
-fn debugger_replay_wrong_arity_is_refused() {
+fn emitting_into_a_marked_dir_with_planted_links_is_refused() {
+    let base = std::env::temp_dir().join(format!("ipe_planted_emit_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let victim = base.join("victim");
+    fs::create_dir_all(&victim).expect("victim dir");
+    fs::write(victim.join("precious.ipe"), "keep").expect("victim file");
+    let emitted = ipe_backend::EmittedProject {
+        files: BTreeMap::new(),
+        cargo_toml: "[package]\nname = \"ipe-app\"\n".to_owned(),
+        uses_webview: false,
+    };
+
+    // A symlinked `src/`: pruning it would mass-delete the target.
+    let dir_link = base.join("out-a");
+    crate::output_dir::OwnedDir::claim(&dir_link).expect("claim");
+    std::os::unix::fs::symlink(&victim, dir_link.join("src")).expect("dir link");
+    let result = write_emitted_project(&emitted, &dir_link, &base.join("no-runtime"), None, false);
     assert!(
-        matches!(
-            run_debugger(&["replay".to_owned()]),
-            Err(CliError::Usage(_) | CliError::UsageOwned(_))
-        ),
-        "`replay` with no log must be refused"
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a symlinked src/ must be refused, got {result:?}"
     );
+
+    // A symlinked final file: writing it would overwrite the target.
+    let file_link = base.join("out-b");
+    crate::output_dir::OwnedDir::claim(&file_link).expect("claim");
+    std::os::unix::fs::symlink(victim.join("precious.ipe"), file_link.join("Cargo.toml"))
+        .expect("file link");
+    let result = write_emitted_project(&emitted, &file_link, &base.join("no-runtime"), None, false);
     assert!(
-        matches!(
-            run_debugger(&["replay".to_owned(), "a.log".to_owned(), "b.log".to_owned()]),
-            Err(CliError::Usage(_) | CliError::UsageOwned(_))
-        ),
-        "`replay` with two logs must be refused"
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a symlinked Cargo.toml must be refused, got {result:?}"
     );
+
+    assert_eq!(
+        fs::read_to_string(victim.join("precious.ipe")).unwrap_or_default(),
+        "keep",
+        "the link target survives byte-for-byte"
+    );
+    let _ = fs::remove_dir_all(&base);
 }
 
-// `replay` on a missing log surfaces a typed Io error, never a panic.
+/// A backup keeps the original's permission bits.
+///
+/// An owner-only source never gets a more readable copy.
+#[cfg(unix)]
 #[test]
-fn debugger_replay_missing_log_is_typed_io_error() {
-    let missing =
-        std::env::temp_dir().join(format!("ipe-replay-absent-{}.ipelog", std::process::id()));
-    let err = run_debugger(&["replay".to_owned(), missing.display().to_string()])
-        .expect_err("a missing replay log must be a typed error");
-    assert!(
-        matches!(err, CliError::Io { .. }),
-        "expected a typed Io error for a missing log, got: {err:?}"
+fn backup_preserves_a_private_files_mode() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = user_project("private_backup");
+    let main = dir.join("src").join("Main.ipe");
+    fs::set_permissions(&main, fs::Permissions::from_mode(0o600)).expect("chmod 600");
+    let backup = rewrite_user_file(
+        &main,
+        "module Main exposing (main)\n-- v2\n",
+        RewriteKind::Lossy,
+    )
+    .expect("rewrite");
+    let Some(backup) = backup else {
+        assert!(false_marker(), "a lossy rewrite must report its backup");
+        return;
+    };
+    let mode = fs::metadata(&backup).map_or(0, |m| m.permissions().mode() & 0o777);
+    assert_eq!(mode, 0o600, "the backup must stay owner-only");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A directory walk refuses to rewrite a file that resolves outside the project.
+///
+/// An explicitly named file may still be followed.
+#[cfg(unix)]
+#[test]
+fn walked_rewrite_refuses_a_file_outside_the_project() {
+    let dir = user_project("walk_escape");
+    let outside = dir.with_extension("outside.ipe");
+    fs::write(&outside, "module Other\n").expect("outside file");
+    let link = dir.join("src").join("Other.ipe");
+    std::os::unix::fs::symlink(&outside, &link).expect("link");
+    let result = rewrite_walked_file(
+        &dir,
+        &link,
+        "module Other\n-- evil\n",
+        RewriteKind::Lossless,
     );
+    assert!(
+        matches!(result, Err(CliError::OutputRefused(_))),
+        "a walked file escaping the project must be refused, got {result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(&outside).unwrap_or_default(),
+        "module Other\n"
+    );
+    let _ = fs::remove_file(&outside);
+    let _ = fs::remove_dir_all(&dir);
 }

@@ -53,7 +53,7 @@ ipe release [<path>] [<shape>] [<runtime>] [<host>]
 
 **Flags:**
 
-- `[--out <dir>]` — write the artifact to <dir> (default: release/)
+- `[--out <dir>]` — put the artifact under <dir>/release/ (default: out/ in the project)
 - `[--target wasm|<triple>]` — produce a browser bundle (`wasm`) or a musl-static binary for <triple> (default: x86_64-unknown-linux-musl)
 - `[--emit-permissions <ios|macos|android>]` — read-only: print the OS-permission declarations the app's accepted web capabilities derive on the platform, and build nothing
 - `[--runtime <dir>]` — vendor the Ipê runtime source from <dir>
@@ -232,23 +232,9 @@ Run the language server over stdio.
 ipe lsp
 ```
 
-### `ipe debugger`
-
-Record a cli/worker app's TEA session and replay it as plain text.
-
-```
-ipe debugger <record <Main.ipe> | replay <log>>
-```
-
-**Arguments:** record: build the app with the time-travel debugger compiled in and run it, capturing each (msg, model) step to a bounded log (default: `<Main>.ipelog` beside the entry). replay: re-emit each recorded step as one plain line — off a TTY every control byte is stripped, so a pipe/file receives clean text only. A record/replay surface, not a live scrubber (which cannot be the cli default: it must fail-closed to plain streaming off-TTY).
-
-**Flags:**
-
-- `[--out <log>]` — record: write the session's replay log to <log> (default: `<Main>.ipelog`)
-
 ### `ipe clean`
 
-Remove the project's build-generated output (out/, target/, .ipe/).
+Remove the project's ipe-owned build output (out/, .ipe/).
 
 ```
 ipe clean
@@ -258,21 +244,6 @@ ipe clean
 
 - `[--json]` — emit the result as JSON ({"schema":"ipe.cli.clean/1","removed":[…]})
 - `[--plain]` — print one removed path per line, flush-left
-
-### `ipe migrate`
-
-Convert an interim manifest to the package.ipe record form.
-
-```
-ipe migrate config
-```
-
-**Arguments:** The migration to run. `config` rewrites the interim manifest (a `Package.named |>` package.ipe, or a legacy ipe.toml) as the record form.
-
-**Flags:**
-
-- `[--json]` — emit the migration result as JSON ({"schema":"ipe.cli.migrate/1","action":…,"path":…})
-- `[--plain]` — print a single status line flush-left, no decoration
 
 ### `ipe health`
 
@@ -344,7 +315,7 @@ ipe eject [<path>]
 
 **Flags:**
 
-- `--out <dir>` — write the standalone project to <dir> (required)
+- `--out <dir>` — write the standalone project to <dir>, which must be absent or empty and outside out/, .ipe/ and any other ipe-owned tree (required)
 - `[--runtime <dir>]` — vendor the Ipê runtime source from <dir>
 
 ### `ipe upgrade`
@@ -397,7 +368,7 @@ ipe build [<path>] [<shape>] [<runtime>] [<host>] [<target>]
 
 **Flags:**
 
-- `[--out <dir>]` — write the emitted project to <dir>
+- `[--out <dir>]` — put build output under <dir> (default: out/ in the project)
 - `[--runtime <dir>]` — vendor the Ipê runtime from <dir>
 - `[--emit-ir]` — also emit the intermediate representation
 - `[--fix]` — apply machine-applicable fixes before building
@@ -424,7 +395,7 @@ ipe run [<path>]
 
 **Flags:**
 
-- `[--out <dir>]` — write the emitted project to <dir>
+- `[--out <dir>]` — put build output under <dir> (default: out/ in the project)
 - `[--runtime <dir>]` — vendor the Ipê runtime from <dir>
 - `[--static]` — produce a statically linked binary
 - `[--target <triple>]` — cross-compile to <triple>
@@ -433,6 +404,8 @@ ipe run [<path>]
 - `[--cfree]` — build without linking any C code (incompatible with allocators that require C, e.g. mimalloc)
 - `[--accept-risks]` — accept every disclosed .Unsafe escape-hatch import and proceed without prompting
 - `[--debugger]` — compile the in-app time-travelling debugger overlay into the run app
+- `[--record]` — cli/worker apps: record the TEA session to out/session.ipelog (one plain `<msg> => <model>` line per step) and, when its Msg is encodable, a replayable out/session.ipemsgs
+- `[--replay [<log>]]` — cli/worker apps: re-fold a recorded session (default: out/session.ipemsgs) from init with no Cmd fired, printing each step and the final model; a log from a changed program is refused. A plain trace (.ipelog, the default when no typed log was recorded, e.g. a Msg carrying a Secret) is shown instead, labelled, with every control character stripped and nothing re-run
 - `[-q|--quiet]` — suppress progress chatter; only warnings and errors
 - `[--json]` — emit each diagnostic as a stable JSON object (one per line) instead of the human layout
 - `[-- <args>...]` — forward <args> to the compiled program
@@ -449,7 +422,7 @@ ipe watch [<path>]
 
 **Flags:**
 
-- `[--out <dir>]` — write the emitted project to <dir>
+- `[--out <dir>]` — put build output under <dir> (default: out/ in the project)
 - `[--runtime <dir>]` — vendor the Ipê runtime from <dir>
 - `[--port <n>]` — serve on port <n> (default: 8000)
 - `[--debugger]` — compile the in-app time-travelling debugger overlay into the served app

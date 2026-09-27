@@ -329,7 +329,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the emitted project to <dir>",
+                desc: "put build output under <dir> (default: out/ in the project)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -397,7 +397,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "--out <dir>",
-                desc: "write the standalone project to <dir> (required)",
+                desc: "write the standalone project to <dir>, which must be absent or empty and outside out/, .ipe/ and any other ipe-owned tree (required)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -421,7 +421,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the artifact to <dir> (default: release/)",
+                desc: "put the artifact under <dir>/release/ (default: out/ in the project)",
             },
             Opt {
                 flag: "[--target wasm|<triple>]",
@@ -497,7 +497,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the emitted project to <dir>",
+                desc: "put build output under <dir> (default: out/ in the project)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -530,6 +530,14 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--debugger]",
                 desc: "compile the in-app time-travelling debugger overlay into the run app",
+            },
+            Opt {
+                flag: "[--record]",
+                desc: "cli/worker apps: record the TEA session to out/session.ipelog (one plain `<msg> => <model>` line per step) and, when its Msg is encodable, a replayable out/session.ipemsgs",
+            },
+            Opt {
+                flag: "[--replay [<log>]]",
+                desc: "cli/worker apps: re-fold a recorded session (default: out/session.ipemsgs) from init with no Cmd fired, printing each step and the final model; a log from a changed program is refused. A plain trace (.ipelog, the default when no typed log was recorded, e.g. a Msg carrying a Secret) is shown instead, labelled, with every control character stripped and nothing re-run",
             },
             Opt {
                 flag: "[-q|--quiet]",
@@ -569,7 +577,7 @@ const COMMANDS: &[Command] = &[
         options: &[
             Opt {
                 flag: "[--out <dir>]",
-                desc: "write the emitted project to <dir>",
+                desc: "put build output under <dir> (default: out/ in the project)",
             },
             Opt {
                 flag: "[--runtime <dir>]",
@@ -653,7 +661,7 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "clean",
         run: crate::clean::run_clean,
-        summary: "Remove the project's build-generated output (out/, target/, .ipe/).",
+        summary: "Remove the project's ipe-owned build output (out/, .ipe/).",
         args: "",
         args_desc: "",
         options: &[
@@ -664,24 +672,6 @@ const COMMANDS: &[Command] = &[
             Opt {
                 flag: "[--plain]",
                 desc: "print one removed path per line, flush-left",
-            },
-        ],
-        hidden: false,
-    },
-    Command {
-        name: "migrate",
-        run: crate::migrate::run_migrate,
-        summary: "Convert an interim manifest to the package.ipe record form.",
-        args: "config",
-        args_desc: "The migration to run. `config` rewrites the interim manifest (a `Package.named |>` package.ipe, or a legacy ipe.toml) as the record form.",
-        options: &[
-            Opt {
-                flag: "[--json]",
-                desc: "emit the migration result as JSON ({\"schema\":\"ipe.cli.migrate/1\",\"action\":…,\"path\":…})",
-            },
-            Opt {
-                flag: "[--plain]",
-                desc: "print a single status line flush-left, no decoration",
             },
         ],
         hidden: false,
@@ -882,23 +872,6 @@ const COMMANDS: &[Command] = &[
         hidden: false,
     },
     Command {
-        name: "debugger",
-        run: crate::run_debugger,
-        summary: "Record a cli/worker app's TEA session and replay it as plain text.",
-        args: "<record <Main.ipe> | replay <log>>",
-        args_desc: "record: build the app with the time-travel debugger compiled in and run it, \
-                    capturing each (msg, model) step to a bounded log (default: `<Main>.ipelog` \
-                    beside the entry). replay: re-emit each recorded step as one plain line — \
-                    off a TTY every control byte is stripped, so a pipe/file receives clean text \
-                    only. A record/replay surface, not a live scrubber (which cannot be the cli \
-                    default: it must fail-closed to plain streaming off-TTY).",
-        options: &[Opt {
-            flag: "[--out <log>]",
-            desc: "record: write the session's replay log to <log> (default: `<Main>.ipelog`)",
-        }],
-        hidden: false,
-    },
-    Command {
         name: "upgrade",
         run: crate::run_upgrade,
         summary: "Self-update ipe to the latest release (re-runs the installer).",
@@ -999,9 +972,7 @@ const SECTIONS: &[Section] = &[
             "doc",
             "fmt",
             "lsp",
-            "debugger",
             "clean",
-            "migrate",
             "health",
             "capabilities",
             "diff",
@@ -1712,9 +1683,6 @@ mod tests {
         assert_help_flags_are_accepted("fmt", |a| crate::cli_args::parse_fmt(a).map(|_| ()));
         assert_help_flags_are_accepted("lint", |a| crate::lint::parse_lint_args(a).map(|_| ()));
         assert_help_flags_are_accepted("clean", |a| crate::clean::parse_clean_args(a).map(|_| ()));
-        assert_help_flags_are_accepted("migrate", |a| {
-            crate::migrate::parse_migrate_args(a).map(|_| ())
-        });
     }
 
     /// `help_json` emits valid JSON covering every command and section.
