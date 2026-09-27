@@ -1280,8 +1280,10 @@ messages! {
     output_inside_vcs(out) = "output-inside-vcs";
     /// An output inside an ipe cache namespace.
     output_inside_cache_namespace(out, namespace) = "output-inside-cache-namespace";
-    /// An output whose not-yet-existing tail contains `..`.
+    /// An output with a `..` that does not climb out of a plain existing directory.
     output_parent_traversal(path) = "output-parent-traversal";
+    /// An output that names no single absolute place on every platform.
+    output_unplaceable(path) = "output-unplaceable";
     /// An eject output that is not absent or empty.
     output_not_fresh(path) = "output-not-fresh";
     /// A product path with a component other than a plain name.
@@ -1923,9 +1925,10 @@ mod tests {
     /// No production code spells a user-facing message as a Rust literal.
     ///
     /// Every message sink (`CliError::Usage`, `CliError::Resolve`, and the
-    /// helpers that wrap them) takes its text from a `text::` function, so the rendered text
-    /// and its catalog entry cannot drift. `#[cfg(test)]` items and `tests/`
-    /// directories are exempt: a test fixture is not user-facing text.
+    /// helpers that wrap them) takes its text from a `text::` function, so the
+    /// rendered text and its catalog entry cannot drift. `#[cfg(test)]` items and
+    /// confirmed out-of-line test modules ([`panic_scan::is_verified_test_path`])
+    /// are exempt: a test fixture is not user-facing text.
     #[test]
     fn no_literal_cli_error_usage_outside_the_catalog() {
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1933,7 +1936,10 @@ mod tests {
         assert!(!files.is_empty(), "no sources under {}", src_root.display());
         let mut offenders = Vec::new();
         for path in files {
-            if path.components().any(|c| c.as_os_str() == "tests") {
+            let is_test_module = path
+                .strip_prefix(&src_root)
+                .is_ok_and(|rel| panic_scan::is_verified_test_path(&src_root, rel));
+            if is_test_module {
                 continue;
             }
             let src = std::fs::read_to_string(&path).expect("source is readable");
