@@ -5696,6 +5696,28 @@ mod tests {
         }
     }
 
+    /// Drift-guard for the `wasm-bindgen` pin (SSOT: [`crate_specs::WASM_BINDGEN`]).
+    /// `templates/Cargo.wasm-dep.toml` and this file's own `WASM_CARGO_TOML` each
+    /// embed a literal copy — a TOML file and a raw-string template can't import
+    /// a Rust const — so this is their "assert equality in a test" tripwire
+    /// (SSOT rule): bump `crate_specs::WASM_BINDGEN` and this fails until both
+    /// copies follow. `runtime/rust/Cargo.toml`'s own copy is covered separately
+    /// by `crate_specs::tests::crate_specs_match_manifests`; `commands.rs`'s
+    /// install-hint copy is gone — it reads `WASM_BINDGEN.version` directly.
+    #[test]
+    fn wasm_manifests_pin_the_crate_specs_wasm_bindgen_version() {
+        let pin = format!(r#"wasm-bindgen = "{}""#, crate_specs::WASM_BINDGEN.version);
+        for (name, manifest) in [
+            ("templates/Cargo.wasm-dep.toml", CARGO_WASM_DEP_TOML),
+            ("project.rs WASM_CARGO_TOML", WASM_CARGO_TOML),
+        ] {
+            assert!(
+                manifest.contains(&pin),
+                "{name}: expected `{pin}` (crate_specs::WASM_BINDGEN drift)"
+            );
+        }
+    }
+
     /// The `tokio = { … }` dependency line of `manifest`.
     fn tokio_line(manifest: &str) -> Option<&str> {
         let prefix = format!("{} = {{", crate_specs::TOKIO.name);

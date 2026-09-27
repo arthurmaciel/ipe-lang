@@ -2080,10 +2080,14 @@ pub fn bundle_wasm(out_dir: &Path) -> Result<(), CliError> {
         })?;
     if !wb_status.success() {
         let code = wb_status.code().unwrap_or(1);
+        // SSOT: the pinned version lives in `crate_specs::WASM_BINDGEN`, not a
+        // literal copy here.
+        let ver = ipe_backend_rust::crate_specs::WASM_BINDGEN
+            .version
+            .trim_start_matches('=');
         return Err(CliError::UsageOwned(format!(
             "wasm-bindgen failed (exit {code}); ensure wasm-bindgen-cli {ver} is installed: \
-             cargo install wasm-bindgen-cli --version {ver}",
-            ver = "0.2.126"
+             cargo install wasm-bindgen-cli --version {ver}"
         )));
     }
 

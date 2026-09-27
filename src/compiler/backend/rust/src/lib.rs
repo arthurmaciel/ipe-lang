@@ -18,7 +18,7 @@
 mod capabilities;
 mod const_fold;
 pub use const_fold::fold_program;
-mod crate_specs;
+pub mod crate_specs;
 mod doc;
 mod emit_console;
 mod emit_doc;
