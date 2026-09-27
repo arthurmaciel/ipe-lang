@@ -7,7 +7,7 @@
 
 use std::fmt;
 use std::iter::Peekable;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::str::Chars;
 
 /// Deepest array or inline-table nesting a manifest may use.
@@ -47,10 +47,36 @@ impl ManifestTargets {
     }
 }
 
-/// Whether manifest path `path` has a `tests` component or ends in `tests.rs`.
+/// Whether a written path names test code or is ambiguous about it.
+///
+/// A path names test code when any component is `tests` or its last is
+/// `tests.rs`, compared case-insensitively because a case-insensitive file
+/// system resolves `Tests` to the same directory. A path is ambiguous, and so
+/// judged as test code, when it is empty, is not UTF-8, holds a `\` or `:`
+/// that another platform reads as a separator or drive, or has a component
+/// ending in `.` or a space that Windows silently strips.
 pub fn names_test_code(path: &Path) -> bool {
-    path.components().any(|c| c.as_os_str() == "tests")
-        || path.file_name().is_some_and(|name| name == "tests.rs")
+    let Some(text) = path.to_str() else {
+        return true;
+    };
+    if text.is_empty() || text.contains(['\\', ':']) {
+        return true;
+    }
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        let is_last = components.peek().is_none();
+        let Component::Normal(name) = component else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        if name.ends_with(['.', ' '])
+            || name.eq_ignore_ascii_case("tests")
+            || (is_last && name.eq_ignore_ascii_case("tests.rs"))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Why a manifest cannot be read.
@@ -658,6 +684,71 @@ path = 7
         ] {
             assert!(parse_manifest(src).is_err(), "{src:?} must be refused");
         }
+    }
+
+    #[test]
+    fn ambiguous_or_case_folded_test_paths_name_test_code() {
+        for path in [
+            "",
+            "Tests/lib.rs",
+            "TESTS/lib.rs",
+            "src/Tests.RS",
+            "tests\\lib.rs",
+            "src\\..\\tests\\lib.rs",
+            "C:tests/lib.rs",
+            "c:/src/lib.rs",
+            "tests./lib.rs",
+            "tests /lib.rs",
+            "src/lib.rs.",
+            "src/lib.rs ",
+        ] {
+            assert!(names_test_code(Path::new(path)), "{path:?}");
+        }
+        for path in [
+            "src/lib.rs",
+            "../../runtime/rust/src/path_core.rs",
+            "./src/contests.rs",
+            "src/tests.rs/../lib.rs.bak",
+            "../tests-helper",
+        ] {
+            assert!(!names_test_code(Path::new(path)), "{path:?}");
+        }
+    }
+
+    /// Every `Cargo.toml` under the repository's `src` tree stays inside the
+    /// subset the reader accepts, and none names test code as a production
+    /// target, so the reader never refuses a real crate.
+    #[test]
+    fn every_repository_manifest_parses_and_names_no_test_code() -> std::io::Result<()> {
+        let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+        let mut pending = vec![src_root];
+        let mut seen = 0_usize;
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir)? {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                let path = entry.path();
+                if kind.is_dir() && entry.file_name() != "target" {
+                    pending.push(path);
+                } else if kind.is_file() && entry.file_name() == "Cargo.toml" {
+                    let src = std::fs::read_to_string(&path)?;
+                    let parsed = parse_manifest(&src);
+                    assert!(parsed.is_ok(), "{}: {parsed:?}", path.display());
+                    assert_eq!(
+                        parsed.unwrap_or_default().first_test_path(),
+                        None,
+                        "{}",
+                        path.display()
+                    );
+                    seen = seen.saturating_add(1);
+                }
+            }
+        }
+        assert!(
+            seen > 0,
+            "no manifest found under the repository `src` tree"
+        );
+        Ok(())
     }
 
     #[test]

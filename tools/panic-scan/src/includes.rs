@@ -1,33 +1,24 @@
-//! Production module and include sources that point into test code.
+//! Production module and include sources, and the refusals they can earn.
 //!
-//! Path-based checks skip test code, so a production `#[path = "tests/x.rs"]`
-//! module or `include!("tests/x.rs")` would compile a skipped file into the
-//! production build unaudited. Each such source is judged by its literal as
-//! written, never resolved: a `tests` component or a final `tests.rs` names
-//! test code. A source that is not a plain string literal cannot be judged and
-//! is reported too, so an unreadable source never reads as a safe one.
+//! A production `#[path = "…"]` module or `include!("…")` compiles another file
+//! into the build. Its literal is judged once, as written, into either a legal
+//! source the caller resolves and scans, or a refusal: test code that
+//! path-based checks skip, a value that is not a plain string literal, a
+//! renamed `include`, or a literal that is absolute, ambiguous across
+//! platforms, not Rust, or under an emitted-program `templates` directory. A
+//! source that cannot be judged is refused, so an unreadable source never reads
+//! as a safe one.
 
 use std::fmt;
-use std::path::Path;
-
-use proc_macro2::{Delimiter, Literal, TokenStream, TokenTree};
+use std::path::{Component, Path};
 
 use crate::manifest::names_test_code;
-use crate::{attr_gates_test_only, cfg_pred_is_test_only, split_top_level_commas};
+use crate::test_path::TEMPLATE_DIR;
 
-/// Attribute key that relocates a module's source file.
-const PATH_ATTR: &str = "path";
-
-/// Attribute that applies its trailing attributes under a predicate.
-const CFG_ATTR: &str = "cfg_attr";
-
-/// Macro that splices another file's Rust into the current one.
-const INCLUDE_MACRO: &str = "include";
-
-/// A production source that may pull test code into the build.
+/// A production source refused because it cannot be audited.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestPathInclude {
-    /// 1-based line of the source literal or macro.
+    /// 1-based line of the source literal, macro, or declaration.
     pub line: usize,
     pub form: IncludeForm,
     pub target: IncludeTarget,
@@ -40,15 +31,46 @@ pub enum IncludeForm {
     PathAttr,
     /// `include!("…")`.
     IncludeMacro,
+    /// `mod name;`, resolved by the compiler to `name.rs` or `name/mod.rs`.
+    ModDecl,
 }
 
-/// What an include source names.
+/// Why a production source is refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IncludeTarget {
-    /// A plain string literal naming test code.
+    /// A source naming test code.
     TestPath(String),
     /// A value that is not a plain string literal, so its target is unknown.
     Opaque(String),
+    /// The `include` macro under another name, so its uses cannot be traced.
+    Aliased(String),
+    /// A plain string literal whose target cannot be audited.
+    Refused { path: String, reason: PathRefusal },
+}
+
+/// Why a plain string-literal source cannot be audited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathRefusal {
+    Absolute,
+    Separator,
+    TrailingDotOrSpace,
+    NotRust,
+    EscapesRoot,
+    Template,
+    Missing,
+    InlineModule,
+}
+
+/// A legal production source the caller must resolve and scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncludedSource {
+    /// 1-based line of the source literal or macro.
+    pub line: usize,
+    pub form: IncludeForm,
+    /// The decoded literal, as written.
+    pub literal: String,
+    /// Names of the inline modules enclosing the source, outermost first.
+    pub inline_mods: Vec<String>,
 }
 
 impl fmt::Display for IncludeForm {
@@ -56,6 +78,24 @@ impl fmt::Display for IncludeForm {
         f.write_str(match self {
             Self::PathAttr => "#[path]",
             Self::IncludeMacro => "include!",
+            Self::ModDecl => "mod declaration",
+        })
+    }
+}
+
+impl fmt::Display for PathRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Absolute => "is absolute",
+            Self::Separator => "holds a `\\` or `:` another platform reads as a separator",
+            Self::TrailingDotOrSpace => "has a component ending in `.` or a space",
+            Self::NotRust => "does not name a `.rs` file",
+            Self::EscapesRoot => "escapes the scanned root",
+            Self::Template => "lies under an emitted-program `templates` directory",
+            Self::Missing => "names no existing file",
+            Self::InlineModule => {
+                "relocates an inline module, whose nested paths the scan does not resolve"
+            }
         })
     }
 }
@@ -73,158 +113,80 @@ impl fmt::Display for TestPathInclude {
                 "line {}: production {} source `{value}` is not a plain string literal, so its target is unknown",
                 self.line, self.form
             ),
+            IncludeTarget::Aliased(name) => write!(
+                f,
+                "line {}: production `{name}` is renamed or re-exported, so its includes cannot be traced",
+                self.line
+            ),
+            IncludeTarget::Refused { path, reason } => write!(
+                f,
+                "line {}: production {} source `{path}` {reason}",
+                self.line, self.form
+            ),
         }
     }
 }
 
-/// Every production `#[path]` or `include!` source in `ts` naming test code.
-pub fn test_path_includes(ts: TokenStream, out: &mut Vec<TestPathInclude>) {
-    let toks: Vec<TokenTree> = ts.into_iter().collect();
-    let mut test_only = false;
-    let mut pending: Vec<TestPathInclude> = Vec::new();
-    let mut idx = 0;
-    while let Some(tok) = toks.get(idx) {
-        idx = idx.saturating_add(1);
-        match tok {
-            TokenTree::Punct(p) if p.as_char() == '#' => {
-                let inner = toks.get(idx).is_some_and(|t| is_punct(t, '!'));
-                let attr_at = if inner { idx.saturating_add(1) } else { idx };
-                if let Some(TokenTree::Group(g)) = toks.get(attr_at) {
-                    if g.delimiter() == Delimiter::Bracket {
-                        if inner {
-                            attr_path_sources(&g.stream(), out);
-                        } else {
-                            test_only |= attr_gates_test_only(&g.stream());
-                            attr_path_sources(&g.stream(), &mut pending);
-                        }
-                        idx = attr_at.saturating_add(1);
-                    }
-                }
-            }
-            TokenTree::Punct(p) if p.as_char() == ';' => {
-                end_item(test_only, &mut pending, out);
-                test_only = false;
-            }
-            TokenTree::Ident(id) if id == INCLUDE_MACRO => {
-                if let (Some(bang), Some(TokenTree::Group(args))) =
-                    (toks.get(idx), toks.get(idx.saturating_add(1)))
-                {
-                    if is_punct(bang, '!') && !test_only {
-                        let line = id.span().start().line;
-                        if let Some(target) = judge_source(&args.stream()) {
-                            out.push(TestPathInclude {
-                                line,
-                                form: IncludeForm::IncludeMacro,
-                                target,
-                            });
-                        }
-                    }
-                }
-            }
-            TokenTree::Group(g) => {
-                let skipped = test_only && g.delimiter() == Delimiter::Brace;
-                if !skipped {
-                    test_path_includes(g.stream(), out);
-                }
-                if g.delimiter() == Delimiter::Brace {
-                    end_item(test_only, &mut pending, out);
-                    test_only = false;
-                }
-            }
-            _ => {}
-        }
-    }
-    end_item(test_only, &mut pending, out);
-}
-
-/// Close an item: its `#[path]` sources count unless the item is test-only.
-fn end_item(test_only: bool, pending: &mut Vec<TestPathInclude>, out: &mut Vec<TestPathInclude>) {
-    if test_only {
-        pending.clear();
-    } else {
-        out.append(pending);
-    }
-}
-
-/// Collect the `path = …` sources of attribute body `attr` naming test code.
+/// Judge a decoded source literal as written, before any resolution.
 ///
-/// A `cfg_attr` whose predicate is test-only contributes nothing; any other
-/// `cfg_attr` contributes the sources of every attribute it applies.
-fn attr_path_sources(attr: &TokenStream, out: &mut Vec<TestPathInclude>) {
-    let toks: Vec<TokenTree> = attr.clone().into_iter().collect();
-    match toks.as_slice() {
-        [TokenTree::Ident(key), TokenTree::Punct(eq), value @ ..]
-            if key == PATH_ATTR && eq.as_char() == '=' =>
-        {
-            let value: TokenStream = value.iter().cloned().collect();
-            if let Some(target) = judge_source(&value) {
-                out.push(TestPathInclude {
-                    line: key.span().start().line,
-                    form: IncludeForm::PathAttr,
-                    target,
-                });
-            }
-        }
-        [TokenTree::Ident(key), TokenTree::Group(args)]
-            if key == CFG_ATTR && args.delimiter() == Delimiter::Parenthesis =>
-        {
-            let operands = split_top_level_commas(&args.stream());
-            let Some((pred, applied)) = operands.split_first() else {
-                return;
-            };
-            if !cfg_pred_is_test_only(pred) {
-                for nested in applied {
-                    attr_path_sources(nested, out);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Judge a source value: `None` when it is a plain string naming production code.
-fn judge_source(value: &TokenStream) -> Option<IncludeTarget> {
-    let toks: Vec<TokenTree> = value.clone().into_iter().collect();
-    let decoded = match toks.as_slice() {
-        [TokenTree::Literal(lit)] => plain_string(lit),
-        _ => None,
+/// # Errors
+///
+/// The refusal when the literal is absolute, holds a character another platform
+/// reads as a separator, has a component Windows silently trims, does not name
+/// a `.rs` file, names test code, or lies under a `templates` directory.
+pub fn judge_literal(literal: &str) -> Result<(), IncludeTarget> {
+    let refused = |reason| {
+        Err(IncludeTarget::Refused {
+            path: literal.to_owned(),
+            reason,
+        })
     };
-    decoded.map_or_else(
-        || Some(IncludeTarget::Opaque(value.to_string())),
-        |path| names_test_code(Path::new(&path)).then_some(IncludeTarget::TestPath(path)),
-    )
-}
-
-/// The contents of a string literal with no escapes, raw or plain.
-///
-/// An escaped literal is not decoded: its written form could spell a `tests`
-/// component the undecoded text hides, so it is left opaque.
-fn plain_string(lit: &Literal) -> Option<String> {
-    let text = lit.to_string();
-    let raw = text.strip_prefix('r').map(|rest| rest.trim_matches('#'));
-    let quoted = raw.unwrap_or(&text);
-    let body = quoted.strip_prefix('"')?.strip_suffix('"')?;
-    let escaped = raw.is_none() && body.contains('\\');
-    (!escaped).then(|| body.to_owned())
-}
-
-/// Whether `tok` is the punctuation character `ch`.
-fn is_punct(tok: &TokenTree, ch: char) -> bool {
-    matches!(tok, TokenTree::Punct(p) if p.as_char() == ch)
+    let path = Path::new(literal);
+    if path.has_root() || path.is_absolute() {
+        return refused(PathRefusal::Absolute);
+    }
+    if literal.contains(['\\', ':']) {
+        return refused(PathRefusal::Separator);
+    }
+    let normal = || {
+        path.components().filter_map(|c| match c {
+            Component::Normal(name) => Some(name.to_string_lossy()),
+            Component::Prefix(_)
+            | Component::RootDir
+            | Component::CurDir
+            | Component::ParentDir => None,
+        })
+    };
+    if normal().any(|name| name.ends_with(['.', ' '])) {
+        return refused(PathRefusal::TrailingDotOrSpace);
+    }
+    if path.extension().is_none_or(|ext| ext != "rs") {
+        return refused(PathRefusal::NotRust);
+    }
+    if names_test_code(path) {
+        return Err(IncludeTarget::TestPath(literal.to_owned()));
+    }
+    if normal().any(|name| name.eq_ignore_ascii_case(TEMPLATE_DIR)) {
+        return refused(PathRefusal::Template);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use super::*;
+    use crate::scan_source;
 
     fn includes(src: &str) -> Vec<TestPathInclude> {
-        let ts = TokenStream::from_str(src);
-        assert!(ts.is_ok(), "{src:?} must lex");
-        let mut out = Vec::new();
-        test_path_includes(ts.unwrap_or_default(), &mut out);
-        out
+        let scan = scan_source(src);
+        assert!(scan.is_ok(), "{src:?} must parse: {scan:?}");
+        scan.map(|s| s.test_path_includes).unwrap_or_default()
+    }
+
+    fn sources(src: &str) -> Vec<IncludedSource> {
+        let scan = scan_source(src);
+        assert!(scan.is_ok(), "{src:?} must parse: {scan:?}");
+        scan.map(|s| s.included_sources).unwrap_or_default()
     }
 
     #[test]
@@ -258,7 +220,12 @@ mod tests {
                 "#[cfg(not(test))]\n#[path = \"tests/p.rs\"]\nmod p;",
                 IncludeForm::PathAttr,
             ),
+            (
+                "#[path = \"t\\u{65}sts/p.rs\"]\nmod p;",
+                IncludeForm::PathAttr,
+            ),
             ("include!(\"tests/prod.rs\");", IncludeForm::IncludeMacro),
+            ("include!(\"t\\x65sts/p.rs\");", IncludeForm::IncludeMacro),
             (
                 "fn f() { include!(\"../tests/prod.rs\") }",
                 IncludeForm::IncludeMacro,
@@ -271,6 +238,16 @@ mod tests {
                 "#[cfg(test)]\nuse x;\ninclude!(\"tests/p.rs\");",
                 IncludeForm::IncludeMacro,
             ),
+            (
+                "fn f(x: u8) { match x { #[cfg(test)] 0 => {}, _ => { include!(\"tests/p.rs\"); } } }",
+                IncludeForm::IncludeMacro,
+            ),
+            (
+                "macro_rules! m { () => { include!(\"tests/p.rs\") }; }",
+                IncludeForm::IncludeMacro,
+            ),
+            ("mod tests;", IncludeForm::ModDecl),
+            ("pub mod Tests;", IncludeForm::ModDecl),
         ] {
             let found = includes(src);
             assert!(
@@ -284,9 +261,8 @@ mod tests {
     fn opaque_sources_are_reported() {
         for src in [
             "include!(concat!(\"tests/\", \"p.rs\"));",
-            "include!(\"t\\x65sts/p.rs\");",
-            "#[path = \"t\\u{65}sts/p.rs\"]\nmod p;",
             "#[path = SOME_CONST]\nmod p;",
+            "#[path = \"p.rs\"suffix]\nmod p;",
         ] {
             let found = includes(src);
             assert!(
@@ -296,6 +272,48 @@ mod tests {
                         target: IncludeTarget::Opaque(_),
                         ..
                     }]
+                ),
+                "{src:?} -> {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn renamed_include_is_refused() {
+        for src in [
+            "use core::include as grab;\nfn f() { grab!(\"tests/prod.rs\"); }",
+            "pub use core::include;",
+            "use core::{include as g};",
+        ] {
+            let found = includes(src);
+            assert!(
+                found
+                    .iter()
+                    .any(|i| matches!(&i.target, IncludeTarget::Aliased(_))),
+                "{src:?} -> {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn illegal_literals_are_refused() {
+        for (src, want) in [
+            ("#[path = \"/etc/x.rs\"]\nmod p;", PathRefusal::Absolute),
+            ("include!(\"a\\\\b.rs\");", PathRefusal::Separator),
+            ("include!(\"c:x.rs\");", PathRefusal::Separator),
+            ("include!(\"a./b.rs\");", PathRefusal::TrailingDotOrSpace),
+            ("include!(\"a /b.rs\");", PathRefusal::TrailingDotOrSpace),
+            ("include!(\"table.txt\");", PathRefusal::NotRust),
+            ("include!(\"\");", PathRefusal::NotRust),
+            ("include!(\"templates/x.rs\");", PathRefusal::Template),
+            ("include!(\"a/Templates/x.rs\");", PathRefusal::Template),
+            ("#[path = \"x.rs\"]\nmod m {}", PathRefusal::InlineModule),
+        ] {
+            let found = includes(src);
+            assert!(
+                matches!(
+                    found.as_slice(),
+                    [TestPathInclude { target: IncludeTarget::Refused { reason, .. }, .. }] if *reason == want
                 ),
                 "{src:?} -> {found:?}"
             );
@@ -314,12 +332,31 @@ mod tests {
             "#[cfg_attr(test, path = \"tests/p.rs\")]\nmod p;",
             "#[cfg(test)]\nmod t {\n    include!(\"tests/p.rs\");\n}",
             "#[test]\nfn t() { include!(\"tests/p.rs\"); }",
+            "#[cfg(test)]\nmod tests;",
             "const S: &str = \"include!(\\\"tests/p.rs\\\")\";",
             "include_str!(\"tests/data.txt\");",
+            "use core::include;",
         ] {
             let found = includes(src);
             assert!(found.is_empty(), "{src:?} -> {found:?}");
         }
+    }
+
+    #[test]
+    fn legal_sources_are_handed_to_the_caller() {
+        let found = sources(
+            "mod outer {\n    include!(\"../gen/t.rs\");\n}\n#[path = \"imp/unix.rs\"]\nmod imp;",
+        );
+        assert!(
+            matches!(
+                found.as_slice(),
+                [
+                    IncludedSource { line: 2, form: IncludeForm::IncludeMacro, literal: a, inline_mods: m },
+                    IncludedSource { line: 4, form: IncludeForm::PathAttr, literal: b, inline_mods: n },
+                ] if a == "../gen/t.rs" && m == &["outer"] && b == "imp/unix.rs" && n.is_empty()
+            ),
+            "{found:?}"
+        );
     }
 
     #[test]

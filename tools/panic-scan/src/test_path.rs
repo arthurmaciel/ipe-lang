@@ -11,21 +11,25 @@
 //! the production build while every path-based check skipped it.
 //! [`check_test_path`] confirms the premise on disk and fails closed otherwise:
 //!
-//! * an integration-test directory sits beside a `Cargo.toml` whose explicit
-//!   production targets ([`check_manifest`]) name no test code, and no module
-//!   file beside it declares the directory as a production module;
-//! * any other test module is declared `mod tests;` under a test-only `cfg` by
-//!   a sibling module file, every declaration there is test-only, and no other
-//!   production item in that file names `tests`.
+//! * a `tests` directory or `tests.rs` under a `bin` directory is an
+//!   automatically discovered production binary, never test code;
+//! * every Rust file beside the test module (and the module file of the
+//!   directory holding it) is free of production items that declare, name, or
+//!   include test code;
+//! * then either an integration-test directory sits beside a `Cargo.toml` whose
+//!   explicit production targets ([`check_manifest`]) name no test code, or some
+//!   file beside it declares `mod tests;` under a test-only `cfg`.
 
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
-use std::str::FromStr;
 
-use proc_macro2::{Delimiter, Ident, TokenStream, TokenTree};
+use proc_macro2::{Ident, TokenStream, TokenTree};
+use syn::ext::IdentExt;
+use syn::visit::{self, Visit};
+use syn::{Expr, ForeignItem, ImplItem, Item, Pat, TraitItem, Type, TypeParamBound};
 
-use crate::cfg_pred_is_test_only;
-use crate::manifest::{ManifestError, parse_manifest};
+use crate::manifest::{ManifestError, names_test_code, parse_manifest};
+use crate::{item_test_only, scan_file};
 
 /// Directory name of a crate's integration tests or an out-of-line test module.
 const TEST_DIR: &str = "tests";
@@ -34,13 +38,13 @@ const TEST_DIR: &str = "tests";
 const TEST_MODULE_FILE: &str = "tests.rs";
 
 /// Directory name of the emitted-program Rust copied into generated binaries.
-const TEMPLATE_DIR: &str = "templates";
+pub(crate) const TEMPLATE_DIR: &str = "templates";
 
 /// File name of a crate manifest.
 const MANIFEST_FILE: &str = "Cargo.toml";
 
-/// Module files that may declare a child module living in directory `dir`.
-const DECLARING_FILES_IN_DIR: &[&str] = &["mod.rs", "lib.rs", "main.rs"];
+/// Directory whose Rust files and subdirectories Cargo builds as binaries.
+const AUTO_BIN_DIR: &str = "bin";
 
 /// Whether `rel` names test code.
 ///
@@ -75,49 +79,65 @@ pub fn is_verified_test_path(root: &Path, rel: &Path) -> bool {
 /// Confirm that test path `rel` (relative to `root`) is compiled only for tests.
 ///
 /// A path that is not a test path is trivially `Ok`. Otherwise the outermost
-/// `tests` directory (or the `tests.rs` file) is judged by the module files
-/// beside it — `<dir>/mod.rs`, `<dir>/lib.rs`, `<dir>/main.rs`, `<dir>.rs` —
-/// and, for a directory, the `Cargo.toml` beside it. Every candidate module
-/// file must be free of production declarations of `tests`; then either the
-/// manifest's explicit production targets name no test code, or some candidate
-/// declares `mod tests;` under a test-only `cfg`.
+/// `tests` directory (or the `tests.rs` file) is judged by the directory `dir`
+/// holding it: every non-test Rust file in `dir`, and `<dir>.rs`, must be free
+/// of production items that declare, name, or include test code; then either
+/// the `Cargo.toml` in `dir` names no test code as a production target, or some
+/// of those files declares `mod tests;` under a test-only `cfg`.
 ///
 /// # Errors
 ///
-/// [`TestPathError`] when no module file declares the test module, when a
-/// production item declares or names it, when the manifest names test code as
-/// a production target, or when a candidate file cannot be read or parsed.
+/// [`TestPathError`] when the marker sits in a `bin` directory, when no file
+/// declares the test module, when a production item reaches it, when the
+/// manifest names test code as a production target, or when a candidate file
+/// or directory cannot be read or parsed.
 pub fn check_test_path(root: &Path, rel: &Path) -> Result<(), TestPathError> {
     let Some(marker) = test_marker(rel) else {
         return Ok(());
     };
+    let in_bin_dir = marker
+        .declaring_dir
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(AUTO_BIN_DIR));
+    if in_bin_dir {
+        return Err(TestPathError::AutoBinary {
+            path: root.join(rel),
+        });
+    }
     let dir = root.join(&marker.declaring_dir);
     let mut declared = false;
-    for file in declaring_candidates(&dir) {
-        if !file.is_file() {
-            continue;
-        }
+    for file in declaring_candidates(&dir)? {
         let src = std::fs::read_to_string(&file).map_err(|error| TestPathError::Unreadable {
             file: file.clone(),
             error,
         })?;
-        match tests_declaration(&src) {
-            Ok(Declaration::Absent) => {}
-            Ok(Declaration::TestOnly) => declared = true,
-            Ok(Declaration::Ungated(by)) => {
+        let parsed = syn::parse_file(&src).map_err(|error| TestPathError::Unparseable {
+            file: file.clone(),
+            error,
+        })?;
+        match tests_declaration(&parsed) {
+            Declaration::Absent => {}
+            Declaration::TestOnly => declared = true,
+            Declaration::Ungated(by) => {
                 return Err(TestPathError::Ungated {
                     declaring_file: file,
                     by,
                 });
             }
-            Err(error) => return Err(TestPathError::Unlexable { file, error }),
+        }
+        if !scan_file(&parsed, &src).test_path_includes.is_empty() {
+            return Err(TestPathError::Ungated {
+                declaring_file: file,
+                by: UngatedBy::IncludesTestCode,
+            });
         }
     }
     let manifest = dir.join(MANIFEST_FILE);
-    if marker.kind == MarkerKind::Directory && manifest.is_file() {
-        return check_manifest(&manifest);
+    let has_manifest = marker.kind == MarkerKind::Directory && manifest.is_file();
+    if has_manifest {
+        check_manifest(&manifest)?;
     }
-    if declared {
+    if has_manifest || declared {
         Ok(())
     } else {
         Err(TestPathError::Undeclared {
@@ -157,23 +177,22 @@ pub fn check_manifest(manifest: &Path) -> Result<(), TestPathError> {
 /// Why a test path's test-only premise does not hold.
 #[derive(Debug)]
 pub enum TestPathError {
-    /// No module file beside the test module declares `mod tests;`.
+    /// No file beside the test module declares `mod tests;`.
     Undeclared { test_module: PathBuf },
     /// `declaring_file` reaches the test module from production code.
     Ungated {
         declaring_file: PathBuf,
         by: UngatedBy,
     },
-    /// A candidate declaring file or manifest could not be read.
+    /// The test module sits in a `bin` directory, so Cargo builds it as a binary.
+    AutoBinary { path: PathBuf },
+    /// A candidate declaring file, its directory, or a manifest could not be read.
     Unreadable {
         file: PathBuf,
         error: std::io::Error,
     },
-    /// A candidate declaring file does not lex as Rust tokens.
-    Unlexable {
-        file: PathBuf,
-        error: proc_macro2::LexError,
-    },
+    /// A candidate declaring file does not parse as a Rust file.
+    Unparseable { file: PathBuf, error: syn::Error },
     /// A manifest leaves the TOML subset the target reader accepts.
     ManifestUnparseable {
         manifest: PathBuf,
@@ -192,6 +211,8 @@ pub enum UngatedBy {
     MacroNamingTests,
     /// Any other production item whose tokens name `tests`.
     ItemNamingTests,
+    /// A production `#[path]` or `include!` that names test code or cannot be judged.
+    IncludesTestCode,
 }
 
 impl fmt::Display for UngatedBy {
@@ -200,6 +221,9 @@ impl fmt::Display for UngatedBy {
             Self::PlainMod => "declares `mod tests;` without `#[cfg(test)]`",
             Self::MacroNamingTests => "invokes a production macro that names `tests`",
             Self::ItemNamingTests => "has a production item that names `tests`",
+            Self::IncludesTestCode => {
+                "has a production `#[path]` or `include!` that names test code or cannot be judged"
+            }
         })
     }
 }
@@ -217,11 +241,16 @@ impl fmt::Display for TestPathError {
                 "{}: {by}, so its test module may compile into production",
                 declaring_file.display()
             ),
+            Self::AutoBinary { path } => write!(
+                f,
+                "{}: a `bin` directory entry is a production binary, not test code",
+                path.display()
+            ),
             Self::Unreadable { file, error } => {
                 write!(f, "{}: cannot read ({error})", file.display())
             }
-            Self::Unlexable { file, error } => {
-                write!(f, "{}: could not lex ({error})", file.display())
+            Self::Unparseable { file, error } => {
+                write!(f, "{}: does not parse as Rust ({error})", file.display())
             }
             Self::ManifestUnparseable { manifest, error } => {
                 write!(
@@ -288,16 +317,40 @@ fn test_marker(rel: &Path) -> Option<TestMarker> {
     None
 }
 
-/// Module files that may declare `mod tests;` for a test module inside `dir`.
-fn declaring_candidates(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = DECLARING_FILES_IN_DIR
-        .iter()
-        .map(|name| dir.join(name))
-        .collect();
-    if dir.file_name().is_some() {
-        files.push(dir.with_extension("rs"));
+/// Files that may declare or reach a test module inside `dir`.
+///
+/// Every Rust file directly in `dir` except test code itself, plus `<dir>.rs`,
+/// in path order. A missing `dir` has no candidates.
+fn declaring_candidates(dir: &Path) -> Result<Vec<PathBuf>, TestPathError> {
+    let unreadable = |error| TestPathError::Unreadable {
+        file: dir.to_path_buf(),
+        error,
+    };
+    let mut files = Vec::new();
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            for entry in entries {
+                let path = entry.map_err(unreadable)?.path();
+                let rust = path.extension().is_some_and(|ext| ext == "rs");
+                let test_code = path
+                    .file_name()
+                    .is_some_and(|name| names_test_code(Path::new(name)));
+                if rust && !test_code && path.is_file() {
+                    files.push(path);
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(unreadable(error)),
     }
-    files
+    if dir.file_name().is_some() {
+        let module_file = dir.with_extension("rs");
+        if module_file.is_file() {
+            files.push(module_file);
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 /// How a module file reaches its `tests` child module.
@@ -311,190 +364,149 @@ enum Declaration {
     Ungated(UngatedBy),
 }
 
-/// Classify every top-level item of `src` that reaches a `tests` module.
+/// Classify every top-level item of `file` that reaches a `tests` module.
 ///
 /// Every item counts, not only the first: one test-only `mod tests;` never
 /// excuses a sibling production item that also declares or names `tests`.
-fn tests_declaration(src: &str) -> Result<Declaration, proc_macro2::LexError> {
+/// Names compare case-insensitively, since a case-insensitive file system
+/// resolves `mod Tests;` to a `tests` directory.
+fn tests_declaration(file: &syn::File) -> Declaration {
+    let mut file_names = NamesTests::default();
+    for attr in &file.attrs {
+        file_names.visit_attribute(attr);
+    }
+    if file_names.0 {
+        return Declaration::Ungated(UngatedBy::ItemNamingTests);
+    }
     let mut declared = false;
-    for item in items(TokenStream::from_str(src)?) {
-        if item.attrs.iter().any(attr_is_test_cfg) {
-            declared |= matches!(&item.kind, ItemKind::ModDecl(name) if name == TEST_DIR);
-            continue;
-        }
-        let by = match item.kind {
-            ItemKind::ModDecl(name) if name == TEST_DIR => Some(UngatedBy::PlainMod),
-            ItemKind::MacroCall if item.names_tests => Some(UngatedBy::MacroNamingTests),
-            _ if item.names_tests => Some(UngatedBy::ItemNamingTests),
+    for item in &file.items {
+        let out_of_line_mod = match item {
+            Item::Mod(m) if m.content.is_none() => Some(m.ident.unraw().to_string()),
             _ => None,
         };
-        if let Some(by) = by {
-            return Ok(Declaration::Ungated(by));
+        if item_test_only(item) {
+            declared |= out_of_line_mod.as_deref() == Some(TEST_DIR);
+            continue;
+        }
+        if out_of_line_mod.is_some_and(|name| name.eq_ignore_ascii_case(TEST_DIR)) {
+            return Declaration::Ungated(UngatedBy::PlainMod);
+        }
+        let mut names = NamesTests::default();
+        names.visit_item(item);
+        if names.0 {
+            return Declaration::Ungated(match item {
+                Item::Macro(_) => UngatedBy::MacroNamingTests,
+                _ => UngatedBy::ItemNamingTests,
+            });
         }
     }
-    Ok(if declared {
+    if declared {
         Declaration::TestOnly
     } else {
         Declaration::Absent
+    }
+}
+
+/// Whether an identifier names `tests`, ignoring case and a raw `r#` prefix.
+fn ident_names_tests(ident: &Ident) -> bool {
+    ident.unraw().to_string().eq_ignore_ascii_case(TEST_DIR)
+}
+
+/// Whether any token in `stream`, at any depth, is an identifier naming `tests`.
+fn stream_names_tests(stream: &TokenStream) -> bool {
+    stream.clone().into_iter().any(|tok| match tok {
+        TokenTree::Ident(id) => ident_names_tests(&id),
+        TokenTree::Group(g) => stream_names_tests(&g.stream()),
+        TokenTree::Punct(_) | TokenTree::Literal(_) => false,
     })
 }
 
-/// One top-level item: its outer attributes and what it is.
-#[derive(Debug)]
-struct Item {
-    /// Bracket bodies of the item's outer `#[…]` attributes.
-    attrs: Vec<TokenStream>,
-    kind: ItemKind,
-    /// Whether any token of the item, attributes included, is the identifier `tests`.
-    names_tests: bool,
+/// Visitor recording whether any identifier or token names `tests`.
+#[derive(Default)]
+struct NamesTests(bool);
+
+impl NamesTests {
+    fn tokens(&mut self, stream: &TokenStream) {
+        self.0 |= stream_names_tests(stream);
+    }
 }
 
-/// The shape of a top-level item, as far as test-module reachability needs.
-#[derive(Debug, PartialEq, Eq)]
-enum ItemKind {
-    /// `[pub[(…)]] mod <name>;`, the name unraw.
-    ModDecl(String),
-    /// A macro invocation or `macro_rules!` definition.
-    MacroCall,
-    /// Anything else, inner attributes included.
-    Other,
-}
+impl<'ast> Visit<'ast> for NamesTests {
+    fn visit_ident(&mut self, ident: &'ast Ident) {
+        self.0 |= ident_names_tests(ident);
+    }
 
-/// Split a file's token stream into top-level items.
-///
-/// An item is its outer attributes followed by body tokens up to and including
-/// a top-level `;` or brace group. An inner attribute `#![…]` is an item of its
-/// own with no outer attributes.
-fn items(stream: TokenStream) -> Vec<Item> {
-    let mut items = Vec::new();
-    let mut attrs: Vec<TokenStream> = Vec::new();
-    let mut body: Vec<TokenTree> = Vec::new();
-    let mut toks = stream.into_iter().peekable();
-    while let Some(tok) = toks.next() {
-        if body.is_empty() && is_punct(&tok, '#') {
-            if let Some(TokenTree::Group(g)) = toks.peek() {
-                if g.delimiter() == Delimiter::Bracket {
-                    attrs.push(g.stream());
-                    toks.next();
-                    continue;
-                }
-            }
-            if toks.peek().is_some_and(|t| is_punct(t, '!')) {
-                let bang = toks.next();
-                let inner: TokenStream = [Some(tok), bang, toks.next()]
-                    .into_iter()
-                    .flatten()
-                    .collect();
-                items.push(Item {
-                    attrs: Vec::new(),
-                    kind: ItemKind::Other,
-                    names_tests: stream_names_tests(inner),
-                });
-                continue;
-            }
-        }
-        let ends_item = is_punct(&tok, ';')
-            || matches!(&tok, TokenTree::Group(g) if g.delimiter() == Delimiter::Brace);
-        body.push(tok);
-        if ends_item {
-            items.push(finish_item(
-                std::mem::take(&mut attrs),
-                std::mem::take(&mut body),
-            ));
+    fn visit_token_stream(&mut self, stream: &'ast TokenStream) {
+        self.tokens(stream);
+    }
+
+    fn visit_item(&mut self, item: &'ast Item) {
+        match item {
+            Item::Verbatim(ts) => self.tokens(ts),
+            _ => visit::visit_item(self, item),
         }
     }
-    if !(attrs.is_empty() && body.is_empty()) {
-        items.push(finish_item(attrs, body));
-    }
-    items
-}
 
-/// Build an [`Item`] from its outer attributes and body tokens.
-fn finish_item(attrs: Vec<TokenStream>, body: Vec<TokenTree>) -> Item {
-    let names_tests =
-        attrs.iter().cloned().any(stream_names_tests) || body.iter().cloned().any(tree_names_tests);
-    Item {
-        kind: item_kind(&body),
-        attrs,
-        names_tests,
-    }
-}
-
-/// Classify an item body.
-fn item_kind(body: &[TokenTree]) -> ItemKind {
-    let rest = strip_visibility(body);
-    if let [
-        TokenTree::Ident(kw),
-        TokenTree::Ident(name),
-        TokenTree::Punct(semi),
-    ] = rest
-    {
-        if kw == "mod" && semi.as_char() == ';' {
-            return ItemKind::ModDecl(unraw(name));
+    fn visit_impl_item(&mut self, item: &'ast ImplItem) {
+        match item {
+            ImplItem::Verbatim(ts) => self.tokens(ts),
+            _ => visit::visit_impl_item(self, item),
         }
     }
-    let invokes_macro = rest
-        .windows(2)
-        .any(|pair| matches!(pair, [TokenTree::Ident(_), TokenTree::Punct(bang)] if bang.as_char() == '!'));
-    if invokes_macro {
-        ItemKind::MacroCall
-    } else {
-        ItemKind::Other
-    }
-}
 
-/// Drop a leading `pub` or `pub(…)` from an item body.
-fn strip_visibility(body: &[TokenTree]) -> &[TokenTree] {
-    match body {
-        [TokenTree::Ident(vis), TokenTree::Group(g), rest @ ..]
-            if vis == "pub" && g.delimiter() == Delimiter::Parenthesis =>
-        {
-            rest
+    fn visit_trait_item(&mut self, item: &'ast TraitItem) {
+        match item {
+            TraitItem::Verbatim(ts) => self.tokens(ts),
+            _ => visit::visit_trait_item(self, item),
         }
-        [TokenTree::Ident(vis), rest @ ..] if vis == "pub" => rest,
-        _ => body,
     }
-}
 
-/// Whether attribute body `attr` is `cfg(P)` with a test-only predicate `P`.
-fn attr_is_test_cfg(attr: &TokenStream) -> bool {
-    let toks: Vec<TokenTree> = attr.clone().into_iter().collect();
-    matches!(
-        toks.as_slice(),
-        [TokenTree::Ident(id), TokenTree::Group(g)]
-            if id == "cfg" && g.delimiter() == Delimiter::Parenthesis && cfg_pred_is_test_only(&g.stream())
-    )
-}
+    fn visit_foreign_item(&mut self, item: &'ast ForeignItem) {
+        match item {
+            ForeignItem::Verbatim(ts) => self.tokens(ts),
+            _ => visit::visit_foreign_item(self, item),
+        }
+    }
 
-/// Whether `tok` is the punctuation character `ch`.
-fn is_punct(tok: &TokenTree, ch: char) -> bool {
-    matches!(tok, TokenTree::Punct(p) if p.as_char() == ch)
-}
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        match expr {
+            Expr::Verbatim(ts) => self.tokens(ts),
+            _ => visit::visit_expr(self, expr),
+        }
+    }
 
-/// An identifier's name without a raw `r#` prefix.
-fn unraw(id: &Ident) -> String {
-    let name = id.to_string();
-    name.strip_prefix("r#")
-        .map_or_else(|| name.clone(), str::to_owned)
-}
+    fn visit_pat(&mut self, pat: &'ast Pat) {
+        match pat {
+            Pat::Verbatim(ts) => self.tokens(ts),
+            _ => visit::visit_pat(self, pat),
+        }
+    }
 
-/// Whether any token in `stream`, at any depth, is the identifier `tests`.
-fn stream_names_tests(stream: TokenStream) -> bool {
-    stream.into_iter().any(tree_names_tests)
-}
+    fn visit_type(&mut self, ty: &'ast Type) {
+        match ty {
+            Type::Verbatim(ts) => self.tokens(ts),
+            _ => visit::visit_type(self, ty),
+        }
+    }
 
-/// Whether token `tok`, or any token nested in it, is the identifier `tests`.
-fn tree_names_tests(tok: TokenTree) -> bool {
-    match tok {
-        TokenTree::Ident(id) => unraw(&id) == TEST_DIR,
-        TokenTree::Group(g) => stream_names_tests(g.stream()),
-        TokenTree::Punct(_) | TokenTree::Literal(_) => false,
+    fn visit_type_param_bound(&mut self, bound: &'ast TypeParamBound) {
+        match bound {
+            TypeParamBound::Verbatim(ts) => self.tokens(ts),
+            _ => visit::visit_type_param_bound(self, bound),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The declaration class of `src`, or `None` when it does not parse.
+    fn declaration(src: &str) -> Option<Declaration> {
+        syn::parse_file(src)
+            .ok()
+            .map(|file| tests_declaration(&file))
+    }
 
     #[test]
     fn test_directories_and_module_files_are_test_paths() {
@@ -521,6 +533,7 @@ mod tests {
             "src/lib.rs",
             "tests",
             "src/tests.rs.bak",
+            "src/Tests/a.rs",
             "",
         ] {
             assert!(!is_test_path(Path::new(rel)), "{rel} must be production");
@@ -565,11 +578,7 @@ mod tests {
             "#[cfg(test)]\nmod r#tests;",
             "#[cfg(test)]\nmod tests;\n#[cfg(test)]\nuse tests::helper;",
         ] {
-            assert_eq!(
-                tests_declaration(src).ok(),
-                Some(Declaration::TestOnly),
-                "{src:?}"
-            );
+            assert_eq!(declaration(src), Some(Declaration::TestOnly), "{src:?}");
         }
     }
 
@@ -579,6 +588,7 @@ mod tests {
             "mod tests;",
             "pub mod tests;",
             "pub mod r#tests;",
+            "pub mod Tests;",
             "#[cfg(any(test, feature = \"x\"))]\nmod tests;",
             "#[cfg(not(test))]\nmod tests;",
             "#[cfg(test)]\nuse x;\nmod tests;",
@@ -587,7 +597,7 @@ mod tests {
             "#[test]\nmod tests;",
         ] {
             assert_eq!(
-                tests_declaration(src).ok(),
+                declaration(src),
                 Some(Declaration::Ungated(UngatedBy::PlainMod)),
                 "{src:?}"
             );
@@ -602,7 +612,7 @@ mod tests {
             "#[cfg(test)]\nmod tests;\n#[cfg(feature = \"x\")]\npub mod tests;",
         ] {
             assert_eq!(
-                tests_declaration(src).ok(),
+                declaration(src),
                 Some(Declaration::Ungated(UngatedBy::PlainMod)),
                 "{src:?}"
             );
@@ -633,11 +643,7 @@ mod tests {
                 UngatedBy::ItemNamingTests,
             ),
         ] {
-            assert_eq!(
-                tests_declaration(src).ok(),
-                Some(Declaration::Ungated(by)),
-                "{src:?}"
-            );
+            assert_eq!(declaration(src), Some(Declaration::Ungated(by)), "{src:?}");
         }
     }
 
@@ -650,11 +656,7 @@ mod tests {
             "/// The tests live elsewhere.\nfn f() {}",
             "const S: &str = \"tests\";",
         ] {
-            assert_eq!(
-                tests_declaration(src).ok(),
-                Some(Declaration::Absent),
-                "{src:?}"
-            );
+            assert_eq!(declaration(src), Some(Declaration::Absent), "{src:?}");
         }
     }
 
@@ -685,6 +687,7 @@ mod tests {
         if root.exists() {
             std::fs::remove_dir_all(&root)?;
         }
+        std::fs::create_dir_all(&root)?;
         for (rel, contents) in files {
             let path = root.join(rel);
             if let Some(parent) = path.parent() {
@@ -706,15 +709,45 @@ mod tests {
         std::fs::remove_dir_all(root)
     }
 
+    /// A directory whose listing is denied fails closed; the same crate with a
+    /// readable directory passes, so the refusal is caused by the denial alone.
+    #[cfg(unix)]
     #[test]
-    fn an_unlexable_declaring_file_fails_closed() -> std::io::Result<()> {
+    fn an_unreadable_declaring_directory_fails_closed() -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let root = scratch_crate(
-            "unlexable",
-            &[("lib.rs", b"#[cfg(test)]\nmod tests;\n\"open")],
+            "unreadable-dir",
+            &[
+                ("src/lib.rs", b"#[cfg(test)]\nmod tests;\n"),
+                ("src/tests/a.rs", b"fn t() {}\n"),
+            ],
+        )?;
+        let rel = Path::new("src/tests/a.rs");
+        let readable = check_test_path(&root, rel);
+        assert!(readable.is_ok(), "{readable:?}");
+        let src = root.join("src");
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o300))?;
+        let listing_denied = std::fs::read_dir(&src).is_err();
+        let result = check_test_path(&root, rel);
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755))?;
+        if listing_denied {
+            assert!(
+                matches!(result, Err(TestPathError::Unreadable { .. })),
+                "{result:?}"
+            );
+        }
+        std::fs::remove_dir_all(root)
+    }
+
+    #[test]
+    fn an_unparseable_declaring_file_fails_closed() -> std::io::Result<()> {
+        let root = scratch_crate(
+            "unparseable",
+            &[("lib.rs", b"#[cfg(test)]\nmod tests;\nfn f( {")],
         )?;
         let result = check_test_path(&root, Path::new("tests/a.rs"));
         assert!(
-            matches!(result, Err(TestPathError::Unlexable { .. })),
+            matches!(result, Err(TestPathError::Unparseable { .. })),
             "{result:?}"
         );
         std::fs::remove_dir_all(root)
@@ -753,6 +786,7 @@ mod tests {
                     b"[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
                 ),
                 ("src/lib.rs", b"pub fn f() {}\n"),
+                ("build.rs", b"fn main() {}\n"),
             ],
         )?;
         let result = check_test_path(&root, Path::new("tests/cli.rs"));
@@ -795,29 +829,71 @@ mod tests {
         std::fs::remove_dir_all(root)
     }
 
+    /// Every Rust file beside a manifest is a candidate, whatever its name.
     #[test]
     fn a_manifest_does_not_excuse_a_production_declaration() -> std::io::Result<()> {
+        for (name, file) in [
+            ("manifest-ungated-lib", "lib.rs"),
+            ("manifest-ungated-build", "build.rs"),
+            ("manifest-ungated-other", "helper.rs"),
+        ] {
+            let root = scratch_crate(
+                name,
+                &[
+                    ("Cargo.toml", b"[package]\nname = \"x\"\n"),
+                    (file, b"pub mod tests;\n"),
+                ],
+            )?;
+            let result = check_test_path(&root, Path::new("tests/mod.rs"));
+            assert!(
+                matches!(
+                    result,
+                    Err(TestPathError::Ungated {
+                        by: UngatedBy::PlainMod,
+                        ..
+                    })
+                ),
+                "{name}: {result:?}"
+            );
+            std::fs::remove_dir_all(root)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_production_include_of_test_code_is_ungated() -> std::io::Result<()> {
         let root = scratch_crate(
-            "manifest-ungated",
+            "includes-tests",
             &[
                 (
-                    "Cargo.toml",
-                    b"[package]\nname = \"x\"\n\n[lib]\npath = \"lib.rs\"\n",
+                    "src/lib.rs",
+                    b"#[cfg(test)]\nmod tests;\n#[path = \"tests/x.rs\"]\nmod foo;\n",
                 ),
-                ("lib.rs", b"pub mod tests;\n"),
+                ("src/tests/x.rs", b"fn t() {}\n"),
             ],
         )?;
-        let result = check_test_path(&root, Path::new("tests/mod.rs"));
+        let result = check_test_path(&root, Path::new("src/tests/x.rs"));
         assert!(
             matches!(
                 result,
                 Err(TestPathError::Ungated {
-                    by: UngatedBy::PlainMod,
+                    by: UngatedBy::IncludesTestCode,
                     ..
                 })
             ),
             "{result:?}"
         );
         std::fs::remove_dir_all(root)
+    }
+
+    #[test]
+    fn a_bin_directory_tests_entry_is_a_binary() {
+        for rel in ["src/bin/tests.rs", "src/bin/tests/main.rs"] {
+            let result = check_test_path(Path::new("/nonexistent"), Path::new(rel));
+            assert!(
+                matches!(result, Err(TestPathError::AutoBinary { .. })),
+                "{rel}: {result:?}"
+            );
+        }
     }
 }

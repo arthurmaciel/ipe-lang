@@ -982,7 +982,7 @@ fn scan_author_ffi_rust(prepared: &Prepared) -> Result<Option<LocatedHit>, CliEr
 ///
 /// # Errors
 /// [`CliError::Io`] on a file-read failure; [`CliError::PackageAudit`] when
-/// the file does not lex as Rust tokens.
+/// the file does not parse as Rust.
 fn first_hit(file: &Path) -> Result<Option<LocatedHit>, CliError> {
     let src =
         crate::io_bounded::read_to_string_capped(file, crate::io_bounded::FFI_CACHE_READ_CAP)?;
@@ -990,7 +990,7 @@ fn first_hit(file: &Path) -> Result<Option<LocatedHit>, CliError> {
         reject(
             Check::Provenance,
             format!(
-                "emitted `{}` does not lex as Rust tokens — the no-panic audit cannot attest \
+                "emitted `{}` does not parse as Rust — the no-panic audit cannot attest \
                  its content; the file is refused rather than admitted",
                 file.display()
             ),
