@@ -8493,88 +8493,77 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
     }
 }
 
-/// `true` when `expr` constructs or matches a `SqlValue` / `SqlField` value —
-/// i.e. it names one of those built-in enums as a first-class value rather than
-/// only threading it through a Db kernel. Drives the synthetic-enum injection so
-/// a module that builds bound binds from the `SqlString`/`SqlInt`/… constructors
-/// (with no Db kernel call) still gets the concrete Rust enum emitted.
+/// `true` when `expr` constructs or matches a value of one of the Prelude `enums`.
 ///
-/// Checks every `Expr::Ctor` head and every `case` arm's `Pat::Ctor` head for
-/// the `SqlValue` / `SqlField` type symbol, recursing structurally over the same
-/// child positions the kernel-usage scan walks.
-fn expr_constructs_sqlvalue(expr: &Expr, sqlvalue: Symbol, sqlfield: Symbol) -> bool {
-    let is_sql = |ty: Symbol| ty == sqlvalue || ty == sqlfield;
+/// The Prelude enums are the synthesized `SqlValue` / `SqlField` /
+/// `ProjectionTerm` / `ProjectionOperand` / `ArithOp` (empty home). Naming one
+/// as a first-class value rather than only threading it through a Db kernel
+/// still needs the concrete Rust enum emitted, so this drives the
+/// synthetic-enum injection.
+///
+/// Checks every `Expr::Ctor` head and every `case` arm's `Pat::Ctor` head,
+/// recursing structurally over the same child positions the kernel-usage scan
+/// walks.
+fn expr_constructs_sqlvalue(expr: &Expr, enums: &[Symbol]) -> bool {
+    let is_sql = |home: &ModPath, ty: Symbol| home.0.is_empty() && enums.contains(&ty);
     match expr {
-        Expr::Ctor { ty, args, .. } => {
-            is_sql(*ty)
-                || args
-                    .iter()
-                    .any(|a| expr_constructs_sqlvalue(a, sqlvalue, sqlfield))
+        Expr::Ctor { home, ty, args, .. } => {
+            is_sql(home, *ty) || args.iter().any(|a| expr_constructs_sqlvalue(a, enums))
         }
-        Expr::TailRecur { args } => args
-            .iter()
-            .any(|a| expr_constructs_sqlvalue(a, sqlvalue, sqlfield)),
-        Expr::Call { args, .. } => args
-            .iter()
-            .any(|a| expr_constructs_sqlvalue(a, sqlvalue, sqlfield)),
+        Expr::TailRecur { args } => args.iter().any(|a| expr_constructs_sqlvalue(a, enums)),
+        Expr::Call { args, .. } => args.iter().any(|a| expr_constructs_sqlvalue(a, enums)),
         Expr::Apply { func, args } => {
-            expr_constructs_sqlvalue(func, sqlvalue, sqlfield)
-                || args
-                    .iter()
-                    .any(|a| expr_constructs_sqlvalue(a, sqlvalue, sqlfield))
+            expr_constructs_sqlvalue(func, enums)
+                || args.iter().any(|a| expr_constructs_sqlvalue(a, enums))
         }
         Expr::Let { value, body, .. } | Expr::Destructure { value, body, .. } => {
-            expr_constructs_sqlvalue(value, sqlvalue, sqlfield)
-                || expr_constructs_sqlvalue(body, sqlvalue, sqlfield)
+            expr_constructs_sqlvalue(value, enums) || expr_constructs_sqlvalue(body, enums)
         }
         Expr::If { cond, then_, else_ } => {
-            expr_constructs_sqlvalue(cond, sqlvalue, sqlfield)
-                || expr_constructs_sqlvalue(then_, sqlvalue, sqlfield)
-                || expr_constructs_sqlvalue(else_, sqlvalue, sqlfield)
+            expr_constructs_sqlvalue(cond, enums)
+                || expr_constructs_sqlvalue(then_, enums)
+                || expr_constructs_sqlvalue(else_, enums)
         }
         Expr::Match(m) => {
-            if expr_constructs_sqlvalue(m.scrutinee(), sqlvalue, sqlfield) {
+            if expr_constructs_sqlvalue(m.scrutinee(), enums) {
                 return true;
             }
             m.arms().iter().any(|arm| {
-                pat_matches_sqlvalue(&arm.pat, sqlvalue, sqlfield)
+                pat_matches_sqlvalue(&arm.pat, enums)
                     || arm
                         .guard
                         .as_ref()
-                        .is_some_and(|g| expr_constructs_sqlvalue(g, sqlvalue, sqlfield))
-                    || expr_constructs_sqlvalue(&arm.body, sqlvalue, sqlfield)
+                        .is_some_and(|g| expr_constructs_sqlvalue(g, enums))
+                    || expr_constructs_sqlvalue(&arm.body, enums)
             })
         }
         Expr::Lambda { body, .. }
         | Expr::SharedLambda { body, .. }
-        | Expr::TailLoop { body, .. } => expr_constructs_sqlvalue(body, sqlvalue, sqlfield),
+        | Expr::TailLoop { body, .. } => expr_constructs_sqlvalue(body, enums),
         Expr::Cons { head, tail } => {
-            expr_constructs_sqlvalue(head, sqlvalue, sqlfield)
-                || expr_constructs_sqlvalue(tail, sqlvalue, sqlfield)
+            expr_constructs_sqlvalue(head, enums) || expr_constructs_sqlvalue(tail, enums)
         }
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            expr_constructs_sqlvalue(list, sqlvalue, sqlfield)
+            expr_constructs_sqlvalue(list, enums)
         }
-        Expr::Tuple(elems) | Expr::List { items: elems, .. } => elems
-            .iter()
-            .any(|e| expr_constructs_sqlvalue(e, sqlvalue, sqlfield)),
+        Expr::Tuple(elems) | Expr::List { items: elems, .. } => {
+            elems.iter().any(|e| expr_constructs_sqlvalue(e, enums))
+        }
         Expr::Record { fields, .. } => fields
             .iter()
-            .any(|(_, v)| expr_constructs_sqlvalue(v, sqlvalue, sqlfield)),
-        Expr::Access { record, .. } => expr_constructs_sqlvalue(record, sqlvalue, sqlfield),
+            .any(|(_, v)| expr_constructs_sqlvalue(v, enums)),
+        Expr::Access { record, .. } => expr_constructs_sqlvalue(record, enums),
         Expr::Update { record, fields } => {
-            expr_constructs_sqlvalue(record, sqlvalue, sqlfield)
+            expr_constructs_sqlvalue(record, enums)
                 || fields
                     .iter()
-                    .any(|(_, v)| expr_constructs_sqlvalue(v, sqlvalue, sqlfield))
+                    .any(|(_, v)| expr_constructs_sqlvalue(v, enums))
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            expr_constructs_sqlvalue(lhs, sqlvalue, sqlfield)
-                || expr_constructs_sqlvalue(rhs, sqlvalue, sqlfield)
+            expr_constructs_sqlvalue(lhs, enums) || expr_constructs_sqlvalue(rhs, enums)
         }
         Expr::TaskSeq { effect, rest } => {
-            expr_constructs_sqlvalue(effect, sqlvalue, sqlfield)
-                || expr_constructs_sqlvalue(rest, sqlvalue, sqlfield)
+            expr_constructs_sqlvalue(effect, enums) || expr_constructs_sqlvalue(rest, enums)
         }
         Expr::FuncValue { .. }
         | Expr::Int(_)
@@ -8590,32 +8579,23 @@ fn expr_constructs_sqlvalue(expr: &Expr, sqlvalue: Symbol, sqlfield: Symbol) -> 
     }
 }
 
-/// `true` when a pattern matches on a `SqlValue` / `SqlField` constructor,
+/// `true` when a pattern matches on a constructor of one of the Prelude `enums`,
 /// recursing into every sub-pattern position.
-fn pat_matches_sqlvalue(pat: &Pat, sqlvalue: Symbol, sqlfield: Symbol) -> bool {
+fn pat_matches_sqlvalue(pat: &Pat, enums: &[Symbol]) -> bool {
     match pat {
-        Pat::Ctor { ty, args, .. } => {
-            *ty == sqlvalue
-                || *ty == sqlfield
-                || args
-                    .iter()
-                    .any(|p| pat_matches_sqlvalue(p, sqlvalue, sqlfield))
+        Pat::Ctor { home, ty, args, .. } => {
+            (home.0.is_empty() && enums.contains(ty))
+                || args.iter().any(|p| pat_matches_sqlvalue(p, enums))
         }
-        Pat::Tuple(ps) | Pat::Or(ps) => ps
-            .iter()
-            .any(|p| pat_matches_sqlvalue(p, sqlvalue, sqlfield)),
-        Pat::Record(fields) => fields
-            .iter()
-            .any(|(_, p)| pat_matches_sqlvalue(p, sqlvalue, sqlfield)),
+        Pat::Tuple(ps) | Pat::Or(ps) => ps.iter().any(|p| pat_matches_sqlvalue(p, enums)),
+        Pat::Record(fields) => fields.iter().any(|(_, p)| pat_matches_sqlvalue(p, enums)),
         Pat::Slice { prefix, rest } => {
-            prefix
-                .iter()
-                .any(|p| pat_matches_sqlvalue(p, sqlvalue, sqlfield))
+            prefix.iter().any(|p| pat_matches_sqlvalue(p, enums))
                 || rest
                     .as_ref()
-                    .is_some_and(|p| pat_matches_sqlvalue(p, sqlvalue, sqlfield))
+                    .is_some_and(|p| pat_matches_sqlvalue(p, enums))
         }
-        Pat::Alias(inner, _) => pat_matches_sqlvalue(inner, sqlvalue, sqlfield),
+        Pat::Alias(inner, _) => pat_matches_sqlvalue(inner, enums),
         Pat::Wildcard | Pat::Var(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) | Pat::Int(_) => {
             false
         }
@@ -11411,40 +11391,9 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.ok), 1);
         ctor_arity.insert((prelude_home.clone(), builtins.err), 1);
 
-        // Seed `SqlValue` / `SqlField` variant sets + arities.
-        // These are Prelude built-ins (like Maybe/Result) — no user `type`
-        // declaration; the symbols must be present here so any `case v of
-        // SqlString s -> … ; SqlInt i -> …` pattern is exhaustively validated and
-        // constructor applications (e.g. `SqlInt 42`) lower as saturated.
-        enum_variants.insert(
-            (prelude_home.clone(), builtins.sqlvalue),
-            vec![
-                builtins.sql_string,
-                builtins.sql_int,
-                builtins.sql_float,
-                builtins.sql_bool,
-                builtins.sql_bytes,
-                builtins.sql_time,
-                builtins.sql_decimal,
-                builtins.sql_money,
-                builtins.sql_null,
-            ],
-        );
-        enum_variants.insert(
-            (prelude_home.clone(), builtins.sqlfield),
-            vec![builtins.set_field, builtins.omit_field],
-        );
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_string), 1);
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_int), 1);
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_float), 1);
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_bool), 1);
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_bytes), 1);
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_time), 1);
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_decimal), 1); // SqlDecimal(Decimal)
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_money), 1); // SqlMoney(String) — "ISO_CODE AMOUNT"
-        ctor_arity.insert((prelude_home.clone(), builtins.sql_null), 1); // SqlNull(SqlValue)
-        ctor_arity.insert((prelude_home.clone(), builtins.set_field), 1); // SetField(SqlValue)
-        ctor_arity.insert((prelude_home.clone(), builtins.omit_field), 0);
+        // `SqlValue` / `SqlField` / `ProjectionTerm` / `ProjectionOperand` /
+        // `ArithOp` are seeded from their synthesized `EnumDef`s once the
+        // lowerer exists — see `Self::seed_synthetic_prelude_enums`.
         // ── Order ADT ─────────────────────────────────────────────────
         enum_variants.insert(
             (prelude_home.clone(), builtins.order),
@@ -11566,7 +11515,7 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.no_redirects), 0);
         ctor_arity.insert((prelude_home, builtins.follow_redirects), 1); // FollowRedirects(Int) — final move
 
-        Self {
+        let mut lowerer = Self {
             m,
             types,
             interner,
@@ -11607,6 +11556,55 @@ impl<'a> Lowerer<'a> {
             source_path: source_path.to_owned(),
             source_text: source_text.to_owned(),
             port_seal_enum_legal: std::cell::RefCell::new(None),
+        };
+        lowerer.seed_synthetic_prelude_enums();
+        lowerer
+    }
+
+    /// The Prelude built-in enums whose `EnumDef` the lowerer synthesizes.
+    ///
+    /// Declared by no Ipê source; injected into the program whenever a Db
+    /// kernel or any use of one of [`Self::synthetic_prelude_enum_names`] is
+    /// present.
+    fn synthetic_prelude_enums(&self) -> [EnumDef; 5] {
+        [
+            self.synthetic_sqlvalue_enum(),
+            self.synthetic_sqlfield_enum(),
+            self.synthetic_projection_term_enum(),
+            self.synthetic_projection_operand_enum(),
+            self.synthetic_arith_op_enum(),
+        ]
+    }
+
+    /// The type names of [`Self::synthetic_prelude_enums`], in the same order.
+    const fn synthetic_prelude_enum_names(&self) -> [Symbol; 5] {
+        let b = self.builtins;
+        [
+            b.sqlvalue,
+            b.sqlfield,
+            b.projection_term,
+            b.projection_operand,
+            b.arith_op,
+        ]
+    }
+
+    /// Register the variant set and payload arities of every synthesized Prelude enum.
+    ///
+    /// Read off the same [`EnumDef`]s the program is emitted with, so a
+    /// constructor's arity and a `case`'s variant set cannot drift from the
+    /// emitted enum, and a Prelude constructor matched or built in Ipê source
+    /// (the `Ipe.Db.Store` projection rewrite does both) resolves like any
+    /// declared constructor.
+    fn seed_synthetic_prelude_enums(&mut self) {
+        for def in self.synthetic_prelude_enums() {
+            for variant in &def.variants {
+                self.ctor_arity
+                    .insert((def.home.clone(), variant.name), variant.fields.len());
+            }
+            self.enum_variants.insert(
+                (def.home.clone(), def.name),
+                def.variants.iter().map(|v| v.name).collect(),
+            );
         }
     }
 
@@ -14052,25 +14050,19 @@ impl<'a> Lowerer<'a> {
             prune_dead_type_decls(&funcs, &mut types_ir, &mut records);
         }
 
-        let sqlvalue_sym = self.builtins.sqlvalue;
-        let sqlfield_sym = self.builtins.sqlfield;
+        // Every synthesized Prelude enum lives in (or aliases into) the Db
+        // runtime surface, so one condition injects them all: a Db kernel, or
+        // any construction, match, or type mention of one of them.
+        let prelude_enum_names = self.synthetic_prelude_enum_names();
         let uses_sqlvalue = kernel_usage.db
             || funcs
                 .iter()
-                .any(|f| expr_constructs_sqlvalue(&f.body, sqlvalue_sym, sqlfield_sym))
+                .any(|f| expr_constructs_sqlvalue(&f.body, &prelude_enum_names))
             || program_type_mentions(&funcs, &records, &types_ir, &|t| {
-                ir_type_mentions_sqlvalue(t, sqlvalue_sym, sqlfield_sym)
+                ir_type_mentions_sqlvalue(t, &prelude_enum_names)
             });
         if uses_sqlvalue {
-            types_ir.push(TypeDef::Enum(self.synthetic_sqlvalue_enum()));
-            types_ir.push(TypeDef::Enum(self.synthetic_sqlfield_enum()));
-            // `ProjectionTerm`/`ProjectionOperand` are consumed only by the
-            // `selectNamed` Db helper; any Db kernel use already implies
-            // `uses_sqlvalue`, so piggyback the injection here to keep the
-            // condition in one place.
-            types_ir.push(TypeDef::Enum(self.synthetic_projection_term_enum()));
-            types_ir.push(TypeDef::Enum(self.synthetic_projection_operand_enum()));
-            types_ir.push(TypeDef::Enum(self.synthetic_arith_op_enum()));
+            types_ir.extend(self.synthetic_prelude_enums().map(TypeDef::Enum));
         }
 
         // detect whether any TEA kernel call is present. The backend uses
@@ -28962,13 +28954,6 @@ mod tests {
             .expect("intern shared built-in table");
         let chunk_event = interner.intern("ChunkEvent").expect("intern");
         let stream_id = interner.intern("StreamId").expect("intern");
-        // `ProjectionTerm` / `ProjectionOperand` / `ArithOp` — injected into
-        // `types_ir` AFTER functions are lowered (when `uses_sqlvalue` is true),
-        // so they are never seeded into `enum_variants` at construction time.
-        // Skip exactly like `StreamId` / `ChunkEvent`.
-        let projection_term = interner.intern("ProjectionTerm").expect("intern");
-        let projection_operand = interner.intern("ProjectionOperand").expect("intern");
-        let arith_op = interner.intern("ArithOp").expect("intern");
         let module = canon::Module {
             imports_unsafe_submodule: false,
             imported_web_capabilities: std::collections::BTreeSet::new(),
@@ -28999,12 +28984,7 @@ mod tests {
 
         let prelude_home = ModPath(Vec::new());
         for (&union, ctors) in &shared.exhaust_union_ctors {
-            if union == chunk_event
-                || union == stream_id
-                || union == projection_term
-                || union == projection_operand
-                || union == arith_op
-            {
+            if union == chunk_event || union == stream_id {
                 continue;
             }
             let seeded_variants = lowerer
