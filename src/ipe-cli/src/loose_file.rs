@@ -6,10 +6,14 @@
 //! set is the entry plus the transitive closure of the sibling modules its
 //! imports name: each import probes exactly one path, only regular files
 //! contained in the entry's directory are read, and the closure is capped by
-//! [`LooseFileLimits`]. The directory holding the entry is never listed, so a
-//! loose file in `/tmp` or `$HOME` reads nothing unrelated to it.
+//! [`LooseFileLimits`]. No unrelated file is ever opened, so a loose file in
+//! `/tmp` or `$HOME` reads nothing unrelated to it. A directory is listed
+//! only on a case-insensitive filesystem, and only to compare entry names
+//! against a probed name's exact spelling, so one file never loads under two
+//! module keys (`import Helper` and `import HELPER`).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::fs;
 #[cfg(unix)]
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
@@ -27,6 +31,11 @@ pub const MAX_LOOSE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Upper bound on the distinct module paths a loose-file load probes, the entry included.
 pub const MAX_LOOSE_FILE_PROBES: usize = 4096;
+
+/// Upper bound on the directory entries one exact-spelling check compares.
+///
+/// Past it the probed name counts as misspelled, so the check fails closed.
+const MAX_SPELLING_SCAN: usize = 65_536;
 
 /// The ceilings one loose-file load is held to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -319,7 +328,8 @@ impl<'e> SourceDir<'e> {
     /// The sibling file for `module`, when every check a read relies on holds.
     ///
     /// `None` unless every intermediate directory is a real directory (not a
-    /// symlink), the file is a regular file (not a symlink), and it
+    /// symlink), the file is a regular file (not a symlink), every segment is
+    /// spelled on disk exactly as the import spells it, and the file
     /// canonicalizes inside this directory. The two layers agree: a path the
     /// no-follow walk in [`VettedSibling::read`] would refuse is refused here
     /// first, so only a swap after these checks reaches that walk.
@@ -329,16 +339,26 @@ impl<'e> SourceDir<'e> {
         let mut dir = self.spelled.to_path_buf();
         for segment in dir_segments {
             dir.push(segment);
-            if !fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_dir()) {
+            if !fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_dir())
+                || !dir
+                    .parent()
+                    .is_some_and(|parent| is_spelled_on_disk(parent, segment))
+            {
                 return None;
             }
         }
         let path = self.spelled.join(relative);
         let is_regular_file =
             fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file());
-        let is_contained =
-            fs::canonicalize(&path).is_ok_and(|canonical| canonical.starts_with(&self.canonical));
-        (is_regular_file && is_contained).then_some(VettedSibling {
+        let is_spelled = || {
+            path.file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| is_spelled_on_disk(&dir, name))
+        };
+        let is_contained = || {
+            fs::canonicalize(&path).is_ok_and(|canonical| canonical.starts_with(&self.canonical))
+        };
+        (is_regular_file && is_spelled() && is_contained()).then_some(VettedSibling {
             dir: self,
             segments: module,
             path,
@@ -437,6 +457,46 @@ fn open_module_beneath(dir: BorrowedFd<'_>, module: &[String]) -> std::io::Resul
     Ok(fs::File::from(file))
 }
 
+/// Whether the existing entry `dir/name` is spelled on disk exactly as `name`.
+///
+/// A case-insensitive filesystem resolves `HELPER.ipe` to `Helper.ipe`,
+/// which would load one file under two module keys. When the case-swapped
+/// spelling does not resolve, the lookup that found `name` was exact and
+/// nothing is listed; otherwise the directory's entry names are compared
+/// against `name`. An unreadable listing fails closed.
+fn is_spelled_on_disk(dir: &Path, name: &str) -> bool {
+    if fs::symlink_metadata(dir.join(swap_ascii_case(name))).is_err() {
+        return true;
+    }
+    fs::read_dir(dir).is_ok_and(|entries| {
+        names_include_exactly(
+            entries.map_while(Result::ok).map(|entry| entry.file_name()),
+            name,
+        )
+    })
+}
+
+/// Whether `names` holds `name` byte for byte within its first [`MAX_SPELLING_SCAN`] entries.
+fn names_include_exactly(names: impl IntoIterator<Item = OsString>, name: &str) -> bool {
+    names
+        .into_iter()
+        .take(MAX_SPELLING_SCAN)
+        .any(|entry| entry.as_os_str() == OsStr::new(name))
+}
+
+/// `name` with every ASCII letter's case inverted.
+fn swap_ascii_case(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_uppercase() {
+                c.to_ascii_lowercase()
+            } else {
+                c.to_ascii_uppercase()
+            }
+        })
+        .collect()
+}
+
 /// Every module path `parsed` imports.
 fn imported_modules(parsed: &ipe_syntax::Module, interner: &Interner) -> Vec<Vec<String>> {
     parsed
@@ -456,12 +516,14 @@ fn module_segments(symbols: &[Symbol], interner: &Interner) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
 
     use super::{
-        CliError, LooseFileLimits, LooseFileSources, ProjectRoot, SiblingRead, SourceDir,
-        VettedSibling, io_bounded, module_file, resolve_loose_file,
+        CliError, LooseFileLimits, LooseFileSources, MAX_SPELLING_SCAN, ProjectRoot, SiblingRead,
+        SourceDir, VettedSibling, io_bounded, is_spelled_on_disk, module_file,
+        names_include_exactly, resolve_loose_file, swap_ascii_case,
     };
 
     /// A fresh, canonical scratch directory unique to `name` and this process.
@@ -513,6 +575,65 @@ mod tests {
             path,
         };
         Some(sibling.read(io_bounded::SOURCE_READ_CAP))
+    }
+
+    fn names(entries: &[&str]) -> Vec<OsString> {
+        entries.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn a_case_variant_is_not_the_exact_spelling() {
+        assert!(!names_include_exactly(names(&["helper.ipe"]), "Helper.ipe"));
+        assert!(!names_include_exactly(names(&["HELPER.ipe"]), "Helper.ipe"));
+        assert!(!names_include_exactly(names(&["Helper.IPE"]), "Helper.ipe"));
+        assert!(!names_include_exactly(names(&["lib", "Lib2"]), "Lib"));
+        assert!(!names_include_exactly(names(&[]), "Helper.ipe"));
+    }
+
+    #[test]
+    fn the_exact_spelling_is_found_among_case_variants() {
+        assert!(names_include_exactly(
+            names(&["helper.ipe", "Other.ipe", "Helper.ipe"]),
+            "Helper.ipe"
+        ));
+        assert!(names_include_exactly(names(&["lib", "Lib"]), "Lib"));
+    }
+
+    #[test]
+    fn the_spelling_scan_fails_closed_past_its_ceiling() {
+        let filler = (0..MAX_SPELLING_SCAN).map(|n| OsString::from(format!("F{n}.ipe")));
+        let late = filler
+            .clone()
+            .chain(std::iter::once(OsString::from("Helper.ipe")));
+        assert!(!names_include_exactly(late, "Helper.ipe"));
+        let last_in_budget = filler
+            .take(MAX_SPELLING_SCAN - 1)
+            .chain(std::iter::once(OsString::from("Helper.ipe")));
+        assert!(names_include_exactly(last_in_budget, "Helper.ipe"));
+    }
+
+    #[test]
+    fn swapping_case_changes_every_module_file_name() {
+        assert_eq!(swap_ascii_case("Helper.ipe"), "hELPER.IPE");
+        assert_eq!(swap_ascii_case("My_Mod2"), "mY_mOD2");
+    }
+
+    #[test]
+    fn an_exactly_spelled_sibling_is_vetted() {
+        let dir = scratch_dir("exact-case");
+        write(
+            &dir.join("Lib").join("Helper.ipe"),
+            "module Lib.Helper exposing (x)\n",
+        );
+        assert!(is_spelled_on_disk(&dir, "Lib"));
+        assert!(is_spelled_on_disk(&dir.join("Lib"), "Helper.ipe"));
+        assert_eq!(
+            vetted_path(&dir, &module(&["Lib", "Helper"])),
+            Some(dir.join("Lib").join("Helper.ipe"))
+        );
+        assert_eq!(vetted_path(&dir, &module(&["LIB", "Helper"])), None);
+        assert_eq!(vetted_path(&dir, &module(&["Lib", "HELPER"])), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
