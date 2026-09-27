@@ -894,7 +894,11 @@ the source root {path} cannot be resolved — ipe cannot prove the output stays 
 
 ## output-parent-traversal
 
-{path} has a `..` in a part that does not exist yet — name the directory directly
+{path} has a `..` that does not climb out of an existing directory that is not a link — name the directory directly
+
+## output-unplaceable
+
+{path} does not name one absolute place on every platform (a drive-relative path, or a `/` inside a `\\?\` path) — name the directory by its full path
 
 ## output-not-fresh
 

@@ -287,15 +287,10 @@ pub struct WebViewWindow {
 /// [reserved]: https://doc.rust-lang.org/reference/keywords.html
 #[must_use]
 pub fn sanitize_cargo_name(name: &str) -> String {
-    const RESERVED: &[&str] = &[
-        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
-        "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
-        "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
-        "return", "self", "Self", "static", "struct", "super", "trait", "true", "try", "type",
-        "typeof", "union", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
-        // Toolchain binary name.
-        "ipe",
-    ];
+    // Non-keyword names that still get the suffix: the toolchain binary name
+    // (a crate named `ipe` would shadow the CLI on `$PATH`) and the weak
+    // keyword `union`, kept conservative for a crate name.
+    const EXTRA_SUFFIXED: &[&str] = &["ipe", "union"];
 
     // Names Cargo forbids as a binary target because they collide with its
     // build-directory names — the emitted crate has no `[[bin]]` override, so
@@ -333,10 +328,13 @@ pub fn sanitize_cargo_name(name: &str) -> String {
         return "ipe-app".to_owned();
     }
 
-    // Step 6: reserved Rust keywords, the `ipe` toolchain name, and Cargo's
+    // Step 6: reserved Rust keywords, the extra suffixed names, and Cargo's
     // forbidden binary-target names get `-app` appended to keep the emitted
     // crate buildable.
-    if RESERVED.contains(&result.as_str()) || CARGO_FORBIDDEN_BIN.contains(&result.as_str()) {
+    if ipe_intern::is_rust_keyword(&result)
+        || EXTRA_SUFFIXED.contains(&result.as_str())
+        || CARGO_FORBIDDEN_BIN.contains(&result.as_str())
+    {
         result.push_str("-app");
     }
 
@@ -5695,6 +5693,19 @@ mod sanitize_cargo_name_tests {
         assert_eq!(sanitize_cargo_name("mod"), "mod-app");
         assert_eq!(sanitize_cargo_name("fn"), "fn-app");
         assert_eq!(sanitize_cargo_name("ipe"), "ipe-app");
+        assert_eq!(sanitize_cargo_name("union"), "union-app");
+    }
+
+    #[test]
+    fn every_ssot_keyword_gets_suffix() {
+        for kw in ipe_intern::RUST_KEYWORDS {
+            let lower = kw.to_ascii_lowercase();
+            assert_eq!(
+                sanitize_cargo_name(kw),
+                format!("{lower}-app"),
+                "{kw} should get the -app suffix"
+            );
+        }
     }
 
     #[test]
