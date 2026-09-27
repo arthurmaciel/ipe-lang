@@ -31313,7 +31313,7 @@ mod tests {
         // The consume count and the move walk share one classifier: the
         // copy-only destructure is no consume, the trailing `w` is the one.
         let worker_copy = copy_record_fields(env, &worker);
-        assert_eq!(count_value_consumes(w, &worker_copy, &copy_only), 1);
+        assert_eq!(count_value_consumes(w_sym, &worker_copy, &copy_only), 1);
 
         // Refusal twins of `copy_only`: the same `(bound, w)` reuse after a
         // binder that MOVES a part.
@@ -31321,23 +31321,23 @@ mod tests {
             binder: Pat::Record(vec![
                 (field, binder),
                 (job, Pat::Wildcard),
-                (n, Pat::Wildcard),
+                (n_sym, Pat::Wildcard),
             ]),
-            value: Box::new(Expr::Var(w)),
-            body: Box::new(Expr::Tuple(vec![Expr::Var(bound), Expr::Var(w)])),
+            value: Box::new(Expr::Var(w_sym)),
+            body: Box::new(Expr::Tuple(vec![Expr::Var(bound), Expr::Var(w_sym)])),
         };
         // `let { view = v } = w in (v, w)`: `Ui Int` is not `Copy` — refused.
-        let view_reuse = reuse_after(view, Pat::Var(v), v);
-        assert_eq!(count_value_consumes(w, &worker_copy, &view_reuse), 2);
+        let view_reuse = reuse_after(view, Pat::Var(v_sym), v_sym);
+        assert_eq!(count_value_consumes(w_sym, &worker_copy, &view_reuse), 2);
         assert!(matches!(reject(&worker, &view_reuse), Err(ref e) if *e == l0135));
         // `let { ghost = g } = w in (g, w)`: a field the binding's type does
         // not resolve is a move (fail closed) — refused.
-        let ghost_reuse = reuse_after(ghost, Pat::Var(g), g);
-        assert_eq!(count_value_consumes(w, &worker_copy, &ghost_reuse), 2);
+        let ghost_reuse = reuse_after(ghost, Pat::Var(g_sym), g_sym);
+        assert_eq!(count_value_consumes(w_sym, &worker_copy, &ghost_reuse), 2);
         assert!(matches!(reject(&worker, &ghost_reuse), Err(ref e) if *e == l0135));
         // With no `Copy` field known (a non-record binding type), even the
         // `Int` binder moves — refused.
-        assert_eq!(count_value_consumes(w, &BTreeSet::new(), &copy_only), 2);
+        assert_eq!(count_value_consumes(w_sym, &BTreeSet::new(), &copy_only), 2);
 
         // `(case w of { n = a } -> () ; _ -> (), w)`: a copy-only arm moves
         // nothing — accepted; an arm that binds `job` moves it — refused.
@@ -31354,11 +31354,11 @@ mod tests {
                     guard: None,
                 },
             ];
-            Match::new_flat(Expr::Var(w), arms)
-                .map(|m| Expr::Tuple(vec![Expr::Match(m), Expr::Var(w)]))
+            Match::new_flat(Expr::Var(w_sym), arms)
+                .map(|m| Expr::Tuple(vec![Expr::Match(m), Expr::Var(w_sym)]))
         };
         let copy_arm = Pat::Record(vec![
-            (n, Pat::Var(a)),
+            (n_sym, Pat::Var(a_sym)),
             (job, Pat::Wildcard),
             (view, Pat::Wildcard),
         ]);
