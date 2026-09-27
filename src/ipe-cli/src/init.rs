@@ -378,6 +378,7 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
             &files,
             args.force,
             true,
+            InitShape::default(),
             InitRuntime::default(),
         );
     }
@@ -418,6 +419,7 @@ pub fn run_init(rest: &[String]) -> Result<(), CliError> {
         &files,
         args.force,
         false,
+        shape,
         runtime,
     )
 }
@@ -732,6 +734,7 @@ fn run_scaffold(
     files: &[ManagedFile],
     force: bool,
     lib: bool,
+    shape: InitShape,
     runtime: InitRuntime,
 ) -> Result<(), CliError> {
     let fresh = is_fresh_target(target_dir)?;
@@ -742,7 +745,7 @@ fn run_scaffold(
         if lib {
             print_next_steps_lib(target_arg, project_name);
         } else {
-            print_next_steps(target_arg, project_name, interactive, runtime);
+            print_next_steps(target_arg, project_name, interactive, shape, runtime);
         }
         if interactive && prompt_yes_no("Verify your toolchain now?", true) {
             let _ = health::run_health_inline();
@@ -1034,9 +1037,43 @@ const fn should_offer_health_check(is_tty: bool, force: bool) -> bool {
     is_tty && !force
 }
 
-/// Print the friendly next-steps message, tuned to the resolved runtime so the
-/// hint matches how the scaffolded app actually runs (spec § 0.1).
-fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool, runtime: InitRuntime) {
+/// The next-steps hint for a freshly scaffolded app, tuned to how its shape
+/// actually runs.
+///
+/// A DOM app is opened in a browser; a `cli`/`tui` app is driven from the same
+/// terminal `ipe run` left open; a `worker` has no UI to open; a
+/// `server`/`script` app is reached or observed differently again.
+const fn next_steps_hint(shape: InitShape, runtime: InitRuntime) -> &'static str {
+    match shape {
+        // A `solo` app ships a self-contained client bundle; a `served` app
+        // serves itself. Only `web` carries this runtime axis.
+        InitShape::Web => match runtime {
+            InitRuntime::Served => "Then open http://localhost:8000 and click the counter buttons.",
+            InitRuntime::Solo => {
+                "This is a `solo` app: `ipe run` serves the wasm bundle at \
+                 http://localhost:8000; open it and click the counter buttons."
+            }
+        },
+        InitShape::Tui => "Then press Up/Down to change the count, or q to quit.",
+        InitShape::Cli => "Then type a line and press enter to see it echoed back, or q to quit.",
+        InitShape::Worker => {
+            "It runs in the background and logs each tick to the terminal — no UI to open."
+        }
+        InitShape::Server => "Then open http://localhost:8000 in a browser, or curl it.",
+        InitShape::Script => "It runs once, prints its output, and exits.",
+    }
+}
+
+/// Print the friendly next-steps message, tuned to the resolved shape and
+/// runtime so the hint matches how the scaffolded app actually runs (spec §
+/// 0.1).
+fn print_next_steps(
+    target_arg: &str,
+    project_name: &str,
+    interactive: bool,
+    shape: InitShape,
+    runtime: InitRuntime,
+) {
     let run_cmd = if target_arg == "." {
         "    ipe run".to_owned()
     } else {
@@ -1047,14 +1084,7 @@ fn print_next_steps(target_arg: &str, project_name: &str, interactive: bool, run
     } else {
         "\nTip: run  ipe health  to tune your toolchain for faster builds.\n".to_owned()
     };
-    // A `solo` app ships a self-contained client bundle; a `served` app serves itself.
-    let open_hint = match runtime {
-        InitRuntime::Served => "Then open http://localhost:8000 and click the counter buttons.",
-        InitRuntime::Solo => {
-            "This is a `solo` app: `ipe run` serves the wasm bundle at \
-             http://localhost:8000; open it and click the counter buttons."
-        }
-    };
+    let open_hint = next_steps_hint(shape, runtime);
     let body = format!(
         "Created Ipê project `{project_name}`.\n\
          \n\
