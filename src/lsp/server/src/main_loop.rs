@@ -810,10 +810,10 @@ fn ensure_project_fresh(state: &mut State, loader: &dyn ProjectLoader, path: &Pa
             state.fallback = false;
         }
         Err(err) if err.disposition() == LoadDisposition::Refuse => {
-            // Refused, not degraded: no fallback layout is served and edits
-            // do not retry (they cannot lift a ceiling or restore trust).
-            // A previously-good layout stays; save and watched-file events
-            // still retry.
+            // Refused, not degraded: no fallback layout is served and
+            // keystrokes do not retry (see `LoadDisposition::Refuse`). A
+            // previously-good layout stays; save and watched-file events
+            // retry.
             eprintln!("[ipe lsp] project load refused: {err}");
             state.fallback = false;
         }

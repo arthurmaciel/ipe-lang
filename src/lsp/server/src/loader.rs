@@ -59,8 +59,10 @@ pub enum LoadDisposition {
     Degrade,
     /// Serve no fallback layout and never retry per keystroke.
     ///
-    /// Editing the buffer cannot lift a ceiling or restore trust, so a
-    /// per-keystroke retry would only re-run the refused load.
+    /// A refused load hit a ceiling or failed a trust check, so re-running it
+    /// on every edit would repeat the most expensive work the server does.
+    /// An edit can still lift the refusal (a loose entry's size and imports
+    /// live in its buffer), so save and watched-file events retry the load.
     Refuse,
 }
 
