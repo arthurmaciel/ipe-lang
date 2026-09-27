@@ -5638,7 +5638,7 @@ impl PartialMove {
     }
 
     /// Has any part been moved out?
-    fn any(&self) -> bool {
+    const fn any(&self) -> bool {
         !matches!(self, Self::Intact)
     }
 
@@ -5665,7 +5665,7 @@ struct NonCloneMoveState {
 
 impl NonCloneMoveState {
     /// A read of the whole binding; `moves` marks a consuming position.
-    fn read_whole(&mut self, moves: bool) {
+    const fn read_whole(&mut self, moves: bool) {
         if self.consumed || self.partial.any() {
             self.hazard = true;
         }
