@@ -1,0 +1,140 @@
+module Main exposing (main)
+
+-- Composite primary keys in the `Draft` model: the declared column list is
+-- parsed once into a typed key, and every illegal declaration is refused with a
+-- typed `Err` that `createSql` returns — no DDL is built from it.
+--
+-- Pure checks (no DB connection), one line each:
+--   * the refusals: an empty list, a one-column list, an invalid identifier, an
+--     unknown column, a repeated column, and every second-key conflict
+--     (single then composite, composite then single, single then single);
+--   * the accessor forms `compositePrimaryKey2` / `compositePrimaryKey3` lower
+--     through the intercept and record the key (the table-level DDL is not
+--     rendered yet, so `createSql` fails closed rather than drop the key);
+--   * a single-column key is unaffected.
+
+import Ipe.Codec as Codec exposing (Codec)
+import Ipe.Db.Store as Store exposing (Draft, Store)
+import Ipe.Db.Store.Unsafe as StoreU
+import Ipe.Error as Error exposing (Error)
+import Ipe.Io as Io
+import Ipe.Result as Result exposing (Result(..))
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+
+
+type alias Membership =
+    { userId : String
+    , groupId : String
+    , role : String
+    }
+
+
+blankMembership : Membership
+blankMembership =
+    { userId = "", groupId = "", role = "" }
+
+
+membershipCodec : Codec Membership
+membershipCodec =
+    Codec.auto blankMembership
+
+
+-- The DDL of a raw-column `memberships` draft shaped by `shape`.
+rawDdl : (Draft Store.Row -> Draft Store.Row) -> Result Error String
+rawDdl shape =
+    case
+        Store.fromColumns "memberships"
+            [ Store.textColumn "user_id"
+            , Store.textColumn "group_id"
+            , Store.textColumn "role"
+            ]
+    of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            Store.createSql (Store.public (shape draft))
+
+
+-- The DDL of the typed `memberships` draft shaped by `shape`.
+typedDdl : (Draft Membership -> Draft Membership) -> Result Error String
+typedDdl shape =
+    case Store.fromCodec "memberships" membershipCodec of
+        Err e ->
+            Err e
+
+        Ok draft ->
+            Store.createSql (Store.public (shape draft))
+
+
+-- `label:rejected` when the DDL is an `Err` whose message contains `needle`.
+refusedLine : String -> String -> Result Error String -> String
+refusedLine label needle ddl =
+    case ddl of
+        Err e ->
+            if String.contains needle (Error.message e) then
+                String.concat [ label, ":rejected" ]
+
+            else
+                String.concat [ label, ":FAIL-wrong-error:", Error.message e ]
+
+        Ok sql ->
+            String.concat [ label, ":FAIL-accepted:", sql ]
+
+
+singlePkLine : String
+singlePkLine =
+    case typedDdl (\d -> Store.primaryKey .userId d) of
+        Err e ->
+            String.concat [ "single-pk:FAIL-rejected:", Error.message e ]
+
+        Ok sql ->
+            if String.contains "PRIMARY KEY" sql then
+                "single-pk:ok"
+
+            else
+                String.concat [ "single-pk:FAIL-bad-ddl:", sql ]
+
+
+main : Task Error ()
+main =
+    Io.println
+        (String.join "\n"
+            [ refusedLine "empty" "was given no columns" (rawDdl (StoreU.compositePrimaryKey []))
+            , refusedLine "one-column"
+                "was given the single column \"user_id\""
+                (rawDdl (StoreU.compositePrimaryKey [ "user_id" ]))
+            , refusedLine "invalid-identifier"
+                "rejected primary-key column identifier"
+                (rawDdl (StoreU.compositePrimaryKey [ "user_id", "group_id; DROP TABLE x" ]))
+            , refusedLine "unknown-column"
+                "\"tenant_id\" is not a column"
+                (rawDdl (StoreU.compositePrimaryKey [ "user_id", "tenant_id" ]))
+            , refusedLine "duplicate-column"
+                "column \"user_id\" is listed twice"
+                (rawDdl (StoreU.compositePrimaryKey [ "user_id", "group_id", "user_id" ]))
+            , refusedLine "single-then-composite"
+                "second one was declared after primary key (user_id)"
+                (rawDdl (\d -> StoreU.compositePrimaryKey [ "user_id", "group_id" ] (StoreU.primaryKey "user_id" d)))
+            , refusedLine "composite-then-single"
+                "second one was declared after composite primary key (user_id, group_id)"
+                (rawDdl (\d -> StoreU.primaryKey "role" (StoreU.compositePrimaryKey [ "user_id", "group_id" ] d)))
+            , refusedLine "single-then-single"
+                "second one was declared after primary key (user_id)"
+                (rawDdl (\d -> StoreU.primaryKey "role" (StoreU.primaryKey "user_id" d)))
+            , refusedLine "typed-single-then-composite"
+                "second one was declared after primary key (user_id)"
+                (typedDdl (\d -> Store.compositePrimaryKey2 .userId .groupId (Store.primaryKey .userId d)))
+            , refusedLine "raw-composite-ddl"
+                "composite primary key is not supported yet"
+                (rawDdl (StoreU.compositePrimaryKey [ "user_id", "group_id" ]))
+            , refusedLine "typed-composite2-ddl"
+                "composite primary key is not supported yet"
+                (typedDdl (\d -> Store.compositePrimaryKey2 .userId .groupId d))
+            , refusedLine "typed-composite3-ddl"
+                "composite primary key is not supported yet"
+                (typedDdl (\d -> Store.compositePrimaryKey3 .userId .groupId .role d))
+            , singlePkLine
+            ]
+        )

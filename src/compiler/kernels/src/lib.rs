@@ -1828,6 +1828,15 @@ pub enum StdlibKernel {
     /// accessor-named column the primary key. The intercept extracts the column
     /// name and delegates to the `primaryKeyNamed` stdlib helper.
     StorePrimaryKey,
+    /// `Store.compositePrimaryKey2 : (row -> a) -> (row -> b) -> Draft row ->
+    /// Draft row` — makes the two accessor-named columns one table-level
+    /// primary key. The intercept extracts both column names and delegates to
+    /// the `compositePrimaryKeyNamed` stdlib helper with them as a list.
+    StoreCompositePrimaryKey2,
+    /// `Store.compositePrimaryKey3 : (row -> a) -> (row -> b) -> (row -> c) ->
+    /// Draft row -> Draft row` — the three-column form of
+    /// `compositePrimaryKey2`.
+    StoreCompositePrimaryKey3,
     /// `Store.serial : (row -> t) -> Store row -> Store row` — marks the
     /// accessor-named column DB-assigned (serial).
     StoreSerial,
@@ -4132,6 +4141,21 @@ impl StdlibKernel {
             // `defaultText` / `defaultInt` — arity 3 (accessor + value + store).
             Self::StoreDefaultText => d("Store", "defaultText", 3, Pure, "store_default_text"),
             Self::StoreDefaultInt => d("Store", "defaultInt", 3, Pure, "store_default_int"),
+            // Composite primary keys — one accessor per key column + store.
+            Self::StoreCompositePrimaryKey2 => d(
+                "Store",
+                "compositePrimaryKey2",
+                3,
+                Pure,
+                "store_composite_primary_key2",
+            ),
+            Self::StoreCompositePrimaryKey3 => d(
+                "Store",
+                "compositePrimaryKey3",
+                4,
+                Pure,
+                "store_composite_primary_key3",
+            ),
             // Row-security policy builders — arity 1 (accessor only), intercepted
             // inline (accessor becomes the validated column, then the stringly
             // `*Named` helper is called). Runtime-fn names are placeholders.
@@ -5854,6 +5878,8 @@ impl StdlibKernel {
         Self::StoreTouchOnUpdate,
         Self::StoreDefaultText,
         Self::StoreDefaultInt,
+        Self::StoreCompositePrimaryKey2,
+        Self::StoreCompositePrimaryKey3,
         // Row-security policy builders (accessor-typed).
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
@@ -9397,6 +9423,20 @@ impl StdlibKernel {
         const INT_TO_DRAFT_A_TO_DRAFT_A: TyShape = TyShape::Fun(&INT, &DRAFT_A_TO_DRAFT_A);
         const STORE_DEFAULT_INT: TyShape =
             TyShape::Fun(&A_TO_INT_GETTER, &INT_TO_DRAFT_A_TO_DRAFT_A);
+        // `compositePrimaryKey2 : (row -> a) -> (row -> b) -> Draft row -> Draft row`
+        // (row = var(0); each key column keeps its own field type).
+        const A_TO_C_GETTER: TyShape = TyShape::Fun(&A, &C);
+        const A_TO_D_GETTER: TyShape = TyShape::Fun(&A, &D);
+        const STORE_COMPOSITE_PK2_TAIL: TyShape = TyShape::Fun(&A_TO_C_GETTER, &DRAFT_A_TO_DRAFT_A);
+        const STORE_COMPOSITE_PK2: TyShape =
+            TyShape::Fun(&A_TO_B_GETTER, &STORE_COMPOSITE_PK2_TAIL);
+        // `compositePrimaryKey3 : (row -> a) -> (row -> b) -> (row -> c) -> Draft row -> Draft row`.
+        const STORE_COMPOSITE_PK3_TAIL: TyShape = {
+            const D_TAIL: TyShape = TyShape::Fun(&A_TO_D_GETTER, &DRAFT_A_TO_DRAFT_A);
+            TyShape::Fun(&A_TO_C_GETTER, &D_TAIL)
+        };
+        const STORE_COMPOSITE_PK3: TyShape =
+            TyShape::Fun(&A_TO_B_GETTER, &STORE_COMPOSITE_PK3_TAIL);
         // Policy builders: `(row -> t) -> Policy row`.
         const STORE_POLICY_BUILDER: TyShape = TyShape::Fun(&A_TO_B_GETTER, &POLICY_A);
         // Correlated-subquery row-security ADTs (phantom in the row type).
@@ -10663,6 +10703,8 @@ impl StdlibKernel {
             | Self::StoreTouchOnUpdate => Some(&STORE_SCHEMA_BUILDER),
             Self::StoreDefaultText => Some(&STORE_DEFAULT_TEXT),
             Self::StoreDefaultInt => Some(&STORE_DEFAULT_INT),
+            Self::StoreCompositePrimaryKey2 => Some(&STORE_COMPOSITE_PK2),
+            Self::StoreCompositePrimaryKey3 => Some(&STORE_COMPOSITE_PK3),
             Self::StoreOwnerColumn | Self::StoreImmutable => Some(&STORE_POLICY_BUILDER),
             Self::StoreMask => Some(&STORE_MASK),
             Self::StoreCorrelate => Some(&STORE_CORRELATE),
@@ -10758,6 +10800,9 @@ impl StdlibKernel {
         // ── Column-spec builders — arity-3 (accessor + value + store) ────────
         Self::StoreDefaultText,
         Self::StoreDefaultInt,
+        // ── Composite primary keys — one accessor per key column + store ─────
+        Self::StoreCompositePrimaryKey2,
+        Self::StoreCompositePrimaryKey3,
         // ── Row-security policy builders — arity-1 (accessor only) ───────────
         Self::StoreOwnerColumn,
         Self::StoreImmutable,
@@ -11287,6 +11332,8 @@ impl StdlibKernel {
             | Self::StoreTouchOnUpdate
             | Self::StoreDefaultText
             | Self::StoreDefaultInt
+            | Self::StoreCompositePrimaryKey2
+            | Self::StoreCompositePrimaryKey3
             | Self::StoreOwnerColumn
             | Self::StoreImmutable
             | Self::StoreMask
