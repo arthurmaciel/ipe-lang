@@ -13915,10 +13915,7 @@ impl<'a> Lowerer<'a> {
             // equals its defining module, but the lowerer does not thread it here
             // and enum-shape errors are rare + already span-precise.
             let def = self.lower_enum(u).map_err(|d| (d, Vec::new()))?;
-            if self.is_cache_handle_union(u)
-                || self.is_config_decoder_union(u)
-                || self.is_pubsub_topic_union(u)
-            {
+            if self.is_runtime_bridged_union(u) {
                 continue;
             }
             // A foreign OPAQUE type from an FFI interface module (`module
@@ -13937,24 +13934,16 @@ impl<'a> Lowerer<'a> {
             {
                 continue;
             }
-            // `Ipe.Email`'s `type EmailProvider` is backed by the runtime enum
-            // `ipe_runtime::email::EmailProvider` (ctor names match verbatim).
-            // Skip its `EnumDef` so the backend never emits a duplicate
-            // `StdEmailEmailProvider`; the `builtin_runtime_enum` / `enum_name`
-            // overrides route the type + ctors + patterns to the runtime enum
-            // (mirrors the `IpeCacheHandle` suppression + the reference's
-            // `runtimeOpaqueTypes` mapping). `lower_enum` is still called above
-            // for its ctor-payload validation side effect.
-            if self.is_email_provider_union(u) {
-                continue;
-            }
             types_ir.push(TypeDef::Enum(def));
         }
         let prelude_enums = self.synthetic_prelude_enums();
         self.enum_payloads = ipe_ir::enum_payload_table(
             types_ir
                 .iter()
-                .map(|TypeDef::Enum(def)| def)
+                .map(|td| {
+                    let TypeDef::Enum(def) = td;
+                    def
+                })
                 .chain(prelude_enums.iter()),
         );
 
@@ -14871,12 +14860,33 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// is `u` the `Ipe.Cache.Cache` opaque handle union — home
-    /// `["Std", "Cache"]`, name `Cache`? Its `EnumDef` is suppressed (the type
-    /// is backed by the runtime `IpeCacheHandle`); the backend routes the type +
-    /// ctor + pattern there via `builtin_runtime_enum`/`enum_name` overrides.
-    fn is_cache_handle_union(&self, u: &canon::Union) -> bool {
-        self.is_cache_handle_con(&u.home, u.name)
+    /// Is `u` a stdlib union whose Rust type the runtime defines?
+    ///
+    /// Such a union gets no `EnumDef`: `Ipe.Cache.Cache` is the runtime
+    /// `IpeCacheHandle` (its phantom `k`/`v` would otherwise be unused enum
+    /// parameters, E0392), `Ipe.Email.EmailProvider` is the runtime
+    /// `email::EmailProvider`, and `Ipe.Config.Decoder` / `Ipe.PubSub.Topic`
+    /// exist only to name a type whose every annotation lowers to the shared
+    /// decoder carrier / topic-name `String`. The set is
+    /// [`ipe_ir::RuntimeBridgedEnum`], the table the backend's enum-fact lookup
+    /// reads, so a skipped union is always one the backend knows the facts of.
+    fn is_runtime_bridged_union(&self, u: &canon::Union) -> bool {
+        self.runtime_bridged_enum(&u.home, u.name)
+            .is_some_and(ipe_ir::RuntimeBridgedEnum::is_source_union)
+    }
+
+    /// The runtime-bridged enum `(module, name)` names, if any.
+    fn runtime_bridged_enum(
+        &self,
+        module: &[Symbol],
+        name: Symbol,
+    ) -> Option<ipe_ir::RuntimeBridgedEnum> {
+        let name = self.interner.resolve(name)?;
+        let home = module
+            .iter()
+            .map(|s| self.interner.resolve(*s))
+            .collect::<Option<Vec<&str>>>()?;
+        ipe_ir::RuntimeBridgedEnum::classify(&home, name)
     }
 
     /// Is `u` a foreign opaque type declared by a driver-generated FFI
@@ -14901,44 +14911,6 @@ impl<'a> Lowerer<'a> {
             transparent_ffi: &self.transparent_ffi_unions,
             payloads: &self.enum_payloads,
         }
-    }
-
-    /// is `u` the `Ipe.Config.Decoder` opaque carrier re-declaration —
-    /// module `["Std", "Config"]`, name `Decoder`? `Ipe.Config` re-declares
-    /// `type Decoder a = Decoder` only to put the name in its export set (matching
-    /// the reference); the type IS the shared `IrType::Decoder` carrier
-    /// (`ipe_runtime::json::Decoder<E, T>`), and every `Decoder a` annotation
-    /// already lowers to it via the ABOVE-guard `Decoder` arm. Skip its `EnumDef`
-    /// so the backend never emits a phantom-param `enum IpeConfigDecoder<T1>`
-    /// (E0392) — the nullary `Decoder` ctor is opaque (never constructed or
-    /// matched in Ipê source), so no enum is needed. Same shape as
-    /// [`Self::is_cache_handle_union`].
-    fn is_config_decoder_union(&self, u: &canon::Union) -> bool {
-        self.interner.resolve(u.name) == Some("Decoder")
-            && matches!(
-                u.home.as_slice(),
-                [a, b] if self.interner.resolve(*a) == Some("Ipe")
-                    && self.interner.resolve(*b) == Some("Config")
-            )
-    }
-
-    /// is `u` the `Ipe.PubSub.Topic` phantom handle declaration — module
-    /// `["Ipe", "PubSub"]`, name `Topic`? `Ipe.PubSub` declares
-    /// `type Topic a = Topic` only to give the payload variable `a` a valid type
-    /// declaration; at runtime a `Topic a` erases to the bare topic-name string
-    /// (`IrType::Str`), which every `Topic a` annotation already lowers to via the
-    /// ABOVE-guard `Topic` arm. Skip its `EnumDef` so the backend never emits a
-    /// phantom-param `enum IpePubSubTopic<T1>` (E0392) — the nullary `Topic` ctor
-    /// is opaque (never constructed or matched in Ipê source; the handle IS a
-    /// `String`), so no enum is needed. Same shape as
-    /// [`Self::is_config_decoder_union`].
-    fn is_pubsub_topic_union(&self, u: &canon::Union) -> bool {
-        self.interner.resolve(u.name) == Some("Topic")
-            && matches!(
-                u.home.as_slice(),
-                [a, b] if self.interner.resolve(*a) == Some("Ipe")
-                    && self.interner.resolve(*b) == Some("PubSub")
-            )
     }
 
     /// is `(module, name)` the `Ipe.Db.Store.Cond` typed-query predicate —
@@ -15035,33 +15007,17 @@ impl<'a> Lowerer<'a> {
             )
     }
 
-    /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type —
-    /// module `["Ipe", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
-    /// lowering (backed by the non-generic runtime `IpeCacheHandle`).
+    /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type?
+    ///
+    /// Its `k`/`v` args are dropped at lowering (backed by the non-generic
+    /// runtime `IpeCacheHandle`).
     fn is_cache_handle_con(&self, module: &[Symbol], name: Symbol) -> bool {
-        self.interner.resolve(name) == Some("Cache")
-            && matches!(
-                module,
-                [a, b] if self.interner.resolve(*a) == Some("Ipe")
-                    && self.interner.resolve(*b) == Some("Cache")
-            )
-    }
-
-    /// is `u` the `Ipe.Email.EmailProvider` opaque ADT — module
-    /// `["Ipe", "Email"]`, name `EmailProvider`? Backed by the runtime enum
-    /// `ipe_runtime::email::EmailProvider`, so its `EnumDef` is suppressed.
-    fn is_email_provider_union(&self, u: &canon::Union) -> bool {
-        self.is_email_provider_con(&u.home, u.name)
+        self.runtime_bridged_enum(module, name) == Some(ipe_ir::RuntimeBridgedEnum::CacheHandle)
     }
 
     /// is `(module, name)` the `Ipe.Email.EmailProvider` opaque ADT?
     fn is_email_provider_con(&self, module: &[Symbol], name: Symbol) -> bool {
-        self.interner.resolve(name) == Some("EmailProvider")
-            && matches!(
-                module,
-                [a, b] if self.interner.resolve(*a) == Some("Ipe")
-                    && self.interner.resolve(*b) == Some("Email")
-            )
+        self.runtime_bridged_enum(module, name) == Some(ipe_ir::RuntimeBridgedEnum::EmailProvider)
     }
 
     /// is `(home, name)` a kernel-implicit opaque `Ipe.Server` nominal —

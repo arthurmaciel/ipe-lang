@@ -76,17 +76,14 @@ pub(super) fn enum_is_opaque_ffi_handle(env: CloneEnv<'_>, home: &ModPath, name:
 
 /// Is `t` a leaf whose presence in an enum payload makes the enum non-`Clone`?
 ///
-/// Leaves defer to [`ipe_ir::carrier_is_clone`] — the rule the backend's
-/// enum-`Clone` fixpoint applies to payload fields — plus opaque FFI handles.
-/// Transparent carriers answer `false` because the payload walk descends into
-/// them itself. A payload `Generic`/`RowGeneric` answers `false`: it is bound by
-/// the enum's own type arguments, which the `Enum` arm classifies separately.
+/// Leaves defer to [`ipe_ir::payload_leaf_is_clone`] — the one leaf rule the
+/// backend's enum-`Clone` fixpoint applies to payload fields — plus opaque FFI
+/// handles. Transparent carriers answer `false` because the payload walk
+/// descends into them itself.
 fn payload_leaf_is_nonclone(env: CloneEnv<'_>, t: &IrType) -> bool {
     match t {
         IrType::Enum { home, name, .. } => enum_is_opaque_ffi_handle(env, home, *name),
-        IrType::Generic(_)
-        | IrType::RowGeneric(_)
-        | IrType::Maybe(_)
+        IrType::Maybe(_)
         | IrType::List(_)
         | IrType::Set(_)
         | IrType::Result(_, _)
@@ -95,7 +92,7 @@ fn payload_leaf_is_nonclone(env: CloneEnv<'_>, t: &IrType) -> bool {
         | IrType::Record(_)
         | IrType::Ui { .. }
         | IrType::WebRoute(_) => false,
-        other => !ipe_ir::carrier_is_clone(other),
+        other => !ipe_ir::payload_leaf_is_clone(other),
     }
 }
 
