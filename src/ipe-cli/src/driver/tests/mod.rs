@@ -1273,6 +1273,7 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
 
     let tmp = std::env::temp_dir().join(format!("ipe-cache-e2e-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
     let out_a = tmp.join("out-a");
     let out_b = tmp.join("out-b");
     let _ = fs::remove_dir_all(&tmp);
@@ -1299,7 +1300,7 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
         &runtime,
         Path::new("<cache-e2e>"),
         ipe_backend_rust::DbDriver::Sqlite,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1333,7 +1334,7 @@ fn on_disk_cache_hit_serves_a_tampered_entry_verbatim() {
         &runtime,
         Path::new("<cache-e2e>"),
         ipe_backend_rust::DbDriver::Sqlite,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1372,6 +1373,10 @@ fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
     let _ = fs::remove_dir_all(&tmp);
     let out = tmp.join("out");
     let cache_dir = out.join(".ipe-cache").join("salt");
+    let cache_site = crate::cache::CacheSite::InOutput {
+        out_dir: out.clone(),
+        salt: "salt".to_owned(),
+    };
 
     let entry_path = vec!["Main".to_owned()];
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
@@ -1396,7 +1401,7 @@ fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
             &runtime,
             Path::new("<cache-in-out>"),
             ipe_backend_rust::DbDriver::Sqlite,
-            Some(&cache_dir),
+            Some(&cache_site),
             BuildOptions::default(),
         )
     };
@@ -1424,6 +1429,112 @@ fn cold_build_with_the_cache_inside_a_fresh_output_dir_claims_it() {
     assert_eq!(warm_outcome, CacheOutcome::Hit);
 
     let _ = fs::remove_dir_all(&tmp);
+}
+
+/// Which level of a marked `out/` carries the planted cache link.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum PlantedCacheLink {
+    /// `out/.ipe-cache` itself.
+    CacheDir,
+    /// `out/.ipe-cache/<salt>`.
+    Salt,
+}
+
+/// Build twice into a marked `out/` whose cache path crosses a planted link.
+///
+/// Both builds succeed uncached: the cache is advisory, so skipping it is the
+/// fail-closed outcome that still ships the Rust built from the sources, while
+/// refusing the build would add nothing (no entry is read or written through the
+/// link either way). The link target stays empty.
+#[cfg(unix)]
+fn build_through_planted_cache_link(tag: &str, planted: PlantedCacheLink) {
+    let Ok(runtime) = resolve_runtime() else {
+        return;
+    };
+
+    let tmp = std::env::temp_dir().join(format!("ipe-cache-link-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let out = tmp.join("out");
+    let elsewhere = tmp.join("elsewhere");
+    fs::create_dir_all(&elsewhere).expect("create the link target");
+    crate::output_dir::OwnedDir::claim(&out).expect("mark out/ as ipe's");
+    let cache = out.join(crate::cache::CACHE_DIR_NAME);
+    match planted {
+        PlantedCacheLink::CacheDir => {
+            std::os::unix::fs::symlink(&elsewhere, &cache).expect("plant .ipe-cache link");
+        }
+        PlantedCacheLink::Salt => {
+            fs::create_dir_all(&cache).expect("mkdir .ipe-cache");
+            std::os::unix::fs::symlink(&elsewhere, cache.join("salt")).expect("plant salt link");
+        }
+    }
+    let cache_site = crate::cache::CacheSite::InOutput {
+        out_dir: out.clone(),
+        salt: "salt".to_owned(),
+    };
+
+    let entry_path = vec!["Main".to_owned()];
+    let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
+    sources.insert(
+        entry_path.clone(),
+        (
+            PathBuf::from("<cache-link>/Main.ipe"),
+            "module Main exposing (main)\n\nimport Ipe.Io as Io\n\nmain : Task Error ()\nmain =\n    Io.println \"hi\"\n".to_owned(),
+        ),
+    );
+    let discovered = vec![project::DiscoveredModule {
+        path: PathBuf::from("<cache-link>/Main.ipe"),
+        module_path: entry_path.clone(),
+    }];
+    let build = || {
+        compile_modules_observed(
+            sources.clone(),
+            discovered.clone(),
+            &entry_path,
+            &out,
+            &runtime,
+            Path::new("<cache-link>"),
+            ipe_backend_rust::DbDriver::Sqlite,
+            Some(&cache_site),
+            BuildOptions::default(),
+        )
+    };
+
+    for round in ["cold", "rebuild"] {
+        let (result, outcome) = build();
+        assert!(
+            result.is_ok(),
+            "the {round} build proceeds without the cache: {result:?}"
+        );
+        assert_eq!(
+            outcome,
+            CacheOutcome::Miss,
+            "the {round} build never uses a cache behind the link"
+        );
+        assert!(
+            fs::read_dir(&elsewhere).is_ok_and(|mut entries| entries.next().is_none()),
+            "the {round} build wrote nothing through the planted link"
+        );
+    }
+    assert!(
+        out.join("Cargo.toml").is_file(),
+        "the product is still emitted"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_never_writes_through_a_planted_ipe_cache_link() {
+    build_through_planted_cache_link("dir", PlantedCacheLink::CacheDir);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_never_writes_through_a_planted_salt_link() {
+    build_through_planted_cache_link("salt", PlantedCacheLink::Salt);
 }
 
 /// Walk `cache_root/<epoch>/*.ir.json` and return the single
@@ -1468,6 +1579,7 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
     };
     let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-driver-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
     let out_a = tmp.join("out-a");
     let out_b = tmp.join("out-b");
     let _ = fs::remove_dir_all(&tmp);
@@ -1494,7 +1606,7 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Sqlite,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1523,7 +1635,7 @@ fn ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit() {
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Postgres,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1558,6 +1670,7 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
     };
     let tmp = std::env::temp_dir().join(format!("ipec-ir-cache-tamper-{}", std::process::id()));
     let cache_dir = tmp.join("cache");
+    let cache_site = crate::cache::CacheSite::Explicit(cache_dir.clone());
     let out_a = tmp.join("out-a");
     let out_b = tmp.join("out-b");
     let _ = fs::remove_dir_all(&tmp);
@@ -1584,7 +1697,7 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Sqlite,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
@@ -1619,7 +1732,7 @@ fn on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim() {
         &runtime,
         Path::new("<p>"),
         ipe_backend_rust::DbDriver::Postgres,
-        Some(&cache_dir),
+        Some(&cache_site),
         BuildOptions::default(),
     );
     assert!(
