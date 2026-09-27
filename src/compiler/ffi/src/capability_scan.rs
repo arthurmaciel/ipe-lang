@@ -31,6 +31,7 @@
 
 use std::collections::BTreeSet;
 
+use ipe_diagnostics::terminal::TerminalSafe;
 pub use ipe_kernels::Capability;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use std::str::FromStr;
@@ -413,14 +414,14 @@ pub enum Opacity {
     /// deliberately un-lexable) file must refuse, never scan to an empty set.
     DoesNotLex {
         /// The file whose contents did not tokenise.
-        file: String,
+        file: TerminalSafe,
     },
     /// An `extern` block or `#[link]`/`libc::` reference — native FFI the scan
     /// is blind past. Its presence is exactly [`Capability::NativeFfi`]: the
     /// wrapper crosses into opaque native code whose effects cannot be inferred.
     NativeFfi {
         /// The file the construct was found in.
-        file: String,
+        file: TerminalSafe,
         /// The 1-based line.
         line: usize,
     },
@@ -429,7 +430,7 @@ pub enum Opacity {
     /// hide in the unscanned text.
     UnenumerableModule {
         /// The file the construct was found in.
-        file: String,
+        file: TerminalSafe,
         /// The 1-based line.
         line: usize,
         /// A short label (`include!`, `#[path]`).
@@ -531,19 +532,19 @@ impl ScanOutcome {
 ///
 /// A file that does not lex yields an [`Opacity::DoesNotLex`] — NEVER an empty
 /// proposed set, which would silently under-propose. `file` is a display label
-/// used only in diagnostics; `src` is the file text.
+/// used only in diagnostics, parsed once into [`TerminalSafe`] here since a
+/// file name is untrusted; `src` is the file text.
 #[must_use]
 pub fn scan_source(file: &str, src: &str) -> ScanOutcome {
+    let file = TerminalSafe::sanitize(file);
     let Ok(ts) = TokenStream::from_str(src) else {
         return ScanOutcome {
             proposed: BTreeSet::new(),
-            opacities: vec![Opacity::DoesNotLex {
-                file: file.to_owned(),
-            }],
+            opacities: vec![Opacity::DoesNotLex { file }],
         };
     };
     let mut outcome = ScanOutcome::default();
-    scan_stream(file, ts, &mut outcome);
+    scan_stream(&file, ts, &mut outcome);
     outcome
 }
 
@@ -562,7 +563,7 @@ pub fn scan_sources<'a>(sources: impl IntoIterator<Item = (&'a str, &'a str)>) -
 /// Walk a token stream, recording capability paths, bare idents, and opacity
 /// triggers. Recurses into every delimited group (fn bodies, `impl` blocks) so
 /// a construct nowhere near the top level is still seen.
-fn scan_stream(file: &str, ts: TokenStream, out: &mut ScanOutcome) {
+fn scan_stream(file: &TerminalSafe, ts: TokenStream, out: &mut ScanOutcome) {
     let toks: Vec<TokenTree> = ts.into_iter().collect();
     for i in 0..toks.len() {
         let Some(tok) = toks.get(i) else { continue };
@@ -583,7 +584,7 @@ fn scan_stream(file: &str, ts: TokenStream, out: &mut ScanOutcome) {
 /// opacity keywords and the capability-bearing `first::second` / bare-ident
 /// path matches.
 fn scan_ident(
-    file: &str,
+    file: &TerminalSafe,
     toks: &[TokenTree],
     i: usize,
     id: &proc_macro2::Ident,
@@ -606,7 +607,7 @@ fn scan_ident(
                 matches!(toks.get(i + 1), Some(TokenTree::Ident(n)) if *n == "crate");
             if !next_is_crate {
                 out.opacities.push(Opacity::NativeFfi {
-                    file: file.to_owned(),
+                    file: file.clone(),
                     line,
                 });
                 out.proposed.insert(Capability::NativeFfi);
@@ -616,7 +617,7 @@ fn scan_ident(
         // `libc::…` — the canonical raw-syscall crate.
         "libc" if next_is_colon(toks, i) => {
             out.opacities.push(Opacity::NativeFfi {
-                file: file.to_owned(),
+                file: file.clone(),
                 line,
             });
             out.proposed.insert(Capability::NativeFfi);
@@ -625,7 +626,7 @@ fn scan_ident(
         // `include!(…)` pulls in unscanned code.
         "include" if next_is_bang(toks, i) => {
             out.opacities.push(Opacity::UnenumerableModule {
-                file: file.to_owned(),
+                file: file.clone(),
                 line,
                 construct: "include!",
             });
@@ -635,7 +636,7 @@ fn scan_ident(
         // whose effects the scan cannot enumerate: NativeFfi opacity.
         "asm" | "global_asm" if next_is_bang(toks, i) => {
             out.opacities.push(Opacity::NativeFfi {
-                file: file.to_owned(),
+                file: file.clone(),
                 line,
             });
             out.proposed.insert(Capability::NativeFfi);
@@ -665,7 +666,7 @@ fn scan_ident(
         // recognised-safe std sub-module will find it in the allowlist.
         if !rule_matched && (name == "std" || name == "core") {
             out.opacities.push(Opacity::UnenumerableModule {
-                file: file.to_owned(),
+                file: file.clone(),
                 line,
                 construct: "std::<unrecognised>",
             });
@@ -701,7 +702,7 @@ fn scan_ident(
         };
         if opaque {
             out.opacities.push(Opacity::UnenumerableModule {
-                file: file.to_owned(),
+                file: file.clone(),
                 line,
                 construct: "std-root-alias",
             });
@@ -712,7 +713,7 @@ fn scan_ident(
 /// Handle a `#` at index `i`: an `#[path = "…"]` (unenumerable module) or
 /// `#[link(…)]` (native library) attribute.
 fn scan_attribute(
-    file: &str,
+    file: &TerminalSafe,
     toks: &[TokenTree],
     i: usize,
     p: &proc_macro2::Punct,
@@ -740,7 +741,7 @@ fn scan_attribute(
         return;
     };
     out.opacities.push(Opacity::UnenumerableModule {
-        file: file.to_owned(),
+        file: file.clone(),
         line: p.span().start().line,
         construct,
     });
@@ -826,8 +827,9 @@ pub enum RefuseReason {
     /// Network the wrapper's own `.rs` never names), so a wrapper with external
     /// deps is opaque and refused in this release.
     NonStdDependency {
-        /// The dependency name.
-        name: String,
+        /// The dependency name, terminal-safe: it comes from the wrapper's
+        /// own `Cargo.toml` and is shown in the refusal.
+        name: TerminalSafe,
     },
 }
 
@@ -914,7 +916,9 @@ pub fn reconcile_for(
             });
         }
         for name in non_std_deps {
-            reasons.push(RefuseReason::NonStdDependency { name: name.clone() });
+            reasons.push(RefuseReason::NonStdDependency {
+                name: TerminalSafe::sanitize(name),
+            });
         }
     }
 
@@ -1406,7 +1410,7 @@ mod tests {
         assert!(
             reasons
                 .iter()
-                .any(|r| matches!(r, RefuseReason::NonStdDependency { name } if name == "reqwest")),
+                .any(|r| matches!(r, RefuseReason::NonStdDependency { name } if name.as_str() == "reqwest")),
             "{reasons:?}"
         );
     }

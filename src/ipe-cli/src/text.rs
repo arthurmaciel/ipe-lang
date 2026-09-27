@@ -17,7 +17,7 @@
 //! the value is sanitised before it can reach the message, whatever prints it.
 
 use std::borrow::Cow;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::ops::Deref;
 
 /// A user-facing message: a catalog text, or an already-rendered error relayed
@@ -54,11 +54,20 @@ impl Message {
     /// Relay a typed refusal whose own `Display` is its user-facing text.
     ///
     /// Only a [`Relayable`] type qualifies: a closed set of typed refusals and
-    /// diagnostics whose text is built from trusted parts, so an arbitrary
-    /// string (and the untrusted bytes it may carry) cannot become a message.
+    /// diagnostics whose text is built from trusted parts, and whose untrusted
+    /// parts (a dependency name, a file label) are [`TerminalSafe`] from the
+    /// moment the refusal is built, so an arbitrary string (and the untrusted
+    /// bytes it may carry) cannot become a message. The whole-text pass here
+    /// is the second, independent gate.
+    ///
+    /// [`TerminalSafe`]: crate::style::TerminalSafe
     #[must_use]
     pub fn relay(rendered: &impl Relayable) -> Self {
-        Self::filled(&rendered.to_string())
+        let mut text = String::new();
+        // A `Display` that errs leaves what it wrote so far; relaying it is
+        // better than aborting the error path.
+        let _ = write!(text, "{rendered}");
+        Self::filled(&text)
     }
 
     /// Join catalog messages into one, one message per line.
@@ -414,7 +423,11 @@ pub fn fill(template: &str, args: &[(&str, &dyn fmt::Display)]) -> String {
             rest = after;
             continue;
         };
-        out.push_str(crate::style::TerminalSafe::sanitize(&value.to_string()).as_str());
+        let mut shown = String::new();
+        // A `Display` that errs leaves what it wrote so far; the message is
+        // still filled rather than aborted.
+        let _ = write!(shown, "{value}");
+        out.push_str(crate::style::TerminalSafe::sanitize(&shown).as_str());
         rest = after.get(close.saturating_add(1)..).unwrap_or("");
     }
     out.push_str(rest);
@@ -1483,8 +1496,14 @@ mod tests {
             message,
             "ipe package publish: `x` declares no `version = \"…\"` — publish records the version being published, so the manifest must name one."
         );
-        let csi = msg::publish_no_version(&"y\u{1b}[");
-        assert!(csi.ends_with("so the manifest must name one."), "{csi:?}");
+        // The catalog text after `{why}` opens with a space and a dash, neither
+        // a CSI final byte, so a whole-text-only pass would swallow them.
+        let raw = crate::style::TerminalSafe::sanitize("raw");
+        let csi = msg::package_name_invalid(&raw, &"y\u{1b}[");
+        assert_eq!(
+            csi,
+            "`raw` is not a valid package name: y — a name is joined into a filesystem path, so it must be a single portable path component (matching `[a-z0-9]([a-z0-9]|-[a-z0-9])*`)"
+        );
     }
 
     /// A relayed refusal is sanitised: its own `Display` cannot smuggle an

@@ -4833,4 +4833,39 @@ iced = "=0.12.1"
             SandboxRoute::Unsandboxed
         ));
     }
+
+    /// An escape sequence in a dependency name cannot swallow the reasons after
+    /// it nor the closing no-sandbox warning: the name is terminal-safe from the
+    /// moment the refusal is built, and the relay's own pass stops any
+    /// sequence at the line break.
+    #[test]
+    fn an_escape_in_a_dependency_name_keeps_the_refusal_tail() {
+        use ipe_ffi::capability_scan::{Capability, RefuseReason};
+        let refusal = WrapperRefusal {
+            reasons: vec![
+                RefuseReason::NonStdDependency {
+                    name: crate::style::TerminalSafe::sanitize("dep\u{1b}]8;;https://evil"),
+                },
+                RefuseReason::DeclaredUnenforceable {
+                    cap: Capability::Network,
+                },
+            ],
+            proposed: BTreeSet::new(),
+        };
+        let relayed = crate::text::Message::relay(&refusal).to_string();
+        assert!(
+            relayed.contains("depends on `dep` — a dependency"),
+            "{relayed:?}"
+        );
+        assert!(relayed.contains("  - declares `"), "{relayed:?}");
+        assert!(
+            relayed.contains("inferred from its source: (none"),
+            "{relayed:?}"
+        );
+        assert!(
+            relayed.contains("Ipê has no runtime sandbox around the emitted app yet"),
+            "{relayed:?}"
+        );
+        assert!(!relayed.contains("evil"), "{relayed:?}");
+    }
 }
