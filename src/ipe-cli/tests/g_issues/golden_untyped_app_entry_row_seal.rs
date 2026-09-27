@@ -2,17 +2,20 @@
 //! parameter the entry's model is read through.
 //!
 //! `mk m = Web.embed { init = \_ -> ( m, Cmd.none ), … }` with a `view` that
-//! reads `model.count` infers `m : { r | count : Int }` — an open record whose
-//! row tail is generalized with no annotation to name it. The generic-entry
-//! walk sees no annotation row generics for an unannotated definition, so this
-//! shape must land on exactly one of the two sound outcomes:
+//! reads `model.count`. An unannotated binding never generalizes a record row,
+//! so `m` is pinned to the use site's `Model`. Each fixture must land on
+//! exactly one of the two sound outcomes:
 //!
-//! - refused by `ipe` with IPE-N0051 (the entry's model still generic), or
+//! - refused by `ipe` with IPE-N0051 (the entry's model or message is still a
+//!   type variable), or
 //! - accepted, and then — under `IPE_E2E` — the emitted crate `cargo build`s.
 //!
 //! Any other diagnostic, or an accept whose crate fails cargo, fails the test.
-//! The entry is a mounted server app, so the emitted binary listens forever;
-//! the positive leg proves the build, not a run.
+//! The unpinned-message fixture's `update` ignores its message and its view
+//! emits none (`notFound` is the route fallback, not a message), so nothing
+//! fixes `msg`; the pinned-message fixture matches on it. The entry is a
+//! mounted server app, so the emitted binary listens forever; the positive leg
+//! proves the build, not a run.
 //!
 //! ```text
 //! # emit / refusal check only (fast):
@@ -56,7 +59,7 @@ fn out_dir(name: &str) -> PathBuf {
 }
 
 /// An unannotated `mk` whose `Web.embed` model is the parameter `m`, read
-/// through `model.count` in `view`.
+/// through `model.count` in `view`, and whose message type nothing fixes.
 const UNTYPED_EMBED_ROW_MODEL: &str = r#"module Main exposing (main)
 
 import Ipe.Server.Http as Server
@@ -97,15 +100,99 @@ main =
     Server.listen 8000 [ Server.mountApp "/" (mk initialModel) ]
 "#;
 
+/// [`UNTYPED_EMBED_ROW_MODEL`] with `update` matching on its `Msg`, so the
+/// message type is fixed and only the model flows through the parameter.
+const UNTYPED_EMBED_ROW_MODEL_PINNED_MSG: &str = r#"module Main exposing (main)
+
+import Ipe.Server.Http as Server
+import Ipe.String as String
+import Ipe.Task as Task exposing (Task)
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+
+
+type alias Model =
+    { count : Int }
+
+
+type Msg
+    = Noop
+
+
+initialModel : Model
+initialModel =
+    { count = 0 }
+
+
+mk m =
+    Web.embed
+        { init = \_ -> ( m, Cmd.none )
+        , update =
+            \msg model ->
+                case msg of
+                    Noop ->
+                        ( model, Cmd.none )
+        , view = \model -> Ui.text (String.fromInt model.count)
+        , subscriptions = \_ -> Sub.none
+        , routes = []
+        , notFound = Noop
+        }
+
+
+main : Task Error ()
+main =
+    Server.listen 8000 [ Server.mountApp "/" (mk initialModel) ]
+"#;
+
 #[test]
 fn untyped_embed_row_model_refused_or_builds() {
     let name = "untyped_embed_row_model";
-    let Some(entry) = write_single(name, UNTYPED_EMBED_ROW_MODEL) else {
+    let Some((built, out)) = build_fixture(name, UNTYPED_EMBED_ROW_MODEL) else {
+        return;
+    };
+    match built {
+        Ok(()) => crate::support::assert_seal_builds(name, &out),
+        Err(CliError::Pipeline { diag, .. }) => assert_eq!(
+            diag.code(),
+            ipe_diagnostics::IPE_N0051,
+            "{name}: a refusal must be the app-entry IPE-N0051, not another reason"
+        ),
+        Err(other) => assert!(
+            false_marker(),
+            "{name}: non-pipeline build error: {other:?}"
+        ),
+    }
+}
+
+/// With its message type fixed nothing is generic, so the entry must be
+/// accepted and its crate must `cargo build` (the mounted app's two callback
+/// copies both capture `m`).
+#[test]
+fn untyped_embed_row_model_pinned_msg_builds() {
+    let name = "untyped_embed_row_model_pinned_msg";
+    let Some((built, out)) = build_fixture(name, UNTYPED_EMBED_ROW_MODEL_PINNED_MSG) else {
+        return;
+    };
+    match built {
+        Ok(()) => crate::support::assert_seal_builds(name, &out),
+        Err(err) => assert!(
+            false_marker(),
+            "{name}: a fully concrete app entry must be accepted, got: {err:?}"
+        ),
+    }
+}
+
+/// Build `source` as `name`, returning the build result and its output dir
+/// (`None`, after a failed assertion, when scratch or runtime setup fails).
+fn build_fixture(name: &str, source: &str) -> Option<(Result<(), CliError>, PathBuf)> {
+    let Some(entry) = write_single(name, source) else {
         assert!(
             false_marker(),
             "{name}: could not write the fixture into the scratch dir"
         );
-        return;
+        return None;
     };
     let out = out_dir(name);
     let runtime = match ipe::resolve_runtime() {
@@ -115,19 +202,8 @@ fn untyped_embed_row_model_refused_or_builds() {
                 false_marker(),
                 "{name}: the embedded runtime could not be resolved: {err:?}"
             );
-            return;
+            return None;
         }
     };
-    match ipe::build(&entry, &out, &runtime) {
-        Ok(()) => crate::support::assert_seal_builds(name, &out),
-        Err(CliError::Pipeline { diag, .. }) => assert_eq!(
-            diag.code(),
-            ipe_diagnostics::IPE_N0051,
-            "{name}: a refusal must be the generic-app-entry IPE-N0051, not another reason"
-        ),
-        Err(other) => assert!(
-            false_marker(),
-            "{name}: non-pipeline build error: {other:?}"
-        ),
-    }
+    Some((ipe::build(&entry, &out, &runtime), out))
 }

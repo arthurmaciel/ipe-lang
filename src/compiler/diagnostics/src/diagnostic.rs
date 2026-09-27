@@ -785,6 +785,13 @@ pub enum NameError {
         type_var: Box<str>,
         reach: GenericAppEntryReach,
     },
+    /// An app entry whose model or message type the program never fixes — an
+    /// `update` that ignores its message and a view that emits none leave
+    /// `msg` a type variable no definition is generic over. The running app
+    /// needs one concrete `Model` / `Msg` exactly as for
+    /// [`NameError::GenericAppEntry`]. `entry` is the entry's qualified name.
+    /// [IPE-N0051]
+    UnpinnedAppEntry { entry: Box<str> },
 }
 
 /// How a [`NameError::GenericAppEntry`] refusal relates the entry to its
@@ -2155,7 +2162,7 @@ const fn name_code(msg: &NameError) -> Code {
         NameError::RustNameFold { .. } => IPE_N0048,
         NameError::DuplicatePatternBinder { .. } => IPE_N0049,
         NameError::ScriptImportsShapeView { .. } => IPE_N0050,
-        NameError::GenericAppEntry { .. } => IPE_N0051,
+        NameError::GenericAppEntry { .. } | NameError::UnpinnedAppEntry { .. } => IPE_N0051,
     })
 }
 
@@ -2371,6 +2378,7 @@ fn name_help(msg: &NameError, span: Span) -> Vec<HelpLine> {
         | NameError::ModuleNotAllowedInPlacement(..)
         | NameError::ScriptImportsShapeView { .. }
         | NameError::GenericAppEntry { .. }
+        | NameError::UnpinnedAppEntry { .. }
         | NameError::WebInitPolyArg => Vec::new(), // no span-based help
     }
 }

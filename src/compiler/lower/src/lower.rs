@@ -174,6 +174,27 @@ fn arrow_params(fn_ty: &Ty) -> Vec<&Ty> {
     params
 }
 
+/// Whether `t` still holds a type variable anywhere, an open record row tail included.
+///
+/// The walk is bounded by the solved type's own depth.
+fn ty_has_type_var(t: &Ty) -> bool {
+    match t {
+        Ty::Var(_) => true,
+        Ty::Fun(a, b) => ty_has_type_var(a) || ty_has_type_var(b),
+        Ty::Con { args, .. } | Ty::Tuple(args) => args.iter().any(ty_has_type_var),
+        Ty::Record(fields, tail) => {
+            matches!(tail, RowTail::Open(_)) || fields.values().any(ty_has_type_var)
+        }
+        Ty::Unit => false,
+    }
+}
+
+/// The qualified surface name of app entry `kernel` (`Web.embed`), as diagnostics print it.
+fn app_entry_name(kernel: KernelFn) -> Box<str> {
+    let def = kernel.def();
+    format!("{}.{}", def.qualifier, def.name).into_boxed_str()
+}
+
 /// The solved type scheme variable `var` is instantiated to, found by walking `shape` alongside `solved`.
 ///
 /// Aligns exactly the positions [`ipe_kernels::shape_aligns_var`] counts — an
@@ -25000,7 +25021,8 @@ impl<'a> Lowerer<'a> {
         self.reject_curried_andmap_payload(&resolved, callee)?;
         match &resolved {
             Callee::Kernel(kernel) => {
-                self.reject_generic_app_entry(*kernel, callee.span)?;
+                // Row generics are refused by the body pre-walk, which alone knows them.
+                self.reject_generic_app_entry(*kernel, callee.span, &BTreeSet::new())?;
                 self.note_sync_captures(*kernel, callee.span);
             }
             Callee::Func(id) => self.note_callee_instance(*id, callee.span),
@@ -25076,8 +25098,50 @@ impl<'a> Lowerer<'a> {
     /// A definition with no generics cannot leak one into the entry. With
     /// generics in scope, a missing region type proves nothing, so it is
     /// refused (fail-closed).
-    fn reject_generic_app_entry(&self, kernel: KernelFn, span: Span) -> DResult<()> {
-        if !kernel.is_app_entry() || self.current_poly_tvars.borrow().is_empty() {
+    ///
+    /// A region type carries no record row tails, so it cannot show whether an
+    /// entry's model reaches one of `row_vars` (the annotation's row
+    /// generics); with any in scope the entry is refused (fail-closed).
+    ///
+    /// A solved type still holding a type variable that is no generic of the
+    /// definition means the program never fixes the app's model or message
+    /// type (an `update` that ignores its message, a view that emits none);
+    /// that entry is refused too. This is the one classification of an app
+    /// entry, so a generic is named before an unfixed type is reported, and
+    /// both are reported before any cfg value reaches the polymorphic-value
+    /// check.
+    fn reject_generic_app_entry(
+        &self,
+        kernel: KernelFn,
+        span: Span,
+        row_vars: &BTreeSet<Symbol>,
+    ) -> DResult<()> {
+        if !kernel.is_app_entry() {
+            return Ok(());
+        }
+        self.reject_poly_tvar_app_entry(kernel, span)?;
+        if let Some(row_var) = row_vars.first() {
+            return Err(self.generic_app_entry_error(
+                kernel,
+                span,
+                *row_var,
+                GenericAppEntryReach::Undetermined,
+            ));
+        }
+        if self.region_ty(span).is_some_and(ty_has_type_var) {
+            return Err(Diagnostic::Name {
+                span,
+                msg: NameError::UnpinnedAppEntry {
+                    entry: app_entry_name(kernel),
+                },
+            });
+        }
+        Ok(())
+    }
+
+    /// The generic-of-the-definition half of [`Self::reject_generic_app_entry`].
+    fn reject_poly_tvar_app_entry(&self, kernel: KernelFn, span: Span) -> DResult<()> {
+        if self.current_poly_tvars.borrow().is_empty() {
             return Ok(());
         }
         let offending = self.region_ty(span).map_or_else(
@@ -25108,11 +25172,10 @@ impl<'a> Lowerer<'a> {
         type_var: Symbol,
         reach: GenericAppEntryReach,
     ) -> Diagnostic {
-        let def = kernel.def();
         Diagnostic::Name {
             span,
             msg: NameError::GenericAppEntry {
-                entry: format!("{}.{}", def.qualifier, def.name).into_boxed_str(),
+                entry: app_entry_name(kernel),
                 type_var: self.resolve(type_var).unwrap_or("a").into(),
                 reach,
             },
@@ -25125,12 +25188,8 @@ impl<'a> Lowerer<'a> {
     /// itself is lowered, but a sub-expression lowered earlier — a `let`
     /// alias's value, a cfg field — can hit an unrelated lowering limit first
     /// and report the program for the wrong reason. Walking the whole body
-    /// first makes IPE-N0051 the refusal wherever the entry sits.
-    ///
-    /// A region type carries no record row tails, so it cannot show whether an
-    /// entry's model reaches one of `row_vars` (the annotation's row
-    /// generics). With any row generic in scope an app entry is refused
-    /// (fail-closed).
+    /// first makes IPE-N0051 the refusal wherever the entry sits. `row_vars`
+    /// are the annotation's row generics ([`Self::reject_generic_app_entry`]).
     ///
     /// The walk is an explicit work stack over the canonical tree, whose size
     /// the parser's limits already bound.
@@ -25145,17 +25204,7 @@ impl<'a> Lowerer<'a> {
                 canon::Expr_::VarKernel {
                     id: Some(kernel), ..
                 } => {
-                    if kernel.is_app_entry() {
-                        self.reject_generic_app_entry(*kernel, e.span)?;
-                        if let Some(row_var) = row_vars.first() {
-                            return Err(self.generic_app_entry_error(
-                                *kernel,
-                                e.span,
-                                *row_var,
-                                GenericAppEntryReach::Undetermined,
-                            ));
-                        }
-                    }
+                    self.reject_generic_app_entry(*kernel, e.span, row_vars)?;
                 }
                 canon::Expr_::Lambda(_, inner) | canon::Expr_::Access(inner, _) => {
                     work.push(inner);

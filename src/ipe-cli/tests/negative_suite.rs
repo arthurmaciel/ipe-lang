@@ -2999,6 +2999,83 @@ fn row_generic_in_scope_web_embed_refused_undetermined() {
     }
 }
 
+/// A mounted `Web.embed` in a definition with no generics whose message type
+/// nothing fixes: `update` ignores its message, the view emits none, and
+/// `notFound` is the route fallback, so `msg` stays a type variable.
+const WEB_EMBED_UNPINNED_MSG: &str = r#"module Main exposing (main)
+import Ipe.Server.Http as Server
+import Ipe.Task as Task exposing (Task)
+import Ipe.Tea.Web as Web
+import Ipe.Tea.Web.Cmd as Cmd
+import Ipe.Tea.Web.Sub as Sub
+import Ipe.Ui as Ui
+type alias Model = { count : Int }
+type Msg = Noop
+app : Web.WebApp
+app =
+    Web.embed
+        { init = \_ -> ( { count = 0 }, Cmd.none )
+        , update = \_ m -> ( m, Cmd.none )
+        , view = \_ -> Ui.text "hi"
+        , subscriptions = \_ -> Sub.none
+        , routes = []
+        , notFound = Noop
+        }
+main : Task Error ()
+main =
+    Server.listen 8000 [ Server.mountApp "/" app ]
+"#;
+
+/// An app entry whose message type the program never fixes is refused with
+/// IPE-N0051 at the entry, before any cfg value reaches the polymorphic-value
+/// check (IPE-L0102).
+#[test]
+fn unpinned_msg_web_embed_refused() {
+    let name = "unpinned_msg_web_embed";
+    let Some(entry) = write_entry(name, WEB_EMBED_UNPINNED_MSG) else {
+        return;
+    };
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("negsuite-out")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&out);
+    let Ok(runtime) = ipe::resolve_runtime() else {
+        return;
+    };
+    match ipe::build_with_options(&entry, &out, &runtime, BuildOptions::default()) {
+        Err(CliError::Pipeline { diag, .. }) => match *diag {
+            ipe_diagnostics::Diagnostic::Name {
+                msg: ipe_diagnostics::NameError::UnpinnedAppEntry { entry },
+                ..
+            } => assert_eq!(
+                &*entry, "Web.embed",
+                "{name}: the refusal must name the entry"
+            ),
+            other => assert!(
+                false_marker(),
+                "{name}: expected IPE-N0051 for the unpinned message type, got {}",
+                other.code().as_str()
+            ),
+        },
+        Ok(()) => fail_accepted(name, "IPE-N0051", "compiled successfully (exit 0)"),
+        Err(other) => fail_accepted(name, "IPE-N0051", &format!("non-pipeline error: {other:?}")),
+    }
+}
+
+/// The contrapositive: the same app with `update` matching on its `Msg` is accepted.
+#[test]
+fn pinned_msg_web_embed_compiles() {
+    let src = WEB_EMBED_UNPINNED_MSG.replace(
+        "        , update = \\_ m -> ( m, Cmd.none )\n",
+        "        , update = \\msg m -> case msg of\n            Noop -> ( m, Cmd.none )\n",
+    );
+    assert!(
+        src != WEB_EMBED_UNPINNED_MSG,
+        "the fixture must carry the message-ignoring update this test replaces"
+    );
+    assert_compiles("pinned_msg_web_embed", &src);
+}
+
 /// A point-free `let` alias of `Web.embed` inside a msg-generic helper is refused.
 ///
 /// The alias is monomorphic (no let-generalization), so its `Web.embed`

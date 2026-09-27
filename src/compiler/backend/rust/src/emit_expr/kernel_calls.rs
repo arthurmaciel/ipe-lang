@@ -1,9 +1,9 @@
 use super::{
     ArgPlan, Callee, DResult, Diagnostic, Expr, GenericScope, Guard, IrType, KernelClass, KernelFn,
     LitKind, LowerError, NativeUiEmit, Span, Symbol, UiDelegate, UiEmitPlan,
-    appearance_literal_record_fields, callee_name, clone_targets_in_expr, emit_expr_at,
-    emit_lambda_unboxed, emit_shared_lambda, emit_sub_arm, float_literal, free_vars, kernel_name,
-    render_type, shape_appearance_literal_args, ui_call_shape,
+    appearance_literal_record_fields, callee_name, clone_targets_in_expr, collect_free_vars,
+    emit_expr_at, emit_lambda_unboxed, emit_shared_lambda, emit_sub_arm, float_literal, free_vars,
+    kernel_name, render_type, shape_appearance_literal_args, ui_call_shape,
 };
 use crate::EmitCtx;
 use core::fmt::Write as _;
@@ -1902,12 +1902,28 @@ pub fn emit_tea_call(
 /// `requires_sync_capture`), or a `Copy` leaf (whose `.clone()` is a bitwise
 /// copy).
 pub fn stream_handler_capture_prologue(ctx: &EmitCtx, handler: &Expr) -> DResult<String> {
+    capture_clone_prologue(ctx, [handler])
+}
+
+/// A `let <v> = <v>.clone(); …` prologue for every free local of `exprs`, each named once.
+///
+/// Spliced ahead of emitted code that `move`-captures those locals while the
+/// originals must stay available afterwards — the prologue's shadowing clones
+/// are what the captures consume.
+pub fn capture_clone_prologue<'e>(
+    ctx: &EmitCtx,
+    exprs: impl IntoIterator<Item = &'e Expr>,
+) -> DResult<String> {
+    let mut captured = std::collections::BTreeSet::new();
+    for expr in exprs {
+        collect_free_vars(expr, &mut captured);
+    }
     let mut prologue = String::new();
-    for sym in free_vars(handler) {
+    for sym in captured {
         let id = ctx.emit_ident(sym)?;
         write!(prologue, "let {id} = {id}.clone(); ").map_err(|_| Diagnostic::CompilerBug {
-            where_: "ipe_backend_rust::stream_handler_capture_prologue",
-            detail: "writing stream-handler capture-clone prologue failed".to_owned(),
+            where_: "ipe_backend_rust::capture_clone_prologue",
+            detail: "writing capture-clone prologue failed".to_owned(),
         })?;
     }
     Ok(prologue)
