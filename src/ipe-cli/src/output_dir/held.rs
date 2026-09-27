@@ -16,14 +16,16 @@ use std::path::{Path, PathBuf};
 use rustix::fs::{AtFlags, CWD, Dir, FileType, Mode, OFlags};
 use rustix::io::Errno;
 
-use super::{MARKER_HEADER, MARKER_READ_CAP, MARKER_TEXT, OWNERSHIP_MARKER, OutputRefusal};
+use super::{
+    MARKER_HEADER, MARKER_READ_CAP, MARKER_TEXT, OWNERSHIP_MARKER, OutputRefusal, temp_suffix,
+};
 use crate::{CliError, io_err};
 
 /// Deepest directory nesting [`HeldDir::remove_entry`] descends.
 ///
 /// Each level keeps two descriptors open (the handle and its listing), so the
 /// ceiling also bounds descriptor use.
-const MAX_REMOVE_DEPTH: usize = 128;
+pub const MAX_REMOVE_DEPTH: usize = 128;
 
 /// The device and inode of a directory, its identity across path lookups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,17 +76,6 @@ fn dir_mode() -> Mode {
     Mode::RWXU | Mode::RWXG | Mode::RWXO
 }
 
-/// A process-unique suffix for a temp file name.
-fn temp_suffix() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-    format!(
-        "{}.{}",
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
 /// The `CliError` for `errno` met at `path`.
 fn errno_err(path: &Path, errno: Errno) -> CliError {
     io_err(path, std::io::Error::from(errno))
@@ -133,10 +124,7 @@ impl HeldDir {
             return Self::open_following(path);
         };
         let parent = path.parent().unwrap_or_else(|| Path::new(""));
-        match Self::open_following(parent)? {
-            Some(parent) => parent.child(name),
-            None => Ok(None),
-        }
+        Self::open_following(parent)?.map_or(Ok(None), |parent| parent.child(name))
     }
 
     /// The path this handle was reached by.
@@ -166,7 +154,12 @@ impl HeldDir {
             Ok(stat) => Ok(match FileType::from_raw_mode(stat.st_mode) {
                 FileType::Directory => EntryKind::Directory,
                 FileType::Symlink => EntryKind::Symlink,
-                _ => EntryKind::Other,
+                FileType::RegularFile
+                | FileType::Fifo
+                | FileType::Socket
+                | FileType::CharacterDevice
+                | FileType::BlockDevice
+                | FileType::Unknown => EntryKind::Other,
             }),
             Err(e) if e == Errno::NOENT => Ok(EntryKind::Absent),
             Err(e) => Err(errno_err(&self.path.join(name), e)),
@@ -214,10 +207,10 @@ impl HeldDir {
             Err(e) if e == Errno::EXIST => false,
             Err(e) => return Err(errno_err(&path, e)),
         };
-        match self.child(name)? {
-            Some(child) => Ok((child, created)),
-            None => Err(errno_err(&path, Errno::NOENT)),
-        }
+        self.child(name)?.map_or_else(
+            || Err(errno_err(&path, Errno::NOENT)),
+            |child| Ok((child, created)),
+        )
     }
 
     /// Whether this directory carries a genuine ownership marker.
@@ -359,8 +352,8 @@ impl HeldDir {
     /// met inside the tree is removed as the link it is, never followed.
     ///
     /// # Errors
-    /// [`OutputRefusal::Symlink`]; [`CliError::Io`] on a filesystem failure,
-    /// or a tree nested deeper than the removal ceiling.
+    /// [`OutputRefusal::Symlink`]; [`OutputRefusal::TooDeep`] for a tree nested
+    /// deeper than [`MAX_REMOVE_DEPTH`]; [`CliError::Io`] on a filesystem failure.
     pub fn remove_entry(&self, name: &OsStr) -> Result<(), CliError> {
         match self.kind_of(name)? {
             EntryKind::Absent => Ok(()),
@@ -388,13 +381,11 @@ impl HeldDir {
     fn remove_dir(&self, name: &OsStr, depth: usize) -> Result<(), CliError> {
         let path = self.path.join(name);
         if depth >= MAX_REMOVE_DEPTH {
-            return Err(io_err(
-                &path,
-                std::io::Error::other(format!(
-                    "directory tree nested deeper than {MAX_REMOVE_DEPTH} levels — \
-                     refusing to remove it"
-                )),
-            ));
+            return Err(OutputRefusal::TooDeep {
+                path,
+                limit: MAX_REMOVE_DEPTH,
+            }
+            .into());
         }
         if let Some(child) = self.child(name)? {
             child.remove_contents(depth)?;

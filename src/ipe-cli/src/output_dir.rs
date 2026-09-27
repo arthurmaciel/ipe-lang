@@ -162,6 +162,13 @@ pub enum OutputRefusal {
     },
     /// An owned directory's path now names a different directory than the one claimed.
     Replaced(PathBuf),
+    /// A directory tree nests deeper than a walk over it is allowed to descend.
+    TooDeep {
+        /// The level at which the walk stopped.
+        path: PathBuf,
+        /// The deepest nesting the walk descends.
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for OutputRefusal {
@@ -257,6 +264,12 @@ impl std::fmt::Display for OutputRefusal {
                 "{} was replaced after ipe claimed it — refusing to write or delete in it; \
                  run the command again",
                 p.display()
+            ),
+            Self::TooDeep { path, limit } => write!(
+                f,
+                "{} is nested more than {limit} directories deep — ipe refuses to walk it; \
+                 remove the tree yourself",
+                path.display()
             ),
         }
     }
@@ -734,19 +747,13 @@ impl OwnedPath {
         permissions: Option<std::fs::Permissions>,
         fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
     ) -> Result<(), CliError> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static SEQ: AtomicU64 = AtomicU64::new(0);
         self.walk(Walk::CreateParents)?;
         let target = self.path();
         let parent = target.parent().unwrap_or(&self.root).to_path_buf();
         let name = target
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let tmp = parent.join(format!(
-            ".{name}.ipe-tmp.{}.{}",
-            std::process::id(),
-            SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
+        let tmp = parent.join(format!(".{name}.ipe-tmp.{}", temp_suffix()));
         let written = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -772,8 +779,18 @@ impl OwnedPath {
     }
 }
 
+/// A process-unique suffix (`<pid>.<n>`) for a temp file name.
+fn temp_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}.{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// Refuse a symlink at `path`, and a non-directory when `wants_dir`.
-#[cfg(not(unix))]
 fn reject_link_or_file(path: &Path, wants_dir: bool) -> Result<(), CliError> {
     let meta = std::fs::symlink_metadata(path).map_err(|e| io_err(path, e))?;
     if meta.file_type().is_symlink() {
@@ -2333,6 +2350,103 @@ mod tests {
             std::fs::read_dir(&victim).expect("read victim").count(),
             0,
             "nothing reaches the link target"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Whether `dir` holds an entry whose name starts with `prefix` and contains `infix`.
+    #[cfg(unix)]
+    fn holds_temp(dir: &Path, prefix: &str, infix: &str) -> bool {
+        std::fs::read_dir(dir).expect("read dir").any(|entry| {
+            let name = entry.expect("dir entry").file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(prefix) && name.contains(infix)
+        })
+    }
+
+    /// A removal descends at most `MAX_REMOVE_DEPTH` levels; a deeper tree is refused, typed.
+    #[cfg(unix)]
+    #[test]
+    fn remove_refuses_a_tree_deeper_than_the_ceiling() {
+        let base = scratch("remove_depth");
+        let out = OwnedDir::claim(&base.join("out")).expect("claim out");
+        let limit = super::held::MAX_REMOVE_DEPTH;
+
+        let mut deepest_allowed = out.path().join("ok");
+        for _ in 1..limit {
+            deepest_allowed.push("d");
+        }
+        std::fs::create_dir_all(&deepest_allowed).expect("make tree at the ceiling");
+        std::fs::write(deepest_allowed.join("f.txt"), "x").expect("leaf file");
+        let removed = out.path_to("ok").expect("path").remove();
+        assert!(
+            removed.is_ok(),
+            "a tree at the ceiling is removed, got {removed:?}"
+        );
+        assert!(
+            std::fs::symlink_metadata(out.path().join("ok")).is_err(),
+            "the tree at the ceiling is gone"
+        );
+
+        let mut too_deep = out.path().join("deep");
+        for _ in 0..limit {
+            too_deep.push("d");
+        }
+        std::fs::create_dir_all(&too_deep).expect("make tree past the ceiling");
+        std::fs::write(too_deep.join("f.txt"), "x").expect("leaf file");
+        let refused = out.path_to("deep").expect("path").remove();
+        assert!(
+            matches!(
+                refused,
+                Err(CliError::OutputRefused(OutputRefusal::TooDeep { limit: l, .. })) if l == limit
+            ),
+            "a tree past the ceiling is refused, got {refused:?}"
+        );
+        assert!(
+            too_deep.join("f.txt").is_file(),
+            "nothing past the ceiling is removed"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A marker whose rename fails (a directory holds its name) leaves no temp file behind.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_marker_rename_removes_its_temp_file() {
+        let base = scratch("marker_tmp");
+        let dir = base.join("out");
+        std::fs::create_dir_all(dir.join(OWNERSHIP_MARKER)).expect("directory at the marker name");
+        let claimed = OwnedDir::claim(&dir);
+        assert!(
+            matches!(claimed, Err(CliError::Io { .. })),
+            "the rename over a directory fails, got {claimed:?}"
+        );
+        assert!(
+            !holds_temp(&dir, &format!("{OWNERSHIP_MARKER}."), ".tmp"),
+            "no `{OWNERSHIP_MARKER}.*.tmp` survives the failed rename"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A file write whose rename fails (a directory holds its name) leaves no temp file behind.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_file_rename_removes_its_temp_file() {
+        let base = scratch("write_tmp");
+        let out = OwnedDir::claim(&base.join("out")).expect("claim out");
+        std::fs::create_dir_all(out.path().join("f.txt")).expect("directory at the file name");
+        let wrote = out.path_to("f.txt").expect("path").write(b"payload");
+        assert!(
+            matches!(wrote, Err(CliError::Io { .. })),
+            "the rename over a directory fails, got {wrote:?}"
+        );
+        assert!(
+            !holds_temp(out.path(), ".f.txt.", ".ipe-tmp."),
+            "no `.f.txt.ipe-tmp.*` survives the failed rename"
+        );
+        assert!(
+            out.path().join("f.txt").is_dir(),
+            "the directory at the name is untouched"
         );
         let _ = std::fs::remove_dir_all(&base);
     }

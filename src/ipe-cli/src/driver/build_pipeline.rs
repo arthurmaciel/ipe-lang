@@ -1,5 +1,5 @@
 use super::{CliError, diag_span, io_err};
-use crate::output_dir::{OwnedDir, OwnedPath};
+use crate::output_dir::{OutputRefusal, OwnedDir, OwnedPath};
 use crate::{
     BTreeMap, BTreeSet, Diagnostic, Interner, Path, PathBuf, build_plan, cache, contained_path,
     ffi, fs, project, render, runtime_embed,
@@ -2125,22 +2125,36 @@ pub fn write_if_changed(target: &OwnedPath, contents: &str) -> Result<(), CliErr
 /// keeps the pass's blast radius minimal.
 ///
 /// # Errors
-/// [`CliError::OutputRefused`] when `src/` is a symlink; [`CliError::Io`] on a
-/// filesystem failure.
+/// [`CliError::OutputRefused`] when `src/` is a symlink, or with
+/// [`OutputRefusal::TooDeep`] when the tree nests deeper than
+/// [`MAX_PRUNE_DEPTH`]; [`CliError::Io`] on a filesystem failure.
 pub fn prune_orphaned_files(
     crate_dir: &OwnedDir,
     manifest: &BTreeMap<PathBuf, String>,
 ) -> Result<(), CliError> {
     let src = crate_dir.path_to("src")?;
-    prune_dir(&src.path(), manifest, crate_dir)
+    prune_dir(&src.path(), manifest, crate_dir, 0)
 }
 
-/// One level of [`prune_orphaned_files`]; `dir` was reached without following a link.
+/// Deepest directory nesting under the crate's `src/` that
+/// [`prune_orphaned_files`] descends.
+pub const MAX_PRUNE_DEPTH: usize = 128;
+
+/// One level of [`prune_orphaned_files`], at nesting `depth` below `src/`;
+/// `dir` was reached without following a link.
 fn prune_dir(
     dir: &Path,
     manifest: &BTreeMap<PathBuf, String>,
     crate_dir: &OwnedDir,
+    depth: usize,
 ) -> Result<(), CliError> {
+    if depth > MAX_PRUNE_DEPTH {
+        return Err(OutputRefusal::TooDeep {
+            path: dir.to_path_buf(),
+            limit: MAX_PRUNE_DEPTH,
+        }
+        .into());
+    }
     // A directory that is absent, or vanishes before this read (a concurrent
     // external cleanup), trivially has nothing left to prune.
     let entries = match fs::read_dir(dir) {
@@ -2165,7 +2179,7 @@ fn prune_dir(
             Err(e) => return Err(io_err(&path, e)),
         };
         if file_type.is_dir() {
-            prune_dir(&path, manifest, crate_dir)?;
+            prune_dir(&path, manifest, crate_dir, depth.saturating_add(1))?;
         } else {
             // `path` was built from `dir`, itself a child of the crate
             // directory by construction, so `strip_prefix` fails only when that
@@ -2399,6 +2413,52 @@ pub fn resolve_vendored_runtime_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `src/` tree nested past [`MAX_PRUNE_DEPTH`] is refused with a typed
+    /// refusal, while one exactly at the ceiling is pruned.
+    #[test]
+    fn prune_refuses_a_tree_deeper_than_the_ceiling() {
+        let dir = std::env::temp_dir().join(format!("ipe_prune_depth_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let owned = OwnedDir::claim(&dir).expect("claim temp dir");
+        let manifest = BTreeMap::new();
+
+        let mut at_ceiling = dir.join("src");
+        for _ in 0..MAX_PRUNE_DEPTH {
+            at_ceiling.push("d");
+        }
+        fs::create_dir_all(&at_ceiling).expect("make tree at the ceiling");
+        fs::write(at_ceiling.join("orphan.rs"), "").expect("write orphan");
+        let pruned = prune_orphaned_files(&owned, &manifest);
+        assert!(
+            pruned.is_ok(),
+            "a tree at the ceiling is pruned, got {pruned:?}"
+        );
+        assert!(
+            !at_ceiling.join("orphan.rs").exists(),
+            "the orphan at the ceiling is removed"
+        );
+
+        let past = at_ceiling.join("d");
+        fs::create_dir_all(&past).expect("make tree past the ceiling");
+        fs::write(past.join("orphan.rs"), "").expect("write orphan");
+        let refused = prune_orphaned_files(&owned, &manifest);
+        assert!(
+            matches!(
+                refused,
+                Err(CliError::OutputRefused(OutputRefusal::TooDeep {
+                    limit: MAX_PRUNE_DEPTH,
+                    ..
+                }))
+            ),
+            "a tree past the ceiling is refused, got {refused:?}"
+        );
+        assert!(
+            past.join("orphan.rs").is_file(),
+            "nothing past the ceiling is touched"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// A same-length, same-content file is left untouched (no rewrite, mtime
     /// preserved) while a differing-length file is rewritten — the two branches
