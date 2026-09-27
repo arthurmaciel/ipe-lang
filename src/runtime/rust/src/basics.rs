@@ -258,14 +258,12 @@ pub fn basics_error_to_string<T: crate::stringify::IpeStringify>(v: T) -> String
 
 /// The `{{expr}}` string-interpolation renderer (internal kernel `Interpolate`).
 ///
-/// Backed by the total `IpeStringify` trait (the same path as
-/// [`basics_error_to_string`]): a `String` interpolates as itself (no
-/// surrounding quotes), a scalar renders as its display form, and records /
-/// ADTs / lists / maps use space-separated layout. Every scalar and every
-/// codegen-emitted record/ADT implements `IpeStringify`, so the bound is
-/// satisfiable at all call sites.
-pub fn interpolate_to_string<T: crate::stringify::IpeStringify>(v: T) -> String {
-    v.ipe_show()
+/// Bounded by the sealed `IpeInterpolate`, implemented for exactly `String` /
+/// `Int` / `Float` / `Bool` / `Char`: a `String` interpolates as itself and each
+/// other scalar as its `String.from*` conversion. Any other type is refused at
+/// type-check, and has no impl here to fall back on.
+pub fn interpolate_to_string<T: crate::stringify::IpeInterpolate>(v: T) -> String {
+    v.ipe_interpolate()
 }
 
 #[cfg(test)]
@@ -433,5 +431,9 @@ mod tests {
     #[test]
     fn test_interpolate_float() {
         assert_eq!(interpolate_to_string(42.5f64), "42.5");
+    }
+    #[test]
+    fn test_interpolate_char() {
+        assert_eq!(interpolate_to_string('x'), "x");
     }
 }

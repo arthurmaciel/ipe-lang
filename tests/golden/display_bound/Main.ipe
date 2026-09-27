@@ -7,15 +7,14 @@ import Ipe.Db
 
 -- Regression — `{{x}}` interpolation of a wildcard `any` param.
 --
--- The runtime renderer `interpolate_to_string<T: IpeStringify>` needs its arg
--- to be `IpeStringify`. The general kernel->bound map
--- (`apply_kernel_type_param_bounds`) obliges `IpeStringify` (BoundSet::SHOW) on
--- any generic param an `Interpolate` kernel is applied to — the same
--- structural machinery as the `Db.get*`->`IpeRow` obligation, generalised.
--- `IpeStringify` is satisfiable by every scalar AND every composite, so the
--- emitted `main_render` body's `interpolate_to_string(x)` type-checks and the crate
--- cargo-builds (without the bound the enclosing `<T1: Clone>` param could not
--- prove the obligation → E0277 at cargo, an exit-0-then-cargo-fail breach).
+-- The runtime renderer `interpolate_to_string<T: IpeInterpolate>` needs its arg
+-- to be `IpeInterpolate` (the sealed closed-scalar trait). The general
+-- kernel->bound map (`apply_kernel_type_param_bounds`) obliges it
+-- (BoundSet::INTERPOLABLE) on any generic param an `Interpolate` kernel is
+-- applied to, and the type checker carries the same interpolable obligation to
+-- every caller, so the emitted `main_render` body's `interpolate_to_string(x)`
+-- type-checks and the crate cargo-builds (without the bound the enclosing
+-- `<T1: Clone>` param could not prove the obligation → E0277 at cargo).
 render : any -> String
 render x =
     """value={{x}}"""

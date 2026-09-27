@@ -45,7 +45,10 @@ html = """<div class="card">
 
 Single `{` literal. Interpolation exprs = identifiers, field access
 (`{{record.field}}`), qualified names (`{{String.fromInt n}}`), or
-function calls.
+function calls. The value must be a `String`, `Int`, `Float`, `Bool` or
+`Char` (rendered as its `String.from*`); a record, custom type, `List`,
+`Maybe`, tuple or opaque value (`Request`, `Secret`) is refused (IPE-T0014) —
+interpolate its fields. `Log.*With` attrs obey the same rule.
 
 Escape w/ backslash: `\{{` emits literal `{{` (no interpolation). Use to
 ship Mustache/Handlebars/shell-script placeholders downstream without Ipê

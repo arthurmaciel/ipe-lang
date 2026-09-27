@@ -1,7 +1,13 @@
-//! `IpeStringify` — the total Ipê value stringifier.
+//! `IpeStringify` — the total Ipê value stringifier — and `IpeInterpolate`,
+//! the closed scalar renderer behind `{{expr}}` interpolation and `Log.*With`.
 //!
-//! Backs `Basics.errorToString` (and `Ipe.Test.debugShow`, which is just
-//! `errorToString v`). Every type reachable from a generic `errorToString`
+//! `IpeInterpolate` is sealed and implemented for exactly the five interpolable
+//! scalars ([`INTERPOLABLE_IPE_TYPES`]); no record, ADT, container or opaque
+//! runtime type can reach an interpolation or a log attribute, so neither path
+//! has a `Debug` fallback.
+//!
+//! `IpeStringify` backs `Basics.errorToString` (and `Ipe.Test.debugShow`, which
+//! is just `errorToString v`). Every type reachable from a generic `errorToString`
 //! call implements this trait (runtime primitives below; every codegen-emitted
 //! record/ADT gets an `IpeStringify` impl from the compiler's emitter).
 //!
@@ -88,6 +94,63 @@ pub trait ViaDebug {
 impl<T: core::fmt::Debug> ViaDebug for &Wrap<T> {
     fn dispatch(&self) -> String {
         format!("{:?}", self.0)
+    }
+}
+
+// ─── Interpolation: the closed scalar set ───────────────────────────────────
+
+/// The Ipê types [`IpeInterpolate`] is implemented for, by Ipê name — the
+/// runtime side of the compiler's interpolable set, asserted equal to it by a
+/// workspace test so the type checker and this impl set cannot drift.
+pub const INTERPOLABLE_IPE_TYPES: [&str; 5] = ["String", "Int", "Float", "Bool", "Char"];
+
+mod sealed {
+    /// Seals [`super::IpeInterpolate`]: only this module can implement it.
+    pub trait Sealed {}
+    impl Sealed for String {}
+    impl Sealed for i64 {}
+    impl Sealed for f64 {}
+    impl Sealed for bool {}
+    impl Sealed for char {}
+}
+
+/// Renders an interpolable scalar for `{{expr}}` and `Log.*With` attributes.
+///
+/// Sealed and implemented for exactly `String` / `Int` / `Float` / `Bool` /
+/// `Char`, each through the same function its `String.from*` conversion uses,
+/// so an interpolation and the explicit conversion never disagree.
+pub trait IpeInterpolate: sealed::Sealed {
+    /// The rendered text of `self`.
+    fn ipe_interpolate(&self) -> String;
+}
+
+impl IpeInterpolate for String {
+    fn ipe_interpolate(&self) -> String {
+        self.clone()
+    }
+}
+
+impl IpeInterpolate for i64 {
+    fn ipe_interpolate(&self) -> String {
+        crate::string::string_from_int(*self)
+    }
+}
+
+impl IpeInterpolate for f64 {
+    fn ipe_interpolate(&self) -> String {
+        crate::string::string_from_float(*self)
+    }
+}
+
+impl IpeInterpolate for bool {
+    fn ipe_interpolate(&self) -> String {
+        crate::string::string_from_bool(*self)
+    }
+}
+
+impl IpeInterpolate for char {
+    fn ipe_interpolate(&self) -> String {
+        crate::string::string_from_char(*self)
     }
 }
 
@@ -465,6 +528,18 @@ mod tests {
                 (&Wrap(&self.debug_only)).dispatch()
             )
         }
+    }
+
+    // Interpolation renders each scalar exactly as its `String.from*` does.
+    #[test]
+    fn interpolate_matches_the_string_conversions() {
+        for f in [42.5, 1e6, 1e21, -0.0, 0.0001, f64::INFINITY, f64::NAN] {
+            assert_eq!(f.ipe_interpolate(), crate::string::string_from_float(f));
+        }
+        assert_eq!(7i64.ipe_interpolate(), "7");
+        assert_eq!(true.ipe_interpolate(), "true");
+        assert_eq!('x'.ipe_interpolate(), "x");
+        assert_eq!("hi".to_string().ipe_interpolate(), "hi");
     }
 
     #[test]

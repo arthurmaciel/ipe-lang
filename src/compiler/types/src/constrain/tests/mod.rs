@@ -648,7 +648,7 @@ mod registry_phase_c_tests {
             K::LogDebug,
             K::LogWarn,
             K::LogError,
-            // Log *With (4 — Stringify obligation on the attr list element).
+            // Log *With (4 — Interpolable obligation on the attr list element).
             K::LogInfoWith,
             K::LogDebugWith,
             K::LogWarnWith,
@@ -666,7 +666,7 @@ mod registry_phase_c_tests {
             // `Basics.clamp` — first-schemed hole; carries the `Comparable a`
             // (Ord) obligation, base scheme in `stdlib_scheme`.
             K::BasicsClamp,
-            // `{{expr}}` interpolation renderer — `Stringify` obligation on `a`.
+            // `{{expr}}` interpolation renderer — `Interpolable` obligation on `a`.
             K::Interpolate,
             // ── Basics numerics — negate/abs/sqrt/min/max ────────────
             K::BasicsNegate,

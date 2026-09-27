@@ -2666,7 +2666,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 //
 // Some runtime kernels are generic over a type parameter with a Rust trait bound
 // — `db_get_*<R: IpeRow>(field: String, row: &R)`,
-// `interpolate_to_string<T: IpeStringify>(v: T)`. When such a kernel is
+// `interpolate_to_string<T: IpeInterpolate>(v: T)`. When such a kernel is
 // applied to a value whose Ipê type is a generic/wildcard type-param, the
 // enclosing emitted function must carry the kernel's Rust bound on THAT generic
 // — otherwise the body's `db_get_string(_, &payload)` / `interpolate_to_string(x)`
@@ -2708,7 +2708,7 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
 /// `matcher(tracked, k, args)` answers, for the currently-tracked symbol
 /// `tracked`, whether the call `Callee::Kernel(k)` applied to `args` obligates
 /// it — e.g. `IpeRow`'s `is_db_row_accessor(k) && args[1] is Var(tracked)` (`IpeRow`),
-/// or stringify's `k == Interpolate && args[0] is Var(tracked)` (`IpeStringify`). Every
+/// or interpolation's `k == Interpolate && args[0] is Var(tracked)` (`IpeInterpolate`). Every
 /// distinct kernel→bound obligation is expressed as one such matcher; the
 /// STRUCTURAL walk (shadow discipline + alias-transparency) is shared, so a new
 /// bound reuses this whole traversal by supplying only its own matcher.
@@ -4173,7 +4173,7 @@ fn body_move_closure_captures_generic(tv: Symbol, expr: &Expr) -> bool {
 /// ([`ir_type_generic_in_decoder`]).
 ///
 /// A kernel whose Rust signature bounds a type parameter — `db_get_*<R: IpeRow>`,
-/// `interpolate_to_string<T: IpeStringify>` — obliges that Rust bound on the Ipê
+/// `interpolate_to_string<T: IpeInterpolate>` — obliges that Rust bound on the Ipê
 /// generic its argument resolves to. When such a kernel is applied,
 /// alias-transparently, to a value whose type is `Generic(tv)`, we add the
 /// required bound to `tv`'s emitted generic so the body type-checks and
@@ -4214,12 +4214,12 @@ fn apply_kernel_type_param_bounds(
     // golden). `DbGetById` (arity 3) takes a `Db` handle, not a row, so it is
     // excluded by `is_db_row_accessor`.
     let ipe_row_matcher = obliges_ipe_row_bound;
-    // Stringify: an `Interpolate(x)` application whose sole arg (index 0) is
-    // the tracked param. Applies to wildcard `any` AND named tvars — interpolation
-    // is legitimate on a polymorphic value, and `IpeStringify` is satisfiable by
-    // every scalar AND every composite caller (record/ADT/list/map), so no
-    // composite call site can exit-0-then-cargo-fail (see `BoundSet::SHOW`).
-    let stringify_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+    // Interpolation: an `Interpolate(x)` application whose sole arg (index 0) is
+    // the tracked param. Applies to wildcard `any` AND named tvars. The bound is
+    // the sealed `IpeInterpolate` (the closed scalar set), the same set the type
+    // checker's interpolable obligation admits at every caller, so no call site
+    // can exit-0-then-cargo-fail (see `BoundSet::INTERPOLABLE`).
+    let interpolate_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
         matches!(k, KernelFn::Interpolate) && arg_is_tracked_var(args, 0, tracked)
     };
     // `Sub.subscribeWebSocket raw kind msg` — the bare `msg` (arg index 2) is
@@ -4263,9 +4263,9 @@ fn apply_kernel_type_param_bounds(
         if is_wildcard && fires_on(&ipe_row_matcher) {
             *bounds = bounds.with_ipe_row();
         }
-        // Stringify (`IpeStringify`) — wildcard OR named.
-        if fires_on(&stringify_matcher) {
-            *bounds = bounds.with_show();
+        // Interpolation (`IpeInterpolate`) — wildcard OR named.
+        if fires_on(&interpolate_matcher) {
+            *bounds = bounds.with_interpolable();
         }
         // `Send + 'static` — the bare `onOpen` msg moved into the
         // `sub_subscribe_ws_open` Source closure. Wildcard OR named (the msg is a
@@ -15784,7 +15784,7 @@ impl<'a> Lowerer<'a> {
     ///
     /// Two independent sources oblige a generic: a kernel the body applies to a
     /// parameter binder of that generic ([`apply_kernel_type_param_bounds`]:
-    /// `IpeRow` for wildcard `any` only, `IpeStringify`, `Send + 'static`,
+    /// `IpeRow` for wildcard `any` only, `IpeInterpolate`, `Send + 'static`,
     /// `Sync`), and a reference whose solved instantiation reaches the generic
     /// through a sync capture or a `Cmd` / `Sub` / `Decoder` carrier
     /// ([`Self::apply_recorded_bounds`], recorded while the body lowered).
@@ -16599,11 +16599,15 @@ impl<'a> Lowerer<'a> {
         if b.has_eq() {
             set = set.with_eq();
         }
-        // Stringify (`{{…}}` / `Log.*With`) → Rust `IpeStringify`. Like `eq`,
-        // it adds no `Copy` (a single stringify moves/borrows the value); the
-        // multi-use case is the general Clone concern, not Stringify-specific.
+        // Stringify (`Debug.log` / `Error.toString`) → Rust `IpeStringify`, and
+        // interpolation (`{{…}}` / `Log.*With`) → the sealed `IpeInterpolate`.
+        // Like `eq`, neither adds `Copy` (a single render moves/borrows the
+        // value); the multi-use case is the general Clone concern.
         if b.has_show() {
             set = set.with_show();
+        }
+        if b.has_interpolable() {
+            set = set.with_interpolable();
         }
         // A `Set` element needs Rust `Ord` (`BTreeSet<A>`); a `Dict` key needs
         // `Hash + Ord` (`HashMap<K, V>` + the determinism-sorted key ops) plus

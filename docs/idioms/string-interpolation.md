@@ -9,8 +9,10 @@ as plumbing.
 
 A `"""…"""` string spans multiple lines and its source indentation is stripped,
 so you lay the text out where it is written without that layout leaking into the
-value. Inside it, `{{expr}}` substitutes a value — rendered by the compiler's
-internal interpolation renderer, so an `Int` needs no `String.fromInt`.
+value. Inside it, `{{expr}}` substitutes a scalar (`String`, `Int`, `Float`,
+`Bool` or `Char`) — rendered by the compiler's internal interpolation renderer,
+so an `Int` needs no `String.fromInt`. A record, custom type or container is
+refused at type-check: interpolate its fields instead.
 
 A gnarly concatenation like this:
 

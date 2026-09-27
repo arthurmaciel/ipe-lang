@@ -202,40 +202,36 @@ pub fn log_info<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
     })
 }
 
-// `Log.*With : String -> List a -> Task` is polymorphic in the attr element
-// (Ipê callers pass a flat `List String` — `["errId", id]` — OR a key/value
-// `List (String, String)` — `[("errId", id), …]`). The attrs slot is generic
-// over its element type `A`, bounded by `IpeStringify` — the total stringifier
-// every Ipê-representable type implements (String unquoted, tuples
-// as `{k v}`, generated records/ADTs via their codegen-emitted impl). A plain
-// `Display` bound is insufficient: tuples + generated types don't implement
-// `Display`, so it fails to compile (E0277) at any tuple/record call site.
-// `IpeStringify` is satisfiable at EVERY concrete element type codegen can emit,
-// so no codegen change is needed — the call site passes its concrete `Vec<A>`
-// and the bound always holds.
+// `Log.*With : String -> List a -> Task` takes a flat list of interpolable
+// scalars (`[ "errId", id ]`). The attrs slot is generic over its element type
+// `A`, bounded by the sealed `IpeInterpolate` — the same closed scalar set
+// (`String` / `Int` / `Float` / `Bool` / `Char`) the type checker admits for
+// the element, so a record, ADT, container or opaque runtime value (a
+// `Secret`, a `Request`) never reaches a log line.
 //
 // Rendering implements `renderLogMsgWithAttrs` byte-for-byte: the flat attr
-// list is space-joined onto the message (`msg a1 a2 …`, each `ai` via `%v`),
+// list is space-joined onto the message (`msg a1 a2 …`, each `ai` rendered as
+// its `String.from*` conversion),
 // then handed to `log_emit` as a single pre-rendered line — so the plain path
 // sanitises the attr values too (no newline-injection via an attr) and the JSON
 // path surfaces them inside `msg` exactly for the List call shape
 // ( With variants pass `ctx=nil`).
 
 /// Flatten `(msg, attrs)` into one line, mirroring  `renderLogMsgWithAttrs`:
-/// `msg` followed by a space + the `%v` of each attr element, in order.
-fn render_with_attrs<A: IpeStringify>(msg: &str, attrs: &[A]) -> String {
+/// `msg` followed by a space + the rendering of each attr element, in order.
+fn render_with_attrs<A: IpeInterpolate>(msg: &str, attrs: &[A]) -> String {
     if attrs.is_empty() {
         return msg.to_string();
     }
     let mut out = String::from(msg);
     for a in attrs {
         out.push(' ');
-        out.push_str(&a.ipe_show());
+        out.push_str(&a.ipe_interpolate());
     }
     out
 }
 
-pub fn log_info_with<E: Send + 'static, A: IpeStringify>(
+pub fn log_info_with<E: Send + 'static, A: IpeInterpolate>(
     msg: String,
     attrs: Vec<A>,
 ) -> IpeTask<E, ()> {
@@ -248,7 +244,7 @@ pub fn log_info_with<E: Send + 'static, A: IpeStringify>(
     })
 }
 
-pub fn log_error_with<E: Send + 'static, A: IpeStringify>(
+pub fn log_error_with<E: Send + 'static, A: IpeInterpolate>(
     msg: String,
     attrs: Vec<A>,
 ) -> IpeTask<E, ()> {
@@ -277,7 +273,7 @@ pub fn log_error<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
         ok_res(())
     })
 }
-pub fn log_debug_with<E: Send + 'static, A: IpeStringify>(
+pub fn log_debug_with<E: Send + 'static, A: IpeInterpolate>(
     msg: String,
     attrs: Vec<A>,
 ) -> IpeTask<E, ()> {
@@ -287,7 +283,7 @@ pub fn log_debug_with<E: Send + 'static, A: IpeStringify>(
         ok_res(())
     })
 }
-pub fn log_warn_with<E: Send + 'static, A: IpeStringify>(
+pub fn log_warn_with<E: Send + 'static, A: IpeInterpolate>(
     msg: String,
     attrs: Vec<A>,
 ) -> IpeTask<E, ()> {

@@ -515,10 +515,16 @@ pub fn render_bounds(bounds: BoundSet, n: usize) -> String {
         traits.push("PartialEq".to_owned());
     }
     if bounds.has_show() {
-        // Ipê `{{…}}` interpolation / `Log.*With`: the value must render. Fully qualified —
+        // `Debug.log` / `Error.toString`: the value must render. Fully qualified —
         // the trait is not in the Rust prelude. Every emitted record/ADT + every
         // scalar has a `IpeStringify` impl.
         traits.push("crate::ipe_runtime::stringify::IpeStringify".to_owned());
+    }
+    if bounds.has_interpolable() {
+        // `{{…}}` interpolation / `Log.*With`: the sealed trait implemented for
+        // exactly the closed scalar set, so `rustc` re-checks every caller's
+        // concrete type against the set the type checker admitted.
+        traits.push("crate::ipe_runtime::stringify::IpeInterpolate".to_owned());
     }
     if bounds.has_ord_total() {
         // `Ord` (total order) for a `Set` element / sorted `Dict` op; carries

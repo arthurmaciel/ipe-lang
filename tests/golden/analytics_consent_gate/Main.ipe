@@ -39,27 +39,10 @@ piiIsRedacted =
     encodedProp (PPii (Analytics.pii "alice@example.com")) == "\"[redacted]\""
 
 
--- Interpolating a `Pii` value must NOT expose the plaintext.
--- The `Pii` constructor wraps a `Secret`; the `Secret` field's `IpeStringify`
--- impl always returns the redacted placeholder regardless of the wrapped value,
--- so the ambient string-interpolation side channel is closed.
-piiToStringIsRedacted : Bool
-piiToStringIsRedacted =
-    let
-        p =
-            Analytics.pii "alice@example.com"
-    in
-    not (String.contains "alice@example.com" """{{p}}""")
-
-
--- Interpolating the `PPii` constructor must also NOT expose the plaintext.
-ppiiToStringIsRedacted : Bool
-ppiiToStringIsRedacted =
-    let
-        p =
-            PPii (Analytics.pii "alice@example.com")
-    in
-    not (String.contains "alice@example.com" """{{p}}""")
+-- The ambient string-interpolation side channel is closed at type-check:
+-- `{{p}}` over a `Pii` (or a `PPii` prop) is refused as not interpolable
+-- (IPE-T0014), since interpolation admits only `String` / `Int` / `Float` /
+-- `Bool` / `Char`.
 
 
 
@@ -102,7 +85,7 @@ grantedCfg =
 main =
     let
         allPure =
-            piiIsRedacted && moneyIsLossless && textPropOk && piiToStringIsRedacted && ppiiToStringIsRedacted
+            piiIsRedacted && moneyIsLossless && textPropOk
     in
     if not allPure then
         Io.println "analytics-FAIL-pure"

@@ -1,5 +1,10 @@
 module Main exposing (main)
 
+-- Refusal golden: `{{expr}}` interpolates exactly `String` / `Int` / `Float` /
+-- `Bool` / `Char`. Interpolating a record or a custom type is refused at
+-- type-check (IPE-T0014) — render the fields explicitly instead (see
+-- `golden_stringify.rs`).
+
 import Ipe.Io as Io
 
 

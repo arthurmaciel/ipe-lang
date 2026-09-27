@@ -1,8 +1,9 @@
 # string interpolation
 
 A triple-quoted string `"""…"""` is a multiline string literal, and inside one
-`{{expr}}` interpolation substitutes a value into the text. Interpolation auto-
-stringifies its value, so you build readable text without a chain of `++`.
+`{{expr}}` interpolation substitutes a value into the text. Interpolation
+renders a scalar — a `String`, `Int`, `Float`, `Bool` or `Char` — so you build
+readable text without a chain of `++`.
 
 ## Syntax
 
@@ -46,6 +47,12 @@ value even though the block is indented in the source.
 
 ## Notes
 
+- **Only the five scalars interpolate.** The value must be a `String`, `Int`,
+  `Float`, `Bool` or `Char`; each renders exactly as its `String.from*`
+  conversion. A record, custom type, `List`, `Maybe`, tuple, `Dict` or opaque
+  runtime value (a `Request`, a `Secret`) is refused at type-check with
+  IPE-T0014 (`ipe doc IPE-T0014`) — interpolate
+  its fields, or convert it first (`Error.toString`, `Secret.redacted`).
 - **Interpolation is only in triple-quoted strings.** A single-line `"…"` string
   does NOT interpolate — `{{x}}` there is literal text. This is the common trap.
 - The four body shapes above are the whole grammar; a more complex body stays

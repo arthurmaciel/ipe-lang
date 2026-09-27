@@ -43,8 +43,10 @@ beta: count=128 ratio=1.5 enabled=false
 Each `{{expr}}` body is rendered by the compiler's interpolation renderer, so
 `count` (an `Int`) and `enabled` (a `Bool`) need no explicit `String.fromInt`
 or `String.fromBool` — only `label`, already a `String`, passes through
-unchanged. Outside a `"""…"""` string, the same row is built with the explicit
-conversions:
+unchanged. Interpolation takes exactly these scalars — `String`, `Int`,
+`Float`, `Bool` and `Char` — and a record, custom type or container is refused
+at type-check, so render its fields one by one. Outside a `"""…"""` string,
+the same row is built with the explicit conversions:
 
 ```ipe ipe:skip
 label ++ ": count=" ++ String.fromInt count ++ " enabled=" ++ String.fromBool enabled

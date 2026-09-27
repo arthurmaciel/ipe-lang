@@ -11,18 +11,13 @@
 //!      (`encodePropValue`) — the raw plaintext is never reachable through the
 //!      module's public API.
 //!   4. `PMoney` serialises losslessly as `{"amount":"…","currency":"…"}`.
-//!   5. `"""{{p}}"""` over `Analytics.pii "…"` does NOT contain the plaintext —
-//!      the ambient string-interpolation side channel is closed.
-//!      `Pii` wraps a `Secret`; the `Secret` field's `IpeStringify` impl always
-//!      returns the redacted placeholder, making plaintext leakage structurally
-//!      impossible in the emitted Rust.
-//!   6. Interpolating `PPii (Analytics.pii "…")` likewise does NOT expose
-//!      the plaintext — the `PPii` constructor's `IpeStringify` auto-derive
-//!      recurses into the `Secret` field's redacting impl.
 //!
-//! Invariants (3)–(6) are checked inside `Main.ipe`; `allPure` must be `true`
-//! for the task chain to reach the sentinel stdout line. The E2E test is the
-//! key evidence that the plaintext no longer appears: any stringification leak
+//! The ambient string-interpolation side channel (`"""{{p}}"""` over a `Pii`)
+//! is closed at type-check — interpolation admits only the scalar set, so a
+//! `Pii` is refused with IPE-T0014 (see `interpolation_scalars.rs`).
+//!
+//! Invariants (3)–(4) are checked inside `Main.ipe`; `allPure` must be `true`
+//! for the task chain to reach the sentinel stdout line; a violation
 //! causes `allPure = false` → stdout `analytics-FAIL-pure` → assertion fails.
 //! Expected stdout: `analytics-consent-gate-ok` (one line).
 

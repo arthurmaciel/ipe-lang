@@ -580,8 +580,13 @@ impl BoundSet {
     /// wildcard `any` variable and ONLY when the body actually calls a `db_get_*`
     /// — no blast radius on genuine named type variables (`a`, `msg`).
     const IPE_ROW: u16 = 1 << 11;
-    // 1 << 12 is free — the stringify bound is `SHOW` (`IpeStringify`),
-    // which covers scalar AND composite arguments.
+    /// The interpolation bound: realises the type checker's
+    /// `TyBounds::interpolable` obligation (`{{…}}` / `Log.*With` attributes) as
+    /// the runtime's sealed `IpeInterpolate`, implemented for exactly the closed
+    /// scalar set `String` / `Int` / `Float` / `Bool` / `Char`. A generic that
+    /// interpolates its parameter carries this bound so every caller's concrete
+    /// type is re-checked by `rustc` against the same closed set.
+    const INTERPOLABLE: u16 = 1 << 12;
     /// The `'static` lifetime bound: a generic type-param that flows,
     /// INSIDE the function body, into a value boxed as a boxed `dyn Fn` trait
     /// object (`Box<dyn Fn(..) -> .. + Send + 'static>`, or the `Arc` +Sync
@@ -698,10 +703,17 @@ impl BoundSet {
         Self(self.0 | Self::EQ)
     }
 
-    /// This set with the `IpeStringify` (Ipê `{{…}}` interpolation / `Log.*With`) bound.
+    /// This set with the `IpeStringify` (`Debug.log` / `Error.toString`) bound.
     #[must_use]
     pub const fn with_show(self) -> Self {
         Self(self.0 | Self::SHOW)
+    }
+
+    /// This set with the `IpeInterpolate` (`{{…}}` interpolation / `Log.*With`)
+    /// bound — see [`Self::INTERPOLABLE`].
+    #[must_use]
+    pub const fn with_interpolable(self) -> Self {
+        Self(self.0 | Self::INTERPOLABLE)
     }
 
     /// This set with the `Copy` (bit-copyable reuse) bound.
@@ -798,6 +810,12 @@ impl BoundSet {
     #[must_use]
     pub const fn has_show(self) -> bool {
         self.0 & Self::SHOW != 0
+    }
+
+    /// Whether the `IpeInterpolate` bound is set — see [`Self::INTERPOLABLE`].
+    #[must_use]
+    pub const fn has_interpolable(self) -> bool {
+        self.0 & Self::INTERPOLABLE != 0
     }
 
     /// Whether the `Copy` bound is set.

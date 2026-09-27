@@ -1237,8 +1237,8 @@ pub enum StdlibKernel {
     /// Internal: the `{{expr}}` string-interpolation renderer.
     ///
     /// Qualifier `"_internal_"` — no surface binding; canon inserts it around
-    /// every interpolated chunk, and its argument carries the `Stringify`
-    /// obligation.
+    /// every interpolated chunk, and its argument carries the interpolable
+    /// obligation (exactly `String` / `Int` / `Float` / `Bool` / `Char`).
     Interpolate,
     // ── Math ────────────────────────────────────────────────────────────────
     MathMin,
@@ -6842,7 +6842,7 @@ impl StdlibKernel {
         // clamp / min / max : a -> a -> a (base scheme; Ord obligation layered).
         const A_TO_A_TO_A: TyShape = TyShape::Fun(&A, &A_TO_A);
         const BASICS_CLAMP: TyShape = TyShape::Fun(&A, &A_TO_A_TO_A);
-        // interpolate : a -> String (base scheme; Stringify obligation layered).
+        // interpolate : a -> String (base scheme; interpolable obligation layered).
         const A_TO_STRING: TyShape = TyShape::Fun(&A, &STRING);
         // compare : a -> a -> Order (base scheme; Ord obligation layered).
         const A_TO_ORDER: TyShape = TyShape::Fun(&A, &ORDER);
@@ -9780,8 +9780,8 @@ impl StdlibKernel {
             Self::DbGetInt => Some(&DB_GET_INT),
             Self::DbGetBool => Some(&DB_GET_BOOL),
 
-            // ── Log (base schemes; the `*With` STRINGIFY obligation is layered
-            //    in `constrain_var_kernel`). ──
+            // ── Log (base schemes; the `*With` INTERPOLABLE obligation is
+            //    layered in `constrain_var_kernel`). ──
             Self::LogInfo | Self::LogDebug | Self::LogWarn | Self::LogError => {
                 Some(&STRING_TO_TASK_UNIT)
             }
