@@ -303,6 +303,29 @@ mod unix {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Linux filesystems store arbitrary name bytes; APFS refuses non-UTF-8 names.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_utf8_names_count_toward_the_listing_cap() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let root = scratch("listing-cap-non-utf8");
+        let cache = private_chain(&root);
+        for name in [b"\xffa".as_slice(), b"\xffb".as_slice()] {
+            std::fs::write(cache.join(std::ffi::OsStr::from_bytes(name)), "")
+                .expect("write non-UTF-8 entry");
+        }
+        let dir = std::fs::File::open(&cache).expect("open cache dir");
+        let refused = crate::owner_trust::held::list_capped(&dir, &cache, 1);
+        assert!(
+            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::ffi_cache_too_many_entries(&cache.display(), &1_usize)),
+            "{refused:?}"
+        );
+        let admitted = crate::owner_trust::held::list_capped(&dir, &cache, 2)
+            .expect("two entries fit a cap of two");
+        assert!(admitted.is_empty(), "a non-UTF-8 name is never an artifact");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A project dir holding an owned `package.ipe` with the given modes.
     fn project(name: &str, dir_mode: u32, manifest_mode: u32) -> (PathBuf, PathBuf) {
         let root = scratch(name);
@@ -385,6 +408,66 @@ mod unix {
     }
 }
 
+/// The unverifiable-host refusals, driven on every platform.
+mod unverifiable_policy {
+    use super::*;
+
+    #[test]
+    fn an_existing_cache_directory_is_refused() {
+        let root = scratch("unverifiable-policy-dir");
+        let cache = root.join(REL);
+        std::fs::create_dir_all(&cache).expect("create cache");
+        let refused = refuse_unverifiable_cache(&root, REL);
+        assert!(
+            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::ffi_cache_unverifiable(&cache.display())),
+            "{refused:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_existing_cache_file_is_refused() {
+        let root = scratch("unverifiable-policy-file");
+        let cache = root.join(REL);
+        let parent = cache.parent().expect("cache has a parent");
+        std::fs::create_dir_all(parent).expect("create cache parent");
+        std::fs::write(&cache, "").expect("plant a file at the cache path");
+        let refused = refuse_unverifiable_cache(&root, REL);
+        assert!(
+            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::ffi_cache_unverifiable(&cache.display())),
+            "{refused:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_absent_cache_is_no_cache() {
+        let root = scratch("unverifiable-policy-absent");
+        assert!(refuse_unverifiable_cache(&root, REL).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_path_through_a_file_is_no_cache() {
+        let root = scratch("unverifiable-policy-through-file");
+        std::fs::write(root.join(".ipe"), "").expect("plant a file where a directory belongs");
+        let admitted = refuse_unverifiable_cache(&root, REL);
+        assert!(admitted.is_ok(), "{admitted:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_discovered_manifest_is_refused_naming_the_fix() {
+        let manifest = Path::new("proj").join("package.ipe");
+        let refused = refuse_unverifiable_manifest(&manifest);
+        assert!(
+            matches!(&refused, Err(CliError::Usage(msg)) if *msg == text::msg::manifest_unverifiable(&manifest.display())),
+            "{refused:?}"
+        );
+    }
+}
+
+/// The non-Unix discovery entry points route to the unverifiable-host refusals.
 #[cfg(not(unix))]
 mod unverifiable_host {
     use super::*;

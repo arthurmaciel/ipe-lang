@@ -218,7 +218,7 @@ refusing to use the project manifest `{path}` found above the entry file: it is 
 
 ## manifest-unverifiable
 
-refusing to use the project manifest `{path}` found above the entry file: its ownership cannot be verified on this platform. Pass the project directory explicitly
+refusing to use the project manifest `{path}` found above the entry file: its ownership cannot be verified on this platform. Pass the project directory instead of the file (for example `ipe build path/to/project`), whose `package.ipe` is then used as named
 
 ## no-entry
 

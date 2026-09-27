@@ -25,5 +25,10 @@ serde_json = "1"
 # points at.
 proc-macro2 = { version = "1", features = ["span-locations"] }
 
+[features]
+# The by-path, link-following catalog reader (`driver::load_catalog`) for
+# tests that load a cache they created themselves. Production never enables it.
+test-support = []
+
 [lints]
 workspace = true

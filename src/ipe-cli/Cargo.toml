@@ -189,6 +189,8 @@ e2e-support = { path = "../../tools/e2e-support" }
 # `sha256-<base64>` over the served asset bytes and asserts it equals the
 # `integrity` the page pinned (page == bytes). Same version as the runtime.
 base64 = "0.22"
+# The by-path catalog reader the FFI negative tests load their own caches with.
+ipe_ffi = { path = "../compiler/ffi", features = ["test-support"] }
 
 [lints]
 workspace = true

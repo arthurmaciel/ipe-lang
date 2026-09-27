@@ -458,7 +458,7 @@ pub struct ArtifactPaths {
     pub consumer: PathBuf,
     /// The validated inspection document (`<slug>.pkg.json`) — the raw
     /// inspector wire JSON that decoded through the [`PkgInfo`] gate. The
-    /// TRUSTED source `load_catalog` re-derives `_bindings.rs` from: the
+    /// TRUSTED source `load_catalog_from` re-derives `_bindings.rs` from: the
     /// stored `_bindings.rs` text is never trusted, only regenerated.
     pub pkg_json: PathBuf,
 }
@@ -501,7 +501,7 @@ impl FfiCache {
 
     /// Emit and write all artifacts for a validated package. `inspection_json`
     /// is the raw inspector wire text that decoded into `pkg`; it is persisted
-    /// as `<slug>.pkg.json`, the sole source `load_catalog` re-derives the
+    /// as `<slug>.pkg.json`, the sole source `load_catalog_from` re-derives the
     /// whole consumer-side view from through the validated decode gate. The
     /// other six artifacts are debug/watch projections the loader never
     /// trusts.
@@ -1015,33 +1015,17 @@ pub struct InspectedConstFact {
     pub ty: String,
 }
 
-/// Load every installed crate from a project's FFI artifact cache.
+/// Load the catalog of a cache the caller created itself, reading by path.
 ///
-/// An absent cache directory is an empty catalog (a project with no FFI).
-///
-/// `<slug>.pkg.json` is the SOLE source of record: when it exists, EVERY
-/// consumer-side view — interface source, bindings source, module/kernel
-/// names, opaque maps, dep lines — is RE-DERIVED by decoding it through the
-/// validated [`PkgInfo`] gate and re-running the emitters. The sibling
-/// projection files (`.ipei`, `consumer.json`, `<slug>.ipe`, `_bindings.rs`)
-/// are debug/watch artifacts the loader never trusts, so a projection that
-/// diverges from the catalog (torn write, mixed-run cache, hand edit) is
-/// inert by construction: a member either exists in `pkg.json` or it does
-/// not exist anywhere. A planted `_bindings.rs` cannot inject a wrapper
-/// body, because the emit derives only from decode-validated newtypes (no
-/// raw type/path/selector string reaches the rendered code); a tampered
-/// `pkg.json` re-runs the full decode gate, so it can only ever produce
-/// injection-free wrappers or fail closed.
-///
-/// This entry reads by path and follows links, so it suits only a cache the
-/// caller created itself; a cache discovered on disk is loaded through
-/// [`load_catalog_from`] over an owner-checked, no-follow handle.
+/// An absent cache directory is an empty catalog. This reader follows links
+/// and caps nothing, so it exists only for tests: production loads a
+/// discovered cache through [`load_catalog_from`] over an owner-checked,
+/// no-follow handle.
 ///
 /// # Errors
 ///
-/// `IPE-F4412` for an unreadable artifact; a wire-defect diagnostic for a
-/// malformed consumer manifest, a malformed inspection document, or a missing
-/// wrapper.
+/// As [`load_catalog_from`].
+#[cfg(any(test, feature = "test-support"))]
 pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic> {
     if !cache_root.is_dir() {
         return Ok(Vec::new());
@@ -1077,8 +1061,10 @@ pub trait CacheSource {
 }
 
 /// A cache read by path, following links, for a directory the caller owns outright.
+#[cfg(any(test, feature = "test-support"))]
 struct PathCacheSource<'a>(&'a Path);
 
+#[cfg(any(test, feature = "test-support"))]
 impl CacheSource for PathCacheSource<'_> {
     type Error = Diagnostic;
 
@@ -1113,11 +1099,27 @@ impl CacheSource for PathCacheSource<'_> {
     }
 }
 
-/// Load the installed-crate catalog from `source` (see [`load_catalog`]).
+/// Load every installed crate from a project's FFI artifact cache, read through `source`.
+///
+/// `<slug>.pkg.json` is the SOLE source of record: when it exists, EVERY
+/// consumer-side view — interface source, bindings source, module/kernel
+/// names, opaque maps, dep lines — is RE-DERIVED by decoding it through the
+/// validated [`PkgInfo`] gate and re-running the emitters. The sibling
+/// projection files (`.ipei`, `consumer.json`, `<slug>.ipe`, `_bindings.rs`)
+/// are debug/watch artifacts the loader never trusts, so a projection that
+/// diverges from the catalog (torn write, mixed-run cache, hand edit) is
+/// inert by construction: a member either exists in `pkg.json` or it does
+/// not exist anywhere. A planted `_bindings.rs` cannot inject a wrapper
+/// body, because the emit derives only from decode-validated newtypes (no
+/// raw type/path/selector string reaches the rendered code); a tampered
+/// `pkg.json` re-runs the full decode gate, so it can only ever produce
+/// injection-free wrappers or fail closed.
 ///
 /// # Errors
 ///
-/// As [`load_catalog`], plus any error `source` raises while listing or reading.
+/// `IPE-F4412` for an unreadable artifact; a wire-defect diagnostic for a
+/// malformed consumer manifest, a malformed inspection document, or a missing
+/// wrapper; any error `source` raises while listing or reading.
 pub fn load_catalog_from<S: CacheSource>(source: &S) -> Result<Vec<InstalledCrate>, S::Error> {
     let mut slugs: Vec<String> = source
         .entry_names()?
@@ -1132,11 +1134,11 @@ pub fn load_catalog_from<S: CacheSource>(source: &S) -> Result<Vec<InstalledCrat
     Ok(out)
 }
 
-/// Load and validate ONE installed crate's artifacts (see [`load_catalog`]).
+/// Load and validate ONE installed crate's artifacts (see [`load_catalog_from`]).
 ///
 /// # Errors
 ///
-/// As [`load_catalog`], scoped to this slug's artifacts.
+/// As [`load_catalog_from`], scoped to this slug's artifacts.
 #[allow(clippy::too_many_lines)] // one linear artifact decode-and-cross-check cascade
 fn load_installed_crate<S: CacheSource>(
     source: &S,
@@ -1159,7 +1161,7 @@ fn load_installed_crate<S: CacheSource>(
         };
         // RE-DERIVE the whole consumer-side view from the validated
         // inspection document — no on-disk projection is trusted as text
-        // (see [`load_catalog`]). A legacy cache written before the
+        // (see [`load_catalog_from`]). A legacy cache written before the
         // `pkg.json` artifact existed has no document to re-derive from; it
         // falls back to the stored projections, whose trust then rests on
         // the discovery-time ownership/write-boundary gate the source

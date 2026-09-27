@@ -89,8 +89,12 @@ const ROOT_UID: u32 = 0;
 
 /// Why `stamp` names an entry some user other than `invoker` can write.
 ///
-/// Group write access passes only under the invoker's own group, which a
-/// default `0o002` umask grants to every file the invoker creates.
+/// Group write access passes only when the owning group is the invoker's
+/// effective group, which a default `0o002` umask grants to every file the
+/// invoker creates. This admits the entry to every member of that group: it
+/// is sound where the effective group is a per-user private group (the
+/// user-private-group convention), and extends trust to the group's other
+/// members where the effective group is shared.
 #[must_use]
 pub const fn breach(stamp: Stamp, invoker: Invoker) -> Option<Breach> {
     if stamp.uid != invoker.uid {
@@ -107,7 +111,8 @@ pub const fn breach(stamp: Stamp, invoker: Invoker) -> Option<Breach> {
 /// Why `stamp` names a directory where another user could replace an entry the invoker owns.
 ///
 /// Root may own the directory, and a sticky directory may be shared-writable:
-/// in one, only an entry's owner can rename or remove it.
+/// in one, only an entry's owner can rename or remove it. Group write access
+/// passes under the invoker's effective group, on the same terms as [`breach`].
 #[must_use]
 pub const fn container_breach(stamp: Stamp, invoker: Invoker) -> Option<Breach> {
     if stamp.uid != invoker.uid && stamp.uid != ROOT_UID {
@@ -190,12 +195,55 @@ pub fn admit_discovered_manifest(manifest: &Path) -> Result<(), CliError> {
 ///
 /// # Errors
 ///
-/// Always [`CliError::Usage`] naming the manifest.
+/// Always [`CliError::Usage`] naming the manifest (see [`refuse_unverifiable_manifest`]).
 #[cfg(not(unix))]
 pub fn admit_discovered_manifest(manifest: &Path) -> Result<(), CliError> {
+    refuse_unverifiable_manifest(manifest)
+}
+
+/// The refusal of a discovered `package.ipe` on a host with no owner check.
+///
+/// Every platform compiles this, so its refusal is exercised everywhere, not
+/// only where it is the discovery rule.
+///
+/// # Errors
+///
+/// Always [`CliError::Usage`] naming the manifest and the explicit-directory fix.
+pub fn refuse_unverifiable_manifest(manifest: &Path) -> Result<(), CliError> {
     Err(CliError::Usage(text::msg::manifest_unverifiable(
         &manifest.display(),
     )))
+}
+
+/// Refuse whatever exists at `anchor/rel` on a host with no owner check.
+///
+/// Every platform compiles this, so its refusal is exercised everywhere, not
+/// only where it is the discovery rule. A missing entry, or a path through a
+/// non-directory, is no cache.
+///
+/// # Errors
+///
+/// [`CliError::Usage`] when anything exists at `anchor/rel`, link or not;
+/// [`CliError::Io`] when its presence cannot be determined.
+pub fn refuse_unverifiable_cache(anchor: &Path, rel: &str) -> Result<(), CliError> {
+    let candidate = anchor.join(rel);
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(_) => Err(CliError::Usage(text::msg::ffi_cache_unverifiable(
+            &candidate.display(),
+        ))),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(())
+        }
+        Err(source) => Err(CliError::Io {
+            path: candidate,
+            source,
+        }),
+    }
 }
 
 #[cfg(unix)]
@@ -343,6 +391,9 @@ mod held {
 
     /// The UTF-8 entry names in `dir`, refusing a listing past `cap` entries.
     ///
+    /// Every entry counts toward `cap`, including one whose name is not UTF-8
+    /// and so is never an artifact.
+    ///
     /// # Errors
     ///
     /// [`CliError::Usage`] past `cap` entries; [`CliError::Io`] when the
@@ -356,10 +407,8 @@ mod held {
         let mut seen: usize = 0;
         for entry in rustix::fs::Dir::read_from(dir).map_err(io)? {
             let entry = entry.map_err(io)?;
-            let Ok(name) = entry.file_name().to_str() else {
-                continue;
-            };
-            if name == "." || name == ".." {
+            let raw = entry.file_name();
+            if matches!(raw.to_bytes(), b"." | b"..") {
                 continue;
             }
             seen = seen.saturating_add(1);
@@ -369,6 +418,9 @@ mod held {
                     &cap,
                 )));
             }
+            let Ok(name) = raw.to_str() else {
+                continue;
+            };
             names.push(name.to_owned());
         }
         Ok(names)
@@ -435,9 +487,8 @@ mod unverifiable {
 
     use ipe_ffi::driver::CacheSource;
 
-    use super::CacheLoadError;
+    use super::{CacheLoadError, refuse_unverifiable_cache};
     use crate::CliError;
-    use crate::text;
 
     /// An owner-checked FFI cache, which this platform can never produce.
     #[derive(Debug)]
@@ -471,15 +522,9 @@ mod unverifiable {
     ///
     /// # Errors
     ///
-    /// [`CliError::Usage`] whenever anything exists at `anchor/rel`.
+    /// As [`refuse_unverifiable_cache`].
     pub fn open_cache(anchor: &Path, rel: &str) -> Result<Option<TrustedCache>, CliError> {
-        let candidate = anchor.join(rel);
-        if std::fs::symlink_metadata(&candidate).is_ok() {
-            return Err(CliError::Usage(text::msg::ffi_cache_unverifiable(
-                &candidate.display(),
-            )));
-        }
-        Ok(None)
+        refuse_unverifiable_cache(anchor, rel).map(|()| None)
     }
 }
 
