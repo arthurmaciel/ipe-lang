@@ -571,11 +571,10 @@ mod tests {
         let link = src.join("Linked.ipe");
         #[cfg(unix)]
         {
-            if std::os::unix::fs::symlink(root.join("target").join("x.ipe"), &link).is_ok() {
-                let scope = WatchScope::build(&root, &root).unwrap();
-                // Raw path is `src/Linked.ipe`; canonical is `target/x.ipe`.
-                assert!(!scope.is_relevant(&link));
-            }
+            std::os::unix::fs::symlink(root.join("target").join("x.ipe"), &link).unwrap();
+            let scope = WatchScope::build(&root, &root).unwrap();
+            // Raw path is `src/Linked.ipe`; canonical is `target/x.ipe`.
+            assert!(!scope.is_relevant(&link));
         }
     }
 
