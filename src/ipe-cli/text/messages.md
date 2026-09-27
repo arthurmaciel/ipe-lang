@@ -208,6 +208,18 @@ directory supplied but no package.ipe found inside it
 
 no package.ipe in this directory (found a legacy ipe.toml — package.ipe is the project manifest the toolchain reads)
 
+## manifest-untrusted
+
+refusing to use the project manifest `{path}` found above the entry file: it is not owned by the current user, or another user can write or replace it. Fix its ownership/permissions, or pass the project directory explicitly
+
+## manifest-symlink
+
+refusing to use the project manifest `{path}` found above the entry file: it is a symbolic link. Replace it with the file itself, or pass the project directory explicitly
+
+## manifest-unverifiable
+
+refusing to use the project manifest `{path}` found above the entry file: its ownership cannot be verified on this platform. Pass the project directory explicitly
+
 ## no-entry
 
 nothing to build here — pass a source file or run inside a project (a package.ipe, or a src/Main.ipe)
@@ -1180,11 +1192,23 @@ Try a broader query or `ipe doc list` to browse modules.
 
 ## ffi-cache-untrusted
 
-refusing to load the FFI cache at `{path}`: it is not owned by the current user or is world-writable — its `_bindings.rs` compiles unsandboxed into your crate. Fix its ownership/permissions or remove it
+refusing to load the FFI cache at `{path}`: it is not owned by the current user, or another user can write to it — its `_bindings.rs` compiles unsandboxed into your crate. Fix its ownership/permissions or remove it
 
 ## ffi-cache-unverifiable
 
 refusing to load the FFI cache at `{path}`: its ownership cannot be verified on this platform — its `_bindings.rs` compiles unsandboxed into your crate. Remove it
+
+## ffi-cache-symlink
+
+refusing to load the FFI cache: `{path}` is a symbolic link, which could redirect the cache to files another user controls. Replace it with a real directory or file, or remove it
+
+## ffi-cache-not-regular
+
+refusing to load the FFI cache: `{path}` is not a regular file. Remove it and re-run `ipe rust add` for the crate
+
+## ffi-cache-too-many-entries
+
+refusing to load the FFI cache at `{path}`: it holds more than {max} entries. Remove the entries that are not installed crates' artifacts
 
 ## ffi-module-clash
 

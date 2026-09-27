@@ -463,7 +463,7 @@ pub(crate) fn resolve_project_sources(
             }
         }
     } else {
-        crate::find_manifest_for_ipe_file(entry)
+        crate::find_manifest_for_ipe_file(entry)?
     };
 
     if let Some(manifest_path) = manifest_path {

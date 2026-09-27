@@ -169,7 +169,7 @@ wasmtime-wasi = { version = "35", default-features = false, features = ["preview
 # check adds no new vetted crate. Unix-only: the query has no portable analogue
 # on the non-Unix targets this CLI builds for.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "0.38", features = ["fs", "termios"] }
+rustix = { version = "0.38", features = ["fs", "process", "termios"] }
 
 # Held output-directory handles read a handle's volume serial number and file
 # index (`GetFileInformationByHandle`) through a safe wrapper, and open entries

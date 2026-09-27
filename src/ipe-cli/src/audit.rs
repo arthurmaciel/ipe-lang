@@ -746,7 +746,7 @@ fn prepare(path: &Path) -> Result<Prepared, CliError> {
 ///
 /// Any committed cache in the fetched source tree is removed first — the gate
 /// never reads publisher-supplied bindings. The freshly generated cache is
-/// owned by the invoking process's uid and not world-writable, so the
+/// owned by the invoking process's uid and no other user can write it, so the
 /// `ffi::find_cache_root` ownership check passes for all subsequent reads.
 ///
 /// Build scripts are always enabled here (equivalent to `--allow-build-scripts`)

@@ -402,6 +402,44 @@ pub fn slugify(name: &str) -> String {
         .collect()
 }
 
+/// The suffix that marks a cache entry as one installed crate's consumer manifest.
+const CONSUMER_SUFFIX: &str = ".consumer.json";
+
+/// The artifact file names for one bound crate, relative to the cache directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactNames {
+    /// The `.ipei` type-environment seed.
+    pub ipei: String,
+    /// The `kernel.json` call registry.
+    pub kernel_json: String,
+    /// The `_bindings.rs` wrapper module.
+    pub bindings: String,
+    /// The `coverage.md` over-drop report.
+    pub coverage: String,
+    /// The injectable Ipê interface module.
+    pub interface: String,
+    /// The consumer manifest.
+    pub consumer: String,
+    /// The validated inspection document.
+    pub pkg_json: String,
+}
+
+impl ArtifactNames {
+    /// The artifact file names for `slug`.
+    #[must_use]
+    pub fn for_slug(slug: &str) -> Self {
+        Self {
+            ipei: format!("{slug}.ipei"),
+            kernel_json: format!("{slug}.kernel.json"),
+            bindings: format!("{slug}_bindings.rs"),
+            coverage: format!("{slug}.coverage.md"),
+            interface: format!("{slug}.ipe"),
+            consumer: format!("{slug}{CONSUMER_SUFFIX}"),
+            pkg_json: format!("{slug}.pkg.json"),
+        }
+    }
+}
+
 /// The artifact paths for one bound crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactPaths {
@@ -449,14 +487,15 @@ impl FfiCache {
     /// The artifact paths for a slug.
     #[must_use]
     pub fn artifact_paths(&self, slug: &str) -> ArtifactPaths {
+        let names = ArtifactNames::for_slug(slug);
         ArtifactPaths {
-            ipei: self.root.join(format!("{slug}.ipei")),
-            kernel_json: self.root.join(format!("{slug}.kernel.json")),
-            bindings: self.root.join(format!("{slug}_bindings.rs")),
-            coverage: self.root.join(format!("{slug}.coverage.md")),
-            interface: self.root.join(format!("{slug}.ipe")),
-            consumer: self.root.join(format!("{slug}.consumer.json")),
-            pkg_json: self.root.join(format!("{slug}.pkg.json")),
+            ipei: self.root.join(names.ipei),
+            kernel_json: self.root.join(names.kernel_json),
+            bindings: self.root.join(names.bindings),
+            coverage: self.root.join(names.coverage),
+            interface: self.root.join(names.interface),
+            consumer: self.root.join(names.consumer),
+            pkg_json: self.root.join(names.pkg_json),
         }
     }
 
@@ -994,6 +1033,10 @@ pub struct InspectedConstFact {
 /// `pkg.json` re-runs the full decode gate, so it can only ever produce
 /// injection-free wrappers or fail closed.
 ///
+/// This entry reads by path and follows links, so it suits only a cache the
+/// caller created itself; a cache discovered on disk is loaded through
+/// [`load_catalog_from`] over an owner-checked, no-follow handle.
+///
 /// # Errors
 ///
 /// `IPE-F4412` for an unreadable artifact; a wire-defect diagnostic for a
@@ -1003,23 +1046,88 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
     if !cache_root.is_dir() {
         return Ok(Vec::new());
     }
-    let io_err = |path: &Path, detail: String| Diagnostic::ArtifactIo {
-        path: path.to_string_lossy().into_owned(),
-        detail,
-    };
-    let mut slugs: Vec<String> = Vec::new();
-    let entries = std::fs::read_dir(cache_root).map_err(|e| io_err(cache_root, e.to_string()))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| io_err(cache_root, e.to_string()))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some(slug) = name.strip_suffix(".consumer.json") {
-            slugs.push(slug.to_owned());
-        }
+    load_catalog_from(&PathCacheSource(cache_root))
+}
+
+/// A readable FFI cache directory the catalog loader draws its artifacts from.
+///
+/// The loader never touches the filesystem itself: every listing and read goes
+/// through the source, so a caller holding the cache as an owner-checked,
+/// no-follow directory handle keeps every read on that same handle.
+pub trait CacheSource {
+    /// The error a listing or read fails with; every loader diagnostic converts into it.
+    type Error: From<Diagnostic>;
+
+    /// The cache directory's path, used only to name artifacts in diagnostics.
+    fn root(&self) -> &Path;
+
+    /// The names of the entries directly inside the cache directory.
+    ///
+    /// # Errors
+    ///
+    /// When the directory cannot be listed.
+    fn entry_names(&self) -> Result<Vec<String>, Self::Error>;
+
+    /// The text of the artifact `name`, or `None` when no such entry exists.
+    ///
+    /// # Errors
+    ///
+    /// When the entry exists but cannot be read as a trusted artifact.
+    fn read_artifact(&self, name: &str) -> Result<Option<String>, Self::Error>;
+}
+
+/// A cache read by path, following links, for a directory the caller owns outright.
+struct PathCacheSource<'a>(&'a Path);
+
+impl CacheSource for PathCacheSource<'_> {
+    type Error = Diagnostic;
+
+    fn root(&self) -> &Path {
+        self.0
     }
+
+    fn entry_names(&self) -> Result<Vec<String>, Diagnostic> {
+        let io_err = |e: &std::io::Error| Diagnostic::ArtifactIo {
+            path: self.0.to_string_lossy().into_owned(),
+            detail: e.to_string(),
+        };
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(self.0).map_err(|e| io_err(&e))? {
+            let entry = entry.map_err(|e| io_err(&e))?;
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        Ok(names)
+    }
+
+    fn read_artifact(&self, name: &str) -> Result<Option<String>, Diagnostic> {
+        let path = self.0.join(name);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        std::fs::read_to_string(&path)
+            .map(Some)
+            .map_err(|e| Diagnostic::ArtifactIo {
+                path: path.to_string_lossy().into_owned(),
+                detail: e.to_string(),
+            })
+    }
+}
+
+/// Load the installed-crate catalog from `source` (see [`load_catalog`]).
+///
+/// # Errors
+///
+/// As [`load_catalog`], plus any error `source` raises while listing or reading.
+pub fn load_catalog_from<S: CacheSource>(source: &S) -> Result<Vec<InstalledCrate>, S::Error> {
+    let mut slugs: Vec<String> = source
+        .entry_names()?
+        .into_iter()
+        .filter_map(|name| name.strip_suffix(CONSUMER_SUFFIX).map(str::to_owned))
+        .collect();
     slugs.sort();
     let mut out = Vec::with_capacity(slugs.len());
     for slug in slugs {
-        out.push(load_installed_crate(cache_root, slug)?);
+        out.push(load_installed_crate(source, slug)?);
     }
     Ok(out)
 }
@@ -1030,37 +1138,41 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
 ///
 /// As [`load_catalog`], scoped to this slug's artifacts.
 #[allow(clippy::too_many_lines)] // one linear artifact decode-and-cross-check cascade
-fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrate, Diagnostic> {
-    let io_err = |path: &Path, detail: String| Diagnostic::ArtifactIo {
-        path: path.to_string_lossy().into_owned(),
-        detail,
-    };
+fn load_installed_crate<S: CacheSource>(
+    source: &S,
+    slug: String,
+) -> Result<InstalledCrate, S::Error> {
     {
         let cache = FfiCache {
-            root: cache_root.to_path_buf(),
+            root: source.root().to_path_buf(),
         };
         let paths = cache.artifact_paths(&slug);
-        let read = |p: &Path| -> Result<String, Diagnostic> {
-            std::fs::read_to_string(p).map_err(|e| io_err(p, e.to_string()))
+        let names = ArtifactNames::for_slug(&slug);
+        let read = |name: &str, path: &Path| -> Result<String, S::Error> {
+            source.read_artifact(name)?.ok_or_else(|| {
+                Diagnostic::ArtifactIo {
+                    path: path.to_string_lossy().into_owned(),
+                    detail: "artifact is missing".to_owned(),
+                }
+                .into()
+            })
         };
         // RE-DERIVE the whole consumer-side view from the validated
         // inspection document — no on-disk projection is trusted as text
         // (see [`load_catalog`]). A legacy cache written before the
         // `pkg.json` artifact existed has no document to re-derive from; it
         // falls back to the stored projections, whose trust then rests on
-        // the discovery-time ownership/write-boundary gate
-        // (`find_cache_root`) plus the injection-free-by-construction
-        // emitter.
-        if paths.pkg_json.is_file() {
-            let pkg_text = read(&paths.pkg_json)?;
+        // the discovery-time ownership/write-boundary gate the source
+        // enforces plus the injection-free-by-construction emitter.
+        if let Some(pkg_text) = source.read_artifact(&names.pkg_json)? {
             let pkg = PkgInfo::decode_json(&pkg_text)?;
-            return installed_crate_from_pkg(slug, &pkg);
+            return installed_crate_from_pkg(slug, &pkg).map_err(Into::into);
         }
-        let consumer_text = read(&paths.consumer)?;
-        let interface_source = read(&paths.interface)?;
+        let consumer_text = read(&names.consumer, &paths.consumer)?;
+        let interface_source = read(&names.interface, &paths.interface)?;
         let dep_versions: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::new();
-        let bindings_source = read(&paths.bindings)?;
+        let bindings_source = read(&names.bindings, &paths.bindings)?;
         let malformed = |detail: String| Diagnostic::WireMalformed {
             context: format!("consumer manifest `{}`", paths.consumer.display()),
             defect: crate::diag::WireDefect::Json { detail },
@@ -1163,7 +1275,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                 "interface module surfaces a transparent record/union but the manifest \
                  carries no `transparentTypes` — re-run `ipe add` to regenerate the cache"
                     .to_owned(),
-            ));
+            )
+            .into());
         }
         let bindings: Vec<crate::interface::InterfaceBinding> = doc
             .get("bindings")
@@ -1214,7 +1327,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                     "interface forwards to wrapper `{ident}` but `{}` declares no such \
                      `pub fn` — re-run `ipe add` to regenerate the cache",
                     paths.bindings.display()
-                )));
+                ))
+                .into());
             }
         }
         Ok(InstalledCrate {

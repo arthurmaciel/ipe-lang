@@ -395,8 +395,9 @@ pub fn resolve_delivery(
 /// Route an entry argument to its `package.ipe`, when one governs it.
 ///
 /// A directory must contain one, and a `.ipe` entry walks up the tree looking
-/// for one (returning no manifest — single-file mode — when none exists). A
-/// directory carrying only a legacy `ipe.toml` is a clear legacy-toml error.
+/// for one (returning no manifest — single-file mode — when none exists, and
+/// refusing one that fails the owner rule). A directory carrying only a legacy
+/// `ipe.toml` is a clear legacy-toml error.
 pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
     if entry_path.is_dir() {
         if let Some(manifest) = project::manifest_in_dir(entry_path) {
@@ -407,7 +408,7 @@ pub fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError>
         }
         Err(CliError::Usage(text::msg::watch_dir_no_manifest()))
     } else {
-        Ok(find_manifest_for_ipe_file(entry_path))
+        find_manifest_for_ipe_file(entry_path)
     }
 }
 
