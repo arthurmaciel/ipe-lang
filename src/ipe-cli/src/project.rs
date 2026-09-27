@@ -665,34 +665,27 @@ const MAX_DISCOVERY_DEPTH: usize = 64;
 /// or characters outside `[A-Za-z0-9_]`) are silently skipped — they may be
 /// build artefacts or editor swap files.
 ///
-/// The walk carries, per branch, the canonicalised identity of every ancestor
-/// directory on the current descent (to detect symlink cycles) and a depth
-/// ceiling to bound pathologically deep trees. Both conditions produce a
+/// The walk carries a canonicalised visited-set to detect symlink cycles and a
+/// depth ceiling to bound pathologically deep trees. Both conditions produce a
 /// typed [`CliError::DiscoveryLimitReached`] rather than an infinite loop or
 /// stack overflow.
-///
-/// A directory is a cycle only when its own canonical identity already
-/// appears among ITS OWN ancestors — not merely because some other, unrelated
-/// branch already reached the same real directory. Two sibling symlinks that
-/// both point at one ordinary directory are therefore not a cycle: each
-/// branch visits that directory once, still within the depth ceiling.
 ///
 /// # Errors
 /// [`CliError::Io`] if the directory cannot be read.
 /// [`CliError::DiscoveryLimitReached`] on a symlink cycle or a tree deeper
 /// than [`MAX_DISCOVERY_DEPTH`].
 pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliError> {
-    use std::rc::Rc;
+    use std::collections::HashSet;
 
     let mut result: Vec<DiscoveredModule> = Vec::new();
-    // Stack entries carry the directory path, its depth from src_root, and
-    // the canonicalised identity of every ancestor on the path from
-    // src_root down to (but excluding) this directory.
-    let mut stack: VecDeque<(PathBuf, usize, Rc<Vec<PathBuf>>)> = VecDeque::new();
+    // Stack entries carry the directory path and its depth from src_root.
+    let mut stack: VecDeque<(PathBuf, usize)> = VecDeque::new();
+    // Visited set of canonicalised paths breaks symlink cycles.
+    let mut visited: HashSet<PathBuf> = HashSet::new();
 
-    stack.push_back((src_root.to_path_buf(), 0, Rc::new(Vec::new())));
+    stack.push_back((src_root.to_path_buf(), 0));
 
-    while let Some((dir, depth, ancestors)) = stack.pop_front() {
+    while let Some((dir, depth)) = stack.pop_front() {
         if depth > MAX_DISCOVERY_DEPTH {
             return Err(CliError::DiscoveryLimitReached {
                 detail: format!(
@@ -703,23 +696,20 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
             });
         }
 
-        // Canonicalise, then check ONLY against this branch's ancestor
-        // chain: revisiting a real directory that is not our own ancestor
-        // (e.g. via a second, sibling symlink) is not a cycle.
+        // Canonicalise to detect symlink cycles: two different dir-paths that
+        // resolve to the same inode are a cycle and the second visit is skipped.
         let canon = fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-        if ancestors.contains(&canon) {
+        if !visited.insert(canon.clone()) {
+            // Already visited this real directory — symlink cycle detected.
             return Err(CliError::DiscoveryLimitReached {
                 detail: format!(
                     "symlink cycle detected: `{}` resolves to an already-visited \
-                     ancestor directory `{}`",
+                     directory `{}`",
                     dir.display(),
                     canon.display()
                 ),
             });
         }
-        let mut child_ancestors = (*ancestors).clone();
-        child_ancestors.push(canon);
-        let child_ancestors = Rc::new(child_ancestors);
 
         let entries = fs::read_dir(&dir).map_err(|e| CliError::Io {
             path: dir.clone(),
@@ -736,7 +726,7 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
                 source: e,
             })?;
             if file_type.is_dir() {
-                stack.push_back((path, depth + 1, Rc::clone(&child_ancestors)));
+                stack.push_back((path, depth + 1));
             } else if file_type.is_file()
                 && path.extension().and_then(|e| e.to_str()) == Some("ipe")
                 && let Some(m) = file_to_module(src_root, &path)
@@ -1490,64 +1480,53 @@ import String
         let _ = fs::remove_dir_all(&root);
     }
 
-    // ── Symlink cycle detection (ancestor-chain, not global) ───────────────────
+    // ── Symlink non-descent ─────────────────────────────────────────────────
 
-    /// Two symlinks pointing at the same real directory from unrelated
-    /// branches are not each other's ancestor, so both are discovered rather
-    /// than the second being refused as a false cycle.
+    /// `discover_modules` classifies each entry with
+    /// [`std::fs::DirEntry::file_type`], which reports the entry's own type
+    /// without following a symlink (`lstat`, not `stat`). A symlinked
+    /// directory is therefore neither `is_dir()` nor `is_file()` to the walk
+    /// and is never pushed onto the descent stack, so a link cycle through it
+    /// is unrepresentable: its modules go undiscovered rather than being
+    /// walked into.
     #[cfg(unix)]
     #[test]
-    fn discover_modules_sibling_symlinks_to_one_dir_are_not_a_cycle() {
+    fn discover_modules_does_not_descend_a_symlinked_directory() {
         let root =
-            std::env::temp_dir().join(format!("ipe_discover_siblings_{}", std::process::id()));
+            std::env::temp_dir().join(format!("ipe_discover_symlink_skip_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let src = root.join("src");
-        let shared = src.join("Shared");
-        fs::create_dir_all(&shared).expect("create Shared/");
+        fs::create_dir_all(&src).expect("create src/");
         fs::write(
-            shared.join("Util.ipe"),
-            "module Shared.Util exposing (x)\n\nx = 0\n",
+            src.join("Local.ipe"),
+            "module Local exposing (x)\n\nx = 0\n",
         )
-        .expect("write Shared/Util.ipe");
+        .expect("write Local.ipe");
 
-        // LinkA and LinkB are independent symlinks, both resolving to Shared/ —
-        // neither is an ancestor of the other's descent.
-        std::os::unix::fs::symlink(&shared, src.join("LinkA")).expect("plant LinkA");
-        std::os::unix::fs::symlink(&shared, src.join("LinkB")).expect("plant LinkB");
+        // `External` sits outside src/ and holds a module that would only be
+        // found if the walk followed the symlink into it.
+        let external = root.join("External");
+        fs::create_dir_all(&external).expect("create External/");
+        fs::write(
+            external.join("Util.ipe"),
+            "module Util exposing (x)\n\nx = 0\n",
+        )
+        .expect("write External/Util.ipe");
+        std::os::unix::fs::symlink(&external, src.join("Link")).expect("plant Link -> External");
 
-        let discovered = discover_modules(&src)
-            .expect("two sibling symlinks to one real directory is not a cycle");
-        let util_hits = discovered
-            .iter()
-            .filter(|m| m.module_path.last().map(String::as_str) == Some("Util"))
-            .count();
-        assert_eq!(
-            util_hits, 3,
-            "the real Shared/Util.ipe plus each symlink's view of it: {discovered:?}"
-        );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    /// A directory containing a symlink back to one of its own ancestors is a
-    /// genuine cycle and must still be refused.
-    #[cfg(unix)]
-    #[test]
-    fn discover_modules_real_ancestor_cycle_is_still_refused() {
-        let root = std::env::temp_dir().join(format!("ipe_discover_cycle_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        let src = root.join("src");
-        let child = src.join("Child");
-        fs::create_dir_all(&child).expect("create Child/");
-
-        // Child/Loop symlinks back up to `src` itself — a real ancestor cycle.
-        std::os::unix::fs::symlink(&src, child.join("Loop")).expect("plant ancestor-cycle link");
-
-        let result = discover_modules(&src);
+        let discovered =
+            discover_modules(&src).expect("a symlinked directory is skipped, not a cycle");
         assert!(
-            matches!(result, Err(CliError::DiscoveryLimitReached { .. })),
-            "a directory symlinking back to its own ancestor must be refused as a cycle: \
-             {result:?}"
+            discovered
+                .iter()
+                .all(|m| m.module_path.last().map(String::as_str) != Some("Util")),
+            "the module behind the symlink must not be discovered: {discovered:?}"
+        );
+        assert!(
+            discovered
+                .iter()
+                .any(|m| m.module_path.last().map(String::as_str) == Some("Local")),
+            "the ordinary top-level module must still be discovered: {discovered:?}"
         );
 
         let _ = fs::remove_dir_all(&root);

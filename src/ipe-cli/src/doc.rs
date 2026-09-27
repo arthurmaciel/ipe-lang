@@ -6168,6 +6168,10 @@ mod tests {
         let Err(err) = result else {
             // Running privileged (e.g. root), a 0o000 mode never actually blocks
             // the read — there is no refusal to observe on this run.
+            eprintln!(
+                "build_docs_or_stdlib_propagates_io_error_for_unreadable_src: skipping — \
+                 running as root, chmod 0o000 does not block reads"
+            );
             let _ = fs::remove_dir_all(&tmp);
             return;
         };
