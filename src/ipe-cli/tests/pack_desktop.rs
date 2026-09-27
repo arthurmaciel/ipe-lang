@@ -111,7 +111,8 @@ fn plist_of(layout: &desktop::BundleLayout) -> String {
 #[cfg(unix)]
 #[test]
 fn materialise_refuses_planted_symlinks() {
-    let dir = std::env::temp_dir().join(format!("pack_desktop_symlink_{}", std::process::id()));
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pack_desktop_symlink_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let victim = dir.join("victim");
     std::fs::create_dir_all(&victim).expect("victim dir");
