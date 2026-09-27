@@ -3112,7 +3112,7 @@ pub fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
 /// Invoking `ipe explain` emits a pointer to `ipe doc` and returns a usage
 /// error so the dispatcher shows the `ipe doc` help page. The command is no
 /// longer advertised; the COMMANDS registry entry was removed.
-pub fn run_explain(_rest: &[String]) -> Result<(), CliError> {
+pub const fn run_explain(_rest: &[String]) -> Result<(), CliError> {
     Err(CliError::Usage(text::msg::explain_moved()))
 }
 

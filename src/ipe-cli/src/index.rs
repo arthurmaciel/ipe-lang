@@ -780,7 +780,7 @@ pub fn parse_entry_json(name: &str, text: &str) -> Result<IndexEntry, CliError> 
     let malformed = |detail: &str| {
         CliError::Resolve(crate::text::msg::registry_json_malformed(
             &name,
-            &crate::style::TerminalSafe::sanitize(&detail),
+            &crate::style::TerminalSafe::sanitize(detail),
         ))
     };
 
