@@ -1020,8 +1020,10 @@ pub type TransparentGlueMap = std::collections::BTreeMap<String, TransparentGlue
 /// Bindings with no transparent position are omitted.
 ///
 /// # Errors
-/// [`crate::diag::WireDefect::UnknownTransparentShape`] when a binding names
-/// a shape absent from `transparent_types`.
+/// [`crate::diag::WireDefect::TransparentArityMismatch`] when a binding's
+/// non-empty parameter shape list does not have exactly one entry per Ipê
+/// argument; [`crate::diag::WireDefect::UnknownTransparentShape`] when a
+/// binding names a shape absent from `transparent_types`.
 pub fn resolve_transparent_glue(
     bindings: &[crate::interface::InterfaceBinding],
     transparent_types: &std::collections::BTreeMap<String, crate::transparency::TransparentType>,
@@ -1030,6 +1032,16 @@ pub fn resolve_transparent_glue(
     for b in bindings {
         if b.transparent_params.iter().all(Option::is_none) && b.transparent_result.is_none() {
             continue;
+        }
+        // The emitted glue converts argument `i` by `params[i]`; an empty list
+        // means no parameter position converts, any other length must be the
+        // arity exactly, or an argument is converted by the wrong shape.
+        if !b.transparent_params.is_empty() && b.transparent_params.len() != b.arity {
+            return Err(crate::diag::WireDefect::TransparentArityMismatch {
+                binding: b.ref_name.clone(),
+                arity: b.arity,
+                params: b.transparent_params.len(),
+            });
         }
         let shape_of = |name: &str| {
             transparent_types.get(name).cloned().ok_or_else(|| {
@@ -1307,7 +1319,8 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                 .collect::<Result<_, _>>()?,
         };
         // Fail-closed cross-check: every transparent position a binding names
-        // must resolve to a shape the manifest carries.
+        // must resolve to a shape the manifest carries, and a non-empty
+        // parameter shape list must align with the binding's arity.
         let transparent_glue =
             resolve_transparent_glue(&bindings, &transparent_types).map_err(|defect| {
                 Diagnostic::WireMalformed {
@@ -2820,6 +2833,58 @@ mod tests {
         assert!(
             matches!(&carried, Some(WireDefect::Json { detail }) if detail.contains("pub fn")),
             "{carried:?}"
+        );
+    }
+
+    #[test]
+    fn a_binding_whose_transparent_params_miss_its_arity_is_refused() {
+        let shape = json!([{
+            "name": "Counter", "kind": "struct", "rustPath": "Counter",
+            "fields": [{ "name": "value", "carrier": "Int" }]
+        }]);
+        for (name, arity, params) in [
+            ("arity_short", 2, json!(["Counter"])),
+            ("arity_long", 1, json!(["Counter", null])),
+        ] {
+            let binding = json!([{
+                "refName": "w", "wrapperIdent": "w", "arity": arity,
+                "sig": "Counter -> Int -> Int", "transparentParams": params
+            }]);
+            let defect = legacy_defect(
+                name,
+                &json!({ "bindings": binding, "transparentTypes": shape }),
+            );
+            assert!(
+                matches!(
+                    defect,
+                    Some(WireDefect::TransparentArityMismatch { arity: a, .. }) if a == arity
+                ),
+                "{name}: {defect:?}"
+            );
+        }
+    }
+
+    // An empty parameter list means "no parameter converts" and stays legal
+    // for any arity: a define forwarder with a transparent result carries it.
+    // The load passes the glue gate and stops only at the absent wrapper.
+    #[test]
+    fn an_empty_transparent_param_list_passes_for_any_arity() {
+        let binding = json!([{
+            "refName": "w", "wrapperIdent": "w", "arity": 3,
+            "sig": "Int -> Int -> Int -> Counter", "transparentParams": [],
+            "transparentResult": { "typeName": "Counter", "inResult": false }
+        }]);
+        let shape = json!([{
+            "name": "Counter", "kind": "struct", "rustPath": "Counter",
+            "fields": [{ "name": "value", "carrier": "Int" }]
+        }]);
+        let defect = legacy_defect(
+            "arity_empty",
+            &json!({ "bindings": binding, "transparentTypes": shape }),
+        );
+        assert!(
+            matches!(&defect, Some(WireDefect::Json { detail }) if detail.contains("pub fn")),
+            "{defect:?}"
         );
     }
 

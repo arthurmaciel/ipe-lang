@@ -767,6 +767,18 @@ pub enum WireDefect {
         /// The transparent nominal the binding names.
         shape: String,
     },
+    /// A binding's per-parameter transparent shapes do not align with its arity.
+    ///
+    /// The conversion glue is indexed by argument position, so a misaligned
+    /// list would convert the wrong argument or skip one.
+    TransparentArityMismatch {
+        /// The binding's Ipê-visible name.
+        binding: String,
+        /// The binding's Ipê-side arity.
+        arity: usize,
+        /// How many parameter positions the binding describes.
+        params: usize,
+    },
     /// A `[rust.define.closure]` signature does not parse into the closed
     /// [`crate::carrier::ClosureSig`] shape: a parameter or return component
     /// outside the carrier set, a bound outside `{Send, Sync, 'static}`, a
@@ -895,6 +907,15 @@ impl fmt::Display for WireDefect {
                 f,
                 "binding `{binding}` converts through transparent type `{shape}`, which the \
                  crate's `transparentTypes` does not carry"
+            ),
+            Self::TransparentArityMismatch {
+                binding,
+                arity,
+                params,
+            } => write!(
+                f,
+                "binding `{binding}` describes {params} transparent parameter position(s) but \
+                 has arity {arity}"
             ),
             Self::InvalidClosureSig { got, reason } => {
                 write!(

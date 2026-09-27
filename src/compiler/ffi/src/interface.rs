@@ -40,7 +40,8 @@ pub struct InterfaceBinding {
     /// Per-parameter transparent-type nominal, aligned with the Ipê arity —
     /// `Some(name)` marks a position whose value the backend converts between
     /// the Ipê record/union and the foreign struct/enum at the call seam.
-    /// Empty when no transparent type occurs anywhere in the signature.
+    /// Empty when no parameter position converts; otherwise exactly `arity`
+    /// entries (glue resolution refuses any other length).
     pub transparent_params: Vec<Option<String>>,
     /// The result's transparent payload, when the binding returns one.
     pub transparent_result: Option<TransparentResult>,
