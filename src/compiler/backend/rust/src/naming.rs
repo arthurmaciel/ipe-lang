@@ -541,18 +541,15 @@ mod tests {
 
     #[test]
     fn reserved_names_get_a_trailing_underscore() {
-        for kw in [
-            "type", "fn", "match", "self", "Self", "crate", "super", "become", "priv", "typeof",
-            "unsized", "virtual", "macro", "gen", "async", "await", "dyn", "true", "false",
-        ] {
-            assert_eq!(super::mangle_reserved(kw.to_owned()), format!("{kw}_"));
+        for kw in ipe_intern::RUST_KEYWORDS {
+            assert_eq!(super::mangle_reserved((*kw).to_owned()), format!("{kw}_"));
         }
     }
 
     #[test]
-    fn every_ssot_keyword_gets_a_trailing_underscore() {
-        for kw in ipe_intern::RUST_KEYWORDS {
-            assert_eq!(super::mangle_reserved((*kw).to_owned()), format!("{kw}_"));
+    fn weak_keyword_field_names_keep_their_wire_spelling() {
+        for name in ["union", "macro_rules", "raw", "safe"] {
+            assert_eq!(super::mangle_reserved(name.to_owned()), name);
         }
     }
 
@@ -583,10 +580,7 @@ mod tests {
 
         let mut images: BTreeMap<String, String> = BTreeMap::new();
         let mut inputs: Vec<String> = Vec::new();
-        for kw in [
-            "type", "fn", "match", "self", "Self", "crate", "super", "become", "priv", "gen",
-            "async", "await", "dyn", "true", "false", "loop", "move",
-        ] {
+        for kw in ipe_intern::RUST_KEYWORDS {
             // The keyword, plus its 0..=3-underscore shadows.
             inputs.push(kw.to_owned());
             inputs.push(format!("{kw}_"));

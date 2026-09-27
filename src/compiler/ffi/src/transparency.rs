@@ -977,6 +977,23 @@ mod tests {
         let keyword =
             StructDef::parse("Kw", &[("case".to_owned(), "i64".to_owned())], &[]).expect("parses");
         assert!(classify_define_struct(&keyword).is_err());
+        // A reserved Rust keyword field cannot render as `value.try`.
+        for kw in ["try", "gen"] {
+            let rust_kw =
+                StructDef::parse("Kw", &[(kw.to_owned(), "i64".to_owned())], &[]).expect("parses");
+            let err = classify_define_struct(&rust_kw).err().unwrap_or_default();
+            assert!(
+                err.contains("reserved keyword"),
+                "{kw} field should be refused, got: {err:?}"
+            );
+        }
+        // The weak keyword `union` is a legal field name.
+        let weak = StructDef::parse("Set", &[("union".to_owned(), "i64".to_owned())], &[])
+            .expect("parses");
+        assert!(
+            classify_define_struct(&weak).is_ok(),
+            "`union` is a legal Rust field name"
+        );
         // The placeholder-shaped enum spells the opaque-handle declaration.
         let placeholder =
             EnumDef::parse("Marker", &[("Marker".to_owned(), vec![])], &[]).expect("parses");

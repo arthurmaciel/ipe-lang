@@ -287,9 +287,10 @@ pub struct WebViewWindow {
 /// [reserved]: https://doc.rust-lang.org/reference/keywords.html
 #[must_use]
 pub fn sanitize_cargo_name(name: &str) -> String {
-    // Toolchain binary name — not a Rust keyword, but colliding with it would
-    // shadow the `ipe` CLI on `$PATH` for anyone building the emitted crate.
-    const TOOLCHAIN_BIN: &str = "ipe";
+    // Non-keyword names that still get the suffix: the toolchain binary name
+    // (a crate named `ipe` would shadow the CLI on `$PATH`) and the weak
+    // keyword `union`, kept conservative for a crate name.
+    const EXTRA_SUFFIXED: &[&str] = &["ipe", "union"];
 
     // Names Cargo forbids as a binary target because they collide with its
     // build-directory names — the emitted crate has no `[[bin]]` override, so
@@ -327,11 +328,11 @@ pub fn sanitize_cargo_name(name: &str) -> String {
         return "ipe-app".to_owned();
     }
 
-    // Step 6: reserved Rust keywords, the `ipe` toolchain name, and Cargo's
+    // Step 6: reserved Rust keywords, the extra suffixed names, and Cargo's
     // forbidden binary-target names get `-app` appended to keep the emitted
     // crate buildable.
     if ipe_intern::is_rust_keyword(&result)
-        || result == TOOLCHAIN_BIN
+        || EXTRA_SUFFIXED.contains(&result.as_str())
         || CARGO_FORBIDDEN_BIN.contains(&result.as_str())
     {
         result.push_str("-app");
@@ -5664,6 +5665,7 @@ mod sanitize_cargo_name_tests {
         assert_eq!(sanitize_cargo_name("mod"), "mod-app");
         assert_eq!(sanitize_cargo_name("fn"), "fn-app");
         assert_eq!(sanitize_cargo_name("ipe"), "ipe-app");
+        assert_eq!(sanitize_cargo_name("union"), "union-app");
     }
 
     #[test]

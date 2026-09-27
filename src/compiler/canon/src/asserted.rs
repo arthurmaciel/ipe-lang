@@ -87,6 +87,11 @@ impl AssertedPath {
                      no generics or spaces)"
                 ));
             }
+            // A lone `_` is the wildcard token, not an identifier; spliced into
+            // the shim it would not parse as a path segment.
+            if *seg == "_" {
+                return Err("`_` is not an identifier and cannot be a path segment".to_owned());
+            }
             // A segment spelled as a Rust keyword is spliced raw into the
             // generated shim (`::sha2::match(...)`), which cargo cannot parse.
             // Reject it at ipe time rather than emit un-buildable Rust.
@@ -480,9 +485,26 @@ mod tests {
     fn every_ssot_keyword_is_rejected_as_a_path_segment() {
         for kw in ipe_intern::RUST_KEYWORDS {
             let raw = format!("some_crate::{kw}");
+            let err = AssertedPath::parse(&raw).err().unwrap_or_default();
             assert!(
-                AssertedPath::parse(&raw).is_err(),
-                "{kw} should be rejected as a path segment"
+                err.contains("Rust keyword"),
+                "{kw} should be rejected as a Rust keyword, got: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn weak_keyword_union_is_a_legal_path_segment() {
+        assert!(AssertedPath::parse("geo::union").is_ok());
+    }
+
+    #[test]
+    fn a_lone_underscore_segment_is_refused() {
+        for raw in ["_::frobnicate", "some_crate::_", "some_crate::_::f"] {
+            let err = AssertedPath::parse(raw).err().unwrap_or_default();
+            assert!(
+                err.contains("`_` is not an identifier"),
+                "{raw} should be refused, got: {err:?}"
             );
         }
     }
