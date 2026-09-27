@@ -3136,21 +3136,20 @@ update _msg model = ( model, Cmd.none )
 view : Model -> Screen Msg
 view _model = Cells.text "hello"
 subscriptions : Model -> Sub Msg
-subscriptions _model = Sub.none
+subscriptions _model = Sub.onKey onKey
 onKey : KeyEvent -> Msg
 onKey _event = NoOp
 main =
     Tui.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onKey = onKey
+        , subscriptions = subscriptions
         }
 appOf step render toMsg =
     Tui.tea
         { init = \_ -> ( initialModel, Cmd.none )
         , update = step
         , view = render
-        , subscriptions = \_ -> Sub.none
-        , onKey = toMsg
+        , subscriptions = \_ -> Sub.onKey toMsg
         }
 "#;
     assert_rejected("generic_msg_tui_tea", src, "IPE-N0051");
@@ -3176,21 +3175,20 @@ update _msg model = ( model, Cmd.none )
 view : Model -> Lines Msg
 view _model = Ui.text "ok"
 subscriptions : Model -> Sub Msg
-subscriptions _model = Sub.none
+subscriptions _model = Sub.onLine onLine
 onLine : String -> Msg
 onLine s = Line s
 main =
     Cli.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onLine = onLine
+        , subscriptions = subscriptions
         }
 appOf step render toMsg =
     Cli.tea
         { init = \_ -> ( initialModel, Cmd.none )
         , update = step
         , view = render
-        , subscriptions = \_ -> Sub.none
-        , onLine = toMsg
+        , subscriptions = \_ -> Sub.onLine toMsg
         }
 "#;
     assert_rejected("generic_msg_cli_tea", src, "IPE-N0051");

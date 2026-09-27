@@ -413,7 +413,7 @@ fn tui_sub_from_a_helper_module_in_a_cli_app_is_rejected() -> Result<(), BoxErro
 
 /// The emitted Ipê-side Rust of a compiled test program (`main.rs` + `ipe_mods`).
 fn emitted_rust(test_name: &str) -> String {
-    let src = std::env::temp_dir()
+    let src = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("tea_surface_{test_name}_out"))
         .join("src");
     let mut combined = std::fs::read_to_string(src.join("main.rs")).unwrap_or_default();
@@ -560,7 +560,8 @@ fn assert_builds_files(test_name: &str, files: &[(&str, &str)]) -> Result<(), Bo
     if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
-    let out_dir = std::env::temp_dir().join(format!("tea_surface_{test_name}_out"));
+    let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("tea_surface_{test_name}_out"));
     e2e_support::build_rust_binary(test_name, &out_dir)
         .map(|_| ())
         .map_err(|e| -> BoxError {

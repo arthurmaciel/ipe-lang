@@ -101,7 +101,7 @@ import Ipe.String as String
 import Ipe.Task as Task
 import Ipe.Tea.Cli as Cli
 import Ipe.Tea.Terminal.Cmd
-import Ipe.Tea.Terminal.Sub
+import Ipe.Tea.Cli.Sub
 import Ipe.Ui.Cli as Ui
 import Ipe.Ui.Cli exposing (Lines)
 
@@ -187,7 +187,7 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    subWith "s"
+    Sub.batch [ subWith "s", Sub.onLine onLine ]
 
 
 onLine : String -> Msg
@@ -201,7 +201,6 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , onLine = onLine
         }
 "#;
 
