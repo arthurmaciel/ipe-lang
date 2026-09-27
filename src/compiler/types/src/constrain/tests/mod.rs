@@ -2018,9 +2018,19 @@ mod registry_phase_c_tests {
                  hof_kernel_result obligation and no stated exemption",
             );
         }
+    }
 
-        // Pins: the `Maybe`/`Result` family and the collection HOFs, each at
-        // its callback's final-result variable.
+    /// Obliged kernels sit at their callback's final-result variable; exempt ones stay empty.
+    ///
+    /// Pins the `Maybe`/`Result` family and the collection HOFs, and the
+    /// boxed-wrapper and handler-class exemptions.
+    #[test]
+    fn hof_result_vars_pins_and_exemptions() {
+        let mut interner = Interner::new();
+        let builtins = make_builder(&mut interner);
+        let mut uf = UnionFind::<Content>::new();
+        let builder = Builder::for_scheme_table(&mut uf, &interner, builtins);
+
         let pins: &[(StdlibKernel, &[u8])] = &[
             (StdlibKernel::MaybeMap, &[1]),
             (StdlibKernel::ResultMap, &[1]),
