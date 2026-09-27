@@ -91,14 +91,21 @@ pub fn render_finding_lines(
             .replace('\t', "    ");
         let line_no = loc.line.to_string();
         let line_no_pad = " ".repeat(pad_width.saturating_sub(line_no.len()));
-        let seg_lo = finding
-            .span
-            .lo
-            .max(u32::try_from(loc.line_start).unwrap_or(u32::MAX));
         let seg_hi = finding
             .span
             .hi
             .min(u32::try_from(loc.content_end).unwrap_or(u32::MAX));
+        // A continuation line underlines from its code column: the indentation
+        // before the span's text on that line is layout, not the span.
+        let seg_lo = if (finding.span.lo as usize) < loc.line_start {
+            let lo = floor_boundary(source, loc.line_start);
+            let hi = floor_boundary(source, seg_hi as usize).max(lo);
+            let text = source.get(lo..hi).unwrap_or("");
+            let indent_len = text.len().saturating_sub(text.trim_start().len());
+            u32::try_from(lo.saturating_add(indent_len)).unwrap_or(u32::MAX)
+        } else {
+            finding.span.lo
+        };
         let indent = caret_indent(source, loc.line_start, seg_lo);
         let width = caret_width(source, seg_lo, seg_hi);
         let source_row = if line_text.is_empty() {
