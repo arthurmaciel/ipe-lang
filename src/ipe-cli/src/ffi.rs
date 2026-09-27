@@ -367,20 +367,14 @@ struct MergedDep {
 impl MergedDep {
     /// Split a typed entry into its merge parts.
     fn of(dep: &CargoDep) -> Self {
-        let (name, source, features) = match dep {
+        let (source, features) = match dep {
             CargoDep::Registry {
-                name,
-                version,
-                features,
-            } => (name, MergedSource::Registry(version.clone()), features),
-            CargoDep::Wrapper {
-                name,
-                dir,
-                features,
-            } => (name, MergedSource::Wrapper(dir.clone()), features),
+                version, features, ..
+            } => (MergedSource::Registry(version.clone()), features),
+            CargoDep::Wrapper { dir, features } => (MergedSource::Wrapper(dir.clone()), features),
         };
         Self {
-            name: name.clone(),
+            name: dep.name().clone(),
             source,
             features: features.iter().cloned().collect(),
         }
@@ -395,11 +389,7 @@ impl MergedDep {
                 version,
                 features,
             },
-            MergedSource::Wrapper(dir) => CargoDep::Wrapper {
-                name: self.name,
-                dir,
-                features,
-            },
+            MergedSource::Wrapper(dir) => CargoDep::Wrapper { dir, features },
         }
     }
 }
@@ -1336,8 +1326,8 @@ fn install_wrapper(
     // Resolve the package-jailed relative path under the cache's project root
     // through the SAME jail the build-time load re-proves: canonicalization
     // resolves symlinks (so a checked-in symlink cannot lead out of the
-    // project), confirms the wrapper directory exists before any jailed build,
-    // and re-checks the canonical form against the renderable path charset.
+    // project), confirms the wrapper directory and its `Cargo.toml` exist
+    // before any jailed build, and reads the crate's `[package] name`.
     let rel = manifest.path().as_str();
     let relay =
         |diag: &ipe_ffi::diag::Diagnostic| CliError::Usage(crate::text::Message::relay(diag));
@@ -1352,9 +1342,10 @@ fn install_wrapper(
         })?;
     let abs_str = jailed.as_str().to_owned();
     let abs = PathBuf::from(&abs_str);
-    // The wrapper crate's Cargo package name is the inspection slug. Derive it
-    // from the directory name, gated through the crate-name charset.
-    let krate = CrateName::parse(abs.file_name().and_then(|n| n.to_str()).unwrap_or(rel))
+    // The inspection slug is the `[package] name` the jail read from the
+    // wrapper's own `Cargo.toml`, so the installed package name, the
+    // dependency key, and the crate cargo finds at the path are one name.
+    let krate = CrateName::parse(jailed.package().as_str())
         .map_err(|diag| CliError::Usage(crate::text::Message::relay(&diag)))?;
 
     // The capability gate runs BEFORE the trust prompt and any jailed compile: a
@@ -4186,8 +4177,8 @@ version = \"1\"
         }
     }
 
-    /// A scratch project with `wrappers/<name>` directories, jailed into
-    /// typed wrapper entries; returns the project root and the entries.
+    /// A scratch project with `wrappers/<name>` crates all named `engine_wrap`,
+    /// jailed into typed wrapper entries; returns the project root and the entries.
     fn jailed_wrappers(tag: &str, dirs: &[&str]) -> (PathBuf, Vec<CargoDep>) {
         let project =
             std::env::temp_dir().join(format!("ipe-cli-wrap-{tag}-{}", std::process::id()));
@@ -4197,18 +4188,44 @@ version = \"1\"
             .map(|dir| {
                 let rel = format!("wrappers/{dir}");
                 std::fs::create_dir_all(project.join(&rel)).expect("scratch wrapper dir");
+                std::fs::write(
+                    project.join(&rel).join("Cargo.toml"),
+                    "[package]\nname = \"engine_wrap\"\nversion = \"0.1.0\"\n",
+                )
+                .expect("scratch wrapper manifest");
                 let jailed = ipe_ffi::pkginfo::WrapperCratePath::parse(&rel)
                     .and_then(|path| path.jail(&project))
                     .expect("jails inside the scratch root");
                 CargoDep::Wrapper {
-                    name: ipe_ffi::pkginfo::PackageName::parse("engine_wrap")
-                        .expect("valid package name"),
                     dir: jailed,
                     features: Vec::new(),
                 }
             })
             .collect();
         (project, deps)
+    }
+
+    /// The source description a wrapper entry carries in a conflict message.
+    fn wrapper_source(deps: &[CargoDep], at: usize) -> String {
+        let Some(CargoDep::Wrapper { dir, .. }) = deps.get(at) else {
+            return String::new();
+        };
+        format!("path {}", dir.as_str())
+    }
+
+    /// The exact source-conflict refusal for the `engine_wrap` key.
+    fn source_conflict(first: &str, second: &str) -> String {
+        text::msg::ffi_dependency_source_conflict(&"engine_wrap", &first, &second).to_string()
+    }
+
+    /// The conflict message renders both sources on their own lines.
+    #[test]
+    fn the_source_conflict_message_names_both_sources() {
+        assert_eq!(
+            source_conflict("version =1.0.0", "path /p/engine"),
+            "installed FFI crates bind dependency `engine_wrap` to two different sources:\n  \
+             version =1.0.0\n  path /p/engine"
+        );
     }
 
     /// A wrapper crate flows through `assemble_emit` as its typed entry and
@@ -4239,6 +4256,7 @@ version = \"1\"
     #[test]
     fn a_registry_pin_against_a_wrapper_path_is_refused() {
         let (project, wrapper) = jailed_wrappers("mixed", &["engine"]);
+        let path = wrapper_source(&wrapper, 0);
         let registry =
             vec![CargoDep::parse_registry_line("engine_wrap = \"=1.0.0\"").expect("registry line")];
         let forward = assemble_emit(&[
@@ -4250,9 +4268,12 @@ version = \"1\"
             crate_with_deps("b", registry),
         ]);
         let _ = std::fs::remove_dir_all(&project);
-        for r in [forward, backward] {
+        for (r, expected) in [
+            (forward, source_conflict("version =1.0.0", &path)),
+            (backward, source_conflict(&path, "version =1.0.0")),
+        ] {
             assert!(
-                matches!(&r, Err(CliError::Usage(m)) if m.to_string().contains("two different sources")),
+                matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
                 "{r:?}"
             );
         }
@@ -4267,8 +4288,9 @@ version = \"1\"
             crate_with_deps("b", deps.iter().skip(1).cloned().collect()),
         ]);
         let _ = std::fs::remove_dir_all(&project);
+        let expected = source_conflict(&wrapper_source(&deps, 0), &wrapper_source(&deps, 1));
         assert!(
-            matches!(&r, Err(CliError::Usage(m)) if m.to_string().contains("two different sources")),
+            matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
             "{r:?}"
         );
     }
@@ -4285,11 +4307,15 @@ version = \"1\"
         let r = assemble_emit(&[
             crate_with_deps("a", vec![pin("1.0.0")]),
             crate_with_deps("b", vec![pin("2.0.0")]),
-            crate_with_deps("c", wrapper),
+            crate_with_deps("c", wrapper.clone()),
         ]);
         let _ = std::fs::remove_dir_all(&project);
+        let expected = source_conflict(
+            "an unpinned registry dependency",
+            &wrapper_source(&wrapper, 0),
+        );
         assert!(
-            matches!(&r, Err(CliError::Usage(m)) if m.to_string().contains("two different sources")),
+            matches!(&r, Err(CliError::Usage(m)) if m.to_string() == expected),
             "{r:?}"
         );
     }

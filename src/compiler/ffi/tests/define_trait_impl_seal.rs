@@ -96,6 +96,11 @@ fn a_marked_trait_impl_type_binds_its_symbols_and_depends_by_path() {
     let project =
         std::env::temp_dir().join(format!("ipe-sprite-wrap-dep-line-{}", std::process::id()));
     std::fs::create_dir_all(project.join("wrappers/sprite")).expect("scratch wrapper dir");
+    std::fs::write(
+        project.join("wrappers/sprite/Cargo.toml"),
+        "[package]\nname = \"sprite_wrap\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("scratch wrapper manifest");
     let canonical =
         std::fs::canonicalize(project.join("wrappers/sprite")).expect("wrapper dir canonicalizes");
     let deps = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project))

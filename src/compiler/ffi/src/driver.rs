@@ -1165,8 +1165,12 @@ fn load_installed_crate(cache_root: &Path, slug: String) -> Result<InstalledCrat
                     let line = line.as_str().ok_or_else(|| {
                         malformed("`cargoDeps` carries a non-string entry".to_owned())
                     })?;
-                    CargoDep::parse_registry_line(line)
-                        .map_err(|defect| malformed(defect.to_string()))
+                    CargoDep::parse_registry_line(line).map_err(|defect| {
+                        Diagnostic::WireMalformed {
+                            context: format!("consumer manifest `{}`", paths.consumer.display()),
+                            defect,
+                        }
+                    })
                 })
                 .collect::<Result<_, _>>()?,
         };
@@ -1463,14 +1467,15 @@ pub fn emit_coverage(
 
 /// One `[dependencies]` entry of the emitted app crate, typed.
 ///
-/// Every value spliced into the rendered line is a decode-validated newtype
-/// whose charset gate excludes TOML metacharacters: the key is a
+/// Every bare value spliced into the rendered line is a decode-validated
+/// newtype whose charset gate excludes TOML metacharacters: the key is a
 /// [`PackageName`] (`[A-Za-z0-9_-]+`, alphabetic-first), the pin a
-/// [`CrateVersion`], the path a [`crate::pkginfo::JailedWrapperDir`] (proven
-/// inside the project root, charset `[A-Za-z0-9._/ -]`), and each feature a
-/// [`FeatureName`]. No raw string reaches a TOML position, so no
-/// `"`-and-newline payload can close its string and inject manifest content —
-/// the types, not a runtime escape, close the injection class.
+/// [`CrateVersion`], and each feature a [`FeatureName`]. The wrapper path is a
+/// [`crate::pkginfo::JailedWrapperDir`] (proven inside the project root, its
+/// `Cargo.toml` naming the key) and is the one free-text value: it is rendered
+/// only through [`toml_basic_string`], which escapes every character a TOML
+/// basic string cannot hold raw. No `"`-and-newline payload can close a string
+/// and inject manifest content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CargoDep {
     /// A registry crate pinned to one exact version.
@@ -1483,9 +1488,11 @@ pub enum CargoDep {
         features: Vec<FeatureName>,
     },
     /// An author-supplied wrapper crate bound by `path`.
+    ///
+    /// The dependency key is the `[package] name` of the wrapper's own
+    /// `Cargo.toml`, carried by the jailed directory, so the key cargo resolves
+    /// and the crate it finds at the path cannot disagree.
     Wrapper {
-        /// The dependency key.
-        name: PackageName,
         /// The wrapper directory, proven inside the project root.
         dir: crate::pkginfo::JailedWrapperDir,
         /// The enabled features, rendered in this order.
@@ -1498,7 +1505,8 @@ impl CargoDep {
     #[must_use]
     pub const fn name(&self) -> &PackageName {
         match self {
-            Self::Registry { name, .. } | Self::Wrapper { name, .. } => name,
+            Self::Registry { name, .. } => name,
+            Self::Wrapper { dir, .. } => dir.package(),
         }
     }
 
@@ -1533,11 +1541,11 @@ impl CargoDep {
                 quoted.join(", ")
             ),
             (Self::Wrapper { dir, .. }, true) => {
-                format!("{name} = {{ path = \"{}\" }}", dir.as_str())
+                format!("{name} = {{ path = {} }}", toml_basic_string(dir.as_str()))
             }
             (Self::Wrapper { dir, .. }, false) => format!(
-                "{name} = {{ path = \"{}\", features = [{}] }}",
-                dir.as_str(),
+                "{name} = {{ path = {}, features = [{}] }}",
+                toml_basic_string(dir.as_str()),
                 quoted.join(", ")
             ),
         }
@@ -1581,6 +1589,34 @@ impl CargoDep {
     }
 }
 
+/// Render `text` as a TOML basic string, quotes included.
+///
+/// `"` and `\` are backslash-escaped, the named controls use their short
+/// escapes, and every other control character (C0, DEL, C1) is a `\uXXXX`
+/// escape, so the result parses back to exactly `text` whatever it holds.
+fn toml_basic_string(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(text.len().saturating_add(2));
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\u{c}' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04X}", u32::from(c));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Split a registry-pin value into its version text and quoted feature names.
 ///
 /// `"=VER"` or `{ version = "=VER", features = ["a", "b"] }`; `None` for any
@@ -1613,7 +1649,8 @@ fn registry_value_parts(value: &str) -> Option<(&str, Vec<&str>)> {
 ///
 /// A dep with no resolved version fails loudly (an unpinned line would be
 /// an under-bind waiting to happen); a wrapper crate that does not resolve
-/// inside the project root, or to a renderable directory, is refused.
+/// inside the project root, or to a renderable directory, or whose
+/// `Cargo.toml` does not name the installed package, is refused.
 pub fn cargo_deps(pkg: &PkgInfo, cache: &FfiCache) -> Result<Vec<CargoDep>, Diagnostic> {
     let missing_version = |name: &str| Diagnostic::WireMalformed {
         context: format!("transitive dep `{name}`"),
@@ -1628,18 +1665,25 @@ pub fn cargo_deps(pkg: &PkgInfo, cache: &FfiCache) -> Result<Vec<CargoDep>, Diag
         // own transitive deps resolve through the wrapper's `Cargo.toml`, so the
         // single path entry is the whole dependency surface the app needs to add.
         crate::pkginfo::PkgSource::Wrapper(path) => {
-            let dir =
-                path.jail(cache.project_root()?)
-                    .map_err(|defect| Diagnostic::WireMalformed {
-                        context: format!("wrapper crate `{}`", pkg.name()),
-                        defect,
-                    })?;
-            // The Cargo `[dependencies]` KEY is the charset-gated package NAME,
-            // never the weakly gated `pkg_path` (which may even be a
-            // `--manifest` filesystem path): the type forbids any ungated string
-            // reaching the TOML key.
+            let refuse = |defect| Diagnostic::WireMalformed {
+                context: format!("wrapper crate `{}`", pkg.name()),
+                defect,
+            };
+            let dir = path.jail(cache.project_root()?).map_err(refuse)?;
+            // The Cargo `[dependencies]` KEY is the wrapper's own
+            // `[package] name`, which must be the installed package's name: a
+            // wrapper edited after install to another name would otherwise bind
+            // bindings generated for one crate to a different one.
+            if dir.package() != pkg.name_pkg() {
+                return Err(refuse(crate::diag::WireDefect::WrapperManifest {
+                    got: path.as_str().to_owned(),
+                    defect: crate::diag::WrapperManifestDefect::PackageNameMismatch {
+                        expected: pkg.name().to_owned(),
+                        found: dir.package().as_str().to_owned(),
+                    },
+                }));
+            }
             Ok(vec![CargoDep::Wrapper {
-                name: pkg.name_pkg().clone(),
                 dir,
                 features: pkg.features().to_vec(),
             }])
@@ -2838,16 +2882,51 @@ mod tests {
         )
     }
 
-    /// A scratch project root holding `wrappers/engine`, plus the canonical
-    /// form of that wrapper directory.
+    /// The `Cargo.toml` of the scratch `engine_wrap` wrapper crate.
+    const ENGINE_MANIFEST: &str = "[package]\nname = \"engine_wrap\"\nversion = \"0.1.0\"\n";
+
+    /// A scratch project root holding the `engine_wrap` crate at
+    /// `wrappers/engine`, plus the canonical form of that wrapper directory.
     fn scratch_project(test_name: &str) -> (PathBuf, PathBuf) {
         let project =
             std::env::temp_dir().join(format!("ipe-ffi-jail-{test_name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&project);
         std::fs::create_dir_all(project.join("wrappers/engine")).expect("scratch wrapper dir");
+        std::fs::write(project.join("wrappers/engine/Cargo.toml"), ENGINE_MANIFEST)
+            .expect("scratch wrapper manifest");
         let canonical =
             std::fs::canonicalize(project.join("wrappers/engine")).expect("canonicalizes");
         (project, canonical)
+    }
+
+    /// The `path` value of a rendered wrapper line, read back by a TOML parser.
+    fn parsed_path(line: &str) -> Option<String> {
+        let table: toml::Table = toml::from_str(line).ok()?;
+        table
+            .get("engine_wrap")?
+            .get("path")?
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    /// The manifest defect a wrapper load was refused with, if any.
+    fn manifest_defect<T>(
+        r: &Result<T, Diagnostic>,
+    ) -> Option<&crate::diag::WrapperManifestDefect> {
+        let Some(crate::diag::WireDefect::WrapperManifest { defect, .. }) = jail_defect(r) else {
+            return None;
+        };
+        Some(defect)
+    }
+
+    /// Load the scratch wrapper after replacing its `Cargo.toml` with `manifest`.
+    fn load_with_manifest(test_name: &str, manifest: &[u8]) -> Result<Vec<CargoDep>, Diagnostic> {
+        let (project, canonical) = scratch_project(test_name);
+        std::fs::write(canonical.join("Cargo.toml"), manifest).expect("scratch manifest");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        r
     }
 
     fn jail_defect<T>(r: &Result<T, Diagnostic>) -> Option<&crate::diag::WireDefect> {
@@ -2888,15 +2967,21 @@ mod tests {
     #[test]
     fn relative_wrapper_path_inside_the_root_renders_canonical() {
         let (project, canonical) = scratch_project("rel-ok");
+        let text = canonical.to_str().expect("utf-8 temp path");
         let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
         let deps = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
         let _ = std::fs::remove_dir_all(&project);
+        let deps = deps.expect("jails inside the root");
         assert_eq!(
-            deps.expect("jails inside the root"),
+            deps,
             [format!(
-                "engine_wrap = {{ path = \"{}\" }}",
-                canonical.display()
+                "engine_wrap = {{ path = {} }}",
+                toml_basic_string(text)
             )]
+        );
+        assert_eq!(
+            deps.first().and_then(|line| parsed_path(line)).as_deref(),
+            Some(text)
         );
     }
 
@@ -2909,7 +2994,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&project);
         assert_eq!(
             deps.expect("jails inside the root"),
-            [format!("engine_wrap = {{ path = \"{text}\" }}")]
+            [format!(
+                "engine_wrap = {{ path = {} }}",
+                toml_basic_string(&text)
+            )]
         );
     }
 
@@ -3049,11 +3137,11 @@ mod tests {
                 matches!(
                     &r,
                     Err(Diagnostic::WireMalformed {
-                        defect: crate::diag::WireDefect::Json { detail },
+                        defect: crate::diag::WireDefect::LegacyDependencyLine { got },
                         ..
-                    }) if detail.contains("re-run `ipe add`")
+                    }) if got == line
                 ),
-                "{line:?} must be refused: {r:?}"
+                "{line:?} must be refused as a typed legacy line: {r:?}"
             );
         }
     }
@@ -3062,10 +3150,11 @@ mod tests {
     /// never skipped.
     #[test]
     fn legacy_manifest_with_non_string_dep_entry_is_refused() {
-        for (i, deps) in [
-            json!([42]),
-            json!(["semver = \"=1.0.0\"", null]),
-            json!("x"),
+        let non_string = "`cargoDeps` carries a non-string entry";
+        for (i, (deps, expected)) in [
+            (json!([42]), non_string),
+            (json!(["semver = \"=1.0.0\"", null]), non_string),
+            (json!("x"), "`cargoDeps` is not an array"),
         ]
         .iter()
         .enumerate()
@@ -3075,10 +3164,29 @@ mod tests {
             let r = load_catalog(&cache_root);
             let _ = std::fs::remove_dir_all(&cache_root);
             assert!(
-                matches!(&r, Err(Diagnostic::WireMalformed { .. })),
+                matches!(
+                    &r,
+                    Err(Diagnostic::WireMalformed {
+                        defect: crate::diag::WireDefect::Json { detail },
+                        ..
+                    }) if detail == expected
+                ),
                 "{deps} must be refused: {r:?}"
             );
         }
+    }
+
+    /// A `path` line is outside the registry-pin grammar and is refused with
+    /// the typed legacy-line defect carrying the line verbatim.
+    #[test]
+    fn parse_registry_line_refuses_a_path_line_typed() {
+        let line = "engine_wrap = { path = \"/etc\" }";
+        assert_eq!(
+            CargoDep::parse_registry_line(line),
+            Err(crate::diag::WireDefect::LegacyDependencyLine {
+                got: line.to_owned()
+            })
+        );
     }
 
     /// A legacy line in the exact rendered grammar loads as a typed registry pin.
@@ -3153,12 +3261,78 @@ mod tests {
         );
     }
 
-    /// A wrapper crate inside the root whose canonical directory carries a
-    /// character outside the path charset has no renderable `path` value.
+    /// Every string, whatever it holds, round-trips through the TOML basic
+    /// string renderer as exactly one value.
+    #[test]
+    fn toml_basic_string_round_trips() {
+        for text in [
+            "plain",
+            "quote\"inside",
+            "back\\slash",
+            "new\nline",
+            "c++/proj/\u{c1}rea",
+            "\u{1}\u{7f}\u{85}\t\r\u{8}\u{c}",
+            "\"\n[dependencies.evil]\npath = \"/etc\"\n\"",
+            "",
+        ] {
+            let doc = format!("x = {}", toml_basic_string(text));
+            let table: toml::Table = toml::from_str(&doc).expect("renders valid TOML");
+            assert_eq!(table.len(), 1, "{doc:?} must hold one key");
+            assert_eq!(
+                table.get("x").and_then(toml::Value::as_str),
+                Some(text),
+                "{doc:?}"
+            );
+        }
+    }
+
+    /// A wrapper crate under a root whose name carries `+` or a non-ASCII
+    /// letter renders a `path` that parses back to the canonical directory.
+    #[test]
+    fn wrapper_dir_under_a_plus_or_non_ascii_root_renders() {
+        for name in ["plus+root", "\u{c1}rea"] {
+            let (project, canonical) = scratch_project(name);
+            let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+            let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+            let deps = r.expect("jails inside the root");
+            let path = deps.first().and_then(|line| parsed_path(line));
+            let back = path.as_deref().and_then(|p| std::fs::canonicalize(p).ok());
+            let _ = std::fs::remove_dir_all(&project);
+            assert!(
+                path.as_deref()
+                    .is_some_and(|p| p.contains(name) && !p.starts_with("\\\\?\\")),
+                "{deps:?}"
+            );
+            assert_eq!(back, Some(canonical), "{deps:?}");
+        }
+    }
+
+    /// A root whose name carries a quote or a backslash renders an escaped
+    /// `path` that parses back to exactly the canonical directory.
     #[cfg(unix)]
     #[test]
-    fn wrapper_dir_under_a_root_outside_the_charset_is_unrenderable() {
-        let (project, _) = scratch_project("plus+root");
+    fn wrapper_dir_under_a_quote_or_backslash_root_renders_escaped() {
+        for name in ["quote\"root", "back\\slash"] {
+            let (project, canonical) = scratch_project(name);
+            let text = canonical.to_str().expect("utf-8 temp path").to_owned();
+            let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+            let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+            let _ = std::fs::remove_dir_all(&project);
+            let deps = r.expect("jails inside the root");
+            assert_eq!(
+                deps.first().and_then(|line| parsed_path(line)),
+                Some(text),
+                "{deps:?}"
+            );
+        }
+    }
+
+    /// A root whose name carries a control character has no renderable
+    /// `path` value and is refused.
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_dir_under_a_control_char_root_is_unrenderable() {
+        let (project, _) = scratch_project("new\nline");
         let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
         let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
         let _ = std::fs::remove_dir_all(&project);
@@ -3166,26 +3340,157 @@ mod tests {
             matches!(
                 jail_defect(&r),
                 Some(crate::diag::WireDefect::WrapperPathUnrenderable { canonical, .. })
-                    if canonical.contains("plus+root")
+                    if canonical.contains("new\nline")
             ),
             "{r:?}"
         );
     }
 
-    /// On Windows the canonical form carries a verbatim prefix and backslash
-    /// separators, so a wrapper crate is refused (fail closed).
+    /// On Windows the verbatim drive prefix is stripped through the typed
+    /// conversion, and the rendered path resolves to the canonical directory.
     #[cfg(windows)]
     #[test]
-    fn wrapper_crate_is_unrenderable_on_windows() {
-        let (project, _) = scratch_project("windows");
+    fn wrapper_crate_renders_a_plain_drive_path_on_windows() {
+        let (project, canonical) = scratch_project("windows");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_dep_lines(&pkg, &FfiCache::at_project_root(&project));
+        let deps = r.expect("jails inside the root");
+        let path = deps.first().and_then(|line| parsed_path(line));
+        let back = path.as_deref().and_then(|p| std::fs::canonicalize(p).ok());
+        let _ = std::fs::remove_dir_all(&project);
+        assert!(
+            path.as_deref().is_some_and(|p| !p.starts_with("\\\\?\\")),
+            "{deps:?}"
+        );
+        assert_eq!(back, Some(canonical));
+    }
+
+    /// A wrapper directory with no `Cargo.toml` is refused at the jail.
+    #[test]
+    fn wrapper_dir_without_a_manifest_is_refused() {
+        let (project, canonical) = scratch_project("no-manifest");
+        std::fs::remove_file(canonical.join("Cargo.toml")).expect("remove manifest");
         let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
         let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
         let _ = std::fs::remove_dir_all(&project);
         assert!(
             matches!(
-                jail_defect(&r),
-                Some(crate::diag::WireDefect::WrapperPathUnrenderable { .. })
+                manifest_defect(&r),
+                Some(crate::diag::WrapperManifestDefect::Unreadable { .. })
             ),
+            "{r:?}"
+        );
+    }
+
+    /// A symlinked `Cargo.toml` is refused rather than followed.
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_manifest_symlink_is_refused() {
+        let (project, canonical) = scratch_project("manifest-link");
+        std::fs::write(project.join("real.toml"), ENGINE_MANIFEST).expect("scratch file");
+        std::fs::remove_file(canonical.join("Cargo.toml")).expect("remove manifest");
+        std::os::unix::fs::symlink(project.join("real.toml"), canonical.join("Cargo.toml"))
+            .expect("symlink");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert_eq!(
+            manifest_defect(&r),
+            Some(&crate::diag::WrapperManifestDefect::NotRegularFile),
+            "{r:?}"
+        );
+    }
+
+    /// A directory named `Cargo.toml` is not a regular file and is refused.
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_manifest_directory_is_refused() {
+        let (project, canonical) = scratch_project("manifest-dir");
+        std::fs::remove_file(canonical.join("Cargo.toml")).expect("remove manifest");
+        std::fs::create_dir(canonical.join("Cargo.toml")).expect("manifest dir");
+        let pkg = wrapper_pkg("wrappers/engine").expect("decodes");
+        let r = cargo_deps(&pkg, &FfiCache::at_project_root(&project));
+        let _ = std::fs::remove_dir_all(&project);
+        assert_eq!(
+            manifest_defect(&r),
+            Some(&crate::diag::WrapperManifestDefect::NotRegularFile),
+            "{r:?}"
+        );
+    }
+
+    /// A manifest one byte past the ceiling is refused; one at it loads.
+    #[test]
+    fn wrapper_manifest_past_the_ceiling_is_refused() {
+        let limit = usize::try_from(crate::pkginfo::WRAPPER_MANIFEST_LIMIT).expect("fits");
+        let pad = |len: usize| {
+            let mut bytes = ENGINE_MANIFEST.as_bytes().to_vec();
+            bytes.push(b'#');
+            bytes.resize(len, b'x');
+            bytes
+        };
+        let over = load_with_manifest("manifest-over", &pad(limit + 1));
+        assert_eq!(
+            manifest_defect(&over),
+            Some(&crate::diag::WrapperManifestDefect::Oversized {
+                limit: crate::pkginfo::WRAPPER_MANIFEST_LIMIT
+            }),
+            "{over:?}"
+        );
+        let at = load_with_manifest("manifest-at", &pad(limit));
+        assert!(at.is_ok(), "{at:?}");
+    }
+
+    /// A manifest that is not UTF-8 TOML with a string `[package] name` is
+    /// refused as invalid.
+    #[test]
+    fn wrapper_manifest_without_a_string_package_name_is_refused() {
+        for (i, manifest) in [
+            b"[lib]\nname = \"engine_wrap\"\n".as_slice(),
+            b"[package]\nname = { workspace = true }\n".as_slice(),
+            b"[package]\nversion = \"0.1.0\"\n".as_slice(),
+            b"[package\nname = \"engine_wrap\"\n".as_slice(),
+            b"[package]\nname = \"engine_wrap\"\nname = \"other\"\n".as_slice(),
+            b"[package]\nname = \"engine\xff_wrap\"\n".as_slice(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let r = load_with_manifest(&format!("manifest-invalid-{i}"), manifest);
+            assert!(
+                matches!(
+                    manifest_defect(&r),
+                    Some(crate::diag::WrapperManifestDefect::Invalid { .. })
+                ),
+                "{:?}: {r:?}",
+                String::from_utf8_lossy(manifest)
+            );
+        }
+    }
+
+    /// A `[package] name` outside the dependency-key charset is refused.
+    #[test]
+    fn wrapper_manifest_with_an_illegal_package_name_is_refused() {
+        let r = load_with_manifest("manifest-illegal", b"[package]\nname = \"9lives\"\n");
+        assert_eq!(
+            manifest_defect(&r),
+            Some(&crate::diag::WrapperManifestDefect::PackageNameIllegal {
+                found: "9lives".to_owned()
+            }),
+            "{r:?}"
+        );
+    }
+
+    /// A `[package] name` other than the installed package's name is refused,
+    /// so the dependency key and the crate cargo finds cannot disagree.
+    #[test]
+    fn wrapper_manifest_naming_another_package_is_refused() {
+        let r = load_with_manifest("manifest-mismatch", b"[package]\nname = \"other_wrap\"\n");
+        assert_eq!(
+            manifest_defect(&r),
+            Some(&crate::diag::WrapperManifestDefect::PackageNameMismatch {
+                expected: "engine_wrap".to_owned(),
+                found: "other_wrap".to_owned()
+            }),
             "{r:?}"
         );
     }
@@ -3203,17 +3508,14 @@ mod tests {
             matches!(deps.as_slice(), [CargoDep::Wrapper { .. }]),
             "expected one wrapper entry: {deps:?}"
         );
-        let [
-            CargoDep::Wrapper {
-                name,
-                dir,
-                features,
-            },
-        ] = deps.as_slice()
-        else {
+        let [dep] = deps.as_slice() else {
             return;
         };
-        assert_eq!(name.as_str(), "engine_wrap");
+        let CargoDep::Wrapper { dir, features } = dep else {
+            return;
+        };
+        assert_eq!(dep.name().as_str(), "engine_wrap");
+        assert_eq!(dir.package().as_str(), "engine_wrap");
         assert_eq!(Some(dir.as_str()), canonical.to_str());
         assert!(features.is_empty());
     }

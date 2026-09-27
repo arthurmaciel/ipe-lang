@@ -508,15 +508,19 @@ impl PkgPath {
 /// A decode-validated filesystem path to an author-supplied wrapper crate.
 ///
 /// Never empty: a package with no wrapper is [`PkgSource::Registry`], not an
-/// empty path. The charset gate (`[A-Za-z0-9._/-]`, plus a space for a
-/// directory name) excludes every TOML-breaking character (quote, bracket,
-/// brace, backslash, control), and a `..` component is refused outright, so
-/// neither an injection payload nor a lexical traversal survives decode. The
-/// path is NOT yet proven to sit inside the project: only
-/// [`WrapperCratePath::jail`] yields the [`JailedWrapperDir`] a `path`
-/// dependency line is rendered from.
+/// empty path. A control character is refused (no path the inspector reports
+/// carries one), and a `..` component (split on `/` or `\`) is refused
+/// outright, so no lexical traversal survives decode. Every other character a
+/// real directory name can hold (`+`, a quote, non-ASCII letters) is admitted:
+/// the `path` dependency value is rendered as an escaped TOML basic string, so
+/// no character here reaches the emitted manifest raw. The path is NOT yet
+/// proven to sit inside the project: only [`WrapperCratePath::jail`] yields the
+/// [`JailedWrapperDir`] a `path` dependency line is rendered from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrapperCratePath(String);
+
+/// The read ceiling for a wrapper crate's `Cargo.toml`, in bytes.
+pub const WRAPPER_MANIFEST_LIMIT: u64 = 1024 * 1024;
 
 impl WrapperCratePath {
     /// Validate and wrap a wrapper-crate path.
@@ -524,16 +528,13 @@ impl WrapperCratePath {
     /// # Errors
     ///
     /// [`WireDefect::InvalidPkgPath`] when the path is empty or carries a
-    /// character outside the charset; [`WireDefect::WrapperPathTraversal`]
-    /// when a component is `..`.
+    /// control character; [`WireDefect::WrapperPathTraversal`] when a
+    /// component is `..`.
     pub fn parse(s: &str) -> Result<Self, WireDefect> {
-        let legal = !s.is_empty()
-            && s.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-' | ' '));
-        if !legal {
+        if s.is_empty() || s.chars().any(char::is_control) {
             return Err(WireDefect::InvalidPkgPath { got: s.to_owned() });
         }
-        if s.split('/').any(|seg| seg == "..") {
+        if s.split(['/', '\\']).any(|seg| seg == "..") {
             return Err(WireDefect::WrapperPathTraversal { got: s.to_owned() });
         }
         Ok(Self(s.to_owned()))
@@ -545,19 +546,20 @@ impl WrapperCratePath {
         &self.0
     }
 
-    /// Prove the wrapper crate sits inside `project_root`.
+    /// Prove the wrapper crate sits inside `project_root` and is the crate cargo builds.
     ///
     /// The proof is taken at load time, when the installed crate is read back
     /// for a build: both sides are canonicalized, so a symlink (at any
     /// component) that leads out of the project, an absolute path elsewhere,
     /// and a stale absolute path left by a moved or copied project are all
     /// refused. A relative path resolves against the project root. The
-    /// canonical form is re-checked against the charset gate, since resolving
-    /// the root or a symlink can surface characters the stored path never
-    /// carried; such a directory has no renderable `path` dependency value.
-    /// On Windows the canonical form carries a verbatim `\\?\` prefix and
-    /// backslash separators, so a wrapper crate is refused there (fail closed)
-    /// with [`WireDefect::WrapperPathUnrenderable`].
+    /// canonical form must be UTF-8 without control characters; on Windows its
+    /// verbatim drive prefix (`\\?\C:`) is converted to the plain drive form
+    /// only when the plain form canonicalizes back to the same directory. The
+    /// directory's `Cargo.toml` is then read (a regular file, never followed
+    /// through a symlink, at most [`WRAPPER_MANIFEST_LIMIT`] bytes) and its
+    /// `[package] name` parsed into the [`PackageName`] the dependency key is
+    /// rendered from.
     ///
     /// # Errors
     ///
@@ -565,7 +567,10 @@ impl WrapperCratePath {
     /// directory does not resolve to an existing directory;
     /// [`WireDefect::WrapperPathOutsideRoot`] when the resolved directory
     /// leaves the root; [`WireDefect::WrapperPathUnrenderable`] when the
-    /// canonical directory is not UTF-8 or falls outside the path charset.
+    /// canonical directory has no plain UTF-8 form;
+    /// [`WireDefect::WrapperManifest`] when its `Cargo.toml` is missing,
+    /// unreadable, not a regular file, oversized, or lacks a legal
+    /// `[package] name`.
     pub fn jail(&self, project_root: &std::path::Path) -> Result<JailedWrapperDir, WireDefect> {
         let unresolvable = |detail: String| WireDefect::WrapperPathUnresolvable {
             got: self.0.clone(),
@@ -584,29 +589,192 @@ impl WrapperCratePath {
         if !metadata.is_dir() {
             return Err(unresolvable("not a directory".to_owned()));
         }
-        let unrenderable = || WireDefect::WrapperPathUnrenderable {
-            got: self.0.clone(),
-            canonical: resolved.to_string_lossy().into_owned(),
-        };
-        let text = resolved.to_str().ok_or_else(unrenderable)?;
-        let canonical = Self::parse(text).map_err(|_| unrenderable())?;
-        Ok(JailedWrapperDir(canonical.0))
+        let path =
+            plain_path_text(&resolved).ok_or_else(|| WireDefect::WrapperPathUnrenderable {
+                got: self.0.clone(),
+                canonical: resolved.to_string_lossy().into_owned(),
+            })?;
+        let package =
+            read_wrapper_package(&resolved).map_err(|defect| WireDefect::WrapperManifest {
+                got: self.0.clone(),
+                defect,
+            })?;
+        Ok(JailedWrapperDir { path, package })
     }
 }
 
-/// A wrapper-crate directory proven, at load, to sit inside the project root.
+/// The plain UTF-8 text of a canonical directory, if it has one.
+///
+/// A path with no prefix is taken as is. A Windows verbatim drive prefix
+/// (`\\?\C:`) becomes the plain drive form, accepted only when that plain
+/// form canonicalizes back to the same directory (a component a plain path
+/// cannot name, such as a trailing dot, fails the proof). Every other prefix
+/// (a UNC share, a device namespace), a non-UTF-8 path, and a path carrying a
+/// control character yield `None`.
+fn plain_path_text(resolved: &std::path::Path) -> Option<String> {
+    use std::path::{Component, Prefix};
+    let mut components = resolved.components();
+    let plain = match components.clone().next() {
+        Some(Component::Prefix(prefix)) => {
+            let Prefix::VerbatimDisk(letter) = prefix.kind() else {
+                return None;
+            };
+            components.next();
+            let mut plain = std::path::PathBuf::from(format!("{}:\\", char::from(letter)));
+            plain.extend(components.filter(|c| !matches!(c, Component::RootDir)));
+            let same = std::fs::canonicalize(&plain).is_ok_and(|back| back == resolved);
+            if !same {
+                return None;
+            }
+            plain
+        }
+        _ => resolved.to_path_buf(),
+    };
+    let text = plain.to_str()?;
+    if text.chars().any(char::is_control) {
+        return None;
+    }
+    Some(text.to_owned())
+}
+
+/// The `[package]` table of a wrapper crate's `Cargo.toml`, as far as the jail reads it.
+#[derive(serde::Deserialize)]
+struct WrapperCargoManifest {
+    package: WrapperCargoPackage,
+}
+
+/// The `[package] name` of a wrapper crate's `Cargo.toml`.
+#[derive(serde::Deserialize)]
+struct WrapperCargoPackage {
+    name: String,
+}
+
+/// Read and parse the `[package] name` of the `Cargo.toml` in `dir`.
+///
+/// The manifest is opened without following a symlink at its final
+/// component, must be a regular file, and is read up to
+/// [`WRAPPER_MANIFEST_LIMIT`] bytes; one byte more is refused as oversized.
+fn read_wrapper_package(
+    dir: &std::path::Path,
+) -> Result<PackageName, crate::diag::WrapperManifestDefect> {
+    use crate::diag::WrapperManifestDefect as Defect;
+    use std::io::Read as _;
+    let unreadable = |e: std::io::Error| Defect::Unreadable {
+        detail: e.to_string(),
+    };
+    let file = open_manifest_no_follow(&dir.join("Cargo.toml"))?;
+    let metadata = file.metadata().map_err(unreadable)?;
+    if !metadata.is_file() {
+        return Err(Defect::NotRegularFile);
+    }
+    let oversized = Defect::Oversized {
+        limit: WRAPPER_MANIFEST_LIMIT,
+    };
+    if metadata.len() > WRAPPER_MANIFEST_LIMIT {
+        return Err(oversized);
+    }
+    let mut bytes = Vec::new();
+    file.take(WRAPPER_MANIFEST_LIMIT.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if !u64::try_from(bytes.len()).is_ok_and(|n| n <= WRAPPER_MANIFEST_LIMIT) {
+        return Err(oversized);
+    }
+    let text = String::from_utf8(bytes).map_err(|e| Defect::Invalid {
+        detail: e.to_string(),
+    })?;
+    let manifest: WrapperCargoManifest = toml::from_str(&text).map_err(|e| Defect::Invalid {
+        detail: e.message().to_owned(),
+    })?;
+    let found = manifest.package.name;
+    PackageName::parse(&found).map_err(|_| Defect::PackageNameIllegal { found })
+}
+
+/// Open `path` read-only without following a symlink at its final component.
+///
+/// `O_NONBLOCK` keeps a FIFO planted in place of the manifest from blocking
+/// the open; the caller's regular-file check then refuses it.
+#[cfg(unix)]
+fn open_manifest_no_follow(
+    path: &std::path::Path,
+) -> Result<std::fs::File, crate::diag::WrapperManifestDefect> {
+    use crate::diag::WrapperManifestDefect as Defect;
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    rustix::fs::open(path, flags, Mode::empty())
+        .map(std::fs::File::from)
+        .map_err(|errno| {
+            let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+            if is_link {
+                Defect::NotRegularFile
+            } else {
+                Defect::Unreadable {
+                    detail: std::io::Error::from(errno).to_string(),
+                }
+            }
+        })
+}
+
+/// Open `path` read-only, refusing a reparse point at its final component.
+#[cfg(windows)]
+fn open_manifest_no_follow(
+    path: &std::path::Path,
+) -> Result<std::fs::File, crate::diag::WrapperManifestDefect> {
+    use crate::diag::WrapperManifestDefect as Defect;
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    /// `FILE_FLAG_OPEN_REPARSE_POINT`: opens a reparse point itself, never its target.
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+    const ATTR_REPARSE_POINT: u32 = 0x400;
+    let unreadable = |e: std::io::Error| Defect::Unreadable {
+        detail: e.to_string(),
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(unreadable)?;
+    let attributes = file.metadata().map_err(unreadable)?.file_attributes();
+    if attributes & ATTR_REPARSE_POINT == 0 {
+        Ok(file)
+    } else {
+        Err(Defect::NotRegularFile)
+    }
+}
+
+/// Refuse: this platform has no symlink-refusing open.
+#[cfg(not(any(unix, windows)))]
+fn open_manifest_no_follow(
+    _path: &std::path::Path,
+) -> Result<std::fs::File, crate::diag::WrapperManifestDefect> {
+    Err(crate::diag::WrapperManifestDefect::Unreadable {
+        detail: "this platform has no symlink-refusing open".to_owned(),
+    })
+}
+
+/// A wrapper-crate directory proven, at load, to be the crate cargo builds.
 ///
 /// The only value a `path = "…"` dependency line is rendered from. It holds
-/// the canonical absolute path, which passed the same charset gate as
-/// [`WrapperCratePath`].
+/// the plain canonical absolute path (inside the project root) and the
+/// `[package] name` its `Cargo.toml` declares, so the dependency key and the
+/// crate cargo finds at the path cannot disagree.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JailedWrapperDir(String);
+pub struct JailedWrapperDir {
+    path: String,
+    package: PackageName,
+}
 
 impl JailedWrapperDir {
-    /// The canonical absolute wrapper directory.
+    /// The plain canonical absolute wrapper directory.
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.path
+    }
+
+    /// The `[package] name` the wrapper's `Cargo.toml` declares.
+    #[must_use]
+    pub const fn package(&self) -> &PackageName {
+        &self.package
     }
 }
 
