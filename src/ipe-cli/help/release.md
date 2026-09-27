@@ -16,4 +16,4 @@ A source file, a project directory, or a package.ipe (default: the current proje
 - `[--runtime <dir>]` — vendor the Ipê runtime source from <dir>
 - `[--bundle]` — native-bearing only: multi-file opt-out — wrapper + app + profile as siblings (app binary can be run directly, bypassing the sandbox)
 - `[--embed]` — native-bearing only: default single self-jailing binary (app + profile fused into wrapper)
-- `[--capabilities] [--plain|--json]` — print the inferred capability model for the app without building
+- `[--capabilities|--show-profile] [--plain|--json]` — print the inferred capability model for the app without building

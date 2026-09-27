@@ -10,4 +10,4 @@ The source file to fix.
 
 ## Options
 
-- `[--yes]` — apply every fix without per-edit confirmation
+- `[--yes|-y]` — apply every fix without per-edit confirmation
