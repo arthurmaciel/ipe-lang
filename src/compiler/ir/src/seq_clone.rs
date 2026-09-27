@@ -290,8 +290,10 @@ fn rewrite(expr: Expr, target: Symbol, row_binders: &BTreeSet<Symbol>, eager: bo
         },
     }
 }
-/// Fold [`clone_free_target`] over every symbol in `targets`. Each fold step
-/// only ever rewrites bare `Var` occurrences into `CloneVar` — the passes
+
+/// Fold [`clone_free_target`] over every symbol in `targets`.
+///
+/// Each fold step only ever rewrites bare `Var` occurrences into `CloneVar` — the passes
 /// don't interfere with each other regardless of order (a `CloneVar` leaf is
 /// never re-matched by a later target's pass).
 ///
