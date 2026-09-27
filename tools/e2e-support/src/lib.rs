@@ -516,12 +516,11 @@ fn run_bounded_build(
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!(
-                        "{golden_name}: emitted `cargo build` produced no output for {}s and was \
+                        "{golden_name}: emitted `cargo build` produced no output for {idle_window:?} and was \
                          killed (inactivity watchdog: a wedged build, not a slow one — a \
                          progressing build resets the window on every compile message; \
                          raise IPE_E2E_BUILD_IDLE_SECS if a single unit legitimately compiles \
                          longer in silence)",
-                        idle_window.as_secs()
                     ));
                 }
                 if elapsed >= max_total {
@@ -679,29 +678,32 @@ mod tests {
         // THE load-independence property: a build that runs FAR longer than the
         // idle window is NOT killed as long as it keeps emitting output. This is
         // exactly the slow-cold-runner case the old total-wall-clock cap
-        // false-killed. Ten ticks 200ms apart run ~2s total — 4× the 500ms idle
-        // window — yet each tick resets the window, so the process completes.
+        // false-killed. Forty ticks 100ms apart run ~4s total — longer than the
+        // 3s idle window — yet each tick resets the window, so the process
+        // completes. The window is 30× the tick gap so scheduler stalls on a
+        // loaded runner (shell startup, a delayed `sleep` fork) cannot fake a
+        // silent build.
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
-            .arg("i=0; while [ $i -lt 10 ]; do echo tick; sleep 0.2; i=$((i+1)); done");
+            .arg("i=0; while [ $i -lt 40 ]; do echo tick; sleep 0.1; i=$((i+1)); done");
         let started = Instant::now();
         let capture = run_bounded_build(
             cmd,
             "slow_progress_probe",
-            Duration::from_secs(3600),  // absolute backstop — far away
-            Duration::from_millis(500), // idle window — SMALLER than total runtime
+            Duration::from_secs(3600), // absolute backstop — far away
+            Duration::from_secs(3),    // idle window — SMALLER than total runtime
         )
         .expect("a progressing process must never be killed by the idle window");
         assert!(capture.status.success());
         assert!(
-            started.elapsed() >= Duration::from_millis(500),
+            started.elapsed() >= Duration::from_secs(3),
             "the probe must have outlived the idle window to prove the point"
         );
         // Counting newlines across a few bytes of captured probe output; a SIMD
         // `bytecount` dependency is unwarranted for a test probe.
         #[allow(clippy::naive_bytecount)]
         let newline_count = capture.stdout.iter().filter(|&&b| b == b'\n').count();
-        assert_eq!(newline_count, 10);
+        assert_eq!(newline_count, 40);
     }
 
     #[test]
