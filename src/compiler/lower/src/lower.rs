@@ -58,7 +58,7 @@ use ir_type_mentions::{
     ir_type_mentions_server, ir_type_mentions_sqlvalue, ir_type_mentions_url,
     program_type_mentions,
 };
-use phantom_default::PhantomPosition;
+use phantom_default::{PHANTOM_BUILTIN_NAME, PHANTOM_IR_TYPE, PhantomSlot};
 #[cfg(test)]
 use record_shapes::OPAQUE_NAMES_ABOVE_GUARD;
 use record_shapes::{
@@ -17572,7 +17572,7 @@ impl<'a> Lowerer<'a> {
     /// is skipped for a used binder whose type is unknown.
     ///
     /// A phantom type variable (free, and not a generic of the enclosing
-    /// definition) is classified at its [`PhantomPosition`] default — the
+    /// definition) is classified at the phantom default (`String`) — the
     /// type every emitting site pins it to — a `CloneOk` leaf: the solver left
     /// it unconstrained, so the disciplines may clone it but never move it
     /// twice. Such a type is a [`BinderType::Phantom`], fit for classification
@@ -17590,7 +17590,7 @@ impl<'a> Lowerer<'a> {
             )
         })?;
         let mut pinned = false;
-        match self.pin_phantom_vars(ty, Some(PhantomPosition::Value), &mut pinned) {
+        match self.pin_phantom_vars(ty, PhantomSlot::Defaulted, &mut pinned) {
             Some(p) if pinned => self
                 .ir_type_from_ty(&p, span)
                 .map(|t| Some(BinderType::Phantom(t))),
@@ -17600,13 +17600,13 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// The solver-side type a phantom in `position` is pinned to.
+    /// The solver-side type every phantom is pinned to.
     ///
     /// `None` only when the builtin's name was never interned: no program
     /// then mentions it, and nothing is pinned.
-    fn phantom_carrier(&self, position: PhantomPosition) -> Option<Ty> {
+    fn phantom_carrier(&self) -> Option<Ty> {
         self.interner
-            .lookup(position.builtin_name())
+            .lookup(PHANTOM_BUILTIN_NAME)
             .map(|name| Ty::Con {
                 module: Vec::new(),
                 name,
@@ -17614,37 +17614,34 @@ impl<'a> Lowerer<'a> {
             })
     }
 
-    /// Copy `ty` with each phantom type variable replaced by its default.
+    /// Copy `ty` with each phantom type variable replaced by the phantom default.
     ///
-    /// Sets `pinned` when a phantom was replaced. `position` is the
-    /// [`PhantomPosition`] of `ty` itself; `None` marks a position whose type
-    /// fixes the emitted carrier: a function arrow's operands, and a
-    /// `Program` shape tag. A phantom there makes the whole copy `None`, so
-    /// type lowering sees it unpinned and refuses it. The error slot of a
-    /// `Result` takes [`PhantomPosition::ResultError`]; every other slot
-    /// under a defaultable position takes [`PhantomPosition::Value`].
-    fn pin_phantom_vars(
-        &self,
-        ty: &Ty,
-        position: Option<PhantomPosition>,
-        pinned: &mut bool,
-    ) -> Option<Ty> {
-        let value = position.map(|_| PhantomPosition::Value);
+    /// Sets `pinned` when a phantom was replaced. `slot` is the [`PhantomSlot`]
+    /// of `ty` itself; a [`PhantomSlot::CarrierFixing`] slot is a function
+    /// arrow's operand or a `Program` shape tag. A phantom there makes the
+    /// whole copy `None`, so type lowering sees it unpinned and refuses it.
+    /// Every phantom takes the same carrier whatever slot it fills, so a
+    /// variable met at several slots is pinned consistently at each.
+    fn pin_phantom_vars(&self, ty: &Ty, slot: PhantomSlot, pinned: &mut bool) -> Option<Ty> {
         match ty {
             Ty::Var(v) if self.poly_tvar_symbol(*v).is_none() => {
-                let carrier = self.phantom_carrier(position?)?;
+                if slot == PhantomSlot::CarrierFixing {
+                    return None;
+                }
+                let carrier = self.phantom_carrier()?;
                 *pinned = true;
                 Some(carrier)
             }
             Ty::Var(_) | Ty::Unit => Some(ty.clone()),
             Ty::Fun(arg, res) => Some(Ty::Fun(
-                Box::new(self.pin_phantom_vars(arg, None, pinned)?),
-                Box::new(self.pin_phantom_vars(res, None, pinned)?),
+                Box::new(self.pin_phantom_vars(arg, PhantomSlot::CarrierFixing, pinned)?),
+                Box::new(self.pin_phantom_vars(res, PhantomSlot::CarrierFixing, pinned)?),
             )),
             Ty::Con { module, name, args } => {
-                let head = self.interner.resolve(*name);
-                let shape_tagged = module.is_empty() && head == Some("Program");
-                let result_shaped = head == Some("Result") && args.len() == 2;
+                // `Program` is a reserved builtin name (IPE-N0026), and a builtin
+                // carries the empty module path, so no user type matches here.
+                let shape_tagged =
+                    module.is_empty() && self.interner.resolve(*name) == Some("Program");
                 Some(Ty::Con {
                     module: module.clone(),
                     name: *name,
@@ -17652,16 +17649,12 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .enumerate()
                         .map(|(i, a)| {
-                            let slot = if i != 0 {
-                                value
-                            } else if shape_tagged {
-                                None
-                            } else if result_shaped {
-                                position.map(|_| PhantomPosition::ResultError)
+                            let arg_slot = if i == 0 && shape_tagged {
+                                PhantomSlot::CarrierFixing
                             } else {
-                                value
+                                slot
                             };
-                            self.pin_phantom_vars(a, slot, pinned)
+                            self.pin_phantom_vars(a, arg_slot, pinned)
                         })
                         .collect::<Option<Vec<_>>>()?,
                 })
@@ -17669,13 +17662,13 @@ impl<'a> Lowerer<'a> {
             Ty::Tuple(elems) => Some(Ty::Tuple(
                 elems
                     .iter()
-                    .map(|e| self.pin_phantom_vars(e, value, pinned))
+                    .map(|e| self.pin_phantom_vars(e, slot, pinned))
                     .collect::<Option<Vec<_>>>()?,
             )),
             Ty::Record(fields, tail) => Some(Ty::Record(
                 fields
                     .iter()
-                    .map(|(k, f)| self.pin_phantom_vars(f, value, pinned).map(|f| (*k, f)))
+                    .map(|(k, f)| self.pin_phantom_vars(f, slot, pinned).map(|f| (*k, f)))
                     .collect::<Option<BTreeMap<_, _>>>()?,
                 tail.clone(),
             )),
@@ -17685,23 +17678,46 @@ impl<'a> Lowerer<'a> {
     /// The producer pin for a constructor application built at `span`.
     ///
     /// Each phantom type argument of the constructed type is pinned to the
-    /// same [`PhantomPosition`] default [`Self::binder_ir_type`] classifies a
-    /// binder of that type at, so a phantom-born value is emitted at the type
-    /// every consumer of it is checked and annotated at. Arguments without a
-    /// phantom stay inferred. [`CtorPin::None`] when no argument is a phantom,
-    /// when a phantom sits where no default applies (under a function arrow),
-    /// or when the type's Rust form does not carry the type's own arguments.
+    /// phantom default [`Self::binder_ir_type`] classifies a binder of that
+    /// type at, so a phantom-born value is emitted at the type every consumer
+    /// of it is checked and annotated at. Arguments without a phantom stay
+    /// inferred; a type with no phantom, or whose Rust form carries no type
+    /// arguments, is [`CtorPin::None`]. Fail-closed otherwise: a phantom that
+    /// takes no default (under a function arrow) refuses (IPE-L0102), and a
+    /// constructed type whose solved or lowered shape does not match the
+    /// constructor is a compiler bug — never an unpinned, ambiguous value.
     fn ctor_pin(&self, span: Span, home: &ModPath, type_name: Symbol) -> DResult<CtorPin> {
-        let Some(ty @ Ty::Con { args, .. }) = self.region_ty(span) else {
+        let ty = self.region_ty(span).ok_or_else(|| {
+            bug(
+                "ipe_lower::ctor_pin",
+                "a constructor application has no solved region type",
+            )
+        })?;
+        if !self.ty_has_phantom(ty) {
             return Ok(CtorPin::None);
+        }
+        let Ty::Con { args, .. } = ty else {
+            return Err(bug(
+                "ipe_lower::ctor_pin",
+                "a constructor application's solved type is not a type constructor",
+            ));
         };
         let mut pinned = false;
-        let Some(defaulted) = self.pin_phantom_vars(ty, Some(PhantomPosition::Value), &mut pinned)
-        else {
-            return Ok(CtorPin::None);
+        let Some(defaulted) = self.pin_phantom_vars(ty, PhantomSlot::Defaulted, &mut pinned) else {
+            // A phantom under an arrow takes no default: the unpinned type's own
+            // lowering carries the typed refusal.
+            return self.ir_type_from_ty(ty, span).and_then(|_| {
+                Err(bug(
+                    "ipe_lower::ctor_pin",
+                    "a phantom-bearing constructor type lowered without its default",
+                ))
+            });
         };
         if !pinned {
-            return Ok(CtorPin::None);
+            return Err(bug(
+                "ipe_lower::ctor_pin",
+                "a phantom-bearing constructor type pinned no phantom",
+            ));
         }
         let ir_args = match self.ir_type_from_ty(&defaulted, span)? {
             IrType::Maybe(t) => vec![*t],
@@ -17711,10 +17727,23 @@ impl<'a> Lowerer<'a> {
                 name,
                 args: ir_args,
             } if h == *home && name == type_name => ir_args,
-            _ => return Ok(CtorPin::None),
+            _ => {
+                return Err(bug(
+                    "ipe_lower::ctor_pin",
+                    "a constructor's type lowered to a Rust form other than its own enum",
+                ));
+            }
         };
-        if ir_args.len() != args.len() {
+        // An opaque handle type (e.g. `Cache k v`) lowers to a non-generic Rust
+        // enum: no type argument to pin, none for rustc to infer.
+        if ir_args.is_empty() {
             return Ok(CtorPin::None);
+        }
+        if ir_args.len() != args.len() {
+            return Err(bug(
+                "ipe_lower::ctor_pin",
+                "a constructor's lowered type arguments disagree with its solved ones",
+            ));
         }
         Ok(CtorPin::from_type_args(
             args.iter()
@@ -18074,8 +18103,8 @@ impl<'a> Lowerer<'a> {
                 // solver leaves the argument type as a free `Ty::Var` — the
                 // common case for callbacks like `\_ -> Task.succeed x` after
                 // `Task.fail` (which never produces a value) or `\_ -> NoOp`
-                // after `System.exit` (which diverges) — the phantom takes its
-                // `PhantomPosition` default instead of raising `IPE-L0102`. A
+                // after `System.exit` (which diverges) — the phantom takes the
+                // phantom default instead of raising `IPE-L0102`. A
                 // wildcard parameter is never inspected, so any inhabited type
                 // is sound there.
                 let ir_ty = if matches!(&pat.value, canon::Pattern_::PAnything) {
@@ -18139,8 +18168,8 @@ impl<'a> Lowerer<'a> {
         // free `Ty::Var` (e.g. `Task a` inside a polymorphic function like
         // `wrap : String -> Task Error a -> Task Error a`), the strict
         // `ir_type_from_ty` fails with IPE-L0102 (Polymorphism).
-        // `ir_type_from_ty_json` lowers a phantom to its `PhantomPosition`
-        // default, the same type every other site pins that phantom to.
+        // `ir_type_from_ty_json` lowers a phantom to the phantom default,
+        // the same type every other site pins that phantom to.
         //
         // Note: lambdas whose PARAMETER types contain free `Ty::Var` still
         // fail at the parameter step (line 4132 above) before reaching here;
@@ -18245,7 +18274,7 @@ impl<'a> Lowerer<'a> {
         match ty {
             Ty::Con { name, args, .. } if self.resolve(*name)? == "List" && args.len() == 1 => {
                 // Use the phantom-aware path: a phantom element type (an empty
-                // literal nothing ever fills) takes its `PhantomPosition`
+                // literal nothing ever fills) takes the phantom
                 // default rather than failing with Polymorphism.
                 // A `List` element is a storage position, so a bare function
                 // element is carried on the `Arc` `SharedFun` carrier — matching
@@ -19289,19 +19318,16 @@ impl<'a> Lowerer<'a> {
     /// quantified variable lowers to that binding's [`IrType::Generic`] — a
     /// closure nested in a generic body shares the body's variable, and any
     /// other type there would disagree with the call site. Only a genuine
-    /// phantom takes the [`PhantomPosition`] default: [`PhantomPosition::Value`]
-    /// everywhere except the error slot of `Result e a`, which takes
-    /// [`PhantomPosition::ResultError`] (the type the `ok_res` wrapper fixes).
+    /// phantom takes the phantom default, the one carrier every slot shares.
     // The match has one arm per compound builtin — each arm adds ~4 lines;
     // pushing past clippy's 100-line ceiling is unavoidable without splitting
     // on an arbitrary boundary.  The allow is narrow: only this function.
     #[allow(clippy::too_many_lines)]
     fn ir_type_from_ty_json(&self, t: &Ty, span: Span) -> DResult<IrType> {
         match t {
-            Ty::Var(v) => {
-                let phantom = PhantomPosition::Value.ir_type();
-                Ok(self.poly_tvar_symbol(*v).map_or(phantom, IrType::Generic))
-            }
+            Ty::Var(v) => Ok(self
+                .poly_tvar_symbol(*v)
+                .map_or(PHANTOM_IR_TYPE, IrType::Generic)),
             Ty::Tuple(elems) => {
                 // Element/component storage positions carry a function on `Arc`,
                 // mirroring the strict [`ir_type_from_ty`] Tuple arm so the JSON
@@ -19338,12 +19364,8 @@ impl<'a> Lowerer<'a> {
                         Ok(IrType::Maybe(Box::new(elem)))
                     }
                     "Result" if args.len() == 2 => {
-                        let err_ty = args.first().ok_or_else(result_arg_bug)?;
-                        let err = if self.ty_is_unbound_free(err_ty) {
-                            PhantomPosition::ResultError.ir_type()
-                        } else {
-                            self.ir_type_from_ty_json(err_ty, span)?
-                        };
+                        let err = self
+                            .ir_type_from_ty_json(args.first().ok_or_else(result_arg_bug)?, span)?;
                         let ok = self
                             .ir_type_from_ty_json(args.get(1).ok_or_else(result_arg_bug)?, span)?;
                         Ok(IrType::Result(Box::new(err), Box::new(ok)))
@@ -21775,41 +21797,6 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Re-type a `Result.mapError` handler's phantom error parameter to the
-    /// `Result` error-slot default.
-    ///
-    /// `Result.mapError : (e -> f) -> Result e a -> Result f a`. When `e` is a
-    /// phantom, the handler lambda's parameter lowers in isolation and takes
-    /// the [`PhantomPosition::Value`] default, while the `Result` it maps pins
-    /// the same variable at [`PhantomPosition::ResultError`]. The parameter is
-    /// moved to the error-slot default so both sides agree. It fires only when
-    /// the handler's solved parameter type is itself a phantom; a concrete or
-    /// enclosing-generic `e` is left untouched. Canon arg order is `[fn, r]`,
-    /// so the handler is `args[0]`.
-    fn retype_result_map_error_handler(
-        &self,
-        resolved: &Callee,
-        args: &[canon::Expr],
-        lowered_args: &mut [Expr],
-    ) {
-        if !matches!(resolved, Callee::Kernel(KernelFn::ResultMapError)) {
-            return;
-        }
-        let handler_param_is_phantom = args
-            .first()
-            .and_then(|h| self.region_ty(h.span))
-            .is_some_and(|t| matches!(t, Ty::Fun(e, _) if self.ty_is_unbound_free(e)));
-        if !handler_param_is_phantom {
-            return;
-        }
-        if let Some(Expr::Lambda { params, .. }) = lowered_args.first_mut()
-            && let [(_, ty)] = params.as_mut_slice()
-            && *ty == PhantomPosition::Value.ir_type()
-        {
-            *ty = PhantomPosition::ResultError.ir_type();
-        }
-    }
-
     /// Re-type a decode-combinator mapper lambda's function-typed
     /// parameter from the SHARED-callback [`IrType::Fun`] shape to the OWNED,
     /// Send-only [`IrType::FnOnceChain`] shape when that parameter IS a decoder
@@ -22009,25 +21996,6 @@ impl<'a> Lowerer<'a> {
                 let ctor_home = ModPath(home.clone());
                 let arity = self.ctor_arity_of(&ctor_home, *name)?;
                 if args.len() == arity {
-                    // `Ok x` whose `Result e a` error type `e` is a phantom
-                    // would emit an ambiguous `IpeResult<_, _>` that rustc
-                    // rejects (E0282). Route it to the main crate's `ok_res`,
-                    // which pins the error slot to the
-                    // `PhantomPosition::ResultError` default. Sound: the `Err`
-                    // arm is unreachable for an `Ok`. A constrained or
-                    // enclosing-generic `e` keeps the direct `IpeResult::Ok`
-                    // form, which rustc infers.
-                    if arity == 1
-                        && self.resolve(*name)? == "Ok"
-                        && self.result_error_unresolved(call_span)
-                    {
-                        return Ok(Expr::Call {
-                            callee: Callee::Kernel(KernelFn::ResultOkDefault),
-                            args: lowered_args,
-                            pin: CallPin::None,
-                            on_form: OnFormKind::NotForm,
-                        });
-                    }
                     // Carrier normalization (value side, USER-enum payloads): a
                     // fn-valued argument to a USER-enum constructor fills a
                     // payload field the type-side flip
@@ -22112,10 +22080,7 @@ impl<'a> Lowerer<'a> {
                         // free parameter is not an enclosing generic (which would
                         // already pin it — see `kernel_turbofish_pin`).
                         let pin = self.kernel_turbofish_pin(&resolved, args, call_span);
-                        // A phantom `Result.mapError` handler parameter takes
-                        // the error-slot default the mapped `Result` carries.
                         let mut lowered_args = lowered_args;
-                        self.retype_result_map_error_handler(&resolved, args, &mut lowered_args);
                         Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
                         // Close the `Arc`-vs-`Box` frontier at a `List` HOF
                         // mapper over a stored list of functions (see method doc).
@@ -22866,7 +22831,7 @@ impl<'a> Lowerer<'a> {
             // Use the phantom-aware variant so that a phantom in the
             // missing-arg slot — the common case for diverging / always-failing
             // tasks passed to `Task.andThen` or `Cmd.perform` where the result
-            // type `a` is never constrained — takes its `PhantomPosition`
+            // type `a` is never constrained — takes the phantom
             // default instead of raising IPE-L0102, agreeing with every other
             // site that pins the same phantom.
             //
@@ -22893,8 +22858,8 @@ impl<'a> Lowerer<'a> {
         // (the common case for polymorphic helpers like
         // `wrap : String -> Task Error a -> Task Error a`), the strict
         // `ir_type_from_ty` would fail with IPE-L0102 (Polymorphism).
-        // `ir_type_from_ty_json` lowers the phantom to its `PhantomPosition`
-        // default instead.
+        // `ir_type_from_ty_json` lowers the phantom to the phantom default
+        // instead.
         //
         // the SAME five pipeline kernels also need this treatment on
         // the wrapper's OWN return type (`Decoder b`) whenever the pipeline
@@ -23064,7 +23029,7 @@ impl<'a> Lowerer<'a> {
 
         // Build the missing parameter list from argument positions
         // `supplied..arity`. Use the phantom-aware variant so a phantom in an
-        // unconstrained slot takes its `PhantomPosition` default rather than
+        // unconstrained slot takes the phantom default rather than
         // raising IPE-L0102.
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
             let sym = self.eta_sym(offset)?;
@@ -23198,7 +23163,7 @@ impl<'a> Lowerer<'a> {
         }
         // Build the missing parameter list from argument positions `supplied..arity`.
         // Use the phantom-aware variant so a phantom in an unconstrained slot
-        // takes its `PhantomPosition` default rather than raising IPE-L0102.
+        // takes the phantom default rather than raising IPE-L0102.
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
             let sym = self.eta_sym(offset)?;
             let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
@@ -25355,24 +25320,6 @@ impl<'a> Lowerer<'a> {
                     }
                 })
             }
-        }
-    }
-
-    /// Whether the `Result e a` value produced at `span` has a phantom error type.
-    ///
-    /// True only when the solved region type is a `Result` whose error slot is
-    /// a free variable no enclosing generic binds — the case the backend cannot
-    /// emit as a bare `IpeResult::Ok` without tripping rustc's E0282 ambiguity.
-    /// An enclosing generic `e` is bound by the function's own signature, so
-    /// pinning it would contradict that signature. A missing region type or a
-    /// concrete error type yields `false`.
-    fn result_error_unresolved(&self, span: Span) -> bool {
-        match self.region_ty(span) {
-            Some(Ty::Con { name, args, .. }) => {
-                self.resolve(*name).is_ok_and(|n| n == "Result")
-                    && args.first().is_some_and(|e| self.ty_is_unbound_free(e))
-            }
-            _ => false,
         }
     }
 
@@ -29662,6 +29609,8 @@ mod tests {
     const RESULT_FREE_OK_SPAN: Span = Span::new(90, 91);
     /// A span the binder-type tests record `Maybe String` at.
     const MAYBE_CLOSED_SPAN: Span = Span::new(100, 101);
+    /// A span the binder-type tests record `Maybe (<free var> -> ())` at.
+    const MAYBE_ARROW_PHANTOM_SPAN: Span = Span::new(110, 111);
 
     /// Run `check` against a lowerer whose solved regions are the spans above.
     fn with_binder_type_lowerer(check: impl FnOnce(&Lowerer<'_>, ipe_intern::Symbol)) {
@@ -29738,6 +29687,13 @@ mod tests {
             (Vec::new(), MAYBE_CLOSED_SPAN),
             con(maybe, vec![con(string, vec![])]),
         );
+        types.regions.insert(
+            (Vec::new(), MAYBE_ARROW_PHANTOM_SPAN),
+            con(
+                maybe,
+                vec![Ty::Fun(Box::new(Ty::Var(7)), Box::new(Ty::Unit))],
+            ),
+        );
         let lowerer = Lowerer::new(
             &module,
             &types,
@@ -29797,18 +29753,18 @@ mod tests {
         });
     }
 
-    /// A phantom `Result` classifies its error slot and `Ok` at their own defaults.
+    /// One phantom variable in both `Result` slots takes one type in both.
     #[test]
-    fn binder_ir_type_pins_phantom_result_error_slot() {
+    fn binder_ir_type_pins_one_type_per_phantom_var() {
         with_binder_type_lowerer(|lowerer, _| {
             let got = lowerer.binder_ir_type(Some(RESULT_PHANTOM_SPAN));
             let want = super::IrType::Result(
-                Box::new(super::PhantomPosition::ResultError.ir_type()),
-                Box::new(super::PhantomPosition::Value.ir_type()),
+                Box::new(super::PHANTOM_IR_TYPE),
+                Box::new(super::PHANTOM_IR_TYPE),
             );
             assert!(
                 matches!(&got, Ok(Some(super::BinderType::Phantom(t))) if *t == want),
-                "a phantom Result must pin to `Result Error String`, got {got:?}"
+                "`Result a a` must pin `a` to one type in both slots, got {got:?}"
             );
         });
     }
@@ -29822,12 +29778,10 @@ mod tests {
                     .region_ty(span)
                     .map(|t| lowerer.ir_type_from_ty_json(t, span))
             };
-            assert!(
-                matches!(lower_at(FREE_VAR_SPAN), Some(Ok(t)) if t == super::PhantomPosition::Value.ir_type())
-            );
+            assert!(matches!(lower_at(FREE_VAR_SPAN), Some(Ok(t)) if t == super::PHANTOM_IR_TYPE));
             let want = super::IrType::Result(
-                Box::new(super::PhantomPosition::ResultError.ir_type()),
-                Box::new(super::PhantomPosition::Value.ir_type()),
+                Box::new(super::PHANTOM_IR_TYPE),
+                Box::new(super::PHANTOM_IR_TYPE),
             );
             assert!(matches!(lower_at(RESULT_PHANTOM_SPAN), Some(Ok(t)) if t == want));
             let classified = lowerer.binder_ir_type(Some(RESULT_PHANTOM_SPAN));
@@ -29854,9 +29808,8 @@ mod tests {
                     Some(Ok(super::IrType::Result(e, a)))
                         if *e == super::IrType::Generic(sym) && *a == super::IrType::Generic(sym)
                 ),
-                "a generic `e` must not take the error-slot default"
+                "a generic `e` must not take the phantom default"
             );
-            assert!(!lowerer.result_error_unresolved(RESULT_PHANTOM_SPAN));
             assert!(!lowerer.ty_has_phantom(&var));
         });
     }
@@ -29872,8 +29825,7 @@ mod tests {
                 return;
             };
             let prelude = super::ModPath(vec![]);
-            let value = super::TypeArgPin::Pinned(super::PhantomPosition::Value.ir_type());
-            let error = super::TypeArgPin::Pinned(super::PhantomPosition::ResultError.ir_type());
+            let value = super::TypeArgPin::Pinned(super::PHANTOM_IR_TYPE);
             let pin_at = |span, ty| lowerer.ctor_pin(span, &prelude, ty);
             assert!(matches!(
                 pin_at(MAYBE_PHANTOM_SPAN, maybe),
@@ -29887,16 +29839,16 @@ mod tests {
             assert!(
                 matches!(
                     pin_at(RESULT_PHANTOM_SPAN, result),
-                    Ok(super::CtorPin::TypeArgs(a)) if a == vec![error, value]
+                    Ok(super::CtorPin::TypeArgs(a)) if a == vec![value.clone(), value]
                 ),
-                "a phantom error slot takes the error-slot default"
+                "one phantom in both slots takes one type in both"
             );
         });
     }
 
-    /// A constructor with no defaultable phantom carries no pin.
+    /// A constructor with no phantom carries no pin.
     #[test]
-    fn ctor_pin_leaves_closed_and_arrow_types_unpinned() {
+    fn ctor_pin_leaves_closed_types_unpinned() {
         with_binder_type_lowerer(|lowerer, sym| {
             let Some(maybe) = lowerer.interner.lookup("Maybe") else {
                 return;
@@ -29909,15 +29861,68 @@ mod tests {
                 )
             };
             assert!(none(MAYBE_CLOSED_SPAN), "a closed type is inferred");
-            assert!(
-                none(FUN_FREE_VAR_SPAN),
-                "a phantom under an arrow is not defaulted"
-            );
-            assert!(none(UNTYPED_SPAN), "no solved type, nothing to pin");
             lowerer.current_poly_tvars.borrow_mut().insert(7, sym);
             assert!(
                 none(MAYBE_PHANTOM_SPAN),
                 "an enclosing generic keeps its generic"
+            );
+        });
+    }
+
+    /// A phantom under a constructor's function arrow refuses as IPE-L0102, never unpinned.
+    #[test]
+    fn ctor_pin_refuses_arrow_phantom() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let Some(maybe) = lowerer.interner.lookup("Maybe") else {
+                return;
+            };
+            let got = lowerer.ctor_pin(MAYBE_ARROW_PHANTOM_SPAN, &super::ModPath(vec![]), maybe);
+            assert!(
+                matches!(
+                    got,
+                    Err(super::Diagnostic::Lower {
+                        msg: super::LowerError::Unsupported(super::Feature::Polymorphism),
+                        ..
+                    })
+                ),
+                "an arrow phantom must refuse as L0102, got {got:?}"
+            );
+        });
+    }
+
+    /// A constructor application with no solved or no constructor type is a compiler bug.
+    #[test]
+    fn ctor_pin_refuses_unshaped_types() {
+        with_binder_type_lowerer(|lowerer, _| {
+            let Some(maybe) = lowerer.interner.lookup("Maybe") else {
+                return;
+            };
+            let prelude = super::ModPath(vec![]);
+            let bug = |span| {
+                matches!(
+                    lowerer.ctor_pin(span, &prelude, maybe),
+                    Err(super::Diagnostic::CompilerBug { .. })
+                )
+            };
+            assert!(
+                bug(UNTYPED_SPAN),
+                "a ctor without a region type must refuse"
+            );
+            assert!(
+                bug(FUN_FREE_VAR_SPAN),
+                "a phantom-bearing non-constructor type must refuse"
+            );
+        });
+    }
+
+    /// A phantom-bearing type whose Rust form is not the constructor's own enum is a compiler bug.
+    #[test]
+    fn ctor_pin_refuses_foreign_rust_form() {
+        with_binder_type_lowerer(|lowerer, sym| {
+            let got = lowerer.ctor_pin(PROGRAM_PHANTOM_MSG_SPAN, &super::ModPath(vec![]), sym);
+            assert!(
+                matches!(got, Err(super::Diagnostic::CompilerBug { .. })),
+                "a phantom constructor type lowering to a non-enum form must refuse, got {got:?}"
             );
         });
     }
@@ -29931,8 +29936,6 @@ mod tests {
             assert_eq!(has(FUN_FREE_VAR_SPAN), Some(true));
             assert_eq!(has(RESULT_PHANTOM_SPAN), Some(true));
             assert_eq!(has(UNIT_SPAN), Some(false));
-            assert!(lowerer.result_error_unresolved(RESULT_PHANTOM_SPAN));
-            assert!(!lowerer.result_error_unresolved(UNIT_SPAN));
         });
     }
 

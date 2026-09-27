@@ -14,6 +14,10 @@
 //! parameterised user type, and an empty list read twice through a generic
 //! function. Each must be accepted by `ipe` and (behind `IPE_E2E=1`) build and
 //! print its `expected.txt`.
+//!
+//! The mixed-position fixture sends one free variable to a `Maybe` element and
+//! a `Result` error slot, and binds a `Result a a`: every slot takes the one
+//! phantom default, so the emitted project must build.
 use std::path::{Path, PathBuf};
 
 use crate::support::repo_root;
@@ -24,6 +28,7 @@ const NOTHING_ARG_FIXTURE: &str = "phantom_nothing_direct_arg";
 const ERR_FREE_OK_FIXTURE: &str = "phantom_err_free_ok";
 const USER_ENUM_NULLARY_FIXTURE: &str = "phantom_user_enum_nullary";
 const EMPTY_LIST_REUSE_FIXTURE: &str = "phantom_empty_list_generic_reuse";
+const MIXED_POSITION_FIXTURE: &str = "phantom_mixed_position";
 
 fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
@@ -145,4 +150,14 @@ fn empty_list_generic_reuse_is_accepted() {
 #[test]
 fn empty_list_generic_reuse_end_to_end_prints_zero() {
     assert_runs_golden(EMPTY_LIST_REUSE_FIXTURE);
+}
+
+#[test]
+fn mixed_position_phantom_is_accepted() {
+    assert_accepts(MIXED_POSITION_FIXTURE);
+}
+
+#[test]
+fn mixed_position_phantom_end_to_end_prints_one_carrier() {
+    assert_runs_golden(MIXED_POSITION_FIXTURE);
 }

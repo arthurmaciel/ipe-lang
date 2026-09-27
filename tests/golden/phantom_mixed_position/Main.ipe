@@ -1,0 +1,32 @@
+module Main exposing (main)
+
+import Ipe.Io as Io
+
+-- One free type variable reaching two different slots. `Nothing` leaves `a`
+-- free as a `Maybe` element and `Ok 1` leaves it free as a `Result` error, yet
+-- both fill the same `a` of `check`, so both must carry one type.
+check : Maybe a -> Result a Int -> Int
+check _ _ =
+    0
+
+-- `wrap Nothing` leaves `a` free in both slots of `Result a a`; the binder
+-- `r` is read twice.
+wrap : Maybe a -> Maybe (Result a a)
+wrap m =
+    case m of
+        Just x -> Just (Ok x)
+        Nothing -> Nothing
+
+describe : Maybe (Result a a) -> String
+describe m =
+    case m of
+        Just (Ok _) -> "ok"
+        Just (Err _) -> "err"
+        Nothing -> "none"
+
+main =
+    let
+        r =
+            wrap Nothing
+    in
+    Io.println (String.fromInt (check Nothing (Ok 1)) ++ " " ++ describe r ++ " " ++ describe r)

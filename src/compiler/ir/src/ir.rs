@@ -3066,9 +3066,9 @@ impl Callee {
 /// Set when the HM solver left the kernel's free type parameter genuinely
 /// unconstrained. Each variant names the SEMANTIC default the emitter renders,
 /// so this enum stays a small, typed decision — never a raw string in the IR.
-/// The defaults are the lowerer's phantom-default SSOT (`String` for a value,
-/// `IpeError` for a `Result` error slot); `ipe_lower` asserts at build time
-/// that [`Self::turbofish`] spells exactly those types.
+/// Every `Default*` variant spells the lowerer's phantom-default SSOT
+/// (`String`, one carrier for every slot); `ipe_lower` asserts at build time
+/// that [`Self::turbofish`] spells exactly that type.
 ///
 /// The lowerer only ever emits a non-[`Self::None`] variant when the free
 /// parameter is a bare type variable NOT bound by an enclosing generic
@@ -3096,10 +3096,11 @@ pub enum CallPin {
     /// where the `Ok` type `A` is discarded (the value comes only from an
     /// `Err`).
     DefaultResultMapErr,
-    /// A single free error parameter pinned to the error-slot default.
+    /// A solved `Error` channel pinned to its one Rust inhabitant.
     ///
-    /// Renders `::<IpeError>`. Used by `decimal_from_string<E: From<String>>`
-    /// and its kin when the `Err` channel is discarded.
+    /// Renders `::<IpeError>`. Not a phantom default: the solver fixed the
+    /// error to the canonical `Error`, but `decimal_from_string<E: From<String>>`
+    /// and its kin cannot back-infer it once the `Err` channel is discarded.
     ErrIpeError,
 }
 

@@ -120,12 +120,11 @@ mod tests {
     /// so the assertions don't merely echo the implementation's anchor logic.
     const GOLDEN: &str = include_str!("../templates/main.rs");
 
-    /// The main crate's `ok_res` and `task_fail` wrappers fix a phantom error slot.
+    /// The main crate's `ok_res` and `task_fail` wrappers fix the canonical `Error`.
     ///
-    /// They must spell the same type as the error-slot turbofish pin, which
-    /// the lowerer's phantom-default SSOT asserts at build time.
+    /// They must spell the same Rust type as the solved-`Error` turbofish pin.
     #[test]
-    fn phantom_error_wrappers_spell_the_error_slot_default() {
+    fn error_wrappers_spell_the_canonical_error() {
         let pin = ipe_ir::CallPin::ErrIpeError.turbofish();
         let err = pin
             .strip_prefix("::<")
@@ -139,7 +138,7 @@ mod tests {
             GOLDEN.contains(&format!(
                 "pub fn task_fail<A: Send + 'static>(e: {err}) -> IpeTask<A> {{"
             )),
-            "`task_fail` must take the `{err}` error-slot default"
+            "`task_fail` must take the canonical `{err}`"
         );
         assert!(
             GOLDEN.contains(&format!(

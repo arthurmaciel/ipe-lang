@@ -1,52 +1,40 @@
-//! The one default a phantom type variable takes, per position.
+//! The one type every phantom type variable defaults to.
 //!
 //! A phantom is a type variable the solver left free that is not a generic of
 //! the enclosing definition: no value of it is ever built or observed, so any
 //! inhabited `Clone` type is sound there. Every site that must name one — the
 //! ownership classifier, a kernel turbofish pin, a type annotation lowered from
-//! a solved type, a producer pin on a phantom-born value — reads it from here,
-//! so the type a binder is classified at is the type it is emitted at.
+//! a solved type, a producer pin on a phantom-born value — reads it from here.
+//!
+//! The default is ONE carrier, whatever slot the variable occupies (a `Maybe`
+//! payload, a `Result` error slot, a dict key). A variable reaching several
+//! slots — `Maybe a` in one argument and `Result a Int` in another — is then
+//! pinned to the same type at every one, so no two producers of the same free
+//! variable can disagree. `String` is `Clone + Ord + Hash + Send`, so it also
+//! satisfies every bound a generic slot may impose on the variable.
 
 use ipe_ir::{CallPin, IrType};
 
-/// Where a phantom type variable sits, which fixes the type it defaults to.
+/// The IR type a phantom lowers to.
+pub(super) const PHANTOM_IR_TYPE: IrType = IrType::Str;
+
+/// The Ipê builtin type name the solver-side carrier is built from.
+pub(super) const PHANTOM_BUILTIN_NAME: &str = "String";
+
+/// The Rust type name a turbofish pin spells in the emitted main crate.
+const PHANTOM_RUST_NAME: &[u8] = b"String";
+
+/// Whether a phantom in a slot takes the default or refuses.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum PhantomPosition {
-    /// Any value position: a list or set element, a `Maybe` or `Ok` payload,
-    /// a dict key or value, a user type's parameter.
-    Value,
-    /// The error slot `e` of `Result e a`.
+pub(super) enum PhantomSlot {
+    /// Any value position: a list or set element, a `Maybe`/`Result` payload
+    /// or error, a dict key or value, a user type's parameter.
+    Defaulted,
+    /// A position whose type fixes the emitted carrier.
     ///
-    /// Pinned to the runtime's `IpeError`, the error type the main crate's
-    /// `ok_res` and `task_fail` wrappers already fix, so a binder annotated
-    /// from the same free variable agrees with the value those wrappers build.
-    ResultError,
-}
-
-impl PhantomPosition {
-    /// The IR type a phantom in this position lowers to.
-    pub(super) const fn ir_type(self) -> IrType {
-        match self {
-            Self::Value => IrType::Str,
-            Self::ResultError => IrType::Error,
-        }
-    }
-
-    /// The Ipê builtin type name the solver-side carrier is built from.
-    pub(super) const fn builtin_name(self) -> &'static str {
-        match self {
-            Self::Value => "String",
-            Self::ResultError => "Error",
-        }
-    }
-
-    /// The Rust type name a turbofish pin spells in the emitted main crate.
-    pub(super) const fn rust_name(self) -> &'static str {
-        match self {
-            Self::Value => "String",
-            Self::ResultError => "IpeError",
-        }
-    }
+    /// A function arrow's operands and a `Program` shape tag: a phantom here
+    /// is not defaulted, so type lowering sees it and refuses (IPE-L0102).
+    CarrierFixing,
 }
 
 /// Whether `whole` is exactly the concatenation of `parts`.
@@ -70,10 +58,9 @@ const fn is_concatenation(whole: &[u8], parts: &[&[u8]]) -> bool {
     rest.is_empty()
 }
 
-const VALUE: &[u8] = PhantomPosition::Value.rust_name().as_bytes();
-const ERROR: &[u8] = PhantomPosition::ResultError.rust_name().as_bytes();
+const VALUE: &[u8] = PHANTOM_RUST_NAME;
 
-/// Whether every kernel turbofish pin spells the phantom default this module fixes.
+/// Whether every phantom turbofish pin spells the default this module fixes.
 const TURBOFISH_PINS_AGREE: bool = is_concatenation(
     CallPin::DefaultValue.turbofish().as_bytes(),
     &[b"::<", VALUE, b">"],
@@ -83,9 +70,6 @@ const TURBOFISH_PINS_AGREE: bool = is_concatenation(
 ) && is_concatenation(
     CallPin::DefaultResultMapErr.turbofish().as_bytes(),
     &[b"::<_, _, ", VALUE, b">"],
-) && is_concatenation(
-    CallPin::ErrIpeError.turbofish().as_bytes(),
-    &[b"::<", ERROR, b">"],
 ) && is_concatenation(CallPin::None.turbofish().as_bytes(), &[]);
 
 // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel) — compile-time `const` assertion (not a runtime panic); fails the BUILD if a `CallPin` turbofish drifts from the phantom-default SSOT [ledger #boundary]
@@ -96,15 +80,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn value_default_is_string() {
-        assert_eq!(PhantomPosition::Value.ir_type(), IrType::Str);
-        assert_eq!(PhantomPosition::Value.builtin_name(), "String");
-    }
-
-    #[test]
-    fn result_error_default_is_ipe_error() {
-        assert_eq!(PhantomPosition::ResultError.ir_type(), IrType::Error);
-        assert_eq!(PhantomPosition::ResultError.builtin_name(), "Error");
+    fn phantom_default_is_string() {
+        assert_eq!(PHANTOM_IR_TYPE, IrType::Str);
+        assert_eq!(PHANTOM_BUILTIN_NAME, "String");
+        assert_eq!(PHANTOM_RUST_NAME, b"String");
     }
 
     #[test]
