@@ -114,11 +114,11 @@ pub fn completions(
 
     // A qualifier written immediately before the cursor (`Mod.` / `Mod.part`)
     // scopes completion to that module alone. Resolved from the raw buffer
-    // text, independent of whether the rest of it currently parses — the
-    // common case mid-edit, and exactly the case a dangling `Mod.` breaks
-    // whole-file parsing. See `qualified_completions`.
+    // text, independent of whether the rest of it currently lexes or parses —
+    // the common case mid-edit, and exactly the case a dangling `Mod.` breaks.
+    // See `qualified_completions`.
     if let Some(qualifier) = qualifier_before_cursor(file.text(db), byte) {
-        return qualified_completions(db, root, entry, files, &qualifier, file.text(db), docs);
+        return qualified_completions(db, root, entry, files, &qualifier, docs);
     }
 
     // Demand all salsa queries before locking the interner — each query
@@ -205,23 +205,23 @@ pub fn completions(
 /// Completion scoped to one module qualifier (`Mod.` / `Mod.part`): only that
 /// module's exported values, constructors, and types.
 ///
-/// `qualifier` resolves against `source_text`'s own `import` declarations
-/// (path + alias), via [`resolve_qualifier`] — independent of whether
-/// `source_text` as a whole currently parses, since a qualifier's import is
-/// typically already complete while the expression under the cursor is still
-/// being typed. An unresolved qualifier, or one whose target module does not
-/// canonicalize, yields an empty list: fail-closed, never a fallback to the
-/// unqualified (own-module + every dep + keywords) candidate set.
+/// `qualifier` resolves against the `import` declarations in the source that
+/// precedes it (path + alias), via [`resolve_qualifier`] — independent of
+/// whether the buffer as a whole currently lexes or parses, since a
+/// qualifier's import is typically already complete while the expression under
+/// the cursor is still being typed. An unresolved qualifier, or one whose
+/// target module does not canonicalize, yields an empty list: fail-closed,
+/// never a fallback to the unqualified (own-module + every dep + keywords)
+/// candidate set.
 fn qualified_completions(
     db: &IpeDatabase,
     root: SourceRoot,
     entry: ipe_db::SourceFile,
     files: &BTreeMap<Vec<String>, ipe_db::SourceFile>,
-    qualifier: &str,
-    source_text: &str,
+    qualifier: &CursorQualifier<'_>,
     docs: Option<&ipe_docs::Index>,
 ) -> Vec<CompletionItem> {
-    let Some(dep_path) = resolve_qualifier(source_text, qualifier) else {
+    let Some(dep_path) = resolve_qualifier(qualifier.preceding_source, qualifier.name) else {
         return Vec::new();
     };
     let Some(&dep_file) = files.get(dep_path.as_slice()) else {
@@ -267,8 +267,8 @@ fn qualified_completions(
 }
 
 /// Resolve a written qualifier (`Mod` in `Mod.name`) to the canonical dotted
-/// path of the module it names, via `source_text`'s own `import`
-/// declarations.
+/// path of the module it names, via the `import` declarations in
+/// `source_text`.
 ///
 /// An `as` alias shadows a same-spelled bare-leaf import — mirrors
 /// `resolve_qualifier_to_module_path` in `ipe_canon`'s `shape_source`, the
@@ -290,6 +290,20 @@ fn resolve_qualifier(source_text: &str, qualifier: &str) -> Option<Vec<String>> 
     None
 }
 
+/// A module qualifier written immediately before the cursor.
+struct CursorQualifier<'a> {
+    /// The qualifier as written (`Mod` in `Mod.part`).
+    name: &'a str,
+    /// The buffer text before the qualifier.
+    ///
+    /// Every `import` declaration precedes the module's first declaration, so
+    /// this prefix holds every import a body-position qualifier can name,
+    /// while leaving out the in-progress `Mod.` itself — a dangling `.` at the
+    /// cursor is a lex error that would otherwise make the whole buffer
+    /// unscannable.
+    preceding_source: &'a str,
+}
+
 /// The module qualifier immediately before `byte`, when the cursor sits right
 /// after `Qualifier.` or `Qualifier.partial`.
 ///
@@ -297,11 +311,11 @@ fn resolve_qualifier(source_text: &str, qualifier: &str) -> Option<Vec<String>> 
 /// lowercase leading letter is never a module and is never treated as one, so
 /// this never misfires on an unrelated `.`-using construct. Scans `text`'s
 /// raw bytes rather than any parsed token stream, so it still finds the
-/// qualifier when the surrounding statement does not currently parse (a bare
-/// trailing `Mod.` is a dangling-dot parse failure at the grammar layer, but
-/// the qualifier itself is still legible from the text). Returns `None` when
+/// qualifier when the surrounding text does not currently lex (a bare
+/// trailing `Mod.` is a stray-dot lex error, but the qualifier itself is
+/// still legible from the text). Returns `None` when
 /// no such qualifier precedes the cursor.
-fn qualifier_before_cursor(text: &str, byte: u32) -> Option<String> {
+fn qualifier_before_cursor(text: &str, byte: u32) -> Option<CursorQualifier<'_>> {
     let bytes = text.as_bytes();
     let start = usize::try_from(byte).ok()?;
     if start > bytes.len() {
@@ -322,11 +336,14 @@ fn qualifier_before_cursor(text: &str, byte: u32) -> Option<String> {
     if j == dot {
         return None;
     }
-    let qualifier = text.get(j..dot)?;
-    if !qualifier.starts_with(|c: char| c.is_ascii_uppercase()) {
+    let name = text.get(j..dot)?;
+    if !name.starts_with(|c: char| c.is_ascii_uppercase()) {
         return None;
     }
-    Some(qualifier.to_owned())
+    Some(CursorQualifier {
+        name,
+        preceding_source: text.get(..j)?,
+    })
 }
 
 /// ASCII-only identifier-continuation byte test, mirroring the lexer's own
