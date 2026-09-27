@@ -5999,19 +5999,26 @@ fn reject_fn_value_reuse(
 /// so a bare `sym` update base IS a genuine consume (1). A compound base
 /// (`{ (mk sym) | .. }`) also moves `sym` and counts via the full recursive
 /// scan.
+///
+/// `Expr::Destructure` value / `Expr::Match` scrutinee: a bare `sym` is matched
+/// by value in place (`let <pat> = sym;`, `match sym { .. }`), so it is a
+/// consume only when a binder moves a part out, as decided by
+/// [`PartialMove::of_pattern`] — the same classifier [`nonclone_read_after_move`]
+/// uses. A binder of a field in `copy_fields` copies it; a wildcard binds
+/// nothing. A `Match` counts one consume when ANY arm's pattern moves a part.
 #[allow(clippy::too_many_lines)] // exhaustive IR match; every arm is structurally required
-fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
+fn count_value_consumes(sym: Symbol, copy_fields: &BTreeSet<Symbol>, expr: &Expr) -> usize {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => usize::from(*s == sym),
         Expr::Lambda { body, .. } | Expr::SharedLambda { body, .. } => {
             usize::from(lambda_body_refs_sym(sym, body))
         }
         Expr::Let { name, value, body } => {
-            let in_value = count_value_consumes(sym, value);
+            let in_value = count_value_consumes(sym, copy_fields, value);
             let in_body = if *name == sym {
                 0
             } else {
-                count_value_consumes(sym, body)
+                count_value_consumes(sym, copy_fields, body)
             };
             in_value + in_body
         }
@@ -6020,20 +6027,36 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
             value,
             body,
         } => {
-            let in_value = count_value_consumes(sym, value);
+            let in_value = if is_bare_sym(sym, value) {
+                usize::from(PartialMove::of_pattern(binder, copy_fields).any())
+            } else {
+                count_value_consumes(sym, copy_fields, value)
+            };
             let in_body = if pat_binds_symbol(binder, sym) {
                 0
             } else {
-                count_value_consumes(sym, body)
+                count_value_consumes(sym, copy_fields, body)
             };
             in_value + in_body
         }
         Expr::If { cond, then_, else_ } => {
-            count_value_consumes(sym, cond)
-                + count_value_consumes(sym, then_).max(count_value_consumes(sym, else_))
+            count_value_consumes(sym, copy_fields, cond)
+                + count_value_consumes(sym, copy_fields, then_).max(count_value_consumes(
+                    sym,
+                    copy_fields,
+                    else_,
+                ))
         }
         Expr::Match(m) => {
-            let in_scrut = count_value_consumes(sym, m.scrutinee());
+            let in_scrut = if is_bare_sym(sym, m.scrutinee()) {
+                usize::from(
+                    m.arms()
+                        .iter()
+                        .any(|arm| PartialMove::of_pattern(&arm.pat, copy_fields).any()),
+                )
+            } else {
+                count_value_consumes(sym, copy_fields, m.scrutinee())
+            };
             let arm_max: usize = m
                 .arms()
                 .iter()
@@ -6044,8 +6067,8 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
                         let in_guard = arm
                             .guard
                             .as_ref()
-                            .map_or(0, |g| count_value_consumes(sym, g));
-                        in_guard + count_value_consumes(sym, &arm.body)
+                            .map_or(0, |g| count_value_consumes(sym, copy_fields, g));
+                        in_guard + count_value_consumes(sym, copy_fields, &arm.body)
                     }
                 })
                 .max()
@@ -6053,58 +6076,71 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
             in_scrut + arm_max
         }
         Expr::BinOp { lhs, rhs, .. } => {
-            count_value_consumes(sym, lhs) + count_value_consumes(sym, rhs)
+            count_value_consumes(sym, copy_fields, lhs)
+                + count_value_consumes(sym, copy_fields, rhs)
         }
-        Expr::Call { args, .. } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
+        Expr::Call { args, .. } => args
+            .iter()
+            .map(|a| count_value_consumes(sym, copy_fields, a))
+            .sum(),
         Expr::Apply { func, args } => {
-            count_value_consumes(sym, func)
+            count_value_consumes(sym, copy_fields, func)
                 + args
                     .iter()
-                    .map(|a| count_value_consumes(sym, a))
+                    .map(|a| count_value_consumes(sym, copy_fields, a))
                     .sum::<usize>()
         }
-        Expr::Tuple(items) | Expr::List { items, .. } => {
-            items.iter().map(|e| count_value_consumes(sym, e)).sum()
-        }
+        Expr::Tuple(items) | Expr::List { items, .. } => items
+            .iter()
+            .map(|e| count_value_consumes(sym, copy_fields, e))
+            .sum(),
         Expr::Cons { head, tail } => {
-            count_value_consumes(sym, head) + count_value_consumes(sym, tail)
+            count_value_consumes(sym, copy_fields, head)
+                + count_value_consumes(sym, copy_fields, tail)
         }
         Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
-            count_value_consumes(sym, list)
+            count_value_consumes(sym, copy_fields, list)
         }
         // A `Record` field is a consuming position.
         Expr::Record { fields, .. } => fields
             .iter()
-            .map(|(_, e)| count_value_consumes(sym, e))
+            .map(|(_, e)| count_value_consumes(sym, copy_fields, e))
             .sum(),
         // An `Update` base emits `let mut __ipe_rec = <base>;`, which MOVES
         // the base, so a bare `sym` base is a genuine consume (counted in
         // full). A compound base (`{ (mk sym) | .. }`) also moves `sym` into
         // its sub-expression and counts via the recursive scan.
         Expr::Update { record, fields } => {
-            count_value_consumes(sym, record)
+            count_value_consumes(sym, copy_fields, record)
                 + fields
                     .iter()
-                    .map(|(_, e)| count_value_consumes(sym, e))
+                    .map(|(_, e)| count_value_consumes(sym, copy_fields, e))
                     .sum::<usize>()
         }
-        Expr::Ctor { args, .. } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
+        Expr::Ctor { args, .. } => args
+            .iter()
+            .map(|a| count_value_consumes(sym, copy_fields, a))
+            .sum(),
         Expr::TaskSeq { effect, rest } => {
-            count_value_consumes(sym, effect) + count_value_consumes(sym, rest)
+            count_value_consumes(sym, copy_fields, effect)
+                + count_value_consumes(sym, copy_fields, rest)
         }
         Expr::TailLoop { params, body } => {
             if params.iter().any(|(s, _)| *s == sym) {
                 0
             } else {
-                count_value_consumes(sym, body)
+                count_value_consumes(sym, copy_fields, body)
             }
         }
-        Expr::TailRecur { args } => args.iter().map(|a| count_value_consumes(sym, a)).sum(),
+        Expr::TailRecur { args } => args
+            .iter()
+            .map(|a| count_value_consumes(sym, copy_fields, a))
+            .sum(),
         // `Access` reads a field off a BORROW of the record base, so a bare
         // `sym` base is not consumed (left to the `IPE-L0120` admissibility
         // gate). A COMPOUND base (`(mk sym).field`) moves `sym` into its
         // sub-expression — a genuine consume the base scan below counts.
-        Expr::Access { record, .. } => base_move_consumes(sym, record),
+        Expr::Access { record, .. } => base_move_consumes(sym, copy_fields, record),
         Expr::Int(_)
         | Expr::Bool(_)
         | Expr::Float(_)
@@ -6129,11 +6165,11 @@ fn count_value_consumes(sym: Symbol, expr: &Expr) -> usize {
 /// `let mut __ipe_rec = <base>;` MOVES the base unconditionally, so a bare
 /// `sym` update base counts as 1 via the standard recursive scan in
 /// [`count_value_consumes`].
-fn base_move_consumes(sym: Symbol, record: &Expr) -> usize {
+fn base_move_consumes(sym: Symbol, copy_fields: &BTreeSet<Symbol>, record: &Expr) -> usize {
     if matches!(record, Expr::Var(s) | Expr::CloneVar(s) if *s == sym) {
         0
     } else {
-        count_value_consumes(sym, record)
+        count_value_consumes(sym, copy_fields, record)
     }
 }
 
@@ -31202,8 +31238,8 @@ mod tests {
         use ipe_ir::{Arm, Expr, IrType, Match, ModPath, Pat, UiCtor};
 
         use super::{
-            CloneClass, CloneEnv, clone_class, nonclone_read_after_move,
-            reject_nonclone_value_reuse, unsupported,
+            CloneClass, CloneEnv, clone_class, copy_record_fields, count_value_consumes,
+            nonclone_read_after_move, reject_nonclone_value_reuse, unsupported,
         };
 
         let mut interner = Interner::new();
@@ -31275,6 +31311,66 @@ mod tests {
         };
         assert!(!hazard(&worker, &copy_only));
         assert!(reject(&worker, &copy_only).is_ok());
+        // The consume count and the move walk share one classifier: the
+        // copy-only destructure is no consume, the trailing `w` is the one.
+        let worker_copy = copy_record_fields(env, &worker);
+        assert_eq!(count_value_consumes(w, &worker_copy, &copy_only), 1);
+
+        // Refusal twins of `copy_only`: the same `(bound, w)` reuse after a
+        // binder that MOVES a part.
+        let reuse_after = |field, binder: Pat, bound| Expr::Destructure {
+            binder: Pat::Record(vec![
+                (field, binder),
+                (job, Pat::Wildcard),
+                (n, Pat::Wildcard),
+            ]),
+            value: Box::new(Expr::Var(w)),
+            body: Box::new(Expr::Tuple(vec![Expr::Var(bound), Expr::Var(w)])),
+        };
+        // `let { view = v } = w in (v, w)`: `Ui Int` is not `Copy` — refused.
+        let view_reuse = reuse_after(view, Pat::Var(v), v);
+        assert_eq!(count_value_consumes(w, &worker_copy, &view_reuse), 2);
+        assert!(matches!(reject(&worker, &view_reuse), Err(ref e) if *e == l0135));
+        // `let { ghost = g } = w in (g, w)`: a field the binding's type does
+        // not resolve is a move (fail closed) — refused.
+        let ghost_reuse = reuse_after(ghost, Pat::Var(g), g);
+        assert_eq!(count_value_consumes(w, &worker_copy, &ghost_reuse), 2);
+        assert!(matches!(reject(&worker, &ghost_reuse), Err(ref e) if *e == l0135));
+        // With no `Copy` field known (a non-record binding type), even the
+        // `Int` binder moves — refused.
+        assert_eq!(count_value_consumes(w, &BTreeSet::new(), &copy_only), 2);
+
+        // `(case w of { n = a } -> () ; _ -> (), w)`: a copy-only arm moves
+        // nothing — accepted; an arm that binds `job` moves it — refused.
+        let match_reuse = |pat: Pat| {
+            let arms = vec![
+                Arm {
+                    pat,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+                Arm {
+                    pat: Pat::Wildcard,
+                    body: Expr::Unit,
+                    guard: None,
+                },
+            ];
+            Match::new_flat(Expr::Var(w), arms)
+                .map(|m| Expr::Tuple(vec![Expr::Match(m), Expr::Var(w)]))
+        };
+        let copy_arm = Pat::Record(vec![
+            (n, Pat::Var(a)),
+            (job, Pat::Wildcard),
+            (view, Pat::Wildcard),
+        ]);
+        assert!(matches!(
+            match_reuse(copy_arm),
+            Ok(ref e) if !hazard(&worker, e) && reject(&worker, e).is_ok()
+        ));
+        assert!(matches!(
+            match_reuse(n_pat()),
+            Ok(ref e) if matches!(reject(&worker, e), Err(ref err) if *err == l0135)
+        ));
 
         // `... in (j, w.job)`: the `Task` field was moved — refused.
         let read_job = destructure_then(n_pat(), read(job, task.clone()));
@@ -31360,6 +31456,7 @@ mod tests {
         let tag = interner.intern("tag").expect("intern");
         let mk = interner.intern("mk").expect("intern");
         let other = interner.intern("other").expect("intern");
+        let no_copy = BTreeSet::new();
 
         // A compound base `(mk w)` that MOVES `w`.
         let compound_base = || Expr::Apply {
@@ -31379,18 +31476,30 @@ mod tests {
         // Bare Access base `w.tag`: a field BORROW — effect-carrier gate defers
         // to IPE-L0120 (0); fn-value gate counts (1) since a Box-fn cannot be
         // re-read from a borrow.
-        assert_eq!(count_value_consumes(w, &access_over(Expr::Var(w))), 0);
+        assert_eq!(
+            count_value_consumes(w, &no_copy, &access_over(Expr::Var(w))),
+            0
+        );
         assert_eq!(count_fn_value_uses(w, &access_over(Expr::Var(w))), 1);
 
         // Bare Update base `{ w | tag = 9 }`: a MOVE (`let mut __ipe_rec = w;`)
         // — effect-carrier gate counts (1); fn-value gate also counts (1).
-        assert_eq!(count_value_consumes(w, &update_over(Expr::Var(w))), 1);
+        assert_eq!(
+            count_value_consumes(w, &no_copy, &update_over(Expr::Var(w))),
+            1
+        );
         assert_eq!(count_fn_value_uses(w, &update_over(Expr::Var(w))), 1);
 
         // Compound base `(mk w).tag` / `{ mk w | tag = 9 }`: a move of `w`, counted
         // by both — the previously-skipped hole.
-        assert_eq!(count_value_consumes(w, &access_over(compound_base())), 1);
-        assert_eq!(count_value_consumes(w, &update_over(compound_base())), 1);
+        assert_eq!(
+            count_value_consumes(w, &no_copy, &access_over(compound_base())),
+            1
+        );
+        assert_eq!(
+            count_value_consumes(w, &no_copy, &update_over(compound_base())),
+            1
+        );
         assert_eq!(count_fn_value_uses(w, &access_over(compound_base())), 1);
         assert_eq!(count_fn_value_uses(w, &update_over(compound_base())), 1);
 
@@ -31398,18 +31507,18 @@ mod tests {
         // slot = 2, the reuse IPE-L0135 must reject. `((mk other).tag, w)` moves
         // `w` once.
         let reuse = Expr::Tuple(vec![access_over(compound_base()), Expr::Var(w)]);
-        assert_eq!(count_value_consumes(w, &reuse), 2);
+        assert_eq!(count_value_consumes(w, &no_copy, &reuse), 2);
         let unrelated_base = Expr::Apply {
             func: Box::new(Expr::Var(mk)),
             args: vec![Expr::Var(other)],
         };
         let linear = Expr::Tuple(vec![access_over(unrelated_base), Expr::Var(w)]);
-        assert_eq!(count_value_consumes(w, &linear), 1);
+        assert_eq!(count_value_consumes(w, &no_copy, &linear), 1);
 
         // Update bare-base repro `({ w | tag = 9 }, w)`: bare Update base (1)
         // + tuple slot (1) = 2, the reuse IPE-L0135 must reject.
         let update_reuse = Expr::Tuple(vec![update_over(Expr::Var(w)), Expr::Var(w)]);
-        assert_eq!(count_value_consumes(w, &update_reuse), 2);
+        assert_eq!(count_value_consumes(w, &no_copy, &update_reuse), 2);
 
         // The fn-value analogue `c.f 1 + c.f 2`: two bare-base reads = 2, the
         // reuse IPE-L0127 must reject (a bare base is a genuine fn read here).
