@@ -644,6 +644,330 @@ messages! {
     site_reference_fallback = "site-reference-fallback";
     /// The diagnostics page's key to the code letters (HTML).
     site_code_families_intro = "site-code-families-intro";
+    /// `ipe type-check` found no type errors.
+    type_check_ok = "type-check-ok";
+    /// `ipe upgrade` found the running version current.
+    upgrade_up_to_date(version) = "upgrade-up-to-date";
+    /// `ipe upgrade` could not reach the release feed.
+    upgrade_feed_unreachable = "upgrade-feed-unreachable";
+    /// `ipe upgrade` found a newer release.
+    upgrade_available(current, latest) = "upgrade-available";
+    /// `ipe upgrade`'s confirmation prompt.
+    upgrade_confirm = "upgrade-confirm";
+    /// `ipe release` wrote a single self-jailing binary.
+    release_embedded(path) = "release-embedded";
+    /// `ipe release --bundle` wrote a wrapper and app pair.
+    release_bundled(path) = "release-bundled";
+    /// One disclosure line under a consent refusal.
+    consent_item(item) = "consent-item";
+    /// The headline of the ungranted web-capability refusal.
+    web_consent_header = "web-consent-header";
+    /// An ungranted web axis and the modules that disclose it.
+    web_consent_disclosure(wire, via) = "web-consent-disclosure";
+    /// An ungranted web axis no scanned module could be attributed to.
+    web_consent_disclosure_unattributed(wire) = "web-consent-disclosure-unattributed";
+    /// The remedy closing the ungranted web-capability refusal.
+    web_consent_remedy = "web-consent-remedy";
+    /// The headline of the ungranted native-crossing refusal.
+    native_ffi_consent_header = "native-ffi-consent-header";
+    /// An ungranted native crossing and the modules that cross it.
+    native_ffi_crossing(krate, via) = "native-ffi-crossing";
+    /// An ungranted native crossing no scanned crate could be attributed to.
+    native_ffi_crossing_unattributed = "native-ffi-crossing-unattributed";
+    /// The remedy closing the ungranted native-crossing refusal.
+    native_ffi_consent_remedy = "native-ffi-consent-remedy";
+    /// A derived control model the declared `acceptsControl` set does not cover.
+    control_model_consent_refusal(entry_module, model, ctor) = "control-model-consent-refusal";
+    /// The headline of the unbacked OS-permission refusal.
+    permission_consent_header(platform) = "permission-consent-header";
+    /// The remedy closing the unbacked OS-permission refusal.
+    permission_consent_remedy = "permission-consent-remedy";
+    /// `ipe package audit` found no `package.ipe` in the directory.
+    audit_no_manifest(path) = "audit-no-manifest";
+    /// `ipe package audit` was given a path that is neither a project nor a manifest.
+    audit_not_a_package(path) = "audit-not-a-package";
+    /// An index entry file is not named `packages/<name>.toml`.
+    index_entry_path_invalid(path) = "index-entry-path-invalid";
+    /// An index entry exceeds the per-entry version ceiling.
+    index_entry_too_many_versions(name, count, max) = "index-entry-too-many-versions";
+    /// An index entry rewrites a published version.
+    index_entry_version_rewritten(name, version) = "index-entry-version-rewritten";
+    /// An index entry drops a published version.
+    index_entry_version_dropped(name, version) = "index-entry-version-dropped";
+    /// An index entry moves a package's source repository.
+    index_entry_source_moved(name, version, source, expected) = "index-entry-source-moved";
+    /// `ipe clean` ran outside a project root.
+    clean_no_manifest = "clean-no-manifest";
+    /// `ipe diff` was given a malformed version.
+    diff_invalid_version(raw) = "diff-invalid-version";
+    /// `ipe fmt` found no `.ipe` files.
+    fmt_no_files(root) = "fmt-no-files";
+    /// `ipe fmt --check` found unformatted files.
+    fmt_unformatted_files(list) = "fmt-unformatted-files";
+    /// `ipe fmt --stdin --check` found the input unformatted.
+    fmt_stdin_unformatted = "fmt-stdin-unformatted";
+    /// `ipe fmt` was given a missing path.
+    fmt_no_such_path(root) = "fmt-no-such-path";
+    /// `ipe health` could not locate the home directory.
+    health_home_unknown = "health-home-unknown";
+    /// An `ipe health` install command was empty (an internal invariant).
+    health_install_command_empty = "health-install-command-empty";
+    /// An `ipe health` install command could not be launched.
+    health_install_launch_failed(program, detail) = "health-install-launch-failed";
+    /// An `ipe health` install command exited non-zero.
+    health_install_failed(program) = "health-install-failed";
+    /// `ipe health` refused to overwrite a malformed config.
+    health_config_not_toml(path, detail) = "health-config-not-toml";
+    /// `ipe health`'s edited config did not re-parse.
+    health_config_edit_unparsable(path) = "health-config-edit-unparsable";
+    /// `ipe lint --fix` with a data form.
+    lint_fix_with_format = "lint-fix-with-format";
+    /// The language server failed.
+    lsp_failed(detail) = "lsp-failed";
+    /// `ipe watch` could not start its filesystem watcher.
+    watch_start_failed(detail) = "watch-start-failed";
+    /// `ipe watch` could not watch a path.
+    watch_path_failed(path, detail) = "watch-path-failed";
+    /// `ipe watch` could not bind its blue-green proxy's port.
+    watch_proxy_bind_failed(port, detail) = "watch-proxy-bind-failed";
+    /// A `ships` delivery is listed twice.
+    ships_repeated(delivery) = "ships-repeated";
+    /// A `ships` delivery does not fit the shape of `main`.
+    ships_shape_mismatch(delivery, shape) = "ships-shape-mismatch";
+    /// `ipe add` found the package already declared as an escape dependency.
+    pkg_add_escape_dependency(name) = "pkg-add-escape-dependency";
+    /// A `package.ipe` program entry is not a valid entry file.
+    manifest_entry_invalid(entry) = "manifest-entry-invalid";
+    /// A `package.ipe` program entry has an invalid module segment.
+    manifest_entry_segment_invalid(entry, segment) = "manifest-entry-segment-invalid";
+    /// A `package.ipe` program entry names no module.
+    manifest_entry_no_module(entry) = "manifest-entry-no-module";
+    /// A manifest path is not a `package.ipe`.
+    manifest_not_package_ipe(path, hint) = "manifest-not-package-ipe";
+    /// A package name is not a single path component for a bundle.
+    bundle_name_not_a_component(name) = "bundle-name-not-a-component";
+    /// A generate-only flag was given to an `ipe doc` subcommand.
+    doc_generate_only_flag(sub, flag) = "doc-generate-only-flag";
+    /// `--port` was given to an `ipe doc` subcommand other than `serve`.
+    doc_port_serve_only(sub) = "doc-port-serve-only";
+    /// A lookup-only flag was given to an `ipe doc` subcommand.
+    doc_lookup_only_flag(sub, flag) = "doc-lookup-only-flag";
+    /// An unknown `ipe doc --write-format` value.
+    doc_unknown_write_format(format) = "doc-unknown-write-format";
+    /// The standard-library documentation index could not be built.
+    doc_stdlib_index_failed(detail) = "doc-stdlib-index-failed";
+    /// The documentation bundle could not be built.
+    doc_bundle_build_error(detail) = "doc-bundle-build-error";
+    /// An `ipe doc <kind>:<key>` query named an unknown kind.
+    doc_unknown_kind(prefix) = "doc-unknown-kind";
+    /// An `ipe doc <kind>:<key>` query named no entry of that kind.
+    doc_no_entry_for_key(kind, key, nearby) = "doc-no-entry-for-key";
+    /// `ipe doc --type` matched no symbol.
+    doc_type_no_match(query) = "doc-type-no-match";
+    /// The kernel type table could not be read for `ipe doc`.
+    doc_kernel_table_error(detail) = "doc-kernel-table-error";
+    /// `ipe doc --type` was given a malformed type expression.
+    doc_type_invalid_query(query, detail) = "doc-type-invalid-query";
+    /// `ipe doc --type` matched no symbol, with a hint to broaden the query.
+    doc_type_no_match_hint(query) = "doc-type-no-match-hint";
+    /// The FFI cache is not owned by the user or is world-writable.
+    ffi_cache_untrusted(path) = "ffi-cache-untrusted";
+    /// A project module clashes with an installed FFI crate.
+    ffi_module_clash(module, krate) = "ffi-module-clash";
+    /// An FFI define type collides with an inspected opaque type.
+    ffi_define_opaque_collision(krate, name) = "ffi-define-opaque-collision";
+    /// An installed FFI crate emitted a malformed dependency line.
+    ffi_dependency_line_unparsable(krate, line) = "ffi-dependency-line-unparsable";
+    /// Installed FFI crates pin one dependency to two versions.
+    ffi_dependency_pin_conflict(name, first, second) = "ffi-dependency-pin-conflict";
+    /// An FFI binding marks a type transparent without its shape.
+    ffi_transparent_without_shape(krate, name, binding) = "ffi-transparent-without-shape";
+    /// An FFI crate claims the reserved asserted-call module.
+    ffi_reserved_module_claimed(krate, module) = "ffi-reserved-module-claimed";
+    /// An FFI wrapper uses the reserved asserted-shim prefix.
+    ffi_reserved_wrapper_prefix(krate, wrapper, prefix) = "ffi-reserved-wrapper-prefix";
+    /// A project module takes the reserved asserted-call module name.
+    ffi_reserved_module_exists(module) = "ffi-reserved-module-exists";
+    /// Asserted calls were validated against an empty FFI catalog (an internal invariant).
+    ffi_asserted_empty_catalog = "ffi-asserted-empty-catalog";
+    /// `ipe add` could not prepare its scratch directory.
+    ffi_add_scratch_dir(detail) = "ffi-add-scratch-dir";
+    /// `ipe install` could not write the manifest.
+    ffi_install_manifest_write_failed(detail) = "ffi-install-manifest-write-failed";
+    /// `ipe install` could not write a manifest chunk.
+    ffi_install_manifest_chunk_write_failed(detail) = "ffi-install-manifest-chunk-write-failed";
+    /// `ipe install` could not resolve a wrapper crate path.
+    ffi_install_wrapper_crate(path, detail) = "ffi-install-wrapper-crate";
+    /// `ipe install` could not resolve the project root.
+    ffi_install_project_root(detail) = "ffi-install-project-root";
+    /// An `ipe install` wrapper crate resolves outside the project root.
+    ffi_install_wrapper_outside_root(path, resolved) = "ffi-install-wrapper-outside-root";
+    /// An `ipe install` wrapper crate path is not UTF-8.
+    ffi_install_wrapper_not_utf8(path) = "ffi-install-wrapper-not-utf8";
+    /// FFI regeneration read malformed inspector JSON.
+    ffi_regen_invalid_json(detail) = "ffi-regen-invalid-json";
+    /// FFI regeneration read inspector output of an unexpected shape.
+    ffi_regen_unexpected_shape(output) = "ffi-regen-unexpected-shape";
+    /// FFI regeneration read an inspector item with no name.
+    ffi_regen_item_unnamed(item) = "ffi-regen-item-unnamed";
+    /// `ipe install` read malformed inspector JSON.
+    ffi_install_invalid_json(detail) = "ffi-install-invalid-json";
+    /// `ipe install` read inspector output of an unexpected shape.
+    ffi_install_unexpected_shape(output) = "ffi-install-unexpected-shape";
+    /// A legacy define table names no crate among several.
+    ffi_define_crate_ambiguous(kind, name) = "ffi-define-crate-ambiguous";
+    /// The inspection JSON is not an object, with the parse detail.
+    ffi_inspection_not_object_detail(detail) = "ffi-inspection-not-object-detail";
+    /// The inspection JSON is not an object.
+    ffi_inspection_not_object = "ffi-inspection-not-object";
+    /// The inspection's `functions` field is not an array.
+    ffi_inspection_functions_not_array = "ffi-inspection-functions-not-array";
+    /// A foreign `Opaque` names a type the crate does not report.
+    ffi_opaque_unknown_type(name, rust_type, krate) = "ffi-opaque-unknown-type";
+    /// A foreign `Opaque` names a type the inspector surfaced as a value.
+    ffi_opaque_is_transparent(name, rust_type) = "ffi-opaque-is-transparent";
+    /// A foreign `Opaque` names a type reported without a Rust path.
+    ffi_opaque_without_path(name, rust_type) = "ffi-opaque-without-path";
+    /// A foreign `Opaque` is declared twice over different types.
+    ffi_opaque_declared_twice(name) = "ffi-opaque-declared-twice";
+    /// A refusal at a source location.
+    located_refusal(file, line, col, reason) = "located-refusal";
+    /// `ipe init` was asked to reshape an existing project.
+    init_shape_fixed(existing, stated) = "init-shape-fixed";
+    /// `ipe init`'s shape positional and `--shape` disagree.
+    init_shape_disagrees(positional, flag) = "init-shape-disagrees";
+    /// `ipe init` was given a web runtime for a non-web shape.
+    init_runtime_needs_web(runtime, shape) = "init-runtime-needs-web";
+    /// `ipe init` was given an unknown shape word.
+    init_unknown_shape(word) = "init-unknown-shape";
+    /// `ipe init` was given an unknown runtime word.
+    init_unknown_runtime(word) = "init-unknown-runtime";
+    /// `ipe init`'s shape prompt was answered with an unknown choice.
+    init_unknown_shape_choice(word) = "init-unknown-shape-choice";
+    /// `ipe init`'s runtime prompt was answered with an unknown choice.
+    init_unknown_runtime_choice(word) = "init-unknown-runtime-choice";
+    /// `ipe init` could not derive a project name.
+    init_no_project_name(target) = "init-no-project-name";
+    /// GitHub returned a verification URL off `https://github.com`.
+    login_verification_url_refused = "login-verification-url-refused";
+    /// The device code expired before approval.
+    login_code_expired_before_approval = "login-code-expired-before-approval";
+    /// GitHub returned a malformed token.
+    login_token_malformed = "login-token-malformed";
+    /// The authorization was denied.
+    login_denied = "login-denied";
+    /// The device code expired.
+    login_code_expired = "login-code-expired";
+    /// GitHub reported an unrecognised status.
+    login_github_reported(status) = "login-github-reported";
+    /// GitHub's response carried neither a token nor a status.
+    login_response_unrecognised = "login-response-unrecognised";
+    /// `curl` could not be launched for the OAuth request.
+    login_curl_unavailable(detail) = "login-curl-unavailable";
+    /// The OAuth request failed while waiting for `curl`.
+    login_curl_wait_failed(detail) = "login-curl-wait-failed";
+    /// The OAuth request failed.
+    login_request_failed(detail) = "login-request-failed";
+    /// GitHub's response is not JSON.
+    login_response_not_json(detail) = "login-response-not-json";
+    /// GitHub's response lacks a field.
+    login_response_missing(key) = "login-response-missing";
+    /// No config directory could be determined for the token.
+    login_config_dir_unknown = "login-config-dir-unknown";
+    /// A directory or file could not be created for the token.
+    login_create_failed(path, detail) = "login-create-failed";
+    /// The token file could not be written.
+    login_write_failed(path, detail) = "login-write-failed";
+    /// The token file could not be moved into place.
+    login_move_failed(path, detail) = "login-move-failed";
+    /// The token file could not be removed.
+    login_remove_failed(path, detail) = "login-remove-failed";
+    /// `ipe add` was given a malformed version requirement.
+    pkg_invalid_requirement(requirement, detail) = "pkg-invalid-requirement";
+    /// The usage line of `ipe add` / `ipe remove`.
+    pkg_usage(command) = "pkg-usage";
+    /// `ipe package publish` could not infer the fork owner.
+    publish_fork_owner_unknown = "publish-fork-owner-unknown";
+    /// `ipe package publish` found no `package.ipe` in the directory.
+    publish_no_manifest(path) = "publish-no-manifest";
+    /// `ipe package publish` was given a path that is neither a project nor a manifest.
+    publish_not_a_package(path) = "publish-not-a-package";
+    /// `ipe package publish` found no version in the manifest.
+    publish_no_version(name) = "publish-no-version";
+    /// `ipe package publish` refused the source URL.
+    publish_source_refused(detail) = "publish-source-refused";
+    /// `ipe package publish` refused the revision.
+    publish_rev_refused(detail) = "publish-rev-refused";
+    /// `ipe package publish`'s `--rev` resolved to a non-SHA.
+    publish_rev_not_sha(detail) = "publish-rev-not-sha";
+    /// `ipe package publish`'s `HEAD` did not resolve to a full SHA.
+    publish_head_not_sha(detail) = "publish-head-not-sha";
+    /// `ipe package publish --fresh` outside the reserved probe.
+    publish_fresh_refused(name) = "publish-fresh-refused";
+    /// The emitted `fn main` anchor is absent from the build.
+    run_main_anchor_absent = "run-main-anchor-absent";
+    /// A jail profile does not parse.
+    run_profile_unparsable(code, detail) = "run-profile-unparsable";
+    /// A binary carries no readable capability floor.
+    run_floor_unreadable(code) = "run-floor-unreadable";
+    /// A declared program entry outside `Main` is not yet buildable.
+    build_entry_not_main(module) = "build-entry-not-main";
+    /// `ipe pack` is retired.
+    pack_retired = "pack-retired";
+    /// `ipe build` found no binary after a successful `cargo build`.
+    build_binary_missing(path) = "build-binary-missing";
+    /// `ipe release` found no binary after a successful `cargo build`.
+    release_binary_missing(path) = "release-binary-missing";
+    /// `ipe release` found no app binary after a successful `cargo build`.
+    release_app_binary_missing(path) = "release-app-binary-missing";
+    /// `ipe release` could not locate the workspace root.
+    release_workspace_root_unknown = "release-workspace-root-unknown";
+    /// `wasm-bindgen` failed while bundling a `--target wasm` build.
+    wasm_bindgen_failed(code, version) = "wasm-bindgen-failed";
+    /// The `wasm32-wasip1` build reported no `.wasm` artifact.
+    wasi_artifact_missing(dir) = "wasi-artifact-missing";
+    /// `ipe run --record` on a program with no recordable session.
+    record_no_session(name) = "record-no-session";
+    /// `ipe run --record` with `--target wasi`.
+    record_native_only = "record-native-only";
+    /// `ipe run --record` on a native-bearing program.
+    record_jailed = "record-jailed";
+    /// A run program exited non-zero.
+    program_exited(program, code) = "program-exited";
+    /// `ipe exec` found no artifact directory.
+    exec_no_artifact_dir(dir) = "exec-no-artifact-dir";
+    /// `ipe exec` found no built binary.
+    exec_no_binary(path) = "exec-no-binary";
+    /// `ipe exec` found a floor-carrying binary without its jail profile.
+    exec_profile_missing(path) = "exec-profile-missing";
+    /// `cargo metadata` failed.
+    cargo_metadata_failed(dir, detail) = "cargo-metadata-failed";
+    /// `cargo metadata` emitted malformed JSON.
+    cargo_metadata_unparsable(detail) = "cargo-metadata-unparsable";
+    /// `cargo metadata` reported no target directory.
+    cargo_metadata_no_target_dir = "cargo-metadata-no-target-dir";
+    /// `ipe explain` moved to `ipe doc`.
+    explain_moved = "explain-moved";
+    /// No app binary after a successful `cargo build`.
+    app_binary_missing(path) = "app-binary-missing";
+    /// The `ipe` binary could not be located to build wasm.
+    wasm_ipe_binary_unknown(detail) = "wasm-ipe-binary-unknown";
+    /// The mobile shell's `--target wasm` build failed.
+    mobile_wasm_build_failed(code) = "mobile-wasm-build-failed";
+    /// `--emit-permissions` failed.
+    emit_permissions_failed(verb, detail) = "emit-permissions-failed";
+    /// `ipe package validate-entry` was given more than one path.
+    package_validate_entry_single_path = "package-validate-entry-single-path";
+    /// `ipe package audit-entry` found nothing new to audit.
+    audit_entry_nothing_new(name) = "audit-entry-nothing-new";
+    /// `ipe upgrade` on a platform without the installer.
+    upgrade_unsupported_platform(command) = "upgrade-unsupported-platform";
+    /// `ipe upgrade`'s installer could not be launched.
+    upgrade_installer_launch_failed(detail) = "upgrade-installer-launch-failed";
+    /// `ipe upgrade`'s installer could not be waited on.
+    upgrade_installer_wait_failed(detail) = "upgrade-installer-wait-failed";
+    /// `ipe upgrade`'s installer exited non-zero.
+    upgrade_installer_failed = "upgrade-installer-failed";
 }
 
 #[cfg(test)]

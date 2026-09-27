@@ -2255,12 +2255,8 @@ pub fn build_project_with_options(
     // so emitting a non-`Main` program entry would miscompile. Refuse cleanly and
     // point at the working analysis path rather than emit a broken crate.
     if entry_path != ["Main".to_owned()] {
-        return Err(CliError::UsageOwned(format!(
-            "program entry module `{}` is not yet buildable — a declared `programs` entry outside \
-             module `Main` type-checks (`ipe type-check`) but native emission still assumes a \
-             `Main` entry. Name the entry file `Main.ipe`, or track the multi-program emit \
-             follow-up",
-            entry_path.join(".")
+        return Err(CliError::UsageOwned(text::build_entry_not_main(
+            &entry_path.join("."),
         )));
     }
 

@@ -196,9 +196,7 @@ pub fn run_publish(rest: &[String]) -> Result<(), CliError> {
         .unwrap_or_else(|| infer_publisher(entry_version.source.as_str()));
     if fork_owner == "unknown" {
         return Err(CliError::UsageOwned(
-            "ipe package publish: could not infer your GitHub fork owner from the source URL — \
-             pass `--fork <github-user>` (the owner of your fork of the index)."
-                .to_owned(),
+            text::publish_fork_owner_unknown().to_owned(),
         ));
     }
 
@@ -229,8 +227,9 @@ fn parse_args(rest: &[String]) -> Result<Args, CliError> {
             "--fork" => fork = Some(take_value(&mut it, "--fork")?),
             "--fresh" => fresh = true,
             flag if flag.starts_with('-') => {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe package publish: unknown flag `{flag}`"
+                return Err(CliError::UsageOwned(text::unknown_flag(
+                    &"package publish",
+                    &flag,
                 )));
             }
             positional => {
@@ -260,7 +259,7 @@ fn take_value<'a>(
 ) -> Result<String, CliError> {
     it.next()
         .cloned()
-        .ok_or_else(|| CliError::UsageOwned(format!("ipe package publish: {flag} needs a value")))
+        .ok_or_else(|| CliError::UsageOwned(text::flag_needs_value(&"package publish", &flag)))
 }
 
 /// Resolve `path` (a directory or a `package.ipe`) to its manifest file.
@@ -272,10 +271,8 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
         if crate::project::has_only_legacy_toml(path) {
             return Err(CliError::Usage(text::legacy_toml_hint()));
         }
-        return Err(CliError::UsageOwned(format!(
-            "ipe package publish: no `package.ipe` in `{}` — publish operates on a publishable \
-             Ipê package, which needs a manifest",
-            path.display()
+        return Err(CliError::UsageOwned(text::publish_no_manifest(
+            &path.display(),
         )));
     }
     if path.file_name().and_then(|n| n.to_str()) == Some(crate::package_manifest::PACKAGE_IPE)
@@ -283,9 +280,8 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     {
         return Ok(path.to_path_buf());
     }
-    Err(CliError::UsageOwned(format!(
-        "ipe package publish: `{}` is neither an Ipê project directory nor a package.ipe",
-        path.display()
+    Err(CliError::UsageOwned(text::publish_not_a_package(
+        &path.display(),
     )))
 }
 
@@ -305,13 +301,10 @@ fn compute_entry_version(
     source_override: Option<&str>,
     rev_override: Option<&str>,
 ) -> Result<EntryVersion, CliError> {
-    let version = manifest.version.clone().ok_or_else(|| {
-        CliError::UsageOwned(format!(
-            "ipe package publish: `{}` declares no `version = \"…\"` — publish records the \
-             version being published, so the manifest must name one.",
-            manifest.name
-        ))
-    })?;
+    let version = manifest
+        .version
+        .clone()
+        .ok_or_else(|| CliError::UsageOwned(text::publish_no_version(&manifest.name)))?;
 
     let source_root = &manifest.root;
     let raw_source = match source_override {
@@ -321,11 +314,8 @@ fn compute_entry_version(
     // Parse-don't-validate: the typed constructor rejects any value outside the
     // transport allow-list. Publish uses the same gate as the resolver so an
     // entry written by `publish` round-trips through `read_entry` without error.
-    let source = SourceUrl::parse(&manifest.name, &raw_source).map_err(|e| {
-        CliError::UsageOwned(format!(
-            "ipe package publish: the source URL is not accepted — {e}"
-        ))
-    })?;
+    let source = SourceUrl::parse(&manifest.name, &raw_source)
+        .map_err(|e| CliError::UsageOwned(text::publish_source_refused(&e)))?;
 
     // The revision is pinned as an immutable commit SHA. The default path runs
     // `committed_pushed_head` which already calls `git rev-parse HEAD` and
@@ -334,24 +324,15 @@ fn compute_entry_version(
     // as moving refs.
     let rev = if let Some(r) = rev_override {
         // Injection-gate the requested ref before passing it to git.
-        let requested = CommitId::parse(&manifest.name, r).map_err(|e| {
-            CliError::UsageOwned(format!(
-                "ipe package publish: the revision is not accepted — {e}"
-            ))
-        })?;
+        let requested = CommitId::parse(&manifest.name, r)
+            .map_err(|e| CliError::UsageOwned(text::publish_rev_refused(&e)))?;
         let raw_sha = resolve_rev_to_sha(source_root, requested.as_str())?;
-        PinnedRev::from_full_sha(&manifest.name, &raw_sha).map_err(|e| {
-            CliError::UsageOwned(format!(
-                "ipe package publish: `--rev` resolved to a non-SHA: {e}"
-            ))
-        })?
+        PinnedRev::from_full_sha(&manifest.name, &raw_sha)
+            .map_err(|e| CliError::UsageOwned(text::publish_rev_not_sha(&e)))?
     } else {
         let raw_sha = committed_pushed_head(source_root)?;
-        PinnedRev::from_full_sha(&manifest.name, &raw_sha).map_err(|e| {
-            CliError::UsageOwned(format!(
-                "ipe package publish: HEAD did not resolve to a full SHA: {e}"
-            ))
-        })?
+        PinnedRev::from_full_sha(&manifest.name, &raw_sha)
+            .map_err(|e| CliError::UsageOwned(text::publish_head_not_sha(&e)))?
     };
 
     let sha256 = crate::resolve::hash_source_tree(source_root)?;
@@ -516,11 +497,7 @@ fn build_fresh_entry(
     let reserved = ipe_kernels::reserved_package_prefix_of(name).is_some();
     let blessed = ipe_kernels::is_blessed_publisher(publisher);
     if !(reserved && blessed) {
-        return Err(CliError::UsageOwned(format!(
-            "ipe package publish: `--fresh` is only permitted for the blessed publisher on a \
-             reserved-namespace package (the disposable smoke probe); it would otherwise erase \
-             `{name}`'s published history. Publish a new version without `--fresh` instead."
-        )));
+        return Err(CliError::UsageOwned(text::publish_fresh_refused(&name)));
     }
     Ok(render_entry(
         name,

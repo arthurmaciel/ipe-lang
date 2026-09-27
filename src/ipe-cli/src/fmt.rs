@@ -107,9 +107,8 @@ fn run_fmt_inplace(
     let root = PathBuf::from(path.unwrap_or("."));
     let files = collect_ipe_files(&root)?;
     if files.is_empty() {
-        return Err(CliError::UsageOwned(format!(
-            "fmt: no .ipe files found at {}",
-            root.display()
+        return Err(CliError::UsageOwned(crate::text::fmt_no_files(
+            &root.display(),
         )));
     }
 
@@ -196,8 +195,8 @@ fn report_check(
                 .map(|p| format!("  {}", p.display()))
                 .collect::<Vec<_>>()
                 .join("\n");
-            Err(CliError::UsageOwned(format!(
-                "the following files are not formatted (run `ipe fmt` to fix):\n{list}"
+            Err(CliError::UsageOwned(crate::text::fmt_unformatted_files(
+                &list,
             )))
         }
     }
@@ -219,7 +218,7 @@ fn run_fmt_stdin(check: bool) -> Result<(), CliError> {
             // Print a unified diff for CI consumption.
             diff_eprint("<stdin>", &src, &formatted);
             return Err(CliError::UsageOwned(
-                "stdin is not formatted (run `ipe fmt --stdin` to fix)".to_owned(),
+                crate::text::fmt_stdin_unformatted().to_owned(),
             ));
         }
     } else {
@@ -287,9 +286,8 @@ fn collect_ipe_files(root: &Path) -> Result<Vec<PathBuf>, CliError> {
         return Ok(vec![root.to_path_buf()]);
     }
     if !root.is_dir() {
-        return Err(CliError::UsageOwned(format!(
-            "fmt: no such file or directory: {}",
-            root.display()
+        return Err(CliError::UsageOwned(crate::text::fmt_no_such_path(
+            &root.display(),
         )));
     }
     let mut out: Vec<PathBuf> = Vec::new();

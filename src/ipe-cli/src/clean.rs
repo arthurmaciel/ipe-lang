@@ -114,9 +114,7 @@ fn project_root() -> Result<PathBuf, CliError> {
         if crate::project::has_only_legacy_toml(&cwd) {
             return Err(CliError::Usage(text::legacy_toml_hint()));
         }
-        return Err(CliError::UsageOwned(
-            "clean: no package.ipe here — run it from an Ipê project root".to_owned(),
-        ));
+        return Err(CliError::UsageOwned(text::clean_no_manifest().to_owned()));
     }
     std::fs::canonicalize(&cwd).map_err(|e| CliError::Io {
         path: cwd,

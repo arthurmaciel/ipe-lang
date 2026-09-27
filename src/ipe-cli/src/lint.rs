@@ -72,9 +72,7 @@ pub(crate) fn parse_lint_args(rest: &[String]) -> Result<LintArgs, CliError> {
     let format = format.unwrap_or_default();
     if fix && format != cli_args::OutputFormat::Human {
         return Err(CliError::UsageOwned(
-            "ipe lint: --fix and a data form (--json/--plain) are mutually exclusive — \
-             a data form reports without mutating"
-                .to_owned(),
+            text::lint_fix_with_format().to_owned(),
         ));
     }
     Ok(LintArgs { entry, fix, format })

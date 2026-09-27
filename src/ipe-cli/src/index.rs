@@ -493,10 +493,7 @@ pub fn validate_entry_file(path: &Path) -> Result<IndexEntry, CliError> {
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            CliError::UsageOwned(format!(
-                "{} is not a `packages/<name>.toml` entry file — the file stem names the package",
-                path.display()
-            ))
+            CliError::UsageOwned(crate::text::index_entry_path_invalid(&path.display()))
         })?;
     let text =
         crate::io_bounded::read_to_string_capped(path, crate::io_bounded::SMALL_FILE_READ_CAP)?;
@@ -540,12 +537,13 @@ pub fn admission_precheck(
     baseline: Option<&IndexEntry>,
 ) -> Result<(), CliError> {
     if submitted.versions.len() > MAX_ENTRY_VERSIONS {
-        return Err(CliError::UsageOwned(format!(
-            "ipe package audit-entry: `{}` lists {} versions, exceeding the {MAX_ENTRY_VERSIONS} \
-             per-entry ceiling — a single submission cannot carry this many versions.",
-            submitted.name,
-            submitted.versions.len()
-        )));
+        return Err(CliError::UsageOwned(
+            crate::text::index_entry_too_many_versions(
+                &submitted.name,
+                &submitted.versions.len(),
+                &MAX_ENTRY_VERSIONS,
+            ),
+        ));
     }
 
     let baseline_by_version: std::collections::BTreeMap<&semver::Version, &EntryVersion> = baseline
@@ -557,12 +555,9 @@ pub fn admission_precheck(
         if let Some(&prior) = baseline_by_version.get(&version.version)
             && prior != version
         {
-            return Err(CliError::UsageOwned(format!(
-                "ipe package audit-entry: `{}` version {} is already published and immutable, \
-                 but the submitted entry rewrites it (source, rev, sha256, or capabilities \
-                 differ). A published version must never be rewritten — publish a new version.",
-                submitted.name, version.version
-            )));
+            return Err(CliError::UsageOwned(
+                crate::text::index_entry_version_rewritten(&submitted.name, &version.version),
+            ));
         }
     }
 
@@ -584,12 +579,9 @@ pub fn admission_precheck(
             submitted.versions.iter().map(|v| &v.version).collect();
         for baseline_version in baseline_by_version.keys() {
             if !submitted_versions.contains(*baseline_version) {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe package audit-entry: `{}` drops the published version {baseline_version}, \
-                     but the index is append-only: a published version must never be removed. \
-                     Publish a new version instead.",
-                    submitted.name
-                )));
+                return Err(CliError::UsageOwned(
+                    crate::text::index_entry_version_dropped(&submitted.name, &baseline_version),
+                ));
             }
         }
     }
@@ -603,14 +595,11 @@ pub fn admission_precheck(
     if let Some(expected_source) = established_source {
         for version in &submitted.versions {
             if version.source.as_str() != expected_source {
-                return Err(CliError::UsageOwned(format!(
-                    "ipe package audit-entry: `{}` version {} declares source `{}`, but this \
-                     package's established source is `{}`. A package name is bound to one source \
-                     repository; a version pointing elsewhere is a name-squat and is refused.",
-                    submitted.name,
-                    version.version,
-                    version.source.as_str(),
-                    expected_source
+                return Err(CliError::UsageOwned(crate::text::index_entry_source_moved(
+                    &submitted.name,
+                    &version.version,
+                    &version.source.as_str(),
+                    &expected_source,
                 )));
             }
         }

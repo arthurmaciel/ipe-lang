@@ -241,9 +241,11 @@ impl Reader<'_> {
     /// panicking (totality).
     fn reject(&self, span: Span, reason: &str) -> CliError {
         let (line, col) = line_col(self.src, span.lo);
-        CliError::UsageOwned(format!(
-            "{}:{line}:{col}: {reason}",
-            self.manifest_path.display()
+        CliError::UsageOwned(text::located_refusal(
+            &self.manifest_path.display(),
+            &line,
+            &col,
+            &reason,
         ))
     }
 
@@ -1823,12 +1825,7 @@ fn edit_dependencies_list(
         // `dep "…" "…"`; an escape is author-owned and never overwritten.
         (Some(entry), Some(found)) => {
             if found.is_escape() {
-                return Err(usage_owned(format!(
-                    "package.ipe: `{name}` is already a git/path escape dependency — `ipe add` \
-                     records only an index requirement and never rewrites an author-written \
-                     `depGit`/`depGitRev`/`depPath` entry. Edit the escape by hand, or remove it \
-                     first."
-                )));
+                return Err(usage_owned(text::pkg_add_escape_dependency(&name)));
             }
             Ok(splice(text, found.entry, entry))
         }

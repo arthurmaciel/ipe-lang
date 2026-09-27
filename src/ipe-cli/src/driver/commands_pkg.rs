@@ -395,9 +395,8 @@ impl<'a> BundleAssembler<'a> {
             .join(self.profile.target_subdir())
             .join(&bin_name);
         if !binary.is_file() {
-            return Err(CliError::UsageOwned(format!(
-                "expected app binary at {} — cargo build succeeded but the binary is missing",
-                binary.display()
+            return Err(CliError::UsageOwned(text::app_binary_missing(
+                &binary.display(),
             )));
         }
 
@@ -591,9 +590,8 @@ pub fn build_wasm_for_mobile(
     output_root: &Path,
     profile: BundleProfile,
 ) -> Result<(), CliError> {
-    let exe = std::env::current_exe().map_err(|e| {
-        CliError::UsageOwned(format!("cannot locate the ipe binary to build wasm: {e}"))
-    })?;
+    let exe = std::env::current_exe()
+        .map_err(|e| CliError::UsageOwned(text::wasm_ipe_binary_unknown(&e)))?;
     let project_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     // A dev shell hosts a `build --target wasm` bundle; a release shell hosts a
     // production `release --target wasm` bundle (Debug.* gated, optimised).
@@ -612,10 +610,8 @@ pub fn build_wasm_for_mobile(
             source,
         })?;
     if !status.success() {
-        return Err(CliError::UsageOwned(format!(
-            "the `--target wasm` build failed (exit {}) — the mobile shell hosts that \
-             bundle, so it must build first",
-            status.code().unwrap_or(1)
+        return Err(CliError::UsageOwned(text::mobile_wasm_build_failed(
+            &status.code().unwrap_or(1),
         )));
     }
     Ok(())
@@ -644,7 +640,7 @@ pub fn emit_permissions(
 
     let platform = raw_platform
         .parse::<pack::permissions::Platform>()
-        .map_err(|e| CliError::UsageOwned(format!("ipe {verb} --emit-permissions: {e}")))?;
+        .map_err(|e| CliError::UsageOwned(text::emit_permissions_failed(&verb, &e)))?;
 
     let root = path.map_or_else(|| PathBuf::from("."), PathBuf::from);
     let manifest_path =
@@ -760,7 +756,7 @@ pub fn run_validate_entry(rest: &[String]) -> Result<(), CliError> {
         }
         _ => {
             return Err(CliError::UsageOwned(
-                "ipe package validate-entry: expected a single entry-file path".to_owned(),
+                text::package_validate_entry_single_path().to_owned(),
             ));
         }
     };
@@ -850,10 +846,8 @@ pub fn run_audit_entry(rest: &[String]) -> Result<(), CliError> {
         .collect();
 
     if new_versions.is_empty() {
-        return Err(CliError::UsageOwned(format!(
-            "ipe package audit-entry: `{}` — every version in the submitted entry is already in \
-             the baseline index; nothing new to audit",
-            submitted.name
+        return Err(CliError::UsageOwned(text::audit_entry_nothing_new(
+            &submitted.name,
         )));
     }
 
@@ -1093,7 +1087,8 @@ pub fn run_type_check_body(rest: &[String]) -> Result<(), CliError> {
             let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
             crate::screen::Screen::new(crate::screen::Stream::Stdout)
                 .styled(&format!(
-                    "{tint}{glyph} No type errors — this program type-checks.{}",
+                    "{tint}{glyph} {}{}",
+                    text::type_check_ok(),
                     p.reset,
                 ))
                 .emit();
@@ -1720,17 +1715,13 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
             "--exit-code" => exit_code_flag = true,
             "--plain" => {
                 if format.is_some() {
-                    return Err(CliError::UsageOwned(
-                        "ipe upgrade: --plain and --json are mutually exclusive".to_owned(),
-                    ));
+                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"upgrade")));
                 }
                 format = Some(cli_args::OutputFormat::Plain);
             }
             "--json" => {
                 if format.is_some() {
-                    return Err(CliError::UsageOwned(
-                        "ipe upgrade: --plain and --json are mutually exclusive".to_owned(),
-                    ));
+                    return Err(CliError::UsageOwned(text::plain_json_exclusive(&"upgrade")));
                 }
                 format = Some(cli_args::OutputFormat::Json);
             }
@@ -1778,8 +1769,9 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
             let (glyph, tint) = style::Outcome::Success.glyph_and_tint(p);
             crate::screen::Screen::new(crate::screen::Stream::Stdout)
                 .styled(&format!(
-                    "{tint}{glyph}{} ipe {v} — already the latest release",
-                    p.reset
+                    "{tint}{glyph}{} {}",
+                    p.reset,
+                    text::upgrade_up_to_date(&v)
                 ))
                 .emit();
             if check && exit_code_flag {
@@ -1793,8 +1785,9 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
             let (glyph, tint) = style::Outcome::Failure.glyph_and_tint(p);
             crate::screen::Screen::new(crate::screen::Stream::Stdout)
                 .styled(&format!(
-                    "{tint}{glyph}{}  couldn't reach the release feed — check your connection",
-                    p.reset
+                    "{tint}{glyph}{}  {}",
+                    p.reset,
+                    text::upgrade_feed_unreachable()
                 ))
                 .emit();
             if check && exit_code_flag {
@@ -1813,8 +1806,10 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
                 .unwrap_or_default();
             crate::screen::Screen::new(crate::screen::Stream::Stdout)
                 .styled(&format!(
-                    "{}?{}  ipe {cur} \u{2192} {lat} available",
-                    p.yellow, p.reset
+                    "{}?{}  {}",
+                    p.yellow,
+                    p.reset,
+                    text::upgrade_available(&cur, &lat)
                 ))
                 .emit();
             if check {
@@ -1833,7 +1828,7 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
     let should_prompt = fmt == cli_args::OutputFormat::Human && stdout_is_tty && !yes;
     let confirmed = if should_prompt {
         use std::io::Write as _;
-        crate::screen::prompt(&format!("{}Upgrade now? [Y/n] ", style::GUTTER));
+        crate::screen::prompt(&format!("{}{} ", style::GUTTER, text::upgrade_confirm()));
         let _ = std::io::stdout().flush();
         let mut line = String::new();
         match std::io::stdin().read_line(&mut line) {
@@ -1865,8 +1860,8 @@ pub fn run_upgrade(rest: &[String]) -> Result<(), CliError> {
 /// [`CliError::UpgradeNoPrebuilt`] when the installer exits 2.
 pub fn run_installer(command: &str) -> Result<(), CliError> {
     if cfg!(not(unix)) {
-        return Err(CliError::UsageOwned(format!(
-            "upgrade: not supported on this platform — run the installer manually:\n  {command}"
+        return Err(CliError::UsageOwned(text::upgrade_unsupported_platform(
+            &command,
         )));
     }
 
@@ -1888,16 +1883,14 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
             stage.failure(format!(
                 "Could not launch the installer (needs `sh` and `curl`): {e}"
             ));
-            return Err(CliError::UsageOwned(format!(
-                "upgrade: cannot launch the installer (needs `sh` and `curl`): {e}"
+            return Err(CliError::UsageOwned(text::upgrade_installer_launch_failed(
+                &e,
             )));
         }
     };
-    let status = child.wait().map_err(|e| {
-        CliError::UsageOwned(format!(
-            "upgrade: the installer could not be waited on: {e}"
-        ))
-    })?;
+    let status = child
+        .wait()
+        .map_err(|e| CliError::UsageOwned(text::upgrade_installer_wait_failed(&e)))?;
     if status.success() {
         return Ok(());
     }
@@ -1931,7 +1924,7 @@ pub fn run_installer(command: &str) -> Result<(), CliError> {
         });
     }
     Err(CliError::UsageOwned(
-        "upgrade: the installer exited non-zero — nothing was changed".to_owned(),
+        text::upgrade_installer_failed().to_owned(),
     ))
 }
 

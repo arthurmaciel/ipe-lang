@@ -325,21 +325,19 @@ fn entry_file_to_module_path(entry: &str) -> Result<Vec<String>, CliError> {
             _ => None,
         };
         let seg = seg.ok_or_else(|| {
-            CliError::UsageOwned(format!(
-                "package.ipe: program entry {entry:?} is not a valid entry file"
-            ))
+            CliError::UsageOwned(text::manifest_entry_invalid(&format!("{entry:?}")))
         })?;
         if !is_module_segment(seg) {
-            return Err(CliError::UsageOwned(format!(
-                "package.ipe: program entry {entry:?} has a path segment {seg:?} that is not a \
-                 valid module name (segments must match [A-Z][A-Za-z0-9_]*)"
+            return Err(CliError::UsageOwned(text::manifest_entry_segment_invalid(
+                &format!("{entry:?}"),
+                &format!("{seg:?}"),
             )));
         }
         segments.push(seg.to_owned());
     }
     if segments.is_empty() {
-        return Err(CliError::UsageOwned(format!(
-            "package.ipe: program entry {entry:?} names no module"
+        return Err(CliError::UsageOwned(text::manifest_entry_no_module(
+            &format!("{entry:?}"),
         )));
     }
     Ok(segments)
@@ -551,10 +549,9 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
     {
         return crate::package_manifest::parse_package_manifest(manifest_path);
     }
-    Err(CliError::UsageOwned(format!(
-        "{}: not a package.ipe manifest. {}",
-        manifest_path.display(),
-        text::legacy_toml_hint()
+    Err(CliError::UsageOwned(text::manifest_not_package_ipe(
+        &manifest_path.display(),
+        &text::legacy_toml_hint(),
     )))
 }
 

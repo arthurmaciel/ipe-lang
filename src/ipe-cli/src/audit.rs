@@ -816,10 +816,8 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
         if crate::project::has_only_legacy_toml(path) {
             return Err(CliError::Usage(text::legacy_toml_hint()));
         }
-        return Err(CliError::UsageOwned(format!(
-            "ipe package audit: no `package.ipe` in `{}` — the gate audits a publishable Ipê \
-             package, which needs a manifest",
-            path.display()
+        return Err(CliError::UsageOwned(text::audit_no_manifest(
+            &path.display(),
         )));
     }
     if path.file_name().and_then(|n| n.to_str()) == Some(crate::package_manifest::PACKAGE_IPE)
@@ -827,9 +825,8 @@ fn locate_manifest(path: &Path) -> Result<PathBuf, CliError> {
     {
         return Ok(path.to_path_buf());
     }
-    Err(CliError::UsageOwned(format!(
-        "ipe package audit: `{}` is neither an Ipê project directory nor a package.ipe",
-        path.display()
+    Err(CliError::UsageOwned(text::audit_not_a_package(
+        &path.display(),
     )))
 }
 

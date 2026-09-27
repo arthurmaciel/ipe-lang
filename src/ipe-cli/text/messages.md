@@ -801,3 +801,708 @@ See <a href="module/index.html">Reference</a> for the full API.
 ## site-code-families-intro
 
 Every code reads <code>IPE-</code>, a family letter, and four digits. The letter names the part of the compiler that reports it:
+
+# Package index and audit
+
+## audit-no-manifest
+
+ipe package audit: no `package.ipe` in `{path}` — the gate audits a publishable Ipê package, which needs a manifest
+
+## audit-not-a-package
+
+ipe package audit: `{path}` is neither an Ipê project directory nor a package.ipe
+
+## index-entry-path-invalid
+
+{path} is not a `packages/<name>.toml` entry file — the file stem names the package
+
+## index-entry-too-many-versions
+
+ipe package audit-entry: `{name}` lists {count} versions, exceeding the {max} per-entry ceiling — a single submission cannot carry this many versions.
+
+## index-entry-version-rewritten
+
+ipe package audit-entry: `{name}` version {version} is already published and immutable, but the submitted entry rewrites it (source, rev, sha256, or capabilities differ). A published version must never be rewritten — publish a new version.
+
+## index-entry-version-dropped
+
+ipe package audit-entry: `{name}` drops the published version {version}, but the index is append-only: a published version must never be removed. Publish a new version instead.
+
+## index-entry-source-moved
+
+ipe package audit-entry: `{name}` version {version} declares source `{source}`, but this package's established source is `{expected}`. A package name is bound to one source repository; a version pointing elsewhere is a name-squat and is refused.
+
+# Tooling commands
+
+## clean-no-manifest
+
+clean: no package.ipe here — run it from an Ipê project root
+
+## diff-invalid-version
+
+diff: invalid version `{raw}`
+
+## fmt-no-files
+
+fmt: no .ipe files found at {root}
+
+## fmt-unformatted-files
+
+the following files are not formatted (run `ipe fmt` to fix):
+{list}
+
+## fmt-stdin-unformatted
+
+stdin is not formatted (run `ipe fmt --stdin` to fix)
+
+## fmt-no-such-path
+
+fmt: no such file or directory: {root}
+
+## health-home-unknown
+
+health: cannot locate your home directory (neither CARGO_HOME nor HOME is set)
+
+## health-install-command-empty
+
+health: an install command was empty
+
+## health-install-launch-failed
+
+health: could not launch `{program}`: {detail}
+
+## health-install-failed
+
+health: `{program}` exited non-zero — nothing was changed
+
+## health-config-not-toml
+
+health: {path} is not valid TOML ({detail}); refusing to overwrite it
+
+## health-config-edit-unparsable
+
+health: the edited config for {path} did not re-parse; no change was made
+
+## lint-fix-with-format
+
+ipe lint: --fix and a data form (--json/--plain) are mutually exclusive — a data form reports without mutating
+
+## lsp-failed
+
+lsp: {detail}
+
+## watch-start-failed
+
+watch: cannot start filesystem watcher: {detail}
+
+## watch-path-failed
+
+watch: cannot watch {path}: {detail}
+
+## watch-proxy-bind-failed
+
+watch: cannot bind the blue-green proxy on port {port}: {detail}
+
+# Manifest refusals
+
+## ships-repeated
+
+package.ipe declares `{delivery}` twice in `ships`. A delivery is shipped once; a repeated entry is a confused manifest, not a request for two copies. Remove the duplicate.
+
+## ships-shape-mismatch
+
+package.ipe declares `{delivery}`, but `main` is a `{shape}` app. The web hosts (desktop, solo, solo ios, …) carry a self-contained web client; a `{shape}` app ships as a binary. Remove the entry, or change `main` to a `Web.tea` entry.
+
+## pkg-add-escape-dependency
+
+package.ipe: `{name}` is already a git/path escape dependency — `ipe add` records only an index requirement and never rewrites an author-written `depGit`/`depGitRev`/`depPath` entry. Edit the escape by hand, or remove it first.
+
+## manifest-entry-invalid
+
+package.ipe: program entry {entry} is not a valid entry file
+
+## manifest-entry-segment-invalid
+
+package.ipe: program entry {entry} has a path segment {segment} that is not a valid module name (segments must match [A-Z][A-Za-z0-9_]*)
+
+## manifest-entry-no-module
+
+package.ipe: program entry {entry} names no module
+
+## manifest-not-package-ipe
+
+{path}: not a package.ipe manifest. {hint}
+
+## bundle-name-not-a-component
+
+package.ipe: name `{name}` cannot be a macOS bundle directory — a bundle root must be a single path component, but this name introduces a path separator, a `..` traversal, or an absolute path. Choose a name without `/`, `\`, or `..`.
+
+# ipe doc
+
+## doc-generate-only-flag
+
+ipe doc {sub}: {flag} is a generate-only flag; run `ipe doc` to write files
+
+## doc-port-serve-only
+
+ipe doc {sub}: --port applies only to `ipe doc serve`
+
+## doc-lookup-only-flag
+
+ipe doc {sub}: {flag} applies only to `list`, `<module>` queries, and `<key>` lookups
+
+## doc-unknown-write-format
+
+ipe doc: unknown --write-format `{format}` (want markdown | json | html | all)
+
+## doc-stdlib-index-failed
+
+ipe doc: stdlib index failed: {detail}
+
+## doc-bundle-build-error
+
+ipe doc: bundle build error: {detail}
+
+## doc-unknown-kind
+
+ipe doc: `{prefix}` is not a known documentation kind
+Known kinds: module, symbol, diagnostic, construct, idiom, topic, guide, cli
+
+## doc-no-entry-for-key
+
+ipe doc: no `{kind}` entry for key `{key}`
+Nearby keys:
+{nearby}
+
+## doc-type-no-match
+
+ipe doc --type: no symbols match `{query}`
+
+## doc-kernel-table-error
+
+ipe doc: kernel type table error: {detail}
+
+## doc-type-invalid-query
+
+ipe doc --type: `{query}` is not a valid type expression
+
+{detail}
+
+Hint: use Ipê type syntax, e.g. `List a -> (a -> b) -> List b`
+
+## doc-type-no-match-hint
+
+ipe doc --type: no symbols match `{query}`
+
+Try a broader query or `ipe doc list` to browse modules.
+
+# Rust crates and FFI
+
+## ffi-cache-untrusted
+
+refusing to load the FFI cache at `{path}`: it is not owned by the current user or is world-writable — its `_bindings.rs` compiles unsandboxed into your crate. Fix its ownership/permissions or remove it
+
+## ffi-module-clash
+
+module `{module}` clashes with the installed FFI crate `{krate}` — the `Rust.*` namespace is reserved for FFI interface modules
+
+## ffi-define-opaque-collision
+
+installed FFI crate `{krate}` defines a `[rust.define.*]` type `{name}` whose name also names an inspected opaque type of the crate — the two are different Rust types that would collide on one nominal; rename the define type
+
+## ffi-dependency-line-unparsable
+
+installed FFI crate `{krate}` emitted an unparsable dependency line: {line}
+
+## ffi-dependency-pin-conflict
+
+installed FFI crates pin dependency `{name}` to conflicting versions:
+  ={first}
+  ={second}
+re-add one of the crates so the version pins agree
+
+## ffi-transparent-without-shape
+
+installed FFI crate `{krate}` marks `{name}` transparent in binding `{binding}` but carries no shape for it — re-run `ipe add`
+
+## ffi-reserved-module-claimed
+
+installed FFI crate `{krate}` claims the module `{module}`, which is reserved for the asserted-call surface (`Rust.Ffi.call`); remove or rename the crate
+
+## ffi-reserved-wrapper-prefix
+
+installed FFI crate `{krate}` declares wrapper `{wrapper}`, which uses the reserved asserted-shim prefix `{prefix}` — refusing to load the cache
+
+## ffi-reserved-module-exists
+
+module `{module}` already exists — it is reserved for the asserted-call surface (`Rust.Ffi.call`)
+
+## ffi-asserted-empty-catalog
+
+internal: asserted calls validated against an empty FFI catalog
+
+## ffi-add-scratch-dir
+
+ipe add: scratch dir: {detail}
+
+## ffi-install-manifest-write-failed
+
+ipe install: manifest write failed: {detail}
+
+## ffi-install-manifest-chunk-write-failed
+
+ipe install: manifest chunk write failed: {detail}
+
+## ffi-install-wrapper-crate
+
+ipe install: wrapper crate `{path}`: {detail}
+
+## ffi-install-project-root
+
+ipe install: project root: {detail}
+
+## ffi-install-wrapper-outside-root
+
+ipe install: wrapper crate `{path}` resolves to {resolved} — outside the project root
+
+## ffi-install-wrapper-not-utf8
+
+ipe install: wrapper crate path `{path}` is not UTF-8
+
+## ffi-regen-invalid-json
+
+ffi regen: invalid inspector JSON: {detail}
+
+## ffi-regen-unexpected-shape
+
+ffi regen: unexpected inspector output shape: {output}
+
+## ffi-regen-item-unnamed
+
+ffi regen: inspector item has no `name` or `pkg` field: {item}
+
+## ffi-install-invalid-json
+
+ipe install: invalid inspector JSON: {detail}
+
+## ffi-install-unexpected-shape
+
+ipe install: unexpected inspector output shape: {output}
+
+## ffi-define-crate-ambiguous
+
+ipe: [[rust.define.{kind}]] `{name}` has no `crate` key but the manifest lists more than one [rust.dependencies] crate — add `crate = "<name>"` to say which crate it augments
+
+## ffi-inspection-not-object-detail
+
+ipe: inspection JSON is not an object: {detail}
+
+## ffi-inspection-not-object
+
+ipe: inspection JSON is not an object
+
+## ffi-inspection-functions-not-array
+
+ipe: inspection `functions` is not an array
+
+## ffi-opaque-unknown-type
+
+foreign `{name}`: `Opaque "{rust_type}"` names a type crate `{krate}` does not report — it is not an inspected type, so a handle over it cannot be minted (check the spelling, or that the crate exposes the type)
+
+## ffi-opaque-is-transparent
+
+foreign `{name}`: `Opaque "{rust_type}"` names a type the inspector surfaced TRANSPARENTLY (a value record/union), not an opaque handle — declare the Ipê record/ADT and let the inspector shape-match it instead of an `Opaque`
+
+## ffi-opaque-without-path
+
+foreign `{name}`: the inspector reported `{rust_type}` without a Rust path — it cannot be resolved to a handle
+
+## ffi-opaque-declared-twice
+
+foreign `{name}`: declared twice over different crate types — a handle nominal names exactly one Rust type
+
+## located-refusal
+
+{file}:{line}:{col}: {reason}
+
+# ipe init
+
+## init-shape-fixed
+
+ipe init: this directory already holds a `{existing}` project (its `src/Main.ipe` pins the shape), but you asked for `{stated}`. A program's shape is fixed by the head of `main`, so `init` will not reshape it. Edit `src/Main.ipe` to change shape, or scaffold the new shape in a fresh directory.
+
+## init-shape-disagrees
+
+ipe init: shape positional `{positional}` and `--shape {flag}` disagree — write the shape once
+
+## init-runtime-needs-web
+
+ipe init: `{runtime}` is a web runtime, but you asked for a `{shape}` project. Only the `web` shape has a runtime choice (served vs solo) — every other shape runs one way. Drop the runtime word.
+
+## init-unknown-shape
+
+ipe init: unknown shape `{word}` — expected: script, tui, cli, worker, server, web
+
+## init-unknown-runtime
+
+ipe init: unknown runtime `{word}` — the web runtimes are: served (the default), solo
+
+## init-unknown-shape-choice
+
+ipe init: unknown shape `{word}` — expected 1-6 or one of: web, tui, cli, worker, server, script
+
+## init-unknown-runtime-choice
+
+ipe init: unknown runtime `{word}` — expected 1-2 or one of: served, solo
+
+## init-no-project-name
+
+init: cannot derive a project name from target {target}
+
+# ipe login
+
+## login-verification-url-refused
+
+GitHub returned a verification URL that is not https on github.com — refusing to open it
+
+## login-code-expired-before-approval
+
+the authorization code expired before you approved it — run `ipe login` again
+
+## login-token-malformed
+
+GitHub returned a token with unexpected characters
+
+## login-denied
+
+authorization was denied on GitHub
+
+## login-code-expired
+
+the authorization code expired — run `ipe login` again
+
+## login-github-reported
+
+GitHub reported `{status}`
+
+## login-response-unrecognised
+
+GitHub's response had neither a token nor a recognised status
+
+## login-curl-unavailable
+
+could not run `curl` (needed for the GitHub OAuth request): {detail}
+
+## login-curl-wait-failed
+
+the OAuth request to GitHub failed while waiting for curl: {detail}
+
+## login-request-failed
+
+the OAuth request to GitHub failed: {detail}
+
+## login-response-not-json
+
+could not parse GitHub's response as JSON: {detail}
+
+## login-response-missing
+
+GitHub's response was missing `{key}`
+
+## login-config-dir-unknown
+
+could not determine a config directory (set HOME or XDG_CONFIG_HOME)
+
+## login-create-failed
+
+could not create {path}: {detail}
+
+## login-write-failed
+
+could not write {path}: {detail}
+
+## login-move-failed
+
+could not move the token into place at {path}: {detail}
+
+## login-remove-failed
+
+could not remove {path}: {detail}
+
+# Packages
+
+## pkg-invalid-requirement
+
+ipe add: `{requirement}` is not a valid version requirement: {detail}
+
+## pkg-usage
+
+usage: ipe {command} <package>[@<version>]
+
+## publish-fork-owner-unknown
+
+ipe package publish: could not infer your GitHub fork owner from the source URL — pass `--fork <github-user>` (the owner of your fork of the index).
+
+## publish-no-manifest
+
+ipe package publish: no `package.ipe` in `{path}` — publish operates on a publishable Ipê package, which needs a manifest
+
+## publish-not-a-package
+
+ipe package publish: `{path}` is neither an Ipê project directory nor a package.ipe
+
+## publish-no-version
+
+ipe package publish: `{name}` declares no `version = "…"` — publish records the version being published, so the manifest must name one.
+
+## publish-source-refused
+
+ipe package publish: the source URL is not accepted — {detail}
+
+## publish-rev-refused
+
+ipe package publish: the revision is not accepted — {detail}
+
+## publish-rev-not-sha
+
+ipe package publish: `--rev` resolved to a non-SHA: {detail}
+
+## publish-head-not-sha
+
+ipe package publish: HEAD did not resolve to a full SHA: {detail}
+
+## publish-fresh-refused
+
+ipe package publish: `--fresh` is only permitted for the blessed publisher on a reserved-namespace package (the disposable smoke probe); it would otherwise erase `{name}`'s published history. Publish a new version without `--fresh` instead.
+
+# Build and run
+
+## run-main-anchor-absent
+
+ipe build: the emitted `fn main` anchor is absent, so the capability floor cannot be retained past linker GC — refusing to write an unenforceable artifact
+
+## run-profile-unparsable
+
+{code}: {detail} — refusing to run (a profile that does not parse is not honored)
+
+## run-floor-unreadable
+
+{code}: the binary carries no readable capability floor — refusing to run an artifact whose floor cannot be verified
+
+## build-entry-not-main
+
+program entry module `{module}` is not yet buildable — a declared `programs` entry outside module `Main` type-checks (`ipe type-check`) but native emission still assumes a `Main` entry. Name the entry file `Main.ipe`, or track the multi-program emit follow-up
+
+## pack-retired
+
+ipe pack has been retired — app bundling is now the delivery grammar. Use `ipe build web desktop` / `ipe build web ios` / `ipe build web android` for a fast dev bundle, or `ipe release web desktop|ios|android` for a production distributable. For the OS-permission dry-run, use `ipe build --emit-permissions <ios|macos|android>`.
+
+## build-binary-missing
+
+ipe build: expected binary at {path} — cargo build succeeded but the binary is missing
+
+## release-binary-missing
+
+ipe release: expected binary at {path} — cargo build succeeded but binary is missing
+
+## release-app-binary-missing
+
+ipe release: expected app binary at {path} — cargo build succeeded but binary is missing
+
+## release-workspace-root-unknown
+
+ipe release: cannot locate workspace root (no Cargo.toml with [workspace] found in any parent directory)
+
+## wasm-bindgen-failed
+
+wasm-bindgen failed (exit {code}); ensure wasm-bindgen-cli {version} is installed: cargo install wasm-bindgen-cli --version {version}
+
+## wasi-artifact-missing
+
+the wasm32-wasip1 build reported no `.wasm` artifact for {dir} — cargo's JSON message stream carried no `compiler-artifact` naming the module
+
+## record-no-session
+
+ipe run --record: {name} has no recordable session — recording captures the update loop of a `Cli.tea` or `Worker.tea` app
+
+## record-native-only
+
+ipe run --record: records a native run only — drop `--target wasi`
+
+## record-jailed
+
+ipe run --record: a native-bearing program runs jailed, where the session log cannot be written — record a pure Ipê build of the app
+
+## program-exited
+
+{program} exited with code {code}
+
+## exec-no-artifact-dir
+
+ipe exec: no artifact directory at {dir}
+
+## exec-no-binary
+
+ipe exec: no built binary at {path} — run `ipe build` first
+
+## exec-profile-missing
+
+ipe exec: {path} embeds a capability floor but carries no ipe.profile — the artifact is incomplete or tampered; refusing to run native code without its jail profile
+
+## cargo-metadata-failed
+
+cargo metadata failed in {dir}: {detail}
+
+## cargo-metadata-unparsable
+
+cargo metadata emitted unparseable JSON: {detail}
+
+## cargo-metadata-no-target-dir
+
+cargo metadata reported no target_directory
+
+## explain-moved
+
+`ipe explain` has moved: use `ipe doc <key>` instead
+
+Examples:
+ipe doc IPE-L0107   look up a diagnostic code
+ipe doc case        look up a language construct
+ipe doc List.map    look up a stdlib symbol
+ipe doc version     look up a command
+
+## app-binary-missing
+
+expected app binary at {path} — cargo build succeeded but the binary is missing
+
+## wasm-ipe-binary-unknown
+
+cannot locate the ipe binary to build wasm: {detail}
+
+## mobile-wasm-build-failed
+
+the `--target wasm` build failed (exit {code}) — the mobile shell hosts that bundle, so it must build first
+
+## emit-permissions-failed
+
+ipe {verb} --emit-permissions: {detail}
+
+## package-validate-entry-single-path
+
+ipe package validate-entry: expected a single entry-file path
+
+## audit-entry-nothing-new
+
+ipe package audit-entry: `{name}` — every version in the submitted entry is already in the baseline index; nothing new to audit
+
+## upgrade-unsupported-platform
+
+upgrade: not supported on this platform — run the installer manually:
+  {command}
+
+## upgrade-installer-launch-failed
+
+upgrade: cannot launch the installer (needs `sh` and `curl`): {detail}
+
+## upgrade-installer-wait-failed
+
+upgrade: the installer could not be waited on: {detail}
+
+## upgrade-installer-failed
+
+upgrade: the installer exited non-zero — nothing was changed
+
+# Command outcomes
+
+## type-check-ok
+
+No type errors — this program type-checks.
+
+## upgrade-up-to-date
+
+ipe {version} — already the latest release
+
+## upgrade-feed-unreachable
+
+couldn't reach the release feed — check your connection
+
+## upgrade-available
+
+ipe {current} → {latest} available
+
+## upgrade-confirm
+
+Upgrade now? [Y/n]
+
+## release-embedded
+
+released → {path} (single self-jailing binary; run `--capabilities` to audit)
+
+## release-bundled
+
+released (bundle) → {path} (run `./ipe-wrapper -- <args>`; WARNING: ipe-app can be run directly, bypassing the sandbox — prefer embed mode for production)
+
+# Consent refusals
+
+## consent-item
+
+  = {item}
+
+## web-consent-header
+
+error[IPE-S0002]: this program reaches a browser web capability the app has not granted
+
+## web-consent-disclosure
+
+`{wire}` disclosed by {via}
+
+## web-consent-disclosure-unattributed
+
+`{wire}` disclosed by a module the build could not attribute
+
+## web-consent-remedy
+
+  = a web capability is granted ONLY by the top-level app's package.ipe; a dependency
+    discloses but cannot self-authorise. Grant it after review by adding the axis to
+    `accept = [ … ]` under [capabilities] in package.ipe, or drop the dependency.
+
+## native-ffi-consent-header
+
+error[IPE-S0003]: this program crosses into native `Rust.` code the app has not granted
+
+## native-ffi-crossing
+
+`Rust.{krate}` crossed by {via}
+
+## native-ffi-crossing-unattributed
+
+a native crossing the build could not attribute to a crate
+
+## native-ffi-consent-remedy
+
+  = a native crossing is granted ONLY by the top-level app's package.ipe; a dependency
+    crosses but cannot self-authorise. Its true effects are opaque to Ipê and
+    contained at run by the OS jail, but the crossing itself needs the consumer's
+    consent. Grant it after review by adding `native-ffi` to `declared = [ … ]` under
+    [capabilities] in package.ipe, or drop the dependency.
+
+## control-model-consent-refusal
+
+error[IPE-S0004]: `{entry_module}` runs the `{model}` control model, which the declared `acceptsControl` set does not cover
+  = the package opted into control-model consent by declaring `acceptsControl`,
+    so that set must cover the program's actual control model; it does not
+    list `{model}`, so the declared acceptance is stale.
+  = cover it after review by adding `{ctor}` to `acceptsControl = [ … ]`
+    under [capabilities] in package.ipe, or switch the entry to a listed
+    control model.
+
+## permission-consent-header
+
+error[IPE-P0001]: the packaged {platform} manifest declares OS permission(s) the app has not accepted
+
+## permission-consent-remedy
+
+  = an OS permission is DERIVED from the app's `accepts` set, never hand-added; a
+    permission with no backing accepted web capability cannot ship. Grant the backing
+    capability after review by adding the axis to `accepts = [ … ]` under
+    [capabilities] in package.ipe, or remove the permission from the override.

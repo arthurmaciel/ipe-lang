@@ -444,13 +444,9 @@ fn guard_rerun_conflict(
         return Ok(());
     };
     if stated != existing {
-        return Err(CliError::UsageOwned(format!(
-            "ipe init: this directory already holds a `{}` project (its `src/Main.ipe` pins the \
-             shape), but you asked for `{}`. A program's shape is fixed by the head of `main`, so \
-             `init` will not reshape it. Edit `src/Main.ipe` to change shape, or scaffold the new \
-             shape in a fresh directory.",
-            existing.label(),
-            stated.label()
+        return Err(CliError::UsageOwned(text::init_shape_fixed(
+            &existing.label(),
+            &stated.label(),
         )));
     }
     // `resolved_shape` equals `stated` here (a stated shape is used verbatim); the
@@ -565,10 +561,9 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     // if both are present they must name the same shape.
     let shape = match (shape_positional, shape_flag) {
         (Some(p), Some(f)) if p != f => {
-            return Err(CliError::UsageOwned(format!(
-                "ipe init: shape positional `{}` and `--shape {}` disagree — write the shape once",
-                p.label(),
-                f.label()
+            return Err(CliError::UsageOwned(text::init_shape_disagrees(
+                &p.label(),
+                &f.label(),
             )));
         }
         (Some(s), _) | (_, Some(s)) => Some(s),
@@ -580,12 +575,9 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
     if let (Some(rt), Some(sh)) = (runtime_positional, shape)
         && !sh.has_runtime_choice()
     {
-        return Err(CliError::UsageOwned(format!(
-            "ipe init: `{}` is a web runtime, but you asked for a `{}` project. Only the `web` \
-             shape has a runtime choice (served vs solo) — every other shape runs one way. Drop \
-             the runtime word.",
-            rt.label(),
-            sh.label()
+        return Err(CliError::UsageOwned(text::init_runtime_needs_web(
+            &rt.label(),
+            &sh.label(),
         )));
     }
 
@@ -601,11 +593,7 @@ fn parse_init_args(rest: &[String]) -> Result<InitArgs, CliError> {
 /// Parse a shape word positional or flag value into an [`InitShape`], with the
 /// one pedagogical "unknown shape" message.
 fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
-    InitShape::parse(word).ok_or_else(|| {
-        CliError::UsageOwned(format!(
-            "ipe init: unknown shape `{word}` — expected: script, tui, cli, worker, server, web"
-        ))
-    })
+    InitShape::parse(word).ok_or_else(|| CliError::UsageOwned(text::init_unknown_shape(&word)))
 }
 
 /// Parse a runtime word positional into an [`InitRuntime`], with the one
@@ -613,11 +601,8 @@ fn parse_shape_word(word: &str) -> Result<InitShape, CliError> {
 /// accepted for one release and prints a rename hint to stderr — never a silent
 /// acceptance.
 fn parse_runtime_word(word: &str) -> Result<InitRuntime, CliError> {
-    let (runtime, deprecated) = InitRuntime::parse(word).ok_or_else(|| {
-        CliError::UsageOwned(format!(
-            "ipe init: unknown runtime `{word}` — the web runtimes are: served (the default), solo"
-        ))
-    })?;
+    let (runtime, deprecated) = InitRuntime::parse(word)
+        .ok_or_else(|| CliError::UsageOwned(text::init_unknown_runtime(&word)))?;
     if let Some(alias) = deprecated {
         print_runtime_rename_hint(alias, runtime);
     }
@@ -664,9 +649,8 @@ fn wizard_shape() -> Result<InitShape, CliError> {
         "5" | "server" => InitShape::Server,
         "6" | "script" => InitShape::Script,
         other => {
-            return Err(CliError::UsageOwned(format!(
-                "ipe init: unknown shape `{other}` — expected 1-6 or one of: \
-                 web, tui, cli, worker, server, script"
+            return Err(CliError::UsageOwned(text::init_unknown_shape_choice(
+                &other,
             )));
         }
     };
@@ -699,8 +683,8 @@ fn wizard_runtime() -> Result<InitRuntime, CliError> {
             InitRuntime::Solo
         }
         other => {
-            return Err(CliError::UsageOwned(format!(
-                "ipe init: unknown runtime `{other}` — expected 1-2 or one of: served, solo"
+            return Err(CliError::UsageOwned(text::init_unknown_runtime_choice(
+                &other,
             )));
         }
     };
@@ -946,12 +930,7 @@ fn project_name_for(target_dir: &Path) -> Result<String, CliError> {
         .file_name()
         .and_then(|n| n.to_str())
         .map(str::to_owned)
-        .ok_or_else(|| {
-            CliError::UsageOwned(format!(
-                "init: cannot derive a project name from target {}",
-                target_dir.display()
-            ))
-        })?;
+        .ok_or_else(|| CliError::UsageOwned(text::init_no_project_name(&target_dir.display())))?;
     Ok(name)
 }
 

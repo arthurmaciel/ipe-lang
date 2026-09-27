@@ -337,11 +337,9 @@ fn reject_traversing_bundle_root(
     if single_normal {
         return Ok(());
     }
-    Err(super::super::CliError::UsageOwned(format!(
-        "package.ipe: name `{display_name}` cannot be a macOS bundle directory — a bundle root \
-         must be a single path component, but this name introduces a path separator, a `..` \
-         traversal, or an absolute path. Choose a name without `/`, `\\`, or `..`."
-    )))
+    Err(super::super::CliError::UsageOwned(
+        crate::text::bundle_name_not_a_component(&display_name),
+    ))
 }
 
 /// The per-OS icon file a bundle carries, derived from the single source icon.

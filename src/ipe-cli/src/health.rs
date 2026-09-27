@@ -176,12 +176,8 @@ fn cargo_config_path() -> Result<PathBuf, CliError> {
     if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
         return Ok(PathBuf::from(cargo_home).join("config.toml"));
     }
-    let home = home_dir().ok_or_else(|| {
-        CliError::UsageOwned(
-            "health: cannot locate your home directory (neither CARGO_HOME nor HOME is set)"
-                .to_owned(),
-        )
-    })?;
+    let home = home_dir()
+        .ok_or_else(|| CliError::UsageOwned(crate::text::health_home_unknown().to_owned()))?;
     Ok(home.join(".cargo").join("config.toml"))
 }
 
@@ -1571,18 +1567,17 @@ fn apply_one(fix: &Fix) -> Result<String, CliError> {
 /// [`CliError::UsageOwned`] when `argv` is empty, the program cannot be
 /// launched, or it exits non-zero.
 fn run_install(argv: &[String]) -> Result<(), CliError> {
-    let (program, rest) = argv
-        .split_first()
-        .ok_or_else(|| CliError::UsageOwned("health: an install command was empty".to_owned()))?;
-    let status = Command::new(program)
-        .args(rest)
-        .status()
-        .map_err(|e| CliError::UsageOwned(format!("health: could not launch `{program}`: {e}")))?;
+    let (program, rest) = argv.split_first().ok_or_else(|| {
+        CliError::UsageOwned(crate::text::health_install_command_empty().to_owned())
+    })?;
+    let status = Command::new(program).args(rest).status().map_err(|e| {
+        CliError::UsageOwned(crate::text::health_install_launch_failed(&program, &e))
+    })?;
     if status.success() {
         Ok(())
     } else {
-        Err(CliError::UsageOwned(format!(
-            "health: `{program}` exited non-zero — nothing was changed"
+        Err(CliError::UsageOwned(crate::text::health_install_failed(
+            &program,
         )))
     }
 }
@@ -1616,10 +1611,7 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(
     };
 
     let mut doc = existing.parse::<toml_edit::DocumentMut>().map_err(|e| {
-        CliError::UsageOwned(format!(
-            "health: {} is not valid TOML ({e}); refusing to overwrite it",
-            path.display()
-        ))
+        CliError::UsageOwned(crate::text::health_config_not_toml(&path.display(), &e))
     })?;
 
     // Idempotent: if the key already holds exactly this value, no write, no
@@ -1642,10 +1634,9 @@ fn apply_config_edit(path: &Path, key: &[&str], value: &ConfigValue) -> Result<(
     // Parse-verify BEFORE the write becomes live: a render that does not
     // round-trip is a bug, and we roll back rather than write it.
     if rendered.parse::<toml_edit::DocumentMut>().is_err() {
-        return Err(CliError::UsageOwned(format!(
-            "health: the edited config for {} did not re-parse; no change was made",
-            path.display()
-        )));
+        return Err(CliError::UsageOwned(
+            crate::text::health_config_edit_unparsable(&path.display()),
+        ));
     }
 
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {

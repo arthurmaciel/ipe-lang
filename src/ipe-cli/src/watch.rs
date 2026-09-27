@@ -885,15 +885,12 @@ fn run_inner(
                 }
             }
         })
-        .map_err(|e| CliError::UsageOwned(format!("watch: cannot start filesystem watcher: {e}")))?
+        .map_err(|e| CliError::UsageOwned(text::watch_start_failed(&e)))?
     };
     for w in scope.roots_to_watch() {
         notify::Watcher::watch(&mut watcher, w.as_path(), notify::RecursiveMode::Recursive)
             .map_err(|e| {
-                CliError::UsageOwned(format!(
-                    "watch: cannot watch {}: {e}",
-                    w.as_path().display()
-                ))
+                CliError::UsageOwned(text::watch_path_failed(&w.as_path().display(), &e))
             })?;
     }
 
@@ -1608,10 +1605,7 @@ fn run_inner(
                         // asked for that port and it is unavailable.
                         if proxy.is_none() && opts.bluegreen && current_binds_http {
                             let bound = ipe_watch::DevProxy::bind(opts.port).map_err(|e| {
-                                CliError::UsageOwned(format!(
-                                    "watch: cannot bind the blue-green proxy on port {}: {e}",
-                                    opts.port
-                                ))
+                                CliError::UsageOwned(text::watch_proxy_bind_failed(&opts.port, &e))
                             })?;
                             if !opts.quiet {
                                 emit_watch_line(

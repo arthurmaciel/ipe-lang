@@ -563,5 +563,5 @@ fn run_diff_with(rest: &[String], notice: &mut dyn FnMut(&str)) -> Result<(), Cl
 
 /// Parse a semver version argument, mapping a malformed value to a usage error.
 fn parse_version(raw: &str) -> Result<Version, CliError> {
-    Version::parse(raw).map_err(|_| CliError::UsageOwned(format!("diff: invalid version `{raw}`")))
+    Version::parse(raw).map_err(|_| CliError::UsageOwned(text::diff_invalid_version(&raw)))
 }
