@@ -708,7 +708,8 @@ fn read_without_links(base: &Path, parts: &[&str]) -> Option<Vec<u8>> {
         seen = Some(meta);
     }
     let seen = seen.filter(fs::Metadata::is_file)?;
-    let mut file = open_entry(&path)?;
+    let mut file =
+        crate::io_bounded::open_regular(&path, crate::io_bounded::FinalLink::Refuse).ok()?;
     let opened = file.metadata().ok()?;
     if !same_file(&seen, &opened) {
         return None;
@@ -716,22 +717,6 @@ fn read_without_links(base: &Path, parts: &[&str]) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
     Some(bytes)
-}
-
-/// Open `path` read-only, refusing a final symlink and never blocking on a FIFO.
-#[cfg(unix)]
-fn open_entry(path: &Path) -> Option<fs::File> {
-    use rustix::fs::{Mode, OFlags};
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    rustix::fs::open(path, flags, Mode::empty())
-        .ok()
-        .map(fs::File::from)
-}
-
-/// Open `path` read-only.
-#[cfg(not(unix))]
-fn open_entry(path: &Path) -> Option<fs::File> {
-    fs::File::open(path).ok()
 }
 
 /// Whether two metadata records name the same file.

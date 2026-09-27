@@ -144,7 +144,7 @@ fn compile_project(name: &str, files: &[(&str, &str)]) -> Outcome {
         return Outcome::Skip;
     };
     let entry = src.join("Main.ipe");
-    match ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    match ipe::build_loose_file(&entry, &out, &runtime) {
         Ok(()) => Outcome::Accepted("compiled successfully (exit 0)".to_owned()),
         Err(CliError::Pipeline { diag, .. }) => Outcome::Rejected(diag.code().as_str()),
         Err(other) => Outcome::Accepted(format!("non-pipeline error: {other:?}")),

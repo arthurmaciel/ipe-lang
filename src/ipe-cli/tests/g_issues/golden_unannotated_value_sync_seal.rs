@@ -60,7 +60,7 @@ fn unannotated_value_sync_bounds_emitted() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "{GOLDEN}: ipe build must accept the program, got: {built:?}"
@@ -88,7 +88,7 @@ fn unannotated_value_sync_seal_builds() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "{GOLDEN}: ipe build must accept the program, got: {built:?}"

@@ -1,7 +1,7 @@
 use super::{
     BuildOptions, BundleHost, BundleProfile, CliError, RuntimeContext, apply_fixes_cmd,
     attribute_canon_errors, attribute_post_link_error, bluegreen_enabled,
-    build_project_with_options, build_with_sibling_discovery_with_options, bundle_delivery,
+    build_loose_file_with_options, build_project_with_options, bundle_delivery,
     collect_entry_and_siblings, create_source_root, emit_machine_error, emit_permissions,
     find_manifest_for_ipe_file, gate_decoder_pipelines, home_to_source_map, io_err,
     render_capabilities, resolve_analysis_entry, resolve_vendored_runtime_dir, run_version,
@@ -801,14 +801,7 @@ pub fn run_build_body(rest: &[String]) -> Result<BuildSuccess, CliError> {
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
     manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &out_dir,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
+        || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
@@ -1092,14 +1085,7 @@ pub fn run_eject(rest: &[String]) -> Result<(), CliError> {
     }
 
     manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &out_dir,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
+        || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
     // From here on the tree is the user's: ipe drops its ownership marker so no
@@ -1292,14 +1278,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             webview_window: None,
         };
         manifest.as_ref().map_or_else(
-            || {
-                build_with_sibling_discovery_with_options(
-                    &entry_path,
-                    &out_dir,
-                    &runtime_dir,
-                    options.clone(),
-                )
-            },
+            || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
             |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
         )?;
         bundle_wasm(&out_dir)?;
@@ -1377,14 +1356,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
             ..BuildOptions::default()
         };
         manifest.as_ref().map_or_else(
-            || {
-                build_with_sibling_discovery_with_options(
-                    &entry_path,
-                    &out_dir,
-                    &runtime_dir,
-                    options.clone(),
-                )
-            },
+            || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
             |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
         )?;
 
@@ -1469,14 +1441,7 @@ pub fn run_release(rest: &[String]) -> Result<(), CliError> {
         ..BuildOptions::default()
     };
     manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &app_out,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
+        || build_loose_file_with_options(&entry_path, &app_out, &runtime_dir, options.clone()),
         |m| build_project_with_options(m, &app_out, &runtime_dir, options.clone()),
     )?;
 
@@ -2715,14 +2680,7 @@ pub fn run_run_with_args(args: cli_args::RunArgs) -> Result<(), CliError> {
     let out_dir = output.area_path(&[OutputArea::Rust])?;
 
     manifest.as_ref().map_or_else(
-        || {
-            build_with_sibling_discovery_with_options(
-                &entry_path,
-                &out_dir,
-                &runtime_dir,
-                options.clone(),
-            )
-        },
+        || build_loose_file_with_options(&entry_path, &out_dir, &runtime_dir, options.clone()),
         |m| build_project_with_options(m, &out_dir, &runtime_dir, options.clone()),
     )?;
 
@@ -3493,12 +3451,7 @@ pub fn user_sources_for_unsafe_scan(
     {
         return discovered
             .iter()
-            .map(|d| {
-                crate::io_bounded::read_to_string_capped(
-                    &d.path,
-                    crate::io_bounded::SOURCE_READ_CAP,
-                )
-            })
+            .map(|d| crate::io_bounded::read_walked_source(&d.path))
             .collect::<Result<Vec<_>, _>>();
     }
     // Single file (or a manifest that failed to parse — the build will surface
@@ -3724,10 +3677,7 @@ pub fn named_sources_for_web_scan(
         let discovered = project::discover_modules(&manifest.src_root)?;
         let mut out = Vec::with_capacity(discovered.len());
         for m in &discovered {
-            let src = crate::io_bounded::read_to_string_capped(
-                &m.path,
-                crate::io_bounded::SOURCE_READ_CAP,
-            )?;
+            let src = crate::io_bounded::read_walked_source(&m.path)?;
             out.push((m.module_path.join("."), src));
         }
         return Ok(out);

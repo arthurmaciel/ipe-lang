@@ -147,7 +147,7 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
         return;
     };
     let entry = src.join("Main.ipe");
-    match ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    match ipe::build_loose_file(&entry, &out, &runtime) {
         Ok(()) => {}
         Err(CliError::Pipeline { diag, .. }) => {
             assert!(

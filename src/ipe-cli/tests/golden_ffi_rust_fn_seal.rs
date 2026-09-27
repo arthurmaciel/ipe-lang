@@ -174,7 +174,7 @@ fn rust_fn_resolves_without_import_rust_ffi() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_no_ffi_import_out");
     let _ = fs::remove_dir_all(&out);
 
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "Rust.fn must build with only `import Ipe.Ffi.Rust as Rust` (no `import Rust.Ffi`): {err}"
@@ -211,7 +211,7 @@ fn rust_fn_emits_the_shared_exact_carrier_shim() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_out");
     let _ = fs::remove_dir_all(&out);
 
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(false_marker(), "rust-fn fixture must build, got: {err}");
         return;
     }
@@ -279,7 +279,7 @@ fn a_clamp_requiring_rust_fn_is_refused() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_clamp_out");
     let _ = fs::remove_dir_all(&out);
-    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+    let err = ipe::build_loose_file(&entry, &out, &runtime)
         .expect_err("a clamp-requiring native binding must be refused");
     let msg = err.to_string();
     assert!(
@@ -313,7 +313,7 @@ fn a_malformed_rust_fn_is_refused() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_malformed_out");
     let _ = fs::remove_dir_all(&out);
-    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+    let err = ipe::build_loose_file(&entry, &out, &runtime)
         .expect_err("a one-literal Rust.fn must be refused");
     let msg = err.to_string();
     assert!(
@@ -347,7 +347,7 @@ fn a_rust_fn_on_an_uninstalled_crate_is_refused() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_uninstalled_out");
     let _ = fs::remove_dir_all(&out);
-    let err = ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+    let err = ipe::build_loose_file(&entry, &out, &runtime)
         .expect_err("a Rust.fn on an uninstalled crate must be refused");
     let msg = err.to_string();
     assert!(
@@ -380,7 +380,7 @@ fn rust_fn_emitted_crate_builds_and_runs() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_rust_fn_e2e_out");
     let _ = fs::remove_dir_all(&out);
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(false_marker(), "rust-fn fixture must build, got: {err}");
         return;
     }

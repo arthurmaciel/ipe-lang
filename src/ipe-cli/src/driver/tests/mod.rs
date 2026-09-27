@@ -835,7 +835,7 @@ fn emit_web_app_source(hot_appearance: bool, tag: &str) -> Option<String> {
         hot_appearance,
         ..BuildOptions::from_env()
     };
-    let built = build_with_sibling_discovery_with_options(&entry, &out, &runtime, options);
+    let built = build_loose_file_with_options(&entry, &out, &runtime, options);
     assert!(built.is_ok(), "web app must compile ({tag}): {built:?}");
     // Walk `out/src` and concatenate every emitted `.rs` file: the view body
     // (and thus any hoisted `__ipe_lit` table) lands in a per-module file
@@ -919,7 +919,7 @@ fn find_manifest_returns_none_when_absent() {
 }
 
 /// Two-module program: `Main.ipe` calls a helper in sibling `Lib.ipe`.
-/// `build_with_sibling_discovery` must compile both without IPE-N0020.
+/// `build_loose_file` must compile both without IPE-N0020.
 #[test]
 fn sibling_discovery_compiles_two_module_program() {
     let runtime = resolve_runtime();
@@ -950,7 +950,7 @@ fn sibling_discovery_compiles_two_module_program() {
     .expect("write Main.ipe");
 
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &runtime);
     assert!(
         result.is_ok(),
         "two-module program must compile via sibling discovery: {:?}",
@@ -1088,7 +1088,7 @@ fn infer_error_in_dep_module_names_dep_file() {
     // Runtime is never accessed: a type error fires at infer, before lower/emit.
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&main_path, &out, &dummy_runtime);
+    let result = build_loose_file(&main_path, &out, &dummy_runtime);
 
     // Must fail — the program has a type error in Helper.
     assert!(
@@ -1193,7 +1193,7 @@ fn home_discriminant_cross_module_type_error_names_correct_file() {
 
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
     // Must fail — type error in Lib.
     assert!(
@@ -2891,7 +2891,7 @@ fn obligation_error_blames_owning_module_not_narrower_padded_sibling() {
 
     let dummy_runtime = std::env::temp_dir();
     let out = tmp.join("out");
-    let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
+    let result = build_loose_file(&src.join("Main.ipe"), &out, &dummy_runtime);
 
     assert!(
         result.is_err(),

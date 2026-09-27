@@ -92,8 +92,8 @@ pub struct LooseFileSources {
     pub probed_files: Vec<PathBuf>,
 }
 
-/// The outcome of reading one vetted sibling: its path and text, or `None` when it is no regular file.
-type SiblingRead = Result<Option<(PathBuf, String)>, CliError>;
+/// The outcome of reading one vetted sibling: its path and text.
+type SiblingRead = Result<(PathBuf, String), CliError>;
 
 /// Load a loose file plus the transitive closure of sibling modules it imports.
 ///
@@ -104,14 +104,18 @@ type SiblingRead = Result<Option<(PathBuf, String)>, CliError>;
 /// refusing every symlink, and reads from the handle it opened, so a file
 /// swapped after the checks can neither escape `<dir>` nor block the load.
 /// Other platforms reopen the checked path and have no such race guarantee.
-/// An import with no such file (the stdlib, a typo) is left for the compiler
-/// to resolve or report. A sibling that fails to parse is still loaded — the
-/// compiler reports its errors — but contributes no further imports.
+/// An import with no such file (the stdlib, a typo) or reached through a
+/// symlink is left for the compiler to resolve or report. A sibling that
+/// fails to parse is still loaded — the compiler reports its errors — but
+/// contributes no further imports.
 /// `entry_text` shadows the entry's disk bytes (an unsaved editor buffer).
 ///
 /// # Errors
-/// [`CliError::Pipeline`] when the entry does not parse; [`CliError::Io`]
-/// when the entry or a probed module cannot be read;
+/// [`CliError::Pipeline`] when the entry does not parse;
+/// [`CliError::SourceRefused`] when the entry or a probed module is a FIFO,
+/// device, socket or other non-regular file, or lies where the process may
+/// not look (an unreadable or exec-only directory); [`CliError::Io`] when
+/// the entry or a probed module otherwise cannot be read;
 /// [`CliError::FileTooLarge`] when one file passes
 /// [`io_bounded::SOURCE_READ_CAP`]; [`CliError::DiscoveryLimitReached`] when
 /// the import closure exceeds `limits`.
@@ -164,7 +168,11 @@ pub fn resolve_loose_file(
             continue;
         };
         probed_files.push(relative);
-        let Some(sibling) = source_dir.as_ref().and_then(|dir| dir.vet(&module)) else {
+        let vetted = source_dir
+            .as_ref()
+            .map(|dir| dir.vet(&module))
+            .transpose()?;
+        let Some(sibling) = vetted.flatten() else {
             continue;
         };
         if sources.len() >= limits.modules {
@@ -175,9 +183,7 @@ pub fn resolve_loose_file(
         }
         let remaining = limits.bytes.saturating_sub(total_bytes);
         let read = sibling.read(budget_cap(remaining));
-        let Some((path, source)) = charge_budget(read, entry, remaining, limits)? else {
-            continue;
-        };
+        let (path, source) = charge_budget(read, entry, remaining, limits)?;
         total_bytes = total_bytes.saturating_add(source_bytes(&source));
         if total_bytes > limits.bytes {
             return Err(bytes_past_budget(entry, limits));
@@ -302,31 +308,65 @@ impl<'e> SourceDir<'e> {
 
     /// The sibling file for `module`, when every check a read relies on holds.
     ///
-    /// `None` unless every intermediate directory is a real directory (not a
-    /// symlink), the file is a regular file (not a symlink), and it
-    /// canonicalizes inside this directory. The two layers agree: a path the
-    /// no-follow walk in [`VettedSibling::read`] would refuse is refused here
-    /// first, so only a swap after these checks reaches that walk.
-    fn vet<'d>(&'d self, module: &'d [String]) -> Option<VettedSibling<'d>> {
-        let relative = module_file(module)?;
-        let (_, dir_segments) = module.split_last()?;
+    /// `Ok(None)` — the import is left to the compiler — unless every
+    /// intermediate directory is a real directory (not a symlink), the file
+    /// is a regular file (not a symlink), and it canonicalizes inside this
+    /// directory. The two layers agree: a path the no-follow walk in
+    /// [`VettedSibling::read`] would refuse is refused here first, so only a
+    /// swap after these checks reaches that walk.
+    ///
+    /// # Errors
+    /// [`CliError::SourceRefused`] when the probed file exists but is a FIFO,
+    /// device, socket or directory, or when a directory on the way may not
+    /// be searched — a module the process cannot see is refused, never
+    /// mistaken for a missing one.
+    fn vet<'d>(&'d self, module: &'d [String]) -> Result<Option<VettedSibling<'d>>, CliError> {
+        let (Some(relative), Some((_, dir_segments))) = (module_file(module), module.split_last())
+        else {
+            return Ok(None);
+        };
+        let path = self.spelled.join(relative);
         let mut dir = self.spelled.to_path_buf();
         for segment in dir_segments {
             dir.push(segment);
-            if !fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_dir()) {
-                return None;
+            if !lstat_kind(&dir, &path)?.is_some_and(|kind| kind.is_dir()) {
+                return Ok(None);
             }
         }
-        let path = self.spelled.join(relative);
-        let is_regular_file =
-            fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file());
+        let Some(kind) = lstat_kind(&path, &path)? else {
+            return Ok(None);
+        };
+        if kind.is_symlink() {
+            return Ok(None);
+        }
+        if !kind.is_file() {
+            return Err(io_bounded::source_refused(
+                &path,
+                io_bounded::SourceRefusal::NotRegularFile,
+            ));
+        }
         let is_contained =
             fs::canonicalize(&path).is_ok_and(|canonical| canonical.starts_with(&self.canonical));
-        (is_regular_file && is_contained).then_some(VettedSibling {
+        Ok(is_contained.then_some(VettedSibling {
             dir: self,
             segments: module,
             path,
-        })
+        }))
+    }
+}
+
+/// The type of the file at `path` without following a final symlink; `None` when it is absent.
+///
+/// # Errors
+/// [`CliError::SourceRefused`] with [`io_bounded::SourceRefusal::AccessDenied`],
+/// naming `probed`, when a directory on the way may not be searched.
+fn lstat_kind(path: &Path, probed: &Path) -> Result<Option<fs::FileType>, CliError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => Ok(Some(meta.file_type())),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Err(
+            io_bounded::source_refused(probed, io_bounded::SourceRefusal::AccessDenied),
+        ),
+        Err(_) => Ok(None),
     }
 }
 
@@ -343,30 +383,18 @@ struct VettedSibling<'d> {
 impl VettedSibling<'_> {
     /// Read the sibling from the handle the no-follow walk opens, at most `cap` bytes.
     ///
-    /// `None` when the opened file is not a regular file (a FIFO or device
-    /// swapped in after the checks).
-    ///
     /// # Errors
-    /// [`CliError::Io`] when the walk to the file or its read fails;
+    /// [`CliError::SourceRefused`] when the opened file is not a regular file
+    /// (a FIFO or device swapped in after the checks), a symlink was swapped
+    /// in on the way, or the directory handle may not be opened (an exec-only
+    /// directory); [`CliError::Io`] when the walk or the read otherwise fails;
     /// [`CliError::FileTooLarge`] past `cap`.
     fn read(self, cap: u64) -> SiblingRead {
-        let opened = self
+        let file = self
             .open()
-            .and_then(|file| file.metadata().map(|meta| (file, meta.is_file())));
-        let (file, is_file) = match opened {
-            Ok(opened) => opened,
-            Err(source) => {
-                return Err(CliError::Io {
-                    path: self.path,
-                    source,
-                });
-            }
-        };
-        if !is_file {
-            return Ok(None);
-        }
-        io_bounded::read_open_file_capped(file, &self.path, cap)
-            .map(|source| Some((self.path, source)))
+            .map_err(|source| io_bounded::open_error(&self.path, source))?;
+        let file = io_bounded::regular_file(file, &self.path)?;
+        io_bounded::read_open_file_capped(file, &self.path, cap).map(|source| (self.path, source))
     }
 
     /// Open the sibling beneath the directory handle, refusing every symlink.
@@ -484,7 +512,11 @@ mod tests {
     /// The path the resolver's checks vet for `module` under `dir`, if any.
     fn vetted_path(dir: &Path, module: &[String]) -> Option<PathBuf> {
         let source_dir = SourceDir::open(dir)?;
-        source_dir.vet(module).map(|sibling| sibling.path)
+        source_dir
+            .vet(module)
+            .ok()
+            .flatten()
+            .map(|sibling| sibling.path)
     }
 
     /// Read `module` under `dir` skipping the path checks, as a swap after them would.
@@ -746,7 +778,7 @@ mod tests {
             "the path check refuses the symlinked directory"
         );
         assert!(
-            matches!(handle_level, Some(Err(CliError::Io { .. }))),
+            matches!(handle_level, Some(Err(_))),
             "the no-follow walk refuses the symlinked directory"
         );
         let loaded = loaded.expect("entry still loads");
@@ -886,7 +918,7 @@ mod tests {
         );
         assert_eq!(path_level, None, "the path check refuses the escaping path");
         assert!(
-            matches!(handle_level, Some(Err(CliError::Io { .. }))),
+            matches!(handle_level, Some(Err(_))),
             "the no-follow walk refuses the symlinked directory"
         );
     }
@@ -917,8 +949,14 @@ mod tests {
         );
         assert_eq!(path_level, None, "the regular-file check refuses a symlink");
         assert!(
-            matches!(handle_level, Some(Err(CliError::Io { .. }))),
-            "the no-follow open refuses the final symlink"
+            matches!(
+                handle_level,
+                Some(Err(CliError::SourceRefused {
+                    reason: io_bounded::SourceRefusal::NotRegularFile,
+                    ..
+                }))
+            ),
+            "the no-follow open refuses the final symlink as not a regular file"
         );
         let loaded = loaded.expect("entry still loads");
         assert_eq!(user_modules(&loaded), vec![module(&["Main"])]);
@@ -941,26 +979,141 @@ mod tests {
         assert_eq!(none, None, "an empty module path is refused");
     }
 
-    /// A FIFO swapped in after the path checks is refused without blocking the load.
+    /// Make `path` a FIFO.
     #[cfg(unix)]
-    #[test]
     #[allow(clippy::expect_used)] // test fixture: a failed `mkfifo` IS the failure
-    fn sibling_fifo_is_refused_without_blocking() {
-        let dir = scratch_dir("fifo");
-        let fifo = dir.join("Pipe.ipe");
+    fn make_fifo(path: &Path) {
         let made = std::process::Command::new("mkfifo")
-            .arg(&fifo)
+            .arg(path)
             .status()
             .expect("run mkfifo");
         assert!(made.success(), "mkfifo creates the fixture");
+    }
 
-        let path_level = vetted_path(&dir, &module(&["Pipe"]));
+    /// Whether `result` is the typed refusal for `reason`.
+    #[cfg(unix)]
+    fn is_refused<T>(result: &Result<T, CliError>, reason: io_bounded::SourceRefusal) -> bool {
+        matches!(result, Err(CliError::SourceRefused { reason: got, .. }) if *got == reason)
+    }
+
+    /// An imported FIFO is refused by both layers without blocking the load.
+    ///
+    /// Every open is non-blocking, so the test needs no writer and no timeout.
+    #[cfg(unix)]
+    #[test]
+    fn sibling_fifo_is_refused_without_blocking() {
+        let dir = scratch_dir("fifo");
+        let entry = dir.join("Main.ipe");
+        write(
+            &entry,
+            "module Main exposing (main)\n\nimport Pipe\n\nmain = Pipe.x\n",
+        );
+        make_fifo(&dir.join("Pipe.ipe"));
+
+        let path_level = SourceDir::open(&dir).map(|source_dir| {
+            source_dir
+                .vet(&module(&["Pipe"]))
+                .map(|sibling| sibling.map(|vetted| vetted.path))
+        });
         let handle_level = read_unvetted(&dir, &module(&["Pipe"]));
+        let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
         let _ = fs::remove_dir_all(&dir);
-        assert_eq!(path_level, None, "the path check refuses a FIFO");
+        let not_regular = io_bounded::SourceRefusal::NotRegularFile;
         assert!(
-            matches!(handle_level, Some(Ok(None))),
+            path_level.is_some_and(|vetted| is_refused(&vetted, not_regular)),
+            "the path check refuses a FIFO"
+        );
+        assert!(
+            handle_level.is_some_and(|read| is_refused(&read, not_regular)),
             "the handle check refuses a FIFO without reading it"
+        );
+        assert!(
+            is_refused(&loaded, not_regular),
+            "the load refuses an imported FIFO"
+        );
+    }
+
+    /// A FIFO as the entry itself is refused at once, never blocking on a writer.
+    #[cfg(unix)]
+    #[test]
+    fn entry_fifo_is_refused_without_blocking() {
+        let dir = scratch_dir("entry-fifo");
+        let entry = dir.join("Main.ipe");
+        make_fifo(&entry);
+        let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(
+            is_refused(&loaded, io_bounded::SourceRefusal::NotRegularFile),
+            "a FIFO entry is refused as not a regular file"
+        );
+    }
+
+    /// An import under a directory the process may not search is refused, not reported missing.
+    ///
+    /// Skipped when the permission bits are not enforced (running as root).
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: an unchangeable mode IS the failure
+    fn sibling_under_an_unreadable_directory_is_refused_as_access_denied() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch_dir("locked-import");
+        let entry = dir.join("Main.ipe");
+        write(
+            &entry,
+            "module Main exposing (main)\n\nimport Locked.Hidden\n\nmain = Locked.Hidden.y\n",
+        );
+        let locked = dir.join("Locked");
+        write(
+            &locked.join("Hidden.ipe"),
+            "module Locked.Hidden exposing (y)\n\ny = 2\n",
+        );
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+            .expect("lock the directory");
+        let privileged = fs::read_dir(&locked).is_ok();
+        let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&dir);
+        if privileged {
+            eprintln!("skipped: running as root, directory permissions are not enforced");
+            return;
+        }
+        assert!(
+            is_refused(&loaded, io_bounded::SourceRefusal::AccessDenied),
+            "an import the process may not look up is refused as access denied"
+        );
+    }
+
+    /// Siblings in an exec-only directory are refused as access denied, not a raw I/O error.
+    ///
+    /// The entry opens by name, but the directory handle every sibling read
+    /// walks from needs the read bit. Skipped when running as root.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::expect_used)] // test fixture: an unchangeable mode IS the failure
+    fn sibling_in_an_exec_only_directory_is_refused_as_access_denied() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch_dir("exec-only");
+        let entry = dir.join("Main.ipe");
+        write(
+            &entry,
+            "module Main exposing (main)\n\nimport Helper\n\nmain = Helper.x\n",
+        );
+        write(
+            &dir.join("Helper.ipe"),
+            "module Helper exposing (x)\n\nx = 1\n",
+        );
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o311)).expect("drop the read bit");
+        let privileged = fs::read_dir(&dir).is_ok();
+        let loaded = resolve_loose_file(&entry, None, LooseFileLimits::DEFAULT);
+        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o755));
+        let _ = fs::remove_dir_all(&dir);
+        if privileged {
+            eprintln!("skipped: running as root, directory permissions are not enforced");
+            return;
+        }
+        assert!(
+            is_refused(&loaded, io_bounded::SourceRefusal::AccessDenied),
+            "a sibling read from an exec-only directory is refused as access denied"
         );
     }
 }

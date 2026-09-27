@@ -423,7 +423,7 @@ fn and_map_cross_module_annotated_wrapper_accepted() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "an annotated andMap wrapper reused cross-module at two arity-1-safe \
@@ -452,7 +452,7 @@ fn and_map_forwarder_curried_is_ipe_t0014() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -669,7 +669,7 @@ fn and_map_cross_module_untyped_forwarder_curried_rejected() {
     let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,

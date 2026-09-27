@@ -61,7 +61,7 @@ fn assert_ipec_bounds_fn_not_struct(fixture: &str) {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for {fixture}: {:?}",
@@ -109,7 +109,7 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for {fixture}: {:?}",

@@ -49,7 +49,7 @@ fn scan_invisible_cycle_must_not_panic_the_driver() {
     let out = tmp.join("out");
     let entry = src.join("A.ipe");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ipe::build_with_sibling_discovery(&entry, &out, &runtime)
+        ipe::build_loose_file(&entry, &out, &runtime)
     }));
 
     match result {

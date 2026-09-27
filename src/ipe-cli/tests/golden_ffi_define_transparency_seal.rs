@@ -140,7 +140,7 @@ fn define_transparency_emits_the_conversion_seam() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_define_transparency_out");
     let _ = fs::remove_dir_all(&out);
 
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "define-transparency fixture must build, got: {err}"
@@ -202,7 +202,7 @@ fn define_transparency_emitted_crate_builds_and_runs() {
     let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_define_transparency_e2e_out");
     let _ = fs::remove_dir_all(&out);
-    if let Err(err) = ipe::build_with_sibling_discovery(&entry, &out, &runtime) {
+    if let Err(err) = ipe::build_loose_file(&entry, &out, &runtime) {
         assert!(
             false_marker(),
             "define-transparency fixture must build, got: {err}"
@@ -304,7 +304,7 @@ fn value_struct_marshal_refuses_a_mismatched_record_shape() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ffi_value_struct_mismatch_out");
     let _ = fs::remove_dir_all(&out);
 
-    let result = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let result = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         result.is_err(),
         "a record shape that mismatches the marshalled value struct's real \

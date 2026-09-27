@@ -59,7 +59,7 @@ fn i199_ipec_accepts_and_hoists() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for nested_capture_outer_arg: {:?}",
@@ -107,7 +107,7 @@ fn i199_cargo_builds_and_runs() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = crate::support::build_and_run_emitted("nested_capture_outer_arg", &out);

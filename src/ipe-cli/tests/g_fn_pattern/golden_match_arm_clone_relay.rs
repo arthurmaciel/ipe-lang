@@ -45,7 +45,7 @@ fn i222_match_arm_ipec_accepts_and_relays() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "ipe build must succeed for match_arm_clone_relay: {:?}",
@@ -80,7 +80,7 @@ fn i222_match_arm_cargo_builds_and_runs() {
         return;
     };
 
-    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_loose_file(&entry, &out, &runtime);
     assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = crate::support::build_and_run_emitted("match_arm_clone_relay", &out);
