@@ -78,11 +78,11 @@
 //! completion from an already-superseded cycle is silently ignored rather
 //! than raced against the new one.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -430,6 +430,38 @@ pub(crate) struct ResolvedProject {
     /// name via [`ipe_backend_rust::sanitize_cargo_name`]). Empty string
     /// when no manifest is present (sibling-discovery path uses `"ipe-app"`).
     pub(crate) cargo_name: String,
+    /// What the confined watcher observes for this snapshot.
+    pub(crate) scope: ScopeSpec,
+}
+
+/// The inputs a [`ipe_watch::WatchScope`] is built from, per project shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ScopeSpec {
+    /// A manifest project: the manifest's directory, watched recursively.
+    Package(PathBuf),
+    /// A loose file: the entry and the sibling module files its import closure probes.
+    LooseFile {
+        /// The entry `.ipe` file as given on the command line.
+        entry: PathBuf,
+        /// Every probed module file, relative to the entry's directory.
+        module_files: Vec<PathBuf>,
+    },
+}
+
+impl ScopeSpec {
+    /// Build the confined scope this spec describes.
+    ///
+    /// # Errors
+    /// [`ipe_watch::ScopeError`] when the root is missing or the scope is too large.
+    fn build(&self) -> Result<ipe_watch::WatchScope, ipe_watch::ScopeError> {
+        match self {
+            Self::Package(root) => ipe_watch::WatchScope::build(root, root),
+            Self::LooseFile {
+                entry,
+                module_files,
+            } => ipe_watch::WatchScope::loose_file(entry, module_files),
+        }
+    }
 }
 
 /// Resolve `entry` (a `.ipe` file or a project directory) into a fresh
@@ -482,6 +514,9 @@ pub(crate) fn resolve_project_sources(
         // multi-program selection is a reported residual — see
         // `misc/docs/package-programs-design.md`.
         let entry_path = manifest.resolved_entry()?;
+        let package_root = manifest_path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         return Ok(ResolvedProject {
             sources,
             discovered,
@@ -490,6 +525,7 @@ pub(crate) fn resolve_project_sources(
             db_driver: manifest.driver,
             wasm_public_env: manifest.wasm.public_env,
             cargo_name,
+            scope: ScopeSpec::Package(package_root),
         });
     }
 
@@ -507,30 +543,70 @@ pub(crate) fn resolve_project_sources(
         db_driver: ipe_backend_rust::DbDriver::Sqlite,
         wasm_public_env: Vec::new(),
         cargo_name: String::new(),
+        scope: ScopeSpec::LooseFile {
+            entry: entry.to_path_buf(),
+            module_files: loaded.probed_files,
+        },
     })
 }
 
-/// The project root + entry directory a [`ipe_watch::WatchScope`] confines
-/// itself to, derived from one resolved snapshot.
-fn scope_roots(resolved: &ResolvedProject, entry: &Path) -> (PathBuf, PathBuf) {
-    // The manifest's directory when a `package.ipe` is the blame path;
-    // otherwise the blame path IS the entry file, and its parent holds every
-    // module of the loose-file closure (the resolver reads nothing outside it).
-    if resolved.blame_path.file_name().and_then(|n| n.to_str())
-        == Some(crate::package_manifest::PACKAGE_IPE)
-    {
-        let root = resolved
-            .blame_path
-            .parent()
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        (root.clone(), root)
-    } else {
-        let dir = entry
-            .parent()
-            .filter(|p| p.is_dir())
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        (dir.clone(), dir)
+/// The directories a scope hands the OS-level watcher.
+fn watched_roots(scope: &ipe_watch::WatchScope) -> BTreeSet<PathBuf> {
+    scope
+        .roots_to_watch()
+        .iter()
+        .map(|watched| watched.as_path().to_path_buf())
+        .collect()
+}
+
+/// Rebuild a loose-file scope from a fresh snapshot so the watcher follows the current import closure.
+///
+/// Directories the new closure needs are watched before the swap and
+/// directories it dropped are unwatched after it; a package scope is
+/// recursive and never changes. A scope that fails to build keeps the
+/// previous one in force, and a directory that fails to watch is logged.
+/// Returns whether a directory was added: an event inside it between the
+/// snapshot's read and the watch taking effect went unobserved, so the
+/// caller resolves once more.
+///
+/// The scope lock is never held across a watcher call, since the watcher's
+/// event thread takes the same lock.
+fn rescope(
+    watcher: &mut notify::RecommendedWatcher,
+    shared: &RwLock<ipe_watch::WatchScope>,
+    spec: &ScopeSpec,
+) -> bool {
+    if matches!(spec, ScopeSpec::Package(_)) {
+        return false;
     }
+    let next = match spec.build() {
+        Ok(next) => next,
+        Err(e) => {
+            emit_watch_line(
+                &crate::style::TerminalSafe::sanitize(&format!("[ipe watch] {e}")),
+                WatchRole::Failure,
+            );
+            return false;
+        }
+    };
+    let previous = watched_roots(&shared.read().unwrap_or_else(PoisonError::into_inner));
+    let current = watched_roots(&next);
+    let mode = next.recursive_mode();
+    let mut added = false;
+    for dir in current.difference(&previous) {
+        match notify::Watcher::watch(watcher, dir, mode) {
+            Ok(()) => added = true,
+            Err(e) => emit_watch_line(
+                &crate::style::TerminalSafe::sanitize(&text::watch_path_failed(&dir.display(), &e)),
+                WatchRole::Failure,
+            ),
+        }
+    }
+    *shared.write().unwrap_or_else(PoisonError::into_inner) = next;
+    for dir in previous.difference(&current) {
+        let _ = notify::Watcher::unwatch(watcher, dir);
+    }
+    added
 }
 
 /// One event on the orchestrator's unified channel. Carries a `generation`
@@ -755,9 +831,9 @@ fn run_inner(
     external_stop: Option<mpsc::Receiver<()>>,
 ) -> Result<(), CliError> {
     let initial = resolve_project_sources(&opts.entry, None)?;
-    let (root_dir, entry_dir) = scope_roots(&initial, &opts.entry);
-
-    let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
+    let scope = initial
+        .scope
+        .build()
         .map_err(|e| CliError::UsageOwned(e.to_string()))?;
     if !opts.quiet {
         emit_watch_line(
@@ -771,8 +847,11 @@ fn run_inner(
     }
 
     let (raw_tx, raw_rx) = mpsc::channel::<PathBuf>();
+    let recursive_mode = scope.recursive_mode();
+    let initial_roots = watched_roots(&scope);
+    let shared_scope = Arc::new(RwLock::new(scope));
     let mut watcher = {
-        let scope = scope.clone();
+        let scope = Arc::clone(&shared_scope);
         notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let Ok(event) = res else { return };
             // Reject non-mutating ACCESS events (open/read/execute) and the
@@ -834,6 +913,7 @@ fn run_inner(
             {
                 return;
             }
+            let scope = scope.read().unwrap_or_else(PoisonError::into_inner);
             for path in event.paths {
                 if scope.is_relevant(&path) {
                     let _ = raw_tx.send(path);
@@ -842,11 +922,9 @@ fn run_inner(
         })
         .map_err(|e| CliError::UsageOwned(text::watch_start_failed(&e)))?
     };
-    for w in scope.roots_to_watch() {
-        notify::Watcher::watch(&mut watcher, w.as_path(), notify::RecursiveMode::Recursive)
-            .map_err(|e| {
-                CliError::UsageOwned(text::watch_path_failed(&w.as_path().display(), &e))
-            })?;
+    for dir in &initial_roots {
+        notify::Watcher::watch(&mut watcher, dir, recursive_mode)
+            .map_err(|e| CliError::UsageOwned(text::watch_path_failed(&dir.display(), &e)))?;
     }
 
     warn_if_memory_store();
@@ -1080,6 +1158,9 @@ fn run_inner(
                         continue;
                     }
                 };
+                if rescope(&mut watcher, &shared_scope, &resolved.scope) {
+                    schedule_resolve_retry(&evt_tx);
+                }
 
                 let mut sources = resolved.sources;
                 let mut discovered = resolved.discovered;
@@ -3141,8 +3222,8 @@ fn find_executable_path(cargo_json_stdout: &str) -> Option<PathBuf> {
 mod tests {
     use super::{
         AppearanceRoute, BuildAccel, Command, Duration, OrchestratorEvent, RESOLVE_RETRY_DELAY,
-        RebuildTimings, ResolvedProject, appearance_route, apply_build_accel_env, child_env,
-        choose_build_accel, compile_failed_frame, dir_has_dep_rlib, emitted_binds_http,
+        RebuildTimings, ResolvedProject, ScopeSpec, appearance_route, apply_build_accel_env,
+        child_env, choose_build_accel, compile_failed_frame, dir_has_dep_rlib, emitted_binds_http,
         emitted_is_tui, emitted_is_web, env_flag_on, first_error_line, mint_hot_token, mpsc,
         push_control_appearance, resolve_project_sources, schedule_resolve_retry,
         send_control_frame, spawn_command, strip_ansi, watch_status_body,
@@ -3915,8 +3996,27 @@ mod tests {
         )
         .expect("rewrite entry");
         let after = resolve_project_sources(&entry, None);
+        let after_scope = after.as_ref().map(|resolved| resolved.scope.build());
+        let canon_dir = std::fs::canonicalize(&dir);
         let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
         let _ = std::fs::remove_dir_all(&dir);
+
+        let canon_dir = canon_dir.expect("scratch dir canonicalises");
+        let after_scope = after_scope
+            .expect("loose file re-resolves")
+            .expect("the watch scope builds beside an unreadable directory");
+        let watched: Vec<&Path> = after_scope
+            .roots_to_watch()
+            .iter()
+            .map(ipe_watch::WatchedPath::as_path)
+            .collect();
+        assert_eq!(watched, vec![canon_dir.as_path()], "no directory is walked");
+        assert!(matches!(
+            after_scope.recursive_mode(),
+            notify::RecursiveMode::NonRecursive
+        ));
+        assert!(after_scope.is_relevant(&canon_dir.join("Helper.ipe")));
+        assert!(!after_scope.is_relevant(&canon_dir.join("Stray.ipe")));
 
         let modules = |resolved: &ResolvedProject| -> Vec<Vec<String>> {
             resolved.sources.keys().cloned().collect()
@@ -3930,6 +4030,13 @@ mod tests {
             "the re-resolve picks up the newly imported sibling only"
         );
         assert_eq!(after.entry_path, vec!["Main".to_owned()]);
+        assert_eq!(
+            after.scope,
+            ScopeSpec::LooseFile {
+                entry: entry.clone(),
+                module_files: vec![PathBuf::from("Helper.ipe")],
+            }
+        );
         assert_eq!(after.blame_path, entry);
     }
 }
