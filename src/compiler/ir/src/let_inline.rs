@@ -17,14 +17,17 @@ use crate::{Expr, IrType, Pat};
 /// True exactly when `value` is move-only ([`expr_value_is_non_clone`]),
 /// `body` reads `name` more than once, and no capture-clone of `name` exists
 /// (a `CloneVar` leaf cannot be substituted; see [`scan_free_target`]).
+#[must_use]
 pub fn let_value_is_inlined(name: Symbol, value: &Expr, body: &Expr) -> bool {
     let (occurrences, has_clonevar) = scan_free_target(body, name);
     occurrences > 1 && expr_value_is_non_clone(value) && !has_clonevar
 }
 
-/// The body the emitter evaluates for `let name = value in body`: `body` with
-/// `value` substituted for `name` when [`let_value_is_inlined`] holds, `None`
+/// The body the emitter evaluates for `let name = value in body`.
+///
+/// It is `body` with `value` substituted for `name` when [`let_value_is_inlined`] holds, `None`
 /// when the plain `let` form (value evaluated once, before `body`) is emitted.
+#[must_use]
 pub fn inlined_let_body(name: Symbol, value: &Expr, body: &Expr) -> Option<Expr> {
     let_value_is_inlined(name, value, body).then(|| substitute_var(body.clone(), name, value))
 }
@@ -64,6 +67,7 @@ pub fn expr_value_is_non_clone(expr: &Expr) -> bool {
 }
 
 /// Returns `true` if `ty` is or structurally contains `IrType::Task`.
+#[must_use]
 pub fn ir_type_contains_task(ty: &IrType) -> bool {
     match ty {
         IrType::Task(_) => true,
@@ -76,6 +80,7 @@ pub fn ir_type_contains_task(ty: &IrType) -> bool {
 /// Shadow check used by [`scan_free_target`] / [`substitute_var`] (and the
 /// backend's capture-clone rewrite): does this irrefutable/refutable binder
 /// pattern bind `target`?
+#[must_use]
 pub fn pat_binds_target(pat: &Pat, target: Symbol) -> bool {
     match pat {
         Pat::Var(s) => *s == target,
@@ -110,6 +115,7 @@ pub fn pat_binds_target(pat: &Pat, target: Symbol) -> bool {
 ///   leaf; when this is `true`, `Expr::Let`'s emitter skips inlining and
 ///   keeps the plain `let` form — always correct, just not move-optimized
 ///   for that one binding.
+#[must_use]
 pub fn scan_free_target(expr: &Expr, target: Symbol) -> (usize, bool) {
     let mut count = 0usize;
     let mut has_clonevar = false;
@@ -226,17 +232,13 @@ pub fn scan_free_target_into(
     }
 }
 
-/// Shadow-aware IR substitution: replace every FREE occurrence of
-/// `Expr::Var(target)` in `body` with a clone of `replacement`, stopping
-/// recursion into any subtree where a binder rebinds `target`. Replaces the
-/// AUD-04 textual `replace_word_all(&body_s, &name_s, &replacement)`, which
-/// pattern-matched the RENDERED Rust source by word-boundary only — so a
-/// captured-variable word appearing mid string literal (`"the count is"` →
-/// `"the count.clone() is"`) or matching a record field name
-/// (`RecCount { count: n }` → `RecCount { count.clone(): n }`, invalid Rust)
-/// got corrupted. Operating on the IR instead only ever touches genuine
-/// `Var` leaf nodes — a string literal is an opaque `Expr::Str`, a record
-/// field name is a `Symbol` key never matched against `Expr::Var`.
+/// Shadow-aware IR substitution of `replacement` for every free `Var(target)`.
+///
+/// Recursion stops at any subtree where a binder rebinds `target`. Operating
+/// on the IR, not on rendered Rust text, only ever touches genuine `Var` leaf
+/// nodes — a string literal is an opaque `Expr::Str`, a record field name is a
+/// `Symbol` key never matched against `Expr::Var`.
+#[must_use]
 #[allow(clippy::too_many_lines)] // A recursive tree-walk over a large enum — necessarily long.
 pub fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
     match expr {
