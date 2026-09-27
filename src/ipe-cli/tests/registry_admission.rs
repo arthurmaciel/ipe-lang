@@ -481,6 +481,33 @@ fn precheck_allows_a_reserved_blessed_reset_dropping_versions() {
         .expect("a reserved + attested-blessed reset drops prior versions");
 }
 
+#[test]
+fn precheck_denies_a_reserved_blessed_reset_going_backwards() {
+    // The reset carve-out licenses dropping history, never regressing it: a
+    // reset to smoke.1 over a published smoke.2 is below the greatest baseline
+    // version and must be refused by the monotonicity check.
+    let src = "https://example.invalid/pkg";
+    let baseline = entry_with_publisher(
+        RESERVED_PROBE,
+        BLESSED,
+        vec![version("0.0.0-smoke.2", src, VALID_REV)],
+    );
+    let submitted = entry_with_publisher(
+        RESERVED_PROBE,
+        BLESSED,
+        vec![version("0.0.0-smoke.1", src, VALID_REV)],
+    );
+    let result = index::admission_precheck(&submitted, Some(&baseline), Some(&attested(BLESSED)));
+    let msg = match &result {
+        Err(err) => format!("{err}"),
+        Ok(()) => String::new(),
+    };
+    assert!(
+        msg.contains("not above the greatest published version 0.0.0-smoke.2"),
+        "a backwards reset must be refused by monotonicity: {result:?}"
+    );
+}
+
 /// The admission workflow's attestation of the authenticated PR author `login`.
 fn attested(login: &str) -> AttestedActor {
     AttestedActor::parse(login).expect("login-shaped attestation")

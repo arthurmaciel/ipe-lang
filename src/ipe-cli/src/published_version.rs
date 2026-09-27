@@ -63,11 +63,13 @@ impl fmt::Display for PublishedVersion {
     }
 }
 
-/// Require `candidate` to exceed every version in `published`.
+/// Require `candidate` to be strictly greater than the greatest version in
+/// `published`.
 ///
-/// The index is monotonic: a newly published version, release or prerelease
-/// alike, is strictly greater than every version already published for the
-/// package. An empty `published` (a first publish) admits any candidate.
+/// Comparing against the maximum alone suffices: exceeding the greatest version
+/// exceeds every one. Callers pass the baseline (already-published) versions and
+/// call this once per version new to the submission, release or prerelease
+/// alike. An empty `published` (a first publish) admits any candidate.
 ///
 /// # Errors
 /// [`VersionRefusal::NotAboveGreatest`] naming the greatest published version

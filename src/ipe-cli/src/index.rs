@@ -624,9 +624,12 @@ pub fn admission_precheck(
         }
     }
 
-    // Monotonicity: a version new to this submission must exceed every version
-    // already published, so the index never gains a release below its greatest.
-    // The map is ordered, so its last key is the greatest published version.
+    // Monotonicity: each submitted version absent from the baseline is checked
+    // against the greatest baseline version and refused unless strictly above it.
+    // Versions carried over from the baseline are covered by the immutability
+    // check above. This holds for the reserved reset too: a reset may drop
+    // history but never go below the greatest version it drops. The map is
+    // ordered, so its last key is the greatest baseline version.
     let greatest_published = baseline_by_version.keys().next_back().copied();
     for version in &submitted.versions {
         if !baseline_by_version.contains_key(&version.version) {
