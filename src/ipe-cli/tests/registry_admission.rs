@@ -38,7 +38,7 @@ use ipe::resolve::{self, hash_source_tree};
 // ── temp / git helpers ──────────────────────────────────────────────────────
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "ipe-registry-admission-{tag}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()

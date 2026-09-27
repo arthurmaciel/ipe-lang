@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 /// A fresh, unique temp directory for one test (removed first if present).
 fn fresh_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ipe_init_test_{tag}"));
+    let dir =
+        std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("ipe_init_test_{tag}"));
     let _ = fs::remove_dir_all(&dir);
     dir
 }

@@ -18,7 +18,7 @@ use ipe::lockfile::Lockfile;
 use ipe::resolve::{self, hash_source_tree};
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "ipe-add-resolve-{tag}-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
