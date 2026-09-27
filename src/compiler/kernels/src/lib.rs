@@ -145,6 +145,71 @@ pub struct StdlibDecl {
     pub emit: &'static str,
 }
 
+/// The app surface a program's entry `main` pins.
+///
+/// Each TEA surface runs its own loop and owns its own `Cmd` / `Sub` import path
+/// (`Ipe.Tea.<Surface>.{Cmd,Sub}`). The shared `Ipe.Tea.Terminal.{Cmd,Sub}`
+/// re-export names no surface; it serves both terminal surfaces. `Script` is a
+/// `main` that heads on no app entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum AppSurface {
+    /// `Web.tea` / `Web.appRouted` / `Web.appWith` / `Web.embed`.
+    Web,
+    /// A `Web` app delivered to a desktop webview host.
+    WebView,
+    /// `Tui.tea` — the full-screen terminal loop.
+    Tui,
+    /// `Cli.tea` — the line-oriented terminal loop.
+    Cli,
+    /// `Worker.tea` — the view-less loop.
+    Worker,
+    /// A plain `main : Task Error ()`.
+    Script,
+}
+
+impl AppSurface {
+    /// The surface's segment in its `Ipe.Tea.<Surface>` import path.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Web => "Web",
+            Self::WebView => "WebView",
+            Self::Tui => "Tui",
+            Self::Cli => "Cli",
+            Self::Worker => "Worker",
+            Self::Script => "Script",
+        }
+    }
+
+    /// The app surface an `Ipe.Tea.<segment>` path segment names.
+    ///
+    /// `Terminal` is the shared terminal re-export, not a surface, so it (and any
+    /// unrecognised segment) yields `None`.
+    #[must_use]
+    pub fn from_segment(segment: &str) -> Option<Self> {
+        match segment {
+            "Web" => Some(Self::Web),
+            "WebView" => Some(Self::WebView),
+            "Tui" => Some(Self::Tui),
+            "Cli" => Some(Self::Cli),
+            "Worker" => Some(Self::Worker),
+            _ => None,
+        }
+    }
+
+    /// Whether an app on this surface may import `Ipe.Tea.<segment>.{Cmd,Sub}`.
+    ///
+    /// Only its own surface's modules qualify, plus the shared
+    /// `Ipe.Tea.Terminal.{Cmd,Sub}` for either terminal surface.
+    #[must_use]
+    pub fn admits_cmd_sub_of(self, segment: &str) -> bool {
+        Self::from_segment(segment).map_or_else(
+            || segment == "Terminal" && matches!(self, Self::Tui | Self::Cli),
+            |imported| imported == self,
+        )
+    }
+}
+
 /// A reference to the HM type scheme of a kernel, without carrying the scheme
 /// itself.
 ///
@@ -846,14 +911,10 @@ pub enum FieldTag {
     AppRoutes,
     /// `"notFound"` — `Web.tea` only.
     AppNotFound,
-    /// `"onKey"` — `Tui.tea` only.
-    TerminalOnKey,
-    /// `"kind"` — the `KeyEvent` record field.
+    /// `"kind"` — the `KeyEvent` record field (`Tui.Sub.onKey`).
     TerminalKeyKind,
-    /// `"value"` — the `KeyEvent` record field.
+    /// `"value"` — the `KeyEvent` record field (`Tui.Sub.onKey`).
     TerminalKeyValue,
-    /// `"onLine"` — `Cli.tea` only.
-    TerminalOnLine,
     // ── Edge record (Ui.paddingEach / Border.widthEach) ──
     /// `"top"`.
     EdgeTop,
@@ -1941,6 +2002,16 @@ pub enum StdlibKernel {
     /// `Sub.map` — `(a -> msg) -> Sub a -> Sub msg`; the `Sub` twin of
     /// [`Self::CmdMap`].
     SubMap,
+    /// `Tui.Sub.onKey` — `(KeyEvent -> msg) -> Sub msg`, key input as a subscription.
+    ///
+    /// Reachable only through `Ipe.Tea.Tui.Sub`, so only a `Tui.tea` app can
+    /// name it.
+    TuiSubOnKey,
+    /// `Cli.Sub.onLine` — `(String -> msg) -> Sub msg`, line input as a subscription.
+    ///
+    /// Reachable only through `Ipe.Tea.Cli.Sub`, so only a `Cli.tea` app can
+    /// name it.
+    CliSubOnLine,
     // ── TEA: pub/sub ────────────────────────────────────────────────────────
     /// `Cmd.publish` — `"publish"` registered in canon `QUALIFIERS`.
     CmdPublish,
@@ -4200,6 +4271,11 @@ impl StdlibKernel {
             Self::SubEvery => d("Sub", "every", 2, Tea, "sub_every"),
             Self::TimeEvery => d("Time", "every", 2, Tea, "time_every"),
             Self::SubMap => d("Sub", "map", 2, Tea, "sub_map"),
+            // Shape-scoped input subscriptions: declared under the shape-scoped
+            // qualifier (not the canonical `Sub`), so the per-shape `Sub`
+            // re-export clone never carries them into another shape.
+            Self::TuiSubOnKey => d("TeaTuiSub", "onKey", 1, Tea, "tui_sub_on_key"),
+            Self::CliSubOnLine => d("TeaCliSub", "onLine", 1, Tea, "cli_sub_on_line"),
             // ── TEA: reserved pub/sub ────────────────────────────────────────
             // Qualifier "Cmd" IS in qual_vars but "publish"/"publishNoEcho" are
             // NOT yet. Absent from ALL until wired; decl() is still exhaustive.
@@ -5919,6 +5995,8 @@ impl StdlibKernel {
         Self::SubEvery,
         Self::SubMap,
         Self::SubSubscribeTopic,
+        Self::TuiSubOnKey,
+        Self::CliSubOnLine,
         Self::TimeEvery,
         // Ipe.PubSub — Task-shaped top-level publish (qualifier "PubSub" in
         // canon QUALIFIERS; class = Web, not TEA-loop machinery)
@@ -8898,7 +8976,7 @@ impl StdlibKernel {
             tail: RowTailShape::Closed,
         };
         // ── App-entry cfg records. var(0)=model, var(1)=msg, var(2)=page,
-        // var(3)=appExt (open-row tail on Web / Tui.tea). ──
+        // var(3)=appExt (open-row tail on Web.tea). ──
         const TUPLE_A_CMD_B: TyShape = TyShape::Tuple(&[A, CMD_B]);
         const WEB_REQ_TO_TUPLE: TyShape = TyShape::Fun(&WEB_REQ, &TUPLE_A_CMD_B);
         const UNIT_TO_TUPLE: TyShape = TyShape::Fun(&UNIT, &TUPLE_A_CMD_B);
@@ -8921,7 +8999,8 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Open(3),
         };
-        // `Tui.tea` — pinned `onKey : KeyEvent -> msg`, OPEN row.
+        // `Tui.Sub.onKey : (KeyEvent -> msg) -> Sub msg` — the pinned, CLOSED
+        // `KeyEvent` record the runtime's flat `(kind, value)` key event fills.
         const KEY_EVENT: TyShape = TyShape::Record {
             fields: &[
                 (FieldTag::TerminalKeyKind, &STRING),
@@ -8929,19 +9008,24 @@ impl StdlibKernel {
             ],
             tail: RowTailShape::Closed,
         };
-        const ON_KEY_FN: TyShape = TyShape::Fun(&KEY_EVENT, &B);
+        const KEY_EVENT_TO_A: TyShape = TyShape::Fun(&KEY_EVENT, &A);
+        const TUI_SUB_ON_KEY: TyShape = TyShape::Fun(&KEY_EVENT_TO_A, &SUB_A);
+        // `Cli.Sub.onLine : (String -> msg) -> Sub msg`.
+        const CLI_SUB_ON_LINE: TyShape = TyShape::Fun(&STRING_TO_A, &SUB_A);
+        // `Tui.tea` — the canonical four TEA fields, CLOSED: input arrives
+        // through `subscriptions` (`Tui.Sub.onKey`), so no extra field has a
+        // denotation and a stray one is refused rather than silently dropped.
         const TERMINAL_SCREEN_CFG: TyShape = TyShape::Record {
             fields: &[
                 (FieldTag::AppInit, &UNIT_TO_TUPLE),
                 (FieldTag::AppUpdate, &UPDATE_FN),
                 (FieldTag::AppView, &VIEW_CELLS_FN),
                 (FieldTag::AppSubscriptions, &SUBS_FN),
-                (FieldTag::TerminalOnKey, &ON_KEY_FN),
             ],
-            tail: RowTailShape::Open(3),
+            tail: RowTailShape::Closed,
         };
-        // `Cli.tea` — `view : model -> Lines msg`, `onLine`, CLOSED.
-        const ON_LINE_FN: TyShape = TyShape::Fun(&STRING, &B);
+        // `Cli.tea` — `view : model -> Lines msg`, the canonical four TEA
+        // fields, CLOSED: line input arrives through `Cli.Sub.onLine`.
         const LINES_B: TyShape = TyShape::Con(BuiltinTag::View, &[PROGRAM_SHAPE_CLI, B]);
         const VIEW_LINES_FN: TyShape = TyShape::Fun(&A, &LINES_B);
         const TERMINAL_LINES_CFG: TyShape = TyShape::Record {
@@ -8950,7 +9034,6 @@ impl StdlibKernel {
                 (FieldTag::AppUpdate, &UPDATE_FN),
                 (FieldTag::AppView, &VIEW_LINES_FN),
                 (FieldTag::AppSubscriptions, &SUBS_FN),
-                (FieldTag::TerminalOnLine, &ON_LINE_FN),
             ],
             tail: RowTailShape::Closed,
         };
@@ -9840,6 +9923,8 @@ impl StdlibKernel {
             Self::SubEvery | Self::TimeEvery => Some(&INT_TO_A_TO_SUB_A),
             Self::SubMap => Some(&SUB_MAP),
             Self::SubSubscribeTopic => Some(&SUB_SUBSCRIBE_TOPIC),
+            Self::TuiSubOnKey => Some(&TUI_SUB_ON_KEY),
+            Self::CliSubOnLine => Some(&CLI_SUB_ON_LINE),
             Self::PubSubPublish | Self::PubSubPublishNoEcho => Some(&PUBSUB_PUBLISH),
             Self::PubSubTopic => Some(&STRING_TO_TOPIC_A),
 
@@ -11672,6 +11757,10 @@ impl StdlibKernel {
             | Self::SubNone
             | Self::SubBatch
             | Self::SubMap
+            // Terminal input is the app's own stdin, read by the shape's loop;
+            // no sandboxed capability beyond the terminal shape itself.
+            | Self::TuiSubOnKey
+            | Self::CliSubOnLine
             | Self::CmdPublish
             | Self::CmdPublishNoEcho
             | Self::SubSubscribeTopic
@@ -13575,6 +13664,45 @@ impl StdlibKernel {
         )
     }
 
+    /// The app surface this app-entry kernel pins, when it is one.
+    #[must_use]
+    pub const fn app_entry_surface(self) -> Option<AppSurface> {
+        match self {
+            Self::WebApp | Self::WebAppRouted | Self::WebAppWith | Self::WebEmbed => {
+                Some(AppSurface::Web)
+            }
+            Self::TerminalAppScreen => Some(AppSurface::Tui),
+            Self::TerminalAppLines => Some(AppSurface::Cli),
+            Self::TeaWorker => Some(AppSurface::Worker),
+            _ => None,
+        }
+    }
+
+    /// The one app surface whose loop reads this shape-owned input subscription.
+    ///
+    /// `Tui.Sub.onKey` is driven only by the `Tui` loop and `Cli.Sub.onLine` only
+    /// by the `Cli` loop; anywhere else the subscription would be silently dead.
+    #[must_use]
+    pub const fn input_surface(self) -> Option<AppSurface> {
+        match self {
+            Self::TuiSubOnKey => Some(AppSurface::Tui),
+            Self::CliSubOnLine => Some(AppSurface::Cli),
+            _ => None,
+        }
+    }
+
+    /// Whether this kernel is emittable only as a saturated call.
+    ///
+    /// Such a kernel's emit arm carries a bridge or a guard (the input
+    /// subscriptions' `KeyEvent` bridge and surface check) that a point-free
+    /// first-class reference would bypass, so the lowerer eta-expands every
+    /// point-free reference to it into `\x -> kernel x` and the backend refuses
+    /// to box it as a bare function value.
+    #[must_use]
+    pub const fn requires_saturated_emit(self) -> bool {
+        self.input_surface().is_some()
+    }
+
     /// `true` when this variant belongs to the `Ipe.CssSafety` leaf
     /// security-kernel family (the `Ipe.Css` backing): `safe_value` /
     /// `safe_prop_name` / `safe_selector` / `strip_style_close_kernel`.
@@ -14927,6 +15055,10 @@ mod tests {
             // only `Web.tea` gains a browser denotation.
             StdlibKernel::TerminalAppLines,
             StdlibKernel::TerminalAppScreen,
+            // Terminal input subscriptions are driven only by the terminal
+            // loops, which never run in a browser.
+            StdlibKernel::TuiSubOnKey,
+            StdlibKernel::CliSubOnLine,
             // Crypto: only the entropy pair (`randomBytes`/`randomToken`) has
             // a wasm substitute; hashing/AEAD/RSA stay denied (M4 scope cut,
             // NOT a qualifier-wide allow — see `wasm_client_available`).

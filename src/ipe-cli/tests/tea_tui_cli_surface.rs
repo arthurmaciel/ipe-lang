@@ -5,25 +5,45 @@
 //! entries are registered in the `env.rs` qualifier catalog and carry
 //! `KernelClass::Terminal` (the one terminal rendering family).
 //!
-//! These tests are COMPILE-ONLY (the `ipe` pipeline writes the emitted project
-//! but `cargo` is never invoked), so they run in CI without `IPE_E2E`.
+//! Terminal input is a subscription (`Tui.Sub.onKey` / `Cli.Sub.onLine`); the
+//! refusals below pin that a stale `onKey` / `onLine` config field and a
+//! wrong-surface input subscription are both rejected at `ipe` time.
+//!
+//! The `ipe` half of every test runs in CI without `IPE_E2E`. The `seal_*`
+//! tests additionally `cargo build` the emitted project under `IPE_E2E=1`, so
+//! every accepted input-subscription shape (point-free, let-bound, lambda,
+//! constructor, helper module) is proven to build, not just to be accepted.
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 fn compile(test_name: &str, source: &str) -> Result<Result<(), ipe::CliError>, BoxError> {
+    compile_files(test_name, &[("Main.ipe", source)])
+}
+
+/// Compile a multi-module program whose entry is `Main.ipe`.
+///
+/// Every `(file name, source)` is written beside the entry.
+fn compile_files(
+    test_name: &str,
+    files: &[(&str, &str)],
+) -> Result<Result<(), ipe::CliError>, BoxError> {
     let ipe_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("tea_surface_{test_name}_ipe"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir)?;
+    for (name, source) in files {
+        std::fs::write(ipe_dir.join(name), source)?;
+    }
     let entry = ipe_dir.join("Main.ipe");
-    std::fs::write(&entry, source)?;
 
     let out_dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("tea_surface_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
     let runtime = ipe::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
-    Ok(ipe::build(&entry, &out_dir, &runtime))
+    Ok(ipe::build_with_sibling_discovery(
+        &entry, &out_dir, &runtime,
+    ))
 }
 
 fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
@@ -87,7 +107,7 @@ view _model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onKey onKey
 
 onKey : KeyEvent -> Msg
 onKey _event =
@@ -96,7 +116,7 @@ onKey _event =
 main =
     Tui.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onKey = onKey
+        , subscriptions = subscriptions
         }
 "#;
 
@@ -131,7 +151,7 @@ view _model =
 
 subscriptions : Model -> Sub Msg
 subscriptions _model =
-    Sub.none
+    Sub.onLine onLine
 
 onLine : String -> Msg
 onLine s =
@@ -140,7 +160,7 @@ onLine s =
 main =
     Cli.tea
         { init = init, update = update, view = view
-        , subscriptions = subscriptions, onLine = onLine
+        , subscriptions = subscriptions
         }
 "#;
 
@@ -226,4 +246,625 @@ fn non_engine_view_tag_is_rejected() -> Result<(), BoxError> {
 #[test]
 fn cli_app_surface_compiles() -> Result<(), BoxError> {
     assert_accepted("cli_app", CLI_APP)
+}
+
+// ── Terminal input is a subscription ────────────────────────────────────────
+
+/// The four-field config closing lines shared by `TUI_APP` and `CLI_APP`.
+///
+/// The two `…_WITH_…` variants still carry an input config field.
+const CFG_TAIL: &str = "        , subscriptions = subscriptions\n        }";
+const CFG_TAIL_WITH_ON_KEY: &str =
+    "        , subscriptions = subscriptions, onKey = onKey\n        }";
+const CFG_TAIL_WITH_ON_LINE: &str =
+    "        , subscriptions = subscriptions, onLine = onLine\n        }";
+
+/// `source` with `from` replaced by `to`, failing if `from` is absent.
+///
+/// A fixture drift then cannot silently turn a refusal test into an acceptance
+/// one.
+fn variant(source: &str, from: &str, to: &str) -> Result<String, BoxError> {
+    if source.contains(from) {
+        Ok(source.replace(from, to))
+    } else {
+        Err(format!("fixture does not contain {from:?}").into())
+    }
+}
+
+/// Assert `source` is REJECTED by the pipeline for any reason (never exit-0).
+fn assert_rejected(test_name: &str, source: &str) -> Result<(), BoxError> {
+    match compile(test_name, source)? {
+        Ok(()) => Err(format!("{test_name}: expected rejection, but ipe accepted").into()),
+        Err(_) => Ok(()),
+    }
+}
+
+/// A `Tui.tea` config still passing `onKey` is refused with IPE-N0052.
+///
+/// Never silently accepted with key input dropped.
+#[test]
+fn tui_on_key_config_field_is_rejected() -> Result<(), BoxError> {
+    let src = variant(TUI_APP, CFG_TAIL, CFG_TAIL_WITH_ON_KEY)?;
+    assert_rejected_code("tui_on_key_field", &src, "IPE-N0052")
+}
+
+/// A `Cli.tea` config still passing `onLine` is refused with IPE-N0052.
+#[test]
+fn cli_on_line_config_field_is_rejected() -> Result<(), BoxError> {
+    let src = variant(CLI_APP, CFG_TAIL, CFG_TAIL_WITH_ON_LINE)?;
+    assert_rejected_code("cli_on_line_field", &src, "IPE-N0052")
+}
+
+/// A config bound to a top-level name is checked too.
+#[test]
+fn cli_on_line_in_top_level_config_is_rejected() -> Result<(), BoxError> {
+    let src = variant(
+        CLI_APP,
+        "main =\n    Cli.tea\n        { init = init, update = update, view = view\n        , subscriptions = subscriptions\n        }",
+        "cfg =\n    { init = init, update = update, view = view\n    , subscriptions = subscriptions, onLine = onLine\n    }\n\nmain =\n    Cli.tea cfg",
+    )?;
+    assert_rejected_code("cli_on_line_top_level_cfg", &src, "IPE-N0052")
+}
+
+/// The config rows are closed, so an extra field is refused.
+///
+/// Never absorbed and ignored.
+#[test]
+fn unknown_terminal_config_field_is_rejected() -> Result<(), BoxError> {
+    let tui = variant(
+        TUI_APP,
+        CFG_TAIL,
+        "        , subscriptions = subscriptions, extra = 1\n        }",
+    )?;
+    assert_rejected("tui_extra_field", &tui)?;
+    // The other surface's input field is just as foreign to this entry.
+    let cli = variant(
+        CLI_APP,
+        CFG_TAIL,
+        "        , subscriptions = subscriptions, onKey = onLine\n        }",
+    )?;
+    assert_rejected("cli_on_key_field", &cli)
+}
+
+/// `Tui.Sub.onKey` in a `Cli` app is refused with IPE-N0035.
+///
+/// A line app has no key stream.
+#[test]
+fn tui_sub_in_cli_app_is_rejected() -> Result<(), BoxError> {
+    let src = variant(CLI_APP, "import Ipe.Tea.Cli.Sub", "import Ipe.Tea.Tui.Sub")?;
+    let src = variant(&src, "Sub.onLine onLine", "Sub.onKey (\\_ -> NoOp)")?;
+    assert_rejected_code("tui_sub_in_cli", &src, "IPE-N0035")
+}
+
+/// `Cli.Sub.onLine` in a `Tui` app is refused with IPE-N0035.
+///
+/// A full-screen app has no line stream.
+#[test]
+fn cli_sub_in_tui_app_is_rejected() -> Result<(), BoxError> {
+    let src = variant(TUI_APP, "import Ipe.Tea.Tui.Sub", "import Ipe.Tea.Cli.Sub")?;
+    let src = variant(&src, "Sub.onKey onKey", "Sub.onLine (\\_ -> NoOp)")?;
+    assert_rejected_code("cli_sub_in_tui", &src, "IPE-N0035")
+}
+
+/// The shared `Ipe.Tea.Terminal.Sub` carries no input subscription.
+///
+/// Naming `onKey` through it is an unknown member.
+#[test]
+fn terminal_sub_has_no_input_subscription() -> Result<(), BoxError> {
+    let src = variant(
+        TUI_APP,
+        "import Ipe.Tea.Tui.Sub",
+        "import Ipe.Tea.Terminal.Sub",
+    )?;
+    assert_rejected_code("terminal_sub_on_key", &src, "IPE-N0005")
+}
+
+/// Any handler expression is accepted.
+///
+/// Covers a lambda, and a key subscription combined with a timer through
+/// `Sub.batch`.
+#[test]
+fn tui_on_key_accepts_any_handler_form() -> Result<(), BoxError> {
+    let lambda = variant(TUI_APP, "Sub.onKey onKey", "Sub.onKey (\\_ -> NoOp)")?;
+    assert_accepted("tui_on_key_lambda", &lambda)?;
+    let batched = variant(
+        TUI_APP,
+        "Sub.onKey onKey",
+        "Sub.batch [ Sub.onKey onKey, Sub.every 1000 NoOp ]",
+    )?;
+    assert_accepted("tui_on_key_batched", &batched)
+}
+
+/// `Cli.Sub.onLine` accepts a constructor directly as its handler.
+#[test]
+fn cli_on_line_accepts_a_constructor_handler() -> Result<(), BoxError> {
+    let src = variant(CLI_APP, "Sub.onLine onLine", "Sub.onLine Line")?;
+    assert_accepted("cli_on_line_ctor", &src)
+}
+
+/// A helper module's `Tui.Sub.onKey` in a `Cli` app is refused with IPE-N0035.
+///
+/// The helper is not the entry, so the entry-module import gate never sees it;
+/// the lowerer's surface gate refuses the reference itself, so it never
+/// compiles into a key subscription the line loop would silently never read.
+#[test]
+fn tui_sub_from_a_helper_module_in_a_cli_app_is_rejected() -> Result<(), BoxError> {
+    let main = variant(
+        CLI_APP,
+        "import Ipe.Tea.Cli as Cli\n",
+        "import Ipe.Tea.Cli as Cli\nimport Keys\n",
+    )?;
+    let main = variant(&main, "Sub.onLine onLine", "Keys.keys NoOp")?;
+    let keys = "module Keys exposing (keys)\n\n\
+                import Ipe.Tea.Tui.Sub as Sub\n\n\n\
+                keys msg =\n    Sub.onKey (\\_ -> msg)\n";
+    let outcome = compile_files(
+        "tui_sub_helper_in_cli",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", keys)],
+    )?;
+    match outcome {
+        Ok(()) => Err("tui_sub_helper_in_cli: expected rejection, but ipe accepted".into()),
+        Err(ipe::CliError::Pipeline { diag, .. }) if diag.code().as_str() == "IPE-N0035" => Ok(()),
+        Err(other) => {
+            Err(format!("tui_sub_helper_in_cli: expected IPE-N0035, got {other:?}").into())
+        }
+    }
+}
+
+/// The emitted Ipê-side Rust of a compiled test program (`main.rs` + `ipe_mods`).
+fn emitted_rust(test_name: &str) -> String {
+    let src = std::env::temp_dir()
+        .join(format!("tea_surface_{test_name}_out"))
+        .join("src");
+    let mut combined = std::fs::read_to_string(src.join("main.rs")).unwrap_or_default();
+    if let Ok(entries) = std::fs::read_dir(src.join("ipe_mods")) {
+        let mut files: Vec<std::path::PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .collect();
+        files.sort();
+        for path in files {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                combined.push('\n');
+                combined.push_str(&text);
+            }
+        }
+    }
+    combined
+}
+
+/// A point-free `Sub.onKey` still emits through the `KeyEvent` bridge.
+///
+/// `List.map Sub.onKey handlers` reifies the kernel as a first-class value;
+/// the lowerer eta-expands it so the saturated emit arm (and its bridge) fires,
+/// instead of boxing the bare runtime function (a `cargo` E0277).
+#[test]
+fn point_free_tui_on_key_emits_the_bridge() -> Result<(), BoxError> {
+    let src = variant(
+        TUI_APP,
+        "import Ipe.Tea.Tui as Tui\n",
+        "import Ipe.Tea.Tui as Tui\nimport Ipe.List as List\n",
+    )?;
+    let src = variant(
+        &src,
+        "Sub.onKey onKey",
+        "Sub.batch (List.map Sub.onKey [ onKey, onKey ])",
+    )?;
+    assert_accepted("point_free_on_key", &src)?;
+    let emitted: String = emitted_rust("point_free_on_key")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if emitted.is_empty() {
+        return Ok(()); // runtime unavailable — structural assertion skipped
+    }
+    if !emitted.contains("tui_sub_on_key(") || !emitted.contains("|kind: String, value: String|") {
+        return Err(
+            format!("point-free Sub.onKey must emit the KeyEvent bridge; got:\n{emitted}").into(),
+        );
+    }
+    if emitted.contains("Box::new(tui_sub_on_key)") {
+        return Err("point-free Sub.onKey must never be boxed as a bare function value".into());
+    }
+    Ok(())
+}
+
+/// A let-bound `Sub.onKey` is eta-expanded the same way and accepted.
+#[test]
+fn let_bound_tui_on_key_is_accepted() -> Result<(), BoxError> {
+    let src = variant(
+        TUI_APP,
+        "Sub.onKey onKey",
+        "let\n        on =\n            Sub.onKey\n    in\n    on onKey",
+    )?;
+    assert_accepted("let_bound_on_key", &src)
+}
+
+/// A point-free `Cli.Sub.onLine` in a helper module of a `Tui` app is refused with IPE-N0035.
+///
+/// The surface gate checks the reference itself, so the point-free form cannot
+/// route around it into a line subscription the key loop never reads.
+#[test]
+fn point_free_cli_sub_from_a_helper_module_in_a_tui_app_is_rejected() -> Result<(), BoxError> {
+    let main = variant(
+        TUI_APP,
+        "import Ipe.Tea.Tui as Tui\n",
+        "import Ipe.Tea.Tui as Tui\nimport Lines\n",
+    )?;
+    let main = variant(&main, "Sub.onKey onKey", "Lines.lines (\\_ -> NoOp)")?;
+    let lines = "module Lines exposing (lines)\n\n\
+                 import Ipe.Tea.Cli.Sub as Sub\n\n\n\
+                 lines =\n    Sub.onLine\n";
+    assert_rejected_files_code(
+        "cli_sub_point_free_helper_in_tui",
+        &[("Main.ipe", main.as_str()), ("Lines.ipe", lines)],
+        "IPE-N0035",
+    )
+}
+
+/// A stray `Tui.tea` in a helper module does not widen a `Cli` app to key input.
+///
+/// The surface is read from the entry's own `main`, never from an app entry
+/// that merely appears in another module.
+#[test]
+fn a_stray_tui_entry_in_a_helper_does_not_widen_a_cli_app() -> Result<(), BoxError> {
+    let main = variant(
+        CLI_APP,
+        "import Ipe.Tea.Cli as Cli\n",
+        "import Ipe.Tea.Cli as Cli\nimport Keys\n",
+    )?;
+    let main = variant(&main, "Sub.onLine onLine", "Keys.keys NoOp")?;
+    let keys = "module Keys exposing (keys, stray)\n\n\
+                import Ipe.Tea.Tui as Tui\n\
+                import Ipe.Tea.Tui.Cmd as Cmd\n\
+                import Ipe.Tea.Tui.Sub as Sub\n\
+                import Ipe.Ui.Cells as Cells\n\n\n\
+                keys msg =\n    Sub.onKey (\\_ -> msg)\n\n\n\
+                stray =\n    Tui.tea\n        { init = \\_ -> ( 0, Cmd.none )\n        \
+                , update = \\_ m -> ( m, Cmd.none )\n        \
+                , view = \\_ -> Cells.text \"x\"\n        \
+                , subscriptions = \\_ -> Sub.none\n        }\n";
+    assert_rejected_files_code(
+        "stray_tui_helper_in_cli",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", keys)],
+        "IPE-N0035",
+    )
+}
+
+/// Assert a multi-module program is REJECTED with exactly `expected`.
+fn assert_rejected_files_code(
+    test_name: &str,
+    files: &[(&str, &str)],
+    expected: &str,
+) -> Result<(), BoxError> {
+    match compile_files(test_name, files)? {
+        Ok(()) => Err(format!("{test_name}: expected {expected}, but ipe accepted").into()),
+        Err(ipe::CliError::Pipeline { diag, .. }) if diag.code().as_str() == expected => Ok(()),
+        Err(other) => Err(format!("{test_name}: expected {expected}, got {other:?}").into()),
+    }
+}
+
+// ── SEAL: every accepted input-subscription shape cargo-builds ──────────────
+
+/// Compile `files` with `ipe`, then under `IPE_E2E` `cargo build` the emitted project.
+///
+/// The build is the SEAL: an input-subscription shape `ipe` accepts must also
+/// build, so a point-free, let-bound, or helper-module reference can never
+/// exit 0 and then fail `cargo` on the bridge closure's `Send + 'static` bound.
+/// Without `IPE_E2E` only the `ipe` half runs.
+fn assert_builds_files(test_name: &str, files: &[(&str, &str)]) -> Result<(), BoxError> {
+    if let Err(e) = compile_files(test_name, files)? {
+        return Err(format!("{test_name}: expected ipe success, got {e:?}").into());
+    }
+    if std::env::var("IPE_E2E").is_err() {
+        return Ok(());
+    }
+    let out_dir = std::env::temp_dir().join(format!("tea_surface_{test_name}_out"));
+    e2e_support::build_rust_binary(test_name, &out_dir)
+        .map(|_| ())
+        .map_err(|e| -> BoxError {
+            format!("{test_name}: ipe accepted but cargo build failed: {e}").into()
+        })
+}
+
+/// [`assert_builds_files`] for a single-module program.
+fn assert_builds(test_name: &str, source: &str) -> Result<(), BoxError> {
+    assert_builds_files(test_name, &[("Main.ipe", source)])
+}
+
+/// `TUI_APP` with `Ipe.List` imported and its subscription body replaced by `subs`.
+fn tui_subscribing(subs: &str) -> Result<String, BoxError> {
+    let src = variant(
+        TUI_APP,
+        "import Ipe.Tea.Tui as Tui\n",
+        "import Ipe.Tea.Tui as Tui\nimport Ipe.List as List\n",
+    )?;
+    variant(&src, "Sub.onKey onKey", subs)
+}
+
+/// `CLI_APP` with `Ipe.List` imported and its subscription body replaced by `subs`.
+fn cli_subscribing(subs: &str) -> Result<String, BoxError> {
+    let src = variant(
+        CLI_APP,
+        "import Ipe.Tea.Cli as Cli\n",
+        "import Ipe.Tea.Cli as Cli\nimport Ipe.List as List\n",
+    )?;
+    variant(&src, "Sub.onLine onLine", subs)
+}
+
+/// `Sub.onKey` mapped point-free over a handler list builds.
+#[test]
+fn seal_tui_on_key_point_free_in_list_map_builds() -> Result<(), BoxError> {
+    let src = tui_subscribing("Sub.batch (List.map Sub.onKey [ onKey, onKey ])")?;
+    assert_builds("seal_tui_list_map", &src)
+}
+
+/// A let-bound `Sub.onKey` applied later builds.
+#[test]
+fn seal_tui_on_key_let_bound_builds() -> Result<(), BoxError> {
+    let src = tui_subscribing("let\n        on =\n            Sub.onKey\n    in\n    on onKey")?;
+    assert_builds("seal_tui_let_bound", &src)
+}
+
+/// `Sub.onKey` with a lambda handler builds.
+#[test]
+fn seal_tui_on_key_lambda_handler_builds() -> Result<(), BoxError> {
+    let src = tui_subscribing("Sub.onKey (\\_ -> NoOp)")?;
+    assert_builds("seal_tui_lambda", &src)
+}
+
+/// `Cli.Sub.onLine` mapped point-free over a handler list builds.
+#[test]
+fn seal_cli_on_line_point_free_in_list_map_builds() -> Result<(), BoxError> {
+    let src = cli_subscribing("Sub.batch (List.map Sub.onLine [ onLine, Line ])")?;
+    assert_builds("seal_cli_list_map", &src)
+}
+
+/// A let-bound `Cli.Sub.onLine` applied later builds.
+#[test]
+fn seal_cli_on_line_let_bound_builds() -> Result<(), BoxError> {
+    let src = cli_subscribing("let\n        on =\n            Sub.onLine\n    in\n    on onLine")?;
+    assert_builds("seal_cli_let_bound", &src)
+}
+
+/// `Cli.Sub.onLine` with a lambda handler builds.
+#[test]
+fn seal_cli_on_line_lambda_handler_builds() -> Result<(), BoxError> {
+    let src = cli_subscribing("Sub.onLine (\\s -> Line s)")?;
+    assert_builds("seal_cli_lambda", &src)
+}
+
+/// `Cli.Sub.onLine` with a constructor handler builds.
+#[test]
+fn seal_cli_on_line_constructor_handler_builds() -> Result<(), BoxError> {
+    let src = cli_subscribing("Sub.onLine Line")?;
+    assert_builds("seal_cli_ctor", &src)
+}
+
+// ── Helper modules exposing an input subscription ───────────────────────────
+
+/// A `Keys` helper exposing point-free `keys` over a polymorphic message.
+const KEYS_POLYMORPHIC: &str = r"module Keys exposing (keys)
+
+import Ipe.Tea.Tui.Sub
+
+type alias KeyEvent = { kind : String, value : String }
+
+keys : (KeyEvent -> msg) -> Sub msg
+keys =
+    Sub.onKey
+";
+
+/// A `Keys` helper exposing point-free `keys` over its own concrete `Msg`.
+const KEYS_CONCRETE: &str = r"module Keys exposing (Msg(..), keys)
+
+import Ipe.Tea.Tui.Sub
+
+type Msg = NoOp
+
+type alias KeyEvent = { kind : String, value : String }
+
+keys : (KeyEvent -> Msg) -> Sub Msg
+keys =
+    Sub.onKey
+";
+
+/// A `Keys` helper exposing an unannotated point-free `keys`.
+const KEYS_UNANNOTATED: &str = r"module Keys exposing (keys)
+
+import Ipe.Tea.Tui.Sub
+
+keys =
+    Sub.onKey
+";
+
+/// A `Keys` helper whose polymorphic `msg` is captured bare into the handler.
+const KEYS_CAPTURED_MSG: &str = r"module Keys exposing (keys)
+
+import Ipe.Tea.Tui.Sub
+
+keys msg =
+    Sub.onKey (\_ -> msg)
+";
+
+/// A `Lines` helper exposing point-free `lines` over a polymorphic message.
+const LINES_POLYMORPHIC: &str = r"module Lines exposing (lines)
+
+import Ipe.Tea.Cli.Sub
+
+lines : (String -> msg) -> Sub msg
+lines =
+    Sub.onLine
+";
+
+/// A `Lines` helper exposing point-free `lines` over its own concrete `Msg`.
+const LINES_CONCRETE: &str = r"module Lines exposing (Msg(..), lines)
+
+import Ipe.Tea.Cli.Sub
+
+type Msg = Line String | NoOp
+
+lines : (String -> Msg) -> Sub Msg
+lines =
+    Sub.onLine
+";
+
+/// A `Lines` helper exposing an unannotated point-free `lines`.
+const LINES_UNANNOTATED: &str = r"module Lines exposing (lines)
+
+import Ipe.Tea.Cli.Sub
+
+lines =
+    Sub.onLine
+";
+
+/// A `Lines` helper whose polymorphic `msg` is captured bare into the handler.
+const LINES_CAPTURED_MSG: &str = r"module Lines exposing (lines)
+
+import Ipe.Tea.Cli.Sub
+
+lines msg =
+    Sub.onLine (\_ -> msg)
+";
+
+/// An entry fixture a helper-module test rewrites to subscribe through the helper.
+struct HelperMain<'a> {
+    /// The entry program.
+    source: &'a str,
+    /// The entry's app import, which the helper import follows.
+    entry_import: &'a str,
+    /// The entry's own `Msg` declaration, dropped when the helper owns `Msg`.
+    own_msg: &'a str,
+    /// The entry's subscription body, replaced by the helper call.
+    own_subs: &'a str,
+}
+
+const TUI_MAIN: HelperMain<'static> = HelperMain {
+    source: TUI_APP,
+    entry_import: "import Ipe.Tea.Tui as Tui\n",
+    own_msg: "type Msg = NoOp\n",
+    own_subs: "Sub.onKey onKey",
+};
+
+const CLI_MAIN: HelperMain<'static> = HelperMain {
+    source: CLI_APP,
+    entry_import: "import Ipe.Tea.Cli as Cli\n",
+    own_msg: "type Msg = Line String | NoOp\n",
+    own_subs: "Sub.onLine onLine",
+};
+
+impl HelperMain<'_> {
+    /// The entry importing `helper` and subscribing through `subs`.
+    ///
+    /// With `exposing`, the helper owns `Msg`, so the entry's own is dropped.
+    fn with(&self, helper: &str, exposing: Option<&str>, subs: &str) -> Result<String, BoxError> {
+        let import = exposing.map_or_else(
+            || format!("import {helper}\n"),
+            |names| format!("import {helper} exposing ({names})\n"),
+        );
+        let src = variant(
+            self.source,
+            self.entry_import,
+            &format!("{}{import}", self.entry_import),
+        )?;
+        let src = if exposing.is_some() {
+            variant(&src, self.own_msg, "")?
+        } else {
+            src
+        };
+        variant(&src, self.own_subs, subs)
+    }
+}
+
+/// A polymorphic point-free helper `keys : (KeyEvent -> msg) -> Sub msg` builds.
+///
+/// The helper's generic `msg` flows into the bridge closure, so it must carry
+/// `Send + 'static` — the shape that exits 0 and then fails `cargo` without it.
+#[test]
+fn seal_tui_polymorphic_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = TUI_MAIN.with("Keys", None, "Keys.keys onKey")?;
+    assert_builds_files(
+        "seal_tui_helper_poly",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", KEYS_POLYMORPHIC)],
+    )
+}
+
+/// A concrete-`Msg` point-free helper `keys : (KeyEvent -> Msg) -> Sub Msg` builds.
+#[test]
+fn seal_tui_concrete_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = TUI_MAIN.with("Keys", Some("Msg(..)"), "Keys.keys onKey")?;
+    assert_builds_files(
+        "seal_tui_helper_concrete",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", KEYS_CONCRETE)],
+    )
+}
+
+/// An unannotated point-free helper `keys = Sub.onKey` builds.
+#[test]
+fn seal_tui_unannotated_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = TUI_MAIN.with("Keys", None, "Keys.keys onKey")?;
+    assert_builds_files(
+        "seal_tui_helper_unannotated",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", KEYS_UNANNOTATED)],
+    )
+}
+
+/// A helper capturing its polymorphic `msg` bare into the key handler builds.
+#[test]
+fn seal_tui_helper_capturing_msg_builds() -> Result<(), BoxError> {
+    let main = TUI_MAIN.with("Keys", None, "Keys.keys NoOp")?;
+    assert_builds_files(
+        "seal_tui_helper_captured",
+        &[("Main.ipe", main.as_str()), ("Keys.ipe", KEYS_CAPTURED_MSG)],
+    )
+}
+
+/// A polymorphic point-free helper `lines : (String -> msg) -> Sub msg` builds.
+#[test]
+fn seal_cli_polymorphic_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = CLI_MAIN.with("Lines", None, "Lines.lines Line")?;
+    assert_builds_files(
+        "seal_cli_helper_poly",
+        &[
+            ("Main.ipe", main.as_str()),
+            ("Lines.ipe", LINES_POLYMORPHIC),
+        ],
+    )
+}
+
+/// A concrete-`Msg` point-free helper `lines : (String -> Msg) -> Sub Msg` builds.
+#[test]
+fn seal_cli_concrete_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = CLI_MAIN.with("Lines", Some("Msg(..)"), "Lines.lines onLine")?;
+    assert_builds_files(
+        "seal_cli_helper_concrete",
+        &[("Main.ipe", main.as_str()), ("Lines.ipe", LINES_CONCRETE)],
+    )
+}
+
+/// An unannotated point-free helper `lines = Sub.onLine` builds.
+#[test]
+fn seal_cli_unannotated_point_free_helper_builds() -> Result<(), BoxError> {
+    let main = CLI_MAIN.with("Lines", None, "Lines.lines onLine")?;
+    assert_builds_files(
+        "seal_cli_helper_unannotated",
+        &[
+            ("Main.ipe", main.as_str()),
+            ("Lines.ipe", LINES_UNANNOTATED),
+        ],
+    )
+}
+
+/// A helper capturing its polymorphic `msg` bare into the line handler builds.
+#[test]
+fn seal_cli_helper_capturing_msg_builds() -> Result<(), BoxError> {
+    let main = CLI_MAIN.with("Lines", None, "Lines.lines NoOp")?;
+    assert_builds_files(
+        "seal_cli_helper_captured",
+        &[
+            ("Main.ipe", main.as_str()),
+            ("Lines.ipe", LINES_CAPTURED_MSG),
+        ],
+    )
 }

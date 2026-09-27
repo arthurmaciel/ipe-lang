@@ -597,6 +597,10 @@ fn name_prose(msg: &NameError) -> String {
              a concrete type — e.g. `update` ignores its message and no view emits one — and a \
              running app needs one concrete model and message type."
         ),
+        NameError::InputFieldIsSubscription { entry, field, .. } => format!(
+            "`{field}` is not a `{entry}` config field — terminal input arrives through \
+             `subscriptions`, like every other event."
+        ),
         NameError::Unknown => "Something is off with a name in this code.".to_string(),
     }
 }
@@ -1659,6 +1663,12 @@ fn name_label(msg: &NameError) -> Option<String> {
              `update : Msg -> Model -> ( Model, Cmd Msg )`"
                 .to_string(),
         ),
+        NameError::InputFieldIsSubscription {
+            field, sub_module, ..
+        } => Some(format!(
+            "remove `{field}` from the config and subscribe instead: \
+             `import {sub_module} as Sub`, then `subscriptions _ = Sub.{field} {field}`"
+        )),
         NameError::RustNameFold { .. } | NameError::Unknown => None,
     }
 }

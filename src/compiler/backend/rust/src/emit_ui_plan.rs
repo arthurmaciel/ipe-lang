@@ -1006,6 +1006,8 @@ pub const fn appearance_literal_args(k: KernelFn) -> &'static [(usize, LitKind)]
         | KernelFn::SubEvery
         | KernelFn::TimeEvery
         | KernelFn::SubMap
+        | KernelFn::TuiSubOnKey
+        | KernelFn::CliSubOnLine
         | KernelFn::CmdPublish
         | KernelFn::CmdPublishNoEcho
         | KernelFn::SubSubscribeTopic

@@ -446,6 +446,8 @@ code! {
     /// inside a definition whose `Model` / `Msg` is still a type variable; the
     /// running app needs one concrete model and message type
     IPE_N0051 = "IPE-N0051", "an app entry is built with a Model or Msg that is still a type variable", "IPE-N0051";
+    /// terminal input passed as an app config field instead of a subscription
+    IPE_N0052 = "IPE-N0052", "terminal input is a subscription, not an app config field", "IPE-N0052";
 
     // -----------------------------------------------------------------------
     // Type (IPE-T####)
