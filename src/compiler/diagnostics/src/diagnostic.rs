@@ -1226,6 +1226,17 @@ pub enum Feature {
     /// non-`Clone`-reuse SEAL, for the effect-carrier payload those two do not
     /// cover. Thread the value linearly (use it once) instead. [IPE-L0135]
     NonCloneValueReuse,
+    /// A `Stream.stream` handler captured a value the per-request re-wrap cannot copy.
+    ///
+    /// The handler is rebuilt for every request and each captured local is
+    /// cloned into it, so a capture must be `Clone`: a destructure-bound
+    /// function, a `Task`/`Cmd`/`Sub`, or a capture whose type could not be
+    /// resolved is refused, as is a partially-applied or point-free
+    /// `Stream.stream` (its handler parameter has no `Clone` carrier). Bind a
+    /// captured function with a plain `let` or take it as a parameter, build a
+    /// captured task inside the handler, and apply `Stream.stream` to
+    /// both arguments at the call. [IPE-L0126]
+    StreamHandlerCapture,
 }
 
 /// The app shape whose entry point rejected an inadmissible Model. Drives the
@@ -2210,6 +2221,7 @@ const fn feature_code(f: Feature) -> Code {
         Feature::RowPolyRecordAnnotation => IPE_L0131,
         Feature::FunctionElementEquality => IPE_L0134,
         Feature::NonCloneValueReuse => IPE_L0135,
+        Feature::StreamHandlerCapture => IPE_L0126,
         Feature::JsPortBoundarySeal => IPE_L0148,
     })
 }

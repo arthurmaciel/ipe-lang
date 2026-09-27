@@ -2249,6 +2249,18 @@ const fn feature_label(f: Feature) -> &'static str {
              restructure so the effect flows through a single continuation \
              [feature: non-clone-value-reuse]"
         }
+        Feature::StreamHandlerCapture => {
+            "a `Stream.stream` handler is rebuilt for every request, so each value \
+             it captures is copied into it — this capture cannot be copied (a \
+             function bound through a tuple/record destructure, a `Task`/`Cmd`/\
+             `Sub`, or a value whose type could not be determined), or \
+             `Stream.stream` is used partially applied / point-free, which leaves \
+             its handler with no copyable form; bind a captured function with a \
+             plain `let f = …` or take it as a parameter, build a captured task \
+             inside the handler, and apply `Stream.stream` to its content \
+             type and handler at the call (`<|` / `|>` are fine) \
+             [feature: stream-handler-capture]"
+        }
     }
 }
 

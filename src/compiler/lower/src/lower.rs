@@ -8520,6 +8520,25 @@ fn reject_point_free_store_kernel(callee: &Callee, span: Span) -> DResult<()> {
     Ok(())
 }
 
+/// Fail-closed SEAL gate for a partial or point-free capture-cloned handler kernel (`Stream.stream`).
+///
+/// The backend re-wraps the handler argument with a per-call `.clone()` of
+/// every free local. In a partial application (eta-expanded) or a point-free
+/// reify, the handler is the synthesized closure's own parameter — a bare
+/// `Box<dyn Fn>` with no `Clone` (E0599) and no `Sync` (E0277) — and the
+/// handler-capture gate never sees the handler's captures. Refuse with
+/// IPE-L0126; a piped `<|` / `|>` spine is flattened to the saturated call
+/// first, so only a genuinely unsaturated use reaches here. A no-op (`Ok`)
+/// for every other callee.
+fn reject_unsaturated_handler_kernel(callee: &Callee, span: Span) -> DResult<()> {
+    if let Callee::Kernel(k) = callee
+        && k.capture_cloned_handler_arg().is_some()
+    {
+        return Err(unsupported(span, Feature::StreamHandlerCapture));
+    }
+    Ok(())
+}
+
 /// Fail-closed SECURITY gate: `Secret.fromString` is legal ONLY as a saturated
 /// one-argument call. The committed-literal ban (IPE-L0150) inspects the
 /// ARGUMENT of a direct `Secret.fromString "…"` call — but that check is
@@ -16775,6 +16794,18 @@ impl<'a> Lowerer<'a> {
         lambda_param_pats: &[&canon::Pattern],
         canon_body: &canon::Expr,
     ) -> Vec<(Symbol, Option<IrType>)> {
+        self.captured_locals_at(lambda_param_pats, canon_body)
+            .into_iter()
+            .map(|(sym, _, ty)| (sym, ty))
+            .collect()
+    }
+
+    /// [`Self::captured_locals`] with each capture's use-site span, for a diagnostic at the capture.
+    fn captured_locals_at(
+        &self,
+        lambda_param_pats: &[&canon::Pattern],
+        canon_body: &canon::Expr,
+    ) -> Vec<(Symbol, Span, Option<IrType>)> {
         let mut outer_bound = BTreeSet::new();
         for &p in lambda_param_pats {
             canon_collect_pat_binds(p, &mut outer_bound);
@@ -16786,7 +16817,7 @@ impl<'a> Lowerer<'a> {
                 let ty = self
                     .region_ty(span)
                     .and_then(|ty| self.ir_type_from_ty(ty, span).ok());
-                (sym, ty)
+                (sym, span, ty)
             })
             .collect()
     }
@@ -16844,7 +16875,11 @@ impl<'a> Lowerer<'a> {
     /// binder site promotes it to the `Arc` carrier; recorded as a deferred
     /// capture, so a binder that cannot promote re-raises IPE-L0126) pass. A
     /// non-`Clone` capture (a destructure-bound `Box<dyn Fn>`, a task, a
-    /// decoder) fails closed with IPE-L0126 instead of a cargo-time E0599.
+    /// decoder) or one whose type did not resolve fails closed with IPE-L0126
+    /// at the capture instead of a cargo-time E0599. The saturated call is the
+    /// only shape that reaches the handler: a piped spine is flattened in
+    /// [`Self::lower_call`] and a partial or point-free use is refused by
+    /// [`reject_unsaturated_handler_kernel`].
     fn reject_nonclone_handler_capture(
         &self,
         callee: &Callee,
@@ -16859,19 +16894,17 @@ impl<'a> Lowerer<'a> {
         else {
             return Ok(());
         };
-        for (sym, ir_ty) in self.captured_locals(&[], handler) {
+        for (sym, capture_span, ir_ty) in self.captured_locals_at(&[], handler) {
             let promotable = self.promotable_fn_binders.borrow().contains(&sym);
-            match classify_handler_capture(self.clone_env(), ir_ty.as_ref(), promotable) {
-                HandlerCapture::CopyLeaf | HandlerCapture::CloneOk => {}
-                HandlerCapture::ArcCarrier => {
-                    self.deferred_fun_captures
-                        .borrow_mut()
-                        .entry(sym)
-                        .or_insert(handler.span);
-                }
-                HandlerCapture::NonClone => {
-                    return Err(unsupported(handler.span, Feature::NonCloneCapture));
-                }
+            let class = classify_handler_capture(self.clone_env(), ir_ty.as_ref(), promotable);
+            if !class.admitted() {
+                return Err(unsupported(capture_span, Feature::StreamHandlerCapture));
+            }
+            if class == HandlerCapture::ArcCarrier {
+                self.deferred_fun_captures
+                    .borrow_mut()
+                    .entry(sym)
+                    .or_insert(capture_span);
             }
         }
         Ok(())
@@ -19432,6 +19465,7 @@ impl<'a> Lowerer<'a> {
                 // never-defined symbol (E0425). See
                 // [`reject_point_free_store_kernel`].
                 reject_point_free_store_kernel(&callee, e.span)?;
+                reject_unsaturated_handler_kernel(&callee, e.span)?;
                 // Fail-closed SECURITY gate: an un-applied `Secret.fromString`
                 // reference (point-free, let-bound, passed as a value) routes
                 // around the committed-literal seal gate (IPE-L0150), which reads
@@ -19973,21 +20007,24 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
 
-        // Flatten a curried call spine ONLY when its head is an accessor-intercept
-        // placeholder kernel used with a piped final argument
-        // (`base |> Store.mask .col pred` desugars to
-        // `Call(Call(Store.mask, [.col, pred]), [base])`): the accessor intercept
-        // keys on a bare `VarKernel` callee saturated to ALL its arguments, so the
-        // nested spine must collapse to `Call(Store.mask, [.col, pred, base])`,
-        // else the kernel is seen only partially applied, reified point-free, and
-        // rejected (IPE-L0146). Restricted to that head on purpose: a GENERAL
+        // Flatten a curried call spine ONLY when its head is a kernel whose
+        // gate must observe the SATURATED call: an accessor-intercept
+        // placeholder (`base |> Store.mask .col pred` desugars to
+        // `Call(Call(Store.mask, [.col, pred]), [base])`; the accessor intercept
+        // keys on a bare `VarKernel` callee saturated to ALL its arguments, else
+        // the kernel is reified point-free and rejected, IPE-L0146), or a
+        // capture-cloned handler kernel (`Stream.stream ct <| h` / `h |>
+        // Stream.stream ct`; the handler-capture gate reads the handler argument
+        // of the saturated call, else the partial is refused, IPE-L0126). The
+        // collapsed spine is exactly the direct saturated call the programmer
+        // could have written. Restricted to those heads on purpose: a GENERAL
         // flatten reshapes the call tree the downstream multi-use / last-use
         // ownership pass reads to decide moves vs clones, mis-placing a move where
         // a later use still needs the value (E0382). Every non-accessor spine is
         // left intact, so ordinary currying (`m |> Maybe.andThen f`) lowers
         // exactly as before.
         if let canon::Expr_::Call(inner_callee, inner_args) = &callee.value
-            && self.spine_head_is_accessor_intercept_placeholder(inner_callee)
+            && self.spine_head_needs_saturated_call(inner_callee)
         {
             let mut merged = inner_args.clone();
             merged.extend_from_slice(args);
@@ -20003,19 +20040,23 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Whether the head of a (possibly curried) call spine resolves to an
-    /// accessor-intercept placeholder kernel (`Store.mask`, `Store.eq`, …). Gates
-    /// the spine-flatten in [`Self::lower_call`] to exactly the kernels whose
-    /// saturated accessor intercept must observe every argument — never a general
+    /// Whether a (possibly curried) call spine's head kernel must be lowered as one saturated call.
+    ///
+    /// True for an accessor-intercept placeholder (`Store.mask`, `Store.eq`, …)
+    /// and a capture-cloned handler kernel (`Stream.stream`). Gates the
+    /// spine-flatten in [`Self::lower_call`] to exactly the kernels whose
+    /// saturated-call gate must observe every argument — never a general
     /// currying reshape (which would disturb the ownership/last-use pass).
-    fn spine_head_is_accessor_intercept_placeholder(&self, callee: &canon::Expr) -> bool {
+    fn spine_head_needs_saturated_call(&self, callee: &canon::Expr) -> bool {
         let mut head = callee;
         while let canon::Expr_::Call(inner, _) = &head.value {
             head = inner;
         }
         matches!(
             self.lower_callee(head),
-            Ok(Callee::Kernel(k)) if k.is_accessor_intercept_placeholder()
+            Ok(Callee::Kernel(k))
+                if k.is_accessor_intercept_placeholder()
+                    || k.capture_cloned_handler_arg().is_some()
         )
     }
 
@@ -21762,6 +21803,7 @@ impl<'a> Lowerer<'a> {
         // never-defined symbol — reject instead. See
         // [`reject_point_free_store_kernel`].
         reject_point_free_store_kernel(&resolved, call_span)?;
+        reject_unsaturated_handler_kernel(&resolved, call_span)?;
         let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
             bug(
                 "ipe_lower::eta_expand_partial",
