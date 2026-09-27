@@ -2324,7 +2324,7 @@ fn reject_unknown_ipe_import_with_candidates(
 /// per [`Env::canonical_stdlib_qualifier`]): any later `Alias.member` reference
 /// surfaces the ordinary `UnknownModule` diagnostic at its use site rather than
 /// resolving against an invented qualifier. This preserves the pre-existing
-/// behaviour for as-yet-unported stdlib modules (e.g. `Ipe.ToString`).
+/// behaviour for as-yet-unported stdlib modules (e.g. `Ipe.Css`).
 ///
 /// # Errors
 /// [`Diagnostic::CompilerBug`] if interning `Ipe` or a canonical name

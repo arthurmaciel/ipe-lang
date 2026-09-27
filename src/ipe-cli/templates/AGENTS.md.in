@@ -415,7 +415,6 @@ app code.
 | `Compression` | `Ipe.Compression` | `gzip`/`gunzip` (RFC 1952) + `zstdCompress`/`zstdDecompress` (RFC 8478). Operates on `String` (Bytes alias). |
 | `Csv` | `Ipe.Csv` | `parse`/`parseWithDelimiter` (returns `Csv = { header, rows }`), `encode`/`encodeWithDelimiter` (RFC 4180 quoting), `parseStreamFromFile`. |
 | `Config` | `Ipe.Config` | Typed TOML/YAML/JSON decoders mirroring `Ipe.Json.Decode`'s shape — `string`/`int`/`float`/`bool`/`nullable`/`field`/`at`/`list`/`succeed`/`fail`/`map`/`andThen`. `decodeToml`/`decodeYaml`/`decodeJson` + `loadFromFile`. |
-| `ToString` | `Ipe.ToString` | `fromInt`/`fromFloat`/`fromBool`/`fromTime` route to canonical kernels — default to `ToString.fromInt n` over memorising per-type kernels. |
 
 **Outbound dial rule** (`Http`, `WebSocket` client): a URL with `\` anywhere, or `@` in its path or fragment, is refused — write `@` as `%40`; an `@` in the query is allowed, but an error for that URL then withholds the host.
 
