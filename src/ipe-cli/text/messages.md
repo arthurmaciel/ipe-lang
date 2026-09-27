@@ -542,11 +542,11 @@ no documentation entry is named `{query}`
 
 ## cli-doc-suggestions-header
 
-closest matches:
+Closest matches:
 
 ## cli-doc-suggestion-line
 
-  ipe doc {key}  — {title} ({kind})
+  ipe doc {key}  {title} ({kind})
 
 ## cli-unknown-code
 

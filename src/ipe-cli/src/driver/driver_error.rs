@@ -690,12 +690,8 @@ impl std::fmt::Display for CliError {
                 f.write_str(&text::cli_doc_not_found(query))?;
                 if !suggestions.is_empty() {
                     write!(f, "\n{}", text::cli_doc_suggestions_header())?;
-                    for s in suggestions {
-                        write!(
-                            f,
-                            "\n{}",
-                            text::cli_doc_suggestion_line(&s.key, &s.title, &s.kind)
-                        )?;
+                    for line in crate::doc_bundle::suggestion_lines(suggestions) {
+                        write!(f, "\n{line}")?;
                     }
                 }
                 Ok(())

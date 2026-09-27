@@ -1074,6 +1074,23 @@ impl DocSuggestion {
     }
 }
 
+/// The lines listing `suggestions` under the doc-miss header, keys in one column.
+#[must_use]
+pub fn suggestion_lines(suggestions: &[DocSuggestion]) -> Vec<String> {
+    let width = suggestions
+        .iter()
+        .map(|s| s.key.chars().count())
+        .max()
+        .unwrap_or(0);
+    suggestions
+        .iter()
+        .map(|s| {
+            let key = format!("{:width$}", s.key);
+            crate::text::cli_doc_suggestion_line(&key, &s.title, &s.kind)
+        })
+        .collect()
+}
+
 /// The suggestions for a query that named no entry.
 ///
 /// The ranked matches, or — when nothing matches any tier — the nearest entries

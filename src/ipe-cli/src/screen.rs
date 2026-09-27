@@ -420,25 +420,15 @@ pub fn error_screen(err: &CliError, color: bool) -> Option<Screen> {
 /// The `ipe doc` miss: the query in the user-error tone, then each suggestion
 /// as the exact command that opens it, with its title as auxiliary text.
 fn doc_not_found(screen: &mut Screen, query: &str, suggestions: &[DocSuggestion]) {
-    screen.line(
-        Tone::UserError,
-        &format!("no documentation entry is named `{query}`"),
-    );
+    screen.line(Tone::UserError, &crate::text::cli_doc_not_found(&query));
     if suggestions.is_empty() {
         return;
     }
-    screen.blank().line(Tone::Text, "Closest matches:");
-    let width = suggestions
-        .iter()
-        .map(|s| s.key.chars().count())
-        .max()
-        .unwrap_or(0);
-    for s in suggestions {
-        let pad = width.saturating_sub(s.key.chars().count());
-        screen.line(
-            Tone::Text,
-            &format!("  ipe doc {}{:pad$}  {} ({})", s.key, "", s.title, s.kind),
-        );
+    screen
+        .blank()
+        .line(Tone::Text, crate::text::cli_doc_suggestions_header());
+    for line in crate::doc_bundle::suggestion_lines(suggestions) {
+        screen.line(Tone::Text, &line);
     }
 }
 
