@@ -8,8 +8,8 @@ use super::{
     emit_process_run_with_call, emit_record, emit_server_call, emit_shared_lambda,
     emit_task_retry_call, emit_tea_call, emit_ui_call, emit_ui_template, emit_update,
     expr_value_is_non_clone, float_literal, free_vars, indent_of, ir_type_is_definitely_copy,
-    kernel_swaps_first_two, op_str, render_type, rust_string_literal, scan_free_target,
-    substitute_var, swapped_container_clone_rewrite,
+    op_str, render_type, rust_string_literal, scan_free_target, substitute_var,
+    swapped_container_clone_rewrite,
 };
 use crate::EmitCtx;
 
@@ -528,7 +528,7 @@ pub fn emit_expr_at(
             // A container-first kernel renders its container before the
             // function closure; clone the function's captures at their container
             // use sites so the closure's capture never reads a moved value.
-            let rewritten_container = swapped_container_clone_rewrite(callee, args, generics);
+            let rewritten_container = swapped_container_clone_rewrite(callee, args);
             let mut parts = Vec::with_capacity(args.len());
             for (i, arg) in args.iter().enumerate() {
                 // Substitute the clone-rewritten container (the second Ipê arg)
@@ -591,7 +591,7 @@ pub fn emit_expr_at(
             // the function first (`Maybe.map f m`). The lowerer keeps the Ipê
             // order; re-point the two arguments here so the runtime call is
             // well-formed.
-            if matches!(callee, Callee::Kernel(k) if kernel_swaps_first_two(*k)) {
+            if callee.evaluates_args_reversed() {
                 parts.reverse();
             }
             Ok(format!("{name}{turbofish}({})", parts.join(", ")))
@@ -745,9 +745,7 @@ pub fn emit_expr_at(
             let effect_s = if targets.is_empty() {
                 emit_expr_at(ctx, effect, indent, child, generics)?
             } else {
-                let row_binders: std::collections::BTreeSet<Symbol> =
-                    generics.row_binders().iter().copied().collect();
-                let effect_rw = clone_targets_in_expr((**effect).clone(), &targets, &row_binders);
+                let effect_rw = clone_targets_in_expr((**effect).clone(), &targets);
                 emit_expr_at(ctx, &effect_rw, indent, child, generics)?
             };
             let rest_s = emit_expr_at(ctx, rest, indent, child, generics)?;

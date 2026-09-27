@@ -8,66 +8,24 @@ use super::{
 use crate::EmitCtx;
 use core::fmt::Write as _;
 
-/// Whether a kernel's runtime function takes its two arguments in the OPPOSITE
-/// order to the Ipê call. The `Maybe` / `Result` mapping combinators are
-/// container-first in the runtime (`ipe_maybe_map(m, f)`) but function-first in
-/// Ipê (`Maybe.map f m`); every other wired kernel matches the Ipê order. Used by
-/// the [`Expr::Call`] emitter to reverse the rendered argument list; the same
-/// predicate drives [`swapped_container_clone_rewrite`], so a kernel added here
-/// gets its container evaluated without moving the function's captures.
-pub const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
-    matches!(
-        k,
-        KernelFn::MaybeMap
-            | KernelFn::MaybeAndThen
-            | KernelFn::ResultMap
-            // `Result.andThen f r` / `Result.mapError f r` — Ipê passes the
-            // fn first; the runtime `ipe_result_and_then(r, f)` /
-            // `ipe_result_map_error(r, f)` take the container first.
-            | KernelFn::ResultAndThen
-            | KernelFn::ResultMapError
-            // `JsonDec.andThen f decoder` — Ipê passes fn first; Rust runtime
-            // `decode_and_then(decoder, f)` expects decoder first. `Config.andThen`
-            // and `Db.Decode.andThen` share `decode_and_then`, so they need the
-            // same reorder.
-            | KernelFn::JsonDecAndThen
-            | KernelFn::ConfigAndThen
-            | KernelFn::DbDecAndThen
-            // `Task.andThen f task` — Ipê passes the continuation first; the
-            // runtime `task_and_then(task, f)` takes the effect first. The swap
-            // evaluates the effect before the continuation closure captures, so
-            // a binding both use would be moved first (E0382);
-            // `swapped_container_clone_rewrite` clones it at the effect site.
-            | KernelFn::TaskAndThen
-    )
-}
-
-/// The clone-rewritten container argument of a container-first kernel call —
-/// the partner of [`kernel_swaps_first_two`]'s argument reversal, keyed on the
-/// same predicate so every swapped kernel carries it by construction.
+/// The clone-rewritten container argument of a call whose runtime takes its
+/// arguments reversed ([`Callee::evaluates_args_reversed`], the single source of
+/// truth the argument reversal and the lowerer's use-ordering share).
 ///
-/// The reversal renders `k f container` as `k(container, f)`. Rust evaluates
-/// arguments left-to-right, so `container` runs BEFORE `f`'s closure is built:
-/// a non-Copy binding `container` MOVES (a handle passed by value into
-/// `Cache.put cache …`, an alias `String` passed into a Db call) is gone by the
-/// time `f` captures the same binding, and the `let v = v.clone()` the lowerer
-/// inserts for `f`'s capture borrows a moved value (E0382). Every variable `f`
-/// captures is cloned at its `container` use site so the original survives into
-/// the closure.
+/// The reversal renders `k f container` as `k(container, f)`, so `container` is
+/// evaluated before `f`'s closure captures. The lowerer's last-use clone rewrite
+/// walks the same evaluation order, so a `Clone` binding both use is already
+/// cloned at its container read. This rewrite is the backstop for a binding the
+/// lowerer's rewrite does not cover: every variable `f` captures is cloned at a
+/// CONSUMING read in `container` (borrowing reads stay bare — see
+/// [`clone_targets_in_expr`]), so the original survives into the closure
+/// instead of being moved first (E0382).
 ///
-/// `None` when the callee does not swap, the call is not the two-argument
+/// `None` when the callee does not reverse, the call is not the two-argument
 /// `f container` shape, or `f` captures none of `container`'s free variables —
-/// the caller then emits `container` unchanged, so non-sharing calls stay
-/// byte-identical.
-pub fn swapped_container_clone_rewrite(
-    callee: &Callee,
-    args: &[Expr],
-    generics: GenericScope,
-) -> Option<Expr> {
-    let Callee::Kernel(k) = callee else {
-        return None;
-    };
-    if !kernel_swaps_first_two(*k) {
+/// the caller then emits `container` unchanged.
+pub fn swapped_container_clone_rewrite(callee: &Callee, args: &[Expr]) -> Option<Expr> {
+    if !callee.evaluates_args_reversed() {
         return None;
     }
     let [func, container] = args else {
@@ -86,13 +44,7 @@ pub fn swapped_container_clone_rewrite(
     if targets.is_empty() {
         return None;
     }
-    let row_binders: std::collections::BTreeSet<Symbol> =
-        generics.row_binders().iter().copied().collect();
-    Some(clone_targets_in_expr(
-        container.clone(),
-        &targets,
-        &row_binders,
-    ))
+    Some(clone_targets_in_expr(container.clone(), &targets))
 }
 
 /// Whether a `Call` node hits one of the bespoke kernel special cases the

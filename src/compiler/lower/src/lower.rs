@@ -1296,8 +1296,9 @@ fn canon_collect_free_locals(
 // only the FIRST move is valid; subsequent reads of a moved value are E0382.
 //
 // Fix: when a `let`-binding or function parameter of `CloneOk` type is used
-// N > 1 times in its scope, insert `.clone()` on all but the syntactically LAST
-// occurrence (DFS left-to-right order).  The last occurrence stays bare — it
+// N > 1 times in its scope, insert `.clone()` on all but the LAST-EVALUATED
+// occurrence (DFS left-to-right, with a reversed-argument kernel call visited
+// last-argument-first).  The last occurrence stays bare — it
 // is the "real" final consume.  Over-cloning is acceptable (conservatism);
 // a precision pass can follow once the correctness seal holds.
 //
@@ -5627,6 +5628,13 @@ fn fn_value_move_walk(sym: Symbol, expr: &Expr, state: &mut FnValueMoveState) {
                 other => fn_value_move_walk(sym, other, state),
             }
             for a in args {
+                fn_value_move_walk(sym, a, state);
+            }
+        }
+        // A kernel whose runtime takes its arguments reversed evaluates them
+        // last-to-first.
+        Expr::Call { callee, args, .. } if callee.evaluates_args_reversed() => {
+            for a in args.iter().rev() {
                 fn_value_move_walk(sym, a, state);
             }
         }

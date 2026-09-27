@@ -6,9 +6,10 @@
 //! the container runs BEFORE `f`'s closure is built: a non-Copy binding the
 //! container moves (`label` passed by value into `wrapJust label`) is gone when
 //! the closure's `let label = label.clone()` capture reads it — `ipe build`
-//! exit 0, then `cargo build` E0382. The backend clones every capture of `f` at
-//! its container use site for EVERY kernel `kernel_swaps_first_two` reverses,
-//! so the original binding survives into the closure.
+//! exit 0, then `cargo build` E0382. The lowerer's last-use clone rewrite walks
+//! every kernel `StdlibKernel::swaps_first_two` reverses in that evaluation
+//! order, so the container's read is the one cloned and the closure's capture
+//! the last, bare use.
 //!
 //! | Kernel | Shape | Contribution |
 //! |---|---|---|
@@ -21,12 +22,17 @@
 //! | `Maybe.map`, fn param | `Maybe.map (\x -> f x) (wrapJust (f s))` | `iii` |
 //! | `Task.andThen`, fn param | `Task.andThen (\x -> f x) (f s)` | printed last: `jjj` |
 //! | container binder shadows | `Maybe.map (\v -> v ++ label) (case wrapJust label of Just label -> …)` | `k!k` |
+//! | non-`Clone` field receiver | `Maybe.map (mkF j) (wrapJust j.name)`, `j` holds a `Task` | `mm` |
+//! | field-access callee | `Maybe.map (fmtWith fmt) (wrapJust (fmt.run fmt.name))` | `pqp` |
+//! | lambda inside the container | `Maybe.map (\v -> v ++ label) (List.head (List.map (\y -> y ++ label) xs))` | `nnn` |
 //!
-//! The function-parameter rows pin the other half of the rewrite: a parameter
-//! `f` read only in direct callee position stays a non-`Clone` `Box<dyn Fn>`
-//! (callee reads borrow), so the container's `f s` must stay a borrowing call
-//! and never become `(f.clone())(s)` (E0599). The shadow row pins that a
-//! container binder rebinding the captured name is not rewritten.
+//! The function-parameter, field-receiver and field-callee rows pin the
+//! borrowing positions: a direct callee `f s`, a field read `j.name`, and a
+//! field call `fmt.run …` borrow their receiver, so none may become a
+//! `.clone()` of a value whose type has no `Clone` (E0599). The shadow row pins
+//! that a container binder rebinding the captured name is not rewritten; the
+//! container-lambda row pins that a closure built inside the container is the
+//! EARLIER use, so it is the one given a clone.
 //!
 //! ```text
 //! # emit check only (fast):
@@ -128,19 +134,44 @@ fn assert_accepted(name: &str, source: &str, expected_stdout: &str) {
 
 /// Every Ipê-callable container-first `Maybe`/`Result` kernel, each with a
 /// function argument that captures the `String` its container moves, plus the
-/// function-parameter callee and shadowed-binder shapes.
+/// borrowing-position (callee, field receiver, field callee), shadowed-binder
+/// and container-lambda shapes.
 const SWAPPED_CONTAINER_CAPTURE: &str = r#"module Main exposing (main)
 
 import Ipe.Io as Io
+import Ipe.List as List
 import Ipe.Maybe as Maybe
 import Ipe.Result as Result
 import Ipe.String as String
 import Ipe.Task as Task
 
 
+type alias Job =
+    { name : String, job : Task Error () }
+
+
+type alias Fmt =
+    { name : String, run : String -> String }
+
+
 wrapJust : String -> Maybe String
 wrapJust s =
     Just s
+
+
+suffixWith : String -> String -> String
+suffixWith s v =
+    v ++ s
+
+
+mkF : Job -> (String -> String)
+mkF j =
+    suffixWith j.name
+
+
+fmtWith : Fmt -> String -> String
+fmtWith fmt v =
+    v ++ fmt.name
 
 
 wrapOk : String -> Result String String
@@ -203,6 +234,21 @@ taskFnParam f s =
     Task.andThen (\x -> f x) (f s)
 
 
+jobLabel : Job -> Maybe String
+jobLabel j =
+    Maybe.map (mkF j) (wrapJust j.name)
+
+
+fieldCallee : Fmt -> Maybe String
+fieldCallee fmt =
+    Maybe.map (fmtWith fmt) (wrapJust (fmt.run fmt.name))
+
+
+containerLambda : String -> List String -> Maybe String
+containerLambda label xs =
+    Maybe.map (\v -> v ++ label) (List.head (List.map (\y -> y ++ label) xs))
+
+
 shadowedBinder : String -> Maybe String
 shadowedBinder label =
     Maybe.map
@@ -230,6 +276,9 @@ main =
                     , Maybe.withDefault "none" (andThenFnParam (\v -> Just (v ++ "h")) "h")
                     , Maybe.withDefault "none" (mapFnParam (\v -> v ++ "i") "i")
                     , Maybe.withDefault "none" (shadowedBinder "k")
+                    , Maybe.withDefault "none" (jobLabel { name = "m", job = Task.succeed () })
+                    , Maybe.withDefault "none" (fieldCallee { name = "p", run = \v -> v ++ "q" })
+                    , Maybe.withDefault "none" (containerLambda "n" [ "n" ])
                     , t
                     ]
                 )
@@ -242,6 +291,6 @@ fn swapped_container_capture_builds() {
     assert_accepted(
         "swapped_container_capture",
         SWAPPED_CONTAINER_CAPTURE,
-        "aa,bb,cc,dd,ee,hhh,iii,k!k,jjj",
+        "aa,bb,cc,dd,ee,hhh,iii,k!k,mm,pqp,nnn,jjj",
     );
 }

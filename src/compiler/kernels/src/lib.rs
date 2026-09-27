@@ -13451,6 +13451,35 @@ impl StdlibKernel {
         matches!(self, Self::TeaWorker)
     }
 
+    /// `true` when the runtime function takes this kernel's arguments in the
+    /// REVERSE of the Ipê call order, so the emitted call evaluates them
+    /// last-to-first.
+    ///
+    /// The `Maybe` / `Result` / decoder / `Task` mapping combinators are
+    /// container-first in the runtime (`ipe_maybe_map(m, f)`,
+    /// `task_and_then(task, f)`) but function-first in Ipê (`Maybe.map f m`).
+    /// The backend reverses the rendered argument list for these kernels, and
+    /// every lowering analysis that orders uses (the last-use clone rewrite, the
+    /// fn-value move walk) visits the arguments in that same reversed order, so
+    /// the container's reads come before the function's captures in both.
+    #[must_use]
+    pub const fn swaps_first_two(self) -> bool {
+        matches!(
+            self,
+            Self::MaybeMap
+                | Self::MaybeAndThen
+                | Self::ResultMap
+                | Self::ResultAndThen
+                | Self::ResultMapError
+                // `JsonDec.andThen` / `Config.andThen` / `Db.Decode.andThen`
+                // share the runtime `decode_and_then(decoder, f)`.
+                | Self::JsonDecAndThen
+                | Self::ConfigAndThen
+                | Self::DbDecAndThen
+                | Self::TaskAndThen
+        )
+    }
+
     /// `true` when this variant is an app entry: it takes an app cfg record and builds a program.
     ///
     /// Every app entry's runtime function bounds the cfg's `Model` / `Msg` with
