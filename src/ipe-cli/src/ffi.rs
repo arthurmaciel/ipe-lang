@@ -210,11 +210,15 @@ pub fn inject_interfaces(
 /// module-qualified opaque-type map, the de-duplicated pinned dep lines, and
 /// the combined `src/ffi.rs` (one `pub mod <slug>` per crate).
 ///
+/// A wrapper crate is bound by a `name = { path = "…" }` line; identical path
+/// lines from several crates collapse to one.
+///
 /// # Errors
 /// [`CliError::UsageOwned`] when two installed crates pin the SAME direct or
 /// path dependency to different sources — an unbuildable `Cargo.toml`
-/// refused here rather than discovered by `cargo` — or when a define type
-/// collides with an inspected opaque of the same crate.
+/// refused here rather than discovered by `cargo` — including a path line
+/// whose name is a transitive dep the members already disagree on; or when a
+/// define type collides with an inspected opaque of the same crate.
 pub fn assemble_emit(
     catalog: &[InstalledCrate],
 ) -> Result<Option<ipe_backend_rust::FfiEmit>, CliError> {
@@ -240,8 +244,12 @@ pub fn assemble_emit(
     // resolves the transitive graph of the direct pins itself and legitimately links
     // both majors of a build-dep. Such a dep is dropped from the emitted `[dependencies]`
     // (recorded as unpinned) rather than exact-pinned to one arbitrary version.
+    // A PATH line is never a transitive: it names a wrapper crate the app must
+    // link, so any disagreement on its name — with a registry pin, another
+    // path, or an already-unpinned transitive — is refused.
     let mut dep_by_name: BTreeMap<String, (DepLine, BTreeSet<FeatureName>)> = BTreeMap::new();
-    let mut unpinned_transitives: BTreeSet<String> = BTreeSet::new();
+    // Unpinned transitive name → the first rendered source seen for it.
+    let mut unpinned_transitives: BTreeMap<String, String> = BTreeMap::new();
     let mut bindings_source = String::from(
         "//! Foreign-crate FFI wrappers — one module per installed crate.\n\
          //! Generated from the project's `.ipe/cache/ffi/rust` artifacts.\n",
@@ -273,7 +281,14 @@ pub fn assemble_emit(
         }
         for line in &c.cargo_deps {
             let name = line.name().as_str().to_owned();
-            if unpinned_transitives.contains(&name) {
+            if let Some(first) = unpinned_transitives.get(&name) {
+                if matches!(line.source(), DepSource::Path(_)) {
+                    return Err(CliError::UsageOwned(text::ffi_dependency_pin_conflict(
+                        &name,
+                        first,
+                        &line.source().to_string(),
+                    )));
+                }
                 continue;
             }
             match dep_by_name.get_mut(&name) {
@@ -289,8 +304,9 @@ pub fn assemble_emit(
                     }
                     // Transitive dep resolved to different versions in different member
                     // jails — defer to Cargo's own transitive resolution.
+                    let first = prev.source().to_string();
                     dep_by_name.remove(&name);
-                    unpinned_transitives.insert(name);
+                    unpinned_transitives.insert(name, first);
                 }
                 Some((_, prev_features)) => {
                     prev_features.extend(line.features().iter().cloned());
@@ -4133,6 +4149,125 @@ version = \"1\"
         assert!(
             clash.is_err(),
             "a direct-crate version conflict still refuses"
+        );
+    }
+
+    /// An installed crate carrying exactly `cargo_deps` and nothing else.
+    fn installed(slug: &str, cargo_deps: Vec<DepLine>) -> InstalledCrate {
+        InstalledCrate {
+            slug: slug.to_owned(),
+            module_name: format!("Rust.{slug}"),
+            kernel_name: format!("Rust_{slug}"),
+            interface_source: String::new(),
+            bindings_source: String::new(),
+            opaque_types: BTreeMap::new(),
+            opaque_type_ids: BTreeMap::new(),
+            define_types: BTreeSet::new(),
+            transparent_types: BTreeMap::new(),
+            bindings: Vec::new(),
+            dep_versions: BTreeMap::new(),
+            inspected_free_fns: BTreeMap::new(),
+            inspected_consts: BTreeMap::new(),
+            cargo_deps,
+            transparent_glue: BTreeMap::new(),
+            wrapper_idents: BTreeSet::new(),
+        }
+    }
+
+    /// Whether `result` is exactly the pin-conflict refusal for `name`.
+    fn is_pin_conflict(
+        result: &Result<Option<ipe_backend_rust::FfiEmit>, CliError>,
+        name: &str,
+        first: &str,
+        second: &str,
+    ) -> bool {
+        let expected = text::ffi_dependency_pin_conflict(&name, &first, &second);
+        matches!(result, Err(CliError::UsageOwned(m)) if *m == expected)
+    }
+
+    #[test]
+    fn a_path_and_a_registry_dep_of_one_name_are_refused() {
+        let result = assemble_emit(&[
+            installed("a", vec![dep("engine_wrap = \"=0.1.0\"")]),
+            installed("b", vec![dep("engine_wrap = { path = \"/w/engine\" }")]),
+        ]);
+        assert!(
+            is_pin_conflict(&result, "engine_wrap", "=0.1.0", "path /w/engine"),
+            "registry then path must refuse: {:?}",
+            result.map(|e| e.map(|e| e.dep_lines))
+        );
+        // The refusal holds in either order.
+        let result = assemble_emit(&[
+            installed("b", vec![dep("engine_wrap = { path = \"/w/engine\" }")]),
+            installed("a", vec![dep("engine_wrap = \"=0.1.0\"")]),
+        ]);
+        assert!(
+            is_pin_conflict(&result, "engine_wrap", "path /w/engine", "=0.1.0"),
+            "path then registry must refuse: {:?}",
+            result.map(|e| e.map(|e| e.dep_lines))
+        );
+    }
+
+    #[test]
+    fn two_different_paths_of_one_name_are_refused() {
+        let result = assemble_emit(&[
+            installed("a", vec![dep("engine_wrap = { path = \"/w/engine\" }")]),
+            installed("b", vec![dep("engine_wrap = { path = \"/v/engine\" }")]),
+        ]);
+        assert!(
+            is_pin_conflict(&result, "engine_wrap", "path /w/engine", "path /v/engine"),
+            "two paths for one name must refuse: {:?}",
+            result.map(|e| e.map(|e| e.dep_lines))
+        );
+    }
+
+    #[test]
+    fn identical_path_lines_dedupe_to_one() {
+        let line = "engine_wrap = { path = \"/w/engine\" }";
+        let emit = assemble_emit(&[
+            installed("a", vec![dep(line)]),
+            installed("b", vec![dep(line)]),
+        ])
+        .expect("identical path lines agree")
+        .expect("emit present");
+        assert_eq!(emit.dep_lines, [line]);
+    }
+
+    #[test]
+    fn a_wrapper_crate_emits_exactly_its_driver_path_line() {
+        let doc = serde_json::json!({
+            "pkg": "engine_wrap",
+            "name": "engine_wrap",
+            "version": "0.1.0",
+            "wrapperPath": "/w/engine",
+            "functions": [],
+            "errors": []
+        })
+        .to_string();
+        let pkg = ipe_ffi::pkginfo::PkgInfo::decode_json(&doc).expect("wrapper inspection decodes");
+        let cargo_deps = ipe_ffi::driver::cargo_deps(&pkg).expect("a wrapper renders a path dep");
+        let driver_lines = ipe_ffi::driver::cargo_dep_lines(&pkg).expect("same line, rendered");
+        let emit = assemble_emit(&[installed("engine_wrap", cargo_deps)])
+            .expect("a lone wrapper assembles")
+            .expect("emit present");
+        assert_eq!(emit.dep_lines, driver_lines);
+        assert_eq!(emit.dep_lines, ["engine_wrap = { path = \"/w/engine\" }"]);
+    }
+
+    // A transitive the members already disagree on is dropped for Cargo to
+    // resolve; a later PATH line of that name is a wrapper the app must link,
+    // so it is refused rather than dropped with the transitive.
+    #[test]
+    fn a_path_line_named_like_an_unpinned_transitive_is_refused() {
+        let result = assemble_emit(&[
+            installed("a", vec![dep("a = \"=1.0.0\""), dep("syn = \"=2.0.119\"")]),
+            installed("b", vec![dep("b = \"=1.0.0\""), dep("syn = \"=3.0.0\"")]),
+            installed("c", vec![dep("syn = { path = \"/w/syn\" }")]),
+        ]);
+        assert!(
+            is_pin_conflict(&result, "syn", "=2.0.119", "path /w/syn"),
+            "a path line must never be dropped as an unpinned transitive: {:?}",
+            result.map(|e| e.map(|e| e.dep_lines))
         );
     }
 
