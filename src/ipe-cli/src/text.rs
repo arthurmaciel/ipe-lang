@@ -1081,8 +1081,10 @@ messages! {
     output_inside_vcs(out) = "output-inside-vcs";
     /// An output inside an ipe cache namespace.
     output_inside_cache_namespace(out, namespace) = "output-inside-cache-namespace";
-    /// An output whose not-yet-existing tail contains `..`.
+    /// An output with a `..` that does not climb out of a plain existing directory.
     output_parent_traversal(path) = "output-parent-traversal";
+    /// An output that names no single absolute place on every platform.
+    output_unplaceable(path) = "output-unplaceable";
     /// An eject output that is not absent or empty.
     output_not_fresh(path) = "output-not-fresh";
     /// A product path with a component other than a plain name.
