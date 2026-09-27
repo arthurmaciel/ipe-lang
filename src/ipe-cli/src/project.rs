@@ -790,39 +790,66 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
 
 /// Map a `.ipe` file path to a [`DiscoveredModule`].
 ///
-/// `Ok(None)` when the path contains a non-module segment (an artefact the
-/// walk skips).
+/// `Ok(None)` when the path is no module path at all (an artefact the walk
+/// skips), per [`module_path_shape`].
 ///
 /// # Errors
-/// [`CliError::DeviceNamedModule`] when a well-formed segment is a Windows
-/// reserved device name.
+/// [`CliError::DeviceNamedModule`] when the path is well formed but a
+/// segment is a Windows reserved device name.
 fn file_to_module(src_root: &Path, path: &Path) -> Result<Option<DiscoveredModule>, CliError> {
-    // Strip the src_root prefix and the .ipe extension.
     let Ok(rel) = path.strip_prefix(src_root) else {
         return Ok(None);
     };
     let without_ext = rel.with_extension("");
-    // Split into segments using the OS path separator.
-    let mut segments: Vec<String> = Vec::new();
-    for component in without_ext.components() {
-        let Some(s) = component.as_os_str().to_str() else {
-            return Ok(None);
-        };
-        if !is_well_formed_segment(s) {
-            return Ok(None);
-        }
-        if is_windows_device_name(s) {
-            return Err(CliError::DeviceNamedModule {
-                path: path.to_path_buf(),
-                segment: s.to_owned(),
-            });
-        }
-        segments.push(s.to_owned());
-    }
-    if segments.is_empty() {
+    let Some(segments) = without_ext
+        .components()
+        .map(|component| component.as_os_str().to_str())
+        .collect::<Option<Vec<&str>>>()
+    else {
         return Ok(None);
+    };
+    match module_path_shape(&segments) {
+        ModulePathShape::NotModule => Ok(None),
+        ModulePathShape::DeviceNamed(segment) => Err(CliError::DeviceNamedModule {
+            path: path.to_path_buf(),
+            segment: segment.to_owned(),
+        }),
+        ModulePathShape::Module => Ok(Some(DiscoveredModule::user(
+            path.to_path_buf(),
+            segments.iter().copied().map(str::to_owned).collect(),
+        ))),
     }
-    Ok(Some(DiscoveredModule::user(path.to_path_buf(), segments)))
+}
+
+/// What a candidate module path is, the one rule package discovery and loose-file imports share.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ModulePathShape<'s> {
+    /// Non-empty, and every segment is a module segment.
+    Module,
+    /// Empty, or some segment is not well formed: no user module at all.
+    NotModule,
+    /// Every segment is well formed, but this one is a Windows reserved device name.
+    DeviceNamed(&'s str),
+}
+
+/// Classify `segments` as a module path.
+///
+/// Well-formedness is decided over every segment before any device name,
+/// so a path that is no module at all (`Aux/notes`) is never refused for a
+/// device-named segment.
+pub(crate) fn module_path_shape<S: AsRef<str>>(segments: &[S]) -> ModulePathShape<'_> {
+    if segments.is_empty()
+        || !segments
+            .iter()
+            .all(|segment| is_well_formed_segment(segment.as_ref()))
+    {
+        return ModulePathShape::NotModule;
+    }
+    segments
+        .iter()
+        .map(AsRef::<str>::as_ref)
+        .find(|segment| is_windows_device_name(segment))
+        .map_or(ModulePathShape::Module, ModulePathShape::DeviceNamed)
 }
 
 /// Whether `s` is a legal Ipê module path segment.
@@ -1121,6 +1148,47 @@ mod tests {
         let paths: Vec<Vec<String>> = found.into_iter().map(|m| m.module_path).collect();
         assert_eq!(paths, vec![vec!["Main".to_owned()]]);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_non_module_file_under_a_device_named_directory_is_skipped() {
+        let root = device_walk_root("device-dir-artefact");
+        fs::write(root.join("Main.ipe"), "module Main exposing (..)\n").expect("write Main");
+        fs::create_dir_all(root.join("Aux")).expect("mk device dir");
+        fs::write(root.join("Aux").join("notes.ipe"), "junk").expect("write artefact");
+        let found = discover_modules(&root);
+        let _ = fs::remove_dir_all(&root);
+        let paths: Option<Vec<Vec<String>>> = found
+            .ok()
+            .map(|found| found.into_iter().map(|m| m.module_path).collect());
+        assert_eq!(paths, Some(vec![vec!["Main".to_owned()]]));
+    }
+
+    #[test]
+    fn well_formedness_is_decided_before_device_names() {
+        assert_eq!(module_path_shape(&["Main"]), ModulePathShape::Module);
+        assert_eq!(module_path_shape(&["Lib", "Util"]), ModulePathShape::Module);
+        assert_eq!(module_path_shape::<&str>(&[]), ModulePathShape::NotModule);
+        assert_eq!(
+            module_path_shape(&["Aux", "notes"]),
+            ModulePathShape::NotModule
+        );
+        assert_eq!(
+            module_path_shape(&["notes", "Aux"]),
+            ModulePathShape::NotModule
+        );
+        assert_eq!(
+            module_path_shape(&["Lib", ".."]),
+            ModulePathShape::NotModule
+        );
+        assert_eq!(
+            module_path_shape(&["Aux"]),
+            ModulePathShape::DeviceNamed("Aux")
+        );
+        assert_eq!(
+            module_path_shape(&["Lib", "Com0", "Nul"]),
+            ModulePathShape::DeviceNamed("Com0")
+        );
     }
 
     #[test]
